@@ -2,9 +2,21 @@
 use super::table_rendering::run_cli_on_terminal_at_width;
 use crate::task_workspace::{TaskSeed, TestWorkspace};
 
+/// `orbit.common.fs.file_lock` warns only when a file lock wait or hold crosses
+/// its threshold, which runner I/O stalls can trigger in one child and not its
+/// sibling. These cases compare child stderr byte for byte, so that target is
+/// silenced for their children. Every other warning stays enabled, as in a
+/// normal CLI run.
+const CHILD_LOG_FILTER: &str = "warn,orbit.common.fs.file_lock=off";
+
+/// A fixture whose children run with [`CHILD_LOG_FILTER`], piped and PTY alike.
+fn diagnostic_workspace(name: &str) -> TestWorkspace {
+    TestWorkspace::new(name, TaskSeed::new("")).with_child_log_filter(CHILD_LOG_FILTER)
+}
+
 #[test]
 fn diagnostic_prose_wraps_on_terminals_and_preserves_pipe_and_json() {
-    let workspace = TestWorkspace::new("diagnostic-prose", TaskSeed::new(""));
+    let workspace = diagnostic_workspace("diagnostic-prose");
     let timestamp = regex::Regex::new(r"\d{4}-\d\d-\d\dT[0-9:.]+(?:Z|[+-]\d\d:\d\d)").unwrap();
     let normalize = |text: &str| {
         timestamp
@@ -149,7 +161,7 @@ fn task_show_prose_wraps_on_terminals_and_preserves_pipe_and_json() {
 
 #[test]
 fn admission_receipt_summary_wraps_and_plain_bytes_stay_unchanged() {
-    let workspace = TestWorkspace::new("admission-receipt-prose", TaskSeed::new(""));
+    let workspace = diagnostic_workspace("admission-receipt-prose");
     let args = ["doctor", "admission-receipts"];
     let piped = workspace.run(&args, "piped admission-receipt report");
     let plain = workspace.run(
@@ -209,7 +221,7 @@ fn admission_receipt_summary_wraps_and_plain_bytes_stay_unchanged() {
 
 #[test]
 fn failed_run_header_wraps_without_changing_plain_or_json_output() {
-    let workspace = TestWorkspace::new("failed-run-prose", TaskSeed::new(""));
+    let workspace = diagnostic_workspace("failed-run-prose");
     let jobs = workspace.home.join(".orbit/resources/jobs");
     std::fs::create_dir_all(&jobs).unwrap();
     let job = serde_json::json!({

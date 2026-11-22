@@ -1,7 +1,7 @@
 ---
 title: Resident Orchestrator — Design
 owner: claude
-last_updated: 2026-11-15
+last_updated: 2026-11-22
 last_validated: 2026-11-08
 status: Draft
 feature: resident-orchestrator
@@ -11,7 +11,7 @@ summary: "Roles, mandate and authority, resident lifecycle and fires, the bounde
 tags: [resident-orchestrator]
 paths: ["crates/orbit-core/src/application/resident/**", "crates/orbit-core/assets/jobs/**", "crates/orbit-core/assets/activities/**", "crates/orbit-types/src/workflow/automation/members.rs", "crates/orbit-types/src/task/decision/request/**"]
 related_features: [routines, condition-triggers, activity-job, human-decision-channel, operator-attention, fleet-notices, mid-run-steering, decision-assistance, granted-tools]
-related_artifacts: [ORB-21229, ORB-21263]
+related_artifacts: [ORB-21229, ORB-21263, ORB-26833]
 ---
 
 # Resident Orchestrator — Design
@@ -88,7 +88,7 @@ not the prompt.
 - **Rights.** `dispatch` (start or requeue leaf runs and drains), `promote` (move a `proposed` task
   to `backlog`, where the drain can admit it), `merge` (land a reviewed PR), `plugin_upgrade`
   (install or upgrade a workspace plugin). Task-pilot assessment is a separate gate: it can assess
-  eligible `proposed` or `backlog` tasks. Reading, commenting, filing `proposed` tasks and friction,
+  eligible `proposed` or `backlog` tasks. Reading, commenting, filing `proposed` tasks, filing and updating friction records in covered workspaces (without moving them via `rehome_to`),
   and checkpointing need no right. Anything not listed (releases, tags, publishing, host changes,
   config edits, secrets) is not grantable to a resident in v1.
 - **Scope.** A list of covered workspaces. A tool call naming another workspace is refused.
@@ -424,9 +424,9 @@ left `started` is refused as `resident_action_in_doubt` for the agent to check b
   resident when the pipeline blocks the task or files a repair task it watches.
 - Info notices and a notice's edits that keep its status do not wake (§7 says any notice change
   does); they still reach the brief.
-- Writes from a resident run that this workspace's runtime does not hold (a cycle run in another
-  catalog workspace) are refused as `resident_scope_refused`: cross-workspace writes through another
-  workspace's MCP server are not supported in this slice.
+- Writes other than `orbit.friction` action `update` from a resident run that this workspace's runtime does not hold (a cycle run in another
+  catalog workspace) are refused as `resident_scope_refused`: cross-workspace task writes through another
+  workspace's MCP server are not supported in this slice. `orbit.friction` action `update` in a covered workspace on the same host records its action ledger row on the mandate's home workspace, while updates carrying `rehome_to` or `move` are refused as `resident_tool_refused`.
 - `plugin_upgrade` maps to no builtin tool yet; `orbit.task.update` with `approve` or `force`,
   `orbit.notice.close` and `orbit.resident.grant` are refused to a cycle.
 - The heartbeat counts from the last cycle start, not the last checkpoint, so a cycle that never
@@ -902,5 +902,6 @@ Slices 1–9 have landed (slice 3 as [§5.1](#51-slice-3-as-implemented) describ
 - [ORB-21642] — fixed `orbit resident metrics --baseline` failing on a baseline task in another workspace
 - [ORB-22844] — removed the evolution pass routine, job and proposal filing; the ledger and manager digest stay
 - [ORB-25105] — wake only on changes the mandate acts on, honour the planned next wake, default the floor to the heartbeat
+- [ORB-26833] — let resident cycles update friction records in covered workspaces without a right and without `rehome_to`
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

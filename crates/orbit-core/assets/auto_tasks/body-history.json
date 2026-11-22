@@ -1701,6 +1701,36 @@
     },
     {
       "comments": [
+        "# No context_files and proposed on purpose: the batch is known only after",
+        "# backlog. The executing run never writes its own scope.",
+        "# operator) persists the selected file: selectors and it is approved to",
+        "# selection, so the instance waits in proposed — never a backlog",
+        "# whole-tree holder — until pre-admission preparation (task pilot or",
+        "## Attach the ledger",
+        "## Check and record",
+        "## Comment-only diffs",
+        "## Escalate repeat skips",
+        "## Select a batch (preparation, before admission)",
+        "## The standard",
+        "## Use the prepared footprint"
+      ],
+      "digest": "ca288c930ada0828c14d03275940b4772d39ade55b256cda6b0baa3310b06b73",
+      "revision": "e55e9dab234d1af7b30262b1fe40076c53ea02f1",
+      "settings": {
+        "complexity": "low",
+        "dedupe": "skip_if_open",
+        "enabled": false,
+        "priority": "low",
+        "schedule": {
+          "cron": "45 6 * * *"
+        },
+        "tags": [
+          "comment-hygiene"
+        ]
+      }
+    },
+    {
+      "comments": [
         "# No context_files on purpose: the batch is only known at run time, and a",
         "# context_files to the selected files before editing.",
         "# minted task without selectors holds no workspace lock. The body narrows",

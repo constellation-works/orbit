@@ -296,11 +296,12 @@ pub(super) fn evaluate_implementers(
                 .iter()
                 .map(|term| {
                     let review_term = is_implementer_review_term(term.key);
-                    let expected = expectations
-                        .iter()
-                        .filter(|task| !review_term || task.reviewed)
-                        .map(|task| task.expected[term.key])
-                        .sum();
+                    let expected = compensated_sum(
+                        expectations
+                            .iter()
+                            .filter(|task| !review_term || task.reviewed)
+                            .map(|task| task.expected[term.key]),
+                    );
                     (term.key, expected)
                 })
                 .collect(),
@@ -329,6 +330,23 @@ pub(super) fn evaluate_implementers(
         rows,
         tasks: per_task,
     }
+}
+
+/// Compensated (Neumaier) sum so per-task expectations retain full `f64`
+/// precision across large task counts when comparing with integer counts.
+fn compensated_sum(values: impl IntoIterator<Item = f64>) -> f64 {
+    let mut sum = 0.0;
+    let mut compensation = 0.0;
+    for value in values {
+        let next = sum + value;
+        compensation += if sum.abs() >= value.abs() {
+            (sum - next) + value
+        } else {
+            (value - next) + sum
+        };
+        sum = next;
+    }
+    sum + compensation
 }
 
 /// The implementer header's `execution_split`: per row (crew and model) with

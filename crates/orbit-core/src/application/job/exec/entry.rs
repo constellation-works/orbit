@@ -175,6 +175,7 @@ impl OrbitRuntime {
             return Err(pipeline::reserved_reconciliation_key_error(&job_name));
         }
         let mut input = input;
+        self.validate_pilot_string_task_ids_input(&job_name, &spec, &input)?;
         delivery::normalize_delivery_input(&spec, &mut input)?;
         self.install_auto_concurrency(
             &job_name,

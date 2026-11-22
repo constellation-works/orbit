@@ -41,8 +41,14 @@ function resetAggregateDrainSelection() {
   feedback("auto-drain-operation-feedback", "", "");
 }
 
+// A failed readiness poll retires the card's authority (actions, readbacks
+// and its write controls) but keeps what the operator was told: the last
+// action's feedback and the failure the phase label now reports.
 function retireFailedDrainReadiness() {
-  resetAggregateDrainSelection();
+  drainScopeGeneration += 1;
+  operationsState.lastAutoDrain = null;
+  announcedDrainState = null;
+  clearStartCard("auto-drain-quick-start");
   for (const button of $("auto-drain-body")?.querySelectorAll("button") || []) button.disabled = true;
 }
 
@@ -51,7 +57,7 @@ function aggregateDrainScope(workspace, hostName, connection, generation, checko
   const revision = getWorkspaceRevision();
   const refusal = hostWriteRefusal(host, connection?.forward_writes) || (checkoutUnavailable ? PULL_OWNER_UNAVAILABLE : "");
   return {
-    workspace, host, hostName, refusal,
+    workspace, host, hostName, refusal, revision,
     isCurrent: () => {
       if (generation !== drainScopeGeneration || revision !== getWorkspaceRevision()) return false;
       if (mode === "board") {

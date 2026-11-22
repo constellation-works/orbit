@@ -15,7 +15,7 @@
 // and Close asks for its reason only once chosen. Posting is a modal dialog
 // with title, severity and body up front. `#notices` opens this tab.
 
-import { bindTaskLink, captureWorkspaceVisit, el, enableRovingRows, fetchJson, formatDateTime, getHostRevision, getWorkspaceRevision, isAggregateView, makeRowDisclosure, onWorkspaceChange, pinnedInfoHint, relativeTime, requestJson, requestPanel, syncNodes } from './common.js';
+import { bindTaskLink, captureWorkspaceVisit, el, enableRovingRows, fetchJson, formatDateTime, getHostRevision, getWorkspaceRevision, isAggregateView, makeRowDisclosure, onWorkspaceChange, pinnedInfoHint, relativeTime, requestJson, requestPanel, setBadgeDescription, syncNodes } from './common.js';
 
 const $ = (id) => document.getElementById(id);
 const text = (value) => (typeof value === "string" ? value : "");
@@ -96,25 +96,23 @@ function setDockNoticeCount(count, reasons = []) {
   if (!state) return;
   const open = Number.isFinite(count) ? count : 0;
   const degraded = reasons.filter(Boolean);
-  state.removeAttribute("title");
+  // The count sits inside the dock tab's button: its caveat is the button's
+  // description, never a native tooltip on the badge (STD-07 §R41).
   state.removeAttribute("aria-label");
   if (open > 0) {
     state.textContent = `${open} open`;
-    if (degraded.length) {
-      const detail = `${open} open in the workspaces that were read. Coverage is incomplete: ${degraded.join("; ")}`;
-      state.title = detail;
-      state.setAttribute("aria-label", detail);
-    }
+    setBadgeDescription(state, degraded.length
+      ? `${open} open in the workspaces that were read. Coverage is incomplete: ${degraded.join("; ")}`
+      : "");
     return;
   }
   if (degraded.length) {
     state.textContent = "partial";
-    const detail = `Coverage is incomplete: ${degraded.join("; ")}`;
-    state.title = detail;
-    state.setAttribute("aria-label", detail);
+    setBadgeDescription(state, `Coverage is incomplete: ${degraded.join("; ")}`);
     return;
   }
   state.textContent = "";
+  setBadgeDescription(state, "");
 }
 
 function hideNoticeBanner() {
@@ -553,6 +551,10 @@ function wirePostDialog() {
     session = null;
     if (dialog.open) dialog.close();
     resetDraft();
+    // Post authority belongs to the scope that was read; the new scope's read
+    // re-enables it.
+    const toggle = $("notices-post-toggle");
+    if (toggle) toggle.disabled = true;
   });
   $("notices-post-toggle")?.addEventListener("click", () => {
     if (!dialog.open) {

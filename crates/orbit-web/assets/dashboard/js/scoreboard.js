@@ -54,6 +54,10 @@ function clearCostChrome() {
 // Aggregate view has no per-workspace cost. Placeholder the panel so a
 // previous workspace's dollars and tokens cannot stay on screen.
 export function placeholdScoreboardAggregate() {
+  // app.js calls this directly in aggregate view: the window selector still
+  // writes the shared window there.
+  wireScoreboardWindowSelector();
+  syncWindowSelectors();
   for (const id of COST_CHROME) renderPanelPlaceholder(id);
   for (const id of COST_COUNTS) {
     const node = $(id);
@@ -65,6 +69,10 @@ export function placeholdScoreboardAggregate() {
 let scoreboardRequestScope = null;
 
 export function fetchAndRenderScoreboard() {
+  // Wire before any early return: the selector must work in aggregate view
+  // and while /api/cost is loading or failing, not only after a success.
+  wireScoreboardWindowSelector();
+  syncWindowSelectors();
   if (isAggregateView()) {
     placeholdScoreboardAggregate();
     return Promise.resolve();

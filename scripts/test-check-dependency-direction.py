@@ -373,7 +373,9 @@ class RelativeImportTests(unittest.TestCase):
             for group in batches.pack_rejected(pending):
                 found, result = self.run_rejected_group(group)
                 self.assertEqual(result.stderr, "", result.stderr)
-                reported += found
+                if found:
+                    self.assertEqual(result.returncode, 1, result.stdout)
+                    reported += found
             if not reported:
                 break
             pending = batches.unreported_batches(pending, reported)
@@ -495,13 +497,13 @@ class RelativeImportTests(unittest.TestCase):
                     **{str(path.relative_to(self.root)): source
                        for path, (_, source) in paths.items()}})
             return
-        try:
-            for path, source in zip(written, (shared or {}).values()):
-                path.parent.mkdir(parents=True, exist_ok=True)
-                path.write_text(source)
-            for path, (_, source) in paths.items():
-                path.parent.mkdir(parents=True, exist_ok=True)
-                path.write_text(source)
+        files = {
+            **{str(path.relative_to(self.root)): source
+               for path, source in zip(written, (shared or {}).values())},
+            **{str(path.relative_to(self.root)): source
+               for path, (_, source) in paths.items()},
+        }
+        with self.fixture_files(self.root, files):
             result = self.run_guard()
             self.assertEqual(result.stderr, "", result.stderr)
             for path, row in paths.items():
@@ -511,9 +513,6 @@ class RelativeImportTests(unittest.TestCase):
                     else:
                         self.assertNotIn(f"{path}:", result.stdout)
             self.assertEqual(result.returncode, 1 if rejected else 0, result.stdout)
-        finally:
-            for path in [*written, *paths]:
-                path.unlink(missing_ok=True)
 
     def test_inherent_calls_from_task_into_upper_modules_rejected(self):
         # Each owner defines its own name, so a row's call is reported only when

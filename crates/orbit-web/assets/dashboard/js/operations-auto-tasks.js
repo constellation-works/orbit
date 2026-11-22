@@ -59,6 +59,8 @@ registerOperationsReset(() => {
   autoTaskRevealedGroups.clear();
   autoTaskDeleteOpen.clear();
   autoTaskDeleteReason.clear();
+  // The rail count is the left workspace's until this one's read lands.
+  setRailSubtabCount("rail-count-ops-auto-tasks", "");
 });
 
 function autoTaskMatchesFilter(definition, query) {

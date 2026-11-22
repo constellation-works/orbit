@@ -4,12 +4,60 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 WRAPPER="$ROOT/scripts/build-budget.py"
+if ! REAL_PYTHON3="$(command -v python3)"; then
+  printf 'test-build-budget: FAIL: python3 is required\n' >&2
+  exit 1
+fi
+export REAL_PYTHON3
 TMP="$(mktemp -d)"
+ISOLATED_HOME="$TMP/default-home"
+mkdir -p "$ISOLATED_HOME"
+export HOME="$ISOLATED_HOME"
 BACKGROUND_PIDS=()
 TEST_COMPLETE=0
 # Admission and interpreter startup can take seconds on a contended host.
 # Bypass/re-entry commands also need startup headroom, even without a slot wait.
 COMMAND_TIMEOUT=30
+
+run_with_timeout() {
+  local secs="$1"
+  shift
+  if command -v timeout >/dev/null 2>&1; then
+    timeout "$secs" "$@"
+  elif command -v gtimeout >/dev/null 2>&1; then
+    gtimeout "$secs" "$@"
+  else
+    "$REAL_PYTHON3" -c '
+import os, signal, subprocess, sys
+limit = float(sys.argv[1])
+proc = subprocess.Popen(sys.argv[2:], start_new_session=True)
+def forward(signum, _frame):
+    try:
+        os.killpg(proc.pid, signum)
+    except ProcessLookupError:
+        pass
+for sig in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
+    signal.signal(sig, forward)
+try:
+    rc = proc.wait(timeout=limit)
+except subprocess.TimeoutExpired:
+    try:
+        os.killpg(proc.pid, signal.SIGTERM)
+    except ProcessLookupError:
+        pass
+    try:
+        proc.wait(timeout=2)
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        proc.wait()
+    sys.exit(124)
+sys.exit(128 - rc if rc < 0 else rc)
+' "$secs" "$@"
+  fi
+}
 
 # Clear any build-budget environment inherited from an outer wrapper (e.g. `make ci`).
 # Fixtures manage their own slots, lock directory, and admission hermetically [ORB-12350].
@@ -66,22 +114,35 @@ forget_pid() {
 
 wait_for() {
   local path="$1"
-  local attempts=0
-  while [[ ! -e "$path" ]]; do
-    attempts=$((attempts + 1))
-    [[ "$attempts" -lt 1000 ]] || fail "timed out waiting for $path"
-    sleep 0.02
-  done
+  "$REAL_PYTHON3" -c '
+import os, sys, time
+path = sys.argv[1]
+deadline = time.monotonic() + 20.0
+while time.monotonic() < deadline:
+    if os.path.exists(path):
+        sys.exit(0)
+    time.sleep(0.02)
+sys.exit(1)
+' "$path" || fail "timed out waiting for $path"
 }
 
 wait_for_match() {
   local pattern="$1" path="$2"
-  local attempts=0
-  until grep -Eq "$pattern" "$path"; do
-    attempts=$((attempts + 1))
-    [[ "$attempts" -lt 1500 ]] || fail "timed out waiting for a matching line in $path"
-    sleep 0.02
-  done
+  "$REAL_PYTHON3" -c '
+import re, sys, time
+from pathlib import Path
+regex = re.compile(sys.argv[1], re.M)
+path = Path(sys.argv[2])
+deadline = time.monotonic() + 30.0
+while time.monotonic() < deadline:
+    try:
+        if regex.search(path.read_text(encoding="utf-8", errors="replace")):
+            sys.exit(0)
+    except OSError:
+        pass
+    time.sleep(0.02)
+sys.exit(1)
+' "$pattern" "$path" || fail "timed out waiting for a matching line in $path"
 }
 
 mkdir -p "$TMP/state" "$TMP/worktrees/a" "$TMP/worktrees/b" \
@@ -182,36 +243,31 @@ finally:
 PY
 chmod +x "$TMP/helper.py"
 
-# Count helpers that have been admitted and recorded their start under $1.
-started_helpers() {
-  local marker started=0
-  for marker in "$1"/started-*; do
-    if [[ -e "$marker" ]]; then
-      started=$((started + 1))
-    fi
-  done
-  printf '%s\n' "$started"
-}
-
 # Admission under test: the first $2 helpers must be admitted together. Starts are
 # awaited through markers, so host load only delays the barrier and cannot shrink
 # the overlap. The wave then holds for a short settle window, so an over-admitted
 # helper has time to appear in the recorded max before release.
 hold_first_wave() {
-  local state="$1" expected="$2" total="$3" settle=0
-  local deadline=$((SECONDS + 15))
-  while [[ "$(started_helpers "$state")" -lt "$expected" ]]; do
-    if ((SECONDS >= deadline)); then
-      touch "$state/release-owner"
-      fail "only $(started_helpers "$state") of $expected admitted helpers started in $state"
-    fi
-    sleep 0.02
-  done
-  while [[ "$(started_helpers "$state")" -lt "$total" && "$settle" -lt 25 ]]; do
-    settle=$((settle + 1))
-    sleep 0.02
-  done
-  touch "$state/release-owner"
+  local state="$1" expected="$2" total="$3"
+  "$REAL_PYTHON3" -c '
+from pathlib import Path
+import sys, time
+state = Path(sys.argv[1])
+expected, total = int(sys.argv[2]), int(sys.argv[3])
+def count():
+    return sum(1 for _ in state.glob("started-*"))
+deadline = time.monotonic() + 15.0
+while count() < expected:
+    if time.monotonic() >= deadline:
+        (state / "release-owner").touch()
+        print(f"only {count()} of {expected} admitted helpers started in {state}", file=sys.stderr)
+        sys.exit(1)
+    time.sleep(0.02)
+settle_end = time.monotonic() + 0.5
+while count() < total and time.monotonic() < settle_end:
+    time.sleep(0.02)
+(state / "release-owner").touch()
+' "$state" "$expected" "$total" || fail "first wave did not reach $expected admitted helpers in $state"
 }
 
 # Agent subprocesses retain HOME and PATH but receive no ORBIT_* settings.
@@ -317,7 +373,7 @@ run_queue_case() {
   wait_for "$case_state/started-owner"
   ORBIT_BUILD_BUDGET_DIR="$TMP/locks-$case_name" ORBIT_BUILD_SLOTS=1 \
     _ORBIT_BUILD_BUDGET_TEST_WAIT_INTERVAL_SECONDS="$wait_interval" \
-    timeout "$COMMAND_TIMEOUT" "$WRAPPER" -- "$TMP/helper.py" "$case_state" queued sleep 0.01 \
+    run_with_timeout "$COMMAND_TIMEOUT" "$WRAPPER" -- "$TMP/helper.py" "$case_state" queued sleep 0.01 \
     2>"$case_state/queued.err" &
   local queued_pid=$!
   BACKGROUND_PIDS+=("$queued_pid")
@@ -361,7 +417,7 @@ detached_pid="$(cat "$detached_state/detached-pid")"
 BACKGROUND_PIDS+=("$detached_pid")
 ORBIT_BUILD_BUDGET_DIR="$TMP/locks-detached" ORBIT_BUILD_SLOTS=1 \
   _ORBIT_BUILD_BUDGET_TEST_WAIT_INTERVAL_SECONDS=0.05 \
-  timeout "$COMMAND_TIMEOUT" "$WRAPPER" -- "$TMP/helper.py" "$detached_state" queued sleep 0.01 \
+  run_with_timeout "$COMMAND_TIMEOUT" "$WRAPPER" -- "$TMP/helper.py" "$detached_state" queued sleep 0.01 \
   2>"$TMP/detached-queue.err" &
 queued_pid=$!
 BACKGROUND_PIDS+=("$queued_pid")
@@ -391,7 +447,7 @@ kill -TERM "$owner_pid"
 wait_for "$termination_state/terminating"
 ORBIT_BUILD_BUDGET_DIR="$TMP/locks-termination-delay" ORBIT_BUILD_SLOTS=1 \
   _ORBIT_BUILD_BUDGET_TEST_WAIT_INTERVAL_SECONDS=0.05 \
-  timeout "$COMMAND_TIMEOUT" "$WRAPPER" -- "$TMP/helper.py" "$termination_state" queued sleep 0.01 \
+  run_with_timeout "$COMMAND_TIMEOUT" "$WRAPPER" -- "$TMP/helper.py" "$termination_state" queued sleep 0.01 \
   2>"$termination_state/queued.err" &
 queued_pid=$!
 BACKGROUND_PIDS+=("$queued_pid")
@@ -411,7 +467,7 @@ forget_pid "$queued_pid"
 
 # Check actual signal termination, not just the equivalent shell exit code.
 ORBIT_BUILD_BUDGET_DIR="$TMP/locks-signals" ORBIT_BUILD_SLOTS=1 \
-  timeout "$COMMAND_TIMEOUT" python3 - "$WRAPPER" "$TMP" "$COMMAND_TIMEOUT" <<'PY'
+  run_with_timeout "$COMMAND_TIMEOUT" "$REAL_PYTHON3" - "$WRAPPER" "$TMP" "$COMMAND_TIMEOUT" <<'PY'
 from pathlib import Path
 import signal
 import subprocess
@@ -461,7 +517,7 @@ wait_interval=0.05
 wait_started="$(python3 -c 'import time; print(time.monotonic())')"
 ORBIT_BUILD_BUDGET_DIR="$TMP/locks-wait-reporting" ORBIT_BUILD_SLOTS=1 \
   _ORBIT_BUILD_BUDGET_TEST_WAIT_INTERVAL_SECONDS="$wait_interval" \
-  timeout "$COMMAND_TIMEOUT" "$WRAPPER" -- bash -c 'printf "wrapped stdout\\n"; exit 23' \
+  run_with_timeout "$COMMAND_TIMEOUT" "$WRAPPER" -- bash -c 'printf "wrapped stdout\\n"; exit 23' \
   >"$TMP/wait-command.out" 2>"$TMP/wait-command.err" &
 queued_pid=$!
 BACKGROUND_PIDS+=("$queued_pid")
@@ -491,14 +547,14 @@ PY
 # Both documented bypass paths execute immediately even while the only slot is held.
 ORBIT_BUILD_BUDGET_DIR="$TMP/locks-wait-reporting" ORBIT_BUILD_SLOTS=1 \
   ORBIT_BUILD_BUDGET_HELD=1 _ORBIT_BUILD_BUDGET_TEST_WAIT_INTERVAL_SECONDS=0.05 \
-  timeout "$COMMAND_TIMEOUT" "$WRAPPER" -- bash -c 'printf "reentry stdout\\n"' \
+  run_with_timeout "$COMMAND_TIMEOUT" "$WRAPPER" -- bash -c 'printf "reentry stdout\\n"' \
   >"$TMP/reentry.out" 2>"$TMP/reentry.err" \
   || fail "held-marker re-entry tried to acquire a second slot"
 [[ "$(cat "$TMP/reentry.out")" == "reentry stdout" ]] || fail "held-marker re-entry changed stdout"
 [[ ! -s "$TMP/reentry.err" ]] || fail "held-marker re-entry emitted admission diagnostics"
 ORBIT_BUILD_BUDGET_DIR="$TMP/locks-wait-reporting" ORBIT_BUILD_SLOTS=1 ORBIT_BUILD_BUDGET=0 \
   _ORBIT_BUILD_BUDGET_TEST_WAIT_INTERVAL_SECONDS=0.05 \
-  timeout "$COMMAND_TIMEOUT" "$WRAPPER" -- bash -c 'printf "bypass stdout\\n"' \
+  run_with_timeout "$COMMAND_TIMEOUT" "$WRAPPER" -- bash -c 'printf "bypass stdout\\n"' \
   >"$TMP/bypass-held.out" 2>"$TMP/bypass-held.err" \
   || fail "budget bypass tried to acquire a slot"
 [[ "$(cat "$TMP/bypass-held.out")" == "bypass stdout" ]] || fail "budget bypass changed stdout"
@@ -543,7 +599,7 @@ grep -Fq "target=$TMP/targets/nested" "$TMP/nested/events" || fail "nested comma
 ORBIT_BUILD_BUDGET_DIR="$TMP/locks-nested" ORBIT_BUILD_SLOTS=1 ORBIT_CARGO_JOBS=5 \
   CARGO_TARGET_DIR="$TMP/targets/queued" \
   _ORBIT_BUILD_BUDGET_TEST_WAIT_INTERVAL_SECONDS=0.05 \
-  timeout "$COMMAND_TIMEOUT" "$WRAPPER" -- "$TMP/helper.py" "$TMP/nested" queued sleep 0.01 \
+  run_with_timeout "$COMMAND_TIMEOUT" "$WRAPPER" -- "$TMP/helper.py" "$TMP/nested" queued sleep 0.01 \
   2>"$TMP/nested-queued.err" &
 queued_pid=$!
 BACKGROUND_PIDS+=("$queued_pid")
@@ -573,7 +629,7 @@ printf '%s\n' "$@" >>"${FAKE_CARGO_LOG}"
 SH
 chmod +x "$TMP/fake-cargo"
 FAKE_CARGO_LOG="$TMP/make.log" ORBIT_BUILD_BUDGET_DIR="$TMP/locks-make" \
-  ORBIT_BUILD_SLOTS=1 ORBIT_CARGO_JOBS=9 timeout "$COMMAND_TIMEOUT" "$WRAPPER" -- \
+  ORBIT_BUILD_SLOTS=1 ORBIT_CARGO_JOBS=9 run_with_timeout "$COMMAND_TIMEOUT" "$WRAPPER" -- \
   make -s -C "$ROOT" check CARGO="$TMP/fake-cargo" BUILD_BUDGET="$WRAPPER"
 grep -Fxq 'jobs=9' "$TMP/make.log" || fail "nested Make entry lost Cargo job limit"
 grep -Fxq 'check' "$TMP/make.log" || fail "nested Make entry did not invoke cargo check"
@@ -587,11 +643,12 @@ CARGO_BUILD_JOBS=6 ORBIT_CARGO_JOBS=7 ORBIT_BUILD_BUDGET_DIR="$TMP/locks-overrid
   "$WRAPPER" -- "$TMP/helper.py" "$TMP/override" orbit-override sleep 0.01
 grep -Fq 'jobs=7' "$TMP/override/events" || fail "ORBIT_CARGO_JOBS did not take precedence"
 
+mkdir -p "$TMP/invalid-home"
 for setting in 'ORBIT_BUILD_SLOTS=0' 'ORBIT_BUILD_SLOTS=banana' \
   'ORBIT_CARGO_JOBS=0' 'ORBIT_CARGO_JOBS=4.5' 'ORBIT_BUILD_BUDGET=maybe' \
   'ORBIT_BUILD_LOW_PRIORITY=maybe'; do
   set +e
-  env "$setting" "$WRAPPER" -- true >/dev/null 2>"$TMP/invalid.err"
+  env HOME="$TMP/invalid-home" ORBIT_BUILD_BUDGET_DIR="$TMP/locks-invalid" "$setting" "$WRAPPER" -- true >/dev/null 2>"$TMP/invalid.err"
   status=$?
   set -e
   [[ "$status" == "64" ]] || fail "$setting returned $status instead of 64"
@@ -653,7 +710,9 @@ for invalid in 0 banana 1025; do
 done
 
 # Explicit bypass avoids admission but retains the resolved Cargo job setting.
-ORBIT_BUILD_BUDGET=0 ORBIT_CARGO_JOBS=8 \
+mkdir -p "$TMP/bypass-home"
+HOME="$TMP/bypass-home" ORBIT_BUILD_BUDGET_DIR="$TMP/locks-bypass" \
+  ORBIT_BUILD_BUDGET=0 ORBIT_CARGO_JOBS=8 \
   "$WRAPPER" -- "$TMP/helper.py" "$TMP/bypass" bypass sleep 0.01
 grep -Fq 'jobs=8' "$TMP/bypass/events" || fail "bypass lost Cargo job setting"
 grep -Fq 'slot=None' "$TMP/bypass/events" || fail "bypass unexpectedly acquired a slot"
@@ -729,9 +788,11 @@ cat >"$TMP/fake-app" <<'SH'
 set -euo pipefail
 printf '%s\n' "$@" >"${FAKE_RUN_ARGS}"
 touch "${FAKE_RUN_STARTED}"
-while [[ ! -e "${FAKE_RUN_RELEASE}" ]]; do
-  sleep 0.02
-done
+"$REAL_PYTHON3" -c 'import os, sys, time
+deadline = time.monotonic() + 60.0
+while not os.path.exists(sys.argv[1]) and time.monotonic() < deadline:
+    time.sleep(0.02)
+' "${FAKE_RUN_RELEASE}"
 exit "${FAKE_RUN_EXIT:-0}"
 SH
 chmod +x "$TMP/fake-app"
@@ -802,17 +863,20 @@ case "$cmd" in
       sh -c "$shell_cmd"
     done
     touch "${FAKE_WATCH_IDLE}"
-    while [[ ! -e "${FAKE_WATCH_AGAIN}" ]]; do
-      sleep 0.02
-    done
+    "$REAL_PYTHON3" -c 'import os, sys, time
+deadline = time.monotonic() + 60.0
+while not os.path.exists(sys.argv[1]) and time.monotonic() < deadline:
+    time.sleep(0.02)
+' "${FAKE_WATCH_AGAIN}"
     export FAKE_WATCH_ITER=2
     for shell_cmd in "${commands[@]}"; do
       sh -c "$shell_cmd"
     done
     touch "${FAKE_WATCH_SECOND}"
-    while true; do
-      sleep 1
-    done
+    exec "$REAL_PYTHON3" -c 'import signal, sys
+signal.signal(signal.SIGTERM, lambda *_: sys.exit(143))
+signal.pause()
+'
     ;;
   check|test)
     printf 'event=iteration cmd=%s iter=%s slot=%s held=%s\n' \
@@ -820,9 +884,11 @@ case "$cmd" in
       "${ORBIT_BUILD_BUDGET_HELD:-}" >>"${FAKE_MAKE_LOG}"
     touch "${FAKE_WATCH_DIR}/started-${cmd}-${FAKE_WATCH_ITER:-unknown}"
     if [[ "$cmd" == "check" && "${FAKE_WATCH_ITER:-}" == "1" ]]; then
-      while [[ ! -e "${FAKE_WATCH_RELEASE}" ]]; do
-        sleep 0.02
-      done
+      "$REAL_PYTHON3" -c 'import os, sys, time
+deadline = time.monotonic() + 60.0
+while not os.path.exists(sys.argv[1]) and time.monotonic() < deadline:
+    time.sleep(0.02)
+' "${FAKE_WATCH_RELEASE}"
     fi
     ;;
   *)
@@ -872,7 +938,7 @@ printf 'alpha\nbeta\n' >"$TMP/expected-run-args"
 diff -q "$FAKE_RUN_ARGS" "$TMP/expected-run-args" >/dev/null \
   || fail "make run did not preserve application arguments"
 ORBIT_BUILD_BUDGET_DIR="$TMP/locks-run" ORBIT_BUILD_SLOTS=1 \
-  timeout "$COMMAND_TIMEOUT" "$WRAPPER" -- true \
+  run_with_timeout "$COMMAND_TIMEOUT" "$WRAPPER" -- true \
   || fail "make run application runtime retained the build slot"
 touch "$FAKE_RUN_RELEASE"
 set +e
@@ -967,7 +1033,7 @@ wait_for "$FAKE_WATCH_DIR/started-check-1"
 # slot, not that the probe was slow to start.
 ORBIT_BUILD_BUDGET_DIR="$TMP/locks-watch" ORBIT_BUILD_SLOTS=1 \
   _ORBIT_BUILD_BUDGET_TEST_WAIT_INTERVAL_SECONDS=0.05 \
-  timeout "$COMMAND_TIMEOUT" "$WRAPPER" -- true \
+  run_with_timeout "$COMMAND_TIMEOUT" "$WRAPPER" -- true \
   2>"$TMP/watch-probe.err" &
 probe_pid=$!
 BACKGROUND_PIDS+=("$probe_pid")
@@ -979,7 +1045,7 @@ wait "$probe_pid" || fail "watch probe did not run after the check released its 
 forget_pid "$probe_pid"
 wait_for "$FAKE_WATCH_IDLE"
 ORBIT_BUILD_BUDGET_DIR="$TMP/locks-watch" ORBIT_BUILD_SLOTS=1 \
-  timeout "$COMMAND_TIMEOUT" "$WRAPPER" -- true \
+  run_with_timeout "$COMMAND_TIMEOUT" "$WRAPPER" -- true \
   || fail "idle watch retained a build slot"
 grep -Eq '^event=invoke cmd=watch slot= held=$' "$FAKE_MAKE_LOG" \
   || fail "watch driver should not hold a slot"
@@ -1052,7 +1118,7 @@ export FAKE_ARTIFACT_MODE FAKE_BUILD_EXIT
 : >"$FAKE_BUILD_ARGS"
 ORBIT_BUILD_BUDGET_DIR="$TMP/locks-install" ORBIT_BUILD_SLOTS=1 \
   CARGO_TARGET_DIR="$REDIRECTED_TARGET" INSTALL_BIN_DIR="$FAKE_INSTALL_BIN_DIR" \
-  HOME="$FAKE_HOME" timeout "$COMMAND_TIMEOUT" \
+  HOME="$FAKE_HOME" run_with_timeout "$COMMAND_TIMEOUT" \
   make -s -C "$CONSUMER_ROOT" install CARGO="$TMP/fake-make-cargo" BUILD_BUDGET="$WRAPPER"
 grep -Eq '^event=invoke cmd=build slot=1 held=1$' "$FAKE_MAKE_LOG" \
   || fail "make install build was not admitted"
@@ -1072,7 +1138,7 @@ rm -f "$FAKE_INSTALL_BIN_DIR/orbit"
 : >"$FAKE_BUILD_ARGS"
 ORBIT_BUILD_BUDGET_DIR="$TMP/locks-install-dbg" ORBIT_BUILD_SLOTS=1 \
   CARGO_TARGET_DIR="$REDIRECTED_TARGET" INSTALL_BIN_DIR="$FAKE_INSTALL_BIN_DIR" \
-  HOME="$FAKE_HOME" timeout "$COMMAND_TIMEOUT" \
+  HOME="$FAKE_HOME" run_with_timeout "$COMMAND_TIMEOUT" \
   make -s -C "$CONSUMER_ROOT" install INSTALL_PROFILE=debug CARGO="$TMP/fake-make-cargo" BUILD_BUDGET="$WRAPPER"
 grep -Eq '^event=invoke cmd=build slot=1 held=1$' "$FAKE_MAKE_LOG" \
   || fail "make install debug build was not admitted"
@@ -1090,9 +1156,11 @@ cat >"$REDIRECTED_DEBUG/orbit" <<'SH'
 #!/usr/bin/env bash
 printf '%s\n' "$@" >"${FAKE_DEV_ARGS}"
 touch "${FAKE_DEV_STARTED}"
-while [[ ! -e "${FAKE_DEV_RELEASE}" ]]; do
-  sleep 0.02
-done
+"$REAL_PYTHON3" -c 'import os, sys, time
+deadline = time.monotonic() + 60.0
+while not os.path.exists(sys.argv[1]) and time.monotonic() < deadline:
+    time.sleep(0.02)
+' "${FAKE_DEV_RELEASE}"
 printf 'fresh-custom-dev-out\n'
 SH
 chmod +x "$REDIRECTED_DEBUG/orbit"
@@ -1118,7 +1186,7 @@ diff -q "$FAKE_DEV_ARGS" "$TMP/expected-dev-args" >/dev/null \
   || fail "make dev did not preserve application arguments"
 # Build slot must be released before application runtime.
 ORBIT_BUILD_BUDGET_DIR="$TMP/locks-dev" ORBIT_BUILD_SLOTS=1 \
-  timeout "$COMMAND_TIMEOUT" "$WRAPPER" -- true \
+  run_with_timeout "$COMMAND_TIMEOUT" "$WRAPPER" -- true \
   || fail "make dev application runtime retained the build slot"
 touch "$FAKE_DEV_RELEASE"
 wait "$DEV_PID"
@@ -1133,7 +1201,7 @@ mkdir -p "$FAKE_BIN_DIR"
 cat >"$FAKE_BIN_DIR/python3" <<'SH'
 #!/usr/bin/env bash
 if [[ "${1:-}" == "-c" ]]; then
-  exec /usr/bin/python3 "$@"
+  exec "$REAL_PYTHON3" "$@"
 fi
 for arg in "$@"; do
   if [[ "$arg" == *"web-memory-soak"* ]]; then
@@ -1141,7 +1209,7 @@ for arg in "$@"; do
     exit 0
   fi
 done
-exec /usr/bin/python3 "$@"
+exec "$REAL_PYTHON3" "$@"
 SH
 chmod +x "$FAKE_BIN_DIR/python3"
 

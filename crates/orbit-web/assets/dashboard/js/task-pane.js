@@ -33,7 +33,7 @@ function refreshDraftDetails(wrap, task, context, readinessTask = task) {
   taskReadiness.refreshOperatorRecordFeedback(wrap, task);
   refreshDecisionAnswerFeedback(wrap, task, context);
   if (Array.isArray(readinessTask.context_files)) {
-    const count = wrap.querySelector(`#detail-${task.id}-tab-context_files .detail-tab-count`);
+    const count = wrap.querySelector(`#${CSS.escape(`detail-${task.id}-tab-context_files`)} .detail-tab-count`);
     if (count) count.textContent = String(readinessTask.context_files.length);
     for (const ul of wrap.querySelectorAll(".file-list")) {
       if (!ul.contentionTask) continue;
@@ -144,6 +144,9 @@ function buildPinnedTask(ptask, context) {
   ]);
   row.hidden = !outside;
   stopRowInteraction(row);
+  // Read the pinned task's Fix PR readiness like a list detail does, so its
+  // pending flag and answer reach the hash below.
+  if (ptask.status === "review" && taskPullRequestNumber(ptask)) fixPrState(ptask, context);
   row.dataset.hash = `${outside}-${ptask.id}-${ptask.title}-${ptask.status}-${ptask.crew || ""}-${ptask.resolved_crew || ""}-${crewOptionsSignature()}-${feedbackSignature(taskState.crewFeedback, taskShared.taskDispatchIdentity(ptask))}`;
 
   const drain = taskDrainState(ptask, context);
@@ -154,7 +157,7 @@ function buildPinnedTask(ptask, context) {
   const wrap = el("div", { class: "pinned-task-wrap" }, [row, detail]);
   wrap.teardown = () => taskComments.disconnectCommentCards(wrap);
   wrap.dataset.key = `pinned-${taskShared.taskDispatchIdentity(ptask)}`;
-  wrap.dataset.hash = `${row.dataset.hash}-${JSON.stringify(ptask)}-${taskDrainSignature(drain)}-${detailFeedbackSignature(ptask)}-${taskActionSignature(ptask)}-${fixPrSignature(ptask)}-${taskReadiness.operatorRecordSignature(ptask)}-${decisionAnswerSignature(ptask)}`;
+  wrap.dataset.hash = `${row.dataset.hash}-${JSON.stringify(ptask)}-${taskDrainSignature(drain)}-${detailFeedbackSignature(ptask)}-${taskActionSignature(ptask)}-${fixPrSignature(ptask)}-${taskReadiness.operatorRecordSignature(ptask)}-${decisionAnswerSignature(ptask)}-${taskState.shipInFlightTaskIds.has(taskShared.taskDispatchIdentity(ptask))}-${hostWriteRefusal()}`;
   return wrap;
 }
 /* ORB-11655: a comment or reject form, or an open field editor (ORB-12235),
@@ -290,10 +293,12 @@ function buildPaneHead(task, pinned, context) {
   const close = page ? null : escCloseButton("Close task details (Esc)", {
     onClick: () => closeTaskPane(context, { forget: true }),
   });
-  const key = `pane-head-${task.id}`;
+  // Keyed by dispatch identity: in the aggregate view two workspaces can
+  // hold the same task id.
+  const key = `pane-head-${taskShared.taskDispatchIdentity(task)}`;
   // The head carries only the id and title; status, crew, run and dates live in
   // the detail's Details section, which edits them.
-  const baseHash = `${task.id}-${task.title}-${pinned}-${page}`;
+  const baseHash = `${taskShared.taskDispatchIdentity(task)}-${task.title}-${pinned}-${page}`;
   const title = el("h2", { class: "task-pane-title", id: "task-pane-title", text: task.title || task.id });
   title.tabIndex = -1;
   const id = makeCopyButton(task.id, { class: "id mono", description: "Copy task ID" });

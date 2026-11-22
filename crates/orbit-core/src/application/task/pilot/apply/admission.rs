@@ -42,6 +42,9 @@ pub(in super::super) struct PreparedTaskSnapshot {
     pub(in super::super) context_creation_identity: Option<String>,
     /// The pilot mode preparation chose for the task.
     pub(in super::super) pilot_mode: PilotModeSnapshot,
+    /// Host-verified deterministic `comment-hygiene` batch preparation, when
+    /// this task is a selector-free `comment-hygiene` chore [ORB-26787].
+    pub(in super::super) comment_hygiene_batch: Option<Value>,
 }
 
 /// How preparation asked the pilot to assess a task. The default, also read
@@ -78,6 +81,9 @@ pub(in super::super) struct ValidatedTask {
     pub(in super::super) post_deploy: Vec<super::super::PostDeployRequirement>,
     /// The typed UI finding: add the `ui` tag when the task lacks it.
     pub(in super::super) user_facing_ui: bool,
+    /// The pilot verified the task expects no repository diff: add the
+    /// `no-diff-expected` tag when the task lacks it.
+    pub(in super::super) no_diff_expected: bool,
     /// Exact material certified by the atomic write, recovered from its audit
     /// on replay rather than adopted from a later task read.
     pub(in super::super) applied_material: Option<AppliedTaskMaterial>,

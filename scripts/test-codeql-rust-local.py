@@ -322,7 +322,10 @@ class LocalCodeqlTests(unittest.TestCase):
                         _ORBIT_CODEQL_MEMINFO_PATH=str(self.meminfo),
                         RUSTUP_HOME=str(self.global_dirs[0]),
                         CARGO_HOME=str(self.global_dirs[1]))
-        self.env.pop("ORBIT_CODEQL_SLOTS", None)
+        for key in ("ORBIT_CODEQL_SLOTS", "ORBIT_CODEQL_THREADS", "ORBIT_CODEQL_RAM",
+                    "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY",
+                    "http_proxy", "https_proxy", "all_proxy", "no_proxy"):
+            self.env.pop(key, None)
 
     # The timeout only guards against a hung script. A stubbed run takes about
     # 2 s, but a busy executor stretched runs past 20 s on a managed macOS leaf
@@ -737,9 +740,19 @@ with open(os.environ["STUB_ADMISSION_RELEASE"]) as pipe:
                     process = subprocess.Popen(["bash", str(self.script), "--fresh", "fixture.ql"],
                                                cwd=self.root, env=env, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                                process_group=0)
-                    anchor = spawn_group_anchor(process)
                     try:
-                        ready, _, _ = select.select([event_pipe], [], [], 180)
+                        anchor = spawn_group_anchor(process)
+                    except BaseException:
+                        process.kill()
+                        process.wait(timeout=180)
+                        raise
+                    try:
+                        wait_deadline = time.monotonic() + 180
+                        ready = []
+                        while time.monotonic() < wait_deadline:
+                            ready, _, _ = select.select([event_pipe], [], [], 0.1)
+                            if ready or process.poll() is not None:
+                                break
                         self.assertTrue(ready, "child never reached admission or extraction")
                         self.assertEqual(event_pipe.read(64), b"waiting\n", "extraction started before admission")
                         self.assertFalse(any(call["name"] == "codeql" for call in self.calls()))
@@ -890,6 +903,8 @@ os.execv({real_mv!r}, sys.argv)
 
         deadline = time.monotonic() + 120
         while (len(starts()) < 2 or not waiting()) and time.monotonic() < deadline:
+            if any(process.poll() is not None for process, _ in runs):
+                break
             time.sleep(0.1)
         self.assertEqual(len(starts()), 2, [path.read_text() for _, path in runs])
         self.assertEqual(len(waiting()), 1)

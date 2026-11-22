@@ -15,7 +15,10 @@ export function initTaskCreate({ getWorkspaces }) {
   try { saved = JSON.parse(sessionStorage.getItem(STORAGE) || 'null'); }
   catch { storageError = 'Saved submission is unavailable. Restore browser storage before creating a task.'; }
   const host = () => getHost() || getServingHost()?.name || null;
-  const inScope = () => !saved || (saved.host === host() && (!getWorkspace() || saved.workspace === getWorkspace()));
+  // The serving host compares as null: a submission saved before /api/hosts
+  // named it stored null, and must stay in scope once the name arrives.
+  const hostKey = name => (name && name !== getServingHost()?.name ? name : null);
+  const inScope = () => !saved || (hostKey(saved.host) === hostKey(host()) && (!getWorkspace() || saved.workspace === getWorkspace()));
   const feedback = message => { $('feedback').textContent = message; };
   const persist = value => {
     // Saving must succeed before a request can begin, including on reload.

@@ -11,6 +11,8 @@ mod attention_read;
 mod checkpoint_history;
 mod control_admission;
 mod deadline_expiry;
+mod drain_status_read;
+mod friction_update;
 mod landing;
 #[cfg(unix)]
 mod launch;

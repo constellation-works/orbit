@@ -28,6 +28,8 @@ function resetOperationsForWorkspace() {
   operationsState.lastOperations = null;
   operationsState.lastAutoTasks = null;
   operationsState.lastAutoDrain = null;
+  // The cron zone is the host's; another host's payload names its own.
+  operationsState.hostCronZone = null;
   for (const reset of operationsResetCallbacks) reset();
   for (const id of ["routine-operation-feedback", "clock-operation-feedback", "auto-task-operation-feedback", "auto-drain-operation-feedback", "job-operation-feedback", "script-operation-feedback", "resident-operation-feedback"]) feedback(id, "", "");
 }

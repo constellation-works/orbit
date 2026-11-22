@@ -80,9 +80,10 @@ class RepackTests(unittest.TestCase):
 
     def test_members_outside_target_links_and_escapes_are_refused(self):
         # nextest's own extraction refused unsafe members; this one must too.
+        absolute_target = self.root / "orbit-repack-absolute"
         for case, member in (("outside target", ("scripts/run.sh", b"x", 0o755)),
                              ("escaping path", ("target/../escape", b"x", 0o644)),
-                             ("absolute path", ("/tmp/orbit-repack-absolute", b"x", 0o644)),
+                             ("absolute path", (str(absolute_target), b"x", 0o644)),
                              ("symlink", ("target/debug/link", b"", 0o777, tarfile.SYMTYPE))):
             with self.subTest(case=case):
                 _, transfer = self.pack_tar([("target/debug/ok", b"ok", 0o644), member], parts=1)
@@ -92,7 +93,7 @@ class RepackTests(unittest.TestCase):
                 self.assertNotEqual(result.returncode, 0, case)
                 self.assertFalse((self.root / "escape").exists())
                 self.assertFalse((destination / "escape").exists())
-                self.assertFalse(Path("/tmp/orbit-repack-absolute").exists())
+                self.assertFalse(absolute_target.exists())
                 self.assertFalse((destination / "scripts").exists())
                 self.assertFalse((destination / "target/debug/link").is_symlink())
 

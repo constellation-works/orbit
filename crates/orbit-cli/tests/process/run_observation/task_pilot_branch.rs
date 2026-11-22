@@ -445,3 +445,307 @@ fn generic_job_run_rejects_string_task_ids_for_task_pilot_before_submission() {
         json!("plain-string-value")
     );
 }
+
+#[test]
+fn generic_job_run_validates_pilot_input_against_resolved_job_and_step() {
+    if !isolated_run_observation(
+        "run_observation::task_pilot_branch::generic_job_run_validates_pilot_input_against_resolved_job_and_step",
+    ) {
+        return;
+    }
+    let fixture = Fixture::terminal();
+    git_repo::SeededRepo::new(&fixture.work).build();
+    let origin = fixture.home.join("origin.git");
+    git_repo::run(
+        &fixture.work,
+        &["clone", "--bare", ".", origin.to_str().unwrap()],
+    );
+    git_repo::run(
+        &fixture.work,
+        &["remote", "add", "origin", origin.to_str().unwrap()],
+    );
+    let runtime = fixture.registered_runtime();
+
+    let activities_dir = fixture.work.join(".orbit/resources/activities");
+    fs::create_dir_all(&activities_dir).unwrap();
+    fs::write(
+        activities_dir.join("custom_prepare.yaml"),
+        json!({
+            "schemaVersion": 2,
+            "kind": "Activity",
+            "metadata": {"name": "custom_prepare"},
+            "spec": {
+                "type": "deterministic",
+                "description": "Custom-named prepare_task_pilot activity alias",
+                "action": "prepare_task_pilot",
+                "config": {}
+            }
+        })
+        .to_string(),
+    )
+    .unwrap();
+
+    // Direct non-pilot file named `task_pilot_pipeline` in the working directory
+    // must win over the catalog name for both bare and `./` spellings on both aliases.
+    let shadowed_file = fixture.work.join("task_pilot_pipeline");
+    fs::write(
+        &shadowed_file,
+        json!({
+            "schemaVersion": 2,
+            "kind": "Job",
+            "metadata": {"name": "string_input_probe"},
+            "spec": {
+                "state": "enabled",
+                "kind": "workflow",
+                "steps": [{
+                    "id": "nap",
+                    "default_input": {"seconds": 0, "note": "{{ input.task_ids }}"},
+                    "spec": {"type": "deterministic", "action": "sleep", "config": {}}
+                }]
+            }
+        })
+        .to_string(),
+    )
+    .unwrap();
+
+    // A direct file whose metadata.name is `task_pilot_pipeline` but has no
+    // preparation step must also keep generic string `task_ids` input.
+    let metadata_named_probe = fixture.home.join("metadata-pilot-name-probe.yaml");
+    fs::write(
+        &metadata_named_probe,
+        json!({
+            "schemaVersion": 2,
+            "kind": "Job",
+            "metadata": {"name": "task_pilot_pipeline"},
+            "spec": {
+                "state": "enabled",
+                "kind": "workflow",
+                "steps": [{
+                    "id": "nap",
+                    "default_input": {"seconds": 0, "note": "{{ input.task_ids }}"},
+                    "spec": {"type": "deterministic", "action": "sleep", "config": {}}
+                }]
+            }
+        })
+        .to_string(),
+    )
+    .unwrap();
+
+    // Custom job whose pilot step passes a literal `task_ids: []` array must
+    // still permit a top-level string `task_ids` consumed by another step.
+    fixture.write_job(
+        "custom_pilot_literal_array.yaml",
+        &json!({
+            "schemaVersion": 2,
+            "kind": "Job",
+            "metadata": {"name": "custom_pilot_literal_array"},
+            "spec": {
+                "state": "enabled",
+                "kind": "workflow",
+                "steps": [
+                    {
+                        "id": "prepare",
+                        "target": "activity:custom_prepare",
+                        "default_input": {
+                            "task_ids": [],
+                            "workspace_path": ".",
+                            "base_branch": "main"
+                        }
+                    },
+                    {
+                        "id": "probe",
+                        "default_input": {"seconds": 0, "note": "{{ input.task_ids }}"},
+                        "spec": {"type": "deterministic", "action": "sleep", "config": {}}
+                    }
+                ]
+            }
+        })
+        .to_string(),
+    );
+
+    // Custom jobs whose `activity:custom_prepare` step forwards caller string
+    // `task_ids` (explicitly or via omitted/whole-input default_input) must fail
+    // with `invalid_input` before any durable run exists.
+    fixture.write_job(
+        "aliased_pilot_forwarded.yaml",
+        &json!({
+            "schemaVersion": 2,
+            "kind": "Job",
+            "metadata": {"name": "aliased_pilot_forwarded"},
+            "spec": {
+                "state": "enabled",
+                "kind": "workflow",
+                "steps": [{
+                    "id": "prepare",
+                    "target": "activity:custom_prepare",
+                    "default_input": {
+                        "task_ids": "{{ input.task_ids }}",
+                        "workspace_path": "."
+                    }
+                }]
+            }
+        })
+        .to_string(),
+    );
+    let aliased_whole_input_path = fixture.home.join("aliased-whole-input.yaml");
+    fs::write(
+        &aliased_whole_input_path,
+        json!({
+            "schemaVersion": 2,
+            "kind": "Job",
+            "metadata": {"name": "aliased_whole_input"},
+            "spec": {
+                "state": "enabled",
+                "kind": "workflow",
+                "steps": [{
+                    "id": "prepare",
+                    "target": "activity:custom_prepare",
+                    "default_input": "{{ input }}"
+                }]
+            }
+        })
+        .to_string(),
+    )
+    .unwrap();
+
+    let cli = |args: &[&str]| {
+        let output = fixture
+            .orbit()
+            .env("PATH", std::env::var_os("PATH").unwrap())
+            .args(args)
+            .timeout(Duration::from_secs(120))
+            .output()
+            .unwrap();
+        if let Ok(result) = serde_json::from_slice::<Value>(&output.stdout)
+            && let Some(id) = result["run_id"].as_str()
+        {
+            let run = runtime.show_job_run(id).unwrap();
+            test_env::wait_until("disposable pilot worker exit", || {
+                run.pid.is_none_or(|pid| {
+                    probe_process_liveness(pid, run.pid_start_time.as_deref())
+                        == ProcessLiveness::Exited
+                })
+            });
+        }
+        output
+    };
+
+    for subcommand in [["run", "job"], ["job", "run"]] {
+        for target in ["task_pilot_pipeline", "./task_pilot_pipeline"] {
+            let output = cli(&[
+                subcommand[0],
+                subcommand[1],
+                target,
+                "--input",
+                "task_ids=plain-string-value",
+                "--wait",
+                "--timeout-seconds",
+                "60",
+                "--json",
+            ]);
+            assert!(
+                output.status.success(),
+                "{subcommand:?} {target} must select direct non-pilot file: {output:?}"
+            );
+            let doc: Value = serde_json::from_slice(&output.stdout).unwrap();
+            assert_eq!(doc["job_id"], "string_input_probe", "{doc}");
+            let run = runtime
+                .show_job_run(doc["run_id"].as_str().unwrap())
+                .unwrap();
+            assert_eq!(
+                run.input.as_ref().unwrap()["task_ids"],
+                json!("plain-string-value")
+            );
+        }
+    }
+
+    let meta_probe_output = cli(&[
+        "run",
+        "job",
+        metadata_named_probe.to_str().unwrap(),
+        "--input",
+        "task_ids=plain-string-value",
+        "--wait",
+        "--timeout-seconds",
+        "60",
+        "--json",
+    ]);
+    assert!(meta_probe_output.status.success(), "{meta_probe_output:?}");
+    let meta_probe_doc: Value = serde_json::from_slice(&meta_probe_output.stdout).unwrap();
+    let meta_probe_run = runtime
+        .show_job_run(meta_probe_doc["run_id"].as_str().unwrap())
+        .unwrap();
+    assert_eq!(
+        meta_probe_run.input.as_ref().unwrap()["task_ids"],
+        json!("plain-string-value")
+    );
+
+    // Once the local file is absent, bare `task_pilot_pipeline` resolves to the
+    // shipped catalog pilot again and refuses string `task_ids`.
+    fs::remove_file(&shadowed_file).unwrap();
+
+    for subcommand in [["run", "job"], ["job", "run"]] {
+        let output = cli(&[
+            subcommand[0],
+            subcommand[1],
+            "custom_pilot_literal_array",
+            "--input",
+            "task_ids=plain-string-value",
+            "--wait",
+            "--timeout-seconds",
+            "60",
+            "--json",
+        ]);
+        assert!(
+            output.status.success(),
+            "{subcommand:?} custom_pilot_literal_array must allow top-level string task_ids: {output:?}"
+        );
+        let doc: Value = serde_json::from_slice(&output.stdout).unwrap();
+        let run_id = doc["run_id"].as_str().unwrap();
+        let run = runtime.show_job_run(run_id).unwrap();
+        assert_eq!(
+            run.input.as_ref().unwrap()["task_ids"],
+            json!("plain-string-value")
+        );
+        let state = runtime.read_run_state(run_id).unwrap().unwrap();
+        assert_eq!(state.pipeline["prepare"]["mode"], json!("automatic"));
+        assert_eq!(state.pipeline["prepare"]["task_ids"], json!([]));
+    }
+
+    let before_refusals = fixture.snapshot();
+    for target in [
+        "task_pilot_pipeline",
+        "aliased_pilot_forwarded",
+        aliased_whole_input_path.to_str().unwrap(),
+    ] {
+        for subcommand in [["run", "job"], ["job", "run"]] {
+            let output = cli(&[
+                subcommand[0],
+                subcommand[1],
+                target,
+                "--input",
+                "task_ids=plain-string-value",
+                "--json",
+            ]);
+            assert_eq!(
+                output.status.code(),
+                Some(1),
+                "{subcommand:?} {target} must fail before submit: {output:?}"
+            );
+            assert!(output.stdout.is_empty(), "{output:?}");
+            let error: Value = serde_json::from_slice(&output.stderr)
+                .unwrap_or_else(|err| panic!("expected JSON error ({err}): {output:?}"));
+            assert_eq!(error["code"], "invalid_input", "{error}");
+            let message = error["error"].as_str().unwrap_or("");
+            assert!(
+                message.contains("orbit run task-pilot"),
+                "error must retain actionable remedy: {message}"
+            );
+            assert_eq!(
+                fixture.snapshot(),
+                before_refusals,
+                "{subcommand:?} {target} must not persist a durable run"
+            );
+        }
+    }
+}

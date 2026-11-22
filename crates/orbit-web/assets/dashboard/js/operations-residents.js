@@ -5,7 +5,7 @@
 // through the `orbit.resident.*` tools behind /api/residents; the server keeps
 // the mandate rules, so a refused write shows the server's own message.
 
-import { captureWorkspaceVisit, detailsPanel, el, escCloseButton, fetchJson, infoHint, isAggregateView, makeToggleRow, onWorkspaceChange, renderPanelPlaceholder, requestJson, requestPanel, taskHref } from './common.js';
+import { captureWorkspaceVisit, detailsPanel, el, escCloseButton, fetchJson, formatDateTime, getClockZone, infoHint, isAggregateView, makeToggleRow, onWorkspaceChange, renderPanelPlaceholder, requestJson, requestPanel, taskHref } from './common.js';
 import { actionReason, explainUnavailable, feedback, selectedWorkspaceName } from './operations-shared.js';
 
 const FEEDBACK = "resident-operation-feedback";
@@ -16,7 +16,8 @@ const STATE_ORDER = { active: 0, taken_over: 1, paused: 2 };
 const list = (values) => (values?.length ? values.join(", ") : "none");
 const lines = (text) => String(text || "").split("\n").map(line => line.trim()).filter(Boolean);
 const csv = (text) => String(text || "").split(",").map(part => part.trim()).filter(Boolean);
-const when = (value) => (value ? String(value).replace("T", " ").replace(/\.\d+Z$/, "Z") : "none");
+// Times follow the dashboard's UTC/Local clock like every other view.
+const when = (value) => (value ? formatDateTime(value) : "none");
 
 // Pane state that is the operator's, not the payload's: the selected mandate,
 // the open start flow and a chosen action awaiting its reason. A background
@@ -54,7 +55,36 @@ function fact(label, value, title = "") {
 }
 
 function clock(value) {
-  return value ? String(value).replace("T", " ").replace(/\.\d+Z$/, "Z") : "";
+  return value ? formatDateTime(value) : "";
+}
+
+// A `datetime-local` input reads wall time in the browser's own zone, which
+// the dashboard's UTC clock does not show: name that zone beside the input.
+function deadlineHint(prefix) {
+  let zone = "";
+  try {
+    zone = Intl.DateTimeFormat().resolvedOptions().timeZone || "";
+  } catch (_) {
+    zone = "";
+  }
+  const local = zone ? `your browser's local time (${zone})` : "your browser's local time";
+  const note = getClockZone() === "utc" ? `Entered in ${local}, not UTC.` : `Entered in ${local}.`;
+  return prefix ? `${prefix} ${note}` : note;
+}
+
+// Whether an authority form holds input the operator has not submitted. The
+// action composer keeps its text in `ui.pending`, so a render restores it.
+function formHoldsDraft(root) {
+  for (const control of root.querySelectorAll(".resident-authority-form input, .resident-authority-form textarea, .resident-authority-form select")) {
+    if (control.type === "checkbox" || control.type === "radio") {
+      if (control.checked !== control.defaultChecked) return true;
+    } else if (control.tagName === "SELECT") {
+      if ([...control.options].some(option => option.selected !== option.defaultSelected)) return true;
+    } else if (control.value !== control.defaultValue) {
+      return true;
+    }
+  }
+  return false;
 }
 
 // Open decisions when the card read succeeded; grant requests when it did not
@@ -79,7 +109,11 @@ async function write(path, body, success, controls = [], applied = null) {
     return null;
   }
   if (!visit.isCurrent()) return null;
-  feedback(FEEDBACK, "success", typeof success === "function" ? success(result) : success);
+  // A message may carry its own tone: a partial refusal is not a success and
+  // must stay up until the operator acts (STD-07 §R11, §R14).
+  const message = typeof success === "function" ? success(result) : success;
+  if (message && typeof message === "object") feedback(FEEDBACK, message.tone, message.text);
+  else feedback(FEEDBACK, "success", message);
   applied?.();
   await refreshAfterWrite(visit);
   return result;
@@ -262,7 +296,7 @@ function startForm(payload) {
       el("legend", { text: "3 · When it runs" }),
       field("Heartbeat minutes", input("heartbeat_minutes", { type: "number", min: "1", value: "60" }), "The longest it goes without a cycle."),
       field("Floor minutes", input("floor_minutes", { type: "number", min: "1" }), "Optional; defaults to the heartbeat. Set it lower only to react to changes sooner."),
-      field("Deadline", input("deadline", { type: "datetime-local" }), "Optional."),
+      field("Deadline", input("deadline", { type: "datetime-local" }), deadlineHint("Optional.")),
       field("Crew", crew),
       field("Continuity", continuity),
       field("Complexity", complexity),
@@ -703,7 +737,7 @@ function authorityForm(payload, mandate) {
     el("div", { class: "resident-authority-column" }, [
       narrowRights,
       field("Drop workspaces", input("drop_workspaces", { placeholder: list(effective.workspaces) })),
-      field("Deadline", input("deadline", { type: "datetime-local" }), "Shortens the mandate; applied as a separate narrow change."),
+      field("Deadline", input("deadline", { type: "datetime-local" }), deadlineHint("Shortens the mandate; applied as a separate narrow change.")),
       gated(payload, "resident_write", narrow),
     ]),
   ]);
@@ -722,10 +756,10 @@ function authorityForm(payload, mandate) {
     if (hasWiden && deadline) {
       await write(path, { add, workspaces, quote: quoteValue, deadline }, (result) => {
         if (result?.outcome === "granted_narrowing_refused") {
-          return `Widened ${mandate.task_id}; recorded as your answered request. Narrowing refused: ${result.narrowing_error || "unknown reason"}`;
+          return { tone: "error", text: `Widened ${mandate.task_id}; recorded as your answered request. Narrowing refused: ${result.narrowing_error || "unknown reason"}` };
         }
         if (result?.outcome === "unchanged_narrowing_refused") {
-          return `No widening applied for ${mandate.task_id}: the requested rights and workspaces were already held, so no grant request was recorded. Narrowing refused: ${result.narrowing_error || "unknown reason"}`;
+          return { tone: "error", text: `No widening applied for ${mandate.task_id}: the requested rights and workspaces were already held, so no grant request was recorded. Narrowing refused: ${result.narrowing_error || "unknown reason"}` };
         }
         if (result?.outcome === "unchanged_and_narrowed") {
           return `No widening applied for ${mandate.task_id}: the requested rights and workspaces were already held, so no grant request was recorded. Shortened its deadline.`;
@@ -1037,10 +1071,11 @@ function renderResidents(payload, deliberate = false) {
   const live = sortedLive(mandates.filter(mandate => mandate.state !== "ended"));
   const ended = mandates.filter(mandate => mandate.state === "ended");
   if (count) count.textContent = live.length ? String(live.length) : "";
-  // A form the operator is typing in survives a background refresh; the
-  // start dialog keeps its own node, so its values survive every render.
-  // A deliberate render (Cancel, a submitted write) must not be dropped.
-  if (!deliberate && body.querySelector("form :focus")) return;
+  // A form the operator is typing in, or has typed into and left, survives a
+  // background refresh; the start dialog keeps its own node, so its values
+  // survive every render. A deliberate render (Cancel, a submitted write)
+  // must not be dropped.
+  if (!deliberate && (body.querySelector("form :focus") || formHoldsDraft(body))) return;
   if (ui.selected && !mandates.some(mandate => mandate.task_id === ui.selected)) ui.selected = null;
   const toolbar = el("div", { class: "resident-toolbar" }, [routineStatus(payload), startButton(payload)]);
   const parts = [toolbar];

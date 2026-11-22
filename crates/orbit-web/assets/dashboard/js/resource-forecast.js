@@ -14,7 +14,7 @@
 
 import {
   syncNodes, fetchJson, requestPanel, panelCanRender, getWorkspaceRevision, onWorkspaceChange,
-  renderPanelPlaceholder, isAggregateView, formatDateTime, relativeTime,
+  renderPanelPlaceholder, isAggregateView, formatDate, formatDateTime, relativeTime,
 } from './common.js';
 import { el, forecastCard, forecastTable } from './forecast-shared.js';
 import { autoDrainForecast } from './operations-forecast.js';
@@ -447,7 +447,9 @@ function accuracyPanel(accuracy) {
   if (!accuracy || Number(accuracy.forecasts ?? 0) === 0 || offsets.length === 0) {
     return [el("p", { class: "fc-line", text: "No admission forecasts recorded on this host yet. A drain records one on each pass while machine.auto_concurrency is shadow or enforce." })];
   }
-  const since = accuracy.since ? new Date(accuracy.since).toLocaleDateString(undefined, { month: "short", day: "numeric" }) : "the start";
+  // The day on the dashboard's UTC/Local clock; an unreadable time is named
+  // as given rather than printed as "Invalid Date".
+  const since = accuracy.since ? formatDate(accuracy.since) : "the start";
   const cpuFormat = (value, sign) => (sign ? signed(value, 1, " cores") : `${Number(value).toFixed(1)}`);
   const memFormat = (value, sign) => (sign ? signed(Number(value) / GIB, 1, " GiB") : `${(Number(value) / GIB).toFixed(1)} GiB`);
   const covered = offsets.some((offset) => offset.attributed_paired != null);
@@ -508,13 +510,14 @@ function decisionRow(drain, showWorkspace, showPull) {
 
 function decisionsPanel(accuracy) {
   const drains = (Array.isArray(accuracy?.drains) ? accuracy.drains : [])
-    .filter((drain) => Number(drain.shadow_passes) + Number(drain.enforce_passes) + Number(drain.pull_requests) > 0)
+    // An older host omits pull_requests (and may omit a pass count).
+    .filter((drain) => Number(drain.shadow_passes ?? 0) + Number(drain.enforce_passes ?? 0) + Number(drain.pull_requests ?? 0) > 0)
     .sort((a, b) => String(b.run_id).localeCompare(String(a.run_id)));
   if (drains.length === 0) {
     return [el("p", { class: "fc-line", text: "No drain has made an admission decision on this host yet. Each shadow or enforce pass is recorded here." })];
   }
   const showWorkspace = new Set(drains.map((drain) => drain.workspace_id)).size > 1;
-  const showPull = drains.some((drain) => Number(drain.pull_requests) > 0);
+  const showPull = drains.some((drain) => Number(drain.pull_requests ?? 0) > 0);
   const head = [["Drain run"], ...(showWorkspace ? [["Workspace"]] : []), ["Mode"], ["Passes", true], ["Admitted", true], ["Held", true], ["Would hold", true], ["Would add", true],
     ...(showPull ? [["Pull sent", true], ["Pull held", true]] : [])];
   return [

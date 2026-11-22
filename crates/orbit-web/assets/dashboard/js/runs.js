@@ -1048,7 +1048,9 @@ function runsLoadingSkeleton() {
 }
 
 function runFilterControls() {
-  const controls = el("div", { class: "runs-filter", title: "Filter runs by state" });
+  // The group's name is its aria-label, not a title: a container title would
+  // show as every button's native tooltip (STD-07 §R41).
+  const controls = el("div", { class: "runs-filter" });
   controls.setAttribute("role", "group");
   controls.setAttribute("aria-label", "Filter runs by state");
   for (const [value, label] of RUN_FILTER_LABELS) {
@@ -1079,7 +1081,7 @@ function runsQueryInput() {
 }
 
 function runsWindowControls() {
-  const controls = el("div", { class: "runs-window", title: "Time window" });
+  const controls = el("div", { class: "runs-window" });
   controls.setAttribute("role", "group");
   controls.setAttribute("aria-label", "Time window");
   const selected = getWindow();
@@ -1514,9 +1516,10 @@ function runGroupRow(group, attributed, listed) {
   const explained = failure && failure.run ? [failure.run, ...failed.filter((run) => run !== failure.run)] : failed;
   if (!group.repeatedFailure && explained.length > 1) failedAt.title = explained.map((run) => `${run.job_id}\n${runFailure(run).title}`).join("\n\n");
   const failureHash = failure ? (failure.run ? `${runIdentity(failure.run)}:${runFailureHash(failure.run)}` : JSON.stringify(failure.cause)) : "";
+  // No row title: it would leak onto the toggle and links inside the row
+  // (STD-07 §R41). The toggle's description names the group's runs.
   const row = el("div", {
     class: `runs-row runs-group${attributed ? " workspace-attributed" : ""}${group.inFlight ? " runs-group-running" : ""}`,
-    title: group.repeatedFailure ? `${runs.length} identical failures of ${first.job_id}` : `${runs.length} ${group.inFlight ? "runs" : "pipeline runs"} for this task: ${jobNames}`,
   }, [
     el("span", { class: "state" }, [stateCell(runGroupState(runs))]),
     attributed ? el("span", { class: "run-workspace", text: first.workspace_name || first.workspace_id, title: first.workspace_id }) : null,
@@ -1537,7 +1540,7 @@ function runGroupRow(group, attributed, listed) {
     el("span", { class: "run-actions" }),
   ]);
   row.dataset.key = `group-${key}`;
-  row.dataset.hash = `group-${key}-${expanded}-${ts}-${denials}-${toolFails}-${frictionUnavailable}-${JSON.stringify(group.inFlight ? groupTaskRun(group).tasks : first.tasks)}-${runs.map((run) => `${runIdentity(run)}:${run.state}:${runFailureHash(run)}`).join("|")}-${failureHash}-${runFilter === "running" ? runs.map((run) => run.resolved_crew || "").join("|") : ""}${elapsed ? `-${fmtDuration(elapsed.durationMs)}-${elapsed.isLive}-${elapsed.longRun}` : ""}`;
+  row.dataset.hash = `group-${key}-${expanded}-${ts}-${formatAge(ts)}-${denials}-${toolFails}-${frictionUnavailable}-${JSON.stringify(group.inFlight ? groupTaskRun(group).tasks : first.tasks)}-${runs.map((run) => `${runIdentity(run)}:${run.state}:${runFailureHash(run)}`).join("|")}-${failureHash}-${runFilter === "running" ? runs.map((run) => run.resolved_crew || "").join("|") : ""}${elapsed ? `-${fmtDuration(elapsed.durationMs)}-${elapsed.isLive}-${elapsed.longRun}` : ""}`;
   row.style.cursor = "pointer";
   makeRowDisclosure(row, toggle, {
     expanded,
@@ -1611,10 +1614,12 @@ function runRow(r, attributed, body, { child = false, sharedTaskInHeader = false
       runIsResumable(r) ? buildResumeRunButton(r, body) : null,
     ]),
   ];
-  const row = el("div", { class: `runs-row${attributed ? " workspace-attributed" : ""}${child ? " runs-group-child" : ""}`, title: `${r.run_id} (click to inspect)` }, rowCells);
+  // No row title: it would show on the Cancel, Resume and Copy buttons inside
+  // the row (STD-07 §R41). The job link names the run it opens.
+  const row = el("div", { class: `runs-row${attributed ? " workspace-attributed" : ""}${child ? " runs-group-child" : ""}` }, rowCells);
   // A run shared by several tasks is listed under each, so its key names the group.
   row.dataset.key = `run-${runIdentity(r)}${groupKey ? `@${groupKey}` : ""}`;
-  row.dataset.hash = `${runIdentity(r)}-${ts}-${r.duration_ms}-${r.state}-${r.retry_source_run_id || ""}-${resumedAsId || ""}-${resumeRequestsInFlight.has(runIdentity(r)) ? "resuming" : ""}-${friction.denials}-${friction.toolFails}-${friction.unavailable ? "friction-unavailable" : ""}-${durationMs}-${formattedDuration}-${isLive ? "live" : ""}-${friction.longRun}-${child ? "child" : ""}-${runFailureHash(r)}-${runFilter === "running" ? r.resolved_crew || "" : ""}`;
+  row.dataset.hash = `${runIdentity(r)}-${ts}-${formatAge(ts)}-${r.duration_ms}-${r.state}-${r.retry_source_run_id || ""}-${resumedAsId || ""}-${resumeRequestsInFlight.has(runIdentity(r)) ? "resuming" : ""}-${friction.denials}-${friction.toolFails}-${friction.unavailable ? "friction-unavailable" : ""}-${durationMs}-${formattedDuration}-${isLive ? "live" : ""}-${friction.longRun}-${child ? "child" : ""}-${runFailureHash(r)}-${runFilter === "running" ? r.resolved_crew || "" : ""}`;
   row.style.cursor = "pointer";
   row.dataset.hash += `-${JSON.stringify(r.tasks)}-${JSON.stringify(r.task_ids)}-${child && sharedTaskInHeader ? "header-task" : ""}-${groupTaskId}`;
   // A run row opens the run detail view rather than disclosing inline, so its
@@ -1641,7 +1646,7 @@ export function renderRuns(runs) {
   if ($("runs-count")) {
     $("runs-count").textContent = loading ? "…"
       : runFilter === "running" ? formatInFlightCount(top, meta)
-        : formatRunCount(top.length, sorted.length, meta);
+        : formatRunCount(top.length, (runs || []).length, meta);
   }
   frag.appendChild(runsToolbar());
   frag.appendChild(runsScopeNote());

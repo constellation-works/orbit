@@ -27,7 +27,6 @@ spec:
     - orbit.auto_task:mint
     - orbit.auto_task:update
     - orbit.command.exec
-    - orbit.friction:update
     - orbit.routine.control
     - orbit.run:show
     - orbit.task.recover:review_reset

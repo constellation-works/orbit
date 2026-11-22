@@ -16,9 +16,11 @@ Forms:
 Exit status is 0 for every verdict, so nonzero means the adapter itself failed.
 """
 
+import copy
 import hashlib
 import json
 import os
+import platform
 import re
 import runpy
 import sys
@@ -33,6 +35,9 @@ DIGEST_RE = re.compile(r"[0-9a-f]{64}")
 # artifact has no class, whatever its content says about its origin.
 AUTHORITATIVE_WRITERS = {"operator", "system"}
 NATIVE_CLAIM = "native-certificate-claim"
+# The OS this adapter itself runs on: the owner's sandbox, not the candidate's
+# report. A Linux scenario row that was not imported ran on this host.
+HOST_OS = platform.system()
 
 QA_REPORT = "qa-full-sweep-report.json"
 QA_FORECAST = "forecast-history-qa.json"
@@ -139,6 +144,13 @@ def authenticated_native_certificate(request, row, name):
                 f"{name}: no operator- or Orbit-written artifact has the native certificate digest {digest}")
 
 
+def load_harness():
+    """Load the QA sweep harness module from the mounted inputs or checkout."""
+    root = os.environ.get("ORBIT_SCRIPT_IN")
+    path = Path(root) / "test-qa-full-sweep.py" if root else Path(__file__).with_name("test-qa-full-sweep.py")
+    return runpy.run_path(str(path))
+
+
 def judge_native_rows(request, scenario, rows):
     """A macOS scenario earns its assertions only from an authenticated certificate.
 
@@ -161,8 +173,7 @@ def judge_native_rows(request, scenario, rows):
         if row.get("certificate_assertions") != certificate.get("assertions"):
             unavailable("assertions-mismatch", f"{name} claims assertions its certificate does not carry")
     try:
-        validate_native = runpy.run_path(str(inputs / "test-qa-full-sweep.py"))[
-            "validate_hosted_macos_evidence"]
+        validate_native = load_harness()["validate_hosted_macos_evidence"]
         report = artifact_json(request, QA_REPORT)
         candidate = {"head": report["candidate"]["source_revision"],
                      "status": report["source_state"]["status"]}
@@ -170,6 +181,118 @@ def judge_native_rows(request, scenario, rows):
             validate_native(row["native_evidence"], scenario, candidate, inputs, source_files=source_files)
     except (OSError, ImportError, KeyError, TypeError, AttributeError, ValueError) as error:
         unavailable("platform-evidence-missing", f"{name} has no valid macOS evidence: {error}")
+
+
+def imported_linux_qa_passes(body, scenario, candidate_id, revision, inventory_sha, *, harness=None):
+    """Whether an owner-authenticated artifact is a clean Linux QA report for this
+    candidate that passes `scenario`: the candidate, pinned revision and coverage
+    inventory match, the checkout was clean, the report ran on Linux, and every
+    row for the scenario is a PASS for this candidate with the scenario's command,
+    per-row required assertions, and valid harness execution evidence."""
+    if not isinstance(body, dict) or body.get("schema_version") != 2:
+        return False
+    candidate = body.get("candidate")
+    if not isinstance(candidate, dict) or candidate.get("id") != candidate_id \
+            or candidate.get("source_revision") != revision:
+        return False
+    if body.get("inventory_sha256") != inventory_sha:
+        return False
+    state, environment = body.get("source_state"), body.get("environment")
+    if not isinstance(state, dict) or state.get("status") != []:
+        return False
+    if not isinstance(environment, dict) or environment.get("os") != "Linux":
+        return False
+    results = body.get("results")
+    if not isinstance(results, list):
+        return False
+    rows = [row for row in results if isinstance(row, dict) and row.get("scenario") == scenario["id"]]
+    if not rows:
+        return False
+    if harness is None:
+        try:
+            harness = load_harness()
+        except (OSError, ImportError):
+            return False
+    expected_command = scenario.get("command")
+    expected_assertions = set(scenario.get("assertions", []))
+    required_tests = scenario.get("required_tests", [])
+    required_rows = scenario.get("required_rows", [])
+    required_cases = scenario.get("required_cases", [])
+    is_cargo_kind = scenario.get("kind") == "cargo-test"
+    for row in rows:
+        if row.get("candidate_id") != candidate_id or row.get("outcome") != "PASS" \
+                or row.get("command") != expected_command:
+            return False
+        assertions = row.get("assertions")
+        if not isinstance(assertions, list) or not all(isinstance(item, str) for item in assertions):
+            return False
+        if set(assertions) != expected_assertions:
+            return False
+        row_copy = copy.deepcopy(row)
+        try:
+            if is_cargo_kind and not harness["is_cargo_test"](row_copy["command"]):
+                return False
+            harness["validate_cargo_test_evidence"](
+                row_copy["command"], row_copy, required_tests, required_rows,
+            )
+            harness["validate_node_test_evidence"](
+                row_copy["command"], row_copy, required_cases,
+            )
+            finalized = harness["finalize_result"](row_copy, list(assertions), candidate_id)
+        except (KeyError, TypeError, AttributeError, ValueError):
+            return False
+        if finalized.get("outcome") != "PASS" or set(finalized.get("assertions", [])) != expected_assertions:
+            return False
+    return True
+
+
+def authenticated_imported_evidence(request, report, scenario, row):
+    """An imported Linux row, bound to an owner-authenticated Linux QA report.
+
+    `imported_from` and `evidence_sha256` are candidate-written, so a truthy
+    value proves nothing. The digest must be exact and name an artifact the
+    owner's authority records as operator- or Orbit-written. That artifact must
+    itself be a clean Linux QA report for this candidate that passes the
+    scenario (see `imported_linux_qa_passes`). Any other authenticated artifact,
+    such as a macOS certificate, earns no Linux row."""
+    name = scenario["id"]
+    digest = row.get("evidence_sha256")
+    if not isinstance(row.get("imported_from"), str) or not row["imported_from"]:
+        unavailable("platform-evidence-missing", f"{name} has an imported row with no source")
+    if not isinstance(digest, str) or not DIGEST_RE.fullmatch(digest):
+        unavailable("platform-evidence-missing", f"{name} has an imported row with no exact evidence digest")
+    authority = request["trusted"].get("artifact_authority")
+    if not isinstance(authority, dict):
+        unavailable("platform-evidence-unauthenticated",
+                    f"{name}: the owner supplied no artifact authority for imported evidence")
+    artifacts = request["evidence"]["artifacts"]
+    revision = request["trusted"]["source_revision"]
+    for path, entry in authority.items():
+        if not (isinstance(entry, dict) and entry.get("sha256") == digest
+                and entry.get("writer") in AUTHORITATIVE_WRITERS):
+            continue
+        listed = artifacts.get(path)
+        if not isinstance(listed, dict) or listed.get("sha256") != digest:
+            continue
+        if imported_linux_qa_passes(listed.get("json"), scenario, report["candidate"]["id"], revision,
+                                    report["inventory_sha256"]):
+            return
+        unavailable("platform-evidence-missing",
+                    f"{name}: the authenticated artifact `{path}` is not a clean Linux QA report "
+                    f"that passes this scenario for this candidate")
+    unavailable("platform-evidence-unauthenticated",
+                f"{name}: no operator- or Orbit-written artifact has the imported evidence digest {digest}")
+
+
+def judge_linux_rows(request, report, scenario, rows):
+    """A Linux scenario's rows ran on this trusted Linux host, or were imported
+    from a Linux QA report the owner authenticated. The report's own environment
+    block is candidate-written, so it can only agree with the host, never replace it."""
+    for row in rows:
+        if row.get("imported_from") or row.get("evidence_sha256"):
+            authenticated_imported_evidence(request, report, scenario, row)
+        elif HOST_OS != "Linux" or (report.get("environment") or {}).get("os") != "Linux":
+            unavailable("platform-evidence-missing", f"{scenario['id']} has no matching Linux evidence")
 
 
 def judge_qa_results(request, inventory, report, candidate_id):
@@ -220,10 +343,8 @@ def judge_qa_results(request, inventory, report, candidate_id):
             if command and not any(row.get("command") == command for row in rows):
                 unavailable("retired-case-not-executed",
                             f"required scenario {name} retired case {case.get('retired')} has no executed command")
-        if capability == "linux" and report.get("environment", {}).get("os") != "Linux" and not all(
-            row.get("imported_from") and row.get("evidence_sha256") for row in rows
-        ):
-            unavailable("platform-evidence-missing", f"{name} has no matching Linux evidence")
+        if capability == "linux":
+            judge_linux_rows(request, report, scenario, rows)
     return discharged
 
 
@@ -234,9 +355,15 @@ def judge_capability_gaps(request, inventory, report, candidate_id, revision, na
     authenticated certificate discharged (the sweep itself never credits one)."""
     gaps = inventory.get("required_capability_gaps", {})
     decision = report.get("decision")
-    findings = report.get("findings", [])
+    reported = report.get("findings", [])
+    if not isinstance(reported, list):
+        unavailable("report-malformed", "the report's findings are not a list")
+    if decision == "INCOMPLETE" and not reported:
+        # INCOMPLETE must be accounted for: a gap or native finding below. A
+        # report that names nothing missing cannot be incomplete.
+        unavailable("report-incomplete", "the report is INCOMPLETE but records no finding that accounts for it")
     native_findings = {f"{name}: missing, failed, or unrun evidence" for name in native_discharged}
-    findings = [finding for finding in findings if finding not in native_findings]
+    findings = [finding for finding in reported if finding not in native_findings]
     if decision in ("PASS", "INCOMPLETE") and not findings and not gaps:
         return
     if decision not in ("PASS", "INCOMPLETE"):
@@ -289,7 +416,9 @@ def judge_qa(request):
         unavailable("report-malformed", "the report has no candidate")
     expect_revision(candidate.get("source_revision"), revision, "the QA report")
     state = report.get("source_state")
-    if not isinstance(state, dict) or state.get("status"):
+    # The sweep records a clean checkout as an empty status-line list; a
+    # missing, null or otherwise shaped status is not proof of a clean one.
+    if not isinstance(state, dict) or state.get("status") != []:
         unavailable("candidate-dirty", "the QA report's checkout was not a clean candidate")
     inventory, inventory_sha = load_inventory()
     if report.get("inventory_sha256") != inventory_sha:
@@ -396,6 +525,12 @@ def trusted_prep_survey(trusted):
     return survey
 
 
+def task_id_order(task):
+    """Numeric task-ID order: `ORB-99999` precedes `ORB-100000`."""
+    prefix, _, number = str(task["id"]).rpartition("-")
+    return (prefix, int(number), "") if prefix and number.isdecimal() else (str(task["id"]), -1, task["id"])
+
+
 def judge_prep(request):
     trusted = request["trusted"]
     body = artifact_json(request, PREP_EVIDENCE)
@@ -427,7 +562,7 @@ def judge_prep(request):
                     f"the pinned source gives {trusted_survey['latest_tag']}")
     if sorted(survey.get("commits")) != sorted(trusted_survey["commits"]):
         unavailable("survey-mismatch", "the handoff commit range does not match the pinned source")
-    if (survey.get("breaking") is True) != trusted_survey["breaking"]:
+    if survey.get("breaking") is not trusted_survey["breaking"]:
         unavailable("survey-mismatch", "the handoff breaking classification does not match the pinned source")
     version = body.get("version")
     expected = expected_version(trusted_survey["latest_tag"], trusted_survey["breaking"])
@@ -437,7 +572,7 @@ def judge_prep(request):
     canonical = sorted(
         (task for task in request["tasks"]["tagged"]
          if PREP_TITLE_RE.fullmatch(task.get("title", "")) and task.get("status") in OPEN_STATUSES),
-        key=lambda task: task["id"],
+        key=task_id_order,
     )
     if not canonical:
         unavailable("handoff-missing", "no open canonical preparation task exists")
