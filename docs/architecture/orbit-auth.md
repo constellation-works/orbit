@@ -8,7 +8,7 @@ tags: [architecture, orbit-auth]
 
 ## What it owns
 
-All credential code for the lease listener: `orbl_` tokens, principals/scopes, allow-or-deny, token store, environment and client-address checks.
+All credential code for the lease listener: `orbl_` tokens, principals/scopes, allow-or-deny, token store, environment and client-address checks, plus the keyed request limiter and coalesced rejection audits.
 
 ## Main modules and types
 
