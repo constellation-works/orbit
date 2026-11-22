@@ -416,10 +416,10 @@ fn resident_show_json(
     let latest_checkpoint =
         comments.iter().rev().find_map(|comment| {
             match ResidentComment::parse(&comment.message).ok()? {
-                record @ ResidentComment::Checkpoint(_)
-                    if record.mandate() == view.task.id.as_str() =>
-                {
-                    Some(view::to_json(&record))
+                ResidentComment::Checkpoint(record) if record.mandate == view.task.id.as_str() => {
+                    let mut checkpoint = view::to_json(&ResidentComment::Checkpoint(record));
+                    checkpoint["at"] = json!(comment.at);
+                    Some(checkpoint)
                 }
                 _ => None,
             }
