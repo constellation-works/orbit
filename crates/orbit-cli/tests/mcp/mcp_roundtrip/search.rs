@@ -142,20 +142,19 @@ fn multi_word_search_ranks_partial_hits_and_preserves_cli_tool_mcp_parity() {
         1
     );
 
-    // Exercise runtime notes, not copies of their source text. Distinguish
-    // each branch's matching contract without pinning the full prose.
+    // A zero-hit multi-word search gets one short next-step note for every
+    // kind, identical over MCP. The length bound is the regression: the note
+    // used to be a ~400-character matching-rules paragraph (ORB-26665).
     for kind in ["task", "friction", "all"] {
         let empty = cli(kind, "absentword absentphrase", 10, None);
         assert!(empty["results"].as_array().unwrap().is_empty());
-        let note = empty["notes"][0].as_str().unwrap();
-        assert_eq!(note.contains("task search"), kind != "friction");
-        assert_eq!(note.contains("friction search"), kind != "task");
-        if kind != "friction" {
-            assert!(note.contains("all terms") && note.contains("any term"));
-        }
-        if kind != "task" {
-            assert!(note.contains("substring") && note.contains("adjacent"));
-        }
+        let notes = empty["notes"].as_array().unwrap();
+        assert_eq!(notes.len(), 1, "one next-step note for `{kind}`: {empty}");
+        let note = notes[0].as_str().unwrap();
+        assert!(
+            note.chars().count() <= 200 && !note.contains('\n'),
+            "the note stays one short line for `{kind}`: {note:?}"
+        );
         assert_eq!(
             client.call_tool_ok(
                 "orbit_search",
@@ -164,6 +163,39 @@ fn multi_word_search_ranks_partial_hits_and_preserves_cli_tool_mcp_parity() {
             empty
         );
     }
+    let single = cli("task", "absentword", 10, None);
+    assert!(
+        single["notes"].as_array().unwrap().is_empty(),
+        "a single-word search carries no note: {single}"
+    );
+}
+
+#[test]
+fn multi_word_search_note_reaches_terminal_stderr_but_not_json_stderr() {
+    let workspace = McpWorkspace::init();
+    let search = |json_output: bool| {
+        let mut args = vec!["search", "absentword absentphrase", "--kind", "task"];
+        if json_output {
+            args.push("--json");
+        }
+        orbit_ok(McpWorkspace::orbit_command(&workspace.work, &workspace.home).args(args))
+    };
+
+    let terminal = search(false);
+    let terminal_stderr = String::from_utf8_lossy(&terminal.stderr);
+    assert!(
+        terminal_stderr.contains("note:"),
+        "a terminal still reads the next-step note on stderr: {terminal_stderr}"
+    );
+
+    let machine = search(true);
+    let machine_stderr = String::from_utf8_lossy(&machine.stderr);
+    assert!(
+        !machine_stderr.contains("note:"),
+        "`--json` carries the note only in the document, not on stderr: {machine_stderr}"
+    );
+    let document: Value = serde_json::from_slice(&machine.stdout).unwrap();
+    assert_eq!(document["notes"].as_array().unwrap().len(), 1);
 }
 
 #[test]
