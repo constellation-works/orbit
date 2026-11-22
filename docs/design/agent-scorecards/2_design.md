@@ -60,8 +60,11 @@ context axis, and it is drawn against one of two references, chosen per axis:
 On both kinds outward is better and the reference sits on the middle ring (radius
 0.5). The per-axis weight and signed contribution (below) explain why a row with
 some inward axes still ranks where it does. The chart does not reconstruct the
-smoothed final score; the **Score breakdown** beside it carries the same
-nine-decimal-grid contributions.
+smoothed final score. On an expectation-adjusted axis the **Score breakdown**
+beside it carries the same nine-decimal-grid excess that the radar places.
+Fleet-median axes have no grid: their radar disclosure gives the gap to the
+fleet median, while the breakdown of a Reviewer or Pilot row gives `weight × rate`
+for each scored term (§6), the raw-score term with no median subtracted.
 
 - Each `scorecard.terms` entry is an axis. The denominator is
   `row.term_units[key]` when present, otherwise `row.units`, labelled with the
@@ -147,7 +150,8 @@ nine-decimal-grid contributions.
   score's signed excess (`row.contributions`, nine-decimal grid), labelled
   **contribution**, and the Score Breakdown uses that same excess. On a
   fleet-median axis it is `weight × (agent rate − median rate)`, labelled
-  **contribution vs fleet median**. The count reads
+  **contribution vs fleet median**; the Score Breakdown has no median gap there
+  and shows `weight × rate` instead (§6). The count reads
   `N raw (E expected)` on expectation-adjusted axes, where E is the expected
   count, and `N raw` otherwise. Unscored axes show **unscored** for weight and
   contribution; gaps show **—** for the agent rate and contribution and name
@@ -444,9 +448,13 @@ of term keys to expected counts on the same term population, and `score_base: 10
 `expected` and `per_100` stay rounded to two decimals. The same row adds
 `contributions`, a map of term keys to the signed excesses the raw score uses,
 each snapped to a nine-decimal grid for serialization. The radar and Score
-Breakdown read that map, so a term whose displayed expected count rounds to
-zero still plots and reads on the side the score used. Other roles omit
-`contributions` and keep the fleet-median comparison. The term metadata names
+Breakdown read that map on expectation-adjusted axes, so a term whose displayed
+expected count rounds to zero still plots and reads on the side the score used.
+Reviewers and Pilots have no `expected` and omit `contributions`, so nothing
+they read is on that grid: their Score Breakdown shows `weight × per_100` for
+each scored term (the §4.1 raw-score term at display precision, with no median
+subtracted), and their radar disclosure shows the gap to the fleet median
+(§1.1). The term metadata names
 `unit: "reviewed deliveries"` for the three review terms; `per_100` is per 100
 of that unit and `expected × 100 / term_units` is its expected rate. With zero
 reviewed deliveries, those rates are null and each contribution is zero.
