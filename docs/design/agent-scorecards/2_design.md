@@ -60,8 +60,8 @@ context axis, and it is drawn against one of two references, chosen per axis:
 On both kinds outward is better and the reference sits on the middle ring (radius
 0.5). The per-axis weight and signed contribution (below) explain why a row with
 some inward axes still ranks where it does. The chart does not reconstruct the
-smoothed final score; the **Score breakdown** beside it carries those exact
-contributions.
+smoothed final score; the **Score breakdown** beside it carries the same
+nine-decimal-grid contributions.
 
 - Each `scorecard.terms` entry is an axis. The denominator is
   `row.term_units[key]` when present, otherwise `row.units`, labelled with the
@@ -69,11 +69,12 @@ contributions.
   Credit axes point out for higher rates; negative-weight axes invert and say
   **fewer is better**.
 - Expectation-adjusted axes place the row by `row.contributions[key]`, the
-  signed excess the score sums (`weight × (full-precision rate −
-  full-precision expected rate)`) snapped to nine decimals so that float noise
-  from the summation order and an exact zero are stable across loads. It is not
-  a difference of the two-decimal display rates. A positive or negative excess that those display rates would
-  turn into zero still plots on that side of the middle ring. Exact zero
+  signed excess used in the raw score (`weight × (full-precision rate −
+  full-precision expected rate)`), serialized on a nine-decimal grid so that
+  float noise from the summation order and an exact zero are stable across
+  loads. It is not a difference of the two-decimal display rates. A positive
+  or negative excess that those display rates would turn into zero still plots
+  on that side of the middle ring. Exact zero
   excess, including a raw count equal to its expected count, sits at radius
   0.5. Positive excess (it helps the score: credit above expectation, or a
   penalty below it) ranks by percentile among the fleet's positive excesses and
@@ -441,14 +442,22 @@ and **Cost per landed task (USD)**. Each implementer row adds `reviewed_units`, 
 that denominator for each review term, `expected`, a map
 of term keys to expected counts on the same term population, and `score_base: 100`.
 `expected` and `per_100` stay rounded to two decimals. The same row adds
-`contributions`, a map of term keys to the unrounded signed excess the raw
-score sums. The radar and Score Breakdown read that map, so a term whose
-displayed expected count rounds to zero still plots and reads on the side the
-score used. Other roles omit `contributions` and keep the fleet-median
-comparison. The term metadata names `unit: "reviewed deliveries"` for the three review terms;
-`per_100` is per 100 of that unit and `expected × 100 / term_units` is its
-expected rate. With zero reviewed deliveries, those rates are null and each
-contribution is zero. Actual `counts` remain counts. Detail term `contribution` stays the two-decimal display of that excess, so `score_base` plus the sum of the unrounded `contributions` equals raw before display rounding. Other roles have neither `expected` nor `score_base` and retain their formulas.
+`contributions`, a map of term keys to the signed excesses the raw score uses,
+each snapped to a nine-decimal grid for serialization. The radar and Score
+Breakdown read that map, so a term whose displayed expected count rounds to
+zero still plots and reads on the side the score used. Other roles omit
+`contributions` and keep the fleet-median comparison. The term metadata names
+`unit: "reviewed deliveries"` for the three review terms; `per_100` is per 100
+of that unit and `expected × 100 / term_units` is its expected rate. With zero
+reviewed deliveries, those rates are null and each contribution is zero.
+Actual `counts` remain counts. Detail term `contribution` stays the two-decimal
+display of that excess. The raw score sums the full-precision excesses before
+they are snapped for `contributions`; adding `score_base` to the serialized
+contributions reconstructs that unrounded raw score with up to 0.0000000005
+points of error per term, before floating-point addition. The `raw` field is
+itself rounded to two decimal places, so comparing a reconstruction with that
+field also includes up to 0.005 points of display rounding. Other roles have
+neither `expected` nor `score_base` and retain their formulas.
 The former `tier_comparison` stat is removed: scored expectations supersede it.
 
 **Escaped regressions are scored against a size-adjusted expectation [ORB-21789].**
