@@ -13,6 +13,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+import unittest.mock
 
 PERF_DIR = Path(__file__).resolve().parent
 ROOT = PERF_DIR.parent.parent
@@ -1270,6 +1271,186 @@ class FixtureGitMetadataTests(unittest.TestCase):
                 )
                 status = self.git(restored_checkout, "status", "--short", check=False)
                 self.assertEqual(status.returncode, 0, status.stderr)
+
+
+class RewriteDatabaseTests(unittest.TestCase):
+    """One UPDATE per table stores the same cells as a per-column rewrite."""
+
+    def setUp(self) -> None:
+        parent = _scratch_parent()
+        self.temp = tempfile.TemporaryDirectory(prefix="rewrite-db-", dir=parent)
+        self.addCleanup(self.temp.cleanup)
+        self.base = Path(self.temp.name)
+
+    def _build(self, path: Path) -> None:
+        conn = sqlite3.connect(path)
+        conn.execute(
+            "CREATE TABLE notes ("
+            "id INTEGER PRIMARY KEY, body TEXT, extra TEXT, n INTEGER, blob BLOB, raw)"
+        )
+        conn.execute('CREATE TABLE "group" ("a""b" TEXT, plain TEXT)')
+        conn.execute(
+            "CREATE TRIGGER notes_guard AFTER UPDATE ON notes "
+            "BEGIN SELECT RAISE(ABORT, 'trigger fired'); END"
+        )
+        conn.execute(
+            "INSERT INTO notes (body, extra, n, blob, raw) VALUES (?, ?, ?, ?, ?)",
+            ("see /src/repo/file and /src/home/x", "untouched", 7, b"\x00\x01", 42),
+        )
+        conn.execute(
+            "INSERT INTO notes (body, extra, n, blob, raw) VALUES (?, ?, ?, ?, ?)",
+            ("no path here", "also /src/home/only", 8, None, None),
+        )
+        conn.execute(
+            "INSERT INTO notes (body, extra, n, blob, raw) VALUES (?, ?, ?, ?, ?)",
+            ("/src/other", None, 9, None, "leave me"),
+        )
+        conn.execute('INSERT INTO "group" ("a""b", plain) VALUES (?, ?)', ("/src/repo/tail", "keep"))
+        conn.commit()
+        conn.close()
+
+    def _per_column_rewrite(self, path: Path, pairs: list[tuple[str, str]]) -> None:
+        """The previous one-UPDATE-per-column algorithm, as the content oracle."""
+        olds: list[str] = []
+        seen: set[str] = set()
+        for old, _new in sorted(pairs, key=lambda pair: len(pair[0]), reverse=True):
+            if old and old not in seen:
+                seen.add(old)
+                olds.append(old)
+        if not olds:
+            return
+
+        def rewrite(text):
+            if not isinstance(text, str):
+                return text
+            return fixture.rewrite_text(text, pairs)
+
+        conn = sqlite3.connect(path)
+        try:
+            conn.create_function("perf_rewrite_path", 1, rewrite, deterministic=True)
+            triggers = conn.execute(
+                "SELECT name, sql FROM sqlite_master WHERE type='trigger'"
+            ).fetchall()
+            for name, _sql in triggers:
+                conn.execute(f"DROP TRIGGER {fixture.quote_ident(name)}")
+            tables = [
+                row[0]
+                for row in conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table' "
+                    "AND sql NOT LIKE 'CREATE VIRTUAL%' AND name NOT LIKE 'sqlite_%'"
+                )
+            ]
+            for table in tables:
+                quoted_table = fixture.quote_ident(table)
+                columns = [row[1] for row in conn.execute(f"PRAGMA table_info({quoted_table})")]
+                for column in columns:
+                    quoted_column = fixture.quote_ident(column)
+                    where_instr = " OR ".join(
+                        f"instr({quoted_column}, ?) > 0" for _old in olds
+                    )
+                    conn.execute(
+                        f"UPDATE {quoted_table} SET {quoted_column} = "
+                        f"perf_rewrite_path({quoted_column}) "
+                        f"WHERE typeof({quoted_column}) = 'text' AND ({where_instr}) "
+                        f"AND perf_rewrite_path({quoted_column}) != {quoted_column}",
+                        tuple(olds),
+                    )
+            for _name, sql in triggers:
+                conn.execute(sql)
+            conn.commit()
+        finally:
+            conn.close()
+
+    def _dump(self, path: Path) -> tuple[dict, list]:
+        conn = sqlite3.connect(path)
+        try:
+            tables = [
+                row[0]
+                for row in conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table' "
+                    "AND name NOT LIKE 'sqlite_%' ORDER BY name"
+                )
+            ]
+            content = {}
+            for table in tables:
+                quoted = fixture.quote_ident(table)
+                columns = [row[1] for row in conn.execute(f"PRAGMA table_info({quoted})")]
+                rows = conn.execute(f"SELECT rowid, * FROM {quoted} ORDER BY rowid").fetchall()
+                content[table] = (columns, [tuple(row) for row in rows])
+            triggers = conn.execute(
+                "SELECT name, sql FROM sqlite_master WHERE type='trigger' ORDER BY name"
+            ).fetchall()
+            return content, triggers
+        finally:
+            conn.close()
+
+    def test_one_update_per_table_matches_per_column_content(self) -> None:
+        pairs = [
+            ("/src", "/dst-short"),
+            ("/src/repo", "/dst/repo"),
+            ("/src/home", "/dst/home"),
+            ("", "/ignored-empty"),
+        ]
+        produced = self.base / "produced.sqlite"
+        oracle = self.base / "oracle.sqlite"
+        self._build(produced)
+        oracle.write_bytes(produced.read_bytes())
+        updates: list[str] = []
+        real_connect = fixture.sqlite3.connect
+
+        class _TracingConnection:
+            def __init__(self, conn: sqlite3.Connection) -> None:
+                self._conn = conn
+
+            def execute(self, sql: str, parameters=()):
+                if sql.lstrip().upper().startswith("UPDATE"):
+                    updates.append(sql)
+                return self._conn.execute(sql, parameters)
+
+            def __getattr__(self, name: str):
+                return getattr(self._conn, name)
+
+        def tracing_connect(path, *args, **kwargs):
+            return _TracingConnection(real_connect(path, *args, **kwargs))
+
+        with unittest.mock.patch.object(fixture.sqlite3, "connect", tracing_connect):
+            fixture.rewrite_database(produced, pairs)
+        self._per_column_rewrite(oracle, pairs)
+
+        self.assertEqual(len(updates), 2, updates)
+        for sql in updates:
+            self.assertEqual(sql.count("UPDATE"), 1, sql)
+            self.assertNotIn(";", sql)
+        notes_sql = next(sql for sql in updates if '"notes"' in sql)
+        group_sql = next(sql for sql in updates if '"group"' in sql)
+        for column in ('"id"', '"body"', '"extra"', '"n"', '"blob"', '"raw"'):
+            self.assertIn(column, notes_sql)
+        self.assertIn('"a""b"', group_sql)
+        self.assertIn('"plain"', group_sql)
+
+        produced_dump = self._dump(produced)
+        oracle_dump = self._dump(oracle)
+        self.assertEqual(produced_dump, oracle_dump)
+        notes = produced_dump[0]["notes"][1]
+        # rowid, id, body, extra, n, blob, raw
+        self.assertEqual(notes[0][2], "see /dst/repo/file and /dst/home/x")
+        self.assertEqual(notes[0][3], "untouched")
+        self.assertEqual(notes[0][4], 7)
+        self.assertEqual(notes[0][5], b"\x00\x01")
+        self.assertEqual(notes[0][6], 42)
+        self.assertEqual(notes[1][2], "no path here")
+        self.assertEqual(notes[1][3], "also /dst/home/only")
+        self.assertEqual(notes[2][2], "/dst-short/other")
+        self.assertEqual(notes[2][3], None)
+        self.assertEqual(notes[2][6], "leave me")
+        group_rows = produced_dump[0]["group"][1]
+        self.assertEqual(group_rows[0][1], "/dst/repo/tail")
+        self.assertEqual(group_rows[0][2], "keep")
+        self.assertEqual(
+            [name for name, _sql in produced_dump[1]],
+            ["notes_guard"],
+        )
+        self.assertIn("trigger fired", produced_dump[1][0][1])
 
 
 if __name__ == "__main__":

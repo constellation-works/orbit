@@ -213,6 +213,97 @@ if not abort and killed:
 sys.exit(status if status >= 0 else 128 - status)
 """
 
+# Doctor-shaped JSON rows for `--parity-mask-row`. The control binary is a copy
+# of the base script, so only `role=candidate` varies. `group` is present only
+# on the disk-space row of the `check` variant, where the check name itself
+# changes and the selector has to match a stable key.
+ROW_PROBE = r"""
+import json
+import sys
+
+role = sys.argv[1]
+variant = sys.argv[2]
+candidate = role == "candidate"
+
+
+def row(check, message, status="ok", duration=1, remediation=None, group=None):
+    body = {
+        "check": check,
+        "duration_ms": duration,
+        "status": status,
+        "message": message,
+        "remediation": remediation,
+    }
+    if group is not None:
+        body["group"] = group
+    return body
+
+
+def standard(
+    disk_message="12 GiB free",
+    disk_status="ok",
+    disk_remediation=None,
+    disk_check="disk-space",
+    disk_group=None,
+    health_message="store ok",
+    fresh_message="last succeeded 54m ago",
+    retain_message="rows older than 60 days: 17522",
+    muse_message="pressure x6.62",
+    duration=1,
+):
+    return [
+        row(disk_check, disk_message, disk_status, duration, disk_remediation, disk_group),
+        row("store-health", health_message, "ok", duration),
+        row("routine-freshness", fresh_message, "ok", duration),
+        row("store-retention", retain_message, "ok", duration),
+        row("provider-limits:muse", muse_message, "ok", duration),
+    ]
+
+
+if variant == "same":
+    rows = standard()
+elif variant == "unmasked":
+    rows = standard(disk_message="11 GiB free", health_message="store drifted") if candidate else standard()
+elif variant == "status":
+    rows = standard(disk_message="11 GiB free", disk_status="error") if candidate else standard()
+elif variant == "remediation":
+    rows = (
+        standard(disk_message="11 GiB free", disk_remediation="free some space")
+        if candidate else standard()
+    )
+elif variant == "check":
+    rows = (
+        standard(disk_message="11 GiB free", disk_check="disk-free", disk_group="host")
+        if candidate else standard(disk_group="host")
+    )
+elif variant == "message":
+    rows = (
+        standard(
+            disk_message="11 GiB free",
+            fresh_message="last succeeded 56m ago",
+            retain_message="rows older than 60 days: 17581",
+            muse_message="pressure x6.63",
+            duration=2,
+        )
+        if candidate else standard()
+    )
+elif variant == "missing":
+    rows = standard(disk_message="11 GiB free") if candidate else standard()
+    if candidate:
+        rows = [item for item in rows if item["check"] != "store-health"]
+elif variant == "reorder":
+    rows = standard()
+    if candidate:
+        rows = [rows[1], rows[0], *rows[2:]]
+else:
+    sys.stderr.write("unknown probe-rows variant %s\n" % variant)
+    sys.exit(3)
+
+json.dump(rows, sys.stdout)
+sys.stdout.write("\n")
+"""
+
+
 # Role is baked in so the control copy of the base binary agrees with base,
 # while the candidate binary can fail or differ on its own.
 ARM_SCRIPT = """#!/bin/sh
@@ -286,6 +377,9 @@ case "$mode" in
       printf '{{"duration_ms": 1, "message": "base", "stable": 1}}\\n'
     fi
     exit 0
+    ;;
+  probe-rows)
+    exec {python} -I {row_probe} "$role" "$2"
     ;;
   timed)
     printf 'timed %s\\n' "$role"
@@ -523,6 +617,8 @@ def write_builds(builds: Path, marks: Path) -> dict[str, Path]:
     ignore_term_driver.write_text(IGNORE_TERM_DRIVER)
     xattr_driver = builds.parent / "xattr_driver.py"
     xattr_driver.write_text(XATTR_DRIVER)
+    row_probe = builds.parent / "row_probe.py"
+    row_probe.write_text(ROW_PROBE)
     binaries = {}
     revisions = {}
     for role, commit in (("base", "a"), ("candidate", "c")):
@@ -537,6 +633,7 @@ def write_builds(builds: Path, marks: Path) -> dict[str, Path]:
             graceful_driver=shlex.quote(str(graceful_driver)),
             ignore_term_driver=shlex.quote(str(ignore_term_driver)),
             xattr_driver=shlex.quote(str(xattr_driver)),
+            row_probe=shlex.quote(str(row_probe)),
         ))
         path.chmod(0o755)
         binaries[role] = path
@@ -1006,6 +1103,198 @@ runpy.run_path(script, run_name="__main__")
         reset_obs = self._run_xattr_check(
             bootstrap=original_xattr_bootstrap, expected_attrs=expected)
         self.assertEqual(reset_obs, keep_obs)
+
+    def doctor_row_masks(self) -> tuple[str, ...]:
+        return (
+            "--parity-mask", "duration_ms",
+            "--parity-mask-row", "check=disk-space:message",
+            "--parity-mask-row", "check=routine-freshness:message",
+            "--parity-mask-row", "check=store-retention:message",
+            "--parity-mask-row", "check=provider-limits:muse:message",
+        )
+
+    def command_rows(self, report: dict, arm: str) -> list:
+        return report["arms"][arm]["command"]["output"]["value"]
+
+    def test_row_mask_passes_when_only_named_messages_and_duration_differ(self) -> None:
+        result, out = self.run_paired(
+            "--parity", "probe-rows message", *self.doctor_row_masks(),
+        )
+        self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+        report = json.loads((out / "parity.json").read_text())
+        self.assertIs(report["match"], True, report)
+        self.assertEqual(report["observation_failures"], {})
+        self.assertEqual(report["differing_arms"], [])
+        self.assertEqual(report["masks"], ["duration_ms"])
+        self.assertEqual(report["row_masks"], [
+            "check=disk-space:message",
+            "check=routine-freshness:message",
+            "check=store-retention:message",
+            "check=provider-limits:muse:message",
+        ])
+        disk = next(row for row in self.command_rows(report, "candidate")
+                    if row["check"] == "disk-space")
+        self.assertNotIn("message", disk)
+        self.assertNotIn("duration_ms", disk)
+        self.assertEqual(disk["status"], "ok")
+        self.assertIsNone(disk["remediation"])
+        health = next(row for row in self.command_rows(report, "candidate")
+                      if row["check"] == "store-health")
+        self.assertEqual(health["message"], "store ok")
+        muse = next(row for row in self.command_rows(report, "base")
+                    if row["check"] == "provider-limits:muse")
+        self.assertNotIn("message", muse)
+        self.assertEqual(muse["status"], "ok")
+
+    def test_row_mask_refuses_an_unmasked_row_difference(self) -> None:
+        result, out = self.run_paired(
+            "--parity", "probe-rows unmasked", *self.doctor_row_masks(),
+        )
+        report = self.assert_no_passing_verdict(result, out)
+        self.assertEqual(report["observation_failures"], {})
+        self.assertEqual(report["differing_arms"], ["candidate"])
+        base_health = next(row for row in self.command_rows(report, "base")
+                           if row["check"] == "store-health")
+        candidate_health = next(row for row in self.command_rows(report, "candidate")
+                                if row["check"] == "store-health")
+        self.assertEqual(base_health["message"], "store ok")
+        self.assertEqual(candidate_health["message"], "store drifted")
+        candidate_disk = next(row for row in self.command_rows(report, "candidate")
+                              if row["check"] == "disk-space")
+        self.assertNotIn("message", candidate_disk)
+
+    def test_row_mask_refuses_status_difference_on_a_masked_row(self) -> None:
+        result, out = self.run_paired(
+            "--parity", "probe-rows status", *self.doctor_row_masks(),
+        )
+        report = self.assert_no_passing_verdict(result, out)
+        self.assertEqual(report["observation_failures"], {})
+        self.assertEqual(report["differing_arms"], ["candidate"])
+        base_disk = next(row for row in self.command_rows(report, "base")
+                         if row["check"] == "disk-space")
+        candidate_disk = next(row for row in self.command_rows(report, "candidate")
+                              if row["check"] == "disk-space")
+        self.assertNotIn("message", base_disk)
+        self.assertNotIn("message", candidate_disk)
+        self.assertEqual(base_disk["status"], "ok")
+        self.assertEqual(candidate_disk["status"], "error")
+
+    def test_row_mask_refuses_remediation_difference_on_a_masked_row(self) -> None:
+        result, out = self.run_paired(
+            "--parity", "probe-rows remediation", *self.doctor_row_masks(),
+        )
+        report = self.assert_no_passing_verdict(result, out)
+        self.assertEqual(report["observation_failures"], {})
+        self.assertEqual(report["differing_arms"], ["candidate"])
+        base_disk = next(row for row in self.command_rows(report, "base")
+                         if row["check"] == "disk-space")
+        candidate_disk = next(row for row in self.command_rows(report, "candidate")
+                              if row["check"] == "disk-space")
+        self.assertNotIn("message", candidate_disk)
+        self.assertIsNone(base_disk["remediation"])
+        self.assertEqual(candidate_disk["remediation"], "free some space")
+
+    def test_row_mask_refuses_check_difference_on_a_masked_row(self) -> None:
+        # The check name itself changed, so the selector matches the stable
+        # `group` key. `message` is dropped and `check` still refuses.
+        result, out = self.run_paired(
+            "--parity", "probe-rows check",
+            "--parity-mask-row", "group=host:message",
+        )
+        report = self.assert_no_passing_verdict(result, out)
+        self.assertEqual(report["observation_failures"], {})
+        self.assertEqual(report["differing_arms"], ["candidate"])
+        base_disk = next(row for row in self.command_rows(report, "base")
+                         if row.get("group") == "host")
+        candidate_disk = next(row for row in self.command_rows(report, "candidate")
+                              if row.get("group") == "host")
+        self.assertNotIn("message", base_disk)
+        self.assertNotIn("message", candidate_disk)
+        self.assertEqual(base_disk["check"], "disk-space")
+        self.assertEqual(candidate_disk["check"], "disk-free")
+
+    def test_row_mask_refuses_when_selector_matches_no_row(self) -> None:
+        result, out = self.run_paired(
+            "--parity", "probe-rows same",
+            "--parity-mask-row", "check=not-a-check:message",
+        )
+        report = self.assert_no_passing_verdict(result, out)
+        self.assertEqual(report["differing_arms"], [])
+        self.assertEqual(set(report["observation_failures"]), {"base", "candidate", "control"})
+        self.assertTrue(all(
+            reason == "row mask matched no row: check=not-a-check:message"
+            for reason in report["observation_failures"].values()
+        ))
+
+    def test_row_mask_refuses_a_missing_row(self) -> None:
+        result, out = self.run_paired(
+            "--parity", "probe-rows missing", *self.doctor_row_masks(),
+        )
+        report = self.assert_no_passing_verdict(result, out)
+        self.assertEqual(report["observation_failures"], {})
+        self.assertEqual(report["differing_arms"], ["candidate"])
+        base_checks = [row["check"] for row in self.command_rows(report, "base")]
+        candidate_checks = [row["check"] for row in self.command_rows(report, "candidate")]
+        self.assertIn("store-health", base_checks)
+        self.assertNotIn("store-health", candidate_checks)
+
+    def test_row_mask_refuses_reordered_rows(self) -> None:
+        result, out = self.run_paired(
+            "--parity", "probe-rows reorder", *self.doctor_row_masks(),
+        )
+        report = self.assert_no_passing_verdict(result, out)
+        self.assertEqual(report["observation_failures"], {})
+        self.assertEqual(report["differing_arms"], ["candidate"])
+        base_checks = [row["check"] for row in self.command_rows(report, "base")]
+        candidate_checks = [row["check"] for row in self.command_rows(report, "candidate")]
+        self.assertEqual(sorted(base_checks), sorted(candidate_checks))
+        self.assertNotEqual(base_checks, candidate_checks)
+        self.assertEqual(candidate_checks[0], "store-health")
+        self.assertEqual(base_checks[0], "disk-space")
+
+    def test_row_mask_does_not_hide_a_nonzero_parity_exit(self) -> None:
+        result, out = self.run_paired(
+            "--parity", "probe-fail",
+            "--parity-mask-row", "check=disk-space:message",
+        )
+        report = self.assert_no_passing_verdict(result, out)
+        self.assertEqual(set(report["observation_failures"]), {"base", "candidate", "control"})
+        self.assertTrue(all(
+            reason == "command exited 9"
+            for reason in report["observation_failures"].values()
+        ))
+
+    def test_row_mask_does_not_hide_a_missing_observation(self) -> None:
+        result, out = self.run_paired("--parity-mask-row", "check=disk-space:message")
+        report = self.assert_no_passing_verdict(result, out)
+        self.assertEqual(set(report["observation_failures"]), {"base", "candidate", "control"})
+        self.assertTrue(all(
+            reason == "missing observation"
+            for reason in report["observation_failures"].values()
+        ))
+
+    def test_row_mask_does_not_hide_a_parity_bound_hit(self) -> None:
+        result, out = self.run_paired(
+            "--parity", "probe-stall",
+            "--parity-mask-row", "check=disk-space:message",
+            "--command-timeout", "1",
+        )
+        report = self.assert_no_passing_verdict(result, out)
+        self.assertIn("base", report["observation_failures"])
+        self.assertIn("timed out", report["observation_failures"]["base"])
+        self.assertEqual(
+            report["arms"]["base"]["command"]["bound"],
+            {"name": "command_timeout_seconds", "value": 1.0},
+        )
+        self.assertFalse((out / "raw.json").exists())
+
+    def test_malformed_row_mask_is_a_usage_error(self) -> None:
+        result, out = self.run_paired(
+            "--parity", "probe-same", "--parity-mask-row", "disk-space",
+        )
+        self.assertEqual(result.returncode, 2, result.stderr + result.stdout)
+        self.assertIn("error: argument --parity-mask-row:", result.stderr)
+        self.assertFalse((out / "parity.json").exists())
 
 
 class PairedCliSupervisionTest(PairedCliTestCase):

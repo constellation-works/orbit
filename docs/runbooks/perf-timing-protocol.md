@@ -170,9 +170,55 @@ everything for debugging.
   two revisions that produce byte-identical binaries (ORB-25652's first candidate silently
   reused the baseline binary). `paired.py` times the binaries this script writes; it does
   not need a separate candidate commit when the build was a working-tree snapshot.
+- **Identical binaries.** The refusal in `build-pair.sh` stays: when the two release
+  binaries have the same sha256 it exits 2 with `built identical binaries` and does not
+  write a pair. A scripts-only change, or any other tree whose release build matches the
+  base, is that case. Time it only after a change that produces a different binary.
+  Until then the evidence is the diff plus the perf script tests
+  (`python3 -I scripts/perf/test_paired_cli.py`,
+  `python3 -I scripts/perf/test_fixture_cli.py`, and
+  `python3 -I scripts/perf/test_build_pair_worktree.py` when `build-pair.sh` itself
+  changes). Do not pass the same commit twice to get past the refusal, and do not
+  delete the check: the candidate would silently measure the baseline.
 - The fixture's store schema must not be newer than the baseline binary understands.
   Snapshot a store the baseline can open; each arm migrates a copy that the harness
   resets from the pristine root before its observation or round.
+
+### Per-command time budget
+
+A managed leaf runs each protocol command in the foreground and waits for it. The
+process ends with the command. A result collected later is not evidence.
+
+Plan each command against a 60-minute cap. That is the cap a live-sized ws_orbit
+doctor run exceeded: restore of the 33 GB snapshot took 38 minutes because
+`rewrite_database` scanned the 17 GB store once per text column, restore plus parity
+took 43 minutes, and the nine further checksum resets of a 3×10 run pushed that
+single `paired.py` command past 60 minutes. `rewrite_database` now rewrites every
+column of a table in one `UPDATE`, so the store is scanned once per table.
+
+A command started with `proc.spawn` inside an activity is also clamped to the
+activity's remaining budget and to at most 45 minutes
+(`PROC_SPAWN_MAX_TIMEOUT_MINUTES`). Size the command for the cap that applies.
+`fixture.py snapshot`, `build-pair.sh` and `paired.py` are already separate
+commands; leave them that way so each one can use the full cap.
+
+`paired.py` is one process. It restores once, checks parity on every arm, then runs
+the rounds. The timing verdict is the invocation that uses `--rounds 3 --samples 10
+--warmup 1`. When that invocation cannot finish inside the cap:
+
+1. Leave the snapshot and the builds directory in place. The next command reuses them.
+2. Time one restore on its own before spending the cap on a run that cannot finish.
+   `python3 -I scripts/perf/fixture.py restore --snapshot <scratch>/perf-<slug>/snapshot
+   --into <scratch>/perf-<slug>/restore-probe`, record the wall time, then
+   `fixture.py clean --into` that probe. `paired.py` restores again into its own
+   work directory; the probe only shows whether the rewrite still dominates.
+3. If restore alone leaves no room for parity and the nine round resets, do not
+   start the protocol `paired.py` under the agent command cap, and do not shrink
+   `--rounds`, `--samples` or the masks to make it fit. Record the restore wall
+   time and that the verdict was not produced. An operator runs that same
+   `paired.py` command on the ws_orbit owner host (dk-server-2), outside the agent
+   command cap, against the snapshot and builds already in scratch, and attaches
+   the protocol artifacts.
 
 ## Procedure
 
@@ -248,6 +294,10 @@ repository root of the checkout that holds these scripts.
    python3 -I scripts/perf/paired.py --builds <scratch>/perf-<slug>/builds \
      --snapshot <scratch>/perf-<slug>/snapshot --out <scratch>/perf-<slug>/results \
      --cli 'doctor --json' --parity 'doctor --json' --parity-mask duration_ms \
+     --parity-mask-row check=disk-space:message \
+     --parity-mask-row check=routine-freshness:message \
+     --parity-mask-row check=store-retention:message \
+     --parity-mask-row 'check=provider-limits:muse:message' \
      --rounds 3 --samples 10 --warmup 1 --gap-ms 250 --bound-ms <n> \
      --qualifying-task-count '<check>=<observed-count>'
 
@@ -255,9 +305,43 @@ repository root of the checkout that holds these scripts.
    python3 -I scripts/perf/paired.py --builds <scratch>/perf-<slug>/builds \
      --snapshot <scratch>/perf-<slug>/snapshot --out <scratch>/perf-<slug>/results \
      --http '/api/residents?all=true' --parity 'doctor --json' --parity-mask duration_ms \
+     --parity-mask-row check=disk-space:message \
+     --parity-mask-row check=routine-freshness:message \
+     --parity-mask-row check=store-retention:message \
+     --parity-mask-row 'check=provider-limits:muse:message' \
      --rounds 3 --samples 10 --bound-ms <n> \
      --qualifying-task-count '<check>=<observed-count>'
    ```
+
+   **Doctor parity masks.** `orbit doctor --json` is a JSON array of rows (`check`,
+   `duration_ms`, `status`, `message`, `remediation`). Mask only `duration_ms` on
+   every row, plus `message` on the four rows whose text is time or host state.
+   Those four drifted between arms on the ws_orbit fixture while every arm exited 0,
+   because each checksum reset takes minutes:
+
+   | Row | Why `message` is masked |
+   |---|---|
+   | `disk-space` | Free space in GiB. It changes with the host between arms. |
+   | `routine-freshness` | How long ago the routine last succeeded (`last succeeded 54m ago` against `56m ago`). The clock moves during the resets. |
+   | `store-retention` | How many rows are older than 60 days (`17522` against `17581`). The window moves while a reset runs. |
+   | `provider-limits:muse` | Provider pressure (`x6.62` against `x6.63`). The check name contains a colon, so the field is the text after the last colon. |
+
+   `duration_ms` is the check's own elapsed time, removed everywhere with
+   `--parity-mask`. `status`, `remediation` and `check` stay visible on the masked
+   rows, and every other row stays whole. A difference in an unmasked field refuses.
+
+   `--parity-mask-row KEY=VALUE:FIELD` removes FIELD only from JSON array elements
+   whose KEY equals VALUE, compared as a JSON string. Repeat it once per row.
+   Comma-separate fields to drop more than one from the same row. `parity.json`
+   records the selectors, in order, in `row_masks`. A selector that matches no row
+   in an arm's parity output refuses (`match` false, and `observation_failures`
+   names `row mask matched no row`). That is a refusal, not a silent pass. A value
+   that is not a selector is a usage error. When `--parity` is set, the selector
+   has to match that command's output. The HTTP body is still masked where a row
+   matches, and a body that is not the doctor array does not by itself fail the
+   selector. Rows present in one arm only, or the same rows in a different order,
+   still refuse. `--parity-mask` still removes a field name or dotted path from
+   every object; masking `message` that way hides every row and is not this route.
 
    Repeat `--qualifying-task-count NAME=COUNT` for every qualifying-task count the
    acceptance criteria ask you to check. Record the observed count, not the threshold;
@@ -311,12 +395,16 @@ repository root of the checkout that holds these scripts.
      (an empty value, or only spaces) is a usage error, so it cannot stand in for an
      omitted one. Identical non-zero exits are a failed probe,
      not a match, even when stdout is empty on every arm. JSON outputs are compared after
-     the `--parity-mask` fields (key names at any depth, or dotted paths) are removed and
-     the root path is replaced by `<root>`. Repeat `--parity-mask` or list several names
-     after one occurrence; `parity.json` records every name in `masks`.
+     the `--parity-mask` fields (key names at any depth, or dotted paths) are removed,
+     `--parity-mask-row` has removed the named fields from the array rows it selects,
+     and the root path is replaced by `<root>`. Repeat `--parity-mask` or list several names
+     after one occurrence; `parity.json` records every name in `masks` and every row
+     selector, in order, in `row_masks`. A row selector that matches no row is a refusal
+     (`match` false), the same outcome as a difference. The doctor set is
+     under Doctor parity masks in this procedure.
      A missing observation, a failed probe, a parity command that hit a bound, or a difference writes `parity.json` with `match` false and exits 2 without sampling, so no bounded timing
-     verdict is issued. Mask only timing fields; a mask that hides a behaviour change
-     defeats the check.
+     verdict is issued. Mask only timing fields and the time or host text named for a
+     route; a mask that hides a behaviour change defeats the check.
    - **Host pressure.** `/proc/loadavg` and the number of Orbit-managed processes (those
      carrying `ORBIT_MANAGED_RUN_CONTEXT`) are read before and after each round.
    - **Aggregation.** Per round, the nearest-rank p95 (ORB-25638): the ⌈0.95·n⌉-th
@@ -491,7 +579,7 @@ whose tree differed from HEAD; `commit` and `tree` are that snapshot. The snapsh
 commit is not stored in the checkout. `build_stub` is true only for the
 `ORBIT_PERF_BUILD_PAIR_STUB` test hook and is never a measurement.
 
-**`parity.json`** (`kind: orbit-perf-parity`): `command`, `http_path`, `masks`, `match`,
+**`parity.json`** (`kind: orbit-perf-parity`): `command`, `http_path`, `masks`, `row_masks`, `match`,
 `differing_arms`, `observation_failures` (arm to why that arm has no successful
 observation; empty when every arm succeeded), and `arms.<arm>`. The top-level `command` is
 the `--parity` string, or `null` when no parity command was given. An arm record holds
@@ -520,7 +608,7 @@ manifest-summary path), `round_p95_ms` and
 
 ## Measurement protocol paragraph for a perf brief
 
-Paste this into the brief and fill the five slots:
+Paste this into the brief and fill the slots:
 
 > **Measurement protocol.** Evidence follows `docs/runbooks/perf-timing-protocol.md` on the
 > ws_orbit owner host; the implementing leaf owns the serial run and holds the perf lane.
@@ -539,12 +627,18 @@ Paste this into the brief and fill the five slots:
 > Measurement: `scripts/perf/paired.py --builds <scratch>/perf-<slug>/builds
 > --snapshot <scratch>/perf-<slug>/snapshot --out <scratch>/perf-<slug>/results
 > --<SURFACE: cli|http> '<COMMAND OR PATH>' --parity
-> '<PARITY COMMAND>' --parity-mask <MASK FIELDS> --rounds 3 --samples 10 --warmup 1 --gap-ms 250
+> '<PARITY COMMAND>' --parity-mask <MASK FIELDS> --parity-mask-row <KEY=VALUE:FIELD>
+> --rounds 3 --samples 10 --warmup 1 --gap-ms 250
 > --bound-ms <BOUND> --qualifying-task-count <CHECK>=<OBSERVED-COUNT>`: base, candidate and unchanged-build control arms in balanced
 > interleaved rounds, per-round nearest-rank p95, per-arm median of round p95s, control
 > spread = max(control range, |control − base|). The criterion passes only on verdict
 > `pass` (candidate median ≤ bound − control spread); `inconclusive` means rerun with more
-> rounds, never pass. Repeat the qualifying-task-count flag for each observed count in the
+> rounds, never pass. Repeat `--parity-mask-row` once per row whose field must be hidden,
+> or leave it out. For `doctor --json`, `<MASK FIELDS>` is only `duration_ms`, and the row
+> selectors are `check=disk-space:message`, `check=routine-freshness:message`,
+> `check=store-retention:message` and `check=provider-limits:muse:message` (quote the last
+> one; the check name contains a colon). Do not mask `message` on every row. Repeat the
+> qualifying-task-count flag for each observed count in the
 > criterion. Attach the parts and checksums for `snapshot-manifest-summary.json`,
 > `provenance.json`, `parity.json`, `raw.json` and `paired-summary.json` under
 > `performance/<SLUG>/` and cite those paths in
@@ -570,7 +664,7 @@ criteria are observable and no behaviour changes.
 For a hard timing criterion, use the paired timing protocol in
 `docs/runbooks/perf-timing-protocol.md` as the evidence route: paste its "Measurement
 protocol" paragraph into the description and fill its slots (surface `cli` or `http`,
-the command or GET path, the parity command and mask fields, the bound in ms, and the
+the command or GET path, the parity command, mask fields and any row selectors, the bound in ms, and the
 artifact slug). Set the bound so the target holds with margin over the unchanged-build
 control spread this pass measured; when no stable bound is known yet, make the timing
 informational and gate on a deterministic proxy (query, request or payload counts)
@@ -590,10 +684,12 @@ Tasks land in `proposed`. Do not approve them.
 | `snapshot … records no workspace identity …` (restore) | The snapshot was taken from an identity-less source | Take a fresh snapshot of an initialized workspace |
 | `task index and bundles still disagree after <n> re-copy rounds …` (snapshot) | A task's index row and bundle kept changing between copies, or the source itself disagrees | Take the snapshot again when drains are quieter; if the same task persists, it is drifted on the source (`orbit doctor` there) |
 | `<arm> prepare … for <label> exited <n> …` (paired.py) or `preparing the restored root with <binary> failed …` (fixture.py) | That binary could not converge or list the restored root | Reproduce with `fixture.py restore`, then `fixture.py prepare --binary <it>`, and read its stderr |
-| `… built identical binaries …` | The two revisions differ only in metadata | Pick revisions whose content differs |
+| `… built identical binaries …` | The two release binaries have the same sha256. A scripts-only change is this case. The refusal stays | Do not time that pair. Evidence is the diff plus `python3 -I scripts/perf/test_paired_cli.py` and `python3 -I scripts/perf/test_fixture_cli.py`, plus `python3 -I scripts/perf/test_build_pair_worktree.py` when `build-pair.sh` changes. A binary change needs revisions whose content differs |
+| `parity mismatch between arms … (… row mask matched no row: …)` | A `--parity-mask-row` selector matched no array row in an arm that otherwise succeeded | Name a row that arm emits, or drop the selector. A miss refuses; it does not pass |
+| `paired.py: error: argument --parity-mask-row: expected KEY=VALUE:FIELD …` | The value is not a selector (no `=`, no field after the last colon, an empty piece, or whitespace) | Pass a selector such as `--parity-mask-row check=disk-space:message`. A colon inside the value stays; the field is the text after the last colon |
 | `base and candidate resolve to the same commit …` | Same commit given twice, or `--candidate-worktree` on a checkout with no uncommitted changes (ignored files do not count) and a base that is that HEAD | Check the revision selectors, or make the working-tree change first |
 | `--candidate-worktree must be the checkout root …` | `--candidate-worktree` names a subdirectory of the checkout | Pass the root path the message names (`git rev-parse --show-toplevel`) |
-| `parity mismatch between arms …` | An arm has no successful observation (missing `--parity` in CLI mode, a probe that did not exit 0 / return 2xx, or a parity command that hit `--command-timeout` or `--output-limit-bytes`, named in the parenthetical as `<arm>: timed out after <n> s …` or `<arm>: wrote more than <n> bytes …`), or outputs differ after masking | Read `parity.json` (`observation_failures` and `differing_arms`); fix the probe or the behaviour change, or mask only a timing field |
+| `parity mismatch between arms …` | An arm has no successful observation (missing `--parity` in CLI mode, a probe that did not exit 0 / return 2xx, a row selector that matched no row, or a parity command that hit `--command-timeout` or `--output-limit-bytes`, named in the parenthetical as `<arm>: timed out after <n> s …` or `<arm>: wrote more than <n> bytes …`), or outputs differ after masking | Read `parity.json` (`observation_failures` and `differing_arms`); fix the probe or the behaviour change, or mask only a timing field or a time or host field on the rows the procedure names |
 | `paired.py: error: argument --parity: takes an orbit command …` | `--parity` given with no command words (an empty variable, say, or whitespace only) | Pass the command, or leave `--parity` out |
 | `paired.py: error: argument --parity: not a valid shell-quoted orbit command …` | `--parity` has an unmatched quote or a trailing backslash | Quote the whole command in one value, e.g. `--parity 'doctor --json'` |
 | `<arm> round <r> sample <i> timed out after <n> s …` | A timed sample command stalled past `--command-timeout` (a parity command's stall is in the `parity mismatch …` row) | Find why it hangs on the fixture, or raise `--command-timeout` for a genuinely slow surface |
