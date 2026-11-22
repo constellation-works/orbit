@@ -66,6 +66,8 @@
 }
 .settings-icon-btn:hover { color: var(--fg-strong); border-color: var(--fg-disabled); }
 .settings-reload { margin-left: var(--space-6); }
+/* With no bar (nothing to lead with), Reload sits at the top right of the first section header. */
+.settings-section-head > .settings-reload { margin-left: auto; }
 
 /* The one button every Settings page uses: Edit, Save, Add, Show more. */
 .settings-btn {

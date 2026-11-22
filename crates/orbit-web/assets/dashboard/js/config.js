@@ -194,15 +194,26 @@ function renderPanels(payload, body) {
     ...bar,
     onReload: () => {
       editing = null;
-      fetchAndRenderConfig().catch((error) => {
-        console.error("Failed to reload config", error);
-        if (lastPayload) {
-          readbackStatus = { saved: readbackStatus?.saved || null, error: error?.message || String(error) };
-          render(lastPayload);
-        }
-      });
+      fetchAndRenderConfig()
+        .catch((error) => {
+          console.error("Failed to reload config", error);
+          if (lastPayload) {
+            readbackStatus = { saved: readbackStatus?.saved || null, error: error?.message || String(error) };
+            render(lastPayload);
+          }
+        })
+        .finally(restoreReloadFocus);
     },
   });
+}
+
+/// Reload rebuilds the tab. Where Reload sits in the body (no bar), the rebuild
+/// can drop focus to the body, so the rebuilt Reload takes it back. Focus the
+/// operator moved elsewhere in the meantime is left alone.
+function restoreReloadFocus() {
+  const active = document.activeElement;
+  if (active && active !== document.body) return;
+  document.querySelector("#config-body .settings-reload, #config-controls .settings-reload")?.focus({ preventScroll: true });
 }
 
 /// What a sub-view module needs from the tab: whether this session may write
