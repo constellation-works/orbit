@@ -532,4 +532,3 @@ if [[ -n "$LOCAL_BINARY" ]]; then
 else
   echo "PASS: npm install chain serves MCP successfully (orbit $binary_version)"
 fi
-echo "smoke diagnostics: $TMPDIR_ROOT"

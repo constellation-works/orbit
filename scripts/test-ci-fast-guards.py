@@ -4093,12 +4093,37 @@ class ReleaseAndSmokeScriptRegressionTests(unittest.TestCase):
             "    for line in raw.splitlines():\n"
             "        if line.strip():\n"
             "            json.loads(line)\n"
+            "    if os.environ.get('SMOKE_FAKE_MCP_SUCCESS') == '1':\n"
+            "        frames = [\n"
+            "            {'jsonrpc': '2.0', 'id': 1, 'result': {'serverInfo': {'name': 'orbit'}}},\n"
+            "            {'jsonrpc': '2.0', 'id': 2, 'result': {'tools': [{'name': 'orbit_workspace_list'}, {'name': 'orbit_friction', 'inputSchema': {'properties': {'tags': {'items': {'enum': ['incident']}}}}}]}},\n"
+            "            {'jsonrpc': '2.0', 'id': 3, 'result': {'structuredContent': {'message': 'Operator only'}}},\n"
+            "            {'jsonrpc': '2.0', 'id': 4, 'result': {'structuredContent': {'message': 'Use orbit_workspace_list; returned `ws_*` ID; run orbit workspace init; never infers one from the server process cwd'}}},\n"
+            "            {'jsonrpc': '2.0', 'id': 5, 'result': {'structuredContent': {'machine_name': 'smoke-npm-install', 'workspaces': [{'id': 'ws_workspace'}]}}},\n"
+            "            {'jsonrpc': '2.0', 'id': 6, 'result': {'structuredContent': {'tasks': []}}},\n"
+            "            {'jsonrpc': '2.0', 'id': 7, 'result': {'structuredContent': {'status': 'proposed'}}},\n"
+            "        ]\n"
+            "        for frame in frames:\n"
+            "            print(json.dumps(frame, separators=(',', ':')))\n"
+            "        raise SystemExit(0)\n"
             "    raise SystemExit(9)\n"
             "raise SystemExit(1)\n"
         )
         fake_orbit.chmod(0o755)
         env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
         env.update(GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM="1")
+        success_env = dict(env, SMOKE_FAKE_MCP_SUCCESS="1")
+        success_res = subprocess.run(
+            ["/bin/bash", str(fixture / "scripts/smoke-npm-install.sh"),
+             "--local-binary-check", str(fake_orbit)],
+            cwd=fixture, env=success_env, capture_output=True, text=True, timeout=60,
+        )
+        self.assertEqual(success_res.returncode, 0, success_res.stdout + success_res.stderr)
+        self.assertIn("PASS: local candidate functional smoke", success_res.stdout)
+        self.assertNotIn("smoke diagnostics:", success_res.stdout)
+        success_leftovers = list((fixture / ".orbit/tmp").glob("npm-smoke.*"))
+        self.assertEqual(success_leftovers, [], f"TMPDIR_ROOT leaked after success: {success_leftovers}")
+
         res = subprocess.run(
             ["/bin/bash", str(fixture / "scripts/smoke-npm-install.sh"),
              "--local-binary-check", str(fake_orbit)],
