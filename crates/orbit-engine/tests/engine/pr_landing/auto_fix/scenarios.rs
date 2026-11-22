@@ -1139,7 +1139,10 @@ pub(super) fn ci_answer(host: &DeliveryHost, operation: &str, input: &Value) -> 
             } else {
                 contract(commit)
             };
-            let run = u64::from_str_radix(&commit[..12], 16).unwrap();
+            let run = fs::read_to_string(forge.join("rerun-run-id"))
+                .ok()
+                .and_then(|value| value.trim().parse().ok())
+                .unwrap_or_else(|| u64::from_str_radix(&commit[..12], 16).unwrap());
             let attempt = rerun_attempt(&forge, &repair_mode);
             if repair_mode == "no_edit_delayed_green"
                 && attempt == 1
@@ -1193,6 +1196,12 @@ pub(super) fn ci_answer(host: &DeliveryHost, operation: &str, input: &Value) -> 
                     format!("{}\n", reads.trim()),
                 )
                 .unwrap();
+            } else if repair_mode == "no_edit_replacement_run" {
+                let run = input["run_id"]
+                    .as_u64()
+                    .or_else(|| input["run_id"].as_str().and_then(|text| text.parse().ok()))
+                    .unwrap();
+                fs::write(forge.join("rerun-run-id"), format!("{}\n", run + 1000)).unwrap();
             }
             Some(json!({"stdout":"", "stderr":""}))
         }
@@ -1779,6 +1788,198 @@ fn no_edit_check_repair_repeat_failure_holds_and_caps_rerun_at_one_per_head() {
             assert_eq!(repair_attempts(&host).len(), 1, "{case}");
             assert_candidate_head_unchanged(&fx, case);
             assert_no_merge_or_landing(&fx, &host, TaskStatus::Review, case);
+        },
+    );
+}
+
+/// Regression for ORB-26904: an independently created replacement workflow run
+/// on the same head, a reservation whose rerun attempt has not appeared, and
+/// legacy `SharedBudgetSpent` never claim the reserved rerun failed again or
+/// send a second rerun, while the reserved run's own later failed attempt still
+/// produces the `RepairDispatched` hold with its checks and tests.
+#[test]
+fn no_edit_distinct_run_unobserved_reservation_and_legacy_budget_never_report_rerun_failed() {
+    auto_fix_table(
+        "auto_fix::no_edit_distinct_run_unobserved_reservation_and_legacy_budget_never_report_rerun_failed",
+        "replacement_run reserved_without_result legacy_budget_spent",
+        |case, row| {
+            let (fx, host) = docs_only_pr(row);
+            let test_name = match case {
+                "replacement_run" => "contracts::replacement_run_smoke",
+                "reserved_without_result" => "contracts::no_result_smoke",
+                "legacy_budget_spent" => "contracts::legacy_budget_smoke",
+                _ => unreachable!(),
+            };
+            host.script(
+                "ci.job_log",
+                json!({"log": format!("test {test_name} ... FAILED\n")}),
+            );
+            host.script(
+                "test_checkpoint",
+                json!({"phase":"commit","task_id":TASK_ID,"commit_sha":fx.candidate}),
+            );
+            host.require_commands(&["true"]);
+            fx.script_checks(&["source_contract"]);
+            if case == "legacy_budget_spent" {
+                host.script("test_ci_repair", json!({"mode":"no_edit_red"}));
+                seed_attempt(
+                    &host,
+                    &fx.candidate,
+                    PrAutoFixBlocker::FailedChecks,
+                    1,
+                    RUN_ID,
+                );
+                seed_auto_fix_history(
+                    &host,
+                    orbit_types::workflow::PR_AUTO_FIX_NO_EDIT_RERUN_EVENT,
+                    &orbit_types::workflow::PrAutoFixNoEditRerun {
+                        pr_number: PR_NUMBER.into(),
+                        head_sha: fx.candidate.clone(),
+                        run_id: RUN_ID.into(),
+                        attempt: 1,
+                    },
+                );
+                seed_auto_fix_history(
+                    &host,
+                    orbit_types::workflow::CI_CHECK_RERUN_EVENT,
+                    &orbit_types::workflow::CiCheckRerunRecord {
+                        head: Some(fx.candidate.clone()),
+                        pr_number: Some(42),
+                        run_id: Some(12_345),
+                        event: Some(orbit_types::workflow::CiCheckRerunEvent::PullRequest),
+                        jobs: Vec::new(),
+                        legacy_pull_requests: Vec::new(),
+                    },
+                );
+                let error = super::complete_with_logical_clock(&host, &auto_fix_input(&fx))
+                    .expect_err("legacy spent budget stops without a second send");
+                assert!(
+                    !matches!(error, OrbitError::DeliveryRefused { .. }),
+                    "{case}: legacy budget exhaustion stops via BudgetSpent, not NoEditRerunFailed: {error}"
+                );
+                let message = error.to_string();
+                assert!(
+                    message.contains("the no-edit repair rerun is spent"),
+                    "{case}: {message}"
+                );
+                assert!(
+                    !message.contains("its one rerun")
+                        && !message.contains("failed again")
+                        && !message.contains(test_name),
+                    "{case}: must not falsely report rerun failure: {message}"
+                );
+                assert_eq!(
+                    host.history(TASK_ID)
+                        .iter()
+                        .filter(|entry| entry.event == orbit_types::workflow::CI_CHECK_RERUN_EVENT)
+                        .count(),
+                    1,
+                    "{case}: legacy budget prevents any rerun send"
+                );
+                assert_eq!(repair_attempts(&host).len(), 1, "{case}");
+                assert_candidate_head_unchanged(&fx, case);
+                assert_no_merge_or_landing(&fx, &host, TaskStatus::Review, case);
+                return;
+            }
+
+            let repair_mode = if case == "replacement_run" {
+                "no_edit_replacement_run"
+            } else {
+                "no_edit_reserved_no_result"
+            };
+            host.script("test_ci_repair", json!({"mode": repair_mode}));
+            let outcome =
+                super::with_completion_clock(|| run_repair_job(&host, auto_fix_input(&fx)));
+            let message = match outcome {
+                Err(DispatchError::DeliveryRefused {
+                    refusal, message, ..
+                }) => {
+                    assert_eq!(
+                        refusal,
+                        orbit_types::workflow::DeliveryRefusal::RepairDispatched,
+                        "{case}: {message}"
+                    );
+                    message
+                }
+                other => panic!("{case}: expected RepairDispatched hold, got {other:?}"),
+            };
+            let stop_message = message
+                .split("; original error before recovery:")
+                .next()
+                .unwrap();
+            assert!(
+                stop_message.contains("already admitted")
+                    && !stop_message.contains("its one rerun")
+                    && !stop_message.contains("failed again")
+                    && !stop_message.contains(test_name),
+                "{case}: must not falsely attribute unobserved/distinct run failure to the reserved rerun: {message}"
+            );
+            let history = host.history(TASK_ID);
+            assert!(
+                history
+                    .iter()
+                    .any(|entry| entry.event == "pr_auto_fix_ci_rerun_hold"),
+                "{case}: planner waits and observes instead of claiming rerun failure"
+            );
+            assert_eq!(
+                history
+                    .iter()
+                    .filter(|entry| entry.event == orbit_types::workflow::CI_CHECK_RERUN_EVENT)
+                    .count(),
+                1,
+                "{case}: existing budget prevents a second send"
+            );
+            assert_eq!(
+                history
+                    .iter()
+                    .filter(|entry| entry.event == orbit_types::workflow::CI_RERUN_RESERVED_EVENT)
+                    .count(),
+                1,
+                "{case}: exactly one rerun reservation is created"
+            );
+            assert_eq!(repair_attempts(&host).len(), 1, "{case}");
+            assert_candidate_head_unchanged(&fx, case);
+            assert_no_merge_or_landing(&fx, &host, TaskStatus::Review, case);
+
+            if case == "replacement_run" {
+                fs::remove_file(fx.forge.join("rerun-run-id")).unwrap();
+                fs::write(fx.forge.join("rerun-attempt"), "2\n").unwrap();
+                host.script(
+                    "ci.job_log",
+                    json!({"log": "test contracts::same_run_retry ... FAILED\n"}),
+                );
+                let later = super::complete_with_logical_clock(&host, &auto_fix_input(&fx));
+                let later_msg = match later {
+                    Err(OrbitError::DeliveryRefused {
+                        refusal, message, ..
+                    }) => {
+                        assert_eq!(
+                            refusal,
+                            orbit_types::workflow::DeliveryRefusal::RepairDispatched,
+                            "{case}: {message}"
+                        );
+                        message
+                    }
+                    other => panic!(
+                        "{case}: expected RepairDispatched hold on same-run later attempt, got {other:?}"
+                    ),
+                };
+                assert!(
+                    later_msg.contains("its one rerun")
+                        && later_msg.contains("failed again")
+                        && later_msg.contains("CI / test")
+                        && later_msg.contains("contracts::same_run_retry"),
+                    "{case}: same-run later failed attempt still reports checks and tests: {later_msg}"
+                );
+                assert_eq!(
+                    host.history(TASK_ID)
+                        .iter()
+                        .filter(|entry| entry.event == orbit_types::workflow::CI_CHECK_RERUN_EVENT)
+                        .count(),
+                    1,
+                    "{case}: still only one rerun sent"
+                );
+            }
         },
     );
 }

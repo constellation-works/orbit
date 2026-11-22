@@ -233,12 +233,11 @@ pub(in crate::executor::automation::vcs) fn request_no_edit_repair_rerun<
         CiRerunAdmission::Observe(previous) => {
             // The authenticated plan is built from the current completed
             // failed jobs. Only a later attempt than the reserved rerun's
-            // original attempt (or a distinct failed run on the same head) is
-            // that rerun's result; the original attempt keeps observing without
-            // a second send.
-            if (previous.run_id == plan.run_id && plan.run_attempt > previous.run_attempt)
-                || previous.run_id != plan.run_id
-            {
+            // original attempt on that same workflow run is that rerun's
+            // result; the original attempt, an ambiguous send with no later
+            // attempt yet, or a distinct workflow run on the same head keeps
+            // observing without a second send.
+            if previous.run_id == plan.run_id && plan.run_attempt > previous.run_attempt {
                 Ok(CiRerunStep::NoEditRerunFailed(no_edit_rerun_failed_reason(
                     host,
                     workspace,
@@ -263,17 +262,9 @@ pub(in crate::executor::automation::vcs) fn request_no_edit_repair_rerun<
                 "ci_infrastructure_retry_exhausted: classification=transient attempts={attempts}; the candidate stays in review"
             )))
         }
-        CiRerunAdmission::Refused(CiRerunRefusal::SharedBudgetSpent) => {
-            Ok(CiRerunStep::NoEditRerunFailed(no_edit_rerun_failed_reason(
-                host,
-                workspace,
-                &plan.head_sha,
-                run_id,
-                failed,
-                &run_failed_jobs,
-                deadline_ms,
-            )))
-        }
+        CiRerunAdmission::Refused(reason @ CiRerunRefusal::SharedBudgetSpent) => Ok(
+            CiRerunStep::BudgetSpent(format!("the no-edit repair rerun is spent: {reason}")),
+        ),
         CiRerunAdmission::Refused(
             reason @ (CiRerunRefusal::InvalidAuthorization
             | CiRerunRefusal::UnreadableReservation
