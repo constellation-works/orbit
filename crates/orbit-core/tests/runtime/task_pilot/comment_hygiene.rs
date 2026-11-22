@@ -617,7 +617,7 @@ fn comment_hygiene_enforces_line_budget_and_oversized_file_solo_rule() {
 
 fn comment_hygiene_missing_ledger_or_footprint_produces_honest_hold_without_provisional_selectors()
 {
-    // Subcase 1: Missing predecessor ledger -> honest hold, never publishes provisional selectors.
+    // Subcase 1: All completed predecessors lack a ledger -> no predecessor ledger can be read at all -> honest hold.
     let workspace = Workspace::new();
     commit_dated(&workspace, "src/a.rs", "fn a() {}\n", "2026-01-01", "add a");
     let missing_ledger_pred =
@@ -812,9 +812,110 @@ fn comment_hygiene_missing_ledger_or_footprint_produces_honest_hold_without_prov
     );
 }
 
+fn comment_hygiene_skips_ledgerless_predecessor_ahead_of_readable_v2_ledger() {
+    let workspace = Workspace::new();
+
+    let checked_base = commit_dated(
+        &workspace,
+        "src/unchanged.rs",
+        "fn stable() {}\n",
+        "2026-01-10",
+        "add unchanged",
+    );
+    commit_dated(
+        &workspace,
+        "src/changed.rs",
+        "fn v1() {}\n",
+        "2026-01-11",
+        "add changed",
+    );
+    // Modify src/changed.rs after checked_base.
+    commit_dated(
+        &workspace,
+        "src/changed.rs",
+        "fn v2() {}\n",
+        "2026-03-01",
+        "edit changed",
+    );
+    commit_dated(
+        &workspace,
+        "src/never.rs",
+        "fn never() {}\n",
+        "2026-02-01",
+        "add never",
+    );
+
+    // Older done predecessor carrying a readable schema_version 2 ledger.
+    let pred_v2 = add_comment_hygiene_task(&workspace, "comment-hygiene v2", TaskStatus::Backlog);
+    let v2_ledger = json!({
+        "schema_version": 2,
+        "run_date": "2026-10-01",
+        "head": checked_base,
+        "files": [],
+        "state": {
+            "src/changed.rs": [{
+                "attempted_on": "2026-10-01",
+                "outcome": "clean",
+                "checked_through": checked_base,
+            }],
+            "src/unchanged.rs": [{
+                "attempted_on": "2026-09-01",
+                "outcome": "clean",
+                "checked_through": checked_base,
+            }],
+        }
+    });
+    attach_ledger(
+        &workspace,
+        &pred_v2.id,
+        &serde_json::to_string(&v2_ledger).unwrap(),
+    );
+    mark_done(&workspace, &pred_v2.id);
+
+    // Newer done predecessor with no comment-hygiene-ledger.json artifact.
+    let pred_without_ledger = add_comment_hygiene_task(
+        &workspace,
+        "comment-hygiene without ledger",
+        TaskStatus::Backlog,
+    );
+    mark_done(&workspace, &pred_without_ledger.id);
+
+    let current = add_comment_hygiene_task(&workspace, "current run", TaskStatus::Proposed);
+    let prepared = prepare(&workspace, &current.id);
+    let batch = &prepared["tasks"][0]["comment_hygiene_batch"];
+
+    assert_eq!(batch["status"], "ready", "{batch}");
+    assert_eq!(batch["hold_reasons"], json!([]), "{batch}");
+    assert_eq!(batch["ledger"]["status"], "loaded", "{batch}");
+    assert_eq!(batch["ledger"]["base_v2_task_id"], pred_v2.id, "{batch}");
+    assert_eq!(
+        batch["ledger"]["skipped_without_ledger_task_ids"],
+        json!([pred_without_ledger.id]),
+        "{batch}"
+    );
+    let notes = batch["ledger"]["notes"].as_str().unwrap_or_default();
+    assert!(
+        notes.contains(&pred_without_ledger.id),
+        "expected skipped predecessor {} in ledger notes: {notes:?}",
+        pred_without_ledger.id
+    );
+    assert_eq!(batch["inventory"]["unchanged_dropped"], 1, "{batch}");
+    assert_eq!(
+        batch["selectors"],
+        json!([
+            "file:src/changed.rs",
+            "file:src/never.rs",
+            "file:.gitignore",
+            "file:README.md",
+        ]),
+        "{batch}"
+    );
+}
+
 crate::scenario_table!(
     comment_hygiene_pilot_batch_preparation_scenarios,
     comment_hygiene_prepare_and_apply_deterministically_verify_oldest_first_batch,
     comment_hygiene_enforces_line_budget_and_oversized_file_solo_rule,
+    comment_hygiene_skips_ledgerless_predecessor_ahead_of_readable_v2_ledger,
     comment_hygiene_missing_ledger_or_footprint_produces_honest_hold_without_provisional_selectors
 );
