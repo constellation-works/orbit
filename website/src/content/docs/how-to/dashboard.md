@@ -496,9 +496,12 @@ appears once as a plain row when none of its tasks has a group. A task group's h
 its task and shows the most severe state among its runs (failed, timeout, interrupted, running,
 then pending). Its expanded child rows always show the job, run ID, age, and duration. A
 child shows its state only when that differs from the header's, and lists only the tasks the
-header does not name, leaving the cell blank when none remain. So two running children of one
-task's group show neither cell, while a child of a group of repeated failures of one job keeps
-its task links, because that header names no task. Under **Running**, the panel header counts
+header does not name, leaving the cell blank when none remain. So a child whose state matches
+the header's, such as a running child of a running group, has a blank State cell. Its Task
+cell is blank only when the run names no task besides the group's task: two running children
+that name only that task show neither cell, while a running child that also names task B keeps
+a link to B. A child of a group of repeated failures of one job keeps its task links, because
+that header names no task. Under **Running**, the panel header counts
 the tasks and runs in flight as `N tasks, M runs in flight` (`nothing in flight` when none is);
 **All** and **Failed** show the number of runs listed instead. Switch to **All**
 or **Failed**, narrow the list with a task ID or job ID, and pick a time window (**Running**
