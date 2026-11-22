@@ -27,7 +27,7 @@ use super::run::RunSubcommand;
 use super::task::TaskInvocation;
 use super::task::TaskSubcommand;
 use super::tool::{self, ToolSubcommand};
-use super::{Cli, CommandOut, Commands, Payload};
+use super::{Block, Cli, CommandOut, Commands, Payload};
 
 /// What the preflight decided.
 pub(crate) enum Preflight {
@@ -818,7 +818,8 @@ fn render(render: Render, value: Value, holder: &HostEntry) -> CommandOut {
             } else {
                 value
             };
-            Ok(Payload::detail(doc, text).into())
+            // Prose, like the local `task show`: a terminal word-wraps it.
+            Ok(Payload::blocks(doc, vec![Block::prose(text)]).into())
         }
         Render::TaskWrite { verb } => {
             let id = value.get("id").and_then(Value::as_str).unwrap_or_default();
