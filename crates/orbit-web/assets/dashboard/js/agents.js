@@ -1075,9 +1075,12 @@ function noReviewedDeliveries(term, row) {
   return role === "implementers" && REVIEW_RATE_TERMS.has(term.key) && reviewedUnits(row) === 0;
 }
 
-// The radar is a percentile view of rates: outward is better, the fleet
-// median always sits on the middle ring, and each vertex discloses its
-// term weight and signed contribution versus that median.
+// The radar compares each axis across the ranked fleet with outward as better.
+// When a scored axis supplies row.expected, rows are ranked by their
+// expectation-adjusted excess weight × (rate − expected rate), anchored with
+// meeting expectation (0) on the middle ring (0.5). Roles without row.expected
+// and unscored context axes retain the fleet-median rate percentile with the
+// fleet median on the middle ring.
 function radarNode(row) {
   const axes = terms().map((term) => ({ ...term }));
   // Only count-valued context with a clear better direction may extend a
@@ -1097,6 +1100,30 @@ function radarNode(row) {
   const rate = (axis, each) => axis.unscored
     ? (each.units > 0 && Number.isFinite(count(axis, each)) ? count(axis, each) * 100 / each.units : null)
     : each.per_100 && each.per_100[axis.key];
+  const expectedCount = (axis, each) => (!axis.unscored && each.expected && typeof each.expected[axis.key] === "number"
+    ? each.expected[axis.key]
+    : null);
+  const expectedRate = (axis, each) => {
+    const exp = expectedCount(axis, each);
+    return exp == null ? null : exp * 100 / Math.max(1, units(axis, each));
+  };
+  const excess = (axis, each) => {
+    const ownRate = rate(axis, each);
+    const expRate = expectedRate(axis, each);
+    if (!Number.isFinite(ownRate) || !Number.isFinite(expRate)) return null;
+    // Exact count equality avoids 2-decimal per_100 rounding artifacts moving
+    // a zero-excess vertex off the middle reference ring.
+    const ownCount = count(axis, each);
+    const expCount = expectedCount(axis, each);
+    if (Number.isFinite(ownCount) && Number.isFinite(expCount) && Math.abs(ownCount - expCount) < 1e-9) return 0;
+    const value = axis.weight * (ownRate - expRate);
+    return Math.abs(value) < 1e-12 ? 0 : value;
+  };
+  const percentileRank = (list, value) => {
+    const under = list.filter((each) => each < value).length;
+    const equal = list.filter((each) => each === value).length;
+    return (under + equal / 2) / list.length;
+  };
   const gap = (axis, each) => {
     if (each.unjudged) return "not judged yet";
     if (below(each)) return "too little evidence to compare";
@@ -1109,6 +1136,43 @@ function radarNode(row) {
   };
   const fleet = (scorecard.rows || []).filter((each) => each.rank != null && !below(each));
   const values = axes.map((axis) => {
+    const expCount = expectedCount(axis, row);
+    const usesExpected = expCount != null;
+    if (usesExpected) {
+      const fleetExcesses = fleet
+        .filter((each) => !gap(axis, each) && expectedCount(axis, each) != null)
+        .map((each) => excess(axis, each))
+        .filter(Number.isFinite)
+        .sort((a, b) => a - b);
+      const negatives = fleetExcesses.filter((value) => value < 0);
+      const positives = fleetExcesses.filter((value) => value > 0);
+      // Zero-anchored percentile in the supported fleet: meeting expectation
+      // (0 excess) stays at 0.5, positive excess renders outward (> 0.5), and
+      // negative excess renders inward (< 0.5), ranked within each half.
+      const scale = (value) => {
+        if (!Number.isFinite(value) || !fleetExcesses.length) return null;
+        if (value === 0) return 0.5;
+        if (value > 0) return positives.length ? 0.5 + 0.5 * percentileRank(positives, value) : 0.75;
+        return negatives.length ? 0.5 * percentileRank(negatives, value) : 0.25;
+      };
+      const reason = gap(axis, row) || (!fleetExcesses.length ? "no supported fleet comparison" : null);
+      const ownRate = rate(axis, row);
+      const expRate = expectedRate(axis, row);
+      const ownExcess = excess(axis, row);
+      const axisContribution = !reason && Number.isFinite(ownRate) && Number.isFinite(expRate)
+        ? axis.weight * (ownRate - expRate)
+        : null;
+      return {
+        axis,
+        usesExpected: true,
+        referenceRate: expRate,
+        expectedCount: expCount,
+        reason,
+        own: reason ? null : scale(ownExcess),
+        fleet: fleetExcesses.length ? 0.5 : null,
+        axisContribution,
+      };
+    }
     const rates = fleet.filter((each) => !gap(axis, each)).map((each) => rate(axis, each)).sort((a, b) => a - b);
     const middle = Math.floor(rates.length / 2);
     const median = rates.length ? (rates[middle] + rates[Math.floor((rates.length - 1) / 2)]) / 2 : null;
@@ -1118,9 +1182,7 @@ function radarNode(row) {
     const scale = (value) => {
       if (!Number.isFinite(value) || !rates.length) return null;
       if (value === median) return 0.5;
-      const under = rates.filter((each) => each < value).length;
-      const equal = rates.filter((each) => each === value).length;
-      const percentile = (under + equal / 2) / rates.length;
+      const percentile = percentileRank(rates, value);
       return axis.weight < 0 ? 1 - percentile : percentile;
     };
     const reason = gap(axis, row) || (!rates.length ? "no supported fleet comparison" : null);
@@ -1128,11 +1190,23 @@ function radarNode(row) {
     // Signed contribution versus the fleet median: weight × (rate −
     // median). Positive helps the score relative to the median, negative
     // hurts it, whichever direction the axis points.
-    const contributionVsMedian = !axis.unscored && !reason && Number.isFinite(ownRate) && median != null
+    const axisContribution = !axis.unscored && !reason && Number.isFinite(ownRate) && median != null
       ? axis.weight * (ownRate - median)
       : null;
-    return { axis, median, reason, own: reason ? null : scale(ownRate), fleet: rates.length ? 0.5 : null, contributionVsMedian };
+    return {
+      axis,
+      usesExpected: false,
+      referenceRate: median,
+      expectedCount: null,
+      reason,
+      own: reason ? null : scale(ownRate),
+      fleet: rates.length ? 0.5 : null,
+      axisContribution,
+    };
   });
+  const expectedAxes = values.filter((entry) => entry.usesExpected).length;
+  const anyExpected = expectedAxes > 0;
+  const allExpected = expectedAxes === values.length && values.length > 0;
   const svg = (tag, attrs = {}, text) => {
     const node = document.createElementNS("http://www.w3.org/2000/svg", tag);
     for (const [name, value] of Object.entries(attrs)) node.setAttribute(name, String(value));
@@ -1143,7 +1217,12 @@ function radarNode(row) {
     const angle = -Math.PI / 2 + index * 2 * Math.PI / axes.length;
     return [150 + Math.cos(angle) * 104 * value, 130 + Math.sin(angle) * 104 * value];
   };
-  const plot = svg("svg", { viewBox: "0 0 300 260", role: "group", "aria-label": `Agent profile for ${rowLabel(row)} versus ranked fleet median; outward is better` });
+  const plotAria = allExpected
+    ? `Agent profile for ${rowLabel(row)} versus tier/size expectation; outward is better`
+    : anyExpected
+      ? `Agent profile for ${rowLabel(row)} versus tier/size expectation on scored axes and fleet median on unscored axes; outward is better`
+      : `Agent profile for ${rowLabel(row)} versus ranked fleet median; outward is better`;
+  const plot = svg("svg", { viewBox: "0 0 300 260", role: "group", "aria-label": plotAria });
   for (const level of [0.25, 0.5, 0.75, 1]) {
     plot.append(svg("polygon", { points: axes.map((_, i) => point(i, level).join(",")).join(" "), class: "agents-radar-grid" }));
   }
@@ -1174,14 +1253,19 @@ function radarNode(row) {
     return node;
   };
   const labels = el("ol", { class: "agents-radar-axes" });
-  values.forEach(({ axis, median, own, reason, contributionVsMedian }, i) => {
+  values.forEach(({ axis, usesExpected, referenceRate, expectedCount: expectedAxisCount, own, reason, axisContribution }, i) => {
     const label = `${axis.label}${axis.weight < 0 ? " (fewer is better)" : " (more is better)"}${axis.unscored ? " · unscored" : ""}`;
     const ownText = reason ? "—" : `${number(rate(axis, row))} per 100 ${termUnit(axis)}`;
-    const fleetText = median == null ? "unavailable" : `${number(median)} per 100 ${termUnit(axis)}`;
+    const refBasis = usesExpected ? "expected" : "fleet median";
+    const refRateText = referenceRate == null ? "unavailable" : `${number(referenceRate)} per 100 ${termUnit(axis)}`;
+    const fleetText = anyExpected && !allExpected && referenceRate != null ? `${refRateText} (${refBasis})` : refRateText;
     const weightText = axis.unscored ? "unscored" : weight(axis.weight);
-    const contributionText = axis.unscored ? "unscored" : contributionVsMedian == null ? "—" : signed(contributionVsMedian);
-    const evidence = `${number(count(axis, row))} raw; ${number(units(axis, row))} ${termUnit(axis)}`;
-    const info = `${label}: agent ${ownText}; fleet median ${fleetText}; weight ${weightText}; contribution vs fleet median ${contributionText}; ${evidence}${reason ? `; gap: ${reason}` : ""}.`;
+    const contributionText = axis.unscored ? "unscored" : axisContribution == null ? "—" : signed(axisContribution);
+    const evidence = usesExpected
+      ? `${number(count(axis, row))} raw (${number(expectedAxisCount)} expected); ${number(units(axis, row))} ${termUnit(axis)}`
+      : `${number(count(axis, row))} raw; ${number(units(axis, row))} ${termUnit(axis)}`;
+    const contribLabel = usesExpected ? "contribution" : "contribution vs fleet median";
+    const info = `${label}: agent ${ownText}; ${refBasis} ${refRateText}; weight ${weightText}; ${contribLabel} ${contributionText}; ${evidence}${reason ? `; gap: ${reason}` : ""}.`;
     const [x, y] = point(i, own ?? 1);
     const vertex = svg("g", { tabindex: 0, role: "button", "aria-label": info, "aria-describedby": "agents-radar-tooltip", class: `agents-radar-vertex${reason ? " is-gap" : ""}` });
     vertex.dataset.term = axis.key;
@@ -1208,17 +1292,31 @@ function radarNode(row) {
   // A table ignores overflow and its nowrap columns set a minimum width, so
   // the offscreen profile sits in a 1px scroll container. Its columns stay in
   // the accessibility tree and out of the Analytics pane's scroll range.
+  const tableColumns = allExpected
+    ? ["Axis", "Agent rate", "Expected rate", "Weight", "Contribution", "Raw and expected counts", "Evidence"]
+    : anyExpected
+      ? ["Axis", "Agent rate", "Reference rate", "Weight", "Contribution", "Counts and units", "Evidence"]
+      : ["Axis", "Agent rate", "Fleet median rate", "Weight", "Contribution vs fleet median", "Raw count and units", "Evidence"];
+  const tableCaption = anyExpected
+    ? `Agent profile: ${rowLabel(row)}; expectation-adjusted in ${windowLabel()}`
+    : `Agent profile: ${rowLabel(row)}; ranked fleet in ${windowLabel()}`;
   const table = el("table", {}, [
-    el("caption", { text: `Agent profile: ${rowLabel(row)}; ranked fleet in ${windowLabel()}` }),
-    el("thead", {}, [el("tr", {}, ["Axis", "Agent rate", "Fleet median rate", "Weight", "Contribution vs fleet median", "Raw count and units", "Evidence"].map((text) => heading(text, "col")))]),
+    el("caption", { text: tableCaption }),
+    el("thead", {}, [el("tr", {}, tableColumns.map((text) => heading(text, "col")))]),
     tableBody,
   ]);
+  const hintText = allExpected
+    ? "Outward is better. Each axis ranks the row's expectation-adjusted excess (weight × (rate − expected rate)) in the ranked fleet; meeting expectation (0) sits on the dashed middle ring. Weight and contribution match the score breakdown. Hover a vertex or its number, or focus it, for actual rates, expected rates and evidence. Hollow outer markers are gaps, not values."
+    : anyExpected
+      ? "Outward is better. Expectation-adjusted axes rank weight × (rate − expected rate) in the ranked fleet with meeting expectation (0) on the dashed middle ring; other axes show fleet-median percentiles. Hover a vertex or its number, or focus it, for rates and evidence. Hollow outer markers are gaps, not values."
+      : "Outward is better. Each axis is the row's percentile in the ranked fleet; the dashed fleet median always sits on the middle ring. Weight and contribution vs the median explain each axis. Hover a vertex or its number, or focus it, for rates and evidence. Hollow outer markers are gaps, not values.";
+  const fleetKeyText = allExpected ? "Expected (tier/size)" : anyExpected ? "Expected / fleet median" : "Fleet median";
   const profile = el("div", { class: "visually-hidden" }, [table]);
   return el("section", { class: `agents-radar${below(row) ? " is-muted" : ""}`, "aria-label": "Agent profile" }, [
-    el("h4", {}, ["Agent profile", common.pinnedInfoHint("Outward is better. Each axis is the row's percentile in the ranked fleet; the dashed fleet median always sits on the middle ring. Weight and contribution vs the median explain each axis. Hover a vertex or its number, or focus it, for rates and evidence. Hollow outer markers are gaps, not values.")]),
+    el("h4", {}, ["Agent profile", common.pinnedInfoHint(hintText)]),
     ...(below(row) ? [el("p", { class: "agents-radar-note", text: row.unjudged ? "Nothing to compare: no unit of this row is judged yet." : "Too little evidence to compare: below minimum support." })] : []),
     plot,
-    el("p", { class: "agents-radar-legend" }, [el("span", { class: "agents-radar-own-key", text: "Selected agent" }), el("span", { class: "agents-radar-fleet-key", text: "Fleet median" })]),
+    el("p", { class: "agents-radar-legend" }, [el("span", { class: "agents-radar-own-key", text: "Selected agent" }), el("span", { class: "agents-radar-fleet-key", text: fleetKeyText })]),
     labels, tooltip, profile,
   ]);
 }
