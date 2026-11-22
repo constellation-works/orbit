@@ -122,7 +122,11 @@ function formatUsd(value) {
   const amount = typeof value === "number" && Number.isFinite(value) ? value : 0;
   const sign = amount < 0 ? "-" : "";
   const magnitude = Math.abs(amount);
-  if (magnitude > 0 && magnitude < 0.01) return `${sign}<$0.01`;
+  const cent = 0.01;
+  const binary64Tolerance = Number.EPSILON * cent;
+  if (magnitude > 0 && magnitude < cent && cent - magnitude > binary64Tolerance) {
+    return `${sign}<$0.01`;
+  }
   return `${sign}$${usdFormatter.format(magnitude)}`;
 }
 
