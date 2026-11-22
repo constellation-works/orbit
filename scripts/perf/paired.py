@@ -12,7 +12,9 @@ that is the base binary copied to a second path, so the unchanged-build spread
 is measured. Each parity observation and round starts from the same restored state:
 the first restore fills one fixed root and keeps a pristine copy of it, and later
 ones reset that root from the copy (--keep restores a separate root for each
-instead). Holds the host-wide perf lane for the whole run. A match requires a successful
+instead). The arm's own binary then prepares that root, untimed (fixture.py
+PREPARE_COMMANDS: converge the managed defaults, record envelope proofs), so each
+arm is timed on the converged warm state a live host running it is in. Holds the host-wide perf lane for the whole run. A match requires a successful
 observation from every arm (parity command exit 0, and HTTP 2xx when that
 probe runs). A missing or failed observation refuses the run before sampling.
 Every arm command runs in its own process group with a deadline and a stdout
@@ -610,6 +612,7 @@ class Harness:
         self.http_path = args.http
         self.qualifying_task_counts = dict(args.qualifying_task_count or [])
         self.reset_info = None
+        self.prepared: list[dict] = []
 
     def prepare(self, created: common.CreatedDirs) -> None:
         provenance = json.loads((self.builds / "provenance.json").read_text())
@@ -669,6 +672,26 @@ class Harness:
             self._sync_tree(template, root, "--checksum", "--delete")
         return self.reset_info
 
+    def prepare_arm(self, arm: str, info: dict, env: dict, label: str) -> None:
+        """Run fixture.PREPARE_COMMANDS with `arm`'s binary on a fresh root, untimed.
+
+        A failure or a bound hit refuses the run: timing an unprepared root
+        measures a state no live host is in (ORB-26617).
+        """
+        for argv in fixture.PREPARE_COMMANDS:
+            result = self.supervised_arm(arm, info, env, list(argv))
+            command = " ".join(argv)
+            if result.ended != "exit":
+                raise common.PerfRefusal(
+                    f"{arm} prepare `orbit {command}` for {label} {self.bound_reason(result)}; "
+                    "failing the run")
+            if result.returncode != 0:
+                raise common.PerfRefusal(
+                    f"{arm} prepare `orbit {command}` for {label} exited {result.returncode}; "
+                    "failing the run (reproduce with fixture.py restore, then fixture.py prepare)")
+            self.prepared.append({"arm": arm, "label": label, "command": command,
+                                  "exit": 0, "ms": round(result.elapsed_ms, 1)})
+
     def drop(self, info: dict) -> None:
         # A successful observation reuses the root; an interrupted one cleans it
         # after its child has been reaped. --keep retains each labelled root.
@@ -723,6 +746,7 @@ class Harness:
             env = fixture.isolated_env(info)
             record: dict = {}
             try:
+                self.prepare_arm(arm, info, env, f"parity-{arm}")
                 if self.args.parity is not None:
                     record["command"] = self.parity_command(arm, info, env)
                 if self.http_path:
@@ -756,6 +780,8 @@ class Harness:
             "http_path": self.http_path,
             "masks": self.masks,
             "limits": self.limits(),
+            "prepare": {"commands": [" ".join(argv) for argv in fixture.PREPARE_COMMANDS],
+                        "runs": list(self.prepared)},
             "match": not failures and not differing,
             "differing_arms": differing,
             "observation_failures": failures,
@@ -765,10 +791,11 @@ class Harness:
     def sample_round(self, arm: str, round_index: int) -> tuple[list[dict], dict]:
         info = self.restore(f"{arm}-{round_index}")
         env = fixture.isolated_env(info)
-        before = host_pressure()
         samples: list[dict] = []
         gap = self.args.gap_ms / 1000
         try:
+            self.prepare_arm(arm, info, env, f"round-{round_index}")
+            before = host_pressure()
             if self.cli_args is not None:
                 server = None
 
@@ -874,6 +901,8 @@ class Harness:
                          "warmup": self.args.warmup, "gap_ms": self.args.gap_ms,
                          "aggregation": "per-round nearest-rank p95; per-arm median of round p95s",
                          **self.limits()},
+            "prepare": {"commands": [" ".join(argv) for argv in fixture.PREPARE_COMMANDS],
+                        "runs": self.prepared},
             "round_order": order,
             "revisions": {role: {k: self.provenance["revisions"][role][k]
                                  for k in ("commit", "tree", "binary_sha256")}

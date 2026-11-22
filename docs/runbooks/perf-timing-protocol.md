@@ -4,8 +4,8 @@ summary: Produce hard-timing evidence for a perf task — frozen store fixture, 
 tags: [performance, development, validation]
 paths: ["scripts/perf/**"]
 related_features: []
-related_artifacts: [ORB-26322, ORB-26395, ORB-25652, ORB-25672, ORB-25638]
-last_validated: 2026-11-21
+related_artifacts: [ORB-26322, ORB-26395, ORB-25652, ORB-25672, ORB-25638, ORB-26617]
+last_validated: 2026-11-22
 ---
 
 # Measure a Perf Task With the Paired Timing Protocol
@@ -21,6 +21,7 @@ The protocol has four scripts under `scripts/perf/`:
 |---|---|
 | `fixture.py snapshot` | Freezes one workspace of a store into a fixture, reading the source read-only. |
 | `fixture.py restore` / `clean` | Makes / removes a disposable root (own `HOME` and workspace) from that fixture. |
+| `fixture.py prepare` | Converges a restored root's managed defaults and records its envelope proofs with one binary, untimed. |
 | `build-pair.sh` | Builds the release `orbit` binary for the baseline and the candidate revision, or for an uncommitted working tree. |
 | `paired.py` | Writes a bounded snapshot-manifest summary, checks output parity, then times base, candidate and an unchanged-build control. |
 
@@ -201,6 +202,29 @@ repository root of the checkout that holds these scripts.
    stack and reconstructs the selected HEAD and per-worktree refs in the standalone
    copy; selected per-worktree reflog history is not retained.
 
+   The snapshot also binds, from the source index, every task another workspace
+   registers that a kept relation targets (and that workspace's `workspace_bindings`
+   row), and nothing else of it. A relation target resolves when any workspace binds
+   it; without those rows ws_orbit's 791 relations into another partition read as
+   dangling, and doctor's `task-relations` row reported them as blocking an index
+   rebuild, which live does not.
+
+   **Index and bundle consistency.** The task index and the bundle tree are copied at
+   different instants while drains write, so a task written in between can have an
+   index row from one moment and a bundle from another (ORB-26617: ORB-26596's copied
+   row said `updated_at` 21:55:19.376518147Z, its copied `task.yaml` 21:55:56.672174779Z).
+   One such row sends every task read of the restored root to a full bundle scan. After
+   copying, `snapshot` compares every copied `task_bundle_index` row of the workspace with
+   its copied bundle: each task needs a `task_bundle_bindings` row, an index row and a
+   bundle directory, and the row's `updated_at` must be the same instant as the
+   `task.yaml` top-level `updated_at` (the index spells UTC `+00:00`, the envelope `Z`).
+   Each drifted task's rows (every table keyed by `task_id` or `source_task_id`) are then
+   re-copied from one read transaction of the `mode=ro` source, and its bundle after
+   them, for up to 5 rounds. A task that still disagrees refuses the snapshot, naming up
+   to 10 tasks and why (`ORB-2: index updated_at … != task.yaml updated_at …`), and the
+   partial output is removed. The manifest's `task_index_consistency` records the result.
+   A store without a `task_bundle_index` table records `checked: false` and why.
+
 2. Build the pair (two cold release builds; about 15 minutes each on the owner host).
    During `implement_bundle`, build the uncommitted candidate from the checkout:
 
@@ -251,6 +275,13 @@ repository root of the checkout that holds these scripts.
      separate full restore. It discards `--warmup` runs, then takes `--samples` sequential
      samples at least `--gap-ms` apart, recording wall ms and exit status. A nonzero exit (or
      a non-2xx HTTP status) fails the run.
+   - **Prepare.** After every restore or reset, before the arm's parity observation or
+     round, the arm's own binary runs `fixture.py`'s `PREPARE_COMMANDS` on the root,
+     untimed and under the same bounds as a sample: `orbit workspace sync`, then
+     `orbit task list --json`. A nonzero exit or a bound hit refuses the run naming the arm
+     and command. See [Restored fixtures: envelope proofs and global
+     defaults](#restored-fixtures-envelope-proofs-and-global-defaults). Each run is recorded
+     under `prepare` in `parity.json` and `paired-summary.json`.
    - **CLI mode** times `<binary> <orbit args>` in the restored root.
    - **Bounds.** Every parity and CLI sample command runs as the leader of its own
      process group, with its stdout drained while it runs. One that runs past
@@ -340,6 +371,36 @@ repository root of the checkout that holds these scripts.
    rm -rf <scratch>/perf-<slug>
    ```
 
+### Restored fixtures: envelope proofs and global defaults
+
+A restored root must be in the state a live host running the binary under test is in,
+or the timing measures a path live never takes (ORB-26617). Two things a copy cannot
+carry are put back by the binary itself, which `fixture.py prepare` and every
+`paired.py` restore or reset do before timing:
+
+- **Envelope proofs.** The task registry's `task_envelope_stamps` rows let a listing
+  skip parsing a `task.yaml` whose file still reports the recorded
+  `size:mtime:device:inode` stamp. Restored files have new inodes and mtimes, so every
+  copied proof is void, and read-only `orbit doctor` never records new ones: each of its
+  listings re-parsed all ~15k envelopes. The second prepare command,
+  `orbit task list --json`, is a writable listing whose freshness scan re-proves each
+  envelope against its index row and records the proof for the restored file, as a live
+  writer does. A `paired.py` reset copies back only files whose checksum changed, so an
+  unchanged envelope keeps the inode its proof names.
+- **Global-default convergence.** The snapshot copies the live `~/.orbit/resources`,
+  whose managed defaults were written by whichever binary last converged the live host.
+  A binary that ships different defaults can read them as stale or invalid (a 0.52.0
+  `activities/task_pilot.yaml` that still disallows a tool a later binary removed
+  withdraws that activity, and doctor's `artifacts-activities` row is an error). Doctor
+  opens read-only and never reconciles defaults; on a live host `orbit update` runs
+  `workspace sync` with the new binary. The first prepare command is that
+  `orbit workspace sync`, run by each arm's binary on its own root, so parity and timing
+  compare converged states. A managed file the source edited locally stays preserved,
+  as live sync preserves it.
+
+Prepare writes only inside the restored root. The snapshot stays read-only toward the
+live store; neither step runs there.
+
 ### Use a restored root by hand
 
 `fixture.py restore --snapshot <snapshot-dir> --into <dir>` verifies every file's size and
@@ -360,6 +421,13 @@ export XDG_CONFIG_HOME="<dir>/home/.config"
 export GIT_CEILING_DIRECTORIES="<dir>"
 cd "<dir>/checkout"
 # workspace selector: --workspace <name>  (registry id <id>)
+```
+
+Before timing a binary in it, prepare the root with that binary (see above). It runs
+in the restored env and prints each command's exit and wall time:
+
+```sh
+python3 -I scripts/perf/fixture.py prepare --into <dir> --binary <orbit>
 ```
 
 Unset every inherited `ORBIT_*` and `GIT_*` variable first, as `paired.py` does. The
@@ -401,6 +469,7 @@ bounded summary instead.
 | `databases` | Per copied database: `method` (`filtered-copy-single-read-transaction` or `online-backup-api`), `filtered`, `scope_columns`, `kept_whole`, and `tables` (row count per table) |
 | `state_distributions` | `job_runs_by_state`, `job_run_steps_by_state`, `routine_fires_by_state`, `routine_fires_by_routine`, `routine_cursors`, `routine_pauses` |
 | `git_metadata` | `null`, or the checkout, per-worktree Git dir and Git common dir copied |
+| `task_index_consistency` | `checked`; when true, `tasks` (index rows compared), `drifted` (each task first found disagreeing, with `reason`), `reconcile_rounds` and `foreign_relation_target_bindings` (bindings kept for relation targets another workspace registers); when false, `reason` |
 | `excluded` | Counts of credential-like and non-regular files skipped, and the excluded workspace paths |
 | `files` | Every copied file: `path`, `size`, `sha256` |
 
@@ -432,14 +501,16 @@ a bound has `exit` null, `stopped` (the reason, naming the flag) and `bound` (`n
 `--parity` leaves every arm record empty, which is a missing observation; an HTTP-only run
 without `--parity` has `command: null` and arm records holding `http` alone. Each output is
 `{format: json|text, value}` after masking. `match` is true only when `observation_failures`
-and `differing_arms` are both empty.
+and `differing_arms` are both empty. `prepare` holds the prepare `commands` and one `runs`
+entry per prepared root (`arm`, `label`, `command`, `exit`, `ms`).
 
 **`raw.json`** (`kind: orbit-perf-raw`): `surface` and `samples`, one entry per sample
 including warmups: `arm`, `round`, `index`, `warmup`, `ms`, `exit`.
 
 **`paired-summary.json`** (`kind: orbit-perf-paired-summary`): `surface`, `protocol`
 (rounds, samples, warmup, gap_ms, aggregation), `round_order`, `revisions`,
-`binary_sha256` per arm, `snapshot` (path, epoch, source workspace,
+`binary_sha256` per arm, `prepare` (as in `parity.json`, covering the rounds too),
+`snapshot` (path, epoch, source workspace,
 manifest-summary path), `round_p95_ms` and
 `median_p95_ms` per arm, `control_spread_ms` (`value`, `control_range`,
 `control_vs_base`), `candidate_minus_base_ms`, `bound_ms`, `verdict`, `reason`, `network`
@@ -516,6 +587,8 @@ Tasks land in `proposed`. Do not approve them.
 | `… failed digest verification, refusing to restore: …` | A snapshot file was changed, removed or added after the snapshot | Take a fresh snapshot |
 | `workspace … has no initialized identity: …` (snapshot) | The registered checkout's `.orbit/config.yaml` is missing or names no `workspace_id` | Initialize that checkout with `orbit workspace init --force`, then snapshot again |
 | `snapshot … records no workspace identity …` (restore) | The snapshot was taken from an identity-less source | Take a fresh snapshot of an initialized workspace |
+| `task index and bundles still disagree after <n> re-copy rounds …` (snapshot) | A task's index row and bundle kept changing between copies, or the source itself disagrees | Take the snapshot again when drains are quieter; if the same task persists, it is drifted on the source (`orbit doctor` there) |
+| `<arm> prepare … for <label> exited <n> …` (paired.py) or `preparing the restored root with <binary> failed …` (fixture.py) | That binary could not converge or list the restored root | Reproduce with `fixture.py restore`, then `fixture.py prepare --binary <it>`, and read its stderr |
 | `… built identical binaries …` | The two revisions differ only in metadata | Pick revisions whose content differs |
 | `base and candidate resolve to the same commit …` | Same commit given twice, or `--candidate-worktree` on a checkout with no uncommitted changes (ignored files do not count) and a base that is that HEAD | Check the revision selectors, or make the working-tree change first |
 | `--candidate-worktree must be the checkout root …` | `--candidate-worktree` names a subdirectory of the checkout | Pass the root path the message names (`git rev-parse --show-toplevel`) |
