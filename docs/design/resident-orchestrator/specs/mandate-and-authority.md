@@ -99,9 +99,9 @@ grantable to a resident in v1.
 
 ### Rights → tools
 
-| Right | Tools the cycle may call (in covered workspaces) |
+| Right | Tools the cycle may call (writes in the mandate's own workspace) |
 |---|---|
-| none | read tools, `orbit.workflow` action `auto` with `mode: "status"` (drain readiness read); `orbit.task.add` filed `proposed` (or with no status); `orbit.task.update` without a status (edits, comments); `orbit.task.artifact` action `put`; `orbit.friction` action `add` and `update` (without `rehome_to` or `move`, in covered workspaces); `orbit.evolution.add`; `orbit.decision` action `raise`; `orbit.notice.post`; and `orbit.resident.checkpoint`, including the `handoff` outcome that has finalize move the assignment to `review` |
+| none | read tools, `orbit.workflow` action `auto` with `mode: "status"` (drain readiness read); `orbit.task.add` filed `proposed` (or with no status); `orbit.task.update` without a status (edits, comments); `orbit.task.artifact` action `put`; `orbit.friction` action `add` (own workspace only) and `update` (without `rehome_to` or `move`, in any covered workspace); `orbit.evolution.add`; `orbit.decision` action `raise`; `orbit.notice.post`; and `orbit.resident.checkpoint`, including the `handoff` outcome that has finalize move the assignment to `review` |
 | `dispatch` | `orbit.pipeline.invoke`, `orbit.run.auto`/`ship`/`resume`, `orbit.task.recover` action `requeue`/`repilot`, drain pull and claim bind/settle, `orbit.task.update` to `in-progress` |
 | `promote` | `orbit.task.update` to `backlog`, `orbit.task.add` filed `backlog` |
 | `merge` | `orbit.workflow` action `land`, `orbit.task.update` to `done` (refused while the task has an open pull request), `orbit.task.recover` action `retry_handoff`, `orbit.task.recover` action `reconcile_review` |
