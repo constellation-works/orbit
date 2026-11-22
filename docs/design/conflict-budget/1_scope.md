@@ -81,8 +81,9 @@ The operator sets how much expected conflict-repair work Orbit may take on to ru
 tasks together, and can set it higher during working hours than overnight. Admission admits an
 overlapping candidate when the expected repair cost of its overlaps, estimated per path from
 recorded history, fits that budget. With the budget at its default of zero, admission is exactly
-today's: every locked path is exclusive and `unlocked_context_paths` still takes no lock for a
-matching entry beside a non-matching one. Landing,
+today's: an overlap at a `shared` path (`workflow.lock_modes`) is waived as it is now, every other
+locked path is exclusive, and `unlocked_context_paths` still takes no lock for a matching entry
+beside a non-matching one. Landing,
 conflict recovery and review are unchanged; the budget changes only which work runs at the same
 time.
 
@@ -141,7 +142,9 @@ admit when overlap_risk(candidate) ≤ budget(now)
 `holders(path)` counts the tasks already holding it, because the k-th task to land on a busy
 path rebases against k−1 changes. A matching path keeps taking no lock (`risk = 0`) when its task
 also declares a non-matching selector; a task whose every selector matches keeps those paths
-locked, so they are priced like any other locked path. Paths matching
+locked, so they are priced like any other locked path. An overlap at a path whose
+`workflow.lock_modes` entry is `shared` is already waived today, so it is not in the overlap set:
+it adds no risk at any budget, and a zero budget admits it as before. Paths matching
 `workflow.exclusive_context_paths` are never shared at any budget.
 Owner pull admission applies the same rule, which also closes today's gap where it checks a
 candidate's full declared context, unlocked paths included, against in-flight claims.
@@ -180,7 +183,7 @@ be explained later.
 
 | Key | Default | Meaning |
 |---|---|---|
-| `workflow.conflict_budget` | `0` (or a `{default, windows}` table) | Expected repair cost, in recovery agent-minutes, that admission may take on per candidate by running it beside overlapping work. `0` keeps today's exclusive locks. |
+| `workflow.conflict_budget` | `0` (or a `{default, windows}` table) | Expected repair cost, in recovery agent-minutes, that admission may take on per candidate by running it beside overlapping work. `0` keeps today's admission: exclusive locks, with overlaps at `workflow.lock_modes` `shared` paths still waived. |
 | `workflow.exclusive_context_paths` | `[]` | Path globs (`unlocked_context_paths` syntax) that are never shared at any budget. |
 | `workflow.conflict_budget_max_holders` | `4` | Most tasks that may hold one path at once. |
 | `workflow.conflict_risk.window_days`, `.min_support`, `.priors` | `30`, `5`, per class | Scoring window, support needed before history replaces a class prior, and the priors; following the task riskiness model's window and support. |
