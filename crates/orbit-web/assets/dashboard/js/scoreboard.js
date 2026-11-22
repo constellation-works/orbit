@@ -117,14 +117,20 @@ const usdFormatter = new Intl.NumberFormat("en-US", {
 const wholeFormatter = new Intl.NumberFormat("en-US", { maximumFractionDigits: 0 });
 
 // Cents with thousands separators; a non-zero amount under one cent reads
-// "<$0.01" so it is not mistaken for no spend.
-function formatUsd(value) {
+// "<$0.01" so it is not mistaken for no spend. A comparison delta passes the
+// larger of its two totals as `totalScale`: subtracting totals leaves binary64
+// error that grows with their size, so a value within that error of a cent is
+// that cent, not sub-cent.
+function formatUsd(value, totalScale = 0) {
   const amount = typeof value === "number" && Number.isFinite(value) ? value : 0;
   const sign = amount < 0 ? "-" : "";
   const magnitude = Math.abs(amount);
   const cent = 0.01;
-  const binary64Tolerance = Number.EPSILON * cent;
-  if (magnitude > 0 && magnitude < cent && cent - magnitude > binary64Tolerance) {
+  const scale = Number.isFinite(totalScale) ? Math.abs(totalScale) : 0;
+  // 1e-12 is about 4.5e3 binary64 epsilons of the larger total, which also covers
+  // rounding accumulated across the sums of many invocations.
+  const tolerance = Math.max(cent, scale) * 1e-12;
+  if (magnitude > 0 && magnitude < cent && cent - magnitude > tolerance) {
     return `${sign}<$0.01`;
   }
   return `${sign}$${usdFormatter.format(magnitude)}`;
@@ -215,6 +221,10 @@ function renderOrchestrationBucket(bucket) {
   const kind = ["orchestrator", "shared", "unattributed", "missing"].includes(bucket?.kind)
     ? bucket.kind
     : "unknown";
+  const comparableTotalScale = Math.max(
+    Math.abs(asScoreboardNumber(bucket?.comparable_provider_cost_usd)),
+    Math.abs(asScoreboardNumber(bucket?.comparable_derived_cost_usd)),
+  );
   const comparison = comparableCount > 0
     ? [
       el("span", { class: "cost-comparison" }, [
@@ -228,7 +238,7 @@ function renderOrchestrationBucket(bucket) {
         ]),
         el("span", {}, [
           el("span", { class: "k", text: "delta" }),
-          el("strong", { text: formatUsd(bucket?.comparable_cost_delta_usd) }),
+          el("strong", { text: formatUsd(bucket?.comparable_cost_delta_usd, comparableTotalScale) }),
         ]),
       ]),
       el("span", { class: "cost-coverage", text: `${fmtScoreboardWhole(comparableCount)} of ${fmtScoreboardWhole(invocationCount)} invocations` }),
