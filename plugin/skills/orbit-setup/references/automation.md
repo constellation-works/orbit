@@ -453,6 +453,22 @@ orbit script revoke <name>                         # revoke this host's grant
 | `--follower` | Grant for a pull follower host instead of the workspace owner. |
 | `--output-max-files <n>` | Most declared output files one step may keep, 1 to 64. Default 8. |
 | `--output-max-file-bytes <b>` | Largest output file one step may keep, up to 64 MiB. Default 1 MiB. |
+| `--memory-max <size>` | Memory ceiling of the script's own scope (`MemoryMax=`): a byte count with an optional `K`, `M`, `G` or `T` suffix (powers of 1024), at least 1 byte. Percentages and `infinity` are refused. Default: `machine.worker_memory_max` (`50%` of RAM). |
+| `--tasks-max <n>` | Process and thread ceiling of the script's own scope (`TasksMax=`), at least 1. Default: `machine.worker_tasks_max` (`4096`). |
+| `--cpu-quota <percent>` | CPU ceiling of the script's own scope as a percentage of one core (`200` is two cores), at least 1. Default: `machine.worker_cpu_quota` (unset: no CPU limit). |
+
+The three scope flags set the script's own Linux systemd scope
+(`orbit-script-*`). They apply only to Linux script steps; a macOS script step
+has no memory or task limits. Each flag is capped at its host setting, so a grant
+can narrow a script's scope but never widen it past the host. `--memory-max`
+narrows `MemoryMax=` only when it is below `machine.worker_memory_max`, and also
+narrows `MemoryHigh=` when it is below `machine.worker_memory_high`. `--tasks-max`
+is capped at `machine.worker_tasks_max`. `--cpu-quota` is capped at
+`machine.worker_cpu_quota` when that is set; when it is unset, the grant's quota
+still applies, so a grant can add a CPU limit the host does not set. systemd
+enforces `--cpu-quota` only where it delegates the cpu controller. A value of 0
+is refused. Each grant states its scope ceilings again, so a re-grant without
+the flags returns each one to its host default.
 
 Every read and write root, from the flags or the manifest's `requests`, must
 already exist, sit outside the credential paths (`~/.ssh`, `~/.config/gh`, the
