@@ -912,6 +912,7 @@ function defectsModel(countView) {
   const tableLabel = (key) => (lineageOn ? LINEAGE_SERIES.find((entry) => entry.key === key).label : ORIGIN_LABELS[key] || key);
   const tableCount = (bucket, key) => (lineageOn ? bucket.lineage[key] : bucket.origin[key]) || 0;
   const attributed = current.total - (current.lineage.unattributed || 0);
+  const fixForFix = current.lineage?.fix_for_fix || 0;
 
   return {
     blurb,
