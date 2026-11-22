@@ -8,7 +8,7 @@ tags: [architecture, orbit-agent]
 
 ## What it owns
 
-One `AgentRuntime` per provider CLI (claude, codex, copilot, gemini, antigravity, grok, muse); audit types and redacted blob sinks.
+One `AgentRuntime` per provider CLI (claude, codex, copilot, gemini, antigravity, grok, muse, ollama); audit types and redacted blob sinks.
 
 ## Main modules and types
 
