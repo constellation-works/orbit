@@ -16,6 +16,7 @@ Forms:
 Exit status is 0 for every verdict, so nonzero means the adapter itself failed.
 """
 
+import copy
 import hashlib
 import json
 import os
@@ -143,6 +144,13 @@ def authenticated_native_certificate(request, row, name):
                 f"{name}: no operator- or Orbit-written artifact has the native certificate digest {digest}")
 
 
+def load_harness():
+    """Load the QA sweep harness module from the mounted inputs or checkout."""
+    root = os.environ.get("ORBIT_SCRIPT_IN")
+    path = Path(root) / "test-qa-full-sweep.py" if root else Path(__file__).with_name("test-qa-full-sweep.py")
+    return runpy.run_path(str(path))
+
+
 def judge_native_rows(request, scenario, rows):
     """A macOS scenario earns its assertions only from an authenticated certificate.
 
@@ -165,8 +173,7 @@ def judge_native_rows(request, scenario, rows):
         if row.get("certificate_assertions") != certificate.get("assertions"):
             unavailable("assertions-mismatch", f"{name} claims assertions its certificate does not carry")
     try:
-        validate_native = runpy.run_path(str(inputs / "test-qa-full-sweep.py"))[
-            "validate_hosted_macos_evidence"]
+        validate_native = load_harness()["validate_hosted_macos_evidence"]
         report = artifact_json(request, QA_REPORT)
         candidate = {"head": report["candidate"]["source_revision"],
                      "status": report["source_state"]["status"]}
@@ -176,13 +183,12 @@ def judge_native_rows(request, scenario, rows):
         unavailable("platform-evidence-missing", f"{name} has no valid macOS evidence: {error}")
 
 
-def imported_linux_qa_passes(body, scenario, candidate_id, revision, inventory_sha):
+def imported_linux_qa_passes(body, scenario, candidate_id, revision, inventory_sha, *, harness=None):
     """Whether an owner-authenticated artifact is a clean Linux QA report for this
     candidate that passes `scenario`: the candidate, pinned revision and coverage
     inventory match, the checkout was clean, the report ran on Linux, and every
-    row for the scenario is a PASS for this candidate with the scenario's command
-    and required assertions. The sweep's own import (`import_platform_evidence`)
-    applies the same candidate, command and assertion checks."""
+    row for the scenario is a PASS for this candidate with the scenario's command,
+    per-row required assertions, and valid harness execution evidence."""
     if not isinstance(body, dict) or body.get("schema_version") != 2:
         return False
     candidate = body.get("candidate")
@@ -200,11 +206,44 @@ def imported_linux_qa_passes(body, scenario, candidate_id, revision, inventory_s
     if not isinstance(results, list):
         return False
     rows = [row for row in results if isinstance(row, dict) and row.get("scenario") == scenario["id"]]
-    if not rows or any(row.get("candidate_id") != candidate_id or row.get("outcome") != "PASS"
-                       or row.get("command") != scenario.get("command") for row in rows):
+    if not rows:
         return False
-    observed = {item for row in rows for item in row.get("assertions", [])}
-    return observed == set(scenario.get("assertions", []))
+    if harness is None:
+        try:
+            harness = load_harness()
+        except (OSError, ImportError):
+            return False
+    expected_command = scenario.get("command")
+    expected_assertions = set(scenario.get("assertions", []))
+    required_tests = scenario.get("required_tests", [])
+    required_rows = scenario.get("required_rows", [])
+    required_cases = scenario.get("required_cases", [])
+    is_cargo_kind = scenario.get("kind") == "cargo-test"
+    for row in rows:
+        if row.get("candidate_id") != candidate_id or row.get("outcome") != "PASS" \
+                or row.get("command") != expected_command:
+            return False
+        assertions = row.get("assertions")
+        if not isinstance(assertions, list) or not all(isinstance(item, str) for item in assertions):
+            return False
+        if set(assertions) != expected_assertions:
+            return False
+        row_copy = copy.deepcopy(row)
+        try:
+            if is_cargo_kind and not harness["is_cargo_test"](row_copy["command"]):
+                return False
+            harness["validate_cargo_test_evidence"](
+                row_copy["command"], row_copy, required_tests, required_rows,
+            )
+            harness["validate_node_test_evidence"](
+                row_copy["command"], row_copy, required_cases,
+            )
+            finalized = harness["finalize_result"](row_copy, list(assertions), candidate_id)
+        except (KeyError, TypeError, AttributeError, ValueError):
+            return False
+        if finalized.get("outcome") != "PASS" or set(finalized.get("assertions", [])) != expected_assertions:
+            return False
+    return True
 
 
 def authenticated_imported_evidence(request, report, scenario, row):
