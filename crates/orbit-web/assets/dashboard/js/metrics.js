@@ -999,11 +999,11 @@ function trendChart(chart) {
     plot.appendChild(el("div", { class: "mx-bars", "aria-hidden": "true" }, chart.bars.map((stack) => stackColumn(stack, "mx-bar-col", chart.stackKeys))));
   }
   if (chart.prev) {
+    // The reference line stays in the plot; its label moves to the legend row,
+    // so no series line or point is drawn across the text.
     const line = el("div", { class: "mx-prev" });
     line.style.top = `${chart.prev.top}%`;
-    const label = el("div", { class: "mx-prev-label", text: chart.prev.label });
-    label.style.top = `${chart.prev.top}%`;
-    plot.append(line, label);
+    plot.appendChild(line);
   }
   const lines = svg("svg", { viewBox: "0 0 1000 1000", preserveAspectRatio: "none", class: "mx-lines", "aria-hidden": "true" });
   // `all` draws last, over the complexity lines.
@@ -1092,6 +1092,7 @@ function trendChart(chart) {
 
   const legend = el("div", { class: "mx-notes" }, [
     chart.hollowNote || chart.hollowText ? el("span", { class: "mx-note-hollow" }, [el("span", { class: "mx-pt-key", "aria-hidden": "true" }), chart.hollowText || `hollow = fewer than ${LOW_SAMPLE} runs`]) : null,
+    chart.prev ? el("span", { class: "mx-note-prev" }, [el("span", { class: "mx-prev-key", "aria-hidden": "true" }), chart.prev.label]) : null,
     ...chart.notes.map((text) => el("span", { text })),
   ]);
   const yWrap = el("div", { class: `mx-y-wrap${chart.volume ? " with-volume" : ""}` }, [
