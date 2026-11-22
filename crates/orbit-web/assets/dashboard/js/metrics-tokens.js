@@ -10,12 +10,18 @@
 // comes from the shared selector with the rest of the Metrics panel. Chart
 // drawing and tooltips stay in metrics.js, which passes its helpers in.
 
-import { el } from './common.js';
+import { el, onWorkspaceChange } from './common.js';
 import { OUTCOMES, TERMINAL_TIME_NOTE, axisScale, fmtCompactTotal, option, runningModel, seriesKey, seriesLabel, tagPicker, tasks, trendSource, undatedNote } from './metrics-running.js';
 
 const SCOPES = [["all", "All invocations"], ["implement", "Implement only"]];
 
 const filters = { outcome: "done", scope: "all", model: "", tags: [] };
+// The model and tag options come from the workspace's own tasks: another
+// workspace may have neither, and a kept pick would filter its trend to empty.
+onWorkspaceChange(() => {
+  filters.model = "";
+  filters.tags = [];
+});
 
 const source = trendSource({
   path: "/api/diagnostics/task_tokens",

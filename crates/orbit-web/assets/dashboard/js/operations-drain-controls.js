@@ -24,6 +24,14 @@ function autoDrainControlVisit(payload) {
   return autoDrainControlScope(payload) || captureWorkspaceVisit();
 }
 
+// A Start or Stop in flight belongs to the host, workspace and visit it was
+// sent in; another scope's card must not show it pending.
+function autoDrainOperationKey(payload, operation) {
+  const visit = autoDrainControlVisit(payload);
+  const workspace = autoDrainControlWorkspace(payload);
+  return `auto-drain:${operation}:${visit.revision ?? ""}:${visit.host || visit.hostName || ""}:${workspace?.id || ""}`;
+}
+
 function autoDrainControlWorkspace(payload) {
   return autoDrainControlScope(payload)?.workspace || selectedWorkspace();
 }
@@ -161,7 +169,7 @@ function autoDrainDurationControl(payload, form) {
     problem.hidden = valid;
     minus.disabled = valid && hours <= AUTO_DRAIN_DURATION_MIN_HOURS;
     plus.disabled = valid && hours >= AUTO_DRAIN_DURATION_MAX_HOURS;
-    if (form.start && !pendingOperations.has("auto-drain:start")) {
+    if (form.start && !pendingOperations.has(autoDrainOperationKey(payload, "start"))) {
       const label = valid ? `${hours}h` : autoDrainHostForm().duration;
       form.start.textContent = `${payload.capacity?.drain_phase === "draining" ? "Start another" : "Start"} ${label} window`;
     }
@@ -395,7 +403,7 @@ function autoDrainStartBlocked(payload) {
   const reasons = autoDrainControlReasons(payload);
   return autoDrainControlScope(payload)?.isCurrent() === false
     || Boolean(reasons.submit || autoDrainStartRefusal(payload))
-    || pendingOperations.has("auto-drain:start")
+    || pendingOperations.has(autoDrainOperationKey(payload, "start"))
     || !autoDrainDurationValid()
     || !autoDrainConcurrencyValid()
     || (autoDrainHostForm().complete && Boolean(reasons.complete))
@@ -405,7 +413,7 @@ function autoDrainStartBlocked(payload) {
 }
 
 function autoDrainStartButton(payload, form) {
-  const key = "auto-drain:start";
+  const key = autoDrainOperationKey(payload, "start");
   const reasons = autoDrainControlReasons(payload);
   const pending = pendingOperations.has(key);
   const startHours = autoDrainDurationHours();
@@ -569,7 +577,7 @@ function autoDrainStopHeadline(outcome) {
 export function autoDrainStopButton(payload) {
   const mode = autoDrainStopMode(payload);
   if (mode === "none") return null;
-  const key = "auto-drain:stop";
+  const key = autoDrainOperationKey(payload, "stop");
   const reasons = autoDrainControlReasons(payload);
   const live = autoDrainLiveWindow(payload);
   const copy = autoDrainStopCopy(payload);

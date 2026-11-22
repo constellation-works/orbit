@@ -129,7 +129,9 @@ function residentComment(comment) {
 }
 
 // Link only known identifiers and HTTPS URLs, never interpret comment text as HTML.
-function residentText(text, decisionTask) {
+// `scope` names the commented task's workspace: in the aggregate view a bare
+// link would resolve against no workspace and open the wrong task or run.
+function residentText(text, decisionTask, scope = {}) {
   const value = typeof text === "string" ? text : "";
   const nodes = [];
   const pattern = /https:\/\/[^\s<>"']+|\bORB-\d+\b|\bjrun-[a-zA-Z0-9-]+\b|\b(?:DR|dr)-[a-zA-Z0-9-]+\b/g;
@@ -140,9 +142,9 @@ function residentText(text, decisionTask) {
     let href = null;
     if (id.startsWith("https://")) {
       try { if (new URL(id).hostname === "github.com") href = id; } catch (_) { /* plain text */ }
-    } else if (id.startsWith("ORB-")) href = taskHref(id);
-    else if (id.startsWith("jrun-")) href = runHref(id);
-    else if (decisionTask) href = taskHref(decisionTask);
+    } else if (id.startsWith("ORB-")) href = taskHref(id, scope);
+    else if (id.startsWith("jrun-")) href = runHref(id, scope);
+    else if (decisionTask) href = taskHref(decisionTask, scope);
     nodes.push(href ? el("a", { href, text: id }) : id);
     offset = match.index + id.length;
   }
@@ -150,12 +152,13 @@ function residentText(text, decisionTask) {
   return nodes;
 }
 
-function residentCommentView(record) {
+function residentCommentView(record, task) {
+  const scope = task && task.workspace_id ? { workspace: task.workspace_id } : {};
   const view = el("div", { class: "resident-comment" });
-  const line = (text, decisionTask) => el("div", {}, residentText(text, decisionTask));
+  const line = (text, decisionTask) => el("div", {}, residentText(text, decisionTask, scope));
   if (record.kind === "resident.checkpoint") {
     const title = el("div", { class: "resident-comment-title" }, [
-      el("a", { href: runHref(record.run_id), text: record.cycle }),
+      el("a", { href: runHref(record.run_id, scope), text: record.cycle }),
       ` · ${record.outcome}`,
     ]);
     view.appendChild(title);
@@ -177,7 +180,7 @@ function residentCommentView(record) {
     view.appendChild(line(record.question));
     if (record.recommended) view.appendChild(line(`Recommended: ${record.recommended}`));
     const refs = [record.decision_request, record.task].filter(Boolean).join(" · ");
-    if (refs) view.appendChild(el("div", { class: "resident-comment-meta" }, residentText(refs, record.task)));
+    if (refs) view.appendChild(el("div", { class: "resident-comment-meta" }, residentText(refs, record.task, scope)));
   } else {
     view.appendChild(el("div", { class: "resident-comment-title", text: "Answer" }));
     view.appendChild(el("p", { class: "resident-comment-notes", text: record.quote }));
@@ -347,7 +350,7 @@ function buildCommentCard(task, comment, index) {
     actions,
   ]);
 
-  const view = pilotLine ? el("p", { text: pilotLine }) : resident ? residentCommentView(resident) : taskFields.markdownView(message);
+  const view = pilotLine ? el("p", { text: pilotLine }) : resident ? residentCommentView(resident, task) : taskFields.markdownView(message);
   view.classList.add("markdown-body", "comment-body");
   const headings = renderedCommentHeadings(view);
   const raw = el("pre", { class: "comment-raw", text: message });

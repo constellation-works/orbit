@@ -321,7 +321,9 @@ function historyPicker() {
     });
     button.dataset.history = key ?? "window";
     button.addEventListener("click", () => {
-      if (view.last === key) return;
+      // Compare with the history on screen, not the last pick: a pick whose
+      // read failed must stay retryable.
+      if ((lastPayload?.last ?? null) === key) return;
       view.last = key;
       view.hover = null;
       fetchAndRenderResources();

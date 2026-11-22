@@ -26,10 +26,10 @@ const triageRefusals = new Map();
 const TRIAGE_REFUSAL_MS = 20000;
 // Recovery (requeue / settle-merged): a refused recovery's typed code and
 // message, kept with the action like a refused Triage.
-export const recoveryRefusals = new Map();
+const recoveryRefusals = new Map();
 // The stored diagnostic behind a recovery refusal's one-line note, keyed the
 // same way. Cleared with the note.
-export const recoveryRefusalDetails = new Map();
+const recoveryRefusalDetails = new Map();
 const RECOVERY_REFUSAL_MS = 20000;
 
 function rememberRecoveryRefusal(key, message, detail) {
@@ -52,6 +52,31 @@ const fixPrReadiness = new Map();
 const fixPrFeedback = new Map();
 const FIX_PR_READINESS_MS = 60000;
 const FIX_PR_FEEDBACK_MS = 20000;
+
+// Every map above is keyed by a task's dispatch identity, which another host
+// or workspace can reuse for a different task: the task list's scope switch
+// drops them all. Watchers and expiry timers from the retired visit check it
+// before writing.
+export function clearTaskAgentActionState() {
+  pilotRunsByTask.clear();
+  pilotRefusals.clear();
+  triageRunsByTask.clear();
+  triageRefusals.clear();
+  recoveryRefusals.clear();
+  recoveryRefusalDetails.clear();
+  fixPrReadiness.clear();
+  fixPrFeedback.clear();
+}
+
+// Retire a remembered message after its read window, unless the visit that
+// showed it ended or a newer message replaced it.
+function expireRemembered(map, key, value, ms, visit, context, forget = () => map.delete(key)) {
+  setTimeout(() => {
+    if (!visit.isCurrent() || map.get(key) !== value) return;
+    forget();
+    rerender(context);
+  }, ms);
+}
 
 // Why Run pilot is unavailable for this task, or "" when it is offered. A pilot
 // run already holding the task is the server's refusal too, so the reason here
@@ -135,11 +160,7 @@ async function runPilot(task, detail, btnNode, context) {
     const message = `run pilot failed: ${error.message || String(error)}`;
     pilotRefusals.set(key, message);
     rerender(context);
-    setTimeout(() => {
-      if (pilotRefusals.get(key) !== message) return;
-      pilotRefusals.delete(key);
-      rerender(context);
-    }, PILOT_REFUSAL_MS);
+    expireRemembered(pilotRefusals, key, message, PILOT_REFUSAL_MS, visit, context);
     return;
   }
   const runId = result && result.run_id ? String(result.run_id) : "";
@@ -258,11 +279,7 @@ async function runTriage(task, detail, btnNode, context) {
     const message = `triage failed: ${error.message || String(error)}`;
     triageRefusals.set(key, message);
     rerender(context);
-    setTimeout(() => {
-      if (triageRefusals.get(key) !== message) return;
-      triageRefusals.delete(key);
-      rerender(context);
-    }, TRIAGE_REFUSAL_MS);
+    expireRemembered(triageRefusals, key, message, TRIAGE_REFUSAL_MS, visit, context);
     return;
   }
   const runId = result && result.run_id ? String(result.run_id) : "";
@@ -376,11 +393,7 @@ async function runRecovery(task, detail, btnNode, context, kind) {
       const message = "[requeue_reason_required] requeue needs a reason; it is recorded with the decision";
       rememberRecoveryRefusal(key, message);
       rerender(context);
-      setTimeout(() => {
-        if (recoveryRefusals.get(key) !== message) return;
-        forgetRecoveryRefusal(key);
-        rerender(context);
-      }, RECOVERY_REFUSAL_MS);
+      expireRemembered(recoveryRefusals, key, message, RECOVERY_REFUSAL_MS, visit, context, () => forgetRecoveryRefusal(key));
       return;
     }
     suffix = "/requeue";
@@ -398,11 +411,7 @@ async function runRecovery(task, detail, btnNode, context, kind) {
     const detail = error && error.body && typeof error.body.detail === "string" ? error.body.detail : "";
     rememberRecoveryRefusal(key, message, detail);
     rerender(context);
-    setTimeout(() => {
-      if (recoveryRefusals.get(key) !== message) return;
-      forgetRecoveryRefusal(key);
-      rerender(context);
-    }, RECOVERY_REFUSAL_MS);
+    expireRemembered(recoveryRefusals, key, message, RECOVERY_REFUSAL_MS, visit, context, () => forgetRecoveryRefusal(key));
     return;
   }
   if (!visit.isCurrent()) return;
@@ -471,9 +480,15 @@ async function loadFixPrReadiness(task, key, prNumber, context) {
   } catch (error) {
     entry.error = error.message || String(error);
   }
+  // A read from a retired visit answers for another scope's task: drop it
+  // rather than leave it cached as this scope's readiness.
+  if (!visit.isCurrent()) {
+    if (fixPrReadiness.get(key) === entry) fixPrReadiness.delete(key);
+    return;
+  }
+  if (fixPrReadiness.get(key) !== entry) return;
   entry.pending = false;
   entry.at = Date.now();
-  if (fixPrReadiness.get(key) !== entry || !visit.isCurrent()) return;
   rerender(context);
 }
 
@@ -592,14 +607,10 @@ export function fixPrSignature(task) {
   return `${state}|${feedback ? `${feedback.ok}|${feedback.text}` : ""}`;
 }
 
-function showFixPrFeedback(key, feedback, context) {
+function showFixPrFeedback(key, feedback, visit, context) {
   fixPrFeedback.set(key, feedback);
   rerender(context);
-  setTimeout(() => {
-    if (fixPrFeedback.get(key) !== feedback) return;
-    fixPrFeedback.delete(key);
-    rerender(context);
-  }, FIX_PR_FEEDBACK_MS);
+  expireRemembered(fixPrFeedback, key, feedback, FIX_PR_FEEDBACK_MS, visit, context);
 }
 
 async function runFixPr(task, detail, btnNode, context, readiness) {
@@ -626,13 +637,13 @@ async function runFixPr(task, detail, btnNode, context, readiness) {
     if (!visit.isCurrent()) return;
     restoreControls();
     fixPrReadiness.delete(key);
-    showFixPrFeedback(key, { ok: false, text: `fix PR refused: ${error.message || String(error)}` }, context);
+    showFixPrFeedback(key, { ok: false, text: `fix PR refused: ${error.message || String(error)}` }, visit, context);
     return;
   }
   if (!visit.isCurrent()) return;
   restoreControls();
   fixPrReadiness.delete(key);
   const runId = result && result.resumed_run_id ? String(result.resumed_run_id) : "";
-  showFixPrFeedback(key, { ok: true, text: `Repair of pull request #${number} started${runId ? ` in run ${runId}` : ""}` }, context);
+  showFixPrFeedback(key, { ok: true, text: `Repair of pull request #${number} started${runId ? ` in run ${runId}` : ""}` }, visit, context);
   await refreshTasks(context);
 }
