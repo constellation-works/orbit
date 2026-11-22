@@ -5,7 +5,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use orbit_common::OrbitError;
 use orbit_store::contracts::{AtomicTaskMutationOutcome, AtomicTaskMutationParams};
 use orbit_types::task::{
-    Task, TaskOsRequirement, TaskRelation, TaskRelationType, TaskStatus, normalize_task_tags,
+    NO_DIFF_EXPECTED_TAG, Task, TaskOsRequirement, TaskRelation, TaskRelationType, TaskStatus,
+    normalize_task_tags,
 };
 use orbit_types::workflow::automation::members::PreparationPolicy;
 use serde_json::{Value, json};
@@ -291,6 +292,12 @@ pub(in super::super) fn apply_task(
             // keeps whatever `ui` tag it has.
             if task.user_facing_ui && !current.tags.iter().any(|tag| tag == super::super::UI_TAG) {
                 add_tags.push(super::super::UI_TAG.to_string());
+            }
+            // A verdict that the task expects no repository diff tags it so,
+            // once; a task already tagged keeps its tags as they are.
+            if task.no_diff_expected && !current.tags.iter().any(|tag| tag == NO_DIFF_EXPECTED_TAG)
+            {
+                add_tags.push(NO_DIFF_EXPECTED_TAG.to_string());
             }
             // Markers and holds below seal the material as written.
             let tags_after =

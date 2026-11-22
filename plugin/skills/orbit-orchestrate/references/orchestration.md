@@ -1080,6 +1080,14 @@ configuration.
   archives it with a system comment once every cited commit exists and at
   least one is on the base branch. Human- and orchestrator-filed tasks are
   never closed this way; archive or re-scope them yourself.
+- A `verified_no_diff` verdict for a task that expects no repository diff
+  (a report, an audit that files tasks) is not held: the pilot adds the
+  `no-diff-expected` tag with its write, so the empty `context_files` stop
+  blocking it, and this pass approves it when nothing else holds. The tag is
+  added only when the assessment cites no commit, carries no `already_landed`,
+  `duplicate_of`, `release_action_required` or `finding_invalid` finding, and
+  the task is not a review, QA or CI-sweep finding. Remove the tag, or add
+  `no-auto-approve`, to override it.
 - Everything else stays `proposed`. `orbit run show` and `orbit run readiness`
   report approved, closed and held counts with each hold reason, and
   `awaiting_reuse` lists fresh assessments a later pass approves. A task this

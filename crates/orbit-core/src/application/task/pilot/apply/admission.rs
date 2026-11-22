@@ -81,6 +81,9 @@ pub(in super::super) struct ValidatedTask {
     pub(in super::super) post_deploy: Vec<super::super::PostDeployRequirement>,
     /// The typed UI finding: add the `ui` tag when the task lacks it.
     pub(in super::super) user_facing_ui: bool,
+    /// The pilot verified the task expects no repository diff: add the
+    /// `no-diff-expected` tag when the task lacks it.
+    pub(in super::super) no_diff_expected: bool,
     /// Exact material certified by the atomic write, recovered from its audit
     /// on replay rather than adopted from a later task read.
     pub(in super::super) applied_material: Option<AppliedTaskMaterial>,

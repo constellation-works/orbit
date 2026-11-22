@@ -31,7 +31,9 @@
 //! criteria only the deployed build on a named host can evidence; it routes
 //! and holds nothing, and lets an implementer hand them off as owed. A
 //! `user_facing_ui` finding adds the `ui` tag to a task that lacks it; apply
-//! never removes one.
+//! never removes one. A `verified_no_diff` assessment that is a no-diff
+//! deliverable rather than an already-fixed finding adds `no-diff-expected`
+//! the same way [ORB-26836]; see `no_diff`.
 //!
 //! An applied assessment also holds or gates the task: backlog holds from
 //! applied findings (`admission`), prerequisite resolution (`blockers`) and
