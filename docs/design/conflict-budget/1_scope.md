@@ -284,14 +284,24 @@ parallelism that broke nothing.
    `crates/orbit-config/assets/default-config.toml` to `workflow.unlocked_context_paths`, and
    map `crates/orbit-core/assets/auto_tasks/body-history.json` to
    `python3 scripts/update-auto-task-body-history.py` in `workflow.generated_paths`. This is the
-   baseline the later phases are measured against, but concurrent admission also requires the
-   shared JSON path to be waived. The built-in `unlocked_context_paths` default is `**/*.md`, so
-   these additions alone leave `body-history.json` locked. The `orbit init` template already
-   includes `**/*.json`; otherwise, add a matching JSON entry to `workflow.unlocked_context_paths`
-   (or set a `shared` lock mode for that path) before expecting these mixed-footprint catalog tasks
-   to run together. `workflow.generated_paths` does not waive an admission lock: its command runs
-   later, during landing recovery, to regenerate a generated file after a rebase conflict. This
-   configuration-only baseline makes no code change.
+   baseline the later phases are measured against. The built-in `unlocked_context_paths` default is
+   `**/*.md`, so these additions alone leave `body-history.json` locked. The `orbit init` template
+   already includes `**/*.json`; a workspace without it must add a matching entry. Two settings do
+   different jobs, and these mixed-footprint catalog tasks need both:
+   - An unlock glob filters the ordinary context lock, for a task that also declares a non-matching
+     selector such as its own YAML file. It lets two such tasks that share `mod.rs` or
+     `body-history.json` pass ordinary context-lock admission together.
+   - An effective `shared` entry in `workflow.lock_modes` waives the overlap at that path for every
+     footprint check, including the live execution-claim guard ([ORB-23894]). An unlock glob does
+     not reach that guard. It compares the task's whole canonical context, unlocked paths included,
+     with the claim's frozen footprint, and decides overlap from the lock-mode table alone.
+   So while the first catalog task holds a protecting claim, a second one that shares
+   `body-history.json` and `mod.rs` with it stays deferred unless both paths have an effective
+   `shared` mode: `[[workflow.lock_modes]]` entries with `mode = "shared"` for `(^|/)mod\.rs$` and
+   `^crates/orbit-core/assets/auto_tasks/body-history\.json$`. Waiving only the JSON still leaves
+   `mod.rs` blocking the claimed case. `workflow.generated_paths` is a separate step and waives
+   neither lock: its command runs later, during landing recovery, to regenerate the file after a
+   rebase conflict. This configuration-only baseline makes no code change.
 1. **Record and show.** Conflict records on the owner for local runs and claimed leaves
    (Shape §1), the `orbit codebase show` conflict section, and wait minutes per path. Before
    anything is built on them, verify whether drain-wave deferrals are persisted; if they are not,
