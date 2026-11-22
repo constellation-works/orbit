@@ -1,5 +1,6 @@
-//! Apply trusted Muse implementation outcomes to this task's next crew draw.
+//! Apply trusted Muse implementation outcomes to automatic crew draws.
 
+use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, BTreeSet};
 
 use chrono::{DateTime, Duration, Utc};
@@ -15,10 +16,11 @@ use orbit_types::workflow::{
 use super::draw::auto_task_id;
 use crate::OrbitRuntime;
 
-/// How long a verified Muse model refusal excludes that model from the
-/// after-landing review pool on the host that observed it. Provider access
-/// can change without any run on this host noticing, so the exclusion lapses
-/// on its own instead of waiting for a success the exclusion itself prevents.
+/// How long a verified Muse model refusal excludes that model on the host and
+/// provider account that observed it (for automatic implementation draws and
+/// the after-landing review pool). Provider access can change without any run
+/// on this host noticing, so the exclusion lapses on its own instead of
+/// waiting for a success the exclusion itself prevents.
 pub(crate) const MUSE_MODEL_REFUSAL_WINDOW_HOURS: i64 = 12;
 
 /// The most recent runs of each local pipeline job the workspace-wide scan
@@ -27,8 +29,45 @@ const WORKSPACE_SCAN_RUN_LIMIT: usize = 200;
 
 type ModelAccount = (String, Option<String>);
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub(crate) struct MuseModelRefusals(BTreeMap<ModelAccount, DateTime<Utc>>);
+
+thread_local! {
+    static MODEL_ACCESS_PASS_DEPTH: Cell<u32> = const { Cell::new(0) };
+    static MODEL_ACCESS_PASS: RefCell<Option<MuseModelRefusals>> = const { RefCell::new(None) };
+}
+
+/// Caches the workspace-wide Muse model-access scan lazily across one backlog
+/// snapshot so admission does not re-query run history per backlog task.
+#[must_use = "dropping the guard ends the admission model-access pass"]
+pub(crate) struct AdmissionModelAccessPass;
+
+impl AdmissionModelAccessPass {
+    /// Enter a snapshot pass. A nested pass reuses the outer cache.
+    pub(crate) fn enter() -> Self {
+        let depth = MODEL_ACCESS_PASS_DEPTH.with(|depth| {
+            let next = depth.get().saturating_add(1);
+            depth.set(next);
+            next
+        });
+        if depth == 1 {
+            MODEL_ACCESS_PASS.with(|state| *state.borrow_mut() = None);
+        }
+        Self
+    }
+}
+
+impl Drop for AdmissionModelAccessPass {
+    fn drop(&mut self) {
+        MODEL_ACCESS_PASS_DEPTH.with(|depth| {
+            let next = depth.get().saturating_sub(1);
+            depth.set(next);
+            if next == 0 {
+                MODEL_ACCESS_PASS.with(|state| *state.borrow_mut() = None);
+            }
+        });
+    }
+}
 
 impl MuseModelRefusals {
     pub(crate) fn rejects_crew_model(&self, crew: &Crew) -> bool {
@@ -68,39 +107,6 @@ pub(super) fn model_access_hold(models: &BTreeSet<String>) -> OrbitError {
 }
 
 impl OrbitRuntime {
-    pub(super) fn task_muse_model_refusals(
-        &self,
-        task_id: &str,
-    ) -> Result<MuseModelRefusals, OrbitError> {
-        let machine = self.automation_machine_identity();
-        let runs = self.stores().jobs().list_job_runs_filtered(&JobRunQuery {
-            task_id: Some(task_id.to_string()),
-            states: vec![JobRunState::Success, JobRunState::Failed, JobRunState::Held],
-            include_steps: false,
-            input_keys: Some(&["task_id", "task_ids"]),
-            ..Default::default()
-        })?;
-        let run_ids = runs
-            .into_iter()
-            .filter(|run| {
-                matches!(
-                    run.job_id.as_str(),
-                    TASK_LOCAL_PIPELINE_JOB | TASK_PR_PIPELINE_JOB
-                ) && run.input.as_ref().and_then(auto_task_id) == Some(task_id)
-                    && run
-                        .executed_on
-                        .as_ref()
-                        .map(|host| host.machine_id.as_str())
-                        == machine
-            })
-            .map(|run| run.run_id)
-            .collect::<Vec<_>>();
-        if run_ids.is_empty() {
-            return Ok(MuseModelRefusals::default());
-        }
-        self.muse_model_refusals_in_runs(&run_ids, None)
-    }
-
     /// Muse model refusals this follower's own claimed leaves of `task_id`
     /// recorded in the last [`MUSE_MODEL_REFUSAL_WINDOW_HOURS`] hours, net of
     /// a newer verified success of the same model and account.
@@ -146,18 +152,33 @@ impl OrbitRuntime {
         self.muse_model_refusals_in_runs(&run_ids, Some(since))
     }
 
+    /// Workspace-wide recent Muse model refusals, cached lazily for the active
+    /// [`AdmissionModelAccessPass`] so backlog snapshots query run history once.
+    pub(super) fn pass_workspace_muse_model_refusals(
+        &self,
+    ) -> Result<MuseModelRefusals, OrbitError> {
+        let in_pass = MODEL_ACCESS_PASS_DEPTH.with(|depth| depth.get()) > 0;
+        if in_pass && let Some(cached) = MODEL_ACCESS_PASS.with(|state| state.borrow().clone()) {
+            return Ok(cached);
+        }
+        let refusals = self.workspace_muse_model_refusals(Utc::now())?;
+        if in_pass {
+            MODEL_ACCESS_PASS.with(|state| *state.borrow_mut() = Some(refusals.clone()));
+        }
+        Ok(refusals)
+    }
+
     /// Muse model refusals the owner-local implementation runs of any task
     /// recorded in the last [`MUSE_MODEL_REFUSAL_WINDOW_HOURS`] hours, net of
-    /// a newer verified success of the same model and account. Only runs this
-    /// host executed count, so a follower's claimed leaf, another host and
+    /// a newer verified success of the same model and account. Only runs with
+    /// this host's machine identity (or unattributed local runs when this
+    /// runtime has none) count, so a follower's claimed leaf, another host and
     /// another provider account cannot exclude a model here.
     pub(crate) fn workspace_muse_model_refusals(
         &self,
         now: DateTime<Utc>,
     ) -> Result<MuseModelRefusals, OrbitError> {
-        let Some(machine) = self.automation_machine_identity() else {
-            return Ok(MuseModelRefusals::default());
-        };
+        let machine = self.automation_machine_identity();
         let since = now - Duration::hours(MUSE_MODEL_REFUSAL_WINDOW_HOURS);
         let mut run_ids = Vec::new();
         for job_id in [TASK_LOCAL_PIPELINE_JOB, TASK_PR_PIPELINE_JOB] {
@@ -176,7 +197,8 @@ impl OrbitRuntime {
                     .filter(|run| {
                         run.executed_on
                             .as_ref()
-                            .is_some_and(|host| host.machine_id == machine)
+                            .map(|host| host.machine_id.as_str())
+                            == machine
                     })
                     .map(|run| run.run_id),
             );

@@ -35,7 +35,7 @@ use super::{
 };
 use crate::OrbitRuntime;
 use crate::application::job::PublishedResume;
-use crate::application::job::crew_pools::CapturedCrewPools;
+use crate::application::job::crew_pools::{AdmissionModelAccessPass, CapturedCrewPools};
 use crate::application::task::{AdmissionProviderPass, standing_baseline_hold_from_history};
 use crate::runtime::engine::crew::CrewAllowlist;
 use crate::runtime::task::locks::{
@@ -138,6 +138,7 @@ pub(super) fn backlog_snapshot_in_mode(
     // including the crew redraw. One lightweight row per backlog task feeds
     // the pilot, baseline and provider holds.
     let _provider_pass = AdmissionProviderPass::enter(runtime);
+    let _model_access_pass = AdmissionModelAccessPass::enter();
     let prepared_rows = match &mut read_mode {
         BacklogReadMode::Admission { prepared_rows } => prepared_rows.take(),
         BacklogReadMode::Observation { .. } => None,
@@ -531,7 +532,9 @@ pub(super) fn backlog_snapshot_in_mode(
             })
     });
     backlog.retain(|task| {
-        let model_access_applies = task.job_run_id.is_some() && *has_muse;
+        // Any task with an enabled Muse crew can be held or redrawn by a
+        // recent same-host, same-account refusal recorded by another task.
+        let model_access_applies = *has_muse;
         if allowlist.is_none() && crew_unset.is_empty() && !model_access_applies {
             return true;
         }
