@@ -140,9 +140,10 @@ pub enum Block {
     /// every mode (`output-modes.md` §5), so a pipe receives only records
     /// while a human still sees the notice.
     Notice(String),
-    /// A stderr notice for a human at a terminal. Table and plain modes write
-    /// it to stderr; `json` and `ndjson` drop it, because the document already
-    /// carries the same text. Use only when the document has the text.
+    /// A terminal-only notice whose text is already in the structured
+    /// document. Table and plain modes write it to stderr; `json` and `ndjson`
+    /// omit it because the document carries the same text. Use only when the
+    /// document has the text.
     TerminalNotice(String),
     /// Operator attention rows, wrapped as associated per-item details on a
     /// terminal and rendered as one escaped tab-separated record per item in
