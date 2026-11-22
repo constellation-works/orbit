@@ -501,6 +501,10 @@ impl OrbitRuntime {
 /// `["{{ input.task_ids }}"]`) from bare pass-throughs (`{{ input.task_ids }}`)
 /// that only happen to parse when a caller passes JSON text via `--input`.
 const PILOT_TASK_IDS_STRING_PROBE: &str = "__orbit_pilot_task_id_probe__";
+/// JSON-quoted string fragment probe for templates that compose a JSON array
+/// around an unquoted placeholder (such as `[{{ input.task_ids }}]`) when a
+/// caller supplies quoted JSON text via `--input`.
+const PILOT_TASK_IDS_JSON_STRING_PROBE: &str = "\"__orbit_pilot_task_id_probe__\"";
 
 fn is_prepare_task_pilot_spec(spec: &ActivityV2Spec) -> bool {
     matches!(
@@ -541,19 +545,24 @@ fn default_input_renders_invalid_pilot_task_ids(
     ) {
         return true;
     }
-    let mut probe_input = caller_input.clone();
-    if let Some(map) = probe_input.as_object_mut() {
-        map.insert(
-            "task_ids".to_string(),
-            Value::String(PILOT_TASK_IDS_STRING_PROBE.to_string()),
-        );
-    }
-    rendered_step_has_invalid_pilot_task_ids(
-        job_default_input,
-        &probe_input,
-        step_default_input,
-        input_schema,
-    )
+    let accepts_string_probe = [
+        PILOT_TASK_IDS_STRING_PROBE,
+        PILOT_TASK_IDS_JSON_STRING_PROBE,
+    ]
+    .into_iter()
+    .any(|probe| {
+        let mut probe_input = caller_input.clone();
+        if let Some(map) = probe_input.as_object_mut() {
+            map.insert("task_ids".to_string(), Value::String(probe.to_string()));
+        }
+        !rendered_step_has_invalid_pilot_task_ids(
+            job_default_input,
+            &probe_input,
+            step_default_input,
+            input_schema,
+        )
+    });
+    !accepts_string_probe
 }
 
 fn rendered_step_has_invalid_pilot_task_ids(
