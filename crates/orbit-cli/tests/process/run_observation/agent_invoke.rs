@@ -64,6 +64,43 @@ spec:
     fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
 }
 
+#[test]
+fn deterministic_run_show_omits_provenance_lines_and_keeps_json_evidence() {
+    if !isolated_run_observation(
+        "run_observation::agent_invoke::deterministic_run_show_omits_provenance_lines_and_keeps_json_evidence",
+    ) {
+        return;
+    }
+    let fixture = Fixture::init();
+    let result = operator_json(
+        &fixture,
+        &["run", "job", "task_auto_pipeline", "--wait", "--json"],
+    );
+    assert_eq!(result["state"], "success", "{result}");
+    let run_id = result["run_id"].as_str().unwrap();
+    let shown = fixture.show_json(run_id);
+    let provenance = shown["run"]["activity_provenance"]
+        .as_array()
+        .expect("run JSON keeps the full activity provenance list");
+    assert!(!provenance.is_empty(), "{shown}");
+    assert!(
+        provenance.iter().all(|activity| activity["invocations"]
+            .as_array()
+            .is_some_and(Vec::is_empty)),
+        "the empty-backlog auto pipeline must not launch an agent: {shown}"
+    );
+
+    let text = fixture.show_text(run_id);
+    assert!(
+        !text.contains("Agent provider/model ("),
+        "a deterministic-only run should not print activity provenance: {text}"
+    );
+    assert!(
+        !text.contains(" actual="),
+        "the human view should not expose the internal actual_status field: {text}"
+    );
+}
+
 fn run_logs_follow_emits_live_output_once_and_stops_at_terminal() {
     use std::io::{BufRead, BufReader};
     use std::process::Stdio;
@@ -548,6 +585,15 @@ fn agent_provenance_reports_provider_model_and_leaves_interrupted_launches_unava
     assert_eq!(invocation["provider"], "codex", "{shown}");
     assert_eq!(invocation["crew"], "sol", "{shown}");
     assert_eq!(invocation["reasoning_effort"], "high", "{shown}");
+    let activity_id = completed[0]["activity_id"].as_str().unwrap();
+    let text = fixture.show_text(run_id);
+    assert!(
+        text.contains(&format!(
+            "Agent provider/model ({activity_id}): codex/{reported}"
+        )),
+        "the human view should name the recorded provider and model: {text}"
+    );
+    assert!(!text.contains(" actual="), "{text}");
     let mcp = operator_json(
         &fixture,
         &[
@@ -698,4 +744,10 @@ fn agent_provenance_reports_provider_model_and_leaves_interrupted_launches_unava
         }]),
         "{shown}"
     );
+    let text = interrupted.show_text(interrupted_id);
+    assert!(
+        text.contains("Agent provider/model (implement_one): evidence unavailable"),
+        "an agent activity with missing invocation evidence remains visible: {text}"
+    );
+    assert!(!text.contains(" actual="), "{text}");
 }

@@ -8,6 +8,9 @@ use orbit_core::application::job::{
 };
 use orbit_core::runtime::audit::run::{RunProviderProcess, RunScriptExecution};
 use orbit_core::{CatalogReferenceLayer, JobRun, OrbitError, OrbitRuntime};
+use orbit_types::workflow::activity_job::{
+    ACTIVITY_REF_PREFIX, ActivityV2Spec, JobV2Step, JobV2StepBody,
+};
 use orbit_types::workflow::{JobRunState, PipelineState};
 use serde_json::{Value, json};
 
@@ -22,9 +25,10 @@ use super::format::{
 };
 use super::job::cli_job_run_to_json_with_activity_provenance;
 use super::lock_holders::waiting_lock_holders;
+use super::steps;
 use super::steps::{
-    RunRead, StepSource, activity_provenance_lines, resolve_run, resolve_run_step,
-    run_display_steps, run_header_text_with_lock_holders, step_record_payload, step_summary_table,
+    RunRead, StepSource, resolve_run, resolve_run_step, run_display_steps,
+    run_header_text_with_lock_holders, step_record_payload, step_summary_table,
 };
 
 /// `CatalogReferenceLayer::layer` for a definition this binary ships.
@@ -403,7 +407,9 @@ pub(crate) fn run_show_payload(
             claim.describe()
         ));
     }
-    let provenance_lines = activity_provenance_lines(&doc["run"]["activity_provenance"]);
+    let agent_activity_ids = agent_activity_ids_for_job(runtime, &run.job_id);
+    let provenance_lines =
+        steps::activity_provenance_lines(&doc["run"]["activity_provenance"], &agent_activity_ids);
     if !provenance_lines.is_empty() {
         header.push('\n');
         header.push_str(&provenance_lines.join("\n"));
@@ -556,6 +562,72 @@ pub(crate) fn run_show_payload(
         ],
     )
     .into())
+}
+
+/// Activity step ids whose workflow definition invokes an agent. This only
+/// affects human rendering; `activity_provenance` stays complete in JSON.
+fn agent_activity_ids_for_job(runtime: &OrbitRuntime, job_id: &str) -> HashSet<String> {
+    let job = match runtime.show_job_catalog_entry(job_id) {
+        Ok(entry) => entry.spec,
+        Err(error) => {
+            tracing::debug!(%job_id, %error, "run show cannot resolve activity provenance definitions");
+            return HashSet::new();
+        }
+    };
+    let agent_activity_names = runtime
+        .v2_activity_catalog()
+        .ok()
+        .map(|catalog| {
+            catalog
+                .names()
+                .filter(|name| {
+                    catalog.get(name).is_some_and(|activity| {
+                        matches!(&activity.spec, ActivityV2Spec::AgentLoop(_))
+                    })
+                })
+                .map(str::to_string)
+                .collect::<HashSet<_>>()
+        })
+        .unwrap_or_default();
+    let mut ids = HashSet::new();
+    collect_agent_activity_ids(&job.steps, &agent_activity_names, &mut ids);
+    ids
+}
+
+fn collect_agent_activity_ids(
+    steps: &[JobV2Step],
+    agent_activity_names: &HashSet<String>,
+    ids: &mut HashSet<String>,
+) {
+    for step in steps {
+        match &step.body {
+            JobV2StepBody::Target(target) => {
+                if matches!(&target.spec, ActivityV2Spec::AgentLoop(_)) {
+                    ids.insert(step.id.clone());
+                }
+            }
+            JobV2StepBody::TargetRef(target) => {
+                if let Some(name) = target.target.strip_prefix(ACTIVITY_REF_PREFIX)
+                    && agent_activity_names.contains(name)
+                {
+                    ids.insert(step.id.clone());
+                }
+            }
+            JobV2StepBody::Parallel { parallel } => {
+                collect_agent_activity_ids(&parallel.branches, agent_activity_names, ids);
+            }
+            JobV2StepBody::FanOut { fan_out, .. } => {
+                collect_agent_activity_ids(
+                    std::slice::from_ref(fan_out.worker.as_ref()),
+                    agent_activity_names,
+                    ids,
+                );
+            }
+            JobV2StepBody::Loop { loop_ } => {
+                collect_agent_activity_ids(&loop_.steps, agent_activity_names, ids);
+            }
+        }
+    }
 }
 
 /// The `Review:` line: the review layer before landing the run captured and
