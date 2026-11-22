@@ -10,11 +10,13 @@ use orbit_common::OrbitError;
 use orbit_common::protocol::tool_input::{
     optional_csv_or_string_list_alias, optional_string, optional_string_list_alias, required_string,
 };
+use orbit_types::tool::{McpCapability, ToolSessionContext};
 use orbit_types::workflow::JobRunTrigger;
 use serde_json::{Value, json};
 
 pub(super) fn readiness(
     runtime: &OrbitRuntime,
+    session: &ToolSessionContext,
     input: &Value,
     limit: usize,
 ) -> Result<Value, OrbitError> {
@@ -25,7 +27,10 @@ pub(super) fn readiness(
     // This is a bounded observational read, not a reconciliation tick.
     let mut value =
         runtime.workspace_auto_readiness(&task_ids, concurrency, limit, &allowed_crews)?;
-    value["controls_authorized"] = json!(true);
+    value["controls_authorized"] = json!(
+        crate::runtime::authorization::resolved_caller_capabilities(session)
+            .contains(&McpCapability::Operator)
+    );
     Ok(value)
 }
 

@@ -106,6 +106,13 @@ impl OrbitToolHost for RuntimeOrbitToolHost {
         self.task_scope.clone()
     }
 
+    fn allows_resident_drain_status(&self) -> bool {
+        self.task_scope
+            .run_id
+            .as_deref()
+            .is_some_and(|run_id| self.runtime.is_live_resident_cycle_run(run_id))
+    }
+
     /// A routed decision-channel callback runs here, outside the plugin
     /// sandbox, through the same `orbit tool run` dispatch the child would
     /// have used. The caller is the routed callback session the dispatch

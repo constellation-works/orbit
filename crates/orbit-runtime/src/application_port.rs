@@ -147,6 +147,17 @@ pub trait ApplicationPort: Send + Sync {
         crew_source: Option<&CrewSource>,
         complexity: Option<TaskComplexity>,
     ) -> Result<Option<String>, OrbitError>;
+    /// Whether `run_id` is a live resident cycle permitted to observe drain
+    /// readiness (`orbit.workflow.auto` action `status`) for `input`'s
+    /// workspace; returns `Err(PolicyDenied)` (`resident_scope_refused`) when
+    /// the live cycle names an uncovered workspace, and `Ok(false)` when `run_id`
+    /// is not a live resident cycle.
+    fn resident_cycle_drain_status_allowed(
+        &self,
+        kernel: &RuntimeKernel,
+        run_id: &str,
+        input: &Value,
+    ) -> Result<bool, OrbitError>;
 }
 
 impl RuntimeKernel {

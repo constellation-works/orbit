@@ -90,8 +90,11 @@ Notices under a `resident:` key (such as status lines) and notices authored by
 the mandate's own assignment task are excluded from wake evaluation so a cycle's
 own reports do not trigger immediate re-wakes.
 
-A live cycle may read runtime attention for its own workspace and the
-workspaces its grant covers. That read does not widen what it can write.
+A live cycle may read runtime attention and drain status (`orbit.workflow`
+action `auto` with `mode: "status"`) for its own workspace and the workspaces
+its grant covers, with or without any granted right. Neither read widens what
+it can write, and drain controls (`start`, `stop`, `resize`) remain
+operator-only.
 
 Each cycle's checkpoint plans the next wake in `next_wake.not_before`. Without
 a change that wakes it sooner, the next cycle starts then, but never sooner

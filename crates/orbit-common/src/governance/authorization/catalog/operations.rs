@@ -203,7 +203,7 @@ pub const GOVERNED_OPERATIONS: &[GovernedOperation] = &[
         id: "orbit.workflow.auto",
         surface: OperationSurface::Tool,
         allowed: &[McpCapability::Operator],
-        rationale: "auto-drain observation and controls require an operator session",
+        rationale: "auto-drain controls require an operator session; observation also requires one outside a live resident cycle",
     },
     GovernedOperation {
         id: "orbit.routine.control",

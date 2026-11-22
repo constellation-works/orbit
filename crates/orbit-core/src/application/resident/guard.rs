@@ -241,6 +241,109 @@ impl OrbitRuntime {
         ids
     }
 
+    fn live_cycle_home_grant_local(
+        &self,
+        run_id: &str,
+    ) -> Option<(String, String, ResidentCycleGrant)> {
+        let run = self.show_job_run_observed(run_id).ok()?;
+        if run.job_id != RESIDENT_CYCLE_JOB {
+            return None;
+        }
+        // History reads recover interrupted task commits. Observational reads
+        // fail closed when non-repairing inspection cannot verify that the home
+        // partition is settled before reading the grant.
+        self.inspect_live_execution_claims().ok()?;
+        let task_id = self.resident_cycle_mandate_of_run(run_id).ok()?;
+        let history = self.get_task_history(&task_id).ok()?;
+        let grant = live_cycle_from_history(&history)
+            .ok()?
+            .filter(|live| live.run_id == run_id && live.expires_at > Utc::now())
+            .and_then(|live| cycle_grant(&history, &live.cycle))?;
+        Some((self.workspace_id().ok()?, self.workspace_label(), grant))
+    }
+
+    fn live_cycle_home_grant(&self, run_id: &str) -> Option<(String, String, ResidentCycleGrant)> {
+        let run_id = run_id.trim();
+        if run_id.is_empty() {
+            return None;
+        }
+        match self.show_job_run_observed(run_id) {
+            Ok(_) => self.live_cycle_home_grant_local(run_id),
+            Err(OrbitError::NotFound {
+                kind: NotFoundKind::JobRun,
+                ..
+            }) => {
+                let catalog = self.workspace_catalog()?;
+                let store = self.sqlite_store().ok()?;
+                let home = self.workspace_id().ok()?;
+                let target = catalog
+                    .resolve_scope(&WorkspaceScope::AllRegistered)
+                    .ok()?
+                    .into_iter()
+                    .filter(|target| target.workspace_id != home)
+                    .find(|target| {
+                        orbit_store::compose::workspace_job_run_store(
+                            store.clone(),
+                            target.workspace_id.clone(),
+                        )
+                        .get_job_run(run_id)
+                        .ok()
+                        .flatten()
+                        .is_some_and(|run| run.job_id == RESIDENT_CYCLE_JOB)
+                    })?;
+                let foreign = Self::from_kernel(catalog.open_observational(&target).ok()?);
+                foreign.live_cycle_home_grant_local(run_id)
+            }
+            Err(_) => None,
+        }
+    }
+
+    fn covered_workspaces_from_grant(
+        &self,
+        home_id: String,
+        home_label: String,
+        grant: &ResidentCycleGrant,
+    ) -> BTreeSet<String> {
+        let mut covered = BTreeSet::from([home_id, home_label]);
+        for selector in &grant.workspaces {
+            covered.extend(self.resident_workspace_ids(selector));
+        }
+        covered
+    }
+
+    /// Whether `run_id` holds a mandate's live cycle in this workspace or
+    /// another workspace in the registered catalog.
+    pub(crate) fn is_live_resident_cycle_run(&self, run_id: &str) -> bool {
+        self.live_cycle_home_grant(run_id).is_some()
+    }
+
+    /// Whether `run_id` is a live resident cycle allowed to read drain status
+    /// (`orbit.workflow.auto` action `status`) for the workspace `self` and
+    /// `input` address. Returns `Ok(false)` when `run_id` is not a live cycle
+    /// so non-resident and stale callers fall through to operator capability.
+    pub(crate) fn resident_cycle_drain_status_allowed(
+        &self,
+        run_id: &str,
+        input: &Value,
+    ) -> Result<bool, OrbitError> {
+        let Some((home_id, home_label, grant)) = self.live_cycle_home_grant(run_id) else {
+            return Ok(false);
+        };
+        let covered = self.covered_workspaces_from_grant(home_id, home_label, &grant);
+        let current_id = self.workspace_id()?;
+        if !covered.contains(&current_id) && !covered.contains(&self.workspace_label()) {
+            return Err(refused(
+                "resident_scope_refused",
+                format!(
+                    "workspace `{}` is outside the resident mandate's authority",
+                    self.workspace_label()
+                ),
+            ));
+        }
+        self.ensure_named_workspaces_in_scope(&covered, input)?;
+        Ok(true)
+    }
+
     /// The workspaces (ids and names) a live resident cycle may read runtime
     /// attention for: its mandate's own workspace and the ones its frozen
     /// grant covers. `None` for any session that is not the live cycle of a
@@ -253,25 +356,8 @@ impl OrbitRuntime {
         run_id: Option<&str>,
     ) -> Option<BTreeSet<String>> {
         let run_id = run_id.map(str::trim).filter(|id| !id.is_empty())?;
-        let run = self.show_job_run_observed(run_id).ok()?;
-        if run.job_id != RESIDENT_CYCLE_JOB {
-            return None;
-        }
-        // History reads recover interrupted task commits. Attention is
-        // observational, so fail closed when non-repairing inspection cannot
-        // verify that the home partition is settled before reading the grant.
-        self.inspect_live_execution_claims().ok()?;
-        let task_id = self.resident_cycle_mandate_of_run(run_id).ok()?;
-        let history = self.get_task_history(&task_id).ok()?;
-        let grant = live_cycle_from_history(&history)
-            .ok()?
-            .filter(|live| live.run_id == run_id && live.expires_at > Utc::now())
-            .and_then(|live| cycle_grant(&history, &live.cycle))?;
-        let mut covered = BTreeSet::from([self.workspace_id().ok()?, self.workspace_label()]);
-        for selector in &grant.workspaces {
-            covered.extend(self.resident_workspace_ids(selector));
-        }
-        Some(covered)
+        let (home_id, home_label, grant) = self.live_cycle_home_grant_local(run_id)?;
+        Some(self.covered_workspaces_from_grant(home_id, home_label, &grant))
     }
 
     /// Admit the call before dispatch. Only the authenticated resident broker may
@@ -417,11 +503,18 @@ impl OrbitRuntime {
         grant: &ResidentCycleGrant,
         input: &Value,
     ) -> Result<(), OrbitError> {
-        let mut allowed: BTreeSet<String> = grant.workspaces.iter().cloned().collect();
-        allowed.insert(self.workspace_id()?);
-        allowed.insert(self.workspace_label());
+        let allowed =
+            self.covered_workspaces_from_grant(self.workspace_id()?, self.workspace_label(), grant);
+        self.ensure_named_workspaces_in_scope(&allowed, input)
+    }
+
+    fn ensure_named_workspaces_in_scope(
+        &self,
+        allowed: &BTreeSet<String>,
+        input: &Value,
+    ) -> Result<(), OrbitError> {
         for selector in named_workspaces(input) {
-            if self.resident_workspace_ids(&selector).is_disjoint(&allowed) {
+            if self.resident_workspace_ids(&selector).is_disjoint(allowed) {
                 return Err(refused(
                     "resident_scope_refused",
                     format!("workspace `{selector}` is outside the resident mandate's authority"),

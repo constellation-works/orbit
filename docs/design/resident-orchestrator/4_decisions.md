@@ -1,17 +1,17 @@
 ---
 title: Resident Orchestrator — Decisions
 owner: claude
-last_updated: 2026-11-20
+last_updated: 2026-11-22
 last_validated: 2026-11-02
 status: Draft
 feature: resident-orchestrator
 doc_role: decisions
 type: design
-summary: "Why the rewrite owns coordination only, rides the clock, keeps loops out of chats and consoles, gates widening on the human, trusts only Orbit state, keeps evolution apart from friction, and lets `dispatch` re-pilot and requeue"
+summary: "Why the rewrite owns coordination only, rides the clock, keeps loops out of chats and consoles, gates widening on the human, trusts only Orbit state, keeps evolution apart from friction, lets `dispatch` re-pilot and requeue, and lets live cycles read drain status"
 tags: [resident-orchestrator]
 paths: ["crates/orbit-core/src/application/resident/**", "crates/orbit-core/assets/jobs/**"]
 related_features: [distributed-drain, routines, activity-job, human-decision-channel, fleet-notices]
-related_artifacts: [ORB-21229, ORB-12488, ORB-10815, ORB-10776]
+related_artifacts: [ORB-21229, ORB-12488, ORB-10815, ORB-10776, ORB-26832]
 ---
 
 # Resident Orchestrator — Decisions
@@ -306,11 +306,62 @@ the ability to discard a candidate through requeue.
 - Cost: discarding a held candidate needs an operator action rather than being
   completed by the resident cycle.
 
+## Live resident cycles read drain status without operator capability
+
+**Recorded:** 2026-11-22 · [ORB-26832] · Approved by Daniel in the chief's chat
+(2026-11-22, `ORB-26762` follow-up)
+
+**Code anchors:** `crates/orbit-runtime/src/tool_exec.rs` `RuntimeKernel::authorize_registered_tool`;
+`crates/orbit-tools/src/builtin/orbit/workflow.rs` `WorkflowVerb::preempt`;
+`crates/orbit-core/src/application/resident/guard.rs` `OrbitRuntime::resident_cycle_drain_status_allowed`;
+`crates/orbit-core/src/adapter/tool_host/resident_guard.rs` `resident_guard_class`
+
+### Context
+
+`orbit.workflow.auto` multiplexes drain readiness observation (`action: "status"`,
+mode `"status"` on the `orbit.workflow` family) and drain controls (`start`,
+`stop`, `resize`) behind one operator-only row in `GOVERNED_OPERATIONS`.
+Because the capability chokepoint runs before any per-action dispatch, every
+resident cycle — even one holding `dispatch` — was refused `capability_denied`
+when checking whether a drain was running, idle or throttled, forcing cycles to
+infer drain state from task and run records.
+
+The alternative was splitting `orbit.workflow.auto` into separate tools or
+granting `McpCapability::Agent` on the governed row, which would either break
+the shipped tool schema/goldens or expose drain controls and cross-workspace
+drain readiness to every agent session.
+
+### Decision
+
+Keep `orbit.workflow.auto` as one operator-governed operation in the catalog so
+application consent and non-resident callers stay unchanged, and admit only its
+`status` action at the chokepoint and `WorkflowVerb::Auto` preempt guard when
+the caller holds a live `resident_cycle_pipeline` cycle (`live_cycle` not
+expired, home partition settled). Because observation is a read, no granted
+right is required (`orbit.workflow.auto` `status` maps to `Read` in
+`resident_guard_class`), and `controls_authorized` in the reply reflects the
+caller's operator capability (`false` for a cycle). Any workspace outside the
+mandate's covered scope is refused as `resident_scope_refused`. Drain controls
+(`start`, `stop`, `resize`) and callers outside a live resident cycle keep the
+operator requirement (`capability_denied`).
+
+### Consequences
+
+- Residents check live drain capacity, active runs and admission holds directly
+  without operator capability or any granted right.
+- Ordinary agent sessions, non-resident managed runs and stale or unstarted
+  cycle runs remain refused `capability_denied`, and application consent stays
+  blocked by the catalog's operator floor.
+- Cost: future read-only sub-actions added to an operator-governed multiplexed
+  tool must follow the same explicit action-and-run-binding check rather than
+  widening the catalog row, or split into a separate read operation.
+
 ## Task References
 
 - [ORB-21229] — rewrote the resident-orchestrator design and recorded these decisions
 - [ORB-25959] — let resident cycles with `dispatch` re-pilot and requeue
 - [ORB-26184] — refuse resident cycles' candidate discards during requeue
+- [ORB-26832] — admit `orbit.workflow.auto` `status` reads for live resident cycles without operator capability
 - [ORB-25951] — on-call whose chief ruling delegated and conditioned that change
 - [ORB-12488] — removed the epic pipeline and the earlier resident-orchestrator folder
 - [ORB-10815] — revised the earlier design to v2: epic-owned worktree and windowed drain

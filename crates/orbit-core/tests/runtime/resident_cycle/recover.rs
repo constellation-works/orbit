@@ -36,7 +36,7 @@ fn operator_only_calls(task: &str, run: &str, workspace: &str) -> Vec<(&'static 
         ),
         (
             "orbit.workflow.auto",
-            json!({"mode": "status", "workspace": workspace}),
+            json!({"mode": "start", "for_seconds": 60, "workspace": workspace}),
         ),
         (
             "orbit.workflow.run.resume",
