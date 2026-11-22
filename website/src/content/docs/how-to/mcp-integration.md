@@ -195,7 +195,8 @@ reports it as `mcp_toolset`.
 | `decision-channel` | `orbit.decision.submit`, `orbit.decision.digest`. Only the bound channel plugin or the operator may call them. |
 | `notice` | `orbit.notice.post`, `close`, `list`, `show`: fleet notices |
 | `resident` | `orbit.resident.*`, and `orbit.evolution.add`, `list`, `show`: resident orchestrator mandates and the evolution ledger |
-| `ui`, `leases` | None. Their tools were removed; the names still load in a selection. |
+| `ui` | `orbit.ui` (`orbit_ui`): `open` and `inspect`, when the session also lists the read-only task read |
+| `leases` | None. Its tools were removed; the name still loads in a selection. |
 | `local` | Tools no MCP server lists, such as `proc.spawn`, `github.*`, and the drain tools. `orbit tool run` and activities reach them. |
 
 A family whose actions span toolsets, such as `orbit.run`, is listed when any
@@ -203,11 +204,12 @@ of its actions is enabled.
 
 ### Choose toolsets
 
-Without a role, a server lists `core`, `tasks-read`, `tasks-write`, and
-`search`. The name `default` stands for that set, and `all` enables every
-toolset. Add toolsets for one server with `--toolset`, or for every server on
-the host with the global `machine.mcp.toolsets` key. The flag replaces the
-key.
+With no role and no `--operator`, and with no `machine.mcp.role`, a server
+lists `core`, `tasks-read`, `tasks-write`, and `search`. `--operator` with no
+`--role` serves the operator role. The name `default` stands for that set, and
+`all` enables every toolset. Add toolsets for one server with `--toolset`, or
+for every server on the host with the global `machine.mcp.toolsets` key. The
+flag replaces the key.
 
 ```bash
 orbit mcp serve --toolset experiments,analytics
