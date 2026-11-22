@@ -11,12 +11,30 @@ use crate::identity::lower_hex;
 pub const SCRIPT_GRANT_DIGEST_DOMAIN: &str = "orbit.script.grant.v1";
 
 /// Resource ceilings one grant carries.
+///
+/// The scope ceilings (`memory_max_bytes`, `tasks_max`,
+/// `cpu_quota_percent`) are optional: unset takes the host's
+/// `machine.worker_*` value, and a set value is capped at that value when
+/// the script's systemd scope is built. Unset fields are omitted when
+/// serialized, so a grant recorded before they existed keeps its witness
+/// integrity, and a binary that predates them refuses a grant that sets
+/// one (its re-serialized record no longer matches the witness) instead of
+/// running the script without the ceiling.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ScriptGrantLimits {
     pub timeout_max_seconds: u64,
     pub scratch_max_bytes: u64,
     pub output_max_files: u32,
     pub output_max_file_bytes: u64,
+    /// Scope `MemoryMax=` in bytes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub memory_max_bytes: Option<u64>,
+    /// Scope `TasksMax=` (processes plus threads).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tasks_max: Option<u32>,
+    /// Scope `CPUQuota=` as a percentage of one core.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cpu_quota_percent: Option<u32>,
 }
 
 impl Default for ScriptGrantLimits {
@@ -26,6 +44,9 @@ impl Default for ScriptGrantLimits {
             scratch_max_bytes: 1024 * 1024 * 1024,
             output_max_files: 8,
             output_max_file_bytes: 1024 * 1024,
+            memory_max_bytes: None,
+            tasks_max: None,
+            cpu_quota_percent: None,
         }
     }
 }

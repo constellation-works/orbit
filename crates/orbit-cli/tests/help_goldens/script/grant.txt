@@ -28,6 +28,15 @@ Options:
       --output-max-file-bytes <BYTES>
           Largest output file one step may keep, in bytes, up to 67108864 (64 MiB; default 1048576). A step's whole output set is also bounded by files times bytes and never exceeds 256 MiB
 
+      --memory-max <SIZE>
+          Memory ceiling of the script's own systemd scope: bytes with an optional K, M, G or T suffix (default: this host's `machine.worker_memory_max`). Never above the host's value; a re-grant without it returns to the default
+
+      --tasks-max <COUNT>
+          Process and thread ceiling of the script's own scope (default: `machine.worker_tasks_max`). Never above the host's value
+
+      --cpu-quota <PERCENT>
+          CPU ceiling of the script's own scope, as a percentage of one core (`200` = two cores; default: `machine.worker_cpu_quota`). Never above the host's value when that is set. Enforced only where systemd delegates the cpu controller
+
   -h, --help
           Print help (see a summary with '-h')
 

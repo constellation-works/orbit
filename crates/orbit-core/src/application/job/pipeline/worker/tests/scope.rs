@@ -4,6 +4,7 @@ use std::collections::BTreeMap;
 use std::process::Command;
 
 use orbit_config::{MemoryLimit, MemoryUnit, WorkerContainmentSettings};
+use orbit_types::workflow::activity_job::ScriptGrantLimits;
 
 use crate::application::job::pipeline::worker::command::WorkerCommandConfig;
 use crate::application::job::pipeline::worker::scope::WorkerLimits;
@@ -316,6 +317,7 @@ fn script_scope_launcher_scopes_when_the_launch_env_reaches_the_bus() {
         "run-1",
         "step-1",
         &settings(MemoryLimit::Infinity, MemoryLimit::Infinity),
+        &ScriptGrantLimits::default(),
         &launcher_env,
         Some(Ok(())),
     )
@@ -367,6 +369,7 @@ fn script_scope_probe_reports_a_missing_bus_in_the_launch_env() {
         "run-1",
         "step-1",
         &settings(MemoryLimit::Infinity, MemoryLimit::Infinity),
+        &ScriptGrantLimits::default(),
         &launcher_env,
         None,
     )
@@ -387,6 +390,7 @@ fn script_scope_probe_reports_a_missing_bus_in_the_launch_env() {
         "run-1",
         "step-1",
         &strict_settings,
+        &ScriptGrantLimits::default(),
         &launcher_env,
         None,
     )

@@ -47,6 +47,7 @@ use std::sync::Once;
 
 use orbit_common::security::child_env::allowlisted_child_env;
 use orbit_config::{MemoryLimit, WorkerContainmentSettings};
+use orbit_types::workflow::activity_job::ScriptGrantLimits;
 
 use crate::application::job::run::worker_scope::{
     SCOPE_UNIT_PREFIX, SCOPE_UNIT_SUFFIX, WorkerScopeCgroup, event_count, stat_value,
@@ -100,6 +101,51 @@ impl WorkerLimits {
             cpu_quota_percent: (settings.cpu_quota_percent > 0)
                 .then_some(settings.cpu_quota_percent),
         })
+    }
+
+    /// These limits with one script grant's scope ceilings applied: each
+    /// grant value replaces the machine value only where it is lower, so a
+    /// grant can narrow a script's scope but never widen it past the host.
+    /// `physical_memory_bytes` resolves a percentage machine value; when it
+    /// is unknown the grant's explicit byte count is taken as the ceiling.
+    fn capped_by_script_grant(
+        &self,
+        grant: &ScriptGrantLimits,
+        physical_memory_bytes: Option<u64>,
+    ) -> Self {
+        let resolve = |limit: MemoryLimit| -> Option<u64> {
+            match limit {
+                MemoryLimit::Bytes { .. } => limit.byte_count(),
+                MemoryLimit::Percent(percent) => physical_memory_bytes
+                    .map(|total| (u128::from(total) * u128::from(percent) / 100) as u64),
+                MemoryLimit::Infinity => Some(u64::MAX),
+            }
+        };
+        let mut capped = self.clone();
+        if let Some(grant_bytes) = grant.memory_max_bytes {
+            let grant_limit = MemoryLimit::Bytes {
+                amount: grant_bytes,
+                unit: None,
+            };
+            if resolve(self.memory_max).is_none_or(|machine| grant_bytes < machine) {
+                capped.memory_max = grant_limit;
+            }
+            // A throttle point above the OOM point never applies; keep it
+            // at or below the narrowed `MemoryMax`.
+            if resolve(self.memory_high).is_none_or(|machine| grant_bytes < machine) {
+                capped.memory_high = grant_limit;
+            }
+        }
+        if let Some(tasks) = grant.tasks_max {
+            capped.tasks_max = tasks.min(self.tasks_max);
+        }
+        if let Some(percent) = grant.cpu_quota_percent {
+            capped.cpu_quota_percent = Some(
+                self.cpu_quota_percent
+                    .map_or(percent, |machine| percent.min(machine)),
+            );
+        }
+        capped
     }
 
     /// The unit properties, in `systemd-run --property=` form.
@@ -313,9 +359,10 @@ pub(crate) fn script_scope_launcher(
     run_id: &str,
     step_id: &str,
     settings: &WorkerContainmentSettings,
+    grant: &ScriptGrantLimits,
     launcher_env: &[(String, String)],
 ) -> Result<ScriptScopeLauncher, String> {
-    script_scope_launcher_with_availability(run_id, step_id, settings, launcher_env, None)
+    script_scope_launcher_with_availability(run_id, step_id, settings, grant, launcher_env, None)
 }
 
 /// [`script_scope_launcher`] with the availability verdict supplied, so a
@@ -326,13 +373,14 @@ pub(crate) fn script_scope_launcher_with_availability(
     run_id: &str,
     step_id: &str,
     settings: &WorkerContainmentSettings,
+    grant: &ScriptGrantLimits,
     launcher_env: &[(String, String)],
     availability: Option<Result<(), String>>,
 ) -> Result<ScriptScopeLauncher, String> {
     let inherited = std::env::var_os(STRICT_WORKER_CONTAINMENT_ENV);
     let strict =
         super::start::effective_strict_containment(settings.strict, false, inherited.as_deref());
-    let Some(limits) = WorkerLimits::from_settings(settings) else {
+    let Some(machine_limits) = WorkerLimits::from_settings(settings) else {
         if strict {
             return Err("machine.worker_containment=off".into());
         }
@@ -347,6 +395,7 @@ pub(crate) fn script_scope_launcher_with_availability(
         }
         return Ok(ScriptScopeLauncher::Uncontained { reason });
     }
+    let limits = machine_limits.capped_by_script_grant(grant, physical_memory_bytes());
     let unit = scope_unit_name(&format!("{run_id}-{step_id}")).replacen(
         SCOPE_UNIT_PREFIX,
         SCRIPT_SCOPE_UNIT_PREFIX,
@@ -368,6 +417,27 @@ pub(crate) fn script_scope_launcher_with_availability(
     );
     argv.push("--".into());
     Ok(ScriptScopeLauncher::Scoped { unit, argv })
+}
+
+/// Total physical RAM from `/proc/meminfo`, which systemd resolves a
+/// percentage `MemoryMax=` against. `None` where it cannot be read.
+#[cfg(target_os = "linux")]
+fn physical_memory_bytes() -> Option<u64> {
+    let meminfo = std::fs::read_to_string("/proc/meminfo").ok()?;
+    let line = meminfo.lines().find(|line| line.starts_with("MemTotal:"))?;
+    let kib: u64 = line
+        .trim_start_matches("MemTotal:")
+        .trim()
+        .trim_end_matches("kB")
+        .trim()
+        .parse()
+        .ok()?;
+    kib.checked_mul(1024)
+}
+
+#[cfg(not(target_os = "linux"))]
+fn physical_memory_bytes() -> Option<u64> {
+    None
 }
 
 /// Whether a script step runs under strict containment: configured, or

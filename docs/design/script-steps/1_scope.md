@@ -364,7 +364,7 @@ record carries:
 | `network` | `none` (default), `https` or `any` (§3) |
 | `read_roots`, `write_roots` | Extra absolute paths beyond the defaults in §3 |
 | `env_pass` | Variable names copied into the child env; `ORBIT_*` refused |
-| `limits` | `timeout_max_seconds`, `memory_max`, `tasks_max`, `scratch_max_bytes`, output-file caps; each at or below the host's `machine.worker_*` and `machine.script_*` ceilings (Configuration) |
+| `limits` | `timeout_max_seconds`, `scratch_max_bytes`, output-file caps, and the optional scope ceilings `memory_max_bytes`, `tasks_max` and `cpu_quota_percent` (§3 Resources). An unset scope ceiling takes the host's `machine.worker_*` value; a set one is capped at it when the scope is built. Unset ceilings are omitted from the record, so a grant made before they existed keeps its witness, and an older binary refuses a grant that sets one rather than run without it |
 | `host_role` | `owner` (default) or `follower` (§7) |
 | `grantor`, `granted_at`, `provenance` | Human label, time, and `cli`, `dashboard` or `decision-channel <name>` |
 | `expires_at` | Optional; none by default |
@@ -524,8 +524,14 @@ it is listed in `read_roots` and isn't under a credential-deny path. A dedicated
   warning when its scope is unavailable, and `off` runs it without a worker scope
   (with a warning on Linux).
   When systemd can create it, the script also gets its own transient scope,
-  `orbit-script-<run>-<step>.scope`, with `MemoryMax`, `TasksMax` and `CPUQuota` from
-  the grant, each capped at the machine value. If that per-script scope is unavailable,
+  `orbit-script-<run>-<step>.scope`, with `MemoryHigh`, `MemoryMax`, `TasksMax` and
+  `CPUQuota` from the machine's `machine.worker_*` values, narrowed by the grant: each
+  scope ceiling the grant sets (`orbit script grant --memory-max`, `--tasks-max`,
+  `--cpu-quota`; [ORB-26739]) replaces the machine value only where it is lower, and
+  `MemoryHigh` drops to a narrowed `MemoryMax`. A percentage machine memory value is
+  resolved against `/proc/meminfo`; a grant `CPUQuota` applies even when the machine
+  sets none. Only the CLI sets these ceilings; a grant answered from the dashboard or a
+  decision request takes the machine values. If that per-script scope is unavailable,
   `warn` or `off` permits the step to continue in the worker's cgroup; `strict` refuses
   the step. A worker with an unavailable scope is likewise refused under `strict`.
   Thus a script may run with neither scope under the default mode and can exhaust
@@ -897,9 +903,13 @@ a binary that can't enforce its grant.
 | `machine.script_timeout_max_seconds` | `3600` | Ceiling on any grant's `timeout_max_seconds` on this host |
 | `machine.script_scratch_max_bytes` | `1GiB` | Ceiling on any grant's scratch size |
 | `machine.worker_containment` | (existing; defaults to `warn`) | `warn` permits uncontained worker/script fallbacks, with a Linux warning when a scope is unavailable (on macOS a worker runs an in-worker watchdog instead, [ORB-19251], which is not kernel containment); `off` skips worker scopes with a Linux warning; `strict` refuses a worker or script step whose required scope can't be created, and every script step on macOS (§3) |
+| `machine.worker_memory_max`, `machine.worker_memory_high`, `machine.worker_tasks_max`, `machine.worker_cpu_quota` | (existing) | The per-script scope's limits, and the ceilings a grant's `memory_max_bytes`, `tasks_max` and `cpu_quota_percent` are capped at when the scope is built (§3 Resources) |
 
-Host keys, not workspace keys. Each grant's limits must sit at or below them. Output-file
-caps have no key: their ceilings are fixed at 64 files, 64 MiB per file and 256 MiB per
+Host keys, not workspace keys, meant as ceilings on every grant's limits. As built, the
+two `machine.script_*` keys are not loaded yet: a grant's timeout is bounded only by
+`1..=4294967295` seconds and its scratch cap is the 1 GiB default. The `machine.worker_*`
+ceilings are applied at run time, not at grant time, so a later lower machine value
+still wins. Output-file caps have no key: their ceilings are fixed at 64 files, 64 MiB per file and 256 MiB per
 set (§4 Files out).
 
 ### Surfaces
@@ -1275,6 +1285,7 @@ A script that rewrites itself during a run changes nothing for that run (§2,
 - [ORB-21297] — phase 3 part (Linux): declared `files.inputs` bound read-only at `in/<as>` and recorded with their SHA-256, and the `attach_script_files` action.
 - [ORB-21298] — phase 3 part (macOS): the `macos-sandbox-script-v1` profile, `RLIMIT_CPU` and `RLIMIT_NOFILE` on both platforms, grant-time and pre-spawn root probes with TCC reporting, nested-sandbox refusal, `strict` refusing on macOS, and the doctor `script-sandbox` row.
 - [ORB-21301] — phase 5 (Linux): `network: https` and `any` grants, `env_pass`, and redaction of passed values.
+- [ORB-26739] — per-grant script scope ceilings (`--memory-max`, `--tasks-max`, `--cpu-quota`), capped at the machine's `machine.worker_*` values.
 - [ORB-00374] — removed the v2 `shell` activity instead of sandboxing it; this doc takes its retrofit alternative.
 - [ORB-00363] — found that the shell allowlist came from the YAML it guarded.
 - [ORB-11294] — restored `local_shell` as a deterministic action; the Bearing and
