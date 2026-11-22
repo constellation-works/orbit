@@ -91,6 +91,12 @@ pub trait McpHost: Send + Sync + 'static {
         true
     }
 
+    /// Refusal for a presentation tool call when [`Self::presentation_enabled`]
+    /// is false.
+    fn presentation_disabled_error(&self) -> OrbitError {
+        toolset::presentation_toolset_not_enabled(None)
+    }
+
     /// Execute one canonicalized call and return its finished result. The
     /// host applies the operation's result policy (such as `orbit.task.list`'s
     /// default compact rows); the adapter renders the value without per-tool

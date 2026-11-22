@@ -1823,7 +1823,7 @@
         "required": false
       }
     ],
-    "mcp_toolset": "dispatch"
+    "mcp_toolset": "pipelines"
   },
   {
     "name": "orbit.pipeline.wait",
@@ -2215,7 +2215,7 @@
         "required": false
       }
     ],
-    "mcp_toolset": "automation"
+    "mcp_toolset": "routines"
   },
   {
     "name": "orbit.run",
@@ -2630,7 +2630,7 @@
         "required": false
       }
     ],
-    "mcp_toolset": "task-repair"
+    "mcp_toolset": "task-triage"
   },
   {
     "name": "orbit.task.eligible",

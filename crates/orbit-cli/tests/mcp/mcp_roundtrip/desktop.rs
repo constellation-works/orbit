@@ -232,7 +232,7 @@ fn domain_automation_stdio_preserves_observed_routine_state_and_refuses_dispatch
     assert_eq!(unchanged["changed"], false, "{unchanged}");
     assert_eq!(std::fs::read(&routine_path).unwrap(), after_toggle);
     drop(client);
-    let mut client = workspace.serve_with_args(&["--operator"]);
+    let mut client = workspace.serve_with_args(&["--operator", "--toolset", "pipelines"]);
     let reopened = client.call_tool_ok(
         "orbit_routine_control",
         json!({"workspace":selector,"action":"list"}),
@@ -293,7 +293,8 @@ fn domain_automation_stdio_preserves_observed_routine_state_and_refuses_dispatch
         "disabled and mixed-input refusals do not submit runs"
     );
     drop(client);
-    let mut unprivileged = workspace.serve_with_args(&["--toolset", "automation,dispatch,runs"]);
+    let mut unprivileged =
+        workspace.serve_with_args(&["--toolset", "routines,pipelines,dispatch,runs"]);
     for (tool, input) in [
         (
             "orbit_routine_control",
@@ -338,7 +339,7 @@ fn replica_routine_control_enables_only_worktree_gc_and_names_the_owner_for_the_
     let auto_task_path = workspace.work.join(".orbit/auto_tasks/qa-sweep.yaml");
     let ci_sweep_before = std::fs::read(&ci_sweep_path).unwrap();
     let auto_task_before = std::fs::read(&auto_task_path).unwrap();
-    let mut client = workspace.serve_with_args(&["--operator"]);
+    let mut client = workspace.serve_with_args(&["--operator", "--toolset", "automation"]);
 
     let listed = client.call_tool_ok(
         "orbit_routine_control",

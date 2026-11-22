@@ -2299,7 +2299,7 @@ fn compact_agent_answers_have_a_serialized_budget() {
             "#!/bin/sh\ncat > /dev/null\ncat {}\n",
             orbit_common::process::shell::quote_posix_arg(response_file.to_str().unwrap())
         ),
-        &["--operator"],
+        &["--operator", "--toolset", "pipelines"],
         &[("ORBIT_CLI_RUNNER_OUTPUT_CAPTURE_LIMIT_BYTES", "2097152")],
     );
     let large_text = "界🙂\n\"\\".repeat(24_000);
@@ -2396,7 +2396,7 @@ fn an_invocation_without_a_response_envelope_fails_with_its_reason() {
     let workspace = McpWorkspace::init();
     let mut client = workspace.serve_agent(
         "#!/bin/sh\ncat > /dev/null\nprintf '%s\\n' 'I looked around and everything seems fine.'\n",
-        &["--operator"],
+        &["--operator", "--toolset", "pipelines"],
         &[],
     );
     let submitted = client.call_tool_ok(

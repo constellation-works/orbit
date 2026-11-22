@@ -456,7 +456,8 @@ print(json.dumps({{"schemaVersion":1,"status":"success","result":{{}},"error":No
         binary = json!(env!("CARGO_BIN_EXE_orbit")),
         evidence = json!(evidence),
     );
-    let mut operator = workspace.serve_agent(&script, &["--operator"], &[]);
+    let mut operator =
+        workspace.serve_agent(&script, &["--operator", "--toolset", "pipelines"], &[]);
     let activity = workspace
         .home
         .join(".orbit/resources/activities/historical_invocation.yaml");

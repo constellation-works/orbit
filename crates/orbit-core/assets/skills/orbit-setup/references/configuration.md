@@ -56,18 +56,24 @@ including workspace discovery, is always present. Roles are presets:
 
 | Role | Included toolsets |
 |---|---|
-| `operator` | `tasks-read`, `tasks-write`, `task-repair`, `decisions`, `runs`, `dispatch`, `automation`, `codebase`, `search`, `ui`, `exec`, and `plugins` |
+| `operator` | `tasks-read`, `tasks-write`, `task-repair`, `decisions`, `runs`, `dispatch`, `routines`, `search`, `exec`, and `plugins` |
 | `manager` | Task and run reads, decisions, notices, resident mandates and search |
-| `resident` | The manager surface plus task writes and dispatch |
+| `resident` | The manager surface plus task writes, dispatch and `pipelines` |
 | `agent` | Task reads and writes, decisions, codebase, search, UI and notices |
 | `reader` | Task and run reads, codebase and search |
 
 The `operator` role selects `tasks-read`, `tasks-write`, `task-repair`,
-`decisions`, `runs`, `dispatch`, `automation`, `codebase`, `search`, `ui`,
-`exec`, and `plugins` but grants no operator authority. `--operator` is a
-separate server choice, and selects the operator profile when no `--role` is
-given; tools that require operator capability still require that capability
-under every role.
+`decisions`, `runs`, `dispatch`, `routines`, `search`, `exec`, and `plugins`
+but grants no operator authority. Six rarely used tools are opt-in in the
+operator profile (`automation` for `orbit_auto_task` and
+`orbit_automation_explain`, `codebase` for `orbit_codebase`, `pipelines` for
+`orbit_pipeline_invoke`, `task-triage` for `orbit_task_block_triage`, and `ui`
+for `orbit_ui`) via `--toolset` or `machine.mcp.toolsets`; `orbit_workflow`
+(`dispatch`), `orbit_run` (`runs`/`dispatch`), `orbit_routine_control`
+(`routines`) and `orbit_task_recover` (`task-repair`) stay in the default.
+`--operator` is a separate server choice, and selects the operator profile when
+no `--role` is given; tools that require operator capability still require that
+capability under every role.
 
 Set and read back the global defaults with:
 

@@ -129,6 +129,28 @@ fn toolset_not_enabled(
     toolset: McpToolset,
     role: Option<McpRole>,
 ) -> OrbitError {
+    build_toolset_not_enabled(tool, action, toolset, role, true)
+}
+
+/// The refusal for a call to the adapter-owned presentation tool (`orbit_ui`)
+/// when the `ui` toolset is not enabled on this server.
+pub(crate) fn presentation_toolset_not_enabled(role: Option<McpRole>) -> OrbitError {
+    build_toolset_not_enabled(
+        crate::presentation_definition::PRESENTATION_TOOL_ALIAS,
+        None,
+        McpToolset::Ui,
+        role,
+        false,
+    )
+}
+
+fn build_toolset_not_enabled(
+    tool: &str,
+    action: Option<&str>,
+    toolset: McpToolset,
+    role: Option<McpRole>,
+    cli_reachable: bool,
+) -> OrbitError {
     if toolset == McpToolset::RunBound {
         return run_bound_not_served(tool);
     }
@@ -147,11 +169,23 @@ fn toolset_not_enabled(
         Some(action) => format!("action '{action}' of tool '{tool}'"),
         None => format!("tool '{tool}'"),
     };
+    let enable_clause = if role_names.is_empty() {
+        format!(
+            "restart `orbit mcp serve` with `{flag}` or add '{toolset}' to `{MCP_TOOLSETS_CONFIG_KEY}`"
+        )
+    } else {
+        format!(
+            "restart `orbit mcp serve` with `{flag}`, add '{toolset}' to `{MCP_TOOLSETS_CONFIG_KEY}`, \
+             or serve a role that includes it ({role_names})"
+        )
+    };
+    let cli_suffix = if cli_reachable {
+        format!(". `orbit tool run {tool}` reaches it without MCP")
+    } else {
+        String::new()
+    };
     let message = format!(
-        "{subject} is in the '{toolset}' MCP toolset, and {served}; restart \
-         `orbit mcp serve` with `{flag}`, add '{toolset}' to `{MCP_TOOLSETS_CONFIG_KEY}`, or \
-         serve a role that includes it ({role_names}). `orbit tool run {tool}` reaches it \
-         without MCP"
+        "{subject} is in the '{toolset}' MCP toolset, and {served}; {enable_clause}{cli_suffix}"
     );
     OrbitError::RemoteTool {
         code: RemoteToolCode::Other(TOOLSET_NOT_ENABLED_CODE.into()),
@@ -193,6 +227,13 @@ fn run_bound_not_served(tool: &str) -> OrbitError {
 impl McpHost for ToolsetFilteredHost {
     fn presentation_enabled(&self) -> bool {
         self.selection.enables(McpToolset::Ui) && self.inner.presentation_enabled()
+    }
+
+    fn presentation_disabled_error(&self) -> OrbitError {
+        if !self.selection.enables(McpToolset::Ui) {
+            return presentation_toolset_not_enabled(self.selection.role());
+        }
+        self.inner.presentation_disabled_error()
     }
 
     fn list_mcp_tool_definitions(&self) -> Result<Vec<McpToolDefinition>, OrbitError> {

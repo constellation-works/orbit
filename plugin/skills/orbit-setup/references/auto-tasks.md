@@ -372,7 +372,10 @@ work for it. Its reason is printed on stderr and carried as `skipped_reason`
 by the MCP listing and the dashboard API, where its next evaluation reads
 `unavailable`. `enabled` and `disabled` follow the definition's own `enabled` flag.
 
-Over MCP: `orbit_auto_task` action `add`, `orbit_auto_task` action `list`, `orbit_auto_task` action `update`, and
+Over MCP (opt-in in the operator profile via `--toolset automation` or
+`machine.mcp.toolsets`; without MCP use `orbit auto-task` or
+`orbit tool run orbit.auto_task`): `orbit_auto_task` action `add`,
+`orbit_auto_task` action `list`, `orbit_auto_task` action `update`, and
 `orbit_auto_task` action `mint`; `orbit_auto_task` action `update` with `enabled` is the
 kill-switch. Adding `expected_enabled` (the observed state) makes it a checked,
 atomic toggle that is refused when the definition no longer matches; that form
@@ -426,7 +429,8 @@ reset before it stays applied, recorded as its own audited reset.
   has its format.
 
 A user-authored definition records no opt-out: delete simply removes it.
-`delete` and `restore` are not on MCP; over MCP, disable a definition instead.
+`delete` and `restore` are not on MCP; over MCP (with `--toolset automation`
+enabled), disable a definition instead, or use `orbit auto-task toggle <name> off`.
 
 Required tools in a template extend an allowlist activity's baseline. In a
 deny-list activity they cannot override `tool_disallow_list`. The implementing

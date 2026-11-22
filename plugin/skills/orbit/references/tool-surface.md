@@ -39,7 +39,10 @@ Related operations share one tool and a required `action` field:
 | `orbit_ui` | `open`, `inspect` |
 
 The `action` description lists each action's required fields, and a call
-missing one is refused with a message naming them. `orbit_workflow` action
+missing one is refused with a message naming them. `orbit_auto_task`
+(`automation`), `orbit_codebase` (`codebase`) and `orbit_ui` (`ui`) are opt-in
+in the operator MCP profile (see [MCP toolsets](#mcp-toolsets)); use their CLI
+commands or enable their toolsets. `orbit_workflow` action
 `auto` and `orbit_task_recover` action `reconcile_review` take their own
 sub-command as `mode` (`status`, `start`, `stop`, `resize`; `inspect`,
 `submit`, `status`, `accept_baseline`). The CLI is the same:
@@ -202,22 +205,22 @@ authenticated role.
 | Task attachments | `orbit_task_artifact` action `put`, `orbit_task_artifact` action `get` | Task artifact commands; source path is on the executing host and must resolve inside the workspace checkout |
 | Retrieval | `orbit_search` | `orbit search`; `orbit search reindex` rebuilds the index |
 | Agent scorecards | `orbit_agents_scorecard` and `orbit_agents_show` (`role`: `implementers`, `reviewers`, or `pilots`; optional `until`); `orbit_agents_ci_failures` (optional `window`, `until`, `task`, `class`) | `orbit agents scorecard --role <role>` and `orbit agents show --role <role> --crew <crew>`, both with optional `--until`; `orbit agents ci-failures` lists required-check failures by cause (see [CI failures by cause](#ci-failures-by-cause)). |
-| Codebase risk | `orbit_codebase` action `analytics`, `orbit_codebase` action `show`, and `orbit_codebase` action `related` | `orbit codebase analytics`, `orbit codebase show <path>`, and `orbit codebase related <path>`. The analytics and show metrics, attribution, filters, and response fields are described below. Related paths are landed co-change |
+| Codebase risk | `orbit_codebase` action `analytics`, `orbit_codebase` action `show`, and `orbit_codebase` action `related` (opt-in `--toolset codebase` or `machine.mcp.toolsets` in the operator profile; included in `agent` and `reader`; always reachable via `orbit tool run orbit.codebase`) | `orbit codebase analytics`, `orbit codebase show <path>`, and `orbit codebase related <path>`. The analytics and show metrics, attribution, filters, and response fields are described below. Related paths are landed co-change |
 | Friction | `orbit_friction action add/update`; list with `orbit_search` `kind: "friction"` and no `query`; move to the owning workspace with `update` `rehome_to` | `orbit friction list`, `rehome`, and additional show/stats/tags/resolve commands |
 | Evolution costs | `orbit.evolution.add` records an interactive cost event; `orbit.evolution.list` ranks capability-gap signatures by recorded cost; `orbit.evolution.show` inspects one record and its occurrences | `orbit evolution add --event <JSON>`, `list [--state <state>] [--since <time>]`, and `show <id>`; operator-only `decline <id>` suppresses proposals for a signature. Use this for repeated costs caused by a missing capability; use [Friction](friction.md) for defects and contradicted assumptions |
 | Submit explicit tasks | `orbit_workflow` action `ship` (review-only; no completion input) | `orbit run ship`, `run auto` (`--auto-fix` also has an operator-only dashboard checkbox; no MCP auto-fix start input) |
 | Forecast mode for a local drain | `orbit_workflow` action `auto` `mode: "start"` accepts `auto_concurrency: "off"`, `"shadow"` or `"enforce"`; omission follows the configured host mode each admission pass. Pull drains refuse this override and use the executor host mode. | `orbit run auto --auto-concurrency <MODE>`; omission has the same live host default. Explicit overrides and inheritance source (`explicit` or `configured`) survive restart/resume without writing config; host thresholds and provider-limit policy refresh next pass, caching unchanged config by mtime and retaining the previous policies with a warning on invalid config; run show and readiness expose `mode`, `source` and the current `configured_mode`. This selects forecast policy only: normal operator authority, worker ceiling and host thresholds still apply. |
 | Land a task in review | `orbit_workflow` action `land` (`task_id`; operator authority, or a resident cycle holding `merge`): merges the task's delivery pull request at the head whose required checks it just read, under the forge's branch protection, and settles the task to `done`. Refusals answer `task_landing_refused`; a repeated call settles an already merged pull request without merging again | MCP and `orbit tool run` only |
-| Submit a catalog job | `orbit_pipeline_invoke` (`job_name` plus `input`, or operator-only `default_input: true` with `workspace`). Returns a run ID; a managed run needs a host-authorized child admission. No MCP wait — an operator session polls `orbit_run` action `show` (operator authority; denied for agent sessions); a session with a shell on the owning host uses `orbit run show <run-id>` instead | `orbit run job <id>` (`--wait` blocks). `orbit.pipeline.wait` is CLI-only |
+| Submit a catalog job | `orbit_pipeline_invoke` (opt-in `--toolset pipelines` or `machine.mcp.toolsets` in the operator profile; included in `resident`; `job_name` plus `input`, or operator-only `default_input: true` with `workspace`). Returns a run ID; a managed run needs a host-authorized child admission. No MCP wait — an operator session polls `orbit_run` action `show` (operator authority; denied for agent sessions); a session with a shell on the owning host uses `orbit run show <run-id>` instead | `orbit run job <id>` (`--wait` blocks). `orbit.pipeline.wait` is CLI-only |
 | Observe/resume workflows | Operator-only `orbit_run action show/list/resume` (denied for agent sessions; a session with a shell on the owning host uses `orbit run show/history/events/trace/logs/cancel`); resize a live auto drain with operator-only `orbit_workflow` action `auto` `mode: "resize"`; its `start` takes `approve_proposed: true` for the same per-pass approval as `run auto --approve-proposed`, which never approves a task tagged `no-drain` or `no-auto-approve` | `orbit run show/history/events/trace/logs/cancel`; `orbit run concurrency`; `orbit run extend`; job replay/resume |
 | Delivery evidence | `orbit_task_show` with `field: "delivery"` alone and optional `run_id` (read only; needs no operator authority) | What one delivery run committed and landed for one task of this workspace, read only from the host's commit and merge step records: typed status, base/head and landed SHAs, PR number, timestamps and provenance. Missing, inconsistent or foreign evidence is `unavailable` with a reason, never inferred; a local fast-forward records no landed SHA. Without `run_id` it reads the newest task-delivery run submitted with the task. It applies only to tasks submitted by a delivery run in this workspace; for any other task, call `orbit_task_show` without `field: "delivery"` instead. Inherited commits require a bounded (64-parent), same-workspace/job/submitted-task retry chain and matching deterministic producer checkpoints/definitions; `provenance.source_run_id` and the source timestamp retain the original commit, while a resumed landing requires its own current host evidence. Execution identity/time can come from bounded (256-event) host step lifecycle audit metadata when the run record has no activity steps; audit metadata never supplies commit/landing bytes. Refreshed candidate heads never replace `commit.head_sha`. Full run details stay on operator-only `orbit_run` action `show` |
-| Auto-tasks | `orbit_auto_task action add/list/update/mint`; `update` `enabled` enables or disables a definition | Those four are also CLI commands. `toggle`, `delete`, `show`, `restore`, `recover`, and `reset` are not on MCP (`orbit auto-task`, or `orbit tool run`); `delete` and `reset` need operator authority |
+| Auto-tasks | `orbit_auto_task action add/list/update/mint` (opt-in `--toolset automation` or `machine.mcp.toolsets` in the operator profile; always reachable via `orbit tool run orbit.auto_task`); `update` `enabled` enables or disables a definition | Those four are also CLI commands (`orbit auto-task add/list/update/mint`). `toggle`, `delete`, `show`, `restore`, `recover`, and `reset` are not on MCP (`orbit auto-task`, or `orbit tool run`); `delete` and `reset` need operator authority |
 | Routine enablement | `orbit_routine_control` with `action: "list"` or `"toggle"`; operator authority and explicit `workspace` required | `orbit routine list/show` reads definitions and state. MCP toggle needs the observed `expected_enabled` and `target` plus desired `enabled`, and returns `changed` (`false` when the routine already had that state); after a lost reply, observe state before retrying. A refused toggle or `set_trigger` names a stable code shared with the CLI and dashboard (`routine_not_found`, `workspace_mismatch`, `stale_routine_state`, `stale_routine_trigger`, `target_mismatch`); owner-only routines on a replica are a capability refusal naming the owner. `orbit routine enable/disable <name>` toggles the same field from the CLI for the selected (`--workspace`) or current workspace only (another workspace's routine is refused, so the audit row names the workspace that changed) and is operator-only (an agent is refused); `orbit routine pause/resume` controls the separate host-local pause. |
 | Review recovery | `orbit_task_recover` action `reconcile_review` (`inspect`, `submit`, `status`, `accept_baseline`) and `orbit_task_recover` action `review_reset`; operator-only and unavailable to managed runs | `orbit task reconcile-review` and `orbit task review-reset`. Reconciliation judges a recovered delivery's changed merged head; reset closes an open attempt and renews one selected lineage budget with a reason, preserving history. Inspect authoritative state after a lost reply. |
 | Blocked-task requeue | `orbit_task_recover` action `requeue` (`id`, `reason`, optional `discard_candidate`); available to operators and to a trusted live resident cycle in its mandate's workspace when that mandate grants `dispatch`. Other managed runs are refused. A resident-cycle requeue must omit `discard_candidate` or set it to `false`; setting it to `true` is refused with `capability_denied`, so only an operator can discard a held candidate. | `orbit task requeue <id> --reason <why> [--discard-candidate]`. Returns a blocked task whose run has stopped to the backlog so its next run resumes the candidate and pull request its failure handoff published, after re-authenticating that publication, or the latest candidate a claim of the task kept, which a later claim that ended without one does not replace (`resumes.source: claim`); a live run or unsettled claim is refused. A changed task specification is refused; `discard_candidate` closes the task's undelivered Orbit pull requests (as `orbit task update --status backlog --discard-candidate` does) and reruns fresh. Nothing is written on a refusal. |
 | Human decision requests | `orbit.decision` action `list` and `orbit.decision` action `show` (read only; an agent may see a request, never answer it or set `auto` on a rule). `orbit.task.show` with `fields: ["open_decisions"]` lists one task's open requests. A current rule the operator marked `auto` may answer an exact topic match and records that answer as precedent | `orbit decision list` and `orbit decision show` (read). `orbit decision answer <id> <answer> [--note]` is operator-only, from the CLI or the dashboard. `orbit decision reverse <id>` re-opens a precedent answer. `orbit decision rule-auto <rule> <on\|off>` is the only way to set `auto`, and it is operator-only. `orbit decision consolidate` prints a rule proposal and writes nothing. `orbit decision submit` and `orbit decision channel` manage registered decision channels |
 | Experiments | `orbit.experiment.show`, `orbit.experiment.list` and `orbit.experiment.readout` (read only; an agent may see an experiment's arms, event log and per-arm outcomes, never change it) | `orbit experiment show <id>`, `orbit experiment list` and `orbit experiment readout <id> [--metric <name>]` (read). `create`, `update`, `clone`, `start`, `pause`, `resume`, `reweight`, `conclude` and `abandon` are operator-only, as is the CLI-only `orbit experiment delete`, which removes a finished experiment that applied no live treatment. `conclude` stores the readout at that moment on the conclusion event and, when an arm is chosen, files one proposed task that names the experiment, arm, verdict and overlay. It changes no configuration or repository file. |
-| Condition explain | `orbit.automation.explain` (read only; `definition`, optional `subject`) | `orbit automation explain <definition> [--subject <key>] [--json]`: a routine's or auto-task's condition over live state with its scope, store prefilter and literal cross-reads, ownership verdict, up to 20 matches (with arm state and remaining hold) and up to 20 closest misses (subjects failing exactly one top-level clause), one subject's top-level `&&`/`||` clause tree with clause and operand values (unreadable values are unknown, never false), and its durable tracking: arm states and holds, stall, last pass and skip, recent fires with their upstream chain, and `self`. Writes nothing. `job:<name>` shows a job's auto-task steps instead: outer bound, revision pin, each step's resolved target auto-task (resolution, digest, enabled, own condition guard) and its waits (`when`, `wait_until`, `expire_when`, `reuse_when`, `require_result`) and step reads; it evaluates no wait. An enabled job's executions run detached and park while a step waits. |
+| Condition explain | `orbit.automation.explain` (read only; `definition`, optional `subject`; opt-in `--toolset automation` or `machine.mcp.toolsets` in the operator profile) | `orbit automation explain <definition> [--subject <key>] [--json]`: a routine's or auto-task's condition over live state with its scope, store prefilter and literal cross-reads, ownership verdict, up to 20 matches (with arm state and remaining hold) and up to 20 closest misses (subjects failing exactly one top-level clause), one subject's top-level `&&`/`||` clause tree with clause and operand values (unreadable values are unknown, never false), and its durable tracking: arm states and holds, stall, last pass and skip, recent fires with their upstream chain, and `self`. Writes nothing. `job:<name>` shows a job's auto-task steps instead: outer bound, revision pin, each step's resolved target auto-task (resolution, digest, enabled, own condition guard) and its waits (`when`, `wait_until`, `expire_when`, `reuse_when`, `require_result`) and step reads; it evaluates no wait. An enabled job's executions run detached and park while a step waits. |
 | Condition stall clear | `orbit.automation.clear_stall` is operator-only; agents report a stalled condition instead | `orbit automation clear-stall <definition> --reason <text>`: clears `match_storm`, `too_many_matches`, `loop_suspected` or `oscillating` on the workspace owner, audited. |
 | Fleet notices | `orbit.notice.post`, `.close`, `.list` and `.show` on a server that enables the opt-in `notice` toolset; always through `orbit tool run` | `orbit notice post\|close\|list\|show`. Short, expiring, attributed announcements (warn, incident, maintenance, info) for the whole fleet; see [Fleet notices](#fleet-notices) |
 | Host commands | `orbit_command_exec` when advertised and authorized | Explicit argv and an absolute working directory inside the selected workspace checkout (or a linked worktree under `.orbit/state/worktrees/`); never a shell string. The child environment is an allowlist (baseline process context, git identity, and Orbit's execution envelope), not the server's full environment |
@@ -251,10 +254,13 @@ To verify the surface, run `orbit tool list` to confirm all three tools are acti
 
 ### Codebase analytics and path detail
 
-Use `orbit_codebase` action `analytics` to compare repository paths across the codebase
-risk rankings. Pass a `path` returned in a ranking row to
-`orbit_codebase` action `show` to inspect that path's standing in every ranking and
-follow its counts to tasks, regression sites, lock waiters, or coupled paths.
+Use `orbit codebase analytics` (or MCP `orbit_codebase` action `analytics`,
+opt-in via `--toolset codebase` or `machine.mcp.toolsets` in the operator
+profile and included in `agent` and `reader`) to compare repository paths across
+the codebase risk rankings. Pass a `path` returned in a ranking row to
+`orbit codebase show <path>` (or `orbit_codebase` action `show`) to inspect that
+path's standing in every ranking and follow its counts to tasks, regression
+sites, lock waiters, or coupled paths.
 Both tools use the same selection: `window` (`7d`, `30d`, `90d`, or `all`,
 default `90d`), `min_support` (default `15`: minimum denominator for the rate
 rankings, minimum shared-reservation count for change coupling) and `rollup`
@@ -432,32 +438,79 @@ subprocess, and external authentication checks.
   activity allowlist, required and granted tools, independent of host
   configuration. `decision-channel` tools may be called only by the bound
   channel plugin or the operator.
-- `--toolset` takes a comma-separated list (`experiments`,
-  `analytics`, `decision-channel`, `notice`, `resident`,
-  `tasks-write`, `dispatch`; `default` names the default surface and `all`
-  every toolset) advertised beside the role's, or beside the default surface
-  without a role. It replaces the `machine.mcp.toolsets` host config for this
-  server. `--mode remote` asks the destination for the same toolsets, and
+- `--toolset` takes a comma-separated list (`automation`, `codebase`,
+  `pipelines`, `task-triage`, `ui`, `experiments`, `analytics`,
+  `decision-channel`, `notice`, `resident`, `tasks-write`, `dispatch`,
+  `routines`; `default` names the default surface and `all` every toolset)
+  advertised beside the role's, or beside the default surface without a role.
+  It replaces the `machine.mcp.toolsets` host config for this server.
+  `--mode remote` asks the destination for the same toolsets, and
   `--mode federated` applies them to every destination. `orbit tool list`
   shows each tool's toolset; what a toolset changes is under MCP toolsets
   below.
 
 ### MCP toolsets
 
-`orbit mcp serve` and `orbit mcp listen` advertise the `default` toolset plus
-the opt-in toolsets the host enables: `experiments` (experiment tools),
-`analytics` (agent scorecards),
-`decision-channel` (decision submit and digest; decision
-list and show use the decisions toolset), `notice`
-(`orbit.notice.*`, fleet notices) and `resident` (`orbit.resident.*`, resident
-mandates; widening their authority from an MCP session raises a decision
-request for the human). Enable them per server with
-`--toolset experiments,analytics` (or `all`), or for the host with
-`orbit config set --global machine.mcp.toolsets '["experiments"]'`; the flag
-replaces the config. A call to a tool outside the server's toolsets is refused
-`toolset_not_enabled`, naming the tool's `toolset` and the `enable` flag and
-config key. A federated mux filters every row the same way. The toolset of each
-tool is in `orbit tool show <name> --json` (`mcp_toolset`).
+`orbit mcp serve` and `orbit mcp listen` advertise the selected role (or the
+`default` tier without one) plus any opt-in toolsets the server or host enables.
+Opt-in toolsets include:
+
+| Toolset | Tools | Notes |
+|---|---|---|
+| `automation` | `orbit_auto_task`, `orbit_automation_explain` | Opt-in in the operator profile (`orbit_routine_control` stays in operator default via `routines`). CLI: `orbit auto-task`, `orbit automation explain`. |
+| `codebase` | `orbit_codebase` | Opt-in in the operator profile; included in `agent` and `reader`. CLI: `orbit codebase analytics\|show\|related`. |
+| `pipelines` | `orbit_pipeline_invoke` | Opt-in in the operator profile (`orbit_workflow` and `orbit_run` stay in operator default via `dispatch`/`runs`); included in `resident`. CLI: `orbit run job`. |
+| `task-triage` | `orbit_task_block_triage` | Opt-in in the operator profile (`orbit_task_recover` stays in operator default via `task-repair`). CLI: `orbit tool run orbit.task.block_triage`. |
+| `ui` | `orbit_ui` | Opt-in in the operator profile; included in `agent`. |
+| `experiments` | `orbit_experiment_*` | Experiment definitions, lifecycle and readouts. |
+| `analytics` | `orbit_agents_*` | Agent scorecards and CI failure breakdowns. |
+| `decision-channel` | `orbit_decision_submit`, `orbit_decision_digest` | Decision channel callbacks (`orbit_decision` list/show/raise use `decisions`). |
+| `notice` | `orbit_notice_*` | Fleet notices; included in `manager`, `resident` and `agent`. |
+| `resident` | `orbit_resident_*`, `orbit_evolution_*` | Resident mandates and evolution ledger; included in `manager` and `resident`. Widening resident authority from MCP raises a decision request for the human. |
+
+Enable one or more opt-in toolsets per server with `--toolset`, or for the host
+with `machine.mcp.toolsets` (the flag replaces the config for that server):
+
+```bash
+# Enable one toolset (for example, pilot-warning triage only):
+orbit mcp serve --mode federated --operator --toolset task-triage
+
+# Enable all six operator opt-in tools:
+orbit mcp serve --mode federated --operator \
+  --toolset automation,codebase,pipelines,task-triage,ui
+
+# Or persist the opt-in in host config:
+orbit config set --global machine.mcp.toolsets \
+  '["automation","codebase","pipelines","task-triage","ui"]'
+```
+
+Example `.mcp.json` entry opting an operator session into all six tools (or pass
+only the toolsets you need, such as `"task-triage"`):
+
+```json
+{
+  "mcpServers": {
+    "orbit": {
+      "command": "orbit",
+      "args": [
+        "mcp",
+        "serve",
+        "--mode",
+        "federated",
+        "--operator",
+        "--toolset",
+        "automation,codebase,pipelines,task-triage,ui"
+      ]
+    }
+  }
+}
+```
+
+A call to a tool outside the server's toolsets is refused
+`toolset_not_enabled`, naming the tool's `toolset`, the `--toolset` flag and
+the `machine.mcp.toolsets` config key. A federated mux filters every row the
+same way. The toolset of each tool is in `orbit tool show <name> --json`
+(`mcp_toolset`).
 
 Toolsets change what an MCP server lists and dispatches. `orbit tool run`, CLI commands,
 activity `required_tools` and task grants, and a decision-channel plugin's
@@ -495,11 +548,13 @@ pilot, so an operator repilot is not needed for that hold.
 ### Pilot-warning triage
 
 `orbit_task_block_triage` (`orbit.task.block_triage`) serves pilot-warning
-triage only. A blocked task is decided by final recovery, which opens a decision
-request an operator answers, so `subject: block` is refused with a message
-naming final recovery. The default subject is `pilot_warning`: the actions read
-`proposed` tasks whose latest task-pilot assessment holds promotion on warning
-findings.
+triage only. Over MCP it is opt-in in the operator profile (`--toolset
+task-triage` or `machine.mcp.toolsets`); without MCP, call it through
+`orbit tool run orbit.task.block_triage --input '<json>'`. A blocked task is
+decided by final recovery, which opens a decision request an operator answers,
+so `subject: block` is refused with a message naming final recovery. The default
+subject is `pilot_warning`: the actions read `proposed` tasks whose latest
+task-pilot assessment holds promotion on warning findings.
 
 `candidates` lists each held assessment that is not yet triaged and has no
 operator decision, quoting its holding findings. `propose` opens a decision card
