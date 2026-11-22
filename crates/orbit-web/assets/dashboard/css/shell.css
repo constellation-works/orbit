@@ -229,45 +229,58 @@
   .rail-group { display: contents; }
   .rail-group + .rail-group > .rail-group-label { margin-top: var(--space-12); }
   .rail-group > .rail-group-label, .rail-group > .tab { flex: 0 0 auto; }
+  /* The list never shrinks below two views and the gap between them. When
+     it must scroll, fitRailSubtabRegion (router.js) caps it to a whole number of rows, and the snap points keep it resting on
+     a row boundary. */
+  /* The generic `.subtabs` strip rule further down shares the plain
+     `.rail-subtabs` rule's specificity and comes later, so its 4px gap, 8px
+     vertical padding and bottom border won: each row cost 34px, not the
+     intended 31px. Out-rank it here. */
+  .rail .rail-subtabs {
+    gap: 1px;
+    padding: 0 0 0 var(--space-12);
+    border-bottom: none;
+  }
   .rail-subtabs:not(.dimmed) {
     flex: 0 1 auto;
-    min-height: 0;
+    min-height: 61px;
     overflow-x: hidden;
     overflow-y: auto;
-    scroll-padding-block: var(--space-4);
+    scroll-snap-type: y mandatory;
     scrollbar-width: thin;
   }
+  .rail-subtabs .subtab { scroll-snap-align: start; }
   /* Views keep their 30px line and scroll out of the region; they never
      squash to fit it. */
   .rail-subtabs .subtab { flex: 0 0 auto; }
   /* The fade cue the phone strips use, turned vertical: an edge fades
      only while it hides more views (classes set by syncRailScrollCues). */
   .rail-subtabs.has-overflow-end {
-    -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 16px), transparent 100%);
-    mask-image: linear-gradient(to bottom, #000 calc(100% - 16px), transparent 100%);
+    -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 10px), transparent 100%);
+    mask-image: linear-gradient(to bottom, #000 calc(100% - 10px), transparent 100%);
   }
   .rail-subtabs.has-overflow-start {
-    -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 16px);
-    mask-image: linear-gradient(to bottom, transparent 0, #000 16px);
+    -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 10px);
+    mask-image: linear-gradient(to bottom, transparent 0, #000 10px);
   }
   .rail-subtabs.has-overflow-start.has-overflow-end {
-    -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 16px, #000 calc(100% - 16px), transparent 100%);
-    mask-image: linear-gradient(to bottom, transparent 0, #000 16px, #000 calc(100% - 16px), transparent 100%);
+    -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 10px, #000 calc(100% - 10px), transparent 100%);
+    mask-image: linear-gradient(to bottom, transparent 0, #000 10px, #000 calc(100% - 10px), transparent 100%);
   }
-  .rail .tab, .rail-subtabs .subtab { scroll-margin-block: var(--space-4); }
+  .rail .tab { scroll-margin-block: var(--space-4); }
 }
-/* On a short desktop window, fixed rail content plus a usable views
+/* On a window up to 1080px tall, fixed rail content plus a usable views
    region can exceed the height even before any view is shown. Tighten
    only the rail's spacing (not label or row heights) so at least two
-   views stay whole beside every destination and the foot. Taller
-   windows keep the spacing above. */
-@media (min-width: 761px) and (max-height: 800px) {
+   views stay whole beside every destination and the foot, and the
+   largest list (Analytics, 8 views) fits whole at 1080. Taller windows
+   keep the spacing above. */
+@media (min-width: 761px) and (max-height: 1080px) {
   .shell > .rail { padding: var(--space-8) var(--space-12) var(--space-6); }
   .shell > .rail .tabs { gap: 1px; margin-top: var(--space-6); margin-bottom: var(--space-4); }
   .shell > .rail .rail-group + .rail-group > .rail-group-label { margin-top: var(--space-6); }
   .shell > .rail .rail-group-label { padding-bottom: var(--space-2); }
   .shell > .rail .rail-foot { gap: var(--space-4); padding-top: var(--space-4); padding-bottom: var(--space-4); }
-  .shell > .rail .rail-subtabs:not(.dimmed) { min-height: 64px; }
 }
 @media (min-width: 761px) {
   .rail .tab:has(> .rail-count + .rail-count:not([hidden])) {
