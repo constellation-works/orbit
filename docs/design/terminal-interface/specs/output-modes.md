@@ -27,7 +27,7 @@ The sink is resolved once at startup and answers every environment question. Not
 
 `width == 0` disables truncation rather than assuming 80. Assuming a width for a sink that has none produces silently truncated data in a file, which is worse than a long line.
 
-Diagnostic summary prose and table notices word-wrap to this width in terminal `table` mode, preserving explicit line breaks and indentation. The wrapper uses display columns and breaks between words; a token wider than an entire line is split to fit.
+Prose blocks word-wrap to this width in terminal `table` mode: diagnostic summary prose, the `orbit task show` record and `--fields` text, and table notices. Explicit line breaks are preserved, and a wrapped line's continuations keep its leading indent, so a bullet's text stays under its bullet (an inline `Label:` value's continuation returns to the margin). The wrapper uses display columns and breaks between words; a token wider than an entire line is split to fit.
 
 `config show` carries each row's trailing-prose column alongside its text, so
 values and tags containing spaces retain their padded cells when descriptions
