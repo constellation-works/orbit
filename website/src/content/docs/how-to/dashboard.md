@@ -492,9 +492,15 @@ first. Select a mandate to answer its requests and steer it:
 **Jobs › History** lists job runs for the selected workspace. It opens on
 **Running**, the runs pending or running now. Tasks with multiple in-flight runs are
 grouped; a shared run appears in every group for a task that has multiple runs, and
-appears once as a plain row when none of its tasks has a group. Each run row shows its
-state, job, tasks, run ID, age, and duration. The panel header shows the tasks and runs in
-flight as `N tasks, M runs in flight` (`nothing in flight` when none is). Switch to **All**
+appears once as a plain row when none of its tasks has a group. A task group's header names
+its task and shows the most severe state among its runs (failed, timeout, interrupted, running,
+then pending). Its expanded child rows always show the job, run ID, age, and duration. A
+child shows its state only when that differs from the header's, and lists only the tasks the
+header does not name, leaving the cell blank when none remain. So two running children of one
+task's group show neither cell, while a child of a group of repeated failures of one job keeps
+its task links, because that header names no task. Under **Running**, the panel header counts
+the tasks and runs in flight as `N tasks, M runs in flight` (`nothing in flight` when none is);
+**All** and **Failed** show the number of runs listed instead. Switch to **All**
 or **Failed**, narrow the list with a task ID or job ID, and pick a time window (**Running**
 ignores the window).
 
