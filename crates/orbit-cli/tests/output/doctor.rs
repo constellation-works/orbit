@@ -2423,3 +2423,74 @@ fn read_only_doctor_sweep_leaves_a_stale_pull_drain_and_its_reservations_as_foun
         "attention keeps the pull drain's reservation active"
     );
 }
+
+/// `orbit attention` ranks the owner host's doctor result by its worst check:
+/// warnings alone are `high`, while an error on the same host stays `critical`
+/// and its row leads the reason [ORB-26662].
+#[test]
+fn attention_ranks_doctor_warnings_high_and_errors_critical() {
+    if in_child("doctor::attention_ranks_doctor_warnings_high_and_errors_critical") {
+        return;
+    }
+    // A fresh workspace has no Git remote and no MCP client registration:
+    // both rows warn and none errors.
+    let warned = WorkCheckout::new();
+    run_ok(
+        &warned,
+        &["workspace", "init", "--name", "doctor-severity-warn"],
+    );
+    let report = rows(&doctor(&warned, &[]));
+    assert!(
+        report.iter().all(|row| row["status"] != "error"),
+        "precondition: a warning-only fixture has no error row: {report:?}"
+    );
+    assert!(
+        report.iter().any(|row| row["status"] == "warning"),
+        "precondition: the fixture warns: {report:?}"
+    );
+    let attention = host_unhealthy_attention(&warned);
+    let item = only_host_item(&attention);
+    assert_eq!(item["severity"], "high", "warnings alone: {item}");
+
+    // Before-PR review on a locally shipping workspace refuses every delivery:
+    // an error row on the same owner host.
+    let failed = WorkCheckout::new();
+    run_ok(
+        &failed,
+        &["workspace", "init", "--name", "doctor-severity-error"],
+    );
+    run_ok(&failed, &["workspace", "ship-mode", "local"]);
+    run_ok(&failed, &["config", "set", "review.timing", "before_pr"]);
+    let attention = host_unhealthy_attention(&failed);
+    let item = only_host_item(&attention);
+    assert_eq!(
+        item["severity"], "critical",
+        "an error on the owner: {item}"
+    );
+    assert_eq!(item["detail"]["checks"][0]["status"], "error", "{item}");
+    assert!(
+        item["reason"]
+            .as_str()
+            .unwrap_or_default()
+            .starts_with("review:"),
+        "the error row leads the reason: {item}"
+    );
+}
+
+/// The `host_unhealthy` attention read of `fixture` as an operator.
+fn host_unhealthy_attention(fixture: &WorkCheckout) -> Value {
+    settle_stores(fixture);
+    let out = command(fixture)
+        .env("ORBIT_OPERATOR", "1")
+        .args(["attention", "--kind", "host_unhealthy", "--json"])
+        .output()
+        .expect("attention command");
+    serde_json::from_slice(&out.stdout)
+        .unwrap_or_else(|error| panic!("attention JSON: {error}; {out:?}"))
+}
+
+fn only_host_item(attention: &Value) -> &Value {
+    let items = attention["items"].as_array().expect("attention items");
+    assert_eq!(items.len(), 1, "one doctor item: {attention}");
+    &items[0]
+}
