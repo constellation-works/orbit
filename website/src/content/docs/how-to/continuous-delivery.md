@@ -118,7 +118,8 @@ including tasks filed after it starts. A task qualifies when it has context
 files and an assessed complexity, or the `no-diff-expected` tag, and its pilot
 reports no duplicate, already-landed, conflict or warning finding.
 
-- Tasks tagged `no-auto-approve` stay `proposed` until a human approves them.
+- Tasks tagged `no-auto-approve` or `no-drain` stay `proposed` until a human
+  approves them.
 - `orbit run show` and `orbit run readiness` report approval counts and hold
   reasons, including each warning finding. The dashboard shows the same on the
   live window.

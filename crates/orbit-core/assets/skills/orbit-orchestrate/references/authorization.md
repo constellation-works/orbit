@@ -47,7 +47,8 @@ separate, default-off authorization for that drain to approve qualifying
 `proposed` tasks into the backlog on every pass, including tasks filed during
 the window. Use it only when the user authorized promotion as well as delivery.
 It cannot be combined with `--pull`. Tag a task `no-auto-approve` to keep it out
-of every automatic approval, the CI sweep's included.
+of every automatic approval, the CI sweep's included. A `no-drain` tag also
+opts the task out of this drain's automatic approval.
 
 `orbit run auto --auto-fix` is the separate, default-off authorization for that
 drain to repair failed required checks and merge conflicts on the PRs its runs
