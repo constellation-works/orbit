@@ -283,9 +283,15 @@ parallelism that broke nothing.
 0. **Configuration-only baseline (proposed for ws_orbit).** Add `**/mod.rs` and
    `crates/orbit-config/assets/default-config.toml` to `workflow.unlocked_context_paths`, and
    map `crates/orbit-core/assets/auto_tasks/body-history.json` to
-   `python3 scripts/update-auto-task-body-history.py` in `workflow.generated_paths`. This unblocks
-   the catalog tasks with no code change and is the baseline the later phases are measured
-   against.
+   `python3 scripts/update-auto-task-body-history.py` in `workflow.generated_paths`. This is the
+   baseline the later phases are measured against, but concurrent admission also requires the
+   shared JSON path to be waived. The built-in `unlocked_context_paths` default is `**/*.md`, so
+   these additions alone leave `body-history.json` locked. The `orbit init` template already
+   includes `**/*.json`; otherwise, add a matching JSON entry to `workflow.unlocked_context_paths`
+   (or set a `shared` lock mode for that path) before expecting these mixed-footprint catalog tasks
+   to run together. `workflow.generated_paths` does not waive an admission lock: its command runs
+   later, during landing recovery, to regenerate a generated file after a rebase conflict. This
+   configuration-only baseline makes no code change.
 1. **Record and show.** Conflict records on the owner for local runs and claimed leaves
    (Shape §1), the `orbit codebase show` conflict section, and wait minutes per path. Before
    anything is built on them, verify whether drain-wave deferrals are persisted; if they are not,
