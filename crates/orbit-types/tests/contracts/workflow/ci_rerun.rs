@@ -144,3 +144,71 @@ fn a_foreign_decision_or_unreadable_note_is_no_reservation() {
         CiRerunAdmission::Refused(CiRerunRefusal::UnreadableReservation)
     ));
 }
+
+#[test]
+fn no_edit_repair_requires_matching_ledger_entry_and_shares_head_budget() {
+    use orbit_types::workflow::{PR_AUTO_FIX_NO_EDIT_RERUN_EVENT, PrAutoFixNoEditRerun};
+
+    let policy = CiInfrastructureRetryPolicy::default();
+    let candidate = plan("no_edit_repair");
+    assert_eq!(
+        decide_ci_rerun_with_policy(&[], &candidate, policy, 1_000),
+        CiRerunAdmission::Refused(CiRerunRefusal::InvalidAuthorization),
+        "no_edit_repair without durable no-edit ledger entry is refused"
+    );
+
+    let wrong_head = TaskHistoryEntry::new(at(500), "system", PR_AUTO_FIX_NO_EDIT_RERUN_EVENT)
+        .with_note(Some(
+            serde_json::to_string(&PrAutoFixNoEditRerun {
+                pr_number: candidate.pr_number.clone(),
+                head_sha: "c".repeat(40),
+                run_id: "jrun-1".into(),
+                attempt: 1,
+            })
+            .unwrap(),
+        ));
+    assert_eq!(
+        decide_ci_rerun_with_policy(&[wrong_head], &candidate, policy, 1_000),
+        CiRerunAdmission::Refused(CiRerunRefusal::InvalidAuthorization),
+        "no_edit_repair requires matching head_sha"
+    );
+
+    let matching = TaskHistoryEntry::new(at(500), "system", PR_AUTO_FIX_NO_EDIT_RERUN_EVENT)
+        .with_note(Some(
+            serde_json::to_string(&PrAutoFixNoEditRerun {
+                pr_number: candidate.pr_number.clone(),
+                head_sha: candidate.head_sha.clone(),
+                run_id: "jrun-1".into(),
+                attempt: 1,
+            })
+            .unwrap(),
+        ));
+
+    let mut mixed = candidate.clone();
+    mixed.roots.push(CiRerunRoot {
+        job_id: 101,
+        check: "CI / Extra".into(),
+        classification: "flaky".into(),
+        signature: "observed failure".into(),
+    });
+    assert_eq!(
+        decide_ci_rerun_with_policy(std::slice::from_ref(&matching), &mixed, policy, 1_000),
+        CiRerunAdmission::Refused(CiRerunRefusal::InvalidAuthorization),
+        "no_edit_repair roots cannot mix classifications"
+    );
+
+    assert_eq!(
+        decide_ci_rerun_with_policy(std::slice::from_ref(&matching), &candidate, policy, 1_000),
+        CiRerunAdmission::Reserved,
+        "matching no-edit repair reserves one rerun"
+    );
+
+    let reserved = reloaded(&candidate.reservation_entry(at(1_000)));
+    let mut later_attempt = candidate.clone();
+    later_attempt.run_attempt = 2;
+    assert_eq!(
+        decide_ci_rerun_with_policy(&[matching, reserved], &later_attempt, policy, 2_000),
+        CiRerunAdmission::Observe(Box::new(candidate)),
+        "repeat failure observes the spent reservation instead of issuing a second rerun"
+    );
+}

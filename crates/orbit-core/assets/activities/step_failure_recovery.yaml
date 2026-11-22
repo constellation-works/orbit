@@ -299,8 +299,10 @@ spec:
     - If a delivered repair for the same failure is already on the current PR
       head, verify it and its check results and reuse it instead of editing.
     - Reproduce locally where you can, fix, leave the repair uncommitted and
-      write `retry`. Do not push, open a PR, merge, release or change lifecycle
-      status.
+      write `retry`. If the failure is not caused by the candidate (for example a
+      flake or infrastructure failure), make no edit, write no scope record, and
+      write `retry`: Orbit reruns the failed checks once on the unchanged head.
+      Do not push, open a PR, merge, release or change lifecycle status.
     - If a committer guard refuses a necessary path, report its exact refusal
       and path as a runtime blocker; do not infer a task-selector restriction.
     - Record the failing head and job, the evidence, the cause, the changed (or
@@ -368,13 +370,17 @@ spec:
          "reason": "<one short sentence>"}
 
     - `retry`: you repaired what made the step fail, so its re-run can succeed
-      on its own. Orbit commits your repair and admits one post-recovery attempt
-      of the failed step, unless it refuses the commit (see Validate failure).
+      on its own (or, for an auto-fix check repair not caused by the candidate,
+      made no edit and wrote no scope record so Orbit reruns failed checks once).
+      Orbit commits any repair and admits one post-recovery attempt of the
+      failed step, unless it refuses the commit (see Validate failure).
     - `not_recovered`: you could not repair it (for example a red base, a
       precondition you may not create, an incomplete implementation, or anything
-      you only diagnosed). Orbit admits no post-recovery attempt: the step fails
-      with its original error, and the run's final recovery may still look at
-      it. Never describe a later attempt as the way the work finishes.
+      you only diagnosed). Except for an auto-fix check repair with no edit and
+      no scope record (which still reruns the failed checks once), Orbit admits
+      no post-recovery attempt: the step fails with its original error, and the
+      run's final recovery may still look at it. Never describe a later attempt
+      as the way the work finishes.
     - `external_blocker`: a cause outside this run that no retry, resume or
       other agent can clear, so a human must act (for example missing
       credentials, an unavailable external service, an operator-only decision).

@@ -357,6 +357,15 @@ impl OrbitRuntime {
             ));
         }
         if let Some(handoff_id) = handoff_id {
+            if plan
+                .roots
+                .iter()
+                .any(|root| root.classification == "no_edit_repair")
+            {
+                return Ok(CiRerunAdmission::Refused(
+                    CiRerunRefusal::InvalidAuthorization,
+                ));
+            }
             let (claim, accepted) = self.landing_claim(handoff_id)?;
             let candidate = &accepted.handoff.candidate;
             if plan.repository != candidate.repository

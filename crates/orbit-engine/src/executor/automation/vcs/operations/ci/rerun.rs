@@ -33,9 +33,19 @@ pub(in crate::executor::automation::vcs::operations) fn ci_rerun_plan(
         || roots.iter().any(|root| {
             !matches!(
                 root.classification.as_str(),
-                "flaky" | "transient" | "unattributed"
+                "flaky" | "transient" | "unattributed" | "no_edit_repair"
             ) || root.signature.is_empty()
         })
+    {
+        return Err(unreadable("ineligible retry roots"));
+    }
+    let no_edit_repair = roots
+        .iter()
+        .any(|root| root.classification == "no_edit_repair");
+    if no_edit_repair
+        && roots
+            .iter()
+            .any(|root| root.classification != "no_edit_repair")
     {
         return Err(unreadable("ineligible retry roots"));
     }
@@ -53,12 +63,13 @@ pub(in crate::executor::automation::vcs::operations) fn ci_rerun_plan(
         return Err(unreadable("superseded retry run"));
     }
     let run = prerequisite::checked_run(deadline, workspace, &snapshot, listed)?;
-    let conclusion_only = roots.iter().all(|root| {
-        matches!(
-            root.signature.as_str(),
-            "concluded cancelled" | "concluded timed_out"
-        )
-    });
+    let conclusion_only = no_edit_repair
+        || roots.iter().all(|root| {
+            matches!(
+                root.signature.as_str(),
+                "concluded cancelled" | "concluded timed_out"
+            )
+        });
     let run_conclusion = run["conclusion"].as_str();
     let run_allowed = if conclusion_only {
         matches!(run_conclusion, Some("failure" | "cancelled" | "timed_out"))
@@ -122,6 +133,7 @@ pub(in crate::executor::automation::vcs::operations) fn ci_rerun_plan(
             continue;
         }
         if job["conclusion"] == "failure"
+            && !no_edit_repair
             && !steps.iter().any(|step| step["conclusion"] == "failure")
         {
             return Err(unreadable("failure without a failed step"));
@@ -225,6 +237,14 @@ pub(in crate::executor::automation::vcs::operations) fn ci_rerun_plan(
             // The provider conclusion is the evidence. The log is often gone.
             root_ids.insert(root.job_id);
             logs.push(json!({"job_id":root.job_id,"authenticated":"conclusion"}));
+            continue;
+        }
+        if root.classification == "no_edit_repair" {
+            // A no-edit repair is authorized by the task's durable no-edit
+            // ledger entry, so every failed job is already bound by run, head,
+            // workflow, step and check policy without requiring a full command log.
+            root_ids.insert(root.job_id);
+            logs.push(json!({"job_id":root.job_id,"authenticated":"no_edit_repair"}));
             continue;
         }
         if handoff_step_authenticated(root, job) {
@@ -331,7 +351,7 @@ fn conclusion_authenticated(roots: &[CiRerunRoot], job_id: u64, job: &Value) -> 
     matches!(conclusion, "cancelled" | "timed_out")
         && roots.iter().any(|root| {
             root.job_id == job_id
-                && root.classification == "transient"
+                && matches!(root.classification.as_str(), "transient" | "no_edit_repair")
                 && root.signature == format!("concluded {conclusion}")
         })
 }

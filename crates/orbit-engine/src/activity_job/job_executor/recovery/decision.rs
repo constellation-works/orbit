@@ -14,8 +14,10 @@ pub(super) enum RecoveryAdmission {
     /// Make the post-recovery attempt. Carries the dispatched recovery's
     /// resolved model, which authors the host's repair commit [ORB-16768].
     Retry(Option<String>),
-    /// Return the original failure.
-    Original,
+    /// Return the original failure. When `no_edit_eligible` is true, an
+    /// auto-fix check repair that left no edit and no scope record may still
+    /// record the unchanged head for one rerun instead of holding immediately.
+    Original { no_edit_eligible: bool },
     /// Fail the step as the blocker recovery declared [ORB-14268].
     Blocked(AgentBlocker),
 }
@@ -36,7 +38,9 @@ pub(super) fn attempt_recovery_activity(
             StepFailure::Error(DispatchError::RecoverableVcsConflict(_))
         )
     {
-        return RecoveryAdmission::Original;
+        return RecoveryAdmission::Original {
+            no_edit_eligible: false,
+        };
     }
 
     let result = match ctx.host.authorize_step_recovery(&ctx.run_id, &step.id) {
@@ -94,13 +98,20 @@ pub(super) fn attempt_recovery_activity(
     // Without a slot (custom or conflict recovery, or a host without the
     // capability) a completed recovery keeps the legacy single re-attempt.
     let admission = match (&decision, blocker) {
-        _ if !recovery_succeeded => RecoveryAdmission::Original,
+        _ if !recovery_succeeded => RecoveryAdmission::Original {
+            no_edit_eligible: false,
+        },
         (_, Some(blocker)) => RecoveryAdmission::Blocked(blocker),
         (None, None) => RecoveryAdmission::Retry(recovery_model),
         (Some(decision), None) if decision.retry_admitted => {
             RecoveryAdmission::Retry(recovery_model)
         }
-        (Some(_), None) => RecoveryAdmission::Original,
+        (Some(decision), None) => RecoveryAdmission::Original {
+            no_edit_eligible: decision.status == "absent"
+                || (decision.status == "verified"
+                    && decision.verdict.as_deref()
+                        == Some(StepRecoveryVerdict::NotRecovered.as_str())),
+        },
     };
     let retry_admitted = matches!(admission, RecoveryAdmission::Retry(_));
     if let Some(decision) = decision.as_ref().filter(|_| !retry_admitted) {

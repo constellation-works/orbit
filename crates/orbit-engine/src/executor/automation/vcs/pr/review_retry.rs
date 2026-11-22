@@ -57,7 +57,9 @@ pub(in crate::executor::automation::vcs) fn recover_review_ci(
         Ok(CiRerunRecovery::Retried | CiRerunRecovery::BackingOff(_)) => {
             Ok(ReviewCiRetryStep::PollAgain)
         }
-        Ok(CiRerunRecovery::Stopped(reason)) => Ok(ReviewCiRetryStep::Hold(reason)),
+        Ok(CiRerunRecovery::Stopped(reason) | CiRerunRecovery::Held { reason, .. }) => {
+            Ok(ReviewCiRetryStep::Hold(reason))
+        }
         Ok(CiRerunRecovery::Waiting(reason)) if reason.starts_with("CI retry was reserved") => {
             Ok(ReviewCiRetryStep::PollAgain)
         }
