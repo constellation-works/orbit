@@ -1047,7 +1047,12 @@ const WARNING_MESSAGE: &str =
     "The index is outdated and must be refreshed before querying the latest workspace records.";
 const ERROR_MESSAGE: &str = "The after-landing review consumer is stuck in definition_changed and cannot accept new delivery candidates.";
 const FIX: &str = "orbit auto-task recover delivery-code-review";
-pub(super) fn render_fixture(case: &str) -> String {
+#[derive(Debug)]
+struct RenderFixtureOutput {
+    stdout: String,
+    stderr: String,
+}
+fn render_fixture(case: &str) -> RenderFixtureOutput {
     let logs = tempfile::tempdir_in(test_env::canonical_temp_dir()).expect("child logs");
     let mut command = std::process::Command::new(std::env::current_exe().expect("test binary"));
     command
@@ -1063,8 +1068,19 @@ pub(super) fn render_fixture(case: &str) -> String {
     );
     let stdout = utf8(output.stdout);
     let after = stdout.split_once("BEGIN_DOCTOR\n").expect("start marker").1;
-    let (body, _) = after.split_once("END_DOCTOR").expect("end marker");
-    body.to_string()
+    let (stdout_body, _) = after.split_once("END_DOCTOR").expect("end marker");
+    let stderr = utf8(output.stderr);
+    let after = stderr
+        .split_once("BEGIN_DOCTOR_STDERR\n")
+        .expect("stderr start marker")
+        .1;
+    let (stderr_body, _) = after
+        .split_once("END_DOCTOR_STDERR\n")
+        .expect("stderr end marker");
+    RenderFixtureOutput {
+        stdout: stdout_body.to_string(),
+        stderr: stderr_body.to_string(),
+    }
 }
 #[test]
 fn render_fixture_child() {
@@ -1152,16 +1168,20 @@ fn render_fixture_child() {
         assert!(!sink.color_allowed(), "explicit plain must disable styling");
     }
     writeln!(std::io::stdout(), "BEGIN_DOCTOR").expect("start marker");
+    writeln!(std::io::stderr(), "BEGIN_DOCTOR_STDERR").expect("stderr start marker");
     crate::output::render::emit(
         Payload::blocks(doc, vec![Block::table(table), Block::DoctorFindings(rows)]).into(),
         &sink,
     )
     .expect("emit");
+    writeln!(std::io::stderr(), "END_DOCTOR_STDERR").expect("stderr end marker");
     writeln!(std::io::stdout(), "END_DOCTOR").expect("end marker");
 }
 #[test]
 fn terminal_findings_preserve_messages_commands_and_one_line_rows() {
-    let stdout = render_fixture("mixed");
+    let rendered = render_fixture("mixed");
+    let stdout = rendered.stdout;
+    let stderr = rendered.stderr;
     let (table, findings) = stdout
         .split_once("\nFindings:\n")
         .expect("findings below table");
@@ -1172,10 +1192,15 @@ fn terminal_findings_preserve_messages_commands_and_one_line_rows() {
     let ordered = findings.find("review  ERROR").unwrap() < findings.find("index  WARN").unwrap();
     assert!(ordered, "{findings}");
     let collapsed = findings.split_whitespace().collect::<Vec<_>>().join(" ");
+    let stderr_collapsed = stderr.split_whitespace().collect::<Vec<_>>().join(" ");
     assert_eq!(
-        stdout.matches("Table details shortened").count(),
+        stderr.matches("Table details shortened").count(),
         1,
-        "doctor prints the shared shortening hint once: {stdout}"
+        "doctor prints the shared shortening hint once on stderr: {stderr}"
+    );
+    assert!(
+        !stdout.contains("Table details shortened"),
+        "doctor stdout contains only the table and findings: {stdout}"
     );
     for message in [ERROR_MESSAGE, WARNING_MESSAGE] {
         has(&collapsed, message);
@@ -1193,58 +1218,77 @@ fn terminal_findings_preserve_messages_commands_and_one_line_rows() {
     for line in findings.lines().filter(|l| !l.starts_with("Table details")) {
         assert!(line.chars().count() <= 48, "line exceeds width: {line}");
     }
-    has(&collapsed, "--format plain or --json");
+    has(&stderr_collapsed, "--format plain or --json");
     let narrow = render_fixture("narrow");
     assert!(
-        !narrow.lines().any(|l| l == format!("  Fix: {FIX}")),
-        "over-width action must wrap: {narrow}"
+        !narrow.stdout.lines().any(|l| l == format!("  Fix: {FIX}")),
+        "over-width action must wrap: {}",
+        narrow.stdout
     );
     has(
-        &narrow,
+        &narrow.stdout,
         "  Fix: orbit auto-task recover\n    delivery-code-review",
     );
     for line in narrow
+        .stdout
         .lines()
-        .filter(|l| !l.starts_with("Findings:") && !l.starts_with("Table details"))
+        .filter(|l| !l.starts_with("Findings:"))
     {
         assert!(
             line.chars().count() <= 32,
             "line exceeds narrow width: {line}"
         );
     }
-    let wide = render_fixture("wide");
-    has(&wide, ERROR_MESSAGE);
-    assert!(
-        wide.lines().any(|l| l == format!("  Fix: {FIX}")),
-        "sufficient width keeps action on one line: {wide}"
-    );
-    assert!(!wide.contains("Table details shortened"), "{wide}");
-    let ok = render_fixture("ok");
-    let (ok_table, _) = ok
-        .split_once("Table details shortened")
-        .expect("a shortened doctor table carries the shared hint");
     assert_eq!(
-        ok_table.lines().filter(|line| !line.is_empty()).count(),
-        4,
-        "{ok}"
+        narrow.stderr.matches("Table details shortened").count(),
+        1,
+        "narrow doctor output reports the hint on stderr: {}",
+        narrow.stderr
     );
-    assert_eq!(ok.matches("Table details shortened").count(), 1, "{ok}");
-    let ok_collapsed = ok.split_whitespace().collect::<Vec<_>>().join(" ");
+    let wide = render_fixture("wide");
+    has(&wide.stdout, ERROR_MESSAGE);
     assert!(
-        !ok.contains("Findings:") && ok_collapsed.contains("--format plain or --json"),
-        "{ok}"
+        wide.stdout.lines().any(|l| l == format!("  Fix: {FIX}")),
+        "sufficient width keeps action on one line: {}",
+        wide.stdout
+    );
+    assert!(
+        !wide.stdout.contains("Table details shortened")
+            && !wide.stderr.contains("Table details shortened"),
+        "a fitting doctor table has no shortening hint: {wide:?}"
+    );
+    let ok = render_fixture("ok");
+    assert!(!ok.stdout.contains("Table details shortened"), "{ok:?}");
+    assert_eq!(
+        ok.stdout.lines().filter(|line| !line.is_empty()).count(),
+        4,
+        "{ok:?}"
+    );
+    assert_eq!(
+        ok.stderr.matches("Table details shortened").count(),
+        1,
+        "{ok:?}"
+    );
+    let ok_collapsed = ok.stderr.split_whitespace().collect::<Vec<_>>().join(" ");
+    assert!(
+        !ok.stdout.contains("Findings:") && ok_collapsed.contains("--format plain or --json"),
+        "{ok:?}"
     );
 }
 #[test]
 fn findings_leave_plain_and_json_documents_unchanged() {
     let plain = render_fixture("plain");
-    assert_eq!(plain.lines().count(), 3, "{plain}");
+    assert_eq!(plain.stdout.lines().count(), 3, "{}", plain.stdout);
     has(
-        &plain,
+        &plain.stdout,
         &format!("review\tERROR\t{ERROR_MESSAGE} | Action: {FIX}"),
     );
-    assert!(!plain.contains("Findings:"), "{plain}");
-    let json: Value = serde_json::from_str(&render_fixture("json")).expect("JSON document");
+    assert!(!plain.stdout.contains("Findings:"), "{}", plain.stdout);
+    assert!(
+        !plain.stderr.contains("Table details shortened"),
+        "{plain:?}"
+    );
+    let json: Value = serde_json::from_str(&render_fixture("json").stdout).expect("JSON document");
     assert_eq!(json[2]["message"], ERROR_MESSAGE, "{json}");
     assert_eq!(json[2]["remediation"], FIX, "{json}");
     assert_eq!(json.as_array().unwrap().len(), 3, "{json}");
