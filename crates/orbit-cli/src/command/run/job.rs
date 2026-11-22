@@ -1,8 +1,13 @@
+use std::path::Path;
+
 use orbit_core::application::job::{
     JobRunProjectionEvidence, JobRunProjectionProfile, project_job_run,
 };
 use orbit_core::{JobRun, OrbitError, OrbitRuntime, PipelineInvokeResult, PipelineWaitEntry};
-use orbit_types::workflow::PipelineState;
+use orbit_types::workflow::{
+    ActivityV2Spec, JobV2, JobV2Step, JobV2StepBody, PipelineState, TASK_PILOT_PIPELINE_JOB,
+};
+use serde::Deserialize;
 use serde_json::{Value, json};
 
 use clap::Args;
@@ -29,6 +34,7 @@ impl Execute for JobRunArgs {
     fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
         let input = build_job_run_input(&self.input)?;
         let timeout_seconds = self.wait.timeout_seconds()?;
+        reject_unrepresentable_job_run_input(runtime, &self.job_id, &input)?;
         // Submission failure — an unknown job, an invalid asset, a worker that
         // could not start — is this command's own failure and surfaces as an
         // error. Everything the submitted run does afterwards is reported by
@@ -279,4 +285,82 @@ fn build_job_run_input(pairs: &[String]) -> Result<Value, OrbitError> {
         map.insert(key.to_string(), Value::String(value.to_string()));
     }
     Ok(Value::Object(map))
+}
+
+const PREPARE_TASK_PILOT_ACTION: &str = "prepare_task_pilot";
+
+fn reject_unrepresentable_job_run_input(
+    runtime: &OrbitRuntime,
+    job_ref: &str,
+    input: &Value,
+) -> Result<(), OrbitError> {
+    let Some(Value::String(raw_task_ids)) = input.get("task_ids") else {
+        return Ok(());
+    };
+    if !is_task_pilot_job(runtime, job_ref) {
+        return Ok(());
+    }
+    Err(OrbitError::InvalidInput(format!(
+        "invalid `--input task_ids={raw_task_ids}` for `{job_ref}`: `--input key=value` only \
+         passes string values, while task-pilot jobs require `task_ids` to be an array. \
+         Use `orbit run task-pilot <TASK_ID>...` for explicit tasks, or omit `--input task_ids=...` \
+         (or run `orbit run task-pilot`) for automatic discovery"
+    )))
+}
+
+fn is_task_pilot_job(runtime: &OrbitRuntime, job_ref: &str) -> bool {
+    if job_ref == TASK_PILOT_PIPELINE_JOB {
+        return true;
+    }
+    let direct_path = Path::new(job_ref);
+    if direct_path.is_file() {
+        return direct_job_uses_task_pilot(direct_path);
+    }
+    runtime
+        .show_job_catalog_entry(job_ref)
+        .is_ok_and(|entry| steps_use_action(&entry.spec.steps, PREPARE_TASK_PILOT_ACTION))
+}
+
+#[derive(Deserialize)]
+struct DirectJobEnvelope {
+    metadata: Option<DirectJobMetadata>,
+    spec: Option<JobV2>,
+}
+
+#[derive(Deserialize)]
+struct DirectJobMetadata {
+    name: Option<String>,
+}
+
+fn direct_job_uses_task_pilot(path: &Path) -> bool {
+    let Ok(yaml) = std::fs::read_to_string(path) else {
+        return false;
+    };
+    let Ok(envelope) = serde_yaml::from_str::<DirectJobEnvelope>(&yaml) else {
+        return false;
+    };
+    envelope
+        .metadata
+        .and_then(|meta| meta.name)
+        .is_some_and(|name| name == TASK_PILOT_PIPELINE_JOB)
+        || envelope
+            .spec
+            .is_some_and(|spec| steps_use_action(&spec.steps, PREPARE_TASK_PILOT_ACTION))
+}
+
+fn steps_use_action(steps: &[JobV2Step], action: &str) -> bool {
+    steps.iter().any(|step| match &step.body {
+        JobV2StepBody::Parallel { parallel } => steps_use_action(&parallel.branches, action),
+        JobV2StepBody::FanOut { fan_out, .. } => {
+            steps_use_action(std::slice::from_ref(fan_out.worker.as_ref()), action)
+        }
+        JobV2StepBody::Loop { loop_ } => steps_use_action(&loop_.steps, action),
+        JobV2StepBody::TargetRef(reference) => {
+            reference.target.strip_prefix("activity:") == Some(action)
+        }
+        JobV2StepBody::Target(target) => match &target.spec {
+            ActivityV2Spec::Deterministic(spec) => spec.action == action,
+            ActivityV2Spec::AgentLoop(_) => false,
+        },
+    })
 }

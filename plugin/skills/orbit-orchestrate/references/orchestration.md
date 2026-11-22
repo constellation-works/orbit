@@ -581,7 +581,7 @@ validated.
 ```bash
 orbit run task-pilot                            # zero-input discovery
 orbit run task-pilot <id> <id>                  # audit exactly these
-orbit run job task_pilot_pipeline --input 'task_ids=["<id>"]' --json
+orbit run task-pilot <id> --json                # machine-readable dispatch output
 ```
 
 The first pilot is automatic once for eligible tasks. Creators can add `no-pilot`
