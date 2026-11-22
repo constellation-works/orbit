@@ -1,8 +1,8 @@
 ---
 type: design
 summary: "Spec: MCP roles — every tool in one toolset, roles as named toolset sets, --role and machine.mcp.role, refusal, remote and federated forwarding, size budgets"
-last_updated: 2026-11-17
-last_validated: 2026-11-14
+last_updated: 2026-11-22
+last_validated: 2026-11-22
 title: Spec — MCP roles and toolsets
 owner: claude
 status: Implemented
@@ -50,9 +50,9 @@ Roles are defined in one place, `McpRole::toolsets`:
 
 | Role | Toolsets beside `core` |
 |---|---|
-| `operator` | `tasks-read`, `tasks-write`, `task-repair`, `decisions`, `runs`, `dispatch`, `automation`, `codebase`, `search`, `ui`, `exec`, `plugins` |
+| `operator` | `tasks-read`, `tasks-write`, `task-repair`, `decisions`, `runs`, `dispatch`, `routines`, `search`, `exec`, `plugins` |
 | `manager` | `tasks-read`, `runs`, `decisions`, `notice`, `resident`, `search` |
-| `resident` | `tasks-read`, `tasks-write`, `runs`, `dispatch`, `decisions`, `notice`, `resident`, `search` |
+| `resident` | `tasks-read`, `tasks-write`, `runs`, `dispatch`, `pipelines`, `decisions`, `notice`, `resident`, `search` |
 | `agent` | `tasks-read`, `tasks-write`, `decisions`, `codebase`, `search`, `ui`, `leases`, `notice` |
 | `reader` | `tasks-read`, `runs`, `codebase`, `search` |
 

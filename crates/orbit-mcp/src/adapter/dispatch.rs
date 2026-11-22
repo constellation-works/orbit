@@ -252,9 +252,7 @@ impl OrbitToolServer {
     ) -> Result<CallToolResult, McpError> {
         if presentation::is_presentation(request.name.as_ref()) {
             if !self.host.presentation_enabled() {
-                return Ok(tool_error_result(&OrbitError::InvalidInput(
-                    "UI tools are not enabled for this server".into(),
-                )));
+                return Ok(tool_error_result(&self.host.presentation_disabled_error()));
             }
             let result = self.dispatch_presentation(request).await;
             return Ok(match result {

@@ -330,6 +330,117 @@ fn all_workspace_attention_lists_a_global_notice_once() {
     assert_eq!(global_items[0]["severity"], "medium", "{attention}");
 }
 
+/// The operator role's default advertised surface (16 tools; the six rarely
+/// used tools are opt-in via `--toolset` / `machine.mcp.toolsets`).
+const OPERATOR_DEFAULT_TOOLS: [&str; 16] = [
+    "orbit_attention",
+    "orbit_command_exec",
+    "orbit_decision",
+    "orbit_friction",
+    "orbit_routine_control",
+    "orbit_run",
+    "orbit_search",
+    "orbit_task_add",
+    "orbit_task_artifact",
+    "orbit_task_eligible",
+    "orbit_task_list",
+    "orbit_task_recover",
+    "orbit_task_show",
+    "orbit_task_update",
+    "orbit_workflow",
+    "orbit_workspace_list",
+];
+
+/// The six rarely used tools that moved to opt-in for the operator role, with
+/// the toolset that enables each.
+const OPERATOR_OPT_IN_TOOLS: [(&str, &str); 6] = [
+    ("orbit_auto_task", "automation"),
+    ("orbit_automation_explain", "automation"),
+    ("orbit_codebase", "codebase"),
+    ("orbit_pipeline_invoke", "pipelines"),
+    ("orbit_task_block_triage", "task-triage"),
+    ("orbit_ui", "ui"),
+];
+
+const AGENT_TOOLS: [&str; 17] = [
+    "orbit_attention",
+    "orbit_codebase",
+    "orbit_decision",
+    "orbit_friction",
+    "orbit_notice_close",
+    "orbit_notice_list",
+    "orbit_notice_post",
+    "orbit_notice_show",
+    "orbit_search",
+    "orbit_task_add",
+    "orbit_task_artifact",
+    "orbit_task_eligible",
+    "orbit_task_list",
+    "orbit_task_show",
+    "orbit_task_update",
+    "orbit_ui",
+    "orbit_workspace_list",
+];
+
+const MANAGER_TOOLS: [&str; 24] = [
+    "orbit_attention",
+    "orbit_decision",
+    "orbit_evolution_add",
+    "orbit_evolution_list",
+    "orbit_evolution_show",
+    "orbit_notice_close",
+    "orbit_notice_list",
+    "orbit_notice_post",
+    "orbit_notice_show",
+    "orbit_resident_checkpoint",
+    "orbit_resident_control",
+    "orbit_resident_digest",
+    "orbit_resident_grant",
+    "orbit_resident_list",
+    "orbit_resident_metrics",
+    "orbit_resident_relay",
+    "orbit_resident_show",
+    "orbit_run",
+    "orbit_search",
+    "orbit_task_artifact",
+    "orbit_task_eligible",
+    "orbit_task_list",
+    "orbit_task_show",
+    "orbit_workspace_list",
+];
+
+const RESIDENT_TOOLS: [&str; 29] = [
+    "orbit_attention",
+    "orbit_decision",
+    "orbit_evolution_add",
+    "orbit_evolution_list",
+    "orbit_evolution_show",
+    "orbit_friction",
+    "orbit_notice_close",
+    "orbit_notice_list",
+    "orbit_notice_post",
+    "orbit_notice_show",
+    "orbit_pipeline_invoke",
+    "orbit_resident_checkpoint",
+    "orbit_resident_control",
+    "orbit_resident_digest",
+    "orbit_resident_grant",
+    "orbit_resident_list",
+    "orbit_resident_metrics",
+    "orbit_resident_relay",
+    "orbit_resident_show",
+    "orbit_run",
+    "orbit_search",
+    "orbit_task_add",
+    "orbit_task_artifact",
+    "orbit_task_eligible",
+    "orbit_task_list",
+    "orbit_task_show",
+    "orbit_task_update",
+    "orbit_workflow",
+    "orbit_workspace_list",
+];
+
 #[test]
 fn default_and_operator_profiles_advertise_their_expected_surfaces() {
     let workspace = McpWorkspace::init();
@@ -350,19 +461,193 @@ fn default_and_operator_profiles_advertise_their_expected_surfaces() {
             "orbit_workspace_list",
         ]
     );
-    let mut operator = workspace.serve_with_args(&["--operator"]);
-    let listed = operator.tools_list();
-    let names = tool_names(&listed);
-    for expected in [
-        "orbit_task_recover",
-        "orbit_workflow",
-        "orbit_routine_control",
-        "orbit_pipeline_invoke",
-        "orbit_decision",
-        "orbit_codebase",
-        "orbit_ui",
+    for (case, args) in [
+        ("bound", &["--operator"][..]),
+        ("federated", &["--mode", "federated", "--operator"][..]),
     ] {
-        assert!(names.contains(&expected), "missing {expected}: {names:?}");
+        let mut operator = workspace.serve_with_args(args);
+        let listed = operator.tools_list();
+        let names = tool_names(&listed);
+        assert_eq!(
+            names,
+            OPERATOR_DEFAULT_TOOLS.to_vec(),
+            "{case}: operator default surface must keep orbit_workflow and drop the six opt-in tools"
+        );
+        assert!(
+            !names.contains(&"orbit_experiment_list"),
+            "{case}: {names:?}"
+        );
+
+        // Every one of the six opted-out tools is refused with
+        // `toolset_not_enabled` naming its toolset, flag and config key.
+        for (tool, toolset) in OPERATOR_OPT_IN_TOOLS {
+            assert!(!names.contains(&tool), "{case}: {tool} should be opt-in");
+            let refused = operator.assert_tool_error(tool, json!({}), "toolset_not_enabled");
+            assert_eq!(refused["toolset"], toolset, "{case} {tool}: {refused}");
+            assert_eq!(refused["role"], "operator", "{case} {tool}: {refused}");
+            assert_eq!(
+                refused["enable"]["flag"],
+                format!("--toolset {toolset}"),
+                "{case} {tool}: {refused}"
+            );
+            assert_eq!(
+                refused["enable"]["config_key"], "machine.mcp.toolsets",
+                "{case} {tool}: {refused}"
+            );
+        }
+
+        // `orbit_workflow` stays in operator default and its auto, ship and
+        // land actions accept calls (reaching domain handling, never toolset refusal).
+        let selector = if case == "federated" {
+            let discovered = operator.call_tool_ok("orbit_workspace_list", json!({}));
+            discovered["workspaces"][0]["selector"]
+                .as_str()
+                .expect("federated selector")
+                .to_string()
+        } else {
+            workspace.work.to_str().expect("workspace path").to_string()
+        };
+        let status = operator.call_tool_ok(
+            "orbit_workflow",
+            json!({"action": "auto", "mode": "status", "workspace": selector}),
+        );
+        assert!(status.is_object(), "{case} auto status: {status}");
+        for (action, input) in [
+            (
+                "ship",
+                json!({"action": "ship", "workspace": selector, "task_ids": ["TST-999999"]}),
+            ),
+            (
+                "land",
+                json!({"action": "land", "workspace": selector, "task_id": "TST-999999"}),
+            ),
+        ] {
+            let err = operator.call_tool_err("orbit_workflow", input);
+            assert_ne!(
+                err["code"], "toolset_not_enabled",
+                "{case} orbit_workflow:{action} must remain enabled in operator default: {err}"
+            );
+            assert_ne!(
+                err["code"], "tool_not_found",
+                "{case} orbit_workflow:{action} must remain advertised: {err}"
+            );
+        }
     }
-    assert!(!names.contains(&"orbit_experiment_list"), "{names:?}");
+
+    // Opting in via `--toolset` restores all six tools and each accepts calls.
+    let mut opted_in = workspace.serve_with_args(&[
+        "--mode",
+        "federated",
+        "--operator",
+        "--toolset",
+        "automation,codebase,pipelines,task-triage,ui",
+    ]);
+    let listed = opted_in.tools_list();
+    let names = tool_names(&listed);
+    for (tool, _) in OPERATOR_OPT_IN_TOOLS {
+        assert!(
+            names.contains(&tool),
+            "--toolset opt-in did not restore {tool}: {names:?}"
+        );
+    }
+    let discovered = opted_in.call_tool_ok("orbit_workspace_list", json!({}));
+    let selector = discovered["workspaces"][0]["selector"]
+        .as_str()
+        .expect("federated selector")
+        .to_string();
+    opted_in.call_tool_ok(
+        "orbit_auto_task",
+        json!({"action": "list", "workspace": selector}),
+    );
+    opted_in.call_tool_ok(
+        "orbit_codebase",
+        json!({"action": "analytics", "workspace": selector}),
+    );
+    opted_in.call_tool_ok(
+        "orbit_task_block_triage",
+        json!({"action": "candidates", "workspace": selector}),
+    );
+    opted_in.call_tool_ok("orbit_ui", json!({"action": "open"}));
+    for (tool, input) in [
+        (
+            "orbit_pipeline_invoke",
+            json!({"job_name": "nonexistent_job", "input": {}, "workspace": selector}),
+        ),
+        (
+            "orbit_automation_explain",
+            json!({"definition": "nonexistent", "workspace": selector}),
+        ),
+    ] {
+        let err = opted_in.call_tool_err(tool, input);
+        assert_ne!(
+            err["code"], "toolset_not_enabled",
+            "{tool} must be callable when opted in: {err}"
+        );
+        assert_ne!(
+            err["code"], "tool_not_found",
+            "{tool} must be callable when opted in: {err}"
+        );
+    }
+    drop(opted_in);
+
+    // Opting in via `machine.mcp.toolsets` host config restores all six too.
+    super::set_host_toolsets(
+        &workspace,
+        &["automation", "codebase", "pipelines", "task-triage", "ui"],
+    );
+    let mut configured = workspace.serve_with_args(&["--mode", "federated", "--operator"]);
+    let listed = configured.tools_list();
+    let names = tool_names(&listed);
+    for (tool, _) in OPERATOR_OPT_IN_TOOLS {
+        assert!(
+            names.contains(&tool),
+            "machine.mcp.toolsets did not restore {tool}: {names:?}"
+        );
+    }
+}
+
+#[test]
+fn non_operator_roles_and_run_bound_surfaces_are_unchanged() {
+    let workspace = McpWorkspace::init();
+    for (role, args, expected) in [
+        ("agent", &["--role", "agent"][..], &AGENT_TOOLS[..]),
+        (
+            "reader",
+            &["--operator", "--role", "reader"][..],
+            &READER_TOOLS[..],
+        ),
+        (
+            "manager",
+            &["--operator", "--role", "manager"][..],
+            &MANAGER_TOOLS[..],
+        ),
+        (
+            "resident",
+            &["--operator", "--role", "resident"][..],
+            &RESIDENT_TOOLS[..],
+        ),
+    ] {
+        let mut client = workspace.serve_with_args(args);
+        let listed = client.tools_list();
+        assert_eq!(
+            tool_names(&listed),
+            expected.to_vec(),
+            "role '{role}' tools/list must remain unchanged"
+        );
+    }
+
+    // Run-bound tools remain unadvertised even under `--toolset all`.
+    let mut all = workspace.serve_with_args(&["--operator", "--toolset", "all"]);
+    let listed = all.tools_list();
+    let names = tool_names(&listed);
+    for run_bound in [
+        "orbit_memory_show",
+        "orbit_memory_write",
+        "orbit_memory_propose",
+    ] {
+        assert!(
+            !names.contains(&run_bound),
+            "run-bound tool {run_bound} must never appear under --toolset all"
+        );
+    }
 }

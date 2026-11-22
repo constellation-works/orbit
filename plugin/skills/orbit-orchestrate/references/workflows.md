@@ -61,7 +61,10 @@ worker and returns as soon as the run is durable — it prints the run id and th
 inspection commands, and does *not* claim the eventual outcome. Add `--wait` to
 block on it.
 
-An MCP session submits the same catalog job with `orbit_pipeline_invoke`:
+An MCP session that opts into the `pipelines` toolset (`--toolset pipelines` or
+`machine.mcp.toolsets` in the operator profile; included in the `resident` role)
+submits the same catalog job with `orbit_pipeline_invoke` (or use
+`orbit run job <job_id>` on the CLI):
 required `job_name`, and `input` unless `default_input` is true (that form
 also requires `workspace`, forbids `input` and `priority`, and is
 operator-only). It returns a run ID immediately. Public submissions require

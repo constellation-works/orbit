@@ -23,8 +23,8 @@ pub(crate) fn builtin_mcp_toolset(name: &str) -> Option<McpToolset> {
         | "orbit.task.artifact.put"
         | "orbit.friction.add"
         | "orbit.friction.update" => T::TasksWrite,
-        "orbit.task.block_triage"
-        | "orbit.task.reconcile_review"
+        "orbit.task.block_triage" => T::TaskTriage,
+        "orbit.task.reconcile_review"
         | "orbit.task.recover_claim"
         | "orbit.task.repilot"
         | "orbit.task.requeue"
@@ -40,14 +40,14 @@ pub(crate) fn builtin_mcp_toolset(name: &str) -> Option<McpToolset> {
         "orbit.workflow.ship"
         | "orbit.workflow.land"
         | "orbit.workflow.auto"
-        | "orbit.workflow.run.resume"
-        | "orbit.pipeline.invoke" => T::Dispatch,
+        | "orbit.workflow.run.resume" => T::Dispatch,
+        "orbit.pipeline.invoke" => T::Pipelines,
+        "orbit.routine.control" => T::Routines,
         "orbit.auto_task.add"
         | "orbit.auto_task.list"
         | "orbit.auto_task.mint"
         | "orbit.auto_task.update"
-        | "orbit.automation.explain"
-        | "orbit.routine.control" => T::Automation,
+        | "orbit.automation.explain" => T::Automation,
         "orbit.codebase.show" | "orbit.codebase.related" | "orbit.codebase.analytics" => {
             T::Codebase
         }

@@ -226,7 +226,8 @@ dashboard's Triage action; that triager only proposes and never approves, promot
 The seeded `blocked-task-triage` routine and its `block_escalated` trigger are
 retired. `orbit workspace sync` removes an unedited copy; an existing
 `blocked-task-triage-*` routine file loads inert and is reported as retired.
-`orbit.task.block_triage` now serves pilot-warning triage only, and
+`orbit.task.block_triage` (`orbit tool run orbit.task.block_triage`, or MCP
+with `--toolset task-triage`) now serves pilot-warning triage only, and
 `subject="block"` is refused with a message naming final recovery. Old
 `blocked_task_triaged` history entries still render.
 
@@ -368,8 +369,9 @@ than three times an hour stalls the definition until
 `orbit automation clear-stall <name> --reason <text>` (operator, audited).
 `host` and `file` scopes are refused.
 
-`orbit automation explain <name>` (MCP `orbit.automation.explain`) shows
-matches with arm state and holds, closest misses, one subject's clause tree,
+`orbit automation explain <name>` (or MCP `orbit.automation.explain` with
+`--toolset automation`) shows matches with arm state and holds, closest misses,
+one subject's clause tree,
 and the durable tracking (stall, last pass and skip, recent fires with their
 chain, `self`), read-only. `orbit auto-task list`, `orbit routine list` and the
 dashboard show the condition state and any stall.

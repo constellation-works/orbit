@@ -45,8 +45,10 @@ Start an orchestrator or on-call inspection with `orbit attention --json` or the
 
 ## Desktop navigation
 
-When the connected client advertises `orbit_ui`, use its read-only `open` and
-`inspect` actions to open the control center or a selected task/run.
+When the connected client advertises `orbit_ui` (opt-in via `--toolset ui` or
+`machine.mcp.toolsets` in the operator profile; included in the `agent` role),
+use its read-only `open` and `inspect` actions to open the control center or a
+selected task/run.
 Discover workspaces first and copy the exact returned selector; pass `workspace`
 and public `id` together, with `kind: run` for a run. Keep ordinary task tools
 available when the client cannot render the UI.

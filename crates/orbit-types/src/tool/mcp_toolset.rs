@@ -29,22 +29,28 @@ pub enum McpToolset {
     TasksRead,
     /// Task, artifact and friction writes.
     TasksWrite,
-    /// Delivery repair verbs (requeue, review reset, handoff recovery, …).
+    /// Delivery repair verbs (`orbit.task.recover`: requeue, review reset,
+    /// handoff recovery, …).
     TaskRepair,
+    /// Pilot-warning triage (`orbit.task.block_triage`).
+    TaskTriage,
     /// Decision requests: list, show and raise.
     Decisions,
     /// Workflow run reads.
     Runs,
-    /// Workflow dispatch: ship, auto, resume and pipeline invocation.
+    /// Workflow dispatch: ship, land, auto and run resume.
     Dispatch,
-    /// Auto-tasks, routines and the condition-trigger explain.
+    /// Direct catalog pipeline invocation (`orbit.pipeline.invoke`).
+    Pipelines,
+    /// Routine status and enablement controls (`orbit.routine.control`).
+    Routines,
+    /// Auto-task definitions and condition-trigger explain.
     Automation,
     /// Codebase analytics reads.
     Codebase,
     /// Lexical search over tasks and frictions.
     Search,
-    /// UI tools. Empty since `orbit.visual.capture` was removed
-    /// [ORB-22807]; kept so a server or role that names `ui` still loads.
+    /// UI presentation entrypoints (`orbit_ui`).
     Ui,
     /// Command execution.
     Exec,
@@ -94,14 +100,17 @@ impl McpToolset {
     }
 
     /// Every toolset, in declaration order.
-    pub const ALL: [Self; 20] = [
+    pub const ALL: [Self; 23] = [
         Self::Core,
         Self::TasksRead,
         Self::TasksWrite,
         Self::TaskRepair,
+        Self::TaskTriage,
         Self::Decisions,
         Self::Runs,
         Self::Dispatch,
+        Self::Pipelines,
+        Self::Routines,
         Self::Automation,
         Self::Codebase,
         Self::Search,
@@ -123,15 +132,15 @@ impl McpToolset {
 
     /// Every name a `machine.mcp.toolsets` entry takes: each toolset's
     /// name in [`Self::ALL`] order, then `all` and `default` [ORB-22809].
-    pub const SELECTION_NAMES: [&'static str; 22] = {
-        let mut names = [""; 22];
+    pub const SELECTION_NAMES: [&'static str; 25] = {
+        let mut names = [""; 25];
         let mut index = 0;
         while index < Self::ALL.len() {
             names[index] = Self::ALL[index].as_str();
             index += 1;
         }
-        names[20] = "all";
-        names[21] = "default";
+        names[23] = "all";
+        names[24] = "default";
         names
     };
 
@@ -142,9 +151,12 @@ impl McpToolset {
             Self::TasksRead => "tasks-read",
             Self::TasksWrite => "tasks-write",
             Self::TaskRepair => "task-repair",
+            Self::TaskTriage => "task-triage",
             Self::Decisions => "decisions",
             Self::Runs => "runs",
             Self::Dispatch => "dispatch",
+            Self::Pipelines => "pipelines",
+            Self::Routines => "routines",
             Self::Automation => "automation",
             Self::Codebase => "codebase",
             Self::Search => "search",
@@ -275,10 +287,8 @@ impl McpRole {
                 T::Decisions,
                 T::Runs,
                 T::Dispatch,
-                T::Automation,
-                T::Codebase,
+                T::Routines,
                 T::Search,
-                T::Ui,
                 T::Exec,
                 T::Plugins,
             ],
@@ -295,6 +305,7 @@ impl McpRole {
                 T::TasksWrite,
                 T::Runs,
                 T::Dispatch,
+                T::Pipelines,
                 T::Decisions,
                 T::Notice,
                 T::Resident,
