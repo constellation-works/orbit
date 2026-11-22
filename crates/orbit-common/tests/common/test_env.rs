@@ -568,12 +568,12 @@ mod orphaned_fixture_children {
         let exe = std::env::current_exe().unwrap();
         let exe = exe.to_str().unwrap();
         let entry = "orphaned_fixture_children::chatty_child_entry";
-        // The shell writes nothing, then replaces itself. Its libtest header
-        // arrives after `quiet`; the test body then waits 500 ms before its
-        // first progress line, reproducing a scheduler pause longer than the
-        // old quiet window without adding synthetic host load.
+        // The shell stays silent longer than `quiet`, then writes the first
+        // controlled byte before exec starts libtest. The test body then waits
+        // 500 ms before its first progress line, without letting the libtest
+        // header start the tested quiet window or adding synthetic host load.
         let script = format!(
-            "sleep 1.1; exec {} --exact {} --ignored --nocapture",
+            "sleep 1.1; printf '%s\\n' 'controlled pre-libtest progress' >&2; exec {} --exact {} --ignored --nocapture",
             quote_posix_arg(exe),
             quote_posix_arg(entry),
         );
@@ -599,6 +599,12 @@ mod orphaned_fixture_children {
             output.status,
             &output.stdout,
             &output.stderr,
+        );
+        assert!(
+            output
+                .stderr
+                .starts_with(b"controlled pre-libtest progress\n"),
+            "the shell's controlled progress must precede libtest startup"
         );
     }
 
