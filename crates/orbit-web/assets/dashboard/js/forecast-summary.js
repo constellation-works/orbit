@@ -69,6 +69,37 @@ export function quantilePair(quantiles) {
   return num(quantiles?.p50) != null || num(quantiles?.p90) != null;
 }
 
+// Unforecastable dependencies withhold every full total, whatever the history.
+export const SUBSET_REASON = "Not every task can be scheduled.";
+
+/// Why one adjusted total (`usd` or `tokens`) has no quantiles in the selected
+/// scenario, naming the evidence of that scenario only: per-task coverage, the
+/// regression follow-up pool, and the arrival history only when the scenario
+/// is With new arrivals. Null when the total is known (or `tokens` is merely
+/// normalized). `scenario` is `{ key, source, coverage }`.
+export function forecastMetricReason(scenario, quantiles, metric, arrivals) {
+  if (quantiles?.p90 != null) return metric === "tokens" ? "Normalized tokens." : null;
+  const { source, coverage = {} } = scenario;
+  if (source?.schedulable_subset) return SUBSET_REASON;
+  const reasons = [];
+  if (metric === "tokens" && num(coverage.uncovered_model)) reasons.push("Some tasks have no priced history.");
+  if (metric === "usd" && num(coverage.uncosted)) reasons.push("Some tasks have no costed history.");
+  // The rework pool is priced separately from the tasks: with every task
+  // priced it alone leaves the total unknown, and the per-task figures
+  // exclude it.
+  const rework = source?.regression_rework;
+  if (!reasons.length && rework?.available !== false && rework && !quantilePair(rework[metric])) {
+    reasons.push(metric === "usd"
+      ? "Regression follow-up cost is unpriced, so the total is unknown. The listed task costs exclude it."
+      : "Regression follow-up tokens are unpriced, so the total is unknown. The per-task figures exclude it.");
+  }
+  if (scenario.key === "arrivals" && arrivals?.coverage?.[`missing_${metric}`]) {
+    reasons.push(metric === "tokens" ? "Some arrival history is missing token telemetry." : "Some arrival history is missing cost telemetry.");
+  }
+  if (reasons.length) return reasons.join(" ");
+  return metric === "tokens" ? "Not enough priced history." : "Not enough costed history.";
+}
+
 export function forecastCount(value) {
   const n = num(value);
   return n == null || n < 0 ? 0 : Math.trunc(n);
@@ -355,6 +386,7 @@ export function backlogForecastSummary(payload) {
       exactCost: costed ? formatForecastQuantileRange(forecast.usd, formatForecastUsd) : null,
       tokens: quantilePair(forecast.tokens) ? formatForecastQuantileRange(forecast.tokens, formatForecastTokens) : null,
       bars: backlogBarQuantiles(forecast),
+      unknown: unknownMetricReasons(payload, forecast),
       references: backlogBarReferences(forecast.pre_regression_baseline),
       boundedGap: forecastBoundedGap(forecast),
       scope, counts, freshness,
@@ -373,6 +405,20 @@ export function backlogForecastSummary(payload) {
   else if (tasks != null && tasks > 0 && hasHorizonCensoringEvidence(forecast)) { reasonKind = "horizon"; reason = "Beyond the 90-day horizon"; detail = "The simulated backlog did not drain within the 90-day horizon."; }
   const figures = forecastBaselineFigures(forecast.pre_regression_baseline);
   return { unavailable: true, reasonKind, reason, detail, baseline: figures, baselineText: baselineText(figures), baselineBars: figures ? backlogBarQuantiles(forecast.pre_regression_baseline) : null, scope, counts, freshness, drain: null, cost: null, exactCost: null, tokens: null };
+}
+
+// The compact forecast's rule: once time to drain is known, a Cost or Tokens
+// total with no quantiles keeps its row, reading Unknown with its reason, so a
+// total never disappears in one state and shows in another. Only the muted
+// pre-regression baseline of an unavailable forecast draws just the metrics it
+// has; there the reason for the whole forecast is the tooltip's.
+function unknownMetricReasons(payload, forecast) {
+  const scenario = { key: "current", source: forecast, coverage: payload.coverage || {} };
+  const reasons = {};
+  for (const [key, , field] of BACKLOG_BAR_METRICS) {
+    if (key !== "drain" && !quantilePair(forecast[field])) reasons[key] = forecastMetricReason(scenario, forecast[field], field, payload.arrivals);
+  }
+  return Object.keys(reasons).length ? reasons : null;
 }
 
 // The backlog card's bar rows: key, label, forecast field and figure format.
@@ -448,12 +494,30 @@ function backlogBarRow([key, label, , fmt], quantiles, reference, caveat) {
   return row;
 }
 
+// A metric with no quantile: no mark, "Unknown" beside its label, and the
+// reason in the accessible text and the link tooltip.
+function backlogUnknownRow([key, label], reason) {
+  const row = el("div", { class: "drain-forecast-peak drain-backlog-forecast-row unknown" }, [
+    el("dt", { text: label }),
+    el("dd", { class: "drain-forecast-bar" }, [el("span", { class: "drain-backlog-forecast-meter", "aria-hidden": "true" })]),
+    el("dd", { class: "drain-forecast-figure" }, [
+      el("span", { class: "drain-forecast-figure-main mono", "aria-hidden": "true", text: "Unknown" }),
+      el("span", { class: "visually-hidden", text: `${label} unknown. ${reason}` }),
+    ]),
+  ]);
+  row.dataset.metric = key;
+  return row;
+}
+
 // The rows for every metric with a known quantile, or null when none has one.
-function backlogBarList(bars, references, caveat) {
+// A metric named in `unknown` keeps an Unknown row in its place.
+function backlogBarList(bars, references, caveat, unknown = null) {
   if (!bars) return null;
   const rows = BACKLOG_BAR_METRICS
-    .filter(([key]) => bars[key])
-    .map((metric) => backlogBarRow(metric, bars[metric[0]], references?.[metric[0]] ?? null, caveat));
+    .filter(([key]) => bars[key] || unknown?.[key])
+    .map((metric) => bars[metric[0]]
+      ? backlogBarRow(metric, bars[metric[0]], references?.[metric[0]] ?? null, caveat)
+      : backlogUnknownRow(metric, unknown[metric[0]]));
   if (!rows.length) return null;
   return el("dl", { class: "drain-forecast-peaks drain-backlog-forecast-bars" }, rows);
 }
@@ -496,11 +560,12 @@ export function drainBacklogForecastLink(summary) {
     summary.boundedGap?.detail,
     summary.drain && `Time to drain ${summary.drain}`, summary.cost && `Cost ${summary.cost}`,
     summary.tokens && `Tokens ${summary.tokens}`, summary.exactCost && `Exact cost ${summary.exactCost}`,
+    summary.unknown?.cost && `Cost unknown: ${summary.unknown.cost}`, summary.unknown?.tokens && `Tokens unknown: ${summary.unknown.tokens}`,
   ].filter(Boolean).join(" · ");
   const accessibleDetail = [summary.counts, summary.boundedGap?.summary, summary.exactCost && `Exact cost ${summary.exactCost}`].filter(Boolean).join(" · ");
   link.title = `p50 – p90 · ${detail}\nAnalytics › Forecast`;
   if (summary.boundedGap) link.dataset.boundedGap = "true";
-  const bars = backlogBarList(summary.bars, summary.references, "");
+  const bars = backlogBarList(summary.bars, summary.references, "", summary.unknown);
   link.append(...[
     el("span", { class: "drain-section-label", text: "Backlog" }),
     el("span", { class: "drain-forecast-meta drain-backlog-forecast-freshness", text: summary.freshness }),

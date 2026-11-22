@@ -236,6 +236,7 @@
 .drain-backlog-forecast-p50 { position: absolute; top: 50%; width: 6px; height: 6px; margin: 0; transform: translate(-50%, -50%); border-radius: 50%; background: var(--mark); box-shadow: 0 0 0 2px var(--bg); }
 .drain-backlog-forecast-bars.baseline .drain-backlog-forecast-meter { --mark: var(--fg-dim); }
 .drain-backlog-forecast-bars.baseline .drain-forecast-figure-main { color: var(--fg-dim); }
+.drain-backlog-forecast-bars .unknown .drain-forecast-figure-main, .drain-backlog-forecast:hover .drain-backlog-forecast-bars .unknown .drain-forecast-figure-main { color: var(--fg-mute); }
 .drain-backlog-forecast:hover .drain-backlog-forecast-bars:not(.baseline) .drain-forecast-figure-main { color: var(--accent); }
 .drain-backlog-forecast-legend { order: 2; flex: 1 1 100%; color: var(--fg-mute); font-size: var(--text-sm); text-align: right; }
 .drain-backlog-forecast-legend::before { content: ""; display: inline-block; width: 2px; height: 10px; margin-right: var(--space-6); vertical-align: -1px; border-radius: var(--radius-2xs); background: var(--fg); }
