@@ -144,7 +144,7 @@ authority, workspace policy and audit.
 
 | Area | What the panel can do | Needs |
 |---|---|---|
-| Tasks | **New task** files a proposed task with acceptance criteria. Nothing runs until it is dispatched. One edit can change title, description, acceptance criteria, priority, crew and status together. A comment or a review verdict is a separate write. | An edit is refused if the task changed since it was read. |
+| Tasks | **New task** files a proposed task with acceptance criteria. Nothing runs until it is dispatched. One edit can change title, description, acceptance criteria, priority and crew together. Status, a comment, and a review verdict are each a separate write. | An edit is refused if the task changed since it was read. |
 | Review | Records criterion outcomes and evidence against the current revision and the run or pull-request head. Requesting changes and recording acceptance keep the task in review. **Accept and mark done** never merges, publishes or dispatches. | **Accept and mark done** needs fresh eligible state and operator authority. |
 | Ship, drain and automation | Ship a backlog row, start or stop an auto-drain window, toggle routines or auto-tasks. A drain's **Complete automatically** option is off by default. Turning it on authorizes completion of every task admitted during that window. | Operator authority and an explicit workspace. |
 

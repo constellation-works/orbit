@@ -16,7 +16,7 @@ full reference for every argument and option.
 | `--json` | Shorthand for `--format json`. |
 | `--header` | Start `plain` output with a header row. |
 
-Every subcommand accepts these options, before or after it.
+These options work before or after a subcommand, except where that subcommand already defines the same flag.
 
 ## Setup
 
