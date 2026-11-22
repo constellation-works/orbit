@@ -600,7 +600,7 @@ function cycleTimestamp(cycle) {
 
 function lastCheckpoint(mandate) {
   const checkpoint = mandate.latest_checkpoint;
-  const at = mandate.last_checkpoint_at || checkpoint?.at || mandate.status_line?.posted_at;
+  const at = checkpoint?.at || mandate.last_checkpoint_at;
   if (at) return { text: clock(at), title: checkpoint?.cycle || "" };
   if (checkpoint?.cycle) {
     const inferred = cycleTimestamp(checkpoint.cycle);
@@ -622,7 +622,7 @@ function mandateWarnings(mandate) {
 }
 
 function stoppedAt(mandate) {
-  const at = mandate.control?.last?.at || mandate.status_line?.posted_at || cycleTimestamp(mandate.latest_checkpoint?.cycle);
+  const at = mandate.control?.last?.at || mandate.latest_checkpoint?.at || cycleTimestamp(mandate.latest_checkpoint?.cycle);
   return at ? clock(at) : "";
 }
 
