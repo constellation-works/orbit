@@ -349,6 +349,178 @@ fn hex_ref_names_do_not_hide_commit_or_unknown_citations() {
     assert_eq!(blocking_gaps(&ws, &shadowed_blob), Vec::<String>::new());
 }
 
+fn duplicate_loose_object_for_ambiguity(repo: &Path, oid: &str) {
+    let (dir, rest) = oid.split_at(2);
+    let source = repo.join(".git/objects").join(dir).join(rest);
+    assert!(
+        source.is_file(),
+        "expected loose object {}",
+        source.display()
+    );
+    let alt_last = if oid.ends_with('0') { '1' } else { '0' };
+    let mut alt_rest = rest[..rest.len() - 1].to_string();
+    alt_rest.push(alt_last);
+    let duplicate = repo.join(".git/objects").join(dir).join(alt_rest);
+    std::fs::copy(&source, &duplicate).unwrap();
+}
+
+fn covering_proof_resolves_unique_commit_prefix_under_blob_tag_and_holds_invalid_citations() {
+    let ws = Workspace::new();
+    let older = ws.commit("older readme change");
+    let culprit = ws.commit("the culprit");
+    let fix = ws.commit("the fix");
+    let other_path = ws.commit_file("other.txt", "unrelated\n", "unrelated path change");
+    let ambig = ws.commit("ambiguous prefix commit");
+    // File the creation task before `src/new.rs` exists so it receives an
+    // operator creation grant, then land `src/new.rs`.
+    let creation = ws.creation_task("shadowed landed creation");
+    std::fs::create_dir_all(ws.repo.join("src")).unwrap();
+    let created = ws.commit_file(
+        "src/new.rs",
+        "pub fn delivered() {}\n",
+        "creation delivered",
+    );
+    let readme_blob = ws.git(&["rev-parse", "HEAD:README.md"]);
+
+    let older_prefix = mixed_hex_prefix(&older);
+    let culprit_prefix = mixed_hex_prefix(&culprit);
+    let fix_prefix = mixed_hex_prefix(&fix);
+    let other_prefix = mixed_hex_prefix(&other_path);
+    let ambig_prefix = mixed_hex_prefix(&ambig);
+    let created_prefix = mixed_hex_prefix(&created);
+
+    // Shadow valid commit prefixes with same-name tags pointing to a blob,
+    // shadow an unknown hex token with a tag pointing to the covering commit,
+    // and make `ambig_prefix` ambiguous in the object database even with a
+    // same-name tag pointing to the commit.
+    for prefix in [
+        older_prefix,
+        culprit_prefix,
+        fix_prefix,
+        other_prefix,
+        created_prefix,
+    ] {
+        ws.git(&["tag", prefix, &readme_blob]);
+    }
+    ws.git(&["tag", "0badc0ffee1", &fix]);
+    duplicate_loose_object_for_ambiguity(&ws.repo, &ambig);
+    ws.git(&["tag", ambig_prefix, &ambig]);
+
+    let drain = ws.drain();
+    let description = format!("Introduced by {culprit_prefix} on the base branch.");
+    let finding = |title: &str| ws.readme_finding(title, description.clone(), Vec::new());
+
+    let covered = finding("covered via pending drain");
+    let cites_culprit = finding("cites shadowed culprit");
+    let cites_older = finding("cites shadowed older commit");
+    let cites_other_path = finding("cites shadowed unrelated path");
+    let cites_unknown = finding("cites unknown hex shadowed by commit tag");
+
+    assert_verified_no_diff_outside(
+        &ws,
+        &drain,
+        verified_cases(&[
+            (&covered, format!("Commit {fix_prefix} repaired README.md.")),
+            (
+                &cites_culprit,
+                format!("Commit {culprit_prefix} is the culprit."),
+            ),
+            (
+                &cites_older,
+                format!("Commit {older_prefix} touched README.md earlier."),
+            ),
+            (
+                &cites_other_path,
+                format!("Commit {other_prefix} touched other.txt."),
+            ),
+            (
+                &cites_unknown,
+                "Commit 0badc0ffee1 supposedly repaired README.md.".into(),
+            ),
+        ]),
+        &[&covered],
+        &[
+            (&cites_culprit, Some("do not count")),
+            (&cites_older, Some("do not count")),
+            (&cites_other_path, Some("do not count")),
+            (&cites_unknown, Some("0badc0ffee1")),
+        ],
+    );
+    let archive_comment = ws.last_comment(&covered);
+    assert!(
+        archive_comment.message.contains(fix_prefix),
+        "archive comment names the cited prefix: {archive_comment:?}"
+    );
+
+    // Audited pilot application under drain approval closes a finding whose
+    // covering commit prefix is shadowed by a blob tag, holds an ambiguous hex
+    // prefix even when a same-name tag points to that commit, and proves
+    // operator-authorized creation work citing blob-tag-shadowed prefixes.
+    let audited_covered = finding("covered via audited pilot apply");
+    let cites_ambiguous = finding("cites ambiguous hex prefix");
+    let selection = ws.select(&drain);
+    assert_task_ids(&selection, &[&creation, &audited_covered, &cites_ambiguous]);
+    let pilot = ws.pilot_child(&drain, &selection["task_ids"]);
+    let applied = ws.pilot_ok(
+        &drain,
+        &pilot,
+        vec![
+            verified_no_diff(
+                &creation,
+                &format!("Complete scope delivered by {fix_prefix} and {created_prefix}."),
+            ),
+            verified_no_diff(
+                &audited_covered,
+                &format!("Commit {fix_prefix} repaired README.md."),
+            ),
+            verified_no_diff(
+                &cites_ambiguous,
+                &format!("Commit {ambig_prefix} repaired README.md."),
+            ),
+        ],
+    );
+    let approvals = applied["drain_approval"].as_array().unwrap();
+    let approval_for = |task: &Task| {
+        approvals
+            .iter()
+            .find(|entry| entry["task_id"] == task.id)
+            .unwrap_or_else(|| panic!("missing approval entry for {}: {applied}", task.id))
+    };
+    let covered_decision = approval_for(&audited_covered);
+    assert_eq!(
+        covered_decision["classification"], "pilot_verified_no_diff",
+        "{applied}"
+    );
+    assert_eq!(covered_decision["closed"], true, "{applied}");
+    assert_eq!(covered_decision["covering_commits"], json!([fix_prefix]));
+    assert_status(&ws, &audited_covered, TaskStatus::Archived);
+
+    let ambig_decision = approval_for(&cites_ambiguous);
+    assert_eq!(
+        ambig_decision["classification"], "pilot_verified_no_diff",
+        "{applied}"
+    );
+    assert_eq!(ambig_decision["closed"], false, "{applied}");
+    assert!(
+        ambig_decision["not_closed_reason"]
+            .as_str()
+            .is_some_and(|reason| reason.contains("not a commit") && reason.contains(ambig_prefix)),
+        "{applied}"
+    );
+    assert_status(&ws, &cites_ambiguous, TaskStatus::Proposed);
+
+    let creation_decision = approval_for(&creation);
+    assert_eq!(
+        creation_decision["classification"], "already_landed",
+        "{applied}"
+    );
+    assert_eq!(
+        creation_decision["evidence"]["covering_commits"],
+        json!([fix_prefix, created_prefix])
+    );
+    assert_status(&ws, &creation, TaskStatus::Proposed);
+}
+
 crate::scenario_table!(
     a_no_diff_verdict_tags_the_task_scenarios,
     a_no_diff_verdict_tags_the_task_and_clears_the_context_files_gap,
@@ -357,5 +529,6 @@ crate::scenario_table!(
     a_verdict_that_is_not_a_no_diff_deliverable_leaves_the_task_untagged_and_gapped,
     non_commit_object_checks_preserve_commit_unknown_and_finding_holds,
     hex_ref_names_do_not_hide_commit_or_unknown_citations,
+    covering_proof_resolves_unique_commit_prefix_under_blob_tag_and_holds_invalid_citations,
     a_task_with_selectors_or_the_tag_is_left_as_it_was
 );

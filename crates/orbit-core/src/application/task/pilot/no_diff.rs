@@ -271,7 +271,7 @@ impl VerifiedNoDiff {
         }
         let mut cited = Vec::with_capacity(self.cited_commits.len());
         for sha in &self.cited_commits {
-            let Some(full) = resolve_commit(source, sha) else {
+            let Some(full) = resolve_commit_object(source, sha) else {
                 return Err(format!("cited {sha} is not a commit in this repository"));
             };
             cited.push((sha, full));
@@ -515,7 +515,7 @@ fn named_commits(
 ) -> Result<Vec<String>, String> {
     let mut named = hex_tokens([task.description.as_str()], abbreviated_sha)
         .iter()
-        .filter_map(|sha| resolve_commit(source, sha))
+        .filter_map(|sha| resolve_commit_object(source, sha))
         .collect::<Vec<_>>();
     for relation in &task.relations {
         if relation.relation_type != TaskRelationType::RegressionFrom {
@@ -534,7 +534,7 @@ fn named_commits(
         let landed = observation
             .filter(|observation| observation.landing.status == LandingObservationStatus::Merged)
             .and_then(|observation| observation.landing.landed_commit)
-            .and_then(|sha| resolve_commit(source, &sha));
+            .and_then(|sha| resolve_commit_object(source, &sha));
         named.extend(landed);
     }
     named.sort();
@@ -554,6 +554,33 @@ fn resolve_commit(source: &dyn SourceGit, revision: &str) -> Option<String> {
         .filter(|sha| !sha.is_empty())
 }
 
+/// Resolve a hexadecimal object ID or prefix directly in Git's object database
+/// via `--disambiguate`, ignoring refs (branches or tags) that share the same
+/// spelling. Returns `None` for non-hex inputs, unknown IDs, ambiguous
+/// prefixes, or Git errors.
+fn resolve_unique_object_id(source: &dyn SourceGit, object: &str) -> Option<String> {
+    if object.len() < 4 || !object.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return None;
+    }
+    let matches = source
+        .git(&["rev-parse", &format!("--disambiguate={object}")])
+        .ok()?;
+    let mut oids = matches.lines().filter(|line| !line.is_empty());
+    let oid = oids.next()?;
+    if oids.next().is_some() || !oid.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return None;
+    }
+    Some(oid.to_string())
+}
+
+/// Resolve a hexadecimal commit ID or prefix directly in Git's object database
+/// so a same-name branch or tag cannot shadow a commit prefix or stand in for
+/// an unknown hex token.
+fn resolve_commit_object(source: &dyn SourceGit, object: &str) -> Option<String> {
+    let oid = resolve_unique_object_id(source, object)?;
+    resolve_commit(source, &oid)
+}
+
 /// Whether `object` resolves in Git's object database as an unambiguous
 /// non-commit object (such as a blob, tree, or tag object that does not peel to
 /// a commit). Resolving the object ID first via `--disambiguate` prevents a
@@ -561,24 +588,14 @@ fn resolve_commit(source: &dyn SourceGit, revision: &str) -> Option<String> {
 /// an unknown hex token. Ambiguous prefixes, unknown SHAs, and Git errors
 /// return `false` so callers fail closed.
 fn is_known_non_commit_object(source: &dyn SourceGit, object: &str) -> bool {
-    if object.len() < 4 || !object.bytes().all(|byte| byte.is_ascii_hexdigit()) {
-        return false;
-    }
-    let Ok(matches) = source.git(&["rev-parse", &format!("--disambiguate={object}")]) else {
+    let Some(oid) = resolve_unique_object_id(source, object) else {
         return false;
     };
-    let mut oids = matches.lines().filter(|line| !line.is_empty());
-    let Some(oid) = oids.next() else {
-        return false;
-    };
-    if oids.next().is_some() || !oid.bytes().all(|byte| byte.is_ascii_hexdigit()) {
-        return false;
-    }
-    if resolve_commit(source, oid).is_some() {
+    if resolve_commit(source, &oid).is_some() {
         return false;
     }
     source
-        .git(&["cat-file", "-t", oid])
+        .git(&["cat-file", "-t", &oid])
         .ok()
         .is_some_and(|kind| !kind.is_empty() && kind != "commit")
 }
