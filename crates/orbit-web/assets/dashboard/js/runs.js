@@ -1186,10 +1186,14 @@ function runCountCell(value, kind, unavailable = false) {
 }
 
 function runDurationCell(run) {
-  const { durationMs, isLive, longRun } = runDurationInfo(run);
+  return durationCell(runDurationInfo(run));
+}
+
+// A duration figure with its live marker and long-run flag; `title` is optional.
+function durationCell({ durationMs, isLive, longRun }, title) {
   const formatted = fmtDuration(durationMs);
   const text = (isLive && formatted !== "-") ? `${formatted} ↻` : formatted;
-  return el("span", { class: "duration" }, [
+  return el("span", { class: "duration", title }, [
     text,
     longRun
       ? el("span", { class: "long-run-flag", text: "!", title: "Long run" })
@@ -1263,6 +1267,20 @@ function runFailedAtCell(run, { withJob = false } = {}) {
   return cell;
 }
 
+// Operator words for the delivery pipelines: "Ship" is what the task Ship action
+// dispatches (task_auto_pipeline). Any other job keeps its id, as the Job column shows it.
+const OPERATOR_JOB_NAMES = new Map([
+  ["task_auto_pipeline", "Ship"],
+  ["task_gate_pipeline", "Gate"],
+  ["task_pr_pipeline", "Pull request"],
+  ["task_local_pipeline", "Local delivery"],
+]);
+
+function operatorJobName(jobId) {
+  const id = String(jobId || "");
+  return OPERATOR_JOB_NAMES.get(id) || id;
+}
+
 // The crew working an in-flight run, in the slot a failed run uses for its
 // error. Only the Running filter shows it; other states say what ended them.
 function runCrewCell(runs, { withJob = false } = {}) {
@@ -1271,11 +1289,11 @@ function runCrewCell(runs, { withJob = false } = {}) {
   if (crews.length) cell.appendChild(el("span", { class: "run-crew-label", text: crews.length === 1 ? "Crew" : "Crews" }));
   for (const run of crews) {
     cell.appendChild(el("span", { class: "run-crew-entry" }, [
-      withJob ? el("span", { class: "run-crew-job", text: pipelineShortName(run.job_id) }) : null,
+      withJob ? el("span", { class: "run-crew-job", text: operatorJobName(run.job_id) }) : null,
       el("span", { class: "mono", text: run.resolved_crew }),
     ].filter(Boolean)));
   }
-  if (crews.length) cell.title = `Crew: ${crews.map((run) => `${pipelineShortName(run.job_id)} ${run.resolved_crew}`).join(", ")}`;
+  if (crews.length) cell.title = `Crew: ${crews.map((run) => `${operatorJobName(run.job_id)} ${run.resolved_crew}`).join(", ")}`;
   return cell;
 }
 
@@ -1448,6 +1466,18 @@ function groupTaskRun(group) {
   return { tasks: [ref], workspace_id: first.workspace_id };
 }
 
+// An in-flight group's elapsed time is its longest run's, the figure that run's
+// own row shows, so the header and the rows beneath it agree.
+function groupDurationInfo(runs) {
+  const infos = runs.map(runDurationInfo);
+  const durations = infos.map((info) => info.durationMs).filter((ms) => Number.isFinite(ms));
+  return {
+    durationMs: durations.length ? Math.max(...durations) : null,
+    isLive: infos.some((info) => info.isLive),
+    longRun: infos.some((info) => info.longRun),
+  };
+}
+
 function runGroupRow(group, attributed, listed) {
   const { runs, key } = group;
   const expanded = expandedRunGroups.has(key);
@@ -1460,6 +1490,7 @@ function runGroupRow(group, attributed, listed) {
   const denials = frictions.reduce((sum, f) => sum + (f.denials || 0), 0);
   const toolFails = frictions.reduce((sum, f) => sum + (f.toolFails || 0), 0);
   const jobNames = runs.map((run) => run.job_id).join(", ");
+  const elapsed = group.inFlight ? groupDurationInfo(runs) : null;
   const toggle = el("button", {
     class: "id run-group-toggle",
     text: group.repeatedFailure ? `${expanded ? "▾" : "▸"} ${first.job_id}` : `${expanded ? "▾" : "▸"} ${runs.length} ${group.inFlight ? "runs" : "pipeline runs"}`,
@@ -1484,7 +1515,7 @@ function runGroupRow(group, attributed, listed) {
   if (!group.repeatedFailure && explained.length > 1) failedAt.title = explained.map((run) => `${run.job_id}\n${runFailure(run).title}`).join("\n\n");
   const failureHash = failure ? (failure.run ? `${runIdentity(failure.run)}:${runFailureHash(failure.run)}` : JSON.stringify(failure.cause)) : "";
   const row = el("div", {
-    class: `runs-row runs-group${attributed ? " workspace-attributed" : ""}`,
+    class: `runs-row runs-group${attributed ? " workspace-attributed" : ""}${group.inFlight ? " runs-group-running" : ""}`,
     title: group.repeatedFailure ? `${runs.length} identical failures of ${first.job_id}` : `${runs.length} ${group.inFlight ? "runs" : "pipeline runs"} for this task: ${jobNames}`,
   }, [
     el("span", { class: "state" }, [stateCell(runGroupState(runs))]),
@@ -1494,15 +1525,19 @@ function runGroupRow(group, attributed, listed) {
     ]) : toggle,
     group.repeatedFailure ? el("span", { class: "run-tasks", text: "—" }) : runTaskLinks(group.inFlight ? groupTaskRun(group) : first),
     failedAt,
-    el("span", { class: "run-id-cell" }, [el("span", { class: "run-group-count", text: group.repeatedFailure ? "—" : `${runs.length} runs` })]),
+    // An in-flight group's count is on its toggle alone; its task spans this
+    // column instead (runs.css), so the title gets the room.
+    group.inFlight ? null : el("span", { class: "run-id-cell" }, [el("span", { class: "run-group-count", text: group.repeatedFailure ? "—" : `${runs.length} runs` })]),
     el("span", { class: "when", text: formatAge(ts), title: ts ? formatDateTime(ts) : "" }),
     runCountCell(denials, "denials", frictionUnavailable),
     runCountCell(toolFails, "tool-fails", frictionUnavailable),
-    el("span", { class: "duration", text: "—" }),
+    elapsed
+      ? durationCell(elapsed, "Elapsed time of the group's longest run")
+      : el("span", { class: "duration", text: "—" }),
     el("span", { class: "run-actions" }),
   ]);
   row.dataset.key = `group-${key}`;
-  row.dataset.hash = `group-${key}-${expanded}-${ts}-${denials}-${toolFails}-${frictionUnavailable}-${JSON.stringify(group.inFlight ? groupTaskRun(group).tasks : first.tasks)}-${runs.map((run) => `${runIdentity(run)}:${run.state}:${runFailureHash(run)}`).join("|")}-${failureHash}-${runFilter === "running" ? runs.map((run) => run.resolved_crew || "").join("|") : ""}`;
+  row.dataset.hash = `group-${key}-${expanded}-${ts}-${denials}-${toolFails}-${frictionUnavailable}-${JSON.stringify(group.inFlight ? groupTaskRun(group).tasks : first.tasks)}-${runs.map((run) => `${runIdentity(run)}:${run.state}:${runFailureHash(run)}`).join("|")}-${failureHash}-${runFilter === "running" ? runs.map((run) => run.resolved_crew || "").join("|") : ""}${elapsed ? `-${fmtDuration(elapsed.durationMs)}-${elapsed.isLive}-${elapsed.longRun}` : ""}`;
   row.style.cursor = "pointer";
   makeRowDisclosure(row, toggle, {
     expanded,

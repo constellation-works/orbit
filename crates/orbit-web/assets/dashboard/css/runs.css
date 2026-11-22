@@ -70,6 +70,11 @@
 .runs-row.runs-group-child + .runs-row:not(.runs-group-child) {
   border-top: 1px solid var(--border-strong);
 }
+/* An in-flight group has no Run ID cell, so on the desktop grid its task spans
+   that track and the title gets the room. Phones keep the named areas. */
+@media (min-width: 601px) {
+  .runs-row.runs-group-running > .run-tasks { grid-column: span 2; }
+}
 .runs-toolbar {
   display: flex;
   flex-wrap: wrap;
