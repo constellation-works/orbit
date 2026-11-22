@@ -1137,12 +1137,12 @@ function radarNode(row) {
   // a contribution smaller than the displayed rate still has a side.
   const excess = (axis, each) => {
     const scored = !axis.unscored && each.contributions ? each.contributions[axis.key] : null;
-    if (typeof scored === "number" && Number.isFinite(scored)) return Object.is(scored, 0) ? 0 : scored;
+    if (typeof scored === "number" && Number.isFinite(scored)) return scored === 0 ? 0 : scored;
     const ownRate = rate(axis, each);
     const expRate = expectedRate(axis, each);
     if (!Number.isFinite(ownRate) || !Number.isFinite(expRate)) return null;
     const value = axis.weight * (ownRate - expRate);
-    return Object.is(value, 0) ? 0 : value;
+    return value === 0 ? 0 : value;
   };
   const percentileRank = (list, value) => {
     const under = list.filter((each) => each < value).length;

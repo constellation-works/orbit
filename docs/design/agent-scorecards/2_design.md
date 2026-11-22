@@ -61,10 +61,11 @@ On both kinds outward is better and the reference sits on the middle ring (radiu
 0.5). The per-axis weight and signed contribution (below) explain why a row with
 some inward axes still ranks where it does. The chart does not reconstruct the
 smoothed final score. On an expectation-adjusted axis the **Score breakdown**
-beside it carries the same nine-decimal-grid excess that the radar places.
-Fleet-median axes have no grid: their radar disclosure gives the gap to the
-fleet median, while the breakdown of a Reviewer or Pilot row gives `weight × rate`
-for each scored term (§6), the raw-score term with no median subtracted.
+beside it carries the same full-precision excess that the radar places.
+Fleet-median axes place against the fleet median instead: their radar
+disclosure gives the gap to that median, while the breakdown of a Reviewer or
+Pilot row gives `weight × rate` for each scored term (§6), the raw-score term
+with no median subtracted.
 
 - Each `scorecard.terms` entry is an axis. The denominator is
   `row.term_units[key]` when present, otherwise `row.units`, labelled with the
@@ -72,13 +73,12 @@ for each scored term (§6), the raw-score term with no median subtracted.
   Credit axes point out for higher rates; negative-weight axes invert and say
   **fewer is better**.
 - Expectation-adjusted axes place the row by `row.contributions[key]`, the
-  signed excess used in the raw score (`weight × (full-precision rate −
-  full-precision expected rate)`), serialized on a nine-decimal grid so that
-  float noise from the summation order and an exact zero are stable across
-  loads. It is not a difference of the two-decimal display rates. A positive
-  or negative excess that those display rates would turn into zero still plots
-  on that side of the middle ring. Exact zero
-  excess, including a raw count equal to its expected count, sits at radius
+  signed excess the score sums (`weight × (full-precision rate −
+  full-precision expected rate)`) at full `f64` precision, with floating-point
+  ULP noise around zero mapped to positive zero. It is not a difference of the
+  two-decimal display rates. A positive or negative excess that those display
+  rates would turn into zero still plots on that side of the middle ring. Exact
+  zero excess, including a raw count equal to its expected count, sits at radius
   0.5. Positive excess (it helps the score: credit above expectation, or a
   penalty below it) ranks by percentile among the fleet's positive excesses and
   fills 0.5 to 1; negative excess ranks among the negatives and fills 0 to 0.5.
@@ -147,8 +147,9 @@ for each scored term (§6), the raw-score term with no median subtracted.
   contribution, raw count, denominator and evidence state. The reference is
   labelled `expected` on an expectation-adjusted axis and `fleet median` on a
   fleet-median axis. On an expectation-adjusted axis the contribution is the
-  score's signed excess (`row.contributions`, nine-decimal grid), labelled
-  **contribution**, and the Score Breakdown uses that same excess. On a
+  score's signed excess (`row.contributions`, full precision with exact zero for
+  equal rates), labelled **contribution**, and the Score Breakdown uses that same
+  excess. On a
   fleet-median axis it is `weight × (agent rate − median rate)`, labelled
   **contribution vs fleet median**; the Score Breakdown has no median gap there
   and shows `weight × rate` instead (§6). The count reads
@@ -446,25 +447,22 @@ and **Cost per landed task (USD)**. Each implementer row adds `reviewed_units`, 
 that denominator for each review term, `expected`, a map
 of term keys to expected counts on the same term population, and `score_base: 100`.
 `expected` and `per_100` stay rounded to two decimals. The same row adds
-`contributions`, a map of term keys to the signed excesses the raw score uses,
-each snapped to a nine-decimal grid for serialization. The radar and Score
-Breakdown read that map on expectation-adjusted axes, so a term whose displayed
-expected count rounds to zero still plots and reads on the side the score used.
-Reviewers and Pilots have no `expected` and omit `contributions`, so nothing
-they read is on that grid: their Score Breakdown shows `weight × per_100` for
-each scored term (the §4.1 raw-score term at display precision, with no median
-subtracted), and their radar disclosure shows the gap to the fleet median
-(§1.1). The term metadata names
+`contributions`, a map of term keys to the full-precision signed excesses the
+raw score sums, unsnapped. The radar and Score Breakdown read that map on
+expectation-adjusted axes, so a term whose displayed expected count rounds to
+zero still plots and reads on the side the score used. Reviewers and Pilots
+have no `expected` and omit `contributions`: their Score Breakdown shows
+`weight × per_100` for each scored term (the §4.1 raw-score term at display
+precision, with no median subtracted), and their radar disclosure shows the gap
+to the fleet median (§1.1). The term metadata names
 `unit: "reviewed deliveries"` for the three review terms; `per_100` is per 100
 of that unit and `expected × 100 / term_units` is its expected rate. With zero
 reviewed deliveries, those rates are null and each contribution is zero.
 Actual `counts` remain counts. Detail term `contribution` stays the two-decimal
-display of that excess. The raw score sums the full-precision excesses before
-they are snapped for `contributions`; adding `score_base` to the serialized
-contributions reconstructs that unrounded raw score with up to 0.0000000005
-points of error per term, before floating-point addition. The `raw` field is
-itself rounded to two decimal places, so comparing a reconstruction with that
-field also includes up to 0.005 points of display rounding. Other roles have
+display of that excess. Adding `score_base` to the serialized `contributions`
+reconstructs the unrounded raw score up to floating-point addition. The `raw`
+field is itself rounded to two decimal places, so comparing a reconstruction
+with that field also includes up to 0.005 points of display rounding. Other roles have
 neither `expected` nor `score_base` and retain their formulas.
 The former `tier_comparison` stat is removed: scored expectations supersede it.
 
