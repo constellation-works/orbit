@@ -266,12 +266,15 @@ pub(crate) fn run_header_text_with_lock_holders(
 
 /// Compact actual provider/model evidence for ordinary human run inspection.
 /// The JSON projection keeps the complete invocation list, including retries.
-pub(crate) fn activity_provenance_lines(value: &Value) -> Vec<String> {
+pub(crate) fn activity_provenance_lines(
+    value: &Value,
+    agent_activity_ids: &std::collections::HashSet<String>,
+) -> Vec<String> {
     value
         .as_array()
         .into_iter()
         .flatten()
-        .map(|activity| {
+        .filter_map(|activity| {
             let id = activity
                 .get("activity_id")
                 .and_then(Value::as_str)
@@ -297,18 +300,15 @@ pub(crate) fn activity_provenance_lines(value: &Value) -> Vec<String> {
                     format!("{provider}/{model}")
                 })
                 .collect::<Vec<_>>();
-            format!(
-                "Activity {} actual={} {}",
-                id,
-                status,
-                if values.is_empty() {
-                    "".to_string()
-                } else {
-                    values.join(", ")
-                }
-            )
-            .trim_end()
-            .to_string()
+            if values.is_empty() && !(status == "unavailable" && agent_activity_ids.contains(id)) {
+                return None;
+            }
+            let evidence = if values.is_empty() {
+                "evidence unavailable".to_string()
+            } else {
+                values.join(", ")
+            };
+            Some(format!("Agent provider/model ({id}): {evidence}"))
         })
         .collect()
 }
