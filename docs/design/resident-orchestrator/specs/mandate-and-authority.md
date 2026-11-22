@@ -8,7 +8,7 @@ status: Draft
 feature: resident-orchestrator
 tags: [resident-orchestrator, spec, security]
 related_features: [resident-orchestrator, human-decision-channel, granted-tools]
-related_artifacts: [ORB-21229, ORB-21242, ORB-26832, ORB-26833]
+related_artifacts: [ORB-21229, ORB-21242, ORB-26832, ORB-26833, ORB-26834]
 last_updated: 2026-11-22
 ---
 
@@ -93,7 +93,7 @@ the history is already the task's append-only audit trail. Folded, it reads:
 }
 ```
 
-Rights: `dispatch`, `promote`, `merge`, `plugin_upgrade`. Unknown rights are refused, not ignored.
+Rights: `dispatch`, `promote`, `merge`, `plugin_upgrade`, `refresh`. Unknown rights are refused, not ignored.
 Releases, tags, publishing, host changes, config edits and secrets are not rights; they are not
 grantable to a resident in v1.
 
@@ -106,6 +106,7 @@ grantable to a resident in v1.
 | `promote` | `orbit.task.update` to `backlog`, `orbit.task.add` filed `backlog` |
 | `merge` | `orbit.workflow` action `land`, `orbit.task.update` to `done` (refused while the task has an open pull request), `orbit.task.recover` action `retry_handoff`, `orbit.task.recover` action `reconcile_review` |
 | `plugin_upgrade` | none yet: no builtin tool installs or upgrades a plugin |
+| `refresh` | `orbit.workflow` action `refresh` (conflict-free base-branch merge commit into a held or review delivery pull request head, starting its required checks; lands nothing) |
 
 The mapping lives in core's tool host beside the dispatch table (`resident_guard`), and core's cycle
 guard applies it to every builtin tool call a `resident_cycle_pipeline` run makes; the run is
@@ -147,6 +148,8 @@ reply was lost settles on a repeated call without merging again. `orbit.task.upd
 `resident_done_pr_open` while a pull request recorded for the task is open, and `resident_lookup_refused`
 when the forge cannot say. Both go through the run's broker, because they read the forge with the host's
 credentials.
+
+`orbit.workflow` action `refresh` is how a resident holding `refresh` brings a held (`blocked`) or `review` task's one open Orbit delivery pull request up to the tip of its base branch, and passes the operator row and managed-run refusal through the run's broker the same way `land` does. Orbit merges the base branch's tip into the pull request head as one conflict-free merge commit — never rebasing, rewriting or force-pushing, and making no code edits — which starts the required checks on the new head. Any conflict is refused as `task_refresh_refused` naming the conflicting paths and leaving the head unchanged; pull requests owned by a live run or not published by an Orbit delivery are also refused. A head that already includes the base tip is a no-op (`already_up_to_date`). Each call is keyed on the action ledger, and it lands nothing (`merge` still owns landing). A refreshed head keeps the review recorded for the head before the refresh when every commit after the reviewed head is a conflict-free refresh merge of the base branch with no conflict resolution; `land` still requires the required checks to pass on the refreshed head, and any other commit after the reviewed head invalidates the review. See [Refresh merges base into the PR head without re-review](../4_decisions.md#refresh-merges-base-into-the-pr-head-without-re-review).
 
 A write other than `orbit.friction` action `update` from a resident cycle run that
 this workspace does not hold (one started in another catalog workspace) is refused as
@@ -219,5 +222,6 @@ Designed by claude (claude-opus-5-5) for [ORB-21229]; built by [ORB-21242].
 - [ORB-21245] — `orbit.resident.control` and relay
 - [ORB-26832] — admit `orbit.workflow.auto` action `status` (drain readiness read) for live resident cycles in covered workspaces without operator capability
 - [ORB-26833] — admit `orbit.friction` action `update` (without `rehome_to` or `move`) in covered workspaces without a granted right
+- [ORB-26834] — add the `refresh` right and `orbit.workflow` action `refresh` to merge a base branch tip into a held or review delivery pull request head and re-run required checks without re-review
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

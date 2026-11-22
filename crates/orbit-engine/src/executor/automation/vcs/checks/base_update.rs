@@ -56,6 +56,93 @@ pub(in crate::executor::automation::vcs) fn verified_base_update(
     Ok(())
 }
 
+/// Verify that `head` is either `reviewed_head` itself or a first-parent chain
+/// of conflict-free two-parent merge commits of `base_branch` onto
+/// `reviewed_head`, with no conflict resolution or other edits.
+///
+/// Any commit after `reviewed_head` that is not a clean two-parent merge of a
+/// commit contained in `base_branch` (including a regular edit commit, a
+/// conflict resolution, or merging a non-base branch) is refused.
+pub fn verify_refreshed_head_from_base(
+    workspace: &Path,
+    reviewed_head: &str,
+    head: &str,
+    base_branch: &str,
+    head_branch: Option<&str>,
+    pr_number: Option<u64>,
+) -> Result<(), String> {
+    if head == reviewed_head {
+        return Ok(());
+    }
+    let valid_sha = |sha: &str| {
+        matches!(sha.len(), 40 | 64) && sha.bytes().all(|byte| byte.is_ascii_hexdigit())
+    };
+    if !valid_sha(reviewed_head) || !valid_sha(head) {
+        return Err("refreshed head verification requires exact commit SHAs".to_string());
+    }
+    let has_remote =
+        git_command_success(workspace, &["remote", "get-url", "origin"]).unwrap_or(false);
+    let landing_ref = if has_remote {
+        super::super::git::fetch_remote_base(workspace, base_branch)
+            .map_err(|error| format!("could not fetch base branch '{base_branch}': {error}"))?;
+        format!("origin/{base_branch}")
+    } else {
+        base_branch.to_string()
+    };
+    if has_remote && !contains(workspace, head, head) {
+        if let Some(branch) = head_branch.filter(|b| !b.trim().is_empty()) {
+            let _ = git_command_success(
+                workspace,
+                &["fetch", "--no-tags", "--quiet", "origin", branch],
+            );
+        }
+        if !contains(workspace, head, head)
+            && let Some(number) = pr_number
+        {
+            let _ = git_command_success(
+                workspace,
+                &[
+                    "fetch",
+                    "--no-tags",
+                    "--quiet",
+                    "origin",
+                    &format!("refs/pull/{number}/head"),
+                ],
+            );
+        }
+        if !contains(workspace, head, head) {
+            let _ = git_command_success(
+                workspace,
+                &["fetch", "--no-tags", "--quiet", "origin", head],
+            );
+        }
+    }
+    if has_remote && !contains(workspace, reviewed_head, reviewed_head) {
+        let _ = git_command_success(
+            workspace,
+            &["fetch", "--no-tags", "--quiet", "origin", reviewed_head],
+        );
+    }
+    if git_output(
+        workspace,
+        &[
+            "rev-parse",
+            "--verify",
+            &format!("{landing_ref}^{{commit}}"),
+        ],
+    )
+    .is_err()
+    {
+        return Err(format!("base ref '{landing_ref}' cannot be resolved"));
+    }
+    if !contains(workspace, reviewed_head, head) {
+        return Err(format!(
+            "head {head} does not descend from reviewed head {reviewed_head}"
+        ));
+    }
+    verified_base_update(workspace, reviewed_head, head, &landing_ref)
+}
+
 /// Shared owner retry/landing proof for a provider base-only update. A cached
 /// base never stands in for a successful fetch. Source and native evidence
 /// continue to describe the original immutable accepted candidate.

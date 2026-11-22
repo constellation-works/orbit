@@ -184,6 +184,133 @@ impl OrbitRuntime {
         self.settlement_candidate_with_claims(task, carried, &mut cache)
     }
 
+    /// `task` as a refresh candidate (held/blocked or review delivery PR with
+    /// no live run or active claim owning it), or why it cannot be refreshed.
+    pub(super) fn refresh_candidate(
+        &self,
+        task: Task,
+        carried: &BTreeSet<String>,
+    ) -> Result<Candidate, String> {
+        if !matches!(task.status, TaskStatus::Review | TaskStatus::Blocked) {
+            return Err(format!(
+                "it is '{}'; only a held (blocked) or review delivery task can be refreshed",
+                task.status
+            ));
+        }
+        if let Some(live) = self.live_task_run(&task) {
+            return Err(format!("{live}; that run owns the delivery pull request"));
+        }
+        if carried.contains(&task.id) {
+            return Err(
+                "a live `run auto` leaf carries it; that run owns the delivery pull request"
+                    .to_string(),
+            );
+        }
+        let mut claims_cache = None;
+        let claims = self.settlement_claims(&mut claims_cache);
+        let handoff = self.refresh_handoff_with_claims(&task, claims)?;
+        let follower_prs = match &handoff {
+            Some(handoff) => {
+                BTreeMap::from([(handoff.pull_request, handoff.landing_branch.clone())])
+            }
+            None => {
+                let mut prs = self.released_claim_pull_requests_with_claims(&task.id, claims);
+                prs.extend(self.accepted_handoff_pull_requests_with_claims(&task.id, claims));
+                prs
+            }
+        };
+        let candidate = Candidate {
+            follower_prs,
+            requeued_handoff: None,
+            task,
+            revoked: handoff,
+        };
+        if candidate.pr_numbers().is_empty() {
+            return Err("Orbit recorded no delivery pull request for it".to_string());
+        }
+        Ok(candidate)
+    }
+
+    /// The task's unsettled claim when it is a held/stopped/revoked or
+    /// unapproved handoff with no live landing job owning it; `None` when it
+    /// has no unsettled claim; or why a live claim refuses refresh.
+    fn refresh_handoff_with_claims(
+        &self,
+        task: &Task,
+        claims: Option<&[ClaimInspection]>,
+    ) -> Result<Option<RevokedHandoff>, String> {
+        let Some(claim) = Self::unsettled_task_claim_with_claims(task, claims)? else {
+            return Ok(None);
+        };
+        let unsettled = unsettled_claim_reason(&claim);
+        if claim.claim.phase != ExecutionClaimPhase::HandedOff {
+            return Err(format!(
+                "{unsettled}; that live claim owns the delivery pull request"
+            ));
+        }
+        let tasks = self.stores().tasks();
+        let unreadable = |_| format!("{unsettled}, and its handoff cannot be read");
+        let accepted = tasks
+            .find_accepted_handoff(&claim.claim.claim_id)
+            .map_err(unreadable)?
+            .ok_or_else(|| format!("{unsettled}, and it has no accepted handoff"))?;
+        if claim.unresolved_merge_intent.is_some() {
+            return Err(format!(
+                "{unsettled}, and its merge intent is unresolved; reconcile that merge first"
+            ));
+        }
+        let authority = tasks
+            .landing_start_requests()
+            .map_err(unreadable)?
+            .into_iter()
+            .find(|request| request.handoff_id == accepted.handoff_id)
+            .map(|request| request.state);
+        let attempt = tasks
+            .landing_attempts()
+            .map_err(unreadable)?
+            .into_iter()
+            .find(|attempt| attempt.handoff_id == accepted.handoff_id);
+        if attempt
+            .as_ref()
+            .is_some_and(|attempt| attempt.state == LandingAttemptState::Dispatched)
+        {
+            return Err(format!(
+                "{unsettled}: an owner landing job is live on its pull request"
+            ));
+        }
+        match authority {
+            Some(LandingStartState::Completed) => {
+                return Err(format!(
+                    "{unsettled}: its handoff's landing already completed"
+                ));
+            }
+            Some(LandingStartState::Pending)
+                if !attempt
+                    .as_ref()
+                    .is_some_and(|attempt| attempt.state == LandingAttemptState::Stopped) =>
+            {
+                return Err(format!(
+                    "{unsettled}: its handoff's owner landing is pending"
+                ));
+            }
+            None | Some(LandingStartState::Revoked) | Some(LandingStartState::Pending) => {}
+        }
+        let candidate = accepted.handoff.candidate;
+        let HandoffDelivery::PullRequest { number } = candidate.delivery else {
+            return Err(format!(
+                "{unsettled}: its handoff delivered no pull request"
+            ));
+        };
+        Ok(Some(RevokedHandoff {
+            claim_id: claim.claim.claim_id,
+            handoff_id: accepted.handoff_id,
+            pull_request: number,
+            landing_branch: candidate.landing_branch.clone(),
+            candidate: (authority == Some(LandingStartState::Pending)).then_some(candidate),
+            stopped_reason: None,
+        }))
+    }
+
     /// [`Self::settlement_candidate`] reusing `cache`'s one ledger read.
     pub(super) fn settlement_candidate_with_claims(
         &self,
@@ -623,7 +750,17 @@ impl OrbitRuntime {
                 pull.head_branch, proof.branch
             ));
         }
-        if proof.head != head_sha {
+        if proof.head != head_sha
+            && orbit_engine::verify_refreshed_head_from_base(
+                &self.paths().repo_root,
+                &proof.head,
+                head_sha,
+                &proof.base_branch,
+                Some(&proof.branch),
+                proof.number.parse::<u64>().ok(),
+            )
+            .is_err()
+        {
             differs.push(format!("head {head_sha} (published {})", proof.head));
         }
         if base_branch != Some(proof.base_branch.as_str()) {
@@ -638,7 +775,7 @@ impl OrbitRuntime {
 
     /// The branch the task's own delivery targets: the base its linked run
     /// was submitted against, else the workspace base branch.
-    pub(super) fn delivery_target_branch(&self, task: &Task) -> String {
+    pub(in crate::application) fn delivery_target_branch(&self, task: &Task) -> String {
         task.job_run_id
             .as_deref()
             .filter(|_| self.task_run_is_local(task))

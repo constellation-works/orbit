@@ -39,6 +39,7 @@ pub(crate) fn builtin_mcp_toolset(name: &str) -> Option<McpToolset> {
         }
         "orbit.workflow.ship"
         | "orbit.workflow.land"
+        | "orbit.workflow.refresh"
         | "orbit.workflow.auto"
         | "orbit.workflow.run.resume"
         | "orbit.pipeline.invoke" => T::Dispatch,

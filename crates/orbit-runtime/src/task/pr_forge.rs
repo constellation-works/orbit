@@ -24,6 +24,8 @@ use orbit_types::plugin::is_full_commit_id;
 use orbit_types::workflow::MergeMessage;
 use serde_json::Value;
 
+pub use super::pr_forge_refresh::{BaseMergeInspection, inspect_base_merge};
+
 /// One open pull request as the closure policy matches it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ForgePullRequest {
@@ -100,6 +102,38 @@ pub struct CheckRerunOutcome {
     pub requested: Vec<(u64, String)>,
     /// The first request whose outcome could not be confirmed, and its error.
     pub uncertain: Option<(u64, String, String)>,
+}
+
+/// How a request to refresh a pull request's head with its base branch ended.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PullRequestRefreshOutcome {
+    /// The forge merged the base branch into the pull request head as one
+    /// conflict-free merge commit, starting required checks on the new head.
+    Updated {
+        /// The new pull request head commit after the merge.
+        head_sha: String,
+    },
+    /// The pull request head already contains the base branch tip; nothing
+    /// changed.
+    AlreadyUpToDate {
+        /// The unchanged pull request head commit.
+        head_sha: String,
+    },
+    /// Merging the base branch into the pull request head would conflict on
+    /// these paths; nothing changed.
+    Conflicting {
+        /// Conflicting file paths, sorted and deduplicated.
+        conflicting_paths: Vec<String>,
+        /// Diagnostic detail.
+        reason: String,
+    },
+    /// The forge or policy refused the refresh (moved head, unrelated history,
+    /// branch protection forbidding merge commits, or caller not permitted);
+    /// nothing changed.
+    Refused {
+        /// The refusal reason.
+        reason: String,
+    },
 }
 
 /// How a request to merge a pull request ended when the forge answered it.
@@ -243,6 +277,26 @@ pub trait TaskPrForge: Send + Sync {
     ) -> Result<PullRequestMergeOutcome, OrbitError> {
         Err(OrbitError::Execution(format!(
             "this forge cannot merge pull request #{number}"
+        )))
+    }
+
+    /// Bring pull request `number`'s `head_branch` at `expected_head_sha` up
+    /// to the tip of `base_branch` as one conflict-free merge commit, without
+    /// rebasing, rewriting or force-pushing, starting required checks on the
+    /// new head. Returns [`PullRequestRefreshOutcome::AlreadyUpToDate`] when
+    /// the head already includes the base tip and
+    /// [`PullRequestRefreshOutcome::Conflicting`] with the conflicting paths
+    /// when the merge would conflict.
+    fn update_pull_request_branch(
+        &self,
+        _repo_root: &Path,
+        number: u64,
+        _head_branch: &str,
+        _base_branch: &str,
+        _expected_head_sha: &str,
+    ) -> Result<PullRequestRefreshOutcome, OrbitError> {
+        Err(OrbitError::Execution(format!(
+            "this forge cannot refresh pull request #{number}"
         )))
     }
 
@@ -576,6 +630,23 @@ impl TaskPrForge for GhTaskPrForge {
         }
     }
 
+    fn update_pull_request_branch(
+        &self,
+        repo_root: &Path,
+        number: u64,
+        head_branch: &str,
+        base_branch: &str,
+        expected_head_sha: &str,
+    ) -> Result<PullRequestRefreshOutcome, OrbitError> {
+        super::pr_forge_refresh::update_pull_request_branch_with_gh(
+            repo_root,
+            number,
+            head_branch,
+            base_branch,
+            expected_head_sha,
+        )
+    }
+
     fn authenticated_login(&self, repo_root: &Path) -> Result<String, OrbitError> {
         let stdout = task_forge_gh_request(
             orbit_tools::github_cli::authenticated_login_request(),
@@ -606,7 +677,7 @@ impl TaskPrForge for GhTaskPrForge {
     }
 }
 
-fn view_pull_request(repo_root: &Path, number: u64) -> Result<Value, OrbitError> {
+pub(super) fn view_pull_request(repo_root: &Path, number: u64) -> Result<Value, OrbitError> {
     let stdout = task_forge_gh_request(
         orbit_tools::github_cli::view_pull_request_request(number),
         repo_root,
@@ -619,7 +690,7 @@ fn view_pull_request(repo_root: &Path, number: u64) -> Result<Value, OrbitError>
 /// request: an HTTP 4xx, which `gh` reports as `gh: <reason> (HTTP 405)`. A
 /// timed-out request or rate limit, a server error and a transport failure
 /// leave the outcome unknown or say nothing about the request.
-fn forge_refused_request(stderr: &str) -> bool {
+pub(super) fn forge_refused_request(stderr: &str) -> bool {
     stderr
         .rsplit_once("(HTTP ")
         .and_then(|(_, status)| status.split_once(')'))
@@ -636,7 +707,7 @@ fn has_state(entry: &Value, state: &str) -> bool {
 
 /// The forge drives a task's own pull request through leasing, landing, merge
 /// and its terminal close, so it spends the host's GitHub quota as delivery.
-const FORGE_QUOTA_CALLER: orbit_tools::github_quota::GithubCaller =
+pub(super) const FORGE_QUOTA_CALLER: orbit_tools::github_quota::GithubCaller =
     orbit_tools::github_quota::GithubCaller::Delivery;
 
 /// Run one forge `gh` request in `repo_root` under the host's GitHub quota

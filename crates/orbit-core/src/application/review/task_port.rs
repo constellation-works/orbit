@@ -79,10 +79,32 @@ impl TaskReviewPort for OrbitRuntime {
         };
         if !certificate.verdict.passed()
             || !certificate.validation_complete
-            || certificate.final_candidate.commit != head
             || !certificate.task_ids.contains(&task.id)
         {
             return Ok(false);
+        }
+        if certificate.final_candidate.commit != head {
+            let base_branch = self.delivery_target_branch(task);
+            let pr_number = task
+                .external_refs
+                .iter()
+                .rev()
+                .filter(|reference| {
+                    reference.system == orbit_types::task::GITHUB_PR_EXTERNAL_REF_SYSTEM
+                })
+                .find_map(|reference| reference.id.parse::<u64>().ok());
+            if orbit_engine::verify_refreshed_head_from_base(
+                &self.paths().repo_root,
+                &certificate.final_candidate.commit,
+                head,
+                &base_branch,
+                None,
+                pr_number,
+            )
+            .is_err()
+            {
+                return Ok(false);
+            }
         }
         let meanings = certificate
             .task_ids

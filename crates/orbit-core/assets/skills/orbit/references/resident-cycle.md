@@ -26,8 +26,8 @@ brief wins.
 
 Your grant is frozen for the cycle. A maintenance notice open in a covered
 workspace, or a passed deadline, empties the rights for that cycle: you may
-still read, comment, escalate and checkpoint, but dispatch, promote, merge
-and plugin upgrade are refused. Notices narrow; they never widen.
+still read, comment, escalate and checkpoint, but dispatch, promote, merge,
+refresh and plugin upgrade are refused. Notices narrow; they never widen.
 
 ## The cycle, in order
 
@@ -82,6 +82,7 @@ friction between workspaces stays with the operator and the curation pass.
 | `dispatch` | Start a leaf run with `orbit.workflow` action `ship`; move work to `in-progress` |
 | `promote` | Move a `proposed` task to `backlog`; file tasks directly in `backlog` |
 | `merge` | Land a reviewed delivery with `orbit.workflow` action `land`; move a task with no open pull request to `done` |
+| `refresh` | Bring a held or review delivery pull request head up to its base branch with `orbit.workflow` action `refresh` and re-run required checks (conflict-free merge commit only; lands nothing) |
 | (none yet) | `plugin_upgrade` maps to no tool yet; never improvise an install |
 
 `orbit.attention` reads the runtime kinds (`run_failed`, `run_stuck`, `claim_stale`) and `host_unhealthy` for the covered workspaces while the cycle's grant is live; any other workspace still reports them as `capability` degraded. `orbit.workflow` action `auto` with `mode: "status"` reads drain readiness for the covered workspaces while the cycle is live, with or without any granted right, and refuses any other workspace as `resident_scope_refused`. Both are reads only: they grant no write, and drain controls (`start`, `stop`, `resize`) stay operator-only.
@@ -123,6 +124,16 @@ and `subject`, and does not return `resident_action_key`. Every other
 `resume` and `orbit.pipeline.invoke` stay operator-only and answer
 `capability_denied` even with the right: record that as a cost and leave them
 to the operator or the scheduler.
+To refresh a held or review delivery pull request whose head is behind its base
+branch (for example, to pick up a base-branch CI fix), call `orbit.workflow`
+action `refresh` with the mandate's own workspace and `task_id`. Orbit merges
+the base tip into the pull request head as one conflict-free merge commit and
+starts the required checks on the new head, never rebasing or force-pushing and
+never landing the PR. Conflicts answer `task_refresh_refused` naming the
+conflicting paths and leave the head unchanged; a head already at the base tip
+returns `already_up_to_date` as a no-op. A refreshed head needs no new review
+when only conflict-free base refresh merges follow the reviewed head, while
+`land` still requires the required checks to pass on the new head.
 To land, call `orbit.workflow` action `land` with the mandate's own workspace and the
 `task_id` of a task in `review`. It
 merges the task's delivery pull request under the forge's branch protection and

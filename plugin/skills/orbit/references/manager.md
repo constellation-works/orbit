@@ -98,7 +98,7 @@ busy queue makes the floor the interval.
 
 ## Relay grants verbatim
 
-Authority rights are `dispatch`, `promote`, `merge` and `plugin_upgrade`.
+Authority rights are `dispatch`, `promote`, `merge`, `plugin_upgrade` and `refresh`.
 Anything else — releases, tags, publishing, host changes, config edits,
 secrets — is not grantable to a resident.
 

@@ -1465,7 +1465,7 @@ fn advertised_descriptions_are_complete_and_value_lists_move_to_enums() {
         (
             "orbit_resident_grant",
             "add",
-            &["dispatch", "promote", "merge", "plugin_upgrade"],
+            &["dispatch", "promote", "merge", "plugin_upgrade", "refresh"],
         ),
     ];
     for (tool_name, field, expected) in enum_cases {

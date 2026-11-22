@@ -31,6 +31,7 @@ pub use crate::builtin::github::landing::{
     commit_pull_requests as commit_pull_requests_request,
     merge_pull_request_at_head as merge_pull_request_at_head_request,
     repository_merge_methods as repository_merge_methods_request,
+    update_pull_request_branch as update_pull_request_branch_request,
 };
 pub use crate::builtin::github::logs::{
     LogReadBounds, LogScope, MAX_EVIDENCE_LINES, RunLogRead, RunLogRequests, SOURCE_JOB_API_LOG,

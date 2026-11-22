@@ -29,9 +29,10 @@ use serde_json::Value;
 
 use crate::OrbitRuntime;
 use crate::runtime::plugin::broker::{
-    BROKERED_RESIDENT_LAND_TOOL, BROKERED_RESIDENT_RAISE_TOOL, BROKERED_RESIDENT_REPILOT_TOOL,
-    BROKERED_RESIDENT_REQUEUE_TOOL, BROKERED_RESIDENT_SHIP_TOOL, BrokerDispatch, BrokerRequest,
-    EntryPoint, is_brokered_resident_completion, is_host_credentialed_read,
+    BROKERED_RESIDENT_LAND_TOOL, BROKERED_RESIDENT_RAISE_TOOL, BROKERED_RESIDENT_REFRESH_TOOL,
+    BROKERED_RESIDENT_REPILOT_TOOL, BROKERED_RESIDENT_REQUEUE_TOOL, BROKERED_RESIDENT_SHIP_TOOL,
+    BrokerDispatch, BrokerRequest, EntryPoint, is_brokered_resident_completion,
+    is_host_credentialed_read,
 };
 use crate::runtime::tool_exec::CapabilityEnforcement;
 
@@ -44,6 +45,7 @@ fn brokered_resident_action(tool: &str, input: &Value) -> Option<OrbitBuiltinAct
         BROKERED_RESIDENT_SHIP_TOOL => Some(OrbitBuiltinAction::Workflow(WorkflowVerb::Ship)),
         BROKERED_RESIDENT_RAISE_TOOL => Some(OrbitBuiltinAction::Decision(DecisionVerb::Raise)),
         BROKERED_RESIDENT_LAND_TOOL => Some(OrbitBuiltinAction::Workflow(WorkflowVerb::Land)),
+        BROKERED_RESIDENT_REFRESH_TOOL => Some(OrbitBuiltinAction::Workflow(WorkflowVerb::Refresh)),
         BROKERED_RESIDENT_REPILOT_TOOL => Some(OrbitBuiltinAction::Task(TaskVerb::Repilot)),
         BROKERED_RESIDENT_REQUEUE_TOOL => Some(OrbitBuiltinAction::Task(TaskVerb::Requeue)),
         _ if is_brokered_resident_completion(tool, input) => {

@@ -72,6 +72,7 @@ pub const MUTATING_TOOLS: &[&str] = &[
     "orbit.task.update",
     "orbit.workflow:auto",
     "orbit.workflow:land",
+    "orbit.workflow:refresh",
     "orbit.workflow:ship",
 ];
 

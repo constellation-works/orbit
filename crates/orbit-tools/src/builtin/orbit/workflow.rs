@@ -40,9 +40,10 @@ impl GuardedModes for WorkflowVerb {
                     .err()
                     .map(Err)
             }
-            WorkflowVerb::Ship | WorkflowVerb::Land | WorkflowVerb::RunResume => {
-                ensure_not_managed(ctx).err().map(Err)
-            }
+            WorkflowVerb::Ship
+            | WorkflowVerb::Land
+            | WorkflowVerb::Refresh
+            | WorkflowVerb::RunResume => ensure_not_managed(ctx).err().map(Err),
             WorkflowVerb::RunList | WorkflowVerb::RunObserve | WorkflowVerb::RunShow => None,
         }
     }
@@ -76,6 +77,7 @@ impl GuardedModes for WorkflowVerb {
                 Err(error) => Some(Err(error)),
             },
             WorkflowVerb::Land
+            | WorkflowVerb::Refresh
             | WorkflowVerb::RunObserve
             | WorkflowVerb::RunResume
             | WorkflowVerb::Ship => None,
@@ -96,6 +98,7 @@ impl GuardedModes for WorkflowVerb {
                 reject_unknown_tool_fields(input, &allowed)
             }
             WorkflowVerb::Land
+            | WorkflowVerb::Refresh
             | WorkflowVerb::RunList
             | WorkflowVerb::RunResume
             | WorkflowVerb::RunObserve
@@ -108,6 +111,7 @@ impl GuardedModes for WorkflowVerb {
         match self {
             WorkflowVerb::Auto
             | WorkflowVerb::Land
+            | WorkflowVerb::Refresh
             | WorkflowVerb::RunList
             | WorkflowVerb::RunResume
             | WorkflowVerb::RunObserve

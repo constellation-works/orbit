@@ -139,10 +139,22 @@ flag.
 | `promote` | Move a `proposed` task to `backlog`. |
 | `merge` | Land a reviewed pull request. |
 | `plugin_upgrade` | Install or upgrade a workspace plugin. |
+| `refresh` | Merge the base branch tip into a held or review delivery pull request head (conflict-free) and re-run its required checks. |
 
 The effective authority is what the resident can act on now: the granted
 rights, in the granted workspaces that the mandate also lists. It is empty for
 an `ended` or `invalid` mandate.
+
+Refreshing a delivery pull request (`orbit.workflow` action `refresh`, gated by
+the `refresh` right) brings a held (`blocked`) or `review` task's open Orbit
+delivery pull request up to the tip of its base branch as one conflict-free
+merge commit and starts its required checks. It never rebases, rewrites or
+force-pushes, makes no code edits, refuses conflicts (naming the conflicting
+paths) as well as pull requests owned by a live run or not published by Orbit,
+treats a head already at the base tip as a no-op, and lands nothing (landing
+stays `merge`). A refreshed head keeps its prior review when every commit after
+the reviewed head is a conflict-free refresh merge of the base branch, while
+`land` still requires the required checks to pass on the refreshed head.
 
 Updating friction records (`orbit.friction` action `update`) in covered
 workspaces requires no granted right — observe-only cycles may record landing

@@ -48,6 +48,9 @@ pub(crate) const WORKFLOW_SHIP_OPERATION_ID: &str = "orbit.workflow.ship";
 /// Canonical tool name of a delivery pull request's landing.
 pub(crate) const WORKFLOW_LAND_OPERATION_ID: &str = "orbit.workflow.land";
 
+/// Canonical tool name of a delivery pull request's base-branch refresh.
+pub(crate) const WORKFLOW_REFRESH_OPERATION_ID: &str = "orbit.workflow.refresh";
+
 /// Canonical tool name of `orbit.task.recover` action `repilot`.
 pub(crate) const TASK_REPILOT_OPERATION_ID: &str = "orbit.task.repilot";
 
@@ -56,11 +59,12 @@ pub(crate) const TASK_REQUEUE_OPERATION_ID: &str = "orbit.task.requeue";
 
 /// The operator-row tools a resident cycle reaches through its mandate's
 /// rights instead: ship, re-pilot and requeue under `dispatch`, land under
-/// `merge`. Every other operator row, the other recover actions included,
-/// holds a cycle to the operator capability.
-const RESIDENT_CYCLE_RIGHT_GATED_OPERATIONS: [&str; 4] = [
+/// `merge`, refresh under `refresh`. Every other operator row, the other
+/// recover actions included, holds a cycle to the operator capability.
+const RESIDENT_CYCLE_RIGHT_GATED_OPERATIONS: [&str; 5] = [
     WORKFLOW_SHIP_OPERATION_ID,
     WORKFLOW_LAND_OPERATION_ID,
+    WORKFLOW_REFRESH_OPERATION_ID,
     TASK_REPILOT_OPERATION_ID,
     TASK_REQUEUE_OPERATION_ID,
 ];

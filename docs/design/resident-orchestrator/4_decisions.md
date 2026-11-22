@@ -7,11 +7,11 @@ status: Draft
 feature: resident-orchestrator
 doc_role: decisions
 type: design
-summary: "Why the rewrite owns coordination only, rides the clock, keeps loops out of chats and consoles, gates widening on the human, trusts only Orbit state, keeps evolution apart from friction, lets `dispatch` re-pilot and requeue, lets live cycles read drain status, and lets cycles update friction without a right or re-homing"
+summary: "Why the rewrite owns coordination only, rides the clock, keeps loops out of chats and consoles, gates widening on the human, trusts only Orbit state, keeps evolution apart from friction, lets `dispatch` re-pilot and requeue, lets live cycles read drain status, lets cycles update friction without a right or re-homing, and lets `refresh` merge base into a delivery PR without re-review"
 tags: [resident-orchestrator]
 paths: ["crates/orbit-core/src/application/resident/**", "crates/orbit-core/assets/jobs/**"]
 related_features: [distributed-drain, routines, activity-job, human-decision-channel, fleet-notices]
-related_artifacts: [ORB-21229, ORB-12488, ORB-10815, ORB-10776, ORB-26832, ORB-26833]
+related_artifacts: [ORB-21229, ORB-12488, ORB-10815, ORB-10776, ORB-26832, ORB-26833, ORB-26834]
 ---
 
 # Resident Orchestrator — Decisions
@@ -409,6 +409,72 @@ ledger row there.
   its covered workspaces without a right grant, relying on the action ledger for
   auditability and recovery dedupe rather than a human right gate.
 
+## Refresh merges base into the PR head without re-review
+
+**Recorded:** 2026-11-22 · [ORB-26834] · Requested by Daniel in the chief's chat
+(2026-11-22, `ORB-26762` follow-up); merge-commit and review-carry-over rules
+decided by the formation chief on Daniel's request (2026-11-22)
+
+**Code anchors:** `crates/orbit-types/src/workflow/resident/mandate.rs` `ResidentRight::Refresh`;
+`crates/orbit-runtime/src/authorization.rs` `RESIDENT_CYCLE_RIGHT_GATED_OPERATIONS`;
+`crates/orbit-core/src/adapter/tool_host/resident_guard.rs` `resident_guard_class`;
+`crates/orbit-core/src/application/task/external_merge/refresh.rs` `OrbitRuntime::refresh_task_pull_request`;
+`crates/orbit-engine/src/executor/automation/vcs/checks/base_update.rs` `verify_refreshed_head_from_base`;
+`crates/orbit-core/src/application/review/task_port.rs` `OrbitRuntime::handoff_landing_review_ready`;
+`crates/orbit-core/src/application/task/external_merge/land.rs` `OrbitRuntime::merge_delivery_pull_request`
+
+### Context
+
+During the overnight mandate [ORB-26762], three mergeable delivery pull requests
+stayed held after flaky tests on the base branch were fixed on `agent-main`. The
+resident held `dispatch`, `promote` and `merge`, none of which could advance a
+published delivery branch to pick up the base-branch fix and re-run required
+checks, so each waited for manual owner recovery.
+
+Two questions needed a standing rule: how Orbit updates the branch (merge commit
+versus rebase/force-push), and whether the review recorded for the head before
+the refresh still counts at landing. Rebasing rewrites published commits,
+invalidating provenance and squash markers and requiring a force-push. Requiring
+a new review after every base refresh would burn reviewer budget even though the
+base commits were already reviewed when they landed.
+
+### Decision
+
+Add a fifth right, `refresh`, granted and narrowed like the others, mapping to
+`orbit.workflow` action `refresh` (`orbit.workflow.refresh`), executed through
+the run's broker with the host's credentials like `land`:
+
+- A refresh brings one held (`blocked`) or `review` task's open Orbit delivery
+  pull request up to the tip of its base branch as **one conflict-free merge
+  commit**. It never rebases, rewrites or force-pushes, makes no code edits, and
+  lands nothing (`merge` still owns landing).
+- Any conflict is refused as `task_refresh_refused` naming the conflicting paths
+  and leaving the head unchanged; pull requests owned by a live run or active
+  claim, or not published by an Orbit delivery, are refused; unrelated histories
+  or forge rules that would require rewriting a published commit are refused. A
+  head that already includes the base tip is a no-op (`already_up_to_date`).
+  Each call is keyed on the resident's action ledger.
+- A refreshed head needs no new review: the landing path accepts a head when a
+  valid review certificate covered an ancestor head and every commit after that
+  reviewed head along the first-parent chain is a conflict-free two-parent merge
+  commit of a commit contained in the base branch, with its tree equal to the
+  clean `git merge-tree` of its parents (zero conflict resolution or extra
+  edits). `land` still requires the required checks to pass on the refreshed
+  head. Any other commit after the reviewed head invalidates the review, as
+  before.
+
+### Consequences
+
+- Residents holding `refresh` clear base-branch CI flakes on held or review
+  delivery pull requests without writing files, dispatching a new implementer,
+  or re-running review.
+- Published commit SHAs, provenance and squash markers remain intact, and any
+  conflict or non-base edit still fails closed.
+- Cost: a refreshed pull request carries merge commit(s) of the base branch in
+  its branch history until squash-landed, and landing must verify the
+  first-parent merge chain in the owner's Git object store whenever the PR head
+  moved past the reviewed commit.
+
 ## Task References
 
 - [ORB-21229] — rewrote the resident-orchestrator design and recorded these decisions
@@ -416,6 +482,7 @@ ledger row there.
 - [ORB-26184] — refuse resident cycles' candidate discards during requeue
 - [ORB-26832] — admit `orbit.workflow.auto` `status` reads for live resident cycles without operator capability
 - [ORB-26833] — let resident cycles update friction records in covered workspaces without a right and without re-homing
+- [ORB-26834] — add the `refresh` right to merge base into a held or review delivery pull request head and re-run required checks without re-review
 - [ORB-25951] — on-call whose chief ruling delegated and conditioned that change
 - [ORB-12488] — removed the epic pipeline and the earlier resident-orchestrator folder
 - [ORB-10815] — revised the earlier design to v2: epic-owned worktree and windowed drain

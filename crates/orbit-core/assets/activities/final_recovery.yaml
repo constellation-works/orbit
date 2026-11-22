@@ -653,6 +653,7 @@ spec:
     - orbit.run:show
     - orbit.run:list
     - orbit.workflow:land
+    - orbit.workflow:refresh
     - orbit.workflow:ship
     - orbit.task.add
     - orbit.task.update

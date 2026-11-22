@@ -578,6 +578,7 @@ spec:
     - orbit.run:resume
     - orbit.run:show
     - orbit.workflow:land
+    - orbit.workflow:refresh
     - orbit.workflow:ship
   proc_disallowed_programs:
     - sudo
