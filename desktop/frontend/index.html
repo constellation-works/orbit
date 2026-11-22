@@ -9,7 +9,7 @@
       color-scheme: light dark;
       --bg: #fafafa;
       --fg: #0a0a0a;
-      --muted: #5c5c66;
+      --fg-soft: #3a3a44;
       --accent: #3b6fe0;
       --border: #e2e2e6;
       --danger: #c2372b;
@@ -18,7 +18,7 @@
       :root {
         --bg: #0a0a0a;
         --fg: #ededf0;
-        --muted: #9a9aa6;
+        --fg-soft: #c6c6ce;
         --accent: #6e9fff;
         --border: #26262c;
         --danger: #ff7a6e;
@@ -28,7 +28,7 @@
     html, body { height: 100%; margin: 0; }
     body {
       background: var(--bg);
-      color: var(--fg);
+      color: var(--fg-soft);
       font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Ubuntu, Cantarell, sans-serif;
       display: grid;
       place-items: center;
@@ -37,8 +37,8 @@
     }
     main { width: min(440px, calc(100% - 32px)); text-align: center; }
     svg { width: 56px; height: 56px; }
-    h1 { font-size: 17px; font-weight: 600; margin: 20px 0 6px; }
-    p { margin: 0; color: var(--muted); -webkit-user-select: text; user-select: text; overflow-wrap: anywhere; }
+    h1 { font-size: 17px; font-weight: 600; margin: 20px 0 6px; color: var(--fg); }
+    p { margin: 0; -webkit-user-select: text; user-select: text; overflow-wrap: anywhere; }
     .error h1 { color: var(--danger); }
     .spinner {
       width: 18px; height: 18px; margin: 18px auto 0;
