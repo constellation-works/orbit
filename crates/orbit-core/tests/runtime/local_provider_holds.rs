@@ -593,7 +593,7 @@ model = "muse-spark-1.3"
     }
 
     let release = fx.repo.join("release-workers");
-    let _owned_workers = super::worker_fixture::install_owned_workers(&release, fx.repo.clone());
+    let mut owned_workers = super::worker_fixture::install_owned_workers(&release, fx.repo.clone());
     let admitted_b = fx
         .runtime
         .submit_pipeline_run(
@@ -643,6 +643,10 @@ model = "muse-spark-1.3"
             &PipelineState::new(verify_run.run_id.clone(), verify_run.job_id, verify_input),
         )
         .unwrap();
+    // The substitute workers hold the single max_active_runs slot until they
+    // are released; settle them before verify_run so it does not wait out the
+    // 120-second release timeout.
+    owned_workers.release_and_wait(&[admitted_b.run_id.clone(), admitted_explicit.run_id.clone()]);
     run_worker(&verify_run.run_id);
     assert_eq!(
         fx.runtime.show_job_run(&verify_run.run_id).unwrap().state,
