@@ -294,6 +294,7 @@ const ADMITTED_SUBCOMMANDS: &[&str] = &[
     "fetch",
     "for-each-ref",
     "init",
+    "log",
     "ls-tree",
     "ls-remote",
     "merge-base",
@@ -307,7 +308,13 @@ const ADMITTED_SUBCOMMANDS: &[&str] = &[
 
 /// Long options that hand Git a program to execute. Git accepts any unique
 /// prefix of a long option, so a prefix of these is refused too.
-const PROGRAM_OPTIONS: &[&str] = &["upload-pack", "receive-pack", "exec"];
+const PROGRAM_OPTIONS: &[&str] = &[
+    "upload-pack",
+    "receive-pack",
+    "exec",
+    "ext-diff",
+    "textconv",
+];
 
 /// Admit an argv for `git` before it reaches the process boundary.
 ///
@@ -415,11 +422,13 @@ pub fn run_git(workspace_path: &Path, args: &[&str]) -> Result<GitCommandOutput,
 /// Children use the C locale without `LANGUAGE` so stderr classification is
 /// stable, and discard inherited `GIT_DIR` and `GIT_CONFIG*` overrides. Callers
 /// select repositories and admitted configuration explicitly through argv.
-pub fn run_git_within(
-    workspace_path: &Path,
-    args: &[&str],
-    deadline: Duration,
-) -> Result<GitCommandOutput, OrbitError> {
+/// Build a sanitized `git` [`Command`] rooted at `workspace_path` after
+/// validating `args` through the same argv admission rules as [`run_git`].
+///
+/// Callers that need streaming or larger capture limits than [`run_git_within`]
+/// use this constructor so every `git` invocation shares one argv admission
+/// barrier and clean environment.
+pub fn git_command(workspace_path: &Path, args: &[&str]) -> Result<Command, OrbitError> {
     let admitted = admitted_git_args(args)?;
     let mut command = Command::new("git");
     command
@@ -436,6 +445,15 @@ pub fn run_git_within(
             command.env_remove(name);
         }
     }
+    Ok(command)
+}
+
+pub fn run_git_within(
+    workspace_path: &Path,
+    args: &[&str],
+    deadline: Duration,
+) -> Result<GitCommandOutput, OrbitError> {
+    let mut command = git_command(workspace_path, args)?;
     let output =
         run_bounded_capped(&mut command, deadline, GIT_OUTPUT_LIMIT).map_err(
             |error| match error {

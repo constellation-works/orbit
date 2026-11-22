@@ -13,8 +13,9 @@ use super::super::persist::source_superseded;
 use super::super::source::{SourceSnapshot, resolve_source_snapshot};
 use super::super::validation_tools::ImplementationLane;
 use super::super::{
-    CONTEXT_CREATION_IDENTITY, CONTEXT_CREATION_SELECTORS, OPERATOR_TOOL_CANDIDATES,
-    VALIDATION_TOOL_WARNINGS, requested_base_branch,
+    COMMENT_HYGIENE_BATCH, COMMENT_HYGIENE_BATCHES, CONTEXT_CREATION_IDENTITY,
+    CONTEXT_CREATION_SELECTORS, OPERATOR_TOOL_CANDIDATES, VALIDATION_TOOL_WARNINGS,
+    comment_hygiene, requested_base_branch,
 };
 use super::exclusion::ExcludedEvidence;
 use super::{exclusion, repilot};
@@ -425,6 +426,14 @@ pub(crate) fn prepare(
         if !operator_tools.is_empty() {
             snapshot[OPERATOR_TOOL_CANDIDATES] = json!(operator_tools);
         }
+        if comment_hygiene::is_comment_hygiene_batch_task(&task) {
+            snapshot[COMMENT_HYGIENE_BATCH] = comment_hygiene::prepare_comment_hygiene_batch(
+                runtime,
+                &workspace_root,
+                &task,
+                source.as_ref(),
+            );
+        }
         let creation = runtime
             .context_creation_state(&task)
             .map_err(|error| DispatchError::action_failed(action, error.to_string()))?;
@@ -590,6 +599,19 @@ pub(crate) fn prepare(
                 .collect::<serde_json::Map<_, _>>();
             if !operator_tools.is_empty() {
                 partition[OPERATOR_TOOL_CANDIDATES] = Value::Object(operator_tools);
+            }
+            let comment_hygiene_batches = ids
+                .iter()
+                .filter_map(|id| {
+                    task_snapshots
+                        .iter()
+                        .find(|snapshot| snapshot["task_id"].as_str() == Some(id.as_str()))
+                        .and_then(|snapshot| snapshot.get(COMMENT_HYGIENE_BATCH))
+                        .map(|batch| (id.clone(), batch.clone()))
+                })
+                .collect::<serde_json::Map<_, _>>();
+            if !comment_hygiene_batches.is_empty() {
+                partition[COMMENT_HYGIENE_BATCHES] = Value::Object(comment_hygiene_batches);
             }
             if let Some(rechecks) =
                 super::super::recheck::partition_rechecks(ids.iter(), &task_snapshots)

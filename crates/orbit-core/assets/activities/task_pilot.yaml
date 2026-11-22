@@ -86,6 +86,16 @@ spec:
                     type: integer
                   tool:
                     type: string
+          comment_hygiene_batches:
+            description: >
+              Maps each selector-free `comment-hygiene` chore in the partition
+              to its host-verified deterministic batch preparation payload
+              (`status`: `ready`, `empty` or `hold`, `selectors`, `selected`,
+              `ranked_candidates`, `inventory`, `ledger`, `open_tasks` and
+              `hold_reasons`). Absent when no task in the partition needs one.
+            type: object
+            additionalProperties:
+              type: object
           rechecks:
             type: object
             additionalProperties:
@@ -547,12 +557,40 @@ spec:
       selection to preparation — it says preparation returns the selected
       `file:` selectors, or the template declares no footprint for a batch
       known only after selection. It does not apply to a worker-selected
-      batch inside a declared footprint, above. Within the bounded footprint
-      lookup authority above, reconcile every predecessor source the task's
-      selection contract requires before declaring the batch verified.
-      Enumerate the required history (including all required statuses and any
-      omitted list pages), read the relevant summaries or artifacts in full,
-      and establish
+      batch inside a declared footprint, above.
+      When `partition.comment_hygiene_batches` carries an entry for this task,
+      that host-computed payload is the authoritative reconciliation of tracked
+      files, standard exclusions, carried ledgers, unchanged-file drops,
+      open-task footprints, repeat-skip holds, git commit dates and batch caps
+      at `source_revision`:
+      - `status: "ready"`: check only whether the repository's own guidance
+        (its agent guide, contribution guide, linter or formatter config)
+        excludes any path in `selected`. If none are excluded, return
+        `selectors` verbatim in order as `context_files_after`. If repository
+        guidance excludes a selected path, drop it and fill in exact order from
+        the next eligible entries of `ranked_candidates` while keeping the
+        6-file cap, 1,500-line budget and >800-line-alone rule; never select a
+        path absent from `ranked_candidates`, never reorder candidates, and
+        cite the host reconciliation (ledger provenance, unchanged drops,
+        open-task exclusions with holding task IDs, repeat-skip holds, and any
+        repository-guidance drops) in `assessment_rationale`.
+      - `status: "empty"`: complete reconciliation left zero eligible files;
+        return `disposition: "verified_no_diff"` with empty
+        `context_files_after` and cite the host reconciliation in `evidence`.
+      - `status: "hold"`: required ledger or footprint evidence was missing,
+        unreadable or malformed. Do NOT return a failed envelope and do NOT
+        publish provisional selectors or `verified_no_diff`. Return
+        `disposition: "selectors"` with `context_files_after: []`,
+        `confidence: "low"`, `evidence_gaps` naming each source in
+        `hold_reasons`, and a holding `utility_warnings` object
+        (`holds_promotion: true`) naming those unreadable or missing sources so
+        apply persists an honest footprint hold with empty `context_files`.
+      For any other task-directed oldest-first batch without a host-computed
+      payload, reconcile every predecessor source the task's selection contract
+      requires within the bounded footprint lookup authority above before
+      declaring the batch verified. Enumerate the required history (including
+      all required statuses and any omitted list pages), read the relevant
+      summaries or artifacts in full, and establish
       each eligible path's latest recorded validation date across that history.
       Use the contract's fallback only when complete history contains no
       validation for that path; an unread source is not evidence of absence.

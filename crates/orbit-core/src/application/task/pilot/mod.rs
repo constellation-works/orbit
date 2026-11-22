@@ -45,6 +45,7 @@ mod audit;
 pub(crate) mod auto_effort;
 mod blockers;
 mod cfg_gate;
+mod comment_hygiene;
 mod consequential;
 mod drain_promotion;
 mod freshness;
@@ -69,9 +70,9 @@ pub(crate) use admission::{
 pub(crate) use apply::apply;
 pub(super) use assessment::member_ready;
 use assessment::{
-    SelectorCheck, contract_conflicts, normalize_evidence_gaps, required_machine, required_os,
-    retained_review_evidence, review_filed, reviewed_evidence_drops, routing_os,
-    unauthorized_missing_targets, user_facing_ui, validate_after_selectors,
+    SelectorCheck, ValidatedSelectors, contract_conflicts, normalize_evidence_gaps,
+    required_machine, required_os, retained_review_evidence, review_filed, reviewed_evidence_drops,
+    routing_os, unauthorized_missing_targets, user_facing_ui, validate_after_selectors,
     validate_recommendations,
 };
 pub(crate) use blockers::{normalize_pilot_self_blockers, pilot_blocker_task_ids};
@@ -208,6 +209,15 @@ pub(super) const VALIDATION_TOOL_WARNINGS: &str = "validation_tool_warnings";
 /// pilot classifies in `operator_tool_classifications` [ORB-21291]. Written
 /// only when a task has one, so other tasks keep their prepared shape.
 pub(super) const OPERATOR_TOOL_CANDIDATES: &str = "operator_tool_candidates";
+
+/// Prepared-snapshot field carrying the host-verified deterministic
+/// `comment-hygiene` batch preparation result [ORB-26787]. Written only for
+/// selector-free `comment-hygiene` chores.
+pub(super) const COMMENT_HYGIENE_BATCH: &str = "comment_hygiene_batch";
+
+/// Partition field mapping each qualifying `comment-hygiene` task ID to its
+/// deterministic batch preparation payload [ORB-26787].
+pub(super) const COMMENT_HYGIENE_BATCHES: &str = "comment_hygiene_batches";
 
 /// Prepared-snapshot fields carrying the task's durable context creation
 /// grant: the exact selectors it authorizes and the identity of the record.
