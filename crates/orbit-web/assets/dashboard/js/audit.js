@@ -688,11 +688,26 @@ function pickAuditToolFailuresTab(tab) {
 }
 
 function buildAuditSummaryTable(items, cols, onRowClick) {
+  const formatCell = (col, item) => (col.format ? col.format(item[col.key]) : item[col.key]);
+  const secondaryCols = cols.filter((col) => col.secondary);
+  const foldModelInNarrow = cols.some((col) => col.key === "model") && secondaryCols.length > 0;
+
   const table = el("table", { class: "summary-table" });
   const thead = el("thead");
   const tr = el("tr");
   for (const c of cols) {
-    const th = el("th", { class: `${c.num ? "num" : ""} ${c.secondary ? "summary-secondary" : ""}`, text: c.label, title: c.title });
+    const classes = [
+      c.num ? "num" : "",
+      c.secondary ? "summary-secondary" : "",
+      foldModelInNarrow && c.key === "model" ? "summary-narrow-hide" : "",
+    ].filter(Boolean).join(" ");
+    const th = el("th", { class: classes, title: c.title });
+    if (foldModelInNarrow && c.key === "tool") {
+      th.appendChild(el("span", { class: "summary-narrow-only", text: "model / " }));
+      th.appendChild(document.createTextNode(c.label));
+    } else {
+      th.textContent = c.label;
+    }
     th.dataset.column = c.key;
     tr.appendChild(th);
   }
@@ -704,21 +719,54 @@ function buildAuditSummaryTable(items, cols, onRowClick) {
     const row = el("tr");
     if (onRowClick) {
       row.classList.add("clickable");
+      const metricSummary = cols
+        .filter((col) => col.num)
+        .map((col) => {
+          const label = col.key === "unexpected" ? "unexpected" : col.label;
+          const value = formatCell(col, item);
+          return `${label}: ${value ?? "-"}`;
+        })
+        .join(", ");
+      const actionSummary = item.tool ? `Filter Events by ${item.tool}` : null;
+      const description = [actionSummary, metricSummary].filter(Boolean).join("; ");
       // The row is the control. A cell title would be a native tooltip on
-      // that button; the cells already show their values.
-      makeToggleRow(row, { onToggle: () => onRowClick(item) });
+      // that button; the values stay visible or in the accessible description.
+      makeToggleRow(row, { onToggle: () => onRowClick(item), description });
     }
     for (const c of cols) {
-      const val = c.format ? c.format(item[c.key]) : item[c.key];
+      const val = formatCell(c, item);
       const title = c.num ? String(val ?? "") : cols.map(col => {
-        const value = col.format ? col.format(item[col.key]) : item[col.key];
+        const value = formatCell(col, item);
         return `${col.title || col.label}: ${value ?? "-"}`;
       }).join("; ");
-      const td = el("td", { class: `${c.num ? "num" : ""} ${c.secondary ? "summary-secondary" : ""}` });
+      const classes = [
+        c.num ? "num" : "",
+        c.secondary ? "summary-secondary" : "",
+        foldModelInNarrow && c.key === "model" ? "summary-narrow-hide" : "",
+      ].filter(Boolean).join(" ");
+      const td = el("td", { class: classes });
       if (!onRowClick) td.title = title;
-      if (c.render) td.textContent = c.render(item[c.key], item, td);
-      else if (c.key === "tool") appendToolIdentifier(td, val);
-      else td.textContent = val ?? "";
+      if (c.render) {
+        td.textContent = c.render(item[c.key], item, td);
+      } else if (c.key === "tool") {
+        if (foldModelInNarrow) {
+          td.appendChild(el("div", { class: "summary-narrow-model", text: item.model ?? "" }));
+        }
+        const toolNode = el("div", { class: "summary-tool-id" });
+        appendToolIdentifier(toolNode, val);
+        td.appendChild(toolNode);
+        if (secondaryCols.length > 0) {
+          const secondaryText = secondaryCols
+            .map((col) => {
+              const value = formatCell(col, item);
+              return `${value ?? "-"} ${col.label}`;
+            })
+            .join(" · ");
+          td.appendChild(el("div", { class: "summary-secondary-meta", text: secondaryText }));
+        }
+      } else {
+        td.textContent = val ?? "";
+      }
       td.dataset.column = c.key;
       row.appendChild(td);
     }

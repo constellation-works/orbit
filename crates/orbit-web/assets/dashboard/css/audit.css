@@ -478,9 +478,21 @@ td.codebase-empty { padding: var(--space-16) var(--space-14); }
   }
 }
 
-/* Secondary counts remain in the row's title and reappear in wider cards. */
+.summary-narrow-only,
+.summary-narrow-model,
+.summary-secondary-meta { display: none; }
+
+/* At narrow card widths, hide the separate secondary (and By model's model)
+   columns so numeric columns keep room, and show them inside the tool column
+   so touch and assistive-technology users still see every value. */
 @container (max-width: 420px) {
-  .summary-table .summary-secondary { display: none; }
+  .summary-table .summary-secondary,
+  .summary-table .summary-narrow-hide { display: none; }
+  .summary-table th.summary-narrow-hide + th,
+  .summary-table td.summary-narrow-hide + td { padding-inline-start: var(--space-12); }
+  .summary-table .summary-narrow-only { display: inline; }
+  .summary-table .summary-narrow-model { display: block; color: var(--fg); margin-bottom: var(--space-2); }
+  .summary-table .summary-secondary-meta { display: block; color: var(--fg-dim); margin-top: var(--space-2); }
 }
 .summary-table tr.clickable { cursor: pointer; }
 .summary-table tr.clickable:hover td { background: rgba(110, 159, 255, 0.08); color: var(--accent-hover); }

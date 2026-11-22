@@ -1178,12 +1178,14 @@ export function pinnedInfoHint(text, { trigger = null, preserveAction = false } 
 //
 // `expanded` is omitted for rows that navigate instead of disclosing; those get
 // button semantics with no expansion state. `controls` names the detail node
-// when the row renders one with a stable id.
-export function makeToggleRow(node, { expanded, onToggle, controls } = {}) {
+// when the row renders one with a stable id. `description` sets
+// `aria-description` when the row's label does not state its full effect.
+export function makeToggleRow(node, { expanded, onToggle, controls, description } = {}) {
   node.tabIndex = 0;
   node.setAttribute("role", "button");
   if (expanded != null) node.setAttribute("aria-expanded", String(!!expanded));
   if (controls) node.setAttribute("aria-controls", controls);
+  if (description) node.setAttribute("aria-description", description);
   node.addEventListener("click", onToggle);
   node.addEventListener("keydown", (event) => {
     if (event.key !== "Enter" && event.key !== " ") return;
