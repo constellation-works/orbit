@@ -14,6 +14,7 @@ use super::super::{
 use super::admission::PreparedTaskSnapshot;
 use super::task::{Assessed, Scope, Settled, refused};
 use super::{ApplyContext, footprint, invalid_finding};
+use crate::application::task::TaskAutomationPort;
 use orbit_types::task::{Task, TaskComplexity};
 use serde_json::{Value, json};
 
@@ -84,8 +85,14 @@ pub(super) fn assess_with(
         user_facing_ui(action, task_id, &assessment).map_err(refused(task_id, "invalid"))?;
     // A host-computed comment-hygiene batch that came up empty has no work, not
     // a no-diff deliverable.
+    let source = context.source.map(|_| context.runtime.bounded_source());
     let no_diff_expected = snapshot.comment_hygiene_batch.is_none()
-        && VerifiedNoDiff::expects_no_repository_diff(&assessment, &scope.after, &current.tags);
+        && VerifiedNoDiff::expects_no_repository_diff(
+            &assessment,
+            &scope.after,
+            &current.tags,
+            source.as_deref(),
+        );
     footprint::hold_unresolved_footprint(&mut assessment, recommended, complexity);
     if let Some(batch) = snapshot.comment_hygiene_batch.as_ref() {
         super::super::comment_hygiene::attach_comment_hygiene_hold(&mut assessment, batch);
