@@ -41,7 +41,7 @@ import { refreshDashboardNow, reschedulePolling, setStreamCoverage } from './js/
 import { fetchAndRenderPlugins } from './js/plugins.js';
 import { fetchAndRenderLeaseLandings, fetchAndRenderLeases, syncLeasesRailItem } from './js/leases.js';
 import { fetchAndRenderNoticeBanner, fetchAndRenderNotices } from './js/notices.js';
-import { fetchAndRenderResidents } from './js/operations-residents.js';
+import { fetchAndRenderResidents, setResidentDetailId } from './js/operations-residents.js';
 import { checkHostConnection, chooseHost, hostLevelFailure, initHostSwitcher, showHostFailure } from './js/host-switch.js';
 import {
   renderRunDetailEmpty,
@@ -383,6 +383,7 @@ function routerContext() {
     setDrainView: (mode) => setDockMode(mode),
     setDockRouteShown,
     showDockBesideList,
+    setResidentDetailId,
 
     // Events and Codebase pass-throughs (re-exported here for router;
     // imported at top of this file)

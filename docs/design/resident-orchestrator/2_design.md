@@ -491,9 +491,7 @@ The dashboard runs the tools with its own session envelope (Agent, plus Operator
 `--operator`), never the terminal it was started from. So the tools' own authority rules apply
 unchanged.
 
-The start flow opens in a dialog so it fits the dock at phone widths. Legacy
-`#operations/residents` links open Tasks with that dock tab selected. The tab
-counts non-ended mandates, omitting the count at zero.
+The dock keeps one compact card per live resident: its one-line ellipsised goal, status pill, task id, crew, deadline, next wake, last checkpoint time, and its warning line when present. Ended mandates stay behind the `Ended (N)` disclosure and collapse to one row each (goal, `ended`, task id, and when it stopped). Each card has a `Details` button that opens a wide native modal `<dialog>` (`#resident-detail-dialog`) holding the full mandate state — Status (the full-status grid, status line, open requests and controls), Current authority (effective rights, workspaces, effect, and the widen/narrow form), Latest checkpoint (actions, decisions, costs, requests, and notes), and History (exit criteria and authority history) — with all existing controls and gating unchanged. Opening a resident's details sets `#tasks/residents/<task-id>` so reload, Back/Forward and pasted links reopen that dialog; closing via `Esc` or the `esc` close button returns to `#tasks/residents` and restores focus to the card's `Details` button, and following a task link inside the dialog closes it and navigates. Background refreshes keep an open dialog open, preserve each `detailsPanel` disclosure's open state, and keep its scroll position. Both the details dialog and the start flow (`#resident-start-dialog`) fill the viewport at phone widths. Legacy `#operations/residents` links normalize in place to `#tasks/residents`. The tab counts non-ended mandates, omitting the count at zero.
 
 The start flow offers the assessed complexity tiers `low`, `medium`, `hard` and `xhard`;
 the API validates the submitted tier. Repeating a widening whose rights and workspaces are
