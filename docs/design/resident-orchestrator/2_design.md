@@ -429,8 +429,10 @@ left `started` is refused as `resident_action_in_doubt` for the agent to check b
 - Writes other than `orbit.friction` action `update` from a resident run that this workspace's runtime does not hold (a cycle run in another
   catalog workspace) are refused as `resident_scope_refused`: cross-workspace task writes through another
   workspace's MCP server are not supported in this slice. `orbit.friction` action `update` in a covered workspace on the same host records its action ledger row on the mandate's home workspace, while updates carrying `rehome_to` or `move` are refused as `resident_tool_refused`.
-- `plugin_upgrade` maps to no builtin tool yet; `orbit.task.update` with `approve` or `force`,
-  `orbit.notice.close` and `orbit.resident.grant` are refused to a cycle.
+- `plugin_upgrade` maps to no builtin tool yet; `orbit.task.update` with `approve` or `force`
+  and `orbit.resident.grant` are refused to a cycle. `orbit.notice.close` is admitted only for
+  notices posted by the mandate's own cycles in its own workspace; a cycle cannot post a
+  `maintenance` notice, so it cannot close the notice that narrows its authority.
 - The heartbeat counts from the last cycle start, not the last checkpoint, so a cycle that never
   checkpoints still cannot fire faster than the heartbeat.
 
