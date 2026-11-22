@@ -152,10 +152,13 @@ pub fn unset_key(
 /// Clear one key from `scope`'s file only when its admitted current effective
 /// value still equals its admitted current removal fallback.
 ///
-/// Re-resolves the layered configuration under the target file's write lock so
-/// a concurrent edit to either layer cannot turn bulk cleanup into a silent
-/// effective-value change. An unknown (`None`) or mismatched fallback refuses
-/// without modifying the file.
+/// Re-resolves the layered configuration under the target file's write lock,
+/// and for a workspace target under the global file's write lock as well, so a
+/// concurrent edit to either layer cannot turn bulk cleanup into a silent
+/// effective-value change: a global write either lands before the fallback is
+/// read (and the unset refuses) or waits until the workspace file is saved.
+/// An unknown (`None`) or mismatched fallback refuses without modifying the
+/// file.
 pub fn unset_key_preserving_effective(
     runtime: &OrbitRuntime,
     key: &str,
@@ -172,6 +175,7 @@ pub fn unset_key_preserving_effective(
         runtime,
         scope,
         ConfigWriteInit::RequireExisting,
+        FallbackLock::Hold,
         |store| {
             if !store.is_key_set(key) {
                 return Err(OrbitError::InvalidInput(format!(
@@ -389,12 +393,23 @@ fn write_store<T>(
     init: ConfigWriteInit,
     edit: impl FnOnce(&mut ConfigStore) -> Result<T, OrbitError>,
 ) -> Result<(ConfigStore, T), OrbitError> {
-    match write_store_conditional(runtime, scope, init, |store| {
+    match write_store_conditional(runtime, scope, init, FallbackLock::Skip, |store| {
         edit(store).map(ConditionalEdit::<T, std::convert::Infallible>::Save)
     })? {
         ConditionalWrite::Saved(store, value) => Ok((*store, value)),
         ConditionalWrite::Aborted(never) => match never {},
     }
+}
+
+/// Whether a workspace transaction also holds the global file's write lock.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum FallbackLock {
+    /// Lock only the target file.
+    Skip,
+    /// For a workspace target, hold the global write lock around the whole
+    /// transaction, so every global writer either saved before `edit` read
+    /// the global fallback or waits until the workspace file is saved.
+    Hold,
 }
 
 /// Locked config transaction whose `edit` may refuse before saving, leaving
@@ -403,6 +418,7 @@ fn write_store_conditional<T, R>(
     runtime: &OrbitRuntime,
     scope: ConfigScope,
     init: ConfigWriteInit,
+    fallback_lock: FallbackLock,
     edit: impl FnOnce(&mut ConfigStore) -> Result<ConditionalEdit<T, R>, OrbitError>,
 ) -> Result<ConditionalWrite<T, R>, OrbitError> {
     if scope == ConfigScope::Workspace {
@@ -422,23 +438,78 @@ fn write_store_conditional<T, R>(
         ConfigScope::Global => global_config_path(runtime),
         ConfigScope::Workspace => workspace_config_path(runtime),
     };
-    ConfigStore::with_write_lock(&path, || {
-        let mut store = match scope {
-            ConfigScope::Global => ConfigStore::open(ConfigScope::Global, path.clone())?,
-            ConfigScope::Workspace => ConfigStore::open_for_workspace_set(
-                path.clone(),
-                &global_config_path(runtime),
-                init.mode(),
-            )?,
-        };
-        match edit(&mut store)? {
-            ConditionalEdit::Save(edited) => {
-                store.save()?;
-                Ok(ConditionalWrite::Saved(Box::new(store), edited))
+    let transaction = || {
+        ConfigStore::with_write_lock(&path, || {
+            let mut store = match scope {
+                ConfigScope::Global => ConfigStore::open(ConfigScope::Global, path.clone())?,
+                ConfigScope::Workspace => ConfigStore::open_for_workspace_set(
+                    path.clone(),
+                    &global_config_path(runtime),
+                    init.mode(),
+                )?,
+            };
+            match edit(&mut store)? {
+                ConditionalEdit::Save(edited) => {
+                    write_gate::wait(match scope {
+                        ConfigScope::Global => "global-before-save",
+                        ConfigScope::Workspace => "workspace-before-save",
+                    });
+                    store.save()?;
+                    Ok(ConditionalWrite::Saved(Box::new(store), edited))
+                }
+                ConditionalEdit::Abort(refusal) => Ok(ConditionalWrite::Aborted(refusal)),
             }
-            ConditionalEdit::Abort(refusal) => Ok(ConditionalWrite::Aborted(refusal)),
+        })
+    };
+    if scope == ConfigScope::Workspace && fallback_lock == FallbackLock::Hold {
+        // Global before workspace, the order every multi-file config writer
+        // takes, so two such writers never wait on each other. The lock is
+        // reentrant when both scopes name one file.
+        write_gate::signal("workspace-fallback-lock");
+        ConfigStore::with_write_lock(&global_config_path(runtime), transaction)
+    } else {
+        transaction()
+    }
+}
+
+/// Test-only gate directory (`ORBIT_TEST_CONFIG_WRITE_GATE`) for ordering
+/// concurrent config writes deterministically: a point is active only when
+/// `<point>.armed` exists there. A waiting point records `<point>.reached`
+/// and blocks until `<point>.release` appears; a signal point only records
+/// `<point>.reached`. Inert unless a test arms it.
+mod write_gate {
+    use std::path::PathBuf;
+
+    const GATE_ENV: &str = "ORBIT_TEST_CONFIG_WRITE_GATE";
+
+    fn armed(point: &str) -> Option<PathBuf> {
+        let dir = PathBuf::from(std::env::var_os(GATE_ENV)?);
+        dir.join(format!("{point}.armed")).exists().then_some(dir)
+    }
+
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "test-gate marker file in a scratch directory; durability is irrelevant"
+    )]
+    pub(super) fn wait(point: &str) {
+        let Some(dir) = armed(point) else { return };
+        let _ = std::fs::write(dir.join(format!("{point}.reached")), b"reached");
+        let release = dir.join(format!("{point}.release"));
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+        while !release.exists() && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(5));
         }
-    })
+    }
+
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "test-gate marker file in a scratch directory; durability is irrelevant"
+    )]
+    pub(super) fn signal(point: &str) {
+        if let Some(dir) = armed(point) {
+            let _ = std::fs::write(dir.join(format!("{point}.reached")), b"reached");
+        }
+    }
 }
 
 fn write_outcome(
