@@ -893,6 +893,106 @@ fn guarded_config_delete_preserves_effective_value_and_keeps_single_delete_uncon
 }
 
 #[test]
+fn guarded_config_delete_refuses_after_a_concurrent_global_write_wins_the_fallback() {
+    isolated(
+        "guards::guarded_config_delete_refuses_after_a_concurrent_global_write_wins_the_fallback",
+        || {
+            use std::time::{Duration, Instant};
+
+            let fixture = Fixture::new();
+            let global_path = fixture.global.join("config.toml");
+            let workspace_path = fixture.work.join("config.toml");
+            let base_global = std::fs::read_to_string(&global_path).unwrap();
+            std::fs::write(
+                &global_path,
+                format!("{base_global}\n[workflow]\nbase_branch = \"global-main\"\n"),
+            )
+            .unwrap();
+            std::fs::write(
+                &workspace_path,
+                "[workflow]\nbase_branch = \"global-main\"\n",
+            )
+            .unwrap();
+            let gate = fixture.path("config-write-gate");
+            std::fs::create_dir_all(&gate).unwrap();
+            let gate_file = |point: &str, kind: &str| {
+                std::fs::write(gate.join(format!("{point}.{kind}")), b"x").unwrap();
+            };
+            let reached = |point: &str| gate.join(format!("{point}.reached")).exists();
+            let server = fixture
+                .server_with_envs(true, &[("ORBIT_TEST_CONFIG_WRITE_GATE", gate.as_os_str())]);
+            gate_file("global-before-save", "armed");
+            gate_file("workspace-fallback-lock", "armed");
+            let ws_before = std::fs::read(&workspace_path).unwrap();
+
+            std::thread::scope(|scope| {
+                // The global PUT validates, then holds at its save decision.
+                let global_put = scope.spawn(|| {
+                    server.send(
+                        "PUT",
+                        "/api/config/keys/workflow.base_branch?workspace=ws_http_fixture",
+                        json!({"value": "changed-global", "scope": "global"}),
+                    )
+                });
+                let deadline = Instant::now() + Duration::from_secs(30);
+                while !reached("global-before-save") {
+                    assert!(
+                        Instant::now() < deadline,
+                        "global PUT never reached its save decision"
+                    );
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                // The guarded DELETE starts while the global write holds its
+                // decision. It must wait on the global fallback rather than
+                // validate against the not-yet-replaced global file. Release
+                // the global write once the DELETE asks for that lock (or has
+                // already answered, as an unguarded delete does).
+                let guarded_delete = scope.spawn(|| {
+                    server.send(
+                        "DELETE",
+                        "/api/config/keys/workflow.base_branch?scope=workspace&preserve_effective=true&workspace=ws_http_fixture",
+                        json!({}),
+                    )
+                });
+                while !reached("workspace-fallback-lock") && !guarded_delete.is_finished() {
+                    assert!(
+                        Instant::now() < deadline,
+                        "guarded DELETE neither requested the global lock nor answered"
+                    );
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                gate_file("global-before-save", "release");
+
+                let put = super::support::json_ok(global_put.join().unwrap());
+                assert_eq!(
+                    put["new_value"], "global-main",
+                    "workspace still overrides: {put}"
+                );
+                let refused = guarded_delete.join().unwrap();
+                assert_eq!(
+                    refused.status().as_u16(),
+                    409,
+                    "a guarded delete must not erase an override whose global fallback changed"
+                );
+                let body: Value = refused.json().unwrap();
+                assert_eq!(body["code"], "effective_value_would_change", "{body}");
+            });
+
+            assert_eq!(
+                std::fs::read(&workspace_path).unwrap(),
+                ws_before,
+                "refused guarded delete must keep the workspace override"
+            );
+            assert!(
+                std::fs::read_to_string(&global_path)
+                    .unwrap()
+                    .contains("changed-global")
+            );
+        },
+    );
+}
+
+#[test]
 fn guarded_config_delete_refuses_when_only_plugin_enablement_would_remain() {
     isolated(
         "guards::guarded_config_delete_refuses_when_only_plugin_enablement_would_remain",
