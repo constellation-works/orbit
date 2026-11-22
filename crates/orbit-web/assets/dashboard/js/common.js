@@ -562,11 +562,15 @@ export function syncWindowSelectors() {
     const targetExists = windowTabs(selector).some((tab) => tab.dataset.window === panelTarget);
     syncWindowTabState(selector, targetExists ? panelTarget : selector.dataset.fallbackWindow || panelTarget);
   }
+  // The note explains a fallback to 24h, so it shows only when one is in
+  // effect. A supported shared window needs no note: the selector and the
+  // heading already name it.
   const toolsMeta = document.getElementById("tools-meta");
   if (toolsMeta) {
+    toolsMeta.hidden = !tools.independent;
     toolsMeta.textContent = tools.independent
       ? `Using an independent ${tools.window} window · Analytics: ${selected}`
-      : `${tools.window} window`;
+      : "";
   }
 }
 
