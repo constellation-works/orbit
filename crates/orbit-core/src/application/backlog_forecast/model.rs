@@ -60,7 +60,9 @@ use super::review_modes::ReviewMode;
 /// a gap, and a pool whose gaps are at most `MAX_BOUNDED_GAP_SHARE` of its
 /// fix observations reports adjusted totals under a `bounded_gap` qualifier
 /// instead of withholding them [ORB-25806].
-pub(super) const MODEL_VERSION: u32 = 21;
+/// 22: residual correction can widen each task's own p50–p90 range,
+/// with the same mapping checked on held-out tasks.
+pub(super) const MODEL_VERSION: u32 = 22;
 /// The revision of each backlog-forecast-v2 factor this model applies;
 /// `None` for one not yet modelled.
 pub(super) const ADMISSION_FACTORS: [(&str, Option<u32>); 5] = [
@@ -618,8 +620,14 @@ pub(super) fn draw_forecast_delivery(
 /// p50 and p90 of `values` by nearest rank; `None` entries (beyond the
 /// horizon, or not computable) sort last.
 pub(super) fn forecast_quantiles(values: &mut [Option<f64>]) -> Value {
+    let (p50, p90) = forecast_quantile_values(values);
+    json!({ "p50": p50.map(round), "p90": p90.map(round) })
+}
+
+/// Unrounded nearest-rank quantiles for a task's correction anchors.
+pub(super) fn forecast_quantile_values(values: &mut [Option<f64>]) -> (Option<f64>, Option<f64>) {
     if values.is_empty() {
-        return json!({ "p50": null, "p90": null });
+        return (None, None);
     }
     values.sort_by(|left, right| match (left, right) {
         (Some(left), Some(right)) => left.total_cmp(right),
@@ -629,9 +637,9 @@ pub(super) fn forecast_quantiles(values: &mut [Option<f64>]) -> Value {
     });
     let rank = |q: f64| {
         let index = ((q * values.len() as f64).ceil() as usize).clamp(1, values.len()) - 1;
-        values[index].map(round)
+        values[index]
     };
-    json!({ "p50": rank(0.5), "p90": rank(0.9) })
+    (rank(0.5), rank(0.9))
 }
 
 fn round(value: f64) -> f64 {
