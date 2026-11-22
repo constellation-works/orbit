@@ -54,6 +54,7 @@ class CpuUtilisationTests(unittest.TestCase):
 
     def run_sampler(self, args, env_extra=None):
         env = dict(os.environ)
+        env.pop("CPU_UTIL_STAT_FILE", None)
         if env_extra:
             env.update(env_extra)
         return subprocess.run(

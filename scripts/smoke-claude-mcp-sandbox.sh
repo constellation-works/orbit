@@ -35,7 +35,7 @@ export ORBIT_SMOKE_OBSERVED="$observed"
 export ORBIT_SMOKE_COMMAND_STATUS="$observed.status"
 trap 'python3 -c "from pathlib import Path; import sys; [Path(name).unlink(missing_ok=True) for name in sys.argv[1:]]" "$PROFILE" "$observed" "$ORBIT_SMOKE_COMMAND_STATUS"' EXIT
 
-esc() { printf '%s' "$1" | sed 's/"/\\"/g'; }
+esc() { printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g'; }
 HOME_ESC="$(esc "$HOME")"
 REPO_ESC="$(esc "$REPO_ROOT")"
 

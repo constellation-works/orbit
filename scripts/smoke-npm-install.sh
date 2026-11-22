@@ -232,6 +232,7 @@ esac
 # Keep diagnostics and disposable state inside the checkout's ignored scratch.
 mkdir -p .orbit/tmp
 TMPDIR_ROOT="$(mktemp -d "$(pwd)/.orbit/tmp/npm-smoke.XXXXXX")"
+trap 'rm -rf "$TMPDIR_ROOT"' EXIT
 
 # A tag-triggered run must prove that npm has the package built from that tag.
 # workflow_dispatch supplies SMOKE_NPM_INSTALL_TAG when a releaser reruns
@@ -438,26 +439,30 @@ RPC_IN="$TMPDIR_ROOT/rpc-in.txt"
 RPC_OUT="$TMPDIR_ROOT/rpc-out.txt"
 RPC_ERR="$TMPDIR_ROOT/rpc-err.txt"
 
-cat >"$RPC_IN" <<EOF
-{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"smoke-npm-install","version":"0.0.1"}}}
-{"jsonrpc":"2.0","method":"notifications/initialized","params":{}}
-{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}
-{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"orbit_run","arguments":{"action":"list","workspace":"$WORKSPACE_DIR"}}}
-{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"orbit_task_list","arguments":{}}}
-{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"orbit_workspace_list","arguments":{}}}
-{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"orbit_task_list","arguments":{"workspace":"$WORKSPACE_DIR"}}}
-{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"orbit_task_add","arguments":{"workspace":"$WORKSPACE_DIR","title":"Smoke projection probe","description":"Created by the npm smoke to check one-field projection shapes","complexity":"low","fields":["status"]}}}
-EOF
+node -e '
+const workspace = process.argv[1];
+const frames = [
+  {jsonrpc: "2.0", id: 1, method: "initialize", params: {protocolVersion: "2024-11-05", capabilities: {}, clientInfo: {name: "smoke-npm-install", version: "0.0.1"}}},
+  {jsonrpc: "2.0", method: "notifications/initialized", params: {}},
+  {jsonrpc: "2.0", id: 2, method: "tools/list", params: {}},
+  {jsonrpc: "2.0", id: 3, method: "tools/call", params: {name: "orbit_run", arguments: {action: "list", workspace}}},
+  {jsonrpc: "2.0", id: 4, method: "tools/call", params: {name: "orbit_task_list", arguments: {}}},
+  {jsonrpc: "2.0", id: 5, method: "tools/call", params: {name: "orbit_workspace_list", arguments: {}}},
+  {jsonrpc: "2.0", id: 6, method: "tools/call", params: {name: "orbit_task_list", arguments: {workspace}}},
+  {jsonrpc: "2.0", id: 7, method: "tools/call", params: {name: "orbit_task_add", arguments: {workspace, title: "Smoke projection probe", description: "Created by the npm smoke to check one-field projection shapes", complexity: "low", fields: ["status"]}}},
+];
+process.stdout.write(frames.map((frame) => JSON.stringify(frame)).join("\n") + "\n");
+' "$WORKSPACE_DIR" >"$RPC_IN"
 
 # Feed the requests, then keep stdin open briefly so the server has time
 # to flush its responses before EOF closes the channel. The registry launch
 # runs outside any workspace: it must not infer this initialized workspace.
+rc=0
 {
   cat "$RPC_IN"
   sleep 5
 } | ( cd "$LAUNCH_DIR" && run_with_timeout 120 "${ORBIT_COMMAND[@]}" "${PACKAGE_ARGUMENTS[@]}" ) \
      >"$RPC_OUT" 2>"$RPC_ERR" || rc=$?
-rc="${rc:-0}"
 
 # Accepted post-handshake exit codes:
 #   0   — server saw stdin EOF and exited cleanly (the expected happy path).

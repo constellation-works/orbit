@@ -57,6 +57,24 @@ elif [[ -n "${HOME:-}" && -x "$HOME/.orbit/cache/bin/sccache" ]]; then
 elif command -v sccache >/dev/null 2>&1; then
   sccache_bin="$(command -v sccache)"
 fi
+cache_dir_writable() {
+  local dir="$1" parent
+  [[ -n "$dir" ]] || return 1
+  while [[ "$dir" == */ && "$dir" != "/" ]]; do
+    dir="${dir%/}"
+  done
+  while [[ "$dir" != "/" && ! -e "$dir" ]]; do
+    if [[ "$dir" == */* ]]; then
+      parent="${dir%/*}"
+      [[ -n "$parent" ]] || parent="/"
+    else
+      parent="."
+    fi
+    [[ "$parent" != "$dir" ]] || break
+    dir="$parent"
+  done
+  [[ -d "$dir" && -w "$dir" ]]
+}
 cache_dir="${SCCACHE_DIR:-}"
 if [[ -z "$cache_dir" && -n "${HOME:-}" ]]; then
   cache_dir="$HOME/.orbit/cache/compiler"
@@ -66,7 +84,7 @@ if [[ "${ORBIT_COMPILER_CACHE:-}" == "0" ]]; then
   cache_disabled_reason="ORBIT_COMPILER_CACHE=0"
 elif [[ -z "$sccache_bin" ]]; then
   cache_disabled_reason="no sccache binary"
-elif [[ -z "$cache_dir" ]] || ! mkdir -p "$cache_dir" 2>/dev/null || [[ ! -w "$cache_dir" ]]; then
+elif ! cache_dir_writable "$cache_dir"; then
   cache_disabled_reason="cache directory unset or not writable"
 fi
 if [[ -n "$cache_disabled_reason" ]]; then
@@ -149,12 +167,19 @@ while not os.path.exists(release):
 sock.close()
 PY
   HOLD_PID=$!
-  local attempts=0
-  while [[ ! -s "$out" ]]; do
-    attempts=$((attempts + 1))
-    [[ "$attempts" -lt 200 ]] || fail "timed out allocating a port"
-    sleep 0.05
-  done
+  python3 - "$out" <<'PY' || fail "timed out allocating a port"
+import os, sys, time
+path = sys.argv[1]
+deadline = time.monotonic() + 10.0
+while time.monotonic() < deadline:
+    try:
+        if os.path.getsize(path) > 0:
+            sys.exit(0)
+    except OSError:
+        pass
+    time.sleep(0.02)
+sys.exit(1)
+PY
   ALLOC_PORT="$(cat "$out")"
   # An empty port makes the wrapper fall back to a private UDS daemon, which
   # silently skips the shared-TCP scenario, so refuse anything but a number.
@@ -228,14 +253,6 @@ report_participants() {
     report_stream stderr "${LOGFILES[$i]}.err"
   done
   report_server_log
-}
-
-pid_running() {
-  kill -0 "$1" 2>/dev/null || return 1
-  if [[ -r "/proc/$1/status" ]] && grep -q '^State:[[:space:]]*Z' "/proc/$1/status"; then
-    return 1
-  fi
-  return 0
 }
 
 # The supervisor enforces the deadline and reaps its complete tree before this
@@ -317,11 +334,25 @@ for signum in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
 def descendants(pid):
     if not linux:
         return []
+    task_root = Path(f"/proc/{pid}/task")
     try:
-        children = list(map(int, Path(f"/proc/{pid}/task/{pid}/children").read_text().split()))
-    except (FileNotFoundError, ProcessLookupError):
-        return []
-    return [child for pid in children for child in [pid, *descendants(pid)]]
+        task_children = [task / "children" for task in task_root.iterdir()]
+    except OSError:
+        task_children = [task_root / str(pid) / "children"]
+    if not task_children:
+        task_children = [task_root / str(pid) / "children"]
+    children = []
+    seen = set()
+    for children_path in task_children:
+        try:
+            for token in children_path.read_text().split():
+                child = int(token)
+                if child not in seen:
+                    seen.add(child)
+                    children.append(child)
+        except (FileNotFoundError, ProcessLookupError, PermissionError, ValueError):
+            continue
+    return [child for child_pid in children for child in [child_pid, *descendants(child_pid)]]
 
 
 deadline = time.monotonic() + int(sys.argv[1])
@@ -367,7 +398,10 @@ finally:
         owned = descendants(os.getpid())
         sig = signal.SIGKILL if time.monotonic() >= grace_end else signal.SIGTERM
         if not group_killed:
-            os.killpg(process.pid, sig)
+            try:
+                os.killpg(process.pid, sig)
+            except ProcessLookupError:
+                pass
             group_killed = sig == signal.SIGKILL
         for pid in reversed(owned):
             if pid == anchor_pid:
@@ -403,7 +437,10 @@ finally:
     # Send the final group signal while its identity is still reserved. Never
     # signal this numeric group again, even if a wait or a cleanup assertion fails.
     if not group_killed:
-        os.killpg(process.pid, signal.SIGKILL)
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
     process.wait(timeout=1)
     if anchor is not None:
         anchor.wait(timeout=1)
@@ -544,25 +581,51 @@ run_ns_hold() {
       SCCACHE_DIR="$SCCACHE_DIR" SCCACHE_SERVER_PORT="$SCCACHE_SERVER_PORT" \
         "$ORBIT_COMPILER_CACHE_BIN" --show-stats || true
       : >"$READY_FILE"
-      hold_attempts=0
-      while [[ ! -f "$DONE_FILE" ]]; do
-        hold_attempts=$((hold_attempts + 1))
-        [[ "$hold_attempts" -lt 6000 ]] || exit 124
-        sleep 0.05
-      done
+      python3 -c "import os, sys, time
+path = sys.argv[1]
+deadline = time.monotonic() + 300.0
+while not os.path.isfile(path):
+    if time.monotonic() >= deadline:
+        sys.exit(124)
+    time.sleep(0.05)
+" "$DONE_FILE"
       SCCACHE_DIR="$SCCACHE_DIR" SCCACHE_SERVER_PORT="$SCCACHE_SERVER_PORT" \
         "$ORBIT_COMPILER_CACHE_BIN" --stop-server >/dev/null 2>&1 || true
     ' >"$logfile" 2>"$logfile.err"
 }
 
 wait_for_file() {
-  local path="$1" attempts=0
-  while [[ ! -f "$path" ]]; do
-    attempts=$((attempts + 1))
-    pid_running "$pid_c" || fail "owner namespace exited before readiness"
-    [[ "$attempts" -lt 400 ]] || fail "timed out waiting for $path"
-    sleep 0.05
-  done
+  local path="$1" rc=0
+  python3 - "$path" "$pid_c" <<'PY' || rc=$?
+import os, sys, time
+from pathlib import Path
+path, pid = sys.argv[1], int(sys.argv[2])
+deadline = time.monotonic() + 20.0
+def running():
+    try:
+        os.kill(pid, 0)
+    except OSError:
+        return False
+    status_path = Path(f"/proc/{pid}/status")
+    try:
+        for line in status_path.read_text().splitlines():
+            if line.startswith("State:") and line.split()[1] == "Z":
+                return False
+    except OSError:
+        pass
+    return True
+while not os.path.isfile(path):
+    if not running():
+        sys.exit(2)
+    if time.monotonic() >= deadline:
+        sys.exit(3)
+    time.sleep(0.05)
+PY
+  if [[ "$rc" -eq 2 ]]; then
+    fail "owner namespace exited before readiness"
+  elif [[ "$rc" -ne 0 ]]; then
+    fail "timed out waiting for $path"
+  fi
 }
 
 probe_out() {

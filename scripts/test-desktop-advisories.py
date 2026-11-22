@@ -10,6 +10,7 @@ stubbed. Missing cargo-deny/PyYAML is a failure, not a skipped regression.
 
 import os
 from pathlib import Path
+import self_test_hang
 import shutil
 import subprocess
 import sys
@@ -36,9 +37,24 @@ class DesktopAdvisoryTests(unittest.TestCase):
         shutil.copy2(ROOT / "scripts/cargo-deny.sh", self.root / "scripts/cargo-deny.sh")
         self.config = (ROOT / "deny.toml").read_text()
         (self.root / "deny.toml").write_text(self.config)
-        self.env = {key: value for key, value in os.environ.items()
-                    if not key.startswith(("CARGO_DENY_", "ORBIT_CARGO_DENY_"))}
-        self.env.update(CARGO_NET_OFFLINE="true", CARGO_TERM_COLOR="never",
+        self.env = {
+            key: value for key, value in os.environ.items()
+            if not key.startswith(("CARGO_DENY_", "ORBIT_CARGO_DENY_", "GIT_"))
+            and key not in (
+                "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY",
+                "http_proxy", "https_proxy", "all_proxy", "no_proxy",
+            )
+        }
+        isolated_home = self.root / "home"
+        isolated_home.mkdir()
+        cargo_home = self.root / "cargo-home"
+        cargo_home.mkdir()
+        if "RUSTUP_HOME" not in self.env and os.environ.get("HOME"):
+            self.env["RUSTUP_HOME"] = str(Path(os.environ["HOME"]) / ".rustup")
+        self.env.update(HOME=str(isolated_home), CARGO_HOME=str(cargo_home),
+                        GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM="1",
+                        GIT_CEILING_DIRECTORIES=str(self.root),
+                        CARGO_NET_OFFLINE="true", CARGO_TERM_COLOR="never",
                         CARGO_DENY_DISABLE_FETCH="1", TMPDIR=str(self.root),
                         CARGO_DENY_DB_PATH=str(self.root / "dbs"))
         self.write_crate("", "fixture-root")
@@ -89,9 +105,10 @@ else:
             f'edition = "2021"\n{extra}')
 
     def run_command(self, command, env=None):
-        return subprocess.run(command, cwd=self.root, env=env or self.env,
-                              stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                              text=True, timeout=60)
+        return self_test_hang.run(
+            command, step=f"desktop-advisories: {command[0]}",
+            cwd=self.root, env=env or self.env,
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
 
     def run_ok(self, command):
         result = self.run_command(command)

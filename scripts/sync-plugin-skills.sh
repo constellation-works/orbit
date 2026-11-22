@@ -50,7 +50,7 @@ if [[ "${1:-}" == "--check" ]]; then
   for name in "${skill_dirs[@]}"; do
     if ! diff -qr "$source_root/$name" "$target_root/$name" >/dev/null 2>&1; then
       echo "sync-plugin-skills: plugin/skills/$name drifted from crates/orbit-core/assets/skills/$name" >&2
-      diff -ru "$source_root/$name" "$target_root/$name" || true
+      diff -ru "$source_root/$name" "$target_root/$name" >&2 || true
       drifted=1
     fi
   done
