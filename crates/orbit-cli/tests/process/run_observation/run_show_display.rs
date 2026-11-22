@@ -670,6 +670,114 @@ fn run_show_reads_a_malformed_recovery_decision_as_absent() {
     }
 }
 
+/// [ORB-26905] Clean no-edit check repairs with an `absent` or verified
+/// `not_recovered` decision record `retry_admitted: true` while preserving
+/// the decision file's actual `status`, `verdict`, and `detail`; a refused
+/// no-edit check or ledger write keeps `retry_admitted: false`.
+fn run_show_projects_no_edit_check_repair_decisions_accurately() {
+    let fixture = Fixture::terminal();
+    seed_interrupted_run(&fixture);
+    let cases = [
+        (
+            "no-edit-not-recovered",
+            serde_json::json!({
+                "status": "verified",
+                "verdict": "not_recovered",
+                "detail": "flake outside candidate",
+                "retry_admitted": true,
+            }),
+            "verified",
+            Some("not_recovered"),
+            Some("flake outside candidate"),
+            true,
+        ),
+        (
+            "no-edit-absent",
+            serde_json::json!({
+                "status": "absent",
+                "detail": "no decision was written and no change to the worktree, base or validation environment was observed since the failure",
+                "retry_admitted": true,
+            }),
+            "absent",
+            None,
+            Some(
+                "no decision was written and no change to the worktree, base or validation environment was observed since the failure",
+            ),
+            true,
+        ),
+        (
+            "no-edit-refused",
+            serde_json::json!({
+                "status": "verified",
+                "verdict": "not_recovered",
+                "detail": "partial edit left behind",
+                "retry_admitted": false,
+            }),
+            "verified",
+            Some("not_recovered"),
+            Some("partial edit left behind"),
+            false,
+        ),
+    ];
+    for (index, (name, decision, _, _, _, _)) in cases.iter().enumerate() {
+        let ts = format!("2026-10-08T04:1{index}:00+00:00");
+        let payload = serde_json::json!({
+            "event_id": format!("recovery-{name}"),
+            "body_kind": "step_recovery_attempted",
+            "step_id": "complete_pr",
+            "recovery_activity": "step_failure_recovery",
+            "recovery_succeeded": true,
+            "decision": decision,
+            "ts": ts,
+        });
+        fixture
+            .db()
+            .execute(
+                "INSERT INTO v2_audit_events (workspace_id, event_id, source, schema_version,
+                event_type, ts, run_id, agent_identity, payload_json)
+             VALUES (?1, ?2, 'v2_envelope', 1, 'step.recovery_attempted',
+                ?3, ?4, 'test', ?5)",
+                params![
+                    fixture.workspace_id(),
+                    format!("recovery-{name}"),
+                    ts,
+                    INTERRUPTED,
+                    payload.to_string()
+                ],
+            )
+            .unwrap();
+    }
+    let json = fixture.json(&["run", "show", INTERRUPTED, "--no-reconcile", "--json"]);
+    let attempts = json["recovery_attempts"]["items"].as_array().unwrap();
+    assert_eq!(attempts.len(), cases.len(), "{attempts:?}");
+    for (name, _, status, verdict, detail, admitted) in cases {
+        let attempt = attempts
+            .iter()
+            .find(|attempt| attempt["event_id"] == format!("recovery-{name}"))
+            .unwrap_or_else(|| panic!("{name}: missing in {attempts:?}"));
+        assert_eq!(attempt["retry_admitted"], admitted, "{name}: {attempt}");
+        assert_eq!(attempt["outcome"], "succeeded", "{name}");
+        assert_eq!(attempt["decision"]["status"], status, "{name}: {attempt}");
+        match verdict {
+            Some(expected) => {
+                assert_eq!(
+                    attempt["decision"]["verdict"], expected,
+                    "{name}: {attempt}"
+                )
+            }
+            None => assert!(
+                attempt["decision"]["verdict"].is_null(),
+                "{name}: {attempt}"
+            ),
+        }
+        assert_eq!(
+            attempt["decision"]["detail"].as_str(),
+            detail,
+            "{name}: {attempt}"
+        );
+    }
+}
+
 /// [ORB-16330] `orbit run show --json` names the claimed worker the way MCP
 /// does, and an unreadable pipeline checkpoint is a warning with
 /// `pipeline_state` null rather than a failed command.
@@ -1504,6 +1612,10 @@ fn run_show_contracts() {
         (
             "run_show_reads_a_malformed_recovery_decision_as_absent",
             run_show_reads_a_malformed_recovery_decision_as_absent as fn(),
+        ),
+        (
+            "run_show_projects_no_edit_check_repair_decisions_accurately",
+            run_show_projects_no_edit_check_repair_decisions_accurately as fn(),
         ),
         (
             "run_show_names_a_sigkilled_workers_rescue_candidate",

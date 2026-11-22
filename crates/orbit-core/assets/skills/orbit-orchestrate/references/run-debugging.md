@@ -163,13 +163,21 @@ An item's `outcome` says only whether the recovery activity completed. Whether
 the failed step was then retried is `retry_admitted`, decided by `decision`:
 the decision file `step_failure_recovery` writes under the worktree's
 `.orbit/tmp/step-recovery/`, never the `recovered` field of its response.
-`decision.status` is `verified` (with `verdict` `retry` or `not_recovered`),
-`absent` (no file: the legacy retry-on-success), `invalid` (malformed, stale,
-for another run/step/attempt, or an unsafe path) or `unavailable` (the host
-could not read it); the last two never admit a retry and `detail` names why.
-Older runs and other recovery activities carry no `decision`. The retried
-step's own result is the `step.post_recovery_attempt` audit event and the
-`orbit.job.step_post_recovery_attempt` log line.
+`decision.status` is `verified` (with `verdict` `retry`, `not_recovered` or
+`external_blocker`), `absent` (no file: admits a retry only when the engine
+observes a worktree, base, or validation-environment change since the failure),
+`invalid` (malformed, stale, for another run/step/attempt, or an unsafe path) or
+`unavailable` (the host could not read it); `invalid` and `unavailable` never
+admit a retry and `detail` names why. One narrow exception applies to an
+admitted `--auto-fix` check repair: when `step_failure_recovery` leaves no
+worktree delivery edit and writes no scope record, an `absent` or verified
+`not_recovered` decision still admits one post-recovery check-rerun attempt once
+the host records the no-edit rerun (`decision` preserves the decision file's
+actual `status` and `verdict`, and `retry_admitted` is `true`; if the no-edit
+check or rerun ledger write refuses, `retry_admitted` stays `false` and no
+retry runs). Older runs and other recovery activities carry no `decision`. The
+retried step's own result is the `step.post_recovery_attempt` audit event and
+the `orbit.job.step_post_recovery_attempt` log line.
 
 An implementer response refused only for its shape (such as a bare file name in
 `task_artifacts`) is corrected once inside the implement step: the

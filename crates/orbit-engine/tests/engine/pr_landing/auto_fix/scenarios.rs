@@ -106,14 +106,17 @@ pub(super) fn pr_landing_fixture_activity(name: &str, action: &str) -> ActivityV
     }
 }
 
-fn run_job(
+fn run_job_with_audit(
     host: &DeliveryHost,
     mut job: orbit_types::workflow::JobV2,
     activities: &[(&str, &str)],
     run_id: &str,
     input: Value,
     resume: Option<&PipelineState>,
-) -> JobResult {
+) -> (
+    JobResult,
+    Vec<orbit_types::workflow::activity_job::V2AuditEvent>,
+) {
     let mut catalog = V2ActivityCatalog::new();
     for &(name, action) in activities {
         catalog.insert(name.to_string(), pr_landing_fixture_activity(name, action));
@@ -121,7 +124,20 @@ fn run_job(
     resolve_job_catalog_refs_for_execution(&mut job, &catalog).unwrap();
     let audit = tempfile::tempdir().unwrap();
     let (writer, _, _) = build_writer_and_sinks(audit.path(), run_id);
-    execute_job_with_resume(&job, input, run_id, writer, host, resume)
+    let result = execute_job_with_resume(&job, input, run_id, writer.clone(), host, resume);
+    let events = writer.events_snapshot().unwrap();
+    (result, events)
+}
+
+fn run_job(
+    host: &DeliveryHost,
+    job: orbit_types::workflow::JobV2,
+    activities: &[(&str, &str)],
+    run_id: &str,
+    input: Value,
+    resume: Option<&PipelineState>,
+) -> JobResult {
+    run_job_with_audit(host, job, activities, run_id, input, resume).0
 }
 
 const REPAIR_ACTS: &[(&str, &str)] = &[
@@ -140,6 +156,23 @@ fn repair_job(input: Value) -> orbit_types::workflow::JobV2 {
 
 fn run_repair_job(host: &DeliveryHost, input: Value) -> JobResult {
     run_job(
+        host,
+        repair_job(input),
+        REPAIR_ACTS,
+        RUN_ID,
+        json!({}),
+        None,
+    )
+}
+
+fn run_repair_job_with_audit(
+    host: &DeliveryHost,
+    input: Value,
+) -> (
+    JobResult,
+    Vec<orbit_types::workflow::activity_job::V2AuditEvent>,
+) {
+    run_job_with_audit(
         host,
         repair_job(input),
         REPAIR_ACTS,
@@ -1618,7 +1651,7 @@ fn no_edit_check_repair_reruns_failed_checks_once() {
 fn no_edit_check_repair_decision_slot_flake_lands_to_done_and_enforces_edit_guard() {
     auto_fix_table(
         "auto_fix::no_edit_check_repair_decision_slot_flake_lands_to_done_and_enforces_edit_guard",
-        "not_recovered absent not_recovered_with_edit",
+        "not_recovered absent not_recovered_with_edit not_recovered_ledger_refused retry_ledger_refused",
         |case, row| {
             let (fx, host) = if case == "not_recovered_with_edit" {
                 one_char_pr(row)
@@ -1652,6 +1685,30 @@ fn no_edit_check_repair_decision_slot_flake_lands_to_done_and_enforces_edit_guar
                     );
                     host.script("test_ci_repair", json!({"mode":"one_char_modified"}));
                 }
+                "not_recovered_ledger_refused" => {
+                    host.script_step_recovery_decision(
+                        orbit_engine::StepRecoveryDecisionRead::Verified {
+                            verdict: orbit_engine::StepRecoveryVerdict::NotRecovered,
+                            reason: Some("flake outside candidate".into()),
+                            blocker: None,
+                        },
+                    );
+                    *locked(&host.fail_history_events) =
+                        vec![orbit_types::workflow::PR_AUTO_FIX_NO_EDIT_RERUN_EVENT.into()];
+                    host.script("test_ci_repair", json!({"mode":"no_edit_green"}));
+                }
+                "retry_ledger_refused" => {
+                    host.script_step_recovery_decision(
+                        orbit_engine::StepRecoveryDecisionRead::Verified {
+                            verdict: orbit_engine::StepRecoveryVerdict::Retry,
+                            reason: Some("flake outside candidate".into()),
+                            blocker: None,
+                        },
+                    );
+                    *locked(&host.fail_history_events) =
+                        vec![orbit_types::workflow::PR_AUTO_FIX_NO_EDIT_RERUN_EVENT.into()];
+                    host.script("test_ci_repair", json!({"mode":"no_edit_green"}));
+                }
                 _ => unreachable!(),
             }
             host.script(
@@ -1662,46 +1719,177 @@ fn no_edit_check_repair_decision_slot_flake_lands_to_done_and_enforces_edit_guar
             fx.script_checks(&["source_contract"]);
             let mut input = auto_fix_input(&fx);
             input["completion"] = json!("done");
-            let outcome = run_repair_job(&host, input);
+            let (outcome, events) = run_repair_job_with_audit(&host, input);
             assert_candidate_head_unchanged(&fx, case);
             assert_eq!(repair_attempts(&host).len(), 1, "{case}");
-            if case == "not_recovered_with_edit" {
-                match outcome {
-                    Err(DispatchError::DeliveryRefused { refusal, .. }) => {
-                        assert_eq!(
-                            refusal,
-                            orbit_types::workflow::DeliveryRefusal::RepairDispatched,
-                            "{case}"
-                        );
+            let recovery_decision = events
+                .iter()
+                .find_map(|event| {
+                    match &event.kind {
+                    orbit_types::workflow::activity_job::V2AuditEventKind::StepRecoveryAttempted {
+                        recovery_succeeded,
+                        decision,
+                        ..
+                    } => {
+                        assert!(recovery_succeeded, "{case}: recovery activity completed");
+                        decision.clone()
                     }
-                    other => panic!("{case}: expected RepairDispatched hold, got {other:?}"),
+                    _ => None,
                 }
-                assert_eq!(
-                    host.history(TASK_ID)
-                        .iter()
-                        .filter(|entry| entry.event == "ci_check_rerun")
-                        .count(),
-                    0,
-                    "{case}: an edited worktree with not_recovered must not rerun checks"
-                );
-                assert_no_merge_or_landing(&fx, &host, TaskStatus::Review, case);
-            } else {
-                let result = outcome.expect(case);
-                assert!(result.success, "{case}: {result:?}");
-                assert_eq!(
-                    host.history(TASK_ID)
-                        .iter()
-                        .filter(|entry| entry.event == "ci_check_rerun")
-                        .count(),
-                    1,
-                    "{case}: exactly one rerun is sent"
-                );
-                assert_eq!(
-                    host.status(TASK_ID),
-                    TaskStatus::Done,
-                    "{case}: lands without operator action"
-                );
-                assert_eq!(fx.merge_requests().len(), 1, "{case}");
+                })
+                .unwrap_or_else(|| {
+                    panic!("{case}: missing StepRecoveryAttempted decision in {events:?}")
+                });
+            let post_recovery_outcomes: Vec<&str> = events
+                .iter()
+                .filter_map(|event| {
+                    match &event.kind {
+                    orbit_types::workflow::activity_job::V2AuditEventKind::StepPostRecoveryAttempt {
+                        outcome,
+                        ..
+                    } => Some(outcome.as_str()),
+                    _ => None,
+                }
+                })
+                .collect();
+            match case {
+                "not_recovered" => {
+                    assert_eq!(recovery_decision.status, "verified", "{case}");
+                    assert_eq!(
+                        recovery_decision.verdict.as_deref(),
+                        Some("not_recovered"),
+                        "{case}: preserve decision file verdict"
+                    );
+                    assert_eq!(
+                        recovery_decision.detail.as_deref(),
+                        Some("flake outside candidate"),
+                        "{case}"
+                    );
+                    assert!(
+                        recovery_decision.retry_admitted,
+                        "{case}: clean no-edit check repair must record retry_admitted=true"
+                    );
+                    assert_eq!(post_recovery_outcomes, vec!["success"], "{case}");
+                    let result = outcome.expect(case);
+                    assert!(result.success, "{case}: {result:?}");
+                    assert_eq!(
+                        host.history(TASK_ID)
+                            .iter()
+                            .filter(|entry| entry.event == "ci_check_rerun")
+                            .count(),
+                        1,
+                        "{case}: exactly one rerun is sent"
+                    );
+                    assert_eq!(
+                        host.status(TASK_ID),
+                        TaskStatus::Done,
+                        "{case}: lands without operator action"
+                    );
+                    assert_eq!(fx.merge_requests().len(), 1, "{case}");
+                }
+                "absent" => {
+                    assert_eq!(recovery_decision.status, "absent", "{case}");
+                    assert_eq!(
+                        recovery_decision.verdict, None,
+                        "{case}: preserve absent verdict"
+                    );
+                    assert!(
+                        recovery_decision.retry_admitted,
+                        "{case}: clean no-edit check repair must record retry_admitted=true"
+                    );
+                    assert_eq!(post_recovery_outcomes, vec!["success"], "{case}");
+                    let result = outcome.expect(case);
+                    assert!(result.success, "{case}: {result:?}");
+                    assert_eq!(
+                        host.history(TASK_ID)
+                            .iter()
+                            .filter(|entry| entry.event == "ci_check_rerun")
+                            .count(),
+                        1,
+                        "{case}: exactly one rerun is sent"
+                    );
+                    assert_eq!(
+                        host.status(TASK_ID),
+                        TaskStatus::Done,
+                        "{case}: lands without operator action"
+                    );
+                    assert_eq!(fx.merge_requests().len(), 1, "{case}");
+                }
+                "not_recovered_with_edit" => {
+                    assert_eq!(recovery_decision.status, "verified", "{case}");
+                    assert_eq!(
+                        recovery_decision.verdict.as_deref(),
+                        Some("not_recovered"),
+                        "{case}"
+                    );
+                    assert_eq!(
+                        recovery_decision.detail.as_deref(),
+                        Some("partial edit left behind"),
+                        "{case}"
+                    );
+                    assert!(
+                        !recovery_decision.retry_admitted,
+                        "{case}: refused no-edit check must report retry_admitted=false"
+                    );
+                    assert!(post_recovery_outcomes.is_empty(), "{case}");
+                    match outcome {
+                        Err(DispatchError::DeliveryRefused { refusal, .. }) => {
+                            assert_eq!(
+                                refusal,
+                                orbit_types::workflow::DeliveryRefusal::RepairDispatched,
+                                "{case}"
+                            );
+                        }
+                        other => panic!("{case}: expected RepairDispatched hold, got {other:?}"),
+                    }
+                    assert_eq!(
+                        host.history(TASK_ID)
+                            .iter()
+                            .filter(|entry| entry.event == "ci_check_rerun")
+                            .count(),
+                        0,
+                        "{case}: an edited worktree with not_recovered must not rerun checks"
+                    );
+                    assert_no_merge_or_landing(&fx, &host, TaskStatus::Review, case);
+                }
+                "not_recovered_ledger_refused" | "retry_ledger_refused" => {
+                    let expected_verdict = if case == "retry_ledger_refused" {
+                        "retry"
+                    } else {
+                        "not_recovered"
+                    };
+                    assert_eq!(recovery_decision.status, "verified", "{case}");
+                    assert_eq!(
+                        recovery_decision.verdict.as_deref(),
+                        Some(expected_verdict),
+                        "{case}"
+                    );
+                    assert_eq!(
+                        recovery_decision.detail.as_deref(),
+                        Some("flake outside candidate"),
+                        "{case}"
+                    );
+                    assert!(
+                        !recovery_decision.retry_admitted,
+                        "{case}: refused ledger write must report retry_admitted=false"
+                    );
+                    assert!(post_recovery_outcomes.is_empty(), "{case}");
+                    let error = outcome.expect_err("ledger write refusal must fail the step");
+                    assert!(
+                        error.to_string().contains("history write for task"),
+                        "{case}: {error}"
+                    );
+                    assert_eq!(
+                        host.history(TASK_ID)
+                            .iter()
+                            .filter(|entry| entry.event == "ci_check_rerun")
+                            .count(),
+                        0,
+                        "{case}: refused ledger write must not rerun checks"
+                    );
+                    assert_no_merge_or_landing(&fx, &host, TaskStatus::Review, case);
+                }
+                _ => unreachable!(),
             }
         },
     );
