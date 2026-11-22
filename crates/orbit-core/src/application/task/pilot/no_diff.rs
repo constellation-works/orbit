@@ -504,19 +504,20 @@ fn hex_tokens<'a>(
 /// The full SHAs of the commits the finding itself names: every commit that
 /// resolves from its description, and the landed commit of each
 /// `regression_from` target that delivery observed as merged. A target never
-/// delivered names no commit. An unreadable or unparseable pinned definition
-/// is an observation failure, not a missing delivery; any such failure
-/// refuses the proof, since a missed culprit would let a proof citing it
-/// close the finding.
+/// delivered names no commit. An unreadable or unparseable pinned definition,
+/// an ambiguous commit prefix, or a Git inspection failure refuses the proof,
+/// since a missed culprit would let a proof citing it close the finding.
 fn named_commits(
     runtime: &OrbitRuntime,
     source: &dyn SourceGit,
     task: &Task,
 ) -> Result<Vec<String>, String> {
-    let mut named = hex_tokens([task.description.as_str()], abbreviated_sha)
-        .iter()
-        .filter_map(|sha| resolve_commit_object(source, sha))
-        .collect::<Vec<_>>();
+    let mut named = Vec::new();
+    for sha in hex_tokens([task.description.as_str()], abbreviated_sha) {
+        if let Some(commit) = resolve_named_commit_object(source, &sha)? {
+            named.push(commit);
+        }
+    }
     for relation in &task.relations {
         if relation.relation_type != TaskRelationType::RegressionFrom {
             continue;
@@ -531,11 +532,13 @@ fn named_commits(
                 ));
             }
         };
-        let landed = observation
+        if let Some(sha) = observation
             .filter(|observation| observation.landing.status == LandingObservationStatus::Merged)
             .and_then(|observation| observation.landing.landed_commit)
-            .and_then(|sha| resolve_commit_object(source, &sha));
-        named.extend(landed);
+            && let Some(commit) = resolve_named_commit_object(source, &sha)?
+        {
+            named.push(commit);
+        }
     }
     named.sort();
     named.dedup();
@@ -554,31 +557,97 @@ fn resolve_commit(source: &dyn SourceGit, revision: &str) -> Option<String> {
         .filter(|sha| !sha.is_empty())
 }
 
+/// List all full object IDs matching hexadecimal ID or prefix `object` directly
+/// in Git's object database via `--disambiguate`, ignoring refs (branches or
+/// tags) that share the same spelling. Returns an empty list for non-hex inputs
+/// or unknown IDs, and `Err` on Git errors or unexpected output.
+fn disambiguate_object_ids(source: &dyn SourceGit, object: &str) -> Result<Vec<String>, String> {
+    if object.len() < 4 || !object.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Ok(Vec::new());
+    }
+    let matches = source
+        .git(&["rev-parse", &format!("--disambiguate={object}")])
+        .map_err(|error| format!("could not disambiguate object prefix {object}: {error}"))?;
+    let mut oids = Vec::new();
+    for line in matches.lines().filter(|line| !line.is_empty()) {
+        if !line.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+            return Err(format!(
+                "unexpected git disambiguation output for object prefix {object}"
+            ));
+        }
+        oids.push(line.to_string());
+    }
+    Ok(oids)
+}
+
 /// Resolve a hexadecimal object ID or prefix directly in Git's object database
 /// via `--disambiguate`, ignoring refs (branches or tags) that share the same
 /// spelling. Returns `None` for non-hex inputs, unknown IDs, ambiguous
 /// prefixes, or Git errors.
 fn resolve_unique_object_id(source: &dyn SourceGit, object: &str) -> Option<String> {
-    if object.len() < 4 || !object.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+    let mut oids = disambiguate_object_ids(source, object).ok()?;
+    if oids.len() != 1 {
         return None;
     }
-    let matches = source
-        .git(&["rev-parse", &format!("--disambiguate={object}")])
-        .ok()?;
-    let mut oids = matches.lines().filter(|line| !line.is_empty());
-    let oid = oids.next()?;
-    if oids.next().is_some() || !oid.bytes().all(|byte| byte.is_ascii_hexdigit()) {
-        return None;
-    }
-    Some(oid.to_string())
+    oids.pop()
 }
 
 /// Resolve a hexadecimal commit ID or prefix directly in Git's object database
 /// so a same-name branch or tag cannot shadow a commit prefix or stand in for
-/// an unknown hex token.
+/// an unknown hex token. Requires an unambiguous object ID in the database.
 fn resolve_commit_object(source: &dyn SourceGit, object: &str) -> Option<String> {
     let oid = resolve_unique_object_id(source, object)?;
     resolve_commit(source, &oid)
+}
+
+/// Peel a full object ID already located in Git's object database to a commit
+/// SHA, or `Ok(None)` for non-commit objects (blobs, trees, and tags that do
+/// not peel to a commit). Returns `Err` on Git inspection failures.
+fn peel_object_to_commit(source: &dyn SourceGit, oid: &str) -> Result<Option<String>, String> {
+    let kind = source
+        .git(&["cat-file", "-t", oid])
+        .map_err(|error| format!("could not inspect git object {oid}: {error}"))?;
+    match kind.as_str() {
+        "commit" => Ok(Some(oid.to_string())),
+        "blob" | "tree" => Ok(None),
+        "tag" => {
+            let peeled = source
+                .git(&["rev-parse", "--verify", "--quiet", &format!("{oid}^{{}}")])
+                .map_err(|error| format!("could not inspect tag object {oid}: {error}"))?;
+            let peeled_kind = source
+                .git(&["cat-file", "-t", &peeled])
+                .map_err(|error| format!("could not inspect peeled object {peeled}: {error}"))?;
+            Ok((peeled_kind == "commit").then_some(peeled))
+        }
+        other => Err(format!("unexpected git object type {other} for {oid}")),
+    }
+}
+
+/// Resolve a hexadecimal commit token named by a finding directly in Git's
+/// object database. Non-commit objects sharing the same prefix (such as blobs
+/// or trees) do not hide a unique commit culprit, while a prefix matching more
+/// than one distinct commit or failing Git inspection fails closed (`Err`) so
+/// a culprit is never silently dropped.
+fn resolve_named_commit_object(
+    source: &dyn SourceGit,
+    object: &str,
+) -> Result<Option<String>, String> {
+    let mut commit = None;
+    for oid in disambiguate_object_ids(source, object)? {
+        let Some(peeled) = peel_object_to_commit(source, &oid)? else {
+            continue;
+        };
+        match &commit {
+            None => commit = Some(peeled),
+            Some(existing) if existing == &peeled => {}
+            Some(_) => {
+                return Err(format!(
+                    "commit prefix {object} named by the finding is ambiguous in this repository"
+                ));
+            }
+        }
+    }
+    Ok(commit)
 }
 
 /// Whether `object` resolves in Git's object database as an unambiguous

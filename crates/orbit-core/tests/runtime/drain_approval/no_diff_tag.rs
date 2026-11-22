@@ -349,19 +349,27 @@ fn hex_ref_names_do_not_hide_commit_or_unknown_citations() {
     assert_eq!(blocking_gaps(&ws, &shadowed_blob), Vec::<String>::new());
 }
 
-fn duplicate_loose_object_for_ambiguity(repo: &Path, oid: &str) {
-    let (dir, rest) = oid.split_at(2);
-    let source = repo.join(".git/objects").join(dir).join(rest);
+fn collide_loose_object_prefix(repo: &Path, target_oid: &str, source_oid: &str) {
+    let (source_dir, source_rest) = source_oid.split_at(2);
+    let source = repo.join(".git/objects").join(source_dir).join(source_rest);
     assert!(
         source.is_file(),
         "expected loose object {}",
         source.display()
     );
-    let alt_last = if oid.ends_with('0') { '1' } else { '0' };
-    let mut alt_rest = rest[..rest.len() - 1].to_string();
+    let (target_dir, target_rest) = target_oid.split_at(2);
+    let alt_last = if target_oid.ends_with('0') { '1' } else { '0' };
+    let mut alt_rest = target_rest[..target_rest.len() - 1].to_string();
     alt_rest.push(alt_last);
-    let duplicate = repo.join(".git/objects").join(dir).join(alt_rest);
+    let duplicate_dir = repo.join(".git/objects").join(target_dir);
+    std::fs::create_dir_all(&duplicate_dir).unwrap();
+    let duplicate = duplicate_dir.join(alt_rest);
+    assert_ne!(source, duplicate);
     std::fs::copy(&source, &duplicate).unwrap();
+}
+
+fn duplicate_loose_object_for_ambiguity(repo: &Path, oid: &str) {
+    collide_loose_object_prefix(repo, oid, oid);
 }
 
 fn covering_proof_resolves_unique_commit_prefix_under_blob_tag_and_holds_invalid_citations() {
@@ -521,6 +529,155 @@ fn covering_proof_resolves_unique_commit_prefix_under_blob_tag_and_holds_invalid
     assert_status(&ws, &creation, TaskStatus::Proposed);
 }
 
+fn culprit_prefix_colliding_with_non_commit_object_still_blocks_self_citation() {
+    let ws = Workspace::new();
+    let older = ws.commit("older readme change");
+    let culprit = ws.commit("the culprit");
+    let ambig_culprit = ws.commit("ambiguous commit-colliding culprit");
+    let fix = ws.commit("the fix");
+    let colliding_fix = ws.commit("fix colliding with blob");
+    let readme_blob = ws.git(&["rev-parse", "HEAD:README.md"]);
+
+    let culprit_prefix = mixed_hex_prefix(&culprit);
+    let ambig_culprit_prefix = mixed_hex_prefix(&ambig_culprit);
+    let fix_prefix = mixed_hex_prefix(&fix);
+    let colliding_fix_prefix = mixed_hex_prefix(&colliding_fix);
+
+    // Give the abbreviated culprit a colliding blob object in the ODB (plus a
+    // blob-named tag), give `ambig_culprit_prefix` a colliding commit object,
+    // shadow `fix_prefix` with a blob tag, and give `colliding_fix_prefix` a
+    // colliding blob object plus a same-name commit tag.
+    collide_loose_object_prefix(&ws.repo, &culprit, &readme_blob);
+    ws.git(&["tag", culprit_prefix, &readme_blob]);
+    ws.git(&["tag", fix_prefix, &readme_blob]);
+    collide_loose_object_prefix(&ws.repo, &ambig_culprit, &ambig_culprit);
+    collide_loose_object_prefix(&ws.repo, &colliding_fix, &readme_blob);
+    ws.git(&["tag", colliding_fix_prefix, &colliding_fix]);
+
+    let disambiguated = ws.git(&["rev-parse", &format!("--disambiguate={culprit_prefix}")]);
+    let mut kinds = disambiguated
+        .lines()
+        .map(|oid| ws.git(&["cat-file", "-t", oid]))
+        .collect::<Vec<_>>();
+    kinds.sort();
+    assert_eq!(kinds, vec!["blob", "commit"]);
+
+    let drain = ws.drain();
+    let culprit_description = format!("Introduced by {culprit_prefix} on the base branch.");
+    let ambig_description = format!("Introduced by {ambig_culprit_prefix} on the base branch.");
+    let finding = |title: &str, description: String| ws.readme_finding(title, description, vec![]);
+
+    let cites_self = finding("cites full culprit", culprit_description.clone());
+    let cites_older = finding("cites older commit", culprit_description.clone());
+    let covered = finding(
+        "covered after colliding culprit",
+        culprit_description.clone(),
+    );
+    let ambig_finding = finding("ambiguous commit culprit", ambig_description);
+
+    assert_verified_no_diff_outside(
+        &ws,
+        &drain,
+        verified_cases(&[
+            (&cites_self, format!("Commit {culprit} repaired README.md.")),
+            (&cites_older, format!("Commit {older} repaired README.md.")),
+            (&covered, format!("Commit {fix_prefix} repaired README.md.")),
+            (
+                &ambig_finding,
+                format!("Commit {ambig_culprit} repaired README.md."),
+            ),
+        ]),
+        &[&covered],
+        &[
+            (&cites_self, Some("do not count")),
+            (&cites_older, Some("do not count")),
+            (&ambig_finding, Some("ambiguous")),
+        ],
+    );
+
+    // Audited pilot application under drain approval also refuses self-citation
+    // of a culprit whose abbreviated prefix collides with a blob, refuses an
+    // ambiguous assessment citation even when a same-name tag points to the
+    // commit, and archives on a valid later covering commit.
+    let audited_cites_self = finding("audited cites full culprit", culprit_description.clone());
+    let audited_covered = finding("audited covered", culprit_description.clone());
+    let audited_ambig_citation = finding("audited ambiguous citation", culprit_description);
+    let selection = ws.select(&drain);
+    assert_task_ids(
+        &selection,
+        &[
+            &audited_cites_self,
+            &audited_covered,
+            &audited_ambig_citation,
+        ],
+    );
+    let pilot = ws.pilot_child(&drain, &selection["task_ids"]);
+    let applied = ws.pilot_ok(
+        &drain,
+        &pilot,
+        vec![
+            verified_no_diff(
+                &audited_cites_self,
+                &format!("Commit {culprit} repaired README.md."),
+            ),
+            verified_no_diff(
+                &audited_covered,
+                &format!("Commit {fix_prefix} repaired README.md."),
+            ),
+            verified_no_diff(
+                &audited_ambig_citation,
+                &format!("Commit {colliding_fix_prefix} repaired README.md."),
+            ),
+        ],
+    );
+    let approvals = applied["drain_approval"].as_array().unwrap();
+    let approval_for = |task: &Task| {
+        approvals
+            .iter()
+            .find(|entry| entry["task_id"] == task.id)
+            .unwrap_or_else(|| panic!("missing approval entry for {}: {applied}", task.id))
+    };
+
+    let self_decision = approval_for(&audited_cites_self);
+    assert_eq!(
+        self_decision["classification"], "pilot_verified_no_diff",
+        "{applied}"
+    );
+    assert_eq!(self_decision["closed"], false, "{applied}");
+    assert!(
+        self_decision["not_closed_reason"]
+            .as_str()
+            .is_some_and(|reason| reason.contains("do not count")),
+        "{applied}"
+    );
+    assert_status(&ws, &audited_cites_self, TaskStatus::Proposed);
+
+    let covered_decision = approval_for(&audited_covered);
+    assert_eq!(
+        covered_decision["classification"], "pilot_verified_no_diff",
+        "{applied}"
+    );
+    assert_eq!(covered_decision["closed"], true, "{applied}");
+    assert_eq!(covered_decision["covering_commits"], json!([fix_prefix]));
+    assert_status(&ws, &audited_covered, TaskStatus::Archived);
+
+    let ambig_decision = approval_for(&audited_ambig_citation);
+    assert_eq!(
+        ambig_decision["classification"], "pilot_verified_no_diff",
+        "{applied}"
+    );
+    assert_eq!(ambig_decision["closed"], false, "{applied}");
+    assert!(
+        ambig_decision["not_closed_reason"]
+            .as_str()
+            .is_some_and(|reason| {
+                reason.contains("not a commit") && reason.contains(colliding_fix_prefix)
+            }),
+        "{applied}"
+    );
+    assert_status(&ws, &audited_ambig_citation, TaskStatus::Proposed);
+}
+
 crate::scenario_table!(
     a_no_diff_verdict_tags_the_task_scenarios,
     a_no_diff_verdict_tags_the_task_and_clears_the_context_files_gap,
@@ -530,5 +687,6 @@ crate::scenario_table!(
     non_commit_object_checks_preserve_commit_unknown_and_finding_holds,
     hex_ref_names_do_not_hide_commit_or_unknown_citations,
     covering_proof_resolves_unique_commit_prefix_under_blob_tag_and_holds_invalid_citations,
+    culprit_prefix_colliding_with_non_commit_object_still_blocks_self_citation,
     a_task_with_selectors_or_the_tag_is_left_as_it_was
 );
