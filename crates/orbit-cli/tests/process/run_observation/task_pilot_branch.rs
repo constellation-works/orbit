@@ -563,9 +563,35 @@ fn generic_job_run_validates_pilot_input_against_resolved_job_and_step() {
         .to_string(),
     );
 
+    // Custom job whose pilot step wraps caller string `task_ids` into a JSON
+    // string array template must succeed on both generic run aliases, keeping
+    // the stored outer input as a string while preparation receives the array.
+    fixture.write_job(
+        "custom_pilot_array_template.yaml",
+        &json!({
+            "schemaVersion": 2,
+            "kind": "Job",
+            "metadata": {"name": "custom_pilot_array_template"},
+            "spec": {
+                "state": "enabled",
+                "kind": "workflow",
+                "steps": [{
+                    "id": "prepare",
+                    "target": "activity:custom_prepare",
+                    "default_input": {
+                        "task_ids": "[\"{{ input.task_ids }}\"]",
+                        "workspace_path": ".",
+                        "base_branch": "main"
+                    }
+                }]
+            }
+        })
+        .to_string(),
+    );
+
     // Custom jobs whose `activity:custom_prepare` step forwards caller string
-    // `task_ids` (explicitly or via omitted/whole-input default_input) must fail
-    // with `invalid_input` before any durable run exists.
+    // `task_ids` (explicitly, via a JSON-object template, or via omitted/whole-input
+    // default_input) must fail with `invalid_input` before any durable run exists.
     fixture.write_job(
         "aliased_pilot_forwarded.yaml",
         &json!({
@@ -582,6 +608,24 @@ fn generic_job_run_validates_pilot_input_against_resolved_job_and_step() {
                         "task_ids": "{{ input.task_ids }}",
                         "workspace_path": "."
                     }
+                }]
+            }
+        })
+        .to_string(),
+    );
+    fixture.write_job(
+        "custom_pilot_json_object_string.yaml",
+        &json!({
+            "schemaVersion": 2,
+            "kind": "Job",
+            "metadata": {"name": "custom_pilot_json_object_string"},
+            "spec": {
+                "state": "enabled",
+                "kind": "workflow",
+                "steps": [{
+                    "id": "prepare",
+                    "target": "activity:custom_prepare",
+                    "default_input": "{\"task_ids\":\"{{ input.task_ids }}\",\"workspace_path\":\".\",\"base_branch\":\"main\"}"
                 }]
             }
         })
@@ -712,11 +756,56 @@ fn generic_job_run_validates_pilot_input_against_resolved_job_and_step() {
         assert_eq!(state.pipeline["prepare"]["task_ids"], json!([]));
     }
 
+    let task = runtime
+        .add_task(TaskAddParams {
+            title: "Custom pilot template rendering fixture".into(),
+            acceptance_criteria: vec!["Render caller string task_ids into an array".into()],
+            tags: vec!["delivery:task_local_pipeline".into()],
+            ..Default::default()
+        })
+        .unwrap();
+    let task_id_input = format!("task_ids={}", task.id);
+    for subcommand in [["run", "job"], ["job", "run"]] {
+        let output = cli(&[
+            subcommand[0],
+            subcommand[1],
+            "custom_pilot_array_template",
+            "--input",
+            &task_id_input,
+            "--wait",
+            "--timeout-seconds",
+            "60",
+            "--json",
+        ]);
+        assert!(
+            output.status.success(),
+            "{subcommand:?} custom_pilot_array_template must accept string task_ids rendered into a string array: {output:?}"
+        );
+        let doc: Value = serde_json::from_slice(&output.stdout).unwrap();
+        let run_id = doc["run_id"].as_str().unwrap();
+        let run = runtime.show_job_run(run_id).unwrap();
+        assert_eq!(
+            run.input.as_ref().unwrap()["task_ids"],
+            json!(task.id),
+            "stored outer input must remain a string"
+        );
+        let state = runtime.read_run_state(run_id).unwrap().unwrap();
+        assert_eq!(state.pipeline["prepare"]["mode"], json!("explicit"));
+        assert_eq!(state.pipeline["prepare"]["task_ids"], json!([task.id]));
+    }
+
     let before_refusals = fixture.snapshot();
-    for target in [
-        "task_pilot_pipeline",
-        "aliased_pilot_forwarded",
-        aliased_whole_input_path.to_str().unwrap(),
+    let json_array_string = format!("task_ids=[\"{}\"]", task.id);
+    for (target, input_arg) in [
+        ("task_pilot_pipeline", "task_ids=plain-string-value"),
+        ("task_pilot_pipeline", json_array_string.as_str()),
+        ("task_pilot_pipeline", "task_ids=[]"),
+        ("aliased_pilot_forwarded", "task_ids=plain-string-value"),
+        ("custom_pilot_json_object_string", task_id_input.as_str()),
+        (
+            aliased_whole_input_path.to_str().unwrap(),
+            "task_ids=plain-string-value",
+        ),
     ] {
         for subcommand in [["run", "job"], ["job", "run"]] {
             let output = cli(&[
@@ -724,13 +813,13 @@ fn generic_job_run_validates_pilot_input_against_resolved_job_and_step() {
                 subcommand[1],
                 target,
                 "--input",
-                "task_ids=plain-string-value",
+                input_arg,
                 "--json",
             ]);
             assert_eq!(
                 output.status.code(),
                 Some(1),
-                "{subcommand:?} {target} must fail before submit: {output:?}"
+                "{subcommand:?} {target} {input_arg} must fail before submit: {output:?}"
             );
             assert!(output.stdout.is_empty(), "{output:?}");
             let error: Value = serde_json::from_slice(&output.stderr)
@@ -744,7 +833,7 @@ fn generic_job_run_validates_pilot_input_against_resolved_job_and_step() {
             assert_eq!(
                 fixture.snapshot(),
                 before_refusals,
-                "{subcommand:?} {target} must not persist a durable run"
+                "{subcommand:?} {target} {input_arg} must not persist a durable run"
             );
         }
     }
