@@ -554,16 +554,31 @@ fn resolve_commit(source: &dyn SourceGit, revision: &str) -> Option<String> {
         .filter(|sha| !sha.is_empty())
 }
 
-/// Whether `object` resolves in Git as an unambiguous non-commit object (such
-/// as a blob, tree, or tag that does not peel to a commit). Ambiguous
-/// prefixes, unknown SHAs, and Git errors return `false` so callers fail
-/// closed.
+/// Whether `object` resolves in Git's object database as an unambiguous
+/// non-commit object (such as a blob, tree, or tag object that does not peel to
+/// a commit). Resolving the object ID first via `--disambiguate` prevents a
+/// matching branch or tag name from shadowing a commit prefix or masquerading as
+/// an unknown hex token. Ambiguous prefixes, unknown SHAs, and Git errors
+/// return `false` so callers fail closed.
 fn is_known_non_commit_object(source: &dyn SourceGit, object: &str) -> bool {
-    if resolve_commit(source, object).is_some() {
+    if object.len() < 4 || !object.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return false;
+    }
+    let Ok(matches) = source.git(&["rev-parse", &format!("--disambiguate={object}")]) else {
+        return false;
+    };
+    let mut oids = matches.lines().filter(|line| !line.is_empty());
+    let Some(oid) = oids.next() else {
+        return false;
+    };
+    if oids.next().is_some() || !oid.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return false;
+    }
+    if resolve_commit(source, oid).is_some() {
         return false;
     }
     source
-        .git(&["cat-file", "-t", object])
+        .git(&["cat-file", "-t", oid])
         .ok()
         .is_some_and(|kind| !kind.is_empty() && kind != "commit")
 }

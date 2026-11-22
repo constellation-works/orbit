@@ -250,6 +250,105 @@ fn non_commit_object_checks_preserve_commit_unknown_and_finding_holds() {
     }
 }
 
+fn mixed_hex_prefix(full: &str) -> &str {
+    let len = (7..full.len())
+        .find(|&len| {
+            let prefix = &full[..len];
+            prefix.bytes().any(|byte| byte.is_ascii_digit())
+                && prefix.bytes().any(|byte| byte.is_ascii_alphabetic())
+        })
+        .expect("full OID has a mixed digit/letter prefix");
+    &full[..len]
+}
+
+fn hex_ref_names_do_not_hide_commit_or_unknown_citations() {
+    let ws = Workspace::new();
+    let landed = ws.commit("the fix");
+    let readme_blob = ws.git(&["rev-parse", "HEAD:README.md"]);
+    let commit_prefix = mixed_hex_prefix(&landed);
+    let blob_prefix = mixed_hex_prefix(&readme_blob);
+    assert_ne!(commit_prefix, blob_prefix);
+
+    // Shadow the commit abbreviation and an unknown hex token with tags to a
+    // blob, and shadow the blob abbreviation with a tag to a commit.
+    ws.git(&["tag", commit_prefix, &readme_blob]);
+    ws.git(&["tag", "0badc0ffee1", &readme_blob]);
+    ws.git(&["tag", blob_prefix, &landed]);
+
+    let drain = ws.drain();
+    let shadowed_commit = audit_task(&ws, "cites commit prefix shadowed by blob tag", &[]);
+    let shadowed_unknown = audit_task(&ws, "cites unknown hex shadowed by blob tag", &[]);
+    let shadowed_blob = audit_task(&ws, "cites blob prefix shadowed by commit tag", &[]);
+
+    let selection = ws.select(&drain);
+    assert_task_ids(
+        &selection,
+        &[&shadowed_commit, &shadowed_unknown, &shadowed_blob],
+    );
+    let pilot = ws.pilot_child(&drain, &selection["task_ids"]);
+    let applied = ws.pilot_ok(
+        &drain,
+        &pilot,
+        vec![
+            verified_no_diff(
+                &shadowed_commit,
+                &format!("Commit {commit_prefix} already carries it."),
+            ),
+            verified_no_diff(
+                &shadowed_unknown,
+                "Report cites unverified sha 0badc0ffee1.",
+            ),
+            verified_no_diff(
+                &shadowed_blob,
+                &format!("Deliver a report artifact recording blob checksum {blob_prefix}."),
+            ),
+        ],
+    );
+
+    let approvals = applied["drain_approval"].as_array().unwrap();
+    assert_eq!(approvals.len(), 3, "{applied}");
+    let approval_for = |task: &Task| {
+        approvals
+            .iter()
+            .find(|entry| entry["task_id"] == task.id)
+            .unwrap_or_else(|| panic!("missing approval entry for {}: {applied}", task.id))
+    };
+
+    let next = ws.select(&drain);
+    for (task, cited) in [
+        (&shadowed_commit, commit_prefix),
+        (&shadowed_unknown, "0badc0ffee1"),
+    ] {
+        let entry = approval_for(task);
+        assert_eq!(
+            entry["classification"], "pilot_verified_no_diff",
+            "{applied}"
+        );
+        assert_eq!(entry["decision"], "withhold", "{applied}");
+        assert_status(&ws, task, TaskStatus::Proposed);
+        assert!(
+            !tags_of(&ws, task).contains(&NO_DIFF_EXPECTED_TAG.to_string()),
+            "{} must stay untagged",
+            task.title
+        );
+        assert_eq!(
+            blocking_gaps(&ws, task),
+            vec!["missing_context_files".to_string()],
+            "{} keeps its gap",
+            task.title
+        );
+        assert_held(&next, task, "pilot_verified_no_diff");
+        assert_held_detail(&next, task, cited);
+    }
+
+    let blob_entry = approval_for(&shadowed_blob);
+    assert_eq!(blob_entry["classification"], "verified_ready", "{applied}");
+    assert_eq!(blob_entry["approved"], true, "{applied}");
+    assert_status(&ws, &shadowed_blob, TaskStatus::Backlog);
+    assert!(tags_of(&ws, &shadowed_blob).contains(&NO_DIFF_EXPECTED_TAG.to_string()));
+    assert_eq!(blocking_gaps(&ws, &shadowed_blob), Vec::<String>::new());
+}
+
 crate::scenario_table!(
     a_no_diff_verdict_tags_the_task_scenarios,
     a_no_diff_verdict_tags_the_task_and_clears_the_context_files_gap,
@@ -257,5 +356,6 @@ crate::scenario_table!(
     a_no_diff_verdict_naming_a_known_non_commit_object_tags_and_approves,
     a_verdict_that_is_not_a_no_diff_deliverable_leaves_the_task_untagged_and_gapped,
     non_commit_object_checks_preserve_commit_unknown_and_finding_holds,
+    hex_ref_names_do_not_hide_commit_or_unknown_citations,
     a_task_with_selectors_or_the_tag_is_left_as_it_was
 );
