@@ -19,11 +19,12 @@ Bearing: admission holds a context lock for every declared `context_files` selec
 candidate on any overlap with a held claim, reservation or wave member
 (`footprints_block`, defined in [`lock_mode.rs`](../../../crates/orbit-common/src/fs/lock_mode.rs), is consulted by [`coordination/admission/footprint.rs`](../../../crates/orbit-store/src/repository/task/coordination/admission/footprint.rs),
 via the `overlaps` closure in `selection.rs`, and by `owner_wave.rs` and the runtime lock index;
-a footprint-less editing task was treated as a whole-tree lock in multi-slot drains by [ORB-15191]). Two settings already relax
-that per path: [`workflow.unlocked_context_paths`](../../CONFIG.md#unlocked-context-paths)
-(globs, default `["**/*.json", "**/*.txt", "**/*.md", "**/mod.rs", "**/*.toml"]`) takes no lock, and
+a footprint-less editing task was treated as a whole-tree lock in multi-slot drains by [ORB-15191]). Three settings already
+relax that per path: [`workflow.unlocked_context_paths`](../../CONFIG.md#unlocked-context-paths)
+takes no lock for matching entries (built-in default `["**/*.md"]`; init template value
+`["**/*.json", "**/*.txt", "**/*.md", "**/mod.rs", "**/*.toml"]`);
 [`workflow.generated_paths`](../../CONFIG.md#generated-paths-are-regenerated-not-merged)
-([ORB-16784]) regenerates a conflicting generated file at landing instead of merging it, and
+([ORB-16784]) regenerates a conflicting generated file at landing instead of merging it; and
 [`workflow.lock_modes`](../../CONFIG.md#footprint-lock-modes) ([ORB-18157], done) waives an
 overlap at a path whose mode is `shared`. A
 conflict that reaches landing is repaired by `pr_conflict_recovery`, whose crew comes from
