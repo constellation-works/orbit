@@ -1,8 +1,12 @@
 use super::*;
 use orbit_store::contracts::JobRunStepParams;
-use orbit_types::workflow::{DeliveryRefusal, JobTargetType};
+use orbit_types::workflow::{DeliveryRefusal, JobRun, JobTargetType};
 
 fn held_completion_fixture() -> Fixture {
+    held_completion_fixture_with(DeliveryRefusal::CheckEvidenceInconclusive)
+}
+
+fn held_completion_fixture_with(code: DeliveryRefusal) -> Fixture {
     let mut f = Fixture::new();
     f.source.state = JobRunState::Held;
     f.runtime
@@ -26,14 +30,8 @@ fn held_completion_fixture() -> Fixture {
                 exit_code: None,
                 lock_wait_ms: None,
                 agent_response_json: None,
-                error_code: Some(
-                    DeliveryRefusal::CheckEvidenceInconclusive
-                        .error_code()
-                        .into(),
-                ),
-                error_message: Some(
-                    "auto_fix_stopped: required-check evidence is unavailable".into(),
-                ),
+                error_code: Some(code.error_code().into()),
+                error_message: Some(format!("auto_fix_stopped: {}", code.error_code())),
             },
         )
         .unwrap();
@@ -355,39 +353,35 @@ fn held_review_task_diagnosis_reaches_agent_prompt_and_spends_budget() {
     );
 }
 
-fn held_completion_retry_on_review_task_carries_diagnosis_and_follows_pushed_head() {
-    use orbit_types::workflow::{
-        PR_AUTO_FIX_PUSHED_EVENT, PrAutoFixBlocker, PrAutoFixPush, source_repair_reservations,
-    };
-
-    let mut f = held_completion_fixture();
-    let captured_prompt = f._root.path().join("captured-retry-prompt.txt");
-    setup_fake_codex_implement_pipeline(&mut f, &captured_prompt);
-
-    // Advance the branch via an auto-fix push recorded on a completion retry run R2.
-    std::fs::write(f.repo.join("source.txt"), "auto-fix attempt before hold\n").unwrap();
-    git(&f.repo, &["add", "source.txt"]);
-    git(&f.repo, &["commit", "-qm", "auto-fix repair"]);
-    let advanced_head = git(&f.repo, &["rev-parse", "HEAD"]);
-    git(&f.repo, &["push", "-q", "origin", &f.branch]);
-    let mut answer: Value = serde_json::from_slice(&std::fs::read(&f.answer).unwrap()).unwrap();
-    answer["headRefOid"] = json!(advanced_head);
-    std::fs::write(&f.answer, answer.to_string()).unwrap();
-
+/// A completion retry of `f.source` that stopped `Held` under `code`, reusing the
+/// source's published checkpoints and original job definition snapshot. The
+/// task stays bound to `f.source`.
+fn insert_held_retry(f: &Fixture, input: Value, code: DeliveryRefusal) -> JobRun {
     let mut retry = f
         .runtime
         .insert_job_run(
             "task_pr_pipeline",
             2,
             Utc::now() + chrono::Duration::seconds(1),
-            Some(json!({"task_ids":[f.task],"completion":"done","auto_fix":true})),
+            Some(input),
             Some(f.source.run_id.clone()),
         )
         .unwrap();
-    // Preserve the original catalog definition snapshot for R2 as well.
+    // Preserve the original catalog definition snapshot for the retry as well.
     let job_runs_dir = &f.runtime.paths().job_runs_dir;
+    std::fs::create_dir_all(job_runs_dir).unwrap();
+    let source_snapshot = job_runs_dir.join(format!("{}.job.yaml", f.source.run_id));
+    if !source_snapshot.exists() {
+        std::fs::copy(
+            f._root
+                .path()
+                .join("global/resources/jobs/task_pr_pipeline.yaml"),
+            &source_snapshot,
+        )
+        .unwrap();
+    }
     std::fs::copy(
-        job_runs_dir.join(format!("{}.job.yaml", f.source.run_id)),
+        &source_snapshot,
         job_runs_dir.join(format!("{}.job.yaml", retry.run_id)),
     )
     .unwrap();
@@ -417,11 +411,38 @@ fn held_completion_retry_on_review_task_carries_diagnosis_and_follows_pushed_hea
                 exit_code: None,
                 lock_wait_ms: None,
                 agent_response_json: None,
-                error_code: Some(DeliveryRefusal::RepairDispatched.error_code().into()),
-                error_message: Some("auto_fix_stopped: repair already dispatched".into()),
+                error_code: Some(code.error_code().into()),
+                error_message: Some(format!("auto_fix_stopped: {}", code.error_code())),
             },
         )
         .unwrap();
+    retry
+}
+
+fn held_completion_retry_on_review_task_carries_diagnosis_and_follows_pushed_head() {
+    use orbit_types::workflow::{
+        PR_AUTO_FIX_PUSHED_EVENT, PrAutoFixBlocker, PrAutoFixPush, source_repair_reservations,
+    };
+
+    let mut f = held_completion_fixture();
+    let captured_prompt = f._root.path().join("captured-retry-prompt.txt");
+    setup_fake_codex_implement_pipeline(&mut f, &captured_prompt);
+
+    // Advance the branch via an auto-fix push recorded on a completion retry run R2.
+    std::fs::write(f.repo.join("source.txt"), "auto-fix attempt before hold\n").unwrap();
+    git(&f.repo, &["add", "source.txt"]);
+    git(&f.repo, &["commit", "-qm", "auto-fix repair"]);
+    let advanced_head = git(&f.repo, &["rev-parse", "HEAD"]);
+    git(&f.repo, &["push", "-q", "origin", &f.branch]);
+    let mut answer: Value = serde_json::from_slice(&std::fs::read(&f.answer).unwrap()).unwrap();
+    answer["headRefOid"] = json!(advanced_head);
+    std::fs::write(&f.answer, answer.to_string()).unwrap();
+
+    let retry = insert_held_retry(
+        &f,
+        json!({"task_ids":[f.task],"completion":"done","auto_fix":true}),
+        DeliveryRefusal::RepairDispatched,
+    );
     let push_note = serde_json::to_string(&PrAutoFixPush {
         pr_number: "17".into(),
         from_head_sha: f.head.clone(),
@@ -556,6 +577,174 @@ fn held_review_task_empty_plan_refuses_naming_missing_plan_and_update_call() {
     }
 }
 
+/// The owner `f.source` held as `delivery_completion_budget_expired`, then the
+/// drain's out-of-run auto-fix hand-back held as `delivery_repair_dispatched`.
+fn owner_held_with_handback_held() -> (Fixture, JobRun) {
+    let f = held_completion_fixture_with(DeliveryRefusal::CompletionBudgetExpired);
+    let handback = insert_held_retry(
+        &f,
+        json!({
+            "task_ids": [f.task],
+            "completion": "done",
+            "auto_fix": true,
+            "footprint_deferred": true,
+            "out_of_run_auto_fix": {
+                "pr_number": "17",
+                "blocker": "failed_checks",
+                "head_sha": f.head,
+                "source_run_id": f.source.run_id,
+                "drain_run_id": "drain-1",
+            },
+        }),
+        DeliveryRefusal::RepairDispatched,
+    );
+    assert_eq!(
+        f.runtime.get_task(&f.task).unwrap().job_run_id.as_deref(),
+        Some(f.source.run_id.as_str()),
+        "a resume leaves the task bound to the owner"
+    );
+    (f, handback)
+}
+
+fn handback_request(f: &Fixture, run_id: &str, action: &str) -> Value {
+    json!({"id": run_id, "source_repair": {"action": action, "task_id": f.task}})
+}
+
+fn spend_pr_auto_fix_budget(f: &Fixture) {
+    use orbit_types::workflow::{PR_AUTO_FIX_ADMITTED_EVENT, PR_AUTO_FIX_BUDGET};
+    let entries = (0..PR_AUTO_FIX_BUDGET)
+        .map(|i| orbit_types::task::TaskHistoryEntry {
+            at: Utc::now(),
+            by: "system".into(),
+            event: PR_AUTO_FIX_ADMITTED_EVENT.into(),
+            note: Some(
+                json!({
+                    "pr_number": "17",
+                    "head_sha": format!("{i:040x}"),
+                    "blocker": "failed_checks",
+                    "attempt": i + 1,
+                    "budget": PR_AUTO_FIX_BUDGET,
+                    "run_id": format!("autofix-{i}"),
+                    "crew": "fixture",
+                    "crew_source": "fixture"
+                })
+                .to_string(),
+            ),
+            from_status: None,
+            to_status: None,
+            operation_id: None,
+            decision: None,
+        })
+        .collect();
+    f.runtime
+        .apply_task_automation_update(
+            &f.task,
+            TaskAutomationUpdate {
+                append_history: entries,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+}
+
+fn held_owner_and_held_auto_fix_handback_admit_repair_on_the_handback() {
+    let (f, handback) = owner_held_with_handback_held();
+    let inspected = f
+        .runtime
+        .run_tool_as_human(
+            "orbit.workflow.run.resume",
+            handback_request(&f, &handback.run_id, "inspect"),
+        )
+        .unwrap();
+    assert_eq!(inspected["binding"]["source_run_id"], handback.run_id);
+    assert_eq!(inspected["binding"]["head_sha"], f.head);
+    let mut submit = handback_request(&f, &handback.run_id, "submit");
+    submit["source_repair"]["binding"] = inspected["binding"].clone();
+    submit["source_repair"]["request_key"] = json!("handback-1");
+    submit["source_repair"]["diagnosis"] = json!("Repair the held hand-back's published head.");
+    let admitted = f
+        .runtime
+        .run_tool_as_human("orbit.workflow.run.resume", submit)
+        .unwrap();
+    assert_eq!(admitted["retry_source_run_id"], handback.run_id);
+}
+
+fn held_auto_fix_handback_with_spent_budget_refuses_as_budget_exhausted() {
+    let (f, handback) = owner_held_with_handback_held();
+    spend_pr_auto_fix_budget(&f);
+    let inspected = f
+        .runtime
+        .run_tool_as_human(
+            "orbit.workflow.run.resume",
+            handback_request(&f, &handback.run_id, "inspect"),
+        )
+        .unwrap();
+    let mut submit = handback_request(&f, &handback.run_id, "submit");
+    submit["source_repair"]["binding"] = inspected["binding"].clone();
+    submit["source_repair"]["request_key"] = json!("handback-spent");
+    submit["source_repair"]["diagnosis"] = json!("Repair the held hand-back's published head.");
+    let error = f
+        .runtime
+        .run_tool_as_human("orbit.workflow.run.resume", submit)
+        .unwrap_err()
+        .to_string();
+    assert!(
+        error.contains("pull request repair budget exhausted"),
+        "{error}"
+    );
+}
+
+fn held_owner_refused_while_its_handback_is_newer_names_the_handback() {
+    let (f, handback) = owner_held_with_handback_held();
+    let error = f
+        .runtime
+        .run_tool_as_human(
+            "orbit.workflow.run.resume",
+            handback_request(&f, &f.source.run_id, "inspect"),
+        )
+        .unwrap_err()
+        .to_string();
+    assert!(
+        error.contains("newer execution makes publication association ambiguous")
+            && error.contains(&handback.run_id)
+            && error.contains("source_repair"),
+        "{error}"
+    );
+}
+
+fn held_run_outside_the_task_lineage_is_still_refused_as_unbound() {
+    let f = held_completion_fixture_with(DeliveryRefusal::CompletionBudgetExpired);
+    let mut stray = f
+        .runtime
+        .insert_job_run(
+            "task_pr_pipeline",
+            2,
+            Utc::now() + chrono::Duration::seconds(1),
+            Some(json!({"task_ids":[f.task],"completion":"done","auto_fix":true})),
+            None,
+        )
+        .unwrap();
+    stray.state = JobRunState::Held;
+    stray.finished_at = Some(Utc::now() + chrono::Duration::seconds(2));
+    f.runtime
+        .sqlite_store()
+        .unwrap()
+        .upsert_job_run_for_workspace(&f.runtime.workspace_id().unwrap(), &stray, None)
+        .unwrap();
+    let error = f
+        .runtime
+        .run_tool_as_human(
+            "orbit.workflow.run.resume",
+            handback_request(&f, &stray.run_id, "inspect"),
+        )
+        .unwrap_err()
+        .to_string();
+    assert!(
+        error.contains("held publication is no longer the task's bound run"),
+        "{error}"
+    );
+}
+
 crate::scenario_table!(
     held_publication_source_repair,
     published_completion_hold_starts_repair_at_published_head,
@@ -563,4 +752,8 @@ crate::scenario_table!(
     held_review_task_diagnosis_reaches_agent_prompt_and_spends_budget,
     held_completion_retry_on_review_task_carries_diagnosis_and_follows_pushed_head,
     held_review_task_empty_plan_refuses_naming_missing_plan_and_update_call,
+    held_owner_and_held_auto_fix_handback_admit_repair_on_the_handback,
+    held_auto_fix_handback_with_spent_budget_refuses_as_budget_exhausted,
+    held_owner_refused_while_its_handback_is_newer_names_the_handback,
+    held_run_outside_the_task_lineage_is_still_refused_as_unbound,
 );
