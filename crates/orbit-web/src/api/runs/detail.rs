@@ -145,8 +145,13 @@ pub(super) fn job_run_detail_to_json(runtime: &OrbitRuntime, run: &JobRun) -> Va
             "run detail omitted a section");
     }
 
+    // The registered workspace that holds the run. `locate_run` may serve a
+    // run from a workspace other than the requested one, so a client cannot
+    // infer the owner from the `workspace` it asked for.
+    let workspace_id = runtime.workspace_id().ok();
     let mut detail = json!({
         "run": full,
+        "workspace_id": workspace_id,
         "steps": display_steps_with_agent_execution_to_json(&steps, state.as_ref(), &evidence),
         "steps_source": steps.source.as_str(),
         "provider_processes": provider_processes
