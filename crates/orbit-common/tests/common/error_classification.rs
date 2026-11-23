@@ -385,7 +385,7 @@ fn unknown_workspace_selector_is_typed_and_reads_as_invalid_input() {
         .unknown_workspace_selector_details()
         .expect("typed variant must expose structured selector details");
     assert_eq!(details.selector, selector);
-    assert_eq!(details.bound_workspace, None);
+    assert_eq!(details.bound, None);
     assert_eq!(typed.wire_code(), legacy.wire_code());
     assert_eq!(typed.wire_details(), legacy.wire_details());
     assert_eq!(typed.to_string(), legacy.to_string());
@@ -395,13 +395,16 @@ fn unknown_workspace_selector_is_typed_and_reads_as_invalid_input() {
         "UnknownWorkspaceSelector must serialize identically to InvalidInput"
     );
 
-    let bound = typed.with_bound_workspace("bound-example");
+    let bound = typed.with_bound_workspace(
+        "bound-example",
+        orbit_common::BoundWorkspaceRemedy::OmitSelector,
+    );
     let bound_details = bound
         .unknown_workspace_selector_details()
         .expect("bound guidance must preserve UnknownWorkspaceSelector identity");
     assert_eq!(bound_details.selector, selector);
     assert_eq!(
-        bound_details.bound_workspace.as_deref(),
+        bound_details.bound.as_ref().map(|bound| bound.name.as_str()),
         Some("bound-example")
     );
     let legacy_bound = OrbitError::InvalidInput(format!(
@@ -412,6 +415,22 @@ fn unknown_workspace_selector_is_typed_and_reads_as_invalid_input() {
     assert_eq!(
         serde_json::to_value(&bound).expect("serialize bound"),
         serde_json::to_value(&legacy_bound).expect("serialize legacy bound")
+    );
+
+    // An ID-resolved tool ignores the binding when `workspace` is omitted, so
+    // its remedy must name the bound workspace as the filter to pass.
+    let pass_bound = OrbitError::unknown_workspace_selector(selector).with_bound_workspace(
+        "bound-example",
+        orbit_common::BoundWorkspaceRemedy::PassBoundSelector,
+    );
+    let legacy_pass_bound = OrbitError::InvalidInput(format!(
+        "{legacy_msg}; this session is bound to workspace 'bound-example'; pass `workspace` as 'bound-example' to keep that filter, since omitting `workspace` looks the task up by its ID in whichever workspace owns it"
+    ));
+    assert_eq!(pass_bound.wire_code(), legacy_pass_bound.wire_code());
+    assert_eq!(pass_bound.to_string(), legacy_pass_bound.to_string());
+    assert_eq!(
+        serde_json::to_value(&pass_bound).expect("serialize pass-bound"),
+        serde_json::to_value(&legacy_pass_bound).expect("serialize legacy pass-bound")
     );
 
     for non_unknown in [

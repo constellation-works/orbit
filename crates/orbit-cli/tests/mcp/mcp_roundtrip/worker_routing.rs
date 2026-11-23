@@ -585,10 +585,45 @@ fn bound_session_unknown_workspace_explains_binding() {
     let missing_checkout = workspace.home.join("missing-checkout");
     let missing_checkout = missing_checkout.to_string_lossy().into_owned();
 
+    // ID-resolved reads ignore the binding when `workspace` is omitted, so the
+    // refusal must name the bound workspace as the filter to keep.
+    for (tool, id_read) in [
+        ("orbit_task_show", json!({"id": "TST-1"})),
+        (
+            "orbit_task_artifact",
+            json!({"action": "get", "id": "TST-1", "path": "qa/note.md"}),
+        ),
+    ] {
+        for selector in ["unknown-example", missing_checkout.as_str()] {
+            let mut arguments = id_read.clone();
+            arguments["workspace"] = json!(selector);
+            let refused = client.assert_tool_error(tool, arguments, "invalid_input");
+            let message = refused["message"].as_str().expect("refusal message");
+            assert!(
+                message.contains(&format!("unknown workspace selector '{selector}'")),
+                "{tool}: {message}"
+            );
+            assert!(
+                message.contains(
+                    "this session is bound to workspace 'bound-example'; pass `workspace` as 'bound-example' to keep that filter"
+                ),
+                "{tool}: {message}"
+            );
+            assert!(
+                message.contains(
+                    "omitting `workspace` looks the task up by its ID in whichever workspace owns it"
+                ),
+                "{tool}: {message}"
+            );
+        }
+    }
+
+    // Other workspace-scoped calls resolve an omitted selector through the
+    // binding, so their remedy stays "omit".
     for selector in ["unknown-example", missing_checkout.as_str()] {
         let refused = client.assert_tool_error(
-            "orbit_task_show",
-            json!({"id": "TST-1", "workspace": selector}),
+            "orbit_task_list",
+            json!({"workspace": selector}),
             "invalid_input",
         );
         let message = refused["message"].as_str().expect("refusal message");
@@ -596,9 +631,40 @@ fn bound_session_unknown_workspace_explains_binding() {
             message.contains(&format!("unknown workspace selector '{selector}'")),
             "{message}"
         );
-        assert!(message.contains("bound-example"), "{message}");
-        assert!(message.contains("omit `workspace`"), "{message}");
+        assert!(
+            message
+                .contains("this session is bound to workspace 'bound-example'; omit `workspace`"),
+            "{message}"
+        );
+        assert!(!message.contains("pass `workspace` as"), "{message}");
     }
+
+    // The id-only read follows the task into `alpha`, the workspace that owns
+    // it, while the retry the refusal describes stays a fail-closed filter on
+    // the bound workspace.
+    let alpha_task = id_of(&stdout_json(&tool_ok_at(
+        &alpha_dir,
+        &workspace.home,
+        "orbit.task.add",
+        json!({
+            "title": "Owned by alpha, read from the bound session",
+            "description": "Addressed by ID alone",
+            "workspace": utf8(&alpha_dir),
+            "complexity": "low",
+            "model": "codex",
+        }),
+    )));
+    let shown = client.show_task(&alpha_task);
+    assert_eq!(shown["id"], json!(alpha_task));
+    assert_eq!(shown["workspace"]["name"], "alpha", "{shown}");
+    let missed = client.call_tool_err(
+        "orbit_task_show",
+        json!({ "id": alpha_task, "workspace": "bound-example" }),
+    );
+    assert!(
+        message_contains(&missed, &alpha_task),
+        "the bound filter named by the refusal must not find alpha's task: {missed}"
+    );
 
     for (argument, expected_fragment) in [
         (json!(123), "`workspace` must be a string"),
