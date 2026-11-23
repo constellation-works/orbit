@@ -18,6 +18,7 @@ use std::path::Path;
 use orbit_engine::DispatchError;
 use orbit_types::task::HostOs;
 
+use super::gate_source::{self, GateSource};
 use super::source::SourceSnapshot;
 
 /// Whether evidence cites a guide rule this check can admit.
@@ -47,39 +48,52 @@ const GUIDE_FILES: &[&str] = &["AGENTS.md", "CLAUDE.md"];
 pub(super) fn admit_guide_gate(
     check: &GuideGateCheck<'_>,
 ) -> Result<GuideGateDecision, DispatchError> {
+    let source_check = GateSource {
+        action: check.action,
+        task_id: check.task_id,
+        criterion_index: check.criterion_index,
+        workspace_root: check.workspace_root,
+        source: check.source,
+    };
     if !check.evidence.to_ascii_lowercase().contains("codeql") {
         return Ok(GuideGateDecision::NotCited);
     }
-    let citations = path_line_citations(check.evidence);
+    let mut citations = Vec::new();
+    for citation in gate_source::path_line_citations(check.evidence) {
+        if !citations.contains(&citation) {
+            citations.push(citation);
+        }
+    }
     if citations.is_empty() || citations.iter().any(|(path, _)| !is_guide_path(path)) {
-        return Err(refuse(
-            check,
+        return Err(gate_source::refuse(
+            &source_check,
             "evidence naming CodeQL must cite the repository guide rule at \
              AGENTS.md:<line> or CLAUDE.md:<line> in the pinned source; leave \
              required_os empty for portable criteria",
         ));
     }
     if citations.iter().any(|(path, _)| path != &citations[0].0) {
-        return Err(refuse(
-            check,
+        return Err(gate_source::refuse(
+            &source_check,
             "evidence must cite one repository guide file for the CodeQL rule",
         ));
     }
     if check.os != HostOs::Linux {
-        return Err(refuse(
-            check,
+        return Err(gate_source::refuse(
+            &source_check,
             "a guide rule that only Linux can satisfy must name os linux; \
              leave required_os empty",
         ));
     }
     let (path, _) = &citations[0];
-    let text = read_pinned_source(check, path)?;
+    let text =
+        gate_source::read_pinned_source(&source_check, path, "a repository guide rule", "guide ")?;
     let lines: Vec<&str> = text.lines().collect();
     let mut cited = Vec::new();
     for (_, line_no) in &citations {
         let Some(line) = lines.get(line_no - 1) else {
-            return Err(refuse(
-                check,
+            return Err(gate_source::refuse(
+                &source_check,
                 &format!("pinned guide has no line {line_no} at {path}"),
             ));
         };
@@ -95,8 +109,8 @@ pub(super) fn admit_guide_gate(
             })
     });
     if !trigger {
-        return Err(refuse(
-            check,
+        return Err(gate_source::refuse(
+            &source_check,
             &format!(
                 "no cited guide line at {path} names CodeQL together with a tag this task \
                  carries; leave required_os empty for portable criteria"
@@ -107,8 +121,8 @@ pub(super) fn admit_guide_gate(
         .iter()
         .any(|(_, line)| line.to_ascii_lowercase().contains("only linux"));
     if !only_linux {
-        return Err(refuse(
-            check,
+        return Err(gate_source::refuse(
+            &source_check,
             &format!(
                 "no cited guide line at {path} states that only Linux can produce the \
                  required validation; leave required_os empty for portable criteria"
@@ -118,114 +132,9 @@ pub(super) fn admit_guide_gate(
     Ok(GuideGateDecision::Admit)
 }
 
-fn refuse(check: &GuideGateCheck<'_>, detail: &str) -> DispatchError {
-    DispatchError::action_failed(
-        check.action,
-        format!(
-            "task {} required_os criterion {} {detail}",
-            check.task_id, check.criterion_index
-        ),
-    )
-}
-
-fn read_pinned_source(check: &GuideGateCheck<'_>, path: &str) -> Result<String, DispatchError> {
-    let Some(source) = check.source else {
-        return Err(refuse(
-            check,
-            "a repository guide rule cannot be verified without a pinned source; leave \
-             required_os empty",
-        ));
-    };
-    match source.file_text(check.action, check.workspace_root, path)? {
-        Some(text) => Ok(text),
-        None => Err(refuse(
-            check,
-            &format!("pinned source has no guide file at {path}"),
-        )),
-    }
-}
-
 fn is_guide_path(path: &str) -> bool {
     let file = path.rsplit('/').next().unwrap_or(path);
     GUIDE_FILES.contains(&file)
-}
-
-/// Every `path:line` citation in `evidence`, in order, de-duplicated.
-fn path_line_citations(evidence: &str) -> Vec<(String, usize)> {
-    let bytes = evidence.as_bytes();
-    let mut found: Vec<(String, usize)> = Vec::new();
-    let mut index = 0;
-    while index < bytes.len() {
-        if bytes[index] == b':' {
-            let mut cursor = index + 1;
-            if cursor < bytes.len() && bytes[cursor].is_ascii_digit() {
-                let mut line = 0usize;
-                let mut overflow = false;
-                while cursor < bytes.len() && bytes[cursor].is_ascii_digit() {
-                    let digit = usize::from(bytes[cursor] - b'0');
-                    match line
-                        .checked_mul(10)
-                        .and_then(|value| value.checked_add(digit))
-                    {
-                        Some(value) => line = value,
-                        None => overflow = true,
-                    }
-                    cursor += 1;
-                }
-                if !overflow
-                    && line >= 1
-                    && let Some(path) = path_before(evidence, index)
-                    && !found.contains(&(path.clone(), line))
-                {
-                    found.push((path, line));
-                }
-                index = cursor;
-                continue;
-            }
-        }
-        index += 1;
-    }
-    found
-}
-
-fn path_before(evidence: &str, colon: usize) -> Option<String> {
-    let bytes = evidence.as_bytes();
-    let mut start = colon;
-    while start > 0 && is_path_byte(bytes[start - 1]) {
-        start -= 1;
-    }
-    let path = &evidence[start..colon];
-    if valid_source_path(path) {
-        Some(path.to_string())
-    } else {
-        None
-    }
-}
-
-fn is_path_byte(byte: u8) -> bool {
-    byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-' | b'.' | b'/')
-}
-
-fn valid_source_path(path: &str) -> bool {
-    if path.is_empty() || path.starts_with('/') || path.ends_with('/') || path.contains(':') {
-        return false;
-    }
-    let mut saw_letter = false;
-    for part in path.split('/') {
-        if part.is_empty() || part == "." || part == ".." {
-            return false;
-        }
-        if part.bytes().any(|byte| byte.is_ascii_alphabetic()) {
-            saw_letter = true;
-        }
-    }
-    let Some((stem, extension)) = path.rsplit_once('.') else {
-        return false;
-    };
-    !stem.is_empty()
-        && !extension.is_empty()
-        && extension.bytes().all(|byte| byte.is_ascii_alphanumeric())
-        && saw_letter
 }
 
 /// The tags a guide line names as CodeQL triggers, lowercased: the

@@ -25,13 +25,12 @@ const BODY_ID = "codebase-body";
 const WINDOWS = ["7d", "30d", "90d", "all"];
 const ROLLUPS = ["file", "dir", "crate"];
 const VIEWS = ["hotspots", "file", "coupling"];
-// The dimensions a regression is filtered by, each value in the server's
-// breakdown order. `absent` (a link stored without a classification) and
-// `unclassified` (the filer could not tell) stay apart.
+// The dimensions a regression is filtered by. Layer names come from the
+// workspace, so only the server validates them, including on a cold deep link.
 const REGRESSION_DIMENSIONS = [
   { key: "nature", label: "Nature", values: ["broke_existing", "defect_in_new", "incomplete", "merge_reintroduced", "contract_drift", "unclassified", "absent"] },
   { key: "escape", label: "Escape", values: ["no_test", "test_not_selected", "platform_only", "review_missed", "spec_ambiguous", "nondeterministic", "unclassified", "absent"] },
-  { key: "layer", label: "Layer", values: ["ci_tests", "docs_skills", "dashboard", "sandbox_policy", "store_migration", "vcs_delivery", "config", "cli_mcp", "runtime_lifecycle", "other", "unknown"] },
+  { key: "layer", label: "Layer" },
   { key: "detected_by", label: "Detected by", values: ["delivery_review", "security_review", "code_review", "qa_sweep", "post_merge_ci", "production_run", "operator", "other"] },
 ];
 const VALUE_LABELS = {
@@ -42,7 +41,7 @@ const VALUE_LABELS = {
   runtime_lifecycle: "runtime/lifecycle", delivery_review: "delivery review", security_review: "security review",
   code_review: "code review", qa_sweep: "QA sweep", post_merge_ci: "post-merge CI", production_run: "production run",
 };
-const valueLabel = (value) => VALUE_LABELS[value] || String(value ?? "").replace(/_/g, " ");
+const valueLabel = (value) => Object.hasOwn(VALUE_LABELS, value) ? VALUE_LABELS[value] : String(value ?? "").replace(/_/g, " ");
 const DEFAULT_FILTER = Object.fromEntries(REGRESSION_DIMENSIONS.map((dimension) => [dimension.key, null]));
 const DEFAULT_QUERY = { window: "90d", min_support: 15, rollup: "file", ...DEFAULT_FILTER };
 // The minimum-support choices; a hashed value off the ladder is added to it.
@@ -93,9 +92,10 @@ let route = { view: "hotspots", path: null };
 // signal, the path search, whether release files are grouped, the lock sort
 // (`wait` or `rate`), whether each Coupling list or every regressed task is
 // expanded, and which path was last copied or failed to copy.
-let view = { showAll: false, search: "", groupRelease: true, lockSort: "wait", allPairs: false, allLocks: false, allTasks: false, copied: null, copyFailed: null };
+let view = { showAll: false, search: "", groupRelease: true, lockSort: "wait", allPairs: false, allLocks: false, allTasks: false, allOthers: false, copied: null, copyFailed: null };
 let lastData = null;
 let lastPayloadKey = null;
+let refusedLayer = null;
 let paintedView = null;
 // The file view's related-files request: the key it answers, the selection its
 // data belongs to, its response or error, and a counter that retires superseded
@@ -112,6 +112,7 @@ let requestHashChange = () => {};
 function dropQueryData() {
   lastData = null;
   lastPayloadKey = null;
+  refusedLayer = null;
 }
 
 function resetRelated() {
@@ -120,10 +121,9 @@ function resetRelated() {
 }
 
 onWorkspaceChange(() => {
-  lastData = null;
-  lastPayloadKey = null;
+  dropQueryData();
   resetRelated();
-  view = { ...view, search: "", showAll: false, allPairs: false, allLocks: false };
+  view = { ...view, search: "", showAll: false, allPairs: false, allLocks: false, allOthers: false };
   if ($("codebase-path-search")) $("codebase-path-search").value = "";
 });
 
@@ -138,7 +138,7 @@ function normalizedQuery(raw, fallback = DEFAULT_QUERY) {
   // An omitted or cleared filter keeps every value; an unknown one falls back.
   for (const { key, values } of REGRESSION_DIMENSIONS) {
     const value = raw[key];
-    query[key] = value == null || value === "" ? null : values.includes(value) ? value : (fallback[key] ?? null);
+    query[key] = value == null || value === "" ? null : !values || values.includes(value) ? value : (fallback[key] ?? null);
   }
   return query;
 }
@@ -254,14 +254,16 @@ function syncCodebaseControls() {
 
 /// Change the selection and ask for a new hash; an invalid or unchanged
 /// selection asks for nothing.
-function updateQuery(update) {
+function updateQuery(update, target = route) {
   const next = normalizedQuery({ ...codebaseQuery, ...update }, codebaseQuery);
   if (JSON.stringify(next) === JSON.stringify(codebaseQuery)) {
     syncCodebaseControls();
+    navigate(target);
     return;
   }
   dropQueryData();
   codebaseQuery = next;
+  setRoute(target);
   syncCodebaseControls();
   requestHashChange();
 }
@@ -292,7 +294,7 @@ function wireCodebaseControls(onChange) {
   const search = $("codebase-path-search");
   if (search) {
     search.addEventListener("input", () => {
-      view = { ...view, search: search.value };
+      view = { ...view, search: search.value, allOthers: false };
       paint();
     });
   }
@@ -321,16 +323,28 @@ function setMeta(text) {
 
 function fetchAndRenderCodebase() {
   if (isAggregateView()) {
-    lastData = null;
-    lastPayloadKey = null;
+    dropQueryData();
     paintedView = null;
     resetRelated();
     setMeta("");
     renderPanelPlaceholder(BODY_ID);
     return Promise.resolve();
   }
+  const requestedLayer = codebaseQuery.layer;
   const path = analyticsPath();
-  return requestPanel(BODY_ID, path, () => fetchJson(path), (data) => renderCodebase(data));
+  return requestPanel(
+    BODY_ID,
+    path,
+    () => fetchJson(path).catch((error) => {
+      // A bookmarked layer may no longer exist in workspace config; render an
+      // in-page recovery control instead of telling the operator to reload.
+      if (requestedLayer && error && error.status === 400 && !error.routeMissing) {
+        return { refusedLayer: requestedLayer, message: error.message || "" };
+      }
+      throw error;
+    }),
+    (data) => renderCodebase(data),
+  );
 }
 
 // ---- figures ----------------------------------------------------------------
@@ -616,11 +630,20 @@ function sectionRow(model, text, kind) {
   return row;
 }
 
+/// Match a path against the search query. `./` scopes to repository-root paths
+/// (files without `/`, plus the `./` group itself in directory/crate views).
+function pathMatchesQuery(path, query) {
+  if (!query) return true;
+  if (query === "./") return path === "./" || !path.includes("/");
+  if (query.startsWith("./")) return !path.includes("/") && path.toLowerCase().includes(query.slice(2));
+  return path.toLowerCase().includes(query);
+}
+
 /// The paths each section lists: under a search, every ranked match; else
 /// the flagged paths, then the top of each signal or, with Show all, the rest.
 function hotspotSections(model) {
   const query = view.search.trim().toLowerCase();
-  const matches = (path) => !query || path.toLowerCase().includes(query);
+  const matches = (path) => pathMatchesQuery(path, query);
   const multi = model.multi.filter(matches);
   const seen = new Set(multi);
   const singles = [];
@@ -636,15 +659,39 @@ function hotspotSections(model) {
 
 function hotspotTable(model) {
   const { data, signals, index } = model;
-  const box = el("section", { class: "codebase-hot", "aria-label": "Hotspots" });
+  const { query, multi, singles } = hotspotSections(model);
+  const allOthers = query && Array.isArray(data.known_paths)
+    ? data.known_paths.filter((path) => !index.has(path) && pathMatchesQuery(path, query))
+    : [];
+  const others = view.allOthers ? allOthers : allOthers.slice(0, OTHER_PATHS_SHOWN);
+  const otherList = el("ul", { class: "codebase-other-paths", id: "codebase-other-paths", "aria-label": "Other matching paths" },
+    others.map((path) => el("li", {}, [fileLink(path)])));
+  const otherNodes = [
+    el("p", { class: "codebase-eyebrow", text: "Not ranked · open to see what changes with it" }),
+    otherList,
+  ];
+  if (allOthers.length > OTHER_PATHS_SHOWN) {
+    const toggle = actionButton(view.allOthers ? "Show fewer" : `Show all ${count(allOthers.length)}`, () => {
+      view = { ...view, allOthers: !view.allOthers };
+      paint();
+    }, "small");
+    toggle.setAttribute("aria-expanded", String(view.allOthers));
+    toggle.setAttribute("aria-controls", otherList.id);
+    otherNodes.push(el("div", { class: "codebase-list-disclosure" }, [
+      el("span", { class: "codebase-extra", text: `Showing ${count(others.length)} of ${count(allOthers.length)}` }),
+      toggle,
+    ]));
+  }
+  const otherPaths = others.length ? el("div", { class: "codebase-others" }, otherNodes) : null;
+  const box = el("section", { class: "card card-flush codebase-hot", "aria-label": "Hotspots" });
   if (!signals.length) {
     box.appendChild(el("div", { class: "codebase-empty-state" }, [
       el("p", { class: "codebase-empty-title", text: `No path reaches minimum support ${count(data.min_support)} under any signal in this window.` }),
       el("div", { class: "codebase-actions" }, [lowerSupportButton(data, `Show paths with ${LOWERED_SUPPORT}+ tasks`), data.window !== "all" ? actionButton("Use all time", () => updateQuery({ window: "all" })) : null]),
     ]));
-    return keyed(box, "hotspots", { empty: true, min: data.min_support, window: data.window });
+    if (otherPaths) box.appendChild(otherPaths);
+    return keyed(box, "hotspots", { empty: true, min: data.min_support, window: data.window, others, allOthersCount: allOthers.length, showAllOthers: view.allOthers });
   }
-  const { query, multi, singles } = hotspotSections(model);
   const head = el("tr", {}, [
     el("th", { class: "codebase-hot-path", text: ROLLUP_NOUNS[data.rollup] || "Path" }),
     ...signals.map((key) => {
@@ -691,24 +738,14 @@ function hotspotTable(model) {
     foot.appendChild(toggle);
   }
   box.appendChild(foot);
-  if (query) {
-    // Paths no signal ranks can still be opened: their files and partners.
-    const ranked = new Set(index.keys());
-    const others = (Array.isArray(data.known_paths) ? data.known_paths : [])
-      .filter((path) => !ranked.has(path) && path.toLowerCase().includes(query)).slice(0, OTHER_PATHS_SHOWN);
-    if (others.length) {
-      const list = el("ul", { class: "codebase-other-paths", "aria-label": "Other matching paths" });
-      for (const path of others) list.appendChild(el("li", {}, [fileLink(path)]));
-      box.appendChild(el("div", { class: "codebase-others" }, [el("p", { class: "codebase-eyebrow", text: "Not ranked · open to see what changes with it" }), list]));
-    }
-  }
+  if (otherPaths) box.appendChild(otherPaths);
   const cells = [...multi, ...singles].map((path) => signals.map((key) => {
     const hit = index.get(path)?.[key];
     return hit ? [hit.rank, hit.row.rate, hit.row.numerator, hit.row.denominator] : null;
   }));
   return keyed(box, "hotspots", {
     signals, rollup: data.rollup, multi, singles, cells, total: index.size, showAll: view.showAll, query,
-    lengths: signals.map((key) => rowsOf(data, key).length), known: query ? data.known_paths || null : null,
+    lengths: signals.map((key) => rowsOf(data, key).length), others, allOthersCount: allOthers.length, showAllOthers: view.allOthers,
   });
 }
 
@@ -780,19 +817,23 @@ function fileHead(model, path) {
 function fileTiles(model, path) {
   const { data, signals, index, limit } = model;
   const hits = index.get(path) || {};
-  const node = el("section", { class: "codebase-file-tiles", "aria-label": "Signals" });
+  const row = el("div", { class: "stat-tiles-row" });
+  const node = el("section", { class: "stat-tiles", "aria-label": "Signals" }, [row]);
   const keys = signals.length ? signals : ["regressions", "footprint_misses", "blocked"];
   for (const key of keys) {
     const hit = hits[key];
-    const tile = el("div", { class: `codebase-file-tile${hit ? "" : " absent"}` }, [
-      el("span", { class: "codebase-tile-label" }, [signalDot(key), SIGNAL_INFO[key].label]),
-      el("span", { class: "codebase-tile-big", text: hit ? pct(hit.row.rate) : "—" }),
-      el("span", { class: "codebase-tile-sub" }, hit
+    const tile = el("div", { class: "stat-tile", "data-state": hit ? null : "unknown" }, [
+      el("span", { class: "stat-tile-label" }, [
+        signalDot(key),
+        el("span", { class: "stat-tile-label-text", text: SIGNAL_INFO[key].label }),
+      ]),
+      el("span", { class: "stat-tile-figure", text: hit ? pct(hit.row.rate) : "—" }),
+      el("span", { class: "stat-tile-compare" }, hit
         ? [`${count(hit.row.numerator)} of ${count(hit.row.denominator)} ${SIGNAL_INFO[key].unit} · `, el("span", { class: "codebase-tile-rank", text: `#${hit.rank}` }), ` of ${count(rowsOf(data, key).length)}`]
         : [`not in the top ${count(limit)}`]),
     ]);
     tile.dataset.signal = key;
-    node.appendChild(tile);
+    row.appendChild(tile);
   }
   return keyed(node, "file-tiles", { path, keys, hits, limit, lengths: keys.map((key) => rowsOf(data, key).length) });
 }
@@ -807,7 +848,7 @@ function regressedTaskNode(task, regressedPaths) {
     el("span", { class: "codebase-task-title", text: task.title || "" }),
   ]);
   if (wide >= WIDE_TASK_PATHS) {
-    top.appendChild(el("span", { class: "codebase-tag wide", text: `${count(wide)} ranked paths`, title: "This task's regression sites fall under several ranked paths" }));
+    top.appendChild(el("span", { class: "badge", "data-tone": "warning", text: `${count(wide)} ranked paths`, title: "This task's regression sites fall under several ranked paths" }));
   }
   const item = el("li", { class: "codebase-task" }, [top]);
   const sites = Array.isArray(task.sites) ? task.sites : [];
@@ -862,7 +903,7 @@ function fileTasks(model, path) {
     toggle.setAttribute("aria-expanded", String(view.allTasks));
     head.appendChild(toggle);
   }
-  const box = el("section", { class: "codebase-box codebase-file-tasks", "aria-label": "Regressed tasks" }, [head]);
+  const box = el("section", { class: "card card-flush codebase-box codebase-file-tasks", "aria-label": "Regressed tasks" }, [head]);
   const filters = activeFilters(model.data.regression_filter || {});
   if (filters.length) {
     box.appendChild(note(`Filtered to ${filters.map(({ label, key }) => `${label.toLowerCase()} ${valueLabel(model.data.regression_filter[key])}`).join(", ")}: only matching regressions are counted and listed.`, "codebase-filter-note"));
@@ -956,7 +997,7 @@ function symbolRow(site, tasksById, underDir) {
 /// one row per symbol, most regressed tasks first. A path with none says so,
 /// with how many regressed tasks that declared it record no site.
 function fileSymbols(model, path) {
-  const box = el("section", { class: "codebase-box codebase-file-symbols", "aria-label": "Symbols" }, [
+  const box = el("section", { class: "card card-flush codebase-box codebase-file-symbols", "aria-label": "Symbols" }, [
     el("div", { class: "codebase-box-head stacked" }, [el("h4", { text: "Symbols" }), el("span", { class: "codebase-extra", text: "regression sites recorded under this path" })]),
   ]);
   const body = el("div", { class: "codebase-box-body" });
@@ -1064,15 +1105,22 @@ function relatedRow(row) {
 }
 
 function fileRelated(path) {
-  const box = el("section", { class: "codebase-box codebase-file-related", "aria-label": "Changes with" }, [
+  const box = el("section", { class: "card card-flush codebase-box codebase-file-related", "aria-label": "Changes with" }, [
     el("div", { class: "codebase-box-head stacked" }, [el("h4", { text: "Changes with" }), el("span", { class: "codebase-extra", text: "files landed in the same tasks" })]),
   ]);
   const body = el("div", { class: "codebase-box-body" });
   box.appendChild(body);
   const done = (hash) => keyed(box, "file-related", hash);
   if (path.endsWith("/")) {
-    body.appendChild(el("p", { class: "codebase-empty", text: "Changes with pairs single files. Group by file to see what lands alongside one." }));
-    body.appendChild(el("div", { class: "codebase-actions" }, [actionButton("Group by file", () => updateQuery({ rollup: "file" }))]));
+    body.appendChild(el("p", { class: "codebase-empty", text: "Choose a file to see what lands alongside it." }));
+    body.appendChild(el("div", { class: "codebase-actions" }, [actionButton("Group by file", () => {
+      const search = path;
+      view = { ...view, search, allOthers: false };
+      const input = $("codebase-path-search");
+      if (input) input.value = search;
+      updateQuery({ rollup: "file" }, { view: "hotspots", path: null });
+      input?.focus();
+    })]));
     return done({ path, rollup: true });
   }
   // An answer for another path, window or minimum is not this selection's.
@@ -1219,7 +1267,7 @@ function pairRow(pair) {
     el("div", { class: "codebase-pair-paths" }, [
       pathNode(left),
       el("span", { class: "codebase-pair-second" }, [el("span", { class: "codebase-pair-arrow", text: "↔ " }), pathNode(right)]),
-      expectedPair(pair.paths) ? el("span", { class: "codebase-tag", text: "expected: its tests" }) : null,
+      expectedPair(pair.paths) ? el("span", { class: "badge", text: "expected: its tests" }) : null,
     ]),
     el("div", { class: "codebase-pair-figure" }, [
       el("span", {}, [el("span", { class: "codebase-rate", text: pct(pair.rate) }), " ", el("span", { class: "codebase-frac", text: `${count(pair.numerator)}/${count(pair.denominator)}` })]),
@@ -1253,7 +1301,7 @@ function pairsNode(model) {
   const head = el("div", { class: "codebase-box-head" }, [
     el("div", {}, [el("h4", { text: "Reserved together" }), el("span", { class: "codebase-extra", text: "tasks holding both ÷ tasks holding either" })]),
   ]);
-  const box = el("section", { class: "codebase-box codebase-pairs", "aria-label": "Reserved together" }, [head]);
+  const box = el("section", { class: "card card-flush codebase-box codebase-pairs", "aria-label": "Reserved together" }, [head]);
   const release = pairs.filter((pair) => releasePair(pair.paths));
   if (release.length) {
     const toggle = el("input", { type: "checkbox", class: "codebase-check" });
@@ -1301,13 +1349,17 @@ function lockRow(row, byWait, maxTotal, recorded) {
   const wait = row.wait && typeof row.wait === "object" ? row.wait : null;
   const total = wait ? waitDuration(wait.total_ms) : "—";
   const denied = `${count(row.numerator)} of ${count(row.denominator)} requesters denied`;
-  const line = recorded && wait ? `median wait ${waitDuration(wait.median_ms)} · ${denied}` : denied;
+  const line = recorded && wait
+    ? byWait
+      ? `median wait ${waitDuration(wait.median_ms)} · ${denied}`
+      : `${denied} · total wait ${total} · median ${waitDuration(wait.median_ms)}`
+    : denied;
   const item = el("li", { class: "codebase-lock-row" }, [
-    el("div", { class: "codebase-lock-top" }, [fileLink(row.path), el("span", { class: "codebase-lock-total", text: recorded ? total : pct(row.rate) })]),
+    el("div", { class: "codebase-lock-top" }, [fileLink(row.path), el("span", { class: "codebase-lock-total", text: byWait ? total : pct(row.rate) })]),
     rateBar(byWait ? (Number(wait?.total_ms) || 0) / (maxTotal || 1) : row.rate),
     el("div", { class: "codebase-lock-line" }, [
       el("span", { class: "codebase-extra", text: line }),
-      recorded && wait && Number(wait.waiting) > 0 ? el("span", { class: "codebase-tag", text: `${count(wait.waiting)} still waiting` }) : null,
+      recorded && wait && Number(wait.waiting) > 0 ? el("span", { class: "badge", text: `${count(wait.waiting)} still waiting` }) : null,
     ]),
   ]);
   item.dataset.path = row.path;
@@ -1321,7 +1373,7 @@ function locksNode(model) {
   const byWait = lockByWait(data);
   const rows = byWait ? rowsByWait(data) : rowsOf(data, "lock_contention");
   const head = el("div", { class: "codebase-box-head" }, [
-    el("div", {}, [el("h4", { text: "Lock waits" }), el("span", { class: "codebase-extra", text: recorded ? "time tasks spent denied a lock on the file" : "requesters denied a lock on the file" })]),
+    el("div", {}, [el("h4", { text: "Lock waits" }), el("span", { class: "codebase-extra", text: byWait ? "time tasks spent denied a lock on the file" : "requesters denied a lock on the file" })]),
   ]);
   if (rowsByWait(data).length) {
     const sorts = el("div", { class: "mx-seg mx-seg-wrap", role: "group", "aria-label": "Sort locks" });
@@ -1338,7 +1390,7 @@ function locksNode(model) {
     }
     head.appendChild(sorts);
   }
-  const box = el("section", { class: "codebase-box codebase-locks", "aria-label": "Lock waits" }, [head]);
+  const box = el("section", { class: "card card-flush codebase-box codebase-locks", "aria-label": "Lock waits" }, [head]);
   const footer = couplingListFooter(rows.length, "allLocks", "codebase-lock-list");
   if (lockIsQuiet(data)) {
     box.appendChild(el("div", { class: "codebase-empty-state good" }, [
@@ -1369,9 +1421,30 @@ function couplingNodes(model) {
 
 // ---- render -----------------------------------------------------------------
 
+function refusedLayerNode({ layer, message }) {
+  const label = route.view === "hotspots" ? "Clear layer filter" : "Clear layer & open Hotspots";
+  const box = el("section", { class: "card card-flush codebase-hot", role: "alert", "aria-label": "Invalid layer filter" }, [
+    el("div", { class: "codebase-empty-state" }, [
+      el("p", { class: "codebase-empty-title", text: `Layer “${layer}” is not configured in this workspace.` }),
+      message ? note(message) : null,
+      el("div", { class: "codebase-actions" }, [
+        actionButton(label, () => updateQuery({ layer: null }, { view: "hotspots", path: null })),
+      ]),
+    ]),
+  ]);
+  return keyed(box, "refused-layer", { layer, message, view: route.view });
+}
+
 function paint() {
   const body = $(BODY_ID);
-  if (!body || !lastData) return;
+  if (!body) return;
+  if (refusedLayer) {
+    body.dataset.view = route.view;
+    syncNodes(body, [refusedLayerNode(refusedLayer)]);
+    paintedView = `${route.view}\n${route.path ?? ""}`;
+    return;
+  }
+  if (!lastData) return;
   const model = buildModel(lastData);
   const nodes = route.view === "file" ? fileNodes(model)
     : route.view === "coupling" ? couplingNodes(model)
@@ -1389,6 +1462,15 @@ function paint() {
 
 function renderCodebase(data) {
   if (!data) return;
+  if (typeof data.refusedLayer === "string") {
+    dropQueryData();
+    resetRelated();
+    setMeta("");
+    refusedLayer = { layer: data.refusedLayer, message: data.message || "" };
+    paint();
+    return;
+  }
+  refusedLayer = null;
   lastData = data;
   lastPayloadKey = JSON.stringify(data);
   const computed = data.computed_at ? formatDateTime(data.computed_at) : "—";

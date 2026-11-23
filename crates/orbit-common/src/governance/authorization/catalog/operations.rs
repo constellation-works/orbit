@@ -178,6 +178,12 @@ pub const GOVERNED_OPERATIONS: &[GovernedOperation] = &[
         allowed: &[McpCapability::Operator],
         rationale: "requeuing a blocked task overrides a recorded escalation and preserves its published candidate",
     },
+    GovernedOperation {
+        id: "orbit.task.resume_delivery",
+        surface: OperationSurface::Tool,
+        allowed: &[McpCapability::Operator],
+        rationale: "starting a source-repair leaf requires the authenticated resident broker and its recover grant",
+    },
     // Field-level, not a tool: `orbit.task.add`, `orbit.task.update`,
     // `orbit.auto_task.add` and `orbit.auto_task.update` additionally require
     // it when their input carries `granted_tools`.
@@ -203,7 +209,7 @@ pub const GOVERNED_OPERATIONS: &[GovernedOperation] = &[
         id: "orbit.workflow.auto",
         surface: OperationSurface::Tool,
         allowed: &[McpCapability::Operator],
-        rationale: "auto-drain observation and controls require an operator session",
+        rationale: "auto-drain controls require an operator session; observation also requires one outside a live resident cycle",
     },
     GovernedOperation {
         id: "orbit.routine.control",
@@ -216,6 +222,12 @@ pub const GOVERNED_OPERATIONS: &[GovernedOperation] = &[
         surface: OperationSurface::Tool,
         allowed: &[McpCapability::Operator],
         rationale: "landing merges a delivery pull request and completes its task",
+    },
+    GovernedOperation {
+        id: "orbit.workflow.refresh",
+        surface: OperationSurface::Tool,
+        allowed: &[McpCapability::Operator],
+        rationale: "refreshing merges the base branch into a delivery pull request head and starts its required checks",
     },
     GovernedOperation {
         id: "orbit.workflow.ship",
@@ -461,59 +473,21 @@ pub const GOVERNED_OPERATIONS: &[GovernedOperation] = &[
         allowed: &[McpCapability::Operator],
         rationale: "deleting an experiment removes its record and event log for good, so only an operator may do it",
     },
-    // Crew memory (experimental): reset, copy and export, which writes
-    // files on this host, are the operator's; show and history stay
-    // ungoverned reads here, and core decides which runs may read. Write and
-    // propose admit the agent capability too, and core then admits an
+    // Crew memory (dormant): only its run-bound write and propose are
+    // governed, and only for the agent capability. Core then admits an
     // agent's call only from a dreaming task's run, with the key fixed to
-    // that task's key.
+    // that task's key; show stays an ungoverned read core scopes the same way.
     GovernedOperation {
         id: "orbit.memory.write",
         surface: OperationSurface::Tool,
-        allowed: &[McpCapability::Agent, McpCapability::Operator],
-        rationale: "writing a crew memory space changes what a model will be told about its own past work, so only an operator or that model's own dreaming run may do it",
+        allowed: &[McpCapability::Agent],
+        rationale: "writing a crew memory space changes what a model will be told about its own past work, so only that model's own dreaming run may do it",
     },
     GovernedOperation {
         id: "orbit.memory.propose",
         surface: OperationSurface::Tool,
         allowed: &[McpCapability::Agent],
-        rationale: "a global-memory proposal comes from a dreaming run's evidence; core refuses every other caller, and only an operator decides it",
-    },
-    GovernedOperation {
-        id: "orbit.memory.reset",
-        surface: OperationSurface::Tool,
-        allowed: &[McpCapability::Operator],
-        rationale: "resetting a crew memory space discards what a model wrote about its own work, so only an operator may do it",
-    },
-    GovernedOperation {
-        id: "orbit.memory.copy",
-        surface: OperationSurface::Tool,
-        allowed: &[McpCapability::Operator],
-        rationale: "copying a crew memory space moves one model's notes into another model's prompts, so only an operator may do it",
-    },
-    GovernedOperation {
-        id: "orbit.memory.export",
-        surface: OperationSurface::Tool,
-        allowed: &[McpCapability::Operator],
-        rationale: "exporting crew memory writes files into a directory on this host, so only an operator may do it",
-    },
-    GovernedOperation {
-        id: "orbit.memory.proposals",
-        surface: OperationSurface::Tool,
-        allowed: &[McpCapability::Operator],
-        rationale: "global-memory review can change what every model receives, so only an operator may review proposals",
-    },
-    GovernedOperation {
-        id: "orbit.memory.proposal.accept",
-        surface: OperationSurface::Tool,
-        allowed: &[McpCapability::Operator],
-        rationale: "global-memory review can change what every model receives, so only an operator may review proposals",
-    },
-    GovernedOperation {
-        id: "orbit.memory.proposal.reject",
-        surface: OperationSurface::Tool,
-        allowed: &[McpCapability::Operator],
-        rationale: "global-memory review can change what every model receives, so only an operator may review proposals",
+        rationale: "a global-memory proposal comes from a dreaming run's evidence; core refuses every other caller",
     },
     // Script grants (script steps phase 1): the operator's host-local
     // consent to run one workspace script at one content digest. No Agent

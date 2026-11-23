@@ -70,6 +70,10 @@ spec:
     auto_push: false
     base_branch: main
     base_sync: remote
+    # Forwarded unchanged to each leaf's worktree setup. `ignore` skips the
+    # dependency-delivery check for work delivered under a different commit
+    # message (`orbit run ship --ignore-dependency-delivery`).
+    dependency_delivery: enforce
     landing_branch: ""
     landing_mode: local
     terminal_status: review
@@ -94,6 +98,7 @@ spec:
         task_ids: "{{ input.task_ids }}"
         base: "{{ input.base_branch }}"
         base_sync: "{{ input.base_sync }}"
+        dependency_delivery: "{{ input.dependency_delivery }}"
         landing_mode: "{{ input.landing_mode }}"
 
     # ORB-13985: a task whose last failed run preserved a candidate resumes
@@ -207,7 +212,7 @@ spec:
     # recorded stay reachable) before the fast-forward push; a conflict, or any
     # other failed push, fails the run with the tasks still in `review`.
     - id: push
-      when: "{{ input.auto_push }} == true && {{ steps.merge.output.merged }} != false || {{ input.completion }} == done && {{ steps.commit.output.decision }} != verified_finding_invalid && {{ steps.merge.output.merged }} != false"
+      when: "{{ input.auto_push }} == true && {{ steps.merge.output.completion_held }} != true || {{ input.completion }} == done && {{ steps.commit.output.decision }} != verified_finding_invalid && {{ steps.merge.output.completion_held }} != true"
       recovery_activity: step_failure_recovery
       target: activity:git_push
       default_input:
@@ -219,7 +224,7 @@ spec:
     # here, which is the precondition the completion authorization was granted
     # against.
     - id: complete_tasks
-      when: "{{ input.completion }} == done && {{ steps.commit.output.decision }} != verified_finding_invalid && {{ steps.merge.output.merged }} != false"
+      when: "{{ input.completion }} == done && {{ steps.commit.output.decision }} != verified_finding_invalid && {{ steps.merge.output.completion_held }} != true"
       loop:
         items: "{{ input.task_ids }}"
         max_iterations: 1

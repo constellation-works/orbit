@@ -210,3 +210,32 @@ fn writes_validate_values_and_the_entire_effective_section_including_layers_and_
         .validate_workspace_for_set(&key, global.path())
         .expect_err("missing required key is refused without a default");
 }
+
+/// The error one load of the workspace config `body` returns, with an empty
+/// global root.
+fn plugin_section_load_error(body: &str) -> String {
+    let global = tempfile::tempdir().expect("global root");
+    let workspace = tempfile::tempdir().expect("workspace root");
+    std::fs::write(workspace.path().join("config.toml"), body).expect("workspace config");
+    ResolvedConfig::load(&ConfigRoots::new(global.path(), workspace.path()))
+        .expect_err("an invalid plugin section refuses the config load")
+        .to_string()
+}
+
+#[test]
+fn plugin_section_admission_errors_join_continuation_lines_with_one_space() {
+    for (body, names) in [
+        ("[plugins.Bad]\nknown = 1\n", "plugins.Bad"),
+        ("[plugins]\nbad = 3\n", "plugins.bad"),
+    ] {
+        let error = plugin_section_load_error(body);
+        assert!(
+            error.contains(names),
+            "error must name the section: {error}"
+        );
+        assert!(
+            !error.contains("  "),
+            "a continuation line leaked its indentation into the error: {error:?}"
+        );
+    }
+}

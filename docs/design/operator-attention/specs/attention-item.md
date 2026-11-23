@@ -44,7 +44,7 @@ review records alone; "runtime" kinds need run, claim, provider or host state.
 | `run_failed` | runtime | the job-run store (`JobRun`, `orbit.run` action `list`) | the newest submitted run of a job (per task when it has one) is `failed`, `timeout` or `interrupted`, falls inside the 48-hour run window, and nothing newer superseded it. On the workspace owner, its referenced task is not terminal and the run is not already an item that names it. A replica keeps a task-naming run visible because it cannot read the owner's task status (see below) | `finished_at` |
 | `run_stuck` | runtime | the job-run store: state `running` or `pending` | the run's owner process is gone (`pid` and `pid_start_time` no longer match a live process on the run's host) before reconcile records the existing `Interrupted` state (an orphaned-run disposition, not a separate state), or it has run past its bound: a run that declares a deadline (a drain's stamped/extended window from its pipeline state, or an explicit `deadline`/`for_seconds`/`timeout_seconds`/`ttl_seconds` in its input) is past that deadline plus the 120-minute grace, or its last progress (pipeline `updated_at` or recorded step activity) has stalled for 120 minutes; a run that declares no bound has run past 120 minutes | `started_at` (or `scheduled_at` when pending) |
 | `claim_stale` | runtime | the claim inspection behind `orbit.drain.claims` (`ClaimInspection`, `crates/orbit-store/src/contracts/task/coordination/settlement.rs`) | an unsettled claim has an expired reservation, a host-local bound run that is absent or terminal, an unresolved merge intent or an invalidated landing. These are diagnostics, not proof the worker died, so `reason` says "possibly stale" | the claim's last event time |
-| `ci_red` | runtime | provider read of the workspace's base branch (the data `github.run.list` returns for `git_remote` and `base_branch`) | the newest completed run of a workflow on the base branch head is `failure` or `timed_out` and no newer run of that workflow succeeded | that run's `updated_at`, labelled as an onset-time proxy (`detail.since_source: updated_at`, `since_is_proxy: true`); the provider projection supplies no exact completion timestamp |
+| `ci_red` | runtime | provider read of the workspace's base branch (the data `github.run.list` returns for `git_remote` and `base_branch`) | the workflow's deciding run is `failure` or `timed_out`: its newest completed run on the base branch head, or, while its runs on that head are all pending, its newest completed run on the base branch (by `created_at`), so a newer green completion clears it; a workflow with no run on the current head is not decided | that run's `updated_at`, or its `created_at` when no usable update time is supplied; `detail.since_source` names the field used and `since_is_proxy: true` labels it an onset-time proxy; the provider projection supplies no exact completion timestamp |
 | `friction_untriaged` | record | the friction store, filtered to status `open` (`orbit friction list --status open`) | the record's status is still `open` | `created_at` |
 | `host_unhealthy` | runtime | `orbit host list` live probe (reachability, version, pull protocol), the default `orbit doctor` workspace check, and `orbit.drain.probe` refusals on a follower | a registered host does not answer or reports a skewed binary or protocol, or a default doctor check fails or warns | the check's recorded onset when the source has one, else `null` |
 | `notice_open` | record | the notice store's effective-open read (`list_notices` with status open), derived only on the home owner | an effective-open fleet notice is homed in the workspace; expired or closed notices are not items | `opened_at` |
@@ -96,7 +96,10 @@ Notes that bind implementations:
 - **Network sources degrade, they do not fail.** `ci_red` needs provider authentication
   (`github.auth.status`); with none, or on timeout, it yields `degraded` code
   `source_unavailable`. On the workspace owner, a workspace with no recognisable remote
-  contributes no `ci_red` and no degradation. A direct read on a replica checkout degrades
+  contributes no `ci_red` and no degradation. When the 100-run branch listing is full
+  and a workflow pending on the current head has no completed result in that listing,
+  the workflow degrades with `source_unavailable`: its history may extend beyond the listing.
+  A direct read on a replica checkout degrades
   with `source_unavailable` before the remote is checked, so it degrades whether or not the
   checkout has a remote. A candidate read (Orbit's own fan-out) on a replica contributes
   nothing and no degradation; the owner's read is the one that reports.
@@ -226,7 +229,7 @@ and are not waiting on a single task.
 | `claim_stale` | high | high | none |
 | `ci_red` | high | critical | critical after the age thresholds are both passed |
 | `friction_untriaged` | low | medium | none |
-| `host_unhealthy` | high | critical | critical when the host is the owner of an in-scope workspace, or its failure is the reason another item is degraded |
+| `host_unhealthy` | high | critical | critical when the host owns an in-scope workspace and a default `orbit doctor` check on it errors, or when the federated read cannot read it or it is skewed (the owner's unreachable or version-skew item); a doctor result that only warns stays high, whoever owns the workspace, so warnings never outrank work-stopping conditions. Or when its failure is the reason another item is degraded |
 | `resident_stalled` | medium | high | none; fingerprint state is the stall reason, `last_checkpoint_at`, and the routine state (`cycle_routine_disabled`, `cycle_routine_name`) |
 | `routine_tripped` | high | high | none; fingerprint state is `tripped_at` and `trips`, so a re-opened breaker after a failed trial is a new episode |
 | `drain_paused` | medium | medium | none; fingerprint state is the pause's `since` |
@@ -284,7 +287,10 @@ Ordering of the list: `severity` descending, then `since` ascending (`null` last
   take as a complete candidate read;
   [attention-federation](./attention-federation.md#completeness)), or
   `unreachable_destination`, `tool_not_on_this_host`, `attention_read_refused` (per host, the federated routing
-  identities of [attention-federation](./attention-federation.md)).
+  identities of [attention-federation](./attention-federation.md)). When a source degrades per
+  subject rather than for the whole workspace (such as a `ci_red` workflow with missing branch
+  history), `degraded[].subject` carries the stable subject identity (for example `id:<workflow_id>`,
+  `name:<workflow>`, or `run:<run_id>`).
 - **Empty is explicit.** With no items, `message` is `Nothing needs attention` followed by the
   hosts and workspaces actually read (`hosts read: …`, `workspaces read: …`). When neither
   was read it says `no host or workspace was read`. When `degraded` is non-empty the message

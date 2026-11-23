@@ -8,12 +8,18 @@
 // local and redraws from the cached payload. The window comes from the
 // shared selector. Chart drawing and tooltips stay in metrics.js.
 
-import { el } from './common.js';
+import { el, onWorkspaceChange } from './common.js';
 import { OUTCOMES, TERMINAL_TIME_NOTE, axisScale, fmtCompactTotal, option, seriesKey, seriesLabel, tagPicker, tasks, trendSource, undatedNote } from './metrics-running.js';
 
 const MEASURES = [["turns", "Turns"], ["bytes", "Result bytes"]];
 
 const filters = { outcome: "done", provider: "", tags: [] };
+// The provider and tag options come from the workspace's own tasks: another
+// workspace may have neither, and a kept pick would filter its trend to empty.
+onWorkspaceChange(() => {
+  filters.provider = "";
+  filters.tags = [];
+});
 /// Local view state. metrics.js includes `measure` in the section hash so
 /// a toggle redraws; the endpoint is not read again.
 export const turnsView = { measure: "turns" };
@@ -69,14 +75,8 @@ function percent(rate) {
   return rate == null || !Number.isFinite(Number(rate)) ? "—" : `${Math.round(Number(rate) * 100)}%`;
 }
 
-function coverageNote(payload) {
-  const coverage = payload.coverage;
-  if (!coverage) return "Trace coverage categories are unavailable from this host.";
-  const head = `First-edit coverage: ${coverage.measured} of ${coverage.tasks} tasks measured; ${coverage.empty_trace} had an empty or unavailable tool trace, ${coverage.incomplete_trace || 0} had a tool trace truncated by the output capture, ${coverage.no_detectable_edit} had a populated trace without a recognized editor`;
-  // A provider filter keeps only attributed tasks, so coverage.no_invocation is
-  // 0 by construction; report the excluded count instead of that zero.
-  if (payload.provider) return `${head}. ${tasks(payload.excluded_unattributed || 0)} with no implement invocation were excluded by the provider filter and are not counted here.`;
-  return `${head}, and ${coverage.no_invocation} had no implement invocation.`;
+function firstEditCoverageExplanation() {
+  return "First-edit measurements exclude empty or unavailable tool traces, incomplete captures, populated traces without a recognized editor, and tasks with no implement invocation.";
 }
 
 function providerCoverageNote(payload) {
@@ -162,21 +162,15 @@ export function turnsModel(payload, { windowKey, shown, bucketTitle, bucketWidth
   const cards = [{ grouped: true, label: "By complexity", entries: complexityCards }];
 
   if (!total.n) {
-    const left = excluded(total);
-    const other = payload.excluded_other_provider || 0;
-    const unattributed = payload.excluded_unattributed || 0;
     const parts = [];
-    if (left) parts.push(`${tasks(left)} outside the measured sample: ${excludedDescription(total)}`);
-    if (other) parts.push(`${tasks(other)} on another provider`);
-    if (unattributed) parts.push(`${tasks(unattributed)} with no implement invocation, so no provider`);
-    parts.push(coverageNote(payload), providerCoverageNote(payload));
+    parts.push(firstEditCoverageExplanation(), providerCoverageNote(payload));
     if (payload.undated_tasks) parts.push(undatedNote(payload.undated_tasks));
     return {
       blurb,
       cards,
       empty: {
         title: `No measured first edits for ${payload.outcome === "done" ? "done" : "closed"} tasks in the last ${windowKey === "all" ? "recorded history" : windowKey}`,
-        detail: parts.join(". "),
+        detail: parts.join(" "),
       },
     };
   }
@@ -196,8 +190,7 @@ export function turnsModel(payload, { windowKey, shown, bucketTitle, bucketWidth
     bytes ? "result bytes before the first edit" : "tool calls before the first edit",
   ];
   if (payload.tags.length) notes.push(`with tag = carries ${payload.tags.join(" or ")} now (current tags, not tags at the time); dashed = without`);
-  if (payload.provider) notes.push(`provider ${payload.provider}; ${tasks(payload.excluded_other_provider || 0)} whose first implement invocation ran on another provider; ${tasks(payload.excluded_unattributed || 0)} with no implement invocation, so no provider to match`);
-  notes.push(coverageNote(payload), providerCoverageNote(payload));
+  notes.push(firstEditCoverageExplanation(), providerCoverageNote(payload));
   if (payload.undated_tasks) notes.push(undatedNote(payload.undated_tasks));
   if (payload.truncated) notes.push("older implement invocations were left out of this read");
 

@@ -52,7 +52,7 @@ export function buildReadinessBadge(task) {
   if (!readiness) return [];
   if (readiness.preparing) {
     return [el("span", {
-      class: "readiness-badge readiness-preparing mono",
+      class: "badge", "data-tone": "unknown",
       text: "preparing",
       title: "A task-pilot run is preparing this task; its readiness settles when the run does",
     })];
@@ -61,7 +61,7 @@ export function buildReadinessBadge(task) {
   if (gaps.length === 0) return [];
   const blocking = readiness.ready === false;
   return [el("span", {
-    class: `readiness-badge ${blocking ? "readiness-blocking" : "readiness-advisory"} mono`,
+    class: "badge", "data-tone": blocking ? "warning" : "muted",
     text: `${blocking ? "not ready" : "advisory"} · ${gaps.length}`,
     title: gaps.map((gap) => `${gap.severity}: ${gap.message}`).join("\n"),
   })];
@@ -76,9 +76,10 @@ export function pilotWarnings(task) {
 export function buildPilotWarningBadge(task) {
   const count = pilotWarnings(task).length;
   return count ? [el("span", {
-    class: "chip pilot-warning-chip",
+    class: "badge", "data-tone": "warning",
     role: "img",
     "aria-label": `Pilot warnings: ${count} holding findings`,
+    title: `Pilot warnings: ${count} holding findings`,
   }, [el("span", { text: "⚠", "aria-hidden": "true" }), ` pilot warnings · ${count}`])] : [];
 }
 
@@ -88,7 +89,7 @@ export function buildActiveTriageBadges(task) {
   return (Array.isArray(task.active_triage) ? task.active_triage : []).map((triage) => {
     const title = triage.crew ? `Triaging with ${triage.crew}` : "Triaging · crew assignment pending";
     const link = el("a", {
-      class: "live-state-pill active-triage-chip",
+      class: "pill triage-run-link", "data-state": "running",
       text: "triaging",
       title,
       "aria-label": `${title}; view run`,
@@ -133,7 +134,10 @@ export function buildDeliveryAttentionBadge(task) {
   const attempt = attention.attempt != null && attention.budget != null ? ` ${attention.attempt}/${attention.budget}` : "";
   const text = repairing ? `${task.status} · repairing${attempt}` : `${task.status} · ${deliveryAttentionLabel(attention)}`;
   return [el("span", {
-    class: repairing ? "live-state-pill delivery-attention-badge repairing" : "live-state-pill delivery-attention-badge",
+    class: "pill",
+    "data-state": repairing ? "running" : null,
+    "data-live": repairing ? "" : null,
+    "data-tone": repairing ? null : "warning",
     role: "img",
     "aria-label": deliveryAttentionTitle(task, attention),
     title: deliveryAttentionTitle(task, attention),
@@ -828,7 +832,7 @@ export function buildReadinessBlock(readiness, drain, workspace, task = null, co
   for (const gap of gaps) {
     const severity = gap.waived === true ? "waived" : gap.severity === "blocking" ? "blocking" : "advisory";
     wrap.appendChild(el("div", { class: "readiness-gap" }, [
-      el("span", { class: `readiness-badge readiness-${severity === "waived" ? "advisory" : severity} mono`, text: severity }),
+      el("span", { class: "badge", "data-tone": severity === "blocking" ? "warning" : "muted", text: severity }),
       el("div", { class: "readiness-gap-body" }, [
         el("div", { class: "readiness-message", text: gap.message || gap.code }),
         ...(gap.fix ? [el("div", { class: "readiness-fix", text: `Fix: ${gap.fix}` })] : []),

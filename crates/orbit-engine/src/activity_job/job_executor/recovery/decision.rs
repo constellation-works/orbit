@@ -14,10 +14,97 @@ pub(super) enum RecoveryAdmission {
     /// Make the post-recovery attempt. Carries the dispatched recovery's
     /// resolved model, which authors the host's repair commit [ORB-16768].
     Retry(Option<String>),
-    /// Return the original failure.
-    Original,
+    /// Return the original failure. When `no_edit_eligible` is true, an
+    /// auto-fix check repair that left no edit and no scope record may still
+    /// record the unchanged head for one rerun instead of holding immediately.
+    Original { no_edit_eligible: bool },
     /// Fail the step as the blocker recovery declared [ORB-14268].
     Blocked(AgentBlocker),
+}
+
+/// Deferred `StepRecoveryAttempted` event so `retry.rs` can settle check-repair
+/// scope, commit and no-edit rerun admission before the audit event and
+/// no-retry warning are emitted.
+pub(super) struct PendingRecoveryAttempt {
+    step_id: String,
+    recovery_activity: String,
+    recovery_succeeded: bool,
+    failure_phase: Option<String>,
+    error_message: Option<String>,
+    output: Option<Value>,
+    decision: Option<StepRecoveryDecisionRecord>,
+    /// Display of the host guard that vetoed a post-recovery attempt the
+    /// decision file had admitted. The same text prefixes the returned error.
+    host_refusal: Option<String>,
+}
+
+impl PendingRecoveryAttempt {
+    /// Record that a clean, admitted no-edit check repair authorized one
+    /// post-recovery rerun while preserving the decision file's status/verdict.
+    pub(super) fn admit_no_edit_retry(&mut self) {
+        if let Some(decision) = &mut self.decision {
+            decision.retry_admitted = true;
+        }
+    }
+
+    /// Record that a host guard refused the post-recovery attempt while
+    /// preserving the decision file's outcome. `refusal` is the guard's
+    /// display, the same text the returned step error starts with.
+    pub(super) fn refuse_retry(&mut self, refusal: impl std::fmt::Display) {
+        if let Some(decision) = &mut self.decision {
+            decision.retry_admitted = false;
+        }
+        self.host_refusal = Some(refusal.to_string());
+    }
+
+    pub(super) fn emit(self, ctx: &ExecCtx<'_>) {
+        let retry_admitted = self.recovery_succeeded
+            && self
+                .decision
+                .as_ref()
+                .is_none_or(|decision| decision.retry_admitted);
+        if let Some(decision) = self.decision.as_ref().filter(|_| !retry_admitted) {
+            if let Some(refusal) = self.host_refusal.as_deref() {
+                // The decision file asked for a retry. The host vetoed the
+                // attempt afterwards, so the warning must name that veto
+                // rather than the verified decision.
+                tracing::warn!(
+                    target: "orbit.engine.job_executor",
+                    run_id = %ctx.run_id,
+                    failed_step_id = %self.step_id,
+                    decision_status = %decision.status,
+                    decision_verdict = decision.verdict.as_deref(),
+                    decision_detail = decision.detail.as_deref(),
+                    retry_admitted,
+                    host_refusal = refusal,
+                    "host admission refused the post-recovery attempt; returning the original failure"
+                );
+            } else {
+                tracing::warn!(
+                    target: "orbit.engine.job_executor",
+                    run_id = %ctx.run_id,
+                    failed_step_id = %self.step_id,
+                    decision_status = %decision.status,
+                    decision_verdict = decision.verdict.as_deref(),
+                    decision_detail = decision.detail.as_deref(),
+                    "recovery decision admits no post-recovery attempt; returning the original failure"
+                );
+            }
+        }
+        emit_job_event_lossy(
+            &ctx.audit,
+            ctx.task_id(),
+            V2AuditEventKind::StepRecoveryAttempted {
+                step_id: self.step_id,
+                recovery_activity: self.recovery_activity,
+                recovery_succeeded: self.recovery_succeeded,
+                failure_phase: self.failure_phase,
+                error_message: self.error_message,
+                output: self.output,
+                decision: self.decision,
+            },
+        );
+    }
 }
 
 pub(super) fn attempt_recovery_activity(
@@ -27,7 +114,7 @@ pub(super) fn attempt_recovery_activity(
     failure: &StepFailure,
     attempt: u32,
     max_attempts: u32,
-) -> RecoveryAdmission {
+) -> (RecoveryAdmission, Option<PendingRecoveryAttempt>) {
     // The conflict leaf resolves a stopped rebase; a declared-failed outcome
     // or any other error is never a rebase conflict for it to resolve.
     if recovery.name == PR_CONFLICT_RECOVERY_ACTIVITY
@@ -36,7 +123,12 @@ pub(super) fn attempt_recovery_activity(
             StepFailure::Error(DispatchError::RecoverableVcsConflict(_))
         )
     {
-        return RecoveryAdmission::Original;
+        return (
+            RecoveryAdmission::Original {
+                no_edit_eligible: false,
+            },
+            None,
+        );
     }
 
     let result = match ctx.host.authorize_step_recovery(&ctx.run_id, &step.id) {
@@ -94,50 +186,44 @@ pub(super) fn attempt_recovery_activity(
     // Without a slot (custom or conflict recovery, or a host without the
     // capability) a completed recovery keeps the legacy single re-attempt.
     let admission = match (&decision, blocker) {
-        _ if !recovery_succeeded => RecoveryAdmission::Original,
+        _ if !recovery_succeeded => RecoveryAdmission::Original {
+            no_edit_eligible: false,
+        },
         (_, Some(blocker)) => RecoveryAdmission::Blocked(blocker),
         (None, None) => RecoveryAdmission::Retry(recovery_model),
         (Some(decision), None) if decision.retry_admitted => {
             RecoveryAdmission::Retry(recovery_model)
         }
-        (Some(_), None) => RecoveryAdmission::Original,
-    };
-    let retry_admitted = matches!(admission, RecoveryAdmission::Retry(_));
-    if let Some(decision) = decision.as_ref().filter(|_| !retry_admitted) {
-        tracing::warn!(
-            target: "orbit.engine.job_executor",
-            run_id = %ctx.run_id,
-            failed_step_id = %step.id,
-            decision_status = %decision.status,
-            decision_verdict = decision.verdict.as_deref(),
-            decision_detail = decision.detail.as_deref(),
-            "recovery decision admits no post-recovery attempt; returning the original failure"
-        );
-    }
-    emit_job_event_lossy(
-        &ctx.audit,
-        ctx.task_id(),
-        V2AuditEventKind::StepRecoveryAttempted {
-            step_id: step.id.clone(),
-            recovery_activity: recovery.name.clone(),
-            recovery_succeeded,
-            failure_phase,
-            error_message,
-            output,
-            decision,
+        (Some(decision), None) => RecoveryAdmission::Original {
+            no_edit_eligible: decision.status == "absent"
+                || (decision.status == "verified"
+                    && decision.verdict.as_deref()
+                        == Some(StepRecoveryVerdict::NotRecovered.as_str())),
         },
-    );
-    admission
+    };
+    let pending = PendingRecoveryAttempt {
+        step_id: step.id.clone(),
+        recovery_activity: recovery.name.clone(),
+        recovery_succeeded,
+        failure_phase,
+        error_message,
+        output,
+        decision,
+        host_refusal: None,
+    };
+    (admission, Some(pending))
 }
 
 /// Read the invocation's durable decision through the host [ORB-14152].
 ///
 /// A verified `retry` admits the post-recovery attempt. An absent file admits
 /// it only when the engine observes a change since the failure [ORB-14268]:
-/// otherwise the rerun meets the same cause. A verified `external_blocker`
-/// returns its blocker. Anything present but not bound to this invocation,
-/// and any read failure, refuses the attempt: neither is evidence that
-/// recovery repaired the step.
+/// otherwise the rerun meets the same cause (except for a clean, admitted
+/// `--auto-fix` check repair whose no-edit rerun ledger write succeeds in
+/// `retry.rs`, which also applies to a verified `not_recovered` verdict).
+/// A verified `external_blocker` returns its blocker. Anything present but not
+/// bound to this invocation, and any read failure, refuses the attempt: neither
+/// is evidence that recovery repaired the step.
 fn read_recovery_decision(
     ctx: &ExecCtx<'_>,
     slot: &StepRecoveryDecisionSlot,

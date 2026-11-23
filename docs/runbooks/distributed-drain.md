@@ -192,9 +192,10 @@ PR first and runs the same contract on the published head after `pr_open`,
 while hosted CI runs. A reviewer fix is revalidated on the leaf and pushed onto
 the PR under a lease (`push_lease_lost` if the branch moved to a commit that
 is not the merged pull request). When the pull request was merged at that
-published head, including a squash, and the branch was deleted while the
-repair was still local, the push fails as `review_repair_after_merge`
-instead: the repair commits are pushed to `refs/heads/orbit-evidence/<branch>`
+published head, including a squash, and the repair is still local, the push
+fails as `review_repair_after_merge` instead, whether or not the head branch
+survives on origin: the repair commits are pushed to
+`refs/heads/orbit-evidence/<branch>`
 (or the durable candidate ref if that push fails) and the task is blocked
 with the commands to land them as a follow-up pull request. The handoff
 carries before-landing evidence for the settled head, and the owner refuses a
@@ -714,7 +715,7 @@ Without `--operator` on the **calling** side, remote sessions hold `agent`.
 Managed agent sessions cannot acquire operator by changing tool input or
 launching a privileged child. To deny a caller, remove its key from the
 owner's `~/.ssh/authorized_keys`. Details:
-[remote-access.md](../../crates/orbit-core/assets/skills/orbit-setup/references/remote-access.md).
+[remote-access-mcp.md](../../crates/orbit-core/assets/skills/orbit-setup/references/remote-access-mcp.md).
 
 ### 6. Read-only probe (never a health check for admission)
 
@@ -1475,8 +1476,9 @@ the scan counts it, derived from the typed kind, class,
 `review_decision_pending` flag and the leaf's recorded step code, never from the
 reason text [ORB-21840].
 `review_decision_hold` (a failed `candidate` settlement awaiting a recorded
-landing decision), `evidence_hold`, `operator_cancel` and `upgrade_paused` (a
-`transient` settlement whose leaf recorded `upgrade_quiesce`) are held, not failed;
+landing decision), `evidence_hold`, `operator_cancel`, `upgrade_paused` (a
+`transient` settlement whose leaf recorded `upgrade_quiesce`) and `delivery_hold` (an
+`environment` settlement whose leaf recorded `delivery_stale_branch`) are held, not failed;
 `failure`, `baseline_red` and legacy `unrecorded` count. The flag on any other
 settlement stays a `failure` with reason
 `review_decision_pending_without_candidate_failure`. Accounting is read-only:
@@ -3000,4 +3002,4 @@ Preserve schedule files; do not bulk-disable routines as cleanup.
 - [Recover stuck job runs](./stuck-job-runs.md)
 - [Distributed drain design](../design/distributed-drain/2_design.md) and
   [task-pull spec](../design/distributed-drain/specs/task-pull.md)
-- Embedded skill: [distributed-drain setup](../../crates/orbit-core/assets/skills/orbit/references/setup/distributed-drain.md)
+- Embedded skill: [distributed-drain setup](../../crates/orbit-core/assets/skills/orbit/references/setup/distributed-drain-setup.md)

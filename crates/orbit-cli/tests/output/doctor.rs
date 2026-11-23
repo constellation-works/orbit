@@ -1047,7 +1047,12 @@ const WARNING_MESSAGE: &str =
     "The index is outdated and must be refreshed before querying the latest workspace records.";
 const ERROR_MESSAGE: &str = "The after-landing review consumer is stuck in definition_changed and cannot accept new delivery candidates.";
 const FIX: &str = "orbit auto-task recover delivery-code-review";
-pub(super) fn render_fixture(case: &str) -> String {
+#[derive(Debug)]
+struct RenderFixtureOutput {
+    stdout: String,
+    stderr: String,
+}
+fn render_fixture(case: &str) -> RenderFixtureOutput {
     let logs = tempfile::tempdir_in(test_env::canonical_temp_dir()).expect("child logs");
     let mut command = std::process::Command::new(std::env::current_exe().expect("test binary"));
     command
@@ -1063,8 +1068,19 @@ pub(super) fn render_fixture(case: &str) -> String {
     );
     let stdout = utf8(output.stdout);
     let after = stdout.split_once("BEGIN_DOCTOR\n").expect("start marker").1;
-    let (body, _) = after.split_once("END_DOCTOR").expect("end marker");
-    body.to_string()
+    let (stdout_body, _) = after.split_once("END_DOCTOR").expect("end marker");
+    let stderr = utf8(output.stderr);
+    let after = stderr
+        .split_once("BEGIN_DOCTOR_STDERR\n")
+        .expect("stderr start marker")
+        .1;
+    let (stderr_body, _) = after
+        .split_once("END_DOCTOR_STDERR\n")
+        .expect("stderr end marker");
+    RenderFixtureOutput {
+        stdout: stdout_body.to_string(),
+        stderr: stderr_body.to_string(),
+    }
 }
 #[test]
 fn render_fixture_child() {
@@ -1152,16 +1168,20 @@ fn render_fixture_child() {
         assert!(!sink.color_allowed(), "explicit plain must disable styling");
     }
     writeln!(std::io::stdout(), "BEGIN_DOCTOR").expect("start marker");
+    writeln!(std::io::stderr(), "BEGIN_DOCTOR_STDERR").expect("stderr start marker");
     crate::output::render::emit(
         Payload::blocks(doc, vec![Block::table(table), Block::DoctorFindings(rows)]).into(),
         &sink,
     )
     .expect("emit");
+    writeln!(std::io::stderr(), "END_DOCTOR_STDERR").expect("stderr end marker");
     writeln!(std::io::stdout(), "END_DOCTOR").expect("end marker");
 }
 #[test]
 fn terminal_findings_preserve_messages_commands_and_one_line_rows() {
-    let stdout = render_fixture("mixed");
+    let rendered = render_fixture("mixed");
+    let stdout = rendered.stdout;
+    let stderr = rendered.stderr;
     let (table, findings) = stdout
         .split_once("\nFindings:\n")
         .expect("findings below table");
@@ -1172,6 +1192,16 @@ fn terminal_findings_preserve_messages_commands_and_one_line_rows() {
     let ordered = findings.find("review  ERROR").unwrap() < findings.find("index  WARN").unwrap();
     assert!(ordered, "{findings}");
     let collapsed = findings.split_whitespace().collect::<Vec<_>>().join(" ");
+    let stderr_collapsed = stderr.split_whitespace().collect::<Vec<_>>().join(" ");
+    assert_eq!(
+        stderr.matches("Table details shortened").count(),
+        1,
+        "doctor prints the shared shortening hint once on stderr: {stderr}"
+    );
+    assert!(
+        !stdout.contains("Table details shortened"),
+        "doctor stdout contains only the table and findings: {stdout}"
+    );
     for message in [ERROR_MESSAGE, WARNING_MESSAGE] {
         has(&collapsed, message);
     }
@@ -1188,49 +1218,77 @@ fn terminal_findings_preserve_messages_commands_and_one_line_rows() {
     for line in findings.lines().filter(|l| !l.starts_with("Table details")) {
         assert!(line.chars().count() <= 48, "line exceeds width: {line}");
     }
-    has(&collapsed, "--format plain or --json");
+    has(&stderr_collapsed, "--format plain or --json");
     let narrow = render_fixture("narrow");
     assert!(
-        !narrow.lines().any(|l| l == format!("  Fix: {FIX}")),
-        "over-width action must wrap: {narrow}"
+        !narrow.stdout.lines().any(|l| l == format!("  Fix: {FIX}")),
+        "over-width action must wrap: {}",
+        narrow.stdout
     );
     has(
-        &narrow,
+        &narrow.stdout,
         "  Fix: orbit auto-task recover\n    delivery-code-review",
     );
     for line in narrow
+        .stdout
         .lines()
-        .filter(|l| !l.starts_with("Findings:") && !l.starts_with("Table details"))
+        .filter(|l| !l.starts_with("Findings:"))
     {
         assert!(
             line.chars().count() <= 32,
             "line exceeds narrow width: {line}"
         );
     }
-    let wide = render_fixture("wide");
-    has(&wide, ERROR_MESSAGE);
-    assert!(
-        wide.lines().any(|l| l == format!("  Fix: {FIX}")),
-        "sufficient width keeps action on one line: {wide}"
+    assert_eq!(
+        narrow.stderr.matches("Table details shortened").count(),
+        1,
+        "narrow doctor output reports the hint on stderr: {}",
+        narrow.stderr
     );
-    assert!(!wide.contains("Table details shortened"), "{wide}");
-    let ok = render_fixture("ok");
-    assert_eq!(ok.lines().count(), 4, "{ok}");
+    let wide = render_fixture("wide");
+    has(&wide.stdout, ERROR_MESSAGE);
     assert!(
-        !ok.contains("Findings:") && !ok.contains("--format plain"),
-        "{ok}"
+        wide.stdout.lines().any(|l| l == format!("  Fix: {FIX}")),
+        "sufficient width keeps action on one line: {}",
+        wide.stdout
+    );
+    assert!(
+        !wide.stdout.contains("Table details shortened")
+            && !wide.stderr.contains("Table details shortened"),
+        "a fitting doctor table has no shortening hint: {wide:?}"
+    );
+    let ok = render_fixture("ok");
+    assert!(!ok.stdout.contains("Table details shortened"), "{ok:?}");
+    assert_eq!(
+        ok.stdout.lines().filter(|line| !line.is_empty()).count(),
+        4,
+        "{ok:?}"
+    );
+    assert_eq!(
+        ok.stderr.matches("Table details shortened").count(),
+        1,
+        "{ok:?}"
+    );
+    let ok_collapsed = ok.stderr.split_whitespace().collect::<Vec<_>>().join(" ");
+    assert!(
+        !ok.stdout.contains("Findings:") && ok_collapsed.contains("--format plain or --json"),
+        "{ok:?}"
     );
 }
 #[test]
 fn findings_leave_plain_and_json_documents_unchanged() {
     let plain = render_fixture("plain");
-    assert_eq!(plain.lines().count(), 3, "{plain}");
+    assert_eq!(plain.stdout.lines().count(), 3, "{}", plain.stdout);
     has(
-        &plain,
+        &plain.stdout,
         &format!("review\tERROR\t{ERROR_MESSAGE} | Action: {FIX}"),
     );
-    assert!(!plain.contains("Findings:"), "{plain}");
-    let json: Value = serde_json::from_str(&render_fixture("json")).expect("JSON document");
+    assert!(!plain.stdout.contains("Findings:"), "{}", plain.stdout);
+    assert!(
+        !plain.stderr.contains("Table details shortened"),
+        "{plain:?}"
+    );
+    let json: Value = serde_json::from_str(&render_fixture("json").stdout).expect("JSON document");
     assert_eq!(json[2]["message"], ERROR_MESSAGE, "{json}");
     assert_eq!(json[2]["remediation"], FIX, "{json}");
     assert_eq!(json.as_array().unwrap().len(), 3, "{json}");
@@ -2408,4 +2466,75 @@ fn read_only_doctor_sweep_leaves_a_stale_pull_drain_and_its_reservations_as_foun
         (None, None),
         "attention keeps the pull drain's reservation active"
     );
+}
+
+/// `orbit attention` ranks the owner host's doctor result by its worst check:
+/// warnings alone are `high`, while an error on the same host stays `critical`
+/// and its row leads the reason [ORB-26662].
+#[test]
+fn attention_ranks_doctor_warnings_high_and_errors_critical() {
+    if in_child("doctor::attention_ranks_doctor_warnings_high_and_errors_critical") {
+        return;
+    }
+    // A fresh workspace has no Git remote and no MCP client registration:
+    // both rows warn and none errors.
+    let warned = WorkCheckout::new();
+    run_ok(
+        &warned,
+        &["workspace", "init", "--name", "doctor-severity-warn"],
+    );
+    let report = rows(&doctor(&warned, &[]));
+    assert!(
+        report.iter().all(|row| row["status"] != "error"),
+        "precondition: a warning-only fixture has no error row: {report:?}"
+    );
+    assert!(
+        report.iter().any(|row| row["status"] == "warning"),
+        "precondition: the fixture warns: {report:?}"
+    );
+    let attention = host_unhealthy_attention(&warned);
+    let item = only_host_item(&attention);
+    assert_eq!(item["severity"], "high", "warnings alone: {item}");
+
+    // Before-PR review on a locally shipping workspace refuses every delivery:
+    // an error row on the same owner host.
+    let failed = WorkCheckout::new();
+    run_ok(
+        &failed,
+        &["workspace", "init", "--name", "doctor-severity-error"],
+    );
+    run_ok(&failed, &["workspace", "ship-mode", "local"]);
+    run_ok(&failed, &["config", "set", "review.timing", "before_pr"]);
+    let attention = host_unhealthy_attention(&failed);
+    let item = only_host_item(&attention);
+    assert_eq!(
+        item["severity"], "critical",
+        "an error on the owner: {item}"
+    );
+    assert_eq!(item["detail"]["checks"][0]["status"], "error", "{item}");
+    assert!(
+        item["reason"]
+            .as_str()
+            .unwrap_or_default()
+            .starts_with("review:"),
+        "the error row leads the reason: {item}"
+    );
+}
+
+/// The `host_unhealthy` attention read of `fixture` as an operator.
+fn host_unhealthy_attention(fixture: &WorkCheckout) -> Value {
+    settle_stores(fixture);
+    let out = command(fixture)
+        .env("ORBIT_OPERATOR", "1")
+        .args(["attention", "--kind", "host_unhealthy", "--json"])
+        .output()
+        .expect("attention command");
+    serde_json::from_slice(&out.stdout)
+        .unwrap_or_else(|error| panic!("attention JSON: {error}; {out:?}"))
+}
+
+fn only_host_item(attention: &Value) -> &Value {
+    let items = attention["items"].as_array().expect("attention items");
+    assert_eq!(items.len(), 1, "one doctor item: {attention}");
+    &items[0]
 }

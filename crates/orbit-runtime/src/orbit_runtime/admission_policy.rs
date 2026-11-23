@@ -38,8 +38,6 @@ pub(super) struct AdmissionPolicy {
     mid_run_steering: MidRunSteeringSettings,
     /// `experiments.enabled`.
     experiments_enabled: bool,
-    /// `crew_memory.enabled`.
-    crew_memory_enabled: bool,
     /// `workflow.standing_drain.*`.
     standing_drain: StandingDrainSettings,
     crew_settings: Arc<AdmissionCrewSettings>,
@@ -50,7 +48,6 @@ impl AdmissionPolicy {
         let provider_limit = config.snapshot.provider_limit_policy();
         let mid_run_steering = config.snapshot.mid_run_steering();
         let experiments_enabled = config.snapshot.experiments().enabled;
-        let crew_memory_enabled = config.snapshot.crew_memory_enabled();
         let standing_drain = config.snapshot.standing_drain();
         let auto_effort = config.snapshot.auto_effort();
         let purpose_crews = config.snapshot.purpose_crews();
@@ -61,7 +58,6 @@ impl AdmissionPolicy {
             provider_limit,
             mid_run_steering,
             experiments_enabled,
-            crew_memory_enabled,
             standing_drain,
             auto_concurrency: config.auto_concurrency,
             crew_settings: Arc::new(AdmissionCrewSettings {
@@ -115,11 +111,8 @@ impl RuntimeKernel {
                 provider_limit: settings.provider_limit().clone(),
                 mid_run_steering: settings.mid_run_steering(),
                 experiments_enabled: settings.experiments().enabled,
-                // Fail closed: until a config load succeeds, crew memory
-                // writes stay refused, the feature's default.
-                crew_memory_enabled: false,
-                // Fail closed the same way: the keeper stays off until a
-                // config load says otherwise.
+                // Fail closed: the keeper stays off until a config load says
+                // otherwise.
                 standing_drain: StandingDrainSettings::default(),
                 crew_settings: Arc::new(AdmissionCrewSettings {
                     complexity_crews: settings.complexity_crews().clone(),
@@ -182,15 +175,8 @@ impl RuntimeKernel {
         self.refresh_workflow_policy().experiments_enabled
     }
 
-    /// Whether crew memory writes are admitted, from the current config like
-    /// [`Self::current_experiments_enabled`], so an operator's disable stops
-    /// every write at once, including in a long-lived runtime.
-    pub fn current_crew_memory_enabled(&self) -> bool {
-        self.refresh_workflow_policy().crew_memory_enabled
-    }
-
     /// `workflow.standing_drain.*` from the current config, like
-    /// [`Self::current_crew_memory_enabled`]: an operator's disable stops the
+    /// [`Self::current_experiments_enabled`]: an operator's disable stops the
     /// keeper at its next tick. Off until a config load succeeds.
     pub fn current_standing_drain(&self) -> StandingDrainSettings {
         self.refresh_workflow_policy().standing_drain

@@ -283,10 +283,12 @@ pub(super) fn observe_failed_workflow(
     let snapshot = prerequisite::snapshot(
         deadline,
         workspace,
-        &evidence.pr_number,
-        &evidence.head_sha,
-        &evidence.head_branch,
-        &evidence.base_branch,
+        prerequisite::PullRequestSelector {
+            pr: &evidence.pr_number,
+            head: &evidence.head_sha,
+            branch: &evidence.head_branch,
+            base: &evidence.base_branch,
+        },
         poll_interval_ms,
         pass,
     )?;

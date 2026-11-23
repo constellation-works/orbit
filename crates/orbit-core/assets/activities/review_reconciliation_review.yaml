@@ -96,7 +96,7 @@ spec:
        here. Mark a finding `disposed`, with a reason, only when you examined a
        suspicion and found it is not a defect.
        Before rating any finding, read the Severity rubric in the installed
-       Orbit skill's `references/task-fields.md`; follow its five grades,
+       Orbit skill's `references/task-fields-review.md`; follow its five grades,
        examples, and lower-level tie rule.
 
     Return
@@ -125,6 +125,7 @@ spec:
     - orbit.run:resume
     - orbit.run:show
     - orbit.workflow:land
+    - orbit.workflow:refresh
     - orbit.workflow:ship
     - orbit.task.add
     - orbit.task.update

@@ -328,6 +328,11 @@ contracts_higher="${app_modules}|routines|auto_tasks"
 # With `$4` set to `named-path`, match the `|`-separated path prefixes `$3`
 # anywhere in code, including grouped trees, while preserving comments and
 # literals as non-dependencies. A single name matches that identifier alone.
+# A leading `super::` chain is resolved from the lexical module under `src/`:
+# the file's path plus each enclosing inline `mod`. Two `super` segments
+# inside `mod nested` in `application/probe.rs` land on `application`, so
+# they do not match `crate::adapter`. The same chain at file depth, or one
+# more `super` inside that module, does.
 # With `$5` set to `include-tests`, also scan sibling test modules.
 super_chains_into() {
   python3 - "$1" "$2" "$3" "${4:-}" "${5:-}" <<'PY'
@@ -346,7 +351,7 @@ token = re.compile(
     r'|(?P<raw>(?:br|cr|r)(?P<hashes>\#*)")'
     r'|(?P<literal>(?:b|c)?"(?:\\[\s\S]|[^"\\])*"'
     r"|b?'(?:\\(?:x[0-9a-fA-F]{2}|u\{[0-9a-fA-F_]+\}|[^\n])|[^'\\\n])')"
-    r"|::|[a-zA-Z_][a-zA-Z_0-9]*|\S"
+    r"|::|[^\W\d]\w*|\S"
 )
 block_delimiter = re.compile(r"/\*|\*/")
 
@@ -405,6 +410,751 @@ def use_tree(tokens, index, prefix=(), aliases=None):
     return paths, index
 
 
+def crate_module_parts(file_path):
+    """Module path of a Rust file relative to its crate `src/` directory."""
+    resolved = file_path.resolve()
+    for parent in resolved.parents:
+        if parent.name != "src":
+            continue
+        names = list(resolved.relative_to(parent).with_suffix("").parts)
+        if names and names[-1] == "mod":
+            names.pop()
+        return names
+    return None
+
+
+def inline_module_suffixes(tokens):
+    """Extra module names at each token from inline `mod name { … }` items.
+
+    A `mod name { … }` item adds a segment wherever it sits inside module or
+    block braces, including inside a function body, because the compiler gives
+    it its own module. Tokens inside an attribute, `macro_rules!` definition,
+    non-item built-in macro (such as `stringify!`), discarding/wrapper-stripping
+    macro arm, or non-macro `(...)`/`[...]` delimiters do not declare inline
+    modules, while item-preserving macro invocations keep lexical module depth
+    through their emitted arguments. This tokenizer spells a raw identifier as
+    `r`, `#`, then the name.
+
+    Matching a macro arm is bounded by a step budget and by a nesting cap. An
+    arm that exceeds either does not match. An invocation that no arm matches
+    takes the summary of its arms: non-item when no arm emits items or every
+    arm strips its module braces, otherwise item-preserving. A large
+    pass-through invocation therefore keeps its lexical module depth instead of
+    aborting the scan.
+    """
+    ident = re.compile(r"[^\W\d]\w*$")
+    keywords = {
+        "as", "async", "await", "break", "const", "continue", "crate", "dyn",
+        "else", "enum", "extern", "false", "fn", "for", "if", "impl", "in",
+        "let", "loop", "match", "mod", "move", "mut", "pub", "ref", "return",
+        "self", "Self", "static", "struct", "super", "trait", "true", "type",
+        "unsafe", "use", "where", "while", "yield", "try",
+    }
+    matching = {"(": ")", "[": "]", "{": "}"}
+    non_item_macros = {
+        "stringify", "concat", "concat_idents", "env", "option_env",
+        "include", "include_str", "include_bytes", "file", "line",
+        "column", "module_path", "format_args", "format_args_nl",
+        "asm", "global_asm", "naked_asm", "cfg", "compile_error",
+        "panic", "assert", "assert_eq", "assert_ne", "debug_assert",
+        "debug_assert_eq", "debug_assert_ne", "print", "println",
+        "eprint", "eprintln", "write", "writeln", "format", "vec",
+        "todo", "unimplemented", "unreachable", "matches",
+        "log_syntax", "trace_macros", "quote",
+    }
+    # Live `match_nodes` nesting allowed per arm. Each level costs a few Python
+    # frames against the default recursion limit of 1000, so a repetition over
+    # a few hundred tokens would otherwise crash the scan [ORB-26595].
+    match_nesting_limit = 200
+
+    def find_matching_close(seq, open_index):
+        stack = [matching[seq[open_index][0]]]
+        cursor = open_index + 1
+        while cursor < len(seq):
+            tok = seq[cursor][0]
+            if tok in matching:
+                stack.append(matching[tok])
+            elif tok in (")", "]", "}") and tok in stack:
+                while stack:
+                    expected = stack.pop()
+                    if expected == tok:
+                        break
+                if not stack:
+                    return cursor
+            cursor += 1
+        return None
+
+    def read_ident(seq, cursor, limit):
+        if cursor >= limit or not ident.fullmatch(seq[cursor][0]):
+            return None, cursor
+        name = seq[cursor][0]
+        if (name == "r" and cursor + 2 < limit and seq[cursor + 1][0] == "#"
+                and ident.fullmatch(seq[cursor + 2][0])):
+            return "r#" + seq[cursor + 2][0], cursor + 3
+        if name in keywords:
+            return None, cursor
+        return name, cursor + 1
+
+    def macro_name_at(seq, end_index, allow_keywords=False):
+        if end_index < 0 or not ident.fullmatch(seq[end_index][0]):
+            return None, end_index
+        if (end_index >= 2 and seq[end_index - 1][0] == "#"
+                and seq[end_index - 2][0] == "r"):
+            return "r#" + seq[end_index][0], end_index - 2
+        tok = seq[end_index][0]
+        if not allow_keywords and tok in keywords:
+            return None, end_index
+        return tok, end_index
+
+    def is_local_macro_start(seq, name_start):
+        if name_start == 0 or seq[name_start - 1][0] != "::":
+            return True
+        return (name_start >= 2 and seq[name_start - 2][0] == "self"
+                and (name_start == 2 or seq[name_start - 3][0] != "::"))
+
+    def is_attr_open(seq, delim_index):
+        if seq[delim_index][0] != "[" or delim_index < 1:
+            return False
+        if seq[delim_index - 1][0] == "#":
+            return True
+        return (delim_index >= 2 and seq[delim_index - 1][0] == "!"
+                and seq[delim_index - 2][0] == "#")
+
+    def macro_rules_def_name(seq, delim_index):
+        if delim_index < 3:
+            return None
+        m_name, name_start = macro_name_at(seq, delim_index - 1, allow_keywords=True)
+        if m_name is None or name_start < 2:
+            return None
+        if seq[name_start - 1][0] == "!" and seq[name_start - 2][0] == "macro_rules":
+            return m_name
+        return None
+
+    def opened_module(seq, mod_index, allow_metavar=False):
+        cursor = mod_index + 1
+        limit = len(seq)
+        if allow_metavar and cursor + 1 < limit and seq[cursor][0] == "$" and ident.fullmatch(seq[cursor + 1][0]):
+            mod_key = ("var", seq[cursor + 1][0])
+            cursor += 2
+        else:
+            if cursor >= limit or not ident.fullmatch(seq[cursor][0]):
+                return None
+            mod_name = seq[cursor][0]
+            cursor += 1
+            if (mod_name == "r" and cursor + 1 < limit and seq[cursor][0] == "#"
+                    and ident.fullmatch(seq[cursor + 1][0])):
+                mod_name = seq[cursor + 1][0]
+                cursor += 2
+            mod_key = ("lit", mod_name) if allow_metavar else mod_name
+        if cursor < limit and seq[cursor][0] == "{":
+            return mod_key, cursor
+        return None
+
+    def parse_macro_arms(body):
+        arms = []
+        cursor = 0
+        limit = len(body)
+        while cursor < limit:
+            if body[cursor][0] == ";":
+                cursor += 1
+                continue
+            if body[cursor][0] not in matching:
+                break
+            m_close = find_matching_close(body, cursor)
+            if m_close is None or m_close + 2 >= limit:
+                break
+            if body[m_close + 1][0] != "=" or body[m_close + 2][0] != ">":
+                break
+            t_open = m_close + 3
+            if t_open >= limit or body[t_open][0] not in matching:
+                break
+            t_close = find_matching_close(body, t_open)
+            if t_close is None:
+                break
+            arms.append((body[cursor + 1:m_close], body[t_open + 1:t_close]))
+            cursor = t_close + 1
+            if cursor < limit and body[cursor][0] == ";":
+                cursor += 1
+        return arms
+
+    def visible_macro(scope_stack, name):
+        for scope in reversed(scope_stack):
+            if name in scope:
+                return scope[name]
+        return None
+
+    def analyze_transcriber(transcriber, scope_stack, visiting):
+        emitted_vars = {}
+        forwarded = {}
+        seen_lit_mod = False
+        t_mods = []
+        t_frames = []
+        t_opens = {}
+        limit = len(transcriber)
+        idx = 0
+        while idx < limit:
+            tok = transcriber[idx][0]
+            in_non_item = bool(t_frames) and t_frames[-1][1]
+            in_item_ctx = (not t_frames) or t_frames[-1][3]
+            if (tok == "mod" and not in_non_item and in_item_ctx
+                    and (idx == 0 or transcriber[idx - 1][0] not in ("::", "#"))):
+                opened = opened_module(transcriber, idx, allow_metavar=True)
+                if opened is not None:
+                    t_opens[opened[1]] = opened[0]
+                    seen_lit_mod = True
+            if (tok == "$" and idx + 1 < limit and ident.fullmatch(transcriber[idx + 1][0])
+                    and not in_non_item and in_item_ctx):
+                var_name = transcriber[idx + 1][0]
+                # `$name` in `mod $name { ... }` supplies the module name; it
+                # is not a separate emitted item at the surrounding depth.
+                if idx == 0 or transcriber[idx - 1][0] != "mod":
+                    emitted_vars.setdefault(var_name, set()).add(tuple(t_mods))
+            if tok in matching:
+                is_rep = tok == "(" and idx >= 1 and transcriber[idx - 1][0] == "$"
+                is_meta_expr = tok == "{" and idx >= 1 and transcriber[idx - 1][0] == "$"
+                if is_rep:
+                    t_frames.append((matching[tok], in_non_item, None, in_item_ctx))
+                    idx += 1
+                    continue
+                non_item = in_non_item or is_meta_expr or is_attr_open(transcriber, idx)
+                if not non_item and macro_rules_def_name(transcriber, idx) is not None:
+                    non_item = True
+                is_item_macro = False
+                if not non_item and idx >= 2 and transcriber[idx - 1][0] == "!":
+                    m_name, m_start = macro_name_at(transcriber, idx - 2)
+                    if m_name is not None:
+                        short = m_name[2:] if m_name.startswith("r#") else m_name
+                        if short in non_item_macros:
+                            non_item = True
+                        elif is_local_macro_start(transcriber, m_start):
+                            target_arms = visible_macro(scope_stack, m_name)
+                            if target_arms is not None and m_name not in visiting:
+                                t_close = find_matching_close(transcriber, idx)
+                                sub = transcriber[idx + 1:t_close] if t_close is not None else []
+                                if (len(sub) == 2 and sub[0][0] == "$"
+                                        and ident.fullmatch(sub[1][0])):
+                                    forwarded.setdefault(sub[1][0], []).append(m_name)
+                                elif (len(sub) == 6 and sub[0][0] == "$" and sub[1][0] == "("
+                                      and sub[2][0] == "$" and ident.fullmatch(sub[3][0])
+                                      and sub[4][0] == ")" and sub[5][0] in ("*", "+")):
+                                    forwarded.setdefault(sub[3][0], []).append(m_name)
+                                target_info = summarize_macro(
+                                    m_name, target_arms, scope_stack, visiting | {m_name}
+                                )
+                                if not target_info["can_emit_items"]:
+                                    non_item = True
+                                else:
+                                    is_item_macro = True
+                            else:
+                                is_item_macro = True
+                        else:
+                            is_item_macro = True
+                mod_item = t_opens.get(idx) if (tok == "{" and not non_item) else None
+                if mod_item is not None:
+                    t_mods.append(mod_item)
+                allows_item = (not non_item) and (tok == "{" or is_item_macro)
+                t_frames.append((matching[tok], non_item, mod_item, allows_item))
+            elif tok in (")", "]", "}") and any(frame[0] == tok for frame in t_frames):
+                while t_frames:
+                    close, _, mod_item, _ = t_frames.pop()
+                    if mod_item is not None:
+                        t_mods.pop()
+                    if close == tok:
+                        break
+            idx += 1
+        return {
+            "emitted_vars": emitted_vars,
+            "forwarded": forwarded,
+            "has_item_output": bool(emitted_vars) or seen_lit_mod,
+        }
+
+    def parse_matcher(seq):
+        nodes = []
+        idx = 0
+        limit = len(seq)
+        while idx < limit:
+            tok = seq[idx][0]
+            if tok == "$" and idx + 1 < limit and seq[idx + 1][0] == "(":
+                close = find_matching_close(seq, idx + 1)
+                if close is None:
+                    return None
+                children = parse_matcher(seq[idx + 2:close])
+                if children is None:
+                    return None
+                cursor = close + 1
+                sep = None
+                if cursor + 1 < limit and seq[cursor + 1][0] in ("*", "+"):
+                    sep = seq[cursor][0]
+                    op = seq[cursor + 1][0]
+                    cursor += 2
+                elif cursor < limit and seq[cursor][0] in ("*", "+", "?"):
+                    op = seq[cursor][0]
+                    cursor += 1
+                else:
+                    return None
+                nodes.append(("rep", children, sep, op))
+                idx = cursor
+            elif tok == "$" and idx + 3 < limit and ident.fullmatch(seq[idx + 1][0]) and seq[idx + 2][0] == ":":
+                nodes.append(("var", seq[idx + 1][0], seq[idx + 3][0]))
+                idx += 4
+            elif tok in matching:
+                close = find_matching_close(seq, idx)
+                if close is None:
+                    return None
+                children = parse_matcher(seq[idx + 1:close])
+                if children is None:
+                    return None
+                mod_key = None
+                if tok == "{" and len(nodes) >= 2 and nodes[-2] == ("lit", "mod"):
+                    prev = nodes[-1]
+                    if prev[0] == "var" and prev[2] == "ident":
+                        mod_key = ("var", prev[1])
+                    elif prev[0] == "lit":
+                        mod_key = ("lit", prev[1])
+                nodes.append(("group", matching[tok], children, mod_key))
+                idx = close + 1
+            else:
+                nodes.append(("lit", tok))
+                idx += 1
+        return nodes
+
+    def collect_pattern_vars(nodes):
+        out = set()
+        for node in nodes:
+            if node[0] == "var":
+                out.add(node[1])
+            elif node[0] in ("group", "rep"):
+                out |= collect_pattern_vars(node[1] if node[0] == "rep" else node[2])
+        return out
+
+    def consume_item(arg, ai, end_ai):
+        cur = ai
+        while cur + 1 < end_ai and arg[cur][0] == "#":
+            b_idx = cur + 1 if arg[cur + 1][0] == "[" else (
+                cur + 2 if cur + 2 < end_ai and arg[cur + 1][0] == "!" and arg[cur + 2][0] == "[" else -1
+            )
+            if b_idx == -1:
+                break
+            close = find_matching_close(arg, b_idx)
+            if close is None or close >= end_ai:
+                return None
+            cur = close + 1
+        if cur < end_ai and arg[cur][0] == "pub":
+            cur += 1
+            if cur < end_ai and arg[cur][0] == "(":
+                close = find_matching_close(arg, cur)
+                if close is None or close >= end_ai:
+                    return None
+                cur = close + 1
+        is_use = cur < end_ai and arg[cur][0] == "use"
+        while cur < end_ai:
+            tok = arg[cur][0]
+            if tok == ";":
+                return cur + 1
+            if tok in matching:
+                close = find_matching_close(arg, cur)
+                if close is None or close >= end_ai:
+                    return None
+                if tok == "{" and not is_use:
+                    if close + 1 < end_ai and arg[close + 1][0] == ";":
+                        return close + 2
+                    return close + 1
+                cur = close + 1
+            else:
+                cur += 1
+        return None
+
+    def candidate_var_ends(frag, arg, ai, end_ai, next_lit):
+        if frag == "ident":
+            _, nxt = read_ident(arg, ai, end_ai)
+            return [nxt] if nxt > ai else []
+        if frag == "tt":
+            if ai >= end_ai:
+                return []
+            if arg[ai][0] in matching:
+                close = find_matching_close(arg, ai)
+                return [close + 1] if close is not None and close < end_ai else []
+            return [ai + 1]
+        if frag == "block":
+            if ai < end_ai and arg[ai][0] == "{":
+                close = find_matching_close(arg, ai)
+                return [close + 1] if close is not None and close < end_ai else []
+            return []
+        if frag == "lifetime":
+            if ai + 1 < end_ai and arg[ai][0] == "'" and ident.fullmatch(arg[ai + 1][0]):
+                return [ai + 2]
+            return []
+        if frag == "vis":
+            ends = []
+            if ai < end_ai and arg[ai][0] == "pub":
+                if ai + 1 < end_ai and arg[ai + 1][0] == "(":
+                    close = find_matching_close(arg, ai + 1)
+                    if close is not None and close < end_ai:
+                        ends.append(close + 1)
+                ends.append(ai + 1)
+            ends.append(ai)
+            return ends
+        if frag == "item":
+            nxt = consume_item(arg, ai, end_ai)
+            return [nxt] if nxt is not None else []
+        if frag == "stmt":
+            nxt = consume_item(arg, ai, end_ai)
+            if nxt is not None:
+                return [nxt]
+            return [end_ai] if next_lit is None and ai < end_ai else []
+        # Remaining fragments (`expr`, `ty`, `pat`, `path`, `meta`, `literal`)
+        if next_lit is None:
+            return [end_ai] if ai < end_ai else []
+        ends = []
+        cur = ai
+        while cur < end_ai:
+            if cur > ai and arg[cur][0] == next_lit:
+                ends.append(cur)
+            if arg[cur][0] in matching:
+                close = find_matching_close(arg, cur)
+                if close is None or close >= end_ai:
+                    break
+                cur = close + 1
+            else:
+                cur += 1
+        return ends
+
+    def match_nodes(nodes, ni, arg, ai, end_ai, base_offset, bindings, mod_matches, steps, on_done):
+        # `steps` is per arm: [calls made, live nesting depth]. Past either
+        # bound the call fails, the same as an exhausted step budget.
+        steps[0] += 1
+        if steps[0] > 10000 or steps[1] >= match_nesting_limit:
+            return False
+        steps[1] += 1
+        try:
+            return match_step(nodes, ni, arg, ai, end_ai, base_offset,
+                              bindings, mod_matches, steps, on_done)
+        finally:
+            steps[1] -= 1
+
+    def match_step(nodes, ni, arg, ai, end_ai, base_offset, bindings, mod_matches, steps, on_done):
+        if ni == len(nodes):
+            return on_done(ai)
+        node = nodes[ni]
+        kind = node[0]
+        if kind == "lit":
+            if ai < end_ai and arg[ai][0] == node[1]:
+                return match_nodes(
+                    nodes, ni + 1, arg, ai + 1, end_ai, base_offset,
+                    bindings, mod_matches, steps, on_done,
+                )
+            return False
+        if kind == "group":
+            close_delim, children, mod_key = node[1:]
+            if ai >= end_ai or matching.get(arg[ai][0]) != close_delim:
+                return False
+            g_end = find_matching_close(arg, ai)
+            if g_end is None or g_end >= end_ai:
+                return False
+            saved_mods = len(mod_matches)
+            saved_binds = {k: list(v) for k, v in bindings.items()}
+
+            def after_group(inner_end):
+                if inner_end != g_end:
+                    return False
+                if mod_key is not None:
+                    mod_matches.append((mod_key, base_offset + ai, collect_pattern_vars(children)))
+                return match_nodes(
+                    nodes, ni + 1, arg, g_end + 1, end_ai, base_offset,
+                    bindings, mod_matches, steps, on_done,
+                )
+
+            if match_nodes(children, 0, arg, ai + 1, g_end, base_offset, bindings, mod_matches, steps, after_group):
+                return True
+            del mod_matches[saved_mods:]
+            bindings.clear()
+            bindings.update(saved_binds)
+            return False
+        if kind == "var":
+            var_name, frag = node[1], node[2]
+            next_lit = nodes[ni + 1][1] if (ni + 1 < len(nodes) and nodes[ni + 1][0] == "lit") else None
+            for nxt in candidate_var_ends(frag, arg, ai, end_ai, next_lit):
+                bindings.setdefault(var_name, []).append((base_offset + ai, base_offset + nxt))
+                if match_nodes(
+                        nodes, ni + 1, arg, nxt, end_ai, base_offset,
+                        bindings, mod_matches, steps, on_done,
+                ):
+                    return True
+                bindings[var_name].pop()
+                if not bindings[var_name]:
+                    del bindings[var_name]
+            return False
+        if kind == "rep":
+            children, sep, op = node[1:]
+
+            def try_rep(cur_ai, count):
+                if op == "?" and count > 1:
+                    return False
+                if (op != "+" or count >= 1) and match_nodes(
+                        nodes, ni + 1, arg, cur_ai, end_ai, base_offset,
+                        bindings, mod_matches, steps, on_done,
+                ):
+                    return True
+                if op == "?" and count >= 1:
+                    return False
+                next_pos = cur_ai
+                if count > 0 and sep is not None:
+                    if next_pos >= end_ai or arg[next_pos][0] != sep:
+                        return False
+                    next_pos += 1
+                saved_mods = len(mod_matches)
+                saved_binds = {k: list(v) for k, v in bindings.items()}
+
+                def after_iter(iter_end):
+                    return iter_end > next_pos and try_rep(iter_end, count + 1)
+
+                if match_nodes(
+                        children, 0, arg, next_pos, end_ai, base_offset,
+                        bindings, mod_matches, steps, after_iter,
+                ):
+                    return True
+                del mod_matches[saved_mods:]
+                bindings.clear()
+                bindings.update(saved_binds)
+                return False
+
+            return try_rep(ai, 0)
+        return False
+
+    def summarize_macro(name, arms, scope_stack, visiting):
+        can_emit = False
+        all_strip = bool(arms)
+        for matcher, transcriber in arms:
+            t_info = analyze_transcriber(transcriber, scope_stack, visiting)
+            if t_info["has_item_output"]:
+                can_emit = True
+            p_ast = parse_matcher(matcher)
+            arm_strips = False
+            if p_ast is not None:
+                for node in p_ast:
+                    if node[0] == "group" and node[3] is not None:
+                        cvars = collect_pattern_vars(node[2])
+                        if not any(node[3] in mods for v in cvars for mods in t_info["emitted_vars"].get(v, ())):
+                            arm_strips = True
+                            break
+            if not arm_strips and t_info["has_item_output"]:
+                all_strip = False
+        return {"can_emit_items": can_emit, "all_strip": all_strip}
+
+    def classify_macro_invocation(m_name, arms, arg, base_offset, scope_stack, visiting):
+        for matcher, transcriber in arms:
+            p_ast = parse_matcher(matcher)
+            if p_ast is None:
+                continue
+            bindings = {}
+            mod_matches = []
+            steps = [0, 0]
+            if not match_nodes(
+                    p_ast, 0, arg, 0, len(arg), base_offset, bindings,
+                    mod_matches, steps, lambda end: end == len(arg),
+            ):
+                continue
+            t_info = analyze_transcriber(transcriber, scope_stack, visiting)
+            if not t_info["has_item_output"]:
+                return {"non_item": True, "stripped": set(), "non_item_braces": set(),
+                        "non_item_ranges": [], "added_mods": ()}
+            emitted_vars = t_info["emitted_vars"]
+            stripped = set()
+            non_item_braces = set()
+            for _, brace_abs, cvars in mod_matches:
+                if not any(v in emitted_vars for v in cvars):
+                    non_item_braces.add(brace_abs)
+                else:
+                    # These braces are matcher syntax. If the transcriber
+                    # emits the captured items, count its output module prefix
+                    # below instead of also counting the consumed input braces.
+                    stripped.add(brace_abs)
+            non_item_ranges = [
+                span for v, spans in bindings.items()
+                if v not in emitted_vars
+                for span in spans
+            ]
+            # Handle forwarded macros like `($($t:tt)*) => { forward!($($t)*); }`
+            for v, targets in t_info["forwarded"].items():
+                spans = bindings.get(v, ())
+                if not spans:
+                    continue
+                span_start, span_end = spans[0][0], spans[-1][1]
+                sub_arg = tokens[span_start:span_end]
+                for target_name in targets:
+                    if target_name in visiting:
+                        continue
+                    target_arms = visible_macro(scope_stack, target_name)
+                    if target_arms is None:
+                        continue
+                    sub_res = classify_macro_invocation(
+                        target_name, target_arms, sub_arg, span_start,
+                        scope_stack, visiting | {target_name}
+                    )
+                    if sub_res["non_item"]:
+                        non_item_ranges.append((span_start, span_end))
+                    stripped |= sub_res["stripped"]
+                    non_item_braces |= sub_res["non_item_braces"]
+                    non_item_ranges.extend(sub_res["non_item_ranges"])
+            # Keep a uniform module prefix for every emitted variable, or its
+            # common depth when every emitted prefix has the same length. Module
+            # names captured by the matcher resolve from the invocation; if a
+            # repeated capture or differing wrapper has different names, a
+            # placeholder still preserves the module level for `super`
+            # resolution.
+            def resolved_mod_prefix(mods):
+                prefix = []
+                for kind, name in mods:
+                    if kind == "lit":
+                        prefix.append(name)
+                        continue
+                    spans = bindings.get(name, ())
+                    bound_names = []
+                    for span_start, span_end in spans:
+                        bound_name, bound_end = read_ident(tokens, span_start, span_end)
+                        if bound_name is None or bound_end != span_end:
+                            bound_names = []
+                            break
+                        bound_names.append(bound_name)
+                    if bound_names and all(bound_name == bound_names[0]
+                                           for bound_name in bound_names):
+                        prefix.append(bound_names[0])
+                    else:
+                        prefix.append(f"${name}")
+                return tuple(prefix)
+
+            added_mods = ()
+            emitted_prefixes = [
+                resolved_mod_prefix(mods)
+                for v in emitted_vars if v in bindings
+                for mods in emitted_vars[v]
+            ]
+            if (emitted_prefixes
+                    and emitted_prefixes[0]
+                    and all(len(prefix) == len(emitted_prefixes[0])
+                            for prefix in emitted_prefixes)):
+                added_mods = tuple(
+                    emitted_prefixes[0][level]
+                    if all(prefix[level] == emitted_prefixes[0][level]
+                           for prefix in emitted_prefixes)
+                    else "$mod"
+                    for level in range(len(emitted_prefixes[0]))
+                )
+            return {
+                "non_item": False,
+                "stripped": stripped,
+                "non_item_braces": non_item_braces,
+                "non_item_ranges": non_item_ranges,
+                "added_mods": added_mods,
+            }
+        # Fallback if no arm matched cleanly
+        summary = summarize_macro(m_name, arms, scope_stack, visiting)
+        return {
+            "non_item": (not summary["can_emit_items"]) or summary["all_strip"],
+            "stripped": set(),
+            "non_item_braces": set(),
+            "non_item_ranges": [],
+            "added_mods": (),
+        }
+
+    suffixes = []
+    extras = []
+    # Each frame: (close_delim, non_item, added_mods, allows_item, local_macros, is_item_macro)
+    frames = []
+    top_macros = {}
+    opens = {}
+    stripped_mod_braces = set()
+    non_item_braces = set()
+    non_item_ranges = []
+
+    def current_macro_scopes():
+        return [top_macros, *(frame[4] for frame in frames if frame[4] is not None)]
+
+    def target_macro_scope():
+        for frame in reversed(frames):
+            if not frame[1] and not frame[5]:
+                return frame[4]
+        return top_macros
+
+    def in_non_item_range(pos):
+        return any(start <= pos < end for start, end in non_item_ranges)
+
+    for index, (name, _) in enumerate(tokens):
+        suffixes.append(tuple(extras))
+        in_non_item = (bool(frames) and frames[-1][1]) or in_non_item_range(index)
+        in_item_ctx = (not frames) or frames[-1][3]
+        if (name == "mod" and not in_non_item and in_item_ctx
+                and (index == 0 or tokens[index - 1][0] not in ("::", "#"))):
+            opened = opened_module(tokens, index)
+            if opened is not None and opened[1] not in stripped_mod_braces:
+                opens[opened[1]] = opened[0]
+        if name in matching:
+            non_item = in_non_item or (name == "{" and index in non_item_braces) or is_attr_open(tokens, index)
+            is_item_macro = False
+            added_mods = ()
+            if not non_item:
+                def_name = macro_rules_def_name(tokens, index)
+                if def_name is not None:
+                    non_item = True
+                    close = find_matching_close(tokens, index)
+                    if close is not None:
+                        target_macro_scope()[def_name] = parse_macro_arms(tokens[index + 1:close])
+                elif index >= 2 and tokens[index - 1][0] == "!":
+                    m_name, m_start = macro_name_at(tokens, index - 2)
+                    if m_name is not None:
+                        short = m_name[2:] if m_name.startswith("r#") else m_name
+                        if short in non_item_macros:
+                            non_item = True
+                        elif is_local_macro_start(tokens, m_start):
+                            scopes = current_macro_scopes()
+                            arms = visible_macro(scopes, m_name)
+                            if arms is not None:
+                                close = find_matching_close(tokens, index)
+                                arg = tokens[index + 1:close] if close is not None else []
+                                res = classify_macro_invocation(
+                                    m_name, arms, arg, index + 1, scopes, {m_name}
+                                )
+                                if res["non_item"]:
+                                    non_item = True
+                                else:
+                                    is_item_macro = True
+                                    stripped_mod_braces |= res["stripped"]
+                                    non_item_braces |= res["non_item_braces"]
+                                    non_item_ranges.extend(res["non_item_ranges"])
+                                    added_mods = res["added_mods"]
+                            else:
+                                is_item_macro = True
+                        else:
+                            is_item_macro = True
+            if not non_item and not is_item_macro and name == "{" and index in opens:
+                added_mods = (opens[index],)
+            extras.extend(added_mods)
+            allows_item = (not non_item) and (name == "{" or is_item_macro)
+            local_macros = {} if (name == "{" and not non_item and not is_item_macro) else None
+            frames.append((matching[name], non_item, added_mods, allows_item, local_macros, is_item_macro))
+        elif name in (")", "]", "}") and any(frame[0] == name for frame in frames):
+            while frames:
+                close, _, added_mods, _, _, _ = frames.pop()
+                for _ in added_mods:
+                    extras.pop()
+                if close == name:
+                    break
+    return suffixes
+
+
+def resolve_super_chain(segments, module_parts):
+    """Rewrite a leading `super::` chain as a `crate::` path, or None."""
+    if module_parts is None or not segments or segments[0] != "super":
+        return None
+    ups = 0
+    while ups < len(segments) and segments[ups] == "super":
+        ups += 1
+    if ups > len(module_parts):
+        return None
+    climbed = module_parts[:len(module_parts) - ups]
+    return ("crate", *climbed, *segments[ups:])
+
+
 failed = False
 target = app / module
 if not target.exists():
@@ -449,12 +1199,28 @@ for path in paths:
                         grown = True
             expanded.extend((head, *prefix[1:]) for head in heads - {prefix[0]})
         prefixes = [*prefixes, *expanded]
+        module_parts = crate_module_parts(path)
+        suffixes = inline_module_suffixes(tokens)
+
+        def matches(segments, at):
+            def hit(candidate):
+                return any(candidate[:len(prefix)] == prefix for prefix in prefixes)
+            if hit(segments):
+                return True
+            here = None if module_parts is None else [*module_parts, *suffixes[at]]
+            absolute = resolve_super_chain(segments, here)
+            return absolute is not None and hit(absolute)
+
         for index, (name, start) in enumerate(tokens):
-            if not any(name == prefix[0] for prefix in prefixes):
+            starts_prefix = any(name == prefix[0] for prefix in prefixes)
+            # Only the first `super` of a path. A later `super` has climbed
+            # less and would name a deeper module than the chain does.
+            starts_super = (name == "super" and (index == 0 or tokens[index - 1][0] != "::")
+                            and index + 1 < len(tokens) and tokens[index + 1][0] == "::")
+            if not starts_prefix and not starts_super:
                 continue
             named_paths, _ = use_tree(tokens, index)
-            if any(segments[:len(prefix)] == prefix
-                   for segments in named_paths for prefix in prefixes):
+            if any(matches(segments, index) for segments in named_paths):
                 number = source.count("\n", 0, start) + 1
                 print(f"{path}:{number}:{source.splitlines()[number - 1]}")
                 failed = True
@@ -633,7 +1399,7 @@ token = re.compile(
     r'|(?P<raw>(?:br|cr|r)(?P<hashes>\#*)")'
     r'|(?P<literal>(?:b|c)?"(?:\\[\s\S]|[^"\\])*"'
     r"|b?'(?:\\(?:x[0-9a-fA-F]{2}|u\{[0-9a-fA-F_]+\}|[^\n])|[^'\\\n])')"
-    r"|::|[a-zA-Z_][a-zA-Z_0-9]*|\S"
+    r"|::|[^\W\d]\w*|\S"
 )
 block_delimiter = re.compile(r"/\*|\*/")
 def code_tokens(source):
@@ -725,7 +1491,7 @@ for top in upper:
                         k += 1
                     i = k
             i += 1
-identifier = re.compile(r"[a-zA-Z_][a-zA-Z_0-9]*")
+identifier = re.compile(r"[^\W\d]\w*")
 def qualified_type(toks, end):
     """The type that the `::` after `toks[end]` qualifies, or None.
 
@@ -1294,7 +2060,7 @@ token = re.compile(
     r'|(?P<raw>(?:br|cr|r)(?P<hashes>\#*)")'
     r'|(?P<literal>(?:b|c)?"(?:\\[\s\S]|[^"\\])*"'
     r"|b?'(?:\\(?:x[0-9a-fA-F]{2}|u\{[0-9a-fA-F_]+\}|[^\n])|[^'\\\n])')"
-    r"|::|r\#[a-zA-Z_][a-zA-Z_0-9]*|[a-zA-Z_][a-zA-Z_0-9]*|\S"
+    r"|::|r\#[^\W\d]\w*|[^\W\d]\w*|\S"
 )
 block_delimiter = re.compile(r"/\*|\*/")
 

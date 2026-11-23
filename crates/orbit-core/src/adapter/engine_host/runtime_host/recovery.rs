@@ -1,4 +1,4 @@
-//! Run-record reads that step and final recovery admission depend on.
+//! Adapter hooks through which the engine's step and final recovery reach the runtime.
 
 use orbit_common::OrbitError;
 
@@ -156,5 +156,5 @@ pub(super) fn validate_source_repair(
     runtime: &OrbitRuntime,
     run_id: &str,
 ) -> Result<(), OrbitError> {
-    runtime.validate_operator_source_repair(run_id)
+    runtime.validate_source_repair_admission(run_id)
 }

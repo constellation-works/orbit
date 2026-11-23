@@ -40,6 +40,13 @@ spec:
       base_sync:
         type: string
         enum: [remote, local]
+      dependency_delivery:
+        type: string
+        enum: [enforce, ignore]
+        description: >
+          `enforce` (default) refuses a task whose done dependency has marked
+          commits only off the base. `ignore` skips that check for work
+          delivered under a different commit message.
       branch_prefix:
         type: string
         description: >

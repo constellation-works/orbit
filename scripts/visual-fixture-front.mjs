@@ -529,6 +529,18 @@ function fetchHealth(upstream) {
           body: Buffer.concat(chunks).toString('utf8').slice(0, 200),
         });
       });
+      // A response that starts and then ends early never emits `end`; settle
+      // with the status line already received and a bounded refusal note.
+      const incomplete = (reason) => resolve({
+        status: response.statusCode || 0,
+        body: `health response ended before completion: ${reason}`.slice(0, 200),
+        incomplete: true,
+      });
+      response.on('error', (error) => incomplete(String(error.message || error)));
+      response.on('aborted', () => incomplete('aborted'));
+      response.on('close', () => {
+        if (!response.complete) incomplete('closed');
+      });
     });
     request.setTimeout(2000, () => request.destroy(new Error('timeout')));
     request.on('error', (error) => resolve({ status: 0, body: String(error.message || error) }));
@@ -905,6 +917,16 @@ async function main() {
           if (!res.headersSent) sendPlain(res, 500, `fixture hosts unreadable: ${error.message}`);
           else res.end();
         });
+        return;
+      }
+      if (req.method === 'GET' && fixtureHosts.some((host) => (
+        host.reachable === false
+        && pathname === `/api/on/${host.name}/fleet/drains`
+      ))) {
+        // An unreachable seeded host has no readable drains. Answer locally so
+        // the fixture can show its unavailable host state without proxying a
+        // request to a backend that does not own this synthetic remote.
+        sendJson(res, { items: [] });
         return;
       }
       // Ranking routes: the implementers scorecard is the seed's `scorecard`;

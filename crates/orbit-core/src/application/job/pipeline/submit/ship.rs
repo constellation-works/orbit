@@ -56,6 +56,11 @@ pub struct ShipRunRequest<'a> {
     /// records which it overrode. Host, crew and live-run refusals still
     /// apply. Ignored without task ids.
     pub operator_override: bool,
+    /// Skip the worktree setup's dependency-delivery check for the named
+    /// tasks: a done dependency whose work reached the base under a commit
+    /// message without its marker would otherwise refuse them. Operator-only;
+    /// ignored without task ids.
+    pub ignore_dependency_delivery: bool,
 }
 
 impl Default for ShipRunRequest<'_> {
@@ -72,6 +77,7 @@ impl Default for ShipRunRequest<'_> {
             strict_containment: false,
             review: None,
             operator_override: false,
+            ignore_dependency_delivery: false,
         }
     }
 }
@@ -203,6 +209,7 @@ impl OrbitRuntime {
             strict_containment,
             review,
             operator_override,
+            ignore_dependency_delivery,
         } = request;
         // The override names its own work; a discovery ship is drain policy.
         let operator_override = operator_override && !task_ids.is_empty();
@@ -240,6 +247,9 @@ impl OrbitRuntime {
         }
         if operator_override {
             input[crate::application::job::OPERATOR_READINESS_OVERRIDE_INPUT] = json!(true);
+        }
+        if ignore_dependency_delivery && !task_ids.is_empty() {
+            input["dependency_delivery"] = json!("ignore");
         }
         self.admit_review_request(
             &mut input,

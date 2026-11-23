@@ -28,7 +28,9 @@ pub(super) fn publish_certificate(
         // [ORB-15130] A before-landing comment states the PR and the status
         // the store holds when it is written, not the before-PR template.
         let delivery = if landing {
-            Delivery::before_landing(&runtime.get_task(&task.id)?)
+            let current = runtime.get_task(&task.id)?;
+            let merged = super::external_merge::merged_outside_orbit(runtime, context, &current);
+            Delivery::before_landing(&current, merged)
         } else {
             Delivery::BeforePr
         };

@@ -110,7 +110,8 @@ pub struct LandingObservation {
     pub status: LandingObservationStatus,
     pub method: Option<LandingMethod>,
     /// Commit the merge produced on the target branch, when the host recorded
-    /// one. A local fast-forward records none.
+    /// one. A local fast-forward records the commit the base is at after the
+    /// merge. An older checkpoint that omits it leaves this empty.
     pub landed_commit: Option<String>,
     pub pr_number: Option<u64>,
     pub observed_at: Option<DateTime<Utc>>,

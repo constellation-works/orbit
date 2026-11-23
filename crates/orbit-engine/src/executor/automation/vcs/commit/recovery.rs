@@ -209,3 +209,73 @@ fn message(request: &RecoveryCommitRequest<'_>) -> String {
         request.recovery_activity,
     )
 }
+
+/// Capture all uncommitted tracked, staged, and untracked changes in
+/// `workspace_path` as a unified patch without mutating `.git/index`.
+pub(in crate::executor::automation::vcs) fn capture_uncommitted_diff(
+    workspace_path: &Path,
+) -> Result<Option<String>, orbit_common::OrbitError> {
+    let dir = tempfile::tempdir().map_err(|error| {
+        orbit_common::OrbitError::Io(format!("failed to create scratch diff index dir: {error}"))
+    })?;
+    let index_path = dir.path().join("index");
+    let index_str = index_path.to_string_lossy().into_owned();
+    let env = [("GIT_INDEX_FILE", index_str.as_str())];
+    let has_head = super::super::git::git_command_success(
+        workspace_path,
+        &["rev-parse", "--verify", "HEAD^{commit}"],
+    )?;
+    if has_head {
+        super::super::git::git_output_with_env(workspace_path, &["read-tree", "HEAD"], &env)?;
+    }
+    super::super::git::git_output_with_env(workspace_path, &["add", "--all", "--", "."], &env)?;
+    let diff = if has_head {
+        super::super::git::git_output_with_env(workspace_path, &["diff", "--cached", "HEAD"], &env)?
+    } else {
+        super::super::git::git_output_with_env(workspace_path, &["diff", "--cached"], &env)?
+    };
+    if diff.trim().is_empty() {
+        Ok(None)
+    } else {
+        Ok(Some(format!("{diff}\n")))
+    }
+}
+
+/// Capture any uncommitted diff in `workspace_path` and persist it as a task
+/// artifact (falling back to `.orbit/tmp/` if the task record rejects writes).
+pub(crate) fn persist_uncommitted_diff_artifact<H: crate::RuntimeHost + ?Sized>(
+    host: &H,
+    task_id: &str,
+    workspace_path: &Path,
+    artifact_path: &str,
+) -> Result<Option<String>, String> {
+    let Some(diff) = capture_uncommitted_diff(workspace_path).map_err(|e| e.to_string())? else {
+        return Ok(None);
+    };
+    let update = crate::TaskAutomationUpdate {
+        upsert_artifacts: vec![orbit_types::task::TaskArtifact::from_text(
+            artifact_path,
+            &diff,
+        )],
+        ..crate::TaskAutomationUpdate::default()
+    };
+    match host.apply_task_automation_update(task_id, update) {
+        Ok(()) => Ok(Some(format!("task artifact `{artifact_path}`"))),
+        Err(task_error) => {
+            orbit_common::fs::io::write_private_text_beneath(
+                workspace_path,
+                Path::new(".orbit/tmp"),
+                artifact_path,
+                &diff,
+            )
+            .map_err(|io_err| {
+                format!(
+                    "task artifact write failed ({task_error}) and scratch write failed ({io_err})"
+                )
+            })?;
+            Ok(Some(format!(
+                "`.orbit/tmp/{artifact_path}` (task artifact write failed: {task_error})"
+            )))
+        }
+    }
+}

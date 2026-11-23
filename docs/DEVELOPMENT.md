@@ -599,7 +599,7 @@ The test gate in `ci.yml` runs on parallel runners from one build:
   the `scripts/test-*` self-tests only when their inputs changed against the
   PR base, by the rule `make ci-fast` uses (`scripts/`, `.github/`, `Makefile`,
   `.cargo/`, the root manifests, `.config/nextest.toml`, `crates/orbit-engine/tests/engine/pr_landing/infrastructure/fixtures/legacy-codeql.yml`, `install.sh`, `RELEASING.md`, `docs/dev/qa/path-leases-listener-sudo.md`, `docs/standards/`,
-  `AGENTS.md`, `CLAUDE.md`, `plugin/`, `npm/`, `.agents/`, `.claude-plugin/`); `test-qa-full-sweep.py --check`
+  `AGENTS.md`, `CLAUDE.md`, `plugin/`, `npm/`, `.agents/`, `.claude-plugin/`, `server.json`, `examples/release-readiness/scripts/release-readiness.yaml`); `test-qa-full-sweep.py --check`
   always runs its inventory check and runs its fixture self-test under the
   same rule. That process fixture accepts an identity-bound pidfd signal only
   on Linux. On macOS and other hosts it records an unsupported identity-signal
@@ -881,7 +881,8 @@ python3 scripts/ci-p90.py --from-json .orbit/tmp/ci-budget-after/runs.json \
 ```
 
 Preserve the p90 command's exit status: 0 means within budget, 1 over budget,
-2 no executed Check job. Report nearest-rank `ceil(0.9 * n)`, the ascending
+2 no executed Check job, 3 a `gh` failure (not over budget). Report
+nearest-rank `ceil(0.9 * n)`, the ascending
 executed Check start-to-completion durations, median and maximum, with
 skipped, cancelled, missing/invalid jobs and executed failures counted
 separately. Never treat a gap as a zero-duration pass. Include earlier attempts
@@ -1055,7 +1056,7 @@ A script that starts `web serve` for screenshots, instead of a person pressing C
 - **Wait for the exit.** SIGTERM, a bounded wait for the exit, then SIGKILL (sent only to the verified PID) and a second bounded wait. A server that survives SIGKILL fails the run loudly and keeps `SERVER_PID` set for a retry; nothing blocks on an unbounded `wait`.
 - **Never delete artifacts.** Teardown touches only the process. Screenshots under `QA_BASE` stay for `orbit.task.artifact` action `put`; the managed-lane rule above still forbids raw removal.
 
-For a static Jobs screenshot, use the prepared Playwright kit and wait for the rendered panel instead of page or network quiescence. The capture deadline is 20 seconds from Chromium launch, including page creation and evidence writing. Browser cleanup has a separate five-second bound; the Node process exits after that bound even if Playwright retains open handles, allowing server teardown to start. Navigate with `waitUntil: "domcontentloaded"`, observe the real `/api/events/stream` response, then wait for `#jobs-live-body .operation-running` to be visible and `#jobs-live-count` to be populated. That pair means the Jobs Live request rendered; the `EventSource` remains open. `browser.close()` runs in `finally`, then `qa_serve_stop` sends TERM, waits at most five seconds, escalates to KILL, reaps the exact server child and confirms its port closed. A screenshot from a static fixture that stubs `/api/events/stream` proves only the rendered state; keep event delivery, reconnect and resync checks on the real stream.
+For a static Jobs screenshot, use the prepared Playwright kit and wait for the rendered panel instead of page or network quiescence. The capture deadline is 20 seconds from Chromium launch, including page creation and evidence writing. Browser cleanup has a separate five-second bound; the Node process exits after that bound even if Playwright retains open handles, allowing server teardown to start. Navigate with `waitUntil: "domcontentloaded"`, observe the real `/api/events/stream` response, then wait for `#runs-body` to show its settled content: a `#runs-body .runs-row` when runs are in flight, or a `#runs-body .empty-state` on an idle workspace, where `#runs-count` reads "nothing in flight". Then wait for `#runs-count` to leave its placeholders (`-`, `—`) and its loading value (`…`). That pair means the Jobs › History request rendered (its default Running filter lists the runs in flight, or reports none); the `EventSource` remains open. `browser.close()` runs in `finally`, then `qa_serve_stop` sends TERM, waits at most five seconds, escalates to KILL, reaps the exact server child and confirms its port closed. A screenshot from a static fixture that stubs `/api/events/stream` proves only the rendered state; keep event delivery, reconnect and resync checks on the real stream.
 
 ```bash
 # Define once, after `qa workspace init`. Run the capture below as `bash script.sh` or in a ( ) subshell.
@@ -1160,20 +1161,22 @@ const capture = async () => {
   }, { timeout: remaining() });
   // Attach a rejection handler immediately, including when navigation fails first.
   void streamPromise.catch(() => {});
-  await page.goto(`${baseUrl}/#jobs/live`, { waitUntil: 'domcontentloaded', timeout: remaining() });
+  await page.goto(`${baseUrl}/#jobs/history`, { waitUntil: 'domcontentloaded', timeout: remaining() });
   const stream = await streamPromise;
   if (stream.status() !== 200) throw new Error(`event stream returned ${stream.status()}`);
   void stream.finished().then(() => { streamClosed = true; }, () => { streamClosed = true; });
-  await page.waitForSelector('#jobs-live-body .operation-running', { state: 'visible', timeout: remaining() });
+  // Settled means rows (runs in flight) or the empty state (an idle workspace):
+  // the Running filter renders no .runs-row when nothing is in flight.
+  await page.waitForSelector('#runs-body .runs-row, #runs-body .empty-state', { state: 'visible', timeout: remaining() });
   await page.waitForFunction(() => {
-    const count = document.querySelector('#jobs-live-count')?.textContent?.trim();
-    return Boolean(count && count !== '-');
+    const count = document.querySelector('#runs-count')?.textContent?.trim();
+    return Boolean(count && !['-', '—', '…'].includes(count));
   }, undefined, { timeout: remaining() });
   await page.screenshot({ path: screenshotPath, fullPage: false, timeout: remaining() });
   if (streamClosed) throw new Error('dashboard event stream closed before screenshot capture');
   const evidence = {
-    url: `${baseUrl}/#jobs/live`,
-    readiness: '#jobs-live-body .operation-running visible and #jobs-live-count populated',
+    url: `${baseUrl}/#jobs/history`,
+    readiness: '#runs-body .runs-row or .empty-state visible and #runs-count settled',
     event_stream_url: stream.url(),
     event_stream_status: stream.status(),
     event_stream_content_type: stream.headers()['content-type'],
@@ -1227,7 +1230,7 @@ trap 'exit 143' INT TERM
 cd "$QA_REPO"; rc=0
 qa_serve_start 30 || rc=$?                                    # readiness timeout or early exit
 if [ "$rc" -eq 0 ]; then
-  browser_shoot "$QA_URL" "$SHOTS/jobs-live-dark-1280.png" "$QA_BASE/jobs-live-capture.json" || rc=$?
+  browser_shoot "$QA_URL" "$SHOTS/jobs-history-running-dark-1280.png" "$QA_BASE/jobs-history-capture.json" || rc=$?
 fi
 qa_serve_stop || { st=$?; [ "$rc" -ne 0 ] || rc=$st; }
 exit "$rc"
@@ -1253,7 +1256,7 @@ Test design (boundary first, unit tests by exception, binary layout) is in [test
 - **Bubblewrap on Linux.** Inside an agent-executor or job-run worktree, live `bwrap` fails with `No permissions to create new namespace` because the outer sandbox blocks nested user namespaces. That is the environment, not a defect: replay the live spawn checks (`spawn_under_linux_bwrap`, `--run-ignored`) on the owning Linux host, and never disable `linux-bwrap` or try to make it nest ([runbook](runbooks/linux-sandbox.md#verify-the-bubblewrap-boundary-natively)).
 - **Deferred fixtures in an implementer's gate.** A deferred fixture prints `DEFERRED: bubblewrap unavailable: …` on Linux, the Seatbelt guard's `SKIP: sandbox-exec cannot apply a profile: …` on macOS, or `DEFERRED: ps denied: …` where the sandbox refuses `ps`, and passes, so `make ci-test-affected` can exit 0 without having run it. Inside the agent sandbox that is expected, and the implementer hands the gap off instead of failing [ORB-15287] [ORB-15409] [ORB-15587]. It runs the gate with a [validation summary](#validation-summary-and-base-reruns) in its scratch and the base pinned, then names only that summary:
 
-  Before attempting or claiming the handoff, follow the full [Sanctioned sandbox deferral contract](../crates/orbit-core/assets/skills/orbit/references/task-execution.md#sanctioned-sandbox-deferral) for eligibility, output, probes, replay and exclusions. The mechanics below explain how the engine checks that handoff.
+  Before attempting or claiming the handoff, follow the full [Sanctioned sandbox deferral contract](../crates/orbit-core/assets/skills/orbit/references/task-execution-handoff-cases.md#sanctioned-sandbox-deferral) for eligibility, output, probes, replay and exclusions. The mechanics below explain how the engine checks that handoff.
 
     ```sh
     ORBIT_VALIDATION_SUMMARY="$PWD/.orbit/tmp/gate-summary.json" make ci-test-affected CI_TEST_BASE=<base_sha>

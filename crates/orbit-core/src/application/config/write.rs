@@ -2,13 +2,15 @@ use std::path::PathBuf;
 
 use orbit_common::OrbitError;
 use orbit_config::{
-    ConfigScope, ConfigStore, WorkspaceInitMode, admit_config_key, load_effective_config,
+    ConfigScope, ConfigStore, ConfigValueSourceKind, WorkspaceInitMode, admit_config_key,
+    load_effective_config,
 };
 use serde_json::{Map, Value as JsonValue, json};
 
 use crate::runtime::OrbitRuntime;
 
 use super::paths::{config_roots, global_config_path, workspace_config_path};
+use super::provenance::fallback_preserves_effective;
 use super::rows::{CREW_FIELDS, CREW_REFERENCE_KEYS, crew_rows, effective_row};
 use super::view::{crew_value, effective_value};
 
@@ -105,6 +107,26 @@ pub fn set_key_literal(
     write_outcome(runtime, scope, &store, old_value, &[key.to_string()])
 }
 
+/// Why a guarded config removal refused to clear a key.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConfigUnsetRefusal {
+    /// Stable machine-readable refusal code.
+    pub code: &'static str,
+    /// Human-readable reason explaining why the value was preserved.
+    pub message: String,
+}
+
+/// Result of a guarded config key removal that requires preserving the
+/// effective value.
+#[derive(Debug, Clone)]
+pub enum GuardedConfigUnset {
+    /// The key was cleared without changing the effective value.
+    Unset(ConfigWriteOutcome),
+    /// The key was preserved because removal would change or cannot predict
+    /// the effective value.
+    Refused(ConfigUnsetRefusal),
+}
+
 /// Clear one key from `scope`'s file so the layer below takes over again.
 pub fn unset_key(
     runtime: &OrbitRuntime,
@@ -125,6 +147,128 @@ pub fn unset_key(
             Ok(old_value)
         })?;
     write_outcome(runtime, scope, &store, old_value, &[key.to_string()])
+}
+
+/// Clear one key from `scope`'s file only when its admitted current effective
+/// value still equals its admitted current removal fallback.
+///
+/// Re-resolves the layered configuration under the target file's write lock,
+/// and for a workspace target under the global file's write lock as well, so a
+/// concurrent edit to either layer cannot turn bulk cleanup into a silent
+/// effective-value change: a global write either lands before the fallback is
+/// read (and the unset refuses) or waits until the workspace file is saved.
+/// An unknown (`None`) or mismatched fallback refuses without modifying the
+/// file.
+pub fn unset_key_preserving_effective(
+    runtime: &OrbitRuntime,
+    key: &str,
+    scope: ConfigScope,
+) -> Result<GuardedConfigUnset, OrbitError> {
+    admit_config_key(key)?;
+    let expected_layer = match scope {
+        ConfigScope::Workspace if runtime.shared_root() != runtime.global_root() => {
+            ConfigValueSourceKind::Workspace
+        }
+        _ => ConfigValueSourceKind::Global,
+    };
+    let result = write_store_conditional(
+        runtime,
+        scope,
+        ConfigWriteInit::RequireExisting,
+        FallbackLock::Hold,
+        |store| {
+            if !store.is_key_set(key) {
+                return Err(OrbitError::InvalidInput(format!(
+                    "'{key}' is not set in the {} config; nothing to clear",
+                    scope.label()
+                )));
+            }
+            let effective = load_effective_config(&config_roots(runtime))?;
+            let Some(entry) = effective.values().iter().find(|entry| entry.key == key) else {
+                return Ok(ConditionalEdit::Abort(ConfigUnsetRefusal {
+                    code: "unknown_fallback",
+                    message: format!(
+                        "removal fallback for '{key}' is unknown; {} value preserved",
+                        scope.label()
+                    ),
+                }));
+            };
+            if entry.source.kind() != expected_layer {
+                return Ok(ConditionalEdit::Abort(ConfigUnsetRefusal {
+                    code: "effective_source_changed",
+                    message: format!(
+                        "'{key}' currently resolves from {} rather than {}; {} value preserved",
+                        entry.source.kind().label(),
+                        expected_layer.label(),
+                        scope.label()
+                    ),
+                }));
+            }
+            let Some(fallback) = entry.fallback.as_ref() else {
+                return Ok(ConditionalEdit::Abort(ConfigUnsetRefusal {
+                    code: "unknown_fallback",
+                    message: format!(
+                        "removal fallback for '{key}' is unknown; {} value preserved",
+                        scope.label()
+                    ),
+                }));
+            };
+            if !fallback_preserves_effective(entry, expected_layer) {
+                return Ok(ConditionalEdit::Abort(ConfigUnsetRefusal {
+                    code: "effective_value_would_change",
+                    message: format!(
+                        "removing '{key}' from the {} config would change the effective value from {} to {} ({}); value preserved",
+                        scope.label(),
+                        entry.value,
+                        fallback.value,
+                        fallback.layer.label()
+                    ),
+                }));
+            }
+            let old_value = entry.value.clone();
+            if !store.unset_value(key)? {
+                return Err(OrbitError::InvalidInput(format!(
+                    "'{key}' is not set in the {} config; nothing to clear",
+                    scope.label()
+                )));
+            }
+            let effective_change_refusal = || ConfigUnsetRefusal {
+                code: "effective_value_would_change",
+                message: format!(
+                    "removing '{key}' from the {} config would change the effective configuration; value preserved",
+                    scope.label()
+                ),
+            };
+            // The staged document is what a reload will see: the removal
+            // can empty an implicit dotted table that serialization
+            // omits, leaving a file that no longer layers as policy. That
+            // is judged before admission, because the admission reload
+            // then discards the file and may reject a global value it had
+            // masked; the refusal must not depend on that error.
+            if scope == ConfigScope::Workspace && !store.staged_workspace_sets_policy() {
+                return Ok(ConditionalEdit::Abort(effective_change_refusal()));
+            }
+            validate_store(runtime, scope, store)?;
+            if scope == ConfigScope::Workspace {
+                let staged_value =
+                    store.staged_workspace_effective_value(key, &runtime.global_root())?;
+                if staged_value.is_some_and(|value| value != old_value) {
+                    return Ok(ConditionalEdit::Abort(effective_change_refusal()));
+                }
+            }
+            Ok(ConditionalEdit::Save(old_value))
+        },
+    )?;
+    match result {
+        ConditionalWrite::Saved(store, old_value) => Ok(GuardedConfigUnset::Unset(write_outcome(
+            runtime,
+            scope,
+            &store,
+            old_value,
+            &[key.to_string()],
+        )?)),
+        ConditionalWrite::Aborted(refusal) => Ok(GuardedConfigUnset::Refused(refusal)),
+    }
 }
 
 /// Create or edit one crew table. Only the supplied fields are written; a
@@ -234,6 +378,16 @@ fn validate_store(
     }
 }
 
+enum ConditionalEdit<T, R> {
+    Save(T),
+    Abort(R),
+}
+
+enum ConditionalWrite<T, R> {
+    Saved(Box<ConfigStore>, T),
+    Aborted(R),
+}
+
 /// One write of `scope`'s file as a transaction: under the file's write lock,
 /// open it, let `edit` mutate and validate the staged document, then save
 /// exactly what was validated. A concurrent writer of the same file waits for
@@ -244,6 +398,34 @@ fn write_store<T>(
     init: ConfigWriteInit,
     edit: impl FnOnce(&mut ConfigStore) -> Result<T, OrbitError>,
 ) -> Result<(ConfigStore, T), OrbitError> {
+    match write_store_conditional(runtime, scope, init, FallbackLock::Skip, |store| {
+        edit(store).map(ConditionalEdit::<T, std::convert::Infallible>::Save)
+    })? {
+        ConditionalWrite::Saved(store, value) => Ok((*store, value)),
+        ConditionalWrite::Aborted(never) => match never {},
+    }
+}
+
+/// Whether a workspace transaction also holds the global file's write lock.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum FallbackLock {
+    /// Lock only the target file.
+    Skip,
+    /// For a workspace target, hold the global write lock around the whole
+    /// transaction, so every global writer either saved before `edit` read
+    /// the global fallback or waits until the workspace file is saved.
+    Hold,
+}
+
+/// Locked config transaction whose `edit` may refuse before saving, leaving
+/// the underlying file untouched.
+fn write_store_conditional<T, R>(
+    runtime: &OrbitRuntime,
+    scope: ConfigScope,
+    init: ConfigWriteInit,
+    fallback_lock: FallbackLock,
+    edit: impl FnOnce(&mut ConfigStore) -> Result<ConditionalEdit<T, R>, OrbitError>,
+) -> Result<ConditionalWrite<T, R>, OrbitError> {
     if scope == ConfigScope::Workspace {
         let cwd = std::env::current_dir().map_err(|err| OrbitError::Io(err.to_string()))?;
         // `--root` pins global and shared to one directory. `ORBIT_ROOT` is
@@ -261,19 +443,78 @@ fn write_store<T>(
         ConfigScope::Global => global_config_path(runtime),
         ConfigScope::Workspace => workspace_config_path(runtime),
     };
-    ConfigStore::with_write_lock(&path, || {
-        let mut store = match scope {
-            ConfigScope::Global => ConfigStore::open(ConfigScope::Global, path.clone())?,
-            ConfigScope::Workspace => ConfigStore::open_for_workspace_set(
-                path.clone(),
-                &global_config_path(runtime),
-                init.mode(),
-            )?,
-        };
-        let edited = edit(&mut store)?;
-        store.save()?;
-        Ok((store, edited))
-    })
+    let transaction = || {
+        ConfigStore::with_write_lock(&path, || {
+            let mut store = match scope {
+                ConfigScope::Global => ConfigStore::open(ConfigScope::Global, path.clone())?,
+                ConfigScope::Workspace => ConfigStore::open_for_workspace_set(
+                    path.clone(),
+                    &global_config_path(runtime),
+                    init.mode(),
+                )?,
+            };
+            match edit(&mut store)? {
+                ConditionalEdit::Save(edited) => {
+                    write_gate::wait(match scope {
+                        ConfigScope::Global => "global-before-save",
+                        ConfigScope::Workspace => "workspace-before-save",
+                    });
+                    store.save()?;
+                    Ok(ConditionalWrite::Saved(Box::new(store), edited))
+                }
+                ConditionalEdit::Abort(refusal) => Ok(ConditionalWrite::Aborted(refusal)),
+            }
+        })
+    };
+    if scope == ConfigScope::Workspace && fallback_lock == FallbackLock::Hold {
+        // Global before workspace, the order every multi-file config writer
+        // takes, so two such writers never wait on each other. The lock is
+        // reentrant when both scopes name one file.
+        write_gate::signal("workspace-fallback-lock");
+        ConfigStore::with_write_lock(&global_config_path(runtime), transaction)
+    } else {
+        transaction()
+    }
+}
+
+/// Test-only gate directory (`ORBIT_TEST_CONFIG_WRITE_GATE`) for ordering
+/// concurrent config writes deterministically: a point is active only when
+/// `<point>.armed` exists there. A waiting point records `<point>.reached`
+/// and blocks until `<point>.release` appears; a signal point only records
+/// `<point>.reached`. Inert unless a test arms it.
+mod write_gate {
+    use std::path::PathBuf;
+
+    const GATE_ENV: &str = "ORBIT_TEST_CONFIG_WRITE_GATE";
+
+    fn armed(point: &str) -> Option<PathBuf> {
+        let dir = PathBuf::from(std::env::var_os(GATE_ENV)?);
+        dir.join(format!("{point}.armed")).exists().then_some(dir)
+    }
+
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "test-gate marker file in a scratch directory; durability is irrelevant"
+    )]
+    pub(super) fn wait(point: &str) {
+        let Some(dir) = armed(point) else { return };
+        let _ = std::fs::write(dir.join(format!("{point}.reached")), b"reached");
+        let release = dir.join(format!("{point}.release"));
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+        while !release.exists() && std::time::Instant::now() < deadline {
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+    }
+
+    #[allow(
+        clippy::disallowed_methods,
+        reason = "test-gate marker file in a scratch directory; durability is irrelevant"
+    )]
+    pub(super) fn signal(point: &str) {
+        if let Some(dir) = armed(point) {
+            let _ = std::fs::write(dir.join(format!("{point}.reached")), b"reached");
+        }
+    }
 }
 
 fn write_outcome(

@@ -61,6 +61,9 @@ impl RuntimeKernel {
     /// owner user's login shell (cached per process) and
     /// `workflow.validation_env.path`, never from whatever launched this
     /// process [ORB-13987].
+    /// Required validation commands and `local_shell` steps receive
+    /// `PYTHONDONTWRITEBYTECODE=1` when it is unset or empty; a nonempty value
+    /// in the allowlisted child environment is preserved.
     pub fn validation_environment(&self) -> orbit_exec::ValidationEnvironment {
         let base = self.execution_env_policy().agent_subprocess_env(&[]);
         let shell = orbit_exec::LoginShell::for_current_user(&base);
@@ -73,7 +76,9 @@ impl RuntimeKernel {
     /// the interpreter and tools required validation uses [ORB-15204]. Inside
     /// an agent session the inherited PATH already carries
     /// [`Self::agent_session_environment`]'s entries, so no login shell is
-    /// probed per call.
+    /// probed per call. This command environment defaults
+    /// `PYTHONDONTWRITEBYTECODE` to `1` when unset or empty and preserves a
+    /// nonempty value from the allowlisted environment or `extras`.
     pub fn agent_environment(&self, extras: &[&str]) -> Vec<(String, String)> {
         self.validation_env_policy()
             .agent_environment(self.execution_env_policy().agent_subprocess_env(extras))
@@ -85,7 +90,9 @@ impl RuntimeKernel {
     /// (`workflow.validation_env.path` first) with every entry of
     /// [`Self::validation_environment`]'s PATH that it lacks appended, so a
     /// session finds each tool required validation finds without a
-    /// hand-built PATH wrapper [ORB-15293].
+    /// hand-built PATH wrapper [ORB-15293]. Like its `proc.spawn` command
+    /// environment, the session defaults `PYTHONDONTWRITEBYTECODE` to `1`
+    /// when unset or empty and keeps a nonempty supplied value.
     pub fn agent_session_environment(&self, extras: &[&str]) -> Vec<(String, String)> {
         self.validation_environment()
             .extend_agent_environment(self.agent_environment(extras))
@@ -95,7 +102,9 @@ impl RuntimeKernel {
     /// `[crews.<name>] env` entries: the crew's names carry their sources'
     /// values (runtime defaults such as `clock.env` included) and win over
     /// `pass`, and a crew that sets one Claude credential has the other
-    /// removed. Unset sources leave their names absent.
+    /// removed. Unset sources leave their names absent. A nonempty crew value
+    /// for `PYTHONDONTWRITEBYTECODE` is preserved; otherwise Orbit supplies
+    /// `1` for agent commands and the provider session.
     pub fn crew_agent_session_environment(
         &self,
         crew_env: &[orbit_types::identity::CrewEnvVar],

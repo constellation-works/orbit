@@ -12,7 +12,7 @@ tags: [architecture, orbit-common]
 
 ## Main modules and types
 
-`error` (`OrbitError`), `fs`, `process` (`process::OwnedChild`, `process::supervisor`), `security`, `storage`, `protocol`, `observability`, `text`, `governance`, `migration`, `model`. See ``crates/orbit-common/src/lib.rs``.
+`error` (`OrbitError`), `fs`, `process` (`process::OwnedChild`, `process::supervisor`), `security`, `storage`, `protocol`, `observability`, `text`, `governance`, `migration`, `model`, `model_defaults`. See ``crates/orbit-common/src/lib.rs``.
 
 ## Dependencies
 

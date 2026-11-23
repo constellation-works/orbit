@@ -252,9 +252,7 @@ impl OrbitToolServer {
     ) -> Result<CallToolResult, McpError> {
         if presentation::is_presentation(request.name.as_ref()) {
             if !self.host.presentation_enabled() {
-                return Ok(tool_error_result(&OrbitError::InvalidInput(
-                    "UI tools are not enabled for this server".into(),
-                )));
+                return Ok(tool_error_result(&self.host.presentation_disabled_error()));
             }
             let result = self.dispatch_presentation(request).await;
             return Ok(match result {
@@ -721,8 +719,15 @@ impl ServerHandler for OrbitToolServer {
                 Some(serde_json::json!({ "code": "resource_not_found" })),
             ));
         }
+        let definitions = self
+            .load_tool_definitions()
+            .map_err(invalid_definitions_mcp_error)?;
         Ok(ReadResourceResponse::Complete(ReadResourceResult::new(
-            vec![presentation::resource_content(&request.uri)],
+            vec![presentation::resource_content(
+                &request.uri,
+                definitions.as_ref(),
+                |name, action| self.host.serves_tool_call(name, action),
+            )],
         )))
     }
 

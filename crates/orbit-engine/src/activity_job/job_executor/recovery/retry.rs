@@ -1,6 +1,6 @@
 //! Recovery admission and the post-recovery retry loop.
 use super::commit::commit_recovery_repair_for_retry;
-use super::decision::{RecoveryAdmission, attempt_recovery_activity};
+use super::decision::{PendingRecoveryAttempt, RecoveryAdmission, attempt_recovery_activity};
 use super::input::bind_recovery_context;
 use super::*;
 use crate::executor::automation::vcs::RecoveryCommitRefusal;
@@ -161,64 +161,149 @@ pub(in crate::activity_job::job_executor) fn recover_or_return_original(
             None if check_repair => return hold_absent_check_repair(failure),
             None => return failure.into_result(),
         };
-        let recovery_model = match attempt_recovery_activity(
-            step,
-            ctx,
-            &recovery,
-            &failure,
-            attempt,
-            max_attempts,
-        ) {
-            RecoveryAdmission::Retry(model) => model,
+        enum RetryPlan {
+            NoCommit,
+            Commit {
+                recovery_model: Option<String>,
+                bound: Value,
+            },
+        }
+        let emit_audit = |audit: Option<PendingRecoveryAttempt>| {
+            if let Some(audit) = audit {
+                audit.emit(ctx);
+            }
+        };
+        let check_repair_step = check_repair && recovery.name == STEP_FAILURE_RECOVERY_ACTIVITY;
+        let (admission, mut pending_audit) =
+            attempt_recovery_activity(step, ctx, &recovery, &failure, attempt, max_attempts);
+        let retry_plan = match admission {
+            RecoveryAdmission::Retry(recovery_model) if check_repair_step => {
+                let mut bound = Value::Object(serde_json::Map::new());
+                let check = bind_recovery_context(step, ctx, &mut bound)
+                    .map_err(|error| RecoveryCommitRefusal::Uncommittable(error.to_string()))
+                    .and_then(|()| {
+                        super::check_scope::bind(ctx, step, &failure.diagnostic(), &mut bound)
+                    });
+                match check {
+                    Ok(super::check_scope::CheckScopeBind::NoEdit) => {
+                        emit_audit(pending_audit.take());
+                        RetryPlan::NoCommit
+                    }
+                    Ok(super::check_scope::CheckScopeBind::Bound) => RetryPlan::Commit {
+                        recovery_model,
+                        bound,
+                    },
+                    Err(refusal) => {
+                        if let Some(mut audit) = pending_audit.take() {
+                            audit.refuse_retry(&refusal);
+                            audit.emit(ctx);
+                        }
+                        return failure.into_refused_repair(&refusal);
+                    }
+                }
+            }
+            RecoveryAdmission::Retry(recovery_model) => {
+                if recovery.name == STEP_FAILURE_RECOVERY_ACTIVITY {
+                    let mut bound = Value::Object(serde_json::Map::new());
+                    if let Err(error) = bind_recovery_context(step, ctx, &mut bound) {
+                        let refusal = RecoveryCommitRefusal::Uncommittable(error.to_string());
+                        if let Some(mut audit) = pending_audit.take() {
+                            audit.refuse_retry(&refusal);
+                            audit.emit(ctx);
+                        }
+                        return failure.into_refused_repair(&refusal);
+                    }
+                    RetryPlan::Commit {
+                        recovery_model,
+                        bound,
+                    }
+                } else {
+                    RetryPlan::NoCommit
+                }
+            }
+            // A check repair that made no edit and wrote no scope record may
+            // have written `not_recovered` or omitted the decision file. Record
+            // the unchanged head and retry completion once so the watcher can
+            // rerun the failed checks instead of holding prematurely.
+            RecoveryAdmission::Original {
+                no_edit_eligible: true,
+            } if check_repair_step => {
+                let mut bound = Value::Object(serde_json::Map::new());
+                let recorded = bind_recovery_context(step, ctx, &mut bound)
+                    .map_err(|error| RecoveryCommitRefusal::Uncommittable(error.to_string()))
+                    .and_then(|()| {
+                        super::check_scope::bind_no_edit_only(
+                            ctx,
+                            step,
+                            &failure.diagnostic(),
+                            &bound,
+                        )
+                    });
+                match recorded {
+                    Ok(true) => {
+                        if let Some(mut audit) = pending_audit.take() {
+                            audit.admit_no_edit_retry();
+                            audit.emit(ctx);
+                        }
+                        RetryPlan::NoCommit
+                    }
+                    Ok(false) => {
+                        emit_audit(pending_audit.take());
+                        return hold_unrepaired_check_repair(failure);
+                    }
+                    Err(ref refusal) => {
+                        emit_audit(pending_audit.take());
+                        return failure.into_refused_repair(refusal);
+                    }
+                }
+            }
             // The watcher admitted this in-budget repair and the recovery ran,
             // but it did not repair the head or admit a retry. Recording the
             // handoff as the terminal step failure would fail a run still
             // inside its repair budget, so it holds instead.
-            RecoveryAdmission::Original if check_repair => {
+            RecoveryAdmission::Original { .. } if check_repair => {
+                emit_audit(pending_audit.take());
                 return hold_unrepaired_check_repair(failure);
             }
-            RecoveryAdmission::Original => return failure.into_result(),
-            RecoveryAdmission::Blocked(blocker) => return failure.into_blocked(&blocker),
+            RecoveryAdmission::Original { .. } => {
+                emit_audit(pending_audit.take());
+                return failure.into_result();
+            }
+            RecoveryAdmission::Blocked(blocker) => {
+                emit_audit(pending_audit.take());
+                return failure.into_blocked(&blocker);
+            }
         };
         // [ORB-14822] The agent cannot commit its repair; the host does,
         // and the retry below runs on that commit.
-        if recovery.name == STEP_FAILURE_RECOVERY_ACTIVITY {
-            let mut bound = Value::Object(serde_json::Map::new());
-            let committed = bind_recovery_context(step, ctx, &mut bound)
-                .map_err(|error| RecoveryCommitRefusal::Uncommittable(error.to_string()))
-                .and_then(|()| {
-                    if check_repair {
-                        // A no-edit repair wrote no scope record: nothing
-                        // to commit. The retry below reruns completion on
-                        // the unchanged head, where the watcher reruns the
-                        // failed checks once (recorded by `bind`).
-                        if matches!(
-                            super::check_scope::bind(ctx, step, &failure.diagnostic(), &mut bound)?,
-                            super::check_scope::CheckScopeBind::NoEdit
-                        ) {
-                            return Ok(());
-                        }
-                    }
-                    // A reviewed head's check repair is re-reviewed before
-                    // the completion step publishes it.
-                    let review_follows = check_repair
-                        && bound
-                            .pointer("/failed_step_input/re_review_on_conflict")
-                            .and_then(Value::as_bool)
-                            == Some(true);
-                    commit_recovery_repair_for_retry(
-                        step,
-                        ctx,
-                        &recovery,
-                        &bound,
-                        review_follows,
-                        recovery_model.as_deref(),
-                    )
-                });
-            if let Err(refusal) = committed {
+        if let RetryPlan::Commit {
+            recovery_model,
+            bound,
+        } = retry_plan
+        {
+            // A reviewed head's check repair is re-reviewed before
+            // the completion step publishes it.
+            let review_follows = check_repair
+                && bound
+                    .pointer("/failed_step_input/re_review_on_conflict")
+                    .and_then(Value::as_bool)
+                    == Some(true);
+            if let Err(refusal) = commit_recovery_repair_for_retry(
+                step,
+                ctx,
+                &recovery,
+                &bound,
+                review_follows,
+                recovery_model.as_deref(),
+            ) {
+                if let Some(mut audit) = pending_audit.take() {
+                    audit.refuse_retry(&refusal);
+                    audit.emit(ctx);
+                }
                 return failure.into_refused_repair(&refusal);
             }
         }
+        emit_audit(pending_audit.take());
         let rounds_left = round < MAX_CONFLICT_RECOVERY_ROUNDS;
         let recovered_conflict = (declared.name == PR_CONFLICT_RECOVERY_ACTIVITY && rounds_left)
             .then(|| failure.diagnostic());
@@ -265,10 +350,10 @@ fn hold_absent_check_repair(failure: StepFailure) -> Result<StepOutcome, Dispatc
         message: format!(
             "admitted check repair has no step_failure_recovery on this job; the run holds \
              and no repair agent runs. The admission remains recorded and spends one repair \
-             attempt; adding recovery and retrying the same head holds again as \
-             delivery_repair_dispatched. Configure step_failure_recovery for future heads, \
-             repair and publish a new head, then start a new delivery attempt. \
-             Further repairs require remaining per-PR budget. {diagnostic}"
+             attempt. Because this held run is terminal, configuring step_failure_recovery and \
+             starting a new authorized delivery run on the same head admits another repair \
+             attempt while per-PR budget remains, or repair and publish a new head, then start \
+             a new delivery attempt. Exhausting the per-PR budget fails the run. {diagnostic}"
         ),
     })
 }
@@ -286,10 +371,11 @@ fn hold_unrepaired_check_repair(failure: StepFailure) -> Result<StepOutcome, Dis
         refusal: orbit_types::workflow::DeliveryRefusal::RepairDispatched,
         message: format!(
             "admitted check repair ran step_failure_recovery and it did not repair the head; \
-             the run holds. The admission remains recorded and spends one repair attempt; \
-             retrying the same head holds again as delivery_repair_dispatched. Inspect the \
-             recovery attempt, repair and publish a new head, then start a new delivery \
-             attempt. Further repairs require remaining per-PR budget. {diagnostic}"
+             the run holds. The admission remains recorded and spends one repair attempt. \
+             Inspect the recovery attempt; because this held run is terminal, starting a new \
+             authorized delivery run on the same head admits another repair attempt while \
+             per-PR budget remains, or repair and publish a new head, then start a new delivery \
+             attempt. Exhausting the per-PR budget fails the run. {diagnostic}"
         ),
     })
 }

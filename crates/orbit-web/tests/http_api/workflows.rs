@@ -1066,6 +1066,19 @@ wf_test!(auto_readiness_explains_the_tasks_it_names, {
     let named = [&locked, &eligible, &saturated, &red, &proposed]
         .map(|task| task.id.as_str())
         .join(",");
+    let repeated = ok_get(
+        &server,
+        &format!(
+            "/api/workflows/auto/readiness?workspace={WS}&concurrency=1&task={},{}&limit=1",
+            eligible.id, eligible.id
+        ),
+    );
+    assert_eq!(
+        repeated["tasks"].as_array().unwrap().len(),
+        1,
+        "HTTP readiness counts repeated IDs once against the limit: {repeated:#}"
+    );
+    check!(repeated, "/tasks/0/task_id": eligible.id.as_str());
     let payload = ok_get(
         &server,
         &format!("/api/workflows/auto/readiness?workspace={WS}&concurrency=1&task={named}"),

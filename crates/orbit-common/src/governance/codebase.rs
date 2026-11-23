@@ -52,7 +52,7 @@ const SELECTION: &[ParamSpec] = &[
         both(
             "window",
             ParamType::Enum(WINDOWS),
-            "Counted period ending now: 7d, 30d, 90d or all. Default: 90d.",
+            "Period: 7d, 30d, 90d, or all (default: 90d).",
             CliArgKind::flag("window"),
             "Counted period ending now",
         ),
@@ -62,7 +62,7 @@ const SELECTION: &[ParamSpec] = &[
         both(
             "min_support",
             ParamType::Integer,
-            "Smallest denominator a ranked row needs, at least 1. Default: 15.",
+            "Min denominator (>=1, default: 15).",
             CliArgKind::flag("min-support"),
             "Smallest denominator a ranked row needs",
         ),
@@ -72,7 +72,7 @@ const SELECTION: &[ParamSpec] = &[
         both(
             "rollup",
             ParamType::Enum(ROLLUPS),
-            "How paths are grouped: file, dir (parent directory) or crate. Default: file.",
+            "Grouping: file, dir, or crate (default: file).",
             CliArgKind::flag("rollup"),
             "Group paths by file, parent directory or crate",
         ),
@@ -116,28 +116,28 @@ const REGRESSION_FILTER: &[ParamSpec] = &[
     both(
         "nature",
         ParamType::Enum(NATURES),
-        "Count only regressions whose regression_from link records this nature; `absent` keeps links stored without a classification, distinct from `unclassified`.",
+        "Filter regressions by nature (`absent`: unclassified-null).",
         CliArgKind::flag("nature"),
         "Count only regressions of this nature (absent: no classification)",
     ),
     both(
         "escape",
         ParamType::Enum(ESCAPES),
-        "Count only regressions whose regression_from link records this escape; `absent` keeps links stored without a classification, distinct from `unclassified`.",
+        "Filter regressions by escape (`absent`: unclassified-null).",
         CliArgKind::flag("escape"),
         "Count only regressions that escaped this way (absent: no classification)",
     ),
     both(
         "layer",
         ParamType::String,
-        "Count only regressions whose fix sits in this layer: a name from the workspace's `workflow.regression_layers`, `other` or `unknown`. The layer is read from the regression task's landed paths, else its declared footprint; `unknown` when it has neither.",
+        "Filter regressions by layer (`workflow.regression_layers`, `other`, `unknown`).",
         CliArgKind::flag("layer"),
         "Count only regressions whose fix sits in this layer (a workflow.regression_layers name, other or unknown)",
     ),
     both(
         "detected_by",
         ParamType::Enum(DETECTORS),
-        "Count only regressions found this way, read from the regression task's tags, else its filer.",
+        "Filter regressions by detector.",
         CliArgKind::flag("detected-by"),
         "Count only regressions found this way",
     ),
@@ -147,7 +147,7 @@ const ANALYTICS: OperationSpec<CodebaseVerb> = OperationSpec {
     verb: CodebaseVerb::Analytics,
     cli_path: &["analytics"],
     tool_name: "orbit.codebase.analytics",
-    tool_description: "Rank repository paths across codebase risk measures. Use action `show` on a ranked path to inspect its evidence. See the installed Orbit skill's `tool-surface.md` reference, Codebase analytics and path detail, for metrics, attribution, filters and response fields.",
+    tool_description: "Rank repository paths across codebase risk measures. Use action `show` on a ranked path to inspect its evidence. See the installed Orbit skill's `tool-surface-codebase.md` reference, Codebase analytics and path detail, for metrics, attribution, filters and response fields.",
     cli_about: "Show the codebase rankings and the paths several share",
     cli_help: CliHelp {
         long_about: None,
@@ -169,7 +169,7 @@ const ANALYTICS: OperationSpec<CodebaseVerb> = OperationSpec {
 const PATH: &[ParamSpec] = &[path_param(required(both(
     "path",
     ParamType::Path,
-    "A ranked key at the chosen rollup: a file path, a directory, or a crate such as crates/orbit-core/. A trailing slash is optional.",
+    "Key at chosen rollup (file, dir, or crate e.g. `crates/orbit-core/`).",
     CliArgKind::Positional,
     "A ranked key at the chosen rollup: a file, directory or crate path",
 )))];
@@ -178,7 +178,7 @@ const SHOW: OperationSpec<CodebaseVerb> = OperationSpec {
     verb: CodebaseVerb::Show,
     cli_path: &["show"],
     tool_name: "orbit.codebase.show",
-    tool_description: "Inspect one repository path across codebase rankings and follow counts to tasks and sites. See the installed Orbit skill's `tool-surface.md` reference, Codebase analytics and path detail, for ranking, attribution, filters and response fields.",
+    tool_description: "Inspect one repository path across codebase rankings and follow counts to tasks and sites. See the installed Orbit skill's `tool-surface-codebase.md` reference, Codebase analytics and path detail, for ranking, attribution, filters and response fields.",
     cli_about: "Show one path's rankings and the tasks behind each count",
     cli_help: CliHelp::NONE,
     effect: Effect::Read,
@@ -200,7 +200,7 @@ const RELATED_SELECTION: &[ParamSpec] = &[
         both(
             "window",
             ParamType::Enum(WINDOWS),
-            "Landed period ending now. Default: 30d.",
+            "Landed period (default: 30d).",
             CliArgKind::flag("window"),
             "Landed period ending now",
         ),
@@ -210,7 +210,7 @@ const RELATED_SELECTION: &[ParamSpec] = &[
         both(
             "min_support",
             ParamType::Integer,
-            "Minimum shared landed tasks, at least 1. Default: 15.",
+            "Min shared tasks (>=1, default: 15).",
             CliArgKind::flag("min-support"),
             "Minimum shared landed tasks",
         ),
@@ -220,7 +220,7 @@ const RELATED_SELECTION: &[ParamSpec] = &[
         both(
             "top",
             ParamType::Integer,
-            "Maximum partners, from 1 to 100. Default: 10.",
+            "Max partners, 1-100 (default: 10).",
             CliArgKind::flag("top"),
             "Maximum related paths (1–100)",
         ),
@@ -246,7 +246,7 @@ const RELATED: OperationSpec<CodebaseVerb> = OperationSpec {
 const RELATED_PATH: &[ParamSpec] = &[path_param(required(both(
     "path",
     ParamType::Path,
-    "A repository-relative file path, including a deleted file with landed history.",
+    "Repository-relative file path.",
     CliArgKind::Positional,
     "A repository-relative file path",
 )))];

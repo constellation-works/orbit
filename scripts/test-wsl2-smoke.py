@@ -47,12 +47,34 @@ elif args[0] not in ("init", "doctor", "config"):
     sys.exit("unexpected fixture command: " + repr(args))
 '''
 
+# A process's stable start identity: the kernel start time, which a reused PID
+# never shares with the process that held the number before. Linux reads
+# /proc; elsewhere `ps` reports the start time. None when it cannot be read.
+_IDENTITY_SOURCE = r'''
+def process_identity(pid):
+    import subprocess
+    try:
+        with open(f"/proc/{pid}/stat", "rb") as handle:
+            return "proc:" + handle.read().decode(errors="replace").rsplit(")", 1)[1].split()[19]
+    except (OSError, IndexError):
+        pass
+    try:
+        done = subprocess.run(["ps", "-o", "lstart=", "-p", str(pid)],
+                              capture_output=True, text=True, timeout=5, check=False)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    started = done.stdout.strip()
+    return "ps:" + started if done.returncode == 0 and started else None
+'''
+exec(_IDENTITY_SOURCE)
+
 # A `web serve` fixture that mimics the npm `orbit` shim: it spawns the real
 # server as a child and waits without forwarding signals. Terminating only
-# the shim orphans the grandchild server.
-_DASHBOARD_SERVER = r'''
+# the shim orphans the grandchild server. It records its PID together with
+# its start identity so a later check never trusts the bare number.
+_DASHBOARD_SERVER = _IDENTITY_SOURCE + r'''
 import http.server, os, pathlib, sys
-pathlib.Path(sys.argv[2]).write_text(str(os.getpid()))
+pathlib.Path(sys.argv[2]).write_text(f"{os.getpid()} {process_identity(os.getpid()) or ''}")
 class Handler(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
@@ -290,18 +312,85 @@ class NestedSandboxRegression(unittest.TestCase):
             self.assertEqual(code, 0, report)
             steps = {row["step"]: row for row in report["steps"]}
             self.assertEqual(steps["dashboard"]["status"], "pass", report)
-            server_pid = int(pidfile.read_text().strip())
+            server_pid, identity = _read_fixture_process(pidfile)
+            self.assertTrue(identity, "fixture server recorded no start identity")
             try:
                 deadline = time.monotonic() + 5
-                while time.monotonic() < deadline and _process_alive(server_pid):
+                while time.monotonic() < deadline and _fixture_process_state(server_pid, identity) != "exited":
                     time.sleep(0.05)
-                self.assertFalse(
-                    _process_alive(server_pid),
+                self.assertEqual(
+                    _fixture_process_state(server_pid, identity), "exited",
                     f"dashboard server pid {server_pid} survived the smoke exit",
                 )
             finally:
-                if _process_alive(server_pid):
-                    os.kill(server_pid, 9)
+                _cleanup_fixture_process(server_pid, identity)
+
+    def test_reused_pid_is_the_original_process_having_exited(self):
+        killed = []
+        state = _fixture_process_state(
+            4242, "proc:100", alive=lambda pid: True, identity_of=lambda pid: "proc:999")
+        self.assertEqual(state, "exited")
+        self.assertFalse(_cleanup_fixture_process(
+            4242, "proc:100", alive=lambda pid: True, identity_of=lambda pid: "proc:999",
+            kill=lambda pid, sig: killed.append((pid, sig))))
+        self.assertEqual(killed, [], "a reused PID must receive no signal")
+
+    def test_unreadable_identity_fails_verification_and_grants_no_cleanup(self):
+        for recorded, current in (("proc:100", None), (None, "proc:100"), ("", "")):
+            with self.subTest(recorded=recorded, current=current):
+                killed = []
+                state = _fixture_process_state(
+                    4242, recorded, alive=lambda pid: True, identity_of=lambda pid: current)
+                self.assertEqual(state, "unverifiable")
+                self.assertFalse(_cleanup_fixture_process(
+                    4242, recorded, alive=lambda pid: True, identity_of=lambda pid: current,
+                    kill=lambda pid, sig: killed.append((pid, sig))))
+                self.assertEqual(killed, [], "an unproven identity must receive no signal")
+
+    def test_matching_live_identity_is_killed_and_dead_process_is_exited(self):
+        killed = []
+        self.assertEqual(_fixture_process_state(
+            4242, "proc:100", alive=lambda pid: True, identity_of=lambda pid: "proc:100"), "alive")
+        self.assertTrue(_cleanup_fixture_process(
+            4242, "proc:100", alive=lambda pid: True, identity_of=lambda pid: "proc:100",
+            kill=lambda pid, sig: killed.append((pid, sig))))
+        self.assertEqual(killed, [(4242, 9)])
+        self.assertEqual(_fixture_process_state(
+            4242, "proc:100", alive=lambda pid: False, identity_of=lambda pid: None), "exited")
+
+
+def _read_fixture_process(pidfile):
+    """The PID and start identity the fixture server recorded about itself."""
+    pid, _, identity = Path(pidfile).read_text().strip().partition(" ")
+    return int(pid), identity or None
+
+
+def _fixture_process_state(pid, recorded, *, alive=None, identity_of=None):
+    """`exited`, `alive` or `unverifiable` for the process a PID file recorded.
+
+    A live occupant counts only when its start identity equals the recorded one.
+    A different identity is a reused PID, so the original process has exited. A
+    live occupant whose identity, or the recorded one, cannot be read proves
+    nothing and is `unverifiable`: verification fails and nothing may signal it."""
+    alive = _process_alive if alive is None else alive
+    identity_of = _process_identity if identity_of is None else identity_of
+    if not alive(pid):
+        return "exited"
+    current = identity_of(pid)
+    if not recorded or not current:
+        return "unverifiable"
+    return "alive" if current == recorded else "exited"
+
+
+def _cleanup_fixture_process(pid, recorded, *, alive=None, identity_of=None, kill=os.kill):
+    """SIGKILL the fixture server only while its recorded identity is live."""
+    if _fixture_process_state(pid, recorded, alive=alive, identity_of=identity_of) != "alive":
+        return False
+    try:
+        kill(pid, 9)
+    except ProcessLookupError:
+        return False
+    return True
 
 
 def _process_alive(pid):
@@ -316,6 +405,9 @@ def _process_alive(pid):
     except OSError:
         return True
     return state != "Z"
+
+
+_process_identity = process_identity
 
 
 class StubCodexContract(unittest.TestCase):

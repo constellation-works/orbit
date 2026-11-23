@@ -29,7 +29,8 @@ use orbit_automation::auto_tasks::settings::load_settings_table;
 use orbit_common::OrbitError;
 use orbit_common::fs::io::{atomic_write_text, with_exclusive_file_lock};
 use orbit_types::task::{
-    Task, TaskComplexity, TaskPriority, TaskStatus, TaskType, normalize_required_tools,
+    GRANTED_TOOLS_FIELD, Task, TaskComplexity, TaskPriority, TaskStatus, TaskType,
+    normalize_required_tools,
 };
 use orbit_types::workflow::{
     AUTO_TASK_SCHEMA_VERSION, AutoTaskDefinition, AutoTaskSchedule, AutoTaskTemplate, DedupePolicy,
@@ -291,6 +292,7 @@ impl OrbitRuntime {
                 updated_at: now,
             };
             self.validate_auto_task(&definition)?;
+            self.refuse_run_bound_tool_names(GRANTED_TOOLS_FIELD, &definition.granted_tools)?;
             self.validate_granted_tools(&definition.granted_tools)?;
 
             let collection = self.validated_auto_tasks(&definition.name)?;
@@ -476,6 +478,7 @@ impl OrbitRuntime {
         // that later became unavailable must not block the kill-switch. Mint
         // checks the stored grant again.
         if let Some(granted_tools) = &params.granted_tools {
+            self.refuse_run_bound_tool_names(GRANTED_TOOLS_FIELD, granted_tools)?;
             self.validate_granted_tools(granted_tools)?;
         }
 

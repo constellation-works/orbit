@@ -14,6 +14,7 @@ use orbit_types::workflow::automation::members::StateTriggerKind;
 
 use super::due::parse_cron;
 use crate::condition::{ConditionCarrier, check_condition, check_guard};
+use crate::definition_directory::{self, DefinitionDirectoryError};
 
 /// Directory under a source workspace's `.orbit/` holding routine YAML files.
 pub const ROUTINES_DIR: &str = "routines";
@@ -303,7 +304,7 @@ fn load_source_workspace(
 
     // Top-level YAML files. The `local/` subdirectory is a directory (never a
     // file) so it is skipped here and scanned separately for one release.
-    match yaml_files_in(&source.orbit_dir, RoutineOrigin::Workspace) {
+    match routine_definition_files(&source.orbit_dir, RoutineOrigin::Workspace) {
         Ok(paths) => load_origin_files(
             paths,
             RoutineOrigin::Workspace,
@@ -326,7 +327,7 @@ fn load_source_workspace(
     }
 
     // `.orbit/routines/local/` remains loadable as a plain subdirectory.
-    match yaml_files_in(&source.orbit_dir, RoutineOrigin::Local) {
+    match routine_definition_files(&source.orbit_dir, RoutineOrigin::Local) {
         Ok(paths) => {
             let local_dir = source
                 .orbit_dir
@@ -425,114 +426,33 @@ impl fmt::Display for RoutinesDirectoryError {
     }
 }
 
-/// CodeQL `rust/path-injection` treats `Path::starts_with` as a SafeAccessCheck
-/// on the receiver. Call this after reconstructing a routines origin so later
-/// `read_dir` sinks only see a prefix-checked value.
-fn routines_origin_dir_is_contained(path: &Path, parent: &Path) -> bool {
-    path.starts_with(parent)
-}
-
-fn resolve_exact_child_dir(
-    parent: &Path,
-    name: &str,
-    child_label: &str,
-) -> Result<PathBuf, RoutinesDirectoryError> {
-    let expected_dir = parent.join(name);
-    if !routines_origin_dir_is_contained(&expected_dir, parent) {
-        return Err(RoutinesDirectoryError::Invalid(format!(
-            "{child_label} directory escapes {}",
-            parent.display()
-        )));
-    }
-    let canonical_dir = match fs::canonicalize(&expected_dir) {
-        Ok(path) => path,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            return Err(RoutinesDirectoryError::Missing);
-        }
-        Err(error) => {
-            return Err(RoutinesDirectoryError::Invalid(format!(
-                "failed to resolve {child_label} directory {}: {error}",
-                expected_dir.display()
-            )));
-        }
-    };
-    if canonical_dir != expected_dir || !canonical_dir.is_dir() {
-        return Err(RoutinesDirectoryError::Invalid(format!(
-            "{child_label} directory must be a regular directory directly under {}",
-            parent.display()
-        )));
-    }
-    Ok(canonical_dir)
-}
-
-/// Resolve a routines origin directory before it reaches `read_dir`.
-///
-/// The runtime supplies the Orbit root, while the directory names are fixed by
-/// this module. Canonicalizing both components and requiring the exact direct
-/// child prevents a symlinked `routines/` or `routines/local/` directory from
-/// redirecting a scan.
-fn validated_routines_origin_dir(
-    orbit_dir: &Path,
-    origin: RoutineOrigin,
-) -> Result<PathBuf, RoutinesDirectoryError> {
-    let canonical_orbit_dir = match fs::canonicalize(orbit_dir) {
-        Ok(path) => path,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            return Err(RoutinesDirectoryError::Missing);
-        }
-        Err(error) => {
-            return Err(RoutinesDirectoryError::Invalid(format!(
-                "failed to resolve Orbit directory {}: {error}",
-                orbit_dir.display()
-            )));
-        }
-    };
-    let canonical_routines_dir =
-        resolve_exact_child_dir(&canonical_orbit_dir, ROUTINES_DIR, "routines")?;
-    match origin {
-        RoutineOrigin::Workspace => Ok(canonical_routines_dir),
-        RoutineOrigin::Local => resolve_exact_child_dir(
-            &canonical_routines_dir,
-            LOCAL_ROUTINES_SUBDIR,
-            "local routines",
-        ),
+fn map_directory_error(error: DefinitionDirectoryError) -> RoutinesDirectoryError {
+    match error {
+        DefinitionDirectoryError::Missing => RoutinesDirectoryError::Missing,
+        DefinitionDirectoryError::Invalid(message) => RoutinesDirectoryError::Invalid(message),
     }
 }
 
-/// Regular `*.yaml` / `*.yml` files directly in a validated origin directory,
-/// in stable filename order. Subdirectories (e.g. `local/` under the committed
-/// scan) are skipped. Directory listing never consumes the caller `orbit_dir`.
-fn yaml_files_in(
+fn routine_definition_files(
     orbit_dir: &Path,
     origin: RoutineOrigin,
 ) -> Result<Vec<PathBuf>, RoutinesDirectoryError> {
-    let dir = validated_routines_origin_dir(orbit_dir, origin)?;
-    let mut paths = Vec::new();
-    let entries = fs::read_dir(&dir).map_err(RoutinesDirectoryError::List)?;
-    for entry in entries {
-        let Ok(entry) = entry else {
-            continue;
-        };
-        let path = dir.join(entry.file_name());
-        if !routines_origin_dir_is_contained(&path, &dir) {
-            continue;
-        }
-        let Ok(metadata) = fs::symlink_metadata(&path) else {
-            continue;
-        };
-        if !metadata.file_type().is_file() {
-            continue;
-        }
-        if path
-            .extension()
-            .and_then(|ext| ext.to_str())
-            .is_some_and(|ext| ext.eq_ignore_ascii_case("yaml") || ext.eq_ignore_ascii_case("yml"))
-        {
-            paths.push(path);
-        }
-    }
-    paths.sort();
-    Ok(paths)
+    let root =
+        definition_directory::canonical_definition_root(orbit_dir).map_err(map_directory_error)?;
+    let routines = definition_directory::resolve_definition_child(&root, ROUTINES_DIR, "routines")
+        .map_err(map_directory_error)?;
+    let dir = match origin {
+        RoutineOrigin::Workspace => routines,
+        RoutineOrigin::Local => definition_directory::resolve_definition_child(
+            &routines,
+            LOCAL_ROUTINES_SUBDIR,
+            "local routines",
+        )
+        .map_err(map_directory_error)?,
+    };
+    definition_directory::list_definition_yaml(&dir)
+        .map(|(paths, _errors)| paths)
+        .map_err(RoutinesDirectoryError::List)
 }
 
 /// Every routine name the workspace rooted at `orbit_dir` already claims,
@@ -557,7 +477,7 @@ fn collect_declared_names(
     origin: RoutineOrigin,
     declared: &mut BTreeMap<String, PathBuf>,
 ) {
-    let Ok(paths) = yaml_files_in(orbit_dir, origin) else {
+    let Ok(paths) = routine_definition_files(orbit_dir, origin) else {
         return;
     };
     for path in paths {
@@ -580,7 +500,7 @@ pub fn find_routine_definition(
     name: &str,
 ) -> Option<(PathBuf, Result<RoutineDefinition, String>)> {
     for origin in [RoutineOrigin::Workspace, RoutineOrigin::Local] {
-        let Ok(paths) = yaml_files_in(orbit_dir, origin) else {
+        let Ok(paths) = routine_definition_files(orbit_dir, origin) else {
             continue;
         };
         for path in paths {

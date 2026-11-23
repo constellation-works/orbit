@@ -48,6 +48,8 @@ pub use base::claim::{
 pub use baseline::{BaselineHoldStatus, baseline_hold_status, recorded_baseline_hold_status};
 pub(super) use candidate_resume::candidate_resume;
 pub(super) use candidate_validate::candidate_validate;
+pub use checks::verify_refreshed_head_from_base;
+pub use checks::{MergedBaseRefresh, verify_merged_base_refresh};
 pub(super) use claim::{claim_candidate_carry, claim_handoff, claim_validate};
 pub(super) use commit::git_commit;
 pub(crate) use commit::{
@@ -55,6 +57,7 @@ pub(crate) use commit::{
 };
 pub(crate) use commit::{
     RecoveryCommit, RecoveryCommitRefusal, RecoveryCommitRequest, commit_recovery_repair,
+    persist_uncommitted_diff_artifact,
 };
 pub use commit::{compose_squash_merge_message, validate_claim_new_paths};
 pub use deferral_probe::run_deferral_probe;
@@ -104,6 +107,45 @@ pub fn run_private_operation(
     input: &serde_json::Value,
 ) -> Result<serde_json::Value, orbit_common::OrbitError> {
     operations::run(operation, input)
+}
+
+/// [ORB-26389] The engine-private operation that merges a pull request. A
+/// host answering [`crate::RuntimeHost::run_private_vcs_operation`] audits
+/// every request of it, so no Orbit-initiated merge leaves the trail.
+pub const PRIVATE_VCS_PR_MERGE: &str = operations::PR_MERGE;
+
+/// The [`PRIVATE_VCS_PR_MERGE`] input field naming the run and step that
+/// request the merge and the task it delivers:
+/// `{"run_id": …, "step_id": …, "task_id": …}`, each `null` when the
+/// caller's input carried none.
+pub const PR_MERGE_ATTRIBUTION_FIELD: &str = "attribution";
+
+/// The [`PR_MERGE_ATTRIBUTION_FIELD`] value for a merge requested by the
+/// deterministic step whose input is `input`: the dispatcher injects the
+/// run as `job_run_id`/`run_id` and the step as `step_id`; the task is the
+/// input's `task_id`, else the first of its `task_ids`.
+pub(crate) fn pr_merge_attribution(input: &serde_json::Value) -> serde_json::Value {
+    let step_id = input
+        .get("step_id")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|step| !step.is_empty());
+    let task_id = input
+        .get("task_id")
+        .and_then(serde_json::Value::as_str)
+        .or_else(|| {
+            input
+                .get("task_ids")
+                .and_then(serde_json::Value::as_array)
+                .and_then(|ids| ids.first())
+                .and_then(serde_json::Value::as_str)
+        })
+        .filter(|id| !id.is_empty());
+    serde_json::json!({
+        "run_id": super::input::required_job_run_id(input, "pr.merge").ok(),
+        "step_id": step_id,
+        "task_id": task_id,
+    })
 }
 
 #[cfg(feature = "test-support")]

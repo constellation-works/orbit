@@ -6,6 +6,7 @@ use super::{DEFINITION_CHANGED, DeliveryHost, Evaluation, input_digest, observe,
 use crate::checkpoint::{commit, diagnostic};
 use crate::{AutomationError, DeferredReason};
 use orbit_store::contracts::AutomationStoreBackend;
+use orbit_types::workflow::automation;
 use orbit_types::workflow::automation::*;
 
 /// Evaluate explicit configuration without another scheduler or ticking loop.
@@ -339,7 +340,7 @@ fn evaluate_pass(
     }
 
     let attempt = BatchAttempt {
-        action_key: format!("automation:{}:1", batch.id),
+        action_key: automation::attempt_action_key(&batch.id, 1),
         batch,
         input_digest: frozen_input_digest,
         attempt: 1,

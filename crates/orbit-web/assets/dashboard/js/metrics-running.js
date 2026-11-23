@@ -2,12 +2,13 @@
 // changed, Tasks completed, Defects and Tokens): Per bucket, Cumulative and
 // Per day.
 //
-// Cumulative is a running total from the start of the window, so its last
-// point is the card total; empty buckets stay flat. Per day is the sum of the
-// 24 hours ending at each bucket's close, filled from the endpoint's lead
-// buckets (history before the window) so the first points are complete; a
-// host that sends none draws those leading points hollow. The views are
-// derived here from the bucket series; chart drawing stays in metrics.js.
+// Cumulative is a running total from the start of the window, so each series'
+// last point is that series' sum since the window started; empty buckets stay
+// flat. Per day is the sum of the 24 hours ending at each bucket's close,
+// filled from the endpoint's lead buckets (history before the window) so the
+// first points are complete; a host that sends none draws those leading points
+// hollow. The views are derived here from the bucket series; chart drawing
+// stays in metrics.js.
 
 import { el, fetchJson, getWorkspaceRevision } from './common.js';
 
@@ -149,7 +150,7 @@ export function runningModel({ mode, kind, windowKey, seconds, starts, series, f
   const anyIncomplete = visible.some((entry) => entry.incomplete.some(Boolean));
   const modeNotes = [`${bucketWidthLabel(seconds)}, aligned to the clock`];
   if (mode === "cumulative") {
-    modeNotes.push(`running total from the start of the window; last point = card total`, "empty buckets stay flat");
+    modeNotes.push(`running total from the start of the window; each line's last point is that series' sum since the window started`, "empty buckets stay flat");
   } else if (mode === "day") {
     modeNotes.push(perDay === 1
       ? "each point is one day, the same as per bucket; the last day is still in progress"
@@ -287,9 +288,44 @@ export function tagPicker({ tags, offered, apply }) {
     }
   });
   const chips = tags.map((tag) => {
-    const chip = el("button", { class: "mx-chip", type: "button", "aria-description": `Stop comparing ${tag}`, "aria-label": `Remove tag ${tag}` }, [tag, el("span", { "aria-hidden": "true", text: "×" })]);
+    const chip = el("button", { class: "chip mono", type: "button", "aria-description": `Stop comparing ${tag}`, "aria-label": `Remove tag ${tag}` }, [el("span", { class: "chip-label", text: tag }), el("span", { "aria-hidden": "true", text: "×" })]);
     chip.addEventListener("click", () => apply({ tags: tags.filter((other) => other !== tag) }));
     return chip;
   });
   return el("div", { class: "mx-tags", role: "group", "aria-label": "Tag cohorts" }, [picker, ...chips]);
+}
+
+/// "43.9m", "1h 05m", "45s" — minutes carry one decimal so close trends stay
+/// distinguishable.
+export function fmtMs(ms) {
+  if (ms == null || !Number.isFinite(Number(ms))) return "—";
+  const value = Number(ms);
+  if (value < 60000) return `${Math.round(value / 1000)}s`;
+  const minutes = value / 60000;
+  if (minutes < 60) return `${minutes.toFixed(1)}m`;
+  let hours = Math.floor(minutes / 60);
+  let rest = Math.round(minutes - hours * 60);
+  if (rest === 60) { hours += 1; rest = 0; }
+  return `${hours}h ${String(rest).padStart(2, "0")}m`;
+}
+
+export function previousLabel(windowKeyValue) {
+  return windowKeyValue === "all" ? "" : `prev ${windowKeyValue}`;
+}
+
+// mode "duration": higher is worse; "count": higher is better; "defects":
+// a count where higher is worse.
+export function delta(current, previous, mode) {
+  if (current == null) return null;
+  // Nothing then and nothing now is no change, not a new series.
+  if (!current && !previous) return null;
+  if (previous == null || !previous) return { text: "new", cls: "flat" };
+  const ratio = (current - previous) / previous * 100;
+  const abs = Math.abs(ratio);
+  const text = `${ratio >= 0 ? "▲" : "▼"} ${abs >= 10 ? Math.round(abs) : abs.toFixed(1)}%`;
+  const higherIsWorse = mode === "duration" || mode === "defects";
+  const worse = higherIsWorse ? ratio > 5 : ratio < -5;
+  const better = higherIsWorse ? ratio < -5 : ratio > 5;
+  const word = mode === "duration" ? (ratio >= 0 ? "slower" : "faster") : (ratio >= 0 ? "more" : "fewer");
+  return { text: `${text} ${word}`, cls: worse ? "bad" : better ? "good" : "flat" };
 }

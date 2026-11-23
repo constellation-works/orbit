@@ -28,6 +28,8 @@ function resetOperationsForWorkspace() {
   operationsState.lastOperations = null;
   operationsState.lastAutoTasks = null;
   operationsState.lastAutoDrain = null;
+  // The cron zone is the host's; another host's payload names its own.
+  operationsState.hostCronZone = null;
   for (const reset of operationsResetCallbacks) reset();
   for (const id of ["routine-operation-feedback", "clock-operation-feedback", "auto-task-operation-feedback", "auto-drain-operation-feedback", "job-operation-feedback", "script-operation-feedback", "resident-operation-feedback"]) feedback(id, "", "");
 }
@@ -466,7 +468,7 @@ export function operationSwitch({ name, on, text, pending, reason }) {
 }
 
 export function operationGroup(tone, title, count, hint) {
-  const group = el("section", { class: "operation-group" });
+  const group = el("section", { class: "card card-flush operation-group" });
   group.appendChild(el("div", { class: "operation-group-head" }, [
     el("div", { class: "operation-group-title" }, [
       el("span", { class: `operation-group-dot ${tone}` }),
@@ -555,7 +557,7 @@ export function inactivePluginGroup(entries, noun, title = "Plugin off", summary
   const group = operationGroup("", title, entries.length, summary);
   group.className += " inactive-plugin-group";
   for (const entry of entries) {
-    group.appendChild(el("article", { class: "operation-card operation-row inactive-plugin-card" }, [
+    group.appendChild(el("article", { class: "operation-row inactive-plugin-card" }, [
       el("div", { class: "operation-row-head" }, [
         operationCell("Definition", [
           el("div", { class: "operation-identity" }, [

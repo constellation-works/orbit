@@ -2,6 +2,8 @@
 //! treatment arms, defined in draft and changed only through recorded events
 //! once started.
 
+use chrono::{DateTime, Datelike, Days, Utc};
+
 mod assignment;
 mod capture;
 mod definition;
@@ -39,3 +41,10 @@ pub const EXPERIMENTS_MAX_RUNNING: u32 = 3;
 pub(crate) const EXPERIMENTS_MIN_DELIVERED_RATE: f64 = 0.9;
 pub use readout::ExperimentReadout;
 pub use view::{ExperimentArmView, ExperimentEventView, ExperimentView};
+
+/// Use the four-digit RFC 3339 calendar shared by the API and the dashboard.
+fn experiment_horizon_at(start: DateTime<Utc>, days: u32) -> Option<DateTime<Utc>> {
+    start
+        .checked_add_days(Days::new(u64::from(days)))
+        .filter(|end| days > 0 && (1..=9999).contains(&end.year()))
+}

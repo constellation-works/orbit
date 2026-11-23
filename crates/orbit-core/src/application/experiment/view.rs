@@ -5,6 +5,8 @@ use orbit_store::contracts::{ExperimentArmRow, ExperimentEventRow, ExperimentRec
 use serde::Serialize;
 use serde_json::Value;
 
+use super::experiment_horizon_at;
+
 /// One experiment as `show`, `list` and every write return it.
 #[derive(Debug, Clone, Serialize)]
 pub struct ExperimentView {
@@ -19,6 +21,8 @@ pub struct ExperimentView {
     pub guardrails: Value,
     pub min_sample: Option<u32>,
     pub max_days: Option<u32>,
+    /// The first start plus the configured days, when the date is representable.
+    pub horizon_at: Option<String>,
     pub salt: String,
     pub concluded_arm: Option<String>,
     pub cloned_from: Option<String>,
@@ -63,6 +67,12 @@ impl ExperimentView {
             arms,
             events,
         } = record;
+        let horizon_at = events
+            .iter()
+            .find(|event| event.kind == "started")
+            .zip(experiment.max_days)
+            .and_then(|(event, days)| experiment_horizon_at(event.at, days))
+            .map(|at| at.to_rfc3339());
         Ok(Self {
             population: stored_json("population", &experiment.population_json)?,
             guardrails: stored_json("guardrails", &experiment.guardrails_json)?,
@@ -80,6 +90,7 @@ impl ExperimentView {
             primary_metric: experiment.primary_metric,
             min_sample: experiment.min_sample_per_arm,
             max_days: experiment.max_days,
+            horizon_at,
             salt: experiment.salt,
             concluded_arm: experiment.concluded_arm,
             cloned_from: experiment.cloned_from,

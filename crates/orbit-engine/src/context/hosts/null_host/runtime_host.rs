@@ -317,6 +317,12 @@ impl<T: NullRuntimeHost> RuntimeHost for T {
     ) -> Result<orbit_types::workflow::PrBaseUpdateAdmission, OrbitError> {
         NullRuntimeHost::admit_pr_base_update(self, task_ids, request)
     }
+    fn refresh_delivery_pull_request(
+        &self,
+        request: &orbit_types::workflow::DeliveryRefreshRequest,
+    ) -> Result<orbit_types::workflow::PullRequestRefreshOutcome, OrbitError> {
+        NullRuntimeHost::refresh_delivery_pull_request(self, request)
+    }
     fn admit_ci_rerun(
         &self,
         task_ids: &[String],

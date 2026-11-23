@@ -2,6 +2,7 @@
 
 use orbit_common::OrbitError;
 use orbit_common::security::release::sha256_hex;
+use orbit_types::workflow::automation;
 use orbit_types::workflow::automation::{
     AcceptedCoverage, AutomationState,
     members::{MEMBER_CAPACITY, MemberAttempt, MemberBatchEvidence, MemberState},
@@ -60,7 +61,7 @@ pub(super) fn validate(
                 || (updated.attempt > active.attempt
                     && (updated.action_id.is_some()
                         || updated.action_key
-                            != format!("automation:{}:{}", active.id, updated.attempt)))
+                            != automation::attempt_action_key(&active.id, updated.attempt)))
                 || updated.attempt > active.max_attempts
             {
                 return Err(invalid());

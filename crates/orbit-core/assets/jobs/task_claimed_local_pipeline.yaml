@@ -65,6 +65,10 @@ spec:
     # An owner-local claim delivers into the owner's own checkout: there is no
     # origin to synchronize against and none is required.
     base_sync: local
+    # Forwarded unchanged to each leaf's worktree setup. `ignore` skips the
+    # dependency-delivery check for work delivered under a different commit
+    # message (`orbit run ship --ignore-dependency-delivery`).
+    dependency_delivery: enforce
     landing_mode: local
     allowed_crews: []
     # [ORB-14338] The candidate the owner kept from the task's last claim,
@@ -86,6 +90,7 @@ spec:
         task_ids: "{{ input.task_ids }}"
         base: "{{ input.base_branch }}"
         base_sync: "{{ input.base_sync }}"
+        dependency_delivery: "{{ input.dependency_delivery }}"
         landing_mode: "{{ input.landing_mode }}"
 
     # [ORB-14338] Carry the candidate the task's last claim committed onto

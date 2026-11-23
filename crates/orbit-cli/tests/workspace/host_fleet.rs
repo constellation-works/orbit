@@ -176,6 +176,84 @@ impl Fleet {
         output
     }
 
+    /// Run `orbit` with its stdout on a pseudo-terminal `columns` wide, as a
+    /// person at that terminal sees it. Stderr stays a pipe; a failed run
+    /// panics with both streams.
+    pub(crate) fn orbit_on_terminal(
+        &self,
+        home: &Path,
+        cwd: &Path,
+        args: &[&str],
+        columns: u16,
+    ) -> std::process::Output {
+        use std::io::Read;
+        use std::os::fd::FromRawFd;
+        use std::process::Stdio;
+
+        let mut master = -1;
+        let mut slave = -1;
+        let mut size = libc::winsize {
+            ws_row: 24,
+            ws_col: columns,
+            ws_xpixel: 0,
+            ws_ypixel: 0,
+        };
+        // SAFETY: openpty initializes both descriptors on success; the pointers
+        // are valid. macOS declares the winsize parameter as *mut and Linux as
+        // *const, and a *mut satisfies both.
+        let rc = unsafe {
+            libc::openpty(
+                &mut master,
+                &mut slave,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                std::ptr::addr_of_mut!(size),
+            )
+        };
+        assert_eq!(rc, 0, "openpty: {}", std::io::Error::last_os_error());
+        // SAFETY: successful openpty returned owned, distinct file descriptors.
+        let mut master = unsafe { fs::File::from_raw_fd(master) };
+        // SAFETY: slave is the other owned end of the same openpty pair.
+        let slave = unsafe { fs::File::from_raw_fd(slave) };
+        let mut command = self.process(home, cwd, args);
+        // COLUMNS and NO_COLOR would override the terminal the test sets.
+        command
+            .env("TERM", "xterm-256color")
+            .env_remove("COLUMNS")
+            .env_remove("NO_COLOR")
+            .env_remove("ORBIT_FORMAT")
+            .stdin(Stdio::null())
+            .stdout(Stdio::from(slave))
+            .stderr(Stdio::piped());
+        let mut child = command.spawn().expect("spawn orbit on terminal");
+        // Release the parent's copy of the terminal side with the command.
+        drop(command);
+        let mut stdout = Vec::new();
+        if let Err(error) = master.read_to_end(&mut stdout) {
+            // Linux PTY masters signal closure with EIO; other Unix systems return EOF.
+            assert_eq!(error.raw_os_error(), Some(libc::EIO), "read pty: {error}");
+        }
+        let status = child.wait().expect("wait for orbit on terminal");
+        let mut stderr = Vec::new();
+        child
+            .stderr
+            .take()
+            .expect("captured stderr")
+            .read_to_end(&mut stderr)
+            .expect("read orbit stderr");
+        assert!(
+            status.success(),
+            "{args:?} on a {columns}-column terminal failed\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&stdout),
+            String::from_utf8_lossy(&stderr)
+        );
+        std::process::Output {
+            status,
+            stdout,
+            stderr,
+        }
+    }
+
     pub(crate) fn json(&self, args: &[&str]) -> Value {
         let output = self.orbit_ok(&self.local.home, args);
         serde_json::from_slice(&output.stdout).unwrap_or_else(|error| {

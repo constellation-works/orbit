@@ -1,0 +1,1796 @@
+#!/usr/bin/env python3
+"""CLI regressions for paired.py: parity and child-process supervision.
+
+Drives ``scripts/perf/paired.py`` with fake arm binaries. A match requires an
+actual successful observation from every arm. Missing observations, failed
+probes and differing observations refuse the run before a bounded verdict.
+A stalled parity or sample command, or one that floods stdout, is refused
+within its bound with its whole process group reaped and the lane released;
+cancelling the harness stops the HTTP server it started (ORB-26380).
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import fcntl
+import os
+import selectors
+import shlex
+import signal
+import subprocess
+import sys
+import tempfile
+import time
+import unittest
+from pathlib import Path
+from unittest import mock
+
+REPO = Path(__file__).resolve().parents[2]
+PAIRED = REPO / "scripts" / "perf" / "paired.py"
+SCRATCH = REPO / ".orbit" / "tmp"
+
+# The child's protected-root guard reads the registry under the passwd home
+# (`pwd.getpwuid`), which an overridden HOME does not move. Every child therefore
+# starts with this patch, which points the passwd home at the fixture home named by
+# PAIRED_TEST_PASSWD_HOME; the guard itself runs unchanged against fixture-owned
+# registry data and never reads the invoking account's registry (STD-03 §R20).
+PASSWD_HOME_PATCH = """
+import os, pwd
+_getpwuid = pwd.getpwuid
+def _fixture_getpwuid(uid):
+    entry = _getpwuid(uid)
+    return pwd.struct_passwd((entry.pw_name, entry.pw_passwd, entry.pw_uid,
+                              entry.pw_gid, entry.pw_gecos,
+                              os.environ["PAIRED_TEST_PASSWD_HOME"], entry.pw_shell))
+pwd.getpwuid = _fixture_getpwuid
+"""
+PAIRED_BOOTSTRAP = PASSWD_HOME_PATCH + """
+import runpy, sys
+script = sys.argv[1]
+sys.argv = [script] + sys.argv[2:]
+runpy.run_path(script, run_name="__main__")
+"""
+
+# Seam for ORB-26496: simulates a broken stop_group that propagates
+# KeyboardInterrupt during the grace wait without killing the process group
+# and bypasses any second stop for that same interrupted process, while
+# paired.py still reports exit 130 and its normal cancellation stderr.
+BROKEN_STOP_PAIRED_BOOTSTRAP = PASSWD_HOME_PATCH + r"""
+import importlib.util, os, signal, sys, time
+script = sys.argv[1]
+spec = importlib.util.spec_from_file_location("paired_under_test", script)
+paired = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(paired)
+_interrupted = set()
+def _broken_stop_group(process, grace=paired.TERM_GRACE_SECONDS):
+    if process.pid in _interrupted:
+        return
+    try:
+        try:
+            os.killpg(process.pid, signal.SIGTERM)
+        except ProcessLookupError:
+            pass
+        deadline = time.monotonic() + grace
+        while paired.group_alive(process.pid) and time.monotonic() < deadline:
+            time.sleep(0.02)
+    except KeyboardInterrupt:
+        _interrupted.add(process.pid)
+        raise
+    try:
+        os.killpg(process.pid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+    process.wait(timeout=10)
+paired.stop_group = _broken_stop_group
+sys.exit(paired.main(sys.argv[2:]))
+"""
+
+# Seam for a regression that must exercise a live pidfd-backed wait. paired.py's
+# supervision loop can see an immediate-exit child as already exited and skip the
+# selector wait it is meant to cover (ORB-26488). This wraps the epoll selector's
+# `select` in the harness process only: for each registered process pidfd it
+# verifies the child has not exited, records the wait and the timeout it was asked
+# for, and only then publishes `release-<pid>` so the held child (ARM_SCRIPT
+# `held-*` modes) may exit, before calling the real `select`. The real epoll call
+# still runs, so a timeout outside its range still raises.
+HELD_PIDFD_WAIT_PATCH = r"""
+import json, os, select, selectors
+_marks = os.environ["PAIRED_TEST_MARKS"]
+_released = set()
+_real_select = selectors.EpollSelector.select
+def _held_select(self, timeout=None):
+    for key in list(self.get_map().values()):
+        if key.data != "exit":
+            continue
+        pid = None
+        with open("/proc/self/fdinfo/%d" % key.fd) as info:
+            for line in info:
+                if line.startswith("Pid:"):
+                    pid = int(line.split()[1])
+        if pid in _released:
+            continue
+        _released.add(pid)
+        live = select.select([key.fd], [], [], 0)[0] == []
+        with open(os.path.join(_marks, "pidfd-waits.jsonl"), "a") as record:
+            record.write(json.dumps({"pid": pid, "live": live, "timeout": timeout}) + "\n")
+        if live:
+            open(os.path.join(_marks, "release-%d" % pid), "w").close()
+    return _real_select(self, timeout)
+selectors.EpollSelector.select = _held_select
+"""
+HELD_PAIRED_BOOTSTRAP = PASSWD_HOME_PATCH + HELD_PIDFD_WAIT_PATCH + """
+import runpy, sys
+script = sys.argv[1]
+sys.argv = [script] + sys.argv[2:]
+runpy.run_path(script, run_name="__main__")
+"""
+
+# A dedicated Linux subreaper owns the entire cancellation fixture, including
+# sessions created by paired.py. Its direct children cannot have their PIDs
+# reused until waitpid reaps them; pidfds keep each signal bound to that child.
+# SIGUSR1 requests emergency cleanup, while the other signals are forwarded to
+# the harness so the cancellation assertions still exercise paired.py itself.
+# On normal harness exit, already-dead adopted descendants are reaped, while
+# any surviving live descendant is still killed and reaped so nothing leaks,
+# and the owner fails loudly instead of returning the harness status.
+CANCELLATION_OWNER = r"""
+import ctypes, os, select, signal, subprocess, sys, time
+if ctypes.CDLL(None, use_errno=True).prctl(36, 1, 0, 0, 0) != 0:
+    raise OSError(ctypes.get_errno(), "PR_SET_CHILD_SUBREAPER")
+harness = None
+abort = False
+def forward(signum, _frame):
+    global abort
+    if signum == signal.SIGUSR1:
+        abort = True
+    elif harness is not None:
+        try:
+            harness.send_signal(signum)
+        except ProcessLookupError:
+            pass
+for sig in (signal.SIGUSR1, signal.SIGTERM, signal.SIGINT):
+    signal.signal(sig, forward)
+harness = subprocess.Popen(sys.argv[1:])
+status = None
+while status is None and not abort:
+    status = harness.poll()
+    time.sleep(0.01)
+if status is None:
+    harness.kill()
+    status = harness.wait()
+
+def reap_zombies():
+    while True:
+        try:
+            pid, _ = os.waitpid(-1, os.WNOHANG)
+        except ChildProcessError:
+            break
+        if pid == 0:
+            break
+
+# The harness is gone, so all surviving descendants eventually become our
+# direct children. Reap already-dead descendants first; on normal exit give a
+# dying child a brief moment to become reapable before treating it as live.
+killed = []
+if not abort:
+    reap_zombies()
+    reap_deadline = time.monotonic() + 0.25
+    while (open("/proc/self/task/%d/children" % os.getpid()).read().split()
+           and time.monotonic() < reap_deadline):
+        time.sleep(0.01)
+        reap_zombies()
+
+deadline = time.monotonic() + 10
+while True:
+    if not abort:
+        reap_zombies()
+    children = open("/proc/self/task/%d/children" % os.getpid()).read().split()
+    if not children:
+        break
+    for child in children:
+        pid = int(child)
+        try:
+            fd = os.pidfd_open(pid)
+            try:
+                if not abort and select.select([fd], [], [], 0)[0]:
+                    continue
+                signal.pidfd_send_signal(fd, signal.SIGKILL)
+                if not abort:
+                    killed.append(pid)
+            finally:
+                os.close(fd)
+        except ProcessLookupError:
+            pass
+    reap_zombies()
+    if time.monotonic() >= deadline:
+        raise RuntimeError("fixture descendants did not exit within 10 seconds")
+    time.sleep(0.01)
+if not abort and killed:
+    sys.stderr.write("cancellation owner killed surviving descendants: %s\n" % (killed,))
+    sys.stderr.flush()
+    sys.exit(1)
+sys.exit(status if status >= 0 else 128 - status)
+"""
+
+# Doctor-shaped JSON rows for `--parity-mask-row`. The control binary is a copy
+# of the base script, so only `role=candidate` varies. `group` is present only
+# on the disk-space row of the `check` variant, where the check name itself
+# changes and the selector has to match a stable key.
+ROW_PROBE = r"""
+import json
+import sys
+
+role = sys.argv[1]
+variant = sys.argv[2]
+candidate = role == "candidate"
+
+
+def row(check, message, status="ok", duration=1, remediation=None, group=None):
+    body = {
+        "check": check,
+        "duration_ms": duration,
+        "status": status,
+        "message": message,
+        "remediation": remediation,
+    }
+    if group is not None:
+        body["group"] = group
+    return body
+
+
+def standard(
+    disk_message="12 GiB free",
+    disk_status="ok",
+    disk_remediation=None,
+    disk_check="disk-space",
+    disk_group=None,
+    health_message="store ok",
+    fresh_message="last succeeded 54m ago",
+    retain_message="rows older than 60 days: 17522",
+    muse_message="pressure x6.62",
+    duration=1,
+):
+    return [
+        row(disk_check, disk_message, disk_status, duration, disk_remediation, disk_group),
+        row("store-health", health_message, "ok", duration),
+        row("routine-freshness", fresh_message, "ok", duration),
+        row("store-retention", retain_message, "ok", duration),
+        row("provider-limits:muse", muse_message, "ok", duration),
+    ]
+
+
+if variant == "same":
+    rows = standard()
+elif variant == "unmasked":
+    rows = standard(disk_message="11 GiB free", health_message="store drifted") if candidate else standard()
+elif variant == "status":
+    rows = standard(disk_message="11 GiB free", disk_status="error") if candidate else standard()
+elif variant == "remediation":
+    rows = (
+        standard(disk_message="11 GiB free", disk_remediation="free some space")
+        if candidate else standard()
+    )
+elif variant == "check":
+    rows = (
+        standard(disk_message="11 GiB free", disk_check="disk-free", disk_group="host")
+        if candidate else standard(disk_group="host")
+    )
+elif variant == "message":
+    rows = (
+        standard(
+            disk_message="11 GiB free",
+            fresh_message="last succeeded 56m ago",
+            retain_message="rows older than 60 days: 17581",
+            muse_message="pressure x6.63",
+            duration=2,
+        )
+        if candidate else standard()
+    )
+elif variant == "missing":
+    rows = standard(disk_message="11 GiB free") if candidate else standard()
+    if candidate:
+        rows = [item for item in rows if item["check"] != "store-health"]
+elif variant == "reorder":
+    rows = standard()
+    if candidate:
+        rows = [rows[1], rows[0], *rows[2:]]
+else:
+    sys.stderr.write("unknown probe-rows variant %s\n" % variant)
+    sys.exit(3)
+
+json.dump(rows, sys.stdout)
+sys.stdout.write("\n")
+"""
+
+
+# Role is baked in so the control copy of the base binary agrees with base,
+# while the candidate binary can fail or differ on its own.
+ARM_SCRIPT = """#!/bin/sh
+role={role}
+marks={marks}
+mode=$1
+case "$mode" in
+  held-*)
+    # Stay alive until the harness reports it is waiting on this process's
+    # pidfd (the `release-<pid>` marker, see HELD_PIDFD_WAIT_PATCH), then run the
+    # plain mode. The wait is bounded: an unreleased child fails visibly.
+    mode=${{mode#held-}}
+    printf '%s\\n' "$$" > "$marks/held-$mode-$role-$$.pid"
+    tries=0
+    while [ ! -e "$marks/release-$$" ]; do
+      tries=$((tries + 1))
+      if [ "$tries" -gt 500 ]; then
+        printf 'never released\\n' >&2
+        exit 4
+      fi
+      sleep 0.02
+    done
+    ;;
+esac
+case "$mode" in
+  workspace|task)
+    # fixture.py PREPARE_COMMANDS, run untimed on every fresh root.
+    exit 0
+    ;;
+  stall|probe-stall)
+    # A descendant in the arm's group, then a leader that never finishes.
+    sleep 600 &
+    printf '%s %s\\n' "$$" "$!" > "$marks/$mode-$role.pids"
+    sleep 600
+    ;;
+  probe-flood)
+    head -c 200000 /dev/zero
+    exit 0
+    ;;
+  ignore-term)
+    exec {python} -I {ignore_term_driver} "$marks/ignore-$role.pid"
+    ;;
+  graceful-descendant)
+    exec {python} -I {graceful_driver} "$marks/graceful-$role"
+    ;;
+  web)
+    exec {python} -I {web_server} "$marks/web-$role.pid"
+    ;;
+  probe-same)
+    printf 'observed\\n'
+    exit 0
+    ;;
+  probe-fail)
+    exit 9
+    ;;
+  probe-one-fail)
+    if [ "$role" = candidate ]; then
+      exit 9
+    fi
+    printf 'observed\\n'
+    exit 0
+    ;;
+  probe-differ)
+    printf '%s\\n' "$role"
+    exit 0
+    ;;
+  probe-json)
+    if [ "$role" = candidate ]; then
+      printf '{{"duration_ms": 2, "message": "candidate", "stable": 1}}\\n'
+    else
+      printf '{{"duration_ms": 1, "message": "base", "stable": 1}}\\n'
+    fi
+    exit 0
+    ;;
+  probe-rows)
+    exec {python} -I {row_probe} "$role" "$2"
+    ;;
+  timed)
+    printf 'timed %s\\n' "$role"
+    exit 0
+    ;;
+  xattr-parity|xattr-timed)
+    exec {python} -I {xattr_driver} "$role" "$marks" "$mode"
+    ;;
+  *)
+    printf 'unexpected %s\\n' "$mode" >&2
+    exit 3
+    ;;
+esac
+"""
+
+
+# Signal and PID markers that a cancellation test reads while the writer may
+# still be running. The writer creates a temp sibling, pauses before flushing
+# (the 200 ms gap keeps that window open on every run), and renames the value
+# into place. A reader that sees the marker's name therefore sees the whole
+# value; creating the marker first would publish an empty file (ORB-26449).
+MARKER_PUBLISH = """
+import os, pathlib, time
+def publish_marker(path, text):
+    path = pathlib.Path(path)
+    tmp = path.with_name(path.name + ".tmp")
+    with open(tmp, "w") as handle:
+        time.sleep(0.2)
+        handle.write(text)
+    os.replace(tmp, path)
+"""
+
+IGNORE_TERM_DRIVER = MARKER_PUBLISH + r"""
+import os, pathlib, signal, sys, time
+pid_file = pathlib.Path(sys.argv[1])
+# The handler is installed before the PID is staged: publish_marker pauses before
+# it writes, and a supervision deadline that lands in that pause must still reach
+# this handler rather than the default disposition (ORB-26485).
+signal.signal(signal.SIGTERM, lambda signum, frame: publish_marker(pid_file.with_suffix(".term"), str(signum)))
+publish_marker(pid_file, str(os.getpid()))
+time.sleep(600)
+"""
+
+
+# Leader exits immediately on SIGTERM while one descendant performs a short
+# graceful shutdown and a sibling ignores SIGTERM until the group is swept.
+GRACEFUL_DRIVER = r"""
+import os, pathlib, signal, subprocess, sys, time
+
+prefix = pathlib.Path(sys.argv[1])
+child_code = '''
+import os, pathlib, signal, sys, time
+prefix = pathlib.Path(sys.argv[1])
+mode = sys.argv[2]
+if mode == "graceful":
+    shutting_down = False
+    def handle_term(_signum, _frame):
+        global shutting_down
+        shutting_down = True
+    signal.signal(signal.SIGTERM, handle_term)
+    prefix.with_suffix(".graceful.pid").write_text(str(os.getpid()))
+    while not shutting_down:
+        time.sleep(0.02)
+    time.sleep(0.3)
+    prefix.with_suffix(".done").write_text("graceful-done\\n")
+else:
+    signal.signal(signal.SIGTERM, signal.SIG_IGN)
+    prefix.with_suffix(".stubborn.pid").write_text(str(os.getpid()))
+    time.sleep(600)
+'''
+graceful = subprocess.Popen([sys.executable, "-I", "-c", child_code, str(prefix), "graceful"])
+stubborn = subprocess.Popen([sys.executable, "-I", "-c", child_code, str(prefix), "stubborn"])
+for suffix in (".graceful.pid", ".stubborn.pid"):
+    marker = prefix.with_suffix(suffix)
+    while not marker.exists() or not marker.read_text():
+        time.sleep(0.01)
+exiting = False
+def leader_term(_signum, _frame):
+    global exiting
+    exiting = True
+signal.signal(signal.SIGTERM, leader_term)
+prefix.with_suffix(".leader.pid").write_text(str(os.getpid()))
+while not exiting:
+    time.sleep(0.02)
+os._exit(0)
+"""
+
+
+# Stands in for `orbit web serve`: announces its address, answers `/`, and
+# stalls on `/slow` so the harness can be cancelled while it is serving.
+WEB_SERVER = MARKER_PUBLISH + """
+import http.server, os, signal, subprocess, sys, time
+from pathlib import Path
+pid_file = Path(sys.argv[1])
+marks = pid_file.parent
+role = pid_file.stem.removeprefix("web-")
+if (marks / "ignore-web-term").exists():
+    def record_term(signum, _frame):
+        publish_marker(marks / f"web-{role}.term", str(signum))
+    signal.signal(signal.SIGTERM, record_term)
+    child = subprocess.Popen([
+        sys.executable, "-c",
+        "import pathlib, signal, sys, time; "
+        "signal.signal(signal.SIGTERM, signal.SIG_IGN); "
+        "pathlib.Path(sys.argv[1]).write_text('ready'); time.sleep(600)",
+        str(marks / f"web-{role}.descendant.ready"),
+    ])
+    publish_marker(marks / f"web-{role}.descendant.pid", str(child.pid))
+class Handler(http.server.BaseHTTPRequestHandler):
+    def do_GET(self):
+        if self.path == "/slow":
+            (marks / f"web-{role}.slow").touch()
+            time.sleep(600)
+        if self.path == "/destination":
+            (marks / "destination-visited").write_text("yes")
+        disconnect = self.path == "/disconnect" or (
+            self.path == "/disconnect-candidate" and role == "candidate"
+        )
+        if self.path == "/disconnect-after-parity":
+            counter = marks / "disconnect-requests"
+            count = int(counter.read_text()) if counter.exists() else 0
+            counter.write_text(str(count + 1))
+            disconnect = count >= 3
+        if disconnect:
+            self.close_connection = True
+            return
+        redirect = self.path in ("/redirect", "/redirect-malformed")
+        if self.path in ("/redirect-after-parity", "/redirect-after-parity-malformed"):
+            counter = marks / "requests"
+            count = int(counter.read_text()) if counter.exists() else 0
+            counter.write_text(str(count + 1))
+            redirect = count >= 3
+        if redirect:
+            self.send_response(302)
+            location = "http://[" if "malformed" in self.path else "/destination"
+            self.send_header("Location", location)
+            self.end_headers()
+            self.wfile.write(b"original redirect body")
+            return
+        self.send_response(200)
+        self.end_headers()
+        self.wfile.write(b"ok")
+    def log_message(self, *args):
+        pass
+server = http.server.HTTPServer(("127.0.0.1", 0), Handler)
+publish_marker(pid_file, str(os.getpid()))
+with open(marks / "web-all.pids", "a") as handle:
+    handle.write(f"{os.getpid()}\\n")
+print(f"http://127.0.0.1:{server.server_address[1]}", flush=True)
+server.serve_forever()
+"""
+
+# Records user extended attributes on `.orbit/config.yaml`, then mutates them
+# (adding `user.fixture_probe` and dropping `user.original` if present).
+XATTR_DRIVER = r"""
+import json, os, sys
+from pathlib import Path
+
+role, marks_dir, mode = sys.argv[1:4]
+target = Path(".orbit/config.yaml")
+observed = {
+    name: os.getxattr(target, name).decode("utf-8", "replace")
+    for name in sorted(os.listxattr(target))
+    if name.startswith("user.")
+}
+with open(Path(marks_dir) / "xattr-observations.jsonl", "a") as handle:
+    handle.write(json.dumps({"mode": mode, "role": role, "attrs": observed}) + "\n")
+if "user.original" in observed:
+    os.removexattr(target, "user.original")
+os.setxattr(target, "user.fixture_probe", f"{mode}:{role}".encode())
+print(json.dumps(observed, sort_keys=True))
+"""
+
+
+def process_gone(pid: int) -> bool:
+    """Whether `pid` is gone or a zombie awaiting its (non-harness) reaper."""
+    try:
+        stat = Path(f"/proc/{pid}/stat").read_text()
+    except FileNotFoundError:
+        return True
+    return stat.rsplit(")", 1)[1].split()[0] in ("Z", "X")
+
+
+def sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1 << 20), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def write_snapshot(snapshot: Path) -> None:
+    """A digest-verified fixture root small enough for a CLI parity run."""
+    orbit_dir = snapshot / "checkout" / ".orbit"
+    orbit_dir.mkdir(parents=True)
+    (orbit_dir / "config.yaml").write_text("workspace_id: test-storage\n")
+    (snapshot / "home").mkdir()
+    files = []
+    for path in snapshot.rglob("*"):
+        if not path.is_file():
+            continue
+        files.append({
+            "path": path.relative_to(snapshot).as_posix(),
+            "size": path.stat().st_size,
+            "sha256": sha256_file(path),
+        })
+    files.sort(key=lambda entry: entry["path"])
+    manifest = {
+        "schemaVersion": 1,
+        "kind": "orbit-perf-snapshot",
+        "source": {
+            "selector": "test-ws",
+            "registry_id": "test-ws",
+            "name": "test-ws",
+            "storage_id": "test-storage",
+            "global_root": "/fixture-source/home/.orbit",
+            "repo_root": "/fixture-source/checkout",
+            "orbit_dir": "/fixture-source/checkout/.orbit",
+            "home": "/fixture-source/home",
+        },
+        "snapshot_epoch": 1,
+        "files": files,
+    }
+    (snapshot / "snapshot-manifest.json").write_text(
+        json.dumps(manifest, indent=2, sort_keys=True) + "\n")
+
+
+def write_builds(builds: Path, marks: Path) -> dict[str, Path]:
+    builds.mkdir()
+    web_server = builds.parent / "web_server.py"
+    web_server.write_text(WEB_SERVER)
+    graceful_driver = builds.parent / "graceful_driver.py"
+    graceful_driver.write_text(GRACEFUL_DRIVER)
+    ignore_term_driver = builds.parent / "ignore_term_driver.py"
+    ignore_term_driver.write_text(IGNORE_TERM_DRIVER)
+    xattr_driver = builds.parent / "xattr_driver.py"
+    xattr_driver.write_text(XATTR_DRIVER)
+    row_probe = builds.parent / "row_probe.py"
+    row_probe.write_text(ROW_PROBE)
+    binaries = {}
+    revisions = {}
+    for role, commit in (("base", "a"), ("candidate", "c")):
+        path = builds / role
+        # The arm script is shell source, so every interpolated path is quoted:
+        # a checkout or scratch path with a space must stay one word.
+        path.write_text(ARM_SCRIPT.format(
+            role=role,
+            marks=shlex.quote(str(marks)),
+            python=shlex.quote(sys.executable),
+            web_server=shlex.quote(str(web_server)),
+            graceful_driver=shlex.quote(str(graceful_driver)),
+            ignore_term_driver=shlex.quote(str(ignore_term_driver)),
+            xattr_driver=shlex.quote(str(xattr_driver)),
+            row_probe=shlex.quote(str(row_probe)),
+        ))
+        path.chmod(0o755)
+        binaries[role] = path
+        revisions[role] = {
+            "binary": role,
+            "binary_sha256": sha256_file(path),
+            "commit": commit * 40,
+            "tree": ("b" if role == "base" else "d") * 40,
+        }
+    (builds / "provenance.json").write_text(json.dumps(
+        {"schemaVersion": 1, "kind": "orbit-perf-build-pair", "revisions": revisions},
+        indent=2, sort_keys=True,
+    ) + "\n")
+    return binaries
+
+
+class PairedCliTestCase(unittest.TestCase):
+    # Prefix of the disposable root under SCRATCH; subclasses may vary it.
+    root_prefix = "paired-cli-"
+
+    def setUp(self) -> None:
+        SCRATCH.mkdir(parents=True, exist_ok=True)
+        self.temp = tempfile.TemporaryDirectory(prefix=self.root_prefix, dir=SCRATCH)
+        self.addCleanup(self.temp.cleanup)
+        root = Path(self.temp.name)
+        self.builds = root / "builds"
+        self.snapshot = root / "snapshot"
+        self.snapshot.mkdir()
+        write_snapshot(self.snapshot)
+        self.marks = root / "marks"
+        self.marks.mkdir()
+        self.binaries = write_builds(self.builds, self.marks)
+        self.lane_lock = root / "lane.lock"
+        self.home = root / "home"
+        self.home.mkdir()
+        self.register_checkouts()
+
+    def register_checkouts(self, *orbit_dirs: Path) -> None:
+        """Write the fixture-owned registry the child's protected-root guard reads."""
+        registry = self.home / ".orbit" / "workspaces.json"
+        registry.parent.mkdir(parents=True, exist_ok=True)
+        registry.write_text(json.dumps(
+            {"checkouts": [{"orbit_dir": str(path)} for path in orbit_dirs]}))
+
+    def paired_argv(self, out: Path, surface: tuple[str, ...], *extra: str,
+                    bootstrap: str = PAIRED_BOOTSTRAP) -> list[str]:
+        return [sys.executable, "-I", "-c", bootstrap, str(PAIRED),
+                "--builds", str(self.builds),
+                "--snapshot", str(self.snapshot),
+                "--out", str(out),
+                "--rounds", "1", "--samples", "1", "--warmup", "0", "--gap-ms", "0",
+                "--lane-wait", "5", "--bound-ms", "600000",
+                *surface, *extra]
+
+    def paired_env(self) -> dict[str, str]:
+        # No inherited Orbit or Git authority reaches the child (STD-03 §R20): it
+        # gets its own HOME, passwd home (PASSWD_HOME_PATCH), Orbit root and
+        # registry, and a private lane lock so this regression never takes the
+        # host perf lane. The child's protected-root guard runs unchanged.
+        env = {key: value for key, value in os.environ.items()
+               if not key.startswith(("ORBIT_", "GIT_"))}
+        env["HOME"] = str(self.home)
+        env["PAIRED_TEST_PASSWD_HOME"] = str(self.home)
+        env["ORBIT_ROOT"] = str(self.home / ".orbit")
+        env["ORBIT_PERF_LANE_LOCK"] = str(self.lane_lock)
+        env["PAIRED_TEST_MARKS"] = str(self.marks)
+        return env
+
+    def run_paired(self, *extra: str, surface: tuple[str, ...] = ("--cli", "timed"),
+                   bootstrap: str = PAIRED_BOOTSTRAP,
+                   ) -> tuple[subprocess.CompletedProcess[str], Path]:
+        out = Path(self.temp.name) / f"out-{len(extra)}-{extra[0] if extra else 'cli'}-{surface[-1]}"
+        result = subprocess.run(
+            self.paired_argv(out, surface, *extra, bootstrap=bootstrap),
+            cwd=REPO,
+            env=self.paired_env(),
+            capture_output=True,
+            text=True,
+            timeout=120,
+            check=False,
+        )
+        return result, out
+
+    def start_cancellation_harness(self, out: Path, surface: tuple[str, ...],
+                                   *extra: str) -> subprocess.Popen:
+        owner = subprocess.Popen(
+            [sys.executable, "-I", "-c", CANCELLATION_OWNER,
+             *self.paired_argv(out, surface, *extra)],
+            cwd=REPO, env=self.paired_env(),
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        )
+
+        def cleanup() -> None:
+            if owner.poll() is None:
+                owner.send_signal(signal.SIGUSR1)
+            owner.communicate(timeout=30)
+        self.addCleanup(cleanup)
+        return owner
+
+    def assert_lane_released(self) -> None:
+        fd = os.open(self.lane_lock, os.O_RDWR)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)  # raises if still held
+            fcntl.flock(fd, fcntl.LOCK_UN)
+        finally:
+            os.close(fd)
+
+    def assert_reaped(self, pids: list[int]) -> None:
+        deadline = time.monotonic() + 10
+        while not all(process_gone(pid) for pid in pids):
+            self.assertLess(time.monotonic(), deadline,
+                            f"arm processes still running: {pids}")
+            time.sleep(0.05)
+
+    def recorded_web_pids(self) -> list[int]:
+        pids_file = self.marks / "web-all.pids"
+        self.assertTrue(pids_file.exists(), "expected fake web servers to record PIDs")
+        return [int(line) for line in pids_file.read_text().splitlines() if line.strip()]
+
+
+class PairedCliParityTest(PairedCliTestCase):
+    def assert_no_passing_verdict(
+        self, result: subprocess.CompletedProcess[str], out: Path,
+    ) -> dict:
+        self.assertEqual(result.returncode, 2, result.stderr + result.stdout)
+        report = json.loads((out / "parity.json").read_text())
+        self.assertIs(report["match"], False)
+        self.assertFalse((out / "paired-summary.json").exists(), result.stdout)
+        self.assertNotIn('"verdict": "pass"', result.stdout)
+        return report
+
+    def test_redirect_is_recorded_as_original_response_and_refused(self) -> None:
+        result, out = self.run_paired(surface=("--http", "/redirect"))
+        report = self.assert_no_passing_verdict(result, out)
+        for arm in ("base", "candidate", "control"):
+            self.assertEqual(report["arms"][arm]["http"], {
+                "status": 302,
+                "body": {"format": "text", "value": "original redirect body"},
+            })
+            self.assertEqual(report["observation_failures"][arm], "http status 302")
+        self.assertFalse((self.marks / "destination-visited").exists())
+
+    def test_malformed_redirect_is_recorded_as_original_response_and_refused(self) -> None:
+        result, out = self.run_paired(surface=("--http", "/redirect-malformed"))
+        report = self.assert_no_passing_verdict(result, out)
+        for arm in ("base", "candidate", "control"):
+            self.assertEqual(report["arms"][arm]["http"], {
+                "status": 302,
+                "body": {"format": "text", "value": "original redirect body"},
+            })
+            self.assertEqual(report["observation_failures"][arm], "http status 302")
+        self.assertFalse((self.marks / "destination-visited").exists())
+
+    def test_redirect_during_sampling_is_refused(self) -> None:
+        result, out = self.run_paired(surface=("--http", "/redirect-after-parity"))
+        self.assertEqual(result.returncode, 2, result.stderr + result.stdout)
+        self.assertIn("sample 0 exited 302", result.stderr)
+        self.assertTrue(json.loads((out / "parity.json").read_text())["match"])
+        self.assertFalse((out / "paired-summary.json").exists())
+        self.assertFalse((self.marks / "destination-visited").exists())
+
+    def test_malformed_redirect_during_sampling_is_refused(self) -> None:
+        result, out = self.run_paired(surface=("--http", "/redirect-after-parity-malformed"))
+        self.assertEqual(result.returncode, 2, result.stderr + result.stdout)
+        self.assertIn("sample 0 exited 302", result.stderr)
+        self.assertTrue(json.loads((out / "parity.json").read_text())["match"])
+        self.assertFalse((out / "paired-summary.json").exists())
+        self.assertFalse((self.marks / "destination-visited").exists())
+
+    def test_http_disconnect_during_parity_writes_refusal_report_and_reaps_server(self) -> None:
+        result, out = self.run_paired(surface=("--http", "/disconnect"))
+        report = self.assert_no_passing_verdict(result, out)
+        self.assertFalse((out / "raw.json").exists())
+        for arm in ("base", "candidate", "control"):
+            self.assertIn(arm, report["observation_failures"])
+            self.assertIn("RemoteDisconnected", report["observation_failures"][arm])
+            self.assertIn("RemoteDisconnected", report["arms"][arm]["http"].get("error", ""))
+        pids = self.recorded_web_pids()
+        self.assertEqual(len(pids), 3)
+        self.assert_reaped(pids)
+        self.assert_lane_released()
+
+    def test_single_arm_http_disconnect_during_parity_writes_arm_failure_and_reaps_server(self) -> None:
+        result, out = self.run_paired(surface=("--http", "/disconnect-candidate"))
+        report = self.assert_no_passing_verdict(result, out)
+        self.assertFalse((out / "raw.json").exists())
+        self.assertIn("RemoteDisconnected", report["observation_failures"].get("candidate", ""))
+        self.assertNotIn("base", report["observation_failures"])
+        self.assertNotIn("control", report["observation_failures"])
+        self.assertIn("candidate", report["differing_arms"])
+        self.assertEqual(report["arms"]["base"]["http"]["status"], 200)
+        self.assertEqual(report["arms"]["control"]["http"]["status"], 200)
+        self.assertIn("RemoteDisconnected", report["arms"]["candidate"]["http"].get("error", ""))
+        pids = self.recorded_web_pids()
+        self.assertEqual(len(pids), 3)
+        self.assert_reaped(pids)
+        self.assert_lane_released()
+
+    def test_http_disconnect_during_sampling_is_refused(self) -> None:
+        result, out = self.run_paired(surface=("--http", "/disconnect-after-parity"))
+        self.assertEqual(result.returncode, 2, result.stderr + result.stdout)
+        self.assertIn("RemoteDisconnected", result.stderr)
+        self.assertTrue(json.loads((out / "parity.json").read_text())["match"])
+        self.assertFalse((out / "paired-summary.json").exists())
+        pids = self.recorded_web_pids()
+        self.assertEqual(len(pids), 4)
+        self.assert_reaped(pids)
+        self.assert_lane_released()
+
+    def test_omitted_parity_does_not_match_different_timed_stdout(self) -> None:
+        base = subprocess.run(
+            [self.binaries["base"], "timed"], capture_output=True, check=False, timeout=10)
+        candidate = subprocess.run(
+            [self.binaries["candidate"], "timed"], capture_output=True, check=False, timeout=10)
+        self.assertEqual(base.returncode, 0)
+        self.assertEqual(candidate.returncode, 0)
+        self.assertNotEqual(base.stdout, candidate.stdout)
+
+        result, out = self.run_paired()
+        report = self.assert_no_passing_verdict(result, out)
+        self.assertEqual(set(report["observation_failures"]), {"base", "candidate", "control"})
+        self.assertTrue(all(
+            reason == "missing observation"
+            for reason in report["observation_failures"].values()))
+        self.assertEqual(report["arms"]["base"], {})
+
+    def test_identical_failed_probes_do_not_match(self) -> None:
+        for role in ("base", "candidate"):
+            probe = subprocess.run(
+                [self.binaries[role], "probe-fail"], capture_output=True, check=False, timeout=10)
+            self.assertEqual(probe.returncode, 9)
+            self.assertEqual(probe.stdout, b"")
+
+        result, out = self.run_paired("--parity", "probe-fail")
+        report = self.assert_no_passing_verdict(result, out)
+        self.assertEqual(set(report["observation_failures"]), {"base", "candidate", "control"})
+        self.assertTrue(all(
+            reason == "command exited 9" for reason in report["observation_failures"].values()))
+        self.assertEqual(report["arms"]["candidate"]["command"]["exit"], 9)
+
+    def test_one_arm_failed_probe_does_not_match(self) -> None:
+        result, out = self.run_paired("--parity", "probe-one-fail")
+        report = self.assert_no_passing_verdict(result, out)
+        self.assertEqual(report["observation_failures"].get("candidate"), "command exited 9")
+        self.assertNotIn("base", report["observation_failures"])
+        self.assertNotIn("control", report["observation_failures"])
+        self.assertIn("candidate", report["differing_arms"])
+
+    def test_differing_successful_observations_do_not_match(self) -> None:
+        result, out = self.run_paired("--parity", "probe-differ")
+        report = self.assert_no_passing_verdict(result, out)
+        self.assertEqual(report["observation_failures"], {})
+        self.assertIn("candidate", report["differing_arms"])
+        self.assertEqual(report["arms"]["base"]["command"]["exit"], 0)
+        self.assertEqual(report["arms"]["candidate"]["command"]["exit"], 0)
+        self.assertNotEqual(
+            report["arms"]["base"]["command"]["output"],
+            report["arms"]["candidate"]["command"]["output"])
+
+    def test_repeated_parity_mask_options_accumulate_into_the_record(self) -> None:
+        # Regression (F2026-11-399): argparse kept only the last `--parity-mask`, so
+        # `--parity-mask duration_ms --parity-mask message` masked `message` alone and
+        # refused on the unmasked `duration_ms` difference after the full restore cost.
+        # The repeated and multi-value forms must both mask every name, and a field
+        # left unmasked must still refuse.
+        for masks in (("--parity-mask", "duration_ms", "--parity-mask", "message"),
+                      ("--parity-mask", "duration_ms", "message")):
+            with self.subTest(masks=masks):
+                result, out = self.run_paired(
+                    "--parity", "probe-json", *masks,
+                    "--qualifying-task-count", "indexed_tasks=14819")
+                self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+                report = json.loads((out / "parity.json").read_text())
+                self.assertIs(report["match"], True, report)
+                self.assertEqual(report["masks"], ["duration_ms", "message"])
+        result, out = self.run_paired(
+            "--parity", "probe-json", "--parity-mask", "duration_ms", "--parity-mask", "stable")
+        report = self.assert_no_passing_verdict(result, out)
+        self.assertEqual(report["masks"], ["duration_ms", "stable"])
+        self.assertEqual(report["differing_arms"], ["candidate"])
+        self.assertEqual(report["observation_failures"], {})
+
+    def test_identical_successful_observations_match_and_can_pass(self) -> None:
+        result, out = self.run_paired("--parity", "probe-same",
+                                     "--qualifying-task-count", "indexed_tasks=14819")
+        self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+        report = json.loads((out / "parity.json").read_text())
+        self.assertIs(report["match"], True)
+        self.assertEqual(report["observation_failures"], {})
+        self.assertEqual(report["differing_arms"], [])
+        summary = json.loads((out / "paired-summary.json").read_text())
+        self.assertEqual(summary["verdict"], "pass")
+        evidence = json.loads((out / "snapshot-manifest-summary.json").read_text())
+        self.assertEqual(evidence["manifest"]["file_count"], 1)
+        self.assertEqual(evidence["manifest"]["size_bytes"],
+                         Path(evidence["manifest"]["path_on_host"]).stat().st_size)
+        self.assertEqual(evidence["qualifying_task_counts"], {"indexed_tasks": 14819})
+        self.assertEqual(evidence["snapshot"]["source_workspace"], "test-ws")
+        self.assertEqual(evidence["revisions"]["base"], "a" * 40)
+        self.assertEqual(evidence["revisions"]["candidate"], "c" * 40)
+        self.assertLessEqual((out / "snapshot-manifest-summary.json").stat().st_size,
+                             1_048_576)
+        self.assertEqual(summary["snapshot"]["manifest_summary"],
+                         str((out / "snapshot-manifest-summary.json").resolve()))
+        self.assertIn('"verdict": "pass"', result.stdout)
+
+    def test_oversized_manifest_summary_is_refused_and_not_left_under_keep(self) -> None:
+        # Regression: the summary was written before its encoded size was checked,
+        # so an oversized file stayed at the evidence path after the refusal when
+        # --keep retained the output directory. Ten non-BMP labels encode past the
+        # 1 MiB artifact limit because json.dumps escapes each character.
+        extra = ["--keep"]
+        for index in range(10):
+            extra += ["--qualifying-task-count", f"{chr(0x1F600 + index) * 10_000}=1"]
+        result, out = self.run_paired(*extra)
+        self.assertEqual(result.returncode, 2, result.stderr + result.stdout)
+        self.assertIn("snapshot-manifest-summary.json", result.stderr)
+        self.assertIn("1048576-byte artifact limit", result.stderr)
+        self.assertFalse((out / "snapshot-manifest-summary.json").exists(),
+                         "an oversized summary must not be left at the evidence path")
+        self.assertFalse((out / "parity.json").exists())
+        self.assertNotIn('"verdict": "pass"', result.stdout)
+
+    def test_inherited_orbit_root_does_not_refuse_isolated_parity(self) -> None:
+        # An ORBIT_ROOT exported by the invoking shell that encloses this run's
+        # scratch must not make the harness refuse its own disposable restore.
+        with mock.patch.dict(os.environ, {"ORBIT_ROOT": str(SCRATCH)}):
+            result, out = self.run_paired("--parity", "probe-same")
+        self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+        self.assertIs(json.loads((out / "parity.json").read_text())["match"], True)
+
+    def test_registered_checkout_on_host_does_not_refuse_isolated_parity(self) -> None:
+        # The guard reads the fixture-owned registry only: the invoking account's
+        # registry, even one naming this checkout, cannot refuse the run. The
+        # fixture registry here names an unrelated directory.
+        self.register_checkouts(self.home / "unrelated" / ".orbit")
+        result, out = self.run_paired("--parity", "probe-same")
+        self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+        self.assertIs(json.loads((out / "parity.json").read_text())["match"], True)
+
+    def test_fixture_registered_protected_destination_is_still_refused(self) -> None:
+        # The real guard stays effective: a checkout the fixture registry names
+        # protects the scratch root enclosed in it.
+        self.register_checkouts(REPO / ".orbit")
+        result, out = self.run_paired("--parity", "probe-same")
+        self.assertEqual(result.returncode, 2, result.stderr + result.stdout)
+        self.assertIn("refusing to restore into", result.stderr)
+        self.assertIn(str(REPO / ".orbit"), result.stderr)
+        self.assertNotIn('"verdict": "pass"', result.stdout)
+        self.assertFalse((out / "paired-summary.json").exists())
+
+    def test_disk_gate_refuses_pristine_copy_once_first_restore_fills_filesystem(self) -> None:
+        # ORB-26572: the first restore populates the root and can carry the
+        # filesystem to the 80% gate. The second full copy (the pristine template)
+        # must be refused by the disk gate before it starts, not run to exit 0.
+        bindir = Path(self.temp.name) / "bin"
+        bindir.mkdir()
+        df = bindir / "df"
+        df.write_text('''#!/bin/sh
+# Stands in for `df --output=pcent PARENT`: 79% until the first restore has
+# populated PARENT/root, then 80%, the disk gate's threshold.
+for parent in "$@"; do :; done
+if [ -e "$parent/root" ]; then
+  printf 'Use%%\\n 80%%\\n'
+else
+  printf 'Use%%\\n 79%%\\n'
+fi
+''')
+        df.chmod(0o755)
+        with mock.patch.dict(os.environ, {"PATH": f"{bindir}{os.pathsep}{os.environ['PATH']}"}):
+            result, out = self.run_paired("--parity", "probe-same")
+        self.assertEqual(result.returncode, 2, result.stderr + result.stdout)
+        self.assertIn("disk gate", result.stderr)
+        self.assertIn("at or above 80%", result.stderr)
+        self.assertIn("pristine", result.stderr)
+        self.assertNotIn('"verdict": "pass"', result.stdout)
+        self.assertFalse(out.exists(), "a refused run keeps no output")
+
+    def test_explicit_empty_parity_command_is_refused_in_http_mode(self) -> None:
+        # ORB-26398: an explicit empty `--parity` names no command, so it must not
+        # stand in for an omitted one and let HTTP-only observations match.
+        result, out = self.run_paired("--parity", "", surface=("--http", "/ok"))
+        self.assertEqual(result.returncode, 2, result.stderr + result.stdout)
+        self.assertIn("--parity", result.stderr)
+        self.assertNotIn('"verdict": "pass"', result.stdout)
+        self.assertFalse(out.exists(), "a refused usage error creates no output")
+        self.assertFalse((self.marks / "web-all.pids").exists(),
+                         "no arm server may start for an empty parity command")
+
+    def test_malformed_parity_quoting_is_a_flag_usage_error_in_http_mode(self) -> None:
+        # ORB-26439: a --parity value shlex cannot split is a usage error (STD-01 R20,
+        # R21), not an unhandled ValueError traceback. Refused before any output or arm.
+        result, out = self.run_paired("--parity", "'", surface=("--http", "/ok"))
+        self.assertEqual(result.returncode, 2, result.stderr + result.stdout)
+        self.assertIn("error: argument --parity:", result.stderr)
+        self.assertNotIn("Traceback", result.stderr)
+        self.assertNotIn('"verdict": "pass"', result.stdout)
+        self.assertFalse(out.exists(), "a refused usage error creates no output")
+        self.assertFalse((self.marks / "web-all.pids").exists(),
+                         "no arm server may start for a malformed parity command")
+
+    def _require_xattr_support(self) -> None:
+        if not (hasattr(os, "listxattr") and hasattr(os, "setxattr")):
+            self.skipTest("requires os.listxattr and os.setxattr")
+        probe = Path(self.temp.name) / "xattr-probe"
+        probe.write_text("probe")
+        try:
+            os.setxattr(probe, "user.probe", b"1")
+        except OSError as error:
+            self.skipTest(f"filesystem does not support user xattrs: {error}")
+
+    def _run_xattr_check(self, *extra: str, bootstrap: str = PAIRED_BOOTSTRAP,
+                         expected_attrs: dict[str, str] | None = None) -> list[dict]:
+        obs_file = self.marks / "xattr-observations.jsonl"
+        if obs_file.exists():
+            obs_file.unlink()
+        result, out = self.run_paired(
+            "--parity", "xattr-parity", *extra,
+            surface=("--cli", "xattr-timed"), bootstrap=bootstrap,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+        report = json.loads((out / "parity.json").read_text())
+        self.assertIs(report["match"], True, report)
+        observations = [json.loads(line) for line in obs_file.read_text().splitlines()]
+        self.assertEqual(
+            [(o["mode"], o["role"]) for o in observations],
+            [("xattr-parity", "base"), ("xattr-parity", "candidate"), ("xattr-parity", "base"),
+             ("xattr-timed", "base"), ("xattr-timed", "candidate"), ("xattr-timed", "base")],
+        )
+        if expected_attrs is not None:
+            for obs in observations:
+                self.assertEqual(obs["attrs"], expected_attrs, obs)
+        return observations
+
+    def test_reset_clears_extended_attributes_between_arms_and_agrees_with_keep(self) -> None:
+        # ORB-26573: an attribute added by an earlier arm must be absent at the next
+        # parity observation and sampling round, and user attributes must agree
+        # with a full restore (--keep).
+        self._require_xattr_support()
+        keep_obs = self._run_xattr_check("--keep", expected_attrs={})
+        reset_obs = self._run_xattr_check(expected_attrs={})
+        self.assertEqual(reset_obs, keep_obs)
+
+    def test_reset_preserves_original_extended_attributes_from_full_restore(self) -> None:
+        # If a full restore leaves original user attributes on a file, the
+        # pristine template and reset must preserve them even when an earlier
+        # arm removes them and adds its own attribute.
+        self._require_xattr_support()
+        original_xattr_bootstrap = PASSWD_HOME_PATCH + r"""
+import importlib.util, os, pathlib, sys
+sys.path.insert(0, str(pathlib.Path(sys.argv[1]).resolve().parent))
+import fixture
+_real_restore_root = fixture.restore_root
+def _restore_with_original_xattr(*args, **kwargs):
+    info = _real_restore_root(*args, **kwargs)
+    os.setxattr(pathlib.Path(info["cwd"]) / ".orbit" / "config.yaml", "user.original", b"kept")
+    return info
+fixture.restore_root = _restore_with_original_xattr
+import runpy
+script = sys.argv[1]
+sys.argv = [script] + sys.argv[2:]
+runpy.run_path(script, run_name="__main__")
+"""
+        expected = {"user.original": "kept"}
+        keep_obs = self._run_xattr_check(
+            "--keep", bootstrap=original_xattr_bootstrap, expected_attrs=expected)
+        reset_obs = self._run_xattr_check(
+            bootstrap=original_xattr_bootstrap, expected_attrs=expected)
+        self.assertEqual(reset_obs, keep_obs)
+
+    def doctor_row_masks(self) -> tuple[str, ...]:
+        return (
+            "--parity-mask", "duration_ms",
+            "--parity-mask-row", "check=disk-space:message",
+            "--parity-mask-row", "check=routine-freshness:message",
+            "--parity-mask-row", "check=store-retention:message",
+            "--parity-mask-row", "check=provider-limits:muse:message",
+        )
+
+    def command_rows(self, report: dict, arm: str) -> list:
+        return report["arms"][arm]["command"]["output"]["value"]
+
+    def test_row_mask_passes_when_only_named_messages_and_duration_differ(self) -> None:
+        result, out = self.run_paired(
+            "--parity", "probe-rows message", *self.doctor_row_masks(),
+        )
+        self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+        report = json.loads((out / "parity.json").read_text())
+        self.assertIs(report["match"], True, report)
+        self.assertEqual(report["observation_failures"], {})
+        self.assertEqual(report["differing_arms"], [])
+        self.assertEqual(report["masks"], ["duration_ms"])
+        self.assertEqual(report["row_masks"], [
+            "check=disk-space:message",
+            "check=routine-freshness:message",
+            "check=store-retention:message",
+            "check=provider-limits:muse:message",
+        ])
+        disk = next(row for row in self.command_rows(report, "candidate")
+                    if row["check"] == "disk-space")
+        self.assertNotIn("message", disk)
+        self.assertNotIn("duration_ms", disk)
+        self.assertEqual(disk["status"], "ok")
+        self.assertIsNone(disk["remediation"])
+        health = next(row for row in self.command_rows(report, "candidate")
+                      if row["check"] == "store-health")
+        self.assertEqual(health["message"], "store ok")
+        muse = next(row for row in self.command_rows(report, "base")
+                    if row["check"] == "provider-limits:muse")
+        self.assertNotIn("message", muse)
+        self.assertEqual(muse["status"], "ok")
+
+    def test_row_mask_refuses_an_unmasked_row_difference(self) -> None:
+        result, out = self.run_paired(
+            "--parity", "probe-rows unmasked", *self.doctor_row_masks(),
+        )
+        report = self.assert_no_passing_verdict(result, out)
+        self.assertEqual(report["observation_failures"], {})
+        self.assertEqual(report["differing_arms"], ["candidate"])
+        base_health = next(row for row in self.command_rows(report, "base")
+                           if row["check"] == "store-health")
+        candidate_health = next(row for row in self.command_rows(report, "candidate")
+                                if row["check"] == "store-health")
+        self.assertEqual(base_health["message"], "store ok")
+        self.assertEqual(candidate_health["message"], "store drifted")
+        candidate_disk = next(row for row in self.command_rows(report, "candidate")
+                              if row["check"] == "disk-space")
+        self.assertNotIn("message", candidate_disk)
+
+    def test_row_mask_refuses_status_difference_on_a_masked_row(self) -> None:
+        result, out = self.run_paired(
+            "--parity", "probe-rows status", *self.doctor_row_masks(),
+        )
+        report = self.assert_no_passing_verdict(result, out)
+        self.assertEqual(report["observation_failures"], {})
+        self.assertEqual(report["differing_arms"], ["candidate"])
+        base_disk = next(row for row in self.command_rows(report, "base")
+                         if row["check"] == "disk-space")
+        candidate_disk = next(row for row in self.command_rows(report, "candidate")
+                              if row["check"] == "disk-space")
+        self.assertNotIn("message", base_disk)
+        self.assertNotIn("message", candidate_disk)
+        self.assertEqual(base_disk["status"], "ok")
+        self.assertEqual(candidate_disk["status"], "error")
+
+    def test_row_mask_refuses_remediation_difference_on_a_masked_row(self) -> None:
+        result, out = self.run_paired(
+            "--parity", "probe-rows remediation", *self.doctor_row_masks(),
+        )
+        report = self.assert_no_passing_verdict(result, out)
+        self.assertEqual(report["observation_failures"], {})
+        self.assertEqual(report["differing_arms"], ["candidate"])
+        base_disk = next(row for row in self.command_rows(report, "base")
+                         if row["check"] == "disk-space")
+        candidate_disk = next(row for row in self.command_rows(report, "candidate")
+                              if row["check"] == "disk-space")
+        self.assertNotIn("message", candidate_disk)
+        self.assertIsNone(base_disk["remediation"])
+        self.assertEqual(candidate_disk["remediation"], "free some space")
+
+    def test_row_mask_refuses_check_difference_on_a_masked_row(self) -> None:
+        # The check name itself changed, so the selector matches the stable
+        # `group` key. `message` is dropped and `check` still refuses.
+        result, out = self.run_paired(
+            "--parity", "probe-rows check",
+            "--parity-mask-row", "group=host:message",
+        )
+        report = self.assert_no_passing_verdict(result, out)
+        self.assertEqual(report["observation_failures"], {})
+        self.assertEqual(report["differing_arms"], ["candidate"])
+        base_disk = next(row for row in self.command_rows(report, "base")
+                         if row.get("group") == "host")
+        candidate_disk = next(row for row in self.command_rows(report, "candidate")
+                              if row.get("group") == "host")
+        self.assertNotIn("message", base_disk)
+        self.assertNotIn("message", candidate_disk)
+        self.assertEqual(base_disk["check"], "disk-space")
+        self.assertEqual(candidate_disk["check"], "disk-free")
+
+    def test_row_mask_refuses_when_selector_matches_no_row(self) -> None:
+        result, out = self.run_paired(
+            "--parity", "probe-rows same",
+            "--parity-mask-row", "check=not-a-check:message",
+        )
+        report = self.assert_no_passing_verdict(result, out)
+        self.assertEqual(report["differing_arms"], [])
+        self.assertEqual(set(report["observation_failures"]), {"base", "candidate", "control"})
+        self.assertTrue(all(
+            reason == "row mask matched no row: check=not-a-check:message"
+            for reason in report["observation_failures"].values()
+        ))
+
+    def test_row_mask_refuses_a_missing_row(self) -> None:
+        result, out = self.run_paired(
+            "--parity", "probe-rows missing", *self.doctor_row_masks(),
+        )
+        report = self.assert_no_passing_verdict(result, out)
+        self.assertEqual(report["observation_failures"], {})
+        self.assertEqual(report["differing_arms"], ["candidate"])
+        base_checks = [row["check"] for row in self.command_rows(report, "base")]
+        candidate_checks = [row["check"] for row in self.command_rows(report, "candidate")]
+        self.assertIn("store-health", base_checks)
+        self.assertNotIn("store-health", candidate_checks)
+
+    def test_row_mask_refuses_reordered_rows(self) -> None:
+        result, out = self.run_paired(
+            "--parity", "probe-rows reorder", *self.doctor_row_masks(),
+        )
+        report = self.assert_no_passing_verdict(result, out)
+        self.assertEqual(report["observation_failures"], {})
+        self.assertEqual(report["differing_arms"], ["candidate"])
+        base_checks = [row["check"] for row in self.command_rows(report, "base")]
+        candidate_checks = [row["check"] for row in self.command_rows(report, "candidate")]
+        self.assertEqual(sorted(base_checks), sorted(candidate_checks))
+        self.assertNotEqual(base_checks, candidate_checks)
+        self.assertEqual(candidate_checks[0], "store-health")
+        self.assertEqual(base_checks[0], "disk-space")
+
+    def test_row_mask_does_not_hide_a_nonzero_parity_exit(self) -> None:
+        result, out = self.run_paired(
+            "--parity", "probe-fail",
+            "--parity-mask-row", "check=disk-space:message",
+        )
+        report = self.assert_no_passing_verdict(result, out)
+        self.assertEqual(set(report["observation_failures"]), {"base", "candidate", "control"})
+        self.assertTrue(all(
+            reason == "command exited 9"
+            for reason in report["observation_failures"].values()
+        ))
+
+    def test_row_mask_does_not_hide_a_missing_observation(self) -> None:
+        result, out = self.run_paired("--parity-mask-row", "check=disk-space:message")
+        report = self.assert_no_passing_verdict(result, out)
+        self.assertEqual(set(report["observation_failures"]), {"base", "candidate", "control"})
+        self.assertTrue(all(
+            reason == "missing observation"
+            for reason in report["observation_failures"].values()
+        ))
+
+    def test_row_mask_does_not_hide_a_parity_bound_hit(self) -> None:
+        result, out = self.run_paired(
+            "--parity", "probe-stall",
+            "--parity-mask-row", "check=disk-space:message",
+            "--command-timeout", "1",
+        )
+        report = self.assert_no_passing_verdict(result, out)
+        self.assertIn("base", report["observation_failures"])
+        self.assertIn("timed out", report["observation_failures"]["base"])
+        self.assertEqual(
+            report["arms"]["base"]["command"]["bound"],
+            {"name": "command_timeout_seconds", "value": 1.0},
+        )
+        self.assertFalse((out / "raw.json").exists())
+
+    def test_malformed_row_mask_is_a_usage_error(self) -> None:
+        result, out = self.run_paired(
+            "--parity", "probe-same", "--parity-mask-row", "disk-space",
+        )
+        self.assertEqual(result.returncode, 2, result.stderr + result.stdout)
+        self.assertIn("error: argument --parity-mask-row:", result.stderr)
+        self.assertFalse((out / "parity.json").exists())
+
+
+class PairedCliSupervisionTest(PairedCliTestCase):
+    def assert_stall_refused(self, mode: str, *extra: str, surface=("--cli", "timed")) -> None:
+        started = time.monotonic()
+        result, out = self.run_paired(*extra, "--command-timeout", "1", surface=surface)
+        elapsed = time.monotonic() - started
+        self.assertEqual(result.returncode, 2, result.stderr + result.stdout)
+        self.assertIn("base", result.stderr)
+        self.assertIn("timed out after 1 s", result.stderr)
+        self.assertIn("--command-timeout", result.stderr)
+        self.assertLess(elapsed, 60, "the refusal must come within the command bound")
+        self.assertFalse((out / "paired-summary.json").exists())
+        self.assert_lane_released()
+        leader, descendant = (int(pid) for pid in
+                              (self.marks / f"{mode}-base.pids").read_text().split())
+        self.assert_reaped([leader, descendant])
+
+    def test_stalled_parity_command_is_refused_and_reaped(self) -> None:
+        self.assert_stall_refused("probe-stall", "--parity", "probe-stall")
+
+    def test_stalled_sample_command_is_refused_and_reaped(self) -> None:
+        self.assert_stall_refused("stall", "--parity", "probe-same", surface=("--cli", "stall"))
+
+    def test_timed_out_cli_preserves_grace_after_leader_exits(self) -> None:
+        def cleanup_leaked_group() -> None:
+            marker_bytes = str(self.marks).encode()
+            for suffix in (".leader.pid", ".graceful.pid", ".stubborn.pid"):
+                pid_file = self.marks / f"graceful-base{suffix}"
+                if not pid_file.exists():
+                    continue
+                pid = int(pid_file.read_text())
+                try:
+                    cmdline = Path(f"/proc/{pid}/cmdline").read_bytes()
+                except FileNotFoundError:
+                    continue
+                if marker_bytes in cmdline:
+                    try:
+                        os.kill(pid, signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
+        self.addCleanup(cleanup_leaked_group)
+
+        started = time.monotonic()
+        result, out = self.run_paired(
+            "--parity", "probe-same", "--command-timeout", "1",
+            surface=("--cli", "graceful-descendant"),
+        )
+        elapsed = time.monotonic() - started
+        self.assertEqual(result.returncode, 2, result.stderr + result.stdout)
+        self.assertIn("base", result.stderr)
+        self.assertIn("timed out after 1 s", result.stderr)
+        self.assertIn("--command-timeout", result.stderr)
+        self.assertLess(elapsed, 60, "the refusal must come within the command bound")
+        self.assertFalse((out / "paired-summary.json").exists())
+        self.assert_lane_released()
+
+        leader_pid = int((self.marks / "graceful-base.leader.pid").read_text())
+        graceful_pid = int((self.marks / "graceful-base.graceful.pid").read_text())
+        stubborn_pid = int((self.marks / "graceful-base.stubborn.pid").read_text())
+        self.assert_reaped([leader_pid, graceful_pid, stubborn_pid])
+        done_file = self.marks / "graceful-base.done"
+        self.assertTrue(
+            done_file.exists(),
+            "in-group descendant did not finish its graceful shutdown after leader exit",
+        )
+        self.assertEqual(done_file.read_text(), "graceful-done\n")
+
+    def test_output_over_limit_is_refused(self) -> None:
+        result, out = self.run_paired("--parity", "probe-flood", "--output-limit-bytes", "1024")
+        self.assertEqual(result.returncode, 2, result.stderr + result.stdout)
+        self.assertIn("wrote more than 1024 bytes of stdout", result.stderr)
+        self.assertIn("--output-limit-bytes", result.stderr)
+        self.assert_lane_released()
+
+    def assert_bounded_parity_report(self, result: subprocess.CompletedProcess[str], out: Path,
+                                     bound_flag: str, bound_name: str, bound_value: float) -> None:
+        # A parity command that hits a bound is a failed observation: the run exits 2
+        # before sampling and parity.json still names the failed arm and its bound.
+        self.assertEqual(result.returncode, 2, result.stderr + result.stdout)
+        report = json.loads((out / "parity.json").read_text())
+        self.assertIs(report["match"], False)
+        self.assertIn("base", report["observation_failures"])
+        self.assertEqual(report["arms"]["base"]["command"]["bound"],
+                         {"name": bound_name, "value": bound_value}, bound_flag)
+        self.assertFalse((out / "raw.json").exists(), "a refused parity check must not sample")
+        self.assertFalse((out / "paired-summary.json").exists(), result.stdout)
+        self.assert_lane_released()
+
+    def test_output_over_limit_parity_writes_failed_report(self) -> None:
+        result, out = self.run_paired("--parity", "probe-flood", "--output-limit-bytes", "1024")
+        self.assert_bounded_parity_report(
+            result, out, "--output-limit-bytes", "output_limit_bytes", 1024)
+
+    def test_timed_out_parity_writes_failed_report(self) -> None:
+        result, out = self.run_paired("--parity", "probe-stall", "--command-timeout", "1")
+        self.assert_bounded_parity_report(
+            result, out, "--command-timeout", "command_timeout_seconds", 1.0)
+
+    def test_reported_limits_are_recorded(self) -> None:
+        result, out = self.run_paired(
+            "--parity", "probe-same", "--command-timeout", "30", "--output-limit-bytes", "4096")
+        self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+        expected = {"command_timeout_seconds": 30.0, "output_limit_bytes": 4096}
+        self.assertEqual(json.loads((out / "parity.json").read_text())["limits"], expected)
+        protocol = json.loads((out / "paired-summary.json").read_text())["protocol"]
+        self.assertEqual(
+            {key: protocol[key] for key in expected}, expected)
+
+    def test_large_command_timeout_allows_short_probe(self) -> None:
+        # ORB-26412: epoll rejects a millisecond timeout this large, so the
+        # supervision loop must never hand it the whole command deadline. An
+        # immediate-exit probe can be seen as exited before the first selector
+        # wait, which skips the code under test (ORB-26488). Every probe here is
+        # therefore held alive until the harness is in a pidfd-backed wait.
+        if not (sys.platform.startswith("linux") and hasattr(os, "pidfd_open")
+                and hasattr(selectors, "EpollSelector")):
+            self.skipTest("requires Linux os.pidfd_open and epoll")
+        try:
+            os.close(os.pidfd_open(os.getpid()))
+        except OSError as error:
+            self.skipTest(f"pidfd_open is unavailable in this environment: {error}")
+        result, out = self.run_paired(
+            "--parity", "held-probe-same", "--command-timeout", "3000000",
+            surface=("--cli", "held-timed"), bootstrap=HELD_PAIRED_BOOTSTRAP)
+        self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+        report = json.loads((out / "parity.json").read_text())
+        self.assertIs(report["match"], True)
+        self.assertEqual(report["observation_failures"], {})
+        self.assertEqual(report["limits"]["command_timeout_seconds"], 3_000_000.0)
+        held = {int(path.read_text()) for path in self.marks.glob("held-*.pid")}
+        self.assertGreaterEqual(len(held), 6, "three arms, held for parity and for sampling")
+        waits = [json.loads(line) for line in
+                 (self.marks / "pidfd-waits.jsonl").read_text().splitlines()]
+        waited = {wait["pid"]: wait for wait in waits}
+        self.assertLessEqual(held, set(waited), "every held probe needs a pidfd-backed wait")
+        for pid in held:
+            self.assertIs(waited[pid]["live"], True,
+                          f"probe exited before its pidfd wait: {waited[pid]}")
+            self.assertTrue((self.marks / f"release-{pid}").exists())
+
+    def test_cancellation_during_process_acquisition(self) -> None:
+        # Trace Popen's return, before its caller can install a cleanup guard.
+        driver = PASSWD_HOME_PATCH + """
+import os, runpy, signal, subprocess, sys
+script, kind, pidfile, signum = sys.argv[1:5]
+sys.argv = [script] + sys.argv[5:]
+spawned = None
+def trace(frame, event, arg):
+    global spawned
+    if spawned is not None and event == "call" and frame.f_code.co_name == "clean_root":
+        try:
+            os.kill(spawned, 0)
+        except ProcessLookupError:
+            state = "reaped"
+        else:
+            state = "live"
+        with open(pidfile + ".cleanup", "w") as output:
+            output.write(state)
+        sys.settrace(None)
+    if spawned is None and event == "return" and frame.f_code is subprocess.Popen.__init__.__code__:
+        args = frame.f_locals.get("args", [])
+        if (kind == "server" and "web" in args) or (kind == "arm" and "probe-stall" in args):
+            spawned = frame.f_locals["self"].pid
+            with open(pidfile, "w") as output:
+                output.write(str(spawned))
+            os.kill(os.getpid(), int(signum))
+    return trace
+sys.settrace(trace)
+runpy.run_path(script, run_name="__main__")
+"""
+        for kind, signum in (("arm", signal.SIGTERM), ("server", signal.SIGINT)):
+            with self.subTest(kind=kind):
+                out = Path(self.temp.name) / ("out-acquire-" + kind)
+                pidfile = Path(self.temp.name) / ("acquire-" + kind + ".pid")
+                surface = ("--http", "/slow") if kind == "server" else ("--cli", "stall")
+                args = self.paired_argv(out, surface, "--parity",
+                                        "probe-same" if kind == "server" else "probe-stall")
+                result = subprocess.run(
+                    [sys.executable, "-I", "-c", driver, str(PAIRED), kind,
+                     str(pidfile), str(signum), *args[5:]],
+                    cwd=REPO, env=self.paired_env(), capture_output=True, text=True, timeout=60,
+                )
+                self.assertTrue(pidfile.exists(), result.stderr)
+                pid = int(pidfile.read_text())
+                try:
+                    self.assertEqual(result.returncode, 128 + signum, result.stderr)
+                    self.assertTrue(process_gone(pid), f"owned leader {pid} survived cancellation")
+                    self.assertEqual(Path(str(pidfile) + ".cleanup").read_text(), "reaped")
+                    self.assert_lane_released()
+                    self.assertFalse(out.exists())
+                finally:
+                    if not process_gone(pid):
+                        os.killpg(pid, signal.SIGKILL)
+
+    def test_interrupt_during_server_stop_kills_group_and_preserves_cancellation(self) -> None:
+        (self.marks / "ignore-web-term").touch()
+        out = Path(self.temp.name) / "out-cancel"
+        harness = self.start_cancellation_harness(out, ("--http", "/slow"))
+
+        pid_file = self.marks / "web-base.pid"
+
+        def pin_fixture_process(pid: int, marker: Path) -> int:
+            try:
+                pidfd = os.pidfd_open(pid)
+            except (AttributeError, OSError) as error:
+                self.fail(f"could not pin fixture process {pid}: {error}")
+            try:
+                cmdline = Path(f"/proc/{pid}/cmdline").read_bytes()
+            except OSError as error:
+                os.close(pidfd)
+                self.fail(f"could not verify fixture process {pid}: {error}")
+            if str(marker).encode() not in cmdline:
+                os.close(pidfd)
+                self.fail(f"fixture process {pid} did not name {marker}")
+            # Keep the descriptor until the leaked-process cleanup has run. It
+            # continues to identify this process if it exits and its PID is reused.
+            self.addCleanup(os.close, pidfd)
+            return pidfd
+
+        deadline = time.monotonic() + 60
+        while not (pid_file.exists() and pid_file.read_text()):
+            self.assertIsNone(harness.poll(), "harness exited before its server started")
+            self.assertLess(time.monotonic(), deadline, "server never started")
+            time.sleep(0.05)
+        server_pid = int(pid_file.read_text())
+        server_pidfd = pin_fixture_process(server_pid, pid_file)
+        descendant_file = self.marks / "web-base.descendant.pid"
+        deadline = time.monotonic() + 10
+        while not descendant_file.exists():
+            self.assertIsNone(harness.poll(), "server exited before recording its descendant")
+            self.assertLess(time.monotonic(), deadline, "server descendant was not started")
+            time.sleep(0.01)
+        descendant_pid = int(descendant_file.read_text())
+        descendant_ready = self.marks / "web-base.descendant.ready"
+        descendant_pidfd = pin_fixture_process(descendant_pid, descendant_ready)
+        deadline = time.monotonic() + 10
+        while not descendant_ready.exists():
+            self.assertIsNone(harness.poll(), "server descendant exited before becoming ready")
+            self.assertLess(time.monotonic(), deadline, "server descendant did not become ready")
+            time.sleep(0.01)
+
+        def stop_leaked_server() -> None:
+            # Signal the pinned fixture processes individually. A numeric PID or
+            # process-group ID could be reused after the cmdline check above.
+            for pidfd in (server_pidfd, descendant_pidfd):
+                try:
+                    signal.pidfd_send_signal(pidfd, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+        self.addCleanup(stop_leaked_server)
+        slow_file = self.marks / "web-base.slow"
+        deadline = time.monotonic() + 10
+        while not slow_file.exists():
+            self.assertIsNone(harness.poll(), "harness exited before starting its stalled GET")
+            self.assertLess(time.monotonic(), deadline, "server did not start its stalled GET")
+            time.sleep(0.01)
+        harness.send_signal(signal.SIGTERM)
+
+        term_file = self.marks / "web-base.term"
+        deadline = time.monotonic() + 10
+        while not term_file.exists():
+            self.assertIsNone(harness.poll(), "harness exited before server cleanup started")
+            self.assertLess(time.monotonic(), deadline, "server did not receive SIGTERM")
+            time.sleep(0.01)
+        self.assertEqual(term_file.read_text(), str(signal.SIGTERM))
+        harness.send_signal(signal.SIGINT)
+        _stdout, stderr = harness.communicate(timeout=60)
+        self.assertNotIn("cancellation owner killed surviving descendants", stderr)
+        self.assertEqual(harness.returncode, 128 + signal.SIGINT, stderr)
+        self.assertIn("cancelled by SIGINT", stderr)
+        self.assert_reaped([server_pid, descendant_pid])
+        self.assert_lane_released()
+        self.assertFalse(out.exists(), "a cancelled run leaves no partial output")
+
+    def test_interrupt_during_supervised_stop_kills_group_and_preserves_cancellation(self) -> None:
+        out = Path(self.temp.name) / "out-supervised-cancel"
+        harness = self.start_cancellation_harness(
+            out, ("--cli", "ignore-term"),
+            "--parity", "probe-same", "--command-timeout", "1")
+
+        pid_file = self.marks / "ignore-base.pid"
+        deadline = time.monotonic() + 60
+        while not pid_file.exists():
+            self.assertIsNone(harness.poll(), "harness exited before starting the supervised child")
+            self.assertLess(time.monotonic(), deadline, "supervised child never started")
+            time.sleep(0.01)
+        leader_pid = int(pid_file.read_text())
+
+        term_file = self.marks / "ignore-base.term"
+        deadline = time.monotonic() + 60
+        while not term_file.exists():
+            self.assertIsNone(harness.poll(), "harness exited before supervised cleanup started")
+            self.assertLess(time.monotonic(), deadline, "supervised child did not receive SIGTERM")
+            time.sleep(0.01)
+        self.assertEqual(term_file.read_text(), str(signal.SIGTERM))
+        harness.send_signal(signal.SIGINT)
+        _stdout, stderr = harness.communicate(timeout=60)
+        self.assertNotIn("cancellation owner killed surviving descendants", stderr)
+        self.assertEqual(harness.returncode, 128 + signal.SIGINT, stderr)
+        self.assertIn("cancelled by SIGINT", stderr)
+        self.assert_reaped([leader_pid])
+        self.assert_lane_released()
+        self.assertFalse((out / "paired-summary.json").exists())
+
+    def test_cancellation_setup_failure_reaps_owned_processes(self) -> None:
+        for method, marker in (
+            ("test_interrupt_during_server_stop_kills_group_and_preserves_cancellation", "web-base.pid"),
+            ("test_interrupt_during_supervised_stop_kills_group_and_preserves_cancellation", "ignore-base.pid"),
+        ):
+            with self.subTest(method=method):
+                case = type(self)(method)
+                case.setUp()
+                observed = []
+                owner = None
+                start = case.start_cancellation_harness
+                read_text = Path.read_text
+
+                def start_owner(*args, **kwargs):
+                    nonlocal owner
+                    owner = start(*args, **kwargs)
+                    return owner
+
+                def fail_pid_read(path, *args, **kwargs):
+                    if path == case.marks / marker:
+                        observed.append(int(read_text(path)))
+                        descendant = case.marks / "web-base.descendant.pid"
+                        if descendant.exists():
+                            observed.append(int(read_text(descendant)))
+                        children = Path(f"/proc/{owner.pid}/task/{owner.pid}/children")
+                        observed.extend(int(pid) for pid in read_text(children).split())
+                        raise ValueError("injected marker read failure")
+                    return read_text(path, *args, **kwargs)
+
+                def verify_cleanup():
+                    self.assertTrue(observed, "the failure must follow fixture startup")
+                    self.assertIsNotNone(owner.returncode)
+                    self.assert_reaped(observed)
+                    case.assert_lane_released()
+
+                case.addCleanup(verify_cleanup)
+                case.start_cancellation_harness = start_owner
+                started = time.monotonic()
+                try:
+                    with mock.patch.object(Path, "read_text", fail_pid_read):
+                        with self.assertRaisesRegex(ValueError, "injected marker read failure"):
+                            getattr(case, method)()
+                finally:
+                    self.assertTrue(case.doCleanups())
+                self.assertLess(time.monotonic() - started, 30)
+
+    def test_cancellation_cases_fail_when_harness_leaves_surviving_process(self) -> None:
+        for method, markers in (
+            ("test_interrupt_during_server_stop_kills_group_and_preserves_cancellation",
+             ("web-base.pid", "web-base.descendant.pid")),
+            ("test_interrupt_during_supervised_stop_kills_group_and_preserves_cancellation",
+             ("ignore-base.pid",)),
+        ):
+            with self.subTest(method=method):
+                case = type(self)(method)
+                case.setUp()
+                observed = []
+                owner = None
+                orig_paired_argv = case.paired_argv
+                orig_start = case.start_cancellation_harness
+                orig_communicate = subprocess.Popen.communicate
+
+                def broken_paired_argv(*args, **kwargs):
+                    kwargs["bootstrap"] = BROKEN_STOP_PAIRED_BOOTSTRAP
+                    return orig_paired_argv(*args, **kwargs)
+
+                def track_owner(*args, **kwargs):
+                    nonlocal owner
+                    owner = orig_start(*args, **kwargs)
+                    return owner
+
+                def record_observed_and_communicate(proc, *args, **kwargs):
+                    if proc is owner and not observed:
+                        for name in markers:
+                            observed.append(int((case.marks / name).read_text()))
+                    return orig_communicate(proc, *args, **kwargs)
+
+                case.paired_argv = broken_paired_argv
+                case.start_cancellation_harness = track_owner
+                try:
+                    with mock.patch.object(subprocess.Popen, "communicate",
+                                           record_observed_and_communicate):
+                        with self.assertRaises(AssertionError) as ctx:
+                            getattr(case, method)()
+                    self.assertIn("cancelled by SIGINT", str(ctx.exception))
+                    self.assertIn("cancellation owner killed surviving descendants",
+                                  str(ctx.exception))
+                    self.assertEqual(len(observed), len(markers))
+                    self.assert_reaped(observed)
+                    case.assert_lane_released()
+                finally:
+                    self.assertTrue(case.doCleanups())
+
+    def test_cancellation_owner_reaps_already_dead_descendant(self) -> None:
+        if not (sys.platform.startswith("linux") and hasattr(os, "pidfd_open")):
+            self.skipTest("requires Linux os.pidfd_open")
+        fake_harness = r"""
+import os, pathlib, signal, subprocess, sys, time
+child = subprocess.Popen([sys.executable, "-c", "pass"])
+stat = pathlib.Path(f"/proc/{child.pid}/stat")
+deadline = time.monotonic() + 10
+while time.monotonic() < deadline:
+    try:
+        state = stat.read_text().rsplit(")", 1)[1].split()[0]
+    except FileNotFoundError:
+        state = "Z"
+    if state in ("Z", "X"):
+        break
+    time.sleep(0.005)
+print(child.pid, flush=True)
+print("paired.py: cancelled by SIGINT; stopped every arm process", file=sys.stderr, flush=True)
+os._exit(128 + signal.SIGINT)
+"""
+        owner = subprocess.Popen(
+            [sys.executable, "-I", "-c", CANCELLATION_OWNER,
+             sys.executable, "-I", "-c", fake_harness],
+            cwd=REPO, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        )
+        stdout, stderr = owner.communicate(timeout=30)
+        self.assertEqual(owner.returncode, 128 + signal.SIGINT, stderr)
+        self.assertIn("cancelled by SIGINT", stderr)
+        self.assertNotIn("cancellation owner killed surviving descendants", stderr)
+        dead_pid = int(stdout.strip())
+        self.assertTrue(process_gone(dead_pid), f"already-dead descendant {dead_pid} was not reaped")
+
+    def test_sigterm_during_fixture_pid_staging_reaches_handler(self) -> None:
+        # ORB-26485: a supervision deadline can expire while the ignore-term fixture
+        # is still staging its PID. The `<pid>.tmp` sibling exists for the whole
+        # staging pause, so deliver the SIGTERM once it appears and require both
+        # markers to become complete. The handler must already be installed then.
+        pid_file = self.marks / "staged-base.pid"
+        fixture = subprocess.Popen(
+            [sys.executable, "-I", str(self.builds.parent / "ignore_term_driver.py"),
+             str(pid_file)],
+            stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True,
+        )
+
+        def cleanup() -> None:
+            if fixture.poll() is None:
+                fixture.kill()
+            fixture.communicate(timeout=30)
+        self.addCleanup(cleanup)
+
+        staging = pid_file.with_name(pid_file.name + ".tmp")
+        deadline = time.monotonic() + 60
+        while not staging.exists():
+            self.assertIsNone(fixture.poll(), "fixture exited before staging its PID")
+            self.assertLess(time.monotonic(), deadline, "fixture never started staging its PID")
+            time.sleep(0.001)
+        fixture.send_signal(signal.SIGTERM)
+
+        term_file = self.marks / "staged-base.term"
+        deadline = time.monotonic() + 60
+        while not (term_file.exists() and pid_file.exists()):
+            returncode = fixture.poll()
+            self.assertIsNone(returncode, f"fixture exited {returncode} before publishing its markers")
+            self.assertLess(time.monotonic(), deadline, "fixture markers never became readable")
+            time.sleep(0.001)
+        self.assertEqual(int(pid_file.read_text()), fixture.pid)
+        self.assertEqual(term_file.read_text(), str(signal.SIGTERM))
+
+
+class PairedCliSpacedPathTest(PairedCliTestCase):
+    # ORB-26414: the fake arms are shell scripts that name their marks
+    # directory, interpreter and helper scripts in shell source. A root path
+    # containing a space must not split those words, or the arms never record.
+    root_prefix = "paired cli spaced "
+
+    def test_stall_arm_records_markers_under_spaced_root(self) -> None:
+        result, out = self.run_paired("--parity", "probe-same", "--command-timeout", "1",
+                                      surface=("--cli", "stall"))
+        self.assertEqual(result.returncode, 2, result.stderr + result.stdout)
+        self.assertIn("timed out after 1 s", result.stderr)
+        self.assertFalse((out / "paired-summary.json").exists())
+        leader, descendant = (int(pid) for pid in
+                              (self.marks / "stall-base.pids").read_text().split())
+        self.assert_reaped([leader, descendant])
+        self.assert_lane_released()
+
+    def test_http_arms_record_markers_under_spaced_root(self) -> None:
+        result, out = self.run_paired(surface=("--http", "/ok"))
+        self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+        report = json.loads((out / "parity.json").read_text())
+        self.assertIs(report["match"], True)
+        for arm in ("base", "candidate", "control"):
+            self.assertEqual(report["arms"][arm]["http"]["status"], 200)
+        pids = self.recorded_web_pids()
+        self.assertGreaterEqual(len(pids), 3)
+        self.assert_reaped(pids)
+        self.assert_lane_released()
+
+
+if __name__ == "__main__":
+    unittest.main()

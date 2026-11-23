@@ -36,6 +36,7 @@ use serde_json::{Value, json};
 use tempfile::TempDir;
 
 use super::super::owner::{ClaimedOwnerRoute, bridge_through};
+use super::owner::broker::raw_call;
 use crate::OrbitRuntime;
 use crate::adapter::command::dispatch::brokered::RunDispatch;
 use crate::adapter::command::dispatch::execute::ToolEntryPoint;
@@ -397,6 +398,15 @@ fn the_running_reviewer_reads_its_manifest_and_attaches_its_report_through_the_b
         pinned.as_slice()
     );
 
+    let read_by_task_id = fixture
+        .forwarded(
+            &broker,
+            GET,
+            json!({"task_id": TASK, "path": REVIEW_MANIFEST_ARTIFACT, "workspace": fixture.binding.owner_destination}),
+        )
+        .unwrap();
+    assert_eq!(read_by_task_id, read);
+
     let (source, report) = fixture.report("report.json", &fixture.attempt_id);
     let put = json!({"id": TASK, "path": REVIEW_REPORT_ARTIFACT, "source_path": source, "model": "codex"});
     fixture.forwarded(&broker, PUT, put.clone()).unwrap();
@@ -406,6 +416,13 @@ fn the_running_reviewer_reads_its_manifest_and_attaches_its_report_through_the_b
     let lost = fixture.forwarded(&broker, PUT, put.clone()).unwrap_err();
     assert!(lost.contains("ended before answering"), "{lost}");
     fixture.forwarded(&broker, PUT, put).unwrap();
+    fixture
+        .forwarded(
+            &broker,
+            PUT,
+            json!({"task_id": TASK, "path": REVIEW_REPORT_ARTIFACT, "source_path": source, "model": "codex"}),
+        )
+        .unwrap();
 
     let calls = fixture.owner.calls.lock().unwrap().clone();
     for (name, input, session) in &calls {
@@ -421,7 +438,7 @@ fn the_running_reviewer_reads_its_manifest_and_attaches_its_report_through_the_b
         );
     }
     let puts = fixture.owner.puts();
-    assert_eq!(puts.len(), 3);
+    assert_eq!(puts.len(), 4);
     for put in &puts {
         assert_eq!(put["id"], TASK);
         assert_eq!(put["artifacts"][0]["path"], REVIEW_REPORT_ARTIFACT);
@@ -439,7 +456,7 @@ fn the_running_reviewer_reads_its_manifest_and_attaches_its_report_through_the_b
         .unwrap();
     assert_eq!(
         rows.len(),
-        3,
+        4,
         "one row per bridged call, written by the broker: {rows:?}"
     );
     assert!(rows.iter().all(|row| row.brokered
@@ -452,24 +469,32 @@ fn the_running_reviewer_reads_its_manifest_and_attaches_its_report_through_the_b
 fn the_broker_refuses_what_its_records_do_not_admit_without_reaching_the_owner() {
     let fixture = Fixture::new();
     let broker = fixture.serve("agent_review_repair");
-    let alias = fixture
-        .forwarded(
-            &broker,
-            GET,
-            json!({"task_id": TASK, "path": REVIEW_MANIFEST_ARTIFACT}),
-        )
-        .unwrap_err();
-    assert!(
-        alias.contains("does not accept `task_id`") && alias.contains("pass the task as `id`"),
-        "{alias}"
-    );
-
     let (_, report) = fixture.report("report.json", &fixture.attempt_id);
     let (stale_source, _) = fixture.report("stale.json", "attempt-of-another-run");
     let encoded = {
         use base64::Engine as _;
         base64::engine::general_purpose::STANDARD.encode(&report)
     };
+    for (tool, input) in [
+        (
+            GET,
+            json!({"id": TASK, "task_id": TASK, "path": REVIEW_MANIFEST_ARTIFACT}),
+        ),
+        (
+            GET,
+            json!({"id": TASK, "task_id": "TSO-2", "path": REVIEW_MANIFEST_ARTIFACT}),
+        ),
+        (
+            PUT,
+            json!({"id": TASK, "task_id": TASK, "path": REVIEW_REPORT_ARTIFACT, "content_base64": encoded}),
+        ),
+    ] {
+        let error = raw_call(&fixture, broker.socket_path(), tool, input).unwrap_err();
+        assert!(
+            error.contains("`task_id` is an alias of `id`") && error.contains("not both"),
+            "{tool}: {error}"
+        );
+    }
 
     let cases = [
         (
@@ -491,6 +516,11 @@ fn the_broker_refuses_what_its_records_do_not_admit_without_reaching_the_owner()
             "another task",
             GET,
             json!({"id": "TSO-2", "path": REVIEW_MANIFEST_ARTIFACT}),
+        ),
+        (
+            "another task via task_id",
+            GET,
+            json!({"task_id": "TSO-2", "path": REVIEW_MANIFEST_ARTIFACT}),
         ),
         (
             "another attempt's report",
@@ -571,14 +601,13 @@ fn the_broker_refuses_what_its_records_do_not_admit_without_reaching_the_owner()
     // Another activity's broker carries nothing; nor does the reviewer's once
     // its invocation has ended.
     let implementer = fixture.serve("agent_implement");
-    let refused = fixture
-        .forwarded(
-            &implementer,
-            GET,
-            json!({"id": TASK, "path": REVIEW_MANIFEST_ARTIFACT}),
-        )
-        .unwrap_err();
-    assert!(refused.contains("before-PR reviewer"), "{refused}");
+    for input in [
+        json!({"id": TASK, "path": REVIEW_MANIFEST_ARTIFACT}),
+        json!({"task_id": TASK, "path": REVIEW_MANIFEST_ARTIFACT}),
+    ] {
+        let refused = fixture.forwarded(&implementer, GET, input).unwrap_err();
+        assert!(refused.contains("before-PR reviewer"), "{refused}");
+    }
     fixture.pin_manifest(&fixture.attempt_id.clone());
     fixture.reviewer(ReviewerInvocationEvent::Finished { runtime_seconds: 5 });
     let ended = fixture

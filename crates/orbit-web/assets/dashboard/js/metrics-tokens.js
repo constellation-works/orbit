@@ -10,12 +10,18 @@
 // comes from the shared selector with the rest of the Metrics panel. Chart
 // drawing and tooltips stay in metrics.js, which passes its helpers in.
 
-import { el } from './common.js';
+import { el, onWorkspaceChange } from './common.js';
 import { OUTCOMES, TERMINAL_TIME_NOTE, axisScale, fmtCompactTotal, option, runningModel, seriesKey, seriesLabel, tagPicker, tasks, trendSource, undatedNote } from './metrics-running.js';
 
 const SCOPES = [["all", "All invocations"], ["implement", "Implement only"]];
 
 const filters = { outcome: "done", scope: "all", model: "", tags: [] };
+// The model and tag options come from the workspace's own tasks: another
+// workspace may have neither, and a kept pick would filter its trend to empty.
+onWorkspaceChange(() => {
+  filters.model = "";
+  filters.tags = [];
+});
 
 const source = trendSource({
   path: "/api/diagnostics/task_tokens",
@@ -87,9 +93,6 @@ export function tokensModel(payload, { windowKey, shown, bucketTitle, bucketWidt
     label: entry.label,
     tag: "",
     on: isShown(entry.key),
-    value: fmtTokens(entry.total.mean),
-    sub: entry.total.n ? `median ${fmtTokens(entry.total.median)}` : "no tasks",
-    foot: `${tasks(entry.total.n)}${excluded(entry.total) ? ` · ${excluded(entry.total)} excluded` : ""}`,
   }));
 
   if (!total.n) {
@@ -120,8 +123,6 @@ export function tokensModel(payload, { windowKey, shown, bucketTitle, bucketWidt
   ];
   if (payload.undated_tasks) notes.push(undatedNote(payload.undated_tasks));
   if (payload.tags.length) notes.push(`with tag = carries ${payload.tags.join(" or ")} now (current tags, not tags at the time); dashed = without`);
-  if (payload.model) notes.push(`implementing model ${payload.model}; ${tasks(payload.excluded_other_model)} on other models left out`);
-  if (excluded(total)) notes.push(`excluded: ${total.excluded_uncovered} with an uncovered model, ${total.excluded_no_invocations} with no linked invocation`);
 
   return {
     blurb,
@@ -220,8 +221,6 @@ export function tokenSpendModel(payload, { windowKey, shown, countView, bucketTi
   ];
   if (payload.undated_tasks) notes.push(undatedNote(payload.undated_tasks));
   if (payload.tags.length) notes.push(`with tag = carries ${payload.tags.join(" or ")} now (current tags, not tags at the time); dashed = without`);
-  if (payload.model) notes.push(`implementing model ${payload.model}; ${tasks(payload.excluded_other_model)} on other models left out`);
-  if (excluded(total)) notes.push(`excluded: ${total.excluded_uncovered} with an uncovered model, ${total.excluded_no_invocations} with no linked invocation`);
 
   return {
     blurb,

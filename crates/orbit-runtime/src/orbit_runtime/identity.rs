@@ -86,6 +86,26 @@ impl RuntimeKernel {
         self.composition_snapshot.as_deref()
     }
 
+    /// Record the registry identity of this runtime's checkout as the open
+    /// resolved it, `None` being a recorded miss. Supplied by the
+    /// registry-owning composition layer; Core never loads the registry to
+    /// refill it.
+    pub fn with_opened_registered_workspace(mut self, identity: Option<(String, String)>) -> Self {
+        self.opened_registered_workspace = Some(identity);
+        self
+    }
+
+    /// The `(id, name)` [`Self::with_opened_registered_workspace`] recorded.
+    /// The outer `None` means this open carried no registry binding; the inner
+    /// `None` is a recorded miss.
+    pub fn opened_registered_workspace(&self) -> Option<Option<(&str, &str)>> {
+        self.opened_registered_workspace.as_ref().map(|identity| {
+            identity
+                .as_ref()
+                .map(|(id, name)| (id.as_str(), name.as_str()))
+        })
+    }
+
     /// Why coordination writes are unavailable from this runtime, if they are.
     ///
     /// Replica checkouts name the owner in their capability refusal. Claimed

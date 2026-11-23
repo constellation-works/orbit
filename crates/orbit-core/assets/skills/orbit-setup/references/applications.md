@@ -1,5 +1,13 @@
 # Scoped application authority
 
+## Contents
+
+- [Install and consent](#install-and-consent)
+- [Invoke through a descriptor](#invoke-through-a-descriptor)
+- [Built-ins and completion callbacks](#built-ins-and-completion-callbacks)
+- [Rotate, revoke and audit](#rotate-revoke-and-audit)
+- [Rust integration API](#rust-integration-api)
+
 An application can act on an operator's explicit consent without receiving
 Operator or Runner capability. This is a host-local API for Unix services and
 CLI children. It is separate from `agent_callable`, MCP placement, task tool
@@ -81,24 +89,31 @@ every field it sends is listed and every listed field that is not `optional`
 passes its constraint on the task's current state: a `task` predicate reads
 the task's tags, status and bound artifact digest, and a `transition` reads
 the status of the task the call's `id` names. The first matching scope wins.
+
 A refusal names each constrained scope of that tool with its first failing
 field and constraint kind, never a value the call sent. The write then
 rechecks the status admission saw, so a task that moved in between is not
 changed. A move to `backlog` is admitted only from `review` or `in-progress`.
 `orbit.task.update` applies `status`, `comment`, `note`, `plan` and
-`execution_summary`; `note` needs a status change. The audit row's
+`execution_summary`; `note` needs a status change.
+
+The audit row's
 `application` object records the bound identity and digest values, a digest
 and length for each free-text field, and the task state admission read.
 A plugin entry's callbacks are admitted the same way against the scope's
 listed callbacks: `bound` admits only the entry's admitted value for that
 field, and a `task` predicate with `pin: true` binds the first task a callback
-names for the rest of that entry call, refusing any other. When the entry's
+names for the rest of that entry call, refusing any other.
+
+When the entry's
 `task` predicate bound an artifact digest, every callback rechecks it, and
 `orbit.task.artifact` action `get` rechecks the bytes it returns, so a payload changed
 after the entry was admitted is refused (`bound artifact changed`).
 `orbit.task.show` returns only the fields the call names, within `id`,
 `status`, `tags`, `terminal`, `artifacts`, `crew`, `updated_at` and
-`execution_summary` (all of them when it names none). An application-bound
+`execution_summary` (all of them when it names none).
+
+An application-bound
 plugin sends these callbacks to the host that spawned it, because the consent
 witness is hidden from the plugin sandbox.
 
@@ -143,7 +158,9 @@ Application CLI callers can run only workspace `tool run` calls (including a
 plugin-derived spelling). Host-global dispatch without a resolved workspace,
 MCP sessions, worker envelopes, and sessions carrying Agent, Operator or Runner
 capabilities cannot borrow this credential. Use the workspace-bound runtime API
-for a tool otherwise advertised globally. A spoofed label, malformed descriptor,
+for a tool otherwise advertised globally.
+
+A spoofed label, malformed descriptor,
 unknown credential, different workspace/checkout, unlisted call, stale plugin
 digest, expired consent or revoked consent is refused before mutation.
 
@@ -156,7 +173,9 @@ The supported built-in write operations include:
   `workspace`. A constrained `fields` scope may also include `note`, `plan` and
   `execution_summary`. `note` is accepted only when `status` is supplied. The
   normal lifecycle, proposal completion and coordination ownership checks still
-  apply. Other keys are refused. Force, tool grants and review artifacts are
+  apply. Other keys are refused.
+
+  Force, tool grants and review artifacts are
   not admitted through this application operation.
 * `orbit.decision.answer`: exact `id` and `answer`, optional `note` and
   optional `workspace`. The existing decision handler checks the current
@@ -220,7 +239,9 @@ and its constrained fields under its parent operation. The plugin must also
 request the tool in `permissions.orbit_tools`, and the host must grant
 `orbit_tools`. Existing plugin grants, the caller ceiling and the consent are
 intersected; none replaces the others. Callbacks run on the spawning host
-through its authenticated descriptor route. They cannot invoke other plugins,
+through its authenticated descriptor route.
+
+They cannot invoke other plugins,
 create new callbacks, change the workspace, or use another scope in the app's
 consent. Each callback rechecks expiry, revocation, protected witness and the
 original plugin's live digest. Long-lived MCP backends are separated by consent
@@ -247,7 +268,9 @@ new file after provisioning succeeds. Failed provisioning leaves no usable new
 credential and may leave the previous consent revoked; recover by issuing a new
 consent. Revocation and rotation do not roll back an operation already admitted.
 Every subsequent operation or callback checks host state again, including in a
-long-lived backend. Remove retired credential files through the service's normal
+long-lived backend.
+
+Remove retired credential files through the service's normal
 secret-management lifecycle.
 
 `orbit audit list --tool <tool> --format json` and `orbit audit show` expose an
@@ -255,18 +278,24 @@ secret-management lifecycle.
 host-issued application id, consent id, workspace/root, operator attribution,
 consent provenance/time/expiry, the scopes the operator reviewed, the selected
 scope name and index, whether the call matched exactly or by constraints
-(`match`), and the callback flag. A constrained admission also records
+(`match`), and the callback flag.
+
+A constrained admission also records
 `bindings` (identity and digest values only), `text_digests` (sha256 and
 length, never the text) and `predicate` (the task state admission read). Each
 callback row sets `entry_execution_id` to the entry row's execution id, and
 `orbit audit show` of that entry lists those callbacks, newest 100 at most. When
 an entry has more, the list is headed `incomplete` and the older callbacks are
-not listed. A constrained refusal adds `refused` with the scope name, the field
+not listed.
+
+A constrained refusal adds `refused` with the scope name, the field
 and the constraint kind, and no values from the call. The attempted tool remains the call's own audit context;
 call arguments are not copied into the application object. Unauthenticated
 labels never populate this object. MCP client attribution stays in
 `self_reported_actor`; it is not an authenticated app identity. Credential
-values never appear in either field. Consent, rotation and revocation also have
+values never appear in either field.
+
+Consent, rotation and revocation also have
 their own application audit events.
 
 Authority is held in a host SQLite record plus an owner-only witness under

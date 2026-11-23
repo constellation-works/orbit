@@ -10,7 +10,7 @@
 // which passes its helpers in.
 
 import { el } from './common.js';
-import { COMPLEXITIES, axisScale, option, trendSource, undatedNote } from './metrics-running.js';
+import { COMPLEXITIES, axisScale, delta, option, previousLabel, trendSource, undatedNote } from './metrics-running.js';
 
 const FAMILIES = [
   { key: "step_recovery", label: "Step recoveries", swatch: "c1" },
@@ -75,12 +75,29 @@ function fmtRate(unit, value) {
   return value >= 10 ? value.toFixed(1) : value.toFixed(2);
 }
 
-function unitWord(unit) {
-  return unit === "usd" ? "USD" : unit === "tokens" ? "tokens" : "events";
-}
-
 function tasksDone(n) {
   return `${n} ${n === 1 ? "task" : "tasks"} done`;
+}
+
+/// "12 invocations", or "" when nothing was left out. Only cost and tokens
+/// carry `excluded_invocations`.
+function excludedText(cell) {
+  const n = cell && cell.excluded_invocations;
+  return n > 0 ? `${n} ${n === 1 ? "invocation" : "invocations"}` : "";
+}
+
+/// What an excluded invocation lacks, per unit.
+function missingWhat(unit) {
+  return unit === "usd" ? "no provider cost" : "uncovered tokens";
+}
+
+/// "3 of 10 invocations have no provider cost": the coverage a withheld rate
+/// is judged by.
+export function coverageText(unit, cell) {
+  const excluded = cell && cell.excluded_invocations;
+  if (!(excluded > 0)) return "";
+  const all = excluded + (cell.covered_invocations || 0);
+  return `${excluded} of ${all} ${all === 1 ? "invocation" : "invocations"}: ${missingWhat(unit)}`;
 }
 
 /// The filter row: the family multi-select, complexity and crew (each
@@ -159,34 +176,25 @@ export function frictionModel(payload, { windowKey, shown, bucketTitle, bucketWi
 
   const cards = families.map((family) => {
     const total = family.total;
-    const previous = family.previous;
-    const value = valueOf(family, total);
-    // Friction is worse when it rises, as the defects trend reads it.
-    let deltaText = null;
-    const prior = previous ? valueOf(family, previous) : null;
-    if (prior != null && value != null && prior > 0) {
-      const change = (value - prior) / prior * 100;
-      const abs = Math.abs(change);
-      deltaText = {
-        cls: change > 5 ? "bad" : change < -5 ? "good" : "flat",
-        text: `${change >= 0 ? "▲" : "▼"} ${abs >= 10 ? Math.round(abs) : abs.toFixed(1)}% vs prev ${windowKey}`,
-      };
-    }
+    const priorRate = family.previous?.rate;
+    const rateChange = rate && priorRate > 0 ? delta(total.rate, priorRate, "defects") : null;
     return {
       key: family.key,
       swatch: family.swatch,
       label: family.label,
       tag: filtering && !family.filtered ? "unfiltered" : "",
       on: isShown(family.key),
-      value: fmtValue(family, value),
-      delta: deltaText,
-      sub: rate ? `${fmtAmount(family.unit, total.count)} ${unitWord(family.unit)}` : `${fmtRate(family.unit, total.rate)} per done task`,
-      foot: tasksDone(total.denominator),
+      value: fmtRate(family.unit, total.rate),
+      sub: "per done task",
+      delta: rateChange ? { ...rateChange, text: `${rateChange.text} vs ${previousLabel(windowKey)}` } : null,
+      foot: coverageText(family.unit, total)
+        ? `${tasksDone(total.denominator)} · ${coverageText(family.unit, total)}${total.rate_withheld ? " · rate withheld" : ""}`
+        : tasksDone(total.denominator),
     };
   });
 
   const visible = families.filter((family) => isShown(family.key));
-  const anyValue = families.some((family) => family.total.count > 0);
+  const anyValue = families.some((family) => family.total.count > 0 || family.total.excluded_invocations > 0);
   if (!anyValue && !(payload.done && payload.done.total)) {
     return {
       blurb,
@@ -217,6 +225,12 @@ export function frictionModel(payload, { windowKey, shown, bucketTitle, bucketWi
     rate ? "per task done in the same bucket, by the recorded move to done" : "distinct occurrences; USD and tokens summed",
   ];
   if (rate && payload.done && payload.done.undated) notes.push(undatedNote(payload.done.undated));
+  for (const family of visible) {
+    const text = coverageText(family.unit, family.total);
+    if (text) {
+      notes.push(`${family.label}: ${text} are left out of the sums${rate ? ", so per-task rates are unavailable (—) where any are missing" : ""}`);
+    }
+  }
   if (!shared) notes.push("mixed units: each line is scaled to its own peak (axis = % of peak)");
   if (filtering) notes.push("complexity and crew narrow done tasks, auto-fixes, failed CI, cost and tokens; recoveries and conflicts stay unfiltered");
 
@@ -250,10 +264,11 @@ export function frictionModel(payload, { windowKey, shown, bucketTitle, bucketWi
         for (const family of families) {
           const point = family.points[index];
           sparse = sparse || point.sparse;
+          const left = excludedText(point);
           tip.rows.push({
             key: family.swatch,
             name: family.label,
-            value: `${fmtAmount(family.unit, point.count)} · ${point.denominator} done · ${fmtRate(family.unit, point.rate)}/task`,
+            value: `${point.count || !left ? fmtAmount(family.unit, point.count) : "—"} · ${point.denominator} done · ${fmtRate(family.unit, point.rate)}/task${left ? ` · ${left} ${missingWhat(family.unit)}, not counted` : ""}`,
           });
         }
         const parts = families
@@ -268,7 +283,7 @@ export function frictionModel(payload, { windowKey, shown, bucketTitle, bucketWi
       },
     },
     table: {
-      caption: `Delivery friction, count (rate per done task), tasks done · ${bucketWidthLabel(seconds)} · newest first · * = sparse bucket`,
+      caption: `Delivery friction, count (rate per done task), tasks done · ${bucketWidthLabel(seconds)} · newest first · * = sparse bucket · †n = n cost or token invocations not counted, so no rate`,
       heads: [...families.map((family) => family.label), "Tasks done"],
       rows: starts.map((start, i) => {
         const done = payload.done ? payload.done.points[i] : 0;
@@ -278,7 +293,11 @@ export function frictionModel(payload, { windowKey, shown, bucketTitle, bucketWi
           cells: [
             ...families.map((family) => {
               const point = family.points[i];
-              return point.count ? `${fmtAmount(family.unit, point.count)} (${fmtRate(family.unit, point.rate)})` : null;
+              const left = excludedText(point);
+              if (!point.count && !left) return null;
+              // No covered invocation means no spend was measured, not $0.
+              const measured = point.count || !left ? fmtAmount(family.unit, point.count) : "—";
+              return `${measured} (${fmtRate(family.unit, point.rate)})${left ? ` †${point.excluded_invocations}` : ""}`;
             }),
             String(done),
           ],

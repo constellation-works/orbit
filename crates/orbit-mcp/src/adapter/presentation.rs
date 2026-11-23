@@ -1,6 +1,7 @@
 //! Adapter-owned desktop entrypoints and static MCP Apps resource.
 //! All data and mutation authority remains behind McpHost.
 
+use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use super::schema::WORKSPACE_SELECTOR_DESCRIPTION;
@@ -9,7 +10,7 @@ use crate::presentation_definition::{
     is_presentation_tool, presentation_action,
 };
 use orbit_common::OrbitError;
-use orbit_types::tool::{McpPresentationRead, McpToolDefinition};
+use orbit_types::tool::{McpPresentationRead, McpToolDefinition, mcp_advertised_tool_name};
 use rmcp::model::{MetaObject, Resource, ResourceContents, Tool, ToolAnnotations};
 use serde_json::{Value, json};
 
@@ -60,11 +61,11 @@ pub(super) fn tools(_federated: bool) -> Vec<Tool> {
         "properties": {
             "action": {
                 "type": "string", "enum": actions,
-                "description": "open: the control center, or a task or run panel given workspace and id. inspect: a task or run panel (workspace, id required)."
+                "description": "open: control center or panel (with `workspace`, `id`); inspect: panel (`workspace`, `id` required)."
             },
             "workspace": { "type": "string", "minLength": 1, "description": WORKSPACE_SELECTOR_DESCRIPTION },
-            "id": { "type": "string", "minLength": 1, "description": "Public task key or run ID." },
-            "kind": {"type":"string", "enum":["task","run"], "default":"task", "description": "Whether `id` is a task or a run."}
+            "id": { "type": "string", "minLength": 1, "description": "Task key or run ID." },
+            "kind": {"type":"string", "enum":["task","run"], "default":"task", "description": "`task` (default) or `run`."}
         },
         "required": ["action"],
         "dependentRequired": { "id": ["workspace"], "kind": ["workspace", "id"] }
@@ -101,12 +102,44 @@ pub(super) fn resource() -> Resource {
         .with_mime_type(MIME)
 }
 
-pub(super) fn resource_content(uri: &str) -> ResourceContents {
-    // Entirely static: task content is never interpolated into executable HTML.
+/// Calls the Automation view must not make when this server withholds them.
+/// `orbit_run:list` is keyed by action: the family is advertised when any
+/// action is served, so a dispatch-only session lists `orbit_run` without
+/// the catalog read.
+fn session_automation_tools(
+    definitions: &[McpToolDefinition],
+    serves: impl Fn(&str, Option<&str>) -> bool,
+) -> String {
+    let advertised = definitions
+        .iter()
+        .map(|definition| mcp_advertised_tool_name(&definition.schema.name))
+        .collect::<BTreeSet<_>>();
+    let enabled = |name: &str| advertised.contains(name);
+    json!({
+        "orbit_routine_control": enabled("orbit_routine_control"),
+        "orbit_auto_task": enabled("orbit_auto_task"),
+        "orbit_run:list": enabled("orbit_run") && serves("orbit_run", Some("list")),
+        "orbit_pipeline_invoke": enabled("orbit_pipeline_invoke"),
+    })
+    .to_string()
+}
+
+pub(super) fn resource_content(
+    uri: &str,
+    definitions: &[McpToolDefinition],
+    serves: impl Fn(&str, Option<&str>) -> bool,
+) -> ResourceContents {
+    // Task content is never interpolated into executable HTML. The only
+    // session value inserted is a JSON boolean map of advertised tool names,
+    // in a non-executed block, so the panel can hide writes this server refuses.
     let html = include_str!("../../assets/task-panel/index.html")
         .replace(
             "/* ORBIT_PANEL_STYLE */",
             include_str!("../../assets/task-panel/css/task-panel.css"),
+        )
+        .replace(
+            "/* ORBIT_SESSION_TOOLS */",
+            &session_automation_tools(definitions, serves),
         )
         .replace(
             "/* ORBIT_PANEL_SCRIPT */",

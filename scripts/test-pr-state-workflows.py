@@ -626,6 +626,27 @@ exit 0
             ["fixture"], step="identity fixture", ready_file="empty-ready-file",
             capture_output=True, timeout=1))
 
+    def test_run_delivers_input_without_an_explicit_stdin_pipe(self):
+        # communicate() drops input when the child stdin is not a pipe, and the
+        # child then inherits the parent's stdin. Callers that already pass
+        # stdin=PIPE keep working.
+        payload = "fixture-stdin-bytes\n"
+        child = "import sys; sys.stdout.write(sys.stdin.read())"
+        cases = ({}, {"stdin": subprocess.PIPE})
+        for extra in cases:
+            with self.subTest(**extra):
+                result = self_test_hang.run(
+                    [sys.executable, "-c", child],
+                    step="hang input delivery",
+                    input=payload,
+                    capture_output=True,
+                    text=True,
+                    timeout=30,
+                    **extra,
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(result.stdout, payload)
+
 
 class _PidChurnModel:
     """Deterministic /proc and pidfd view of recorded pids that exit and are reused.
@@ -854,20 +875,54 @@ class NextestShardWorkflowTests(unittest.TestCase):
                         time.sleep(0.01)
                     self.assertTrue(path.exists(), f"timed out waiting for {path}")
 
-                def stop_process_group(process):
+                # The step leader is reaped by wait/communicate before cleanup.
+                # process_group=0 makes it a group leader in this session, so an
+                # unreaped anchor can join that group. A new session cannot be
+                # joined (EPERM). killpg runs only while the anchor still holds
+                # the group, so a reaped leader's PGID is never signalled after
+                # the group has been released.
+                blocked_on_stdin = [sys.executable, "-c", "import sys; sys.stdin.buffer.read()"]
+
+                def reserve_group(leader):
                     try:
-                        os.killpg(process.pid, signal.SIGKILL)
-                    except ProcessLookupError:
-                        pass
-                    try:
-                        process.wait(timeout=1)
-                    except subprocess.TimeoutExpired as error:
-                        raise AssertionError("workflow step process did not stop") from error
+                        anchor = subprocess.Popen(
+                            blocked_on_stdin,
+                            stdin=subprocess.PIPE,
+                            stdout=subprocess.DEVNULL,
+                            stderr=subprocess.DEVNULL,
+                            process_group=leader.pid,
+                        )
+                    except Exception:
+                        if leader.returncode is None:
+                            try:
+                                os.killpg(leader.pid, signal.SIGKILL)
+                            except ProcessLookupError:
+                                pass
+                            leader.wait(timeout=1)
+                        raise
+                    self.addCleanup(stop_process_group, leader, anchor)
+                    return anchor
+
+                def stop_process_group(process, anchor):
+                    if anchor.returncode is None:
+                        try:
+                            os.killpg(process.pid, signal.SIGKILL)
+                        except ProcessLookupError:
+                            pass
+                    for owned in (process, anchor):
+                        if owned.returncode is not None:
+                            continue
+                        try:
+                            owned.wait(timeout=1)
+                        except subprocess.TimeoutExpired as error:
+                            raise AssertionError("workflow step process did not stop") from error
+                    if anchor.stdin is not None:
+                        anchor.stdin.close()
 
                 start = subprocess.Popen(["bash", "-e", "-c", steps[start_name]["run"]],
                                          cwd=root, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                                         start_new_session=True)
-                self.addCleanup(stop_process_group, start)
+                                         process_group=0)
+                reserve_group(start)
                 await_file(root / "lock-paused")
                 try:
                     start.wait(timeout=0.5)
@@ -880,8 +935,8 @@ class NextestShardWorkflowTests(unittest.TestCase):
                 await_file(root / "proof-running")
                 wait = subprocess.Popen(["bash", "-e", "-c", steps[wait_name]["run"]],
                                         cwd=root, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
-                                        start_new_session=True)
-                self.addCleanup(stop_process_group, wait)
+                                        process_group=0)
+                reserve_group(wait)
                 try:
                     self.assertIsNone(wait.poll(), "wait returned while proof was still running")
                 finally:

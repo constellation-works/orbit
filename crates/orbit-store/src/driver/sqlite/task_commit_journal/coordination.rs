@@ -29,6 +29,14 @@ const CLAIM_ROWS_PROTECTING_SQL: &str = "SELECT kind, row_id, payload_json
        AND json_extract(payload_json,'$.phase') IN ('claimed','running','handed_off','repair_pending')
      ORDER BY row_id ASC";
 
+/// Host-wide counterpart of [`CLAIM_ROWS_PROTECTING_SQL`] using the same v90
+/// partial index so machine-scoped checks decode only live protecting claims.
+const HOST_CLAIM_ROWS_PROTECTING_SQL: &str = "SELECT workspace_id, kind, row_id, payload_json
+     FROM task_coordination_rows INDEXED BY idx_task_coordination_claims_protecting
+     WHERE kind = 'distributed-execution-claim-v1'
+       AND json_extract(payload_json,'$.phase') IN ('claimed','running','handed_off','repair_pending')
+     ORDER BY workspace_id ASC, row_id ASC";
+
 /// v90 `idx_task_coordination_lifecycle_by_task`. The planner prefers the
 /// primary key when `kind` is a literal, so the statement names the index.
 const LIFECYCLE_ROWS_FOR_CLAIM_TASK_SQL: &str = "SELECT kind, row_id, payload_json
@@ -330,6 +338,33 @@ impl Store {
     ) -> Result<Vec<TaskCoordinationRow>, OrbitError> {
         self.with_read_connection(|conn| {
             read_coordination_rows(conn, CLAIM_ROWS_PROTECTING_SQL, params![workspace_id])
+        })
+    }
+
+    /// Claim rows whose phase protects a footprint across every workspace
+    /// partition in this database, returning `(workspace_id, row)` pairs.
+    /// Callers re-check `protects_footprint` after decode.
+    pub(crate) fn host_execution_claim_rows_protecting_footprint(
+        &self,
+    ) -> Result<Vec<(String, TaskCoordinationRow)>, OrbitError> {
+        self.with_read_connection(|conn| {
+            let mut stmt = conn
+                .prepare(HOST_CLAIM_ROWS_PROTECTING_SQL)
+                .map_err(sqlite_store_error)?;
+            let rows = stmt
+                .query_map([], |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        TaskCoordinationRow {
+                            kind: row.get(1)?,
+                            row_id: row.get(2)?,
+                            payload_json: row.get(3)?,
+                        },
+                    ))
+                })
+                .map_err(sqlite_store_error)?;
+            rows.collect::<Result<Vec<_>, _>>()
+                .map_err(sqlite_store_error)
         })
     }
 

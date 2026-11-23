@@ -320,7 +320,7 @@ function buildDeliveryCard(task, drain, context, { editor, showsEditor }) {
   if (task.workspace_root) {
     rows.push(row("location", "Location", el("span", { class: "value ws-location mono", text: task.workspace_root, title: task.workspace_root })));
   }
-  return rows.length ? el("div", { class: "task-delivery-card" }, rows) : null;
+  return rows.length ? el("div", { class: "card card-flush card-raised task-delivery-card" }, rows) : null;
 }
 // Where the task may run, as a word or two: "any", or the operating systems
 // (macOS, Linux). The full sentence — which crew or tags decided it — is the

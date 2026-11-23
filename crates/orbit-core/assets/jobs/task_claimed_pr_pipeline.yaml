@@ -141,6 +141,10 @@ spec:
     task_ids: []
     base_branch: main
     base_sync: remote
+    # Forwarded unchanged to each leaf's worktree setup. `ignore` skips the
+    # dependency-delivery check for work delivered under a different commit
+    # message (`orbit run ship --ignore-dependency-delivery`).
+    dependency_delivery: enforce
     landing_branch: ""
     allowed_crews: []
     # The repair a claim carries when it re-runs a handoff whose landing
@@ -165,6 +169,7 @@ spec:
         task_ids: "{{ input.task_ids }}"
         base: "{{ input.base_branch }}"
         base_sync: "{{ input.base_sync }}"
+        dependency_delivery: "{{ input.dependency_delivery }}"
 
     # [ORB-14257] Carry the candidate the task's last claim committed onto
     # this base as uncommitted changes, so the implementer continues it

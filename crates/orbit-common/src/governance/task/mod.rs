@@ -17,9 +17,12 @@ pub use artifact_hints::{
 pub use list_projection::{
     MINIMAL_TASK_FIELDS, TASK_LIST_COMPACT_HINT, project_task_list_output, select_fields,
 };
+pub(crate) use operations::aliased_task_id;
 pub use operations::{
-    TASK, TASK_COMPLEXITY_VALUES, TASK_HOST_HELP, TASK_OPERATIONS, TASK_ORIGIN_VALUES,
-    TASK_PRIORITY_VALUES, TASK_STATUS_VALUES, TASK_TYPE_VALUES, TaskOperation, TaskVerb,
+    TASK, TASK_COMPLEXITY_VALUES, TASK_HOST_HELP, TASK_ID_WIRE_ALIAS, TASK_OPERATIONS,
+    TASK_ORIGIN_VALUES, TASK_PRIORITY_VALUES, TASK_STATUS_VALUES, TASK_TYPE_VALUES, TaskOperation,
+    TaskVerb, normalize_task_id_alias, resolve_task_id_alias, task_id_alias_conflict_error,
+    task_id_alias_str,
 };
 pub use write_operations::TASK_CLI_OPTIONS_PARAM;
 pub(crate) use write_operations::TASK_UPDATE_STATUS_VALUES;

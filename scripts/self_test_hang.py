@@ -135,6 +135,8 @@ def run(argv, *, step, timeout=None, check=False, input=None, capture_output=Fal
     `timeout` defaults to `HANG_CEILING_SECONDS`.
     When `ready_file` is set, wait for a non-empty file before starting the
     hang timeout. `startup_timeout` bounds that fixture setup phase.
+    `input`, when set, is written to the child's stdin. The child stdin is a
+    pipe even when the caller does not pass `stdin=PIPE`.
     """
     if not isinstance(step, str) or not step.strip():
         raise ValueError("hang guard requires a step or command name")
@@ -147,6 +149,14 @@ def run(argv, *, step, timeout=None, check=False, input=None, capture_output=Fal
     if capture_output:
         popen_kwargs["stdout"] = subprocess.PIPE
         popen_kwargs["stderr"] = subprocess.PIPE
+    # Popen.communicate ignores `input` when stdin is not a pipe, and the
+    # child then inherits the parent's stdin. An explicit PIPE stays valid
+    # because existing callers pass both.
+    if input is not None:
+        supplied_stdin = popen_kwargs.get("stdin")
+        if supplied_stdin not in (None, subprocess.PIPE):
+            raise ValueError("stdin and input arguments may not both be used")
+        popen_kwargs["stdin"] = subprocess.PIPE
     owned = OwnedProcessGroup(argv, **popen_kwargs)
     proc = owned.process
     try:

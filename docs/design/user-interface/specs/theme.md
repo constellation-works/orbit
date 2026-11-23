@@ -2,7 +2,7 @@
 type: design
 summary: "Spec: Canon Refined Theme"
 tags: ["user-interface"]
-last_validated: 2026-10-28
+last_validated: 2026-11-21
 ---
 
 # Spec: Canon Refined Theme
@@ -36,19 +36,74 @@ Borders delineate structure without heavy contrast.
 ### Typography
 - **Sans-serif (Primary):** `Geist`, self-hosted, used for prose, titles, and general UI text.
 - **Monospace (Secondary/Data):** `Geist Mono`, self-hosted, used for IDs, metrics, timestamps, code snippets and logs.
-- **Base Size:** `14px` with `1.5` line height.
+- **Base Size:** `14px` (`--text-base`) with `1.5` line height.
+
+### Type-Size Scale
+The design rule is that every `font-size` declaration in the dashboard uses one of the ten integer steps in `base.css`. Half-pixel sizes (`9.5px`, `10.5px`, `11.5px`, `12.5px`, `13.5px`, `14.5px`) are excluded from the scale; snap them to the adjacent step for their role so sub-pixel drift does not accumulate. Off-scale sizes that remain in a stylesheet are existing debt that the ratchet admits by count, not a sign that the stylesheet follows the scale (see [Token enforcement](#token-enforcement)).
+
+| Token | Value | Common uses (and off-scale snaps) |
+|---|---|---|
+| `--text-2xs` | `10px` | Micro chart axis ticks and compact inline tags that are not content prose (snaps `9px`, `9.5px`, micro `10.5px`). Content-bearing UI text stays at `11px` or above. |
+| `--text-xs` | `11px` | Label text: `th`, `.col-head`, uppercase field overlines, compact badges and alert counts (snaps `10.5px` content labels and `11.5px` badges). |
+| `--text-sm` | `12px` | Secondary and data text: table cells, metadata, descriptions, monospace IDs/metrics/timestamps, rail volume counts, compact buttons/chips/pills/inputs (snaps `11.5px` log/data lines and `12.5px` controls/metadata). |
+| `--text-md` | `13px` | Section titles (`.section-title`), primary list/row titles, nav and dock tabs, panel body prose and empty states (snaps `12.5px` readable prose and `13.5px` tabs/row titles). |
+| `--text-base` | `14px` | Body baseline (`html, body`), `.panel > header` titles, primary prose and markdown headings (snaps `13.5px` body prose and `14.5px`). |
+| `--text-lg` | `16px` | Detail and dialog subheadings (`h2`/`h3`), medium card figures (covers `15px`–`17px`). |
+| `--text-xl` | `18px` | View and pane titles (`.topbar .crumb`, `.task-pane-title`), medium stat-tile figures. |
+| `--text-2xl` | `20px` | Stat-tile KPI numbers and file-view headings (covers `20px`–`22px`). |
+| `--text-3xl` | `24px` | Large callout figures and empty-state icons. |
+| `--text-4xl` | `28px` | Hero KPI numbers (covers `28px`–`30px`). |
+
+Stat-tile figures use `--text-2xl`. A 26px `--text-kpi` step was considered for the old per-view figures and was not added: those figures are the shared stat tile.
+
+Relative `em` sizing stays allowed only where scaling a glyph proportionally with its host text (for example `.copy-id::after` at `0.85em`).
+
+### Spacing Scale
+The design rule is that every `padding`, `margin` and `gap` declaration uses one of the twelve steps in `base.css`. The ratchet counts only colour literals and font sizes, so literal spacing values that remain in the stylesheets are not tracked by it. Intermediate literals (`3px`, `5px`, `7px`, `9px`, `11px`, `18px`, `22px`, `28px`) snap to the nearest step without changing visible rhythm, and container padding stays symmetric (`top == bottom`, `left == right` per STD-07 R1). (`1px` grid gaps over a `--border` background are structural hairlines, not spacing steps.)
+
+| Token | Value | Role |
+|---|---|---|
+| `--space-2` | `2px` | Hairline offsets, tight stacked row lines, minimal tag vertical padding |
+| `--space-4` | `4px` | Micro gaps (status dot to label, icon to text), compact badge/tag vertical padding |
+| `--space-6` | `6px` | Tight gaps inside controls (chip, pill, button, inline action groups), table cell vertical padding |
+| `--space-8` | `8px` | Standard gap between sibling controls in toolbars and button rows; compact row vertical padding; scrollbars and tight insets |
+| `--space-10` | `10px` | Standard row vertical padding, control horizontal padding, dense card/box padding |
+| `--space-12` | `12px` | Standard horizontal row/control padding, section/column stack gaps, compact panel/card inset, narrow-screen row padding |
+| `--space-14` | `14px` | Panel header vertical padding (`14px 16px`), medium card inset |
+| `--space-16` | `16px` | Standard panel inset, full-width row horizontal padding, major toolbar/panel padding, section stack gaps |
+| `--space-20` | `20px` | Generous section/detail header horizontal inset, list indents, status-bar horizontal padding |
+| `--space-24` | `24px` | Page-level grid padding and gaps, empty-state horizontal padding, wide meta-grid column gaps |
+| `--space-32` | `32px` | Wide split-layout column gaps and generous empty-panel vertical padding |
+| `--space-48` | `48px` | Full empty-state vertical padding (`--space-48` `--space-24`) |
+
+#### Common spacing choices
+- **Row padding:** `--space-8` `--space-12` (`8px 12px`) or `--space-10` `--space-12` (`10px 12px`) for dense table/list rows; `--space-10` `--space-16` (`10px 16px`) or `--space-12` `--space-16` (`12px 16px`) for full-width panel rows (settings, expanded detail); `--space-8` `--space-16` or `--space-4` `--space-16` for fixed-min-height list rows (`tasks`, `runs`); `--space-12` (`12px`) on narrow stacked rows.
+- **Panel inset:** `--space-14` `--space-16` (`14px 16px`) or `--space-12` `--space-16` (`12px 16px`) for panel headers and toolbars (`.controls`); `--space-16` (`16px`) or `--space-12` `--space-16` for panel bodies and cards; `--space-12` (`12px`) or `--space-10` `--space-12` for nested cards/wells; `--space-8` `0` for bare list panel bodies whose rows carry their own horizontal inset; `--space-48` `--space-24` for `.empty-state`.
+- **Gaps between controls:** `--space-8` (`8px`) between sibling buttons, filters, chips and inputs in a toolbar or action row; `--space-6` (`6px`) inside a control (icon + label) or between tightly paired inline actions; `--space-4` (`4px`) for dot-to-label or compact tag clusters; `--space-12` (`12px`) or `--space-16` (`16px`) between adjacent cards or form groups.
+
+### Radius Scale
+The design rule is that every `border-radius` declaration uses one of the six steps in `base.css` (with `50%` reserved for 1:1 circles such as status dots and avatars). The ratchet does not count radius values, so literal radii that remain in the stylesheets are not tracked by it.
+
+| Token | Value | Common uses (and off-scale snaps) |
+|---|---|---|
+| `--radius-2xs` | `2px` | Inline progress bars, chart bars, colour swatches, focus-ring offsets on plain text controls (covers `1px`–`3px`) |
+| `--radius-xs` | `4px` | Badges, tags, skeleton rows, compact inline markers (covers `3px`–`5px`) |
+| `--radius-sm` | `6px` | Buttons, text inputs, segments, small nested wells (covers `5px`–`7px`, snapping `7px` controls) |
+| `--radius` | `8px` | Stat tiles, segmented-control tracks, selects, inner cards/boxes, top corners of attached tabs (`var(--radius) var(--radius) 0 0`) |
+| `--radius-panel` | `10px` | Panels, raised content cards, dialogs and drawers (covers `10px`–`14px`) |
+| `--radius-pill` | `999px` | Filter chips, status pills and toggle switches (covers `999px` and `13px`–`16px` capsules) |
 
 ### Text conventions
 The shared classes live in `crates/orbit-web/assets/dashboard/css/components.css`; a view sets layout on them (padding, alignment, stickiness) but never font, case or tracking.
 - **Column heads:** every `<th>` takes one style from the shared `th` rule, and every grid header row that stands in for a table head (Tasks, Runs, Automation, Settings crews, system and hosts) carries the same rule as `.col-head`: sans, `11px`, weight `600`, uppercase, `0.06em` tracking, `--fg-dim`. Numeric columns align right but keep the sans head; mono is for the cells.
-- **Titles:** sentence case: capitalize only the first word and proper names (`MCP vs CLI`, `Knowledge pack`, `Context files`). A panel header is `14px` sans, weight `600`. A section or card title inside a panel uses `.section-title`: `13px` sans, weight `600`, `--fg`. Titles are never `text-transform: capitalize`, which raises every word of generated text (`Average Implement_one Duration By Actor`). A title built from lowercase data raises only its first letter through `.section-title::first-letter`.
+- **Titles:** sentence case: capitalize only the first word and proper names (`Tool call failures`, `Knowledge pack`, `Context files`). A panel header is `14px` sans, weight `600`. A section or card title inside a panel uses `.section-title`: `13px` sans, weight `600`, `--fg`. Titles are never `text-transform: capitalize`, which raises every word of generated text (`Average Implement_one Duration By Actor`). A title built from lowercase data raises only its first letter through `.section-title::first-letter`.
 - **Overlines:** the small uppercase style is for column heads and field labels inside a section, never for a title.
 - **Prose:** explanatory notes, hints, empty states, placeholders and error or status messages are sans. Mono stays for IDs, metrics, timestamps, code, and raw diagnostics or logs, even inside a sentence (`code` spans).
 - **Rail counts:** a rail count is either an attention count or a volume count. An attention count (failed runs) is the `.rail-count.alert` pill in the danger colours. A volume count (tasks listed, audited events) is plain `12px` `--fg-mute` numerals that do not brighten on the active entry. Colour or a pill on a volume count would give a total the weight of something that needs action.
 
 ### Semantic Colors
 Colors are muted but distinct, avoiding harsh neon tones while maintaining semantic meaning.
-- **Text:** `--fg-strong` (`#f2f4f7`, titles and selected entries), `--fg` (`#e7eaee`), `--fg-soft` (`#c9d0d9`, rail entries, field labels and long-form body text such as task descriptions, failure messages and friction reports), `--fg-dim` (`#a3acb8`), `--fg-mute` (`#8b95a3`)
+- **Text:** `--fg-strong` (`#f2f4f7`, selected entries and heightened titles), `--fg` (`#e7eaee`, titles, naming labels and scanned values such as ids, counts and states), `--fg-soft` (`#c9d0d9`, prose: descriptions, comment bodies, reasons, messages and rendered markdown paragraphs; inline code, ids and links inside prose keep `--fg` or `--accent`), `--fg-dim` (`#a3acb8`, secondary metadata: timestamps, authors, counts beside a title), `--fg-mute` (`#8b95a3`, hints and placeholders)
 - **Disabled text:** `--fg-disabled` (`#66707d`), reserved for disabled states. Muted text stays above 4.5:1 contrast on `--bg`, `--bg-rail` and `--bg-elev`; disabled plugin cards keep full text contrast so their status and diagnostics remain readable.
 - **Accent (Blue):** `--accent` (`#7aa7ff`)
 - **Success/Done (Green):** `--status-done` (`#63d297`)
@@ -73,8 +128,8 @@ A backlog task's readiness dot, the Backlog card's readiness bar and its legend 
 
 ### Structural Rules
 - **Keyboard focus:** Every focusable control uses a `2px solid var(--accent)` outline under `:focus-visible`, including filters and task-action textareas. Outline offsets may move the ring inside a clipped row or outside a control.
-- **Radii:** `10px` (`--radius-panel`) for panels and cards, `8px` (`--radius`) for stat tiles, segmented controls and selects, `6–7px` for buttons, inputs and segments, `4px` for badges, and fully round for filter chips, pills and status dots.
-- **Density:** Padding remains tight (e.g., `12px 16px` for headers, `8px` gaps), but text is allowed to breathe more than in the legacy terminal theme.
+- **Radii:** Defined by the [Radius Scale](#radius-scale): `--radius-panel` (`10px`) for panels, raised cards and dialogs; `--radius` (`8px`) for content cards, stat tiles, segmented-control tracks and selects; `--radius-sm` (`6px`) for buttons, inputs and segments; `--radius-xs` (`4px`) for badges and tags; `--radius-2xs` (`2px`) for bars and swatches; and `--radius-pill` (`999px`) for filter chips and pills (`50%` for 1:1 status dots).
+- **Density:** Tight and uniform via the [Spacing Scale](#spacing-scale) (e.g., `--space-14` `--space-16` or `--space-12` `--space-16` for panel headers, `--space-8` gaps between controls), while text breathes at `--text-base` / `1.5` line height.
 - **Animation:** Minimal, purposeful motion. Used primarily for loading indicators (e.g., `pulse-skeleton 1.5s infinite ease-in-out`).
 
 ### Label/value lists
@@ -83,6 +138,28 @@ Detail panes and side panels list facts as label/value pairs (for example a "Sho
 - **Whole labels:** A label never breaks into one word per line. When the label and value cannot sit side by side, the value moves under its label instead of squeezing the label column.
 - **Label column width:** The label column keeps a readable minimum width of about `12ch`, and a label that needs more room takes it from the value column.
 - **Numbers:** Numeric values stay right-aligned when they sit beside their label, so digits line up down the list.
+
+### Token enforcement
+Colour values and font sizes are defined once in `crates/orbit-web/assets/dashboard/css/base.css`. The design rule is that every other stylesheet uses `var(--…)` for both. The rule is not yet met: stylesheets still hold literals, and the ratchet admits them by count. A stylesheet can pass CI while it still contains colour literals and raw font sizes.
+
+`scripts/check-dashboard-css-literals.py` runs in CI through `scripts/ci-guardrails.sh`, with no arguments. For each stylesheet under `crates/orbit-web/assets/dashboard/` except `base.css`, it counts two kinds and compares each count with `scripts/dashboard-css-literals-baseline.json`:
+
+- `colour_literals`: hex (`#rgb`, `#rgba`, `#rrggbb`, `#rrggbbaa`), `rgb()`, `rgba()`, `hsl()` and `hsla()` values. Selectors such as `#face` and comments are not counted.
+- `raw_font_sizes`: `font-size` values that are not `var(--…)`. The CSS-wide keywords (`inherit`, `initial`, `unset`, `revert`, `revert-layer`) are not counted. The `font` shorthand and a size held in a custom property are not counted either.
+
+The comparison is per file and per kind. A file's colour count and its size count are checked separately, and a change in one file never offsets a change in another.
+
+- **Rise:** a count above its baseline fails. The message lists every occurrence of that kind in the file. A colour that equals a `base.css` colour names that token (`var(--bg)`); any other colour, and every raw size, gets a pointer to the token scale instead.
+- **Fall:** a count below its baseline also fails until the baseline is lowered in the same change, so a removed literal must lower its count.
+- **New stylesheet:** a file with no baseline entry has a baseline of zero, so its first literal fails.
+- **Equal-count substitution:** the guard compares numbers, not values. Replacing a file's only colour with a different colour and its only raw size with a different size passes. A one-colour, one-size fixture changed to `#fff` and `19px` exits 0. Only review of the diff catches that substitution.
+
+The intent is that the counts only go down. Check mode alone does not hold that line, because it accepts any baseline that matches the current counts; the baseline writer's refusal, described below, and review of the baseline diff are the other controls.
+
+#### Baseline writer
+`--write-baseline` rewrites the baseline with the current counts. It compares only against the baseline file already on disk in the checkout, not against `main` or the base revision. It refuses any per-file, per-kind rise against that file and lists the occurrences it refuses. If the baseline file is missing, it writes without any comparison.
+
+Check mode reads the same file in the checkout. A rise hand-edited into `scripts/dashboard-css-literals-baseline.json` therefore passes CI, and running `--write-baseline` afterwards accepts it too. Only a review of the baseline diff against the base revision catches such a raise.
 
 ## Mechanism-specific sections
 

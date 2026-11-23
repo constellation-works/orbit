@@ -252,6 +252,13 @@ publication its failure handoff made; the next run still re-authenticates that
 publication before adopting it, as described in
 [stuck job runs](../../runbooks/stuck-job-runs.md#requeue-a-failure-handoff-task-onto-its-published-candidate).
 
+Current surface addition (2026-11-22): `orbit.task.resume_delivery` is
+advertised through `orbit.task.recover` in the task-repair toolset. Its
+governed row requires operator capability on ordinary routes. The activity
+broker admits this action only for an authenticated live resident cycle with
+the `recover` right in scope. The operation starts a review-only leaf and
+records the cycle's action key. See the [resident authority spec](../resident-orchestrator/specs/mandate-and-authority.md#rights--tools).
+
 Current surface addition (2026-10-25): `orbit.decision.submit` is advertised
 and governed by the operator capability. It is advertised because its real
 caller — a registered decision channel's plugin backend — reaches Orbit
@@ -304,6 +311,15 @@ unadvertised, governed `operator` operations. Listing can withdraw expired
 proposals; acceptance changes the notes every model receives, and rejection
 records the operator's decision. `GOVERNED_TOOL_PLACEMENT` records all three
 unadvertised ([crew memory](../crew-memory/2_design.md) §8).
+
+Current surface removal (2026-11-21): crew memory's operator verbs (history,
+export, reset, copy, proposals and proposal accept/reject) and the operator
+writer of `orbit.memory.write` are removed, and with them the `orbit memory`
+CLI group. Show, write and propose remain as tool-only operations in the
+`run-bound` MCP toolset, served only to a managed run whose dispatch stamp
+names them, so `GOVERNED_TOOL_PLACEMENT` keeps write and propose advertised
+to that server only; the write row is governed `agent` alone
+([crew memory](../crew-memory/2_design.md) §1).
 
 ### Rejected alternatives
 
@@ -1073,5 +1089,6 @@ different contracts; a future equivalent surface can use this shape.
 - [ORB-22808] — deprecated unused config keys and simplified the config surface
 - [ORB-23047] — took dashboard governed-write authority from session state only
 - [ORB-24115] — added `orbit.drain.claim.effort` for a follower's late effort report on the governed floor
+- [ORB-26835] — placed the brokered resident recovery action in the task-repair toolset.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

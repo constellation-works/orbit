@@ -18,6 +18,15 @@ pub(in super::super) struct Snapshot {
     pub(in super::super) statuses: Value,
     pub(in super::super) runs: Value,
 }
+
+/// The pull request and the head, branch and base a snapshot must still show.
+pub(in super::super) struct PullRequestSelector<'a> {
+    pub(in super::super) pr: &'a str,
+    pub(in super::super) head: &'a str,
+    pub(in super::super) branch: &'a str,
+    pub(in super::super) base: &'a str,
+}
+
 /// First wait between reads of unreadable-but-possibly-transient evidence.
 const FIRST_RETRY_WAIT_MS: u64 = 5_000;
 
@@ -126,17 +135,19 @@ pub(in super::super) fn poll_interval_ms(input: &Value) -> u64 {
 /// that cannot change returns at once; a transient one is read again after a
 /// wait that starts at 5 s and doubles up to `poll_interval_ms`, until the
 /// deadline ends the wait with the last unreadable cause.
-#[allow(clippy::too_many_arguments)]
 pub(in super::super) fn snapshot(
     deadline: Deadline,
     workspace: &Path,
-    pr: &str,
-    head: &str,
-    branch: &str,
-    base: &str,
+    selector: PullRequestSelector<'_>,
     poll_interval_ms: u64,
     pass: &super::super::read_reset::SnapshotWaits,
 ) -> Result<Snapshot, OrbitError> {
+    let PullRequestSelector {
+        pr,
+        head,
+        branch,
+        base,
+    } = selector;
     if pr.is_empty()
         || !pr.bytes().all(|byte| byte.is_ascii_digit())
         || !super::super::input::valid_expected_remote_sha(Some(head))

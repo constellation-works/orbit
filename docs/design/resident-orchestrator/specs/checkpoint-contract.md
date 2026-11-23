@@ -9,7 +9,7 @@ feature: resident-orchestrator
 tags: [resident-orchestrator, spec]
 related_features: [resident-orchestrator, activity-job, mid-run-steering]
 related_artifacts: [ORB-21229, ORB-21243, ORB-21246]
-last_updated: 2026-11-02
+last_updated: 2026-11-22
 ---
 
 # Spec: Checkpoint and resume contract
@@ -141,8 +141,13 @@ Dedicated start/approval/rejection transitions require a separate comment-only u
 records, so their specialized lifecycle writers cannot bypass resident admission.
 
 `orbit resident show <task> --json` includes `latest_checkpoint` as the complete parsed object
-(or null), alongside `live_cycle`. Ordinary comments and request/answer records do not obscure
-the latest checkpoint. The text output includes its cycle, outcome and notes.
+(or null), alongside `live_cycle` and top-level `latest_checkpoint_at`: the persisted comment time
+of that checkpoint, or null when the mandate has no checkpoint. The parsed object has no time field
+(`ResidentCheckpoint` denies unknown fields), so its `cycle` names the cycle it records, not the
+write time. The dashboard's GET reads move the time into `latest_checkpoint.at` and drop the
+top-level field ([2_design.md §6.1](../2_design.md#61-the-dashboard-path)). Ordinary comments and
+request/answer records do not obscure the latest checkpoint. The text output includes its cycle,
+outcome and notes.
 Recovery checkpoints may also list action keys from `recovery_of`, since retrying a dead cycle's
 action must reuse its original key. Other cycles' action keys are refused.
 

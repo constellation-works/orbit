@@ -14,8 +14,10 @@ not skipped. Skipped and cancelled runs are reported as gaps, never
 counted as fast runs. The p90 is nearest-rank over the executed Check
 durations (job start to completion): rank ceil(0.9 * n) of the ascending
 durations. Exit status is 0 when the p90 is at most the budget, 1 when
-it exceeds it, and 2 when no executed run is available. This measures a
-rolling cohort; it does not by itself attribute a change's effect.
+it exceeds it, 2 when no executed run is available, and 3 when `gh`
+fails (missing binary, auth, rate limit, network, or unreadable output).
+A `gh` failure is not an over-budget result. This measures a rolling
+cohort; it does not by itself attribute a change's effect.
 """
 
 import argparse
@@ -83,20 +85,41 @@ def summarise_run(run):
     }
 
 
+def run_gh(command):
+    """Run `gh`. Exit 3 on failure, which is not the over-budget status."""
+    try:
+        result = subprocess.run(command, capture_output=True, text=True)
+    except OSError as error:
+        print(f"ci-p90: gh failed: could not run gh ({error})", file=sys.stderr)
+        raise SystemExit(3) from None
+    if result.returncode != 0:
+        detail = (result.stderr or result.stdout or "gh exited nonzero").strip()
+        print(f"ci-p90: gh failed ({result.returncode}): {detail}", file=sys.stderr)
+        raise SystemExit(3)
+    return result.stdout
+
+
+def load_gh_json(command):
+    raw = run_gh(command)
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError as error:
+        print(f"ci-p90: gh failed: unreadable output ({error})", file=sys.stderr)
+        raise SystemExit(3) from None
+
+
 def load_runs(args):
     if args.from_json:
         with open(args.from_json, encoding="utf-8") as handle:
             return json.load(handle)
-    listing = json.loads(subprocess.run(
+    listing = load_gh_json(
         ["gh", "run", "list", "--workflow", "ci.yml", "--event", "pull_request",
          "--status", "completed", "--limit", str(args.limit),
-         "--json", "databaseId,headSha,conclusion,createdAt"],
-        capture_output=True, text=True, check=True).stdout)
+         "--json", "databaseId,headSha,conclusion,createdAt"])
     runs = []
     for entry in listing:
-        view = json.loads(subprocess.run(
-            ["gh", "run", "view", str(entry["databaseId"]), "--json", "jobs,headSha"],
-            capture_output=True, text=True, check=True).stdout)
+        view = load_gh_json(
+            ["gh", "run", "view", str(entry["databaseId"]), "--json", "jobs,headSha"])
         view.setdefault("databaseId", entry["databaseId"])
         view.setdefault("headSha", entry.get("headSha", ""))
         runs.append(view)

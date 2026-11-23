@@ -5,8 +5,9 @@
 // as touching the edge. Measure each text run's distance to the BORDER box
 // of its nearest bordered/filled block-level ancestor (padding counts as
 // inset); a run with no such ancestor within three levels has no edge to
-// touch and is skipped. Buttons, pills and chips hug by design and are out
-// of scope, as are absolutely positioned and screen-reader-only runs.
+// touch and is skipped. Buttons and the badge, pill and chip classes hug by
+// design and are out of scope, whatever their computed display; as are
+// table parts, absolutely positioned and screen-reader-only runs.
 import { measureInPage, verdict } from "../lib/ui-context.mjs";
 
 export const MIN_INSET_PX = 4;
@@ -46,6 +47,9 @@ export async function check(ctx) {
       [...el.childNodes].some(
         (node) => node.nodeType === 3 && node.textContent.trim() !== "",
       );
+    // Shared component chrome that hugs its text by design. Matched as whole
+    // class tokens, so `chip-group` or `chip-label` are not exempt.
+    const HUGGING_CLASSES = ["badge", "pill", "chip"];
     const TABLE_PARTS = new Set([
       "TR",
       "TD",
@@ -86,11 +90,15 @@ export async function check(ctx) {
       // wrapper barely larger than the text itself (pills, chips, tracks),
       // is the text's own badge, not a roomy container.
       if (box.tagName === "BUTTON" || box.tagName === "A") continue;
+      // A badge, pill or chip is the text's own chrome whatever its computed
+      // display: a flex child is blockified to `block`, so the display check
+      // below cannot tell it apart from a panel.
+      if (HUGGING_CLASSES.some((name) => box.classList.contains(name))) continue;
       const edgeBox = H.rect(box);
       const textArea = Math.max(1, selfBox.width * selfBox.height);
       const boxArea = Math.max(1, edgeBox.width * edgeBox.height);
       if (boxArea < 8 * textArea) continue;
-      // Pills, chips and buttons hug their text by design (inline-level
+      // Inline-level containers hug their text by design (inline-level
       // boxes); the rule targets block-level containers such as panels,
       // headers and bodies.
       const display = getComputedStyle(box).display;

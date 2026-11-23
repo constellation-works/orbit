@@ -12,6 +12,7 @@
 
 use orbit_types::tool::{McpIdRouteDeclaration, McpToolScope};
 
+use super::aliased_task_id;
 use super::operations::{TASK_HOST_HELP, TaskOperation, TaskVerb};
 use super::write_operations::WRITE_PROJECTION_PARAMS;
 use crate::governance::operation::{
@@ -38,7 +39,7 @@ const HOST_PARAM: ParamSpec = cli_only(
 const WORKSPACE_PARAM: ParamSpec = mcp_only(
     "workspace",
     ParamType::String,
-    "Optional workspace selector; defaults to the binding or task ID lookup if unbound.",
+    crate::governance::tool_schema::WORKSPACE_SELECTOR_DESCRIPTION,
 );
 
 const fn flag_named(long: &'static str, value_name: &'static str) -> CliArgKind {
@@ -158,37 +159,37 @@ pub(super) const RECONCILE_REVIEW: TaskOperation = TaskOperation {
             mcp_only(
                 "action",
                 ParamType::Enum(RECONCILE_ACTION_VALUES),
-                "inspect, submit, status, or accept_baseline",
+                "inspect, submit, status, or accept_baseline.",
             ),
             RECONCILE_CLI_ACTIONS,
         )),
-        required(mcp_only("id", ParamType::String, RECONCILE_ID_HELP)),
-        mcp_only(
-            "request_key",
+        required(aliased_task_id(mcp_only(
+            "id",
             ParamType::String,
-            "submit: operator-chosen key; resubmitting it replays the same reconciliation",
-        ),
+            "Task ID.",
+        ))),
+        mcp_only("request_key", ParamType::String, "submit: Replay key."),
         mcp_only(
             "reconciliation_id",
             ParamType::String,
-            "status, accept_baseline: the target reconciliation",
+            "status, accept_baseline: Reconciliation ID.",
         ),
         // Selects an already-authorized stored command, so it is kept
         // byte-for-byte for exact evidence matching.
         mcp_only(
             "command",
             ParamType::String,
-            "accept_baseline: the required command whose failure reproduced at the base",
+            "accept_baseline: Failing command.",
         ),
         mcp_only(
             "remediation_commit",
             ParamType::String,
-            "accept_baseline: commit on the landing branch, landed on top of the delivery's merge or squash commit, that remediates that failure",
+            "accept_baseline: Fix commit on landing branch.",
         ),
         free_text(mcp_only(
             "reason",
             ParamType::String,
-            "accept_baseline: why the baseline failure is accepted",
+            "accept_baseline: Why baseline failure is accepted.",
         )),
     ]],
     at_least_one_of: &[],
@@ -209,31 +210,31 @@ pub(super) const REVIEW_RESET: TaskOperation = TaskOperation {
     params: &[&[
         HOST_PARAM,
         WORKSPACE_PARAM,
-        required(both(
+        required(aliased_task_id(both(
             "id",
             ParamType::String,
-            "Task in the selected lineage",
+            "Task ID.",
             CliArgKind::Positional,
             "Task belonging to the selected lineage",
-        )),
+        ))),
         required(both(
             "lineage_key",
             ParamType::String,
-            "Exact lineage key from the admission refusal or review manifest",
+            "Lineage key from refusal or manifest.",
             flag_named("lineage", "LINEAGE"),
             "Exact lineage key from the refusal or review manifest",
         )),
         required(free_text(both(
             "reason",
             ParamType::String,
-            "Required explanation retained in the decision history",
+            "Audited operator reason.",
             CliArgKind::flag("reason"),
             "Explanation recorded with the operator decision",
         ))),
         both(
             "adopt_configured_budget",
             ParamType::Switch,
-            "Explicitly adopt current configured review limits; default retains the captured limits",
+            "Adopt current review limits (default retains captured).",
             CliArgKind::flag("adopt-configured-budget"),
             "Adopt the current configured budget instead of the captured budget",
         ),
@@ -258,27 +259,57 @@ pub(super) const REQUEUE: TaskOperation = TaskOperation {
     params: &[&[
         HOST_PARAM,
         WORKSPACE_PARAM,
-        required(both(
+        required(aliased_task_id(both(
             "id",
             ParamType::String,
-            "Blocked task to requeue",
+            "Task ID.",
             CliArgKind::Positional,
             "Blocked task to requeue",
-        )),
+        ))),
         required(free_text(both(
             "reason",
             ParamType::String,
-            "Required explanation retained in the task history",
+            "Audited operator reason.",
             CliArgKind::flag("reason"),
             "Explanation recorded with the operator decision",
         ))),
         both(
             "discard_candidate",
             ParamType::Switch,
-            "Discard the published or kept candidate, close the task's undelivered Orbit pull requests and let the next run implement fresh",
+            "Close kept candidate/PRs and implement fresh.",
             CliArgKind::flag("discard-candidate"),
             "Discard the published or kept candidate and rerun from scratch",
         ),
+    ]],
+    at_least_one_of: &[],
+    retired_fields: &[],
+    unknown_fields: UnknownFields::Refuse,
+    mcp_scope: Some(McpToolScope::WorkspaceRequired),
+    id_route: McpIdRouteDeclaration::Task,
+};
+
+/// Start recovery of a stopped resident-covered delivery.
+pub(super) const RESUME_DELIVERY: TaskOperation = TaskOperation {
+    verb: TaskVerb::ResumeDelivery,
+    cli_path: &[],
+    tool_name: "orbit.task.resume_delivery",
+    tool_description: "Start a review-only recovery leaf for a blocked task's preserved delivery through an authenticated cycle with the recover right. Provide the stopped failed or held run ID and remaining source work. It continues on the current base with fresh validation and review. Limit: one attempt per cycle, one per task per 24 hours. Landing requires separate merge authority.",
+    cli_about: "",
+    cli_help: CliHelp::NONE,
+    effect: Effect::Write,
+    params: &[&[
+        WORKSPACE_PARAM,
+        required(mcp_only("id", ParamType::String, "task ID")),
+        required(mcp_only(
+            "run_id",
+            ParamType::String,
+            "Stopped recovery run",
+        )),
+        required(free_text(mcp_only(
+            "diagnosis",
+            ParamType::String,
+            "Cause and remaining work",
+        ))),
     ]],
     at_least_one_of: &[],
     retired_fields: &[],
@@ -304,17 +335,17 @@ pub(super) const REPILOT: TaskOperation = TaskOperation {
     params: &[&[
         HOST_PARAM,
         WORKSPACE_PARAM,
-        required(both(
+        required(aliased_task_id(both(
             "id",
             ParamType::String,
-            "Task to assess again",
+            "Task ID.",
             CliArgKind::Positional,
             "Task to assess again",
-        )),
+        ))),
         both(
             "full",
             ParamType::Switch,
-            "Run a full assessment instead of re-checking a held one",
+            "Force full assessment.",
             CliArgKind::flag("full"),
             "Run a full assessment instead of re-checking the held one",
         ),
@@ -341,7 +372,7 @@ pub(super) const BLOCK_TRIAGE: TaskOperation = TaskOperation {
     verb: TaskVerb::BlockTriage,
     cli_path: &[],
     tool_name: "orbit.task.block_triage",
-    tool_description: "Triage proposed tasks a task-pilot warning holds. `candidates` lists those awaiting triage; `propose` opens a decision request with a summary, options and a recommendation, which the operator answers with one click; `report` records the exact human action when only something outside Orbit resolves the hold. Prefer `propose` whenever the operator resolves the hold by choosing. Never approves, rejects or archives a task itself. Blocked tasks are refused here: final recovery decides them. A decision on a task a live triage run holds needs that run's inspection proof. Policy detail, the pilot-warning marker and the proof recipe: the orbit skill's references/tool-surface.md, section `Pilot-warning triage`.",
+    tool_description: "Triage proposed tasks a task-pilot warning holds. `candidates` lists held tasks; `propose` opens an operator decision; `report` records a human action. Policy and the proof recipe: the orbit skill's references/tool-surface-pilot.md, section `Pilot-warning triage`.",
     cli_about: "",
     cli_help: CliHelp::NONE,
     // `candidates` only reads, but the decisions write.
@@ -351,52 +382,52 @@ pub(super) const BLOCK_TRIAGE: TaskOperation = TaskOperation {
         required(mcp_only(
             "action",
             ParamType::Enum(BLOCK_TRIAGE_ACTION_VALUES),
-            "candidates, propose, or report",
+            "candidates, propose, or report.",
         )),
         mcp_only(
             "subject",
             ParamType::Enum(BLOCK_TRIAGE_SUBJECT_VALUES),
-            "Triage subject, only pilot_warning (default); a proposed task's pilot warning hold",
+            "Triage subject (only `pilot_warning`).",
         ),
-        mcp_only(
+        aliased_task_id(mcp_only(
             "id",
             ParamType::String,
-            "Pilot-held task ID, for propose and report",
-        ),
+            "Held task ID (propose, report).",
+        )),
         free_text(mcp_only(
             "summary",
             ParamType::String,
-            "Decision needed in one or two plain sentences, for propose and report; readable without opening the code",
+            "Decision summary in 1-2 sentences (propose, report).",
         )),
         free_text(mcp_only(
             "reason",
             ParamType::String,
-            "Exact action only a human outside Orbit can take, for report",
+            "Human-only action needed (report).",
         )),
         mcp_only(
             "options",
             ParamType::Array,
-            "Two or three decision options for propose; each is a {summary, consequence, rewrite, action} object; rewrite is {description?, acceptance_criteria?} with the field's complete new value; action is {kind: requeue | re_pilot | change_crew (crew) | split (title, description, acceptance_criteria) | reject | archive}; every option needs a rewrite, an action or both",
+            "propose: 2-3 {summary, consequence, rewrite?, action?}; each option needs a rewrite, an action or both. rewrite: {description?, acceptance_criteria?} with at least one field, each the field's complete new value. action: a tagged object such as {kind: requeue}; kind is requeue, re_pilot, change_crew, split, reject or archive. change_crew adds crew; split adds title, description and acceptance_criteria; reject and archive take no rewrite.",
         ),
         mcp_only(
             "recommended",
             ParamType::Integer,
-            "1-based index of the recommended option, for propose",
+            "1-based recommended index (propose).",
         ),
         mcp_only(
             "source_revision",
             ParamType::String,
-            "Pinned commit id inspected (null if non-Git); supply with observed_revision and observed_tree",
+            "Inspected commit or null; pair with `observed_*`.",
         ),
         mcp_only(
             "observed_revision",
             ParamType::String,
-            "Value of `git rev-parse HEAD` in the inspection checkout; inspection proof",
+            "Inspection `git rev-parse HEAD`.",
         ),
         mcp_only(
             "observed_tree",
             ParamType::String,
-            "Value of `git rev-parse 'HEAD^{tree}'` in the inspection checkout; inspection proof",
+            "Inspection `git rev-parse 'HEAD^{tree}'`.",
         ),
     ]],
     at_least_one_of: &[],
@@ -407,7 +438,11 @@ pub(super) const BLOCK_TRIAGE: TaskOperation = TaskOperation {
 };
 
 /// The task a lifecycle tool acts on.
-const TASK_ID_PARAM: ParamSpec = required(mcp_only("id", ParamType::String, "task ID"));
+const TASK_ID_PARAM: ParamSpec = required(aliased_task_id(mcp_only(
+    "id",
+    ParamType::String,
+    "task ID",
+)));
 
 // Task rejection is a human/operator decision: CLI and dashboard only.
 pub(super) const REJECT: TaskOperation = TaskOperation {
@@ -491,35 +526,35 @@ pub(super) const RECOVER_CLAIM: TaskOperation = TaskOperation {
         required(both(
             "claim_id",
             ParamType::String,
-            "Live claim to recover",
+            "Claim ID.",
             CliArgKind::Positional,
             "Claim to recover",
         )),
         required(both(
             "expected_phase",
             ParamType::String,
-            "Claim phase you observed; a claim that moved on is refused",
+            "Observed claim phase.",
             flag_named("phase", "PHASE"),
             "Expected claim phase you observed",
         )),
         required(both(
             "status",
             ParamType::Enum(RECOVER_STATUS_VALUES),
-            "Lifecycle-allowed target; done needs completion evidence",
+            "Lifecycle-valid target (done needs completion evidence).",
             flag_named("status", "STATUS"),
             "Lifecycle-valid status to move the task to",
         )),
         required(free_text(both(
             "reason",
             ParamType::String,
-            "Required operator reason retained durably",
+            "Audited operator reason.",
             flag_named("reason", "REASON"),
             "Operator reason recorded with the recovery",
         ))),
         required(both(
             "request_key",
             ParamType::String,
-            "Durable request key; reuse exactly after a lost reply",
+            "Durable replay key.",
             flag_named("request", "KEY"),
             "Durable replay key; reuse after a lost reply",
         )),
@@ -546,35 +581,35 @@ pub(super) const REVOKE_HANDOFF: TaskOperation = TaskOperation {
         required(both(
             "handoff_id",
             ParamType::String,
-            "Accepted handoff whose authority to revoke",
+            "Accepted handoff ID.",
             CliArgKind::Positional,
             "Accepted handoff identity",
         )),
         required(both(
             "expected_candidate_commit",
             ParamType::String,
-            "Accepted candidate commit the operator observed",
+            "Expected candidate commit.",
             flag_named("candidate", "COMMIT"),
             "Expected accepted candidate commit",
         )),
         required(both(
             "expected_base_commit",
             ParamType::String,
-            "Accepted base commit the operator observed",
+            "Expected base commit.",
             flag_named("base", "COMMIT"),
             "Expected accepted base commit",
         )),
         required(free_text(both(
             "reason",
             ParamType::String,
-            "Required operator reason retained durably",
+            "Audited operator reason.",
             flag_named("reason", "REASON"),
             "Operator reason recorded with the revocation",
         ))),
         required(both(
             "request_key",
             ParamType::String,
-            "Durable request key; reuse exactly after a lost reply",
+            "Durable replay key.",
             flag_named("request", "KEY"),
             "Durable replay key; reuse after a lost reply",
         )),
@@ -605,54 +640,54 @@ pub(super) const RETRY_HANDOFF: TaskOperation = TaskOperation {
         required(mcp_only(
             "workspace",
             ParamType::String,
-            "Explicit owner logical workspace ID or absolute checkout path",
+            crate::governance::tool_schema::WORKSPACE_SELECTOR_DESCRIPTION,
         )),
         required(both(
             "handoff_id",
             ParamType::String,
-            "Immutable accepted handoff identity",
+            "Accepted handoff ID.",
             CliArgKind::Positional,
             "Accepted handoff identity",
         )),
         required(both(
             "expected_candidate_commit",
             ParamType::String,
-            "Accepted candidate commit the operator observed",
+            "Expected candidate commit.",
             flag_named("candidate", "COMMIT"),
             "Expected accepted candidate commit",
         )),
         required(both(
             "expected_base_commit",
             ParamType::String,
-            "Accepted base commit the operator observed",
+            "Expected base commit.",
             flag_named("base", "COMMIT"),
             "Expected accepted base commit",
         )),
         required(both(
             "expected_latest_attempt",
             ParamType::Integer,
-            "Latest landing attempt number the operator observed",
+            "Expected latest attempt.",
             flag_named("attempt", "NUMBER"),
             "Expected latest landing attempt number",
         )),
         required(both(
             "expected_latest_state",
             ParamType::Enum(&[EnumValue::plain("stopped"), EnumValue::plain("dispatched")]),
-            "Latest state; dispatched is eligible only with unresolved intent and no live owner job",
+            "stopped, or dispatched with unresolved intent.",
             flag_named("state", "STATE"),
             "Expected latest state: stopped or dispatched with uncertain intent",
         )),
         required(free_text(both(
             "reason",
             ParamType::String,
-            "Required operator reason retained durably",
+            "Audited operator reason.",
             flag_named("reason", "REASON"),
             "Operator reason recorded with the retry",
         ))),
         required(both(
             "request_key",
             ParamType::String,
-            "Durable request key; reuse exactly after a lost reply",
+            "Durable replay key.",
             flag_named("request", "KEY"),
             "Durable replay key; reuse after a lost reply",
         )),

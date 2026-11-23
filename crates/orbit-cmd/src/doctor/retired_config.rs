@@ -276,12 +276,9 @@ fn read_document(path: &Path) -> Result<Option<toml::Value>, OrbitError> {
             redact_home_dir(&path.display().to_string())
         ))
     })?;
-    toml::from_str(&original).map(Some).map_err(|error| {
-        OrbitError::InvalidInput(format!(
-            "invalid runtime config '{}': {error}",
-            redact_home_dir(&path.display().to_string())
-        ))
-    })
+    toml::from_str(&original)
+        .map(Some)
+        .map_err(|error| orbit_config::invalid_runtime_config(path, error))
 }
 
 /// Plan one file's repair. `lower` is the global file as written when

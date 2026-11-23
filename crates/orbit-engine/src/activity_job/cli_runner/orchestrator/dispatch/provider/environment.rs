@@ -7,7 +7,9 @@ use super::super::super::policy::{activity_policy_env, drop_inherited_policy_env
 use super::super::CliDispatchContext;
 use crate::activity_job::cli_runner::inspection::SourceInspection;
 use crate::activity_job::dispatcher::{DispatchError, ResolvedSandbox};
-use crate::context::{ProvenanceEnv, ResolvedActivityTools, provenance_env};
+use crate::context::{
+    ProvenanceEnv, ResolvedActivityTools, default_python_cache_prefix, provenance_env,
+};
 use orbit_common::process::build_budget::WAIT_DIRECTORY_ENV;
 use orbit_common::security::child_env::{
     ACTIVITY_MCP_TOOLSETS_ENV, MCP_MANAGED_REGISTRY_ROOT_ENV, MCP_MANAGED_WORKSPACE_ENV,
@@ -115,6 +117,7 @@ pub(super) struct ProviderEnvironmentInput<'a> {
 pub(super) struct PreparedProviderEnvironment {
     pub(super) scratch_dir: Option<PathBuf>,
     pub(super) build_wait_directory: tempfile::TempDir,
+    pub(super) python_cache_directory: tempfile::TempDir,
 }
 
 pub(super) fn prepare_provider_environment(
@@ -177,6 +180,12 @@ pub(super) fn prepare_provider_environment(
         .tempdir_in(scratch)
         .map_err(|error| {
             DispatchError::CliInvocationPermanent(format!("create build wait channel: {error}"))
+        })?;
+    let python_cache_directory = tempfile::Builder::new()
+        .prefix("python-cache-")
+        .tempdir_in(scratch)
+        .map_err(|error| {
+            DispatchError::CliInvocationPermanent(format!("create Python cache scratch: {error}"))
         })?;
     dispatch_env.push((
         WAIT_DIRECTORY_ENV.to_string(),
@@ -305,6 +314,7 @@ pub(super) fn prepare_provider_environment(
             .map(|(key, value)| ((*key).to_string(), (*value).to_string())),
     );
     child_env.extend(dispatch_env);
+    default_python_cache_prefix(child_env, python_cache_directory.path());
     add_browser_kit_env(child_env);
     if host.worker_invocation().is_some() {
         child_env.push(("ORBIT_WORKER_CONTEXT_REQUIRED".into(), "1".into()));
@@ -312,5 +322,6 @@ pub(super) fn prepare_provider_environment(
     Ok(PreparedProviderEnvironment {
         scratch_dir,
         build_wait_directory,
+        python_cache_directory,
     })
 }

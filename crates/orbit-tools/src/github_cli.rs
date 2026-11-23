@@ -31,6 +31,7 @@ pub use crate::builtin::github::landing::{
     commit_pull_requests as commit_pull_requests_request,
     merge_pull_request_at_head as merge_pull_request_at_head_request,
     repository_merge_methods as repository_merge_methods_request,
+    update_pull_request_branch as update_pull_request_branch_request,
 };
 pub use crate::builtin::github::logs::{
     LogReadBounds, LogScope, MAX_EVIDENCE_LINES, RunLogRead, RunLogRequests, SOURCE_JOB_API_LOG,
@@ -59,6 +60,7 @@ pub use crate::builtin::github::run::view::{
 pub use crate::builtin::github::task_prs::{
     authenticated_login as authenticated_login_request,
     bound_branch_pull_request as bound_branch_pull_request_request,
+    branch_protection_rules as branch_protection_rules_request,
     close_pull_request as close_pull_request_request,
     commit_workflow_runs as commit_workflow_runs_request,
     merged_pull_requests as merged_pull_requests_request,

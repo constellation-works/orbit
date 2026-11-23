@@ -68,12 +68,19 @@
 //! failure not caused by the candidate: nothing is committed, the no-edit
 //! outcome is recorded against its already-spent attempt, and the watcher
 //! reruns the failed required checks once on the unchanged head through
-//! the shared CI rerun budget. Only a rerun that fails again stops.
+//! the shared CI rerun budget. Only a rerun that fails again stops, unless
+//! the failure is base-inherited: red at the head's fork point, passing on a
+//! newer base commit, and citing no file the candidate changed. Then the
+//! completion reserves the pull request's one base update and refreshes the
+//! head to the base tip through the host's refresh operation, once and only
+//! conflict-free ([`refresh_inherited_failure`], [ORB-26860]); a conflict or
+//! any other refusal holds with its reason.
 //!
 //! [`head_check_evidence`]: super::super::checks::head_check_evidence
 
 mod admission;
 mod checks;
+mod inherited_refresh;
 mod ledger;
 mod publication;
 mod published_head;
@@ -82,9 +89,10 @@ mod verdict;
 
 pub(super) use admission::{AutoFix, admit};
 pub(super) use checks::{
-    CheckRepair, CiRerunRecovery, base_tip_checks, recover_ci_rerun, red_base_wait,
-    repair_failed_checks,
+    CheckRepair, CiRerunRecovery, base_tip_checks, failed_no_edit_rerun, recover_ci_rerun,
+    red_base_wait, repair_failed_checks,
 };
+pub(super) use inherited_refresh::{InheritedRefresh, refresh_inherited_failure};
 pub(super) use ledger::{
     attach_evidence, record_base_path, record_base_red, record_landed_repair,
     record_published_repair, reserve_base_refresh,

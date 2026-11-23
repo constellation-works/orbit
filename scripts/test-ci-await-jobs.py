@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 import self_test_hang
 import shutil
+import subprocess
 import sys
 import tempfile
 import threading
@@ -166,7 +167,16 @@ if "CI_AWAIT_FIXTURE_TIME" in os.environ:
 os.execv({real_gh!r}, [{real_gh!r}, *args])
 ''')
         (bin_dir / "gh").chmod(0o755)
-        self.env = dict(os.environ, PATH=f"{bin_dir}:{os.environ['PATH']}", GH_TOKEN="offline-token",
+        self.env = {
+            key: value for key, value in os.environ.items()
+            if not key.startswith(("ORBIT_DEPENDENCY_", "CI_AWAIT_"))
+            and key not in (
+                "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY",
+                "http_proxy", "https_proxy", "all_proxy", "no_proxy",
+                "GITHUB_RUN_ATTEMPT", "GITHUB_SHA", "GITHUB_JOB", "GITHUB_WORKFLOW_REF",
+            )
+        }
+        self.env.update(PATH=f"{bin_dir}:{os.environ['PATH']}", GH_TOKEN="offline-token",
                         GH_CONFIG_DIR=str(self.root / "gh-config"), GITHUB_REPOSITORY="fixture/orbit",
                         GITHUB_RUN_ID="4242")
         # Drive the public CLI on a virtual clock: the observed 15-second
@@ -480,13 +490,24 @@ finally:
     def test_a_blocked_listing_is_killed_at_the_deadline(self):
         pid_file = self.root / "gh.pid"
         self.env["CI_AWAIT_BLOCK_PID_FILE"] = str(pid_file)
-        result = self.wait([job("Test build")], timeout="2")
-        self.assertEqual(result.returncode, 1, result.stdout)
-        self.assertIn("timed out after 2 s waiting for every job (job listing still running at the "
-                      "deadline, killed)", result.stderr)
-        self.assertTrue(pid_file.exists(), "the listing child started before the deadline")
-        with self.assertRaises(ProcessLookupError, msg="the timed-out listing child is reaped"):
-            os.kill(int(pid_file.read_text()), 0)
+        self.responses[:] = ([job("Test build")],)
+        arguments = [argument for name in EXPECTED for argument in ("--job", name)]
+        owned = self_test_hang.OwnedProcessGroup(
+            [sys.executable, str(SCRIPTS / "ci-await-jobs.py"), *arguments,
+             "--poll-seconds", "0.01", "--timeout-seconds", "2"],
+            env=self.env, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        try:
+            stdout, stderr = owned.process.communicate(timeout=self_test_hang.HANG_CEILING_SECONDS)
+            self.assertEqual(owned.process.returncode, 1, stdout)
+            self.assertIn("timed out after 2 s waiting for every job (job listing still running at the "
+                          "deadline, killed)", stderr)
+            self.assertTrue(pid_file.exists(), "the listing child started before the deadline")
+            # Check before OwnedProcessGroup.close() sends SIGKILL to the group,
+            # so this assertion fails if ci-await-jobs.py leaves gh alive.
+            with self.assertRaises(ProcessLookupError, msg="the timed-out listing child is reaped"):
+                os.kill(int(pid_file.read_text()), 0)
+        finally:
+            owned.close()
 
     def test_a_listing_after_the_deadline_is_not_a_success(self):
         everything = [job("Test build"), job("Test shard 1/2"), job("Test shard 2/2")]

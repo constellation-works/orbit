@@ -104,6 +104,26 @@ function restoreActionFocus(actions, selector) {
   if (opener && typeof opener.focus === "function") opener.focus();
 }
 
+// A refresh that fails after the server accepted the action must stay
+// visible. The action collapsed the detail before refreshing, so the node it
+// started from may be detached or hidden: report on the live detail when one
+// is on the page, and otherwise through the task list's action notice.
+function reportRefreshFailure(task, context, text) {
+  // Render first so the page matches the collapsed state the action set.
+  rerender(context);
+  const live = $("detail-" + task.id);
+  if (live && live.isConnected) {
+    live.prepend(actionErrorNode(text));
+    return;
+  }
+  taskState.taskActionNotice = text;
+  rerender(context);
+}
+
+function refreshFailureText(action, error) {
+  return `${action} was accepted, but the view could not refresh: ${error.message || String(error)}. Reload the page to update it.`;
+}
+
 function disableActionControls(detail) {
   const controls = [...detail.querySelectorAll(".action")].map(node => ({ node, disabled: node.disabled }));
   for (const { node } of controls) node.disabled = true;
@@ -133,20 +153,22 @@ async function shipTask(task, detail, btnNode, context) {
     const runId = result && result.run_id ? result.run_id : "(no run id)";
     const state = result && result.state ? result.state : "submitted";
     taskState.taskActionNotice = [`${task.id}: ship run ${runId} ${state}`, ...submissionNoticeLines(result)].join("\n");
-    collapseTask(task.id);
+    collapseTask(task.id, task.workspace_id);
     await refreshTasks(context);
   } catch (error) {
     if (!dispatched) taskState.shipInFlightTaskIds.delete(dispatchKey);
     if (!visit.isCurrent()) return;
+    if (dispatched) {
+      reportRefreshFailure(task, context, refreshFailureText("Ship", error));
+      return;
+    }
     restoreControls();
     // A refresh may have replaced the detail while this request was pending.
     rerender(context);
     detail = $("detail-" + task.id) || detail;
     btnNode = detail.querySelector(".action.ship") || btnNode;
     btnNode.textContent = oldText;
-    detail.prepend(actionErrorNode(dispatched
-      ? `Ship was accepted, but the view could not refresh: ${error.message || String(error)}. Reload the page to update it.`
-      : `ship failed: ${error.message || String(error)}`));
+    detail.prepend(actionErrorNode(`ship failed: ${error.message || String(error)}`));
   }
 }
 
@@ -282,13 +304,19 @@ async function archiveTaskWithForce(task, detail, btnNode, context) {
     restoreControls();
     if (btnNode && btnNode.tagName === "BUTTON") btnNode.textContent = oldText;
   };
+  let archived = false;
   try {
     await postJson(requestPath, {});
+    archived = true;
     if (!visit.isCurrent()) return;
-    collapseTask(task.id);
+    collapseTask(task.id, task.workspace_id);
     await refreshTasks(context);
   } catch (error) {
     if (!visit.isCurrent()) return;
+    if (archived) {
+      reportRefreshFailure(task, context, refreshFailureText("Archive", error));
+      return;
+    }
     if (!error || error.code !== "force_overridable") {
       restore();
       detail.prepend(actionErrorNode(`archive failed: ${error.message || String(error)}`));
@@ -307,11 +335,16 @@ async function archiveTaskWithForce(task, detail, btnNode, context) {
     }
     try {
       await postJson(requestPath, { force: true });
+      archived = true;
       if (!visit.isCurrent()) return;
-      collapseTask(task.id);
+      collapseTask(task.id, task.workspace_id);
       await refreshTasks(context);
     } catch (retryError) {
       if (!visit.isCurrent()) return;
+      if (archived) {
+        reportRefreshFailure(task, context, refreshFailureText("Archive", retryError));
+        return;
+      }
       restore();
       const current = $(`detail-${task.id}`) || detail;
       current.prepend(actionErrorNode(`archive failed: ${retryError.message || String(retryError)}`));
@@ -358,17 +391,23 @@ async function runAction(task, kind, detail, body, btnNode, context, opts = {}) 
     }
     accepted = true;
     if (!visit.isCurrent()) return;
-    if (opts.collapseOnSuccess !== false) collapseTask(task.id);
+    // The submitted draft (the reject form) is spent: let the next render
+    // rebuild the detail, including a full-page task that does not collapse.
+    delete detail.dataset.draft;
+    if (opts.collapseOnSuccess !== false) collapseTask(task.id, task.workspace_id);
     if (opts.successNotice) taskState.taskActionNotice = opts.successNotice;
     await refreshTasks(context);
   } catch (err) {
     if (!visit.isCurrent()) return;
-    if (!accepted) restoreControls();
+    if (accepted) {
+      if (btnNode && btnNode.tagName === "BUTTON") btnNode.textContent = oldText;
+      reportRefreshFailure(task, context, refreshFailureText(kind, err));
+      return;
+    }
+    restoreControls();
     if (btnNode && btnNode.tagName === "BUTTON") btnNode.textContent = oldText;
-    if (!accepted && opts.onFailure) opts.onFailure();
-    detail.prepend(actionErrorNode(accepted
-      ? `${kind} was accepted, but the view could not refresh: ${err.message || String(err)}. Reload the page to update it.`
-      : String(err.message || err), err && err.remedy));
+    if (opts.onFailure) opts.onFailure();
+    detail.prepend(actionErrorNode(String(err.message || err), err && err.remedy));
   }
 }
 

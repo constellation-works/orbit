@@ -4,8 +4,9 @@ use orbit_common::OrbitError;
 use orbit_exec::{EnvironmentMode, NoSandbox, run_process};
 
 use super::super::forge_text;
-use super::super::git::{git_output, git_output_paths, git_output_raw, git_request, git_success};
+use super::super::git::{git_output, git_output_raw, git_request, git_success};
 use super::author::GitAuthor;
+use super::scope::exact_delivery_paths;
 
 pub(super) fn git_commit_with_identity(
     workspace_path: &Path,
@@ -92,7 +93,9 @@ pub(super) fn stage_paths(workspace_path: &Path, files: &[String]) -> Result<(),
         .map(|path| literal_pathspec(path))
         .collect::<Vec<_>>();
     list_args.extend(literal_files.iter().map(String::as_str));
-    let stageable = git_output_paths(workspace_path, &list_args)?;
+    // Exact names: a lossy one would make `ls-files` omit the native path
+    // while the rest of the delivery still stages and commits.
+    let stageable = exact_delivery_paths(workspace_path, &list_args)?;
     if stageable.is_empty() {
         return Ok(());
     }
@@ -114,7 +117,7 @@ fn literal_pathspec(path: &str) -> String {
 }
 
 pub(super) fn staged_changed_files(workspace_path: &Path) -> Result<Vec<String>, OrbitError> {
-    git_output_paths(
+    exact_delivery_paths(
         workspace_path,
         &["diff", "--cached", "--name-only", "-z", "--relative"],
     )

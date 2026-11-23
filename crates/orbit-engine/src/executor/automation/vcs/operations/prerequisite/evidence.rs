@@ -9,7 +9,7 @@ use super::super::CI_PREREQUISITE_EVIDENCE;
 use super::super::ci::ci_job_log;
 use super::super::input::{number, required_string, same, text};
 use super::super::workflow_dependency::dependency;
-use super::snapshot::{checked_run, poll_interval_ms, snapshot};
+use super::snapshot::{PullRequestSelector, checked_run, poll_interval_ms, snapshot};
 use super::support::{api, complete_list, unreadable};
 use super::workflow::{gate_present, workflow};
 
@@ -51,10 +51,12 @@ fn evidence_once(
     let snapshot = snapshot(
         deadline,
         workspace,
-        pr,
-        head,
-        branch,
-        base,
+        PullRequestSelector {
+            pr,
+            head,
+            branch,
+            base,
+        },
         poll_interval_ms(input),
         pass,
     )?;

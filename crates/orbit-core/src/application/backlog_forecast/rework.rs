@@ -1,6 +1,8 @@
 //! Frozen regression bundles and one generation of forecast-only work.
 
+use std::cell::OnceCell;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::time::Instant;
 
 use chrono::{DateTime, Utc};
 use orbit_common::fs::selector::Selector;
@@ -12,7 +14,7 @@ use serde_json::{Value, json};
 
 use crate::application::statistics::SplitMix64;
 
-use super::correction::{self, Correction};
+use super::correction::{self, Correction, ScriptCorrection};
 use super::model::{self, Delivery, Draw, Item, Script};
 use super::outcomes::{AwayWait, Episode};
 use super::schedule::HORIZON_HOURS;
@@ -71,6 +73,8 @@ pub(super) struct ForecastDonor {
     pub(super) delivery: Delivery,
     pub(super) item: Item,
     pub(super) resolved: model::Resolved,
+    /// The correction reference sample for this forecast, computed on first use.
+    script_correction: OnceCell<ScriptCorrection>,
     /// The footprint came from durable history, not current selectors.
     pub(super) recovered: bool,
 }
@@ -524,6 +528,7 @@ pub(super) fn draw_regression_bundles(
     episodes: &[Episode],
     rng: &mut SplitMix64,
     correction: &Correction,
+    deadline: Option<Instant>,
 ) -> (Vec<ForecastGeneratedNode>, bool) {
     let mut nodes = Vec::new();
     let mut seen = BTreeSet::new();
@@ -566,6 +571,10 @@ pub(super) fn draw_regression_bundles(
             if nodes.len() == max_generated() {
                 return (nodes, true);
             }
+            // The caller discards this iteration on an expired deadline.
+            if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
+                return (nodes, false);
+            }
             nodes.push(generated_node(
                 donor,
                 items.len() + fix.donor,
@@ -589,20 +598,31 @@ fn generated_node(
     rng: &mut SplitMix64,
     correction: &Correction,
 ) -> ForecastGeneratedNode {
+    let delivery = Draw {
+        hours: Some(donor.delivery.hours),
+        tokens: donor.delivery.tokens,
+        usd: donor.delivery.usd,
+    };
+    let draw_script = |rng: &mut SplitMix64, script: &mut Script| {
+        model::draw_forecast_attempts(
+            rng,
+            &donor.item,
+            &donor.resolved,
+            episodes,
+            delivery,
+            script,
+        );
+    };
+    let adjustment = donor.script_correction.get_or_init(|| {
+        correction.prepare_script_correction(
+            &donor.item.complexity,
+            model::FORECAST_SEED,
+            draw_script,
+        )
+    });
     let mut script = Script::default();
-    model::draw_forecast_attempts(
-        rng,
-        &donor.item,
-        &donor.resolved,
-        episodes,
-        Draw {
-            hours: Some(donor.delivery.hours),
-            tokens: donor.delivery.tokens,
-            usd: donor.delivery.usd,
-        },
-        &mut script,
-    );
-    correction::apply_script(correction, &donor.item.complexity, &mut script);
+    draw_script(rng, &mut script);
+    correction::apply_script_correction(adjustment, &mut script);
     ForecastGeneratedNode {
         template,
         origin,
@@ -660,6 +680,7 @@ pub(super) fn collect_forecast_donors(
                 delivery: delivery.clone(),
                 item,
                 resolved,
+                script_correction: OnceCell::new(),
                 recovered,
             })
         })
@@ -732,8 +753,12 @@ impl<'a> ForecastArrivalStream<'a> {
         rng: &mut SplitMix64,
         correction: &Correction,
         nodes: &mut Vec<ForecastGeneratedNode>,
+        deadline: Option<Instant>,
     ) {
-        while self.next_at <= HORIZON_HOURS && nodes.len() < limit {
+        while self.next_at <= HORIZON_HOURS
+            && nodes.len() < limit
+            && deadline.is_none_or(|deadline| Instant::now() < deadline)
+        {
             let pick = rng.unit() * self.total;
             let mut accumulated = 0.0;
             let class = self

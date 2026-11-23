@@ -14,7 +14,7 @@ use orbit_types::task::{Task, TaskStatus};
 use serde::Serialize;
 
 use crate::OrbitRuntime;
-use crate::application::task::TaskWorkspaceAutoPort;
+use crate::application::task::{TaskReviewPort, TaskWorkspaceAutoPort};
 use crate::runtime::task_pr_forge::{PullRequestBlockers, PullRequestMergeOutcome, TaskPrForge};
 
 /// How long a landing waits while GitHub reports mergeability `UNKNOWN`.
@@ -38,6 +38,9 @@ const MERGEABILITY_UNKNOWN_BACKOFF_SECS: [u64; 4] = [5, 10, 20, 40];
 const MERGEABILITY_WAIT_TEST_ENV: &str = "ORBIT_TEST_MERGEABILITY_WAIT";
 
 use super::candidate::Candidate;
+
+/// The audit step a merge requested through `orbit.workflow.land` names.
+const LAND_TOOL_MERGE_STEP: &str = "workflow.land";
 
 /// The stable code a refused landing's error starts with.
 pub const TASK_LANDING_REFUSED: &str = "task_landing_refused";
@@ -89,6 +92,9 @@ pub(super) enum DeliveryMergeOutcome {
     },
     /// The pull request no longer targets `expected_base`.
     TargetBranchChanged { reason: String },
+    /// Required pre-landing review does not cover the pull request head
+    /// (neither exact match nor conflict-free base refresh merges).
+    ReviewNotSettled,
     /// The forge itself refused the merge request.
     ForgeRefused { reason: String },
 }
@@ -112,6 +118,12 @@ impl DeliveryMergeOutcome {
                 id,
                 format_args!(
                     "pull request #{number} has required checks failed {failed:?} and unfinished {pending:?}"
+                ),
+            )),
+            Self::ReviewNotSettled => Err(landing_refused(
+                id,
+                format_args!(
+                    "the required pre-landing review does not cover pull request #{number} head"
                 ),
             )),
             Self::ForgeRefused { reason } => Err(landing_refused(
@@ -218,7 +230,18 @@ impl OrbitRuntime {
             }
         };
         let merge_commit = self
-            .merge_delivery_pull_request(id, number, None, &expected_base, false)?
+            .merge_delivery_pull_request(
+                id,
+                number,
+                None,
+                &expected_base,
+                false,
+                &super::PullRequestMergeAttribution {
+                    run_id: None,
+                    step: LAND_TOOL_MERGE_STEP,
+                    task_id: Some(id),
+                },
+            )?
             .into_merge_commit(id, number)?;
         // The work has landed, so a settlement that fails now is not a failed
         // landing: the owner's settlement pass reads the same merge.
@@ -365,6 +388,7 @@ impl OrbitRuntime {
         expected_head: Option<&str>,
         expected_base: &str,
         require_passed_check: bool,
+        attribution: &super::PullRequestMergeAttribution<'_>,
     ) -> Result<DeliveryMergeOutcome, OrbitError> {
         let repo_root = self.context.paths().repo_root.clone();
         let forge = self.task_pr_forge();
@@ -380,6 +404,13 @@ impl OrbitRuntime {
         if blockers.conflicting {
             return Ok(DeliveryMergeOutcome::Conflicting);
         }
+        let task = self.get_task(id)?;
+        if !self.handoff_landing_review_ready(&task, Some(&blockers.head_sha), None)? {
+            return Ok(DeliveryMergeOutcome::ReviewNotSettled);
+        }
+        let refreshed_head =
+            self.head_is_refreshed_past_reviewed_commit(&task, &blockers.head_sha)?;
+        let require_passed_check = require_passed_check || refreshed_head;
         if !blockers.failed_required_checks.is_empty()
             || !blockers.pending_required_checks.is_empty()
             || (require_passed_check && blockers.passed_required_checks.is_empty())
@@ -397,13 +428,21 @@ impl OrbitRuntime {
         }
         let message = orbit_engine::compose_squash_merge_message(
             &repo_root,
-            std::slice::from_ref(&self.get_task(id)?),
+            std::slice::from_ref(&task),
             self.pr_config(),
             base.as_deref(),
             &blockers.head_sha,
             number,
         );
-        match forge.merge_pull_request(&repo_root, number, &blockers.head_sha, &message)? {
+        match super::audited_forge_merge(
+            self,
+            forge,
+            &repo_root,
+            number,
+            &blockers.head_sha,
+            &message,
+            attribution,
+        )? {
             PullRequestMergeOutcome::Merged { merge_commit } => {
                 Ok(DeliveryMergeOutcome::Merged { merge_commit })
             }
@@ -411,6 +450,24 @@ impl OrbitRuntime {
                 Ok(DeliveryMergeOutcome::ForgeRefused { reason })
             }
         }
+    }
+
+    /// Whether `task` has a recorded review certificate whose reviewed commit
+    /// differs from `head_sha` (meaning `head_sha` is a refreshed head on
+    /// which required checks must explicitly pass before landing).
+    fn head_is_refreshed_past_reviewed_commit(
+        &self,
+        task: &Task,
+        head_sha: &str,
+    ) -> Result<bool, OrbitError> {
+        use orbit_types::workflow::{REVIEW_GATE_ARTIFACT, ReviewCertificate};
+        let Some(artifact) = self.get_task_artifact(&task.id, REVIEW_GATE_ARTIFACT)? else {
+            return Ok(false);
+        };
+        let Ok(certificate) = serde_json::from_slice::<ReviewCertificate>(&artifact.content) else {
+            return Ok(false);
+        };
+        Ok(certificate.final_candidate.commit != head_sha)
     }
 }
 

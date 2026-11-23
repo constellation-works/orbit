@@ -8,14 +8,14 @@ use orbit_cmd::registry_runtime::{RegisteredRuntimeFactory, ResolvedWorkspaceSel
 use orbit_cmd::task_owner::{TaskOwnerLookup, WorkspaceIdentity};
 use orbit_common::governance::operation::OperationVerb;
 use orbit_common::governance::workflow::WorkflowVerb;
-use orbit_common::protocol::tool_input::required_string;
-use orbit_common::{NotFoundKind, OrbitError};
+use orbit_common::{BoundWorkspaceRemedy, NotFoundKind, OrbitError};
 use orbit_core::OrbitRuntime;
 use orbit_core::adapter::command::{
     GlobalAuditStoreCache, HostPluginMcpCache, HostPluginMcpSurface, ToolEntryPoint,
     execute_global_in_process_tool_dispatch_with_audit_writer, execute_global_plugin_tool,
 };
 use orbit_core::runtime::HostLifetime;
+use orbit_core::runtime::authorization::route_resident_delivery_recovery_to_broker;
 use orbit_mcp::federated;
 use orbit_mcp::{McpHost, McpSessionAuthority};
 use orbit_types::tool::{
@@ -499,7 +499,7 @@ impl ServerMcpHost {
         let explicit = call_workspace_selector(input)?;
         let operation = tool_operation_name(name, input);
         if explicit.is_none() && federated::is_id_routed_tool(operation) {
-            let task_id = required_string(input, &["id"], "id")?;
+            let task_id = orbit_common::governance::task::resolve_task_id_alias(input)?;
             // A v1 server does not relay [ORB-14449]: an id another
             // registered host writes is refused with where it lives, never
             // answered from a local mirror or reported as not found.
@@ -519,7 +519,28 @@ impl ServerMcpHost {
             return RegisteredRuntimeFactory::resolve_workspace_selector(
                 &self.global_root,
                 selector,
-            );
+            )
+            .map_err(|error| {
+                if error.unknown_workspace_selector_details().is_some()
+                    && explicit.is_some()
+                    && let Some(bound) = Self::workspace_selector(None, context)
+                    && let Ok(workspace) = RegisteredRuntimeFactory::resolve_workspace_selector(
+                        &self.global_root,
+                        bound,
+                    )
+                {
+                    // An ID-resolved tool ignores the binding when `workspace`
+                    // is omitted, so its retry keeps the filter only by naming
+                    // the bound workspace.
+                    let remedy = if ID_RESOLVED_WORKSPACE_TOOLS.contains(&operation) {
+                        BoundWorkspaceRemedy::PassBoundSelector
+                    } else {
+                        BoundWorkspaceRemedy::OmitSelector
+                    };
+                    return error.with_bound_workspace(workspace.workspace.name, remedy);
+                }
+                error
+            });
         }
         if self.workspace_optional_aggregate(name, input, context, definition) {
             return self.local_aggregate_selection(name, federated::McpToolClass::ControlPlane);
@@ -681,13 +702,26 @@ impl ServerMcpHost {
         {
             object.insert("all".into(), Value::Bool(true));
         }
-        let (runtime, selected) =
-            match self.resolve_workspace_runtime(name, &input, &context, definition) {
-                Ok(resolved) => resolved,
-                Err(error) => {
-                    return self.audit_global_failure(name, input, context, error);
-                }
-            };
+        // An authenticated resident broker resolves the recovery target.
+        // Resolve only this session's binding before handing it the selector.
+        let broker_home = Self::workspace_selector(None, &context)
+            .filter(|_| {
+                context.application.is_none()
+                    && context.worker_invocation.is_none()
+                    && route_resident_delivery_recovery_to_broker(&operation)
+            })
+            .map(|home| serde_json::json!({"workspace": home}));
+        let (runtime, selected) = match self.resolve_workspace_runtime(
+            name,
+            broker_home.as_ref().unwrap_or(&input),
+            &context,
+            definition,
+        ) {
+            Ok(resolved) => resolved,
+            Err(error) => {
+                return self.audit_global_failure(name, input, context, error);
+            }
+        };
         let repo_root = selected.checkout.repo_root.to_string_lossy().into_owned();
 
         context.workspace_id = Some(selected.workspace.id.clone());
@@ -695,7 +729,8 @@ impl ServerMcpHost {
         context.process_machine_id = Some(self.process_machine_id.clone());
         context.process_machine_name = Some(self.process_machine_name.clone());
 
-        if let Some(object) = input.as_object_mut()
+        if broker_home.is_none()
+            && let Some(object) = input.as_object_mut()
             && object.contains_key("workspace")
         {
             object.insert("workspace".to_string(), Value::String(repo_root));

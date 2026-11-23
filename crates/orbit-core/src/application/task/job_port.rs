@@ -55,9 +55,10 @@ pub(in crate::application) enum DeliveryCompletion {
     Authorized {
         /// That run.
         run_id: String,
-        /// The run held on `delivery_check_runs_absent`: the head had no
-        /// required check run to watch, so a merge needs a required check
-        /// that has since passed on it.
+        /// The run held. Its hold says the run could not establish the head's
+        /// check evidence, so a merge needs a required check that has since
+        /// passed on it: a forge read that reports no required check at all
+        /// is not that evidence [ORB-26389].
         needs_passed_check: bool,
     },
 }
@@ -171,6 +172,16 @@ pub(in crate::application) trait TaskJobPort {
     /// or a publication-preservation record that no failure-handoff receipt
     /// binds, so the next admission would refuse it.
     fn unbound_publication(&self, task: &Task) -> Result<bool, OrbitError>;
+
+    /// Local precondition check for requeuing `task` onto the `[BLOCKED]`
+    /// failure-handoff PR its stopped run published. Contacts neither remotes
+    /// nor the forge; `Err` carries the refusal a requeue reports.
+    fn check_failure_handoff_requeue(&self, task: &Task) -> Result<(), OrbitError>;
+
+    /// Local precondition check for requeuing `task` onto the escalated or
+    /// pipeline publication of its stopped run. Contacts neither remotes nor
+    /// the forge; `Err` carries the refusal a requeue reports.
+    fn check_escalated_publication_requeue(&self, task: &Task) -> Result<(), OrbitError>;
 
     /// The validation gates this process holds a candidate to: a claimed
     /// leaf's captured owner gates, else this host's configuration.

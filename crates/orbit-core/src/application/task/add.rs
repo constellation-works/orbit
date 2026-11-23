@@ -3,9 +3,9 @@ use orbit_common::security::redaction::redact_all;
 use orbit_store::contracts::TaskCreateParams as StoreTaskCreateParams;
 use orbit_types::identity::{Crew, all_agent_families};
 use orbit_types::task::{
-    OrchestratorModelSource, REQUIRES_LABELS_FIELD, Task, TaskOrigin, TaskStatus, TaskType,
-    normalize_host_labels, normalize_required_tools, normalize_task_dependencies,
-    normalize_task_tags, validate_os_tags,
+    GRANTED_TOOLS_FIELD, OrchestratorModelSource, REQUIRES_LABELS_FIELD, Task, TaskOrigin,
+    TaskStatus, TaskType, normalize_host_labels, normalize_required_tools,
+    normalize_task_dependencies, normalize_task_tags, validate_os_tags,
 };
 use orbit_types::tool::{TOOL_ACTION_SEPARATOR, tool_family_action, tool_requirement_name};
 
@@ -82,6 +82,7 @@ impl OrbitRuntime {
         field: &str,
         names: &[String],
     ) -> Result<Vec<String>, OrbitError> {
+        self.refuse_run_bound_tool_names(field, names)?;
         let mut warnings = Vec::new();
         for name in normalize_required_tools(names.to_vec()) {
             // A family action names its family's registry entry. An operation
@@ -193,6 +194,11 @@ impl OrbitRuntime {
             params.required_tools = required_tools;
         }
         let required_tool_warnings = self.validate_required_tools(&params.required_tools)?;
+        // Only a task Orbit mints itself (crew memory's dreaming task) may be
+        // granted a run-bound tool.
+        if !params.system_created {
+            self.refuse_run_bound_tool_names(GRANTED_TOOLS_FIELD, &params.granted_tools)?;
+        }
         self.validate_granted_tools(&params.granted_tools)?;
 
         // [ORB-00417] Redact secrets at the single task-creation choke point

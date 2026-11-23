@@ -142,20 +142,19 @@ fn multi_word_search_ranks_partial_hits_and_preserves_cli_tool_mcp_parity() {
         1
     );
 
-    // Exercise runtime notes, not copies of their source text. Distinguish
-    // each branch's matching contract without pinning the full prose.
+    // A zero-hit multi-word search gets one short next-step note for every
+    // kind, identical over MCP. The length bound is the regression: the note
+    // used to be a ~400-character matching-rules paragraph (ORB-26665).
     for kind in ["task", "friction", "all"] {
         let empty = cli(kind, "absentword absentphrase", 10, None);
         assert!(empty["results"].as_array().unwrap().is_empty());
-        let note = empty["notes"][0].as_str().unwrap();
-        assert_eq!(note.contains("task search"), kind != "friction");
-        assert_eq!(note.contains("friction search"), kind != "task");
-        if kind != "friction" {
-            assert!(note.contains("all terms") && note.contains("any term"));
-        }
-        if kind != "task" {
-            assert!(note.contains("substring") && note.contains("adjacent"));
-        }
+        let notes = empty["notes"].as_array().unwrap();
+        assert_eq!(notes.len(), 1, "one next-step note for `{kind}`: {empty}");
+        let note = notes[0].as_str().unwrap();
+        assert!(
+            note.chars().count() <= 200 && !note.contains('\n'),
+            "the note stays one short line for `{kind}`: {note:?}"
+        );
         assert_eq!(
             client.call_tool_ok(
                 "orbit_search",
@@ -164,6 +163,39 @@ fn multi_word_search_ranks_partial_hits_and_preserves_cli_tool_mcp_parity() {
             empty
         );
     }
+    let single = cli("task", "absentword", 10, None);
+    assert!(
+        single["notes"].as_array().unwrap().is_empty(),
+        "a single-word search carries no note: {single}"
+    );
+}
+
+#[test]
+fn multi_word_search_note_reaches_terminal_stderr_but_not_json_stderr() {
+    let workspace = McpWorkspace::init();
+    let search = |json_output: bool| {
+        let mut args = vec!["search", "absentword absentphrase", "--kind", "task"];
+        if json_output {
+            args.push("--json");
+        }
+        orbit_ok(McpWorkspace::orbit_command(&workspace.work, &workspace.home).args(args))
+    };
+
+    let terminal = search(false);
+    let terminal_stderr = String::from_utf8_lossy(&terminal.stderr);
+    assert!(
+        terminal_stderr.contains("note:"),
+        "a terminal still reads the next-step note on stderr: {terminal_stderr}"
+    );
+
+    let machine = search(true);
+    let machine_stderr = String::from_utf8_lossy(&machine.stderr);
+    assert!(
+        !machine_stderr.contains("note:"),
+        "`--json` carries the note only in the document, not on stderr: {machine_stderr}"
+    );
+    let document: Value = serde_json::from_slice(&machine.stdout).unwrap();
+    assert_eq!(document["notes"].as_array().unwrap().len(), 1);
 }
 
 #[test]
@@ -237,22 +269,32 @@ fn search_queryless_refusal_names_supported_fields_and_lists_reachable_alternati
     let workspace = McpWorkspace::init();
     let mut client = workspace.serve();
 
-    let refused = client.call_tool_err("orbit_search", json!({ "model": "codex" }));
-    assert_eq!(
-        refused["code"], "invalid_input",
-        "wrong error category: {refused}"
-    );
-    let message = refused["message"].as_str().unwrap_or_default();
-    for field in ["query", "tag", "kind", "friction"] {
+    for input in [
+        json!({ "model": "codex" }),
+        json!({ "kind": "task", "model": "codex" }),
+        json!({ "kind": "all", "model": "codex" }),
+    ] {
+        let refused = client.call_tool_err("orbit_search", input.clone());
+        assert_eq!(
+            refused["code"], "invalid_input",
+            "wrong error category for {input}: {refused}"
+        );
+        let message = refused["message"].as_str().unwrap_or_default();
+        for field in ["query", "tag"] {
+            assert!(
+                message.contains(field),
+                "the refusal should name a supported search field (`{field}`): {refused}"
+            );
+        }
         assert!(
-            message.contains(field),
-            "the refusal should name a supported search field (`{field}`): {refused}"
+            !message.contains("friction"),
+            "the missing-query refusal without kind: friction must not mention friction: {refused}"
+        );
+        assert!(
+            !message.contains("path") && !message.contains("--"),
+            "the refusal must not steer toward the retired path option or CLI-only flags: {refused}"
         );
     }
-    assert!(
-        !message.contains("path") && !message.contains("--"),
-        "the refusal must not steer toward the retired path option or CLI-only flags: {refused}"
-    );
 
     let seeded = client.call_tool_ok(
         "orbit_task_add",
@@ -296,4 +338,123 @@ fn search_queryless_refusal_names_supported_fields_and_lists_reachable_alternati
             .is_some_and(|hits| hits.iter().any(|hit| hit["id"] == seeded_id)),
         "the refused `query` alternative must reach the seeded task: {by_query}"
     );
+}
+
+#[test]
+fn search_refuses_unknown_keys_with_did_you_mean_and_closes_schema() {
+    let workspace = McpWorkspace::init();
+    let mut client = workspace.serve();
+
+    let listed = client.tools_list();
+    let search_schema = find_tool(tools_array(&listed), "orbit_search");
+    assert_eq!(
+        search_schema["inputSchema"]["additionalProperties"],
+        json!(false),
+        "orbit_search schema must forbid undeclared keys: {search_schema}"
+    );
+
+    for input in [
+        json!({ "q": "x" }),
+        json!({ "q": "x", "model": "codex" }),
+        json!({ "q": "x", "kind": "task" }),
+    ] {
+        let refused = client.call_tool_err("orbit_search", input.clone());
+        assert_eq!(refused["code"], "invalid_input", "{input}: {refused}");
+        assert_eq!(
+            refused["did_you_mean"],
+            json!(["query"]),
+            "{input}: {refused}"
+        );
+        let message = refused["message"].as_str().unwrap_or_default();
+        assert!(
+            message.contains("'q'") && message.contains("did you mean 'query'"),
+            "unknown key `q` must be named with a `query` suggestion for {input}: {refused}"
+        );
+        assert!(
+            !message.contains("friction"),
+            "unknown-key refusal for {input} must not mention friction: {refused}"
+        );
+    }
+
+    let unhinted = client.call_tool_err("orbit_search", json!({ "bogus": "x" }));
+    assert_eq!(unhinted["code"], "invalid_input", "{unhinted}");
+    let unhinted_message = unhinted["message"].as_str().unwrap_or_default();
+    assert!(
+        unhinted_message.contains("'bogus'"),
+        "unknown key without synonym must still be named: {unhinted}"
+    );
+}
+
+/// [ORB-27340] The advertised `limit` default must match the runtime for both
+/// friction forms: a friction query keeps the default of 10, a queryless
+/// friction listing defaults to 1000, and an explicit zero means the same
+/// default for each form. The defaults are advertised on the raw tool list;
+/// MCP `tools/list` slims property prose, so it is not asserted here.
+#[test]
+fn friction_query_and_listing_limit_defaults_match_the_advertised_text() {
+    let workspace = McpWorkspace::init();
+    let mut client = workspace.serve();
+
+    let tools: Vec<Value> = serde_json::from_slice(
+        &orbit_ok(
+            McpWorkspace::orbit_command(&workspace.work, &workspace.home)
+                .args(["tool", "list", "--json"]),
+        )
+        .stdout,
+    )
+    .unwrap();
+    let search = tools
+        .iter()
+        .find(|tool| tool["name"] == "orbit.search")
+        .expect("the raw tool list carries orbit.search");
+    let limit = search["parameters"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|parameter| parameter["name"] == "limit")
+        .expect("orbit.search advertises limit");
+    let text = limit["description"].as_str().unwrap();
+    for phrase in ["Omitted or 0", "default: 10", "1000 for a friction listing"] {
+        assert!(
+            text.contains(phrase),
+            "the advertised limit must state `{phrase}`: {text}"
+        );
+    }
+
+    for index in 1..=12 {
+        client.call_tool_ok(
+            "orbit_friction",
+            json!({
+                "action": "add",
+                "title": format!("limit probe {index}"),
+                "body": "Default-limit fixture",
+                "model": "codex"
+            }),
+        );
+    }
+    let hits = |response: &Value| response["results"].as_array().unwrap().len();
+
+    // A friction query keeps the default of 10, omitted or zero, over MCP and CLI.
+    let query = json!({"query": "limit probe", "kind": "friction", "model": "codex"});
+    assert_eq!(hits(&client.call_tool_ok("orbit_search", query)), 10);
+    let zero_query =
+        json!({"query": "limit probe", "kind": "friction", "limit": 0, "model": "codex"});
+    assert_eq!(hits(&client.call_tool_ok("orbit_search", zero_query)), 10);
+    let cli = orbit_ok(
+        McpWorkspace::orbit_command(&workspace.work, &workspace.home).args([
+            "search",
+            "limit probe",
+            "--kind",
+            "friction",
+            "--json",
+        ]),
+    );
+    let cli: Value = serde_json::from_slice(&cli.stdout).unwrap();
+    assert_eq!(hits(&cli), 10);
+
+    // A queryless friction listing defaults to 1000, so all twelve records return.
+    let listing = json!({"kind": "friction", "model": "codex"});
+    assert_eq!(hits(&client.call_tool_ok("orbit_search", listing)), 12);
+    let zero_listing = json!({"kind": "friction", "limit": 0, "model": "codex"});
+    assert_eq!(hits(&client.call_tool_ok("orbit_search", zero_listing)), 12);
 }

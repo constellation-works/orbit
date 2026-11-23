@@ -91,6 +91,14 @@ class OpenptyPortabilityTests(unittest.TestCase):
                     source = "fn fixture() {\n libc::openpty(\n " + ",\n ".join(args) + ",\n );\n}"
                     self.check_tree({"lib.rs": source}, 0)
 
+    def assert_openpty_finding(self, files, relative, line):
+        result = self.check_tree(files, 1)
+        self.assertIn(
+            f"crates/example/src/{relative}:{line}: immutable openpty argument: &dimensions",
+            result.stderr,
+        )
+        return result
+
     def test_redirected_descendants_keep_gates_and_loading_contexts(self):
         call = "fn f() { libc::openpty(a,b,c,d,&dimensions); }"
         gate = '#[cfg(target_os = "linux")] '
@@ -101,25 +109,25 @@ class OpenptyPortabilityTests(unittest.TestCase):
                          "helpers/provider.rs": declaration, child: call}
                 self.check_tree(files, 0)
                 files["lib.rs"] = files["lib.rs"].replace(gate, "")
-                self.check_tree(files, 1)
+                self.assert_openpty_finding(files, child, 1)
 
         files = {"lib.rs": gate + 'mod provider;\n#[path = "provider.rs"] mod redirected;',
                  "provider.rs": "mod child;", "provider/child.rs": call,
                  "child.rs": "pub fn portable() {}"}
         self.check_tree(files, 0)
         files["lib.rs"] = 'mod provider;\n' + gate + '#[path = "provider.rs"] mod redirected;'
-        self.check_tree(files, 1)
+        self.assert_openpty_finding(files, "provider/child.rs", 1)
         files["provider/child.rs"], files["child.rs"] = files["child.rs"], call
         self.check_tree(files, 0)
         files["lib.rs"] = files["lib.rs"].replace(gate, "")
-        self.check_tree(files, 1)
+        self.assert_openpty_finding(files, "child.rs", 1)
 
     def test_redirected_child_is_still_an_automatic_cargo_target(self):
         files = {"../Cargo.toml": '[package]\nname = "fixture"\nversion = "0.1.0"\n',
                  "lib.rs": '#[cfg(target_os = "linux")] #[path = "bin/provider.rs"] mod helper;',
                  "bin/provider.rs": "mod child;",
                  "bin/child.rs": "fn main() { libc::openpty(a,b,c,d,&dimensions); }"}
-        self.check_tree(files, 1)
+        self.assert_openpty_finding(files, "bin/child.rs", 1)
         files["../Cargo.toml"] += "autobins = false\n"
         self.check_tree(files, 0)
 
@@ -127,8 +135,12 @@ class OpenptyPortabilityTests(unittest.TestCase):
         call = "fn f() { libc::openpty(a,b,c,d,&dimensions); }"
         self.check_tree({"lib.rs": '#[cfg(target_os = "linux")]\n' + call}, 0)
         self.check_tree({"lib.rs": '#[cfg(target_os = "linux")] mod child;', "child.rs": call}, 0)
-        self.check_tree({"lib.rs": 'mod child;', "child.rs": call}, 1)
-        self.check_tree({"lib.rs": '#[cfg(any(target_os = "linux", feature = "x"))]\n' + call}, 1)
+        self.assert_openpty_finding({"lib.rs": 'mod child;', "child.rs": call}, "child.rs", 1)
+        self.assert_openpty_finding(
+            {"lib.rs": '#[cfg(any(target_os = "linux", feature = "x"))]\n' + call},
+            "lib.rs",
+            2,
+        )
 
 
 if __name__ == "__main__":

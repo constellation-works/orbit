@@ -39,7 +39,7 @@ use crate::command::CommandOut;
                   versioned `enabled` field like the dashboard toggle, are operator-only\n\
                   and are audited. A newly initialized workspace seeds `task-pilot`,\n\
                   `worktree-gc` and `crew-memory-dream` (which mints nothing while\n\
-                  `crew_memory.enabled` is false) enabled and the other shipped routines\n\
+                  no experiment with a memory arm is running) enabled and the other shipped routines\n\
                   (`ci-failure-sweep`, `dependabot-alert-sweep`, `resident-cycle`,\n\
                   `store-gc`, `task-publication`) off until enabled. A workspace initialized earlier keeps the `enabled`\n\
                   value its definitions already hold. The host scheduler is controlled\n\

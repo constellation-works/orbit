@@ -140,4 +140,4 @@ Global options (see 'orbit --help' for descriptions):
   --json
   --header
 
-Lifecycle, override, selector and scheduling rules for these flags: installed Orbit skill `references/task-fields.md` (Human CLI task update).
+Lifecycle, override, selector and scheduling rules for these flags: installed Orbit skill `references/task-fields-projections.md` (Human CLI task update).

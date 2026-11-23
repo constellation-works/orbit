@@ -67,6 +67,7 @@ struct BucketAccumulator {
 #[derive(Debug, Default)]
 struct TokenAccumulator {
     linked_task_ids: BTreeSet<String>,
+    uncovered_task_ids: BTreeSet<String>,
     summary: NormalizedTokenSummary,
 }
 
@@ -75,6 +76,8 @@ impl TokenAccumulator {
         self.summary.invocation_count = self.summary.invocation_count.saturating_add(1);
         self.linked_task_ids.extend(fact.task_ids.iter().cloned());
         let Some(model) = fact.model.as_deref() else {
+            self.uncovered_task_ids
+                .extend(fact.task_ids.iter().cloned());
             self.summary.unknown_input_basis_or_model_count = self
                 .summary
                 .unknown_input_basis_or_model_count
@@ -89,6 +92,8 @@ impl TokenAccumulator {
             output: fact.output_tokens,
         };
         let Some(usage) = normalize_token_usage(model, fact.ts, &usage) else {
+            self.uncovered_task_ids
+                .extend(fact.task_ids.iter().cloned());
             self.summary.unknown_input_basis_or_model_count = self
                 .summary
                 .unknown_input_basis_or_model_count
@@ -131,6 +136,10 @@ impl TokenAccumulator {
     fn finish(&self) -> NormalizedTokenSummary {
         let mut summary = self.summary.clone();
         summary.linked_task_count = self.linked_task_ids.len() as u64;
+        summary.covered_linked_task_count = self
+            .linked_task_ids
+            .difference(&self.uncovered_task_ids)
+            .count() as u64;
         summary
     }
 }

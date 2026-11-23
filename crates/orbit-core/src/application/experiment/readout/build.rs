@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use chrono::{DateTime, Duration, Utc};
+use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
 use orbit_store::contracts::{ExperimentRecord, ExperimentStoreBackend as _};
 use orbit_types::workflow::TagInstructionRole;
@@ -15,6 +15,7 @@ use crate::application::experiment::definition::{
     ExperimentOverlay, Kind, METRIC_SPECS, experiment_metric_is_review_derived, metric_spec,
     validate_metric,
 };
+use crate::application::experiment::experiment_horizon_at;
 use crate::application::experiment::memory_arm_names;
 use crate::application::experiment::overlay::instruction_role;
 use crate::application::experiment::readout::outcomes::{
@@ -102,7 +103,7 @@ fn build_readout(
         .map(|event| event.at);
     let horizon_at = started_at
         .zip(experiment.max_days)
-        .map(|(at, days)| at + Duration::days(i64::from(days)));
+        .and_then(|(at, days)| experiment_horizon_at(at, days));
     let control = record
         .arms
         .iter()
@@ -110,6 +111,12 @@ fn build_readout(
         .map(|arm| arm.name.clone());
     let tasks = &observed.tasks;
     let mut warnings = Vec::new();
+    if started_at.is_some() && experiment.max_days.is_some() && horizon_at.is_none() {
+        warnings.push(ReadoutWarning {
+            kind: "horizon_unavailable",
+            message: "The saved maximum days fall outside the supported calendar. Only the minimum sample can reach the horizon.".into(),
+        });
+    }
     if observed.first_edit_incomplete {
         warnings.push(ReadoutWarning {
             kind: "first_edit_incomplete",
@@ -421,6 +428,7 @@ fn arm_readout(
                 .iter()
                 .map(|role| role.as_str().to_string())
                 .collect(),
+            crew: roles.crew,
             assigned: mine.len(),
             delivered: delivered_count,
             pending,

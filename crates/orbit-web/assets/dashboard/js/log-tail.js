@@ -104,9 +104,6 @@ export function applyLogWrap(wrap) {
     stream.classList.toggle("wrap", wrap);
   }
   if (btn) {
-    if (btn.classList && typeof btn.classList.toggle === "function") {
-      btn.classList.toggle("on", wrap);
-    }
     if (typeof btn.setAttribute === "function") {
       btn.setAttribute("aria-pressed", String(wrap));
     }
@@ -230,7 +227,16 @@ export function chooseDockMode(mode) {
   setDockMode(mode);
   const url = new URL(window.location.href);
   const [route, query = ""] = url.hash.slice(1).split("?");
-  if (route !== "tasks") return;
+  const isResidentsRoute = route === "tasks/residents" || route.startsWith("tasks/residents/");
+  if (route !== "tasks" && !isResidentsRoute) return;
+  if (isResidentsRoute && mode === "residents") {
+    if (route !== "tasks/residents") {
+      url.hash = "tasks/residents";
+      window.history.replaceState(null, "", url);
+      recordRoutedHref();
+    }
+    return;
+  }
   const params = new URLSearchParams(query);
   // The selection itself is remembered in the dock prefs (setDockMode). Only a
   // tab chosen in the one-column dock route is part of the address: there the
@@ -269,7 +275,7 @@ export function setDockMode(mode) {
   applyDockMode();
   // Dialogs live outside their panes; a dock switch rewrites the hash
   // without a hashchange, so leaving their tab closes them here.
-  for (const [view, id] of [["notices", "notices-post-dialog"], ["residents", "resident-start-dialog"]]) {
+  for (const [view, id] of [["notices", "notices-post-dialog"], ["residents", "resident-start-dialog"], ["residents", "resident-detail-dialog"]]) {
     const dialog = $(id);
     if (mode !== view && dialog?.open) dialog.close();
   }
@@ -749,7 +755,6 @@ export function initLogTail() {
   if (followBtn) {
     followBtn.addEventListener("click", () => {
       logFollowTail = !logFollowTail;
-      followBtn.classList.toggle("on", logFollowTail);
       followBtn.setAttribute("aria-pressed", String(logFollowTail));
       if (logFollowTail) {
         flushBufferedLogs();
@@ -775,7 +780,7 @@ export function initLogTail() {
     });
   }
 
-  document.querySelectorAll("#side-dock .filter-pill[data-filter]").forEach(pill => {
+  document.querySelectorAll("#side-dock .chip[data-filter]").forEach(pill => {
     pill.addEventListener("click", () => {
       const filter = pill.dataset.filter;
       if (filter === "all") {
@@ -868,18 +873,14 @@ function enforceLogBounds() {
   }
 }
 
-// The pills are toggle buttons: `on` carries the visual state and `aria-pressed`
-// carries the same fact for assistive tech, so both are written from the one
-// active-filter set rather than from the click target.
+// aria-pressed drives both the filter styling and the announced state.
 function syncLogFilterPills() {
-  for (const pill of document.querySelectorAll("#side-dock .filter-pill[data-filter]")) {
+  for (const pill of document.querySelectorAll("#side-dock .chip[data-filter]")) {
     const on = activeLogFilters.has(pill.dataset.filter);
-    pill.classList.toggle("on", on);
     pill.setAttribute("aria-pressed", String(on));
   }
   const agentBtn = $("log-show-agent");
   if (agentBtn) {
-    agentBtn.classList.toggle("on", logPanelPrefs.showAgent);
     agentBtn.setAttribute("aria-pressed", String(logPanelPrefs.showAgent));
   }
 }

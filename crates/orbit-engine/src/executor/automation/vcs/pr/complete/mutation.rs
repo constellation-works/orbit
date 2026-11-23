@@ -196,6 +196,8 @@ pub(super) fn request_merge<H: RuntimeHost + ?Sized>(
         "report_base_modified": reviewed_head_sha.is_some(),
         "report_ambiguous": reviewed_head_sha.is_some(),
         "workspace_path": workspace_path,
+        (super::super::super::PR_MERGE_ATTRIBUTION_FIELD):
+            super::super::super::pr_merge_attribution(input),
     });
     let context = load_handoff_context(host, input, "pr_complete")?;
     if let Value::Object(request) = &mut request {

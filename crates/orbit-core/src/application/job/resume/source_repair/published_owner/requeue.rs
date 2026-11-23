@@ -209,10 +209,12 @@ impl OrbitRuntime {
     /// binding it resumes. Called by a requeue of the blocked task before it
     /// takes the task write lock, since authenticating asks the remote and
     /// the forge; nothing is written here.
-    pub(crate) fn failure_handoff_requeue_record(
+    /// Check local handoff-requeue preconditions without contacting remotes
+    /// or the forge.
+    pub(crate) fn failure_handoff_local_gate(
         &self,
         task: &Task,
-    ) -> Result<(TaskHistoryEntry, SourceRepairBinding), OrbitError> {
+    ) -> Result<(String, JobRun, orbit_types::workflow::PipelineState), OrbitError> {
         let (source_id, source) = self.stopped_failed_requeue_source(
             task,
             "the task's failure handoff belongs to another machine",
@@ -227,6 +229,19 @@ impl OrbitRuntime {
         if state.failure_activity_checkpoint.is_none() {
             return Err(refuse("the run published no failure-handoff PR"));
         }
+        Ok((source_id, source, state))
+    }
+
+    /// Authenticate the failure-handoff PR `task`'s stopped run published,
+    /// and return the preservation record a requeue appends with the binding
+    /// the next run adopts. Does not write anything; called before admission
+    /// takes the task write lock, since authenticating asks the remote and
+    /// the forge; nothing is written here.
+    pub(crate) fn failure_handoff_requeue_record(
+        &self,
+        task: &Task,
+    ) -> Result<(TaskHistoryEntry, SourceRepairBinding), OrbitError> {
+        let (source_id, source, state) = self.failure_handoff_local_gate(task)?;
         let definition = self.source_repair_definition(&source)?;
         let (_, _, binding) =
             self.observe_handoff_publication(source, task.clone(), state, definition)?;
@@ -361,15 +376,22 @@ impl OrbitRuntime {
                     && run.retry_source_run_id.as_deref() == Some(source_id)
             }) {
                 let held = self.get_job_run_backend(&run.run_id)?;
-                if held
+                let code = held
                     .as_ref()
                     .and_then(|run| run.steps.last())
-                    .and_then(|step| step.error_code.as_deref())
-                    == Some(workflow::DeliveryRefusal::CheckEvidenceInconclusive.error_code())
-                {
+                    .and_then(|step| step.error_code.as_deref());
+                if code == Some(workflow::DeliveryRefusal::CheckEvidenceInconclusive.error_code()) {
                     return Err(refuse(format!(
                         "newer execution makes publication association ambiguous; completion run '{}' is held on inconclusive check evidence; resume it with `orbit job resume {}`",
                         run.run_id, run.run_id
+                    )));
+                }
+                if code == Some(workflow::DeliveryRefusal::RepairDispatched.error_code()) {
+                    // The held hand-back is the run source repair accepts; the
+                    // task stays bound to this owner.
+                    return Err(refuse(format!(
+                        "newer execution makes publication association ambiguous; auto-fix run '{}' is held after a dispatched repair; run `source_repair` on that run instead",
+                        run.run_id
                     )));
                 }
             }

@@ -1,5 +1,5 @@
 use std::cell::RefCell;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use orbit_common::OrbitError;
 use orbit_store::TaskCommitBoundary;
@@ -93,8 +93,9 @@ impl OrbitRuntime {
         // Do this before the admission section: reconciliation writes task
         // declarations, which that section deliberately fences.
         self.reconcile_pull_recovery_context()?;
-        let mut admission_holds = self
-            .live_local_delivery_runs()?
+        let live_runs = self.live_local_delivery_runs()?;
+        let owner_local_carriers = live_runs.keys().cloned().collect::<BTreeSet<_>>();
+        let mut admission_holds = live_runs
             .into_iter()
             .map(|(task, run)| {
                 (
@@ -261,6 +262,8 @@ impl OrbitRuntime {
                 tag_label_requirements: self.tag_label_requirements().clone(),
                 repairs_only,
                 crew_pools: self.dispatch_crew_pools(),
+                honor_owner_local_perf_lane: self.requester_honors_owner_local_perf_lane(identity),
+                owner_local_carriers,
             },
             owner_binary_version(),
             &self.paths().repo_root,
@@ -319,6 +322,18 @@ impl OrbitRuntime {
                 })
             },
         )
+    }
+
+    /// The requester is this owner host, so owner-local perf work holds its lane.
+    /// A remote follower is a different machine: its pulls see only claims on
+    /// that machine.
+    fn requester_honors_owner_local_perf_lane(&self, identity: &AdmissionIdentity) -> bool {
+        if !identity.is_remote() {
+            return true;
+        }
+        let machine = identity.location().machine_id.as_str();
+        self.automation_machine_identity() == Some(machine)
+            || self.workspace_owner_machine_id() == Some(machine)
     }
 
     /// Why a standing provider hold keeps `task` from the executor `request`

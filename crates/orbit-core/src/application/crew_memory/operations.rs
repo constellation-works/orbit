@@ -1,15 +1,11 @@
-//! The operator's crew memory operations and the one write path every
-//! writer shares.
+//! Crew memory's reads and the one write path every writer shares.
 
 use std::collections::BTreeSet;
-use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use chrono::{SubsecRound, Utc};
 use orbit_common::OrbitError;
-use orbit_store::contracts::{
-    CrewMemoryEventRow, CrewMemoryProposalDecision, CrewMemoryRevisionRow, CrewMemoryStoreBackend,
-};
+use orbit_store::contracts::{CrewMemoryEventRow, CrewMemoryRevisionRow, CrewMemoryStoreBackend};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
@@ -20,9 +16,6 @@ use super::{
 };
 use crate::OrbitRuntime;
 
-/// The policy key that gates every crew memory write.
-pub(super) const ENABLED_KEY: &str = "crew_memory.enabled";
-
 /// What a dreaming run's write is held to beyond the five rules: the task
 /// it writes for, recorded on the revision's event, and the evidence pack
 /// its citations must come from.
@@ -31,40 +24,9 @@ pub(super) struct DreamingWrite<'a> {
     pub(super) evidence_pack: &'a BTreeSet<String>,
 }
 
-/// What a revision records about the change that wrote it.
-pub(super) enum WriteAction {
-    Write,
-    Reset,
-    Copy {
-        from: MemoryKey,
-        from_revision: u32,
-    },
-    Accept {
-        proposal_id: String,
-        expected_revision: u32,
-    },
-}
-
-impl WriteAction {
-    fn verb(&self) -> &'static str {
-        match self {
-            Self::Write => "write",
-            Self::Reset => "reset",
-            Self::Copy { .. } => "copy",
-            Self::Accept { .. } => "proposal accept",
-        }
-    }
-
-    /// The audit action of the revision this change writes.
-    fn event(&self) -> &'static str {
-        match self {
-            Self::Write => "revision_written",
-            Self::Reset => "reset",
-            Self::Copy { .. } => "copied",
-            Self::Accept { .. } => "proposal_accepted",
-        }
-    }
-}
+/// The verb and audit action every revision write records.
+const WRITE_VERB: &str = "write";
+const WRITE_EVENT: &str = "revision_written";
 
 impl OrbitRuntime {
     pub(super) fn crew_memory_store(&self) -> Result<Arc<dyn CrewMemoryStoreBackend>, OrbitError> {
@@ -134,23 +96,23 @@ impl OrbitRuntime {
         }
     }
 
-    /// Refuse `verb` on `key` while `crew_memory.enabled` is false, read
-    /// from the current config so a disable takes effect at once.
+    /// Refuse `verb` on `key` unless a running experiment has a memory arm,
+    /// read from the store each time so concluding it takes effect at once.
     pub(super) fn ensure_crew_memory_writes_enabled(
         &self,
         verb: &str,
         key: &MemoryKey,
     ) -> Result<(), OrbitError> {
-        if self.current_crew_memory_enabled() {
+        if self.crew_memory_experiment_running() {
             return Ok(());
         }
         Err(OrbitError::PolicyDenied(format!(
-            "crew memory {verb} refused for `{key}`: crew memory is disabled in this workspace (`{ENABLED_KEY}` is false)"
+            "crew memory {verb} refused for `{key}`: crew memory is off in this workspace, as no running experiment has a memory arm"
         )))
     }
 
-    /// The one crew memory write path. Refused while `crew_memory.enabled`
-    /// is false; otherwise runs [`validate_memory_write`] and appends a
+    /// The one crew memory write path. Refused unless a running experiment
+    /// has a memory arm; otherwise runs [`validate_memory_write`] and appends a
     /// revision, or records the refusal and refuses the whole write. A
     /// dreaming run's write also cites only its evidence pack.
     pub(super) fn write_crew_memory_revision(
@@ -158,19 +120,14 @@ impl OrbitRuntime {
         key: &MemoryKey,
         mut write: MemoryWrite,
         writer: &MemoryWriter,
-        action: WriteAction,
         reason: Option<String>,
         dreaming: Option<&DreamingWrite<'_>>,
     ) -> Result<Value, OrbitError> {
-        self.ensure_crew_memory_writes_enabled(action.verb(), key)?;
+        self.ensure_crew_memory_writes_enabled(WRITE_VERB, key)?;
         self.ensure_coordination_task_write_permitted()?;
         let store = self.crew_memory_store()?;
         let workspace_id = self.workspace_id()?;
-        let mut own = vec![key];
-        if let WriteAction::Copy { from, .. } = &action {
-            own.push(from);
-        }
-        let vocabulary = self.crew_memory_vocabulary(&own);
+        let vocabulary = self.crew_memory_vocabulary(&[key]);
         let context = MemoryWriteContext {
             key,
             writer,
@@ -189,7 +146,7 @@ impl OrbitRuntime {
                 actor: writer.actor().to_string(),
                 revision: None,
                 detail_json: json!({
-                    "verb": action.verb(),
+                    "verb": WRITE_VERB,
                     "task_id": task_id,
                     "rule": refusal.rule,
                     "file": refusal.file,
@@ -219,55 +176,22 @@ impl OrbitRuntime {
             reason: reason.clone(),
             created_at: now,
         };
-        let mut detail = json!({ "verb": action.verb(), "reason": reason });
+        let mut detail = json!({ "verb": WRITE_VERB, "reason": reason });
         if let Some(task_id) = task_id {
             detail["task_id"] = json!(task_id);
         }
-        if let WriteAction::Copy {
-            from,
-            from_revision,
-        } = &action
-        {
-            detail["from"] = json!(from);
-            detail["from_revision"] = json!(from_revision);
-        }
-        let mut event = CrewMemoryEventRow {
+        let event = CrewMemoryEventRow {
             workspace_id: workspace_id.clone(),
             memory_key: key.to_string(),
             at: now,
-            action: action.event().to_string(),
+            action: WRITE_EVENT.to_string(),
             actor: writer.actor().to_string(),
             revision: None,
             detail_json: detail.to_string(),
         };
-        let stored = if let WriteAction::Accept {
-            proposal_id,
-            expected_revision,
-        } = &action
-        {
-            detail["proposal_id"] = json!(proposal_id);
-            event.detail_json = detail.to_string();
-            store
-                .decide_crew_memory_proposal(
-                    &CrewMemoryProposalDecision {
-                        workspace_id,
-                        id: proposal_id.clone(),
-                        status: "accepted".to_string(),
-                        actor: writer.actor().to_string(),
-                        at: now,
-                        reason: reason.unwrap_or_default(),
-                    },
-                    &event,
-                    Some((&row, *expected_revision)),
-                )?
-                .ok_or_else(|| {
-                    OrbitError::Store("proposal acceptance wrote no revision".to_string())
-                })?
-        } else {
-            store.append_crew_memory_revision(&row, &event)?
-        };
+        let stored = store.append_crew_memory_revision(&row, &event)?;
         let mut view = revision_view(key, Some(&stored))?;
-        view["action"] = json!(action.event());
+        view["action"] = json!(WRITE_EVENT);
         Ok(view)
     }
 
@@ -280,7 +204,7 @@ impl OrbitRuntime {
     ) -> Result<Value, OrbitError> {
         let store = self.crew_memory_store()?;
         let workspace_id = self.workspace_id()?;
-        let enabled = self.current_crew_memory_enabled();
+        let enabled = self.crew_memory_experiment_running();
         let Some(raw) = key else {
             if revision.is_some() {
                 return Err(OrbitError::InvalidInput(
@@ -288,8 +212,7 @@ impl OrbitRuntime {
                 ));
             }
             let mut spaces = self.crew_memory_space_rows()?;
-            // While crew memory is off, the operator still reads what is
-            // stored (to read and reset it); unwritten spaces are not listed.
+            // While crew memory is off, only stored spaces are listed.
             if !enabled {
                 spaces.retain(|space| !space["revision"].is_null());
             }
@@ -307,35 +230,18 @@ impl OrbitRuntime {
         Ok(view)
     }
 
-    /// The dashboard's memory spaces, as a read that writes nothing. While
-    /// `crew_memory.enabled` is false the list is empty.
-    pub fn crew_memory_spaces(&self) -> Result<Value, OrbitError> {
-        if !self.current_crew_memory_enabled() {
-            return Ok(
-                json!({ "enabled": false, "enabled_key": ENABLED_KEY, "count": 0, "keys": [] }),
-            );
-        }
-        let rows = self.crew_memory_space_rows()?;
-        Ok(json!({
-            "enabled": true,
-            "enabled_key": ENABLED_KEY,
-            "count": rows.len(),
-            "keys": rows,
-        }))
-    }
-
-    /// The space summary rows both the dashboard and `orbit.memory.show`
-    /// with no key list, as a read that writes nothing: `global` first, then
+    /// The space summary rows `orbit.memory.show` with no key lists, as a
+    /// read that writes nothing: `global` first, then
     /// each key with a stored revision by key, then each configured crew's
     /// model key and each proposing key with none yet. Every row has one
     /// shape: its current revision's usage against the key's caps, its
     /// writer and its open proposal count. Open proposals are read only
-    /// while `crew_memory.enabled` is set.
+    /// while a running experiment has a memory arm.
     pub(super) fn crew_memory_space_rows(&self) -> Result<Vec<Value>, OrbitError> {
         let store = self.crew_memory_store()?;
         let workspace_id = self.workspace_id()?;
         let current = store.crew_memory_current(&workspace_id)?;
-        let open = if self.current_crew_memory_enabled() {
+        let open = if self.crew_memory_experiment_running() {
             self.unexpired_crew_memory_proposals()?
         } else {
             Vec::new()
@@ -378,79 +284,9 @@ impl OrbitRuntime {
             .collect()
     }
 
-    /// One space's revisions, newest first, and its audit events in order.
-    pub fn crew_memory_history(&self, key: &str) -> Result<Value, OrbitError> {
-        let key = self.operator_memory_key(key)?;
-        let store = self.crew_memory_store()?;
-        let workspace_id = self.workspace_id()?;
-        let revisions = store
-            .crew_memory_revisions(&workspace_id, key.as_str())?
-            .iter()
-            .map(|row| {
-                let mut view = revision_view(&key, Some(row))?;
-                let paths: Vec<Value> = view["files"]
-                    .as_array()
-                    .into_iter()
-                    .flatten()
-                    .map(|file| file["path"].clone())
-                    .collect();
-                view["files"] = Value::Array(paths);
-                if let Some(object) = view.as_object_mut() {
-                    object.remove("key");
-                    object.remove("caps");
-                }
-                Ok(view)
-            })
-            .collect::<Result<Vec<_>, OrbitError>>()?;
-        let events = store
-            .crew_memory_events(&workspace_id, key.as_str())?
-            .into_iter()
-            .map(|event| {
-                Ok(json!({
-                    "at": event.at,
-                    "action": event.action,
-                    "actor": event.actor,
-                    "revision": event.revision,
-                    "detail": serde_json::from_str::<Value>(&event.detail_json)
-                        .map_err(|error| OrbitError::Store(format!("invalid crew memory event: {error}")))?,
-                }))
-            })
-            .collect::<Result<Vec<_>, OrbitError>>()?;
-        Ok(json!({ "key": key, "revisions": revisions, "events": events }))
-    }
-
-    /// Render every current space as `global.md` and `<model>/<file>.md`
-    /// under `dir` (default: the workspace's `.orbit/memory`). Orbit never
-    /// reads these files back. An empty space writes nothing.
-    pub(crate) fn crew_memory_export(&self, dir: Option<&Path>) -> Result<Value, OrbitError> {
-        let dir = dir.map_or_else(|| self.shared_root().join("memory"), Path::to_path_buf);
-        let store = self.crew_memory_store()?;
-        let rows = store.crew_memory_current(&self.workspace_id()?)?;
-        let mut written = Vec::new();
-        for row in &rows {
-            let key = parse_memory_key(&row.memory_key)?;
-            let files = crew_memory_revision_files(row)?;
-            if key.is_global() {
-                if let Some(file) = files.first() {
-                    write_export(&dir, &PathBuf::from("global.md"), &file.text)?;
-                    written.push("global.md".to_string());
-                }
-                continue;
-            }
-            for file in &files {
-                let relative = Path::new(&key.export_dir_name()).join(&file.path);
-                write_export(&dir, &relative, &file.text)?;
-                written.push(relative.to_string_lossy().into_owned());
-            }
-        }
-        Ok(json!({
-            "dir": dir.to_string_lossy(),
-            "spaces": rows.len(),
-            "files": written,
-        }))
-    }
-
-    /// Replace a space's files with a new revision, as the operator.
+    /// Replace a space's files with a new revision, as the operator. No
+    /// operator surface calls it while crew memory is dormant; it is the
+    /// write an experiment variant's surface would reach.
     pub fn crew_memory_write(
         &self,
         key: &str,
@@ -459,73 +295,7 @@ impl OrbitRuntime {
     ) -> Result<Value, OrbitError> {
         let key = self.operator_memory_key(key)?;
         let writer = self.operator_memory_writer();
-        self.write_crew_memory_revision(&key, write, &writer, WriteAction::Write, reason, None)
-    }
-
-    /// Empty a space with a new revision that holds no files.
-    pub(crate) fn crew_memory_reset(
-        &self,
-        key: &str,
-        reason: Option<String>,
-    ) -> Result<Value, OrbitError> {
-        let key = self.operator_memory_key(key)?;
-        let writer = self.operator_memory_writer();
-        self.write_crew_memory_revision(
-            &key,
-            MemoryWrite::default(),
-            &writer,
-            WriteAction::Reset,
-            reason,
-            None,
-        )
-    }
-
-    /// Copy `from`'s current space into `to` as a new revision, keeping the
-    /// source revision's evidence.
-    pub(crate) fn crew_memory_copy(
-        &self,
-        from: &str,
-        to: &str,
-        reason: Option<String>,
-    ) -> Result<Value, OrbitError> {
-        let from = self.operator_memory_key(from)?;
-        let to = self.operator_memory_key(to)?;
-        if from.is_global() || to.is_global() {
-            return Err(OrbitError::InvalidInput(
-                "crew memory copy moves one model's space to another model; `global` is neither"
-                    .to_string(),
-            ));
-        }
-        if from == to {
-            return Err(OrbitError::InvalidInput(format!(
-                "crew memory copy needs two different models; both are `{from}`"
-            )));
-        }
-        // Refuse before the source is read, so a disabled workspace answers
-        // the same whatever the source holds.
-        self.ensure_crew_memory_writes_enabled("copy", &to)?;
-        let writer = self.operator_memory_writer();
-        let source = self
-            .crew_memory_store()?
-            .crew_memory_revision(&self.workspace_id()?, from.as_str(), None)?
-            .ok_or_else(|| {
-                OrbitError::InvalidInput(format!("crew memory `{from}` has no revision to copy"))
-            })?;
-        let write = MemoryWrite {
-            files: crew_memory_revision_files(&source)?,
-            evidence: crew_memory_revision_evidence(&source)?,
-        };
-        self.write_crew_memory_revision(
-            &to,
-            write,
-            &writer,
-            WriteAction::Copy {
-                from,
-                from_revision: source.revision,
-            },
-            reason,
-            None,
-        )
+        self.write_crew_memory_revision(&key, write, &writer, reason, None)
     }
 }
 
@@ -618,15 +388,4 @@ pub(super) fn revision_view(
         "created_at": row.created_at,
         "caps": caps,
     }))
-}
-
-fn write_export(dir: &Path, relative: &Path, text: &str) -> Result<(), OrbitError> {
-    let path = dir.join(relative);
-    let failed = |error: std::io::Error| {
-        OrbitError::Execution(format!("export crew memory to {}: {error}", path.display()))
-    };
-    if let Some(parent) = path.parent() {
-        orbit_common::fs::io::create_private_dir_all(parent).map_err(failed)?;
-    }
-    orbit_common::fs::io::atomic_write_text(&path, text).map_err(failed)
 }

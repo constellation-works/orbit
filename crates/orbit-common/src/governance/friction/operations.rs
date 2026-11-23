@@ -15,7 +15,6 @@ use crate::governance::operation::{
 };
 use orbit_types::tool::{McpIdRouteDeclaration, McpToolScope};
 
-use super::friction_tags_literal;
 use super::title::FRICTION_TITLE_MAX_CHARS;
 
 operation_registry! {
@@ -85,7 +84,7 @@ const ADD: FrictionOperation = FrictionOperation {
             preserve_empty: false,
             default: None,
             redact: Redaction::FreeText,
-            mcp_description: Some(BODY_HELP),
+            mcp_description: Some(Description::Static("Markdown friction description.")),
             cli: Some(CliBinding {
                 required: false,
                 kind: flag("body"),
@@ -139,7 +138,9 @@ const ADD: FrictionOperation = FrictionOperation {
             preserve_empty: false,
             default: None,
             redact: Redaction::None,
-            mcp_description: Some(DURING_TASK_HELP),
+            mcp_description: Some(Description::Static(
+                "Task ID being worked on (unknown ID refused).",
+            )),
             cli: Some(CliBinding {
                 required: false,
                 kind: flag("during-task"),
@@ -305,14 +306,28 @@ const UPDATE: FrictionOperation = FrictionOperation {
             preserve_empty: false,
             default: None,
             redact: Redaction::None,
-            mcp_description: Some(FRICTION_ID_HELP),
+            mcp_description: Some(Description::Static("Friction ID (FYYYY-MM-NNN).")),
             cli: Some(CliBinding {
                 required: false,
                 kind: CliArgKind::Positional,
                 help: FRICTION_ID_HELP,
             }),
         },
-        text_param("status", "Optional status: open, triaged, or resolved"),
+        ParamSpec {
+            name: "status",
+            aliases: &[],
+            param_type: ParamType::String,
+            required: false,
+            preserve_empty: false,
+            default: None,
+            redact: Redaction::None,
+            mcp_description: Some(Description::Static("open, triaged, or resolved.")),
+            cli: Some(CliBinding {
+                required: false,
+                kind: flag("status"),
+                help: Description::Static("Optional status: open, triaged, or resolved"),
+            }),
+        },
         ParamSpec {
             name: "tags",
             aliases: &["tag"],
@@ -345,7 +360,7 @@ const UPDATE: FrictionOperation = FrictionOperation {
             preserve_empty: false,
             default: None,
             redact: Redaction::FreeText,
-            mcp_description: Some(UPDATE_BODY_HELP),
+            mcp_description: Some(Description::Static("Replacement markdown body.")),
             cli: Some(CliBinding {
                 required: false,
                 kind: flag("body"),
@@ -487,11 +502,10 @@ const ADD_TITLE_CLI_HELP: Description = Description::Computed(add_title_cli_help
 const UPDATE_TITLE_HELP: Description = Description::Computed(update_title_description);
 const UPDATE_TITLE_CLI_HELP: Description = Description::Computed(update_title_cli_help);
 const UPDATE_BODY_HELP: Description = Description::Static("Optional replacement markdown body");
-const REHOME_TO_HELP: Description = Description::Static(
-    "Optional registered workspace that owns a friction recorded in the wrong one; moves the record there unless `move` is false. An empty string clears a recorded disposition",
-);
+const REHOME_TO_HELP: Description =
+    Description::Static("Owning workspace; moves record unless `move` is false (empty clears).");
 const MOVE_HELP: Description = Description::Static(
-    "With `rehome_to`: false records the `rehome_required` disposition without moving, for a workspace that is not registered here; defaults to true",
+    "With `rehome_to`: false records disposition without moving (default true).",
 );
 const REHOME_TO_CLI_HELP: Description = Description::Static(
     "Optional registered workspace that owns a friction recorded in the wrong one; moves the record there unless --move false. An empty string clears a recorded disposition",
@@ -585,18 +599,11 @@ const fn flag(long: &'static str) -> CliArgKind {
 }
 
 fn add_title_description() -> String {
-    format!(
-        "One-line handle identifying the problem, at most {FRICTION_TITLE_MAX_CHARS} characters. \
-         This is what lists and searches show, so name the surface and the failure. \
-         Derived from the body's opening line when omitted"
-    )
+    format!("One-line handle (<={FRICTION_TITLE_MAX_CHARS} chars; derived from body if omitted).")
 }
 
 fn update_title_description() -> String {
-    format!(
-        "Optional replacement one-line title, at most {FRICTION_TITLE_MAX_CHARS} characters; \
-         an empty string restores derivation from the body"
-    )
+    format!("Replacement title (<={FRICTION_TITLE_MAX_CHARS} chars; empty restores derivation).")
 }
 
 fn add_title_cli_help() -> String {
@@ -610,15 +617,9 @@ fn update_title_cli_help() -> String {
 }
 
 fn add_tags_description() -> String {
-    format!(
-        "Friction taxonomy tags as a string or array; valid tags: {}; defaults to other",
-        friction_tags_literal()
-    )
+    "Friction taxonomy tags (default: other).".to_string()
 }
 
 fn update_tags_description() -> String {
-    format!(
-        "Optional replacement taxonomy tags as a string or array; valid tags: {}",
-        friction_tags_literal()
-    )
+    "Replacement friction taxonomy tags.".to_string()
 }

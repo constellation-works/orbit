@@ -11,10 +11,18 @@ is for the operator supervising work.
 
 ## Operating loop
 
-Inspect → deduplicate → author → prepare → promote → dispatch → verify → repair.
+1. Inspect the owning workspace with `orbit attention --json` and `orbit run readiness --json`.
+2. Before filing a finding, search the owning task store with `orbit tool run orbit.search --input '{"query":"<distinctive terms>","kind":"task","all":true,"workspace":"<selector>"}'`.
+3. For authorized filing, create the task as `proposed`. Use `orbit tool run orbit.task.add --input '{"workspace":"<selector>","title":"<title>","description":"<description>","complexity":"<level>"}'` with the task fields described in [Search, then author](references/loop-author.md#search-then-author).
+4. Prepare the task with `orbit run task-pilot <task-id>`. Inspect the task and its assessment with `orbit task show <task-id>` before choosing a crew or promoting it.
+5. Record the selected crew with `orbit tool run orbit.task.update --input '{"id":"<task-id>","crew":"<crew>"}'` when the task needs a crew assignment. Follow [Select an allowed crew](references/loop-crew.md#select-an-allowed-crew).
+6. With promotion authority and readiness confirmed, run `orbit task update <task-id> --status backlog`. With dispatch authority, run `orbit run ship <task-id>` or `orbit run auto --for <window>`.
+7. Verify delivery with `orbit run show <run-id> --json` and `orbit task show <task-id>`. Route failures through the reference that matches the evidence.
+
+## Rules for supervision
 
 - Discover the owning workspace and use its returned selector; see
-  [tool surface](../orbit/references/tool-surface.md). Never substitute a local
+  [tool surface](../orbit/references/tool-surface-routing.md). Never substitute a local
   store for an unavailable owner.
 - Follow the user's scope, crew choices and concurrency/build budget. After
   authorized preparation succeeds, promote promptly. An active drain can claim
@@ -25,19 +33,20 @@ Inspect → deduplicate → author → prepare → promote → dispatch → veri
   is the separate opt-in for a drain to approve qualifying proposed tasks, and
   `run auto --auto-fix` the separate opt-in to repair its own PRs' failed
   required checks and conflicts, which never merges.
-  Existing continuous-delivery authorization may cover them; apply the user's
+- Existing continuous-delivery authorization may cover them; apply the user's
   actual instructions.
 - Verify persisted preparation, actual diffs, required checks and merge state.
   Post-merge review/QA findings become repairs under continuous delivery; do not
   invent an extra pre-merge approval gate. Repository protections still apply.
 - Start every supervision pass (each wake of a long-running session) with
   `orbit.attention` (`orbit attention`) on the owning host for the workspaces
-  you supervise. Clear each `pilot_warning` and `pilot_hold`: repair the task
+  you supervise.
+- Clear each `pilot_warning` and `pilot_hold`: repair the task
   (criteria, context, dependencies; `required_tools` is set only at filing, so
   re-file to change it), then re-pilot only if the hold stays, or record on the
   task why it stays. A `context_files` edit by you on a proposed or backlog task
   re-pilots it on its own.
-  Treat an empty result as clear only when `degraded` is empty and the read
+- Treat an empty result as clear only when `degraded` is empty and the read
   reached the owner: a federated read that misses the owner can return
   nothing. A caller holding neither the agent nor the operator capability
   is refused with `capability_denied` and does not receive an empty
@@ -47,95 +56,78 @@ Inspect → deduplicate → author → prepare → promote → dispatch → veri
 - Record `orchestrator` separately from execution `crew`. Neither attribution
   field grants authority. Leave a durable handoff when a lane cannot proceed.
 
-## Mid-run steering
-
-Use a steering comment to correct the agent's course while the admitted task
-scope and acceptance criteria remain right. Do not cancel a run just to add
-guidance: steering is delivered at the next prompt that includes task context,
-not injected into a step that is already running.
-
-Post an operator comment on the task while the run is in flight:
-
-```bash
-orbit task update <task-id> --comment "Please prioritize the existing acceptance criteria for the retry path."
-```
-
-This also works for a claimed task. Write to the owner's task record; the owner
-admits an operator's comment-only update while the execution claim is active,
-and the claimed leaf reads and records delivery through that owner. Other
-unscoped task edits remain refused during the claim. Automation and agent
-comments are not steering.
-
-The run carries outstanding operator comments, oldest first, in its next safe
-task-context prompt. Each comment is delivered at most once per run. Verify
-delivery with `orbit task show <task-id>`: find the `steering_delivered` event
-for the run and step, then confirm the comment is listed under `delivered`. A
-comment under `truncated` was not carried in full. The host maintains the
-delivery watermark as internal pipeline state; the event is the operator-facing
-receipt. Agent narrative in the execution summary may help diagnose a run, but
-is not required to confirm delivery.
-
-When steering is enabled, `task_pr_pipeline` and `task_local_pipeline`, plus
-`task_claimed_pr_pipeline` and `task_claimed_local_pipeline`, check for
-undelivered comments before `commit`. An outstanding comment sends the
-uncommitted candidate through a bounded steering round, up to `max_rounds`.
-If the limit is spent, or the last round delivers none of the remaining
-comments, the task is held as `steering_unconsumed` and the run stops without
-committing. Inspect the task comments, then requeue, reply with clarification,
-or accept the candidate through the normal review record.
-
-Configure steering for the workspace:
-
-```toml
-[workflow.mid_run_steering]
-enabled = true
-max_rounds = 2
-```
-
-`enabled` defaults to `false`; `max_rounds` defaults to `2` and accepts
-`1` through `10`. Settings refresh at prompt and gate checkpoints. Enabling
-while runs are already in flight leaves missing watermarks absent, so operator
-comments since dispatch are outstanding at the next prompt or gate unless an
-inherited candidate or claim watermark provides the baseline; prefer enabling
-between drains. Disabling takes effect at the next checkpoint and leaves
-existing watermark and round state inert.
-
-Steering cannot change the task's actual specification. A changed title,
-description, or acceptance criteria changes the task meaning digest. If the
-old-scope candidate must not continue, cancel the live child run if needed and
-wait for it and its claim to settle. Then update the task and requeue for fresh
-implementation with the old candidate discarded. See
-[failed runs](references/orchestration.md#failed-runs) for requeue mechanics.
-
 ## Choose the reference
 
 | Need | Read |
 |---|---|
-| Correct course while a task is running | [Mid-run steering](#mid-run-steering) |
-| Prepare/promote work and supervise progress | [Operating loop](references/loop.md) |
-| Compare implementer models when selecting a crew | [Model ranking](references/model-ranking.md) |
-| Scope completion authority and dispatch windows | [Authorization](references/authorization.md) |
-| Ship/auto command examples, locks and capacity | [Dispatch mechanics](references/orchestration.md) |
-| Understand the drain card's backlog forecast | [Backlog forecast](references/orchestration.md#backlog-forecast) |
-| See admission's CPU/memory forecast, its accuracy and decisions | [Resource forecast view](references/orchestration.md#resource-forecast-view) |
-| Jobs, activities, run commands and CI sweep | [Workflows](references/workflows.md) |
-| Author or diagnose version 3 auto-task jobs, waits and accepted results | [Auto-task workflows](references/workflows.md#version-3-auto-task-workflows) |
-| Diagnose task-pilot start prerequisites and unreachable evidence | [Task-pilot readiness holds](references/workflows.md#task-pilot-readiness-holds) |
-| Diagnose a specific failed, held, or stuck run | [Run debugging](references/run-debugging.md) |
-| Recognise an agent step an Orbit upgrade stopped mid-run (`upgrade_pending`) | [Upgrade-refused agent steps](references/run-debugging.md#upgrade-refused-agent-steps) |
-| Choose checkpoint resume or a whole-run replay from step zero | [Whole-run replay](references/run-debugging.md#whole-run-replay-from-step-zero) |
-| Tell a corrected agent reply from a clean one | [Response-correction rounds](references/run-debugging.md#bounded-response-correction-rounds) |
-| Tell what a held delivery-refusal code means | [Delivery-refusal holds](references/run-debugging.md#delivery-refusal-holds) |
-| Tell an inherited red base from candidate damage in hosted CI | [Hosted-check diagnosis](references/run-debugging.md#hosted-check-failures-and-inherited-red-bases) |
-| Diagnose a failed local required-validation command and its replay evidence | [Local validation replay](references/run-debugging.md#local-required-validation-replay) |
-| Find or answer a human decision request on held work | [Decision requests](references/run-debugging.md#decision-requests-on-held-work) |
-| Match an observed failure to a remedy | [Common failures](references/common-failures.md) |
-| Reconcile an open PR that predates the drain | [Stalled pull requests](references/loop.md#reconcile-stalled-pull-requests) |
-| Route CI findings, recover delivery and verify deployment | [Recovery](references/recovery.md) |
-| Salvage an incomplete or stopped candidate instead of starting over | [Salvage an incomplete candidate](references/recovery.md#salvage-an-incomplete-candidate) |
-| Work through typical orchestration decisions | [Walkthroughs](references/walkthroughs.md) |
+| Scope completion authority and dispatch windows | [`references/authorization.md`](references/authorization.md) |
+| Match an observed failure to a remedy | [`references/common-failures.md`](references/common-failures.md) |
+| Deduplicate or file a task | [`references/loop-author.md`](references/loop-author.md) |
+| Pick a crew, take over a task or record who orchestrated it | [`references/loop-crew.md`](references/loop-crew.md) |
+| Establish authority and inspect workspace readiness | [`references/loop-inspect.md`](references/loop-inspect.md) |
+| Pilot, promote and dispatch ready work | [`references/loop-promote.md`](references/loop-promote.md) |
+| Reconcile an open PR that predates the drain | [`references/loop-stalled-prs.md`](references/loop-stalled-prs.md) |
+| Correct course while a task is running, verify steering delivery or configure its bounds | [`references/mid-run-steering.md`](references/mid-run-steering.md) |
+| Compare implementer models when selecting a crew | [`references/model-ranking.md`](references/model-ranking.md) |
+| Choose a recent-run count for analytics | [`references/orchestration-analytics-windows.md`](references/orchestration-analytics-windows.md) |
+| Authorize auto-fix or interpret its repair limits | [`references/orchestration-auto-fix.md`](references/orchestration-auto-fix.md) |
+| Read the drain card's backlog forecast | [`references/orchestration-backlog-forecast.md`](references/orchestration-backlog-forecast.md) |
+| Interpret delivery behavior and verify completion | [`references/orchestration-completion.md`](references/orchestration-completion.md) |
+| Ship tasks or start an authorized drain | [`references/orchestration-dispatch.md`](references/orchestration-dispatch.md) |
+| Resize, extend, stop or read the outcome of a live drain | [`references/orchestration-drain-control.md`](references/orchestration-drain-control.md) |
+| Start or stop a kept drain, or resolve a paused or open-breaker hold | [`references/orchestration-drain-keeper.md`](references/orchestration-drain-keeper.md) |
+| Use a crew allowlist or select the owner of a pull drain | [`references/orchestration-drain-routing.md`](references/orchestration-drain-routing.md) |
+| Requeue or resume a task after a failed run | [`references/orchestration-failed-runs.md`](references/orchestration-failed-runs.md) |
+| Add an authorized review to one run or diagnose a review refusal | [`references/orchestration-per-run-review.md`](references/orchestration-per-run-review.md) |
+| Run or re-run task-pilot, interpret stale assessments or admit a task with an empty footprint | [`references/orchestration-pilot-admission.md`](references/orchestration-pilot-admission.md) |
+| Trace the pinned pilot checkout, routine and partition outcomes | [`references/orchestration-pilot-apply.md`](references/orchestration-pilot-apply.md) |
+| Use --approve-proposed and interpret the resulting pilot decisions | [`references/orchestration-proposed-approval.md`](references/orchestration-proposed-approval.md) |
+| Explain drain eligibility, capacity and waits | [`references/orchestration-readiness.md`](references/orchestration-readiness.md) |
+| Diagnose overlapping reservations or size a task hierarchy | [`references/orchestration-reservations.md`](references/orchestration-reservations.md) |
+| Inspect admission's CPU and memory forecasts and accuracy | [`references/orchestration-resource-forecast.md`](references/orchestration-resource-forecast.md) |
+| Admit a retry of a stopped owner landing | [`references/orchestration-retry-landing.md`](references/orchestration-retry-landing.md) |
+| Operate under a workspace claim or supervise an unattended window | [`references/orchestration-unattended.md`](references/orchestration-unattended.md) |
+| Investigate a blocked task or requeue a failed run | [`references/recovery-blocked-run.md`](references/recovery-blocked-run.md) |
+| Check finding freshness, record operator coverage or file a repair | [`references/recovery-ci-findings.md`](references/recovery-ci-findings.md) |
+| Verify that a landed repair is deployed | [`references/recovery-deployment.md`](references/recovery-deployment.md) |
+| Inspect a completion failure after PR publication | [`references/recovery-pr-completion.md`](references/recovery-pr-completion.md) |
+| Decide who may dispatch and implement a repair | [`references/recovery-repair-authority.md`](references/recovery-repair-authority.md) |
+| Resume a stopped candidate or salvage an interrupted review repair | [`references/recovery-salvage-candidate.md`](references/recovery-salvage-candidate.md) |
+| Close a rescued blocked task after a verified landing | [`references/recovery-settle-rescued-task.md`](references/recovery-settle-rescued-task.md) |
+| Admit, deliver or recover an explicit source repair | [`references/recovery-source-repair.md`](references/recovery-source-repair.md) |
+| Tell a working agent from an abandoned wrapper or verify model routing | [`references/run-debugging-agent-processes.md`](references/run-debugging-agent-processes.md) |
+| Interpret JSON from run show, logs, events or trace | [`references/run-debugging-audit-output.md`](references/run-debugging-audit-output.md) |
+| Read the v2 audit trail, transcript blobs and failure classes | [`references/run-debugging-audit-trail.md`](references/run-debugging-audit-trail.md) |
+| Find, answer or verify a decision request on held work | [`references/run-debugging-decisions.md`](references/run-debugging-decisions.md) |
+| Read a typed delivery refusal and choose the next step | [`references/run-debugging-delivery-holds.md`](references/run-debugging-delivery-holds.md) |
+| Check branch, divergence and conflict evidence for a failed run | [`references/run-debugging-git-state.md`](references/run-debugging-git-state.md) |
+| Trace parent and child failures or interpret history, incidents and failure rows | [`references/run-debugging-history.md`](references/run-debugging-history.md) |
+| Tell an inherited red base from candidate damage in hosted CI | [`references/run-debugging-hosted-checks.md`](references/run-debugging-hosted-checks.md) |
+| Verify a recorded PID or clean up a process group after authorized cancellation | [`references/run-debugging-live-processes.md`](references/run-debugging-live-processes.md) |
+| Inspect a base refresh or confirmed hold after an unchanged-head rerun fails | [`references/run-debugging-no-edit-rerun.md`](references/run-debugging-no-edit-rerun.md) |
+| Inspect step recovery attempts before reading raw audit files | [`references/run-debugging-recovery-evidence.md`](references/run-debugging-recovery-evidence.md) |
+| Write and verify a run diagnosis using the report template | [`references/run-debugging-report.md`](references/run-debugging-report.md) |
+| Check whether a corrected reply triggered another attempt | [`references/run-debugging-response-correction.md`](references/run-debugging-response-correction.md) |
+| Route check or conflict repairs for review deliveries without a handoff | [`references/run-debugging-review-delivery.md`](references/run-debugging-review-delivery.md) |
+| Check task state, historical invocations or replay a pilot assessment | [`references/run-debugging-task-state.md`](references/run-debugging-task-state.md) |
+| Identify the first failing step from run state, audit events and captured logs | [`references/run-debugging-triage.md`](references/run-debugging-triage.md) |
+| Investigate an agent step stopped or refused with upgrade_pending | [`references/run-debugging-upgrade-refusals.md`](references/run-debugging-upgrade-refusals.md) |
+| Diagnose a failed local required-validation command and its replay evidence | [`references/run-debugging-validation-replay.md`](references/run-debugging-validation-replay.md) |
+| Choose checkpoint resume or a replay from step zero | [`references/run-debugging-whole-run-replay.md`](references/run-debugging-whole-run-replay.md) |
+| Work through typical orchestration decisions | [`references/walkthroughs.md`](references/walkthroughs.md) |
+| Author or diagnose version 3 auto-task jobs, waits and accepted results | [`references/workflows-auto-tasks.md`](references/workflows-auto-tasks.md) |
+| Cancel a run or choose an inspection route for a stuck run | [`references/workflows-cancel-and-diagnose.md`](references/workflows-cancel-and-diagnose.md) |
+| Check CI log selection, completeness and checkout attribution | [`references/workflows-ci-log-evidence.md`](references/workflows-ci-log-evidence.md) |
+| Check whether a fresh failure warrants reassessing a completed repair | [`references/workflows-ci-reassessment.md`](references/workflows-ci-reassessment.md) |
+| Trace a CI sweep from filing through pilot admission and host routing | [`references/workflows-ci-sweep.md`](references/workflows-ci-sweep.md) |
+| Inspect resource overrides or author a version 2 job | [`references/workflows-custom-jobs.md`](references/workflows-custom-jobs.md) |
+| Trace completion and auto-fix inputs through the pipeline | [`references/workflows-delivery-inputs.md`](references/workflows-delivery-inputs.md) |
+| Diagnose task-pilot start prerequisites or owner-only evidence | [`references/workflows-pilot-holds.md`](references/workflows-pilot-holds.md) |
+| Re-run a task with a candidate or deliberately discard it | [`references/workflows-preserved-candidate.md`](references/workflows-preserved-candidate.md) |
+| Inspect jobs and activities or submit and observe a job | [`references/workflows-run-jobs.md`](references/workflows-run-jobs.md) |
+| Look up the purpose and authority of a shipped pipeline | [`references/workflows-shipped-pipelines.md`](references/workflows-shipped-pipelines.md) |
 
-Use [task authoring](../orbit/references/task-authoring.md) when filing work.
+Use [task authoring](../orbit/references/task-authoring-contract.md) when filing work.
 Use [orbit-setup](../orbit-setup/SKILL.md) when the cause is host configuration,
 installation, scheduler setup or maintenance; do not load those procedures
 for ordinary dispatch.

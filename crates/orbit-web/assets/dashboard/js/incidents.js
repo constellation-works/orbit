@@ -19,7 +19,7 @@
 // Counts stay per signature: a cause header counts signatures, never runs or
 // events added across them.
 
-import { incidentClassLabel, INCIDENT_CLASS_TITLES, auditActorLabel, el, fetchJson, syncNodes, getWindow, setWindow, notifyScopeChange, DASHBOARD_WINDOWS, getWorkspace, getHost, getWorkspaceRevision, onWorkspaceChange, formatAge, formatDateTime, bindRunLink, bindTaskLink, makeCopyButton, truncate } from './common.js';
+import { currentHostToken, incidentClassLabel, INCIDENT_CLASS_TITLES, auditActorLabel, el, fetchJson, syncNodes, getWindow, setWindow, notifyScopeChange, DASHBOARD_WINDOWS, getWorkspace, getHost, getWorkspaceRevision, onWorkspaceChange, formatAge, formatDateTime, bindRunLink, bindTaskLink, makeCopyButton, truncate } from './common.js';
 import { navigateToDrilldown } from './audit.js';
 
 const $ = (id) => document.getElementById(id);
@@ -59,6 +59,7 @@ let selectedKey = null;
 let runsOpen = false;
 let evidenceOpen = false;
 let lastPayload = null;
+let lastPayloadHost = null;
 let lastCtx = {};
 let layout = null;
 // Full messages loaded for the detail panel, by host, workspace and audit row.
@@ -77,6 +78,7 @@ function cacheFullMessage(key, value) {
 onWorkspaceChange(() => {
   fullMessageLoads.clear();
   lastPayload = null;
+  lastPayloadHost = null;
 });
 
 export function getIncidentClass() { return incidentClass; }
@@ -560,7 +562,12 @@ function classTilesNode(payload, window) {
   const byClass = payload.incidents_by_class || {};
   const eventsByClass = payload.raw_events_by_class || {};
   const runsByClass = payload.affected_runs_by_class || {};
-  const tiles = el("div", { class: "incident-tiles", role: "group", "aria-label": "Incident class" });
+  const row = el("div", {
+    class: "stat-tiles-row",
+    "data-select": "single",
+    role: "group",
+    "aria-label": "Incident class",
+  });
   const facts = [];
   for (const key of CLASS_ORDER) {
     const category = categories[key] || {};
@@ -570,25 +577,25 @@ function classTilesNode(payload, window) {
     facts.push([key, incidents, events, runs]);
     const on = incidentClass === key;
     const tile = el("button", {
-      class: `incident-tile ${key}${on ? " on" : ""}`,
+      class: `stat-tile incident-${key}`,
       type: "button",
       "aria-pressed": on ? "true" : "false",
       "aria-description": `${incidentClassLabel(key, (payload.class_labels || {})[key])}: ${plural(incidents, "incident")} ${windowPhrase(window)}`,
     }, [
-      el("span", { class: "incident-tile-label" }, [el("span", { class: "incident-dot", "aria-hidden": "true" }), INCIDENT_CLASS_TITLES[key]]),
-      el("span", { class: "incident-tile-count" }, [
-        el("span", { class: "incident-tile-number", text: number(incidents) }),
-        el("span", { text: incidents === 1 ? " incident" : " incidents" }),
+      el("span", { class: "stat-tile-label" }, [
+        el("span", { class: "incident-dot", "aria-hidden": "true" }),
+        el("span", { class: "stat-tile-label-text", text: INCIDENT_CLASS_TITLES[key] }),
       ]),
-      el("span", { class: "incident-tile-sub", text: `${plural(events, "event")} · ${plural(runs, "run")}` }),
-      key === "diagnostic" ? el("span", { class: "incident-tile-note", text: "excluded from tool rates" }) : null,
+      el("span", { class: "stat-tile-figure", text: number(incidents) }),
+      el("span", { class: "stat-tile-compare", text: `${plural(events, "event")} · ${plural(runs, "run")}` }),
+      key === "diagnostic" ? el("span", { class: "stat-tile-note", text: "excluded from tool rates" }) : null,
     ]);
     tile.dataset.class = key;
     tile.addEventListener("click", () => selectClass(key));
-    tiles.appendChild(tile);
+    row.appendChild(tile);
   }
 
-  const children = [tiles];
+  const children = [el("div", { class: "stat-tiles" }, [row])];
   if (payload.truncated) {
     children.push(el("p", {
       class: "incident-scan-note",
@@ -626,7 +633,9 @@ function visibleGroups(groups) {
 }
 
 function causeCodeNode(cause) {
-  return el("span", { class: "incident-code", text: cause.label, title: `Cause: ${cause.label}` });
+  // The label is already the visible text. A title restates it, and inside a
+  // signature row that title is a native tooltip on the row button (STD-07 §R41).
+  return el("span", { class: "incident-code", text: cause.label });
 }
 
 // A signature row. Beneath a cause header it is indented (`child`); a cause
@@ -656,9 +665,14 @@ function rowNode(group, axis, now, cap, { child = false, flat = false } = {}) {
       }),
     ]),
     track,
-    el("span", { class: "incident-count", text: countLabel(group), title: countTitle(group, cap) }),
-    el("span", { class: `incident-last${live ? " live" : ""}`, text: lastLabel, title: group.last ? `last seen ${formatDateTime(group.last)}` : "" }),
+    el("span", { class: "incident-count", text: countLabel(group) }),
+    el("span", { class: `incident-last${live ? " live" : ""}`, text: lastLabel }),
   ]);
+  const described = [
+    countTitle(group, cap),
+    group.last ? `Last seen ${formatDateTime(group.last)}` : "",
+  ].filter(Boolean).join(". ");
+  if (described) row.setAttribute("aria-description", described);
   row.dataset.key = `incident-${group.key}`;
   row.dataset.hash = JSON.stringify([selected, live, child, lastLabel, group.events, group.incidents.length, row.textContent]);
   row.incidentGroupKey = group.key;
@@ -779,13 +793,17 @@ function ensureLayout(body) {
   return layout;
 }
 
+function clearIncidentSearch() {
+  searchQuery = "";
+  if (layout) layout.search.value = "";
+}
+
 function emptyNode(text, { clear = false, status = false } = {}) {
   const children = [el("span", { text })];
   if (clear) {
     const button = el("button", { class: "incident-link-button", type: "button", text: "Clear filters" });
     button.addEventListener("click", () => {
-      searchQuery = "";
-      if (layout) layout.search.value = "";
+      clearIncidentSearch();
       rerender();
     });
     children.push(button);
@@ -812,8 +830,8 @@ function footerNodes(payload, cap, ctx) {
 
 // ===== Detail panel.
 
-function pill(text, className) {
-  return el("span", { class: `incident-pill ${className}`, text });
+function incidentPill(text, tone) {
+  return el("span", { class: "pill", "data-tone": tone, text, title: text });
 }
 
 function summarySentence(group) {
@@ -863,6 +881,7 @@ function openAuditEvents(group) {
     role: eventIds ? null : (sharedIncidentActor(group.incidents) || null),
     tool: eventIds || sample.has_tool_identity === false ? null : (sample.surface || null),
     eventIds,
+    eventHost: eventIds ? (lastPayloadHost || currentHostToken()) : null,
   });
 }
 
@@ -950,7 +969,8 @@ function evidenceTable(events, ctx) {
 
 // The forensic record: the grouping signature and propagation chain, plus a
 // five-row-per-incident audit evidence preview. When events_omitted is
-// positive, the panel shows that count and offers an Open all events action.
+// positive, the panel shows that count and offers an Open all events action;
+// otherwise it still offers the scoped Events drilldown to the raw records.
 function evidenceNode(group, ctx) {
   const details = el("details", { class: "incident-disclosure incident-evidence-details" });
   details.open = evidenceOpen;
@@ -963,6 +983,13 @@ function evidenceNode(group, ctx) {
       `This list shows an evidence preview; ${eventCountLabel(omitted)} omitted. `,
       auditButton(group, `Open all ${eventCountLabel(group.events)}`, "incident-link-button"),
       " to read the complete records.",
+    ]));
+  } else {
+    // Every row fits, but the raw record lives in Events: keep the scoped
+    // drilldown inside the disclosure.
+    details.appendChild(el("p", { class: "incident-message-note incident-evidence-note" }, [
+      auditButton(group, `Open ${eventCountLabel(group.events)} in Events`, "incident-link-button"),
+      " to expand each raw audit record.",
     ]));
   }
   const signatures = [...new Set(group.incidents.map(incident => incident.signature).filter(Boolean))];
@@ -998,7 +1025,10 @@ function relatedItems(section, related, noun) {
       el("span", { class: "mono", text: `${other.sample.surface || "unknown surface"} · ${actorLabel(other.incidents)}` }),
       el("span", { class: "incident-related-meta", text: `${countLabel(other)} · ${formatAge(other.last)}` }),
     ]);
-    button.addEventListener("click", () => selectGroup(other.key));
+    button.addEventListener("click", () => {
+      if (!matchesSearch(other, searchQuery.trim().toLowerCase())) clearIncidentSearch();
+      selectGroup(other.key);
+    });
     section.appendChild(button);
   }
   if (related.length > RELATED_MAX) {
@@ -1097,28 +1127,11 @@ function detailNode(group, groups, axis, now, ctx) {
       " to read each underlying record.",
     ]));
   }
-  const actions = [];
-  const runIds = [...new Set(group.incidents.flatMap(incidentRunIds))];
-  if (runIds.length === 1 && hasCtx(ctx, "setActiveTab")) {
-    const view = el("button", { class: "incident-action", type: "button", text: "View run", "aria-description": `Open ${runIds[0]}` });
-    view.addEventListener("click", () => ctx.setActiveTab(`runs/${encodeURIComponent(runIds[0])}`));
-    actions.push(view);
-  } else if (runIds.length > 1) {
-    const view = el("button", { class: "incident-action", type: "button", text: `View runs (${runIds.length})` });
-    view.addEventListener("click", () => {
-      runsOpen = true;
-      rerender();
-      const runs = layout && layout.detail.querySelector && layout.detail.querySelector(".incident-runs");
-      if (runs && typeof runs.scrollIntoView === "function") runs.scrollIntoView({ block: "nearest" });
-    });
-    actions.push(view);
-  }
-  actions.push(auditButton(group, "Audit events", "incident-action"));
-
   const node = el("div", { class: "incident-detail" }, [
-    el("div", { class: "incident-pills" }, [
-      pill(CLASS_NAMES[group.cls] || incidentClassLabel(group.cls, group.sample.class_label), group.cls),
-      pill(live ? "Failed in the last hour" : `Quiet for ${formatAge(group.last)}`, live ? "live" : "quiet"),
+    el("div", { class: "incident-detail-meta" }, [
+      incidentPill(CLASS_NAMES[group.cls] || incidentClassLabel(group.cls, group.sample.class_label),
+        { unexpected: "danger", expected: "warning", denied: "accent", deferred: "held" }[group.cls]),
+      incidentPill(live ? "Failed in the last hour" : `Quiet for ${formatAge(group.last)}`, live ? "danger" : "muted"),
     ]),
     el("div", { class: "incident-detail-head" }, [
       el("h3", { class: "incident-detail-title", text: truncate(group.title, 240) }),
@@ -1128,13 +1141,12 @@ function detailNode(group, groups, axis, now, ctx) {
       track,
       axisNode(axis, 4, "incident-wide-axis"),
     ]),
-    factsNode(group),
+    el("div", { class: "incident-facts-panel" }, [factsNode(group)]),
     el("section", { class: "incident-message", "aria-label": "Message" }, messageChildren),
     sameCauseNode(group, groups),
     relatedNode(group, groups),
     group.incidents.some(incident => incidentRunIds(incident).length) ? runsNode(group, ctx) : null,
     evidenceNode(group, ctx),
-    el("div", { class: "incident-actions" }, actions),
   ]);
   node.dataset.key = `detail-${group.key}`;
   node.dataset.hash = JSON.stringify([runsOpen, evidenceOpen, live, node.textContent]);
@@ -1151,6 +1163,7 @@ function rerender() {
 
 export function renderIncidents(payload, ctx = {}, { interactive = false } = {}) {
   lastPayload = payload || {};
+  lastPayloadHost = currentHostToken();
   lastCtx = ctx;
   const body = $("diag-body");
   if (!body) return;

@@ -145,6 +145,7 @@ impl<'a> AdmissionWave<'a> {
             &input.snapshot.lock_holders,
             input.claimed,
             &input.snapshot.task_lookup,
+            &input.snapshot.remote_claims,
             input.workspace_root,
             input.unlocked,
             input.lock_modes,

@@ -59,6 +59,8 @@ registerOperationsReset(() => {
   autoTaskRevealedGroups.clear();
   autoTaskDeleteOpen.clear();
   autoTaskDeleteReason.clear();
+  // The rail count is the left workspace's until this one's read lands.
+  setRailSubtabCount("rail-count-ops-auto-tasks", "");
 });
 
 function autoTaskMatchesFilter(definition, query) {
@@ -249,8 +251,8 @@ function autoTaskTrigger(definition) {
   return "schedule";
 }
 
-function autoTaskChip(text, tone = "") {
-  return el("span", { class: `operation-chip mono ${tone}`.trim(), text });
+function autoTaskBadge(text, tone) {
+  return el("span", { class: "badge mono", "data-tone": tone, text, title: text });
 }
 
 function autoTaskEditKey(definition) {
@@ -483,7 +485,7 @@ function autoTaskRow(payload, definition, workspaceId) {
   const nextCell = next?.state === "scheduled" && next.at
     ? whenCell("Next mint", next.at)
     : operationCell("Next mint", [el("span", { class: `operation-cell-main${on ? "" : " muted"}`, text: nextEvaluationText(next, null, definition.schedule) })]);
-  const card = el("article", { class: `operation-card operation-row auto-task-card ${state}` });
+  const card = el("article", { class: `operation-row auto-task-card ${state}` });
   card.append(
     el("div", { class: "operation-row-head" }, [
       operationCell("", [autoTaskToggleButton(payload, definition)], "operation-cell-control"),
@@ -493,8 +495,8 @@ function autoTaskRow(payload, definition, workspaceId) {
           definition.condition?.stall ? el("span", { class: "operation-state blocked", text: "stalled" }) : null,
         ]),
         el("span", { class: "operation-cell-sub operation-chips" }, [
-          template.crew ? autoTaskChip(template.crew, "crew") : null,
-          template.priority ? autoTaskChip(template.priority) : null,
+          template.crew ? autoTaskBadge(template.crew, "accent") : null,
+          template.priority ? autoTaskBadge(template.priority) : null,
         ].filter(Boolean)),
       ], "operation-cell-identity"),
       operationCell("Trigger", [

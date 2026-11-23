@@ -118,7 +118,8 @@ including tasks filed after it starts. A task qualifies when it has context
 files and an assessed complexity, or the `no-diff-expected` tag, and its pilot
 reports no duplicate, already-landed, conflict or warning finding.
 
-- Tasks tagged `no-auto-approve` stay `proposed` until a human approves them.
+- Tasks tagged `no-auto-approve` or `no-drain` stay `proposed` until a human
+  approves them.
 - `orbit run show` and `orbit run readiness` report approval counts and hold
   reasons, including each warning finding. The dashboard shows the same on the
   live window.
@@ -160,6 +161,7 @@ whose `context_files` overlap cannot run at once;
 |---|---|---|
 | `surface_reserved` | A critical or high-priority task ahead in the queue is waiting on file locks this task overlaps. | Nothing. It starts once that task starts. |
 | `awaiting_footprint`, `awaiting_exclusive_slot` | The task has no `context_files`, so it holds no lock. The drain waits for the pilot to fill them in, then runs the task alone. | File such tasks as `proposed` so the pilot prepares them first, or have an operator [waive readiness](/how-to/dashboard/#waive-readiness) to let the drain run it beside other work. |
+| `perf_lane_busy` | The task is tagged `performance` or `perf-review`, so it measures with the host-wide perf lane, and another such task is running or already admitted on this host. The detail names that task. A pull onto this host waits the same way, including while an owner-local wave has admitted one that is not yet in progress. A perf task on another host does not hold this host's lane. | Nothing. It starts once that task leaves `in-progress` and no owner-local wave still holds the lane. |
 | `pilot_assessment_stale` | The description or criteria changed after the last assessment. | [Wait for the automatic pilot or repilot the task](#if-you-edit-a-piloted-task). |
 | `pilot_duplicate`, `pilot_already_landed` | The latest pilot assessment found duplicate or already-landed work. | Read the finding in the task comments, then repilot or [record a decision](#override-a-pilot-admission-hold). |
 | `native_os_required` | The criteria need native-host evidence this host cannot produce. | Route the task to a capable host, re-scope the criteria, or [record a decision](#override-a-pilot-admission-hold). |
@@ -261,8 +263,14 @@ The drain watches each pull request it opened:
 - Missing approvals, permissions, admin rules, unknown status and failed
   optional checks start no agent.
 
-Each PR gets at most one repair per head and blocker, and three in total,
-recorded in the task's history. For the crew settings, see
+Only one attempt for a head and blocker may be live at a time. If its run is
+still live or its end cannot be confirmed, that pair remains reserved. Once the
+run is confirmed ended without publishing a new head, its admitted attempt
+still counts toward the PR's three-attempt budget, but another run may try the
+same head and blocker while budget remains. An out-of-run hand-back whose
+resumed run never admits an attempt is not repeated for that head and blocker;
+blocker hand-backs are also capped at three per PR. Attempts are recorded in
+the task's history. For the crew settings, see
 [System work](/reference/config/#system-work).
 
 ### Restrict a window to some crews

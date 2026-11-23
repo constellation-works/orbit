@@ -470,6 +470,66 @@ fn start_refuses_legacy_step_local_primary() {
     assert_eq!(started.status, "running");
 }
 
+/// [ORB-26553] A run-bound memory tool is served only to the managed runs
+/// Orbit starts for it, so an arm may not add it: start refuses each of the
+/// three naming the tool, and the draft stays a draft.
+#[test]
+fn start_refuses_run_bound_memory_tool_in_arm_tools_add() {
+    if !super::dispatch_admission::isolated(
+        "experiment_lifecycle::start_refuses_run_bound_memory_tool_in_arm_tools_add",
+    ) {
+        return;
+    }
+
+    let root = tempfile::tempdir_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
+    let global = root.path().join("home/.orbit");
+    let workspace = root.path().join("repo/.orbit");
+    std::fs::create_dir_all(&global).unwrap();
+    std::fs::create_dir_all(&workspace).unwrap();
+    std::fs::write(
+        workspace.join("config.toml"),
+        "[experiments]\nenabled = true\n",
+    )
+    .unwrap();
+    let runtime = OrbitRuntime::from_roots(&global, &workspace).unwrap();
+    let actor = ExperimentActor {
+        actor: "experiment-lifecycle-test".into(),
+        reason: None,
+    };
+
+    for action in ["show", "write", "propose"] {
+        let tool = format!("orbit.memory.{action}");
+        let experiment_id = runtime
+            .create_experiment(
+                &format!("run-bound-{action}"),
+                ExperimentDefinitionInput {
+                    arms: Some(json!([
+                        { "name": "control", "control": true },
+                        { "name": "treatment", "overlay": { "tools": { "add": [tool] } } }
+                    ])),
+                    primary_metric: Some("total_tokens".into()),
+                    ..ExperimentDefinitionInput::default()
+                },
+                actor.clone(),
+            )
+            .unwrap()
+            .id;
+
+        let error = runtime
+            .change_experiment(&experiment_id, ExperimentChange::Start, actor.clone())
+            .unwrap_err();
+        assert!(
+            matches!(&error, OrbitError::InvalidInput(message) if message.contains(&tool) && message.contains("served only to the runs Orbit starts")),
+            "start must refuse run-bound `{tool}` in an arm's tools.add, naming the tool and why, got {error:?}"
+        );
+        assert_eq!(
+            runtime.experiment_view(&experiment_id).unwrap().status,
+            "draft",
+            "a refused start must leave the experiment with `{tool}` a draft"
+        );
+    }
+}
+
 fn capture_job(root: &std::path::Path) -> std::path::PathBuf {
     let job_path = root.join("task_local_pipeline.yaml");
     std::fs::write(

@@ -173,6 +173,31 @@ export function findRegisteredHost(selector) {
   return registeredHosts.find((row) => row.machine_id === wanted || row.name.toLowerCase() === wanted.toLowerCase()) || null;
 }
 
+/// Stable host token for the currently selected host, used when binding
+/// host-local identifiers (such as SQLite audit row IDs) into URLs and caches.
+export function currentHostToken() {
+  return currentHost || (servingHost ? servingHost.name : "local");
+}
+
+function normalizedHostScope(selector) {
+  if (!selector) return null;
+  const raw = String(selector).trim();
+  if (!raw || raw.toLowerCase() === "local") return null;
+  const named = findRegisteredHost(raw);
+  if (named) return named.local ? null : named.name.toLowerCase();
+  if (servingHost && (raw === servingHost.machine_id || raw.toLowerCase() === servingHost.name.toLowerCase())) {
+    return null;
+  }
+  return raw.toLowerCase();
+}
+
+/// True when `selector` names the currently selected host (including serving
+/// host name, `machine_id` or fallback `"local"` token).
+export function isCurrentHostToken(selector) {
+  if (selector == null || String(selector).trim() === "") return false;
+  return normalizedHostScope(selector) === normalizedHostScope(currentHost);
+}
+
 /// The name the dashboard shows for the selected host.
 export function hostLabel() {
   if (currentHost) return currentHost;
@@ -537,11 +562,15 @@ export function syncWindowSelectors() {
     const targetExists = windowTabs(selector).some((tab) => tab.dataset.window === panelTarget);
     syncWindowTabState(selector, targetExists ? panelTarget : selector.dataset.fallbackWindow || panelTarget);
   }
+  // The note explains a fallback to 24h, so it shows only when one is in
+  // effect. A supported shared window needs no note: the selector and the
+  // heading already name it.
   const toolsMeta = document.getElementById("tools-meta");
   if (toolsMeta) {
+    toolsMeta.hidden = !tools.independent;
     toolsMeta.textContent = tools.independent
       ? `Using an independent ${tools.window} window · Analytics: ${selected}`
-      : `${tools.window} window`;
+      : "";
   }
 }
 
@@ -920,6 +949,20 @@ if (typeof window !== "undefined" && typeof window.addEventListener === "functio
   window.addEventListener("popstate", restoreScopeFromUrl);
 }
 
+/// Navigate to `hash` under another host or workspace while keeping the source
+/// history entry's own scope (including an aggregate workspace subset) intact.
+/// Back and Forward restore each entry's scope via `restoreScopeFromUrl`.
+export function pushScopedHash(hash, { host = selectedRunHost(), workspace = currentWorkspace, remember = false } = {}) {
+  persistScopeToUrl();
+  if (host !== selectedRunHost()) requestHostSwitch(host, { fromHistory: true });
+  if (workspace) setWorkspace(workspace);
+  if (remember) rememberWorkspace();
+  syncWorkspaceSelector();
+  history.pushState(null, "", scopedHref(hash, { host, workspace }));
+  addressScope = addressScopeKey();
+  window.dispatchEvent(new HashChangeEvent("hashchange"));
+}
+
 /// Bind a run address while keeping ordinary navigation in this dashboard.
 export function bindRunLink(link, runId, { host = selectedRunHost(), workspace = currentWorkspace } = {}) {
   link.href = runHref(runId, { host, workspace });
@@ -928,13 +971,7 @@ export function bindRunLink(link, runId, { host = selectedRunHost(), workspace =
     if (event.defaultPrevented || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
     event.preventDefault();
     if (host !== selectedRunHost() || (workspace && workspace !== currentWorkspace)) {
-      persistScopeToUrl();
-      if (host !== selectedRunHost()) requestHostSwitch(host, { fromHistory: true });
-      if (workspace) setWorkspace(workspace);
-      syncWorkspaceSelector();
-      history.pushState(null, "", runHref(runId, { host, workspace }));
-      addressScope = addressScopeKey();
-      window.dispatchEvent(new HashChangeEvent("hashchange"));
+      pushScopedHash(`#runs/${encodeURIComponent(runId)}`, { host, workspace });
       return;
     }
     window.location.hash = `#runs/${encodeURIComponent(runId)}`;
@@ -960,12 +997,7 @@ export function bindTaskLink(link, taskId, { workspace = currentWorkspace } = {}
       // Back and Forward re-read the scope from each entry
       // (`restoreScopeFromUrl`). No hashchange follows a pushState, so the
       // router is told by hand.
-      persistScopeToUrl();
-      setWorkspace(workspace);
-      syncWorkspaceSelector();
-      history.pushState(null, "", taskHref(taskId, { workspace }));
-      addressScope = addressScopeKey();
-      window.dispatchEvent(new HashChangeEvent("hashchange"));
+      pushScopedHash(`#tasks?open=${encodeURIComponent(taskId)}`, { workspace });
       return;
     }
     window.location.hash = `#tasks?open=${encodeURIComponent(taskId)}`;
@@ -1146,12 +1178,14 @@ export function pinnedInfoHint(text, { trigger = null, preserveAction = false } 
 //
 // `expanded` is omitted for rows that navigate instead of disclosing; those get
 // button semantics with no expansion state. `controls` names the detail node
-// when the row renders one with a stable id.
-export function makeToggleRow(node, { expanded, onToggle, controls } = {}) {
+// when the row renders one with a stable id. `description` sets
+// `aria-description` when the row's label does not state its full effect.
+export function makeToggleRow(node, { expanded, onToggle, controls, description } = {}) {
   node.tabIndex = 0;
   node.setAttribute("role", "button");
   if (expanded != null) node.setAttribute("aria-expanded", String(!!expanded));
   if (controls) node.setAttribute("aria-controls", controls);
+  if (description) node.setAttribute("aria-description", description);
   node.addEventListener("click", onToggle);
   node.addEventListener("keydown", (event) => {
     if (event.key !== "Enter" && event.key !== " ") return;
@@ -1278,6 +1312,11 @@ export function normalizeTaskStatus(status) {
   return String(status || "unknown").replaceAll("_", "-");
 }
 
+// Host and provider resource verdicts use the same marker palette.
+export function resourcePillTone(severity) {
+  return { critical: "danger", elevated: "warning", ok: "success", stale: "unknown", off: "unknown" }[severity];
+}
+
 export function statusPill(status) {
   status = normalizeTaskStatus(status);
   const pill = el("span", { class: "pill", text: status });
@@ -1304,7 +1343,7 @@ export function incidentClassLabel(key, label) {
 }
 
 export function stateCell(state) {
-  const node = el("span", { class: "state-label", text: state });
+  const node = el("span", { class: "pill", text: state });
   node.dataset.state = state;
   return node;
 }
@@ -1382,17 +1421,25 @@ export function makeCopyButton(value, { class: className = "", text = value, des
   return button;
 }
 
-export async function fetchJson(path) {
-  return (await fetchJsonPage(path)).body;
+export async function fetchJson(path, opts) {
+  return (await fetchJsonPage(path, opts)).body;
 }
 
 // Like fetchJson, for an endpoint that also answers in response headers (a
 // paging cursor). `header(name)` reads one; most callers never need it.
-export async function fetchJsonPage(path) {
+// An optional `{ visit }` pins the host and workspace to that captured visit
+// and refuses to start a request once the visit is no longer current.
+export async function fetchJsonPage(path, { visit } = {}) {
+  if (visit && !visit.isCurrent()) {
+    const error = new Error("The host or workspace changed before the request began");
+    error.code = "stale_workspace_visit";
+    throw error;
+  }
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 30000);
   try {
-    const res = await fetch(withWorkspace(path), { headers: { accept: "application/json" }, signal: controller.signal });
+    const target = visit ? visit.path(path) : withWorkspace(path);
+    const res = await fetch(target, { headers: { accept: "application/json" }, signal: controller.signal });
     return await dashboardJsonResponse(res, path);
   } catch (error) {
     if (controller.signal.aborted) throw new Error("Request timed out after 30 seconds");
@@ -1538,20 +1585,21 @@ export function confirmForceOverride({ heading, guard, effect }) {
     forceDialogSequence += 1;
     const headingId = `force-override-heading-${forceDialogSequence}`;
     const bodyId = `force-override-body-${forceDialogSequence}`;
-    dialog.className = "force-override-dialog";
+    dialog.className = "force-override-dialog dialog-surface";
     dialog.setAttribute("aria-labelledby", headingId);
     dialog.setAttribute("aria-describedby", bodyId);
     const title = el("h3", { text: heading });
     title.id = headingId;
-    const copy = el("div", {}, [
+    const copy = el("div", { class: "dialog-body" }, [
       el("p", { text: guard }),
       el("p", { text: effect }),
     ]);
     copy.id = bodyId;
     const forceButton = el("button", { class: "action force", text: "Force", type: "button" });
     const cancelButton = el("button", { class: "action cancel", text: "Cancel", type: "button" });
-    const actions = el("div", { class: "force-override-actions" }, [forceButton, cancelButton]);
-    dialog.append(title, copy, actions);
+    const actions = el("div", { class: "force-override-actions dialog-actions" }, [forceButton, cancelButton]);
+    const closeButton = escCloseButton("Cancel (Esc)", { onClick: () => settle(false) });
+    dialog.append(el("header", { class: "dialog-header" }, [title, closeButton]), copy, actions);
     const previouslyFocused = document.activeElement;
     let settled = false;
     // Escape cancels even when focus has left the dialog (a viewport
@@ -1588,7 +1636,7 @@ export function confirmForceOverride({ heading, guard, effect }) {
         return;
       }
       if (event.key !== "Tab" || event.altKey || event.ctrlKey || event.metaKey) return;
-      const controls = [forceButton, cancelButton].filter((node) => !node.disabled);
+      const controls = [closeButton, forceButton, cancelButton].filter((node) => !node.disabled);
       if (!controls.length) return;
       const active = document.activeElement;
       if (event.shiftKey ? active === controls[0] : active === controls[controls.length - 1]) {
@@ -1750,8 +1798,10 @@ function readsOnThisClock(oldNode, newNode) {
 
 function clockReading(node) {
   if (typeof node.querySelectorAll !== "function") return null;
-  const titles = Array.from(node.querySelectorAll("[title]"), (titled) => titled.getAttribute("title"));
-  return JSON.stringify([node.textContent, node.getAttribute("title"), titles]);
+  // aria-description can carry a time too (audit event and incident rows), so
+  // it reads like a title: a zone switch rebuilds a row whose time changed.
+  const described = Array.from(node.querySelectorAll("[title], [aria-description]"), (item) => [item.getAttribute("title"), item.getAttribute("aria-description")]);
+  return JSON.stringify([node.textContent, node.getAttribute("title"), node.getAttribute("aria-description"), described]);
 }
 
 // One entry per admission a follower's settle-only pass carried (`orbit run

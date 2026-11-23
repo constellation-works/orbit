@@ -10,8 +10,8 @@
 //! ORB-12731: the worker bound to a run may also declare, from that run's
 //! worktree, a file it has not created yet — for the task the run owns only —
 //! and the write reports those selectors as `context_files_unverified`, through
-//! `orbit.task.update` and `orbit task update` alike. Every other
-//! missing-target rejection names the escape hatch.
+//! `orbit.task.update` and `orbit task update` alike when the parent is also
+//! missing. A missing file with an existing parent instead gets creation intent.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -301,9 +301,9 @@ fn linked_worktree_caller_can_declare_a_file_that_exists_only_there() {
         "`orbit.task.update` must accept a worktree-local file alongside a shared one"
     );
 
-    // The guard is relaxed for the caller's own checkout only: the same
-    // selector from the registered checkout still names nothing.
-    let rejected = workspace.run_failure(
+    // From the registered checkout the file is missing, but its parent
+    // exists, so the write records creation intent and reports a warning.
+    let response = workspace.run_success(
         &workspace.repo,
         &[
             "task",
@@ -311,11 +311,18 @@ fn linked_worktree_caller_can_declare_a_file_that_exists_only_there() {
             &task_id,
             "--context",
             "file:src/brand_new.rs",
+            "--json",
         ],
     );
+    let response: Value = serde_json::from_slice(&response.stdout).expect("JSON response");
     assert!(
-        rejected.contains("file:src/brand_new.rs"),
-        "a caller outside the worktree must still be refused: {rejected}"
+        response["warnings"]
+            .as_array()
+            .expect("warning")
+            .iter()
+            .any(|warning| warning
+                .as_str()
+                .is_some_and(|text| text.contains("file:src/brand_new.rs")))
     );
 }
 
@@ -330,10 +337,16 @@ fn selector_missing_from_both_checkouts_is_rejected_from_a_worktree() {
 
     let rejected = workspace.run_failure(
         &worktree,
-        &["task", "update", &task_id, "--context", "file:src/typo.rs"],
+        &[
+            "task",
+            "update",
+            &task_id,
+            "--context",
+            "file:src/not_created/typo.rs",
+        ],
     );
     assert!(
-        rejected.contains("file:src/typo.rs")
+        rejected.contains("file:src/not_created/typo.rs")
             && rejected.contains("does not resolve to an existing in-workspace target")
             && rejected.contains("`--allow-missing-context` on the CLI"),
         "`orbit task update --context` must still reject a dead selector and name the flag: {rejected}"
@@ -341,7 +354,7 @@ fn selector_missing_from_both_checkouts_is_rejected_from_a_worktree() {
 
     let tool_input = json!({
         "id": task_id,
-        "context_files": ["file:src/typo.rs"],
+        "context_files": ["file:src/not_created/typo.rs"],
     })
     .to_string();
     let rejected = workspace.run_failure(
@@ -349,7 +362,7 @@ fn selector_missing_from_both_checkouts_is_rejected_from_a_worktree() {
         &["tool", "run", "orbit.task.update", "--input", &tool_input],
     );
     assert!(
-        rejected.contains("file:src/typo.rs"),
+        rejected.contains("file:src/not_created/typo.rs"),
         "`orbit.task.update` must still reject a dead selector: {rejected}"
     );
 
@@ -408,7 +421,8 @@ fn owning_worker_in_its_worktree_may_declare_a_file_it_has_not_created_yet() {
         "src/brand_new.rs",
     );
     assert!(
-        !worktree.join("src/not_yet.rs").exists() && !worktree.join("src/planned").exists(),
+        !worktree.join("src/not_created/not_yet.rs").exists()
+            && !worktree.join("src/planned").exists(),
         "the fixture targets must exist nowhere before the declaration"
     );
 
@@ -421,7 +435,7 @@ fn owning_worker_in_its_worktree_may_declare_a_file_it_has_not_created_yet() {
                 "context_files": [
                     "file:src/lib.rs",
                     "file:src/brand_new.rs",
-                    "file:src/not_yet.rs",
+                    "file:src/not_created/not_yet.rs",
                     "dir:src/planned",
                 ],
             }),
@@ -430,7 +444,7 @@ fn owning_worker_in_its_worktree_may_declare_a_file_it_has_not_created_yet() {
     );
     assert_eq!(
         response["context_files_unverified"],
-        json!(["file:src/not_yet.rs", "dir:src/planned"]),
+        json!(["file:src/not_created/not_yet.rs", "dir:src/planned"]),
         "only the selectors no checkout could verify are reported: {response}"
     );
     assert_eq!(
@@ -438,7 +452,7 @@ fn owning_worker_in_its_worktree_may_declare_a_file_it_has_not_created_yet() {
         vec![
             "file:src/lib.rs".to_string(),
             "file:src/brand_new.rs".to_string(),
-            "file:src/not_yet.rs".to_string(),
+            "file:src/not_created/not_yet.rs".to_string(),
             "dir:src/planned".to_string(),
         ],
         "the relaxed write stores every declared selector"
@@ -484,7 +498,7 @@ fn owning_worker_cli_update_gets_the_same_relaxation_as_the_tool() {
             &[
                 &task_id,
                 "--context",
-                "file:src/lib.rs,file:src/brand_new.rs,file:src/not_yet.rs",
+                "file:src/lib.rs,file:src/brand_new.rs,file:src/not_created/not_yet.rs",
                 "--json",
             ],
         ),
@@ -492,7 +506,7 @@ fn owning_worker_cli_update_gets_the_same_relaxation_as_the_tool() {
     );
     assert_eq!(
         response["context_files_unverified"],
-        json!(["file:src/not_yet.rs"]),
+        json!(["file:src/not_created/not_yet.rs"]),
         "only the selector no checkout could verify is reported: {response}"
     );
     assert_eq!(
@@ -500,7 +514,7 @@ fn owning_worker_cli_update_gets_the_same_relaxation_as_the_tool() {
         vec![
             "file:src/lib.rs".to_string(),
             "file:src/brand_new.rs".to_string(),
-            "file:src/not_yet.rs".to_string(),
+            "file:src/not_created/not_yet.rs".to_string(),
         ],
     );
 
@@ -508,21 +522,28 @@ fn owning_worker_cli_update_gets_the_same_relaxation_as_the_tool() {
         &workspace.cli_update_as_run(
             &worktree,
             run_id,
-            &[&foreign, "--context", "file:src/not_yet.rs"],
+            &[&foreign, "--context", "file:src/not_created/not_yet.rs"],
         ),
         "owning worker's CLI update of a task its run does not own",
     );
     assert!(
-        rejected.contains("file:src/not_yet.rs") && rejected.contains("--allow-missing-context"),
+        rejected.contains("file:src/not_created/not_yet.rs")
+            && rejected.contains("--allow-missing-context"),
         "the strict rejection must name the selector and the flag: {rejected}"
     );
 
     let rejected = workspace.run_failure(
         &worktree,
-        &["task", "update", &task_id, "--context", "file:src/later.rs"],
+        &[
+            "task",
+            "update",
+            &task_id,
+            "--context",
+            "file:src/not_created/later.rs",
+        ],
     );
     assert!(
-        rejected.contains("file:src/later.rs"),
+        rejected.contains("file:src/not_created/later.rs"),
         "a shell outside the managed run gets the strict check: {rejected}"
     );
 }
@@ -551,12 +572,12 @@ fn owning_worker_cannot_relax_a_task_its_run_does_not_own() {
             &workspace.tool_update_as_run(
                 &worktree,
                 run_id,
-                &json!({ "id": task_id, "context_files": ["file:src/not_yet.rs"] }),
+                &json!({ "id": task_id, "context_files": ["file:src/not_created/not_yet.rs"] }),
             ),
             "owning worker declaring a missing target on a task it does not own",
         );
         assert!(
-            rejected.contains("file:src/not_yet.rs")
+            rejected.contains("file:src/not_created/not_yet.rs")
                 && rejected.contains("does not resolve to an existing in-workspace target")
                 && rejected.contains("allow_missing_context"),
             "the strict rejection must name the selector and the escape: {rejected}"
@@ -576,7 +597,7 @@ fn owning_worker_cannot_relax_a_task_its_run_does_not_own() {
             run_id,
             &json!({
                 "id": foreign,
-                "context_files": ["file:src/not_yet.rs"],
+                "context_files": ["file:src/not_created/not_yet.rs"],
                 "allow_missing_context": true,
             }),
         ),
@@ -642,12 +663,13 @@ fn owning_worker_outside_a_worktree_gets_the_strict_guard() {
         &workspace.tool_update_as_run(
             &workspace.repo,
             run_id,
-            &json!({ "id": task_id, "context_files": ["file:src/not_yet.rs"] }),
+            &json!({ "id": task_id, "context_files": ["file:src/not_created/not_yet.rs"] }),
         ),
         "owning worker declaring a missing target from the registered checkout",
     );
     assert!(
-        rejected.contains("file:src/not_yet.rs") && rejected.contains("allow_missing_context"),
+        rejected.contains("file:src/not_created/not_yet.rs")
+            && rejected.contains("allow_missing_context"),
         "the registered checkout keeps the strict guard: {rejected}"
     );
 }

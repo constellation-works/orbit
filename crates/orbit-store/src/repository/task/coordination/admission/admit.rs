@@ -233,7 +233,7 @@ impl TaskCommitBoundary {
                 .map(Some);
         }
         let in_flight = self.in_flight_locked(snapshot, repo_root)?;
-        let claims = self.footprint_protecting_claims()?;
+        let (claims, host_claims) = self.partition_and_host_protecting_claims()?;
         let drain_released =
             self.drain_releases(&identity.location().machine_id, &request.run_context.run_id)?;
         let reservations = self.store.inspect_active_task_reservations(
@@ -241,6 +241,14 @@ impl TaskCommitBoundary {
             Some(&self.workspace_id),
         )?;
         let owner_wave = self.owner_wave_footprints_locked()?;
+        let perf_lane_holders = self.perf_lane_holders_locked(
+            &identity.location().machine_id,
+            ordering.honor_owner_local_perf_lane,
+            &host_claims,
+            &in_flight.tasks,
+            &owner_wave,
+            &ordering.owner_local_carriers,
+        )?;
         let screen = Screen {
             identity,
             request,
@@ -252,6 +260,7 @@ impl TaskCommitBoundary {
             in_flight: &in_flight.footprints,
             reservations: &reservations,
             owner_wave: &owner_wave,
+            perf_lane_holders: &perf_lane_holders,
             lock_modes: self.store.footprint_lock_modes(),
             executor_host_os,
             tag_label_requirements: &ordering.tag_label_requirements,
@@ -283,14 +292,19 @@ impl TaskCommitBoundary {
         let key = receipt_key(&receipt.machine_id, &request.request_id)?;
         // A stopped landing's repair is nearly finished work for its task, so
         // it is offered before any backlog candidate [ORB-14261].
-        if self.admit_repair_locked(
+        let Some(repaired) = self.admit_repair_locked(
             &screen,
             &key,
             orbit_dir,
             &in_flight.tasks,
             &mut receipt,
             guidance_capture,
-        )? {
+            reach,
+        )?
+        else {
+            return Ok(None);
+        };
+        if repaired {
             return self
                 .lookup_admission(identity, &request.request_id)
                 .map(Some);
@@ -339,6 +353,14 @@ impl TaskCommitBoundary {
             let Some(footprint) = screen.footprint(&task, &statuses, &mut receipt) else {
                 continue;
             };
+            // Granting a perf-lane claim must serialize across every workspace
+            // partition on this owner host so concurrent pulls cannot both see
+            // a free lane. Nothing has been written yet, so take the decision
+            // again host-wide.
+            if reach == DependencyReach::Partition && orbit_types::task::needs_perf_lane(&task.tags)
+            {
+                return Ok(None);
+            }
             if let Some(reason) = validation_hold(&task, &comments, &history)? {
                 receipt.queue_depth = receipt.queue_depth.saturating_sub(1);
                 receipt.deferred_conflicts.push(AdmissionDiagnostic {

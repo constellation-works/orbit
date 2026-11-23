@@ -15,7 +15,7 @@
 // module owns the tab, Crews and the throttle panel.
 
 import { captureFocus, captureWorkspaceVisit, el, fetchJson, formatDateTime, getWorkspace, hostWriteRefusal, isAggregateView, onWorkspaceChange, renderPanelPlaceholder, requestJson, requestPanel, teardownNode } from './common.js';
-import { renderExecution, renderMachine, renderOther, renderReview, renderWorkflow, resetTopics, workspacePolicyMissing } from './config-topics.js';
+import { renderExecution, renderMachine, renderOther, renderReview, renderWorkflow, resetTopics, topicDrawerOpen, workspacePolicyMissing } from './config-topics.js';
 import { fetchHostResourcePayload, hostReading, hostVerdict, onHostResources } from './host-resources.js';
 import { renderSettingsBar, settingsEditButton, settingsKeyName, settingsRow, settingsRowSource, settingsSearchField, settingsSection, settingsSource, settingsSourceIsSet } from './settings-ui.js';
 
@@ -56,6 +56,9 @@ let lastPayload = null;
 // The row (or crew) currently being edited with its draft values. It is
 // operator state, so a background refresh must not discard it.
 let editing = null;
+// Stale readback banner retained across renderPanels when a refresh fails
+// (especially after a successful write) while earlier values remain on display.
+let readbackStatus = null;
 let unsubscribeWorkspace = null;
 
 export function initConfig() {
@@ -63,14 +66,18 @@ export function initConfig() {
   unsubscribeWorkspace = onWorkspaceChange(() => {
     lastPayload = null;
     editing = null;
+    readbackStatus = null;
     resetCrewList();
     resetTopics();
   });
   // Live readings follow the topbar's poll. A rebuild would discard an open
-  // editor's focus, so it waits until nothing is being edited.
+  // editor's focus, undo history and IME input, so it waits until nothing is
+  // being edited. The Machine key drawer lives in config-topics, separate
+  // from this module's crew editor.
   onHostResources((host) => {
-    if (activeSubtab !== "machine" || !lastPayload || editing) return;
+    if (activeSubtab !== "machine" || !lastPayload) return;
     lastPayload = { ...lastPayload, host };
+    if (editing || topicDrawerOpen()) return;
     render(lastPayload);
   });
 }
@@ -81,6 +88,7 @@ export function setConfigSubtab(name) {
   if (name !== activeSubtab) {
     editing = null;
     lastPayload = null;
+    readbackStatus = null;
   }
   activeSubtab = name;
 }
@@ -112,6 +120,7 @@ export async function fetchAndRenderConfig() {
       }
     },
     (payload) => {
+      readbackStatus = null;
       lastPayload = payload;
       render(payload);
     },
@@ -134,11 +143,42 @@ function render(payload) {
   restoreControls();
 }
 
+function staleReadbackCallout() {
+  if (!readbackStatus) return null;
+  const { saved, error } = readbackStatus;
+  const text = saved
+    ? `${saved}, but refreshing Settings failed: ${error}. Showing earlier values.`
+    : `Refreshing Settings failed: ${error}. Showing earlier values.`;
+  const retry = el("button", { class: "settings-btn", type: "button", text: "Retry" });
+  retry.addEventListener("click", async () => {
+    const prior = readbackStatus;
+    retry.disabled = true;
+    try {
+      await fetchAndRenderConfig();
+    } catch (retryError) {
+      if (lastPayload) {
+        readbackStatus = {
+          saved: prior?.saved || null,
+          error: retryError?.message || String(retryError),
+        };
+        render(lastPayload);
+      }
+    }
+  });
+  return el("div", { class: "settings-callout warn settings-readback-status", role: "status", "aria-live": "polite" }, [
+    el("span", { text }),
+    " ",
+    retry,
+  ]);
+}
+
 function renderPanels(payload, body) {
   // replaceChildren detaches without running teardown, so a poll would leave
   // the previous render's clamp spans observed. Release them first.
   teardownNode(body);
   body.replaceChildren();
+  const stale = staleReadbackCallout();
+  if (stale) body.appendChild(stale);
   const ctx = viewContext(payload);
   let bar;
   if (activeSubtab === "crews") {
@@ -154,9 +194,26 @@ function renderPanels(payload, body) {
     ...bar,
     onReload: () => {
       editing = null;
-      fetchAndRenderConfig().catch((error) => console.error("Failed to reload config", error));
+      fetchAndRenderConfig()
+        .catch((error) => {
+          console.error("Failed to reload config", error);
+          if (lastPayload) {
+            readbackStatus = { saved: readbackStatus?.saved || null, error: error?.message || String(error) };
+            render(lastPayload);
+          }
+        })
+        .finally(restoreReloadFocus);
     },
   });
+}
+
+/// Reload rebuilds the tab. Where Reload sits in the body (no bar), the rebuild
+/// can drop focus to the body, so the rebuilt Reload takes it back. Focus the
+/// operator moved elsewhere in the meantime is left alone.
+function restoreReloadFocus() {
+  const active = document.activeElement;
+  if (active && active !== document.body) return;
+  document.querySelector("#config-body .settings-reload, #config-controls .settings-reload")?.focus({ preventScroll: true });
 }
 
 /// What a sub-view module needs from the tab: whether this session may write
@@ -168,6 +225,9 @@ function viewContext(payload) {
     render,
     rerender: () => { if (lastPayload) render(lastPayload); },
     reload: fetchAndRenderConfig,
+    reportReadbackFailure: (saved, error) => {
+      readbackStatus = { saved: saved || null, error: error?.message || String(error) };
+    },
   };
 }
 
@@ -398,7 +458,9 @@ function chipListInput(initial, draft, field) {
   const draw = () => {
     node.replaceChildren();
     entries.forEach((entry, index) => {
-      const chip = el("span", { class: "config-entry mono", text: entry });
+      const chip = el("span", { class: "chip mono" }, [
+        el("span", { class: "chip-label", text: entry, title: entry }),
+      ]);
       const remove = el("button", { class: "config-entry-remove", text: "×", "aria-label": `Remove ${entry}` });
       remove.type = "button";
       remove.addEventListener("click", (event) => {
@@ -441,23 +503,29 @@ function chipListInput(initial, draft, field) {
 }
 
 async function submitKey(row, value, init) {
-  await submitConfigMutation((visit) =>
-    requestJson(`/api/config/keys/${encodeURIComponent(row.key)}`, "PUT", {
-      value,
-      scope: writeScope(),
-      ...(init ? { init } : {}),
-    }, visit),
+  await submitConfigMutation(
+    (visit) =>
+      requestJson(`/api/config/keys/${encodeURIComponent(row.key)}`, "PUT", {
+        value,
+        scope: writeScope(),
+        ...(init ? { init } : {}),
+      }, visit),
+    undefined,
+    `Saved ${row.key}`,
   );
 }
 
 async function submitKeyClear(row) {
-  await submitConfigMutation((visit) =>
-    requestJson(
-      `/api/config/keys/${encodeURIComponent(row.key)}?scope=${encodeURIComponent(writeScope())}`,
-      "DELETE",
-      undefined,
-      visit,
-    ),
+  await submitConfigMutation(
+    (visit) =>
+      requestJson(
+        `/api/config/keys/${encodeURIComponent(row.key)}?scope=${encodeURIComponent(writeScope())}`,
+        "DELETE",
+        undefined,
+        visit,
+      ),
+    undefined,
+    `Cleared ${row.key}`,
   );
 }
 
@@ -466,7 +534,7 @@ async function submitKeyClear(row) {
 /// only on the session that issued it: a workspace switch or Reload while the
 /// write was in flight has already ended that session, and a later edit must
 /// not inherit its error or be closed by its success.
-async function submitConfigMutation(request, afterWrite) {
+async function submitConfigMutation(request, afterWrite, savedSummary = "Changes saved") {
   const session = editing;
   if (!session || session.pending || !session.visit.isCurrent()) return;
   const ownsSubmission = () => editing === session && session.visit.isCurrent();
@@ -487,14 +555,22 @@ async function submitConfigMutation(request, afterWrite) {
   }
   if (!ownsSubmission()) return;
   afterWrite?.(session);
+  let readbackError = null;
   try {
     await fetchAndRenderConfig();
-  } catch (_) {
-    // The write landed; only the re-read failed. requestPanel already left
-    // its stale-data note on the panel, so close as a successful save rather
-    // than reporting the re-read error as a refused write.
+  } catch (error) {
+    // The write landed; only the re-read failed. Keep the write outcome
+    // distinct from the readback failure, and retain a visible stale status
+    // with a Retry action across closing the editor and returning focus.
+    readbackError = error;
   }
   if (!ownsSubmission()) return;
+  if (readbackError) {
+    readbackStatus = {
+      saved: savedSummary,
+      error: readbackError?.message || String(readbackError),
+    };
+  }
   editing = null;
   if (lastPayload) render(lastPayload);
   focusEditAffordance(session);
@@ -1050,25 +1126,31 @@ async function submitCrew(crew, fields, isNew, init) {
     const value = read();
     if (value !== undefined) body[field] = value;
   }
-  await submitConfigMutation((visit) =>
-    requestJson(`/api/config/crews/${encodeURIComponent(name)}`, "PUT", {
-      fields: body,
-      scope: writeScope(),
-      ...(init ? { init } : {}),
-    }, visit),
-  // Only a landed write earns the typed name, so a refused save keeps the
-  // new-crew editor (keyed by "") open and focus finds the row on success.
-  isNew ? (session) => { session.name = name; } : undefined);
+  await submitConfigMutation(
+    (visit) =>
+      requestJson(`/api/config/crews/${encodeURIComponent(name)}`, "PUT", {
+        fields: body,
+        scope: writeScope(),
+        ...(init ? { init } : {}),
+      }, visit),
+    // Only a landed write earns the typed name, so a refused save keeps the
+    // new-crew editor (keyed by "") open and focus finds the row on success.
+    isNew ? (session) => { session.name = name; } : undefined,
+    `Saved crew ${name}`,
+  );
 }
 
 async function submitCrewDelete(crew) {
-  await submitConfigMutation((visit) =>
-    requestJson(
-      `/api/config/crews/${encodeURIComponent(crew.name)}?scope=${encodeURIComponent(writeScope())}`,
-      "DELETE",
-      undefined,
-      visit,
-    ),
+  await submitConfigMutation(
+    (visit) =>
+      requestJson(
+        `/api/config/crews/${encodeURIComponent(crew.name)}?scope=${encodeURIComponent(writeScope())}`,
+        "DELETE",
+        undefined,
+        visit,
+      ),
+    undefined,
+    `Deleted crew ${crew.name}`,
   );
 }
 

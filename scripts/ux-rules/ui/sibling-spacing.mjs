@@ -1,12 +1,7 @@
 // Siblings of one documented semantic kind share padding, font size and weight.
 //
-// A tag plus the first class is only a candidate cluster. It is not identity:
-// experiment badges share `.ex-badge` and then a role the stylesheet documents
-// (status, mode, verdict). A verdict's font-weight 600 is that role, not a
-// spacing defect. Selected state is exempt and is not itself a kind.
-// A cluster that shares a shell but diverges by an undocumented class is
-// ambiguous: the rule records it and does not fail it, and it does not skip
-// the rest of the view.
+// The first class groups candidates. Compare matching class sets within that
+// group and record mixed sets as ambiguous. Selected items are exempt.
 import { measureInPage, verdict } from "../lib/ui-context.mjs";
 
 export const rule = {
@@ -20,8 +15,6 @@ export const rule = {
 export async function check(ctx) {
   const measured = await measureInPage(ctx, (H) => {
     const MIN_PEERS = 3;
-    // Whole class tokens only. `active-triage-chip` is not selected, and `on`
-    // is not a dashboard state class.
     const STATE_TOKENS = new Set(["active", "selected"]);
 
     function tokensOf(el) {
@@ -37,31 +30,6 @@ export async function check(ctx) {
       if (el.hasAttribute("aria-current")) return "aria-current";
       for (const token of tokensOf(el)) if (STATE_TOKENS.has(token)) return token;
       return "";
-    }
-
-    // experiments.css: status, mode and verdict are roles on `.ex-badge`.
-    // `ex-status-running` and `ex-status-paused` are one role. `ex-verdict`
-    // and `ex-verdict-*` are the verdict role, which sets font-weight 600.
-    function semanticKind(token) {
-      if (token.startsWith("ex-status-")) return "status";
-      if (token.startsWith("ex-mode-")) return "mode";
-      if (token === "ex-verdict" || token.startsWith("ex-verdict-")) return "verdict";
-      return "";
-    }
-
-    function profileOf(el) {
-      const tokens = tokensOf(el);
-      const kinds = [];
-      const shell = [];
-      for (const token of tokens) {
-        const kind = semanticKind(token);
-        if (kind) {
-          if (!kinds.includes(kind)) kinds.push(kind);
-        } else shell.push(token);
-      }
-      kinds.sort();
-      shell.sort();
-      return { tokens, kinds, shell };
     }
 
     function measuredItem(el) {
@@ -107,59 +75,31 @@ export async function check(ctx) {
         }
         if (rest.length < MIN_PEERS) continue;
 
-        const profiles = rest.map((el) => ({ el, ...profileOf(el) }));
-        const shellKey = (item) => item.shell.join(".");
-        const shells = new Set(profiles.map(shellKey));
-        const kindKeys = profiles.map((item) => item.kinds.join("+"));
-        const sameKind = shells.size === 1 && new Set(kindKeys).size === 1;
-        const documentedSplit = shells.size === 1
-          && profiles.every((item) => item.kinds.length === 1)
-          && new Set(kindKeys).size > 1;
-
-        if (sameKind) {
-          const kind = profiles[0].kinds[0] || shellKey(profiles[0]) || bucket;
+        const profiles = rest.map((el) => ({ el, tokens: tokensOf(el).sort() }));
+        const kinds = new Set(profiles.map((item) => item.tokens.join(".")));
+        if (kinds.size === 1) {
+          const kind = kinds.values().next().value || bucket;
           groups.push({
             parent: parentSelector,
             kind,
             bucket,
-            items: profiles.slice(0, 12).map((item) => measuredItem(item.el)),
+            items: rest.slice(0, 12).map(measuredItem),
           });
           coverage.push({
             parent: parentSelector,
             bucket,
             coverage: "compared",
             kind,
-            count: profiles.length,
+            count: rest.length,
           });
-        } else if (documentedSplit) {
-          const byKind = new Map();
-          for (const item of profiles) {
-            const kind = item.kinds[0];
-            if (!byKind.has(kind)) byKind.set(kind, []);
-            byKind.get(kind).push(item);
-          }
-          const kinds = [];
-          for (const [kind, items] of byKind) {
-            kinds.push({ kind, count: items.length, compared: items.length >= MIN_PEERS });
-            if (items.length < MIN_PEERS) continue;
-            groups.push({
-              parent: parentSelector,
-              kind,
-              bucket,
-              items: items.slice(0, 12).map((item) => measuredItem(item.el)),
-            });
-          }
-          coverage.push({ parent: parentSelector, bucket, coverage: "distinct-kind", kinds });
         } else {
           coverage.push({
             parent: parentSelector,
             bucket,
             coverage: "ambiguous",
-            members: profiles.slice(0, 12).map((item) => ({
-              selector: H.selectorOf(item.el),
-              tokens: item.tokens,
-              kinds: item.kinds,
-              shell: item.shell,
+            members: profiles.slice(0, 12).map(({ el, tokens }) => ({
+              selector: H.selectorOf(el),
+              tokens,
             })),
           });
         }

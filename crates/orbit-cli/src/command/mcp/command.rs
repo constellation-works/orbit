@@ -98,7 +98,7 @@ const SERVE_CONTRACT_HELP: &str = "\
 Omit `--operator` for any server an agent launches: without it a session holds agent \
 capability only.\n\
 Mode, authority, workspace binding, attribution, role and toolset rules: installed Orbit \
-skill `references/tool-surface.md` (Serving MCP).";
+skill `references/tool-surface-mcp-serve.md` (Serving MCP).";
 
 #[derive(Args)]
 #[command(
@@ -270,7 +270,7 @@ pub(super) fn resolve_mcp_toolsets(
         return configured_mcp_toolsets(global_root, role_flag, toolset_flag);
     };
     let selection = McpToolsetSelection::default_only();
-    match selection.clone().with_names(stamped.split(',')) {
+    match selection.clone().with_stamped_names(stamped.split(',')) {
         Ok(stamped) => Ok(stamped),
         Err(error) => {
             tracing::warn!(

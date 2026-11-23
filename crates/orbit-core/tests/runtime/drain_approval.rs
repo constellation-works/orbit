@@ -15,7 +15,8 @@ use orbit_types::task::{
     CONTEXT_CREATION_AUTHORIZED_EVENT, TaskDecision, TaskRelation, TaskRelationType,
 };
 use orbit_types::workflow::{
-    ChildDispatch, ExecutorDef, JobRunState, JobRunTrigger, JobTargetType, PipelineState,
+    ChildDispatch, DeliveryEvidenceGap, ExecutorDef, JobRunState, JobRunTrigger, JobTargetType,
+    LandingMethod, LandingObservationStatus, PipelineState,
 };
 use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
@@ -25,6 +26,7 @@ mod advisory;
 mod explicit_pilot_reuse;
 mod landed_creation;
 mod leaf_dispatch;
+mod no_diff_tag;
 mod pilot_mutations;
 #[cfg(unix)]
 mod required_tools;
@@ -335,6 +337,86 @@ impl Workspace {
             .join(format!("{}.job.yaml", run.run_id));
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         std::fs::write(&path, "kind: Job\nmetadata:\n  name: [broken\n").unwrap();
+    }
+    /// A successful local fast-forward. `landed` is the commit the base is at
+    /// after `git merge --ff-only`; `None` is an older checkpoint that records
+    /// the merge and omits that commit. `commit_sha` is still written on the
+    /// commit step, so a proof must not recover the culprit from there.
+    fn record_local_fast_forward(
+        &self,
+        task: &Task,
+        landed: Option<&str>,
+        commit_sha: &str,
+        merged: bool,
+    ) {
+        self.install_delivery_job();
+        std::fs::copy(
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/activities/git_merge.yaml"),
+            self.runtime
+                .paths()
+                .global_dir
+                .join("resources/activities/git_merge.yaml"),
+        )
+        .unwrap();
+        std::fs::write(
+            self.runtime
+                .paths()
+                .global_dir
+                .join("resources/jobs/fixture_local_delivery.yaml"),
+            "schemaVersion: 2\nkind: Job\nmetadata:\n  name: fixture_local_delivery\nspec:\n  \
+             state: enabled\n  task_delivery: {}\n  steps:\n    - id: commit\n      \
+             target: activity:git_commit\n    - id: merge\n      target: activity:git_merge\n",
+        )
+        .unwrap();
+        let mut run = self
+            .runtime
+            .insert_job_run(
+                "fixture_local_delivery",
+                1,
+                Utc::now(),
+                Some(json!({"task_ids": [task.id]})),
+                None,
+            )
+            .unwrap();
+        run.state = JobRunState::Success;
+        self.runtime
+            .sqlite_store()
+            .unwrap()
+            .upsert_job_run_for_workspace(&self.runtime.workspace_id().unwrap(), &run, None)
+            .unwrap();
+        let mut merge = json!({
+            "merged": merged,
+            "already_contained": !merged,
+            "completion_held": false,
+            "base": "main",
+            "base_commit": commit_sha,
+            "workspace_path": self.repo.display().to_string(),
+            "workspace_branch": "culprit",
+        });
+        if let Some(sha) = landed {
+            merge["landed_commit"] = json!(sha);
+        }
+        let mut state = PipelineState::new(run.run_id.clone(), run.job_id.clone(), json!({}));
+        for (index, step_id, output) in [
+            (
+                0u32,
+                "commit",
+                json!({
+                    "phase": "commit",
+                    "decision": "performed",
+                    "committed": true,
+                    "commit_sha": commit_sha,
+                    "base_sha": "a".repeat(40),
+                    "job_run_id": run.run_id,
+                    "task_id": task.id,
+                }),
+            ),
+            (1, "merge", merge),
+        ] {
+            state.record_step(index, JobRunState::Success, Some(output.clone()), None);
+            state.record_pipeline_output(step_id, output);
+        }
+        self.runtime.write_run_state(&run.run_id, &state).unwrap();
     }
     fn task_with_crew(
         &self,
@@ -1359,6 +1441,164 @@ fn an_unreadable_culprit_delivery_holds_a_relation_only_finding() {
         ],
     );
 }
+fn a_local_fast_forward_culprit_stays_excluded_until_a_later_repair() {
+    let ws = Workspace::new();
+    let older = ws.commit("older readme change");
+    let culprit = ws.branch_commit_file("culprit", "README.md", "culprit readme\n", "the culprit");
+    ws.git(&["merge", "--ff-only", "culprit"]);
+    assert_eq!(
+        ws.git(&["rev-parse", "HEAD"]),
+        culprit,
+        "the culprit reaches main by fast-forward"
+    );
+    let fix = ws.commit("the later repair");
+    let drain = ws.drain();
+    let known = ws.readme_task("known local landing");
+    ws.record_local_fast_forward(&known, Some(&culprit), &culprit, true);
+    let observed = ws
+        .runtime
+        .observe_task_delivery(&known.id, None)
+        .expect("a local fast-forward with a landed commit is observed");
+    assert_eq!(
+        observed.landing.method,
+        Some(LandingMethod::LocalFastForward)
+    );
+    assert_eq!(observed.landing.status, LandingObservationStatus::Merged);
+    assert_eq!(
+        observed.landing.landed_commit.as_deref(),
+        Some(culprit.as_str()),
+        "the local checkpoint names the fast-forwarded commit: {observed:?}"
+    );
+    let unnamed = ws.readme_task("landed without a commit");
+    ws.record_local_fast_forward(&unnamed, None, &culprit, true);
+    let observed = ws
+        .runtime
+        .observe_task_delivery(&unnamed.id, None)
+        .expect("an older local checkpoint is still a merged landing");
+    assert_eq!(
+        observed.landing.method,
+        Some(LandingMethod::LocalFastForward)
+    );
+    assert_eq!(observed.landing.status, LandingObservationStatus::Merged);
+    assert!(
+        observed.landing.landed_commit.is_none(),
+        "an older local checkpoint records no landed commit: {observed:?}"
+    );
+    let unchanged = ws.readme_task("already included in base");
+    ws.record_local_fast_forward(&unchanged, None, &fix, false);
+    let observed = ws
+        .runtime
+        .observe_task_delivery(&unchanged.id, None)
+        .unwrap();
+    assert_eq!(
+        observed.landing.status,
+        LandingObservationStatus::NotRequested
+    );
+    assert!(observed.landing.landed_commit.is_none());
+    let never_delivered = ws.readme_task("never delivered");
+    assert!(
+        matches!(
+            ws.runtime.observe_task_delivery(&never_delivered.id, None),
+            Err(OrbitError::TaskDeliveryUnavailable(_))
+        ),
+        "a task with no recorded delivery stays unavailable"
+    );
+    let relation = |target: &Task| TaskRelation {
+        relation_type: TaskRelationType::RegressionFrom,
+        target: target.id.clone(),
+        regression: None,
+    };
+    let finding = |title: &str, target: &Task| {
+        ws.readme_finding(
+            title,
+            "A finding that names no commit.".into(),
+            vec![relation(target)],
+        )
+    };
+    let cites_culprit = finding("cites the fast-forward culprit", &known);
+    let cites_older = finding("cites the older readme change", &known);
+    let later_repair = finding("later repair of the known culprit", &known);
+    let unavailable = finding("unavailable landing identity", &unnamed);
+    let no_delivery = finding("no recorded delivery", &never_delivered);
+    assert_verified_no_diff_outside(
+        &ws,
+        &drain,
+        verified_cases(&[
+            (&cites_culprit, format!("Commit {culprit} is the culprit.")),
+            (&cites_older, format!("Commit {older} touched the README.")),
+            (&later_repair, format!("Commit {fix} repaired the README.")),
+            (&unavailable, format!("Commit {fix} repaired the README.")),
+            (&no_delivery, format!("Commit {fix} repaired the README.")),
+        ]),
+        &[&later_repair, &no_delivery],
+        &[
+            (&cites_culprit, Some("do not count")),
+            (&cites_older, Some("do not count")),
+            (&unavailable, Some("without a recorded commit")),
+        ],
+    );
+    let comment = ws.last_comment(&later_repair);
+    assert!(
+        comment.message.contains("Covering commit(s)")
+            && comment.message.contains(&format!(": {fix}.")),
+        "only the later repair is named as covering: {comment:?}"
+    );
+    assert!(
+        !comment.message.contains(&culprit),
+        "the fast-forward culprit is not covering: {comment:?}"
+    );
+}
+fn a_local_fast_forward_with_a_malformed_landed_commit_holds_a_relation_only_finding() {
+    let ws = Workspace::new();
+    let culprit = ws.branch_commit_file("culprit", "README.md", "culprit readme\n", "the culprit");
+    ws.git(&["merge", "--ff-only", "culprit"]);
+    let fix = ws.commit("the later repair");
+    let drain = ws.drain();
+    let malformed = ws.readme_task("malformed landed commit");
+    ws.record_local_fast_forward(&malformed, Some("abc"), &culprit, true);
+    let observed = ws
+        .runtime
+        .observe_task_delivery(&malformed.id, None)
+        .expect("a malformed landing checkpoint is still observed");
+    assert_eq!(
+        observed.landing.status,
+        LandingObservationStatus::Unavailable
+    );
+    assert_eq!(
+        observed.landing.reason,
+        Some(DeliveryEvidenceGap::OutputMalformed)
+    );
+    let never_delivered = ws.readme_task("never delivered");
+    let relation = |target: &Task| TaskRelation {
+        relation_type: TaskRelationType::RegressionFrom,
+        target: target.id.clone(),
+        regression: None,
+    };
+    let finding = |title: &str, target: &Task| {
+        ws.readme_finding(
+            title,
+            "A finding that names no commit.".into(),
+            vec![relation(target)],
+        )
+    };
+    let cites_culprit = finding("cites the unreadable culprit", &malformed);
+    let later_repair = finding("later repair of the unreadable culprit", &malformed);
+    let no_delivery = finding("no recorded delivery", &never_delivered);
+    assert_verified_no_diff_outside(
+        &ws,
+        &drain,
+        verified_cases(&[
+            (&cites_culprit, format!("Commit {culprit} is the culprit.")),
+            (&later_repair, format!("Commit {fix} repaired the README.")),
+            (&no_delivery, format!("Commit {fix} repaired the README.")),
+        ]),
+        &[&no_delivery],
+        &[
+            (&cites_culprit, Some("is unavailable (OutputMalformed)")),
+            (&later_repair, Some("is unavailable (OutputMalformed)")),
+        ],
+    );
+}
 fn a_culprit_named_by_an_all_digit_abbreviation_still_does_not_count() {
     let ws = Workspace::new();
     // About 4% of 7-char abbreviations are all digits: recommit until one is.
@@ -1711,6 +1951,14 @@ crate::scenario_table!(
 crate::scenario_table!(
     an_unreadable_culprit_delivery_holds_a_relation_only_finding_scenarios,
     an_unreadable_culprit_delivery_holds_a_relation_only_finding
+);
+crate::scenario_table!(
+    a_local_fast_forward_culprit_stays_excluded_until_a_later_repair_scenarios,
+    a_local_fast_forward_culprit_stays_excluded_until_a_later_repair
+);
+crate::scenario_table!(
+    a_local_fast_forward_with_a_malformed_landed_commit_holds_a_relation_only_finding_scenarios,
+    a_local_fast_forward_with_a_malformed_landed_commit_holds_a_relation_only_finding
 );
 crate::scenario_table!(
     a_culprit_named_by_an_all_digit_abbreviation_still_does_not_count_scenarios,

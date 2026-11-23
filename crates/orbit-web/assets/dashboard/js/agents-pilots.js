@@ -73,7 +73,7 @@ function card(row, matrix) {
     dd.dataset.count = key;
     return [el("dt", { text }), dd];
   }));
-  const node = el("article", { class: `agents-tier-card${row.below_support ? " agents-row-below" : ""}` }, [
+  const node = el("article", { class: `card card-dense agents-tier-card${row.below_support ? " agents-row-below" : ""}` }, [
     el("h4", {}, [
       el("span", { class: "agents-tier-crew", text: row.label || row.model }),
       el("span", { class: "agents-model", text: (row.crews || [row.crew]).join(", ") }),

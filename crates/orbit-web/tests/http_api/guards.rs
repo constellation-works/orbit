@@ -700,3 +700,385 @@ fn config_key_global_admission_and_dashboard_audit_stay_intact() {
         },
     );
 }
+
+#[test]
+fn guarded_config_delete_preserves_effective_value_and_keeps_single_delete_unconditional() {
+    isolated(
+        "guards::guarded_config_delete_preserves_effective_value_and_keeps_single_delete_unconditional",
+        || {
+            let fixture = Fixture::new();
+            let global_path = fixture.global.join("config.toml");
+            let workspace_path = fixture.work.join("config.toml");
+            let base_global = std::fs::read_to_string(&global_path).unwrap();
+            let write_global = |extra: &str| {
+                std::fs::write(&global_path, format!("{base_global}\n{extra}")).unwrap();
+            };
+            let row_for = |view: &Value, key: &str| -> Value {
+                view["sections"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .flat_map(|section| section["keys"].as_array().unwrap())
+                    .find(|row| row["key"] == key)
+                    .cloned()
+                    .unwrap_or_else(|| panic!("missing effective config row for {key}"))
+            };
+            let row_is_fallback_preserving = |row: &Value| -> bool {
+                row["source"]["layer"] == "workspace"
+                    && !row["fallback"].is_null()
+                    && row["value"] == row["fallback"]["value"]
+            };
+
+            write_global(concat!(
+                "[workflow]\nbase_branch = \"global-main\"\n",
+                "[execution.codex]\nsandbox = \"danger-full-access\"\n",
+            ));
+            std::fs::write(
+                &workspace_path,
+                concat!(
+                    "[workflow]\nbase_branch = \"global-main\"\n",
+                    "[execution.codex]\nsandbox = \"workspace-write\"\n",
+                ),
+            )
+            .unwrap();
+
+            let server = fixture.server(true);
+            let effective = super::support::json_ok(
+                server.get("/api/config/effective?workspace=ws_http_fixture"),
+            );
+            let branch_row = row_for(&effective, "workflow.base_branch");
+            assert!(
+                row_is_fallback_preserving(&branch_row),
+                "matching global fallback must be removable: {branch_row}"
+            );
+            let sandbox_row = row_for(&effective, "execution.codex.sandbox");
+            assert!(
+                row_is_fallback_preserving(&sandbox_row),
+                "replace-only execution key matching built-in fallback must be removable: {sandbox_row}"
+            );
+
+            // 1. Stale read: global changes after the UI read, so base_branch is now a meaningful override.
+            write_global(concat!(
+                "[workflow]\nbase_branch = \"changed-global\"\n",
+                "[execution.codex]\nsandbox = \"danger-full-access\"\n",
+            ));
+            let ws_before = std::fs::read(&workspace_path).unwrap();
+            let refused_global_drift = server.send(
+                "DELETE",
+                "/api/config/keys/workflow.base_branch?scope=workspace&preserve_effective=true&workspace=ws_http_fixture",
+                json!({}),
+            );
+            assert_eq!(refused_global_drift.status().as_u16(), 409);
+            let body: Value = refused_global_drift.json().unwrap();
+            assert_eq!(body["code"], "effective_value_would_change");
+            assert_eq!(
+                std::fs::read(&workspace_path).unwrap(),
+                ws_before,
+                "refused guarded delete must not modify workspace config"
+            );
+            let after_global_drift = super::support::json_ok(
+                server.get("/api/config/effective?workspace=ws_http_fixture"),
+            );
+            assert!(!row_is_fallback_preserving(&row_for(
+                &after_global_drift,
+                "workflow.base_branch"
+            )));
+
+            // 2. Replace-only security key: workspace equals built-in while global differs -> guarded delete succeeds.
+            let removed_sandbox = super::support::json_ok(server.send(
+                "DELETE",
+                "/api/config/keys/execution.codex.sandbox?scope=workspace&preserve_effective=true&workspace=ws_http_fixture",
+                json!({}),
+            ));
+            assert_eq!(removed_sandbox["old_value"], "workspace-write");
+            assert_eq!(removed_sandbox["new_value"], "workspace-write");
+
+            // 3. Replace-only security key matching global (but not built-in) must be refused because fallback is built-in.
+            write_global(concat!(
+                "[workflow]\nbase_branch = \"global-main\"\n",
+                "[execution.codex]\nsandbox = \"read-only\"\n",
+            ));
+            std::fs::write(
+                &workspace_path,
+                concat!(
+                    "[workflow]\nbase_branch = \"global-main\"\n",
+                    "[execution.codex]\nsandbox = \"read-only\"\n",
+                ),
+            )
+            .unwrap();
+            let effective_sec = super::support::json_ok(
+                server.get("/api/config/effective?workspace=ws_http_fixture"),
+            );
+            assert!(
+                !row_is_fallback_preserving(&row_for(&effective_sec, "execution.codex.sandbox")),
+                "replace-only key whose value equals global but differs from built-in is not fallback-preserving"
+            );
+            let refused_sec = server.send(
+                "DELETE",
+                "/api/config/keys/execution.codex.sandbox?scope=workspace&preserve_effective=true&workspace=ws_http_fixture",
+                json!({}),
+            );
+            assert_eq!(refused_sec.status().as_u16(), 409);
+            assert_eq!(
+                refused_sec.json::<Value>().unwrap()["code"],
+                "effective_value_would_change"
+            );
+
+            // 4. Matching ordinary key succeeds under guarded delete and preserves effective value.
+            let removed_branch = super::support::json_ok(server.send(
+                "DELETE",
+                "/api/config/keys/workflow.base_branch?scope=workspace&preserve_effective=true&workspace=ws_http_fixture",
+                json!({}),
+            ));
+            assert_eq!(removed_branch["old_value"], "global-main");
+            assert_eq!(removed_branch["new_value"], "global-main");
+
+            // 5. Stale workspace edit: workspace changes before guarded delete -> refused.
+            std::fs::write(
+                &workspace_path,
+                "[workflow]\nbase_branch = \"workspace-only\"\n",
+            )
+            .unwrap();
+            let ws_override = std::fs::read(&workspace_path).unwrap();
+            let refused_ws_drift = server.send(
+                "DELETE",
+                "/api/config/keys/workflow.base_branch?scope=workspace&preserve_effective=true&workspace=ws_http_fixture",
+                json!({}),
+            );
+            assert_eq!(refused_ws_drift.status().as_u16(), 409);
+            assert_eq!(std::fs::read(&workspace_path).unwrap(), ws_override);
+
+            // 6. Unknown fallback (crew field whose removal leaves no valid fallback) -> refused and preserved.
+            std::fs::write(
+                &workspace_path,
+                concat!(
+                    "[workflow]\nbase_branch = \"workspace-only\"\ndefault_crew = \"ws_only\"\n",
+                    "[crews.ws_only]\nprovider = \"claude\"\nmodel = \"opus\"\n",
+                ),
+            )
+            .unwrap();
+            let effective_crew = super::support::json_ok(
+                server.get("/api/config/effective?workspace=ws_http_fixture"),
+            );
+            assert!(
+                effective_crew["crews"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|crew| crew["name"] == "ws_only"),
+                "workspace crew must be active in effective config: {effective_crew}"
+            );
+            let ws_with_crew = std::fs::read(&workspace_path).unwrap();
+            let refused_unknown = server.send(
+                "DELETE",
+                "/api/config/keys/crews.ws_only.model?scope=workspace&preserve_effective=true&workspace=ws_http_fixture",
+                json!({}),
+            );
+            let unknown_status = refused_unknown.status().as_u16();
+            let unknown_body: Value = refused_unknown.json().unwrap();
+            assert_eq!(unknown_status, 409, "unexpected response: {unknown_body}");
+            assert_eq!(unknown_body["code"], "unknown_fallback");
+            assert_eq!(std::fs::read(&workspace_path).unwrap(), ws_with_crew);
+
+            // 7. Explicit single-key DELETE (without preserve_effective) stays unconditional.
+            let cleared = super::support::json_ok(server.send(
+                "DELETE",
+                "/api/config/keys/workflow.base_branch?scope=workspace&workspace=ws_http_fixture",
+                json!({}),
+            ));
+            assert_eq!(cleared["old_value"], "workspace-only");
+            assert_eq!(cleared["new_value"], "global-main");
+        },
+    );
+}
+
+#[test]
+fn guarded_config_delete_refuses_after_a_concurrent_global_write_wins_the_fallback() {
+    isolated(
+        "guards::guarded_config_delete_refuses_after_a_concurrent_global_write_wins_the_fallback",
+        || {
+            use std::time::{Duration, Instant};
+
+            let fixture = Fixture::new();
+            let global_path = fixture.global.join("config.toml");
+            let workspace_path = fixture.work.join("config.toml");
+            let base_global = std::fs::read_to_string(&global_path).unwrap();
+            std::fs::write(
+                &global_path,
+                format!("{base_global}\n[workflow]\nbase_branch = \"global-main\"\n"),
+            )
+            .unwrap();
+            std::fs::write(
+                &workspace_path,
+                "[workflow]\nbase_branch = \"global-main\"\n",
+            )
+            .unwrap();
+            let gate = fixture.path("config-write-gate");
+            std::fs::create_dir_all(&gate).unwrap();
+            let gate_file = |point: &str, kind: &str| {
+                std::fs::write(gate.join(format!("{point}.{kind}")), b"x").unwrap();
+            };
+            let reached = |point: &str| gate.join(format!("{point}.reached")).exists();
+            let server = fixture
+                .server_with_envs(true, &[("ORBIT_TEST_CONFIG_WRITE_GATE", gate.as_os_str())]);
+            gate_file("global-before-save", "armed");
+            gate_file("workspace-fallback-lock", "armed");
+            let ws_before = std::fs::read(&workspace_path).unwrap();
+
+            std::thread::scope(|scope| {
+                // The global PUT validates, then holds at its save decision.
+                let global_put = scope.spawn(|| {
+                    server.send(
+                        "PUT",
+                        "/api/config/keys/workflow.base_branch?workspace=ws_http_fixture",
+                        json!({"value": "changed-global", "scope": "global"}),
+                    )
+                });
+                let deadline = Instant::now() + Duration::from_secs(30);
+                while !reached("global-before-save") {
+                    assert!(
+                        Instant::now() < deadline,
+                        "global PUT never reached its save decision"
+                    );
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                // The guarded DELETE starts while the global write holds its
+                // decision. It must wait on the global fallback rather than
+                // validate against the not-yet-replaced global file. Release
+                // the global write once the DELETE asks for that lock (or has
+                // already answered, as an unguarded delete does).
+                let guarded_delete = scope.spawn(|| {
+                    server.send(
+                        "DELETE",
+                        "/api/config/keys/workflow.base_branch?scope=workspace&preserve_effective=true&workspace=ws_http_fixture",
+                        json!({}),
+                    )
+                });
+                while !reached("workspace-fallback-lock") && !guarded_delete.is_finished() {
+                    assert!(
+                        Instant::now() < deadline,
+                        "guarded DELETE neither requested the global lock nor answered"
+                    );
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                gate_file("global-before-save", "release");
+
+                let put = super::support::json_ok(global_put.join().unwrap());
+                assert_eq!(
+                    put["new_value"], "global-main",
+                    "workspace still overrides: {put}"
+                );
+                let refused = guarded_delete.join().unwrap();
+                assert_eq!(
+                    refused.status().as_u16(),
+                    409,
+                    "a guarded delete must not erase an override whose global fallback changed"
+                );
+                let body: Value = refused.json().unwrap();
+                assert_eq!(body["code"], "effective_value_would_change", "{body}");
+            });
+
+            assert_eq!(
+                std::fs::read(&workspace_path).unwrap(),
+                ws_before,
+                "refused guarded delete must keep the workspace override"
+            );
+            assert!(
+                std::fs::read_to_string(&global_path)
+                    .unwrap()
+                    .contains("changed-global")
+            );
+        },
+    );
+}
+
+#[test]
+fn guarded_config_delete_refuses_when_only_plugin_enablement_would_remain() {
+    isolated(
+        "guards::guarded_config_delete_refuses_when_only_plugin_enablement_would_remain",
+        || {
+            let fixture = Fixture::new();
+            let global_path = fixture.global.join("config.toml");
+            let workspace_path = fixture.work.join("config.toml");
+            let base_global = std::fs::read_to_string(&global_path).unwrap();
+            std::fs::write(
+                &global_path,
+                format!("{base_global}\n[execution.codex]\nsandbox = \"danger-full-access\"\n"),
+            )
+            .unwrap();
+            // A dotted key lives in an implicit table that serialization drops
+            // once emptied, leaving a file that is no longer a policy layer.
+            std::fs::write(
+                &workspace_path,
+                concat!(
+                    "execution.codex.sandbox = \"workspace-write\"\n",
+                    "[plugin_enablement]\n",
+                ),
+            )
+            .unwrap();
+
+            let server = fixture.server(true);
+            let before = std::fs::read(&workspace_path).unwrap();
+            let refused = server.send(
+                "DELETE",
+                "/api/config/keys/execution.codex.sandbox?scope=workspace&preserve_effective=true&workspace=ws_http_fixture",
+                json!({}),
+            );
+            let status = refused.status().as_u16();
+            let body: Value = refused.json().unwrap();
+            assert_eq!(status, 409, "unexpected response: {body}");
+            assert_eq!(body["code"], "effective_value_would_change");
+            assert_eq!(
+                std::fs::read(&workspace_path).unwrap(),
+                before,
+                "refused guarded delete must not modify workspace config"
+            );
+        },
+    );
+}
+
+#[test]
+fn guarded_config_delete_refuses_plugin_only_policy_when_staged_reload_would_fail() {
+    isolated(
+        "guards::guarded_config_delete_refuses_plugin_only_policy_when_staged_reload_would_fail",
+        || {
+            let fixture = Fixture::new();
+            let global_path = fixture.global.join("config.toml");
+            let workspace_path = fixture.work.join("config.toml");
+            let base_global = std::fs::read_to_string(&global_path).unwrap();
+            // TOML-valid but unsupported. The workspace layer masks it, so
+            // the current layered config loads; the reload after the guarded
+            // delete discards the toggle-only workspace file and would reject it.
+            std::fs::write(
+                &global_path,
+                format!("{base_global}\n[execution.codex]\nsandbox = \"not-a-sandbox\"\n"),
+            )
+            .unwrap();
+            std::fs::write(
+                &workspace_path,
+                concat!(
+                    "execution.codex.sandbox = \"workspace-write\"\n",
+                    "[plugin_enablement]\n",
+                ),
+            )
+            .unwrap();
+
+            let server = fixture.server(true);
+            let before = std::fs::read(&workspace_path).unwrap();
+            let refused = server.send(
+                "DELETE",
+                "/api/config/keys/execution.codex.sandbox?scope=workspace&preserve_effective=true&workspace=ws_http_fixture",
+                json!({}),
+            );
+            let status = refused.status().as_u16();
+            let body: Value = refused.json().unwrap();
+            assert_eq!(status, 409, "unexpected response: {body}");
+            assert_eq!(body["code"], "effective_value_would_change");
+            assert_eq!(
+                std::fs::read(&workspace_path).unwrap(),
+                before,
+                "refused guarded delete must not modify workspace config"
+            );
+        },
+    );
+}

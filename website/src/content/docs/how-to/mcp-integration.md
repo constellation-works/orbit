@@ -145,7 +145,7 @@ operation:
 | Family | Actions |
 |---|---|
 | `orbit.run` | `list`, `show`, `observe`, `resume` |
-| `orbit.workflow` | `ship`, `land`, `auto` (its sub-command goes in `mode`) |
+| `orbit.workflow` | `ship`, `land`, `auto`, `refresh` (`auto`'s sub-command goes in `mode`) |
 | `orbit.task.recover` | `requeue`, `review_reset`, `retry_handoff`, `revoke_handoff`, `recover_claim`, `repilot`, `reconcile_review` (its sub-command goes in `mode`) |
 | `orbit.task.artifact` | `get`, `put` |
 | `orbit.friction` | `add`, `update` |
@@ -181,21 +181,25 @@ reports it as `mcp_toolset`.
 | `core` (always on) | `orbit.workspace.list` |
 | `tasks-read` | `orbit.task.show`, `orbit.task.list`, `orbit.task.eligible`, `orbit.task.artifact` action `get`, `orbit.attention` |
 | `tasks-write` | `orbit.task.add`, `orbit.task.update`, `orbit.task.artifact` action `put`, `orbit.friction` |
-| `task-repair` | `orbit.task.block_triage`, `orbit.task.recover` |
+| `task-repair` | `orbit.task.recover` |
+| `task-triage` | `orbit.task.block_triage` |
 | `decisions` | `orbit.decision` |
 | `runs` | `orbit.run` actions `list`, `show`, `observe` |
-| `dispatch` | `orbit.workflow`, `orbit.run` action `resume`, `orbit.pipeline.invoke` |
-| `automation` | `orbit.auto_task`, `orbit.routine.control`, `orbit.automation.explain` |
+| `dispatch` | `orbit.workflow`, `orbit.run` action `resume` |
+| `pipelines` | `orbit.pipeline.invoke` |
+| `routines` | `orbit.routine.control` |
+| `automation` | `orbit.auto_task`, `orbit.automation.explain` |
 | `codebase` | `orbit.codebase` |
 | `search` | `orbit.search` |
 | `exec` | `orbit.command.exec` |
 | `plugins` | Plugin tools |
-| `experiments` | `orbit.experiment.*`, and `orbit.memory.show`, `history`, `write`, `propose` |
+| `experiments` | `orbit.experiment.*` |
 | `analytics` | `orbit.agents.*` |
 | `decision-channel` | `orbit.decision.submit`, `orbit.decision.digest`. Only the bound channel plugin or the operator may call them. |
 | `notice` | `orbit.notice.post`, `close`, `list`, `show`: fleet notices |
 | `resident` | `orbit.resident.*`, and `orbit.evolution.add`, `list`, `show`: resident orchestrator mandates and the evolution ledger |
-| `ui`, `leases` | None. Their tools were removed; the names still load in a selection. |
+| `ui` | `orbit.ui` (`orbit_ui`): `open` and `inspect`, when the session also lists the read-only task read |
+| `leases` | None. Its tools were removed; the name still loads in a selection. |
 | `local` | Tools no MCP server lists, such as `proc.spawn`, `github.*`, and the drain tools. `orbit tool run` and activities reach them. |
 
 A family whose actions span toolsets, such as `orbit.run`, is listed when any
@@ -203,11 +207,24 @@ of its actions is enabled.
 
 ### Choose toolsets
 
-Without a role, a server lists `core`, `tasks-read`, `tasks-write`, and
-`search`. The name `default` stands for that set, and `all` enables every
-toolset. Add toolsets for one server with `--toolset`, or for every server on
-the host with the global `machine.mcp.toolsets` key. The flag replaces the
-key.
+With no role and no `--operator`, and with no `machine.mcp.role`, a server
+lists `core`, `tasks-read`, `tasks-write`, and `search`. `--operator` with no
+`--role` serves the operator role. The name `default` stands for that set, and
+`all` enables every toolset. `--toolset` adds the named toolsets to the role, or
+to that default set when no role applies.
+
+The global `machine.mcp.toolsets` key is the default toolset list for
+`orbit mcp serve` launches on the host. It is added to the role's toolsets, or
+to the default set, for operator and agent sessions alike. Three cases decide
+which list a server uses:
+
+- Outside a managed run, a server with no `--toolset` uses
+  `machine.mcp.toolsets`.
+- An explicit `--toolset` replaces `machine.mcp.toolsets` for that server. The
+  role's toolsets still apply, so with `pipelines` set on the host,
+  `orbit mcp serve --operator --toolset ui` does not enable `pipelines`.
+- A managed server, one Orbit starts for a run, uses the selection Orbit stamped
+  for that run. Neither `machine.mcp.toolsets` nor `--toolset` changes it.
 
 ```bash
 orbit mcp serve --toolset experiments,analytics
@@ -216,6 +233,29 @@ orbit config set --global machine.mcp.toolsets '["experiments"]'
 
 `--mode remote` asks the destination for the same role and toolsets, and
 `--mode federated` applies them to every destination.
+
+The `operator` role leaves six tools out by default. Add the five toolsets below
+to enable all six:
+
+| Toolset | Tools |
+|---|---|
+| `automation` | `orbit.auto_task`, `orbit.automation.explain` |
+| `codebase` | `orbit.codebase` |
+| `pipelines` | `orbit.pipeline.invoke` |
+| `task-triage` | `orbit.task.block_triage` |
+| `ui` | `orbit.ui` (`orbit_ui`) |
+
+For one server, add them to the operator profile:
+
+```bash
+orbit mcp serve --operator \
+  --toolset automation,codebase,pipelines,task-triage,ui
+```
+
+For every server on the host, include them in `machine.mcp.toolsets`. Each
+launch that passes no `--toolset` then gets them, agent sessions included; a
+managed run does not. A server started with its own `--toolset` needs the names
+in that flag.
 
 ### If a call returns `toolset_not_enabled`
 
@@ -230,9 +270,9 @@ A role is a named set of toolsets for one kind of session:
 
 | Role | Toolsets (beside `core`) |
 |---|---|
-| `operator` | `tasks-read`, `tasks-write`, `task-repair`, `decisions`, `runs`, `dispatch`, `automation`, `codebase`, `search`, `ui`, `exec`, `plugins` |
+| `operator` | `tasks-read`, `tasks-write`, `task-repair`, `decisions`, `runs`, `dispatch`, `routines`, `search`, `exec`, `plugins` |
 | `manager` | `tasks-read`, `runs`, `decisions`, `notice`, `resident`, `search` |
-| `resident` | `tasks-read`, `tasks-write`, `runs`, `dispatch`, `decisions`, `notice`, `resident`, `search` |
+| `resident` | `tasks-read`, `tasks-write`, `runs`, `dispatch`, `pipelines`, `decisions`, `notice`, `resident`, `search` |
 | `agent` | `tasks-read`, `tasks-write`, `decisions`, `codebase`, `search`, `ui`, `leases`, `notice` |
 | `reader` | `tasks-read`, `runs`, `codebase`, `search` |
 
@@ -309,7 +349,16 @@ A completed tool call is not a successful command: read `success` and
 `orbit.pipeline.invoke` submits a registered job and returns at once with a
 durable `run_id`. The job has been accepted, not finished. Pass `input` as a
 JSON object that matches the job's input contract, even when it is `{}`. This
-example assumes a job named `example_check` that accepts `directory`:
+example assumes a job named `example_check` that accepts `directory`.
+`pipelines` is not in the operator profile by default, so enable it for this
+server with `--toolset pipelines` or include it in the host's
+`machine.mcp.toolsets` setting before using either job-submission example:
+
+```bash
+orbit mcp serve --operator --toolset pipelines
+```
+
+Then call the tool:
 
 ```json
 {

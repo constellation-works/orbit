@@ -420,7 +420,8 @@ pub(crate) fn ensure_task_has_execution_plan(id: &str, plan: &str) -> Result<(),
     let normalized = plan.trim();
     if normalized.is_empty() || normalized == UNAUTHORED_TASK_PLAN_PLACEHOLDER {
         return Err(OrbitError::InvalidInput(format!(
-            "task '{id}' requires a non-empty execution plan before transitioning to in-progress"
+            "task '{id}' requires a non-empty execution plan before transitioning to in-progress; \
+             set `plan` with `orbit.task.update` ({{\"id\":\"{id}\",\"plan\":\"<plan>\"}})"
         )));
     }
     Ok(())

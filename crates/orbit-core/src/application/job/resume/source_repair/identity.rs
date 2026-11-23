@@ -11,6 +11,8 @@ pub(super) struct PublicationIdentity<'a> {
     /// The unpublished tip the source's certified chases carried `head` to:
     /// the only other local branch tip binding accepts.
     pub(super) certified_tip: Option<&'a super::certified_rebase::CertifiedRebaseTip>,
+    /// The preserved non-accept before-landing reviewer commit on a durable ref.
+    pub(super) preserved_review_tip: Option<&'a super::publication::PreservedReviewTip>,
 }
 
 impl OrbitRuntime {
@@ -30,6 +32,7 @@ impl OrbitRuntime {
             number,
             allow_missing_branch,
             certified_tip,
+            preserved_review_tip,
         } = identity;
         let repo = &self.paths().repo_root;
         for sha in [head, base_sha] {
@@ -57,22 +60,27 @@ impl OrbitRuntime {
         // source proves the tip with its own `commit` checkpoint; the remote
         // and PR stay bound to P below. Anything else keeps the refusal, so an
         // empty or divergent commit still refuses.
-        let candidate_head = if held_same_tree_tip {
-            None
+        let (candidate_head, preserved_review) = if held_same_tree_tip {
+            (None, None)
         } else {
             match git2::Repository::open(repo)
                 .and_then(|r| r.find_reference(&local_ref).map(|r| r.target()))
             {
-                Ok(Some(oid)) if oid.to_string() == head => None,
+                Ok(Some(oid)) if oid.to_string() == head => (None, preserved_review_tip),
                 // The published head P stays the remote and PR identity below;
                 // the local tip T is adopted only as the end of the source's
                 // certified chase chain from P, and only while it still contains
                 // the base the last chase landed it on.
                 Ok(Some(oid)) if certified_tip.is_some_and(|tip| oid.to_string() == tip.head) => {
-                    certified_tip
+                    (certified_tip, None)
+                }
+                Ok(Some(oid))
+                    if preserved_review_tip.is_some_and(|tip| oid.to_string() == tip.head) =>
+                {
+                    (None, preserved_review_tip)
                 }
                 Err(error) if allow_missing_branch && error.code() == git2::ErrorCode::NotFound => {
-                    None
+                    (None, preserved_review_tip)
                 }
                 _ => return Err(refuse_operator_decision("retained local branch moved")),
             }
@@ -80,6 +88,12 @@ impl OrbitRuntime {
         if let Some(tip) = candidate_head
             && (!observation::resolves_to_commit(repo, &tip.head)?
                 || !observation::is_git_ancestor(repo, &tip.target_base, &tip.head)?)
+        {
+            return Err(refuse_operator_decision("retained local branch moved"));
+        }
+        if let Some(tip) = preserved_review
+            && (!observation::resolves_to_commit(repo, &tip.head)?
+                || !observation::is_git_ancestor(repo, head, &tip.head)?)
         {
             return Err(refuse_operator_decision("retained local branch moved"));
         }
@@ -147,7 +161,10 @@ impl OrbitRuntime {
             base_branch: base_branch.into(),
             superseded: None,
             checkpoint_owner: None,
-            candidate_head_sha: candidate_head.map(|tip| tip.head.clone()),
+            candidate_head_sha: candidate_head
+                .map(|tip| tip.head.clone())
+                .or_else(|| preserved_review.map(|tip| tip.head.clone())),
+            candidate_ref: preserved_review.map(|tip| tip.durable_ref.clone()),
         };
         Ok((source, task, binding))
     }

@@ -30,7 +30,7 @@ FUNCTION = re.compile(
     # so the quoted ABI can never be present. Accept a bare `extern` (the
     # masked form) as well as `extern \"ABI\"` (the unmasked form).
     r"(?:(?:const|async|unsafe)\s+|extern(?:\s+\"[^\"]*\")?\s+)*"
-    r"fn\s+(r#)?([A-Za-z_][A-Za-z0-9_]*)\b"
+    r"fn\s+(r#)?([^\s(<{]+)"
 )
 RUST_TOKEN = re.compile(
     r'''(?P<comment>//[^\n]*|/\*)|(?P<raw>(?:br|cr|r)(?P<hashes>\#*)")|'''
@@ -110,7 +110,7 @@ def test_function_paths(text, relative_path):
                     break
                 header = stripped
             function = FUNCTION.match(header)
-            if function:
+            if function and function.group(2).isidentifier():
                 paths.append(f"{relative_path}::{function.group(1) or ''}{function.group(2)}")
                 pending = None
                 pending_has_code = False

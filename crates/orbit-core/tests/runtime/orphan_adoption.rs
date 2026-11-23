@@ -296,6 +296,19 @@ impl Fixture {
     }
 
     fn step(&self, run: &str, index: usize, id: &str, state: JobRunState, code: Option<&str>) {
+        let message = code.map(|_| "worker process exited");
+        self.step_with_message(run, index, id, state, code, message);
+    }
+
+    fn step_with_message(
+        &self,
+        run: &str,
+        index: usize,
+        id: &str,
+        state: JobRunState,
+        code: Option<&str>,
+        message: Option<&str>,
+    ) {
         let now = Utc::now();
         self.jobs
             .complete_job_run_step(
@@ -312,7 +325,7 @@ impl Fixture {
                     agent_response_json: None,
                     state,
                     error_code: code.map(str::to_string),
-                    error_message: code.map(|_| "worker process exited".to_string()),
+                    error_message: message.map(str::to_string),
                 },
             )
             .unwrap();

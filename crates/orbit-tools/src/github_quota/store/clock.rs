@@ -26,6 +26,7 @@ pub(super) mod refusal_clock {
         static ADVANCE_AT_REFUSAL: Cell<Option<Duration>> = const { Cell::new(None) };
         static ADVANCE_AFTER_DECISION: Cell<Option<Duration>> = const { Cell::new(None) };
         static OFFSET: Cell<Duration> = const { Cell::new(Duration::ZERO) };
+        static FIXED: Cell<Option<Instant>> = const { Cell::new(None) };
     }
 
     pub(super) fn arm(by: Duration) {
@@ -51,11 +52,26 @@ pub(super) mod refusal_clock {
     }
 
     pub(super) fn now() -> Instant {
-        Instant::now() + OFFSET.get()
+        FIXED.get().unwrap_or_else(|| Instant::now() + OFFSET.get())
+    }
+
+    pub(super) fn with_fixed<T>(body: impl FnOnce() -> T) -> T {
+        struct Reset(Option<Instant>);
+        impl Drop for Reset {
+            fn drop(&mut self) {
+                FIXED.set(self.0);
+            }
+        }
+        let _reset = Reset(FIXED.replace(Some(Instant::now())));
+        body()
     }
 
     /// Advance this thread's clock to at least `deadline`, never back.
     pub(super) fn reach(deadline: Instant) {
+        if FIXED.get().is_some() {
+            FIXED.set(Some(deadline));
+            return;
+        }
         let behind = deadline.saturating_duration_since(Instant::now());
         if behind > OFFSET.get() {
             OFFSET.set(behind);
@@ -86,4 +102,10 @@ pub fn advance_deadline_clock_at_next_refusal(by: Duration) {
 #[cfg(any(test, feature = "test-support"))]
 pub fn advance_deadline_clock_after_next_refusal_decision(by: Duration) {
     refusal_clock::arm_after_decision(by);
+}
+
+/// Freeze the admission clock during a deterministic probe fixture.
+#[cfg(any(test, feature = "test-support"))]
+pub(in crate::github_quota) fn with_fixed_clock<T>(body: impl FnOnce() -> T) -> T {
+    refusal_clock::with_fixed(body)
 }

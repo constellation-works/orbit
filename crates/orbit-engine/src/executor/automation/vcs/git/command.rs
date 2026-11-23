@@ -224,6 +224,10 @@ pub(in crate::executor::automation) fn base_sync_mode_from_input(
     BaseSyncMode::from_input(input)
 }
 
+/// NUL-delimited Git path records, decoded lossily: bytes that are not UTF-8
+/// become U+FFFD, so two native names can share one result and a listed name
+/// may not exist. Callers that stage, commit or otherwise act on the exact
+/// names must use [`git_output_exact_paths`].
 pub(crate) fn git_output_paths(
     current_dir: &Path,
     args: &[&str],
@@ -234,6 +238,61 @@ pub(crate) fn git_output_paths(
         .filter(|value| !value.is_empty())
         .map(ToOwned::to_owned)
         .collect())
+}
+
+/// NUL-delimited Git path records read from raw stdout bytes, split by
+/// whether each name is exact UTF-8 text.
+#[derive(Debug, Default)]
+pub(crate) struct ExactPaths {
+    /// Records whose bytes are valid UTF-8, unchanged.
+    pub paths: Vec<String>,
+    /// Records whose bytes are not UTF-8, rendered with
+    /// [`slice::escape_ascii`] for diagnostics only (for example
+    /// `loose-\xff.pyc`). Such a rendering never names the native path.
+    pub unrepresentable: Vec<String>,
+}
+
+/// Run Git and split its NUL-delimited path output without lossy decoding.
+/// A record that is not UTF-8 is kept apart in
+/// [`ExactPaths::unrepresentable`] instead of being renamed with U+FFFD.
+pub(crate) fn git_output_exact_paths(
+    current_dir: &Path,
+    args: &[&str],
+) -> Result<ExactPaths, OrbitError> {
+    let outcome = git_run_bytes(current_dir, args, None)?;
+    if outcome.timed_out {
+        return Err(git_timeout_error(
+            current_dir,
+            args,
+            outcome.timeout_ms,
+            &outcome.stderr,
+        ));
+    }
+    if !outcome.success {
+        return Err(git_failure_error(
+            current_dir,
+            args,
+            outcome.exit_code,
+            &outcome.stderr,
+        ));
+    }
+    Ok(split_exact_paths(&outcome.stdout))
+}
+
+fn split_exact_paths(stdout: &[u8]) -> ExactPaths {
+    let mut exact = ExactPaths::default();
+    for record in stdout.split(|byte| *byte == 0) {
+        if record.is_empty() {
+            continue;
+        }
+        match std::str::from_utf8(record) {
+            Ok(path) => exact.paths.push(path.to_owned()),
+            Err(_) => exact
+                .unrepresentable
+                .push(record.escape_ascii().to_string()),
+        }
+    }
+    exact
 }
 
 /// Runs Git and trims the *entire* stdout string as one unit.

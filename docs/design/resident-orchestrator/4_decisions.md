@@ -1,17 +1,17 @@
 ---
 title: Resident Orchestrator — Decisions
 owner: claude
-last_updated: 2026-11-20
+last_updated: 2026-11-22
 last_validated: 2026-11-02
 status: Draft
 feature: resident-orchestrator
 doc_role: decisions
 type: design
-summary: "Why the rewrite owns coordination only, rides the clock, keeps loops out of chats and consoles, gates widening on the human, trusts only Orbit state, keeps evolution apart from friction, and lets `dispatch` re-pilot and requeue"
+summary: "Why the rewrite owns coordination only, rides the clock, keeps loops out of chats and consoles, gates widening on the human, trusts only Orbit state, keeps evolution apart from friction, lets `dispatch` re-pilot and requeue, lets live cycles read drain status, lets cycles update friction without a right or re-homing, lets `refresh` merge base into a delivery PR without re-review, and bounds review-only recovery under `recover`"
 tags: [resident-orchestrator]
 paths: ["crates/orbit-core/src/application/resident/**", "crates/orbit-core/assets/jobs/**"]
 related_features: [distributed-drain, routines, activity-job, human-decision-channel, fleet-notices]
-related_artifacts: [ORB-21229, ORB-12488, ORB-10815, ORB-10776]
+related_artifacts: [ORB-21229, ORB-12488, ORB-10815, ORB-10776, ORB-26832, ORB-26833, ORB-26834]
 ---
 
 # Resident Orchestrator — Decisions
@@ -306,14 +306,221 @@ the ability to discard a candidate through requeue.
 - Cost: discarding a held candidate needs an operator action rather than being
   completed by the resident cycle.
 
+## Live resident cycles read drain status without operator capability
+
+**Recorded:** 2026-11-22 · [ORB-26832] · Approved by Daniel in the chief's chat
+(2026-11-22, `ORB-26762` follow-up)
+
+**Code anchors:** `crates/orbit-runtime/src/tool_exec.rs` `RuntimeKernel::authorize_registered_tool`;
+`crates/orbit-tools/src/builtin/orbit/workflow.rs` `WorkflowVerb::preempt`;
+`crates/orbit-core/src/application/resident/guard.rs` `OrbitRuntime::resident_cycle_drain_status_allowed`;
+`crates/orbit-core/src/adapter/tool_host/resident_guard.rs` `resident_guard_class`
+
+### Context
+
+`orbit.workflow.auto` multiplexes drain readiness observation (`action: "status"`,
+mode `"status"` on the `orbit.workflow` family) and drain controls (`start`,
+`stop`, `resize`) behind one operator-only row in `GOVERNED_OPERATIONS`.
+Because the capability chokepoint runs before any per-action dispatch, every
+resident cycle — even one holding `dispatch` — was refused `capability_denied`
+when checking whether a drain was running, idle or throttled, forcing cycles to
+infer drain state from task and run records.
+
+The alternative was splitting `orbit.workflow.auto` into separate tools or
+granting `McpCapability::Agent` on the governed row, which would either break
+the shipped tool schema/goldens or expose drain controls and cross-workspace
+drain readiness to every agent session.
+
+### Decision
+
+Keep `orbit.workflow.auto` as one operator-governed operation in the catalog so
+application consent and non-resident callers stay unchanged, and admit only its
+`status` action at the chokepoint and `WorkflowVerb::Auto` preempt guard when
+the caller holds a live `resident_cycle_pipeline` cycle (`live_cycle` not
+expired, home partition settled). Because observation is a read, no granted
+right is required (`orbit.workflow.auto` `status` maps to `Read` in
+`resident_guard_class`), and `controls_authorized` in the reply reflects the
+caller's operator capability (`false` for a cycle). Any workspace outside the
+mandate's covered scope is refused as `resident_scope_refused`. Drain controls
+(`start`, `stop`, `resize`) and callers outside a live resident cycle keep the
+operator requirement (`capability_denied`).
+
+### Consequences
+
+- Residents check live drain capacity, active runs and admission holds directly
+  without operator capability or any granted right.
+- Ordinary agent sessions, non-resident managed runs and stale or unstarted
+  cycle runs remain refused `capability_denied`, and application consent stays
+  blocked by the catalog's operator floor.
+- Cost: future read-only sub-actions added to an operator-governed multiplexed
+  tool must follow the same explicit action-and-run-binding check rather than
+  widening the catalog row, or split into a separate read operation.
+
+## Resident cycles update friction records without a right, without re-homing
+
+**Recorded:** 2026-11-22 · [ORB-26833] · Requested by Daniel in the chief's chat
+(2026-11-22, `ORB-26762` follow-up); re-homing refusal decided by the formation
+chief (2026-11-22)
+
+**Code anchors:** `crates/orbit-core/assets/activities/resident_cycle.yaml` `tool_disallow_list`;
+`crates/orbit-core/src/adapter/tool_host/resident_guard.rs` `resident_guard_class`;
+`crates/orbit-core/src/application/resident/guard.rs` `OrbitRuntime::check_resident_cycle_grant_for`
+
+### Context
+
+`resident_cycle.yaml` disallowed `orbit.friction:update`, and `resident_guard_class`
+refused `FrictionVerb::Update` as `Refused`. Overnight resident cycles such as
+[ORB-26762] could file new friction records (`orbit.friction` action `add`) with no
+granted right, but could not append landing evidence to or close an open friction
+whose fix they had seen land, leaving those updates on the assignment for the
+scheduled curation pass.
+
+The alternative for gating was placing `orbit.friction` action `update` under
+`promote`, alongside moving a `proposed` task to `backlog`. However, updating or
+closing a friction record changes no task lifecycle, dispatches no work, and merges
+no code; it is the same Orbit record-keeping class as `orbit.friction` action
+`add` and `orbit.task.update` comments, and every write is numbered and deduped
+on the mandate's action ledger. Moving a friction between workspaces (`rehome_to`)
+belongs to the operator and the scheduled curation pass and must never happen
+from a resident cycle regardless of its granted rights.
+
+### Decision
+
+Remove `orbit.friction:update` from `resident_cycle.yaml`'s `tool_disallow_list`
+and admit `orbit.friction` action `update` in `resident_guard_class` as `Open`
+(requiring no granted right, so observe-only cycles may call it too), except
+that any call carrying `rehome_to` (or `move`) is refused as
+`resident_tool_refused` whatever rights the cycle holds. The cycle's scope check
+enforces that the friction's workspace is covered by the mandate's authority
+(`resident_scope_refused` otherwise); when routed through another covered
+workspace's runtime on the same host, the guard verifies the live cycle on the
+mandate's home runtime and records the `resident:<mandate>:<cycle>:<n>` action
+ledger row there.
+
+### Consequences
+
+- A live resident cycle — including an observe-only cycle — records landing
+  evidence on and closes friction records in its covered workspaces under its
+  action ledger.
+- Cross-workspace friction moves (`rehome_to`) remain restricted to operators and
+  the curation pass (`resident_tool_refused`), and updates targeting uncovered
+  workspaces remain refused (`resident_scope_refused`).
+- Cost: an observe-only resident cycle can mutate or close friction records in
+  its covered workspaces without a right grant, relying on the action ledger for
+  auditability and recovery dedupe rather than a human right gate.
+
+## Refresh merges base into the PR head without re-review
+
+**Recorded:** 2026-11-22 · [ORB-26834] · Requested by Daniel in the chief's chat
+(2026-11-22, `ORB-26762` follow-up); merge-commit and review-carry-over rules
+decided by the formation chief on Daniel's request (2026-11-22)
+
+**Code anchors:** `crates/orbit-types/src/workflow/resident/mandate.rs` `ResidentRight::Refresh`;
+`crates/orbit-runtime/src/authorization.rs` `RESIDENT_CYCLE_RIGHT_GATED_OPERATIONS`;
+`crates/orbit-core/src/adapter/tool_host/resident_guard.rs` `resident_guard_class`;
+`crates/orbit-core/src/application/task/external_merge/refresh.rs` `OrbitRuntime::refresh_task_pull_request`;
+`crates/orbit-engine/src/executor/automation/vcs/checks/base_update.rs` `verify_refreshed_head_from_base`;
+`crates/orbit-core/src/application/review/task_port.rs` `OrbitRuntime::handoff_landing_review_ready`;
+`crates/orbit-core/src/application/task/external_merge/land.rs` `OrbitRuntime::merge_delivery_pull_request`
+
+### Context
+
+During the overnight mandate [ORB-26762], three mergeable delivery pull requests
+stayed held after flaky tests on the base branch were fixed on `agent-main`. The
+resident held `dispatch`, `promote` and `merge`, none of which could advance a
+published delivery branch to pick up the base-branch fix and re-run required
+checks, so each waited for manual owner recovery.
+
+Two questions needed a standing rule: how Orbit updates the branch (merge commit
+versus rebase/force-push), and whether the review recorded for the head before
+the refresh still counts at landing. Rebasing rewrites published commits,
+invalidating provenance and squash markers and requiring a force-push. Requiring
+a new review after every base refresh would burn reviewer budget even though the
+base commits were already reviewed when they landed.
+
+### Decision
+
+Add a fifth right, `refresh`, granted and narrowed like the others, mapping to
+`orbit.workflow` action `refresh` (`orbit.workflow.refresh`), executed through
+the run's broker with the host's credentials like `land`:
+
+- A refresh brings one held (`blocked`) or `review` task's open Orbit delivery
+  pull request up to the tip of its base branch as **one conflict-free merge
+  commit**. It never rebases, rewrites or force-pushes, makes no code edits, and
+  lands nothing (`merge` still owns landing).
+- Any conflict is refused as `task_refresh_refused` naming the conflicting paths
+  and leaving the head unchanged; pull requests owned by a live run or active
+  claim, or not published by an Orbit delivery, are refused; unrelated histories
+  or forge rules that would require rewriting a published commit are refused. A
+  head that already includes the base tip is a no-op (`already_up_to_date`).
+  Each call is keyed on the resident's action ledger.
+- A refreshed head needs no new review: the landing path accepts a head when a
+  valid review certificate covered an ancestor head and every commit after that
+  reviewed head along the first-parent chain is a conflict-free two-parent merge
+  commit of a commit contained in the base branch, with its tree equal to the
+  clean `git merge-tree` of its parents (zero conflict resolution or extra
+  edits). `land` still requires the required checks to pass on the refreshed
+  head. Any other commit after the reviewed head invalidates the review, as
+  before.
+
+### Consequences
+
+- Residents holding `refresh` clear base-branch CI flakes on held or review
+  delivery pull requests without writing files, dispatching a new implementer,
+  or re-running review.
+- Published commit SHAs, provenance and squash markers remain intact, and any
+  conflict or non-base edit still fails closed.
+- Cost: a refreshed pull request carries merge commit(s) of the base branch in
+  its branch history until squash-landed, and landing must verify the
+  first-parent merge chain in the owner's Git object store whenever the PR head
+  moved past the reviewed commit.
+
 ## Task References
 
 - [ORB-21229] — rewrote the resident-orchestrator design and recorded these decisions
 - [ORB-25959] — let resident cycles with `dispatch` re-pilot and requeue
 - [ORB-26184] — refuse resident cycles' candidate discards during requeue
+- [ORB-26832] — admit `orbit.workflow.auto` `status` reads for live resident cycles without operator capability
+- [ORB-26833] — let resident cycles update friction records in covered workspaces without a right and without re-homing
+- [ORB-26834] — add the `refresh` right to merge base into a held or review delivery pull request head and re-run required checks without re-review
 - [ORB-25951] — on-call whose chief ruling delegated and conditioned that change
 - [ORB-12488] — removed the epic pipeline and the earlier resident-orchestrator folder
 - [ORB-10815] — revised the earlier design to v2: epic-owned worktree and windowed drain
 - [ORB-10776] — moved the earlier design's fire clock outside Orbit and added its session log
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.
+
+## Residents may start review-only delivery recovery under recover
+
+### Context
+
+A failed delivery can need source edits and fresh operator-host validation after the
+base advances. Refresh brings in the base and starts checks. Requeue leaves admission
+to a later dispatch.
+
+### Decision
+
+Add `recover` for `orbit.task.recover` action `resume_delivery`. The authenticated
+cycle broker records the action and starts the source-repair pipeline for a blocked
+task's stopped failed or held publication in a covered local workspace. The leaf
+continues the authenticated candidate on the current base, validates it, and sends it
+through fresh review. Landing still requires `merge` and the current head's evidence
+and required checks.
+
+The operator retains decision answers, live-claim recovery, review resets and
+reconciliation, handoff retry and revocation, and general source-repair submission
+and reconciliation. The resident
+can proceed with an open final-recovery decision only when every option explicitly
+carries routine or reversible risk and the request has no separate human action.
+Other open requests, unknown risk, and irreversible options hold recovery. The leaf
+admission records no decision answer.
+
+A cycle gets one attempt. The task gets one resident reservation per rolling 24
+hours across all mandates, charging failed starts after reservation as well. Each
+reservation gets a shared 120-minute agent deadline from admission. The ordinary
+source-repair and review budgets also apply.
+
+- Cost: stopped owner-local published candidates only. Cases requiring more time or
+  authority remain visible to the operator with the preserved candidate intact.
+
+**Provenance:** ORB-26835.

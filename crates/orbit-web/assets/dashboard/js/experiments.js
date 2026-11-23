@@ -27,7 +27,7 @@ import {
 } from './common.js';
 import { setActiveTab } from './router.js';
 import {
-  el, num, metricLabel, pluralCount, armColor, armIndex, armSwatch, experimentBadge, experimentCard, experimentEmpty,
+  el, num, metricLabel, pluralCount, armColor, armIndex, armSwatch, experimentCard, experimentEmpty,
   armCards, armEvidenceCard, forestCard, cumulativeCard, complexityCard, crewCard,
 } from './experiment-readout.js';
 import { draftActions, draftStartRenderState, lockedNote, syncExperimentAuthoring } from './experiment-form.js';
@@ -49,6 +49,7 @@ const WARNING_LABELS = {
   explorer_trace_incomplete: "Explorer uptake unconfirmed",
   crew_mismatch: "Crew outside arm pool",
   crew_mismatch_unavailable: "Crew admission pool unavailable",
+  horizon_unavailable: "Horizon unavailable",
   forced: "Forced assignments",
   explicit_crew: "Explicit-crew exclusions",
   interactive: "Interactive exclusions",
@@ -95,6 +96,11 @@ export function experimentsRoute(id = selectedId) {
 /// address in step without routing, which would refetch.
 export function onExperimentTabPick(listener) {
   tabPickListener = listener;
+}
+
+function experimentStatusPill(status) {
+  const state = { running: "running", paused: "pending", concluded: "success", abandoned: "disabled" }[status];
+  return el("span", { class: "pill", "data-state": state, text: status });
 }
 
 function clearExperiments() {
@@ -296,8 +302,8 @@ function listItem(experiment, authoring) {
       el("span", { class: "ex-arm-name" }, [
         armSwatch(armColor(index)),
         el("span", { text: arm.name }),
-        arm.control ? el("span", { class: "mx-sc-tag", text: "control" }) : null,
-        arm.retired_segment != null ? el("span", { class: "mx-sc-tag", text: `retired at ${arm.retired_segment}` }) : null,
+        arm.control ? el("span", { class: "stat-tile-tag", text: "control" }) : null,
+        arm.retired_segment != null ? el("span", { class: "stat-tile-tag", text: `retired at ${arm.retired_segment}` }) : null,
       ]),
       bar,
       el("span", {
@@ -311,12 +317,12 @@ function listItem(experiment, authoring) {
   if (experiment.forced) extras.push(`${pluralCount(experiment.forced, "forced assignment")} left out`);
   if (experiment.excluded) extras.push(`${experiment.excluded} excluded for a surface conflict`);
   if (experiment.concluded_arm) extras.push(`concluded with ${experiment.concluded_arm}`);
-  return el("article", { class: "mx-card ex-item", role: "listitem" }, [
+  return el("article", { class: "card mx-card ex-item", role: "listitem" }, [
     el("div", { class: "ex-item-head" }, [
       experimentLink(experiment.id, [experiment.name || experiment.id], "ex-item-name"),
       el("span", { class: "ex-badges" }, [
-        experimentBadge(experiment.status, `ex-status-${experiment.status}`),
-        experimentBadge(experiment.mode, `ex-mode-${experiment.mode}`),
+        experimentStatusPill(experiment.status),
+        el("span", { class: "badge", text: experiment.mode }),
       ]),
     ]),
     experiment.hypothesis ? el("p", { class: "ex-hypothesis", text: experiment.hypothesis }) : null,
@@ -328,7 +334,7 @@ function listItem(experiment, authoring) {
 }
 
 function missingView(payload) {
-  return el("section", { class: "mx-card ex-card ex-missing", role: "alert" }, [
+  return el("section", { class: "card mx-card ex-card ex-missing", role: "alert" }, [
     el("div", { class: "mx-empty ex-empty" }, [
       el("div", { class: "mx-empty-title", text: "Experiment not found" }),
       el("div", { class: "mx-empty-detail", text: payload.message || `No experiment ${payload.id} in this workspace.` }),
@@ -384,7 +390,7 @@ function retryButton(view) {
 // A tab that needs the readout, before it has one.
 function readoutPlaceholder(title, view) {
   if (view.error) {
-    return el("section", { class: "mx-card ex-card ex-readout-state ex-readout-error", role: "alert", "aria-label": title }, [
+    return el("section", { class: "card mx-card ex-card ex-readout-state ex-readout-error", role: "alert", "aria-label": title }, [
       el("div", { class: "mx-empty ex-empty" }, [
         el("div", { class: "mx-empty-title", text: "The readout could not be loaded" }),
         el("div", { class: "mx-empty-detail", text: view.error }),
@@ -392,7 +398,7 @@ function readoutPlaceholder(title, view) {
       ]),
     ]);
   }
-  return el("section", { class: "mx-card ex-card ex-readout-state ex-readout-loading", role: "status", "aria-label": title, "aria-busy": "true" }, [
+  return el("section", { class: "card mx-card ex-card ex-readout-state ex-readout-loading", role: "status", "aria-label": title, "aria-busy": "true" }, [
     experimentEmpty("Reading results…", "The readout covers every enrolled task, so it can take a while on a large workspace."),
   ]);
 }
@@ -409,14 +415,19 @@ function readoutNotice(view) {
 // readout: the first start event opens the horizon, as it does the readout's.
 function definitionInfo(experiment) {
   const started = (experiment.events || []).find((event) => event.kind === "started")?.at || null;
-  const startedAt = started ? Date.parse(started) : NaN;
   const days = num(experiment.max_days);
+  let horizon = experiment.horizon_at;
+  // An older host only sends the start and day count.
+  if (!Object.hasOwn(experiment, "horizon_at") && started && days > 0) {
+    const end = new Date(Date.parse(started) + days * 86400000);
+    if (end.getUTCFullYear() >= 1 && end.getUTCFullYear() <= 9999) horizon = end.toISOString();
+  }
   return {
     primary_metric: experiment.primary_metric || null,
     min_sample: num(experiment.min_sample),
     max_days: days,
     started_at: started,
-    horizon_at: Number.isFinite(startedAt) && days != null ? new Date(startedAt + days * 86400000).toISOString() : null,
+    horizon_at: horizon,
   };
 }
 
@@ -482,7 +493,9 @@ function detailTabPanel(key, children) {
 function readoutVerdictBadge(experiment, verdict) {
   if (experiment.status !== "concluded") return null;
   const state = verdict?.state || "collecting";
-  return experimentBadge(`readout: ${verdict?.label || state}`, `ex-verdict ex-verdict-${state}`);
+  const label = `readout: ${verdict?.label || state}`;
+  const tone = { winner: "success", withheld: "warning", inconclusive: "warning" }[state];
+  return el("span", { class: "badge", "data-tone": tone, text: label, title: label });
 }
 
 // The headline answer: the operator's conclusion once there is one, otherwise
@@ -522,7 +535,7 @@ function headerCard(experiment, view, primary) {
     readout ? `As of ${formatDateTime(readout.as_of)}.` : null,
   ].filter(Boolean);
   const promotion = concluded?.detail?.promotion_task;
-  return el("section", { class: "mx-card ex-card ex-head", "aria-label": "Experiment" }, [
+  return el("section", { class: "card mx-card ex-card ex-head", "aria-label": "Experiment" }, [
     experimentLink(null, ["All experiments"], "ex-back"),
     el("div", { class: "ex-item-head" }, [
       el("h2", { class: "ex-title" }, [
@@ -530,8 +543,8 @@ function headerCard(experiment, view, primary) {
         experiment.hypothesis ? pinnedInfoHint(experiment.hypothesis) : null,
       ]),
       el("span", { class: "ex-badges" }, [
-        experimentBadge(experiment.status, `ex-status-${experiment.status}`),
-        experimentBadge(experiment.mode, `ex-mode-${experiment.mode}`),
+        experimentStatusPill(experiment.status),
+        el("span", { class: "badge", text: experiment.mode }),
       ]),
     ]),
     el("div", { class: "ex-decision" }, [
@@ -566,6 +579,7 @@ function pendingFact(view) {
 
 function horizonText(info) {
   if (info.horizon_at) return formatDateTime(info.horizon_at);
+  if (info.started_at && info.max_days != null) return "Unavailable · saved days exceed calendar range";
   return info.max_days != null ? `${info.max_days} days after start` : "—";
 }
 

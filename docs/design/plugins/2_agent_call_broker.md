@@ -264,10 +264,16 @@ the owner receives that form. A path such as ` review-gate.json` or `./review-ga
 therefore the gate's `review-gate.json`, never an ordinary artifact.
 
 A `review-*` artifact (the prefix matched without ASCII case) is the review gate's and keeps its
-stricter scope. Artifact reads validate their fields before comparing the task ID. A read with
-`task_id` in place of `id` is refused with guidance to pass the task as `id`.
-A `review-*` call with valid fields for a task other than the claimed task is refused as
-`claimed_owner_bridge_refused` before any of the scopes below. The broker carries it only for the
+stricter scope. Task show and artifact reads validate their fields before task-scope checks;
+`task_id` remains an unadvertised alias for `id` when `id` is absent, and requests that set both
+are refused. Artifact puts have route-specific ordering. On a local owner, the claimed-task check
+comes before canonicalizing the path or validating the remaining put fields. A brokered ordinary
+put canonicalizes its path, validates its fields, then checks the claimed task. A brokered
+`review-*` put canonicalizes its path and checks the claimed task before review-specific field
+validation, so a wrong-task review put with an extra field reports
+`claimed_owner_bridge_refused` first. A `review-*` call for a task other than the claimed task is
+refused as `claimed_owner_bridge_refused` before any of the activity-dependent scopes below. The
+broker carries it only for the
 reviewer activity (`agent_review_repair`),
 and only while the review ledger shows one open attempt, admitted by that leaf, whose reviewer
 is running in this run before its deadline. A read may name the review contract's

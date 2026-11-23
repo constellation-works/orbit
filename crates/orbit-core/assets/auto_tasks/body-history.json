@@ -1625,6 +1625,36 @@
         "## The standard",
         "## Use the prepared footprint"
       ],
+      "digest": "5b1cb894892cdba2b2f442a4ac3a428ca70a591ace8afbe4fbdb2269878e843e",
+      "revision": "2f3ea1dd3c327f7c9472206c3b137dbbb758c872",
+      "settings": {
+        "complexity": "low",
+        "dedupe": "skip_if_open",
+        "enabled": false,
+        "priority": "low",
+        "schedule": {
+          "cron": "45 6 * * *"
+        },
+        "tags": [
+          "comment-hygiene"
+        ]
+      }
+    },
+    {
+      "comments": [
+        "# No context_files and proposed on purpose: the batch is known only after",
+        "# backlog. The executing run never writes its own scope.",
+        "# operator) persists the selected file: selectors and it is approved to",
+        "# selection, so the instance waits in proposed — never a backlog",
+        "# whole-tree holder — until pre-admission preparation (task pilot or",
+        "## Attach the ledger",
+        "## Check and record",
+        "## Comment-only diffs",
+        "## Escalate repeat skips",
+        "## Select a batch (preparation, before admission)",
+        "## The standard",
+        "## Use the prepared footprint"
+      ],
       "digest": "8605b87bdf3739deeae10662b02d16dda79c1962950b03b6b0fb326d40319f34",
       "revision": "ece2cce0fa66cdec8e5bf16d30cfd813df4bc1a6",
       "settings": {
@@ -1686,6 +1716,36 @@
       ],
       "digest": "bdcf4d046362ca4d2466873e0056501dc3d29a1e795c31949fcc99eacaafd2d4",
       "revision": "5d0634f6ac62d38e85797172b1dfb075d0f5f6ee",
+      "settings": {
+        "complexity": "low",
+        "dedupe": "skip_if_open",
+        "enabled": false,
+        "priority": "low",
+        "schedule": {
+          "cron": "45 6 * * *"
+        },
+        "tags": [
+          "comment-hygiene"
+        ]
+      }
+    },
+    {
+      "comments": [
+        "# No context_files and proposed on purpose: the batch is known only after",
+        "# backlog. The executing run never writes its own scope.",
+        "# operator) persists the selected file: selectors and it is approved to",
+        "# selection, so the instance waits in proposed — never a backlog",
+        "# whole-tree holder — until pre-admission preparation (task pilot or",
+        "## Attach the ledger",
+        "## Check and record",
+        "## Comment-only diffs",
+        "## Escalate repeat skips",
+        "## Select a batch (preparation, before admission)",
+        "## The standard",
+        "## Use the prepared footprint"
+      ],
+      "digest": "ca288c930ada0828c14d03275940b4772d39ade55b256cda6b0baa3310b06b73",
+      "revision": "e55e9dab234d1af7b30262b1fe40076c53ea02f1",
       "settings": {
         "complexity": "low",
         "dedupe": "skip_if_open",
@@ -4291,6 +4351,56 @@
         "## Read the evidence",
         "## Record"
       ],
+      "digest": "745885f4ab078b2ff2ba47cc0f5c24352a1db64166ce82528ae26fed8e7c43be",
+      "revision": "b94403434e4ef62fb3a456d1ac6e97e2dbdecb38",
+      "settings": {
+        "complexity": "medium",
+        "dedupe": "skip_if_open",
+        "enabled": false,
+        "priority": "medium",
+        "schedule": {
+          "every_minutes": 4320
+        },
+        "tags": [
+          "path-risk-review",
+          "no-diff-expected"
+        ]
+      }
+    },
+    {
+      "comments": [
+        "## Find the cause",
+        "## Minimum support",
+        "## Pick the paths",
+        "## Propose fixes",
+        "## Read the evidence",
+        "## Record"
+      ],
+      "digest": "b890b6ed1f3eab6ce0b2b405a6c88146df0e32203388953ddbdbd1dc060a66b5",
+      "revision": "4451b393d01d13768e7662a7e085f3ba56c4c81e",
+      "settings": {
+        "complexity": "medium",
+        "dedupe": "skip_if_open",
+        "enabled": false,
+        "priority": "medium",
+        "schedule": {
+          "every_minutes": 4320
+        },
+        "tags": [
+          "path-risk-review",
+          "no-diff-expected"
+        ]
+      }
+    },
+    {
+      "comments": [
+        "## Find the cause",
+        "## Minimum support",
+        "## Pick the paths",
+        "## Propose fixes",
+        "## Read the evidence",
+        "## Record"
+      ],
       "digest": "f0248e7baed84400c8668327031401c3e07ca0b9c23cdb7b910293158640662a",
       "revision": "2f7c14d449460f17a05084c024159c5a199b3eff",
       "settings": {
@@ -4346,6 +4456,31 @@
       ],
       "digest": "115eff93d74a9b0917928f9056f266051f7b03bd7982600bbeccc5bc5838d473",
       "revision": "fbd213c7f114a7e7c3f0425f261ad7bb011b3c8d",
+      "settings": {
+        "complexity": "medium",
+        "dedupe": "skip_if_open",
+        "enabled": false,
+        "priority": "medium",
+        "schedule": {
+          "cron": "40 6 * * *"
+        },
+        "tags": [
+          "pilot-block-patterns"
+        ]
+      }
+    },
+    {
+      "comments": [
+        "## 1. Windows",
+        "## 2. Collect",
+        "## 3. Group by cause and route to the source",
+        "## 4. Dedupe and file",
+        "## 5. Check earlier fixes",
+        "## 6. Corpus proposal, report and cursor",
+        "## Rules and command surfaces"
+      ],
+      "digest": "22ec2be900baa47e69c9a811a0188c0e12ce6a6f4dd793711f5103d93a65e655",
+      "revision": "e69d1cb248c6d70d5ff08b82eabfb16065a364a2",
       "settings": {
         "complexity": "medium",
         "dedupe": "skip_if_open",
@@ -4624,6 +4759,56 @@
       ],
       "digest": "f27e05d2a573115c8ce9988500516eca4bf6fce6947ee892da7f33d404ead94f",
       "revision": "1be0afe703fc4435857578d56fb2c2d3e986aab4",
+      "settings": {
+        "complexity": "medium",
+        "dedupe": "skip_if_open",
+        "enabled": false,
+        "priority": "medium",
+        "schedule": {
+          "cron": "40 6 * * *"
+        },
+        "tags": [
+          "pilot-block-patterns"
+        ]
+      }
+    },
+    {
+      "comments": [
+        "## 1. Windows",
+        "## 2. Collect",
+        "## 3. Group by cause and route to the source",
+        "## 4. Dedupe and file",
+        "## 5. Check earlier fixes",
+        "## 6. Corpus proposal, report and cursor",
+        "## Rules and command surfaces"
+      ],
+      "digest": "f420fa0e70541495dcd8df60be920928119e111a7525f414178ffd790bb12ae2",
+      "revision": "87d40f42e134213db9d0fe52c1cc0c58cf1d11b1",
+      "settings": {
+        "complexity": "medium",
+        "dedupe": "skip_if_open",
+        "enabled": false,
+        "priority": "medium",
+        "schedule": {
+          "cron": "40 6 * * *"
+        },
+        "tags": [
+          "pilot-block-patterns"
+        ]
+      }
+    },
+    {
+      "comments": [
+        "## 1. Windows",
+        "## 2. Collect",
+        "## 3. Group by cause and route to the source",
+        "## 4. Dedupe and file",
+        "## 5. Check earlier fixes",
+        "## 6. Corpus proposal, report and cursor",
+        "## Rules and command surfaces"
+      ],
+      "digest": "fff4a9401abe81824fc3ad0ce53248276e95790f8d03a5cdb508ef947b66431b",
+      "revision": "29b3a1d572eb2f860518da5ce0cd84134b2e36cc",
       "settings": {
         "complexity": "medium",
         "dedupe": "skip_if_open",
@@ -5927,6 +6112,32 @@
       ],
       "digest": "48ac649ca64ecaad5e89de9587f1dc57e46a89f9f4a4ef20c0f1e0615b4639ca",
       "revision": "9ab7579b0e805f1eb058f11c2f1ffc1efcccf036",
+      "settings": {
+        "complexity": "medium",
+        "dedupe": "skip_if_open",
+        "enabled": false,
+        "priority": "medium",
+        "schedule": {
+          "cron": "20 7 * * 1"
+        },
+        "tags": [
+          "run-failure-patterns",
+          "no-diff-expected"
+        ]
+      }
+    },
+    {
+      "comments": [
+        "## 1. Windows",
+        "## 2. Measure the rate",
+        "## 3. Find the classes that drive it",
+        "## 4. Check coverage and effectiveness",
+        "## 5. Filing",
+        "## 6. Report and cursor",
+        "## Rules and command surfaces"
+      ],
+      "digest": "4973daa67b24aed03bacd183fa7a49b748c2bf265ec5f9407b3fd0e40e5c08c7",
+      "revision": "cb8cd6afcaafc69b1d39a01cbcf1f3f0bbab6c78",
       "settings": {
         "complexity": "medium",
         "dedupe": "skip_if_open",

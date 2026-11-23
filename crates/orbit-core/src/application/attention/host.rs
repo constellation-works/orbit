@@ -21,7 +21,8 @@ const DETAIL_CHECK_CAP: usize = 32;
 ///
 /// `catalog_runtime` lends the registry-backed catalog; `selected` is the
 /// checkout the checks run against. Severity is `critical` when this host
-/// owns the workspace, else `high`.
+/// owns the workspace and a check errors, else `high`: warnings alone never
+/// rank critical.
 pub(super) fn read_doctor_host_item(
     catalog_runtime: &OrbitRuntime,
     selected: &OrbitRuntime,
@@ -84,11 +85,7 @@ fn doctor_item(
     let mut item = AttentionItem {
         id: cursor::attention_item_id(kind, &host.machine_id, &workspace.id, &json!("doctor")),
         kind,
-        severity: if owner {
-            AttentionSeverity::Critical
-        } else {
-            AttentionSeverity::High
-        },
+        severity: doctor_severity(&failing, owner),
         workspace: workspace.clone(),
         host: host.clone(),
         refs: json!({}),
@@ -109,6 +106,16 @@ fn doctor_item(
     item
 }
 
+/// `critical` needs an owner whose doctor reports an error; a warning-only
+/// result stays `high` so it does not outrank work-stopping items.
+fn doctor_severity(failing: &[AttentionHealthCheck], owner: bool) -> AttentionSeverity {
+    if owner && failing.iter().any(|check| check.status == "error") {
+        AttentionSeverity::Critical
+    } else {
+        AttentionSeverity::High
+    }
+}
+
 /// The `degraded` entry for a session that may not read host health.
 pub(super) fn host_capability_degraded(
     host: &AttentionHost,
@@ -118,5 +125,6 @@ pub(super) fn host_capability_degraded(
         kind: AttentionKind::HostUnhealthy.as_str().into(),
         code: "capability".into(),
         message: "Host health requires the Operator capability".into(),
+        subject: None,
     }
 }

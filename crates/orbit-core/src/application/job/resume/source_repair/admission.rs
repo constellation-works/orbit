@@ -8,9 +8,9 @@ use orbit_engine::{RuntimeHost, TaskAutomationUpdate};
 use orbit_types::task::{Task, TaskHistoryEntry, TaskStatus};
 use orbit_types::tool::ToolSessionContext;
 use orbit_types::workflow::{
-    self, JobRun, JobRunState, JobV2, PR_AUTO_FIX_BUDGET, PipelineState, ReviewAdmission,
-    SOURCE_REPAIR_KEY, SOURCE_REPAIR_LINKED, SOURCE_REPAIR_RESERVED, SourceRepairAdmission,
-    SourceRepairBinding, pr_auto_fix_attempts,
+    self, JobRun, JobRunState, JobV2, PR_AUTO_FIX_BUDGET, PipelineState,
+    RESIDENT_SOURCE_REPAIR_PROVENANCE, ReviewAdmission, SOURCE_REPAIR_KEY, SOURCE_REPAIR_LINKED,
+    SOURCE_REPAIR_RESERVED, SourceRepairAdmission, SourceRepairBinding, pr_auto_fix_attempts,
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -164,6 +164,53 @@ fn history(runtime: &OrbitRuntime, task: &str) -> Result<Vec<SourceRepairAdmissi
 }
 
 impl OrbitRuntime {
+    /// Use the ordinary source-repair admission with the exact publication
+    /// observed by the owner. Only the authenticated resident tool supplies
+    /// the ledger key. Source and decision checks share the owning task lock.
+    pub(crate) fn submit_resident_delivery_recovery(
+        &self,
+        task_id: &str,
+        source_id: &str,
+        diagnosis: &str,
+        action_key: &str,
+        actor: &str,
+    ) -> Result<Value, OrbitError> {
+        self.require_workspace_claim("orbit.task.resume_delivery", None)?;
+        self.ensure_coordination_task_write_permitted()?;
+        let mut response = None;
+        self.stores()
+            .tasks()
+            .with_task_write_lock(task_id, &mut || {
+                self.check_resident_delivery_recovery(task_id, action_key)?;
+                let (source, _, binding) = self.observe_source_repair(source_id, task_id, false)?;
+                if !matches!(source.state, JobRunState::Failed | JobRunState::Held) {
+                    return Err(refuse(
+                        "resident recovery requires a failed or held delivery run",
+                    ));
+                }
+                // Do not mint the additional operator consent needed to rework an
+                // already successful publication or a kept inline handoff.
+                let request = Request {
+                    action: "submit".into(),
+                    task_id: task_id.into(),
+                    request_key: Some(action_key.into()),
+                    binding: Some(binding),
+                    diagnosis: Some(diagnosis.into()),
+                    unmet_acceptance: None,
+                    policy_digest: None,
+                    reservation_digest: None,
+                };
+                response = Some(self.submit_source_repair(
+                    source_id,
+                    &request,
+                    actor,
+                    RESIDENT_SOURCE_REPAIR_PROVENANCE,
+                )?);
+                Ok(())
+            })?;
+        response.ok_or_else(|| refuse("admission lock did not execute"))
+    }
+
     // Task meaning and the immutable publication are bound separately. Keeping
     // policy independent of task selectors allows the host's recorded delivery
     // widening while still refusing configuration changes before source effects.
@@ -197,7 +244,7 @@ impl OrbitRuntime {
         }))
     }
 
-    pub(crate) fn validate_operator_source_repair(&self, run_id: &str) -> Result<(), OrbitError> {
+    pub(crate) fn validate_source_repair_admission(&self, run_id: &str) -> Result<(), OrbitError> {
         if self.worker_invocation().is_some() {
             return Err(refuse(
                 "claimed executions cannot apply operator source repair",
@@ -561,6 +608,11 @@ impl OrbitRuntime {
         let mut current: ReviewAdmission =
             serde_json::from_value(fresh[orbit_types::workflow::REVIEW_ADMISSION_KEY].clone())
                 .map_err(|e| refuse(e.to_string()))?;
+        if provenance == RESIDENT_SOURCE_REPAIR_PROVENANCE && !current.gates_merge() {
+            return Err(refuse(
+                "resident recovery requires before-PR or before-landing review",
+            ));
+        }
         if let Some(prior) = prior {
             let mut comparable = current.clone();
             comparable.captured_at = prior.review.captured_at;
@@ -649,9 +701,14 @@ impl OrbitRuntime {
         // Review -> in-progress is a new operator source decision, not restored
         // completion authority. Lifecycle was preflighted before persistence.
         if task.status != TaskStatus::InProgress {
+            let authority = if provenance == RESIDENT_SOURCE_REPAIR_PROVENANCE {
+                "resident"
+            } else {
+                "operator"
+            };
             self.apply_task_automation_update(&task.id, TaskAutomationUpdate {
                 status:Some(TaskStatus::InProgress),expected_status:Some(task.status),
-                status_event:Some("source_repair_readmitted".into()),status_note:Some(format!("operator source repair request {key}; source={source_id}; completion=review")),
+                status_event:Some("source_repair_readmitted".into()),status_note:Some(format!("{authority} source repair request {key}; source={source_id}; completion=review")),
                 ..Default::default()
             })?;
         }
@@ -756,9 +813,13 @@ impl OrbitRuntime {
                 "successful publication is superseded by a newer task binding",
             ));
         }
+        let mut held_retry_lineage = None;
         if source.state == JobRunState::Held {
             if task.job_run_id.as_deref() != Some(source_id) {
-                return Err(refuse("held publication is no longer the task's bound run"));
+                held_retry_lineage = self.held_completion_retry_lineage(&source, &task)?;
+                if held_retry_lineage.is_none() {
+                    return Err(refuse("held publication is no longer the task's bound run"));
+                }
             }
             self.require_current_requeue_source(
                 &task,
@@ -785,7 +846,10 @@ impl OrbitRuntime {
             && super::inline_publication::kept_inline_publication(&state);
         let superseded = if inline {
             Some(self.observe_inline_repair_lineage(&source, &task, None)?)
-        } else if resumed_owner.is_none() && task.job_run_id.as_deref() != Some(source_id) {
+        } else if resumed_owner.is_none()
+            && held_retry_lineage.is_none()
+            && task.job_run_id.as_deref() != Some(source_id)
+        {
             Some(self.observe_source_successor(&source, &task)?)
         } else {
             None
@@ -809,7 +873,10 @@ impl OrbitRuntime {
                 "task status does not allow source repair for this run; inspect the task's current status and run binding",
             ));
         }
-        let (source, task, mut binding) = self.observe_published_source(source, task, true)?;
+        let (source, task, mut binding) = match held_retry_lineage.as_deref() {
+            Some(lineage) => self.observe_held_retry_source(source, task, lineage)?,
+            None => self.observe_published_source(source, task, true)?,
+        };
         binding.superseded = superseded;
         Ok((source, task, binding))
     }

@@ -12,7 +12,7 @@ Filesystem-profile policy: resolves `FsProfile` and evaluates deny-read/deny-mod
 
 ## Main modules and types
 
-`engine` (`PolicyEngine` in `crates/orbit-policy/src/engine.rs`), `evaluator` (`FsPolicyEvaluation`). See ``crates/orbit-policy/src/lib.rs``.
+`engine` (`PolicyEngine` and `FsPolicyEvaluation` in `crates/orbit-policy/src/engine.rs`), `evaluator`. See ``crates/orbit-policy/src/lib.rs``.
 
 ## Dependencies
 

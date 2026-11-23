@@ -115,4 +115,12 @@ impl TaskAutomationPort for OrbitRuntime {
     ) -> Result<BTreeMap<String, Value>, OrbitError> {
         preparation::escalation_triage_checkpoints_holding(self, task_id)
     }
+
+    fn has_open_delivery_batch_attempt(&self, task_id: &str) -> Result<bool, OrbitError> {
+        super::task::has_open_delivery_batch_attempt(self, task_id)
+    }
+
+    fn is_task_own_orbit_run(&self, task: &Task, run_id: Option<&str>) -> Result<bool, OrbitError> {
+        super::task::is_task_own_orbit_run(self, task, run_id)
+    }
 }

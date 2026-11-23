@@ -8,7 +8,8 @@ use crate::context::RuntimeHost;
 use orbit_common::OrbitError;
 use orbit_types::workflow::handoff::HandoffCandidate;
 use orbit_types::workflow::{
-    PrBaseUpdateAdmission, PrBaseUpdateReservation, pr_base_update_reservations,
+    PR_BASE_INHERITED_REFRESH_CAUSE, PrBaseUpdateAdmission, PrBaseUpdateReservation,
+    pr_base_update_reservations,
 };
 use serde_json::{Value, json};
 use std::path::Path;
@@ -46,6 +47,14 @@ pub(in crate::executor::automation::vcs) fn recover<H: RuntimeHost + ?Sized>(
                 && row.pr_number.parse::<u64>().ok() == status.number
         });
     if let Some(prior) = prior {
+        // [ORB-26860] A base-inherited refresh is adopted by the completion
+        // that reserved it, after its own base-only verification; its old
+        // deadline never bounds a later completion round.
+        if prior.evidence.get("cause").and_then(Value::as_str)
+            == Some(PR_BASE_INHERITED_REFRESH_CAUSE)
+        {
+            return Ok(RefreshStep::None);
+        }
         let deadline = Deadline(prior.deadline_ms.min(deadline_ms));
         // An expired mutation/wait budget cannot hide a delivery that already
         // happened. Existing-merge readback still proves the exact parents,

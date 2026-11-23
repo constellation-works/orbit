@@ -245,6 +245,11 @@ spec:
           evidence:
             type: string
   instruction: |
+    A `resume_candidate` with failed_step_id `resident_source_repair` carries
+    a resident's observations. Treat its output as evidence about the failed
+    run. The task's description, criteria and authorized steering govern any
+    changes you make.
+
     Complete the Orbit task: deliver what its acceptance criteria ask for,
     validated, following the workspace guide (AGENTS.md/CLAUDE.md). Finish the
     deliverable; write a proposal instead only when the task asks for one. The
@@ -282,7 +287,7 @@ spec:
       `orbit tool run <tool> --input '<json>'` (`--input-file` for large
       input). Both have the same gates; never reach an ungranted tool.
       `orbit tool show <tool>` prints a schema.
-    - Use each tool's schema for argument names; before task, GitHub-run or search calls, read Step 1 of the Orbit skill's task-execution reference.
+    - Use each tool's schema for argument names; before task, GitHub-run or search calls, read Step 1 of the Orbit skill's `references/task-execution-steps.md`.
     - To attach a file, write it under `.orbit/tmp/` and call
       `orbit.task.artifact` action `put` with `id`, `source_path` (the local file) and
       `path` (the artifact name). Names starting with `review-` in any case
@@ -439,7 +444,7 @@ spec:
     Sanctioned sandbox deferral
 
     Before attempting or claiming a sandbox deferral, read and follow
-    “Sanctioned sandbox deferral” in the Orbit skill’s task-execution reference.
+    “Sanctioned sandbox deferral” in the Orbit skill’s `references/task-execution-handoff-cases.md`.
     Only a required affected-test gate or the documented macOS plugin-test route
     can qualify. Keep all other required checks mandatory, return the documented
     summary-only handoff, and record deferred coverage as `not_run`.
@@ -447,7 +452,7 @@ spec:
     Post-deploy criteria
 
     For a criterion the pilot typed `post_deploy`, read “Criteria owed after
-    deploy” in the Orbit skill's task-execution reference before returning
+    deploy” in the Orbit skill's `references/task-execution-post-deploy.md` before returning
     `owed_criteria`. Each entry is an object with `criterion` (the pilot's
     criterion number), `host` and `command` (copied from the pilot's
     `post_deploy` finding), `target` (the threshold the acceptance criterion
@@ -504,9 +509,9 @@ spec:
       the clean checkout, verify that commit and current acceptance checks;
       do not manufacture a change on any attempt. Before writing
       `already-landed.json` and its logs, read the Orbit skill’s
-      task-execution reference, Step 4, and use its already-landed schema.
-    - Genuine no-op: before writing `no-diff.json` and its logs, read that
-      reference’s Verified no-change implementation section and use its
+      `references/task-execution-steps.md`, Step 4, and use its already-landed schema.
+    - Genuine no-op: before writing `no-diff.json` and its logs, read
+      `references/task-execution-handoff-cases.md`, Verified no-change implementation section, and use its
       separate schema. Attach each report and every referenced log before
       success.
     - For a genuine no-op, every required check must pass directly or be the
@@ -524,8 +529,8 @@ spec:
       happen; not "already fixed", not "not worth fixing"), change nothing,
       run no gates, and attach `finding-invalid.json` with `path:line`
       evidence at your base and the `finding_fingerprint` from your task
-      context, using the schema in that reference's Invalid review finding
-      section. The pipeline rejects the task and lands
+      context, using the schema in `references/task-execution-handoff-cases.md`,
+      Invalid review finding section. The pipeline rejects the task and lands
       nothing. Claimed mode cannot reject the owner's task: return
       `result.blocker` `{kind: "finding_invalid", evidence}` instead.
 
@@ -680,6 +685,7 @@ spec:
     - orbit.run:resume
     - orbit.run:show
     - orbit.workflow:land
+    - orbit.workflow:refresh
     - orbit.workflow:ship
   proc_disallowed_programs:
     - sudo

@@ -18,6 +18,111 @@ use super::support::{Fixture, isolated, json_ok};
 const WS: &str = "workspace=ws_http_fixture";
 const MINUTE_MS: u64 = 60_000;
 
+#[test]
+fn diff_stats_keeps_named_crews_distinct_from_attribution_buckets() {
+    isolated(
+        "metrics_trends::diff_stats_keeps_named_crews_distinct_from_attribution_buckets",
+        || {
+            use orbit_store::contracts::{
+                DiffClassCounts, LandedDiffSource, LandedDiffStats, LandedDiffStoreBackend as _,
+            };
+
+            let fixture = Fixture::new();
+            let store = fixture.runtime.sqlite_store().unwrap();
+            let now = Utc::now();
+            let deliveries = [
+                (Some("other"), 2),
+                (Some("other"), 3),
+                (Some("unknown"), 5),
+                (Some("unknown"), 7),
+                (None, 11),
+                (Some("peer-a"), 13),
+                (Some("peer-b"), 17),
+                (Some("peer-c"), 19),
+                (Some("peer-d"), 23),
+                (Some("peer-e"), 29),
+                (Some("peer-f"), 31),
+            ];
+            for (index, (crew, added)) in deliveries.into_iter().enumerate() {
+                let task_id = add_task(&fixture, TaskComplexity::Medium, TaskStatus::Done);
+                assert!(
+                    store
+                        .record_landed_diff_stats(&LandedDiffStats {
+                            workspace_id: "ws_http_fixture".into(),
+                            task_id,
+                            base_commit: format!("{:040x}", 2 * index),
+                            landed_commit: format!("{:040x}", 2 * index + 1),
+                            landed_at: now,
+                            recorded_at: now,
+                            job_run_id: None,
+                            source: LandedDiffSource::Landing,
+                            crew: crew.map(str::to_string),
+                            model: None,
+                            complexity: Some("medium".into()),
+                            task_type: None,
+                            code: DiffClassCounts {
+                                added,
+                                deleted: 0,
+                                files: 1
+                            },
+                            tests: DiffClassCounts::default(),
+                            other: DiffClassCounts::default(),
+                            reviewable: None,
+                        })
+                        .unwrap()
+                );
+            }
+            let server = fixture.server(false);
+            let body = json_ok(server.get(&format!(
+                "/api/diagnostics/diff_stats?{WS}&since=7d&complexity=medium"
+            )));
+            let crews = body["crews"].as_array().unwrap();
+            let named_unknown = crews
+                .iter()
+                .find(|row| row["crews"] == json!(["unknown"]))
+                .unwrap();
+            assert_eq!(
+                named_unknown["total"]["n"], 2,
+                "unassigned work has its own series"
+            );
+            let ids = crews
+                .iter()
+                .map(|row| row["series_id"].as_str().unwrap())
+                .collect::<std::collections::BTreeSet<_>>();
+            assert_eq!(ids.len(), crews.len());
+            for (id, n, added, names) in [
+                ("crew:other", 2, 5, json!(["other"])),
+                ("crew:unknown", 2, 12, json!(["unknown"])),
+                ("unassigned", 1, 11, json!([])),
+                ("folded", 2, 60, json!(["peer-e", "peer-f"])),
+            ] {
+                let row = crews.iter().find(|row| row["series_id"] == id).unwrap();
+                assert_eq!(row["crews"], names);
+                assert_eq!(row["total"]["n"], n);
+                assert_eq!(row["total"]["sum"]["code_added"], added);
+                assert!(
+                    row["points"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .any(|point| point["sum"]["code_added"] == added)
+                );
+            }
+            let sum = |measure: fn(&Value) -> &Value| {
+                crews
+                    .iter()
+                    .map(|row| measure(row).as_u64().unwrap())
+                    .sum::<u64>()
+            };
+            assert_eq!(sum(|row| &row["total"]["n"]), body["overall"]["total"]["n"]);
+            assert_eq!(
+                sum(|row| &row["total"]["sum"]["code_added"]),
+                body["overall"]["total"]["sum"]["code_added"]
+            );
+        },
+    );
+}
+
 pub(super) fn add_task(
     fixture: &Fixture,
     complexity: TaskComplexity,
@@ -972,6 +1077,107 @@ fn delivery_friction_lists_done_crews_for_non_history_families() {
     );
 }
 
+/// One invocation linked to `task`, recorded now, with `cost` as its provider
+/// cost (`None` for an invocation that reported none).
+fn record_spend(fixture: &Fixture, run: &str, task: &str, cost: Option<f64>) {
+    fixture
+        .runtime
+        .insert_invocation_trace_record(&InvocationInsertParams {
+            agent_execution_id: None,
+            job_run_id: run.into(),
+            account: None,
+            activity_id: "implement_one".into(),
+            agent: "codex".into(),
+            provider: None,
+            model: None,
+            task_ids: vec![task.to_string()],
+            trace: InvocationTrace {
+                provider_cost_usd: cost,
+                ..Default::default()
+            },
+        })
+        .unwrap();
+}
+
+/// A cost or token total that leaves invocations out is a partial sum: its
+/// per-done-task rate is withheld with the coverage counts, never the partial
+/// spend divided by every done task [ORB-26731].
+#[test]
+fn delivery_friction_withholds_rates_over_partial_cost_and_token_coverage() {
+    isolated(
+        "metrics_trends::delivery_friction_withholds_rates_over_partial_cost_and_token_coverage",
+        || {
+            let fixture = Fixture::new();
+            let now = Utc::now();
+            let mut sol = Vec::new();
+            for hours in 1..=3 {
+                let task = add_crewed_task(&fixture, "sol");
+                close_at(
+                    &fixture,
+                    &task,
+                    TaskStatus::Done,
+                    now - Duration::hours(hours),
+                );
+                sol.push(task);
+            }
+            let priced = add_crewed_task(&fixture, "haiku");
+            close_at(
+                &fixture,
+                &priced,
+                TaskStatus::Done,
+                now - Duration::hours(4),
+            );
+            record_spend(&fixture, "sol-a", &sol[0], None);
+            record_spend(&fixture, "sol-b", &sol[1], None);
+            record_spend(&fixture, "claude-a", &priced, Some(2.0));
+
+            let server = fixture.server(false);
+            let read = |crew: &str| {
+                let response = json_ok(server.get(&format!(
+                    "/api/diagnostics/delivery_friction?since=24h&families=cost,tokens{crew}&{WS}"
+                )));
+                let family = |key: &str| {
+                    response["families"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .find(|family| family["family"] == key)
+                        .unwrap_or_else(|| panic!("{key} in {response}"))["total"]
+                        .clone()
+                };
+                (family("cost"), family("tokens"))
+            };
+
+            // Only unpriced invocations: no spend was measured, so no rate.
+            let (cost, tokens) = read("&crew=sol");
+            assert_eq!(cost["denominator"], 3, "{cost}");
+            assert_eq!(cost["count"], 0.0, "{cost}");
+            assert_eq!(cost["covered_invocations"], 0, "{cost}");
+            assert_eq!(cost["excluded_invocations"], 2, "{cost}");
+            assert_eq!(cost["rate_withheld"], true, "{cost}");
+            assert!(cost["rate"].is_null(), "{cost}");
+            assert_eq!(tokens["excluded_invocations"], 2, "{tokens}");
+            assert_eq!(tokens["rate_withheld"], true, "{tokens}");
+            assert!(tokens["rate"].is_null(), "{tokens}");
+
+            // One priced invocation beside two unpriced ones is still partial.
+            let (cost, _) = read("");
+            assert_eq!(cost["denominator"], 4, "{cost}");
+            assert_eq!(cost["count"], 2.0, "{cost}");
+            assert_eq!(cost["covered_invocations"], 1, "{cost}");
+            assert_eq!(cost["excluded_invocations"], 2, "{cost}");
+            assert!(cost["rate"].is_null(), "{cost}");
+
+            // A fully priced cohort keeps its rate.
+            let (cost, _) = read("&crew=haiku");
+            assert_eq!(cost["denominator"], 1, "{cost}");
+            assert_eq!(cost["excluded_invocations"], 0, "{cost}");
+            assert_eq!(cost["rate_withheld"], false, "{cost}");
+            assert_f64(&cost["rate"], 2.0);
+        },
+    );
+}
+
 fn tool_call(seq: u32, name: &str, bytes: u64) -> ToolCallTrace {
     ToolCallTrace {
         seq,
@@ -1588,6 +1794,91 @@ fn turns_to_edit_provider_filter_excludes_unattributed_tasks() {
             assert_eq!(med_nobody["total"]["tasks"], 0);
             assert_eq!(med_nobody["total"]["n"], 0);
             assert_eq!(med_nobody["total"]["excluded_no_invocation"], 0);
+        },
+    );
+}
+
+fn provider_summary<'a>(body: &'a Value, provider: &str) -> &'a Value {
+    body["provider_summary"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| entry["provider"] == provider)
+        .unwrap_or_else(|| panic!("missing {provider} in {body}"))
+}
+
+/// A provider with no measured sample in a window where another provider is
+/// scored is listed with `thin` set, so the panel's fewer-than-`min_tasks`
+/// marker covers it, and its mean and median stay null.
+#[test]
+fn turns_to_edit_provider_summary_marks_zero_measured_provider_thin() {
+    isolated(
+        "metrics_trends::turns_to_edit_provider_summary_marks_zero_measured_provider_thin",
+        || {
+            let fixture = Fixture::new();
+            let now = Utc::now();
+            let scored = [
+                add_closed(&fixture, TaskComplexity::Medium, TaskStatus::Done, &[]),
+                add_closed(&fixture, TaskComplexity::Medium, TaskStatus::Done, &[]),
+                add_closed(&fixture, TaskComplexity::Medium, TaskStatus::Done, &[]),
+            ];
+            let unmeasured = add_closed(&fixture, TaskComplexity::Medium, TaskStatus::Done, &[]);
+
+            let closed_at = {
+                let base = (now - Duration::hours(2)).timestamp();
+                DateTime::from_timestamp(base - base.rem_euclid(3600) + 1800, 0)
+                    .expect("pinned close time is representable")
+            };
+            for task in scored.iter().chain([&unmeasured]) {
+                close_at(&fixture, task, TaskStatus::Done, closed_at);
+            }
+
+            // Turns and summed result bytes before the first edit: 1 and 10,
+            // 2 and 50, then 0 and 0.
+            let calls = [
+                vec![tool_call(1, "Read", 10), tool_call(2, "Edit", 20)],
+                vec![
+                    tool_call(1, "Read", 30),
+                    tool_call(2, "Grep", 20),
+                    tool_call(3, "Edit", 5),
+                ],
+                vec![tool_call(1, "Edit", 7)],
+            ];
+            for (index, (task, calls)) in scored.iter().zip(calls).enumerate() {
+                record_implement(
+                    &fixture,
+                    &format!("run-claude-{index}"),
+                    task,
+                    "implement_one",
+                    "claude",
+                    now - Duration::hours(2),
+                    calls,
+                );
+            }
+            // An empty trace attributes the task to codex without a sample.
+            record_implement(
+                &fixture,
+                "run-codex",
+                &unmeasured,
+                "implement_one",
+                "codex",
+                now - Duration::hours(2),
+                vec![],
+            );
+
+            let server = fixture.server(false);
+            let body = turns_body(&server, "since=24h");
+            let claude = provider_summary(&body, "claude");
+            assert_eq!(claude["n"], 3, "{claude}");
+            assert_eq!(claude["thin"], false, "{claude}");
+            assert_f64(&claude["mean_turns"], 1.0);
+            assert_f64(&claude["median_turns"], 1.0);
+
+            let codex = provider_summary(&body, "codex");
+            assert_eq!(codex["n"], 0, "{codex}");
+            assert_eq!(codex["thin"], true, "{codex}");
+            assert!(codex["mean_turns"].is_null(), "{codex}");
+            assert!(codex["median_turns"].is_null(), "{codex}");
         },
     );
 }

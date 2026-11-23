@@ -242,7 +242,9 @@ impl StateInner {
             Err(error)
                 if matches!(
                     error,
-                    OrbitError::InvalidInput(_) | OrbitError::InvalidInputDiagnostic { .. }
+                    OrbitError::InvalidInput(_)
+                        | OrbitError::InvalidInputDiagnostic { .. }
+                        | OrbitError::UnknownWorkspaceSelector(_)
                 ) =>
             {
                 let cache = self.lock_runtimes();

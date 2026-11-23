@@ -174,9 +174,12 @@ pub trait TaskStoreBackend: Send + Sync {
         _observation: &crate::contracts::DeferredBranchObservation,
     ) -> Result<crate::contracts::BranchObservationOutcome, OrbitError>;
     /// Admit an owner-local drain wave through the pull admission section.
+    /// `owner_machine_id` is the owner's machine, so a second perf task on
+    /// that host is withheld. `None` skips claim and owner-local lane holds.
     fn admit_owner_wave(
         &self,
         candidates: &[crate::contracts::OwnerWaveCandidate],
+        owner_machine_id: Option<&str>,
     ) -> Result<Vec<crate::contracts::OwnerWaveAdmission>, OrbitError>;
     /// Repairs still waiting for a repair leaf, with take eligibility.
     fn pending_repairs(

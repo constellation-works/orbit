@@ -37,18 +37,22 @@
 //!   naming the task and authored by a delivery identity;
 //! - it conflicts with its base or a required check failed on its head, and
 //!   the pull request's attempt ledger would admit a repair of that head and
-//!   blocker (at most one per head and blocker, three per pull request);
+//!   blocker (three attempts per pull request). An attempt that published no
+//!   new head, or whose head still fails, leaves that head repairable: the
+//!   next run's watcher admits another attempt while the budget lasts;
 //! - no earlier out-of-run auto-fix resumed delivery for that head and
-//!   blocker, and fewer than the ledger's budget did for the pull request, so
-//!   a resume that dies before it repairs cannot loop;
+//!   blocker without admitting an attempt, and fewer than the ledger's budget
+//!   did for the pull request, so a resume that dies before it repairs cannot
+//!   loop;
 //! - checkpoint resume accepts the rewound run.
 //!
 //! A pass starts at most as many repairs as the drain has free slots after
 //! adoption. A pull request found unblocked is not read again for
 //! [`pass_types::CLEAN_RECHECK`]. A forge read failure defers the pass's remaining reads;
 //! GitHub's `UNKNOWN` mergeability answer skips only that pull request.
-//! Nothing here ends the drain: each refusal is reported in the step output
-//! and a later pass reconsiders it.
+//! Nothing here ends the drain: each refusal is reported in the step output,
+//! with the repair attempts the pull request has spent and has left, and a
+//! later pass reconsiders it.
 //!
 //! A leaf that ended `held` on a delivery refusal a fresh forge read can
 //! clear (`delivery_check_evidence_inconclusive`,
@@ -65,8 +69,15 @@
 //! back. Its pull request is repaired through the ledger when the forge
 //! reports a blocker; otherwise the hand-back spends none of the ledger and
 //! is bounded per held lineage by a backoff and a ceiling (`held`), after
-//! which the pass reports the task under its hold code. Other holds keep
-//! their own documented next step.
+//! which the pass reports the task under its hold code. An `auto_fix_stopped`
+//! hold is handed back without backoff only when the published head matches
+//! and has positive, complete green required-check evidence; the ceiling
+//! still applies and completion performs the normal landing checks. A leaf
+//! held as `delivery_repair_dispatched` with `pr_auto_fix_check_repair:` when
+//! `step_failure_recovery` ran without repairing or publishing is handed back
+//! through the ledger while a blocker and budget remain (without held-leaf
+//! backoff), or without backoff once the published head reports complete green
+//! checks. Other holds keep their own documented next step.
 //!
 //! The dashboard's Fix PR action starts the same repair for one task through
 //! [`crate::OrbitRuntime::start_task_pr_auto_fix`] (`task_auto_fix`): the same

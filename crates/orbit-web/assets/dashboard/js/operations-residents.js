@@ -1,39 +1,123 @@
 // Tasks dock › Residents: start, supervise, steer and stop resident mandates.
-// The pane is a list of mandates, one row each, with the selected mandate's
-// detail opening under its row; one start flow creates a mandate, grants its
-// rights and turns the workspace's cycle routine on. Every read and write goes
-// through the `orbit.resident.*` tools behind /api/residents; the server keeps
-// the mandate rules, so a refused write shows the server's own message.
+// The dock shows compact cards for live mandates and one-row entries for ended
+// ones; a Details button on each card opens the full mandate state in a wide
+// native modal `<dialog>` backed by `#tasks/residents/<task-id>`. One start
+// flow creates a mandate, grants its rights and turns the workspace's cycle
+// routine on. Every read and write goes through the `orbit.resident.*` tools
+// behind /api/residents; the server keeps the mandate rules, so a refused
+// write shows the server's own message.
 
-import { captureWorkspaceVisit, detailsPanel, el, fetchJson, infoHint, isAggregateView, makeToggleRow, onWorkspaceChange, renderPanelPlaceholder, requestJson, requestPanel, taskHref } from './common.js';
+import { captureWorkspaceVisit, detailsPanel, el, escCloseButton, fetchJson, formatDateTime, getClockZone, infoHint, isAggregateView, onWorkspaceChange, renderPanelPlaceholder, requestJson, requestPanel, taskHref } from './common.js';
 import { actionReason, explainUnavailable, feedback, selectedWorkspaceName } from './operations-shared.js';
+import { recordRoutedHref } from './router.js';
 
 const FEEDBACK = "resident-operation-feedback";
-const RIGHTS = ["dispatch", "promote", "merge", "plugin_upgrade"];
+const DETAIL_FEEDBACK = "resident-detail-feedback";
+const RIGHTS = ["dispatch", "promote", "merge", "plugin_upgrade", "refresh", "recover"];
 const STATE_STATUS = { active: "done", paused: "todo", taken_over: "in_progress", ended: "archived" };
 const STATE_ORDER = { active: 0, taken_over: 1, paused: 2 };
 
 const list = (values) => (values?.length ? values.join(", ") : "none");
 const lines = (text) => String(text || "").split("\n").map(line => line.trim()).filter(Boolean);
 const csv = (text) => String(text || "").split(",").map(part => part.trim()).filter(Boolean);
-const when = (value) => (value ? String(value).replace("T", " ").replace(/\.\d+Z$/, "Z") : "none");
+// Times follow the dashboard's UTC/Local clock like every other view.
+const when = (value) => (value ? formatDateTime(value) : "none");
 
-// Pane state that is the operator's, not the payload's: the selected mandate,
+// Pane state that is the operator's, not the payload's: the open detail route,
 // the open start flow and a chosen action awaiting its reason. A background
 // refresh rebuilds the pane from it; a workspace switch clears it.
-const ui = { revision: null, payload: null, selected: null, startForm: null, pending: null };
+const ui = {
+  revision: null,
+  payload: null,
+  selected: null,
+  lastOpenedBy: null,
+  startForm: null,
+  pending: null,
+};
+
+function residentsPaneActive() {
+  return Boolean(document.querySelector('.tab-pane[data-tab="tasks"].active #side-dock[data-mode="residents"]'));
+}
 
 function resetUiFor(visit) {
   if (ui.revision === visit.revision) return;
   closeResidentStart();
-  Object.assign(ui, { revision: visit.revision, payload: null, selected: null, startForm: null, pending: null });
+  closeResidentDetailProgrammatic();
+  Object.assign(ui, {
+    revision: visit.revision,
+    payload: null,
+    selected: null,
+    lastOpenedBy: null,
+    startForm: null,
+    pending: null,
+  });
 }
-
 
 function closeResidentStart() {
   const dialog = document.getElementById("resident-start-dialog");
   if (dialog?.open) dialog.close();
   ui.startForm = null;
+}
+
+function closeResidentDetailProgrammatic() {
+  const dialog = document.getElementById("resident-detail-dialog");
+  if (!dialog?.open) return;
+  dialog.close("programmatic");
+}
+
+function dismissResidentDetail() {
+  const returnId = ui.lastOpenedBy || ui.selected;
+  ui.selected = null;
+  ui.pending = null;
+  const dialog = document.getElementById("resident-detail-dialog");
+  if (dialog?.open) dialog.close("dismissed");
+  if (!residentsPaneActive()) return;
+  focusDetailsButton(returnId);
+  if (/^#tasks\/residents\/.+/.test(window.location.hash)) {
+    window.location.hash = "#tasks/residents";
+  }
+}
+
+function openResidentDetailRoute(taskId) {
+  ui.lastOpenedBy = taskId;
+  const target = `#tasks/residents/${encodeURIComponent(taskId)}`;
+  if (window.location.hash !== target) {
+    window.location.hash = target;
+  } else {
+    setResidentDetailId(taskId);
+  }
+}
+
+/// Sync the resident details modal with the `#tasks/residents[/<task-id>]` route.
+export function setResidentDetailId(taskId) {
+  resetUiFor(captureWorkspaceVisit());
+  const next = taskId || null;
+  if (!next) {
+    const returnId = ui.lastOpenedBy || ui.selected;
+    ui.selected = null;
+    ui.pending = null;
+    const dialog = document.getElementById("resident-detail-dialog");
+    const wasOpen = Boolean(dialog?.open);
+    closeResidentDetailProgrammatic();
+    if (wasOpen && returnId && residentsPaneActive()) {
+      focusDetailsButton(returnId);
+    }
+    return;
+  }
+  const changed = ui.selected !== next;
+  ui.selected = next;
+  ui.lastOpenedBy = next;
+  if (changed) ui.pending = null;
+  if (ui.payload) {
+    renderResidentDetailDialog(ui.payload, true);
+  }
+}
+
+function focusDetailsButton(taskId) {
+  if (!taskId) return;
+  document.querySelector(
+    `.tab-pane[data-tab="tasks"].active #side-dock[data-mode="residents"] #residents-body .resident-details-btn[data-task="${CSS.escape(taskId)}"]`,
+  )?.focus({ preventScroll: true });
 }
 
 onWorkspaceChange(() => {
@@ -42,7 +126,10 @@ onWorkspaceChange(() => {
   if (count) count.textContent = "";
 });
 window.addEventListener("hashchange", () => {
-  if (!document.querySelector('.tab-pane[data-tab="tasks"].active #side-dock[data-mode="residents"]')) closeResidentStart();
+  if (!residentsPaneActive()) {
+    closeResidentStart();
+    closeResidentDetailProgrammatic();
+  }
 });
 
 
@@ -54,13 +141,48 @@ function fact(label, value, title = "") {
 }
 
 function clock(value) {
-  return value ? String(value).replace("T", " ").replace(/\.\d+Z$/, "Z") : "";
+  return value ? formatDateTime(value) : "";
+}
+
+// A `datetime-local` input reads wall time in the browser's own zone, which
+// the dashboard's UTC clock does not show: name that zone beside the input.
+function deadlineHint(prefix) {
+  let zone = "";
+  try {
+    zone = Intl.DateTimeFormat().resolvedOptions().timeZone || "";
+  } catch (_) {
+    zone = "";
+  }
+  const local = zone ? `your browser's local time (${zone})` : "your browser's local time";
+  const note = getClockZone() === "utc" ? `Entered in ${local}, not UTC.` : `Entered in ${local}.`;
+  return prefix ? `${prefix} ${note}` : note;
+}
+
+// Whether an authority form holds input the operator has not submitted. The
+// action composer keeps its text in `ui.pending`, so a render restores it.
+function formHoldsDraft(root) {
+  for (const control of root.querySelectorAll(".resident-authority-form input, .resident-authority-form textarea, .resident-authority-form select")) {
+    if (control.type === "checkbox" || control.type === "radio") {
+      if (control.checked !== control.defaultChecked) return true;
+    } else if (control.tagName === "SELECT") {
+      if ([...control.options].some(option => option.selected !== option.defaultSelected)) return true;
+    } else if (control.value !== control.defaultValue) {
+      return true;
+    }
+  }
+  return false;
 }
 
 // Open decisions when the card read succeeded; grant requests when it did not
 // or this server does not send the field yet.
 function openDecisionList(mandate) {
   return Array.isArray(mandate.open_decisions) ? mandate.open_decisions : (mandate.open_requests || []);
+}
+
+function reportFeedback(kind, message) {
+  feedback(FEEDBACK, kind, message);
+  const dialog = document.getElementById("resident-detail-dialog");
+  if (dialog?.open) feedback(DETAIL_FEEDBACK, kind, message);
 }
 
 // One write: pinned to the visit the operator acted in, refreshing the view
@@ -75,11 +197,15 @@ async function write(path, body, success, controls = [], applied = null) {
   } catch (error) {
     if (!visit.isCurrent() || error?.code === "stale_workspace_visit") return null;
     for (const control of controls) control.disabled = false;
-    feedback(FEEDBACK, "error", `Refused: ${error.message || error}`);
+    reportFeedback("error", `Refused: ${error.message || error}`);
     return null;
   }
   if (!visit.isCurrent()) return null;
-  feedback(FEEDBACK, "success", typeof success === "function" ? success(result) : success);
+  // A message may carry its own tone: a partial refusal is not a success and
+  // must stay up until the operator acts (STD-07 §R11, §R14).
+  const message = typeof success === "function" ? success(result) : success;
+  if (message && typeof message === "object") reportFeedback(message.tone, message.text);
+  else reportFeedback("success", message);
   applied?.();
   await refreshAfterWrite(visit);
   return result;
@@ -92,9 +218,11 @@ async function refreshAfterWrite(visit) {
     if (visit.isCurrent()) {
       // The write already changed page state; do not leave a finished form up.
       rerender();
-      document.getElementById(FEEDBACK)?.appendChild(el("span", {
-        text: `\nRefresh failed: ${error.message || error}. The change was applied; refresh before acting again.`,
-      }));
+      const note = `\nRefresh failed: ${error.message || error}. The change was applied; refresh before acting again.`;
+      document.getElementById(FEEDBACK)?.appendChild(el("span", { text: note }));
+      if (document.getElementById("resident-detail-dialog")?.open) {
+        document.getElementById(DETAIL_FEEDBACK)?.appendChild(el("span", { text: note }));
+      }
     }
   }
 }
@@ -206,7 +334,7 @@ function startButton(payload) {
       ui.startForm = null;
       // A refresh may have replaced the button that opened the dialog.
       // Restore focus to its current instance instead of a hidden input.
-      document.querySelector('.tab-pane[data-tab="tasks"].active #side-dock[data-mode="residents"] #residents-body button[aria-haspopup="dialog"]')?.focus();
+      document.querySelector('.tab-pane[data-tab="tasks"].active #side-dock[data-mode="residents"] #residents-body .resident-toolbar button[aria-haspopup="dialog"]')?.focus();
     };
     dialog.oncancel = event => {
       // Match the disabled Cancel button while a start write is pending.
@@ -244,7 +372,7 @@ function startForm(payload) {
   const cancel = button("Cancel", "Cancel starting a resident");
   const status = el("p", { class: "resident-start-status", role: "status", "aria-live": "polite" });
   const form = el("form", { class: "resident-form resident-start", "aria-label": "Start a resident" }, [
-    el("h3", { id: "resident-start-heading", class: "resident-start-title", text: "Start a resident" }),
+    el("header", { class: "dialog-header" }, [el("h3", { id: "resident-start-heading", class: "resident-start-title", text: "Start a resident" }), escCloseButton("Close (Esc)", { onClick: () => { if (!submit.disabled) closeResidentStart(); } })]),
     el("fieldset", { class: "resident-step" }, [
       el("legend", { text: "1 · What it should do" }),
       field("Goal", input("goal", { maxlength: "240", required: "", placeholder: "One line: what the resident keeps true" })),
@@ -262,15 +390,18 @@ function startForm(payload) {
       el("legend", { text: "3 · When it runs" }),
       field("Heartbeat minutes", input("heartbeat_minutes", { type: "number", min: "1", value: "60" }), "The longest it goes without a cycle."),
       field("Floor minutes", input("floor_minutes", { type: "number", min: "1" }), "Optional; defaults to the heartbeat. Set it lower only to react to changes sooner."),
-      field("Deadline", input("deadline", { type: "datetime-local" }), "Optional."),
+      field("Deadline", input("deadline", { type: "datetime-local" }), deadlineHint("Optional.")),
       field("Crew", crew),
       field("Continuity", continuity),
       field("Complexity", complexity),
       field("Title", input("title"), "Optional; defaults to the goal."),
       routineNote(payload),
     ]),
-    el("div", { class: "resident-form-actions" }, [status, cancel, gated(payload, "resident_write", submit)]),
+    el("div", { class: "resident-form-actions dialog-actions" }, [status, cancel, gated(payload, "resident_write", submit)]),
   ]);
+  const body = el("div", { class: "dialog-body" });
+  for (const step of form.querySelectorAll(".resident-step")) body.append(step);
+  form.insertBefore(body, form.querySelector(".dialog-actions"));
   cancel.addEventListener("click", () => {
     closeResidentStart();
   });
@@ -337,8 +468,14 @@ async function startResident(form, controls, status) {
   const finish = async (kind, message) => {
     closeResidentStart();
     ui.selected = id;
+    ui.lastOpenedBy = id;
     ui.pending = null;
     feedback(FEEDBACK, kind, message);
+    const target = `#tasks/residents/${encodeURIComponent(id)}`;
+    if (window.location.hash !== target) {
+      window.history.replaceState(window.history.state, "", target);
+      recordRoutedHref();
+    }
     await refreshAfterWrite(visit);
   };
 
@@ -455,53 +592,97 @@ function stateLabel(mandate) {
   return state;
 }
 
-function endedMeta(mandate) {
-  if (mandate.state !== "ended") return null;
-  const outcome = mandate.latest_checkpoint?.outcome;
-  const at = mandate.control?.last?.at;
-  const parts = [];
-  if (outcome) parts.push(outcome);
-  if (at) parts.push(clock(at));
-  if (!parts.length) return null;
-  return el("span", { class: "resident-row-ended", text: parts.join(" · ") });
+function cycleTimestamp(cycle) {
+  const match = /^rcy-jrun-(\d{4})(\d{2})(\d{2})-(\d{2})(\d{2})(?:-|$)/.exec(String(cycle || ""));
+  if (!match) return "";
+  return `${match[1]}-${match[2]}-${match[3]}T${match[4]}:${match[5]}:00Z`;
 }
 
-function mandateRow(mandate) {
-  const selected = ui.selected === mandate.task_id;
-  const goal = mandate.goal || mandate.mandate?.goal || mandate.title || mandate.task_id;
-  const status = statusLine(mandate);
-  const open = openDecisionList(mandate).length;
-  const meta = [
-    el("span", { class: "resident-row-state" }, [stateLabel(mandate)]),
-    el("span", { class: "resident-id", text: mandate.task_id }),
-  ];
-  if (open) {
-    const pill = el("span", { class: "pill", text: `${open} open` });
-    pill.dataset.status = "open";
-    meta.push(pill);
+function lastCheckpoint(mandate) {
+  const checkpoint = mandate.latest_checkpoint;
+  const at = checkpoint?.at || mandate.last_checkpoint_at;
+  if (at) return { text: clock(at), title: checkpoint?.cycle || "" };
+  if (checkpoint?.cycle) {
+    const inferred = cycleTimestamp(checkpoint.cycle);
+    return {
+      text: inferred ? clock(inferred) : checkpoint.cycle,
+      title: inferred ? checkpoint.cycle : "",
+    };
   }
-  const statusAttrs = { class: "resident-row-status", text: status.text };
-  if (status.text.length > 72) statusAttrs.title = status.text;
-  const row = el("div", {
-    class: `resident-row${selected ? " selected" : ""}${mandate.state === "ended" ? " ended" : ""}`,
-    "aria-label": `Resident ${goal}, ${mandate.state}, task ${mandate.task_id}. ${status.text}`,
+  return { text: "No checkpoint yet", title: "" };
+}
+
+function mandateWarnings(mandate) {
+  return [
+    mandate.mandate_error,
+    mandate.authority_error,
+    mandate.cycle_routine_disabled ? `Cycle routine off: ${mandate.cycle_routine_name || "the resident cycle routine"} is disabled, so no cycle will fire until it is enabled.` : null,
+    mandate.stalled ? `Stalled: ${mandate.stalled_reason || "no checkpoint within the heartbeat"}` : null,
+  ].filter(Boolean);
+}
+
+function stoppedAt(mandate) {
+  return mandate.ended_at ? clock(mandate.ended_at) : "Time unknown";
+}
+
+function detailsButton(mandate) {
+  const open = button("Details", `Details for ${mandate.task_id}`, "resident-small resident-details-btn");
+  open.dataset.task = mandate.task_id;
+  open.setAttribute("aria-haspopup", "dialog");
+  open.setAttribute("aria-controls", "resident-detail-dialog");
+  open.addEventListener("click", () => openResidentDetailRoute(mandate.task_id));
+  return open;
+}
+
+function liveMandateCard(payload, mandate) {
+  const goal = mandate.goal || mandate.mandate?.goal || mandate.title || mandate.task_id;
+  const body = mandate.mandate || {};
+  const wake = nextWake(payload, mandate);
+  const checkpoint = lastCheckpoint(mandate);
+  const warnings = mandateWarnings(mandate);
+  const card = el("article", {
+    class: "resident-card",
+    "aria-label": `Resident ${goal}, ${mandate.state}, task ${mandate.task_id}`,
   }, [
-    el("span", { class: "resident-row-goal resident-goal", text: goal }),
-    el("span", { class: "resident-row-meta" }, meta),
-    el("span", statusAttrs),
-    endedMeta(mandate),
+    el("div", { class: "resident-card-head" }, [
+      el("span", { class: "resident-card-goal resident-goal", text: goal, title: goal.length > 36 ? goal : null }),
+      detailsButton(mandate),
+    ]),
+    el("div", { class: "resident-card-meta" }, [
+      el("span", { class: "resident-row-state" }, [stateLabel(mandate)]),
+      el("span", { class: "resident-id", text: mandate.task_id }),
+    ]),
+    el("div", { class: "resident-facts resident-card-facts" }, [
+      fact("Crew", body.crew || "No crew"),
+      fact("Deadline", clock(body.deadline || mandate.authority?.deadline) || "No deadline"),
+      fact("Next wake", wake.text, wake.title),
+      fact("Last checkpoint", checkpoint.text, checkpoint.title),
+    ]),
+    warnings.length ? el("p", { class: "resident-stalled resident-card-warning", text: warnings[0] }) : null,
+  ]);
+  card.dataset.task = mandate.task_id;
+  return card;
+}
+
+function endedMandateRow(mandate) {
+  const goal = mandate.goal || mandate.mandate?.goal || mandate.title || mandate.task_id;
+  const stopped = stoppedAt(mandate);
+  const row = el("article", {
+    class: "resident-ended-row",
+    "aria-label": `Ended resident ${goal}, task ${mandate.task_id}${stopped ? `, ${stopped}` : ""}`,
+  }, [
+    el("div", { class: "resident-card-head" }, [
+      el("span", { class: "resident-card-goal resident-goal", text: goal, title: goal.length > 36 ? goal : null }),
+      detailsButton(mandate),
+    ]),
+    el("div", { class: "resident-ended-meta" }, [
+      el("span", { class: "resident-row-state" }, [stateLabel(mandate)]),
+      el("span", { class: "resident-id", text: mandate.task_id }),
+      stopped ? el("span", { class: "resident-row-ended", text: stopped }) : null,
+    ]),
   ]);
   row.dataset.task = mandate.task_id;
-  return makeToggleRow(row, {
-    expanded: selected,
-    controls: selected ? `resident-detail-${mandate.task_id}` : null,
-    onToggle: () => {
-      ui.selected = selected ? null : mandate.task_id;
-      ui.pending = null;
-      rerender();
-      document.querySelector(`.resident-row[data-task="${CSS.escape(mandate.task_id)}"]`)?.focus();
-    },
-  });
+  return row;
 }
 
 // --- one mandate: detail -----------------------------------------------------------
@@ -524,11 +705,17 @@ function historyList(authority) {
   }));
 }
 
+function residentDisclosure(key, opts = {}) {
+  const panel = detailsPanel(key, opts);
+  panel.dataset.detailsKey = key;
+  return panel;
+}
+
 function checkpointNotes(checkpoint) {
   const notes = checkpoint.notes;
   if (!notes) return null;
   if (notes.length <= 180) return el("p", { class: "resident-notes", text: notes });
-  const panel = detailsPanel(`resident-notes:${checkpoint.cycle || checkpoint.mandate || "notes"}`, { class: "resident-disclosure" });
+  const panel = residentDisclosure(`resident-notes:${checkpoint.cycle || checkpoint.mandate || "notes"}`, { class: "resident-disclosure" });
   panel.append(el("summary", { text: "Show notes" }), el("p", { class: "resident-notes", text: notes }));
   return panel;
 }
@@ -591,8 +778,7 @@ function checkpointBlock(checkpoint) {
     ]);
   }
   const outcome = checkpoint.outcome || "Outcome not recorded";
-  const probe = checkpoint.probe ? el("span", { class: "pill", text: "probe" }) : null;
-  if (probe) probe.dataset.status = "in_progress";
+  const probe = checkpoint.probe ? el("span", { class: "badge", "data-tone": "accent", text: "probe" }) : null;
   return el("div", { class: "resident-checkpoint" }, [
     el("p", { class: "resident-checkpoint-summary" }, [
       checkpoint.cycle ? el("span", { class: "resident-id", text: checkpoint.cycle }) : null,
@@ -703,7 +889,7 @@ function authorityForm(payload, mandate) {
     el("div", { class: "resident-authority-column" }, [
       narrowRights,
       field("Drop workspaces", input("drop_workspaces", { placeholder: list(effective.workspaces) })),
-      field("Deadline", input("deadline", { type: "datetime-local" }), "Shortens the mandate; applied as a separate narrow change."),
+      field("Deadline", input("deadline", { type: "datetime-local" }), deadlineHint("Shortens the mandate; applied as a separate narrow change.")),
       gated(payload, "resident_write", narrow),
     ]),
   ]);
@@ -722,10 +908,10 @@ function authorityForm(payload, mandate) {
     if (hasWiden && deadline) {
       await write(path, { add, workspaces, quote: quoteValue, deadline }, (result) => {
         if (result?.outcome === "granted_narrowing_refused") {
-          return `Widened ${mandate.task_id}; recorded as your answered request. Narrowing refused: ${result.narrowing_error || "unknown reason"}`;
+          return { tone: "error", text: `Widened ${mandate.task_id}; recorded as your answered request. Narrowing refused: ${result.narrowing_error || "unknown reason"}` };
         }
         if (result?.outcome === "unchanged_narrowing_refused") {
-          return `No widening applied for ${mandate.task_id}: the requested rights and workspaces were already held, so no grant request was recorded. Narrowing refused: ${result.narrowing_error || "unknown reason"}`;
+          return { tone: "error", text: `No widening applied for ${mandate.task_id}: the requested rights and workspaces were already held, so no grant request was recorded. Narrowing refused: ${result.narrowing_error || "unknown reason"}` };
         }
         if (result?.outcome === "unchanged_and_narrowed") {
           return `No widening applied for ${mandate.task_id}: the requested rights and workspaces were already held, so no grant request was recorded. Shortened its deadline.`;
@@ -923,13 +1109,15 @@ function statusExtra(mandate) {
   const line = mandate.status_line;
   if (!line?.title) return [];
   const status = statusLine(mandate);
-  const nodes = [];
+  const nodes = [
+    el("p", { class: `resident-status-line${status.stale ? " stale" : ""}`, text: status.text }),
+  ];
   const posted = line.posted_at ? `Posted ${clock(line.posted_at)}` : "";
   const lapse = line.expires_at ? `${status.stale ? "Lapsed" : "Lapses"} ${clock(line.expires_at)}` : "";
   const text = [posted, lapse].filter(Boolean).join(" · ");
   if (text) nodes.push(el("p", { class: "resident-muted", text }));
   if (line.body) {
-    const panel = detailsPanel(`resident-status:${mandate.task_id}`, { class: "resident-disclosure" });
+    const panel = residentDisclosure(`resident-status:${mandate.task_id}`, { class: "resident-disclosure" });
     panel.append(el("summary", { text: "Show full status" }), el("p", { class: "resident-notes", text: line.body }));
     nodes.push(panel);
   }
@@ -959,12 +1147,7 @@ function mandateDetail(payload, mandate) {
   const body = mandate.mandate || {};
   const wake = nextWake(payload, mandate);
   const last = mandate.control?.last;
-  const warnings = [
-    mandate.mandate_error,
-    mandate.authority_error,
-    mandate.cycle_routine_disabled ? `Cycle routine off: ${mandate.cycle_routine_name || "the resident cycle routine"} is disabled, so no cycle will fire until it is enabled.` : null,
-    mandate.stalled ? `Stalled: ${mandate.stalled_reason || "no checkpoint within the heartbeat"}` : null,
-  ].filter(Boolean);
+  const warnings = mandateWarnings(mandate);
   const facts = [
     fact("Next wake", wake.text, wake.title),
     fact("Deadline", clock(body.deadline || mandate.authority?.deadline) || "No deadline"),
@@ -977,10 +1160,10 @@ function mandateDetail(payload, mandate) {
   // detailsPanel keeps each disclosure's open state across refreshes.
   let authority = null;
   if (mandate.state !== "ended") {
-    authority = detailsPanel(`resident-authority:${id}`, { class: "resident-disclosure resident-authority" });
+    authority = residentDisclosure(`resident-authority:${id}`, { class: "resident-disclosure resident-authority" });
     authority.append(el("summary", { text: "Change authority" }), authorityForm(payload, mandate));
   }
-  const history = detailsPanel(`resident-history:${id}`, { class: "resident-disclosure" });
+  const history = residentDisclosure(`resident-history:${id}`, { class: "resident-disclosure" });
   history.append(...[
     el("summary", { text: "Exit criteria and history" }),
     body.exit_criteria?.length ? el("h4", { text: "Exit criteria" }) : null,
@@ -988,19 +1171,164 @@ function mandateDetail(payload, mandate) {
     el("h4", { text: "Authority history" }),
     historyList(mandate.authority),
   ].filter(node => node != null));
-  return el("section", { class: "resident-detail", "aria-label": `Detail for ${id}` }, [
-    mandate.state_reason ? el("p", { class: "resident-muted", text: mandate.state_reason }) : null,
-    ...warnings.map(text => el("p", { class: "resident-stalled", text })),
-    el("div", { class: "resident-facts" }, facts),
-    ...statusExtra(mandate),
-    requestRows(payload, mandate),
-    controlRow(payload, mandate),
-    authorityBlock(mandate, effective),
-    el("h4", { text: "Latest checkpoint" }),
-    checkpointBlock(mandate.latest_checkpoint),
-    authority,
-    history,
+  const detail = el("div", { class: "resident-detail", "aria-label": `Detail for ${id}` }, [
+    el("section", { class: "resident-dialog-section", "aria-label": "Status" }, [
+      el("h4", { text: "Status" }),
+      mandate.state_reason ? el("p", { class: "resident-muted", text: mandate.state_reason }) : null,
+      ...warnings.map(text => el("p", { class: "resident-stalled", text })),
+      el("div", { class: "resident-facts" }, facts),
+      ...statusExtra(mandate),
+      requestRows(payload, mandate),
+      controlRow(payload, mandate),
+    ]),
+    el("section", { class: "resident-dialog-section", "aria-label": "Current authority" }, [
+      authorityBlock(mandate, effective),
+      authority,
+    ]),
+    el("section", { class: "resident-dialog-section", "aria-label": "Latest checkpoint" }, [
+      el("h4", { text: "Latest checkpoint" }),
+      checkpointBlock(mandate.latest_checkpoint),
+    ]),
+    el("section", { class: "resident-dialog-section", "aria-label": "History" }, [
+      history,
+    ]),
   ]);
+  detail.id = `resident-detail-${id}`;
+  return detail;
+}
+
+let detailDialogWired = false;
+
+function wireResidentDetailDialog(dialog) {
+  if (detailDialogWired || !dialog) return;
+  detailDialogWired = true;
+  // Escape fires `cancel` synchronously before the queued `close` task; handle
+  // dismissal right away so the route and focus update immediately.
+  dialog.addEventListener("cancel", (event) => {
+    event.preventDefault();
+    dismissResidentDetail();
+  });
+  // Fallback when closed directly (e.g. from setDockMode when leaving Residents).
+  dialog.addEventListener("close", () => {
+    if (dialog.returnValue === "programmatic" || dialog.returnValue === "dismissed") return;
+    const returnId = ui.lastOpenedBy || ui.selected;
+    ui.selected = null;
+    ui.pending = null;
+    if (!residentsPaneActive()) return;
+    focusDetailsButton(returnId);
+    if (/^#tasks\/residents\/.+/.test(window.location.hash)) {
+      window.location.hash = "#tasks/residents";
+    }
+  });
+  // Clicking a task link inside the dialog closes it and lets the browser
+  // follow the link's navigation without rewriting the hash back to Residents.
+  dialog.addEventListener("click", (event) => {
+    const link = event.target?.closest?.("a[href]");
+    if (!link || !dialog.contains(link)) return;
+    if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey || event.button !== 0) return;
+    ui.selected = null;
+    ui.pending = null;
+    closeResidentDetailProgrammatic();
+  });
+}
+
+function captureDialogFocus(dialog) {
+  const active = document.activeElement;
+  if (!active || !dialog.contains(active)) return null;
+  if (active.classList.contains("esc-close")) {
+    return () => dialog.querySelector(".esc-close")?.focus({ preventScroll: true });
+  }
+  if (active.id === "resident-detail-heading") {
+    return () => dialog.querySelector("#resident-detail-heading")?.focus({ preventScroll: true });
+  }
+  if (active.tagName === "SUMMARY") {
+    const key = active.parentElement?.dataset?.detailsKey;
+    if (key) {
+      return () => dialog.querySelector(`details[data-details-key="${CSS.escape(key)}"] > summary`)?.focus({ preventScroll: true });
+    }
+  }
+  const label = active.getAttribute("aria-label");
+  if (label && active.tagName === "BUTTON") {
+    return () => dialog.querySelector(`button[aria-label="${CSS.escape(label)}"]`)?.focus({ preventScroll: true });
+  }
+  return null;
+}
+
+function renderResidentDetailDialog(payload, deliberate = false) {
+  const dialog = document.getElementById("resident-detail-dialog");
+  if (!dialog) return;
+  wireResidentDetailDialog(dialog);
+  if (!ui.selected) {
+    closeResidentDetailProgrammatic();
+    return;
+  }
+  const mandates = payload?.mandates || [];
+  const mandate = mandates.find(item => item.task_id === ui.selected);
+  if (!mandate) {
+    ui.selected = null;
+    ui.pending = null;
+    closeResidentDetailProgrammatic();
+    if (/^#tasks\/residents\/.+/.test(window.location.hash)) {
+      window.history.replaceState(window.history.state, "", "#tasks/residents");
+      recordRoutedHref();
+    }
+    return;
+  }
+  const wasOpen = dialog.open;
+  const sameMandate = wasOpen && dialog.dataset.task === mandate.task_id;
+  // A form the operator is typing in, or has typed into and left, survives a
+  // background refresh without losing input or resetting scroll.
+  if (!deliberate && sameMandate && (dialog.querySelector("form :focus") || formHoldsDraft(dialog))) return;
+  const prevScrollTop = sameMandate ? dialog.scrollTop : 0;
+  const prevScrollLeft = sameMandate ? dialog.scrollLeft : 0;
+  const restoreFocus = sameMandate ? captureDialogFocus(dialog) : null;
+  const prevFeedback = sameMandate ? dialog.querySelector(`#${DETAIL_FEEDBACK}`) : null;
+  const preservedFeedbackClass = prevFeedback?.className || "operation-feedback";
+  const preservedFeedbackText = prevFeedback?.textContent || "";
+
+  const goal = mandate.goal || mandate.mandate?.goal || mandate.title || mandate.task_id;
+  const heading = el("h3", { id: "resident-detail-heading", class: "resident-dialog-title", text: goal });
+  heading.tabIndex = -1;
+  const close = escCloseButton("Close resident details (Esc)", { onClick: () => dismissResidentDetail() });
+  const header = el("header", { class: "dialog-header resident-dialog-header" }, [
+    el("div", { class: "resident-dialog-head-main" }, [
+      heading,
+      el("div", { class: "resident-dialog-meta" }, [
+        el("span", { class: "resident-row-state" }, [stateLabel(mandate)]),
+        el("span", { class: "resident-id", text: mandate.task_id }),
+      ]),
+    ]),
+    close,
+  ]);
+  const feedbackSlot = el("div", {
+    class: preservedFeedbackClass,
+    id: DETAIL_FEEDBACK,
+    role: "status",
+    "aria-live": "polite",
+    text: preservedFeedbackText,
+  });
+  const body = el("div", { class: "dialog-body resident-dialog-body" }, [
+    feedbackSlot,
+    mandateDetail(payload, mandate),
+  ]);
+
+  dialog.dataset.task = mandate.task_id;
+  dialog.replaceChildren(header, body);
+  if (!wasOpen) {
+    dialog.returnValue = "";
+    dialog.showModal();
+    dialog.scrollTop = 0;
+    dialog.scrollLeft = 0;
+    heading.focus({ preventScroll: true });
+  } else if (sameMandate) {
+    dialog.scrollTop = prevScrollTop;
+    dialog.scrollLeft = prevScrollLeft;
+    restoreFocus?.();
+  } else {
+    dialog.scrollTop = 0;
+    dialog.scrollLeft = 0;
+    heading.focus({ preventScroll: true });
+  }
 }
 
 // --- page -------------------------------------------------------------------------
@@ -1014,17 +1342,20 @@ function sortedLive(mandates) {
     .map(entry => entry.mandate);
 }
 
-function mandateList(payload, mandates) {
-  const items = [];
-  for (const mandate of mandates) {
-    items.push(mandateRow(mandate));
-    if (ui.selected === mandate.task_id) {
-      const detail = mandateDetail(payload, mandate);
-      detail.id = `resident-detail-${mandate.task_id}`;
-      items.push(detail);
+function captureDockFocus(body) {
+  const active = document.activeElement;
+  if (!active || !body.contains(active)) return null;
+  const detailsTask = active.closest?.(".resident-details-btn")?.dataset.task;
+  if (detailsTask) {
+    return () => body.querySelector(`.resident-details-btn[data-task="${CSS.escape(detailsTask)}"]`)?.focus({ preventScroll: true });
+  }
+  if (active.closest?.(".resident-toolbar")) {
+    const label = active.getAttribute("aria-label");
+    if (label) {
+      return () => body.querySelector(`.resident-toolbar button[aria-label="${CSS.escape(label)}"]`)?.focus({ preventScroll: true });
     }
   }
-  return items;
+  return null;
 }
 
 function renderResidents(payload, deliberate = false) {
@@ -1037,25 +1368,26 @@ function renderResidents(payload, deliberate = false) {
   const live = sortedLive(mandates.filter(mandate => mandate.state !== "ended"));
   const ended = mandates.filter(mandate => mandate.state === "ended");
   if (count) count.textContent = live.length ? String(live.length) : "";
-  // A form the operator is typing in survives a background refresh; the
-  // start dialog keeps its own node, so its values survive every render.
-  // A deliberate render (Cancel, a submitted write) must not be dropped.
-  if (!deliberate && body.querySelector("form :focus")) return;
-  if (ui.selected && !mandates.some(mandate => mandate.task_id === ui.selected)) ui.selected = null;
+  const restoreFocus = captureDockFocus(body);
   const toolbar = el("div", { class: "resident-toolbar" }, [routineStatus(payload), startButton(payload)]);
   const parts = [toolbar];
   if (live.length) {
-    parts.push(el("div", { class: "resident-list" }, mandateList(payload, live)));
+    parts.push(el("div", { class: "resident-list" }, live.map(mandate => liveMandateCard(payload, mandate))));
   } else {
     parts.push(el("p", { class: "resident-muted resident-none", text: "No running residents." }));
   }
   if (ended.length) {
-    const panel = detailsPanel("resident-ended", { class: "resident-disclosure resident-ended" });
-    panel.append(el("summary", { text: `Ended (${ended.length})` }), el("div", { class: "resident-list" }, mandateList(payload, ended)));
+    const panel = residentDisclosure("resident-ended", { class: "resident-disclosure resident-ended" });
+    panel.append(
+      el("summary", { text: `Ended (${ended.length})` }),
+      el("div", { class: "resident-list" }, ended.map(mandate => endedMandateRow(mandate))),
+    );
     if (ended.some(mandate => mandate.task_id === ui.selected)) panel.open = true;
     parts.push(panel);
   }
   body.replaceChildren(...parts);
+  restoreFocus?.();
+  renderResidentDetailDialog(payload, deliberate);
 }
 
 export async function fetchAndRenderResidents({ deliberate = false } = {}) {

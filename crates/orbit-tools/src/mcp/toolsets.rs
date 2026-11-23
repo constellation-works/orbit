@@ -23,11 +23,12 @@ pub(crate) fn builtin_mcp_toolset(name: &str) -> Option<McpToolset> {
         | "orbit.task.artifact.put"
         | "orbit.friction.add"
         | "orbit.friction.update" => T::TasksWrite,
-        "orbit.task.block_triage"
-        | "orbit.task.reconcile_review"
+        "orbit.task.block_triage" => T::TaskTriage,
+        "orbit.task.reconcile_review"
         | "orbit.task.recover_claim"
         | "orbit.task.repilot"
         | "orbit.task.requeue"
+        | "orbit.task.resume_delivery"
         | "orbit.task.retry_handoff"
         | "orbit.task.review_reset"
         | "orbit.task.revoke_handoff" => T::TaskRepair,
@@ -39,15 +40,16 @@ pub(crate) fn builtin_mcp_toolset(name: &str) -> Option<McpToolset> {
         }
         "orbit.workflow.ship"
         | "orbit.workflow.land"
+        | "orbit.workflow.refresh"
         | "orbit.workflow.auto"
-        | "orbit.workflow.run.resume"
-        | "orbit.pipeline.invoke" => T::Dispatch,
+        | "orbit.workflow.run.resume" => T::Dispatch,
+        "orbit.pipeline.invoke" => T::Pipelines,
+        "orbit.routine.control" => T::Routines,
         "orbit.auto_task.add"
         | "orbit.auto_task.list"
         | "orbit.auto_task.mint"
         | "orbit.auto_task.update"
-        | "orbit.automation.explain"
-        | "orbit.routine.control" => T::Automation,
+        | "orbit.automation.explain" => T::Automation,
         "orbit.codebase.show" | "orbit.codebase.related" | "orbit.codebase.analytics" => {
             T::Codebase
         }
@@ -57,10 +59,10 @@ pub(crate) fn builtin_mcp_toolset(name: &str) -> Option<McpToolset> {
         _ if name.starts_with("orbit.resident.") || name.starts_with("orbit.evolution.") => {
             T::Resident
         }
-        // Crew memory is the memory experiment arm's surface.
-        _ if name.starts_with("orbit.experiment.") || name.starts_with("orbit.memory.") => {
-            T::Experiments
-        }
+        _ if name.starts_with("orbit.experiment.") => T::Experiments,
+        // Crew memory is dormant machinery: only a dreaming run or a run in
+        // a memory experiment arm is served it, by its dispatch stamp.
+        _ if name.starts_with("orbit.memory.") => T::RunBound,
         _ if name.starts_with("orbit.agents.") || name.starts_with("orbit.crew.") => T::Analytics,
         _ => return None,
     };

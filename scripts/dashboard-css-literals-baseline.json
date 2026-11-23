@@ -1,0 +1,77 @@
+{
+  "files": {
+    "crates/orbit-web/assets/dashboard/css/agents.css": {
+      "colour_literals": 26,
+      "raw_font_sizes": 0
+    },
+    "crates/orbit-web/assets/dashboard/css/audit.css": {
+      "colour_literals": 18,
+      "raw_font_sizes": 0
+    },
+    "crates/orbit-web/assets/dashboard/css/automation.css": {
+      "colour_literals": 2,
+      "raw_font_sizes": 1
+    },
+    "crates/orbit-web/assets/dashboard/css/components.css": {
+      "colour_literals": 24,
+      "raw_font_sizes": 1
+    },
+    "crates/orbit-web/assets/dashboard/css/drain.css": {
+      "colour_literals": 1,
+      "raw_font_sizes": 0
+    },
+    "crates/orbit-web/assets/dashboard/css/experiments.css": {
+      "colour_literals": 4,
+      "raw_font_sizes": 0
+    },
+    "crates/orbit-web/assets/dashboard/css/health.css": {
+      "colour_literals": 38,
+      "raw_font_sizes": 0
+    },
+    "crates/orbit-web/assets/dashboard/css/knowledge.css": {
+      "colour_literals": 6,
+      "raw_font_sizes": 0
+    },
+    "crates/orbit-web/assets/dashboard/css/log-tail.css": {
+      "colour_literals": 8,
+      "raw_font_sizes": 0
+    },
+    "crates/orbit-web/assets/dashboard/css/markdown.css": {
+      "colour_literals": 3,
+      "raw_font_sizes": 0
+    },
+    "crates/orbit-web/assets/dashboard/css/notices.css": {
+      "colour_literals": 1,
+      "raw_font_sizes": 0
+    },
+    "crates/orbit-web/assets/dashboard/css/run-detail.css": {
+      "colour_literals": 25,
+      "raw_font_sizes": 0
+    },
+    "crates/orbit-web/assets/dashboard/css/runs.css": {
+      "colour_literals": 8,
+      "raw_font_sizes": 0
+    },
+    "crates/orbit-web/assets/dashboard/css/scoreboard.css": {
+      "colour_literals": 1,
+      "raw_font_sizes": 0
+    },
+    "crates/orbit-web/assets/dashboard/css/settings.css": {
+      "colour_literals": 2,
+      "raw_font_sizes": 0
+    },
+    "crates/orbit-web/assets/dashboard/css/shell.css": {
+      "colour_literals": 23,
+      "raw_font_sizes": 0
+    },
+    "crates/orbit-web/assets/dashboard/css/task-detail.css": {
+      "colour_literals": 12,
+      "raw_font_sizes": 0
+    },
+    "crates/orbit-web/assets/dashboard/css/tasks.css": {
+      "colour_literals": 9,
+      "raw_font_sizes": 0
+    }
+  },
+  "schema_version": 1
+}

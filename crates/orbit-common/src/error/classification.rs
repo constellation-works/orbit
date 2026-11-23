@@ -1,11 +1,12 @@
 use std::path::Path;
 
 use super::{
-    ArtifactOrigin, ClaimRefusalKind, DecisionRefusalCode, ForceOverridableKind,
-    ForceOverridableRefusal, ForgePushHoldFailure, FrictionNotLocal, HostRegistryCode,
-    NotFoundKind, NoticeRefusalCode, OrbitError, PrivateVcsFailure, RemoteToolCode,
-    SourceRepairAuthorityRefusal, SourceRepairRunStateRefusal, SqliteContention, StorageLayer,
-    TaskPilotRefusalCode, WorkflowEvidenceUnavailable, WorkspaceClaimHeld,
+    ArtifactOrigin, BoundWorkspace, BoundWorkspaceRemedy, ClaimRefusalKind, DecisionRefusalCode,
+    ForceOverridableKind, ForceOverridableRefusal, ForgePushHoldFailure, FrictionNotLocal,
+    HostRegistryCode, NotFoundKind, NoticeRefusalCode, OrbitError, PrivateVcsFailure,
+    RemoteToolCode, SourceRepairAuthorityRefusal, SourceRepairRunStateRefusal, SqliteContention,
+    StorageLayer, TaskPilotRefusalCode, UnknownWorkspaceSelector, WorkflowEvidenceUnavailable,
+    WorkspaceClaimHeld,
 };
 
 /// The JSON-RPC invalid-params code. An owner whose internal drain
@@ -69,6 +70,7 @@ impl OrbitError {
             }
             OrbitError::ForceOverridable(_) => "force_overridable",
             OrbitError::InvalidInput(_)
+            | OrbitError::UnknownWorkspaceSelector(_)
             | OrbitError::TaskDeliveryUnavailable(_)
             | OrbitError::InvalidInputDiagnostic { .. }
             | OrbitError::ClaimRefused { .. } => const { RemoteToolCode::InvalidInput.as_str() },
@@ -784,6 +786,44 @@ impl OrbitError {
             self,
             Self::ProcessTimeout { .. } | Self::ExecutionTimeout { .. }
         )
+    }
+
+    /// Construct a typed unknown-workspace-selector refusal without encoding
+    /// its classification only in prose.
+    pub fn unknown_workspace_selector(selector: impl Into<String>) -> Self {
+        Self::UnknownWorkspaceSelector(Box::new(UnknownWorkspaceSelector {
+            selector: selector.into(),
+            bound: None,
+        }))
+    }
+
+    /// Attach the bound session's workspace name and the remedy that keeps
+    /// its filter to an unknown-workspace refusal, preserving the typed
+    /// [`Self::UnknownWorkspaceSelector`] identity.
+    pub fn with_bound_workspace(
+        mut self,
+        bound_workspace: impl Into<String>,
+        remedy: BoundWorkspaceRemedy,
+    ) -> Self {
+        if let Self::UnknownWorkspaceSelector(unknown) = &mut self {
+            unknown.bound = Some(BoundWorkspace {
+                name: bound_workspace.into(),
+                remedy,
+            });
+        }
+        self
+    }
+
+    /// The structured unknown-workspace-selector evidence, if this is one.
+    ///
+    /// Answered from the variant alone, so an [`Self::InvalidInput`] quoting
+    /// `"unknown workspace selector '…'"` or reporting an ambiguous or inactive
+    /// workspace never matches.
+    pub fn unknown_workspace_selector_details(&self) -> Option<&UnknownWorkspaceSelector> {
+        match self {
+            Self::UnknownWorkspaceSelector(unknown) => Some(unknown),
+            _ => None,
+        }
     }
 }
 

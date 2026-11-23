@@ -3,6 +3,7 @@
 
 use std::time::Instant;
 
+use orbit_common::security::redaction::redact_all_json_with_keys;
 use orbit_common::{NotFoundKind, OrbitError};
 use orbit_store::contracts::{AuditEventInsertParams, AuditInvocationFields};
 use orbit_tools::ToolExecutionKind;
@@ -118,6 +119,9 @@ where
     // row's id as `entry_execution_id`. The frame pops when this dispatch
     // ends, including when the tool fails.
     let execution_frame = DispatchAuditFrame::enter();
+    // `dispatch` consumes the input, and only a refusal records it, so the
+    // copy is kept for the refusal row alone.
+    let refused_input = input.clone();
     let result = dispatch(input);
     let application = crate::runtime::application_authority::take_application_audit();
     crate::runtime::application_authority::finish_application_dispatch();
@@ -169,6 +173,15 @@ where
         ),
     };
 
+    let arguments_json = match &result {
+        Err(
+            OrbitError::InvalidInput(_)
+            | OrbitError::InvalidInputDiagnostic { .. }
+            | OrbitError::UnknownWorkspaceSelector(_),
+        ) => Some(refused_arguments_json(refused_input)),
+        _ => None,
+    };
+
     let params = AuditEventInsertParams {
         execution_id: execution_frame.id().to_owned(),
         command: "tool".to_string(),
@@ -183,7 +196,7 @@ where
         exit_code,
         duration_ms,
         working_directory,
-        arguments_json: None,
+        arguments_json,
         stdout_truncated: None,
         stderr_truncated: None,
         error_message,
@@ -292,6 +305,63 @@ where
     // (ORB-16383). Finding M1 (SECURITY-REVIEW-2026-07-15) still holds for
     // the silent case: a missing audit row is reported on the success value.
     finalize_successful_dispatch(name, execution_kind, value, audit_write)
+}
+
+/// Largest serialized redacted argument payload an invalid-input refusal row
+/// stores. Past it the row keeps only the top-level key names that fit (see
+/// [`refused_key_names_json`]).
+const REFUSED_ARGUMENTS_MAX_BYTES: usize = 4096;
+
+/// The `arguments_json` of an invalid-input refusal: the refused call's
+/// arguments after secret redaction (property names included, since the
+/// caller chooses them), or just their top-level key names, as a
+/// JSON array, when the redacted JSON exceeds [`REFUSED_ARGUMENTS_MAX_BYTES`].
+fn refused_arguments_json(arguments: Value) -> String {
+    let redacted = redact_all_json_with_keys(arguments);
+    let serialized = redacted.to_string();
+    if serialized.len() <= REFUSED_ARGUMENTS_MAX_BYTES {
+        return serialized;
+    }
+    let keys: Vec<String> = redacted
+        .as_object()
+        .map(|object| object.keys().cloned().collect())
+        .unwrap_or_default();
+    refused_key_names_json(&keys)
+}
+
+/// The key names as a JSON array no longer than [`REFUSED_ARGUMENTS_MAX_BYTES`].
+/// Names are kept in order while they fit; each one that does not fit is left
+/// out and counted by a trailing `+N more` entry, so a single oversized name
+/// cannot push the summary past the limit.
+fn refused_key_names_json(keys: &[String]) -> String {
+    let whole = Value::Array(keys.iter().cloned().map(Value::String).collect()).to_string();
+    if whole.len() <= REFUSED_ARGUMENTS_MAX_BYTES {
+        return whole;
+    }
+    // The marker is sized for the full key count, which has at least as many
+    // digits as the omitted count, so the marker always fits the reservation.
+    // Its separator comma is included.
+    let marker_room = json_string_len(&format!("+{} more", keys.len())) + 1;
+    // The array's brackets are two bytes.
+    let names_budget = REFUSED_ARGUMENTS_MAX_BYTES - 2 - marker_room;
+    let mut kept: Vec<Value> = Vec::new();
+    let mut used = 0;
+    for key in keys {
+        let separator = usize::from(!kept.is_empty());
+        let element = json_string_len(key) + separator;
+        if used + element <= names_budget {
+            used += element;
+            kept.push(Value::String(key.clone()));
+        }
+    }
+    let omitted = keys.len() - kept.len();
+    kept.push(Value::String(format!("+{omitted} more")));
+    Value::Array(kept).to_string()
+}
+
+/// Serialized length of `text` as a JSON string, quotes and escapes included.
+fn json_string_len(text: &str) -> usize {
+    Value::String(text.to_owned()).to_string().len()
 }
 
 /// This dispatch's audit execution id, pushed before the tool runs and popped

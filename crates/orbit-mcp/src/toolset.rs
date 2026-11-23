@@ -33,13 +33,13 @@ pub const MCP_ROLE_CONFIG_KEY: &str = "machine.mcp.role";
 pub const TOOLSET_NOT_ENABLED_CODE: &str = "toolset_not_enabled";
 
 /// Serve `inner` with only the definitions of `selection`'s toolsets.
+///
+/// Even a selection of every toolset is filtered: a [`McpToolset::RunBound`]
+/// definition is advertised only when the selection names it as a tool.
 pub fn with_mcp_toolsets(
     inner: Arc<dyn McpHost>,
     selection: McpToolsetSelection,
 ) -> Arc<dyn McpHost> {
-    if selection.enables_all() {
-        return inner;
-    }
     Arc::new(ToolsetFilteredHost {
         inner,
         selection,
@@ -129,6 +129,31 @@ fn toolset_not_enabled(
     toolset: McpToolset,
     role: Option<McpRole>,
 ) -> OrbitError {
+    build_toolset_not_enabled(tool, action, toolset, role, true)
+}
+
+/// The refusal for a call to the adapter-owned presentation tool (`orbit_ui`)
+/// when the `ui` toolset is not enabled on this server.
+pub(crate) fn presentation_toolset_not_enabled(role: Option<McpRole>) -> OrbitError {
+    build_toolset_not_enabled(
+        crate::presentation_definition::PRESENTATION_TOOL_ALIAS,
+        None,
+        McpToolset::Ui,
+        role,
+        false,
+    )
+}
+
+fn build_toolset_not_enabled(
+    tool: &str,
+    action: Option<&str>,
+    toolset: McpToolset,
+    role: Option<McpRole>,
+    cli_reachable: bool,
+) -> OrbitError {
+    if toolset == McpToolset::RunBound {
+        return run_bound_not_served(tool);
+    }
     let flag = format!("--toolset {toolset}");
     let roles = toolset.roles();
     let role_names = roles
@@ -144,11 +169,23 @@ fn toolset_not_enabled(
         Some(action) => format!("action '{action}' of tool '{tool}'"),
         None => format!("tool '{tool}'"),
     };
+    let enable_clause = if role_names.is_empty() {
+        format!(
+            "restart `orbit mcp serve` with `{flag}` or add '{toolset}' to `{MCP_TOOLSETS_CONFIG_KEY}`"
+        )
+    } else {
+        format!(
+            "restart `orbit mcp serve` with `{flag}`, add '{toolset}' to `{MCP_TOOLSETS_CONFIG_KEY}`, \
+             or serve a role that includes it ({role_names})"
+        )
+    };
+    let cli_suffix = if cli_reachable {
+        format!(". `orbit tool run {tool}` reaches it without MCP")
+    } else {
+        String::new()
+    };
     let message = format!(
-        "{subject} is in the '{toolset}' MCP toolset, and {served}; restart \
-         `orbit mcp serve` with `{flag}`, add '{toolset}' to `{MCP_TOOLSETS_CONFIG_KEY}`, or \
-         serve a role that includes it ({role_names}). `orbit tool run {tool}` reaches it \
-         without MCP"
+        "{subject} is in the '{toolset}' MCP toolset, and {served}; {enable_clause}{cli_suffix}"
     );
     OrbitError::RemoteTool {
         code: RemoteToolCode::Other(TOOLSET_NOT_ENABLED_CODE.into()),
@@ -169,9 +206,47 @@ fn toolset_not_enabled(
     }
 }
 
+/// The refusal for a run-bound tool on a server whose dispatch stamp does not
+/// name it: no flag, config or role enables it, so none is suggested.
+fn run_bound_not_served(tool: &str) -> OrbitError {
+    let message = format!(
+        "tool '{tool}' is served only to the managed runs that may call it, and this server was not started for one"
+    );
+    OrbitError::RemoteTool {
+        code: RemoteToolCode::Other(TOOLSET_NOT_ENABLED_CODE.into()),
+        payload: json!({
+            "code": TOOLSET_NOT_ENABLED_CODE,
+            "message": message,
+            "tool": tool,
+            "toolset": McpToolset::RunBound,
+        }),
+        message,
+    }
+}
+
 impl McpHost for ToolsetFilteredHost {
     fn presentation_enabled(&self) -> bool {
         self.selection.enables(McpToolset::Ui) && self.inner.presentation_enabled()
+    }
+
+    fn presentation_disabled_error(&self) -> OrbitError {
+        if !self.selection.enables(McpToolset::Ui) {
+            return presentation_toolset_not_enabled(self.selection.role());
+        }
+        self.inner.presentation_disabled_error()
+    }
+
+    fn serves_tool_call(&self, name: &str, action: Option<&str>) -> bool {
+        let Ok(surface) = self.surface() else {
+            return false;
+        };
+        if surface.withheld.contains_key(name) {
+            return false;
+        }
+        match surface.per_action.get(name) {
+            Some((canonical, rules)) => self.selection.enables_call(rules, canonical, action),
+            None => self.inner.serves_tool_call(name, action),
+        }
     }
 
     fn list_mcp_tool_definitions(&self) -> Result<Vec<McpToolDefinition>, OrbitError> {

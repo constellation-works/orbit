@@ -39,14 +39,14 @@ const EXPLAIN_PARAMS: &[ParamSpec] = &[
     required(both(
         "definition",
         ParamType::String,
-        "The routine or auto-task carrying the condition: its name, or `routine:<name>` / `auto-task:<name>` when a routine and an auto-task share the name. `job:<name>` explains that job's auto-task steps instead.",
+        "Routine, auto-task, or `job:<name>`.",
         CliArgKind::Positional,
         "Routine or auto-task name (routine:<name> or auto-task:<name> when both exist), or job:<name> for a job's auto-task steps",
     )),
     both(
         "subject",
         ParamType::String,
-        "The subject whose clause tree to show: a task ID for a task-scope condition, `workspace` for a workspace-scope one. Default: the first match, else the first closest miss, else the first subject evaluated.",
+        "Task ID or `workspace`.",
         CliArgKind::flag("subject"),
         "Subject whose clause tree to show (a task ID, or workspace)",
     ),
@@ -56,7 +56,7 @@ const EXPLAIN: OperationSpec<AutomationVerb> = OperationSpec {
     verb: AutomationVerb::Explain,
     cli_path: &["explain"],
     tool_name: "orbit.automation.explain",
-    tool_description: "Explain a routine's `trigger.condition`, an auto-task's `schedule.condition`, or `job:<name>` steps against live workspace state. Reports the scope, matches and closest misses, one subject's clause tree with operand values (unreadable values are unknown, never false), and durable tracking; job mode shows the steps checked at load. Read-only: it writes nothing, evaluates no waits and mints nothing; enabled jobs run detached and park while a step waits. Details: installed Orbit skill `references/tool-surface.md`, row `Condition explain`.",
+    tool_description: "Explain a routine's `trigger.condition`, an auto-task's `schedule.condition`, or `job:<name>` steps against live workspace state. Reports the scope, matches and closest misses, one subject's clause tree with operand values (unreadable values are unknown, never false), and durable tracking; job mode shows the steps checked at load. Read-only: it writes nothing, evaluates no waits and mints nothing; enabled jobs run detached and park while a step waits. Details: installed Orbit skill `references/tool-surface-capability-map.md`, row `Condition explain`.",
     cli_about: "Show a condition's matches, closest misses and clause tree over live state, or a job's auto-task steps",
     cli_help: CliHelp {
         long_about: None,

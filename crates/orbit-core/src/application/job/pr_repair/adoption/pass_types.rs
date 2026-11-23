@@ -1,5 +1,5 @@
 use orbit_types::task::TaskStatus;
-use orbit_types::workflow::{DeliveryRefusal, JobRun, PrAutoFixBlocker};
+use orbit_types::workflow::{JobRun, PrAutoFixBlocker};
 use serde_json::{Value, json};
 use std::time::Duration;
 
@@ -21,7 +21,7 @@ pub(in crate::application::job::pr_repair) struct Repair {
     /// a pull request with no blocker.
     pub(super) blocker: Option<PrAutoFixBlocker>,
     /// The delivery hold a held hand-back resumes completion from.
-    pub(super) hold: Option<DeliveryRefusal>,
+    pub(super) hold: Option<&'static str>,
     /// The run input record of the repair.
     pub(super) marker: Value,
 }
@@ -35,7 +35,7 @@ impl Repair {
             "pr_number": self.pr_number,
             "head_sha": self.head_sha,
             "blocker": self.blocker.map(PrAutoFixBlocker::as_str),
-            "hold_code": self.hold.map(DeliveryRefusal::error_code),
+            "hold_code": self.hold,
         })
     }
 }
@@ -98,8 +98,9 @@ impl PassReads {
 
 pub(in crate::application::job::pr_repair) enum BlockerRead {
     /// The forge could read the pull request's blockers (or determined it is
-    /// no longer open).
-    Complete(Option<crate::runtime::task_pr_forge::PullRequestBlockers>),
+    /// no longer open). Boxed so this enum stays under clippy's
+    /// `large_enum_variant` threshold, as the blocker record grows.
+    Complete(Option<Box<crate::runtime::task_pr_forge::PullRequestBlockers>>),
     /// GitHub is still calculating this pull request's mergeability. This is
     /// local to that candidate and must not defer the rest of the pass.
     MergeabilityUnknown,

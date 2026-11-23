@@ -35,6 +35,10 @@ ITEM_HEADS = {
     "pub", "use", "fn", "const", "static", "mod", "async", "unsafe", "extern", "impl", "trait",
     "struct", "enum", "type", "union", "macro_rules",
 }
+# A statement that starts with one of these can end at `}` (an `else` continues
+# `if`). Other statements, including `let` and `const`/`static` initializers,
+# run to `;`, so every brace in them keeps the statement's cfg.
+BLOCK_INTRODUCERS = {"if", "else", "match", "loop", "while", "for", "unsafe", "async", "try"}
 # Known cfg atoms per target: bare flags, then key = "value" options. Anything
 # else (features, test, debug_assertions, ...) is unknown and evaluates both ways.
 PLATFORMS = {
@@ -43,6 +47,50 @@ PLATFORMS = {
     "macos": ({"unix": True, "windows": False},
               {"target_os": "macos", "target_family": "unix", "target_vendor": "apple"}),
 }
+
+
+def item_body_brace(head):
+    """Whether `{` closes this item rather than an expression inside it.
+
+    `fn`, `struct`, `mod` and the other body items end at that brace.
+    `const` and `static` end at `;` even when the initializer has braces.
+    """
+    index = 0
+    if index < len(head) and head[index] == "pub":
+        index += 1
+        if index < len(head) and head[index] == "(":
+            depth = 0
+            while index < len(head):
+                token = head[index]
+                index += 1
+                if token == "(":
+                    depth += 1
+                elif token == ")":
+                    depth -= 1
+                    if depth == 0:
+                        break
+    while index < len(head):
+        token = head[index]
+        nxt = head[index + 1] if index + 1 < len(head) else None
+        if token == "const" and nxt in ("fn", "unsafe", "extern"):
+            index += 1
+            continue
+        if token in ("async", "unsafe") and nxt in ("fn", "trait", "impl", "mod", "extern", "const"):
+            index += 1
+            continue
+        if token == "extern":
+            index += 1
+            if index < len(head) and head[index][:1] in ('"', "'"):
+                index += 1
+            if index < len(head) and head[index] == "fn":
+                continue
+            return True
+        if token in ("fn", "mod", "struct", "enum", "union", "impl", "trait", "macro_rules"):
+            return True
+        if token in ("unsafe", "async"):
+            return True
+        return False
+    return False
 
 
 @dataclass
@@ -313,8 +361,20 @@ class Source:
         header = start
         path_override = None
         attrs = []
+        # A statement cfg stays up through every top-level brace of that
+        # statement. close_statement drops it on the next token when a block
+        # statement has ended, unless that token is `else`.
+        close_statement = False
+        statement_kind = None
         while index < end:
             value = self.values[index]
+            if close_statement:
+                close_statement = False
+                if value != "else":
+                    active = enabled
+                    path_override = None
+                    attrs = []
+                    statement_kind = None
             if value == "#" and index + 1 < end and self.values[index + 1] in ("!", "["):
                 inner = self.values[index + 1] == "!"
                 opening = index + 2 if inner else index + 1
@@ -336,6 +396,9 @@ class Source:
                 index = closing + 1
                 header = index
                 continue
+            if (statement_kind is None and value not in ("{", "}", ";", ",")
+                    and not value.startswith("'") and value != ":"):
+                statement_kind = "block" if value in BLOCK_INTRODUCERS else "semi"
             self.live[index] = active
             if value in ("(", "["):
                 closing = self.ends[index]
@@ -384,10 +447,24 @@ class Source:
                               comma_items=comma_items or "struct" in head or "enum" in head,
                               block=inner)
                     index = closing
-                active = enabled
-                path_override = None
-                attrs = []
-                header = index + 1
+                    # An item body ends here. A brace inside a `let`, `const`
+                    # or `static` does not: the cfg runs on to the semicolon.
+                    # A block statement (`if`, `match`, a bare block) ends at
+                    # `}` unless `else` continues it.
+                    if is_item and item_body_brace(head):
+                        active = enabled
+                        path_override = None
+                        attrs = []
+                        statement_kind = None
+                    elif statement_kind != "semi":
+                        close_statement = True
+                    header = index + 1
+                else:
+                    active = enabled
+                    path_override = None
+                    attrs = []
+                    statement_kind = None
+                    header = index + 1
             index += 1
 
     def findings(self):

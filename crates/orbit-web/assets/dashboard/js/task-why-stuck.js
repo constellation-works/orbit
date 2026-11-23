@@ -39,7 +39,7 @@ export function buildWhyStuckCard(task) {
   const stuck = task.why_stuck;
   if (!stuck || typeof stuck !== "object") return null;
   const headingId = `why-stuck-${task.id}`;
-  return el("section", { class: "why-stuck", "aria-labelledby": headingId }, [
+  return el("section", { class: "card why-stuck", "aria-labelledby": headingId }, [
     el("h3", { class: "why-stuck-title", id: headingId, text: "Why stuck" }),
     el("dl", { class: "why-stuck-rows" }, [
       whyStuckRow("Escalation", whyStuckEscalationValue(task, stuck.escalation_note)),

@@ -173,7 +173,7 @@ render_guide_rows() {
 # docs/runbooks/CONVENTIONS.md; no per-runbook frontmatter field is needed.
 runbook_group() {
   case "$(basename "$1")" in
-    CONVENTIONS.md | build-budget.md | codeql-local.md | compiler-cache.md | qa-full-sweep.md | release.md | web-memory-soak.md | website-validation.md)
+    CONVENTIONS.md | build-budget.md | codeql-local.md | compiler-cache.md | perf-timing-protocol.md | qa-full-sweep.md | release.md | web-memory-soak.md | website-validation.md)
       printf '%s\n' 'Develop and release'
       ;;
     *)

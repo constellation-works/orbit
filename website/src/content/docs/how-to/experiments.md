@@ -105,7 +105,7 @@ An overlay is an object with any of these fields. Unknown fields are refused.
 | `tools` | `{"add": [...], "remove": [...], "roles": [...]}` | Adds or removes tools. No tool may be in both lists. |
 | `crew` | `{"pool": [{"crew": name, "weight": n}]}` | Draws the implementing crew from this weighted pool instead of the usual draw. |
 | `config` | `{"values": {key: value}, "roles": [...]}` | Sets task-local configuration values. Each key must be listed in `experiments.config_keys`. The only keys Orbit admits, `workflow.explore.max_calls_per_run` and `visual_review.reviewer`, are kept for old experiments and ignored. |
-| `memory` | `{"roles": [...], "global": bool}` | Delivers the crew's model memory; `global: true` adds the shared memory. See [Give models a memory](/how-to/crew-memory/). |
+| `memory` | `{"roles": [...], "global": bool}` | Delivers the model's memory notes to the listed roles; `global: true` adds the shared notes. Memory is kept only while an experiment with a memory arm runs. |
 
 Roles are `implement`, `review` and `recovery`. `roles` defaults to
 `["implement"]`.
@@ -153,8 +153,7 @@ orbit experiment start brief-v2
 `start` freezes the definition and begins enrollment. It is refused, naming
 the arm and the reason, unless the definition is complete (at least two arms,
 exactly one control, a primary metric) and every prerequisite under
-[Before you start](#before-you-start) holds. A memory overlay also needs
-`crew_memory.enabled`.
+[Before you start](#before-you-start) holds.
 
 `--mode`, set on `create` or `update`, decides what an assignment does:
 
@@ -309,8 +308,9 @@ smaller than the settled tasks. Two warnings mark gaps:
   its early tool calls were lost and its task is unmeasured. Raise
   `ORBIT_CLI_RUNNER_OUTPUT_CAPTURE_LIMIT_BYTES` for later runs.
 
-**Memory arms.** A memory arm adds its own readout fields; see
-[Give models a memory](/how-to/crew-memory/#read-the-result).
+**Memory arms.** A memory arm's readout also reports, per task, the digest
+of the memory captured for it and the revisions it carried, and counts the
+cost of the memory-writing tasks against that arm.
 
 ## Conclude or abandon
 

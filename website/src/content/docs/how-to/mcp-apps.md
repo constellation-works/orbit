@@ -21,9 +21,38 @@ JSON. See [When it does not render](#when-it-does-not-render).
 
 ## Prerequisites
 
-[Connect your agent](/how-to/mcp-integration/) first. `orbit_ui` then appears in
-`tools/list` with the actions `open` and `inspect`. A session that hides the
-read-only task read does not list it.
+[Connect your agent](/how-to/mcp-integration/) first. The `ui` toolset must be
+enabled for `orbit_ui` to appear in `tools/list` with the actions `open` and
+`inspect`, and the session must also include the read-only task read. The
+operator profile already includes task reads and writes, runs, dispatch (ship
+and auto-drain) and routines. `ui` is opt-in. Two Automation actions need
+further toolsets the operator profile does not include:
+
+| Panel action | Tool | Toolset |
+|---|---|---|
+| Auto-tasks: list, enable or disable, mint one task | `orbit_auto_task` | `automation` |
+| Run job | `orbit_pipeline_invoke` | `pipelines` |
+
+This launch keeps those operator panel functions available:
+
+```bash
+orbit mcp serve --operator \
+  --toolset ui,automation,pipelines
+```
+
+`orbit mcp serve --operator --toolset ui` still opens the panel. Tasks, Runs,
+Auto-drain and Routines work. Auto-tasks and Run job stay unavailable: the
+panel names the toolset to add and does not send the write. For an operator
+launch that currently uses only `--toolset ui`, use the list shown above and
+reopen the panel.
+
+`machine.mcp.toolsets` is the host-wide default for `orbit mcp serve` launches
+that do not pass `--toolset`. An explicit flag supplies that launch's toolsets
+instead of the host list; the operator role still applies. Changing the host
+setting will not add `automation` or `pipelines` to `--toolset ui`. A managed
+run uses the toolsets Orbit stamped for that run. See the [toolset precedence
+rules in MCP Integration](/how-to/mcp-integration/#choose-toolsets). Restart
+the MCP server or client session to load the updated tool list.
 
 A client that renders the panel reads the resource
 `ui://orbit/control-center/v1/index.html` (MIME type
@@ -129,7 +158,7 @@ The panel has a rail with a workspace selector and four views.
 | **Tasks** | Tasks grouped by status, with search and a priority filter. It opens on In progress, Review, Blocked and Backlog. **Active work** restores that set and **All** includes every status. A row opens its detail, with paged comments, history and artifact metadata. |
 | **Runs** | Workflow runs with a state filter. A run's detail has its state and paged log excerpts. In-progress task rows link to their run. |
 | **Auto-drain** | Backlog readiness, the current delivery window and its workers. |
-| **Automation** | Routines and auto-tasks, with the next evaluation time when one is scheduled and their state otherwise. Job rows show their step count and parallel-run limit. |
+| **Automation** | Routines and auto-tasks, with the next evaluation time when one is scheduled and their state otherwise. Job rows show their step count and parallel-run limit. Auto-tasks need the `automation` toolset. Run job needs the `pipelines` toolset. |
 
 **Send context to chat** puts a short reference into the conversation: the
 destination, the task or run ID, the observed revision and the title. It
@@ -144,18 +173,23 @@ authority, workspace policy and audit.
 
 | Area | What the panel can do | Needs |
 |---|---|---|
-| Tasks | **New task** files a proposed task with acceptance criteria. Nothing runs until it is dispatched. One edit can change title, description, acceptance criteria, priority, crew and status together. A comment or a review verdict is a separate write. | An edit is refused if the task changed since it was read. |
+| Tasks | **New task** files a proposed task with acceptance criteria. Nothing runs until it is dispatched. One edit can change title, description, acceptance criteria, priority and crew together. Status, a comment, and a review verdict are each a separate write. | An edit is refused if the task changed since it was read. |
 | Review | Records criterion outcomes and evidence against the current revision and the run or pull-request head. Requesting changes and recording acceptance keep the task in review. **Accept and mark done** never merges, publishes or dispatches. | **Accept and mark done** needs fresh eligible state and operator authority. |
-| Ship, drain and automation | Ship a backlog row, start or stop an auto-drain window, toggle routines or auto-tasks. A drain's **Complete automatically** option is off by default. Turning it on authorizes completion of every task admitted during that window. | Operator authority and an explicit workspace. |
+| Ship and auto-drain | Ship a backlog row, or start or stop an auto-drain window. A drain's **Complete automatically** option is off by default. Turning it on authorizes completion of every task admitted during that window. | Operator authority and an explicit workspace. Dispatch is in the operator profile. |
+| Routines | Enable or disable a routine definition. | Operator authority and an explicit workspace. The routines toolset is in the operator profile. |
+| Auto-tasks | List definitions, enable or disable one, or mint one task. Mint ignores the schedule and does not dispatch. | The `automation` toolset, operator authority and an explicit workspace. |
+| Run job | Submit a job that accepts its default input. | The `pipelines` toolset, operator authority and an explicit workspace. |
 
 An agent-only session (`orbit mcp init`) can read through the panel and make
 the task edits an agent may make. It is refused the operator actions. A session
 from `orbit workspace init --mcp` is operator. See
 [Connect your agent](/how-to/mcp-integration/#connect).
 
-If the reply to a drain or automation action is lost, the panel does not repeat
-the action. It disables further writes of that kind for the workspace until you
-reopen it. Check Tasks and Runs for what happened.
+A toolset that is not enabled is not a lost reply. The panel does not call
+that tool, and it names the toolset to add. If the reply to a drain or
+automation action is lost, the panel does not repeat the action. It disables
+further writes of that kind for the workspace until you reopen it. Check Tasks
+and Runs for what happened.
 
 ## When it does not render
 

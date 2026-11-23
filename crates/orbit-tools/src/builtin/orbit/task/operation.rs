@@ -8,12 +8,18 @@
 //! contract and schema conditionals, and `update` refuses an implementation
 //! activity's `blocked` status before any field check. The operator review
 //! and recovery verbs refuse a managed run before any field check, except a
-//! resident cycle's `repilot` and `requeue`, which its cycle guard decides.
+//! resident cycle’s brokered recovery actions, which its cycle guard decides.
+//! `resume_delivery` also checks its declared input shape before refusing a
+//! call without that broker.
 
 use orbit_common::OrbitError;
 use orbit_common::governance::operation::OperationInput;
-use orbit_common::governance::task::{TASK_CLI_OPTIONS_PARAM, TaskVerb, artifact_listing_hint};
-use orbit_common::protocol::tool_input::{reject_unknown_tool_fields, required_string};
+use orbit_common::governance::task::{
+    TASK_CLI_OPTIONS_PARAM, TASK_ID_WIRE_ALIAS, TaskVerb, artifact_listing_hint,
+};
+use orbit_common::protocol::tool_input::{
+    optional_csv_or_string_list_alias, reject_unknown_tool_fields, required_string,
+};
 use serde_json::Value;
 
 use super::super::domain_control::{bounded, bounded_read};
@@ -38,6 +44,60 @@ impl GuardedModes for TaskVerb {
             return Some(Err(OrbitError::InvalidInput(format!(
                 "unknown field '{TASK_CLI_OPTIONS_PARAM}'"
             ))));
+        }
+        if matches!(self, TaskVerb::Show)
+            && input.get("snapshot") == Some(&Value::Bool(true))
+            && input.get("view").is_none()
+            && let Err(error) = reject_unknown_tool_fields(
+                input,
+                &[
+                    "workspace",
+                    "id",
+                    TASK_ID_WIRE_ALIAS,
+                    "snapshot",
+                    "model",
+                    "fields",
+                    "field",
+                    "limit",
+                ],
+            )
+        {
+            return Some(Err(OrbitError::InvalidInput(format!(
+                "{error}; not accepted with snapshot: true; drop it"
+            ))));
+        }
+        if matches!(self, TaskVerb::Show | TaskVerb::List)
+            && input.get("view").and_then(Value::as_str) == Some("bounded")
+        {
+            let keys: &[&str] = if matches!(self, TaskVerb::Show) {
+                &[
+                    "workspace",
+                    "view",
+                    "id",
+                    TASK_ID_WIRE_ALIAS,
+                    "limit",
+                    "comments_offset",
+                    "history_offset",
+                    "artifacts_offset",
+                    "model",
+                ]
+            } else {
+                &[
+                    "workspace",
+                    "view",
+                    "offset",
+                    "limit",
+                    "search",
+                    "status",
+                    "priority",
+                    "model",
+                ]
+            };
+            if let Err(error) = reject_unknown_tool_fields(input, keys) {
+                return Some(Err(OrbitError::InvalidInput(format!(
+                    "{error}; not accepted with view: bounded; drop it"
+                ))));
+            }
         }
         match self {
             TaskVerb::ArtifactPut => super::artifact_put::preempt(ctx, input),
@@ -91,6 +151,9 @@ impl GuardedModes for TaskVerb {
             TaskVerb::Requeue => {
                 managed_run_refusal(ctx, "managed agents cannot requeue blocked tasks")
             }
+            TaskVerb::ResumeDelivery => Some(Err(OrbitError::CapabilityDenied(
+                "delivery recovery requires an authenticated resident cycle".into(),
+            ))),
             TaskVerb::Show
             | TaskVerb::List
             | TaskVerb::Eligible
@@ -103,6 +166,10 @@ impl GuardedModes for TaskVerb {
             | TaskVerb::Reject
             | TaskVerb::Delete => None,
         }
+    }
+
+    fn preempt_after_input_check(self) -> bool {
+        matches!(self, TaskVerb::ResumeDelivery)
     }
 
     fn normalize_input(self, input: &mut Value) {
@@ -122,6 +189,7 @@ impl GuardedModes for TaskVerb {
             | TaskVerb::ReviewReset
             | TaskVerb::Repilot
             | TaskVerb::Requeue
+            | TaskVerb::ResumeDelivery
             | TaskVerb::BlockTriage
             | TaskVerb::ReconcileReview
             | TaskVerb::RetryHandoff
@@ -210,6 +278,7 @@ impl GuardedModes for TaskVerb {
             | TaskVerb::ReviewReset
             | TaskVerb::Repilot
             | TaskVerb::Requeue
+            | TaskVerb::ResumeDelivery
             | TaskVerb::BlockTriage
             | TaskVerb::ReconcileReview
             | TaskVerb::RetryHandoff
@@ -260,6 +329,7 @@ impl GuardedModes for TaskVerb {
             | TaskVerb::ReviewReset
             | TaskVerb::Repilot
             | TaskVerb::Requeue
+            | TaskVerb::ResumeDelivery
             | TaskVerb::BlockTriage
             | TaskVerb::ReconcileReview
             | TaskVerb::RetryHandoff
@@ -286,6 +356,7 @@ impl GuardedModes for TaskVerb {
             | TaskVerb::ReviewReset
             | TaskVerb::Repilot
             | TaskVerb::Requeue
+            | TaskVerb::ResumeDelivery
             | TaskVerb::BlockTriage
             | TaskVerb::ReconcileReview
             | TaskVerb::RetryHandoff
@@ -328,10 +399,63 @@ fn implementation_activity_sets_blocked(ctx: &ToolContext, input: &Value) -> boo
 /// The bounded versioned snapshot: one task, an opaque revision and the
 /// actions available, for an explicit workspace.
 fn snapshot(ctx: &ToolContext, mut input: Value) -> Result<Value, OrbitError> {
-    reject_unknown_tool_fields(&input, &["workspace", "id", "snapshot", "model"])?;
+    reject_unknown_tool_fields(
+        &input,
+        &[
+            "workspace",
+            "id",
+            "snapshot",
+            "model",
+            "fields",
+            "field",
+            "limit",
+        ],
+    )
+    .map_err(|error| {
+        OrbitError::InvalidInput(format!(
+            "{error}; not accepted with snapshot: true; drop it"
+        ))
+    })?;
     required_string(&input, &["workspace"], "workspace")?;
+    let projection = response_projection(&input)?;
+    let ignored_limit = input.get("limit").is_some();
     if let Some(object) = input.as_object_mut() {
-        object.remove("snapshot");
+        for key in ["snapshot", "fields", "field", "limit"] {
+            object.remove(key);
+        }
     }
-    super::super::execute_host_action(ctx, input, OrbitBuiltinAction::DesktopTaskSnapshot)
+    let result =
+        super::super::execute_host_action(ctx, input, OrbitBuiltinAction::DesktopTaskSnapshot)?;
+    let mut result = project_response(result, projection);
+    if ignored_limit {
+        if !result.is_object() {
+            result = serde_json::json!({"value": result});
+        }
+        result["note"] = serde_json::json!("limit was ignored for snapshot: true");
+    }
+    Ok(result)
+}
+
+pub(super) fn response_projection(
+    input: &Value,
+) -> Result<Option<(Vec<String>, bool)>, OrbitError> {
+    Ok(
+        optional_csv_or_string_list_alias(input, &["fields", "field"])?
+            .map(|fields| (fields, input.get("fields").is_some())),
+    )
+}
+
+pub(super) fn project_response(result: Value, projection: Option<(Vec<String>, bool)>) -> Value {
+    let Some((fields, keyed)) = projection else {
+        return result;
+    };
+    let Value::Object(mut object) = result else {
+        return result;
+    };
+    if !keyed && fields.len() == 1 {
+        return object.remove(&fields[0]).unwrap_or(Value::Null);
+    }
+    Value::Object(orbit_common::governance::task::select_fields(
+        object, &fields,
+    ))
 }

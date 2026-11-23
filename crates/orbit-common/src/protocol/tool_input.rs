@@ -94,6 +94,7 @@ fn suggest_tool_field<'a>(unknown: &str, allowed: &[&'a str]) -> Option<&'a str>
 fn synonym_tool_field(unknown: &str) -> Option<&'static str> {
     match unknown {
         "task_id" => Some("id"),
+        "q" => Some("query"),
         "run_id" => Some("run"),
         "task_type" => Some("type"),
         "note" | "notes" | "message" | "msg" => Some("comment"),

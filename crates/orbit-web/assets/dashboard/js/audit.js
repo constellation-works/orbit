@@ -2,7 +2,7 @@
 // Incidents › Events) and the tool-call summary (Analytics › Reliability › Tools).
 // Pure vanilla JS, split into ES modules with no build step.
 
-import { auditActorLabel, INCIDENT_CLASS_TITLES, el, fetchJson, fetchJsonPage, fmtDuration, formatAge, formatDateTime, syncNodes, makeToggleRow, pinnedInfoHint, positiveIntParam, isAggregateView, isMultiWorkspace, isWorkspaceListReady, renderPanelPlaceholder, requestPanel, onWorkspaceChange, onWorkspaceNamesChange, workspaceDisplayName, getWindow, setWindow, getWorkspace, setWorkspace, persistScopeToUrl, runHref, DEFAULT_DASHBOARD_WINDOW } from './common.js';
+import { auditActorLabel, captureWorkspaceVisit, currentHostToken, INCIDENT_CLASS_TITLES, el, fetchJson, fetchJsonPage, fmtDuration, formatAge, formatDateTime, getHost, getHostRevision, isCurrentHostToken, syncNodes, makeToggleRow, pinnedInfoHint, positiveIntParam, isAggregateView, isMultiWorkspace, isWorkspaceListReady, renderPanelPlaceholder, requestPanel, onWorkspaceChange, onWorkspaceNamesChange, workspaceDisplayName, getWindow, setWindow, getWorkspace, setWorkspace, persistScopeToUrl, runHref, DEFAULT_DASHBOARD_WINDOW } from './common.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -35,8 +35,10 @@ let auditFilter = {
   // JobRun — see T20260427-26.
   execution_id: null,
   profile: null,
-  // Exact persisted row IDs from an incident evidence drilldown.
+  // Exact persisted row IDs from an incident evidence drilldown, bound to the
+  // host whose SQLite audit DB owns those numeric row IDs.
   eventIds: [],
+  eventHost: null,
   // Time-window filter for the Events sub-tab. Accepts the same shorthands as
   // the API (`24h`, `7d`, `1w`, RFC3339); null means the API-side default.
   since: null,
@@ -45,7 +47,28 @@ let auditFilter = {
   // Hides successful calls from the unconfirmed caller (probe traffic).
   hide_unverified: false,
 };
+// Keyed by `<hostScope>:<rowId>` and cleared on host changes so database-local
+// row IDs from one host never expand unrelated rows on another host.
 let expandedAuditIds = new Set();
+let lastAuditHostRevision = getHostRevision();
+let auditSearchDebounce = null;
+
+function auditHostScopeKey() {
+  return getHost() ? getHost().toLowerCase() : "local";
+}
+
+function auditExpandedKey(id) {
+  return `${auditHostScopeKey()}:${id}`;
+}
+
+function isExactAuditMode() {
+  return auditFilter.eventIds.length > 0;
+}
+
+function clearExactIncidentScope() {
+  auditFilter = { ...emptyAuditFilter(), status: DEFAULT_AUDIT_STATUS };
+  syncAuditControls();
+}
 const AUDIT_COLUMNS = [
   { key: "time", label: "time" },
   { key: "status", label: "status" },
@@ -71,6 +94,8 @@ function buildAuditHash() {
   const sp = new URLSearchParams();
   if (auditFilter.eventIds.length > 0) {
     sp.set("ids", auditFilter.eventIds.join(","));
+    const host = auditFilter.eventHost || currentHostToken();
+    if (host) sp.set("host", host);
   } else {
     if (auditFilter.since) sp.set("since", auditFilter.since);
     // Always written: a hash without a status opens on the default filter.
@@ -88,34 +113,47 @@ function buildAuditHash() {
 }
 
 function syncAuditControls() {
+  const exact = isExactAuditMode();
+  if (exact && auditSearchDebounce) {
+    clearTimeout(auditSearchDebounce);
+    auditSearchDebounce = null;
+  }
   const search = $("audit-search");
-  if (search && search.value !== (auditFilter.q || "")) {
-    search.value = auditFilter.q || "";
+  if (search) {
+    search.hidden = exact;
+    search.disabled = exact;
+    if (!exact && search.value !== (auditFilter.q || "")) {
+      search.value = auditFilter.q || "";
+    }
   }
-  for (const chip of document.querySelectorAll("#audit-filter .chip[data-status]")) {
-    chip.classList.toggle("active", (auditFilter.status || ALL_STATUSES) === chip.dataset.status);
-  }
-  const hideChip = Array.from($("audit-filter")?.children || []).find(chip => chip.dataset.toggle === "hide_unverified");
-  if (hideChip) {
-    hideChip.classList.toggle("active", auditFilter.hide_unverified);
-    hideChip.setAttribute("aria-pressed", String(auditFilter.hide_unverified));
+  const filter = $("audit-filter");
+  if (filter) filter.hidden = exact;
+  if (!exact) {
+    for (const chip of document.querySelectorAll("#audit-filter .chip[data-status]")) {
+      chip.classList.toggle("active", (auditFilter.status || ALL_STATUSES) === chip.dataset.status);
+    }
+    const hideChip = Array.from(filter?.children || []).find(chip => chip.dataset.toggle === "hide_unverified");
+    if (hideChip) {
+      hideChip.classList.toggle("active", auditFilter.hide_unverified);
+      hideChip.setAttribute("aria-pressed", String(auditFilter.hide_unverified));
+    }
   }
   renderScopeChips();
 }
 
 function scopeChip(label, value, onRemove) {
   const chip = el(onRemove ? "button" : "span", {
-    class: "scope-chip",
+    class: "chip scope-facet",
     ...(onRemove
       ? { "aria-description": `Remove ${label} filter` }
       : { title: `${label}: ${value}` }),
   });
   if (onRemove) chip.type = "button";
   chip.dataset.chip = label;
-  chip.appendChild(el("span", { class: "scope-chip-k", text: label }));
-  chip.appendChild(el("span", { class: "scope-chip-v", text: value }));
+  chip.appendChild(el("span", { class: "scope-key", text: label }));
+  chip.appendChild(el("span", { class: "chip-label", text: value }));
   if (onRemove) {
-    chip.appendChild(el("span", { class: "scope-chip-x", text: "×" }));
+    chip.appendChild(el("span", { class: "scope-remove", "aria-hidden": "true", text: "×" }));
     chip.addEventListener("click", (event) => {
       event.preventDefault();
       onRemove();
@@ -141,6 +179,26 @@ function renderScopeChips() {
       window.location.hash = buildAuditHash();
     } : null));
   }
+  if (isExactAuditMode()) {
+    const count = auditFilter.eventIds.length;
+    const exactChip = scopeChip("incident events", `${count} ${count === 1 ? "row" : "rows"}`, null);
+    exactChip.dataset.tone = "accent";
+    host.appendChild(exactChip);
+    const clearBtn = el("button", {
+      class: "chip",
+      type: "button",
+      text: "Clear incident scope",
+      "aria-description": "Exit exact incident evidence and restore ordinary event filters",
+    });
+    clearBtn.dataset.action = "clear-exact-scope";
+    clearBtn.addEventListener("click", (event) => {
+      event.preventDefault();
+      clearExactIncidentScope();
+      window.location.hash = buildAuditHash();
+    });
+    host.appendChild(clearBtn);
+    return;
+  }
   const windowLabel = effectiveAuditWindow();
   if (windowLabel) {
     const chip = scopeChip("window", windowLabel, () => {
@@ -149,7 +207,7 @@ function renderScopeChips() {
       persistScopeToUrl();
       window.location.hash = buildAuditHash();
     });
-    if (windowLabel !== getWindow()) chip.classList.add("independent");
+    if (windowLabel !== getWindow()) chip.dataset.tone = "accent";
     host.appendChild(chip);
   }
   if (auditFilter.tool) {
@@ -202,12 +260,6 @@ function renderScopeChips() {
       window.location.hash = buildAuditHash();
     }));
   }
-  if (auditFilter.eventIds.length > 0) {
-    host.appendChild(scopeChip("incident events", `${auditFilter.eventIds.length} rows`, () => {
-      auditFilter.eventIds = [];
-      window.location.hash = buildAuditHash();
-    }));
-  }
   if (auditFilter.metric) {
     host.appendChild(scopeChip("metric", auditFilter.metric, () => {
       auditFilter.metric = null;
@@ -219,13 +271,28 @@ function renderScopeChips() {
 function applyAuditHashQuery(query) {
   // Mutates auditFilter from URLSearchParams (hash query). Called from setActiveTab.
   // Legacy run_id alias for execution_id is preserved for old deep links.
-  const status = query.get("status");
-  auditFilter.eventIds = (query.get("ids") || "")
+  const ids = (query.get("ids") || "")
     .split(",")
     .map(value => Number(value))
     .filter(value => Number.isSafeInteger(value) && value > 0);
-  // Exact incident evidence applies no status restriction in the request.
-  auditFilter.status = auditFilter.eventIds.length > 0 || status === ALL_STATUSES ? null
+  const hashHost = query.get("host");
+  // Exact audit row IDs are SQLite rowids local to the issuing host's DB.
+  // Reject IDs tagged for a different host; an explicit scoped link without
+  // a hash host binds to the currently selected host.
+  const exactAccepted = ids.length > 0 && (!hashHost || isCurrentHostToken(hashHost));
+  if (exactAccepted) {
+    auditFilter = {
+      ...emptyAuditFilter(),
+      eventIds: [...new Set(ids)],
+      eventHost: currentHostToken(),
+      status: null,
+    };
+    return;
+  }
+  const status = query.get("status");
+  auditFilter.eventIds = [];
+  auditFilter.eventHost = null;
+  auditFilter.status = status === ALL_STATUSES ? null
     : AUDIT_STATUSES.includes(status) ? status : DEFAULT_AUDIT_STATUS;
   auditFilter.tool = query.get("tool") || null;
   auditFilter.role = query.get("role") || null;
@@ -255,11 +322,15 @@ function fetchAndRenderAudit(ctx) {
     placeholdAuditAggregate();
     return Promise.resolve();
   }
+  if (auditFilter.eventIds.length > 0 && auditFilter.eventHost && !isCurrentHostToken(auditFilter.eventHost)) {
+    clearExactIncidentScope();
+  }
+  const visit = captureWorkspaceVisit();
   const eventIds = auditFilter.eventIds.slice();
   const sp = new URLSearchParams();
   sp.set("limit", String(AUDIT_LIMIT));
-  if (auditFilter.eventIds.length > 0) {
-    sp.set("ids", auditFilter.eventIds.join(","));
+  if (eventIds.length > 0) {
+    sp.set("ids", eventIds.join(","));
   } else {
     const since = effectiveAuditWindow();
     if (since) sp.set("since", since);
@@ -273,22 +344,26 @@ function fetchAndRenderAudit(ctx) {
     if (auditFilter.hide_unverified) sp.set("hide_unverified", "true");
   }
   const path = `/api/audit?${sp.toString()}`;
+  const scope = `${auditHostScopeKey()}:${path}`;
   const requestEvents = eventIds.length > 0
     ? async () => {
       const events = [];
       for (let start = 0; start < eventIds.length; start += INCIDENT_ID_BATCH_SIZE) {
+        if (!visit.isCurrent()) return { events: [], nextBefore: null };
         const batch = new URLSearchParams();
         batch.set("limit", String(AUDIT_LIMIT));
         batch.set("ids", eventIds.slice(start, start + INCIDENT_ID_BATCH_SIZE).join(","));
-        events.push(...await fetchJson(`/api/audit?${batch.toString()}`));
+        const chunk = await fetchJson(`/api/audit?${batch.toString()}`, { visit });
+        if (!visit.isCurrent()) return { events: [], nextBefore: null };
+        events.push(...chunk);
       }
       // Each batch is newest-first; restore that order across batches.
       return { events: events.sort((a, b) => b.id - a.id), nextBefore: null };
     }
     : async () => {
-      const page = await fetchJsonPage(path);
+      const page = await fetchJsonPage(path, { visit });
       const head = { events: page.body, nextBefore: page.header(AUDIT_NEXT_BEFORE_HEADER) };
-      return revalidateAuditTail(path, head);
+      return revalidateAuditTail(path, head, visit);
     };
   // A head for another scope retires the previous paging now, not when it
   // settles: an older page still in flight for the old scope must not paint
@@ -297,7 +372,7 @@ function fetchAndRenderAudit(ctx) {
   if (auditPaging.path !== path) auditPaging = freshAuditPaging();
   // A slower search or the previous workspace must not paint over the visit
   // now on screen, and must not become the snapshot row expansion re-renders.
-  return requestPanel("audit-body", path, requestEvents, (head) => {
+  return requestPanel("audit-body", scope, requestEvents, (head) => {
     mergeAuditHead(path, head, eventIds.length === 0);
     renderAudit(lastAudit, ctx);
   }, "audit-count");
@@ -315,7 +390,7 @@ function freshAuditPaging() {
 // `since` is reparsed on every request, so rows that aged out of the window
 // simply do not come back; still-valid rows do, in paging order. Without this,
 // the prior tail survived solely by ID and expired rows stayed on screen.
-async function revalidateAuditTail(path, head) {
+async function revalidateAuditTail(path, head, visit) {
   if (auditPaging.path !== path || lastAudit.length <= head.events.length || head.events.length === 0) return head;
   const headOldest = head.events[head.events.length - 1].id;
   const exhausted = head.events.length < AUDIT_LIMIT && !head.nextBefore;
@@ -327,14 +402,16 @@ async function revalidateAuditTail(path, head) {
   let cursor = head.nextBefore;
   let nextBefore = cursor;
   while (cursor) {
+    if (visit && !visit.isCurrent()) return head;
     let page;
     try {
-      page = await fetchJsonPage(`${path}&before=${encodeURIComponent(cursor)}`);
+      page = await fetchJsonPage(`${path}&before=${encodeURIComponent(cursor)}`, { visit });
     } catch {
       // Keep a successful head even if an older page failed. Discard the
       // partial walk so the merge falls back to the complete prior tail.
       return head;
     }
+    if (visit && !visit.isCurrent()) return head;
     for (const ev of page.body) {
       // Rows older than the loaded tail were never on screen; they stay
       // behind the Load older cursor rather than joining the retained tail.
@@ -491,6 +568,17 @@ function incidentScanPartialCoverageNote(scanLimit) {
   return `Partial coverage: counts include only ${scannedRows} in this window. Older failures and affected runs may be omitted.`;
 }
 
+function appendToolIdentifier(container, value) {
+  const segments = String(value ?? "").split(".");
+  segments.forEach((segment, index) => {
+    if (index > 0) {
+      container.appendChild(document.createTextNode("."));
+      container.appendChild(document.createElement("wbr"));
+    }
+    container.appendChild(document.createTextNode(segment));
+  });
+}
+
 // The headline failure rate is the first line of the per-tool failures panel it
 // summarises (STD-07 §R29). Its definition sits behind an info icon (§R13), so
 // it reads on hover, keyboard focus or tap rather than as a caption.
@@ -505,7 +593,7 @@ function toolCallFailureRateLine(stats) {
   ]);
 }
 
-function renderFailuresByToolCard(rateRows, failuresRows, onCardClick, window = "24h", capped = false, scanLimit = 0) {
+function renderFailuresByToolCard(rateRows, failuresRows, onCardClick, capped = false, scanLimit = 0) {
   const failByTool = new Map();
   for (const f of failuresRows) {
     if (isNamedTool(f.tool)) failByTool.set(f.tool, f);
@@ -513,10 +601,10 @@ function renderFailuresByToolCard(rateRows, failuresRows, onCardClick, window = 
 
   // Same card chrome and title row as the per-tool panel beside it, so the
   // side-by-side pair's headers share a top edge and height (§R2).
-  const panel = el("div", { class: "audit-summary-card" });
+  const panel = el("div", { class: "card card-flush audit-summary-card" });
   panel.appendChild(el("h3", {
     class: "card-title section-title",
-    text: `Unexpected failures by callable tool (${window})${capped ? " · capped counts" : ""}`,
+    text: `Unexpected failures by callable tool${capped ? " · capped counts" : ""}`,
   }));
   const body = el("div", { class: "card-body tool-health-body" });
   if (capped) {
@@ -531,12 +619,15 @@ function renderFailuresByToolCard(rateRows, failuresRows, onCardClick, window = 
     if (!isNamedTool(row.tool)) continue;
     const rate = row.rate || 0;
     const severity = rate >= 0.14 ? "critical" : rate >= 0.05 ? "warning" : "normal";
-    const card = el("div", { class: `health-card ${severity}` });
+    const card = el("div", { class: `card health-card ${severity}` });
 
     const header = el("div", { class: "card-header" });
-    header.appendChild(el("span", { class: "tool-name", text: row.tool, title: row.tool }));
+    const toolName = el("span", { class: "tool-name" });
+    appendToolIdentifier(toolName, row.tool);
+    header.appendChild(toolName);
     header.appendChild(el("span", {
-      class: "status-badge",
+      class: "badge mono",
+      "data-tone": severity === "critical" ? "danger" : severity === "warning" ? "warning" : null,
       text: `${(rate * 100).toFixed(1)}% Unexpected Failure Rate`,
     }));
     card.appendChild(header);
@@ -551,7 +642,6 @@ function renderFailuresByToolCard(rateRows, failuresRows, onCardClick, window = 
     card.appendChild(body);
 
     if (onCardClick) {
-      card.classList.add("clickable");
       card.setAttribute("aria-label", `Filter unexpected failures by ${row.tool}`);
       makeToggleRow(card, { onToggle: () => onCardClick(row) });
     }
@@ -569,9 +659,14 @@ function renderFailuresByToolCard(rateRows, failuresRows, onCardClick, window = 
 // reliability tables. Ordering and rates are the caller's; only the
 // presentation is bounded.
 const AUDIT_TOOL_FAILURES_VISIBLE_ROWS = 10;
-const AUDIT_TOOL_FAILURES_CARD_KEY = "tool-call-failures-by-tool";
-const AUDIT_TOOL_MODEL_FAILURES_CARD_KEY = "tool-call-failures-by-model";
+const AUDIT_TOOL_FAILURES_CARD_KEY = "tool-call-failures";
+// One card holds both tool-call failure tables; each tab keeps its own
+// "Show all" expansion under its own key.
+const AUDIT_TOOL_FAILURES_TOOL_TAB_KEY = "tool-call-failures-by-tool";
+const AUDIT_TOOL_FAILURES_MODEL_TAB_KEY = "tool-call-failures-by-model";
+const AUDIT_TOOL_FAILURES_TABS = [["tool", "By tool"], ["model", "By model"]];
 const expandedAuditSummaryCards = new Set();
+let auditToolFailuresTab = "tool";
 let lastAuditSummaryPayload = null;
 
 function toggleAuditSummaryCard(cardKey) {
@@ -582,12 +677,37 @@ function toggleAuditSummaryCard(cardKey) {
   }
 }
 
+// The tool-call failures tab is card state like the expansion set: it survives
+// the 30-second refresh and resets only when the page reloads.
+function pickAuditToolFailuresTab(tab) {
+  if (auditToolFailuresTab === tab) return;
+  auditToolFailuresTab = tab;
+  if (lastAuditSummaryPayload) {
+    renderAuditSummary(lastAuditSummaryPayload.data, lastAuditSummaryPayload.ctx);
+  }
+}
+
 function buildAuditSummaryTable(items, cols, onRowClick) {
+  const formatCell = (col, item) => (col.format ? col.format(item[col.key]) : item[col.key]);
+  const secondaryCols = cols.filter((col) => col.secondary);
+  const foldModelInNarrow = cols.some((col) => col.key === "model") && secondaryCols.length > 0;
+
   const table = el("table", { class: "summary-table" });
   const thead = el("thead");
   const tr = el("tr");
   for (const c of cols) {
-    const th = el("th", { class: `${c.num ? "num" : ""} ${c.secondary ? "summary-secondary" : ""}`, text: c.label, title: c.title });
+    const classes = [
+      c.num ? "num" : "",
+      c.secondary ? "summary-secondary" : "",
+      foldModelInNarrow && c.key === "model" ? "summary-narrow-hide" : "",
+    ].filter(Boolean).join(" ");
+    const th = el("th", { class: classes, title: c.title });
+    if (foldModelInNarrow && c.key === "tool") {
+      th.appendChild(el("span", { class: "summary-narrow-only", text: "model / " }));
+      th.appendChild(document.createTextNode(c.label));
+    } else {
+      th.textContent = c.label;
+    }
     th.dataset.column = c.key;
     tr.appendChild(th);
   }
@@ -599,16 +719,54 @@ function buildAuditSummaryTable(items, cols, onRowClick) {
     const row = el("tr");
     if (onRowClick) {
       row.classList.add("clickable");
-      row.addEventListener("click", () => onRowClick(item));
+      const metricSummary = cols
+        .filter((col) => col.num)
+        .map((col) => {
+          const label = col.key === "unexpected" ? "unexpected" : col.label;
+          const value = formatCell(col, item);
+          return `${label}: ${value ?? "-"}`;
+        })
+        .join(", ");
+      const actionSummary = item.tool ? `Filter Events by ${item.tool}` : null;
+      const description = [actionSummary, metricSummary].filter(Boolean).join("; ");
+      // The row is the control. A cell title would be a native tooltip on
+      // that button; the values stay visible or in the accessible description.
+      makeToggleRow(row, { onToggle: () => onRowClick(item), description });
     }
     for (const c of cols) {
-      const val = c.format ? c.format(item[c.key]) : item[c.key];
+      const val = formatCell(c, item);
       const title = c.num ? String(val ?? "") : cols.map(col => {
-        const value = col.format ? col.format(item[col.key]) : item[col.key];
+        const value = formatCell(col, item);
         return `${col.title || col.label}: ${value ?? "-"}`;
       }).join("; ");
-      const td = el("td", { class: `${c.num ? "num" : ""} ${c.secondary ? "summary-secondary" : ""}`, text: val, title });
-      if (c.render) td.textContent = c.render(item[c.key], item, td);
+      const classes = [
+        c.num ? "num" : "",
+        c.secondary ? "summary-secondary" : "",
+        foldModelInNarrow && c.key === "model" ? "summary-narrow-hide" : "",
+      ].filter(Boolean).join(" ");
+      const td = el("td", { class: classes });
+      if (!onRowClick) td.title = title;
+      if (c.render) {
+        td.textContent = c.render(item[c.key], item, td);
+      } else if (c.key === "tool") {
+        if (foldModelInNarrow) {
+          td.appendChild(el("div", { class: "summary-narrow-model", text: item.model ?? "" }));
+        }
+        const toolNode = el("div", { class: "summary-tool-id" });
+        appendToolIdentifier(toolNode, val);
+        td.appendChild(toolNode);
+        if (secondaryCols.length > 0) {
+          const secondaryText = secondaryCols
+            .map((col) => {
+              const value = formatCell(col, item);
+              return `${value ?? "-"} ${col.label}`;
+            })
+            .join(" · ");
+          td.appendChild(el("div", { class: "summary-secondary-meta", text: secondaryText }));
+        }
+      } else {
+        td.textContent = val ?? "";
+      }
       td.dataset.column = c.key;
       row.appendChild(td);
     }
@@ -667,9 +825,16 @@ function renderAuditSummary(data, ctx) {
     cards.push(card);
   };
 
-  const createCard = (title, renderBody, scrollableBody = false) => {
-    const card = el("div", { class: "audit-summary-card" });
-    card.appendChild(el("div", { class: "card-title section-title", text: title }));
+  const createCard = (title, renderBody, scrollableBody = false, titleControls = null) => {
+    const card = el("div", { class: "card card-flush audit-summary-card" });
+    const head = el("div", { class: titleControls ? "card-title section-title card-title-controls" : "card-title section-title" });
+    if (titleControls) {
+      head.appendChild(el("span", { text: title, title }));
+      head.appendChild(titleControls);
+    } else {
+      head.textContent = title;
+    }
+    card.appendChild(head);
     const body = el("div", { class: "card-body" });
     if (scrollableBody) {
       body.tabIndex = 0;
@@ -705,11 +870,14 @@ function renderAuditSummary(data, ctx) {
   const title = $("audit-summary-title");
   if (title) title.textContent = `Tool calls ${windowLabel}`;
 
-  // The headline rate opens the per-tool panel it summarises (STD-07 §R29), so
-  // the panel also appears with no rows when only the rate is present.
+  // One card, two tabs: By tool (the default) and By model. The headline rate
+  // opens the By tool tab it summarises (STD-07 §R29), so the card also appears
+  // with no rows when only the rate is present.
   const failureRate = data.tool_call_failure_rate;
   const namedToolFailures = (data.tool_call_failures_by_tool || []).filter((row) => isNamedTool(row.tool));
-  if (failureRate || namedToolFailures.length) {
+  const namedModelFailures = (data.tool_call_failures_by_model || []).filter((row) => isNamedTool(row.tool));
+  if (failureRate || namedToolFailures.length || namedModelFailures.length) {
+    const tab = auditToolFailuresTab;
     const renderToolRows = boundedAuditSummaryTable(namedToolFailures, [
       { key: "tool", label: "tool" },
       { key: "failed", label: "failed", num: true },
@@ -717,32 +885,44 @@ function renderAuditSummary(data, ctx) {
       { key: "rate", label: "rate", num: true, format: (v) => formatFailureRatePct(v) },
       { key: "unexpected", label: "unexp.", num: true, secondary: true, title: "Failed calls classified as unexpected" },
       { key: "denied", label: "denied", num: true, title: "Calls recorded as denied; excluded from total and rate" },
-    ], filterByTool, AUDIT_TOOL_FAILURES_CARD_KEY, "tools");
+    ], filterByTool, AUDIT_TOOL_FAILURES_TOOL_TAB_KEY, "tools");
+    const renderModelRows = boundedAuditSummaryTable(namedModelFailures, [
+      { key: "model", label: "model", title: "Server-derived session model, not the authenticated role" },
+      { key: "tool", label: "tool" },
+      { key: "failed", label: "failed", num: true },
+      { key: "total", label: "total", num: true, secondary: true, title: "Successful + failed calls; denied calls excluded" },
+      { key: "rate", label: "rate", num: true, format: (v) => formatFailureRatePct(v) },
+      { key: "unexpected", label: "unexp.", num: true, secondary: true, title: "Failed calls classified as unexpected" },
+      { key: "denied", label: "denied", num: true, title: "Calls recorded as denied; excluded from total and rate" },
+    ], filterByTool, AUDIT_TOOL_FAILURES_MODEL_TAB_KEY, "models");
+    const tabGroup = el("div", { class: "mx-seg audit-tool-failures-tabs", role: "group", "aria-label": "Group tool call failures by" });
+    for (const [key, text] of AUDIT_TOOL_FAILURES_TABS) {
+      const on = key === tab;
+      const button = el("button", { class: on ? "mx-seg-btn on" : "mx-seg-btn", type: "button", text, "aria-pressed": on ? "true" : "false" });
+      button.addEventListener("click", () => pickAuditToolFailuresTab(key));
+      tabGroup.appendChild(button);
+    }
     addCard(AUDIT_TOOL_FAILURES_CARD_KEY, createCard(
-      `Tool call failures by tool · window ${windowLabel}`,
+      "Tool call failures",
       (body) => {
+        if (tab === "model") {
+          renderModelRows(body);
+          return;
+        }
         if (failureRate) body.appendChild(toolCallFailureRateLine(failureRate));
         renderToolRows(body);
       },
       true,
-    ), [namedToolFailures, windowLabel, failureRate, expandedAuditSummaryCards.has(AUDIT_TOOL_FAILURES_CARD_KEY)]);
-  }
-
-  const namedModelFailures = (data.tool_call_failures_by_model || []).filter((row) => isNamedTool(row.tool));
-  if (namedModelFailures.length) {
-    addCard(AUDIT_TOOL_MODEL_FAILURES_CARD_KEY, createCard(
-      `Tool call failures by model · window ${windowLabel}`,
-      boundedAuditSummaryTable(namedModelFailures, [
-        { key: "model", label: "model", title: "Server-derived session model, not the authenticated role" },
-        { key: "tool", label: "tool" },
-        { key: "failed", label: "failed", num: true },
-        { key: "total", label: "total", num: true, secondary: true, title: "Successful + failed calls; denied calls excluded" },
-        { key: "rate", label: "rate", num: true, format: (v) => formatFailureRatePct(v) },
-        { key: "unexpected", label: "unexp.", num: true, secondary: true, title: "Failed calls classified as unexpected" },
-        { key: "denied", label: "denied", num: true, title: "Calls recorded as denied; excluded from total and rate" },
-      ], filterByTool, AUDIT_TOOL_MODEL_FAILURES_CARD_KEY, "models"),
-      true,
-    ), [namedModelFailures, windowLabel, expandedAuditSummaryCards.has(AUDIT_TOOL_MODEL_FAILURES_CARD_KEY)]);
+      tabGroup,
+    ), [
+      namedToolFailures,
+      namedModelFailures,
+      windowLabel,
+      failureRate,
+      tab,
+      expandedAuditSummaryCards.has(AUDIT_TOOL_FAILURES_TOOL_TAB_KEY),
+      expandedAuditSummaryCards.has(AUDIT_TOOL_FAILURES_MODEL_TAB_KEY),
+    ]);
   }
 
   const namedRates = (data.failure_rate_by_tool || []).filter((row) => isNamedTool(row.tool));
@@ -754,10 +934,9 @@ function renderAuditSummary(data, ctx) {
       namedRates,
       namedFailures,
       filterByTool,
-      windowLabel,
       incidentScanCapped,
       incidentScanLimit,
-    ), [namedRates, namedFailures, windowLabel, incidentScanCapped, incidentScanLimit]);
+    ), [namedRates, namedFailures, incidentScanCapped, incidentScanLimit]);
   }
 
   const categoryOrder = ["unexpected", "expected", "denied", "diagnostic", "deferred"];
@@ -773,7 +952,7 @@ function renderAuditSummary(data, ctx) {
     const capped = incidentScanCapped;
     const scanLimit = incidentScanLimit;
     const card = createCard(
-      `Failure categories · window ${data.window || "24h"}${capped ? " · capped counts" : ""}`,
+      `Failure categories${capped ? " · capped counts" : ""}`,
       renderTable(categoryRows, [
         { key: "label", label: "class", title: "Failure classification", render: (value, row, td) => {
           // The full name is visible now, so a tooltip would only repeat it (STD-07 R32).
@@ -791,16 +970,15 @@ function renderAuditSummary(data, ctx) {
         text: incidentScanPartialCoverageNote(scanLimit),
       }));
     }
-    addCard("failure-categories", card, [categoryRows, data.window || "24h", capped, scanLimit]);
+    addCard("failure-categories", card, [categoryRows, capped, scanLimit]);
   }
 
   const lifecycleFailures = Number(data.lifecycle_diagnostic_events) || 0;
   const lifecycleIncidents = Number(data.lifecycle_diagnostic_incidents) || 0;
   if (lifecycleFailures > 0 || lifecycleIncidents > 0) {
     const label = data.lifecycle_diagnostic_label || "lifecycle diagnostics";
-    const window = data.window || "24h";
     const lifecycleTitle = `${label}${incidentScanCapped ? " · capped counts" : ""}`;
-    const lifecycleCard = el("div", { class: "audit-summary-card lifecycle-failure-card" });
+    const lifecycleCard = el("div", { class: "card card-flush audit-summary-card lifecycle-failure-card" });
     lifecycleCard.appendChild(el("div", { class: "card-title section-title", text: lifecycleTitle }));
     const body = el("div", { class: "card-body" });
     body.appendChild(el("div", {
@@ -809,7 +987,7 @@ function renderAuditSummary(data, ctx) {
     }));
     body.appendChild(el("div", {
       class: "metric-trend",
-      text: `Failure-only diagnostic surfaces; excluded from callable-tool denominators and rates · window ${window}`,
+      text: "Failure-only diagnostic surfaces; excluded from callable-tool denominators and rates",
     }));
     if (incidentScanCapped) {
       body.appendChild(el("div", {
@@ -820,7 +998,6 @@ function renderAuditSummary(data, ctx) {
     lifecycleCard.appendChild(body);
     addCard("lifecycle-diagnostics", lifecycleCard, [
       label,
-      window,
       lifecycleIncidents,
       lifecycleFailures,
       Number(data.lifecycle_diagnostic_affected_run_count) || 0,
@@ -843,14 +1020,6 @@ function renderAuditSummary(data, ctx) {
     )), durations);
   }
 
-  if (data.mcp_vs_cli_split) {
-    addCard("mcp-vs-cli", createCard("MCP vs CLI", renderTable(
-      data.mcp_vs_cli_split,
-      [{ key: "label", label: "surface" }, { key: "count", label: "count", num: true }],
-      null
-    )), data.mcp_vs_cli_split);
-  }
-
   syncNodes(container, cards);
 }
 
@@ -859,7 +1028,15 @@ onWorkspaceChange(() => {
   auditPaging = freshAuditPaging();
   auditWindowTotal = null;
   lastAuditSummaryPayload = null;
-  renderScopeChips();
+  const currentHostRevision = getHostRevision();
+  if (currentHostRevision !== lastAuditHostRevision) {
+    lastAuditHostRevision = currentHostRevision;
+    expandedAuditIds.clear();
+    if (auditFilter.eventIds.length > 0 && !isCurrentHostToken(auditFilter.eventHost)) {
+      clearExactIncidentScope();
+    }
+  }
+  syncAuditControls();
 });
 
 // The workspace chip shows a name, which arrives with the workspace list.
@@ -880,6 +1057,7 @@ function emptyAuditFilter() {
     execution_id: null,
     profile: null,
     eventIds: [],
+    eventHost: null,
     since: getWindow() === "all" ? null : getWindow(),
     metric: null,
     hide_unverified: false,
@@ -904,10 +1082,13 @@ function navigateToRole(role, ctx) {
 /// records the source metric so the landing chips explain the scope. A
 /// drill-down without a status lists every status.
 function navigateToDrilldown(opts = {}, ctx) {
-  auditFilter = emptyAuditFilter();
-  auditFilter.eventIds = Array.isArray(opts.eventIds)
+  const eventIds = Array.isArray(opts.eventIds)
     ? [...new Set(opts.eventIds.filter(id => Number.isSafeInteger(id) && id > 0))]
     : [];
+  if (eventIds.length > 0 && opts.eventHost && !isCurrentHostToken(opts.eventHost)) return;
+  auditFilter = emptyAuditFilter();
+  auditFilter.eventIds = eventIds;
+  auditFilter.eventHost = eventIds.length > 0 ? currentHostToken() : null;
   auditFilter.role = auditFilter.eventIds.length > 0 ? null : (opts.role || null);
   auditFilter.agent_family = auditFilter.eventIds.length > 0 ? null : (opts.agent_family || null);
   auditFilter.metric = auditFilter.eventIds.length > 0 ? null : (opts.metric || null);
@@ -916,6 +1097,7 @@ function navigateToDrilldown(opts = {}, ctx) {
   // Incident drilldowns supply exact event IDs and clear these broader filters.
   auditFilter.tool = auditFilter.eventIds.length > 0 ? null : (opts.tool || null);
   if (opts.window) auditFilter.since = opts.window === "all" ? null : opts.window;
+  if (eventIds.length > 0) persistScopeToUrl();
   syncAuditControls();
   window.location.hash = buildAuditHash();
 }
@@ -927,6 +1109,7 @@ function buildAuditChips(ctx) {
   const allChip = el("button", { class: "chip", text: "all" });
   allChip.dataset.status = ALL_STATUSES;
   allChip.addEventListener("click", () => {
+    if (isExactAuditMode()) return;
     auditFilter.status = null;
     syncAuditControls();
     window.location.hash = buildAuditHash();
@@ -936,6 +1119,7 @@ function buildAuditChips(ctx) {
     const chip = el("button", { class: "chip", text: status === "non_success" ? "failure + denied" : status });
     chip.dataset.status = status;
     chip.addEventListener("click", () => {
+      if (isExactAuditMode()) return;
       auditFilter.status = auditFilter.status === status ? null : status;
       syncAuditControls();
       const hash = buildAuditHash();
@@ -951,6 +1135,7 @@ function buildAuditChips(ctx) {
   });
   hideChip.dataset.toggle = "hide_unverified";
   hideChip.addEventListener("click", () => {
+    if (isExactAuditMode()) return;
     auditFilter.hide_unverified = !auditFilter.hide_unverified;
     syncAuditControls();
     window.location.hash = buildAuditHash();
@@ -962,11 +1147,13 @@ function buildAuditChips(ctx) {
 function wireAuditSearch(ctx) {
   const input = $("audit-search");
   if (!input) return;
-  let debounce = null;
   input.addEventListener("input", (e) => {
+    if (isExactAuditMode()) return;
     auditFilter.q = e.target.value.trim();
-    if (debounce) clearTimeout(debounce);
-    debounce = setTimeout(() => {
+    if (auditSearchDebounce) clearTimeout(auditSearchDebounce);
+    auditSearchDebounce = setTimeout(() => {
+      auditSearchDebounce = null;
+      if (isExactAuditMode()) return;
       const hash = buildAuditHash();
       if (window.location.hash !== hash) {
         window.location.hash = hash;
@@ -1018,38 +1205,47 @@ function renderAudit(events, ctx) {
     const targetValue = ev.target_id || ev.target_type || "";
     const target = targetValue === ev.tool_name ? "" : targetValue;
     const cmd = ev.subcommand ? `${ev.command} ${ev.subcommand}` : ev.command;
-    const tr = el("tr", { class: "audit-row", title: `event ${ev.id}` });
-    tr.dataset.key = `audit-${ev.id}`;
+    const expandedKey = auditExpandedKey(ev.id);
+    const expanded = expandedAuditIds.has(expandedKey);
+    const tr = el("tr", { class: "audit-row" });
+    tr.dataset.key = `audit-${expandedKey}`;
     // Expansion is part of the row's identity: without it the keyed diff reuses
     // the collapsed node and drops the `expanded` class and `aria-expanded`
     // the toggle just set.
     // Include the displayed relative age so syncNodes rebuilds the row when
     // the age advances instead of reusing the first-render age forever.
-    tr.dataset.hash = `${ev.id}-${ev.status}-${exit}-${expandedAuditIds.has(ev.id)}-${formatAge(ev.timestamp)}`;
-    tr.appendChild(el("td", { class: "c-time", text: formatAge(ev.timestamp), title: formatDateTime(ev.timestamp) }));
+    tr.dataset.hash = `${expandedKey}-${ev.status}-${exit}-${expanded}-${formatAge(ev.timestamp)}`;
+    // The row is a button, so it carries no native tooltip. The event id, the
+    // absolute time and an unconfirmed caller stay in the accessible description.
+    const described = [`Event ${ev.id}`];
+    const when = formatDateTime(ev.timestamp);
+    if (when && when !== "-") described.push(when);
+    if (ev.role === "unverified") described.push("Caller identity has not been confirmed");
+    tr.setAttribute("aria-description", described.join(". "));
+    tr.appendChild(el("td", { class: "c-time", text: formatAge(ev.timestamp) }));
     const statusTd = el("td", { class: "c-status" });
     statusTd.appendChild(el("span", { class: `audit-status ${ev.status}`, text: ev.status }));
     tr.appendChild(statusTd);
-    tr.appendChild(el("td", { class: "c-role", text: auditActorLabel(ev.role), title: ev.role === "unverified" ? "unverified: caller identity has not been confirmed" : ev.role || "" }));
-    tr.appendChild(el("td", { class: "c-command", text: ev.tool_name || cmd || "-", title: ev.tool_name || cmd || "" }));
-    tr.appendChild(el("td", { class: "c-target", text: target, title: target }));
+    tr.appendChild(el("td", { class: "c-role", text: auditActorLabel(ev.role) }));
+    tr.appendChild(el("td", { class: "c-command", text: ev.tool_name || cmd || "-" }));
+    tr.appendChild(el("td", { class: "c-target", text: target }));
     tr.appendChild(el("td", { class: "num c-duration", text: fmtDuration(ev.duration_ms) }));
     tr.appendChild(el("td", { class: `${exitClass} c-exit`, text: exit == null ? "-" : String(exit) }));
-    if (expandedAuditIds.has(ev.id)) tr.classList.add("expanded");
+    if (expanded) tr.classList.add("expanded");
     makeToggleRow(tr, {
-      expanded: expandedAuditIds.has(ev.id),
+      expanded,
       // The detail row only exists while the event is open, so the IDREF is
       // only published while it actually resolves.
-      controls: expandedAuditIds.has(ev.id) ? `audit-detail-${ev.id}` : null,
+      controls: expanded ? `audit-detail-${ev.id}` : null,
       onToggle: () => {
-        if (expandedAuditIds.has(ev.id)) expandedAuditIds.delete(ev.id);
-        else expandedAuditIds.add(ev.id);
+        if (expandedAuditIds.has(expandedKey)) expandedAuditIds.delete(expandedKey);
+        else expandedAuditIds.add(expandedKey);
         renderAudit(lastAudit, ctx);
       },
     });
     frag.appendChild(tr);
 
-    if (expandedAuditIds.has(ev.id)) {
+    if (expanded) {
       frag.appendChild(buildAuditDetailRow(ev));
     }
   }
@@ -1059,7 +1255,7 @@ function renderAudit(events, ctx) {
 
 function buildAuditDetailRow(ev) {
   const tr = el("tr", { class: "audit-detail-row" });
-  tr.dataset.key = `audit-detail-${ev.id}`;
+  tr.dataset.key = `audit-detail-${auditExpandedKey(ev.id)}`;
   // The event row's `aria-controls` points here, so the detail needs a real id.
   tr.id = `audit-detail-${ev.id}`;
   tr.dataset.hash = JSON.stringify(ev);

@@ -163,7 +163,7 @@ pub(crate) fn review_gate_settle(
                     .as_deref()
                     .unwrap_or("no escalation reason recorded"),
                 certificate.findings.len(),
-                output::candidate_standing(&admitted)
+                output::candidate_standing(runtime, &context, &admitted)
             ),
         }),
         // Typed `[baseline_red]`, so the failure handoff keeps the candidate
@@ -182,7 +182,7 @@ pub(crate) fn review_gate_settle(
                  validation record, never updated); attempt {attempt_id} was released without a \
                  verdict, so the candidate's review is not spent and a reviewer is admitted again \
                  within its remaining minutes; {}",
-                output::candidate_standing(&admitted)
+                output::candidate_standing(runtime, &context, &admitted)
             ),
         }),
         Err(error) => Err(DispatchError::action_failed(action, error.to_string())),

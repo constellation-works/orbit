@@ -98,12 +98,8 @@ fn task_tool_unknown_selectors_give_specific_recovery_hints() {
             "Read the injected steering snapshot as `task.steering`; `steering` is not an `orbit.task.show` field.",
         ),
         (
-            "workspace",
-            "Pass the workspace filter in the `workspace` argument to `orbit.task.show`; neither name is a projection field.",
-        ),
-        (
             "workspace_path",
-            "Pass the workspace filter in the `workspace` argument to `orbit.task.show`; neither name is a projection field.",
+            "Pass the workspace filter in the `workspace` argument to `orbit.task.show`; `workspace_path` is not a projection field.",
         ),
         (
             "pilot",

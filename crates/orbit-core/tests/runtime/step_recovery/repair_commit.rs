@@ -5,6 +5,10 @@
 //! Git command. A repair the host must not commit is refused by name before
 //! the index changes, and the step fails without its retry.
 
+use std::sync::{Arc, Mutex};
+
+use tracing_subscriber::prelude::*;
+
 use super::*;
 
 /// The candidate the implementation committed, which `validate` judges.
@@ -60,6 +64,8 @@ fn a_validate_repair_is_committed_by_the_host_and_retried_on_that_head() {
             },
         );
         assert_eq!(observed.result, Ok((true, None)), "{name}");
+        assert!(observed.decision().retry_admitted, "{name}");
+        assert!(observed.projection.attempts[0].retry_admitted, "{name}");
         assert_eq!(observed.post_recovery, ["success"], "{name}");
         let [(implementation, failed_status), (retried, retried_status)] =
             observed.attempts_saw.as_slice()
@@ -188,6 +194,10 @@ fn a_validate_repair_is_committed_by_the_host_and_retried_on_that_head() {
 }
 
 fn a_repair_the_host_must_not_commit_is_refused_by_name_and_nothing_is_committed() {
+    let warnings = Arc::new(Mutex::new(Vec::new()));
+    let subscriber =
+        tracing_subscriber::registry().with(HostRefusalWarnings(Arc::clone(&warnings)));
+    let _subscriber = tracing::subscriber::set_default(subscriber);
     let fixture = fixture();
     let admitted_review = (
         "review_gate_admit",
@@ -239,7 +249,18 @@ fn a_repair_the_host_must_not_commit_is_refused_by_name_and_nothing_is_committed
                 ..Case::default()
             },
         );
-        assert!(observed.decision().retry_admitted, "{reason}");
+        assert_eq!(observed.decision().status, "verified", "{reason}");
+        assert_eq!(
+            observed.decision().verdict.as_deref(),
+            Some("retry"),
+            "{reason}"
+        );
+        assert!(!observed.decision().retry_admitted, "{reason}");
+        let projected = &observed.projection.attempts[0];
+        assert!(!projected.retry_admitted, "{reason}");
+        let decision = projected.decision.as_ref().unwrap();
+        assert_eq!(decision.status, "verified", "{reason}");
+        assert_eq!(decision.verdict.as_deref(), Some("retry"), "{reason}");
         assert_eq!(observed.deliveries, 1, "{reason}: no post-recovery attempt");
         assert!(observed.post_recovery.is_empty(), "{reason}");
         let failure = failure_text(&observed);
@@ -247,6 +268,49 @@ fn a_repair_the_host_must_not_commit_is_refused_by_name_and_nothing_is_committed
             failure.contains(&format!("recovery_commit_refused:{reason}:"))
                 && failure.contains(ORIGINAL_FAILURE),
             "{reason}: the step fails with the typed refusal and keeps the original: {failure}"
+        );
+        // A verified `retry` that the host vetoes must not be reported as a
+        // decision that admitted nothing. The warning names host admission
+        // and repeats the refusal the step returns.
+        let warning = {
+            let recorded = warnings.lock().unwrap();
+            let matched = recorded
+                .iter()
+                .filter(|warning| warning.run_id == format!("run-{name}"))
+                .cloned()
+                .collect::<Vec<_>>();
+            assert_eq!(
+                matched.len(),
+                1,
+                "{reason}: one no-retry warning for this run: {recorded:?}"
+            );
+            matched.into_iter().next().unwrap()
+        };
+        assert!(
+            warning.message.contains("host admission")
+                && !warning.message.contains("recovery decision admits"),
+            "{reason}: the warning must blame host admission, not the verified decision: {}",
+            warning.message
+        );
+        assert_eq!(
+            warning.decision_verdict.as_deref(),
+            Some("retry"),
+            "{reason}: the warning keeps the decision-file verdict"
+        );
+        assert_eq!(
+            warning.retry_admitted,
+            Some(false),
+            "{reason}: the warning reports that host admission refused the retry"
+        );
+        let refusal = warning
+            .host_refusal
+            .as_deref()
+            .unwrap_or_else(|| panic!("{reason}: the warning carries the host refusal"));
+        assert!(
+            refusal.starts_with(&format!("recovery_commit_refused:{reason}:"))
+                && failure.contains(refusal),
+            "{reason}: the warning refusal must be the refusal the step returns\n\
+             warning: {refusal}\nerror: {failure}"
         );
         let worktree = &observed.worktree;
         assert_eq!(
@@ -264,6 +328,80 @@ fn a_repair_the_host_must_not_commit_is_refused_by_name_and_nothing_is_committed
             status.contains("M candidate.txt") && status.contains(leftover),
             "{reason}: the repair is left as recovery wrote it: {status}"
         );
+    }
+}
+
+/// `orbit.engine.job_executor` no-retry warnings emitted while a host guard
+/// refuses a verified retry.
+#[derive(Clone, Debug)]
+struct HostRefusalWarning {
+    run_id: String,
+    message: String,
+    decision_verdict: Option<String>,
+    retry_admitted: Option<bool>,
+    host_refusal: Option<String>,
+}
+
+struct HostRefusalWarnings(Arc<Mutex<Vec<HostRefusalWarning>>>);
+
+impl<S: tracing::Subscriber> tracing_subscriber::Layer<S> for HostRefusalWarnings {
+    fn on_event(&self, event: &tracing::Event<'_>, _: tracing_subscriber::layer::Context<'_, S>) {
+        if event.metadata().target() != "orbit.engine.job_executor" {
+            return;
+        }
+        let mut fields = WarningFields::default();
+        event.record(&mut fields);
+        if !fields.message.contains("post-recovery attempt") {
+            return;
+        }
+        self.0.lock().unwrap().push(HostRefusalWarning {
+            run_id: fields.run_id,
+            message: fields.message,
+            decision_verdict: fields.decision_verdict,
+            retry_admitted: fields.retry_admitted,
+            host_refusal: fields.host_refusal,
+        });
+    }
+}
+
+#[derive(Default)]
+struct WarningFields {
+    run_id: String,
+    message: String,
+    decision_verdict: Option<String>,
+    retry_admitted: Option<bool>,
+    host_refusal: Option<String>,
+}
+
+impl tracing::field::Visit for WarningFields {
+    fn record_bool(&mut self, field: &tracing::field::Field, value: bool) {
+        if field.name() == "retry_admitted" {
+            self.retry_admitted = Some(value);
+        }
+    }
+
+    fn record_str(&mut self, field: &tracing::field::Field, value: &str) {
+        match field.name() {
+            "run_id" => self.run_id = value.to_string(),
+            "message" => self.message = value.to_string(),
+            "decision_verdict" => self.decision_verdict = Some(value.to_string()),
+            "host_refusal" => self.host_refusal = Some(value.to_string()),
+            _ => {}
+        }
+    }
+
+    fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
+        let rendered = format!("{value:?}");
+        let text = rendered.trim_matches('"');
+        if field.name() == "retry_admitted" {
+            self.retry_admitted = match text {
+                "true" => Some(true),
+                "false" => Some(false),
+                _ => self.retry_admitted,
+            };
+            return;
+        }
+        self.record_str(field, text);
     }
 }
 

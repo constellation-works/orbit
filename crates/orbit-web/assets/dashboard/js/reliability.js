@@ -96,10 +96,14 @@ export function fmtWindowRange(window) {
 }
 
 function statTile(label, value, hint) {
-  return el("div", { class: "rel-tile" }, [
-    el("span", { class: "rel-tile-label", text: label }),
-    typeof value === "string" ? el("span", { class: "rel-tile-value", text: value }) : value,
-    hint ? el("span", { class: "rel-tile-hint", text: hint }) : null,
+  const unknown = typeof value !== "string" && value?.classList?.contains("rel-rate-empty");
+  const figure = typeof value === "string"
+    ? el("span", { class: "stat-tile-figure", text: value })
+    : el("span", { class: "stat-tile-figure" }, [value]);
+  return el("div", { class: "stat-tile", "data-state": unknown ? "unknown" : null }, [
+    el("span", { class: "stat-tile-label", text: label }),
+    figure,
+    hint ? el("span", { class: "stat-tile-compare", text: hint }) : null,
   ]);
 }
 
@@ -387,7 +391,7 @@ function renderBreakdown(payload) {
 }
 
 function card(title, body, key) {
-  const node = el("div", { class: "audit-summary-card rel-card" }, [
+  const node = el("div", { class: "card card-flush audit-summary-card rel-card" }, [
     el("div", { class: "card-title section-title", text: title }),
     el("div", { class: "card-body" }, [body]),
   ]);
@@ -518,7 +522,8 @@ function renderReliabilityScope(payload) {
   const scope = payload && payload.scope === "workspace" ? "Workspace" : "Fleet-wide";
   const rel = reliabilityWindowFor(getWindow());
   badge.textContent = rel.independent ? `${scope} · independent ${rel.window}` : scope;
-  badge.className = "scope-badge independent";
+  badge.className = "badge";
+  badge.dataset.tone = "accent";
   badge.hidden = false;
   badge.title = rel.independent
     ? "Reliability is fleet-wide and cannot use the unbounded all window"

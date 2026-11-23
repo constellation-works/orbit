@@ -6,8 +6,8 @@ use crate::OrbitRuntime;
 use super::candidates::BranchContext;
 use super::filters::SearchStatusFilters;
 use super::{
-    GlobalSearchKind, GlobalSearchMode, GlobalSearchParams, GlobalSearchResponse,
-    merge_round_robin, whitespace_query_note,
+    GlobalSearchMode, GlobalSearchParams, GlobalSearchResponse, merge_round_robin,
+    whitespace_query_note,
 };
 
 impl OrbitRuntime {
@@ -106,10 +106,12 @@ impl OrbitRuntime {
 
         let listing = params.is_friction_listing();
         if query_owned.is_none() && !has_path && tag_filter.is_empty() && !listing {
-            return Err(OrbitError::InvalidInput(
+            let message = if params.kind == super::GlobalSearchKind::Friction {
                 "search requires a `query` or a `tag`; with `kind` `friction` and neither, it lists friction records"
-                    .to_string(),
-            ));
+            } else {
+                "search requires a `query` or a `tag`"
+            };
+            return Err(OrbitError::InvalidInput(message.to_string()));
         }
 
         let mut branches = Vec::new();
@@ -156,14 +158,9 @@ impl OrbitRuntime {
                 .as_ref()
                 .is_some_and(|labels| labels.iter().any(|label| label == "partial"))
         });
-        let searched_kind = if has_path && params.kind == GlobalSearchKind::All {
-            GlobalSearchKind::Task
-        } else {
-            params.kind
-        };
         if (results.is_empty() || partial)
             && let Some(query) = query_owned.as_deref()
-            && let Some(note) = whitespace_query_note(query, searched_kind)
+            && let Some(note) = whitespace_query_note(query, results.is_empty())
         {
             notes.push(note);
         }

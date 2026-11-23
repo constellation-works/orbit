@@ -1,11 +1,47 @@
 //! Pure TOML path access for config documents, and the typed read of one
-//! dotted path that admission and layering share.
+//! dotted path that admission and layering share, and the one constructor for
+//! `invalid runtime config '<path>'` errors.
 
+use std::fmt::Display;
 use std::path::Path;
 
 use orbit_common::OrbitError;
 use orbit_common::security::redaction::redact_home_dir;
 use serde::de::DeserializeOwned;
+
+/// The path with the home directory redacted to `~`, in the form user-facing
+/// config errors name it.
+pub(crate) fn redacted_display(path: &Path) -> String {
+    redact_home_dir(&path.display().to_string())
+}
+
+fn invalid_runtime_config_message(path: &Path, detail: impl Display) -> String {
+    format!(
+        "invalid runtime config '{}': {detail}",
+        redacted_display(path)
+    )
+}
+
+/// `invalid runtime config '<path>': <detail>` as an `InvalidInput` error,
+/// naming `path` with the home directory redacted. Every admitted config
+/// reader builds this error here.
+pub fn invalid_runtime_config(path: &Path, detail: impl Display) -> OrbitError {
+    OrbitError::InvalidInput(invalid_runtime_config_message(path, detail))
+}
+
+/// [`invalid_runtime_config`] that also carries `did_you_mean` suggestions.
+/// Non-empty suggestions yield `OrbitError::InvalidInputDiagnostic`; the
+/// message is unchanged.
+pub(crate) fn invalid_runtime_config_with_suggestions(
+    path: &Path,
+    detail: impl Display,
+    did_you_mean: Vec<String>,
+) -> OrbitError {
+    OrbitError::invalid_input_with_suggestions(
+        invalid_runtime_config_message(path, detail),
+        did_you_mean,
+    )
+}
 
 pub(crate) fn config_value_at_path<'a>(
     document: &'a toml::Value,
@@ -70,10 +106,10 @@ pub(crate) fn read_typed_config_value<T: DeserializeOwned>(
     let mut value = document;
     for segment in key.split('.') {
         let table = value.as_table().ok_or_else(|| {
-            OrbitError::InvalidInput(format!(
-                "invalid runtime config '{}': table path for '{key}' contains a non-table value",
-                redact_home_dir(&config_path.display().to_string())
-            ))
+            invalid_runtime_config(
+                config_path,
+                format!("table path for '{key}' contains a non-table value"),
+            )
         })?;
         let Some(next) = table.get(segment) else {
             return Ok(None);
@@ -90,9 +126,9 @@ pub(crate) fn read_typed_config_value<T: DeserializeOwned>(
         } else {
             ""
         };
-        OrbitError::InvalidInput(format!(
-            "invalid runtime config '{}': invalid value for '{key}': {error}{hint}",
-            redact_home_dir(&config_path.display().to_string())
-        ))
+        invalid_runtime_config(
+            config_path,
+            format!("invalid value for '{key}': {error}{hint}"),
+        )
     })
 }

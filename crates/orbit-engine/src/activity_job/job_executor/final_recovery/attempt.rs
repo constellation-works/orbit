@@ -582,8 +582,25 @@ pub(in crate::activity_job::job_executor) fn attempt_final_recovery(
             recovery_model.as_deref(),
         )
     {
+        let artifact_name = if step.id == "landing_review" {
+            format!("landing-recovery-uncommitted-{}.patch", ctx.run_id)
+        } else {
+            format!("recovery-uncommitted-{}.patch", ctx.run_id)
+        };
+        let saved_diff = match crate::executor::automation::vcs::persist_uncommitted_diff_artifact(
+            ctx.host,
+            &task_id,
+            std::path::Path::new(&worktree.workspace_path),
+            &artifact_name,
+        ) {
+            Ok(Some(location)) => format!("; uncommitted diff saved to {location}"),
+            Ok(None) => String::new(),
+            Err(error) => format!("; failed to capture uncommitted diff: {error}"),
+        };
         decision = FinalRecoveryDecision::Escalate {
-            diagnosis: format!("{refusal}; original error before recovery: {error_message}"),
+            diagnosis: format!(
+                "{refusal}{saved_diff}; original error before recovery: {error_message}"
+            ),
             human_action:
                 "Inspect the refused repair and its candidate ownership before resuming the run."
                     .into(),

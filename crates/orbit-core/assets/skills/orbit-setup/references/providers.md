@@ -1,5 +1,14 @@
 # Providers and CLI setup
 
+## Contents
+
+- [Provider identity and resolution](#provider-identity-and-resolution)
+- [Provider setup](#provider-setup)
+  - [Provider credentials](#provider-credentials)
+  - [Copilot](#copilot)
+  - [Antigravity](#antigravity)
+  - [Muse](#muse)
+
 ## Provider identity and resolution
 
 Choose the execution lane first. Canonical provider IDs are `claude`, `codex`,
@@ -8,7 +17,9 @@ Choose the execution lane first. Canonical provider IDs are `claude`, `codex`,
 Orbit CLI entry point; `openai-compat` is an accepted spelling of `openai_compat`.
 Case and surrounding whitespace are ignored. Deprecated aliases resolve with
 an `orbit.config.crew` warning: `anthropic` → `claude`, `openai`/`chatgpt` →
-`codex`, `google` → `gemini`, `xai` → `grok`. The warning says the provider
+`codex`, `google` → `gemini`, `xai` → `grok`.
+
+The warning says the provider
 "uses a deprecated alias; resolving to the canonical id — update the config".
 Replace aliases with canonical IDs.
 The newer lanes have no aliases. A model vendor routed through a lane never
@@ -20,7 +31,7 @@ For task dispatch, the first applicable tier wins:
 
 1. Explicit run `--crew` or run-input `crew`.
 2. Task `crew`, including a still-valid pool or purpose assignment. Admission
-   redraws stale automatic assignments as described in [crew selection](configuration.md#crew-selection-and-actual-execution).
+   redraws stale automatic assignments as described in [crew selection](configuration-crews.md#crew-selection-and-actual-execution).
 3. `workflow.default_crew` (workspace config over global config).
 4. `CONSTELLATION_DEFAULT_PROVIDER`: a provider ID or alias; `claude` selects
    `opus`, `codex` selects `sol`, `antigravity` selects `gemini-flash` and
@@ -39,6 +50,7 @@ An explicit lane that cannot run never silently switches runtime. Refusals inclu
 `unknown provider '<x>'; expected one of` followed by the canonical list.
 Correct the provider ID or choose a supported lane. A missing binary fails
 permanently naming that binary: install it on the execution host and fix `PATH`.
+
 An undefined default fails config load; a disabled selected crew refuses dispatch
 naming the crew: correct the name or deliberately enable it, then recheck.
 
@@ -62,6 +74,7 @@ naming the crew: correct the name or deliberately enable it, then recheck.
    (`-` when the sandbox is not linux-bwrap), and LAUNCHER shows the resolved
    CLI path. LIMITS reports usage readings. Neither FOUND nor READY proves
    authentication or tool access.
+
    Fix a missing CLI or sandbox first; see [Linux sandbox](linux-sandbox.md).
 4. Add or update a named crew in the chosen config file, using the model ID
    returned by that CLI. For example, replace the model placeholder before saving:
@@ -75,7 +88,7 @@ naming the crew: correct the name or deliberately enable it, then recheck.
 
    Crew names may not contain `:`, which pool weights reserve. If a config file
    already names a crew that way, follow
-   [Crew names containing a colon](configuration.md#crew-names-containing-a-colon).
+   [Crew names containing a colon](configuration-crews.md#crew-names-containing-a-colon).
 
    Set it as default with `orbit config set workflow.default_crew copilot` (add
    `--global` for a user-wide default). Check `orbit config show`; a task pin or
@@ -123,7 +136,7 @@ Choose the intended scope:
   environment and gives that crew `CODEX_API_KEY`; the right-hand side is
   a source variable name, never a literal key. For Claude API credits, use
   `ANTHROPIC_API_KEY=ANTHROPIC_CREDITS_API_KEY_1`. A
-  [`file:` source](configuration.md#crews) avoids depending on shell or
+  [`file:` source](configuration-crews.md#crews) avoids depending on shell or
   service exports.
 
 A shared `pass` name that is unset or empty produces a warning, but does
@@ -131,7 +144,9 @@ not itself refuse the run; the provider may use its saved login. On a host
 whose Claude (or Codex) crews authenticate through `claude login` (`codex
 login`) rather than a token, set `execution.env.login_auth = ["claude"]` with
 `orbit config set`: doctor, `orbit attention` and drain starts then skip that
-provider's credential names. It is a declaration; Orbit reads no credential. A missing
+provider's credential names. It is a declaration; Orbit reads no credential.
+
+A missing
 per-crew source instead excludes that crew from drains and refuses its
 activities, so it cannot silently use another account.
 
@@ -140,13 +155,17 @@ Verify the actual launcher, not just an SSH login shell. Run
 (substitute the intended crew) and `orbit doctor --check env-pass --json`.
 Doctor's `env-pass` row also counts a `pass` name that a non-empty
 `clock.env` value supplies as held, so its `ok` for such a name covers
-timer-started runs, not a manual drain from this shell. Dashboard runs inherit
+timer-started runs, not a manual drain from this shell.
+
+Dashboard runs inherit
 the web service; clock runs can read admitted names
 and crew sources from owner-only `~/.orbit/clock.env`, which does not supply
 the web service. A service started with `bash -lc` reads login exports at
 startup, but an already running process does not receive later profile edits.
 Inspect its effective unit and start time, then restart the affected service
-when authorized before starting a new drain. Check credential presence by
+when authorized before starting a new drain.
+
+Check credential presence by
 name only in the live launcher or worker; never print environment values.
 Codex's `login status` describes the stored login and alone does not establish
 which credential an environment-overridden worker uses.
@@ -159,6 +178,7 @@ and `/model` to list IDs; Orbit passes the crew model explicitly, overriding
 `COPILOT_MODEL` and a saved selection. Token precedence is `COPILOT_GITHUB_TOKEN`,
 `GH_TOKEN`, `GITHUB_TOKEN`, then saved login: admit the chosen token name in
 `execution.env.pass`. Preserve `COPILOT_HOME`/`XDG_CACHE_HOME` when customized.
+
 Writes cover `COPILOT_HOME` (else `~/.copilot`) and `$XDG_CACHE_HOME/copilot`
 (else `~/.cache/copilot`); macOS reads
 `~/Library/Keychains`, with no `~/.config/gh` grant. Copilot has a native MCP
@@ -166,7 +186,9 @@ client (`~/.copilot/mcp-config.json`); Orbit init has no Copilot target, so
 configure the client explicitly or use its shell and `orbit tool run`.
 `Error: Authentication failed` can mean missing Copilot entitlement; a
 `session.warning` with `warningType: "policy"` can mean org-disabled third-party
-MCP. Check login/entitlement or ask the org admin to fix policy.
+MCP.
+
+Check login/entitlement or ask the org admin to fix policy.
 
 ### Antigravity
 
@@ -175,12 +197,16 @@ Install `curl -fsSL https://antigravity.google/cli/install.sh | bash` per the
 verify `agy --version`, launch `agy` once for interactive login, and list slugs
 with `agy models`. Saved login is under `~/.gemini/antigravity-cli/`; this route
 needs no token name in `execution.env.pass`. Writes cover `~/.gemini`; macOS
-reads the keychain. Version-dependent alternative key auth requires the CLI's
+reads the keychain.
+
+Version-dependent alternative key auth requires the CLI's
 Gemini model-provider setting as well as allowing `GEMINI_API_KEY`; see its
 [authentication instructions](https://antigravity.google/docs/install?tab=cli).
 Native MCP uses `orbit mcp init --antigravity` (`.agents/mcp_config.json`, or
 `~/.gemini/config/mcp_config.json` at home scope). `authentication required`
-means finish login on that host. This lane uses `agy`, separate from `gemini`;
+means finish login on that host.
+
+This lane uses `agy`, separate from `gemini`;
 when migrating, change both the provider and model slug.
 
 ### Muse
@@ -191,13 +217,16 @@ Install `curl -fsSL https://dev.meta.ai/install.sh | sh` per the
 outside Orbit, or allow `META_API_KEY`, which takes precedence. In interactive
 Muse, [`/models`](https://dev.meta.ai/docs/muse-code/configuration) lists choices;
 `muse model-profile show <model>` resolves a
-catalog ID. These details depend on the CLI version (Orbit's headless contract
+catalog ID.
+
+These details depend on the CLI version (Orbit's headless contract
 was checked with Muse 1.4.10). Preserve customized `XDG_CONFIG_HOME` and
 `XDG_DATA_HOME` in `pass`: writes cover their `muse` subdirectories (defaults
 `~/.config/muse`, `~/.local/share/muse`), plus macOS
 `~/Library/Application Support/Muse`; macOS reads `~/Library/Keychains`.
 `missing meta credentials` calls for checking login/key availability and keychain
-access. Orbit fixes `MUSE_NO_AUTO_UPDATE=1` and `MUSE_LOGIN=0` for runs; upgrade
+access.
+
+Orbit fixes `MUSE_NO_AUTO_UPDATE=1` and `MUSE_LOGIN=0` for runs; upgrade
 and login outside them. Muse has native MCP, but Orbit's per-run injection is
 unverified and init has no Muse target: keep shell access for `orbit tool run`.
-

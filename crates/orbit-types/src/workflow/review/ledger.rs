@@ -20,6 +20,12 @@ pub const REVIEW_ABANDONED_MARKER: &str = "review_abandoned:";
 pub const REVIEW_LANDING_DECISION_PENDING: &str =
     "the pull request stays open and unmerged until a recorded decision lands it";
 
+/// What a before-landing review refusal says when its pull request already
+/// merged outside Orbit [ORB-26599]: the verdict gates nothing and no
+/// decision is pending, so the refusal carries this text and never
+/// [`REVIEW_LANDING_DECISION_PENDING`].
+pub const REVIEW_PR_MERGED_OUTSIDE_ORBIT: &str = "the pull request already merged outside Orbit";
+
 /// The state of one reviewer attempt in a lineage ledger.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", tag = "state")]

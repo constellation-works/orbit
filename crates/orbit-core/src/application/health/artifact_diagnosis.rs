@@ -26,8 +26,8 @@ use crate::application::routines::seed::RETIRED_ROUTINE_FILES;
 use crate::application::routines::template::{ShippedShape, shipped_shape_of};
 use orbit_automation::auto_tasks::settings::{AutoTaskOverrides, load_settings_table};
 
-/// Inspect legacy workspace copies without adopting user files, reporting
-/// absent defaults or retiring anything. Startup uses the same refresh mode.
+/// Inspect stale, retired, and preserved legacy workspace copies without
+/// changing them or adopting user files. Startup uses the same refresh mode.
 pub(super) fn diagnose_workspace_catalog_copies(
     runtime: &OrbitRuntime,
     kind: ArtifactKind,
@@ -65,26 +65,116 @@ pub(super) fn diagnose_workspace_catalog_copies(
         ManagedAssetReconcileMode::RefreshExisting { check: true },
         |_, content| Ok(std::borrow::Cow::Borrowed(content)),
     ) {
-        Ok(report) => report
-            .actions
-            .into_iter()
-            .filter(|action| action.outcome == ManagedAssetOutcome::Refreshed)
-            .map(|action| {
-                let detail = format!(
-                    "`{}` is a stale managed workspace copy of {} `{}`: its bytes match the recorded Orbit-written digest, but differ from this binary's shipped default; automatic refresh has not persisted",
-                    action.path.display(), kind.singular(), action.name,
-                );
-                ArtifactFinding {
-                    kind,
-                    name: action.name,
-                    path: action.path,
-                    condition: ArtifactCondition::Stale,
-                    provenance: ArtifactProvenance::OrbitWritten,
-                    detail,
-                    remediation: "Make the catalog and its managed manifest writable, then run `orbit workspace sync`; normal workspace opening also refreshes unmodified managed copies.".to_string(),
-                }
-            })
-            .collect(),
+        Ok(report) => {
+            let shipped: BTreeSet<&str> = files.iter().map(|(name, _)| *name).collect();
+            let warnings: BTreeSet<String> = report.warnings.iter().cloned().collect();
+            // A modified retired copy produces both Preserved and Retired actions.
+            // Report its preservation once, with the accurate provenance and detail.
+            let preserved: BTreeSet<PathBuf> = report
+                .actions
+                .iter()
+                .filter(|action| action.outcome == ManagedAssetOutcome::Preserved)
+                .map(|action| action.path.clone())
+                .collect();
+            let retired: BTreeSet<PathBuf> = report
+                .actions
+                .iter()
+                .filter(|action| action.outcome == ManagedAssetOutcome::Retired)
+                .map(|action| action.path.clone())
+                .collect();
+            report
+                .actions
+                .into_iter()
+                .filter_map(|action| {
+                    let is_shipped = shipped.contains(action.name.as_str());
+                    let (condition, provenance, detail, remediation) = match action.outcome {
+                        ManagedAssetOutcome::Refreshed => (
+                            ArtifactCondition::Stale,
+                            ArtifactProvenance::OrbitWritten,
+                            format!(
+                                "`{}` is a stale managed workspace copy of {} `{}`: its bytes match the recorded Orbit-written digest, but differ from this binary's shipped default; automatic refresh has not persisted",
+                                action.path.display(),
+                                kind.singular(),
+                                action.name,
+                            ),
+                            "Make the catalog and its managed manifest writable, then run `orbit workspace sync`; normal workspace opening also refreshes unmodified managed copies."
+                                .to_string(),
+                        ),
+                        ManagedAssetOutcome::Retired if !preserved.contains(&action.path) => (
+                            ArtifactCondition::Deprecated,
+                            ArtifactProvenance::OrbitWritten,
+                            format!(
+                                "`{}` is a retired managed workspace copy of {} `{}`; automatic retirement has not persisted{}",
+                                action.path.display(),
+                                kind.singular(),
+                                action.name,
+                                action
+                                    .detail
+                                    .as_deref()
+                                    .map(|detail| format!(": {detail}"))
+                                    .unwrap_or_default(),
+                            ),
+                            "Make the catalog and its managed manifest writable, then run `orbit workspace sync`; normal workspace opening also retires unmodified managed copies."
+                                .to_string(),
+                        ),
+                        ManagedAssetOutcome::Preserved if is_shipped => {
+                            let Some(detail) =
+                                action.detail.filter(|detail| warnings.contains(detail))
+                            else {
+                                // Tracked local edits to still-shipped defaults are
+                                // intentional local authorship preserved in place by
+                                // sync, matching `diagnose_catalog`.
+                                return None;
+                            };
+                            // Activity catalog inspection already reports linked or
+                            // non-regular files beneath `activities_dir` as Faulty.
+                            if kind == ArtifactKind::Activity {
+                                return None;
+                            }
+                            (
+                                ArtifactCondition::Faulty,
+                                ArtifactProvenance::UserAuthored,
+                                detail,
+                                "Replace the linked or non-file path with a regular file inside the catalog (or remove the link), then run `orbit workspace sync`."
+                                    .to_string(),
+                            )
+                        }
+                        ManagedAssetOutcome::Preserved => {
+                            let will_preserve = retired.contains(&action.path);
+                            let detail = action.detail.unwrap_or_else(|| {
+                                "retired managed workspace copy requires preservation".to_string()
+                            });
+                            let provenance = if detail.contains("locally modified") {
+                                ArtifactProvenance::LocallyModified
+                            } else {
+                                ArtifactProvenance::UserAuthored
+                            };
+                            let remediation = if will_preserve {
+                                "Make the catalog and its managed manifest writable, then run `orbit workspace sync`; normal workspace opening also moves modified retired copies outside the active catalog."
+                                    .to_string()
+                            } else if provenance == ArtifactProvenance::LocallyModified {
+                                "Repair the `.retired-managed` preservation destination path, then run `orbit workspace sync`."
+                                    .to_string()
+                            } else {
+                                "Replace the linked or non-file path with a regular file inside the catalog (or remove the link), then run `orbit workspace sync`."
+                                    .to_string()
+                            };
+                            (ArtifactCondition::Deprecated, provenance, detail, remediation)
+                        }
+                        _ => return None,
+                    };
+                    Some(ArtifactFinding {
+                        kind,
+                        name: action.name,
+                        path: action.path,
+                        condition,
+                        provenance,
+                        detail,
+                        remediation,
+                    })
+                })
+                .collect()
+        }
         Err(error) => vec![ArtifactFinding {
             kind,
             name: MANAGED_ASSET_MANIFEST_FILE.to_string(),
@@ -92,7 +182,9 @@ pub(super) fn diagnose_workspace_catalog_copies(
             condition: ArtifactCondition::Faulty,
             provenance: ArtifactProvenance::OrbitWritten,
             detail: format!("cannot inspect managed workspace catalog copies: {error}"),
-            remediation: "Repair the named path or managed manifest, then run `orbit workspace sync`.".to_string(),
+            remediation:
+                "Repair the named path or managed manifest, then run `orbit workspace sync`."
+                    .to_string(),
         }],
     }
 }

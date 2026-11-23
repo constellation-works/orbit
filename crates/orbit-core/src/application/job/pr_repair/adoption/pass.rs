@@ -181,6 +181,8 @@ impl OrbitRuntime {
                 Verdict::Ignore(..) | Verdict::Repair(_) => {}
                 Verdict::Started(entry) => started.push(entry),
                 Verdict::Skip(reason, detail) => {
+                    let detail =
+                        self.skip_detail_with_budget(task_id, &observation, reason, &detail);
                     tracing::debug!(
                         target: "orbit.core.drain",
                         run_id = %run.run_id,
@@ -248,6 +250,7 @@ impl OrbitRuntime {
                     "blocker": repair["blocker"],
                     "hold_code": repair.get("hold_code").cloned().unwrap_or(Value::Null),
                     "head_sha": repair["head_sha"],
+                    "reason": repair.get("reason").cloned().unwrap_or(Value::Null),
                     "source_run_id": repair["source_run_id"],
                     "drain_run_id": repair["drain_run_id"],
                 }))

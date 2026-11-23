@@ -75,6 +75,9 @@ pub(super) struct Screen<'a> {
     /// Each task the owner's local drain admitted whose gate may not have
     /// reserved yet, with its footprint [ORB-15514].
     pub(super) owner_wave: &'a [(String, Vec<String>)],
+    /// Perf tasks that already hold the lane on the requester's machine.
+    /// The candidate itself may be listed; it does not wait for itself.
+    pub(super) perf_lane_holders: &'a BTreeSet<String>,
     /// The owner's `workflow.lock_modes`: an overlap only at a shared path
     /// neither blocks the candidate nor names a blocker.
     pub(super) lock_modes: &'a FootprintLockModes,
@@ -230,6 +233,20 @@ impl Screen<'_> {
             receipt.crew_unavailable.push(diagnostic(
                 format!("{why} ({}): {}", release.class.as_str(), release.reason),
                 Vec::new(),
+            ));
+            return None;
+        }
+        // Inside the section, so a claim the previous pull committed is
+        // visible. Prefer the lane over a footprint overlap when both apply.
+        if orbit_types::task::needs_perf_lane(&task.tags)
+            && let Some(holder) = self
+                .perf_lane_holders
+                .iter()
+                .find(|holder| holder.as_str() != task.id.as_str())
+        {
+            receipt.deferred_conflicts.push(diagnostic(
+                orbit_types::task::perf_lane_hold_reason(holder),
+                vec![holder.clone()],
             ));
             return None;
         }

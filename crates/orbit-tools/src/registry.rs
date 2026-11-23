@@ -341,7 +341,7 @@ impl ToolRegistry {
                         .find(|member| member.action.operation == name)
                 })
             {
-                check_family_action_fields(family, member, input, &declared_aliases(name), ctx)?;
+                check_family_action_fields(family, member, input, &self.input_aliases(name), ctx)?;
             }
             Ok(())
         })
@@ -349,6 +349,17 @@ impl ToolRegistry {
 
     pub fn get_schema(&self, name: &str) -> Option<ToolSchema> {
         self.tools.get(name).map(|entry| entry.tool.schema())
+    }
+
+    /// The input spellings `name` accepts besides its canonical parameter
+    /// names, as `(canonical, alias)`. Empty for an unknown tool. The schema
+    /// lists canonical names only, so a field check counts an alias as supplying
+    /// its canonical field, as the operation's own input parse does.
+    pub fn input_aliases(&self, name: &str) -> Vec<(&'static str, &'static str)> {
+        self.tools
+            .get(name)
+            .map(|entry| entry.tool.input_aliases())
+            .unwrap_or_default()
     }
 
     /// The tool's full declared input schema, including conditional requirements.
@@ -403,6 +414,13 @@ impl ToolRegistry {
     /// only for an unknown name or an unclassified builtin MCP tool.
     pub fn mcp_toolset(&self, name: &str) -> Option<McpToolset> {
         self.tools.get(name).and_then(|entry| entry.toolset)
+    }
+
+    /// Whether `name` is a run-bound tool ([`McpToolset::RunBound`]): served
+    /// only to the managed runs whose dispatch stamp names it, never listed
+    /// for an operator and never grantable.
+    pub fn is_run_bound(&self, name: &str) -> bool {
+        self.mcp_toolset(name) == Some(McpToolset::RunBound)
     }
 
     /// Advertised MCP scope of one entry, active or not.
@@ -537,33 +555,6 @@ impl ToolRegistry {
         }
         Ok(definitions)
     }
-}
-
-/// The input spellings a registry operation accepts besides its canonical
-/// names, as `(canonical, alias)`. The schema lists canonical names only; the
-/// handler's `OperationSpec::parse_input` renames an alias, so the field checks
-/// must let it through rather than refuse it or count it as missing.
-fn declared_aliases(name: &str) -> Vec<(&'static str, &'static str)> {
-    use orbit_common::governance as gov;
-    let mut aliases = Vec::new();
-    spec_aliases(gov::task::TASK_OPERATIONS, name, &mut aliases);
-    spec_aliases(gov::friction::FRICTION_OPERATIONS, name, &mut aliases);
-    spec_aliases(gov::auto_task::AUTO_TASK_OPERATIONS, name, &mut aliases);
-    aliases
-}
-
-fn spec_aliases<V>(
-    specs: &'static [orbit_common::governance::operation::OperationSpec<V>],
-    name: &str,
-    aliases: &mut Vec<(&'static str, &'static str)>,
-) {
-    aliases.extend(
-        specs
-            .iter()
-            .filter(|spec| spec.tool_name == name)
-            .flat_map(|spec| spec.wire_params())
-            .flat_map(|param| param.aliases.iter().map(|alias| (param.name, *alias))),
-    );
 }
 
 /// Whether a definition's tool addresses exactly one id with an optional

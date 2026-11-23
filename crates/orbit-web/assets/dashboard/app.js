@@ -1,11 +1,12 @@
 // Orbit dashboard — terminal-dark, manually refreshed SPA.
 // Pure vanilla JS, split into ES modules with no build step.
 
-import { captureWorkspaceVisit, requestPanel, runPanelPoll, resetPanel, onWorkspaceChange, getWorkspaceRevision, el, fetchJson, fetchDashboardChrome, listItems, postJson, patchJson, syncNodes, makeRowDisclosure, enableRovingRows, positiveIntParam, getWorkspace, setWorkspace, getSelectedWorkspaces, setSelectedWorkspaces, workspaceFilterIds, getRememberedWorkspace, rememberWorkspace, ALL_WORKSPACES_TOKEN, isAggregateLinked, isOwnedWorkspace, ownedWorkspaces, setUnownedReplicas, getUnownedReplicas, setMultiWorkspace, setWorkspaceNames, isAggregateView, renderPanelPlaceholder, getWindow, persistScopeToUrl, setScopeChangeListener, syncWindowSelectors, toolsWindowFor, TOOLS_WINDOWS, wireWindowSelector, getHost, getHostRevision, setHostSwitchHandler, withHost, withWorkspace, formatAge, formatDateTime, formatClock, getClockZone, setClockZone, zoneName, truncate, setBadgeDescription } from './js/common.js';
+import { captureWorkspaceVisit, requestPanel, runPanelPoll, resetPanel, onWorkspaceChange, getWorkspaceRevision, el, fetchJson, fetchDashboardChrome, listItems, syncNodes, makeRowDisclosure, enableRovingRows, positiveIntParam, getWorkspace, setWorkspace, getSelectedWorkspaces, setSelectedWorkspaces, workspaceFilterIds, getRememberedWorkspace, rememberWorkspace, ALL_WORKSPACES_TOKEN, isAggregateLinked, isOwnedWorkspace, ownedWorkspaces, setUnownedReplicas, getUnownedReplicas, setMultiWorkspace, setWorkspaceNames, isAggregateView, renderPanelPlaceholder, getWindow, persistScopeToUrl, setScopeChangeListener, syncWindowSelectors, toolsWindowFor, TOOLS_WINDOWS, wireWindowSelector, getHost, getHostRevision, setHostSwitchHandler, withHost, withWorkspace, formatAge, formatDateTime, formatClock, getClockZone, setClockZone, zoneName, truncate, setBadgeDescription } from './js/common.js';
 import { taskPilotWarningsFilter, buildChips, buildTasksHash, buildTasksFilterHash, applyTasksHashQuery, cacheCrewPayload, copyTaskIdWithNotice, refreshChips, refreshPinnedTask, renderTasks, syncTaskControls, wireQuickFilter, wireTaskPane } from './js/tasks.js';
 import { dropAggregateCrewsForOtherHosts, loadAggregateCrews } from './js/task-crew.js';
 import * as globalSearch from './js/global-search.js';
 import { initTaskCreate } from './js/task-create.js';
+import { FRICTION_STATUSES, paintFrictionDetail } from './js/friction-detail.js';
 import { applyAuditHashQuery, buildAuditChips, buildAuditHash, effectiveAuditWindow, fetchAndRenderAudit, renderAuditSummary, syncAuditControls, wireAuditSearch, } from './js/audit.js';
 import { applyCodebaseHashQuery, buildCodebaseHash, fetchAndRenderCodebase, wireCodebaseControls } from './js/codebase.js';
 import { fetchAndRenderScoreboard, placeholdScoreboardAggregate } from './js/scoreboard.js';
@@ -23,7 +24,6 @@ import {
   fetchAndRenderExperiments, placeholdExperimentsAggregate, setExperimentId, experimentsRoute, onExperimentTabPick,
 } from './js/experiments.js';
 import { getIncidentClass, getIncidentWindow } from './js/incidents.js';
-import { renderMarkdown } from './js/markdown.js';
 import { destinationLabel, initRouter, initTabs as iT, navigateToRun as nTR, recordRoutedHref, returnFromRunDetail, runDetailBackLabel, scopeRouteHash, setActiveTab as sAT, setRunDetailSubtab, } from './js/router.js';
 import { initRuns, jobRunsQuery, runsQueryKey, mergeRunsWithFriction, renderRuns, runIsCancellable, buildCancelRunButton, buildReplayRunButton } from './js/runs.js';
 import { fetchAndRenderAutoDrainPane, fetchAndRenderOperations, fetchAndRenderJobs, initOperations, peekJobFailures, peekRoutineFailures, startFleetIndicatorRefresh } from './js/operations.js';
@@ -39,10 +39,9 @@ import { applyPushedHostResources, fetchAndRenderHostResources, initHostResource
 import { changeStreamLive, onChange, onChangeStreamLive, startChangeStream } from './js/change-stream.js';
 import { refreshDashboardNow, reschedulePolling, setStreamCoverage } from './js/polling.js';
 import { fetchAndRenderPlugins } from './js/plugins.js';
-import { fetchAndRenderMemory, memoryRoute, setMemorySelection } from './js/memory.js';
 import { fetchAndRenderLeaseLandings, fetchAndRenderLeases, syncLeasesRailItem } from './js/leases.js';
 import { fetchAndRenderNoticeBanner, fetchAndRenderNotices } from './js/notices.js';
-import { fetchAndRenderResidents } from './js/operations-residents.js';
+import { fetchAndRenderResidents, setResidentDetailId } from './js/operations-residents.js';
 import { checkHostConnection, chooseHost, hostLevelFailure, initHostSwitcher, showHostFailure } from './js/host-switch.js';
 import {
   renderRunDetailEmpty,
@@ -111,7 +110,6 @@ const FRICTION_LIMIT = positiveIntParam("frictions", 100);
 // many screens tall. Eight cards keep Previous and Next beside the filters.
 const FRICTION_PAGE_SIZE = 8;
 
-const FRICTION_STATUSES = ["open", "triaged", "resolved"];
 const DEFAULT_FRICTION_STATUS_FILTER = "active";
 const FRICTION_ACCORDION_QUERY = "(max-width: 1000px)";
 const frictionAccordionMedia = window.matchMedia(FRICTION_ACCORDION_QUERY);
@@ -149,7 +147,7 @@ let activeTab = "tasks";
 // Health: the rail subtab and the view
 // Incidents shows. Analytics: the rail subtab and the view Reliability shows.
 let activeDiagSubtab = "incidents";
-let activeJobsSubtab = "live";
+let activeJobsSubtab = "history";
 let activeIncidentsView = "incidents";
 let activeAnalyticsSubtab = "metrics";
 let activeReliabilityView = "pipeline";
@@ -333,9 +331,6 @@ function routerContext() {
     setAgentsRole,
     getKnowledgeSubtab: () => activeKnowledgeSubtab,
     setKnowledgeSubtab: (v) => { activeKnowledgeSubtab = v; },
-    // The memory key on screen is owned by memory.js, which renders it.
-    setMemorySelection,
-    memoryRoute,
     // The friction on screen is owned here; the router reads and sets it.
     setFrictionSelection,
     frictionRoute,
@@ -387,6 +382,7 @@ function routerContext() {
     setDrainView: (mode) => setDockMode(mode),
     setDockRouteShown,
     showDockBesideList,
+    setResidentDetailId,
 
     // Events and Codebase pass-throughs (re-exported here for router;
     // imported at top of this file)
@@ -481,40 +477,34 @@ function runDetailContext() {
 
 function knowledgeStatusPill(status) {
   const value = status || "active";
-  return el("span", { class: `knowledge-pill ${value}`, text: value });
+  return el("span", { class: "pill", "data-status": value, "data-tone": value === "active" ? "success" : null, text: value });
 }
 
 function knowledgeTagWrap(nodes) {
   const values = Array.isArray(nodes) ? nodes : [];
   return el("span", { class: "knowledge-tags" }, values.length > 0
     ? values
-    : [el("span", { class: "knowledge-tag dim", text: "-" })]);
-}
-
-function markdownPanel(body, fallbackClass) {
-  const text = body || "";
-  const rendered = renderMarkdown(text || "_No body._");
-  const view = el(rendered !== null ? "div" : "pre", {
-    class: rendered !== null ? "markdown-body" : fallbackClass,
-  });
-  if (rendered !== null) {
-    view.innerHTML = rendered;
-  } else {
-    view.textContent = text || "No body.";
-  }
-  return view;
+    : [el("span", { class: "badge", "data-tone": "muted", text: "-" })]);
 }
 
 function frictionTagNodes(tags = []) {
   const values = Array.isArray(tags) ? tags : [];
-  if (values.length === 0) return [el("span", { class: "knowledge-tag dim", text: "-" })];
-  return values.map((tag) => el("span", { class: "knowledge-tag", text: tag, title: tag }));
+  if (values.length === 0) return [el("span", { class: "badge", "data-tone": "muted", text: "-" })];
+  return values.map((tag) => el("span", { class: "badge mono", text: tag, title: tag }));
+}
+
+function paintFrictionStat(id, value) {
+  const node = $(id);
+  if (!node) return;
+  node.textContent = formatBigInt(value);
+  // Zero is a real count. The unknown state is only the unpainted placeholder.
+  if (node.parentElement) delete node.parentElement.dataset.state;
 }
 
 function renderFrictionStats(stats = {}) {
-  $("friction-open-value").textContent = formatBigInt(stats.open || 0);
-  $("friction-triaged-value").textContent = formatBigInt(stats.triaged || 0);
-  $("friction-resolved-month-value").textContent = formatBigInt(stats.resolved_this_month || 0);
+  paintFrictionStat("friction-open-value", stats.open || 0);
+  paintFrictionStat("friction-triaged-value", stats.triaged || 0);
+  paintFrictionStat("friction-resolved-month-value", stats.resolved_this_month || 0);
 }
 
 function frictionFilterLabel() {
@@ -701,7 +691,11 @@ function renderFrictions(payload) {
     return;
   }
 
-  const frag = document.createDocumentFragment();
+  const existing = new Map();
+  for (const node of body.children) {
+    if (node.dataset && node.dataset.key) existing.set(node.dataset.key, node);
+  }
+  const nodes = [];
 
   for (const friction of visible) {
     const title = friction.title || friction.id;
@@ -755,19 +749,26 @@ function renderFrictions(payload) {
     makeRowDisclosure(row, openButton, accordion
       ? { expanded, controls: detailId, onToggle: toggle }
       : { controls: "friction-detail", current: expanded, onToggle: toggle });
-    frag.appendChild(row);
+    nodes.push(row);
     if (accordion && expanded) {
-      const inlineDetail = el("section", { class: "friction-accordion-detail" });
+      const detailKey = `friction-detail-${friction.id}`;
+      const detailHash = JSON.stringify({ friction, tags: lastFrictionPayload.tags, clock: getClockZone() });
+      const existingDetail = existing.get(detailKey);
+      const inlineDetail = existingDetail || el("section", { class: "friction-accordion-detail" });
       inlineDetail.id = detailId;
-      inlineDetail.dataset.key = `friction-detail-${friction.id}`;
-      inlineDetail.dataset.hash = JSON.stringify({ friction, tags: lastFrictionPayload.tags });
+      inlineDetail.dataset.key = detailKey;
       inlineDetail.setAttribute("aria-label", `Details for ${friction.id}`);
-      renderFrictionDetail(friction, inlineDetail);
-      frag.appendChild(inlineDetail);
+      // Reuse the mounted accordion section so an open tags draft stays
+      // mounted and `paintFrictionDetail` repaints around it when the record changes.
+      if (!existingDetail || existingDetail.dataset.hash !== detailHash) {
+        inlineDetail.dataset.hash = detailHash;
+        renderFrictionDetail(friction, inlineDetail);
+      }
+      nodes.push(inlineDetail);
     }
   }
 
-  syncNodes(body, Array.from(frag.children));
+  syncNodes(body, nodes);
   const selected = visible.find((item) => item.id === activeFrictionId) || null;
   renderFrictionDetail(accordion ? null : selected);
 }
@@ -777,6 +778,7 @@ function renderFrictionDetail(friction, detail = $("friction-detail")) {
   const count = detail.id === "friction-detail" ? $("friction-detail-count") : null;
   if (!friction) {
     if (count) count.textContent = "-";
+    delete detail.dataset.frictionId;
     syncNodes(detail, [el("div", { class: "empty-state" }, [
       el("div", { class: "icon", text: "✧" }),
       el("div", { class: "text", text: "No friction selected." }),
@@ -784,168 +786,14 @@ function renderFrictionDetail(friction, detail = $("friction-detail")) {
     return;
   }
   if (count) count.textContent = friction.status || "open";
-
-  const actions = el("div", { class: "actions" });
-  const resolve = el("button", {
-    class: "knowledge-btn primary",
-    text: "resolve",
-    "aria-description": `Resolve ${friction.id}`,
+  paintFrictionDetail(detail, friction, {
+    knownTags: lastFrictionPayload.tags,
+    openTask: openTaskFromKnowledge,
+    onChanged: async (id) => {
+      activeFrictionId = id;
+      await fetchAndRenderFrictions();
+    },
   });
-  resolve.type = "button";
-  resolve.disabled = friction.status === "resolved";
-  resolve.addEventListener("click", () => resolveFriction(friction, resolve, detail));
-  actions.appendChild(resolve);
-
-  // One card in the task detail's property-row style: each fact once, then
-  // the two triage controls. The head keeps only the title and status pill.
-  const factRow = (label, value) => el("div", { class: "property-row fact" }, [
-    el("span", { class: "label", text: label }),
-    value,
-  ]);
-  const textValue = (text, mono) => el("span", { class: mono ? "value mono" : "value", text });
-  const rows = [factRow("ID", textValue(friction.id, true))];
-  if (friction.model) rows.push(factRow("Model", textValue(friction.model)));
-  rows.push(factRow("Reported", textValue(formatDateTime(friction.created_at))));
-  if (friction.resolved_at) rows.push(factRow("Resolved", textValue(formatDateTime(friction.resolved_at))));
-  if (friction.during_task) {
-    const link = buildKnowledgeValueList([friction.during_task], { taskLinks: true });
-    link.classList.add("value");
-    rows.push(factRow("During task", link));
-  }
-  rows.push(buildFrictionStatusControl(friction, detail));
-  rows.push(buildFrictionTagPicker(friction, detail));
-
-  const body = el("div", { class: "knowledge-detail-body" }, [
-    el("aside", { class: "knowledge-side" }, [
-      el("div", { class: "task-delivery-card knowledge-meta-card" }, rows),
-    ]),
-    el("div", { class: "knowledge-body" }, [
-      markdownPanel(friction.body || friction.title, "friction-detail-body"),
-    ]),
-  ]);
-
-  syncNodes(detail, [
-    el("div", { class: "knowledge-detail-head" }, [
-      el("div", { class: "crumb" }, [el("span", { text: "friction event" })]),
-      el("h2", { text: friction.title || friction.id }),
-      el("div", { class: "sub" }, [knowledgeStatusPill(friction.status || "open")]),
-      actions,
-    ]),
-    body,
-  ]);
-}
-
-function buildFrictionStatusControl(friction, detail) {
-  const select = el("select", { class: "action status-update", title: `Status for ${friction.id}` });
-  for (const status of FRICTION_STATUSES) {
-    const option = el("option", { text: status });
-    option.value = status;
-    option.selected = (friction.status || "open") === status;
-    select.appendChild(option);
-  }
-  select.addEventListener("change", () => {
-    patchFriction(friction, { status: select.value }, select, detail);
-  });
-  return el("label", { class: "property-row triage" }, [
-    el("span", { class: "label", text: "Status" }),
-    select,
-  ]);
-}
-
-function buildFrictionTagPicker(friction, detail) {
-  const options = Array.isArray(lastFrictionPayload.tags) ? lastFrictionPayload.tags : [];
-  const selected = new Set(Array.isArray(friction.tags) ? friction.tags : []);
-  const grid = el("div", { class: "friction-tag-options" });
-  const checkboxes = new Map();
-  if (options.length === 0) {
-    grid.appendChild(el("span", { class: "knowledge-tag dim", text: "-" }));
-  }
-  for (const tag of options) {
-    const id = `friction-tag-${friction.id}-${tag}`;
-    const checkbox = el("input");
-    checkbox.type = "checkbox";
-    checkbox.id = id;
-    checkbox.checked = selected.has(tag);
-    checkboxes.set(tag, checkbox);
-    checkbox.addEventListener("change", () => {
-      const tags = options.filter((option) => checkboxes.get(option)?.checked);
-      if (tags.length === 0) {
-        checkbox.checked = true;
-        return;
-      }
-      patchFriction(friction, { tags }, checkbox, detail);
-    });
-    const label = el("label", { class: "friction-tag-option", title: tag }, [
-      checkbox,
-      el("span", { text: tag }),
-    ]);
-    grid.appendChild(label);
-  }
-  return el("div", { class: "property-row triage friction-tag-picker" }, [
-    el("span", { class: "label", text: "Tags" }),
-    grid,
-  ]);
-}
-
-async function patchFriction(friction, patch, control, detail) {
-  const visit = captureWorkspaceVisit();
-  if (!friction || !friction.id) return;
-  if (control) control.disabled = true;
-  for (const node of detail.querySelectorAll(".action-error")) node.remove();
-  try {
-    const updated = await patchJson(visit.path(`/api/frictions/${encodeURIComponent(friction.id)}`), patch);
-    if (!visit.isCurrent()) return;
-    activeFrictionId = updated.id || friction.id;
-    await fetchAndRenderFrictions();
-  } catch (e) {
-    if (!visit.isCurrent()) return;
-    detail.prepend(el("div", { class: "action-error", text: e.message || "friction update failed" }));
-    if (patch.status && control) control.value = friction.status || "open";
-  } finally {
-    if (control) control.disabled = false;
-  }
-}
-
-async function resolveFriction(friction, btn, detail) {
-  const visit = captureWorkspaceVisit();
-  const oldText = btn.textContent;
-  btn.disabled = true;
-  btn.innerHTML = `<span class="spinner"></span>wait`;
-  for (const node of detail.querySelectorAll(".action-error")) node.remove();
-  try {
-    const updated = await postJson(visit.path(`/api/frictions/${encodeURIComponent(friction.id)}/resolve`));
-    if (!visit.isCurrent()) return;
-    activeFrictionId = updated.id || friction.id;
-    await fetchAndRenderFrictions();
-  } catch (e) {
-    if (!visit.isCurrent()) return;
-    detail.prepend(el("div", { class: "action-error", text: e.message || "resolve failed" }));
-  } finally {
-    btn.disabled = false;
-    btn.textContent = oldText;
-  }
-}
-
-function buildKnowledgeValueList(values, opts = {}) {
-  const wrap = el("div", { class: "knowledge-detail-list" });
-  if (!values || values.length === 0) {
-    wrap.appendChild(el("span", { class: "knowledge-tag dim", text: "-" }));
-    return wrap;
-  }
-  for (const value of values) {
-    if (opts.taskLinks) {
-      const btn = el("button", { class: "knowledge-link-row", text: value, "aria-description": `Open task ${value}` });
-      btn.type = "button";
-      btn.addEventListener("click", (e) => {
-        e.stopPropagation();
-        openTaskFromKnowledge(value);
-      });
-      wrap.appendChild(btn);
-    } else {
-      wrap.appendChild(el("span", { class: "knowledge-tag", text: value, title: value }));
-    }
-  }
-  return wrap;
 }
 
 // Shared with global search so knowledge links resolve tasks across workspaces.
@@ -1653,10 +1501,6 @@ function activeRefreshJobs({ poll = false } = {}) {
   }
 
   if (activeTab === "knowledge") {
-    if (activeKnowledgeSubtab === "memory") {
-      add("Knowledge › Memory", fetchAndRenderMemory());
-      return jobs;
-    }
     add("Knowledge › Frictions", fetchAndRenderFrictions());
     return jobs;
   }
@@ -1758,7 +1602,9 @@ function fetchAndRenderRuns() {
       }))
     : Promise.all([
         fetchJson(`/api/job-runs?${query}`),
-        fetchJson(`/api/diagnostics/friction?limit=${DIAG_LIMIT}`),
+        // Friction only annotates runs: a failed read leaves them listed with the
+        // friction columns marked unavailable (null), never as zero.
+        fetchJson(`/api/diagnostics/friction?limit=${DIAG_LIMIT}`).catch(() => null),
       ]).then(([payload, frictionRows]) => ({
         runs: listItems(payload), frictionRows, meta: payload, unavailable: [],
       })), ({ runs, frictionRows, meta, unavailable }) => {
@@ -2139,7 +1985,20 @@ function selectHost(name, { fromHistory = false } = {}) {
   const changed = chooseHost(name);
   if (changed) workspacesWanted = true;
   if (fromHistory) return;
-  if (changed) persistScopeToUrl();
+  if (changed) {
+    persistScopeToUrl();
+    // Exiting a host invalidates any Events exact-ID hash bound to that host.
+    // Rewrite the Events hash in place so the address matches the cleared state.
+    if (window.location.hash.startsWith("#diagnostics/incidents/events")) {
+      const nextHash = buildAuditHash();
+      if (window.location.hash !== nextHash) {
+        const url = new URL(window.location.href);
+        url.hash = nextHash.replace(/^#/, "");
+        window.history.replaceState(window.history.state, "", url);
+        recordRoutedHref();
+      }
+    }
+  }
   refreshDashboard();
 }
 
@@ -2308,7 +2167,7 @@ function selectFleetScope(host, workspace) {
   refreshDashboard();
 }
 
-initOperations({ getTab: () => activeTab, selectFleetScope, getJobsSubtab: () => activeJobsSubtab, getWorkspaces: () => dashboardWorkspaces, getOperationsSubtab: () => activeOperationsSubtab });
+initOperations({ getTab: () => activeTab, selectFleetScope, getWorkspaces: () => dashboardWorkspaces, getOperationsSubtab: () => activeOperationsSubtab });
 initConfig();
 initFleetView({ selectScope: selectFleetScope });
 

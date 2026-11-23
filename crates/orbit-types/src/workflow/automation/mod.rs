@@ -3,6 +3,7 @@
 pub mod members;
 pub mod recovery;
 
+mod action_key;
 mod batch;
 mod condition;
 mod condition_state;
@@ -11,6 +12,7 @@ mod evidence;
 mod ownership;
 mod state;
 
+pub use action_key::attempt_action_key;
 pub use batch::{
     ActionReissue, BatchAttempt, BatchState, BatchWaiver, CoverageBatch, WaiveBatchRequest,
 };

@@ -1,8 +1,8 @@
 ---
 title: "Scope: operator-granted tools for the implementing activity (`granted_tools`)"
 owner: claude
-last_updated: 2026-11-09
-last_validated: 2026-11-09
+last_updated: 2026-11-20
+last_validated: 2026-11-20
 status: Implemented
 stage: shipped
 next: "—"
@@ -15,11 +15,11 @@ tags: [granted-tools]
 
 # Scope: operator-granted tools for the implementing activity (`granted_tools`)
 
-Status: Implemented — all six implementation phases are shipped. Grants are
+Status: Implemented — all six implementation phases are shipped, as scoped by [ORB-18317]. Grants are
 operator-only, owner-host-only and frozen for a dispatched attempt. Every
 currently denied implementer tool is mutating: grants authorize reviewed
 proposals, never live mutations. See the shipped
-[operator runbook](../../../crates/orbit-core/assets/skills/orbit/references/task-fields.md#operator-runbook-granting-tools).
+[operator runbook](../../../crates/orbit-core/assets/skills/orbit/references/task-fields-tools.md#operator-runbook-granting-tools).
 Bearing: tasks already carry `required_tools`
 ([`artifacts.rs`](../../../crates/orbit-types/src/task/artifacts.rs));
 `agent_implement` is a deny-list activity
@@ -118,10 +118,11 @@ operator authority, following the field-level authorization pattern of
   default it is a settings field and does not fork the body. The check is on
   the write call: the definition file itself is per-user checkout state, and
   a hand edit of it is not authority-checked.
-- **As built, call-time reads.** Crew memory's `orbit.memory.show` and
-  `orbit.memory.history` are not on any deny list; core refuses an agent's
-  call unless its run's task grants that tool, so for these two the grant is
-  what admits the call, not only what lifts a list entry
+- **Run-bound tools are not grantable.** Crew memory's `orbit.memory.*`
+  tools are run-bound since 2026-11-21: a `granted_tools` or
+  `required_tools` naming one is refused, except on the dreaming task Orbit
+  mints itself. The earlier call-time read grant for `orbit.memory.show` and
+  `orbit.memory.history` was removed
   ([crew memory design](../crew-memory/2_design.md) §6.3).
 - **Change window.** An operator may change the grant freely while the
   task is pre-dispatch (no run, claim or worktree exists for it). Once an

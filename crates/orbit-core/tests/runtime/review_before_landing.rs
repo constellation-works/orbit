@@ -3,9 +3,12 @@
 //! open and unmerged with the task in review [ORB-14849].
 
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use chrono::Utc;
+use orbit_core::OrbitError;
 use orbit_core::TaskStatus;
+use orbit_core::runtime::task_pr_forge::{ForgePullRequest, MergedPullRequest, TaskPrForge};
 use orbit_engine::{RuntimeHost, TaskAutomationUpdate, execute_deterministic_action};
 use orbit_types::task::{ExternalRef, GITHUB_PR_EXTERNAL_REF_SYSTEM};
 use orbit_types::workflow::{JobRunState, REVIEW_CONTRACT_VERSION};
@@ -404,8 +407,47 @@ struct Stranded {
     refused: String,
 }
 
+/// A forge on which the reviewed PR #42 already merged as [`EXTERNAL_MERGE`].
+struct MergedForge;
+
+const EXTERNAL_MERGE: &str = "94016e8238aa0cb5e1b3c9e4d2f7a6b8c0d1e2f3";
+
+impl TaskPrForge for MergedForge {
+    fn open_pull_requests(&self, _: &Path) -> Result<Vec<ForgePullRequest>, OrbitError> {
+        Ok(Vec::new())
+    }
+    fn merged_pull_request(
+        &self,
+        _: &Path,
+        number: u64,
+    ) -> Result<Option<MergedPullRequest>, OrbitError> {
+        Ok((number == 42).then(|| MergedPullRequest {
+            pull: ForgePullRequest {
+                number,
+                head_branch: "candidate".into(),
+                body: String::new(),
+                author: "orbit-bot".into(),
+            },
+            url: "https://github.com/owner/repo/pull/42".into(),
+            base_branch: "main".into(),
+            head_sha: "0123456789abcdef0123456789abcdef01234567".into(),
+            merge_commit: EXTERNAL_MERGE.into(),
+            merged_at: Utc::now(),
+        }))
+    }
+    fn authenticated_login(&self, _: &Path) -> Result<String, OrbitError> {
+        Ok("orbit-bot".into())
+    }
+    fn close_pull_request(&self, _: &Path, _: u64, _: &str) -> Result<(), OrbitError> {
+        Ok(())
+    }
+}
+
 fn stranded(verdict: &str) -> Stranded {
-    let mut fixture = Fixture::before_landing();
+    stranded_on(verdict, Fixture::before_landing())
+}
+
+fn stranded_on(verdict: &str, mut fixture: Fixture) -> Stranded {
     let bare = fixture._root.path().join("origin.git");
     git(
         fixture._root.path(),
@@ -526,9 +568,128 @@ fn an_incomplete_before_landing_review_pushes_its_reviewer_commit_and_merges_not
     );
 }
 
+/// The PR merged outside Orbit while the review ran [ORB-26599]: the settle
+/// comment and the refusal name the merge, claim no open or unmerged PR, name
+/// the unpushed reviewer commit and its worktree, and leave no pending
+/// decision; the failure handoff pushes nothing.
+fn a_before_landing_review_of_a_pr_merged_outside_orbit_says_so_and_names_the_stranded_commit() {
+    let mut fixture = Fixture::before_landing();
+    fixture.runtime = fixture
+        .runtime
+        .clone()
+        .with_task_pr_forge(Arc::new(MergedForge));
+    let stranded = stranded_on("incomplete", fixture);
+    let reviewer_commit = git(&stranded.fixture.repo, &["rev-parse", "HEAD"]);
+
+    assert!(
+        stranded.refused.contains(EXTERNAL_MERGE)
+            && !stranded.refused.contains("stays open and unmerged")
+            && orbit_types::workflow::HeldFailure::of(None, Some(&stranded.refused)).is_none(),
+        "{}",
+        stranded.refused
+    );
+    let comments = stranded
+        .fixture
+        .runtime
+        .get_task_comments(&stranded.fixture.task_id)
+        .unwrap();
+    let verdict = comments
+        .iter()
+        .rfind(|comment| {
+            comment
+                .message
+                .starts_with("before-landing review settled attempt")
+        })
+        .unwrap_or_else(|| panic!("{comments:#?}"));
+    assert!(
+        verdict
+            .message
+            .contains("PR #42 already merged outside Orbit")
+            && verdict.message.contains(EXTERNAL_MERGE)
+            && verdict.message.contains(&reviewer_commit)
+            && verdict
+                .message
+                .contains(&stranded.fixture.repo.display().to_string())
+            && !verdict.message.contains("stays open and unmerged")
+            && !verdict.message.contains("An operator decides"),
+        "{}",
+        verdict.message
+    );
+
+    let handoff = stranded.handoff();
+    assert_eq!(handoff["decision"], "landing_review_failure", "{handoff}");
+    assert_eq!(handoff["reviewer_push"], Value::Null, "{handoff}");
+    assert_eq!(stranded.remote("refs/heads/candidate"), stranded.published);
+    let comments = stranded
+        .fixture
+        .runtime
+        .get_task_comments(&stranded.fixture.task_id)
+        .unwrap();
+    let handoff_note = comments
+        .iter()
+        .rfind(|comment| comment.message.starts_with("Before-landing review ended"))
+        .unwrap_or_else(|| panic!("{comments:#?}"));
+    assert!(
+        handoff_note
+            .message
+            .contains("already merged outside Orbit")
+            && !handoff_note.message.contains("stays open and unmerged"),
+        "{}",
+        handoff_note.message
+    );
+}
+
+/// An accepted reviewer commit on a PR that merged outside Orbit still reaches
+/// the push step, which may preserve it and block the task with a recipe: the
+/// settle comment must not call it worktree-only or decision-free.
+fn an_accepted_reviewer_fix_on_a_pr_merged_outside_orbit_defers_to_the_push_step() {
+    let mut fixture = Fixture::before_landing();
+    fixture.runtime = fixture
+        .runtime
+        .clone()
+        .with_task_pr_forge(Arc::new(MergedForge));
+    fixture.input["before_landing"] = json!(true);
+    published(&fixture);
+    fixture.admit();
+    std::fs::write(fixture.repo.join("candidate.txt"), "reviewed\n").unwrap();
+    fixture.put_report(&json!({
+        "schema_version": REVIEW_CONTRACT_VERSION,
+        "attempt_id": fixture.input["admission"]["attempt_id"],
+        "verdict": "accept_with_fixes", "summary": "Fixed what was found.",
+        "findings": [{
+            "id": "F1", "severity": "low", "summary": "Line missing",
+            "paths": ["candidate.txt"], "disposition": {"kind": "repaired"},
+            "change": "Added the line",
+        }],
+        "validation": [{"id": "V1", "command": "fixture check", "outcome": "passed", "role": "required"}],
+    }));
+    fixture.settle().expect("an accepted review settles");
+
+    let comments = fixture.runtime.get_task_comments(&fixture.task_id).unwrap();
+    let verdict = comments
+        .iter()
+        .rfind(|comment| {
+            comment
+                .message
+                .starts_with("before-landing review settled attempt")
+        })
+        .unwrap_or_else(|| panic!("{comments:#?}"));
+    assert!(
+        verdict
+            .message
+            .contains("PR #42 already merged outside Orbit")
+            && verdict.message.contains("durable ref")
+            && !verdict.message.contains("no decision is pending")
+            && !verdict.message.contains("was not pushed"),
+        "{}",
+        verdict.message
+    );
+}
+
 /// The push is conditional on the head the review reviewed: a branch that moved
-/// since keeps its new head, the reviewer commit stays local, and the handoff
-/// still leaves the PR open in review.
+/// since keeps its new head, the reviewer commit is preserved on a durable ref
+/// instead, and the handoff reports both the refusal and that ref while still
+/// leaving the PR open in review.
 fn a_reviewer_commit_is_not_pushed_over_a_pr_branch_that_moved() {
     let stranded = stranded("incomplete");
     let other = stranded.fixture._root.path().join("other");
@@ -551,6 +712,12 @@ fn a_reviewer_commit_is_not_pushed_over_a_pr_branch_that_moved() {
     git(&other, &["commit", "-q", "-m", "moved on"]);
     git(&other, &["push", "-q", "origin", "candidate"]);
     let moved = stranded.remote("refs/heads/candidate");
+    let reviewer_commit = git(&stranded.fixture.repo, &["rev-parse", "HEAD"]);
+    let run_id = stranded.fixture.input["job_run_id"].as_str().unwrap();
+    let expected_ref = format!(
+        "refs/orbit/candidates/{}/{run_id}",
+        stranded.fixture.task_id
+    );
 
     let handoff = stranded.handoff();
 
@@ -566,21 +733,247 @@ fn a_reviewer_commit_is_not_pushed_over_a_pr_branch_that_moved() {
             .contains("push_lease_lost"),
         "{handoff}"
     );
+    assert_eq!(
+        handoff["reviewer_preservation"]["decision"], "preserved",
+        "{handoff}"
+    );
+    assert_eq!(
+        handoff["reviewer_preservation"]["commit_sha"], reviewer_commit,
+        "{handoff}"
+    );
+    assert_eq!(
+        handoff["reviewer_preservation"]["ref"], expected_ref,
+        "{handoff}"
+    );
     assert_eq!(stranded.remote("refs/heads/candidate"), moved);
+    assert_eq!(stranded.remote(&expected_ref), reviewer_commit);
     assert_eq!(status(&stranded.fixture), TaskStatus::Review);
+    let comments = stranded
+        .fixture
+        .runtime
+        .get_task_comments(&stranded.fixture.task_id)
+        .unwrap();
+    assert!(
+        comments.iter().any(|comment| {
+            comment.message.contains("push_lease_lost")
+                && comment.message.contains("PR branch is unchanged")
+                && comment.message.contains(&reviewer_commit)
+                && comment.message.contains(&expected_ref)
+        }),
+        "{comments:#?}"
+    );
 }
 
-/// Only an `incomplete` settlement pushes: a `reject` leaves the reviewer
-/// commit local like any other non-approving outcome.
+/// Only an `incomplete` settlement pushes to the PR branch: a `reject` leaves
+/// the PR branch untouched at the published head, preserves any reviewer fix
+/// commit on a durable ref, and names both the commit and ref in the delivery
+/// comment.
 fn a_rejected_before_landing_review_pushes_nothing() {
     let stranded = stranded("reject");
+    let reviewer_commit = git(&stranded.fixture.repo, &["rev-parse", "HEAD"]);
+    let run_id = stranded.fixture.input["job_run_id"].as_str().unwrap();
+    let expected_ref = format!(
+        "refs/orbit/candidates/{}/{run_id}",
+        stranded.fixture.task_id
+    );
 
     let handoff = stranded.handoff();
 
     assert_eq!(handoff["decision"], "landing_review_failure", "{handoff}");
     assert_eq!(handoff["reviewer_push"], Value::Null, "{handoff}");
+    assert_eq!(
+        handoff["reviewer_preservation"]["decision"], "preserved",
+        "{handoff}"
+    );
+    assert_eq!(
+        handoff["reviewer_preservation"]["commit_sha"], reviewer_commit,
+        "{handoff}"
+    );
+    assert_eq!(
+        handoff["reviewer_preservation"]["ref"], expected_ref,
+        "{handoff}"
+    );
     assert_eq!(stranded.remote("refs/heads/candidate"), stranded.published);
+    assert_eq!(stranded.remote(&expected_ref), reviewer_commit);
     assert_eq!(status(&stranded.fixture), TaskStatus::Review);
+    let comments = stranded
+        .fixture
+        .runtime
+        .get_task_comments(&stranded.fixture.task_id)
+        .unwrap();
+    assert!(
+        comments.iter().any(|comment| {
+            comment
+                .message
+                .starts_with("Before-landing review did not approve PR #42")
+                && comment.message.contains(&reviewer_commit)
+                && comment.message.contains(&expected_ref)
+                && comment.message.contains("not pushed to the PR branch")
+        }),
+        "{comments:#?}"
+    );
+}
+
+fn setup_before_landing_remote() -> (Fixture, PathBuf, String) {
+    let mut fixture = Fixture::before_landing();
+    let bare = fixture._root.path().join("origin.git");
+    git(
+        fixture._root.path(),
+        &["init", "--bare", "-q", bare.to_str().unwrap()],
+    );
+    git(
+        &fixture.repo,
+        &["remote", "add", "origin", bare.to_str().unwrap()],
+    );
+    git(
+        &fixture.repo,
+        &["push", "-q", "origin", "main", "candidate"],
+    );
+    let published_head = git(&fixture.repo, &["rev-parse", "HEAD"]);
+    published(&fixture);
+    fixture.input["before_landing"] = json!(true);
+    fixture.admit();
+    (fixture, bare, published_head)
+}
+
+/// A before-landing review that times out mid-repair commits its uncommitted
+/// repairs, preserves that commit on a durable candidate ref (never pushing to
+/// the PR branch), and names the commit and ref in the delivery comment.
+fn a_timed_out_before_landing_review_preserves_uncommitted_repairs_on_a_durable_ref() {
+    let (fixture, bare, published_head) = setup_before_landing_remote();
+    std::fs::write(
+        fixture.repo.join("candidate.txt"),
+        "timed out reviewer repair\n",
+    )
+    .unwrap();
+    let run_id = fixture.input["job_run_id"].as_str().unwrap();
+    let expected_ref = format!("refs/orbit/candidates/{}/{run_id}", fixture.task_id);
+
+    let handoff = failure_handoff_after(
+        &fixture,
+        "landing_review",
+        "review_timeout_incomplete: timed out mid-repair",
+        &json!({
+            "sync_base": {"head": "candidate"},
+            "push": {"local_sha": published_head},
+        }),
+    );
+
+    assert_eq!(handoff["decision"], "landing_review_failure", "{handoff}");
+    assert_eq!(handoff["reviewer_push"], Value::Null, "{handoff}");
+    assert_eq!(
+        handoff["reviewer_preservation"]["decision"], "preserved",
+        "{handoff}"
+    );
+    assert_eq!(
+        handoff["reviewer_preservation"]["committed_by_handoff"], true,
+        "{handoff}"
+    );
+    let preserved_commit = handoff["reviewer_preservation"]["commit_sha"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert_ne!(preserved_commit, published_head);
+    assert_eq!(handoff["reviewer_preservation"]["ref"], expected_ref);
+    assert_eq!(
+        git(&bare, &["rev-parse", "refs/heads/candidate"]),
+        published_head
+    );
+    assert_eq!(git(&bare, &["rev-parse", &expected_ref]), preserved_commit);
+    assert_eq!(
+        git(&bare, &["rev-parse", &format!("{preserved_commit}^")]),
+        published_head
+    );
+    let comments = fixture.runtime.get_task_comments(&fixture.task_id).unwrap();
+    assert!(
+        comments.iter().any(|comment| {
+            comment.message.contains(&preserved_commit) && comment.message.contains(&expected_ref)
+        }),
+        "{comments:#?}"
+    );
+}
+
+/// When a timed-out landing review's uncommitted repair cannot be committed,
+/// the handoff captures the uncommitted diff in a task artifact and names both
+/// the refusal reason and where the diff was saved.
+fn a_timed_out_before_landing_review_saves_uncommittable_diff_as_artifact_and_names_refusal() {
+    let (fixture, bare, published_head) = setup_before_landing_remote();
+    let left_path = fixture.repo.join("left.tmp");
+    let right_path = fixture.repo.join("right.tmp");
+    std::fs::write(&left_path, "ours\n").unwrap();
+    std::fs::write(&right_path, "theirs\n").unwrap();
+    let left_sha = git(
+        &fixture.repo,
+        &["hash-object", "-w", left_path.to_str().unwrap()],
+    );
+    let right_sha = git(
+        &fixture.repo,
+        &["hash-object", "-w", right_path.to_str().unwrap()],
+    );
+    std::fs::remove_file(&left_path).unwrap();
+    std::fs::remove_file(&right_path).unwrap();
+    let index_input =
+        format!("100644 {left_sha} 2\tconflict.txt\n100644 {right_sha} 3\tconflict.txt\n");
+    let mut child = std::process::Command::new("git")
+        .args(["update-index", "--index-info"])
+        .current_dir(&fixture.repo)
+        .stdin(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    use std::io::Write;
+    child
+        .stdin
+        .as_mut()
+        .unwrap()
+        .write_all(index_input.as_bytes())
+        .unwrap();
+    assert!(child.wait().unwrap().success());
+    std::fs::write(fixture.repo.join("conflict.txt"), "resolved locally\n").unwrap();
+
+    let run_id = fixture.input["job_run_id"].as_str().unwrap();
+    let expected_artifact = format!("landing-review-uncommitted-{run_id}.patch");
+    let handoff = failure_handoff_after(
+        &fixture,
+        "landing_review",
+        "review_timeout_incomplete: timed out mid-repair",
+        &json!({
+            "sync_base": {"head": "candidate"},
+            "push": {"local_sha": published_head},
+        }),
+    );
+
+    assert_eq!(handoff["decision"], "landing_review_failure", "{handoff}");
+    assert_eq!(handoff["reviewer_push"], Value::Null, "{handoff}");
+    assert_eq!(
+        handoff["reviewer_preservation"]["decision"], "commit_refused",
+        "{handoff}"
+    );
+    assert_eq!(
+        handoff["reviewer_preservation"]["diff_artifact"], expected_artifact,
+        "{handoff}"
+    );
+    let reason = handoff["reviewer_preservation"]["error"].as_str().unwrap();
+    assert!(!reason.is_empty());
+    assert_eq!(
+        git(&bare, &["rev-parse", "refs/heads/candidate"]),
+        published_head
+    );
+
+    let artifact = fixture
+        .runtime
+        .get_task_artifact(&fixture.task_id, &expected_artifact)
+        .unwrap()
+        .expect("uncommitted diff artifact is saved on the task");
+    let diff_text = String::from_utf8_lossy(&artifact.content);
+    assert!(diff_text.contains("resolved locally"), "{diff_text}");
+
+    let comments = fixture.runtime.get_task_comments(&fixture.task_id).unwrap();
+    assert!(
+        comments.iter().any(|comment| {
+            comment.message.contains(&expected_artifact) && comment.message.contains(reason)
+        }),
+        "{comments:#?}"
+    );
 }
 
 // Related boundary scenarios share the isolated table fixture.
@@ -592,5 +985,9 @@ crate::scenario_table!(
     an_incomplete_review_with_a_reason_a_record_or_a_revision_still_counts,
     an_incomplete_before_landing_review_pushes_its_reviewer_commit_and_merges_nothing,
     a_reviewer_commit_is_not_pushed_over_a_pr_branch_that_moved,
-    a_rejected_before_landing_review_pushes_nothing
+    a_before_landing_review_of_a_pr_merged_outside_orbit_says_so_and_names_the_stranded_commit,
+    an_accepted_reviewer_fix_on_a_pr_merged_outside_orbit_defers_to_the_push_step,
+    a_rejected_before_landing_review_pushes_nothing,
+    a_timed_out_before_landing_review_preserves_uncommitted_repairs_on_a_durable_ref,
+    a_timed_out_before_landing_review_saves_uncommittable_diff_as_artifact_and_names_refusal
 );

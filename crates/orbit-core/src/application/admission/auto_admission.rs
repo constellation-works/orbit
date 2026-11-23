@@ -37,9 +37,14 @@ use serde_json::{Value, json};
 
 use super::claim_holders::claim_detail;
 use super::gap_fit::GapFit;
+use super::perf_lane::{needs_perf_lane, perf_lane_detail, perf_lane_holder};
 use super::unknown_footprint::{FootprintGuard, FootprintWave};
 use crate::application::job::PublishedResume;
 use crate::runtime::task::locks::{UnlockedContextPaths, lock_context_files_for_task};
+
+/// The stand-in selector a perf-lane deferral names on both sides: the lane
+/// is one host-wide resource, not a path.
+pub(crate) const PERF_LANE_SELECTOR: &str = "perf-lane";
 
 /// Where a blocking footprint came from, so a deferral says whether the lock is
 /// genuinely held or merely planned.
@@ -64,6 +69,9 @@ pub(crate) enum ConflictProvenance {
     /// A pull grant claimed the blocker, or the candidate itself, after this
     /// wave's snapshot; the admission section found the claim [ORB-15514].
     ExecutionClaim,
+    /// The blocker is a perf task running now, which holds the host-wide perf
+    /// lane the candidate's paired timing run also needs.
+    PerfLane,
 }
 
 impl ConflictProvenance {
@@ -75,6 +83,7 @@ impl ConflictProvenance {
             ConflictProvenance::UnknownFootprint => "unknown_footprint",
             ConflictProvenance::ExclusiveReservation => "exclusive_reservation",
             ConflictProvenance::ExecutionClaim => "execution_claim",
+            ConflictProvenance::PerfLane => "perf_lane",
         }
     }
 }
@@ -102,6 +111,9 @@ pub(crate) enum DeferralReason {
     /// It declares no footprint, no pilot will prepare one, and other work is
     /// in flight, so it waits to run alone [ORB-15191].
     AwaitingExclusiveSlot,
+    /// It needs the host-wide perf lane, and another perf task holds it or
+    /// was selected earlier in this wave; `conflicts` names that task.
+    PerfLaneBusy,
 }
 
 impl DeferralReason {
@@ -111,12 +123,13 @@ impl DeferralReason {
             DeferralReason::Conflict => "conflict_deferred",
             DeferralReason::AwaitingFootprint => "awaiting_footprint",
             DeferralReason::AwaitingExclusiveSlot => "awaiting_exclusive_slot",
+            DeferralReason::PerfLaneBusy => "perf_lane_busy",
         }
     }
 }
 
 /// A candidate that was examined and could not take a slot: a free slot was
-/// available, or it waits for a footprint regardless.
+/// available, or it waits for a footprint or the perf lane regardless.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct DeferredAdmission {
     pub(crate) task_id: String,
@@ -162,8 +175,9 @@ impl DeferredAdmission {
 pub(crate) struct AdmissionSelection {
     /// Mutually compatible tasks, in the candidate order they were offered in.
     pub(crate) selected: Vec<String>,
-    /// Examined against a free slot and blocked. A candidate gap fit refused
-    /// is recorded by the gap fit instead.
+    /// Examined and blocked. A perf task waiting on a held lane lands here even
+    /// with no slot free, because the lane is its wait. A candidate gap fit
+    /// refused is recorded by the gap fit instead.
     pub(crate) deferred: Vec<DeferredAdmission>,
     /// Never examined: the wave was already full when they came up. These are
     /// saturated, not conflicted, and saying so keeps the two diagnoses apart.
@@ -222,6 +236,25 @@ impl AdmissionSelection {
             detail: Some(claim_detail(claim)),
         });
     }
+
+    /// Take `task` back out of the wave because another perf task holds this
+    /// host's lane. The admission section found `holder`; this wave's snapshot
+    /// predates it, or the wave itself selected it earlier and the section
+    /// refused the second one.
+    pub(crate) fn refuse_perf_lane(&mut self, task: &Task, holder: &str) {
+        self.selected.retain(|selected| *selected != task.id);
+        self.deferred.push(DeferredAdmission {
+            task_id: task.id.clone(),
+            reason: DeferralReason::PerfLaneBusy,
+            conflicts: vec![AdmissionConflict {
+                requested_selector: PERF_LANE_SELECTOR.to_string(),
+                blocking_selector: PERF_LANE_SELECTOR.to_string(),
+                blocking_task_id: holder.to_string(),
+                provenance: ConflictProvenance::PerfLane,
+            }],
+            detail: Some(perf_lane_detail(holder)),
+        });
+    }
 }
 
 /// Every lock footprint a wave must respect, keyed by selector.
@@ -236,6 +269,8 @@ pub(crate) struct AdmissionHolders {
     /// `workflow.lock_modes`: an overlap only at a shared path is no
     /// conflict, with holders or within the wave.
     lock_modes: FootprintLockModes,
+    /// The perf task running now, which holds the host-wide perf lane.
+    perf_lane_holder: Option<String>,
 }
 
 impl AdmissionHolders {
@@ -249,6 +284,7 @@ impl AdmissionHolders {
         lock_holders: &BTreeMap<String, Vec<String>>,
         live_claims: &BTreeSet<String>,
         task_lookup: &BTreeMap<String, Task>,
+        remote_claims: &BTreeSet<String>,
         workspace_root: &Path,
         unlocked: &UnlockedContextPaths,
         lock_modes: &FootprintLockModes,
@@ -274,6 +310,7 @@ impl AdmissionHolders {
             held: index_holders(lock_holders),
             claimed: index_holders(&claimed),
             lock_modes: lock_modes.clone(),
+            perf_lane_holder: perf_lane_holder(live_claims, task_lookup, remote_claims),
         }
     }
 
@@ -350,6 +387,9 @@ pub(crate) fn select_admissions(
     // consistent rather than merely consistent with the stores.
     let mut wave: OverlapIndex<String> = OverlapIndex::new();
     let mut footprint = FootprintWave::new(footprint);
+    // The perf task holding the lane: the one running now, else the first
+    // selected in this wave.
+    let mut perf_lane = holders.perf_lane_holder.clone();
 
     for candidate_id in ordered_candidates {
         let task = task_lookup.get(candidate_id);
@@ -358,7 +398,17 @@ pub(crate) fn select_admissions(
             continue;
         }
         if selection.selected.len() >= free_slots {
-            selection.queued_behind_capacity.push(candidate_id.clone());
+            // [ORB-26479] A perf task whose lane is held waits on the lane
+            // whether or not a slot is free, so it is named as such rather
+            // than as saturated. A full wave selects nothing either way.
+            match (task, &perf_lane) {
+                (Some(task), Some(holder)) if needs_perf_lane(task) => {
+                    selection
+                        .deferred
+                        .push(perf_lane_deferral(candidate_id, holder));
+                }
+                _ => selection.queued_behind_capacity.push(candidate_id.clone()),
+            }
             continue;
         }
         let Some(task) = task else {
@@ -372,6 +422,13 @@ pub(crate) fn select_admissions(
         let edits = !selectors.is_empty();
         if let Some(deferred) = footprint.check(task, edits) {
             selection.deferred.push(deferred);
+            continue;
+        }
+        let needs_lane = needs_perf_lane(task);
+        if needs_lane && let Some(holder) = &perf_lane {
+            selection
+                .deferred
+                .push(perf_lane_deferral(candidate_id, holder));
             continue;
         }
         let mut conflicts = Vec::new();
@@ -398,6 +455,9 @@ pub(crate) fn select_admissions(
                 wave.insert(&selector, candidate_id.clone());
             }
             footprint.selected(task, edits);
+            if needs_lane {
+                perf_lane = Some(candidate_id.clone());
+            }
             selection.selected.push(candidate_id.clone());
         } else {
             selection.deferred.push(DeferredAdmission {
@@ -410,6 +470,21 @@ pub(crate) fn select_admissions(
     }
 
     selection
+}
+
+/// The deferral of perf task `task_id`, which waits on the lane `holder` holds.
+fn perf_lane_deferral(task_id: &str, holder: &str) -> DeferredAdmission {
+    DeferredAdmission {
+        task_id: task_id.to_string(),
+        reason: DeferralReason::PerfLaneBusy,
+        conflicts: vec![AdmissionConflict {
+            requested_selector: PERF_LANE_SELECTOR.to_string(),
+            blocking_selector: PERF_LANE_SELECTOR.to_string(),
+            blocking_task_id: holder.to_string(),
+            provenance: ConflictProvenance::PerfLane,
+        }],
+        detail: Some(perf_lane_detail(holder)),
+    }
 }
 
 fn wave_conflicts(

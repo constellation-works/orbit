@@ -66,12 +66,14 @@ pub const MUTATING_TOOLS: &[&str] = &[
     "orbit.task.recover:recover_claim",
     "orbit.task.recover:repilot",
     "orbit.task.recover:requeue",
+    "orbit.task.recover:resume_delivery",
     "orbit.task.recover:retry_handoff",
     "orbit.task.recover:review_reset",
     "orbit.task.recover:revoke_handoff",
     "orbit.task.update",
     "orbit.workflow:auto",
     "orbit.workflow:land",
+    "orbit.workflow:refresh",
     "orbit.workflow:ship",
 ];
 

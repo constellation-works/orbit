@@ -87,7 +87,7 @@ fn task_update_class(input: &Value) -> ResidentCallClass {
 /// What a resident cycle's grant must hold for this call.
 pub(super) fn resident_guard_class(action: OrbitBuiltinAction, input: &Value) -> ResidentCallClass {
     use ResidentCallClass::{Gated, Open, Read, Refused};
-    use ResidentRight::{Dispatch, Merge, Promote};
+    use ResidentRight::{Dispatch, Merge, Promote, Recover, Refresh};
     match action {
         OrbitBuiltinAction::PipelineInvoke => Gated(Dispatch),
         OrbitBuiltinAction::PipelineWait
@@ -119,6 +119,7 @@ pub(super) fn resident_guard_class(action: OrbitBuiltinAction, input: &Value) ->
             TaskVerb::Update => task_update_class(input),
             TaskVerb::ArtifactPut => Open,
             TaskVerb::Requeue | TaskVerb::Repilot => Gated(Dispatch),
+            TaskVerb::ResumeDelivery => Gated(Recover),
             TaskVerb::RetryHandoff | TaskVerb::ReconcileReview => Gated(Merge),
             TaskVerb::LocksReserve
             | TaskVerb::LocksRelease
@@ -130,8 +131,17 @@ pub(super) fn resident_guard_class(action: OrbitBuiltinAction, input: &Value) ->
             | TaskVerb::Delete => Refused,
         },
         OrbitBuiltinAction::Workflow(verb) => match verb {
+            WorkflowVerb::Auto
+                if input
+                    .get("action")
+                    .and_then(Value::as_str)
+                    .is_some_and(|action| action.trim() == "status") =>
+            {
+                Read
+            }
             WorkflowVerb::Auto | WorkflowVerb::Ship | WorkflowVerb::RunResume => Gated(Dispatch),
             WorkflowVerb::Land => Gated(Merge),
+            WorkflowVerb::Refresh => Gated(Refresh),
             WorkflowVerb::RunList | WorkflowVerb::RunObserve | WorkflowVerb::RunShow => Read,
         },
         OrbitBuiltinAction::Drain(verb) => match verb {
@@ -156,17 +166,10 @@ pub(super) fn resident_guard_class(action: OrbitBuiltinAction, input: &Value) ->
             | DecisionVerb::ChannelRotateKey => Refused,
         },
         OrbitBuiltinAction::Memory(verb) => match verb {
-            MemoryVerb::Show | MemoryVerb::History => Read,
-            // Every crew memory write, and export to host files, is the
-            // operator's or a dreaming run's, never a resident cycle's.
-            MemoryVerb::Export
-            | MemoryVerb::Write
-            | MemoryVerb::Reset
-            | MemoryVerb::Copy
-            | MemoryVerb::Proposals
-            | MemoryVerb::ProposalAccept
-            | MemoryVerb::ProposalReject
-            | MemoryVerb::Propose => Refused,
+            MemoryVerb::Show => Read,
+            // Every crew memory write is a dreaming run's, never a resident
+            // cycle's.
+            MemoryVerb::Write | MemoryVerb::Propose => Refused,
         },
         OrbitBuiltinAction::Notice(verb) => match verb {
             NoticeVerb::List | NoticeVerb::Show => Read,
@@ -191,7 +194,16 @@ pub(super) fn resident_guard_class(action: OrbitBuiltinAction, input: &Value) ->
                 Read
             }
             FrictionVerb::Add => Open,
-            FrictionVerb::Update | FrictionVerb::Resolve | FrictionVerb::Rehome => Refused,
+            FrictionVerb::Update => {
+                if input.get("rehome_to").is_some_and(|value| !value.is_null())
+                    || input.get("move").is_some_and(|value| !value.is_null())
+                {
+                    Refused
+                } else {
+                    Open
+                }
+            }
+            FrictionVerb::Resolve | FrictionVerb::Rehome => Refused,
         },
         OrbitBuiltinAction::Evolution(verb) => match verb {
             EvolutionVerb::List | EvolutionVerb::Show => Read,

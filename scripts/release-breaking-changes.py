@@ -1582,17 +1582,118 @@ RUST_FIELD = re.compile(r"^\s*(?:pub(?:\([^)]*\))?\s+)?(?:r#)?([a-z_][a-z0-9_]*)
 RUST_VARIANT = re.compile(r"^\s*([A-Z][A-Za-z0-9_]*)\s*\{")
 
 
+RAW_STRING_PREFIX = re.compile(r'(?:br|cr|r)(?P<hashes>#*)"')
+
+
+def _mask_rust_source(text):
+    """Return `(no_comments, masked)` with identical length and newlines to `text`.
+
+    `no_comments` replaces `//` and nested `/* ... */` comments with spaces while
+    respecting string/raw-string/char literals. `masked` additionally replaces
+    string, raw-string, and char literal contents with spaces so brace, bracket,
+    item, and attribute matching cannot be misled by comments or quoted text.
+    """
+    no_comments = list(text)
+    masked = list(text)
+    length = len(text)
+    index = 0
+
+    def blank(buf, start, end):
+        for pos in range(start, end):
+            if text[pos] != "\n":
+                buf[pos] = " "
+
+    def ident_before(pos):
+        return pos > 0 and (text[pos - 1].isalnum() or text[pos - 1] == "_")
+
+    while index < length:
+        ch = text[index]
+        # Line comment: // ...
+        if ch == "/" and index + 1 < length and text[index + 1] == "/":
+            end = text.find("\n", index + 2)
+            end = length if end < 0 else end
+            blank(no_comments, index, end)
+            blank(masked, index, end)
+            index = end
+            continue
+        # Nested block comment: /* ... */
+        if ch == "/" and index + 1 < length and text[index + 1] == "*":
+            start = index
+            index += 2
+            nest = 1
+            while index < length and nest:
+                if text[index] == "/" and index + 1 < length and text[index + 1] == "*":
+                    nest += 1
+                    index += 2
+                elif text[index] == "*" and index + 1 < length and text[index + 1] == "/":
+                    nest -= 1
+                    index += 2
+                else:
+                    index += 1
+            blank(no_comments, start, index)
+            blank(masked, start, index)
+            continue
+        # Raw string literal: r#"..."#, br#"..."#, cr#"..."#
+        if ch in ("r", "b", "c") and not ident_before(index):
+            raw_match = RAW_STRING_PREFIX.match(text, index)
+            if raw_match:
+                closing = '"' + raw_match.group("hashes")
+                end = text.find(closing, raw_match.end())
+                end = length if end < 0 else end + len(closing)
+                blank(masked, index, end)
+                index = end
+                continue
+        # Normal / byte / C string literal: "...", b"...", c"..."
+        if ch == '"' or (ch in ("b", "c") and not ident_before(index)
+                         and index + 1 < length and text[index + 1] == '"'):
+            start = index
+            index = index + 2 if ch != '"' else index + 1
+            escaped = False
+            while index < length:
+                c = text[index]
+                index += 1
+                if escaped:
+                    escaped = False
+                elif c == "\\":
+                    escaped = True
+                elif c == '"':
+                    break
+            blank(masked, start, index)
+            continue
+        # Char / byte-char literal: 'a', '\'', '\u{...}', b'{' (not lifetimes like 'a)
+        if ch == "'" or (ch == "b" and not ident_before(index)
+                         and index + 1 < length and text[index + 1] == "'"):
+            quote = index + 1 if ch == "b" else index
+            end = None
+            if quote + 2 < length and text[quote + 1] == "\\":
+                pos = quote + 2
+                if pos < length and text[pos] != "\n":
+                    pos += 1
+                    while pos < length and text[pos] not in ("'", "\n") and pos - quote <= 12:
+                        pos += 1
+                    if pos < length and text[pos] == "'":
+                        end = pos + 1
+            elif (quote + 2 < length and text[quote + 1] not in ("'", "\n", "\\")
+                  and text[quote + 2] == "'"):
+                end = quote + 3
+            if end is not None:
+                blank(masked, index, end)
+                index = end
+                continue
+        index += 1
+    return "".join(no_comments), "".join(masked)
+
+
 def strip_rust_comments(text):
-    text = re.sub(r"/\*.*?\*/", "", text, flags=re.S)
-    return "\n".join(re.sub(r"//.*$", "", line) for line in text.splitlines())
+    return _mask_rust_source(text)[0]
 
 
-def item_attributes(text, start):
-    """The attribute and comment lines directly above the item starting at `start`."""
-    lines = text[:start].splitlines()
+def item_attributes(masked_text, start):
+    """The attribute lines directly above the item starting at `start` (on masked source)."""
+    lines = masked_text[:start].splitlines()
     attrs = []
     for line in reversed(lines):
-        code = re.sub(r"//.*$", "", line).strip()
+        code = line.strip()
         if code.endswith((";", "{", "}")):
             break
         attrs.append(code)
@@ -1605,64 +1706,22 @@ def deny_unknown_types(text):
         return {}
 
     def field_is_skipped(attributes):
-        # Mask Rust string literals before looking for serde attributes so a
-        # doc or rename value containing an attribute example stays text.
-        outside_strings = list(attributes)
-        raw_string_prefix = re.compile(r'(?:br|r)(?P<hashes>#*)"')
-        index = 0
-        while index < len(attributes):
-            raw_string = raw_string_prefix.match(attributes, index)
-            if raw_string:
-                closing = '"' + raw_string.group("hashes")
-                end = attributes.find(closing, raw_string.end())
-                end = len(attributes) if end < 0 else end + len(closing)
-                for position in range(index, end):
-                    if attributes[position] != "\n":
-                        outside_strings[position] = " "
-                index = end
-                continue
-            if attributes[index] == '"':
-                end = index + 1
-                escaped = False
-                while end < len(attributes):
-                    char = attributes[end]
-                    end += 1
-                    if escaped:
-                        escaped = False
-                    elif char == "\\":
-                        escaped = True
-                    elif char == '"':
-                        break
-                for position in range(index, end):
-                    if attributes[position] != "\n":
-                        outside_strings[position] = " "
-                index = end
-                continue
-            index += 1
-
-        attribute_text = "".join(outside_strings)
-        # Match a serde attribute anywhere outside string literals: masking
-        # above already hides quoted examples, so no line-start anchor is
-        # needed, and anchoring would miss `#[serde(...)]` that shares its
-        # line with another attribute.
+        if not attributes:
+            return False
+        _, attribute_text = _mask_rust_source(attributes)
+        # Match a serde attribute anywhere outside comments and string literals:
+        # scanning `attribute_text` directly keeps regular and raw strings
+        # masked so quoted commas, parens, or `skip` examples cannot confuse
+        # argument splitting.
         serde_attribute = re.compile(r"#\s*\[\s*serde\s*\(")
         for match in serde_attribute.finditer(attribute_text):
             arguments, argument, depth = [], [], 1
             index = match.end()
-            in_string = escaped = False
-            while index < len(attributes) and depth:
-                char = attributes[index]
-                if in_string:
-                    if escaped:
-                        escaped = False
-                    elif char == "\\":
-                        escaped = True
-                    elif char == '"':
-                        in_string = False
-                elif char == '"':
-                    in_string = True
-                elif char == "(":
+            while index < len(attribute_text) and depth:
+                char = attribute_text[index]
+                if char == "(":
                     depth += 1
+                    argument.append(char)
                 elif char == ")":
                     depth -= 1
                     if depth == 0:
@@ -1680,60 +1739,128 @@ def deny_unknown_types(text):
                 return True
         return False
 
+    def split_leading_attributes(raw_line, masked_line, attr_buf, attr_depth, pending):
+        """Consume leading `#[...]` attributes (including multiline continuations).
+
+        Returns `(rest_raw, rest_masked, attr_buf, attr_depth)` with any
+        completed attributes appended to `pending`.
+        """
+        pos = 0
+        length = len(masked_line)
+        if attr_buf is not None:
+            while pos < length and attr_depth > 0:
+                ch = masked_line[pos]
+                if ch == "[":
+                    attr_depth += 1
+                elif ch == "]":
+                    attr_depth -= 1
+                pos += 1
+            if attr_depth == 0:
+                pending.append(attr_buf + "\n" + raw_line[:pos])
+                attr_buf = None
+            else:
+                return "", "", attr_buf + "\n" + raw_line, attr_depth
+        while pos < length:
+            while pos < length and masked_line[pos].isspace():
+                pos += 1
+            if pos >= length or masked_line[pos] != "#":
+                break
+            probe = pos + 1
+            while probe < length and masked_line[probe].isspace():
+                probe += 1
+            if probe < length and masked_line[probe] == "!":
+                probe += 1
+                while probe < length and masked_line[probe].isspace():
+                    probe += 1
+            if probe >= length or masked_line[probe] != "[":
+                break
+            attr_start = pos
+            attr_depth = 1
+            pos = probe + 1
+            while pos < length and attr_depth > 0:
+                ch = masked_line[pos]
+                if ch == "[":
+                    attr_depth += 1
+                elif ch == "]":
+                    attr_depth -= 1
+                pos += 1
+            if attr_depth == 0:
+                pending.append(raw_line[attr_start:pos])
+            else:
+                return "", "", raw_line[attr_start:], attr_depth
+        return raw_line[pos:], masked_line[pos:], None, 0
+
+    def split_top_level_commas(raw_slice, masked_slice):
+        parts = []
+        start = 0
+        nest = 0
+        for idx, ch in enumerate(masked_slice):
+            if ch in "([<":
+                nest += 1
+            elif ch in ")]>" and nest > 0:
+                nest -= 1
+            elif ch == "," and nest == 0:
+                parts.append((raw_slice[start:idx], masked_slice[start:idx]))
+                start = idx + 1
+        parts.append((raw_slice[start:], masked_slice[start:]))
+        return parts
+
+    no_comments, masked = _mask_rust_source(text)
     types = {}
-    for match in RUST_ITEM.finditer(text):
-        attrs = item_attributes(text, match.start())
+    for match in RUST_ITEM.finditer(masked):
+        attrs = item_attributes(masked, match.start())
         if not re.search(r"\bdeny_unknown_fields\b", attrs):
             continue
         depth, start, index = 1, match.end(), match.end()
-        while index < len(text) and depth:
-            depth += {"{": 1, "}": -1}.get(text[index], 0)
+        while index < len(masked) and depth:
+            depth += {"{": 1, "}": -1}.get(masked[index], 0)
             index += 1
-        body = strip_rust_comments(text[start:index - 1])
+        body_raw = no_comments[start:index - 1]
+        body_masked = masked[start:index - 1]
         fields, depth, variant = set(), 1, None
-        pending_attributes, attribute_buffer = [], None
-        for line in body.splitlines():
-            stripped = line.strip()
-            if attribute_buffer is not None:
-                attribute_buffer += "\n" + line
-                if "]" in line:
-                    pending_attributes.append(attribute_buffer)
-                    attribute_buffer = None
-                continue
-            if stripped.startswith("#"):
-                if "]" in stripped:
-                    pending_attributes.append(line)
-                else:
-                    attribute_buffer = line
-                continue
-            if match.group("kind") == "struct" and depth == 1:
-                field = RUST_FIELD.match(line)
-                if field:
-                    if not field_is_skipped("\n".join(pending_attributes)):
-                        fields.add(field.group(1))
-                    pending_attributes = []
-                elif stripped:
-                    pending_attributes = []
-            elif match.group("kind") == "enum":
-                if depth == 1:
-                    opened = RUST_VARIANT.match(line)
-                    variant_skipped = field_is_skipped("\n".join(pending_attributes))
-                    variant = opened.group(1) if opened and not variant_skipped else None
-                    if opened and not variant_skipped and "}" in line:  # `Variant { a: A, b: B },`
-                        inline = line[opened.end():line.rindex("}")]
-                        fields.update(f"{variant}.{field.group(1)}"
-                                      for part in inline.split(",")
-                                      if (field := RUST_FIELD.match(part)))
-                    pending_attributes = []
-                elif depth == 2 and variant:
-                    field = RUST_FIELD.match(line)
+        pending_attributes, attr_buf, attr_depth = [], None, 0
+        for raw_line, masked_line in zip(body_raw.splitlines(), body_masked.splitlines()):
+            line_brace_delta = masked_line.count("{") - masked_line.count("}")
+            rest_raw, rest_masked, attr_buf, attr_depth = split_leading_attributes(
+                raw_line, masked_line, attr_buf, attr_depth, pending_attributes)
+            stripped = rest_masked.strip()
+            if attr_buf is None and stripped:
+                if match.group("kind") == "struct" and depth == 1:
+                    field = RUST_FIELD.match(rest_masked)
                     if field:
                         if not field_is_skipped("\n".join(pending_attributes)):
-                            fields.add(f"{variant}.{field.group(1)}")
+                            fields.add(field.group(1))
                         pending_attributes = []
-                    elif stripped:
+                    else:
                         pending_attributes = []
-            depth += line.count("{") - line.count("}")
+                elif match.group("kind") == "enum":
+                    if depth == 1:
+                        opened = RUST_VARIANT.match(rest_masked)
+                        variant_skipped = field_is_skipped("\n".join(pending_attributes))
+                        variant = opened.group(1) if opened and not variant_skipped else None
+                        if opened and not variant_skipped and "}" in rest_masked:  # `Variant { a: A, b: B },`
+                            close_idx = rest_masked.rindex("}")
+                            inline_raw = rest_raw[opened.end():close_idx]
+                            inline_masked = rest_masked[opened.end():close_idx]
+                            for part_raw, part_masked in split_top_level_commas(inline_raw, inline_masked):
+                                part_attrs = []
+                                _, field_masked, part_buf, _ = split_leading_attributes(
+                                    part_raw, part_masked, None, 0, part_attrs)
+                                if part_buf is not None:
+                                    continue
+                                field = RUST_FIELD.match(field_masked)
+                                if field and not field_is_skipped("\n".join(part_attrs)):
+                                    fields.add(f"{variant}.{field.group(1)}")
+                        pending_attributes = []
+                    elif depth == 2 and variant:
+                        field = RUST_FIELD.match(rest_masked)
+                        if field:
+                            if not field_is_skipped("\n".join(pending_attributes)):
+                                fields.add(f"{variant}.{field.group(1)}")
+                            pending_attributes = []
+                        else:
+                            pending_attributes = []
+            depth += line_brace_delta
         types[match.group("name")] = fields
     return types
 
@@ -1889,6 +2016,9 @@ def commit_task_ids(subject, trailer_ids):
 def survey(repo, revision_range, orbit, offline):
     git = Git(repo)
     revision_range = revision_range or default_range(git)
+    if "..." in revision_range:
+        raise SystemExit(
+            "release-breaking-changes: --range A...B is not accepted; use A..B")
     if ".." not in revision_range:
         raise SystemExit("release-breaking-changes: --range must be A..B")
     base, head = revision_range.split("..", 1)
@@ -2013,7 +2143,8 @@ def render_text(report):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    parser.add_argument("--range", help="git range A..B (default: last vX.Y.Z tag..HEAD)")
+    parser.add_argument("--range",
+                        help="git range A..B (A...B is refused; default: last vX.Y.Z tag..HEAD)")
     parser.add_argument("--repo", default=".", help="repository to survey (default: .)")
     parser.add_argument("--json", action="store_true", help="print the report as JSON")
     parser.add_argument("--offline", action="store_true",

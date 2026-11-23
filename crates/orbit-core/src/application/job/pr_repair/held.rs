@@ -5,7 +5,11 @@
 //! read can clear ([`handed_back_hold`]), an `--auto-fix` drain pass (or the
 //! dashboard's Fix PR) hands the task back to the leaf's completion step, the
 //! same resume a failed, timed-out or interrupted leaf gets. Every other hold
-//! keeps its own documented next step.
+//! keeps its own documented next step, except an auto-fix stop whose
+//! published head subsequently reports green required checks, and an admitted
+//! check repair whose `step_failure_recovery` failed without publishing
+//! ([`unrepaired_check_repair`]), which leaves the pull request's unspent
+//! auto-fix budget usable on a later attempt.
 //!
 //! The hand-backs of one held lineage are bounded without the pull request's
 //! repair ledger, which they never spend:
@@ -68,7 +72,9 @@ pub(crate) fn handed_back_hold(refusal: DeliveryRefusal) -> bool {
         // The claim already ended. Resuming this hold would land a revoked handoff.
         | DeliveryRefusal::LandingRepairRequeue
         // The operator inspects explicit source repair or discards the candidate.
-        | DeliveryRefusal::SourceRepairDecision => false,
+        | DeliveryRefusal::SourceRepairDecision
+        // The operator inspects the retained branch or worktree before retrying setup.
+        | DeliveryRefusal::StaleBranch => false,
     }
 }
 
@@ -87,14 +93,10 @@ pub(crate) fn held_refusal(run: &JobRun) -> Option<DeliveryRefusal> {
 
 /// How long after a held leaf ended the next hand-back for `code` waits,
 /// given the pull request's history.
-pub(super) fn held_backoff(
-    history: &[TaskHistoryEntry],
-    pr_number: &str,
-    code: DeliveryRefusal,
-) -> Duration {
+pub(super) fn held_backoff(history: &[TaskHistoryEntry], pr_number: &str, code: &str) -> Duration {
     let earlier = out_of_run_starts(history, pr_number)
         .iter()
-        .filter(|start| start.hold_code.as_deref() == Some(code.error_code()))
+        .filter(|start| start.hold_code.as_deref() == Some(code))
         .count()
         .min(HELD_HANDBACK_CEILING);
     HELD_BACKOFF_BASE.saturating_mul(1 << earlier)
@@ -116,12 +118,60 @@ pub(super) fn held_handbacks(
     history: &[TaskHistoryEntry],
     pr_number: &str,
     head_sha: &str,
-    code: DeliveryRefusal,
+    code: &str,
 ) -> usize {
     out_of_run_starts(history, pr_number)
         .iter()
-        .filter(|start| {
-            start.head_sha == head_sha && start.hold_code.as_deref() == Some(code.error_code())
-        })
+        .filter(|start| start.head_sha == head_sha && start.hold_code.as_deref() == Some(code))
         .count()
+}
+
+/// The diagnostic prefix an auto-fix stop carries inside its hold message.
+const AUTO_FIX_STOP_DIAGNOSTIC: &str = "auto_fix_stopped:";
+
+/// A run held by an auto-fix stop that no hand-back hold covers, which can be
+/// reconsidered once checks turn green [ORB-27221].
+///
+/// `hold_auto_fix_stop` gives a stop its typed refusal and keeps the
+/// `auto_fix_stopped: ...` diagnostic inside the step's message, so a stored
+/// hold is that typed code (never `auto_fix_stopped` itself) with the text in
+/// `error_message`. A stop whose typed refusal [`handed_back_hold`] already
+/// covers is handed back under that code instead.
+pub(crate) fn auto_fix_stopped(run: &JobRun) -> bool {
+    let Some(refusal) = held_refusal(run) else {
+        return false;
+    };
+    !handed_back_hold(refusal)
+        && run
+            .steps
+            .last()
+            .and_then(|step| step.error_message.as_deref())
+            .is_some_and(|message| message.contains(AUTO_FIX_STOP_DIAGNOSTIC))
+}
+
+/// A run held because an admitted check repair's `step_failure_recovery` ran
+/// and did not repair or publish a new head (`hold_unrepaired_check_repair`).
+///
+/// Its typed refusal is [`DeliveryRefusal::RepairDispatched`] with the
+/// `pr_auto_fix_check_repair:` handoff diagnostic in `error_message` and
+/// neither an `auto_fix_stopped:` prefix nor a `; original error before
+/// recovery:` wrapper (which marks a post-recovery `pr_complete` hold such as
+/// a spent or failed no-edit rerun). The pull request's unspent auto-fix
+/// budget remains usable on a later run.
+pub(crate) fn unrepaired_check_repair(run: &JobRun) -> bool {
+    if held_refusal(run) != Some(DeliveryRefusal::RepairDispatched) {
+        return false;
+    }
+    run.steps
+        .last()
+        .and_then(|step| step.error_message.as_deref())
+        .is_some_and(|message| {
+            !message.contains(AUTO_FIX_STOP_DIAGNOSTIC)
+                && orbit_types::workflow::is_pr_auto_fix_check_repair(message)
+                && message
+                    .split_once(orbit_types::workflow::PR_AUTO_FIX_CHECK_REPAIR_MARKER)
+                    .is_some_and(|(prefix, _)| {
+                        !prefix.contains("; original error before recovery:")
+                    })
+        })
 }

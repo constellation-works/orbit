@@ -200,6 +200,7 @@ pub(crate) fn host_error_code(error: &OrbitError) -> &str {
         OrbitError::HostConfiguration { .. } => "host_configuration",
         OrbitError::InvalidInput(_)
         | OrbitError::InvalidInputDiagnostic { .. }
+        | OrbitError::UnknownWorkspaceSelector(_)
         | OrbitError::ClaimRefused { .. } => "invalid_input",
         OrbitError::UnreachableDestination(_) => "unreachable_destination",
         OrbitError::AmbiguousDestination(_) => "ambiguous_destination",

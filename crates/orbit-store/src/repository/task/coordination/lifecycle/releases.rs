@@ -34,6 +34,7 @@ impl TaskCommitBoundary {
                 record.class.suppresses_task_repull()
                     && !record.forge_unavailable
                     && !record.owner_busy
+                    && !record.delivery_hold
             }) else {
                 continue;
             };

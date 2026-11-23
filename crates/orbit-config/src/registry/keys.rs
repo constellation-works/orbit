@@ -35,6 +35,10 @@ pub(crate) const REMOVED_CONFIG_KEYS: &[(&str, &str)] = &[(
 /// them errors; move each to its replacement before then [ORB-13992].
 pub(crate) const DEPRECATED_CONFIG_KEYS: &[(&str, &str)] = &[
     (
+        "crew_memory.enabled",
+        "ignored: crew memory has no switch of its own; it runs only while an experiment with a memory arm is running. Remove this key",
+    ),
+    (
         "workflow.explore.enabled",
         "ignored: explorer delegation was removed; remove this key",
     ),
@@ -777,7 +781,10 @@ pub fn admit_settable_config_key(key: &str) -> Result<(), OrbitError> {
 ///
 /// Fixed registry keys, live `crews.<name>.<field>` keys and
 /// `plugins.<ns>.<key>` keys owned by an installed plugin succeed. A
-/// removed key fails with its migration note. Unknown registry keys fail
+/// removed key fails with its migration note. A TOML-only table
+/// (`workflow.agent_corpus`, `workflow.tag_instructions`,
+/// `workflow.review_skip_tags`, `crews`) fails with a pointer to the layered
+/// `config.toml` files. Unknown registry keys fail
 /// with nearby-key suggestions when available; misspelled crew fields fail
 /// with valid-field suggestions. All before any document mutation.
 pub fn admit_config_key(key: &str) -> Result<(), OrbitError> {
@@ -794,6 +801,13 @@ pub fn admit_config_key(key: &str) -> Result<(), OrbitError> {
             "config key '{key}' is deprecated and no longer settable: {note}"
         )));
     }
+    if toml_only_table(key) {
+        return Err(OrbitError::InvalidInput(format!(
+            "config key '{key}' is a TOML-only table, not a scalar key: \
+             `orbit config get` and `orbit config set` do not read or write it; \
+             read or edit [{key}] in <workspace>/.orbit/config.toml and ~/.orbit/config.toml"
+        )));
+    }
     if let Some(parsed) = crate::plugins::parse_plugin_field_key(key)? {
         return crate::plugins::admit_plugin_field_key(parsed);
     }
@@ -804,6 +818,18 @@ pub fn admit_config_key(key: &str) -> Result<(), OrbitError> {
             nearby_config_key_names(key),
         )),
     }
+}
+
+/// Whether `key` names a whole TOML-only table that `orbit config get`/`set`
+/// cannot address as a scalar key.
+fn toml_only_table(key: &str) -> bool {
+    matches!(
+        key,
+        "workflow.agent_corpus"
+            | "workflow.tag_instructions"
+            | "workflow.review_skip_tags"
+            | "crews"
+    )
 }
 
 /// Parse `crews.<name>.<field>` when `key` is a crew-table path.

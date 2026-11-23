@@ -15,12 +15,21 @@
 // click uses setActiveTab (preserving the ?step= query for run-detail
 // pre-expansion) rather than navigateToRun, so it matches the pre-split behavior.
 
-import { panelCanRender, resetPanel, el, syncNodes, getWindow, getWorkspace, formatAge, formatDateTime, listItems, bindRunLink, truncate } from './common.js';
+import { panelCanRender, resetPanel, el, syncNodes, getHostRevision, getWindow, getWorkspace, getWorkspaceRevision, onWorkspaceChange, formatAge, formatDateTime, listItems, bindRunLink, truncate } from './common.js';
 import { renderIncidents } from './incidents.js';
 
 const $ = (id) => document.getElementById(id);
 
 let agentDiagnosticsOpen = false;
+// Message disclosures rebuilt by a poll. Keyed by the error row, so an
+// expanded message stays open when the table node is replaced.
+const openErrorMessages = new Set();
+
+onWorkspaceChange(() => {
+  openErrorMessages.clear();
+  errorsPageStart = 0;
+  errorsPageScope = "";
+});
 
 // Ordinary error cards are paged in the browser. The fetch cap stays a separate
 // control (Load more errors). Phone cards are several hundred pixels tall, so
@@ -97,11 +106,29 @@ function truncatedMessageNote(row, ctx) {
   return el("p", { class: "error-message-note" }, ["The feed shows the start of this long message. ", link, " for the full text."]);
 }
 
+function errorDisclosureKey(row) {
+  return [
+    row.ts || "",
+    row.source || "",
+    row.job_run || row.affiliation || "",
+    row.step ?? "",
+    row.target || "",
+    row.message || "",
+  ].join("\u0000");
+}
+
 function errorMessageDisclosure(value, row, ctx, td) {
   const full = value || "";
   const shortened = shortenWorktreePaths(full);
   td.title = row.target ? `${row.target}: ${full}` : full;
+  const key = errorDisclosureKey(row);
   const details = el("details", { class: "error-message" });
+  if (openErrorMessages.has(key)) details.open = true;
+  details.addEventListener("toggle", () => {
+    if (!details.isConnected) return;
+    if (details.open) openErrorMessages.add(key);
+    else openErrorMessages.delete(key);
+  });
   details.addEventListener("click", event => event.stopPropagation());
   const summary = el("summary");
   summary.appendChild(el("span", {
@@ -269,10 +296,30 @@ function errorsPageSize() {
 }
 
 function syncErrorsPageScope() {
-  const scope = `${getWorkspace() || ""}|${getWindow()}`;
+  const scope = `${getHostRevision()}|${getWorkspaceRevision()}|${getWindow()}`;
   if (scope === errorsPageScope) return;
   errorsPageScope = scope;
   errorsPageStart = 0;
+  openErrorMessages.clear();
+  // A reused row would keep its <details> open after the memory is cleared.
+  const body = $("diag-body");
+  if (!body) return;
+  for (const details of body.querySelectorAll("details.error-message")) details.open = false;
+}
+
+function pruneOpenErrorMessages(rows) {
+  if (openErrorMessages.size === 0) return;
+  const activeKeys = new Set(rows.map(errorDisclosureKey));
+  for (const key of openErrorMessages) {
+    if (!activeKeys.has(key)) openErrorMessages.delete(key);
+  }
+}
+
+function errorsMain(body) {
+  for (const child of body.children) {
+    if (child.classList && child.classList.contains("diagnostics-errors-main")) return child;
+  }
+  return el("div", { class: "diagnostics-errors-main" });
 }
 
 function alignErrorsPageStart(length, size) {
@@ -378,6 +425,7 @@ function renderDiagnostics(ctx = {}) {
   lastErrorsCtx = ctx;
   bindErrorsPageMedia();
   syncErrorsPageScope();
+  pruneOpenErrorMessages(rows);
   const ordinary = rows.filter(row => !recoverableAgentDiagnostic(row));
   const size = errorsPageSize();
   const paged = ordinary.length > size;
@@ -397,7 +445,8 @@ function renderDiagnostics(ctx = {}) {
   }
   const columns = getDiagErrorsColumns(ctx).filter(column =>
     ["ts", "source", "job_run", "message"].includes(column.key) || errorColumnHasData(rows, column.key));
-  const main = el("div", { class: "diagnostics-errors-main" });
+  const diagBody = $("diag-body");
+  const main = errorsMain(diagBody);
   const internal = rows.filter(recoverableAgentDiagnostic);
   renderDiagnosticsTable(paged ? ordinary.slice(start, end) : ordinary, columns, ctx,
     rows.length ? "No other error events in this window." : "No error events in this window.", { cards: true, body: main });
@@ -414,7 +463,7 @@ function renderDiagnostics(ctx = {}) {
     details.appendChild(content);
     children.push(details);
   }
-  syncNodes($("diag-body"), children);
+  syncNodes(diagBody, children);
 }
 
 export { renderDiagnostics };

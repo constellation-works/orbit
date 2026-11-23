@@ -638,16 +638,9 @@ const GOVERNED_TOOL_PLACEMENT: &[(&str, Placement)] = &[
     ("orbit.experiment.reweight", Placement::Advertised),
     ("orbit.experiment.start", Placement::Advertised),
     ("orbit.experiment.update", Placement::Advertised),
-    // Crew memory copy, export and reset are operator CLI only (no MCP
-    // scope). Write and propose are listed by a server serving the
-    // `experiments` toolset, which a dreaming run's dispatch stamps.
-    ("orbit.memory.copy", Placement::Unadvertised),
-    ("orbit.memory.export", Placement::Unadvertised),
-    ("orbit.memory.proposal.accept", Placement::Unadvertised),
-    ("orbit.memory.proposal.reject", Placement::Unadvertised),
-    ("orbit.memory.proposals", Placement::Unadvertised),
+    // Crew memory write and propose are run-bound: listed only by a server
+    // whose dispatch stamp names them, which only a dreaming run's has.
     ("orbit.memory.propose", Placement::Advertised),
-    ("orbit.memory.reset", Placement::Unadvertised),
     ("orbit.memory.write", Placement::Advertised),
     // Listed only by a server that enables the opt-in `notice` toolset.
     ("orbit.notice.close", Placement::Advertised),
@@ -674,12 +667,14 @@ const GOVERNED_TOOL_PLACEMENT: &[(&str, Placement)] = &[
     ("orbit.task.reject", Placement::Unadvertised),
     ("orbit.task.repilot", Placement::Advertised),
     ("orbit.task.requeue", Placement::Advertised),
+    ("orbit.task.resume_delivery", Placement::Advertised),
     ("orbit.task.recover_claim", Placement::Advertised),
     ("orbit.task.retry_handoff", Placement::Advertised),
     ("orbit.task.revoke_handoff", Placement::Advertised),
     ("orbit.task.review_reset", Placement::Advertised),
     ("orbit.workflow.auto", Placement::Advertised),
     ("orbit.workflow.land", Placement::Advertised),
+    ("orbit.workflow.refresh", Placement::Advertised),
     ("orbit.workflow.run.list", Placement::Advertised),
     ("orbit.workflow.run.observe", Placement::Advertised),
     ("orbit.workflow.run.resume", Placement::Advertised),

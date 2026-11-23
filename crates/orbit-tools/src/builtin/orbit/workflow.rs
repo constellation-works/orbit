@@ -19,15 +19,31 @@ use crate::{OrbitBuiltinAction, ToolContext};
 impl GuardedModes for WorkflowVerb {
     fn preempt(self, ctx: &ToolContext, input: &Value) -> Option<Result<Value, OrbitError>> {
         match self {
-            WorkflowVerb::Auto => ensure_operator_leaf(ctx)
-                .and_then(|()| {
-                    orbit_common::governance::workflow::validate_auto_concurrency_input(input)
-                })
-                .err()
-                .map(Err),
-            WorkflowVerb::Ship | WorkflowVerb::Land | WorkflowVerb::RunResume => {
-                ensure_not_managed(ctx).err().map(Err)
+            WorkflowVerb::Auto => {
+                let resident_status_read = input
+                    .get("action")
+                    .and_then(Value::as_str)
+                    .is_some_and(|action| action.trim() == "status")
+                    && ctx
+                        .orbit_host
+                        .as_deref()
+                        .is_some_and(|host| host.allows_resident_drain_status());
+                let admission = if resident_status_read {
+                    Ok(())
+                } else {
+                    ensure_operator_leaf(ctx)
+                };
+                admission
+                    .and_then(|()| {
+                        orbit_common::governance::workflow::validate_auto_concurrency_input(input)
+                    })
+                    .err()
+                    .map(Err)
             }
+            WorkflowVerb::Ship
+            | WorkflowVerb::Land
+            | WorkflowVerb::Refresh
+            | WorkflowVerb::RunResume => ensure_not_managed(ctx).err().map(Err),
             WorkflowVerb::RunList | WorkflowVerb::RunObserve | WorkflowVerb::RunShow => None,
         }
     }
@@ -61,6 +77,7 @@ impl GuardedModes for WorkflowVerb {
                 Err(error) => Some(Err(error)),
             },
             WorkflowVerb::Land
+            | WorkflowVerb::Refresh
             | WorkflowVerb::RunObserve
             | WorkflowVerb::RunResume
             | WorkflowVerb::Ship => None,
@@ -81,6 +98,7 @@ impl GuardedModes for WorkflowVerb {
                 reject_unknown_tool_fields(input, &allowed)
             }
             WorkflowVerb::Land
+            | WorkflowVerb::Refresh
             | WorkflowVerb::RunList
             | WorkflowVerb::RunResume
             | WorkflowVerb::RunObserve
@@ -93,6 +111,7 @@ impl GuardedModes for WorkflowVerb {
         match self {
             WorkflowVerb::Auto
             | WorkflowVerb::Land
+            | WorkflowVerb::Refresh
             | WorkflowVerb::RunList
             | WorkflowVerb::RunResume
             | WorkflowVerb::RunObserve

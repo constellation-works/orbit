@@ -204,6 +204,8 @@ impl FakeForge {
             failed_required_checks: Vec::new(),
             pending_required_checks: Vec::new(),
             passed_required_checks: vec!["Test".into()],
+            unreported_required_checks: Vec::new(),
+            requires_status_checks: None,
         }
     }
     /// A delivery PR of `task_id`, merged into `base` by `author`.

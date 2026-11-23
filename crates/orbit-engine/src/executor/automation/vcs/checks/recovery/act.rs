@@ -141,7 +141,8 @@ pub(in crate::executor::automation::vcs) fn recover_failed_checks<H: RuntimeHost
             ));
             return Ok(CheckRecoveryStep::Acted);
         }
-        super::super::rerun::CiRerunStep::BudgetSpent(reason) => {
+        super::super::rerun::CiRerunStep::BudgetSpent(reason)
+        | super::super::rerun::CiRerunStep::NoEditRerunFailed(reason) => {
             return Ok(CheckRecoveryStep::Stop(format!(
                 "{reason}; {}",
                 describe(

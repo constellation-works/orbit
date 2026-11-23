@@ -66,7 +66,11 @@ export function fleetHostCards(hosts, health, openHost) {
     const loading = readingPending(reading);
     const verdict = hostVerdict(payload);
     const state = row.checking ? 'Checking' : row.reachable === false ? 'Unreachable' : row.reachable ? (row.error ? 'Answered' : reading?.resourcesError ? 'Last reached' : 'Online') : 'Unprobed';
-    const card = fleetButton('', `Inspect ${row.name}, diagnostics and registry actions`, () => openHost(row.machine_id), 'fleet-host-card');
+    const card = el('button', {
+      type: 'button', class: 'card fleet-host-card',
+      'aria-label': `Inspect ${row.name}, diagnostics and registry actions`,
+    });
+    card.addEventListener('click', () => openHost(row.machine_id));
     card.dataset.key = row.machine_id;
     card.setAttribute('aria-haspopup', 'dialog');
     card.append(
@@ -84,7 +88,7 @@ export function fleetHostCards(hosts, health, openHost) {
 }
 
 export function fleetDrainSection(hosts, health, selectScope) {
-  const list = el('div', { class: 'fleet-work-list' });
+  const list = el('div', { class: 'card card-flush fleet-work-list' });
   let pending = false;
   for (const host of hosts) {
     const reading = health.get(host.machine_id);
@@ -116,7 +120,7 @@ export function fleetDrainSection(hosts, health, selectScope) {
 // Only shares_default_login proves that two crew accounts share a login.
 // Never sum percentages or deduplicate identical names across machines.
 export function fleetProviderSection(hosts, health) {
-  const list = el('div', { class: 'fleet-account-list' });
+  const list = el('div', { class: 'card card-flush fleet-account-list' });
   for (const host of hosts) {
     const payload = health.get(host.machine_id)?.resources;
     const pressures = payload?.provider_pressures || [];

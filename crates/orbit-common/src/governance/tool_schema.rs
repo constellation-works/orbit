@@ -9,6 +9,9 @@ use super::operation::EnumValue;
 use super::resident::{CONTROL_ACTIONS, RIGHTS};
 use super::task::TASK_UPDATE_STATUS_VALUES;
 use super::task::operations::{ELIGIBLE_STATUS_VALUES, TASK_TYPE_VALUES};
+
+/// Shared concise description for MCP `workspace` selector parameters.
+pub const WORKSPACE_SELECTOR_DESCRIPTION: &str = "Workspace selector from orbit_workspace_list.";
 /// JSON Schema `pattern` for a provenance `model` value.
 ///
 /// Mirrors `infer_agent_family_from_model` in `orbit-types`: a canonical
@@ -84,12 +87,12 @@ pub fn tool_input_schema_for(tool_name: &str, params: &[ToolParam]) -> Map<Strin
 
 /// Whether the advertised argument object accepts undeclared keys.
 ///
-/// Registered task tools refuse extras at runtime; their schemas match that
-/// contract. Other tools keep `additionalProperties: true` until
-/// they grow the same check. Transport wrappers (`_meta`, `workspace`) are
-/// not modeled as additional argument properties.
+/// Registered task tools and `orbit.search` refuse extras at runtime; their
+/// schemas match that contract. Other tools keep `additionalProperties: true`
+/// until they grow the same check. Transport wrappers (`_meta`, `workspace`)
+/// are not modeled as additional argument properties.
 pub fn tool_arguments_allow_additional_properties(tool_name: &str) -> bool {
-    !tool_name.starts_with("orbit.task.")
+    !tool_name.starts_with("orbit.task.") && tool_name != "orbit.search"
 }
 
 /// Build the canonical JSON-Schema fragment for one tool parameter.

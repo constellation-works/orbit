@@ -116,7 +116,7 @@ const ADD: AutoTaskOperation = AutoTaskOperation {
         constraints: &[],
         long_about: None,
         after_help: Some(
-            "Minted-task status meanings and lifecycle rules: installed Orbit skill `references/task-fields.md`.",
+            "Minted-task status meanings and lifecycle rules: installed Orbit skill `references/task-fields-projections.md`.",
         ),
         flag_order: &[],
     },
@@ -125,7 +125,7 @@ const ADD: AutoTaskOperation = AutoTaskOperation {
         required(both(
             "name",
             ParamType::String,
-            "Unique definition name (lowercase alphanumeric, `-`/`_`, starts alphanumeric). Required.",
+            "Unique name ([a-z0-9][a-z0-9_-]*).",
             CliArgKind::flag("name"),
             "Unique definition name (lowercase alphanumeric, `-`/`_`, starts alphanumeric)",
         )),
@@ -133,7 +133,7 @@ const ADD: AutoTaskOperation = AutoTaskOperation {
             free_text(both(
                 "description",
                 ParamType::String,
-                "Human description of the recurring chore.",
+                "Chore description.",
                 CliArgKind::flag("description"),
                 "Human description of the recurring chore",
             )),
@@ -142,7 +142,7 @@ const ADD: AutoTaskOperation = AutoTaskOperation {
         required(mcp_only(
             "schedule",
             ParamType::Object,
-            "Schedule object: exactly one of `{ cron: string }` (5-field cron) `{ every_minutes: number }`, `{ deliveries_landed: { branch, threshold, max_wait_minutes, coverage, owner_machine?, max_items?, retries? } }` (coverage: landed_code_review_v1; owner_machine defaults to this workspace's registered owner machine), or `{ condition: { ... } }` (fires once per subject edge on the workspace owner). `cron`, `every_minutes` and `deliveries_landed` take an optional `when` CEL guard over workspace state; `cron` and `every_minutes` also take `guard_miss` (`wait`, the default, or `skip`). Required.",
+            "One of {cron}, {every_minutes}, {deliveries_landed: {branch, threshold, max_wait_minutes, coverage, owner_machine?, max_items?, retries?}}, or {condition}; optional `when` guards cron, every_minutes and deliveries_landed, and a condition takes no guard; `guard_miss` (`wait`|`skip`) requires `when` and applies to cron and every_minutes only.",
         )),
         cli_only(
             "cron",
@@ -165,7 +165,7 @@ const ADD: AutoTaskOperation = AutoTaskOperation {
         required(mcp_only(
             "template",
             ParamType::Object,
-            "Task template: `{ title, description?, acceptance_criteria?, task_type?, tags?, required_tools?, priority?, complexity?, crew?, status? }`. `complexity` is an assessed low/medium/hard/xhard value copied to every minted task; omission retains legacy unassessed minting. `required_tools` is an exact canonical-name list copied to every minted task. Provider-neutral — no turn knobs. Required.",
+            "{title, description?, acceptance_criteria?, task_type?, tags?, required_tools?, priority?, complexity?, crew?, status?}; provider-neutral.",
         )),
         required(cli_only(
             "title",
@@ -250,7 +250,7 @@ const ADD: AutoTaskOperation = AutoTaskOperation {
             both(
                 "dedupe",
                 ParamType::Enum(DEDUPE_VALUES),
-                "Dedupe policy: `skip_if_open` (default) or `always`.",
+                "`skip_if_open` (default) or `always`.",
                 CliArgKind::flag("dedupe"),
                 "Dedupe policy (defaults to skip-if-open)",
             ),
@@ -259,7 +259,7 @@ const ADD: AutoTaskOperation = AutoTaskOperation {
         both(
             "granted_tools",
             ParamType::StringList,
-            "Operator only: tool names granted to every minted task. They are copied to its `granted_tools`; a caller without operator authority that supplies this is refused, and a `template` cannot carry it.",
+            "Operator-granted tools for minted tasks (not in `template`).",
             GRANTED_TOOLS_FLAG,
             "Exact canonical tool names an operator grants every minted task's implementing activity (operator only)",
         ),
@@ -296,7 +296,7 @@ const LIST: AutoTaskOperation = AutoTaskOperation {
         both(
             "include_inactive_plugins",
             ParamType::Switch,
-            "Also list definitions whose seeding plugin is off in this workspace or on the host, each marked plugin_inactive with its skipped_reason.",
+            "Include definitions whose seeding plugin is off.",
             CliArgKind::Flag {
                 long: "include-inactive-plugins",
                 delimiter: None,
@@ -310,10 +310,10 @@ const LIST: AutoTaskOperation = AutoTaskOperation {
         mcp_only(
             "view",
             ParamType::String,
-            "bounded: bounded metadata, explicit workspace, pagination and display truncation. Omit for the existing full-record response.",
+            "Bounded metadata view; requires `workspace` (only value: `bounded`).",
         ),
-        mcp_only("offset", ParamType::Integer, "Bounded list offset"),
-        mcp_only("limit", ParamType::Integer, "Bounded page size"),
+        mcp_only("offset", ParamType::Integer, "Bounded list offset."),
+        mcp_only("limit", ParamType::Integer, "Bounded page size."),
     ]],
     at_least_one_of: &[],
     retired_fields: &[],
@@ -358,7 +358,7 @@ const UPDATE: AutoTaskOperation = AutoTaskOperation {
         constraints: &[],
         long_about: None,
         after_help: Some(
-            "Minted-task status meanings and lifecycle rules: installed Orbit skill `references/task-fields.md`.",
+            "Minted-task status meanings and lifecycle rules: installed Orbit skill `references/task-fields-projections.md`.",
         ),
         flag_order: &[],
     },
@@ -367,7 +367,7 @@ const UPDATE: AutoTaskOperation = AutoTaskOperation {
         mcp_only(
             "waive_batch",
             ParamType::Object,
-            "Explicit settled-batch waiver: { batch_id, reason }. Cannot be combined with definition edits; advances no coverage.",
+            "Settled-batch waiver {batch_id, reason}; no other edits.",
         ),
         NAME_PARAM,
         preserve_empty(free_text(both(
@@ -380,7 +380,7 @@ const UPDATE: AutoTaskOperation = AutoTaskOperation {
         mcp_only(
             "schedule",
             ParamType::Object,
-            "New schedule object: `{ cron: string }` `{ every_minutes: number }`, `{ deliveries_landed: { branch, threshold, max_wait_minutes, coverage, owner_machine?, max_items?, retries? } }` (owner_machine defaults to this workspace's registered owner machine) (coverage: landed_code_review_v1), or `{ condition: { ... } }` (fires once per subject edge on the workspace owner). `cron`, `every_minutes` and `deliveries_landed` take an optional `when` CEL guard over workspace state; `cron` and `every_minutes` also take `guard_miss` (`wait`, the default, or `skip`).",
+            "Replacement schedule (same shape as `add`).",
         ),
         cli_only(
             "cron",
@@ -403,12 +403,12 @@ const UPDATE: AutoTaskOperation = AutoTaskOperation {
         mcp_only(
             "template",
             ParamType::Object,
-            "Replacement task template object, including optional assessed `complexity` (low/medium/hard/xhard) and exact canonical `required_tools` copied to minted tasks.",
+            "Replacement template (same fields as `add`).",
         ),
         both(
             "dedupe",
             ParamType::Enum(DEDUPE_VALUES),
-            "New dedupe policy: `skip_if_open` or `always`.",
+            "`skip_if_open` or `always`.",
             CliArgKind::flag("dedupe"),
             "New dedupe policy",
         ),
@@ -495,29 +495,29 @@ const UPDATE: AutoTaskOperation = AutoTaskOperation {
         mcp_only(
             "enabled",
             ParamType::Boolean,
-            "Enable (`true`) or disable (`false`) the definition. Disabling is the kill-switch, not a delete.",
+            "Enable (`true`) or disable (`false`).",
         ),
         mcp_only(
             "expected_enabled",
             ParamType::Boolean,
-            "Observed enabled state, checked atomically with the `enabled` change; the change is refused when the definition no longer matches. Requires operator authority and `workspace`, and accepts no other edits.",
+            "CAS expected `enabled` state (operator + `workspace`; no other edits).",
         ),
         mcp_only(
             "workspace",
             ParamType::String,
-            "Explicit workspace, required with `expected_enabled`",
+            crate::governance::tool_schema::WORKSPACE_SELECTOR_DESCRIPTION,
         ),
         both(
             "adopt_bundled_contract",
             ParamType::Switch,
-            "Append the bundled contract the effective body omits, keeping every other field. Cannot be combined with another edit.",
+            "Append omitted bundled contract; no other edits.",
             CliArgKind::flag("adopt-bundled-contract"),
             "Append the bundled contract this body omits, preserving every other field",
         ),
         preserve_empty(both(
             "granted_tools",
             ParamType::StringList,
-            "Operator only: replacement granted tool names; an empty list clears them. A caller without operator authority that supplies this is refused, and a `template` edit never changes it.",
+            "Replacement operator-granted tools (empty clears).",
             GRANTED_TOOLS_FLAG,
             "Replacement tool names an operator grants every minted task (operator only; empty string clears)",
         )),
@@ -643,12 +643,12 @@ const MINT: AutoTaskOperation = AutoTaskOperation {
         mcp_only(
             "workspace",
             ParamType::String,
-            "Explicit workspace for acknowledged mint",
+            crate::governance::tool_schema::WORKSPACE_SELECTOR_DESCRIPTION,
         ),
         mcp_only(
             "acknowledge_unconditional",
             ParamType::Boolean,
-            "True acknowledges unconditional creation; requires operator authority",
+            "True acknowledges unconditional mint (operator only).",
         ),
     ]],
     at_least_one_of: &[],
@@ -740,7 +740,7 @@ const RESET: AutoTaskOperation = AutoTaskOperation {
 const NAME_PARAM: ParamSpec = required(both(
     "name",
     ParamType::String,
-    "Definition name. Required.",
+    "Definition name.",
     CliArgKind::Positional,
     "Definition name",
 ));

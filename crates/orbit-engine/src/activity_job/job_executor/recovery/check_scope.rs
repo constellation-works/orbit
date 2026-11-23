@@ -106,14 +106,22 @@ fn worktree_has_delivery_edit(root: &Path) -> Result<bool, RecoveryCommitRefusal
     Ok(false)
 }
 
-/// Require a host admission for this exact run/head, then bind explanations.
-/// The provider's report is evidence only; it cannot mint admission or a lease.
-pub(super) fn bind(
+struct BoundCheckRepair<'a> {
+    root: &'a Path,
+    head: String,
+    task: String,
+    owner_run: String,
+    pr: String,
+    admitted: orbit_types::workflow::PrAutoFixAttempt,
+    relative: String,
+}
+
+fn bind_preflight<'a>(
     ctx: &ExecCtx<'_>,
     step: &JobV2Step,
     failure: &str,
-    bound: &mut Value,
-) -> Result<CheckScopeBind, RecoveryCommitRefusal> {
+    bound: &'a Value,
+) -> Result<BoundCheckRepair<'a>, RecoveryCommitRefusal> {
     if bound
         .pointer("/failed_step_input/auto_fix")
         .and_then(Value::as_bool)
@@ -137,7 +145,8 @@ pub(super) fn bind(
         .get("task_id")
         .and_then(Value::as_str)
         .or_else(|| ids.iter().filter_map(Value::as_str).min())
-        .ok_or_else(|| refused("no owning task"))?;
+        .ok_or_else(|| refused("no owning task"))?
+        .to_string();
     let owner_run = bound
         .pointer("/failed_step_input/job_run_id")
         .and_then(Value::as_str)
@@ -145,7 +154,7 @@ pub(super) fn bind(
         .to_string();
     if ctx
         .host
-        .get_task(task)
+        .get_task(&task)
         .map_err(refused)?
         .job_run_id
         .as_deref()
@@ -153,12 +162,13 @@ pub(super) fn bind(
     {
         return Err(refused("task no longer belongs to the failed step's run"));
     }
-    let history = ctx.host.get_task_history(task).map_err(refused)?;
+    let history = ctx.host.get_task_history(&task).map_err(refused)?;
     let pr = bound
         .pointer("/failed_step_input/pr_number")
         .and_then(Value::as_str)
-        .ok_or_else(|| refused("no PR checkpoint"))?;
-    let admitted = pr_auto_fix_attempts(&history, pr)
+        .ok_or_else(|| refused("no PR checkpoint"))?
+        .to_string();
+    let admitted = pr_auto_fix_attempts(&history, &pr)
         .into_iter()
         .find(|attempt| {
             attempt.run_id == ctx.run_id
@@ -167,38 +177,100 @@ pub(super) fn bind(
         })
         .ok_or_else(|| refused("no durable CI repair admission for this run, PR and head"))?;
     let relative = report_path(&ctx.run_id, &step.id, failure);
-    // Refuse scratch symlinks as well as a symlink in place of the report.
-    // An absent record is a repair outcome, not an OS error: with no edit
-    // it hands the head to the one rerun; with edits it refuses in words.
-    for part in [".orbit", ".orbit/tmp", relative.as_str()] {
+    Ok(BoundCheckRepair {
+        root,
+        head,
+        task,
+        owner_run,
+        pr,
+        admitted,
+        relative,
+    })
+}
+
+fn scope_record_presence(root: &Path, relative: &str) -> Result<bool, RecoveryCommitRefusal> {
+    for part in [".orbit", ".orbit/tmp", relative] {
         let metadata = match std::fs::symlink_metadata(root.join(part)) {
             Ok(metadata) => metadata,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                if worktree_has_delivery_edit(root)? {
-                    return Err(refused(
-                        "the CI repair changed files but wrote no scope record; \
-                         no scope record was written, so no edit is explained",
-                    ));
-                }
-                record_no_edit_rerun(
-                    ctx,
-                    step,
-                    failure,
-                    NoEditRerunTarget {
-                        task,
-                        owner_run: &owner_run,
-                        pr,
-                        head: &head,
-                    },
-                    &admitted,
-                )?;
-                return Ok(CheckScopeBind::NoEdit);
-            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
             Err(error) => return Err(refused(error)),
         };
         if metadata.file_type().is_symlink() || (part == relative && !metadata.is_file()) {
             return Err(refused("scope record traverses a symlink"));
         }
+    }
+    Ok(true)
+}
+
+/// Record a no-edit check repair when recovery left the worktree clean and
+/// wrote no scope record despite a `not_recovered` or omitted decision.
+pub(super) fn bind_no_edit_only(
+    ctx: &ExecCtx<'_>,
+    step: &JobV2Step,
+    failure: &str,
+    bound: &Value,
+) -> Result<bool, RecoveryCommitRefusal> {
+    let preflight = bind_preflight(ctx, step, failure, bound)?;
+    if scope_record_presence(preflight.root, &preflight.relative)?
+        || worktree_has_delivery_edit(preflight.root)?
+    {
+        return Ok(false);
+    }
+    record_no_edit_rerun(
+        ctx,
+        step,
+        failure,
+        NoEditRerunTarget {
+            task: &preflight.task,
+            owner_run: &preflight.owner_run,
+            pr: &preflight.pr,
+            head: &preflight.head,
+        },
+        &preflight.admitted,
+    )?;
+    Ok(true)
+}
+
+/// Require a host admission for this exact run/head, then bind explanations.
+/// The provider's report is evidence only; it cannot mint admission or a lease.
+pub(super) fn bind(
+    ctx: &ExecCtx<'_>,
+    step: &JobV2Step,
+    failure: &str,
+    bound: &mut Value,
+) -> Result<CheckScopeBind, RecoveryCommitRefusal> {
+    let BoundCheckRepair {
+        root,
+        head,
+        task,
+        owner_run,
+        pr,
+        admitted,
+        relative,
+    } = bind_preflight(ctx, step, failure, bound)?;
+    // Refuse scratch symlinks as well as a symlink in place of the report.
+    // An absent record is a repair outcome, not an OS error: with no edit
+    // it hands the head to the one rerun; with edits it refuses in words.
+    if !scope_record_presence(root, &relative)? {
+        if worktree_has_delivery_edit(root)? {
+            return Err(refused(
+                "the CI repair changed files but wrote no scope record; \
+                 no scope record was written, so no edit is explained",
+            ));
+        }
+        record_no_edit_rerun(
+            ctx,
+            step,
+            failure,
+            NoEditRerunTarget {
+                task: &task,
+                owner_run: &owner_run,
+                pr: &pr,
+                head: &head,
+            },
+            &admitted,
+        )?;
+        return Ok(CheckScopeBind::NoEdit);
     }
     let mut bytes = Vec::new();
     let file =
@@ -243,7 +315,7 @@ pub(super) fn bind(
     let retained = orbit_common::security::redaction::redact_all_json(evidence.clone());
     ctx.host
         .attach_task_validation_log(
-            task,
+            &task,
             &owner_run,
             &format!("auto-fix/{}/scope-{head}.json", ctx.run_id),
             serde_json::to_vec(&retained).map_err(refused)?,

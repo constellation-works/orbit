@@ -15,7 +15,7 @@ use orbit_engine::{PrAutoFixAdmission, PrAutoFixRequest, RuntimeHost, TaskAutoma
 use orbit_types::task::{TaskComplexity, TaskHistoryEntry};
 use orbit_types::workflow::{
     CrewPurpose, PR_AUTO_FIX_ADMITTED_EVENT, PR_AUTO_FIX_BUDGET, PR_AUTO_FIX_CREWS_KEY,
-    PrAutoFixClaim, PrAutoFixDecision, decide_pr_auto_fix, pr_auto_fix_attempts,
+    PrAutoFixClaim, PrAutoFixDecision, decide_pr_auto_fix_settled, pr_auto_fix_attempts,
 };
 use serde_json::json;
 
@@ -96,12 +96,22 @@ impl OrbitRuntime {
             .with_task_write_lock(primary, &mut || {
                 let history = self.get_task_history(primary)?;
                 let attempts = pr_auto_fix_attempts(&history, &request.pr_number);
-                let decided = decide_pr_auto_fix(
+                // An earlier run's attempt on this head that ended without
+                // publishing a new head leaves the head repairable.
+                let ended = |attempt: &orbit_types::workflow::PrAutoFixAttempt| {
+                    matches!(
+                        self.stores().jobs().get_job_run(&attempt.run_id),
+                        Ok(Some(run)) if run.state.is_terminal()
+                    )
+                };
+                let source_repairs = source_repairs_reserved(&history, &request.pr_number)?;
+                let decided = decide_pr_auto_fix_settled(
                     &attempts,
                     &claim,
-                    pr_auto_fix_budget(&history, &request.pr_number)?,
+                    PR_AUTO_FIX_BUDGET.saturating_sub(source_repairs),
                     &crew.name,
                     &crew_source,
+                    &ended,
                 );
                 if let PrAutoFixDecision::Admit(attempt) = &decided {
                     let note = serde_json::to_string(attempt).map_err(|error| {
@@ -126,19 +136,42 @@ impl OrbitRuntime {
                         },
                     )?;
                 }
-                decision = Some(decided);
+                decision = Some((decided, source_repairs));
                 Ok(())
             })?;
-        let decision = decision.ok_or_else(|| {
+        let (decision, source_repairs) = decision.ok_or_else(|| {
             OrbitError::Execution("auto-fix admission did not run under the task lock".to_string())
         })?;
-        Ok(PrAutoFixAdmission::Decided(decision))
+        Ok(PrAutoFixAdmission::Decided {
+            decision,
+            source_repairs,
+        })
     }
 }
 
-/// The repairs `pr_number` may receive in all: [`PR_AUTO_FIX_BUDGET`], less
-/// the source repairs reserved for it, which spend the same budget.
+/// The repairs `pr_number` may receive from the watcher: [`PR_AUTO_FIX_BUDGET`],
+/// less the source repairs reserved for it, which spend the same budget.
 pub(crate) fn pr_auto_fix_budget(
+    history: &[TaskHistoryEntry],
+    pr_number: &str,
+) -> Result<u32, OrbitError> {
+    Ok(PR_AUTO_FIX_BUDGET.saturating_sub(source_repairs_reserved(history, pr_number)?))
+}
+
+/// The repairs `pr_number` has spent in all, against [`PR_AUTO_FIX_BUDGET`]:
+/// its admitted watcher attempts plus the source repairs reserved for it.
+pub(crate) fn pr_auto_fix_spent(
+    history: &[TaskHistoryEntry],
+    pr_number: &str,
+) -> Result<u32, OrbitError> {
+    let admitted =
+        u32::try_from(pr_auto_fix_attempts(history, pr_number).len()).unwrap_or(u32::MAX);
+    Ok(admitted.saturating_add(source_repairs_reserved(history, pr_number)?))
+}
+
+/// The source repairs reserved for `pr_number`. An unreadable ledger is an
+/// error, never a refund of its budget.
+fn source_repairs_reserved(
     history: &[TaskHistoryEntry],
     pr_number: &str,
 ) -> Result<u32, OrbitError> {
@@ -147,7 +180,7 @@ pub(crate) fn pr_auto_fix_budget(
         .iter()
         .filter(|record| record.binding.pull_request == pr_number)
         .count();
-    Ok(PR_AUTO_FIX_BUDGET.saturating_sub(u32::try_from(reserved).unwrap_or(u32::MAX)))
+    Ok(u32::try_from(reserved).unwrap_or(u32::MAX))
 }
 
 impl OrbitRuntime {
@@ -357,6 +390,15 @@ impl OrbitRuntime {
             ));
         }
         if let Some(handoff_id) = handoff_id {
+            if plan
+                .roots
+                .iter()
+                .any(|root| root.classification == "no_edit_repair")
+            {
+                return Ok(CiRerunAdmission::Refused(
+                    CiRerunRefusal::InvalidAuthorization,
+                ));
+            }
             let (claim, accepted) = self.landing_claim(handoff_id)?;
             let candidate = &accepted.handoff.candidate;
             if plan.repository != candidate.repository

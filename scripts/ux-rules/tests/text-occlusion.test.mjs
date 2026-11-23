@@ -152,3 +152,26 @@ test("text-occlusion still fails when another text run paints over the label", a
   assert.equal(result.measurements.failures[0].selector, "#label");
   assert.equal(result.measurements.failures[0].covered_by, "#value");
 });
+
+// Regression: .rail and .topbar sit beside .tab-pane.active, so measuring the
+// active pane alone passed a sub-nav drawn over shell chrome (ORB-26295).
+test("text-occlusion fails when shell chrome outside the active pane is painted over", async (t) => {
+  const result = await checkInBrowser(
+    t,
+    `<header class="topbar" style="position:relative;height:40px">` +
+      `<span id="crumb" style="position:absolute;top:0;left:0">Automation crumb</span>` +
+      `<div style="position:absolute;top:0;left:0;width:200px;height:24px;background:#fff"></div>` +
+      `</header>` +
+      `<nav class="rail" style="position:relative;height:120px">` +
+      `<span id="manage-heading" style="position:absolute;top:0;left:0">Manage heading</span>` +
+      `<div style="position:absolute;top:0;left:0;width:200px;height:24px;background:#fff"></div>` +
+      `</nav>` +
+      `<section class="tab-pane active"><p>Pane text stays readable</p></section>`,
+  );
+  if (result === null) return;
+  assert.equal(result.status, "fail");
+  assert.deepEqual(
+    result.measurements.failures.map((failure) => failure.selector).sort(),
+    ["#crumb", "#manage-heading"],
+  );
+});

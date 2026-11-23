@@ -269,7 +269,14 @@ fn guarded_required_string(input: &Value, field: &str, create: bool) -> Result<S
         suggestions,
     ))
 }
-pub(super) fn write(ctx: &ToolContext, input: Value, create: bool) -> Result<Value, OrbitError> {
+pub(super) fn write(
+    ctx: &ToolContext,
+    mut input: Value,
+    create: bool,
+) -> Result<Value, OrbitError> {
+    if !create && let Some(object) = input.as_object_mut() {
+        orbit_common::governance::task::normalize_task_id_alias(object)?;
+    }
     let (allowed, mode) = guarded_mode(create, &input);
     validate_guarded_write_fields(&input, create, allowed)?;
     let workspace = guarded_required_string(&input, "workspace", create)?;
@@ -297,7 +304,15 @@ pub(super) fn write(ctx: &ToolContext, input: Value, create: bool) -> Result<Val
         };
         operation.insert("kind".into(), json!(kind));
     };
+    let projection = if !create && mode == "review" {
+        super::operation::response_projection(&input)?
+    } else {
+        None
+    };
     let mut keys = vec!["workspace", "request_id", "model"];
+    if !create && mode == "review" {
+        keys.extend(["fields", "field"]);
+    }
     if !create {
         keys.extend(["id", "expected_revision"]);
     }
@@ -317,14 +332,16 @@ pub(super) fn write(ctx: &ToolContext, input: Value, create: bool) -> Result<Val
     if let Some(model) = input.get("model") {
         request["model"] = model.clone();
     }
-    super::super::execute_host_action(ctx, request, OrbitBuiltinAction::DesktopTaskWrite)
+    let result =
+        super::super::execute_host_action(ctx, request, OrbitBuiltinAction::DesktopTaskWrite)?;
+    Ok(super::operation::project_response(result, projection))
 }
 
 /// `orbit.task.add`'s schema extension: guarded creation's conditionals,
 /// without weakening ordinary creation's requirements.
 ///
 /// Relation types and `regression_from` attribution are not repeated on the
-/// wire schema; they live in the installed Orbit skill `references/task-fields.md`.
+/// wire schema; they live in the installed Orbit skill `references/task-fields-*.md` references.
 pub(super) fn extend_create_schema(value: &mut Value) {
     value["allOf"] = json!([{
         "if":{"required":["request_id"]},
@@ -338,17 +355,17 @@ pub(super) fn extend_create_schema(value: &mut Value) {
 
 /// `orbit.task.update`'s schema extension: a review verdict is an object, and
 /// guarded writes keep their conditionals. The verdict's fields are documented
-/// in the installed Orbit skill `references/task-fields.md`; the host still
+/// in the installed Orbit skill `references/task-fields-*.md` references; the host still
 /// validates the object.
 pub(super) fn extend_update_schema(value: &mut Value) {
     value["properties"]["verdict"] = json!({
         "type": "object",
-        "description": "Review verdict object."
+        "description": "Review verdict."
     });
     value["allOf"] = json!([{
         "if":{"anyOf":[{"required":["request_id"]},{"required":["expected_revision"]},{"required":["verdict"]},{"required":["complete"]}]},
         "then":{"required":["workspace","request_id","expected_revision"],"oneOf":[
-            {"required":["verdict"],"propertyNames":{"enum":["workspace","request_id","id","expected_revision","verdict","complete"]}},
+            {"required":["verdict"],"propertyNames":{"enum":["workspace","request_id","id","expected_revision","verdict","complete","fields","field"]}},
             {"required":["comment"],"propertyNames":{"enum":["workspace","request_id","id","expected_revision","comment"]}},
             {"propertyNames":{"enum":["workspace","request_id","id","expected_revision","status","title","description","acceptance_criteria","priority","crew"]},"properties":{"acceptance_criteria":{"type":"array","items":{"type":"string"}}}}
         ]}

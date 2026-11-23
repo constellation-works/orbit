@@ -268,7 +268,12 @@ pub struct PrAutoFixRequest {
 pub enum PrAutoFixAdmission {
     /// The ledger's decision, recorded under the primary task's lock when it
     /// admits.
-    Decided(orbit_types::workflow::PrAutoFixDecision),
+    Decided {
+        /// The watcher ledger decision.
+        decision: orbit_types::workflow::PrAutoFixDecision,
+        /// Source-repair reservations charged to the same PR budget.
+        source_repairs: u32,
+    },
     /// No repair may run here, for this reason: no usable crew, or a host
     /// that does not own the task's record.
     Refused(String),

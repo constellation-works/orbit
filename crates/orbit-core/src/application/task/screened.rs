@@ -11,11 +11,13 @@
 use orbit_common::OrbitError;
 use orbit_common::fs::selector::canonical_selector_in_workspace;
 use orbit_types::task::{
-    RegressionClassification, SeveritySource, Task, TaskRelation, TaskRelationType,
-    backlog_footprint_warning,
+    RegressionClassification, SeveritySource, Task, TaskRelation, TaskRelationType, TaskStatus,
+    backlog_footprint_warning, canonical_artifact_path,
 };
+use orbit_types::workflow::automation::COVERAGE_ARTIFACT;
 
 use crate::OrbitRuntime;
+use crate::application::task::TaskAutomationPort;
 use crate::runtime::run_input::managed_run_context_run_id_from_env;
 
 use super::TaskRow;
@@ -108,8 +110,8 @@ pub enum TaskUpdateAuthority {
 impl OrbitRuntime {
     /// Create a task for an operator or agent surface.
     ///
-    /// Every selector must resolve unless the screen allows missing context,
-    /// which records each missing one as a durable creation grant.
+    /// Missing files with an existing parent receive a durable creation grant;
+    /// the explicit screen option also accepts other missing selectors.
     pub fn add_task_screened(
         &self,
         params: TaskAddParams,
@@ -134,9 +136,9 @@ impl OrbitRuntime {
         params.context_creation = if screen.allow_missing_context {
             self.authorize_missing_context(&params.context_files)?
         } else {
-            self.ensure_context_selectors_exist(&params.context_files)?;
-            ContextCreationAuthorization::default()
+            self.authorize_files_with_existing_parents(&params.context_files)?
         };
+        let creation_warnings = automatic_creation_warnings(&params.context_creation, screen);
         let parent_warning = params
             .parent_id
             .as_deref()
@@ -149,6 +151,7 @@ impl OrbitRuntime {
 
         let (task, mut warnings) =
             self.add_task_validated(params, agent, model, action_key, digest)?;
+        warnings.extend(creation_warnings);
         warnings.extend(parent_warning);
         warnings.extend(dependency_warnings);
         warnings.extend(compute_task_add_warnings(&requested_context_files, &task));
@@ -176,7 +179,7 @@ impl OrbitRuntime {
         agent: Option<String>,
         model: Option<String>,
     ) -> Result<ScreenedTaskWrite, OrbitError> {
-        self.write_screened_update(id, params, screen, |params| match authority {
+        self.write_screened_update(id, params, screen, false, |params| match authority {
             TaskUpdateAuthority::Lifecycle => {
                 self.update_task_with_identity_applied(id, params, agent, model)
             }
@@ -198,7 +201,7 @@ impl OrbitRuntime {
         note: Option<String>,
     ) -> Result<ScreenedTaskWrite, OrbitError> {
         let owner = screen.owner_run_id().map(ToOwned::to_owned);
-        self.write_screened_update(id, params, screen, |params| {
+        self.write_screened_update(id, params, screen, true, |params| {
             self.update_task_with_owner(id, params, agent, model, note, owner)
         })
     }
@@ -215,7 +218,7 @@ impl OrbitRuntime {
         model: Option<String>,
     ) -> Result<ScreenedTaskWrite, OrbitError> {
         let owner = screen.owner_run_id().map(ToOwned::to_owned);
-        self.write_screened_update(id, params, screen, |params| {
+        self.write_screened_update(id, params, screen, true, |params| {
             self.start_task_with_identity_and_crew(
                 id,
                 note,
@@ -271,20 +274,50 @@ impl OrbitRuntime {
     ///
     /// With `allow_missing_context` every missing selector becomes a durable
     /// creation grant. Otherwise the strict check runs, keeping a selector
-    /// the task already holds a grant for and relaxing a missing anchor for
-    /// the task's owning run calling from its worktree; those are reported
-    /// as unverified.
+    /// the task already holds a grant for, granting missing files with existing
+    /// parents, and relaxing other missing anchors for the owning run. Only
+    /// the last group is reported as unverified.
     fn write_screened_update(
         &self,
         id: &str,
         mut params: TaskUpdateParams,
         screen: &TaskWriteScreen,
+        records_artifact_owner: bool,
         write: impl FnOnce(TaskUpdateParams) -> Result<(Task, Option<TaskRow>), OrbitError>,
     ) -> Result<ScreenedTaskWrite, OrbitError> {
         self.ensure_coordination_task_write_permitted()?;
-        if let Some(relations) = params.relations.as_mut() {
-            let stored = self.get_task(id)?;
+        let writes_coverage = params.upsert_artifacts.iter().any(|artifact| {
+            canonical_artifact_path(&artifact.path).ok().as_deref() == Some(COVERAGE_ARTIFACT)
+        });
+        let needs_prior_task = params.relations.is_some()
+            || params.status == Some(TaskStatus::InProgress)
+            || writes_coverage;
+        let stored = if needs_prior_task {
+            Some(self.get_task(id)?)
+        } else {
+            None
+        };
+        if let (Some(relations), Some(stored)) = (params.relations.as_mut(), stored.as_ref()) {
             self.admit_regression_sites(Some(relations), Some(&stored.relations))?;
+        }
+        if writes_coverage
+            && let Some(stored) = stored.as_ref()
+            && self.has_open_delivery_batch_attempt(id)?
+        {
+            let own_run = records_artifact_owner
+                && self.is_task_own_orbit_run(stored, screen.owner_run_id())?;
+            if !own_run {
+                let caller = match screen.owner_run_id() {
+                    Some(run_id) => format!("run '{run_id}'"),
+                    None => "a caller outside that run".to_string(),
+                };
+                return Err(OrbitError::PolicyDenied(format!(
+                    "cannot attach `{COVERAGE_ARTIFACT}` to task '{id}' from {caller}: task \
+                     '{id}' owes a delivery batch attempt, and coverage evidence is accepted only \
+                     from the task's own Orbit run. Dispatch it with `orbit run ship {id}` (a \
+                     singleton run, no drain needed)"
+                )));
+            }
         }
         let mut context_files_unverified = Vec::new();
         if let Some(candidates) = params.context_files.as_deref() {
@@ -307,6 +340,11 @@ impl OrbitRuntime {
             .map(|dependencies| self.unreadable_dependency_warnings(dependencies))
             .unwrap_or_default();
 
+        warnings.extend(automatic_creation_warnings(
+            &params.context_creation,
+            screen,
+        ));
+
         // Only readiness-field writes repeat the footprint warning. Comments
         // and other metadata edits still project the task's readiness, but
         // do not ask the writer to fix an unchanged gap again.
@@ -314,9 +352,25 @@ impl OrbitRuntime {
             || params.tags.is_some()
             || params.context_files.is_some()
             || params.complexity.is_some();
+        let started_from_other_status = params.status == Some(TaskStatus::InProgress)
+            && stored
+                .as_ref()
+                .is_some_and(|task| task.status != TaskStatus::InProgress);
         let (task, row) = write(params)?;
         if updates_readiness {
             warnings.extend(backlog_footprint_warning(&task));
+        }
+        if started_from_other_status
+            && task.status == TaskStatus::InProgress
+            && !self.is_task_own_orbit_run(&task, screen.owner_run_id())?
+            && self.has_open_delivery_batch_attempt(id)?
+        {
+            warnings.push(format!(
+                "task '{id}' owes a delivery batch attempt: `{COVERAGE_ARTIFACT}` is accepted \
+                 only from the task's own Orbit run, so coverage written in an external session \
+                 will be refused. Dispatch it with `orbit run ship {id}` (a singleton run, no \
+                 drain needed)"
+            ));
         }
         Ok(ScreenedTaskWrite {
             task,
@@ -447,4 +501,16 @@ fn admit_regression_severity(
         }
     }
     Ok(())
+}
+
+fn automatic_creation_warnings(
+    authorization: &ContextCreationAuthorization,
+    screen: &TaskWriteScreen,
+) -> Vec<String> {
+    if screen.allow_missing_context {
+        return Vec::new();
+    }
+    authorization.authorized().iter().map(|selector| {
+        format!("selector `{selector}` does not exist; recording creation intent because its parent directory exists")
+    }).collect()
 }

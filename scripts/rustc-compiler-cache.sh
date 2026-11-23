@@ -74,7 +74,7 @@ fi
 
 script_dir="$(cd "$(dirname "$0")" && pwd -P)"
 repo_root="$(cd "$script_dir/.." && pwd -P)"
-orig_cwd="$(pwd)"
+orig_cwd="$(pwd -P)"
 if [[ -n "${CARGO_TARGET_DIR:-}" ]]; then
   target_real="${CARGO_TARGET_DIR}"
   if [[ "$target_real" != /* ]]; then
@@ -144,8 +144,10 @@ if [[ "$source_aliased" -eq 1 || "$target_aliased" -eq 1 ]]; then
   # resolve to the same files, and rewriting them to the original worktree
   # absolute path would re-introduce unique prefixes into sccache's key.
   while IFS= read -r name; do
+    case "$name" in
+      ""|PWD|OLDPWD) continue ;;
+    esac
     value="${!name}"
-    [[ -n "$name" ]] || continue
     # Keep the sentinel through command substitution, then remove only it.
     new="$(rewrite_value "$value"; printf '\001')"
     new="${new%$'\001'}"

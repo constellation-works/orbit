@@ -12,10 +12,11 @@ use std::collections::BTreeMap;
 use std::path::Path;
 
 use orbit_common::OrbitError;
-use orbit_common::security::redaction::redact_home_dir;
 use orbit_types::workflow::{
     MAX_TAG_INSTRUCTION_TAGS, TagInstructionRole, normalize_instruction_tag,
 };
+
+use crate::config_document;
 
 /// The dotted config path of the tag table.
 pub(crate) const TAG_INSTRUCTIONS_KEY: &str = "workflow.tag_instructions";
@@ -131,12 +132,7 @@ fn tag_table_from_document(
     else {
         return Ok(TagInstructionSettings::default());
     };
-    let invalid = |detail: String| {
-        OrbitError::InvalidInput(format!(
-            "invalid runtime config '{}': {detail}",
-            redact_home_dir(&config_path.display().to_string())
-        ))
-    };
+    let invalid = |detail: String| config_document::invalid_runtime_config(config_path, detail);
     let Some(table) = value.as_table() else {
         return Err(invalid(format!(
             "'{TAG_INSTRUCTIONS_KEY}' must be a table of `[{TAG_INSTRUCTIONS_KEY}.<tag>]` tables"
@@ -163,11 +159,9 @@ fn tag_table_from_document(
         let mut settings = BTreeMap::new();
         for (raw_role, setting) in roles {
             let Some(role) = TagInstructionRole::parse(raw_role) else {
-                return Err(OrbitError::invalid_input_with_suggestions(
-                    format!(
-                        "invalid runtime config '{}': unknown role '{raw_role}' in '{key}'",
-                        redact_home_dir(&config_path.display().to_string())
-                    ),
+                return Err(config_document::invalid_runtime_config_with_suggestions(
+                    config_path,
+                    format!("unknown role '{raw_role}' in '{key}'"),
                     TagInstructionRole::ALL
                         .iter()
                         .map(|role| format!("{key}.{}", role.as_str()))

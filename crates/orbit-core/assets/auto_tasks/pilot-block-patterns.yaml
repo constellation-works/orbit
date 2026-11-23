@@ -48,7 +48,7 @@ template:
       complete, reject, archive or approve a task.
     - Search with `orbit tool run orbit.search --input '{"query":"<one distinctive token>","all":true,"model":"<agent-family>"}'`:
       one error code, guard name, finding kind or file name per query. A 0-hit multi-word
-      query proves nothing. Read the installed `orbit` skill's `references/task-authoring.md`
+      query proves nothing. Read the installed `orbit` skill's `references/task-authoring-contract.md` and `references/task-authoring-create.md`
       before filing.
     - A pass that finds nothing new still succeeds, with the report and cursor stored. Don't
       invent work.
@@ -205,7 +205,10 @@ template:
     ## 6. Corpus proposal, report and cursor
 
     Check the effective `[workflow.agent_corpus]` mapping in the layered workspace and
-    global configuration. A workspace has a corpus when that mapping names a tracked
+    global configuration. It is a TOML-only table, so `orbit config get` does not read it
+    (it is refused as a TOML-only table, not a scalar key): read `[workflow.agent_corpus]` from
+    `<workspace>/.orbit/config.toml` and `~/.orbit/config.toml`, with a workspace entry
+    replacing the global entry for that activity. A workspace has a corpus when that mapping names a tracked
     `INDEX.md`. The mapped corpus directory is the directory holding that index (for
     `knowledge/corpus/INDEX.md`, it is `knowledge/corpus`). Every corpus path below is
     under that directory and never a fixed location; its issue documents are

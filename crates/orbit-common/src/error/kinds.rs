@@ -753,7 +753,8 @@ pub enum SourceRepairRunStateRefusal {
     /// worker is not conclusively gone.
     StillRunning,
     /// The run is terminal but is not a conclusively stopped failed delivery
-    /// or review-decision hold.
+    /// or review-decision hold (or, for a pipeline publication, a stopped
+    /// cancelled or succeeded delivery).
     NotStoppedFailed,
 }
 
@@ -836,6 +837,63 @@ impl SourceRepairAuthorityRefusal {
             self.reason().to_string()
         } else {
             format!("source repair refused: {}", self.reason())
+        }
+    }
+}
+
+/// Evidence behind [`crate::OrbitError::UnknownWorkspaceSelector`]: the
+/// selector that matched neither a registered logical workspace nor a local
+/// checkout, and — when a bound MCP session refused an explicit override — the
+/// bound workspace and the remedy that keeps its filter.
+///
+/// Boxed into the error enum so adding it stays well within
+/// [`crate::OrbitError`]'s 128-byte size budget.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct UnknownWorkspaceSelector {
+    pub selector: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bound: Option<BoundWorkspace>,
+}
+
+/// The session's bound workspace, as an unknown explicit selector's refusal
+/// names it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct BoundWorkspace {
+    pub name: String,
+    pub remedy: BoundWorkspaceRemedy,
+}
+
+/// How a retry keeps the bound workspace as its filter.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub enum BoundWorkspaceRemedy {
+    /// Omitting `workspace` resolves through the session binding, so omitting
+    /// it keeps the bound filter.
+    OmitSelector,
+    /// Omitting `workspace` on an ID-resolved tool looks the task up in
+    /// whichever workspace owns it, which drops the binding. The bound filter
+    /// survives only when the bound workspace is passed explicitly.
+    PassBoundSelector,
+}
+
+impl UnknownWorkspaceSelector {
+    /// The human-readable diagnostic without the `invalid input: ` enum prefix.
+    pub fn message(&self) -> String {
+        let base = format!(
+            "unknown workspace selector '{}'; run `orbit workspace list` to see registered workspaces, then pass a registered workspace name, a logical workspace ID, or an absolute local checkout path",
+            self.selector
+        );
+        match &self.bound {
+            None => base,
+            Some(BoundWorkspace {
+                name,
+                remedy: BoundWorkspaceRemedy::OmitSelector,
+            }) => format!("{base}; this session is bound to workspace '{name}'; omit `workspace`"),
+            Some(BoundWorkspace {
+                name,
+                remedy: BoundWorkspaceRemedy::PassBoundSelector,
+            }) => format!(
+                "{base}; this session is bound to workspace '{name}'; pass `workspace` as '{name}' to keep that filter, since omitting `workspace` looks the task up by its ID in whichever workspace owns it"
+            ),
         }
     }
 }

@@ -12,6 +12,42 @@ The rules come from two sweeps on 2026-11-09 (ORB-23557):
 
 A rule is here only when its correction recurred.
 
+## Principles
+
+The principles (v15, ORB-26273) were distilled from the rule entries below, not written
+first. They exist because, in November 2026, the standard grew by about one rule a day (R38
+to R44 and a refinement of R1, from 10 `standards` frictions), each written after the owner caught a case no rule
+covered. A principle lets a reviewer judge the next such case before he has to.
+
+- **P1** gathers the most repeated theme: R16 (18 tasks, 9 sessions: "just noise", "seems
+  redundant") and R13 (8 sessions, 6 tasks: "too many long sentences - it feels chaotic").
+- **P2** gathers "whenever text appear it shifts the whole panel up and down - bad UX" (R5),
+  the collapse that showed Drain in place of Tasks, "since that was the page that I was on"
+  (R43), and a select whose look changed with its behaviour (R37).
+- **P3** gathers R1, the single most repeated correction (9 sessions), R2 (7 sessions, 7
+  tasks) and R27's "I would rather remove one than keeping one left out like that."
+- **P4** starts from "I asked for wider, but how should we determine an optimal width?"
+  (R42, after a fixed 330px). Orbit's dashboard showed what guessing costs: 25 font sizes,
+  27 radii, about 240 padding values and 158 hex literals outside its token file, with no
+  spacing or type tokens to derive from (ORB-26273, 2026-11-21). Deriving colours from a few
+  inputs follows Linear, which generates each theme from a base colour, an accent and a
+  contrast level instead of 98 hand-set variables.
+- **P5** gathers "the window has enough width" (R23), "no need to use 2 rows when there is
+  more space" (R38) and "right column is empty" (R28). It is where this standard parts from
+  Linear: Linear's calm comes from receding chrome and space, while the owner's corrections
+  ask for density that fits.
+- **P6** gathers "sol is second in rank, yet the chart suggest below median" (R19), a lone
+  figure that "does not belong there alone like that" (R29), and "instead of raw data, we
+  should just display chart" (R18).
+- **P7** gathers R20 (6 sessions: "perhaps 'repairing' pill"), "when idle ... its currently
+  invisible" (R10), and a status change that did not collapse its item, asked twice (R22).
+- **P8** gathers the four requests that corrections become checks (R26), and the redesigns
+  that skipped the mock, which are the ones that came back (R25).
+
+Left out on purpose, because no correction asks for them: Linear's dimmer, receding chrome,
+and keyboard-first navigation with a command menu. R44's "esc" labels are the only seed of
+the second.
+
 ## Layout and alignment
 
 - **R1 (sibling spacing).** Raised in 9 separate sessions: the most repeated correction.
@@ -115,6 +151,15 @@ The vertical centring was added from the Fleet host dialog, where labels sat at 
   down. "make light mode the default, not the dark mode" (ORB-13354, September dashboard);
   the website then moved to dark (410a5432); the Orbit dashboard's current theme spec is dark.
   The rule makes each product state its choice once, instead of the standard picking one.
+- **R45 (text colour follows role).** Daniel, 2026-11-22, on a notice card in the Orbit
+  dashboard whose title and four-line body were both the strongest text colour: "long texts
+  in var(--fg) color aren't comfortable to read. I think var(--fg) should be reserved for
+  titles and labels for accentuations. and var(--fg-soft) should be used for anything long
+  texts." The rule names roles instead of a length, because a one-line description is still
+  prose and a long title is still a title; a length threshold would be chosen per view,
+  which R11 forbids. On the dashboard's background the two steps measure about 16:1 and
+  12.5:1, so the softer one stays far above R10's 4.5:1. R11's own correction was the same
+  complaint on one page ("white texts ... are too bright, unlike other pages").
 
 ## Words
 

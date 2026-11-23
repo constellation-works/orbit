@@ -183,6 +183,7 @@ pub(super) fn policy_for_action(action: OrbitBuiltinAction) -> ActionPolicy {
             | TaskVerb::ReviewReset
             | TaskVerb::Repilot
             | TaskVerb::Requeue
+            | TaskVerb::ResumeDelivery
             | TaskVerb::BlockTriage
             | TaskVerb::ReconcileReview
             | TaskVerb::RetryHandoff
@@ -243,23 +244,15 @@ pub(super) fn policy_for_action(action: OrbitBuiltinAction) -> ActionPolicy {
             },
         },
         // Crew memory: a write's file text redacts as free text, as does a
-        // proposal's declared free-text note; every other verb carries only
-        // keys, revisions, a directory and a reason.
+        // proposal's declared free-text note; show carries only a key and a
+        // revision.
         OrbitBuiltinAction::Memory(verb) => match verb {
             MemoryVerb::Write => ActionPolicy {
                 declared: verb.spec().params,
                 nested_arrays: MEMORY_WRITE_FILES,
                 ..NO_REDACTION
             },
-            MemoryVerb::Show
-            | MemoryVerb::History
-            | MemoryVerb::Export
-            | MemoryVerb::Reset
-            | MemoryVerb::Copy
-            | MemoryVerb::Proposals
-            | MemoryVerb::ProposalAccept
-            | MemoryVerb::ProposalReject
-            | MemoryVerb::Propose => ActionPolicy {
+            MemoryVerb::Show | MemoryVerb::Propose => ActionPolicy {
                 declared: verb.spec().params,
                 ..NO_REDACTION
             },
@@ -305,6 +298,7 @@ pub(super) fn policy_for_action(action: OrbitBuiltinAction) -> ActionPolicy {
         OrbitBuiltinAction::Workflow(verb) => match verb {
             WorkflowVerb::Auto
             | WorkflowVerb::Land
+            | WorkflowVerb::Refresh
             | WorkflowVerb::RunList
             | WorkflowVerb::RunResume
             | WorkflowVerb::RunObserve
@@ -374,6 +368,7 @@ pub(super) fn is_covered_mutating_action(action: OrbitBuiltinAction) -> bool {
         OrbitBuiltinAction::Workflow(verb) => match verb {
             WorkflowVerb::Auto
             | WorkflowVerb::Land
+            | WorkflowVerb::Refresh
             | WorkflowVerb::RunList
             | WorkflowVerb::RunResume
             | WorkflowVerb::RunObserve
@@ -387,6 +382,7 @@ pub(super) fn is_covered_mutating_action(action: OrbitBuiltinAction) -> bool {
             | TaskVerb::ReviewReset
             | TaskVerb::Repilot
             | TaskVerb::Requeue
+            | TaskVerb::ResumeDelivery
             | TaskVerb::BlockTriage
             | TaskVerb::ReconcileReview
             | TaskVerb::RetryHandoff

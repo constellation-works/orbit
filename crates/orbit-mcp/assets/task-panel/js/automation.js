@@ -3,6 +3,16 @@ window.OrbitAutomation = ({el, ui, tool, open, current}) => {
   let scope='routines', offset=0, next=null, revision=0, fresh=false, busy=false, selected=null, items=[], confirmation=null;
   const uncertain=new Map();
   const scopes={routines:['Routines','routine'],auto_tasks:['Auto-tasks','auto_task'],jobs:['Jobs','job']};
+  const writeTool={routines:'orbit_routine_control',auto_tasks:'orbit_auto_task',jobs:'orbit_pipeline_invoke'};
+  // An unreplaced marker is the static fixture, which still calls every tool.
+  const sessionTools=(()=>{
+    const node=document.getElementById('orbit-session-tools');
+    const text=String(node&&node.textContent||'').trim();
+    if(!text||text.startsWith('/*'))return null;
+    try{const value=JSON.parse(text);return value&&typeof value==='object'&&!Array.isArray(value)?value:null;}catch{return null;}
+  })();
+  const toolReady=name=>sessionTools==null||sessionTools[name]===true;
+  const gapMessage=which=>which==='auto_tasks'?'Auto-tasks need the automation toolset. Add it and reopen this panel.':which==='jobs-read'?'Jobs need the runs toolset. Add it and reopen this panel.':which==='jobs-write'?'Run job needs the pipelines toolset. Add it and reopen this panel.':which==='routines'?'Routines need the routines toolset. Add it and reopen this panel.':'This action is not in this session. Add its toolset and reopen this panel.';
   const feedback=text=>{el('automation-feedback').textContent=text;};
   const key=()=>`${current()}|${scope}`;
   const schedule=value=>value?.every_minutes?`Every ${value.every_minutes} minutes`:value?.deliveries_landed?'After verified deliveries':value?.state?'When state matches':value?.condition?'When condition matches':value?.cron?`Cron · ${value.cron}`:'On demand';
@@ -14,13 +24,23 @@ window.OrbitAutomation = ({el, ui, tool, open, current}) => {
     el('automation-previous').disabled=el('automation-next').disabled=true;
     feedback(uncertain.get(key())||'');
   }
+  function showGap(message){
+    fresh=false;items=[];selected=null;confirmation=null;next=null;
+    el('automation-list').replaceChildren(ui.node('p',message,'empty-state'));
+    el('automation-detail').replaceChildren();
+    el('automation-notes').textContent='';
+    el('automation-page').textContent='';
+    el('automation-previous').disabled=el('automation-next').disabled=true;
+    feedback('');
+  }
   function renderDetail(focusAction){
     const target=el('automation-detail');target.replaceChildren();
     if(!selected)return;
     const item=items.find(i=>i.name===selected);if(!item){selected=null;return;}
     target.append(ui.node('h3',item.name));
     if(item.description)ui.markdown(target,item.description);
-    for(const [title,value] of [['Target',item.target],['Schedule',schedule(item.schedule)],['Next evaluation',scope==='jobs'?null:item.next_due&&item.state==='scheduled'?ui.time(item.next_due):item.state?ui.label(item.state):null],['Deduplication',item.dedupe?ui.label(item.dedupe):null],['Paused on this host',item.paused_at?ui.time(item.paused_at):null],['Last fire',item.last_fire],['Parallel runs',item.max_active_runs],['Steps',item.steps],['Availability',item.skip_reason||item.run_reason]]){
+    const hideSubmitReason=scope==='jobs'&&!toolReady('orbit_pipeline_invoke')&&item.run_available===true;
+    for(const [title,value] of [['Target',item.target],['Schedule',schedule(item.schedule)],['Next evaluation',scope==='jobs'?null:item.next_due&&item.state==='scheduled'?ui.time(item.next_due):item.state?ui.label(item.state):null],['Deduplication',item.dedupe?ui.label(item.dedupe):null],['Paused on this host',item.paused_at?ui.time(item.paused_at):null],['Last fire',item.last_fire],['Parallel runs',item.max_active_runs],['Steps',item.steps],['Availability',hideSubmitReason?null:item.skip_reason||item.run_reason]]){
       if(value!=null)ui.field(target,title,value);
     }
     if(item.last_run?.run_id){
@@ -28,7 +48,7 @@ window.OrbitAutomation = ({el, ui, tool, open, current}) => {
       link.type='button';link.addEventListener('click',()=>open('run',item.last_run.run_id));target.append(link);
     }
     const actions=ui.node('div',null,'automation-actions');
-    if(item.toggle_available===true)actions.append(button(item.enabled?'Disable definition':'Enable definition',()=>void act('toggle',item)));
+    if(item.toggle_available===true&&toolReady(writeTool[scope]))actions.append(button(item.enabled?'Disable definition':'Enable definition',()=>void act('toggle',item)));
     if(confirmation && (confirmation.name!==item.name||confirmation.signature!==JSON.stringify(item))) {
       confirmation=null;feedback('Definition changed. Review it before confirming an action.');
     }
@@ -38,7 +58,7 @@ window.OrbitAutomation = ({el, ui, tool, open, current}) => {
       box.append(ui.node('p',action==='mint'?'Mint one task now? This ignores the schedule, enabled flag and dedupe policy. The new task is not dispatched.':`Submit ${item.name} now using its default input? This starts or queues a workflow on the selected host.`));
       box.append(button(action==='mint'?'Mint one task':'Submit job',()=>void act(action,item),`confirm-${action}`),button('Cancel',()=>{confirmation=null;renderDetail(action);}));
       actions.replaceChildren(box);
-    }else for(const action of ['mint','run'])if(item[`${action}_available`]===true){
+    }else for(const action of ['mint','run'])if(item[`${action}_available`]===true&&toolReady(action==='run'?'orbit_pipeline_invoke':writeTool[scope])){
       actions.append(button(action==='mint'?'Mint task…':'Run job…',()=>{
         confirmation={action,name:item.name,signature:JSON.stringify(item)};renderDetail(`confirm-${action}`);
       },action));
@@ -71,6 +91,12 @@ window.OrbitAutomation = ({el, ui, tool, open, current}) => {
   async function refresh(){
     const workspace=current(), expectedScope=scope, g=++revision;
     fresh=false;renderDetail();
+    const readName=scope==='jobs'?'orbit_run:list':writeTool[scope];
+    if(!toolReady(readName)){
+      if(g!==revision||workspace!==current()||expectedScope!==scope)return;
+      showGap(gapMessage(scope==='jobs'?'jobs-read':scope));
+      return true;
+    }
     try{
       const data=scope==='routines'
         ?await tool('orbit_routine_control',{workspace,action:'list',offset,limit:25})
@@ -79,7 +105,9 @@ window.OrbitAutomation = ({el, ui, tool, open, current}) => {
           :(await tool('orbit_run',{action:'list',workspace,view:'bounded',include_catalog:true,offset,limit:25})).catalog;
       if(g!==revision||workspace!==current()||expectedScope!==scope)return;
       if(data.schema_version!==1||data.workspace!==workspace||data.scope!==scope||!Array.isArray(data.items)||data.controls_authorized!==true)throw new Error('Incompatible automation projection');
-      fresh=true;render(data);feedback(uncertain.get(key())||'');
+      fresh=true;render(data);
+      const note=scope==='jobs'&&!toolReady('orbit_pipeline_invoke')?gapMessage('jobs-write'):'';
+      feedback(uncertain.get(key())||note);
       return true;
     }catch(error){
       if(g!==revision||workspace!==current())return;
@@ -89,6 +117,13 @@ window.OrbitAutomation = ({el, ui, tool, open, current}) => {
   }
   async function act(action,item){
     if(!fresh||busy||uncertain.has(key())||!items.includes(item))return;
+    const writeName=action==='run'?'orbit_pipeline_invoke':writeTool[scope];
+    if(!toolReady(writeName)){
+      confirmation=null;
+      feedback(action==='run'?gapMessage('jobs-write'):gapMessage(scope));
+      renderDetail();
+      return;
+    }
     const workspace=current(), scopeAtStart=scope, g=revision, uncertainKey=key();
     const args={workspace,action,kind:scopes[scope][1],name:item.name};
     if(action==='toggle'){

@@ -10,11 +10,16 @@ use orbit_types::workflow::COMPLETION_HELD_EVENT;
 
 use crate::OrbitRuntime;
 use crate::application::task::{
-    EXTERNAL_MERGE_SETTLED_EVENT, TaskJobPort, TaskRecordUpdateParams, TaskRecords, TaskReviewPort,
+    EXTERNAL_MERGE_SETTLED_EVENT, PullRequestMergeAttribution, TaskJobPort, TaskRecordUpdateParams,
+    TaskRecords, TaskReviewPort, audited_forge_merge,
 };
 use crate::runtime::task_pr_forge::PullRequestMergeOutcome;
 
 use super::answering::decision_comment;
+
+/// The audit step an operator's handoff landing decision names; its row's run
+/// is the run that published the handoff.
+const HANDOFF_DECISION_MERGE_STEP: &str = "decision.handoff_land";
 
 fn handoff_answer_refused(reason: impl std::fmt::Display) -> OrbitError {
     OrbitError::decision_refused(
@@ -220,13 +225,24 @@ impl OrbitRuntime {
             &receipt.head_sha,
             number,
         );
-        let merge_commit =
-            match forge.merge_pull_request(repo, number, &receipt.head_sha, &message)? {
-                PullRequestMergeOutcome::Merged { merge_commit } => merge_commit,
-                PullRequestMergeOutcome::Refused { reason } => {
-                    return Err(handoff_answer_refused(reason));
-                }
-            };
+        let merge_commit = match audited_forge_merge(
+            self,
+            forge,
+            repo,
+            number,
+            &receipt.head_sha,
+            &message,
+            &PullRequestMergeAttribution {
+                run_id: Some(&receipt.run_id),
+                step: HANDOFF_DECISION_MERGE_STEP,
+                task_id: Some(&task.id),
+            },
+        )? {
+            PullRequestMergeOutcome::Merged { merge_commit } => merge_commit,
+            PullRequestMergeOutcome::Refused { reason } => {
+                return Err(handoff_answer_refused(reason));
+            }
+        };
         let actor = &resolution.answered_by;
         let mut history = vec![answered];
         history.extend(corpus);

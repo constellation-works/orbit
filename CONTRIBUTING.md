@@ -36,7 +36,7 @@ Start with [ARCHITECTURE.md](ARCHITECTURE.md) for the crate layout and layering 
 
 1. **Branch from `agent-main`,** and target your PR at `agent-main`. `main` is reserved for releases.
 2. **Keep it scoped.** One change per PR, with no unrelated refactors.
-3. **Follow the code rules** in [CLAUDE.md](CLAUDE.md#code). Lints are enforced, behaviour is tested at the boundary first (integration, golden, e2e) with unit tests only by exception ([test_strategy.md](docs/design-patterns/test_strategy.md)) in a sibling `tests/` dir, and internal IDs stay out of user-facing text.
+3. **Follow the code rules** in [AGENTS.md](AGENTS.md#code). Lints are enforced, behaviour is tested at the boundary first (integration, golden, e2e) with unit tests only by exception ([test_strategy.md](docs/design-patterns/test_strategy.md)) in a sibling `tests/` dir, and internal IDs stay out of user-facing text.
 4. **Update docs in the same PR.** That includes the affected pages in `docs/design/` and `website/`. Run `make goldens` when you change CLI help, MCP text, or another golden surface; use `make goldens UPDATE=1` to regenerate expected output, then review the diff. Leave `CHANGELOG.md` alone, because it's compiled at release.
 5. **Run focused local checks** before opening the PR. For a diff, run the
    checks relevant to the change, such as tests for the behavior you changed,
@@ -104,7 +104,7 @@ gate, review, lock and analytics definitions still apply.
 
 ## Using coding agents
 
-Agent-assisted PRs are welcome. [AGENTS.md](AGENTS.md) and [CLAUDE.md](CLAUDE.md) load automatically in most agent CLIs. You are responsible for the diff, so review it, run focused local checks relevant to the changes, and say in the PR description what you verified. Required PR checks and managed-delivery final validation are described in [Validation and CI](docs/DEVELOPMENT.md#validation-and-ci).
+Agent-assisted PRs are welcome. [AGENTS.md](AGENTS.md) and its `CLAUDE.md` import load automatically in most agent CLIs. You are responsible for the diff, so review it, run focused local checks relevant to the changes, and say in the PR description what you verified. Required PR checks and managed-delivery final validation are described in [Validation and CI](docs/DEVELOPMENT.md#validation-and-ci).
 
 ## Community
 

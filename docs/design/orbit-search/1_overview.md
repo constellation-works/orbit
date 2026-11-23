@@ -61,8 +61,9 @@ hits and their counts (for example `["partial", "terms:3/6"]`). A full page skip
 the OR pass. [ORB-14790] bounded that pass to one query of at most 20 ranked
 chunks per requested result; partial matches beyond that window are not offered
 when filters reject the window. Frictions retain case-insensitive substring
-matching, requiring adjacent words. Empty multi-word results and partial task results explain these
-per-kind semantics in `notes`.
+matching, requiring adjacent words. Empty multi-word results and partial results carry one short
+next-step sentence in `notes`; the full matching rules live in the orbit skill's search reference
+(ORB-26665 moved them out of the note).
 Federation interleaves per-workspace rankings and attributes each hit.
 
 The index retains `semantic.db` for persisted-path compatibility. The first

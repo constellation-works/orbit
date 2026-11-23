@@ -373,7 +373,9 @@ class RelativeImportTests(unittest.TestCase):
             for group in batches.pack_rejected(pending):
                 found, result = self.run_rejected_group(group)
                 self.assertEqual(result.stderr, "", result.stderr)
-                reported += found
+                if found:
+                    self.assertEqual(result.returncode, 1, result.stdout)
+                    reported += found
             if not reported:
                 break
             pending = batches.unreported_batches(pending, reported)
@@ -495,13 +497,13 @@ class RelativeImportTests(unittest.TestCase):
                     **{str(path.relative_to(self.root)): source
                        for path, (_, source) in paths.items()}})
             return
-        try:
-            for path, source in zip(written, (shared or {}).values()):
-                path.parent.mkdir(parents=True, exist_ok=True)
-                path.write_text(source)
-            for path, (_, source) in paths.items():
-                path.parent.mkdir(parents=True, exist_ok=True)
-                path.write_text(source)
+        files = {
+            **{str(path.relative_to(self.root)): source
+               for path, source in zip(written, (shared or {}).values())},
+            **{str(path.relative_to(self.root)): source
+               for path, (_, source) in paths.items()},
+        }
+        with self.fixture_files(self.root, files):
             result = self.run_guard()
             self.assertEqual(result.stderr, "", result.stderr)
             for path, row in paths.items():
@@ -511,9 +513,6 @@ class RelativeImportTests(unittest.TestCase):
                     else:
                         self.assertNotIn(f"{path}:", result.stdout)
             self.assertEqual(result.returncode, 1 if rejected else 0, result.stdout)
-        finally:
-            for path in [*written, *paths]:
-                path.unlink(missing_ok=True)
 
     def test_inherent_calls_from_task_into_upper_modules_rejected(self):
         # Each owner defines its own name, so a row's call is reported only when
@@ -1479,6 +1478,378 @@ class RelativeImportTests(unittest.TestCase):
         ):
             with self.subTest(relative=relative):
                 self.check_rows([(relative, source)], rejected=True, base=store)
+
+    def test_super_relative_crate_paths_rejected(self):
+        # `crate::adapter`, `crate::driver…`, `crate::repository` and
+        # `crate::Store`/`StoreTx` are named-path guards. The same edge written
+        # with `super::` from that file's module is the same import.
+        self.check_rows([
+            ("probe.rs", "use super::super::adapter::Probe;\n"),
+            ("nested/probe.rs", "use super::super::super::adapter::Probe;\n"),
+            ("grouped.rs", "use super::super::{adapter::Probe};\n"),
+            ("inline.rs", "fn probe() { super::super::adapter::Probe; }\n"),
+        ], rejected=True)
+        self.check_rows([
+            ("probe.rs", "use super::adapter::Probe;\n"),
+            ("kept.rs", "use super::super::std::io::Probe;\n"),
+        ], rejected=False)
+        store = self.root / "crates/orbit-store/src"
+        self.check_rows([
+            ("contracts/probe.rs", "use super::super::repository::Probe;\n"),
+            ("contracts/driver.rs", "use super::super::driver::Probe;\n"),
+            ("driver/file/probe.rs", "use super::super::super::driver::sqlite::Probe;\n"),
+            ("driver/file/store.rs", "use super::super::super::Store;\n"),
+            ("driver/file/tx.rs", "use super::super::super::StoreTx;\n"),
+            ("driver/sqlite/probe.rs", "use super::super::super::repository::Probe;\n"),
+            ("driver/sqlite/file.rs", "use super::super::super::driver::file::Probe;\n"),
+            ("fs/probe.rs", "use super::super::workflow::Probe;\n"),
+        ], rejected=True, base=store)
+        self.check_rows([
+            ("driver/file/probe.rs", "use super::super::super::contracts::Probe;\n"),
+        ], rejected=False, base=store)
+
+    def test_inline_module_super_resolves_at_its_lexical_depth(self):
+        # [ORB-26522] `mod nested` in a file directly under application adds
+        # one module. Two `super` segments there name application::adapter,
+        # which the public guard allows, in the module body and in a function
+        # nested there. Three `super` segments name crate::adapter in both
+        # of those places and stay rejected. A function body on its own adds
+        # no module; that row lives with the file-depth cases above.
+        self.check_rows([
+            ("probe.rs", "mod nested {\n    use super::super::adapter::Probe;\n}\n"),
+            ("body.rs", "mod nested {\n    fn probe() {\n"
+             "        super::super::adapter::Probe;\n    }\n}\n"),
+        ], rejected=False)
+        self.check_rows([
+            ("escape.rs", "mod nested {\n    use super::super::super::adapter::Probe;\n}\n"),
+            ("escape_body.rs", "mod nested {\n    fn probe() {\n"
+             "        super::super::super::adapter::Probe;\n    }\n}\n"),
+        ], rejected=True)
+
+    def test_inline_module_with_unicode_identifier_resolves_at_its_lexical_depth(self):
+        # [ORB-26563] `mod détours` is a compiler-valid inline module. Two
+        # `super` segments there name application::adapter (allowed); three
+        # name crate::adapter and stay rejected.
+        self.check_rows([
+            ("probe.rs", "mod détours {\n    use super::super::adapter::Probe;\n"
+             "    fn probe() { let _ = Probe; }\n}\n"),
+        ], rejected=False)
+        self.check_rows([
+            ("escape.rs", "mod détours {\n    use super::super::super::adapter::Probe;\n"
+             "    fn probe() { let _ = Probe; }\n}\n"),
+        ], rejected=True)
+
+    def test_inline_module_inside_function_body_resolves_at_its_lexical_depth(self):
+        # [ORB-26562] A `mod` item declared inside a function body adds a module
+        # segment, as one in a module body does. In `mod outer { fn local() {
+        # mod inner { … } } }` under application/probe.rs, `super` climbs
+        # inner -> outer -> probe -> application, so three segments reach
+        # application (allowed) and four reach crate::adapter (rejected). A `fn`
+        # in the same body adds no segment, so two `super` segments from it reach
+        # application and three reach crate::adapter.
+        self.check_rows([
+            ("probe.rs", "mod outer {\n    fn local() {\n        mod inner {\n"
+             "            use super::super::super::adapter::Probe;\n"
+             "            fn probe() { let _ = Probe; }\n        }\n    }\n}\n"),
+            ("body_fn.rs", "mod outer {\n    fn local() {\n        fn inner() {\n"
+             "            use super::super::adapter::Probe;\n        }\n    }\n}\n"),
+        ], rejected=False)
+        self.check_rows([
+            ("escape.rs", "mod outer {\n    fn local() {\n        mod inner {\n"
+             "            use super::super::super::super::adapter::Probe;\n        }\n    }\n}\n"),
+            ("escape_body_fn.rs", "mod outer {\n    fn local() {\n        fn inner() {\n"
+             "            use super::super::super::adapter::Probe;\n        }\n    }\n}\n"),
+        ], rejected=True)
+
+    def test_function_local_macro_forwarding_mod_does_not_mask_super(self):
+        # [ORB-26580] A `mod name { … }` token tree passed to a function-local
+        # macro (with `()`, `[]`, or `{}` delimiters) is macro input, not a
+        # real inline module unless expanded as one. Inside `application/probe.rs`,
+        # `super::super::adapter` climbs to `crate::adapter` and must be
+        # rejected, while `super::adapter` stays within `application`.
+        # Genuine function-local inline modules—even after `-> !` or inside
+        # `({ … })`—still add one module segment.
+        self.check_rows([
+            ("probe.rs",
+             "pub fn probe() {\n"
+             "    macro_rules! forward {\n"
+             "        (mod $name:ident { $item:item }) => { $item };\n"
+             "    }\n"
+             "    forward!(mod envelope {\n"
+             "        use super::super::adapter::Probe;\n"
+             "    });\n"
+             "    let _ = Probe;\n"
+             "}\n"),
+            ("probe_braces.rs",
+             "pub fn probe() {\n"
+             "    macro_rules! forward {\n"
+             "        (mod $name:ident { $item:item }) => { $item };\n"
+             "    }\n"
+             "    forward! {\n"
+             "        mod envelope {\n"
+             "            use super::super::adapter::Probe;\n"
+             "        }\n"
+             "    }\n"
+             "    let _ = Probe;\n"
+             "}\n"),
+            ("probe_brackets.rs",
+             "pub fn probe() {\n"
+             "    macro_rules! forward {\n"
+             "        (mod $name:ident { $item:item }) => { $item };\n"
+             "    }\n"
+             "    forward![mod envelope {\n"
+             "        use super::super::adapter::Probe;\n"
+             "    }];\n"
+             "    let _ = Probe;\n"
+             "}\n"),
+            ("never_local_mod_escape.rs",
+             "pub fn probe() -> ! {\n"
+             "    mod inner {\n"
+             "        pub fn check() {\n"
+             "            let _ = super::super::super::adapter::Probe;\n"
+             "        }\n"
+             "    }\n"
+             "    loop {}\n"
+             "}\n"),
+        ], rejected=True)
+        self.check_rows([
+            ("probe_allowed.rs",
+             "pub fn probe() {\n"
+             "    macro_rules! forward {\n"
+             "        (mod $name:ident { $item:item }) => { $item };\n"
+             "    }\n"
+             "    forward!(mod envelope {\n"
+             "        use super::adapter::Probe;\n"
+             "    });\n"
+             "    let _ = Probe;\n"
+             "}\n"),
+            ("never_local_mod.rs",
+             "pub fn probe() -> ! {\n"
+             "    mod inner {\n"
+             "        pub fn check() {\n"
+             "            let _ = super::super::adapter::Probe;\n"
+             "        }\n"
+             "    }\n"
+             "    loop {}\n"
+             "}\n"),
+            ("paren_block_local_mod.rs",
+             "pub fn probe() {\n"
+             "    let _ = ({\n"
+             "        mod inner {\n"
+             "            pub fn check() {\n"
+             "                let _ = super::super::adapter::Probe;\n"
+             "            }\n"
+             "        }\n"
+             "        1\n"
+             "    });\n"
+             "}\n"),
+        ], rejected=False)
+
+    def test_item_preserving_macro_preserves_inline_module_super_depth(self):
+        # [ORB-26589] A macro that emits an `$item:item` or token tree intact
+        # keeps the inline module in the expanded AST, so `super::super` inside
+        # `application/probe.rs`'s `mod inner` resolves to `application::adapter`
+        # (allowed) while three `super` segments reach `crate::adapter` (rejected),
+        # regardless of whether the macro uses `{}`, `()`, or `[]`. Non-item
+        # macros (like `stringify!` or a discarding macro) and multi-arm or
+        # rewrapping rules follow what their transcriber emits.
+        self.check_rows([
+            ("keep_braces_ok.rs",
+             "pub fn probe() {\n"
+             "    macro_rules! keep { ($item:item) => { $item }; }\n"
+             "    keep! { mod inner {\n"
+             "        pub fn check() { let _ = super::super::adapter::Probe; }\n"
+             "    } }\n"
+             "    inner::check();\n"
+             "}\n"),
+            ("keep_parens_ok.rs",
+             "pub fn probe() {\n"
+             "    macro_rules! keep { ($item:item) => { $item }; }\n"
+             "    keep!(mod inner {\n"
+             "        pub fn check() { let _ = super::super::adapter::Probe; }\n"
+             "    });\n"
+             "    inner::check();\n"
+             "}\n"),
+            ("keep_brackets_ok.rs",
+             "pub fn probe() {\n"
+             "    macro_rules! keep { ($item:item) => { $item }; }\n"
+             "    keep![mod inner {\n"
+             "        pub fn check() { let _ = super::super::adapter::Probe; }\n"
+             "    }];\n"
+             "    inner::check();\n"
+             "}\n"),
+            ("keep_tt_ok.rs",
+             "macro_rules! keep_tt { ($($t:tt)*) => { $($t)* }; }\n"
+             "keep_tt! {\n"
+             "    mod inner {\n"
+             "        pub fn check() { let _ = super::super::adapter::Probe; }\n"
+             "    }\n"
+             "}\n"),
+            ("keep_many_ok.rs",
+             "macro_rules! keep_many { ($($item:item)*) => { $($item)* }; }\n"
+             "keep_many! {\n"
+             "    const N: usize = { 1 };\n"
+             "    mod inner {\n"
+             "        pub fn check() { let _ = super::super::adapter::Probe; }\n"
+             "    }\n"
+             "}\n"),
+            ("keep_gated_ok.rs",
+             "macro_rules! gate { ($meta:meta, $item:item) => { #[cfg($meta)] $item }; }\n"
+             "gate!(all(), mod inner {\n"
+             "    pub fn check() { let _ = super::super::adapter::Probe; }\n"
+             "});\n"),
+            ("rewrap_ok.rs",
+             "macro_rules! rewrap { (mod $name:ident { $item:item }) => { pub mod $name { $item } }; }\n"
+             "rewrap!(mod inner {\n"
+             "    pub fn check() { let _ = super::super::adapter::Probe; }\n"
+             "});\n"),
+            ("wrap_outer_ok.rs",
+             "macro_rules! wrap_outer { ($item:item) => { mod outer { $item } }; }\n"
+             "wrap_outer!(mod inner {\n"
+             "    pub fn check() { let _ = super::super::super::adapter::Probe; }\n"
+             "});\n"),
+            ("either_item_arm_ok.rs",
+             "macro_rules! either {\n"
+             "    (mod $name:ident { $item:item }) => { $item };\n"
+             "    ($item:item) => { $item };\n"
+             "}\n"
+             "either!(pub fn check() {\n"
+             "    mod inner { pub fn inner_check() { let _ = super::super::adapter::Probe; } }\n"
+             "});\n"),
+            ("external_cfg_if_ok.rs",
+             "external_macros::cfg_if! {\n"
+             "    if #[cfg(all())] {\n"
+             "        mod inner {\n"
+             "            pub fn check() { let _ = super::super::adapter::Probe; }\n"
+             "        }\n"
+             "    }\n"
+             "}\n"),
+        ], rejected=False)
+        self.check_rows([
+            ("keep_braces_escape.rs",
+             "pub fn probe() {\n"
+             "    macro_rules! keep { ($item:item) => { $item }; }\n"
+             "    keep! { mod inner {\n"
+             "        pub fn check() { let _ = super::super::super::adapter::Probe; }\n"
+             "    } }\n"
+             "    inner::check();\n"
+             "}\n"),
+            ("keep_parens_escape.rs",
+             "pub fn probe() {\n"
+             "    macro_rules! keep { ($item:item) => { $item }; }\n"
+             "    keep!(mod inner {\n"
+             "        pub fn check() { let _ = super::super::super::adapter::Probe; }\n"
+             "    });\n"
+             "    inner::check();\n"
+             "}\n"),
+            ("keep_brackets_escape.rs",
+             "pub fn probe() {\n"
+             "    macro_rules! keep { ($item:item) => { $item }; }\n"
+             "    keep![mod inner {\n"
+             "        pub fn check() { let _ = super::super::super::adapter::Probe; }\n"
+             "    }];\n"
+             "    inner::check();\n"
+             "}\n"),
+            ("discard_mod_escape.rs",
+             "pub fn probe() {\n"
+             "    macro_rules! discard { ($($t:tt)*) => {}; }\n"
+             "    discard!(mod fake { use super::super::adapter::Probe; });\n"
+             "}\n"),
+            ("stringify_wrapper_escape.rs",
+             "pub fn probe() {\n"
+             "    macro_rules! to_str { ($item:item) => { const S: &str = stringify!($item); }; }\n"
+             "    to_str!(mod fake { use super::super::adapter::Probe; });\n"
+             "}\n"),
+            ("stringify_builtin_escape.rs",
+             "pub fn probe() {\n"
+             "    let _ = stringify!(mod fake { use super::super::adapter::Probe; });\n"
+             "}\n"),
+            ("either_strip_arm_escape.rs",
+             "macro_rules! either {\n"
+             "    (mod $name:ident { $item:item }) => { $item };\n"
+             "    ($item:item) => { $item };\n"
+             "}\n"
+             "either!(mod envelope { use super::super::adapter::Probe; });\n"),
+            ("rewrap_escape.rs",
+             "macro_rules! rewrap { (mod $name:ident { $item:item }) => { pub mod $name { $item } }; }\n"
+             "rewrap!(mod inner {\n"
+             "    pub fn check() { let _ = super::super::super::adapter::Probe; }\n"
+             "});\n"),
+            ("forwarded_strip_escape.rs",
+             "pub fn probe() {\n"
+             "    macro_rules! forward { (mod $name:ident { $item:item }) => { $item }; }\n"
+             "    macro_rules! outer { ($($t:tt)*) => { forward!($($t)*); }; }\n"
+             "    outer!(mod envelope { use super::super::adapter::Probe; });\n"
+             "}\n"),
+        ], rejected=True)
+
+    def test_metavariable_named_macro_wrapper_counts_inline_module_depth(self):
+        # A module emitted as `mod $name` contributes a lexical module level,
+        # just like a literal-name wrapper. Three `super` segments from the
+        # inner module reach application::adapter; four escape to crate::adapter.
+        self.check_rows([
+            ("named_wrap_ok.rs",
+             "macro_rules! named { ($n:ident, $i:item) => { mod $n { $i } }; }\n"
+             "named!(outer, mod inner {\n"
+             "    pub fn check() { let _ = super::super::super::adapter::Probe; }\n"
+             "});\n"),
+        ], rejected=False)
+        self.check_rows([
+            ("named_wrap_escape.rs",
+             "macro_rules! named { ($n:ident, $i:item) => { mod $n { $i } }; }\n"
+             "named!(outer, mod inner {\n"
+             "    pub fn check() { let _ = super::super::super::super::adapter::Probe; }\n"
+             "});\n"),
+        ], rejected=True)
+
+    def test_macro_reemitting_under_different_module_wrappers_keeps_depth(self):
+        # [ORB-26602] Re-emitting an item under two differing wrappers of equal
+        # depth (such as `mod $n { $i } mod other { $i }`) still places `$i`
+        # one module deeper, so `super::super::adapter` stays within
+        # `application` while `super::super::super::adapter` escapes to `crate`.
+        self.check_rows([
+            ("dual_wrap_ok.rs",
+             "macro_rules! dual { (mod $n:ident { $i:item }) => { mod $n { $i } mod other { $i } }; }\n"
+             "dual!(mod inner {\n"
+             "    pub fn check() { let _ = super::super::adapter::Probe; }\n"
+             "});\n"),
+            ("mix_wrap_ok.rs",
+             "macro_rules! mix { ($n:ident, $i:item) => { mod $n { $i } mod other { $i } }; }\n"
+             "mix!(outer, pub fn check() { let _ = super::super::adapter::Probe; });\n"),
+        ], rejected=False)
+        self.check_rows([
+            ("dual_wrap_escape.rs",
+             "macro_rules! dual { (mod $n:ident { $i:item }) => { mod $n { $i } mod other { $i } }; }\n"
+             "dual!(mod inner {\n"
+             "    pub fn check() { let _ = super::super::super::adapter::Probe; }\n"
+             "});\n"),
+            ("mix_wrap_escape.rs",
+             "macro_rules! mix { ($n:ident, $i:item) => { mod $n { $i } mod other { $i } }; }\n"
+             "mix!(outer, pub fn check() { let _ = super::super::super::adapter::Probe; });\n"),
+        ], rejected=True)
+
+    def test_large_token_tree_invocation_keeps_inline_module_depth(self):
+        # [ORB-26595] A `$($t:tt)*` pass-through over about 2000 tokens nested
+        # the arm matcher past Python's recursion limit and crashed the guard
+        # with a RecursionError. Such an invocation now falls back to the
+        # summary of its arms, which keeps the inline module's depth for an
+        # item-preserving macro: `super::super` stays in `application` (allowed)
+        # and three `super` segments reach `crate::adapter` (rejected).
+        def large_invocation(supers):
+            items = [f"    pub const C{index}: usize = {index};\n" for index in range(260)]
+            return ("macro_rules! keep_tt { ($($t:tt)*) => { $($t)* }; }\n"
+                    "keep_tt! {\n"
+                    + "".join(items)
+                    + "    mod inner {\n"
+                    f"        pub fn check() {{ let _ = {supers}::adapter::Probe; }}\n"
+                    "    }\n"
+                    "}\n")
+        self.check_rows([
+            ("keep_tt_large_ok.rs", large_invocation("super::super")),
+        ], rejected=False)
+        self.check_rows([
+            ("keep_tt_large_escape.rs", large_invocation("super::super::super")),
+        ], rejected=True)
 
     def test_tools_builtin_grouped_imports_rejected_in_either_spelling(self):
         # [ORB-26107] `r#builtin` names the same module as `builtin`. The

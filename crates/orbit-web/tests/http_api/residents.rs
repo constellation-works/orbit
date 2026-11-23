@@ -4,6 +4,9 @@
 
 use std::fs;
 
+use chrono::{DateTime, Utc};
+use orbit_store::contracts::TaskHistoryUpdateParams;
+use orbit_types::task::TaskComment;
 use orbit_types::telemetry::AuditEventStatus;
 use serde_json::{Value, json};
 
@@ -73,6 +76,133 @@ fn create(server: &super::support::Server, goal: &str) -> String {
         .as_str()
         .expect("created task id")
         .to_string()
+}
+
+#[test]
+fn resident_reads_report_checkpoint_comment_time_and_keep_empty_state_with_notice() {
+    isolated(
+        "residents::resident_reads_report_checkpoint_comment_time_and_keep_empty_state_with_notice",
+        || {
+            let fixture = Fixture::new();
+            resident_fixture(&fixture);
+            let server = fixture.server(true);
+
+            let checkpoint_id = create(&server, "Report the persisted checkpoint time.");
+            let cycle = "rcy-jrun-20261122-1205-checkpoint-time";
+            let checkpoint_at: DateTime<Utc> = "2026-11-22T12:24:00Z".parse().unwrap();
+            let checkpoint = json!({
+                "kind": "resident.checkpoint",
+                "schema": 1,
+                "mandate": checkpoint_id,
+                "cycle": cycle,
+                "run_id": "jrun-checkpoint-time",
+                "crew": "sol",
+                "recovery_of": null,
+                "wake": {
+                    "reasons": ["heartbeat"],
+                    "digest": format!("sha256:{}", "0".repeat(64)),
+                },
+                "authority": {
+                    "rights": [],
+                    "observe_only": true,
+                    "narrowed_by": null,
+                },
+                "actions": [],
+                "decisions": [],
+                "requests": [],
+                "costs": [],
+                "notes": "",
+                "next_wake": {
+                    "reason": "heartbeat",
+                    "not_before": "2026-11-22T13:00:00Z",
+                },
+                "continuity": "off",
+                "outcome": "idle",
+                "probe": false,
+                "error": null,
+                "conversation_ref": null,
+            });
+            let registry = orbit_store::maintenance::task_registry::TaskRegistryStore::open(
+                &orbit_store::maintenance::task_registry::task_registry_path(
+                    &fixture.runtime.global_root(),
+                ),
+            )
+            .unwrap();
+            let history = orbit_store::compose::workspace_coordinated_backends(
+                registry,
+                fixture.runtime.workspace_id().unwrap(),
+                fixture.runtime.sqlite_store().unwrap(),
+            )
+            .unwrap()
+            .task
+            .history;
+            history
+                .update_task_history(
+                    &checkpoint_id,
+                    TaskHistoryUpdateParams {
+                        actor: "fixture".into(),
+                        append_comments: vec![TaskComment {
+                            at: checkpoint_at,
+                            by: "fixture".into(),
+                            message: checkpoint.to_string(),
+                            operation_id: None,
+                        }],
+                        ..Default::default()
+                    },
+                )
+                .unwrap();
+
+            let empty_id = create(&server, "Keep the empty checkpoint state.");
+            json_ok(server.send(
+                "POST",
+                &format!("/api/residents/{empty_id}/control{WS}"),
+                json!({"action": "pause", "reason": "Waiting for a direction."}),
+            ));
+
+            let listed = json_ok(server.get(&format!("/api/residents{WS}&all=true")));
+            let cards = listed["mandates"].as_array().unwrap();
+            let checkpoint_card = cards
+                .iter()
+                .find(|card| card["task_id"] == checkpoint_id)
+                .expect("checkpoint mandate is listed");
+            assert_eq!(
+                checkpoint_card["latest_checkpoint"]["at"],
+                json!(checkpoint_at),
+                "checkpoint timestamp comes from the persisted comment, not its 12:05 cycle id: {checkpoint_card}"
+            );
+            assert_eq!(checkpoint_card["latest_checkpoint"]["cycle"], cycle);
+            assert_ne!(
+                checkpoint_card["latest_checkpoint"]["at"],
+                json!("2026-11-22T12:05:00Z"),
+                "the cycle submission minute is not the checkpoint write time"
+            );
+
+            let shown = json_ok(server.get(&format!("/api/residents/{checkpoint_id}{WS}")));
+            assert_eq!(shown["latest_checkpoint"]["at"], json!(checkpoint_at));
+
+            let empty_card = cards
+                .iter()
+                .find(|card| card["task_id"] == empty_id)
+                .expect("empty mandate is listed");
+            assert!(empty_card["latest_checkpoint"].is_null(), "{empty_card}");
+            assert!(
+                empty_card["status_line"]["title"]
+                    .as_str()
+                    .unwrap()
+                    .starts_with("Paused"),
+                "{empty_card}"
+            );
+            let empty_shown = json_ok(server.get(&format!("/api/residents/{empty_id}{WS}")));
+            assert!(empty_shown["latest_checkpoint"].is_null(), "{empty_shown}");
+            assert!(
+                empty_shown["status_line"]["title"]
+                    .as_str()
+                    .unwrap()
+                    .starts_with("Paused"),
+                "{empty_shown}"
+            );
+        },
+    );
 }
 
 #[test]
@@ -677,6 +807,60 @@ fn every_resident_action_runs_through_its_tool_and_is_audited() {
                     count,
                     "{operation}"
                 );
+            }
+        },
+    );
+}
+
+#[test]
+fn ended_resident_reads_use_the_ending_event() {
+    isolated(
+        "residents::ended_resident_reads_use_the_ending_event",
+        || {
+            let fixture = Fixture::new();
+            resident_fixture(&fixture);
+            let server = fixture.server(true);
+            let archived = create(&server, "Archive after a wake.");
+            json_ok(server.send(
+                "POST",
+                &format!("/api/residents/{archived}/control{WS}"),
+                json!({"action": "wake", "reason": "Earlier wake"}),
+            ));
+            fixture
+                .runtime
+                .archive_task_as_operator(&archived, false)
+                .unwrap();
+            let history = fixture.runtime.get_task_history(&archived).unwrap();
+            let archive_at = history
+                .iter()
+                .find(|entry| entry.to_status == Some(orbit_types::task::TaskStatus::Archived))
+                .unwrap()
+                .at;
+            let shown = json_ok(server.get(&format!("/api/residents/{archived}{WS}")));
+            assert_eq!(shown["ended_at"], json!(archive_at), "{shown}");
+            let stopped = create(&server, "Stop explicitly.");
+            let response = json_ok(server.send(
+                "POST",
+                &format!("/api/residents/{stopped}/control{WS}"),
+                json!({"action": "stop", "reason": "Finished"}),
+            ));
+            let shown = json_ok(server.get(&format!("/api/residents/{stopped}{WS}")));
+            assert_eq!(
+                shown["ended_at"], response["effective_at"],
+                "{shown} {response}"
+            );
+            let list = json_ok(server.get("/api/residents?all=true&workspace=ws_http_fixture"));
+            for (id, expected) in [
+                (&archived, json!(archive_at)),
+                (&stopped, response["effective_at"].clone()),
+            ] {
+                let row = list["mandates"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .find(|row| row["task_id"] == *id)
+                    .unwrap();
+                assert_eq!(row["ended_at"], expected, "{row}");
             }
         },
     );

@@ -30,7 +30,6 @@ the bundled `orbit-setup` and `orbit-orchestrate` skills.
 
 <ul class="orbit-index">
   <li><a href="/how-to/experiments/"><span class="orbit-index-title">Run an experiment</span><span class="orbit-index-desc">Split real tasks between agent treatments and read the result.</span></a></li>
-  <li><a href="/how-to/crew-memory/"><span class="orbit-index-title">Give models a memory</span><span class="orbit-index-desc">Turn on crew memory and review what models write to it.</span></a></li>
   <li><a href="/how-to/friction/"><span class="orbit-index-title">Report and triage friction</span><span class="orbit-index-desc">Record what made work harder than it should have been, then triage it.</span></a></li>
 </ul>
 

@@ -347,7 +347,10 @@ Git writes, changes task lifecycle, approves, or merges.
 The instruction carries the report's exact JSON Schema, and
 `orbit.task.artifact` action `put` validates a `review-report.json` on attach,
 refusing a mismatch with the offending field named so the reviewer can fix it
-while it still runs [ORB-13890]. Both the validator and settlement read
+while it still runs [ORB-13890]. It also refuses an `expected_failure` record
+whose outcome is not `failed`, naming the record's index and command, since
+settlement would decide that same contradiction from the record alone
+[ORB-26788]. Both the validator and settlement read
 through `ReviewReport::parse`, which accepts benign shape drift that leaves
 the meaning unambiguous — a bare-string `disposition`, enum labels in another
 case or with `-`/space separators, `pass`/`fail`/`skipped` outcomes, a single
@@ -508,8 +511,21 @@ naming the step's typed reason (`review_gate_blocked`,
 `review_timeout_incomplete`, `push_lease_lost`, ...) and decision
 `landing_review_failure`. `review_repair_after_merge` is the exception to
 staying in `review`: the pull request is already merged, and the task is
-blocked with the recipe that lands the preserved repair. No outcome closes the PR. One exception to "no
-push": a reviewer commit that settled `incomplete` is not left in the run's
+blocked with the recipe that lands the preserved repair. No outcome closes the PR.
+A PR that merged outside Orbit while its review ran [ORB-26599] is the other
+exception: settlement reads the forge, and the settle comment names the merge
+commit and says the verdict no longer gates anything. For a `reject` or
+`incomplete` verdict it also names any unpushed reviewer commit by sha and
+review worktree. The refusal omits the pending-decision text, so the run is not
+held for a decision; the failure handoff pushes no reviewer commit, its comment
+says the PR already merged, and external-merge settlement then moves the task
+to `done`. An `accept_with_fixes` reviewer commit is not stranded by the
+comment: the settle comment defers to the push step, which follows the
+`review_repair_after_merge` exception above whether the head branch survives
+or was deleted: it tries to preserve the repair and blocks the task with a
+follow-up recipe. If both preservation refs fail, the recipe reports that the
+repair remains local. An unconfirmed merge with a lost lease also stays local.
+One exception to "no push": a reviewer commit that settled `incomplete` is not left in the run's
 host-local worktree. Settlement has already committed the reviewer's repair, so
 the failure handoff pushes it onto the published head under the same lease as
 `landing_push` and records the result as `reviewer_push` in its output and in

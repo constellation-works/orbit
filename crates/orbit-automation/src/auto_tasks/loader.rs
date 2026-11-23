@@ -8,8 +8,8 @@
 //! unreadable settings table fails every definition closed, since any of them
 //! may carry settings.
 
+use std::fmt;
 use std::path::{Path, PathBuf};
-use std::{fmt, fs};
 
 use std::collections::BTreeMap;
 
@@ -24,6 +24,7 @@ use crate::condition::{
     BoardFacts, CheckedCondition, ConditionCarrier, ConditionEvaluator, ConditionFacts,
     OriginFacts, SelfFacts, TaskFacts, Truth, check_condition, check_guard,
 };
+use crate::definition_directory::{self, DefinitionDirectoryError, DefinitionEntryError};
 
 /// Directory under a workspace's `.orbit/` holding auto-task YAML files.
 pub const AUTO_TASKS_DIR: &str = "auto_tasks";
@@ -82,46 +83,17 @@ pub enum AutoTasksDirectoryError {
 /// Inspecting the leaf first also rejects dangling links instead of treating
 /// them as an absent catalog that permits shared-catalog fallback.
 pub fn validated_auto_tasks_dir(orbit_dir: &Path) -> Result<PathBuf, AutoTasksDirectoryError> {
-    let canonical_orbit_dir = match fs::canonicalize(orbit_dir) {
-        Ok(path) => path,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            return Err(AutoTasksDirectoryError::Missing);
-        }
-        Err(error) => {
-            return Err(AutoTasksDirectoryError::Invalid(format!(
-                "failed to resolve Orbit directory {}: {error}",
-                orbit_dir.display()
-            )));
-        }
-    };
-    let expected_dir = canonical_orbit_dir.join(AUTO_TASKS_DIR);
-    if fs::symlink_metadata(&expected_dir).is_ok_and(|metadata| !metadata.is_dir()) {
-        return Err(AutoTasksDirectoryError::Invalid(format!(
-            "auto_tasks directory must be a regular directory directly under {}",
-            canonical_orbit_dir.display()
-        )));
-    }
-    let canonical_dir = match fs::canonicalize(&expected_dir) {
-        Ok(path) => path,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            return Err(AutoTasksDirectoryError::Missing);
-        }
-        Err(error) => {
-            return Err(AutoTasksDirectoryError::Invalid(format!(
-                "failed to resolve auto_tasks directory {}: {error}",
-                expected_dir.display()
-            )));
-        }
-    };
+    let root =
+        definition_directory::canonical_definition_root(orbit_dir).map_err(map_directory_error)?;
+    definition_directory::resolve_definition_child(&root, AUTO_TASKS_DIR, "auto_tasks")
+        .map_err(map_directory_error)
+}
 
-    if canonical_dir != expected_dir || !canonical_dir.is_dir() {
-        return Err(AutoTasksDirectoryError::Invalid(format!(
-            "auto_tasks directory must be a regular directory directly under {}",
-            canonical_orbit_dir.display()
-        )));
+fn map_directory_error(error: DefinitionDirectoryError) -> AutoTasksDirectoryError {
+    match error {
+        DefinitionDirectoryError::Missing => AutoTasksDirectoryError::Missing,
+        DefinitionDirectoryError::Invalid(message) => AutoTasksDirectoryError::Invalid(message),
     }
-
-    Ok(canonical_dir)
 }
 
 impl fmt::Display for AutoTasksDirectoryError {
@@ -150,45 +122,8 @@ pub fn collect_auto_tasks(orbit_dir: &Path) -> AutoTaskCollection {
         }
     };
 
-    let mut paths = Vec::new();
-    match fs::read_dir(&dir) {
-        Ok(entries) => {
-            for entry in entries {
-                let entry = match entry {
-                    Ok(entry) => entry,
-                    Err(error) => {
-                        collection.errors.push(AutoTaskLoadError {
-                            path: Some(dir.clone()),
-                            message: format!("failed to read auto_tasks directory entry: {error}"),
-                        });
-                        continue;
-                    }
-                };
-                let path = entry.path();
-                let metadata = match fs::symlink_metadata(&path) {
-                    Ok(metadata) => metadata,
-                    Err(error) => {
-                        collection.errors.push(AutoTaskLoadError {
-                            path: Some(path),
-                            message: format!("failed to inspect auto-task entry: {error}"),
-                        });
-                        continue;
-                    }
-                };
-                if !metadata.file_type().is_file() {
-                    continue;
-                }
-                if path
-                    .extension()
-                    .and_then(|ext| ext.to_str())
-                    .is_some_and(|ext| {
-                        ext.eq_ignore_ascii_case("yaml") || ext.eq_ignore_ascii_case("yml")
-                    })
-                {
-                    paths.push(path);
-                }
-            }
-        }
+    let (mut paths, errors) = match definition_directory::list_definition_yaml(&dir) {
+        Ok(listing) => listing,
         Err(error) => {
             collection.errors.push(AutoTaskLoadError {
                 path: Some(dir),
@@ -196,8 +131,22 @@ pub fn collect_auto_tasks(orbit_dir: &Path) -> AutoTaskCollection {
             });
             return collection;
         }
+    };
+    for error in errors {
+        let (path, message) = match error {
+            DefinitionEntryError::Read(error) => (
+                dir.clone(),
+                format!("failed to read auto_tasks directory entry: {error}"),
+            ),
+            DefinitionEntryError::Inspect(path, error) => {
+                (path, format!("failed to inspect auto-task entry: {error}"))
+            }
+        };
+        collection.errors.push(AutoTaskLoadError {
+            path: Some(path),
+            message,
+        });
     }
-    paths.sort();
 
     // The file stem is the definition identity, so `name.yaml` and `name.yml`
     // (or any other extension spelling) would be two definitions of one

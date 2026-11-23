@@ -89,7 +89,6 @@ fn canonical_builtin_definitions_preserve_the_exact_workspace_surface() {
             "orbit.experiment.start",
             "orbit.experiment.update",
             "orbit.friction",
-            "orbit.memory.history",
             "orbit.memory.propose",
             "orbit.memory.show",
             "orbit.memory.write",
@@ -224,9 +223,8 @@ fn unclassified_id_addressing_builtin_fails_closed_in_this_target() {
 
 #[test]
 fn every_builtin_id_route_is_declared_and_preserves_the_former_tables() {
-    // The pre-change hand-kept tables, duplicates removed, are the baseline:
-    // every one of these tools must keep its classification and, for
-    // workspace-local tools, its reason string verbatim.
+    // Preserve the route tables and the workspace-local reason strings.
+    // New ID-routed operations also declare their expected route here.
     let task_routed = [
         "orbit.task.show",
         "orbit.task.update",
@@ -238,6 +236,7 @@ fn every_builtin_id_route_is_declared_and_preserves_the_former_tables() {
         "orbit.task.review_reset",
         "orbit.task.reconcile_review",
         "orbit.task.requeue",
+        "orbit.task.resume_delivery",
     ];
     for name in task_routed {
         assert_eq!(
@@ -252,9 +251,7 @@ fn every_builtin_id_route_is_declared_and_preserves_the_former_tables() {
     let experiment = "an experiment id is workspace-local and carries no host prefix";
     let run = "a run id is host-local: a run executes where it was admitted";
     let notice = "a notice id is workspace-local and carries no host prefix";
-    let memory_proposal =
-        "a crew memory proposal id is workspace-local and carries no task host prefix";
-    let workspace_local: [(&str, &str); 28] = [
+    let workspace_local: [(&str, &str); 26] = [
         ("orbit.friction.show", friction),
         ("orbit.friction.update", friction),
         ("orbit.friction.resolve", friction),
@@ -281,8 +278,6 @@ fn every_builtin_id_route_is_declared_and_preserves_the_former_tables() {
         ("orbit.workflow.run.show", run),
         ("orbit.workflow.run.resume", run),
         ("orbit.notice.show", notice),
-        ("orbit.memory.proposal.accept", memory_proposal),
-        ("orbit.memory.proposal.reject", memory_proposal),
     ];
     for (name, reason) in workspace_local {
         assert_eq!(

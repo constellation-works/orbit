@@ -97,8 +97,8 @@ function coverageItems() {
     ["return_unsupported", "No return history", coverage.return_unsupported, "Blocked, with no recorded wait to draw a return from. Left out of the full totals."],
     ["return_tail_unsupported", "Unknown return tail", coverage.return_tail_unsupported, "Recorded waits run out before 90 days: a draw past the last one counts as no return."],
     ["phase_age_unknown", "Unknown elapsed time", coverage.phase_age_unknown, "Running or blocked, but the history does not say since when: treated as just started."],
-    ["arrivals_missing_tokens", "Arrival history: missing tokens", arrivals.missing_tokens, "Deliveries missing normalized tokens in the pool used by recent arrivals."],
-    ["arrivals_missing_usd", "Arrival history: missing cost", arrivals.missing_usd, "Deliveries missing provider cost in the pool used by recent arrivals."],
+    ["arrivals_missing_tokens", "Arrival history: missing tokens", arrivals.missing_tokens, "Deliveries missing normalized tokens across the full history lookback."],
+    ["arrivals_missing_usd", "Arrival history: missing cost", arrivals.missing_usd, "Deliveries missing provider cost across the full history lookback."],
   ];
 }
 
@@ -233,7 +233,9 @@ function coverageChecklist() {
     el("dd", { class: "fc-cov-def", text: hint }),
   ])));
   const left = `${backlog.review ?? 0} in review are not forecast.`;
-  const arrivalNote = `Recent arrivals sample all ${arrivals.deliveries ?? 0} history deliveries for both the backlog and if-approved totals. A sampled arrival missing tokens or cost makes that iteration's total unavailable for that metric; duration remains independent. Missing totals sort last, so p50 or p90 can show —. These gaps do not affect the no-arrivals forecast.`;
+  const donorNote = arrivals.conflict_donors == null ? "" :
+    `Recent arrivals draw from ${arrivals.conflict_donors} measured footprint donors by source class, pooling donors when a class has too few examples. The missing-token and missing-cost counts cover all ${arrivals.deliveries ?? 0} history deliveries. `;
+  const arrivalNote = donorNote + "A sampled arrival missing tokens or cost makes that iteration’s total unavailable for that metric. Duration remains independent. Missing totals sort last, so p50 or p90 can show —. The no-arrivals forecast is unaffected.";
   return [
     el("h3", { class: "fc-sub-title", text: `Coverage checklist · ${coverage.tasks ?? 0} initial tasks forecast` }),
     list,

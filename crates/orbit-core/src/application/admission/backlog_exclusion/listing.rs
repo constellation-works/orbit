@@ -21,6 +21,7 @@ use super::{
     BacklogTaskConflict, BacklogTaskExclusion, BacklogTaskExclusionReason, workspace_ship_mode,
 };
 use crate::OrbitRuntime;
+use crate::application::admission::auto_admission::PERF_LANE_SELECTOR;
 use crate::application::task::TaskWorkspaceAutoPort;
 use crate::runtime::engine::crew::CrewAllowlist;
 use crate::runtime::task::locks::lock_context_files_for_task;
@@ -67,6 +68,19 @@ fn claim_lock_exclusion(
         conflicts,
         crew: None,
         detail: Some(claim_detail(claim)),
+    }
+}
+
+fn perf_lane_exclusion(task_id: String, holder: &str) -> BacklogTaskExclusion {
+    BacklogTaskExclusion {
+        id: task_id,
+        reason: BacklogTaskExclusionReason::PerfLaneBusy,
+        conflicts: vec![BacklogTaskConflict {
+            requested_file: PERF_LANE_SELECTOR.to_string(),
+            locking_task_id: holder.to_string(),
+        }],
+        crew: None,
+        detail: Some(orbit_types::task::perf_lane_detail(holder)),
     }
 }
 
@@ -435,13 +449,23 @@ fn list_backlog_tasks_impl(
             runtime
                 .stores()
                 .tasks()
-                .admit_owner_wave(&candidates)
+                .admit_owner_wave(
+                    &candidates,
+                    runtime
+                        .automation_machine_identity()
+                        .or(runtime.workspace_owner_machine_id()),
+                )
                 .map_err(|error| DispatchError::DeterministicActionFailed {
                     action: action.to_string(),
                     message: format!("admit explicit tasks through the admission section: {error}"),
                 })?
         };
         for admission in admissions {
+            if let Some(holder) = admission.perf_lane_held_by.clone() {
+                tasks.retain(|task| task.id != admission.task_id);
+                excluded.push(perf_lane_exclusion(admission.task_id, &holder));
+                continue;
+            }
             let Some(claim) = admission.blocked_by else {
                 continue;
             };

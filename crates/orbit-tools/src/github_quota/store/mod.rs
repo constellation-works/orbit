@@ -36,3 +36,6 @@ pub use types::{
     GithubResourceStatus, ObservedQuota, QuotaRefusal, QuotaRefusalReason, RESOURCE_CORE,
     RESOURCE_GRAPHQL, RateLimitAnswer,
 };
+
+#[cfg(any(test, feature = "test-support"))]
+pub(in crate::github_quota) use clock::with_fixed_clock;

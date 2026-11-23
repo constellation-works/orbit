@@ -9,15 +9,25 @@ use crate::application::task::lifecycle::EXTERNAL_MERGE_SETTLED_EVENT;
 use crate::application::task::{TaskRecordUpdateParams, TaskRecords, TaskWorkspaceAutoPort};
 use crate::runtime::task_pr_forge::MergedPullRequest;
 
-use super::candidate::{Candidate, RevokedHandoff};
+use super::candidate::{Candidate, DeliveryLanding, RevokedHandoff};
 use super::model::ExternalMergeSettlement;
 use super::{refusal, rescued};
 
 /// How the task landed (`pull request #N, merged into B at T as C outside Orbit`),
-/// and the landing note its settlement records.
-fn landing_note(landing: &MergedPullRequest) -> (String, String) {
+/// and the landing note its settlement records. A merge at a verified base
+/// refresh of the published head names both heads; the merged head is the
+/// delivered candidate.
+fn landing_note(landing: &MergedPullRequest, refreshed_from: Option<&str>) -> (String, String) {
+    let refresh = refreshed_from
+        .map(|published| {
+            format!(
+                " (published head {published}; delivered head {} adds only base merges)",
+                landing.head_sha
+            )
+        })
+        .unwrap_or_default();
     let landed = format!(
-        "pull request #{}, merged into {} at {} as {} outside Orbit",
+        "pull request #{}{refresh}, merged into {} at {} as {} outside Orbit",
         landing.pull.number,
         landing.base_branch,
         landing
@@ -41,13 +51,22 @@ pub(crate) fn settled_merge_commit(note: &str) -> Option<&str> {
     is_sha1_commit_id(commit).then_some(commit)
 }
 
+/// What a settlement's landing note records besides the merge.
+pub(super) enum SettlementNote<'a> {
+    /// An operator-rescued follower claim's merge.
+    Rescued(&'a rescued::RecoveredMerge),
+    /// A recorded delivery's merge, with the published head when the pull
+    /// request merged at a verified base refresh of it.
+    Landing { refreshed_from: Option<&'a str> },
+}
+
 impl OrbitRuntime {
     /// Settle `candidate` from `landing`, through its revoked handoff's claim
     /// when it has one.
     pub(super) fn write_settlement(
         &self,
         candidate: &Candidate,
-        landing: &MergedPullRequest,
+        landing: &DeliveryLanding,
     ) -> Result<ExternalMergeSettlement, OrbitError> {
         self.write_settlement_as(candidate, landing, None)
     }
@@ -55,14 +74,24 @@ impl OrbitRuntime {
     pub(super) fn write_settlement_as(
         &self,
         candidate: &Candidate,
-        landing: &MergedPullRequest,
+        landing: &DeliveryLanding,
         actor: Option<&str>,
     ) -> Result<ExternalMergeSettlement, OrbitError> {
         match &candidate.revoked {
-            Some(revoked) => {
-                self.write_revoked_handoff_settlement(&candidate.task, revoked, landing, actor)
-            }
-            None => self.write_external_merge_settlement_as(&candidate.task, landing, actor, None),
+            Some(revoked) => self.write_revoked_handoff_settlement(
+                &candidate.task,
+                revoked,
+                &landing.merged,
+                actor,
+            ),
+            None => self.write_external_merge_settlement_as(
+                &candidate.task,
+                &landing.merged,
+                actor,
+                SettlementNote::Landing {
+                    refreshed_from: landing.refreshed_from.as_deref(),
+                },
+            ),
         }
     }
 
@@ -82,7 +111,7 @@ impl OrbitRuntime {
     ) -> Result<ExternalMergeSettlement, OrbitError> {
         let id = observed.id.as_str();
         let number = landing.pull.number;
-        let (_, mut note) = landing_note(landing);
+        let (_, mut note) = landing_note(landing, None);
         if revoked.candidate.is_some() {
             note.push_str(&format!(
                 "; verified accepted candidate plus base merges at head {}",
@@ -154,14 +183,20 @@ impl OrbitRuntime {
         observed: &Task,
         landing: &MergedPullRequest,
         actor: Option<&str>,
-        rescue: Option<&rescued::RecoveredMerge>,
+        source: SettlementNote<'_>,
     ) -> Result<ExternalMergeSettlement, OrbitError> {
         let history_actor = actor.unwrap_or(SYSTEM_ACTOR_LABEL).to_string();
         let id = observed.id.as_str();
         let number = landing.pull.number;
-        let (landed, note) = match rescue {
-            Some(rescue) => rescue.landing_note(landing),
-            None => landing_note(landing),
+        let (landed, note, rescue) = match source {
+            SettlementNote::Rescued(rescue) => {
+                let (landed, note) = rescue.landing_note(landing);
+                (landed, note, Some(rescue))
+            }
+            SettlementNote::Landing { refreshed_from } => {
+                let (landed, note) = landing_note(landing, refreshed_from);
+                (landed, note, None)
+            }
         };
         let task = self.with_task_write_locked(id, || {
             let task = self.get_task(id)?;

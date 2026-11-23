@@ -5,7 +5,7 @@
 // or the Pin button keeps it open. The readings ride the host resource poll
 // (`provider_limits` and `provider_pressures` in its payload), so they follow
 // the selected host and pause with it in a hidden tab.
-import { el, formatDateTime } from './common.js';
+import { resourcePillTone, el, escCloseButton, formatDateTime } from './common.js';
 
 const DIALOG_ID = 'provider-usage-dialog';
 // One dialog lists every provider; it opens from the `+N more` chip and, on
@@ -55,8 +55,10 @@ export function providerReadingAge(reading, now = Date.now()) {
     stale = observed.toISOString().slice(0, 10) < new Date(now).toISOString().slice(0, 10);
   }
   if (!stale) return { label: 'today', stale: false };
-  const seconds = Number.isFinite(Number(reading?.age_seconds))
-    ? Math.max(0, Math.floor(Number(reading.age_seconds)))
+  // `Number(null)` is 0: only a real number of seconds counts as an age.
+  const ageSeconds = typeof reading?.age_seconds === 'number' ? reading.age_seconds : NaN;
+  const seconds = Number.isFinite(ageSeconds)
+    ? Math.max(0, Math.floor(ageSeconds))
     : valid ? Math.max(0, Math.floor((now - observed.getTime()) / 1000)) : 0;
   const minutes = Math.floor(seconds / 60);
   const hours = Math.floor(seconds / 3600);
@@ -294,14 +296,14 @@ const chipClasses = (chip, kind) => `host-resource provider-usage ${kind} ${chip
 // share the all-providers key).
 const ui = {
   key: null, pinned: false, anchor: null, host: null, signature: '', views: new Map(), chips: new Map(),
-  pointerInside: false, openTimer: null, closeTimer: null, suppressFocus: false, bound: false, pinButton: null,
+  pointerInside: false, openTimer: null, closeTimer: null, suppressFocus: false, bound: false, closeButton: null, pinButton: null,
   focusedChip: null,
 };
 
 function dialogNode() {
   let node = document.getElementById(DIALOG_ID);
   if (!node) {
-    node = el('div', { id: DIALOG_ID, class: 'usage-dialog', role: 'dialog' });
+    node = el('div', { id: DIALOG_ID, class: 'usage-dialog dialog-surface', role: 'dialog' });
     setHidden(node, true);
     document.body?.append(node);
   }
@@ -388,9 +390,9 @@ function pinButton() {
 
 function providerDialog(view) {
   return [
-    el('div', { class: 'usage-head' }, [
-      el('span', { class: 'usage-title', text: view.title }),
-      el('span', { class: `usage-pill ${view.pill.tone}`, text: view.pill.text }),
+    el('div', { class: 'usage-head dialog-header' }, [
+      el('h2', { text: view.title }),
+      el('span', { class: 'pill', 'data-tone': resourcePillTone(view.pill.tone), text: view.pill.text }),
       ...(view.observed ? [el('span', { class: 'usage-observed', text: view.observed })] : []),
     ]),
     ...(view.pressure ? [el('section', { class: 'usage-section usage-pressure' }, [
@@ -406,7 +408,7 @@ function providerDialog(view) {
       el('div', { class: 'usage-rows', role: 'list' },
         view.rows.length ? view.rows.map(windowRow) : [el('p', { class: 'usage-note', text: 'No usage windows reported.' })]),
     ]),
-    el('div', { class: 'usage-foot' }, [
+    el('div', { class: 'usage-foot dialog-actions' }, [
       el('span', { class: 'usage-foot-text', text: view.held.length ? `Held back: ${view.held.join(', ')}` : 'No crews held back' }),
       pinButton(),
     ]),
@@ -415,14 +417,14 @@ function providerDialog(view) {
 
 function allDialog(view) {
   return [
-    el('div', { class: 'usage-head' }, [
-      el('span', { class: 'usage-title', text: view.title }),
+    el('div', { class: 'usage-head dialog-header' }, [
+      el('h2', { text: view.title }),
       el('span', { class: 'usage-observed', text: view.count }),
     ]),
     el('section', { class: 'usage-section' }, [
       el('div', { class: 'usage-rows', role: 'list' }, view.rows.map(providerRow)),
     ]),
-    el('div', { class: 'usage-foot' }, [
+    el('div', { class: 'usage-foot dialog-actions' }, [
       el('span', { class: 'usage-foot-text', text: 'Worst first' }),
       pinButton(),
     ]),
@@ -467,8 +469,12 @@ function fillDialog() {
   const dialog = dialogNode();
   dialog.setAttribute('role', 'dialog');
   dialog.setAttribute('aria-label', view.label);
-  dialog.className = `usage-dialog ${view.key === ALL_KEY ? 'usage-dialog-all' : 'usage-dialog-provider'}`;
-  dialog.replaceChildren(...(view.key === ALL_KEY ? allDialog(view) : providerDialog(view)));
+  dialog.className = `usage-dialog dialog-surface ${view.key === ALL_KEY ? 'usage-dialog-all' : 'usage-dialog-provider'}`;
+  const [header, ...rest] = view.key === ALL_KEY ? allDialog(view) : providerDialog(view);
+  const actions = rest.pop();
+  ui.closeButton = escCloseButton('Close usage (Esc)', { onClick: () => closeUsage({ restoreFocus: true }) });
+  header.append(ui.closeButton);
+  dialog.replaceChildren(header, el('div', { class: 'dialog-body' }, rest), actions);
 }
 
 function closeUsage({ restoreFocus = false } = {}) {
@@ -549,10 +555,10 @@ function bindChip(node, key) {
     else openUsage(key, node, true);
   });
   on(node, 'keydown', event => {
-    // Tab moves into the open dialog, which sits at the end of the page.
-    if (event.key !== 'Tab' || event.shiftKey || ui.key !== key || !ui.pinButton) return;
+    // Tab enters the dialog at its first control, the header's Close button.
+    if (event.key !== 'Tab' || event.shiftKey || ui.key !== key || !ui.closeButton) return;
     event.preventDefault?.();
-    ui.pinButton.focus?.();
+    ui.closeButton.focus?.();
   });
 }
 
@@ -573,9 +579,22 @@ function bindOnce() {
   });
   on(dialog, 'keydown', event => {
     if (event.key !== 'Tab' || !ui.anchor) return;
-    // Back to the chip; a forward Tab then continues past it.
-    if (event.shiftKey) event.preventDefault?.();
-    focusQuietly(ui.anchor);
+    const active = document.activeElement;
+    if (event.shiftKey) {
+      if (active === ui.closeButton) {
+        event.preventDefault?.();
+        focusQuietly(ui.anchor);
+      } else if (active === ui.pinButton) {
+        event.preventDefault?.();
+        ui.closeButton?.focus?.();
+      }
+    } else if (active === ui.closeButton) {
+      event.preventDefault?.();
+      ui.pinButton?.focus?.();
+    } else if (active === ui.pinButton) {
+      event.preventDefault?.();
+      focusQuietly(ui.anchor);
+    }
   });
   on(document, 'keydown', event => {
     if (event.key === 'Escape' && ui.key) closeUsage({ restoreFocus: true });
@@ -648,7 +667,8 @@ export function renderProviderUsage(payload, host = document.getElementById('pro
 
   const refocus = document.activeElement?.dataset?.usageKey;
   // Changed readings rebuild the open dialog, and with it the focused control.
-  const dialogFocused = !!ui.key && !!dialogNode().contains?.(document.activeElement);
+  const focusedDialogControl = document.activeElement === ui.closeButton ? 'close'
+    : document.activeElement === ui.pinButton ? 'pin' : null;
   // The rebuilt chips are under the same pointer, but the removed ones never
   // report it leaving.
   ui.pointerInside = !!(ui.key && (ui.anchor?.matches?.(':hover') || dialogNode().matches?.(':hover')));
@@ -676,7 +696,8 @@ export function renderProviderUsage(payload, host = document.getElementById('pro
       setHidden(dialogNode(), false);
       placeDialog();
       syncExpanded();
-      if (dialogFocused) focusQuietly(ui.pinButton);
+      if (focusedDialogControl === 'close') ui.closeButton?.focus?.();
+      else if (focusedDialogControl === 'pin') ui.pinButton?.focus?.();
     } else closeUsage();
   } else if (ui.key) closeUsage();
   if (refocus && ui.chips.has(refocus)) focusQuietly(ui.chips.get(refocus).find(node => node === visibleChip(refocus)));

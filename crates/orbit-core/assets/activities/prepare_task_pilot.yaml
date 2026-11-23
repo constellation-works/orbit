@@ -37,6 +37,13 @@ spec:
     assessment, holding findings, source revision and field-level task diff),
     which its partition repeats under `rechecks`. `full_pilot` forces full
     pilots; `recheck_max_age_hours` bounds a re-checked assessment's age.
+    For a selector-free `comment-hygiene` chore, preparation also runs the
+    deterministic batch-selection route against the pinned source revision,
+    carried attempt ledgers and open-task footprints, attaching
+    `comment_hygiene_batch` on the task snapshot and repeating it under the
+    partition's `comment_hygiene_batches`. Missing, unreadable or malformed
+    required ledger or footprint evidence emits `status: "hold"` with empty
+    selectors and empty ranked candidates rather than provisional picks.
   input_schema_json:
     type: object
     properties:

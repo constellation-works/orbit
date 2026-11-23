@@ -8,9 +8,11 @@
 //! decision cannot be made in 154 places any more — it is made here, once,
 //! from the sink `main` already resolved.
 //!
-//! Everything that is not a record goes to stderr in every mode (spec §5):
-//! empty-state lines, dropped-column notices, trailing notices such as a
-//! truncation count, and progress.
+//! Non-record notices follow spec §5. Ordinary notices and table trailing
+//! notices go to stderr in every mode. A `TerminalNotice` whose text is
+//! already in the structured document goes to stderr only in table and plain
+//! modes; `json` and `ndjson` carry the text in the document without a
+//! duplicate. Progress follows spec §6.
 
 use std::io::Write;
 
@@ -79,6 +81,7 @@ fn table_notices(view: &View) -> Vec<&str> {
             | Block::ConfigShow(_)
             | Block::Prose(_)
             | Block::Notice(_)
+            | Block::TerminalNotice(_)
             | Block::Attention(_)
             | Block::DoctorFindings(_) => None,
         })
@@ -87,9 +90,11 @@ fn table_notices(view: &View) -> Vec<&str> {
         .collect()
 }
 
-/// The non-record notices carried as blocks, if the view has any. Read here
-/// rather than inside `emit_human` so a `json`/`ndjson` caller — which never
-/// reaches `emit_human` — still receives them on stderr (spec §5).
+/// The ordinary non-record notices carried as blocks, if the view has any.
+/// Read here rather than inside `emit_human` so a `json`/`ndjson` caller —
+/// which never reaches `emit_human` — still receives them on stderr (spec
+/// §5). `TerminalNotice` is excluded because its text is already in the
+/// document and it is written to stderr only in table and plain modes.
 fn block_notices(view: &View) -> Vec<&str> {
     let View::Blocks(blocks) = view else {
         return Vec::new();
@@ -102,6 +107,7 @@ fn block_notices(view: &View) -> Vec<&str> {
             | Block::ConfigShow(_)
             | Block::Prose(_)
             | Block::Table(_)
+            | Block::TerminalNotice(_)
             | Block::Attention(_)
             | Block::DoctorFindings(_) => None,
         })
@@ -162,7 +168,9 @@ fn emit_human(doc: Value, view: View, sink: &OutputSink) -> Result<(), OrbitErro
                         }
                     }
                     Block::Prose(text) => println!("{}", sink.wrap_prose(&text)),
-                    Block::Notice(text) => eprintln!("{}", sink.wrap_prose(&text)),
+                    Block::Notice(text) | Block::TerminalNotice(text) => {
+                        eprintln!("{}", sink.wrap_prose(&text));
+                    }
                     Block::Table(table) => truncated |= table.emit(sink),
                     Block::Attention(rows) => {
                         if sink.mode() == OutputMode::Table {
@@ -189,15 +197,21 @@ fn emit_human(doc: Value, view: View, sink: &OutputSink) -> Result<(), OrbitErro
                             let findings = doctor_findings(&rows, sink.width());
                             if !findings.is_empty() {
                                 println!("\n{findings}");
-                                if truncated {
-                                    println!("{}", sink.wrap_prose(
-                                        "\nTable details shortened. Use --format plain or --json for full output."
-                                    ));
-                                }
                             }
                         }
                     }
                 }
+            }
+            if truncated {
+                // Advisory and best effort: the table already reached stdout, so a
+                // closed stderr must not turn a successful render into a panic.
+                let _ = writeln!(
+                    std::io::stderr(),
+                    "{}",
+                    sink.wrap_prose(
+                        "\nTable details shortened. Use --format plain or --json for full output."
+                    )
+                );
             }
             Ok(())
         }

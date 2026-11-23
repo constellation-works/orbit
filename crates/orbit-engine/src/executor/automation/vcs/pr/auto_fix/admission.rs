@@ -82,9 +82,12 @@ pub(in crate::executor::automation::vcs::pr) fn admit<H: RuntimeHost + ?Sized>(
         blocker,
         allowed_crews: auto_fix.allowed_crews.clone(),
     })?;
-    let decision = match admission {
+    let (decision, source_repairs) = match admission {
         PrAutoFixAdmission::Refused(reason) => return Err(verdict::stopped(pr_number, &reason)),
-        PrAutoFixAdmission::Decided(decision) => decision,
+        PrAutoFixAdmission::Decided {
+            decision,
+            source_repairs,
+        } => (decision, source_repairs),
     };
     match decision {
         PrAutoFixDecision::Admit(attempt) | PrAutoFixDecision::Continue(attempt) => {
@@ -102,10 +105,11 @@ pub(in crate::executor::automation::vcs::pr) fn admit<H: RuntimeHost + ?Sized>(
         }
         PrAutoFixDecision::Duplicate(previous) => {
             let remedy = if blocker == PrAutoFixBlocker::FailedChecks {
-                ". If a repair is running, let it finish. If none ran because the job lacked \
-                 step_failure_recovery, configure recovery for future heads, repair and publish \
-                 a new head, then start a new delivery attempt; adding recovery alone cannot \
-                 re-admit this head. Further repairs require remaining per-PR budget"
+                ". If that run is still running, let it finish; once it ends (including held \
+                 without step_failure_recovery), starting a new authorized delivery run on the \
+                 same head with step_failure_recovery configured admits another repair attempt \
+                 while per-PR budget remains, or repair and publish a new head and start a new \
+                 delivery attempt. Exhausting the per-PR budget fails the run"
             } else {
                 ""
             };
@@ -125,7 +129,7 @@ pub(in crate::executor::automation::vcs::pr) fn admit<H: RuntimeHost + ?Sized>(
             ))
         }
         PrAutoFixDecision::Exhausted(attempts) => {
-            let spent = attempts
+            let watcher_evidence = attempts
                 .iter()
                 .map(|attempt| {
                     format!(
@@ -138,11 +142,11 @@ pub(in crate::executor::automation::vcs::pr) fn admit<H: RuntimeHost + ?Sized>(
                 })
                 .collect::<Vec<_>>()
                 .join("; ");
+            let total = attempts.len().saturating_add(source_repairs as usize);
             Err(verdict::stopped(
                 pr_number,
                 &format!(
-                    "auto_fix_budget_exhausted: its {} repairs are spent ({spent})",
-                    attempts.len()
+                    "auto_fix_budget_exhausted: its {total} repairs are spent ({source_repairs} source-repair reservations; watcher attempts: {watcher_evidence})"
                 ),
             ))
         }

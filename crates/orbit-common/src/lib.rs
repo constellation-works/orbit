@@ -34,13 +34,14 @@ pub mod test_fixtures;
 pub mod test_process;
 
 pub use error::{
-    ArtifactOrigin, ArtifactOriginMode, CandidateAbsorbed, ClaimRefusalKind, ConflictedFile,
-    DecisionRefusalCode, DependencyNotDelivered, ForceOverridableKind, ForceOverridableRefusal,
-    ForgePushHoldFailure, HostRegistryCode, JSON_RPC_INVALID_PARAMS_CODE, LOCK_BUSY_ERROR_CODE,
-    NotFoundKind, NoticeRefusalCode, OrbitError, PrivateVcsFailure, PrivateVcsFailureClass,
-    ProviderReadThrottle, RecoverableVcsConflict, RemoteToolCode, SourceRepairAuthorityRefusal,
-    SourceRepairReaderText, SourceRepairRunStateRefusal, SqliteContention, StorageLayer,
-    TaskPilotRefusalCode, UpgradeAdmissionRefusal, UpgradeAdmissionRefusalKind,
+    ArtifactOrigin, ArtifactOriginMode, BoundWorkspace, BoundWorkspaceRemedy, CandidateAbsorbed,
+    ClaimRefusalKind, ConflictedFile, DecisionRefusalCode, DependencyNotDelivered,
+    ForceOverridableKind, ForceOverridableRefusal, ForgePushHoldFailure, HostRegistryCode,
+    JSON_RPC_INVALID_PARAMS_CODE, LOCK_BUSY_ERROR_CODE, NotFoundKind, NoticeRefusalCode,
+    OrbitError, PrivateVcsFailure, PrivateVcsFailureClass, ProviderReadThrottle,
+    RecoverableVcsConflict, RemoteToolCode, SourceRepairAuthorityRefusal, SourceRepairReaderText,
+    SourceRepairRunStateRefusal, SqliteContention, StorageLayer, TaskPilotRefusalCode,
+    UnknownWorkspaceSelector, UpgradeAdmissionRefusal, UpgradeAdmissionRefusalKind,
     WorkflowEvidenceUnavailable, WorkspaceClaimHeld, is_lock_busy_message,
     source_repair_reader_text,
 };

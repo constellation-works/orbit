@@ -55,8 +55,9 @@ body {
   display: none;
   font-family: var(--sl-font-mono);
   font-size: var(--orbit-text-xs);
+  font-weight: 500;
   line-height: 1;
-  padding: 0.3rem 0.5rem;
+  padding: var(--orbit-space-1) var(--orbit-space-2);
   text-decoration: none;
   white-space: nowrap;
 }

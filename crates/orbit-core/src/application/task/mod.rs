@@ -202,10 +202,13 @@ pub(crate) use write_response::{
     task_fields_response_json_projected_hydrated, task_reference_status_index,
 };
 
-pub(crate) use external_merge::settled_merge_commit;
 pub use external_merge::{
     AutoLanding, ExternalMergeSettlement, ExternalMergeSettlementProfile, FOLLOW_UP_OWNER_OPERATOR,
     LANDING_FOLLOW_UP_EVENT, LandingFollowUp,
+};
+pub(crate) use external_merge::{
+    PullRequestMergeAttribution, audited_forge_merge, audited_private_vcs_merge,
+    settled_merge_commit,
 };
 pub(crate) use helpers::{SYSTEM_ACTOR_LABEL, TaskAttributionInput, assemble_task_attribution};
 pub use lifecycle::EXTERNAL_MERGE_SETTLED_EVENT;

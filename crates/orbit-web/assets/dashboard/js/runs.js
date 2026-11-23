@@ -17,7 +17,12 @@ const $ = (id) => document.getElementById(id);
 
 const CANCELLABLE_RUN_STATES = new Set(["pending", "running"]);
 const RESUMABLE_RUN_STATES = new Set(["failed", "interrupted", "timeout"]);
-const RUN_FILTERS = new Set(["all", "failed"]);
+const RUN_FILTERS = new Set(["running", "all", "failed"]);
+// Opening History shows what is in flight; All and Failed are the operator's choice.
+const DEFAULT_RUN_FILTER = "running";
+const RUN_FILTER_LABELS = [["running", "Running"], ["all", "All"], ["failed", "Failed"]];
+// Running lists pending and running runs: the API's `active` state.
+const IN_FLIGHT_RUN_STATES = new Set(["pending", "running"]);
 // One delivered task runs these three pipelines back to back; the list folds
 // them into one group per task.
 const PIPELINE_GROUP_JOBS = new Set(["task_auto_pipeline", "task_gate_pipeline", "task_pr_pipeline"]);
@@ -29,8 +34,6 @@ const RUN_SORT_DEFAULT_DIR = {
   job: "asc",
   task: "asc",
   run_id: "asc",
-  denials: "desc",
-  tool_fails: "desc",
   duration: "desc",
   state: "asc",
 };
@@ -64,20 +67,15 @@ function parseRunIdParam(value) {
 
 function runFiltersFromAddress() {
   const params = new URLSearchParams(window.location.search);
-  const state = params.get("run_state") || "all";
+  const state = params.get("run_state") || DEFAULT_RUN_FILTER;
   return {
-    state: RUN_FILTERS.has(state) ? state : "all",
+    state: RUN_FILTERS.has(state) ? state : DEFAULT_RUN_FILTER,
     taskId: parseRunIdParam(params.get("task_id")),
     jobId: parseRunIdParam(params.get("job_id")),
   };
 }
 
-/// Take the state filter and the task or job id filter from the address, for
-/// a load, Back or Forward onto Jobs › History. The chips, search field, list
-/// and address then agree: a change reloads the list, and an address that
-/// named something unusable is rewritten in place to what is shown.
-export function adoptRunFiltersFromAddress() {
-  const { state, taskId, jobId } = runFiltersFromAddress();
+function applyRunFilters({ state, taskId, jobId }) {
   const changed = state !== runFilter || taskId !== runTaskId || jobId !== runJobId;
   runFilter = state;
   runTaskId = taskId;
@@ -90,11 +88,30 @@ export function adoptRunFiltersFromAddress() {
   if (hasCtx("markRunsLoading")) showRunsLoading();
 }
 
+/// Take the state filter and the task or job id filter from the address, for
+/// a load, Back or Forward onto Jobs › History. The chips, search field, list
+/// and address then agree: a change reloads the list, and an address that
+/// named something unusable is rewritten in place to what is shown.
+export function adoptRunFiltersFromAddress() {
+  applyRunFilters(runFiltersFromAddress());
+}
+
 // Task ids are PREFIX-digits with a 2-5 letter prefix outside the ADR, L,
 // and F artifact namespaces. Anything else in the search field is a job id.
 function isTaskId(value) {
   const match = /^([A-Z]{2,5})-(\d+)$/.exec(value);
   return Boolean(match) && !["ADR", "L", "F"].includes(match[1]);
+}
+
+/// Show the unfiltered Running filter and write it to the address: the retired
+/// Jobs › Live links and the rail's in-flight count open History through this.
+export function selectRunningRunFilter() {
+  applyRunFilters({ state: DEFAULT_RUN_FILTER, taskId: "", jobId: "" });
+}
+
+// The `state` the job-runs API takes for the selected filter.
+function runStateParam() {
+  return runFilter === "running" ? "active" : runFilter;
 }
 
 export function runsQueryKey() {
@@ -106,11 +123,12 @@ export function runsQueryKey() {
 export function jobRunsQuery(limit) {
   const params = new URLSearchParams();
   params.set("limit", String(limit));
-  params.set("state", runFilter);
+  params.set("state", runStateParam());
   if (runTaskId) params.set("task_id", runTaskId);
   if (runJobId) params.set("job_id", runJobId);
+  // What is in flight now is not bounded by the history window.
   const selected = getWindow();
-  if (selected && selected !== "all") params.set("since", selected);
+  if (runFilter !== "running" && selected && selected !== "all") params.set("since", selected);
   return params.toString();
 }
 
@@ -680,19 +698,6 @@ function frictionRowText(row) {
     .toLowerCase();
 }
 
-function frictionRowLooksDenied(row) {
-  const text = frictionRowText(row).replace(/[_-]/g, " ");
-  return /\bden(?:y|ied|ial|ials)\b/.test(text) || text.includes("policy deny");
-}
-
-function frictionRowLooksToolFail(row) {
-  const exitCode = coerceNumber(row && row.exit_code);
-  if (exitCode != null && exitCode !== 0) return true;
-  if (firstBooleanField(row, ["timed_out", "timeout"])) return true;
-  const text = frictionRowText(row).replace(/[_-]/g, " ");
-  return text.includes("tool") && /\b(fail|failed|failure|timeout|timed out)\b/.test(text);
-}
-
 function frictionRowLooksLongRun(row) {
   if (firstBooleanField(row, ["long_run", "is_long_run", "long_running"])) return true;
   const text = frictionRowText(row).replace(/[_-]/g, " ");
@@ -701,37 +706,12 @@ function frictionRowLooksLongRun(row) {
 
 function emptyRunFrictionSummary(run) {
   return {
-    denials: 0,
-    toolFails: 0,
     durationMs: coerceNumber(run && run.duration_ms),
     longRun: false,
   };
 }
 
 function addFrictionRowToSummary(summary, row) {
-  const denials = firstNumericField(row, [
-    "denials",
-    "denial_count",
-    "policy_denials",
-  ]);
-  if (denials != null) {
-    summary.denials += denials;
-  } else if (frictionRowLooksDenied(row)) {
-    summary.denials += 1;
-  }
-
-  const toolFails = firstNumericField(row, [
-    "tool_fails",
-    "tool_failures",
-    "tool_fail_count",
-    "failed_tool_calls",
-  ]);
-  if (toolFails != null) {
-    summary.toolFails += toolFails;
-  } else if (frictionRowLooksToolFail(row)) {
-    summary.toolFails += 1;
-  }
-
   const durationMs = firstNumericField(row, [
     "duration_ms",
     "run_duration_ms",
@@ -744,7 +724,15 @@ function addFrictionRowToSummary(summary, row) {
   summary.longRun = summary.longRun || frictionRowLooksLongRun(row);
 }
 
+// `frictionRows === null` means the diagnostics friction read failed: the runs
+// stay listed and long-run flags are marked unavailable.
 export function mergeRunsWithFriction(runs, frictionRows) {
+  if (frictionRows === null) {
+    return (runs || []).map((run) => ({
+      ...run,
+      diagnostics_friction: { ...emptyRunFrictionSummary(run), unavailable: true },
+    }));
+  }
   const byRun = new Map();
   for (const row of frictionRows || []) {
     const runId = frictionRunId(row);
@@ -784,7 +772,6 @@ function runDurationInfo(run) {
 }
 
 function runSortValue(run, key) {
-  const friction = runFriction(run);
   switch (key) {
     case "when":
       return runTimestampValue(run);
@@ -794,10 +781,6 @@ function runSortValue(run, key) {
       return (run.task_ids || []).join(" ");
     case "run_id":
       return run.run_id || "";
-    case "denials":
-      return friction.denials || 0;
-    case "tool_fails":
-      return friction.toolFails || 0;
     case "duration": {
       const { durationMs } = runDurationInfo(run);
       return durationMs || 0;
@@ -827,12 +810,13 @@ function sortedRunsForDisplay(runs) {
 
 function runMatchesFilter(run) {
   if (runFilter === "failed") return RESUMABLE_RUN_STATES.has(run && run.state);
+  if (runFilter === "running") return IN_FLIGHT_RUN_STATES.has(run && run.state);
   return true;
 }
 
 function persistRunFilters() {
   const url = new URL(window.location.href);
-  if (runFilter === "all") url.searchParams.delete("run_state");
+  if (runFilter === DEFAULT_RUN_FILTER) url.searchParams.delete("run_state");
   else url.searchParams.set("run_state", runFilter);
   if (runTaskId) url.searchParams.set("task_id", runTaskId);
   else url.searchParams.delete("task_id");
@@ -854,7 +838,7 @@ function showRunsLoading() {
 }
 
 export function setRunFilter(value) {
-  runFilter = RUN_FILTERS.has(value) ? value : "all";
+  runFilter = RUN_FILTERS.has(value) ? value : DEFAULT_RUN_FILTER;
   persistRunFilters();
   clearRunsFetchTimer();
   showRunsLoading();
@@ -893,6 +877,15 @@ function applyRunQuery(raw) {
   if (runQueryTimer && typeof runQueryTimer.unref === "function") runQueryTimer.unref();
 }
 
+// The Running header: tasks with work in flight and the runs behind them.
+function formatInFlightCount(runs, meta) {
+  const tasks = new Set(runs.flatMap(runTaskIds)).size;
+  const plural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
+  if (!runs.length) return "nothing in flight";
+  const base = `${plural(tasks, "task")}, ${plural(runs.length, "run")} in flight`;
+  return meta && meta.truncated && Number.isFinite(meta.total) ? `${base} · ${meta.total} total, newest shown` : base;
+}
+
 export function formatRunCount(shown, fetched, meta) {
   const capped = hasCtx("getRunsLimitCapped") && _runsCtx.getRunsLimitCapped();
   const limit = `${capped ? "server limit" : "limit"} ${meta?.limit || fetched}`;
@@ -917,7 +910,7 @@ function runsAreLoading(runs, meta) {
   if (!runs || runs.length === 0) return true;
   if (meta && meta.runsQuery && meta.runsQuery !== runsQueryKey()) return true;
   const loadedState = meta && meta.state;
-  return Boolean(loadedState && loadedState !== runFilter);
+  return Boolean(loadedState && loadedState !== runStateParam());
 }
 
 function windowPhrase() {
@@ -934,13 +927,15 @@ function runsEmptyText() {
   if (runFilter === "failed") {
     return `No failed, timed-out, or interrupted job runs${extra} (${windowPhrase()}).`;
   }
+  if (runFilter === "running") return `Nothing in flight${extra} in this workspace.`;
   return `No job runs${extra} in this workspace (${windowPhrase()}).`;
 }
 
 function runsScopeText() {
   let lead = "Every job run";
   if (runFilter === "failed") lead = "Failed, timed-out, and interrupted job runs";
-  const qualifiers = ["newest first", windowPhrase()];
+  if (runFilter === "running") lead = "Pending and running job runs";
+  const qualifiers = runFilter === "running" ? ["newest first", "whatever the time window"] : ["newest first", windowPhrase()];
   if (runTaskId) qualifiers.push(`task ${runTaskId}`);
   if (runJobId) qualifiers.push(`job ${runJobId}`);
   return `${lead}, ${qualifiers.join(", ")}.`;
@@ -1008,10 +1003,12 @@ function runsLoadingSkeleton() {
 }
 
 function runFilterControls() {
-  const controls = el("div", { class: "runs-filter", title: "Filter runs by state" });
+  // The group's name is its aria-label, not a title: a container title would
+  // show as every button's native tooltip (STD-07 §R41).
+  const controls = el("div", { class: "runs-filter" });
   controls.setAttribute("role", "group");
   controls.setAttribute("aria-label", "Filter runs by state");
-  for (const [value, label] of [["all", "All"], ["failed", "Failed"]]) {
+  for (const [value, label] of RUN_FILTER_LABELS) {
     const button = el("button", {
       class: `runs-filter-button${runFilter === value ? " active" : ""}`,
       text: label,
@@ -1039,7 +1036,7 @@ function runsQueryInput() {
 }
 
 function runsWindowControls() {
-  const controls = el("div", { class: "runs-window", title: "Time window" });
+  const controls = el("div", { class: "runs-window" });
   controls.setAttribute("role", "group");
   controls.setAttribute("aria-label", "Time window");
   const selected = getWindow();
@@ -1066,7 +1063,8 @@ function runsToolbar() {
   toolbar.dataset.hash = `runs-toolbar-${runFilter}-${getWindow()}`;
   toolbar.appendChild(runFilterControls());
   toolbar.appendChild(runsQueryInput());
-  toolbar.appendChild(runsWindowControls());
+  // Running ignores the window, so its control is withdrawn rather than left inert.
+  if (runFilter !== "running") toolbar.appendChild(runsWindowControls());
   return toolbar;
 }
 
@@ -1083,6 +1081,18 @@ function unavailableSourcesNode(unavailable) {
   return node;
 }
 
+function frictionUnavailableNode() {
+  const node = el("div", {
+    class: "runs-source-warning runs-friction-warning",
+    role: "status",
+    "aria-live": "polite",
+    text: "Long-run flags are unavailable: diagnostics friction could not be loaded. Runs are shown without them.",
+  });
+  node.dataset.key = "runs-friction-warning";
+  node.dataset.hash = "runs-friction-warning";
+  return node;
+}
+
 function setRunSort(key) {
   if (runSort.key === key) {
     runSort = { key, dir: runSort.dir === "asc" ? "desc" : "asc" };
@@ -1094,8 +1104,7 @@ function setRunSort(key) {
 }
 
 function runHeaderCell(label, key, opts = {}) {
-  const classes = [opts.class, opts.num ? "num" : ""].filter(Boolean).join(" ");
-  const cell = el("span", { class: classes, style: opts.style });
+  const cell = el("span", { class: opts.class || "", style: opts.style });
   const button = el("button", {
     class: `runs-sort${runSort.key === key ? " active" : ""}`,
     text: label,
@@ -1116,18 +1125,15 @@ function runHeaderCell(label, key, opts = {}) {
   return cell;
 }
 
-function runCountCell(value, kind) {
-  return el("span", {
-    class: `num ${kind}${value > 0 ? " hot" : ""}`,
-    text: String(value || 0),
-  });
+function runDurationCell(run) {
+  return durationCell(runDurationInfo(run));
 }
 
-function runDurationCell(run) {
-  const { durationMs, isLive, longRun } = runDurationInfo(run);
+// A duration figure with its live marker and long-run flag; `title` is optional.
+function durationCell({ durationMs, isLive, longRun }, title) {
   const formatted = fmtDuration(durationMs);
   const text = (isLive && formatted !== "-") ? `${formatted} ↻` : formatted;
-  return el("span", { class: "duration" }, [
+  return el("span", { class: "duration", title }, [
     text,
     longRun
       ? el("span", { class: "long-run-flag", text: "!", title: "Long run" })
@@ -1136,14 +1142,15 @@ function runDurationCell(run) {
 }
 
 // Keep workspace scope in the URL, including when an aggregate row opens a task.
-export function runTaskLinks(run) {
-  const tasks = Array.isArray(run.tasks) ? run.tasks : (run.task_ids || []).map(id => ({ id }));
+export function runTaskLinks(run, { omit = "" } = {}) {
+  const tasks = (Array.isArray(run.tasks) ? run.tasks : (run.task_ids || []).map(id => ({ id }))).filter((task) => task.id !== omit);
   const cell = el("span", { class: "run-tasks" });
   if (tasks.length === 0) cell.textContent = "—";
   for (const task of tasks) {
-    const link = el("a", { class: "run-task-link", title: task.title ? `${task.id}: ${task.title}` : task.id }, [
+    const linkAttrs = task.title ? { class: "run-task-link", title: task.title } : { class: "run-task-link" };
+    const link = el("a", linkAttrs, [
       el("span", { class: "run-task-id", text: task.id }),
-      task.title ? el("span", { class: "run-task-title", text: task.title }) : null,
+      task.title ? el("span", { class: "run-task-title", text: task.title, title: task.title }) : null,
     ]);
     bindTaskLink(link, task.id, { workspace: run.workspace_id || getWorkspace() });
     cell.appendChild(link);
@@ -1211,6 +1218,7 @@ function runFailureHash(run) {
 // run sorts. Only the loaded page is grouped: a triplet split across Load more
 // pages folds once its other runs arrive.
 function groupRunsForDisplay(sorted) {
+  if (runFilter === "running") return groupInFlightRunsByTask(sorted);
   const entries = [];
   const groups = new Map();
   // Form repeats in time order before applying the operator's sort. A
@@ -1258,6 +1266,43 @@ function groupRunsForDisplay(sorted) {
   return entries
     .flatMap((entry) => (entry.runs && !entry.repeatedFailure ? splitAttempts(entry) : [entry]))
     .map((entry) => (entry.runs && entry.runs.length === 1 ? { run: entry.runs[0] } : entry));
+}
+
+// The Running filter groups every in-flight run under each task it names, so
+// a task's pipeline and custom jobs sit together and a run shared by several
+// tasks appears under each. A task with a single run, and a run with no task,
+// stay plain rows; a run is listed flat once, and never beside a group that
+// already holds it.
+function groupInFlightRunsByTask(sorted) {
+  const entries = [];
+  const groups = new Map();
+  for (const run of sorted) {
+    const taskIds = runTaskIds(run);
+    if (!taskIds.length) {
+      entries.push({ run });
+      continue;
+    }
+    for (const taskId of taskIds) {
+      const key = `running:${run.workspace_id || getWorkspace() || ""}:${taskId}`;
+      let group = groups.get(key);
+      if (!group) {
+        group = { key, taskId, inFlight: true, runs: [] };
+        groups.set(key, group);
+        entries.push(group);
+      }
+      group.runs.push(run);
+    }
+  }
+  const grouped = new Set();
+  for (const group of groups.values()) if (group.runs.length > 1) group.runs.forEach((run) => grouped.add(run));
+  const flat = new Set();
+  return entries.filter((entry) => {
+    if (!entry.inFlight || entry.runs.length > 1) return true;
+    const [run] = entry.runs;
+    if (grouped.has(run) || flat.has(run)) return false;
+    flat.add(run);
+    return true;
+  }).map((entry) => (entry.inFlight && entry.runs.length === 1 ? { run: entry.runs[0] } : entry));
 }
 
 // The listed run that dispatched this one, or "" when none of `byId` did.
@@ -1324,6 +1369,26 @@ function rootCauseFailedAtCell(cause) {
   return cell;
 }
 
+// The one task an in-flight group stands for, shaped as a run for runTaskLinks.
+function groupTaskRun(group) {
+  const first = group.runs[0];
+  const ref = group.runs.flatMap((run) => (Array.isArray(run.tasks) ? run.tasks : []))
+    .find((task) => task && task.id === group.taskId && task.title) || { id: group.taskId };
+  return { tasks: [ref], workspace_id: first.workspace_id };
+}
+
+// An in-flight group's elapsed time is its longest run's, the figure that run's
+// own row shows, so the header and the rows beneath it agree.
+function groupDurationInfo(runs) {
+  const infos = runs.map(runDurationInfo);
+  const durations = infos.map((info) => info.durationMs).filter((ms) => Number.isFinite(ms));
+  return {
+    durationMs: durations.length ? Math.max(...durations) : null,
+    isLive: infos.some((info) => info.isLive),
+    longRun: infos.some((info) => info.longRun),
+  };
+}
+
 function runGroupRow(group, attributed, listed) {
   const { runs, key } = group;
   const expanded = expandedRunGroups.has(key);
@@ -1331,13 +1396,11 @@ function runGroupRow(group, attributed, listed) {
   const latest = runs.reduce((a, b) => (runTimestampValue(b) > runTimestampValue(a) ? b : a));
   const ts = latest.finished_at || latest.started_at || latest.scheduled_at || latest.created_at;
   const failed = runs.filter(runIsResumable);
-  const frictions = runs.map(runFriction);
-  const denials = frictions.reduce((sum, f) => sum + (f.denials || 0), 0);
-  const toolFails = frictions.reduce((sum, f) => sum + (f.toolFails || 0), 0);
   const jobNames = runs.map((run) => run.job_id).join(", ");
+  const elapsed = group.inFlight ? groupDurationInfo(runs) : null;
   const toggle = el("button", {
     class: "id run-group-toggle",
-    text: group.repeatedFailure ? `${expanded ? "▾" : "▸"} ${first.job_id}` : `${expanded ? "▾" : "▸"} ${runs.length} pipeline runs`,
+    text: group.repeatedFailure ? `${expanded ? "▾" : "▸"} ${first.job_id}` : `${expanded ? "▾" : "▸"} ${runs.length} ${group.inFlight ? "runs" : "pipeline runs"}`,
     "aria-description": group.repeatedFailure ? `${expanded ? "Hide" : "Show"} the ${runs.length} individual failed runs of ${first.job_id}` : `${expanded ? "Hide" : "Show"} ${jobNames}`,
   });
   const failure = group.repeatedFailure ? { run: first } : groupFailure(group, failed, listed);
@@ -1355,26 +1418,28 @@ function runGroupRow(group, attributed, listed) {
   const explained = failure && failure.run ? [failure.run, ...failed.filter((run) => run !== failure.run)] : failed;
   if (!group.repeatedFailure && explained.length > 1) failedAt.title = explained.map((run) => `${run.job_id}\n${runFailure(run).title}`).join("\n\n");
   const failureHash = failure ? (failure.run ? `${runIdentity(failure.run)}:${runFailureHash(failure.run)}` : JSON.stringify(failure.cause)) : "";
+  // No row title: it would leak onto the toggle and links inside the row
+  // (STD-07 §R41). The toggle's description names the group's runs.
   const row = el("div", {
     class: `runs-row runs-group${attributed ? " workspace-attributed" : ""}`,
-    title: group.repeatedFailure ? `${runs.length} identical failures of ${first.job_id}` : `${runs.length} pipeline runs for this task: ${jobNames}`,
   }, [
     el("span", { class: "state" }, [stateCell(runGroupState(runs))]),
     attributed ? el("span", { class: "run-workspace", text: first.workspace_name || first.workspace_id, title: first.workspace_id }) : null,
     group.repeatedFailure ? el("span", { class: "run-repeat-job" }, [toggle,
       el("span", { class: "run-group-count", text: `${runs.length} identical failures` }),
     ]) : toggle,
-    group.repeatedFailure ? el("span", { class: "run-tasks", text: "—" }) : runTaskLinks(first),
+    group.repeatedFailure ? el("span", { class: "run-tasks", text: "—" }) : runTaskLinks(group.inFlight ? groupTaskRun(group) : first),
     failedAt,
-    el("span", { class: "run-id-cell" }, [el("span", { class: "run-group-count", text: group.repeatedFailure ? "—" : `${runs.length} runs` })]),
+    // Group rows have no single run id; keep the track occupied and blank.
+    el("span", { class: "run-id-cell", "aria-hidden": "true" }),
     el("span", { class: "when", text: formatAge(ts), title: ts ? formatDateTime(ts) : "" }),
-    runCountCell(denials, "denials"),
-    runCountCell(toolFails, "tool-fails"),
-    el("span", { class: "duration", text: "—" }),
+    elapsed
+      ? durationCell(elapsed, "Elapsed time of the group's longest run")
+      : el("span", { class: "duration", text: "—" }),
     el("span", { class: "run-actions" }),
   ]);
   row.dataset.key = `group-${key}`;
-  row.dataset.hash = `group-${key}-${expanded}-${ts}-${denials}-${toolFails}-${JSON.stringify(first.tasks)}-${runs.map((run) => `${runIdentity(run)}:${run.state}:${runFailureHash(run)}`).join("|")}-${failureHash}`;
+  row.dataset.hash = `group-${key}-${expanded}-${ts}-${formatAge(ts)}-${JSON.stringify(group.inFlight ? groupTaskRun(group).tasks : first.tasks)}-${runs.map((run) => `${runIdentity(run)}:${run.state}:${runFailureHash(run)}`).join("|")}-${failureHash}${elapsed ? `-${fmtDuration(elapsed.durationMs)}-${elapsed.isLive}-${elapsed.longRun}` : ""}`;
   row.style.cursor = "pointer";
   makeRowDisclosure(row, toggle, {
     expanded,
@@ -1387,7 +1452,30 @@ function runGroupRow(group, attributed, listed) {
   return row;
 }
 
-function runRow(r, attributed, body, { child = false } = {}) {
+// Child rows omit the state pill; a child whose state differs from its group's
+// shows that state as plain text in its state's colour.
+function runChildStateCell(state, groupState) {
+  if (!state || state === groupState) return el("span", { class: "state", "aria-hidden": "true" });
+  const label = el("span", { class: "run-child-state", text: state });
+  label.dataset.state = state;
+  return el("span", { class: "state" }, [label]);
+}
+
+// A child of an in-flight task group leaves out that group's task and keeps
+// links to the run's other tasks, so a shared run still names every task.
+function runRowTaskCell(r, { child, sharedTaskInHeader, groupTaskId }) {
+  if (child && groupTaskId) {
+    return runTaskIds(r).some((id) => id !== groupTaskId)
+      ? runTaskLinks(r, { omit: groupTaskId })
+      : el("span", { class: "run-tasks", "aria-hidden": "true" });
+  }
+  return child && sharedTaskInHeader ? el("span", { class: "run-tasks", "aria-hidden": "true" }) : runTaskLinks(r);
+}
+
+// A task group's header carries the one task all its children share, so those
+// children leave the Task cell empty. A repeated-failure header spans tasks, so
+// its children keep their own links.
+function runRow(r, attributed, body, { child = false, groupState = "", sharedTaskInHeader = false, groupTaskId = "", groupKey = "" } = {}) {
   const ts = r.finished_at || r.started_at || r.scheduled_at || r.created_at;
   const friction = runFriction(r);
   const { durationMs, isLive } = runDurationInfo(r);
@@ -1419,26 +1507,27 @@ function runRow(r, attributed, body, { child = false } = {}) {
   // clipped in a narrow column, so its tooltip is the full job name.
   const openButton = bindRunLink(el("a", { class: "id", text: r.job_id, title: r.job_id }), r.run_id, { workspace: r.workspace_id || getWorkspace() });
   const rowCells = [
-    el("span", { class: "state" }, [stateCell(r.state)]),
+    child ? runChildStateCell(r.state, groupState) : el("span", { class: "state" }, [stateCell(r.state)]),
     attributed ? el("span", { class: "run-workspace", text: r.workspace_name || r.workspace_id, title: r.workspace_id }) : null,
     openButton,
-    runTaskLinks(r),
+    runRowTaskCell(r, { child, sharedTaskInHeader, groupTaskId }),
     runFailedAtCell(r),
     runIdCell,
     el("span", { class: "when", text: formatAge(ts), title: ts ? formatDateTime(ts) : "" }),
-    runCountCell(friction.denials, "denials"),
-    runCountCell(friction.toolFails, "tool-fails"),
     runDurationCell(r),
     el("span", { class: "run-actions" }, [
       runIsCancellable(r) ? buildCancelRunButton(r, body) : null,
       runIsResumable(r) ? buildResumeRunButton(r, body) : null,
     ]),
   ];
-  const row = el("div", { class: `runs-row${attributed ? " workspace-attributed" : ""}${child ? " runs-group-child" : ""}`, title: `${r.run_id} (click to inspect)` }, rowCells);
-  row.dataset.key = `run-${runIdentity(r)}`;
-  row.dataset.hash = `${runIdentity(r)}-${ts}-${r.duration_ms}-${r.state}-${r.retry_source_run_id || ""}-${resumedAsId || ""}-${resumeRequestsInFlight.has(runIdentity(r)) ? "resuming" : ""}-${friction.denials}-${friction.toolFails}-${durationMs}-${formattedDuration}-${isLive ? "live" : ""}-${friction.longRun}-${child ? "child" : ""}-${runFailureHash(r)}`;
+  // No row title: it would show on the Cancel, Resume and Copy buttons inside
+  // the row (STD-07 §R41). The job link names the run it opens.
+  const row = el("div", { class: `runs-row${attributed ? " workspace-attributed" : ""}${child ? " runs-group-child" : ""}` }, rowCells);
+  // A run shared by several tasks is listed under each, so its key names the group.
+  row.dataset.key = `run-${runIdentity(r)}${groupKey ? `@${groupKey}` : ""}`;
+  row.dataset.hash = `${runIdentity(r)}-${ts}-${formatAge(ts)}-${r.duration_ms}-${r.state}-${r.retry_source_run_id || ""}-${resumedAsId || ""}-${resumeRequestsInFlight.has(runIdentity(r)) ? "resuming" : ""}-${durationMs}-${formattedDuration}-${isLive ? "live" : ""}-${friction.longRun}-${child ? `child:${groupState}` : ""}-${runFailureHash(r)}`;
   row.style.cursor = "pointer";
-  row.dataset.hash += `-${JSON.stringify(r.tasks)}-${JSON.stringify(r.task_ids)}`;
+  row.dataset.hash += `-${JSON.stringify(r.tasks)}-${JSON.stringify(r.task_ids)}-${child && sharedTaskInHeader ? "header-task" : ""}-${groupTaskId}`;
   // A run row opens the run detail view rather than disclosing inline, so its
   // button has no expansion state.
   makeRowDisclosure(row, openButton, { onToggle: (event) => {
@@ -1461,7 +1550,9 @@ export function renderRuns(runs) {
   const sorted = sortedRunsForDisplay(filtered);
   const top = sorted;
   if ($("runs-count")) {
-    $("runs-count").textContent = loading ? "…" : formatRunCount(top.length, sorted.length, meta);
+    $("runs-count").textContent = loading ? "…"
+      : runFilter === "running" ? formatInFlightCount(top, meta)
+        : formatRunCount(top.length, (runs || []).length, meta);
   }
   frag.appendChild(runsToolbar());
   frag.appendChild(runsScopeNote());
@@ -1503,8 +1594,6 @@ export function renderRuns(runs) {
     runHeaderCell("Task", "task"),
     runHeaderCell("Run ID", "run_id"),
     runHeaderCell("When", "when"),
-    runHeaderCell("Denials", "denials", { num: true }),
-    runHeaderCell("Tool fails", "tool_fails", { num: true }),
     runHeaderCell("Duration", "duration", { class: "duration", style: { textAlign: "right" } }),
     el("span", { class: "run-actions-header", text: "Actions", style: { textAlign: "right" } }),
   ];
@@ -1517,11 +1606,19 @@ export function renderRuns(runs) {
       frag.appendChild(runRow(entry.run, attributed, body));
       continue;
     }
+    const groupState = runGroupState(entry.runs);
     frag.appendChild(runGroupRow(entry, attributed, top));
     if (expandedRunGroups.has(entry.key)) {
-      for (const r of entry.runs) frag.appendChild(runRow(r, attributed, body, { child: true }));
+      for (const r of entry.runs) frag.appendChild(runRow(r, attributed, body, {
+        child: true,
+        groupState,
+        sharedTaskInHeader: !entry.repeatedFailure && !entry.inFlight,
+        groupTaskId: entry.inFlight ? entry.taskId : "",
+        groupKey: entry.inFlight ? entry.key : "",
+      }));
     }
   }
+  if (top.some((run) => runFriction(run).unavailable)) frag.appendChild(frictionUnavailableNode());
   syncNodes(body, Array.from(frag.children));
 }
 

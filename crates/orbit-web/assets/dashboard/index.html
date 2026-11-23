@@ -55,6 +55,7 @@
               <div id="global-search-popover" class="global-search-popover" hidden>
                 <div id="global-search-results" role="listbox" aria-label="Task results"></div>
                 <div id="global-search-status" class="global-search-status" role="status"></div>
+                <div id="global-search-unavailable" class="global-search-status global-search-unavailable" role="status"></div>
               </div>
             </div>
             <button type="button" id="task-create-open" class="action primary" aria-haspopup="dialog" aria-controls="task-create-panel" aria-expanded="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>New task</button>
@@ -157,7 +158,7 @@
         </div>
       </nav>
       <div class="host-detail" id="host-detail" role="dialog" aria-label="Host resources" hidden></div>
-      <div class="usage-dialog" id="provider-usage-dialog" role="dialog" aria-label="Provider usage" hidden></div>
+      <div class="usage-dialog dialog-surface" id="provider-usage-dialog" role="dialog" aria-label="Provider usage" hidden></div>
 
       <div class="main-col">
         <!-- ORB-14680: the selected host's state. An unreachable, mismatched or
@@ -184,7 +185,7 @@
             <h2 class="visually-hidden">Tasks</h2>
             <span class="visually-hidden" id="tasks-count">-</span>
             <div class="filter-summary visually-hidden" id="task-filter-summary" role="status" aria-live="polite"></div>
-            <div class="body" id="tasks-body" tabindex="0" role="region" aria-label="Task list" data-messages="tasks-messages">
+            <div class="body card-groups" id="tasks-body" tabindex="0" role="region" aria-label="Task list" data-messages="tasks-messages">
               <div class="skeleton-state" role="status" aria-live="polite"><span>Loading…</span>
                 <div class="skeleton skeleton-row"></div>
                 <div class="skeleton skeleton-row" style="width: 80%"></div>
@@ -248,16 +249,16 @@
               <section class="panel" id="log-panel">
                 <div class="log-foot log-filters">
                   <div class="log-filter-group" role="group" aria-label="Filter log lines">
-                    <button type="button" class="filter-pill on" data-filter="all" aria-pressed="true">All</button>
-                    <button type="button" class="filter-pill" data-filter="err" aria-pressed="false">Err <span class="filter-count" data-count="err">0</span></button>
-                    <button type="button" class="filter-pill" data-filter="deny" aria-pressed="false">Deny <span class="filter-count" data-count="deny">0</span></button>
-                    <button type="button" class="filter-pill" data-filter="warn" aria-pressed="false">Warn <span class="filter-count" data-count="warn">0</span></button>
-                    <button type="button" class="filter-pill on" id="log-show-agent" aria-label="Show agent stdout relays" aria-pressed="true">Agent</button>
+                    <button type="button" class="chip" data-filter="all" aria-pressed="true">All</button>
+                    <button type="button" class="chip" data-filter="err" aria-pressed="false">Err <span class="filter-count" data-count="err">0</span></button>
+                    <button type="button" class="chip" data-filter="deny" aria-pressed="false">Deny <span class="filter-count" data-count="deny">0</span></button>
+                    <button type="button" class="chip" data-filter="warn" aria-pressed="false">Warn <span class="filter-count" data-count="warn">0</span></button>
+                    <button type="button" class="chip" id="log-show-agent" aria-label="Show agent stdout relays" aria-pressed="true">Agent</button>
                   </div>
                   <div class="log-view-group">
-                    <button type="button" class="seg on" id="log-follow-tail" aria-description="Follow the tail" aria-pressed="true"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14M6 13l6 6 6-6"/></svg>Follow</button>
-                    <button type="button" class="seg" id="log-wrap-lines" aria-description="Wrap lines" aria-pressed="false">Wrap</button>
-                    <button type="button" class="count" id="log-buffered-count" style="display: none;">0 buffered</button>
+                    <button type="button" class="chip" id="log-follow-tail" aria-description="Follow the tail" aria-pressed="true"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14M6 13l6 6 6-6"/></svg>Follow</button>
+                    <button type="button" class="chip" id="log-wrap-lines" aria-description="Wrap lines" aria-pressed="false">Wrap</button>
+                    <button type="button" class="chip" data-tone="warning" id="log-buffered-count" style="display: none;">0 buffered</button>
                   </div>
                 </div>
                 <div class="log-caption">
@@ -357,19 +358,10 @@
     </section>
     <section class="tab-pane" data-tab="jobs" tabindex="0" role="region" aria-labelledby="topbar-crumb">
       <nav class="subtabs view-tabs" id="jobs-subtabs" aria-label="Jobs views">
-        <button class="subtab active" data-subtab="live" type="button">Live</button>
-        <button class="subtab" data-subtab="history" type="button">History</button>
+        <button class="subtab active" data-subtab="history" type="button">History</button>
         <button class="subtab" data-subtab="catalogue" type="button">Catalogue</button>
       </nav>
-      <main class="operations-layout jobs-layout" id="jobs-live-main">
-        <section class="panel">
-          <header><span>Live</span><span class="count" id="jobs-live-count">-</span></header>
-          <div class="body" id="jobs-live-body">
-            <div class="skeleton-state" role="status" aria-live="polite"><span>Loading…</span><div class="skeleton skeleton-row"></div></div>
-          </div>
-        </section>
-      </main>
-      <main class="jobs-layout" id="jobs-history-main" hidden>
+      <main class="jobs-layout" id="jobs-history-main">
         <section class="panel" id="runs-panel">
           <header><span>History</span><span class="count" id="runs-count">-</span></header>
           <div class="body" id="runs-body" tabindex="0" role="region" aria-label="Runs">
@@ -459,13 +451,11 @@
     <section class="tab-pane" data-tab="analytics" tabindex="0" role="region" aria-labelledby="topbar-crumb">
       <!-- Analytics answers "how is delivery trending". Each view brings its
            own full-width <main>; Reliability has a Pipeline and a Tools view. -->
-      <!-- ORB-15746: implement_one duration and task completion trends over
-           the shared window, by complexity, with the per-actor tables. -->
+      <!-- Metrics trends and their breakdowns over the shared window. -->
       <main id="analytics-metrics-main" style="grid-template-columns: 1fr; display: none;">
         <section class="panel" id="metrics-panel">
           <header>
             <span>Metrics</span>
-            <span class="count" id="metrics-count">-</span>
           </header>
           <div class="scoreboard-controls" id="metrics-controls">
             <div class="scoreboard-control-group">
@@ -495,7 +485,7 @@
         <section class="panel" id="reliability-panel">
           <header>
             <span>Pipeline reliability <span id="reliability-method"></span></span>
-            <span class="scope-badge independent" id="reliability-scope-badge">Fleet-wide</span>
+            <span class="badge" data-tone="accent" id="reliability-scope-badge">Fleet-wide</span>
             <span class="count" id="reliability-count">-</span>
           </header>
           <div class="scoreboard-controls" id="reliability-controls">
@@ -512,7 +502,9 @@
             <span class="scoreboard-controls-meta" id="reliability-meta">-</span>
           </div>
           <div id="reliability-status"></div>
-          <div class="rel-summary" id="reliability-summary"></div>
+          <div class="rel-summary stat-tiles">
+            <div class="stat-tiles-row" id="reliability-summary"></div>
+          </div>
           <p class="rel-note rel-note-warn" id="reliability-truncation-note" style="display: none;"></p>
           <div class="rel-chart-wrap">
             <div class="rel-chart-title section-title">Job-run failure rate over time</div>
@@ -544,7 +536,7 @@
               </div>
             </div>
             <span class="scoreboard-controls-spacer"></span>
-            <span class="scoreboard-controls-meta" id="tools-meta" aria-live="polite">24h window</span>
+            <span class="scoreboard-controls-meta" id="tools-meta" aria-live="polite" hidden></span>
           </div>
           <div class="body" id="audit-summary-body" tabindex="0" role="region" aria-labelledby="audit-summary-title">
           </div>
@@ -644,11 +636,15 @@
       <!-- Analytics › Cost: managed-execution cost and token usage. -->
       <main id="analytics-cost-main" style="grid-template-columns: 1fr; display: none;">
         <section class="panel" id="scoreboard-orchestration-panel">
-          <!-- Header band: the title, window and scope apply to both tabs and
-               stay on screen while either is open. -->
+          <!-- Header band: the title with its bucket count and cost hint, then the
+               window and the scope. -->
           <div class="band" id="scoreboard-controls">
             <div class="cost-band-head">
-              <h2 class="cost-band-title">Managed execution cost &amp; token usage</h2>
+              <div class="cost-band-title-group">
+                <h2 class="cost-band-title" title="Managed execution cost &amp; token usage"><span class="cost-band-title-full">Managed execution cost &amp; token usage</span><span class="cost-band-title-short" aria-hidden="true">Cost &amp; token usage</span></h2>
+                <span id="scoreboard-cost-hint"></span>
+                <span class="cost-band-count" id="scoreboard-orchestration-count">—</span>
+              </div>
               <div class="scoreboard-control-group">
                 <span class="scoreboard-control-label">window</span>
                 <div class="scoreboard-window-selector" id="scoreboard-window-selector" role="tablist" aria-label="Cost time window">
@@ -665,12 +661,9 @@
               <span>Interactive orchestration-session overhead is excluded.</span>
               <span class="cost-window-range" id="scoreboard-window-range"></span>
             </div>
-            <div class="band-tabs" id="scoreboard-tabs" role="tablist" aria-label="Cost views">
-              <button type="button" role="tab" class="band-tab" id="scoreboard-tab-spend" data-cost-tab="spend" aria-selected="true" aria-controls="scoreboard-panel-spend" tabindex="0">Spend &amp; tokens<span class="band-tab-count" id="scoreboard-orchestration-count">—</span></button>
-            </div>
           </div>
-          <div class="body cost-tabpanel" id="scoreboard-panel-spend" role="tabpanel" aria-labelledby="scoreboard-tab-spend">
-            <div class="cost-tab-body" id="scoreboard-orchestration">
+          <div class="body">
+            <div class="cost-body" id="scoreboard-orchestration">
               <div class="empty-state">
                 <div class="icon">✧</div>
                 <div class="text">No managed execution cost data yet.</div>
@@ -796,22 +789,20 @@
       <main style="grid-template-columns: minmax(0, 1fr) minmax(380px, 1fr);">
         <section class="panel" id="knowledge-panel">
           <header><span id="knowledge-title">Knowledge</span><span class="count" id="knowledge-count" role="status" aria-live="polite" aria-atomic="true">-</span></header>
-          <nav class="subtabs" id="knowledge-subtabs">
-            <button class="subtab active" data-subtab="frictions" type="button">Frictions</button>
-            <button class="subtab" data-subtab="memory" type="button">Memory</button>
-          </nav>
-          <div class="friction-stats" id="friction-stats">
-            <div class="tile">
-              <span class="value" id="friction-open-value">-</span>
-              <span class="label">open</span>
-            </div>
-            <div class="tile">
-              <span class="value" id="friction-triaged-value">-</span>
-              <span class="label">triaged</span>
-            </div>
-            <div class="tile">
-              <span class="value" id="friction-resolved-month-value">-</span>
-              <span class="label">resolved this month</span>
+          <div class="friction-stats stat-tiles" id="friction-stats">
+            <div class="stat-tiles-row">
+              <div class="stat-tile" data-state="unknown">
+                <span class="stat-tile-label">open</span>
+                <span class="stat-tile-figure" id="friction-open-value">-</span>
+              </div>
+              <div class="stat-tile" data-state="unknown">
+                <span class="stat-tile-label">triaged</span>
+                <span class="stat-tile-figure" id="friction-triaged-value">-</span>
+              </div>
+              <div class="stat-tile" data-state="unknown">
+                <span class="stat-tile-label">resolved this month</span>
+                <span class="stat-tile-figure" id="friction-resolved-month-value">-</span>
+              </div>
             </div>
           </div>
           <div class="controls" id="friction-controls">
@@ -832,14 +823,6 @@
               <button type="button" id="frictions-next" aria-description="Show the next friction records">Next</button>
             </nav>
           </div>
-          <!-- Knowledge › Memory: crew memory keys and the global proposals,
-               read-only; the detail panel below shows the selection. -->
-          <div class="body" id="memory-body" style="display: none;">
-            <div class="skeleton-state" role="status" aria-live="polite"><span>Loading…</span>
-              <div class="skeleton skeleton-row"></div>
-              <div class="skeleton skeleton-row" style="width: 80%"></div>
-            </div>
-          </div>
           <div class="body scoreboard-table-wrap" id="frictions-body">
             <div class="skeleton-state" role="status" aria-live="polite"><span>Loading…</span>
               <div class="skeleton skeleton-row"></div>
@@ -854,15 +837,6 @@
             <div class="empty-state">
               <div class="icon">✧</div>
               <div class="text">No friction selected.</div>
-            </div>
-          </div>
-        </section>
-        <section class="panel" id="memory-detail-panel" style="display: none;">
-          <header><span id="memory-detail-title">Memory detail</span></header>
-          <div class="body" id="memory-detail">
-            <div class="empty-state">
-              <div class="icon">✧</div>
-              <div class="text">No memory key selected.</div>
             </div>
           </div>
         </section>
@@ -963,7 +937,8 @@
       <button type="button" class="sb-open" id="log-statusbar-open">Open log</button>
     </div>
     <div id="gantt-tooltip" role="tooltip" aria-hidden="true"></div>
-    <dialog id="resident-start-dialog" class="resident-start-dialog" aria-labelledby="resident-start-heading"></dialog>
+    <dialog id="resident-start-dialog" class="resident-start-dialog dialog-surface" aria-labelledby="resident-start-heading"></dialog>
+    <dialog id="resident-detail-dialog" class="resident-detail-dialog dialog-surface" aria-labelledby="resident-detail-heading"></dialog>
     <!-- Posting is a modal dialog in the top layer, outside the dock pane so a
          hidden tab cannot keep it from opening. Severity defaults to the one
          kind that raises no banner, and the options keep the server's defaults. -->

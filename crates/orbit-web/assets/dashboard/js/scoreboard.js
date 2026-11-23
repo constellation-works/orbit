@@ -1,11 +1,11 @@
 // Analytics › Cost: managed-execution cost and token usage.
 // The family leaderboard, narrative, agent cards and insights panel are gone.
 // The page reads managed execution spend from GET /api/cost.
-// A header band (title, window, scope, range) sits above the Spend & tokens
-// view, which renders into #scoreboard-orchestration.
+// A header band (title, bucket count, window, scope, range) sits above the cost
+// body, which renders into #scoreboard-orchestration.
 // Pure vanilla JS, split into ES modules with no build step.
 
-import { el, syncNodes, fetchJson, getWindow, payloadHonorsWindow, wireWindowSelector, syncWindowSelectors, requestPanel, getWorkspaceRevision, onWorkspaceChange, renderPanelPlaceholder, isAggregateView, formatDateTime, infoHint } from './common.js';
+import { el, syncNodes, fetchJson, getWindow, payloadHonorsWindow, wireWindowSelector, syncWindowSelectors, requestPanel, getWorkspaceRevision, onWorkspaceChange, renderPanelPlaceholder, isAggregateView, formatDateTime, infoHint, pinnedInfoHint } from './common.js';
 
 // The selector writes the shared dashboard window. app.js refresh is the
 // single fetch path so Cost cannot drift onto a different cutoff.
@@ -16,6 +16,18 @@ function wireScoreboardWindowSelector() {
 }
 
 const $ = (id) => document.getElementById(id);
+
+const COST_HINT = "Provider-reported values come first. Derived values are labelled estimates with their own coverage. Compare the two only on the same-invocation population.";
+
+// The hint sits beside the view's title, the first heading it explains. The
+// band is static markup, so the hint mounts once when this module loads. It is
+// a pinned hint: it opens on hover, keyboard focus and tap, and its bubble is
+// fixed to the viewport so the panel's overflow clip cannot cut it.
+function mountCostHint() {
+  const slot = $("scoreboard-cost-hint");
+  if (slot && !slot.firstChild) slot.append(pinnedInfoHint(COST_HINT));
+}
+mountCostHint();
 
 const COST_CHROME = ["scoreboard-orchestration"];
 const COST_COUNTS = ["scoreboard-orchestration-count"];
@@ -42,6 +54,10 @@ function clearCostChrome() {
 // Aggregate view has no per-workspace cost. Placeholder the panel so a
 // previous workspace's dollars and tokens cannot stay on screen.
 export function placeholdScoreboardAggregate() {
+  // app.js calls this directly in aggregate view: the window selector still
+  // writes the shared window there.
+  wireScoreboardWindowSelector();
+  syncWindowSelectors();
   for (const id of COST_CHROME) renderPanelPlaceholder(id);
   for (const id of COST_COUNTS) {
     const node = $(id);
@@ -53,6 +69,10 @@ export function placeholdScoreboardAggregate() {
 let scoreboardRequestScope = null;
 
 export function fetchAndRenderScoreboard() {
+  // Wire before any early return: the selector must work in aggregate view
+  // and while /api/cost is loading or failing, not only after a success.
+  wireScoreboardWindowSelector();
+  syncWindowSelectors();
   if (isAggregateView()) {
     placeholdScoreboardAggregate();
     return Promise.resolve();
@@ -104,13 +124,23 @@ const usdFormatter = new Intl.NumberFormat("en-US", {
 });
 const wholeFormatter = new Intl.NumberFormat("en-US", { maximumFractionDigits: 0 });
 
-// Cents with thousands separators; a non-zero amount that rounds to $0.00
-// reads "<$0.01" so it is not mistaken for no spend.
-function formatUsd(value) {
+// Cents with thousands separators; a non-zero amount under one cent reads
+// "<$0.01" so it is not mistaken for no spend. A comparison delta passes the
+// larger of its two totals as `totalScale`: subtracting totals leaves binary64
+// error that grows with their size, so a value within that error of a cent is
+// that cent, not sub-cent.
+function formatUsd(value, totalScale = 0) {
   const amount = typeof value === "number" && Number.isFinite(value) ? value : 0;
   const sign = amount < 0 ? "-" : "";
   const magnitude = Math.abs(amount);
-  if (magnitude > 0 && usdFormatter.format(magnitude) === "0.00") return `${sign}<$0.01`;
+  const cent = 0.01;
+  const scale = Number.isFinite(totalScale) ? Math.abs(totalScale) : 0;
+  // 1e-12 is about 4.5e3 binary64 epsilons of the larger total, which also covers
+  // rounding accumulated across the sums of many invocations.
+  const tolerance = Math.max(cent, scale) * 1e-12;
+  if (magnitude > 0 && magnitude < cent && cent - magnitude > tolerance) {
+    return `${sign}<$0.01`;
+  }
   return `${sign}$${usdFormatter.format(magnitude)}`;
 }
 
@@ -141,8 +171,10 @@ function renderNormalizedTokenUsage(tokens, previous) {
   const total = asScoreboardNumber(usage.normalized_token_total);
   const invocations = asScoreboardNumber(usage.invocation_count);
   const tasks = asScoreboardNumber(usage.linked_task_count);
-  const perInvocation = invocations === 0 ? "—" : fmtScoreboardCount(Math.round(total / invocations));
-  const perTask = tasks === 0 ? "—" : fmtScoreboardCount(Math.round(total / tasks));
+  const coveredInvocations = asScoreboardNumber(usage.covered_invocation_count);
+  const coveredTasks = asScoreboardNumber(usage.covered_linked_task_count);
+  const perInvocation = coveredInvocations === 0 ? "—" : fmtScoreboardCount(Math.round(total / coveredInvocations));
+  const perTask = coveredTasks === 0 || coveredInvocations !== invocations ? "—" : fmtScoreboardCount(Math.round(total / coveredTasks));
   const bucketText = [
     `uncached input ${fmtScoreboardCount(usage.uncached_input_tokens)}`,
     `cache read ${fmtScoreboardCount(usage.cache_read_tokens)}`,
@@ -159,11 +191,11 @@ function renderNormalizedTokenUsage(tokens, previous) {
     el("div", { class: "token-ratios" }, [
       tokenStat(fmtScoreboardCount(invocations), "invocations"),
       tokenStat(fmtScoreboardCount(tasks), "linked tasks"),
-      tokenStat(perInvocation, invocations === 0 ? "tokens / invocation (0 invocations)" : "tokens / invocation"),
-      tokenStat(perTask, tasks === 0 ? "tokens / linked task (0 linked tasks)" : "tokens / linked task"),
+      tokenStat(perInvocation, "tokens / covered invocation"),
+      tokenStat(perTask, "tokens / covered linked task"),
     ]),
     el("span", { class: "token-buckets", text: bucketText }),
-    el("span", { class: "token-coverage" }, [el("span", { text: `${fmtScoreboardCount(usage.covered_invocation_count)} of ${fmtScoreboardCount(invocations)} invocations normalized` }), infoHint(`${fmtScoreboardCount(usage.unknown_input_basis_or_model_count)} with unknown model or input basis are excluded, never guessed.`)]),
+    el("span", { class: "token-coverage" }, [el("span", { text: `${fmtScoreboardCount(usage.covered_invocation_count)} of ${fmtScoreboardCount(invocations)} invocations normalized` }), infoHint(`${fmtScoreboardCount(usage.unknown_input_basis_or_model_count)} with unknown model or input basis are excluded, never guessed. Tokens per linked task is withheld when any invocation is uncovered.`)]),
   ]);
 }
 
@@ -199,6 +231,10 @@ function renderOrchestrationBucket(bucket) {
   const kind = ["orchestrator", "shared", "unattributed", "missing"].includes(bucket?.kind)
     ? bucket.kind
     : "unknown";
+  const comparableTotalScale = Math.max(
+    Math.abs(asScoreboardNumber(bucket?.comparable_provider_cost_usd)),
+    Math.abs(asScoreboardNumber(bucket?.comparable_derived_cost_usd)),
+  );
   const comparison = comparableCount > 0
     ? [
       el("span", { class: "cost-comparison" }, [
@@ -212,7 +248,7 @@ function renderOrchestrationBucket(bucket) {
         ]),
         el("span", {}, [
           el("span", { class: "k", text: "delta" }),
-          el("strong", { text: formatUsd(bucket?.comparable_cost_delta_usd) }),
+          el("strong", { text: formatUsd(bucket?.comparable_cost_delta_usd, comparableTotalScale) }),
         ]),
       ]),
       el("span", { class: "cost-coverage", text: `${fmtScoreboardWhole(comparableCount)} of ${fmtScoreboardWhole(invocationCount)} invocations` }),
@@ -285,7 +321,6 @@ function paintWindowRange(orchestration) {
 function renderOrchestrationSummary(orchestration) {
   if (!orchestration || !Array.isArray(orchestration.buckets)) return [emptyOrchestrationNode()];
   const children = [
-    el("div", { class: "scoreboard-orchestration-policy" }, [el("span", { text: "Cost" }), infoHint("Provider-reported values come first. Derived values are labelled estimates with their own coverage. Compare the two only on the same-invocation population.")]),
     renderNormalizedTokenUsage(orchestration.normalized_tokens, orchestration.previous_normalized_tokens),
   ];
   if (orchestration.buckets.length === 0) {

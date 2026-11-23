@@ -188,6 +188,7 @@ fn local_completion_hold<H: RuntimeHost + ?Sized>(
     record_completion_hold(host, &task_ids, &hold)?;
     Ok(Some(json!({
         "merged": false,
+        "completion_held": true,
         "reason": "completion_held",
         "held_task_ids": task_ids,
         "completion_hold": hold,
@@ -269,6 +270,7 @@ pub(super) fn merge_batch_pr<H: RuntimeHost + ?Sized>(
         "strategy": merge_strategy.as_str(),
         "reviewed_head_sha": reviewed_head_sha,
         "workspace_path": workspace_path,
+        (super::super::PR_MERGE_ATTRIBUTION_FIELD): super::super::pr_merge_attribution(input),
     });
     if let Value::Object(request) = &mut request {
         request.extend(squash_merge_fields(

@@ -199,8 +199,9 @@ the hard timeout (1800 seconds), `timed_out`, exit code and outcome. It also
 keeps the step's capability notices, the last lines of its stdout and stderr,
 and the last progress of npm's debug log (when that log last changed and how
 long it had been idle when the step ended). URLs, including their userinfo and
-query strings, IP addresses and credential-bearing lines are redacted, and raw
-install output is not retained. The build working directory is also retained on
+query strings, IP addresses and credential-bearing lines are redacted before any
+report field is built, including the capability notices and the cleanup
+diagnostics of an unverified install, and raw install output is not retained. The build working directory is also retained on
 the row. A failed install or build is `FAIL`; omitting the flag remains `NOT_RUN`.
 Candidate dependencies and generated files are preserved. This flag never deploys.
 
@@ -742,7 +743,10 @@ and its warning record the reason. The `dashboard-api-boundary` builtin runs its
 `web serve` probe under the same supervisor. The server, its pipes and its
 descendants share that wait and sweep, so a descendant holding an output pipe
 cannot stall the sweep. A refused teardown fails the row with unverified
-cleanup, and the health, workspace and task assertions still apply.
+cleanup, and the health, workspace and task assertions still apply. Each is judged
+alone: `/healthz` must answer 200 with the body `ok`, one `/api/workspaces` row's
+`root` must be the bound checkout, and a `/api/tasks` `items` row must carry the
+persisted task ID. An identifier in any other field earns nothing.
 The bounded result reader allows the supervisor's command wait, ten-second TERM
 window and five-second KILL grace, plus time to publish its record; it also bounds
 partial-record reads. A refused group signal or expired reap deadline fails

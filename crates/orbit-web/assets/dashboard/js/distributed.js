@@ -30,21 +30,13 @@ import * as progressStrip from './progress-strip.js';
 
 const CONSOLE_PATH = "/api/distributed/claims";
 
-// One task-scoped read per short window, shared by however many panels show
-// it. The memo expires after CONSOLE_TTL_MS so a detail that is opened or rebuilt later
-// (the dashboard refreshes tasks on its own timer and never re-reads claims)
-// shows current authority rather than a panel hours out of date. It is also
-// invalidated on every action and workspace change, so a decision is never
-// rendered from the state that preceded it.
+// Share a task-scoped read for CONSOLE_TTL_MS. After that the payload can
+// still paint attention while a fresh read loads. Bound both uses by keeping
+// just the last 50 reads in this workspace visit.
 export const CONSOLE_TTL_MS = 10000;
+const CONSOLE_LIMIT = 50;
 const cachedConsoles = new Map();
 const inflightConsoles = new Map();
-// The last read per task in this workspace visit, kept past the TTL. A detail
-// rebuilt after the memo expired paints its attention callout from it at once
-// instead of flashing empty until the re-read lands; the re-read then replaces
-// it. Nothing decides from it: actions always carry a fresh read's identity.
-const knownConsoles = new Map();
-const KNOWN_CONSOLES_LIMIT = 50;
 // The outcome of the operator's last action, per task. It outlives the block
 // that reported it: the detail is rebuilt once the action changes the task, and
 // a message written only to the old container would be lost with it.
@@ -55,13 +47,17 @@ let lastFeedback = null;
 export function invalidateDistributedConsole() {
   cachedConsoles.clear();
   inflightConsoles.clear();
-  knownConsoles.clear();
   lastFeedback = null;
 }
 
 function freshConsole(taskId) {
-  const entry = cachedConsoles.get(taskId);
+  const entry = consoleForVisit(taskId);
   return entry && Date.now() - entry.at < CONSOLE_TTL_MS ? entry.payload : null;
+}
+
+function consoleForVisit(taskId) {
+  const entry = cachedConsoles.get(String(taskId));
+  return entry?.revision === getWorkspaceRevision() ? entry : null;
 }
 
 export function peekDistributedConsole(taskId) {
@@ -90,11 +86,10 @@ export function loadDistributedConsole({ taskId, force = false } = {}) {
         if (inflightConsoles.get(key) !== request || revision !== getWorkspaceRevision()) {
           return body;
         }
-        cachedConsoles.set(key, { payload: body, at: Date.now() });
-        knownConsoles.delete(key);
-        knownConsoles.set(key, { payload: body, revision });
-        while (knownConsoles.size > KNOWN_CONSOLES_LIMIT) {
-          knownConsoles.delete(knownConsoles.keys().next().value);
+        cachedConsoles.delete(key);
+        cachedConsoles.set(key, { payload: body, at: Date.now(), revision });
+        while (cachedConsoles.size > CONSOLE_LIMIT) {
+          cachedConsoles.delete(cachedConsoles.keys().next().value);
         }
         inflightConsoles.delete(key);
         return body;
@@ -117,8 +112,8 @@ export function claimsForTask(payload, taskId) {
 /// or `null` when there has been none. For painting only, never for deciding.
 export function lastKnownClaims(taskId) {
   if (isAggregateView() || !taskId) return null;
-  const entry = knownConsoles.get(String(taskId));
-  if (!entry || entry.revision !== getWorkspaceRevision()) return null;
+  const entry = consoleForVisit(taskId);
+  if (!entry) return null;
   return entry.payload && entry.payload.owner_workspace === false ? [] : claimsForTask(entry.payload, taskId);
 }
 
@@ -832,7 +827,7 @@ function recoverTargets(claim) {
 function buildClaimActions(claim, capabilities, handlers) {
   const handoff = claim.handoff;
   const authority = (handoff && handoff.authority) || {};
-  const row = el("section", { class: "claim-actions" });
+  const row = el("section", { class: "card claim-actions" });
   row.setAttribute("aria-label", "Owner actions");
 
   // Every control in this card, so one in-flight decision can lock them all
@@ -1326,8 +1321,7 @@ export function mountTaskClaimPanel(container, taskId, { onTaskChanged, onConten
         feedback(message, error && error.code === "uncertain_merge_intent" ? "uncertain" : "error", remedy);
         return;
       }
-      await refresh();
-      feedback(`${message} — refreshed`, "stale", remedy);
+      if (await refresh(message)) feedback(`${message} — refreshed`, "stale", remedy);
       return;
     }
     // Re-read before reporting, and before the task list is told to refresh:

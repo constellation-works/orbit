@@ -1,7 +1,7 @@
 ---
 title: "Task pilot — assessment persistence"
 owner: orbit
-last_updated: 2026-11-10
+last_updated: 2026-11-22
 status: Draft
 feature: task-pilot
 doc_role: scope
@@ -42,13 +42,68 @@ readout to a `pilot_assessment_unavailable` finding and keep serving every other
 task. Drain admission, re-pilot and attention still fail closed on the same
 resolution. The dashboard warnings path, which had aborted the whole list on one
 missing artifact, was corrected to degrade per task by [ORB-23707].
+[ORB-23750] and [ORB-23760] extended task-show degradation to unreadable,
+dangling and corrupt assessment blobs while keeping admission fail-closed.
 
 All assessment consumers resolve the reference, including attention, warning
 holds and admission, preparation and drain reuse, requirement edit tracking,
 legacy targetless markers, rechecks, post-deploy obligations, no-diff closure,
 codebase grading, pilot scorecards and task hands. Raw task/comment projections
 keep the compact message; readers that need inline audits use a resolved view.
+[ORB-25120] adds a structured pilot projection so the CLI and dashboard show the
+summary while retaining the raw receipt.
 Historical malformed inline records retain each reader's existing failure policy.
+
+## A no-diff verdict tags the task
+
+[ORB-26836] A `verified_no_diff` assessment that says the task expects no repository diff adds
+the `no-diff-expected` tag in the same atomic write as the assessment, next to the `ui` and `os:`
+routing tags. The pilot clears the task's selectors in that write, so without the tag the
+`missing_context_files` readiness gap blocks a task the pilot has just assessed.
+
+Until then the drain held every `verified_no_diff` task of a person's or an auto-task's making as
+`pilot_verified_no_diff`. That hold was deliberate and stays for its original case: the disposition
+also carries "the work is already on the base branch", which approving would run an implementer
+over for nothing. A person decided on such a task, and only a task Orbit automation filed, once a
+cited commit passed the proof, was archived. The hold could not tell that case from a no-diff
+deliverable (a parity audit, a report, filed tasks), so the pilot had to be corrected by hand.
+
+What replaces the hold for a deliverable is the typed shape of the verdict. The tag is added only
+when every one of these holds:
+
+- the disposition is `verified_no_diff` and apply keeps no selectors (an operator's creation grant
+  turns the verdict into an `already_landed` hold with its selectors, so it never tags);
+- the assessment carries no `already_landed`, `duplicate_of`, `release_action_required` or
+  `finding_invalid` finding, and its `evidence` and rationale cite no commit (known non-commit Git
+  objects such as blob or tree checksums do not block tagging; commits and unknown IDs still do,
+  and finding-proof closure keeps its fail-closed rules [ORB-26851]);
+- the task is not a review, QA or CI-sweep finding (`code-review`, `delivery-code-review`,
+  `qa-full-sweep`, `qa-sweep`, `security-review` or `ci-failure-sweep`, also as `auto-task:<name>`),
+  where `verified_no_diff` means the finding no longer holds;
+- the task has no host-computed `comment-hygiene` batch, where an empty batch means no work;
+- the task is not already tagged.
+
+For an untagged task, any other `verified_no_diff` verdict leaves it untagged and keeps the
+`pilot_verified_no_diff` hold, its commit proof and its archival rule unchanged. A task already
+tagged `no-diff-expected` is different: a later `verified_no_diff` does not reinstate that finding
+hold, and the drain may approve it if every other promotion rule passes. The tag remains in place.
+
+A `selectors` verdict with no selectors is not a verdict that no diff is expected. Ordinary apply
+rejects empty `context_files_after` with the `selectors` disposition before writing anything; it
+does not add the tag, and the task keeps its readiness gap. The host-computed comment-hygiene hold
+is a separate case: apply accepts its empty selectors with the `selectors` disposition, then the
+host attaches `evidence_gaps` and a holding `utility_warnings` finding that keeps the task held.
+An empty comment-hygiene batch means there is no work, not a no-diff deliverable. The tag turns on
+the applied disposition and the footprint apply leaves, not on the selectors the task started with.
+An eligible `verified_no_diff` verdict clears the ordinary selectors the task already held and tags
+it. An ordinary `selectors` verdict keeps its selectors and gets no tag, whatever the task held
+before. A creation grant that `verified_no_diff` meets keeps its scope as an `already_landed` hold
+once its covering commits prove the work landed (otherwise apply refuses it), and never tags.
+
+A drain judges the task as the tagged task it becomes, so the pass that applies an eligible
+deliverable verdict also approves it when no other hold applies. Tagging is never removed by a
+later pilot. Adding `no-auto-approve` stops automatic approval but leaves the `no-diff-expected`
+tag in place; a person can remove the tag to opt out of the no-diff disposition.
 
 ## Compatibility
 
@@ -68,6 +123,11 @@ the release, consumer and remaining-record retirement checks in
 ## Task References
 
 - [ORB-23677] — move pilot assessments into task artifacts and retain compact receipts.
+- [ORB-26836] — a no-diff deliverable verdict tags the task `no-diff-expected`.
+- [ORB-26851] — known non-commit Git object IDs do not block `no-diff-expected` tagging.
 - [ORB-23707] — makes the dashboard pilot-warnings readout degrade per task when an artifact is missing.
+- [ORB-25120] — projects a readable summary while preserving the raw receipt.
+- [ORB-23750] — degrades task show when pilot evidence is unreadable or invalid.
+- [ORB-23760] — degrades task show for dangling or corrupt pilot blobs.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

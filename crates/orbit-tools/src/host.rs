@@ -145,7 +145,7 @@ pub enum OrbitBuiltinAction {
     Resident(ResidentVerb),
     /// Capability-gap costs and evolution records.
     Evolution(orbit_common::governance::evolution::EvolutionVerb),
-    /// Crew memory spaces: operator reads, export and writes.
+    /// Crew memory spaces: the run-bound show, write and propose.
     Memory(orbit_common::governance::memory::MemoryVerb),
 }
 
@@ -297,6 +297,12 @@ pub trait OrbitToolHost: Send + Sync {
     }
 
     fn task_scope(&self) -> OrbitTaskScope;
+
+    /// Whether this host's active run is a live resident cycle permitted to
+    /// observe drain readiness (`orbit.workflow.auto` action `status`).
+    fn allows_resident_drain_status(&self) -> bool {
+        false
+    }
 }
 
 impl From<SearchVerb> for OrbitBuiltinAction {

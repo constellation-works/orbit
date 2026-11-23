@@ -15,9 +15,25 @@
 //! `ORBIT_TASK_ACTOR_KIND`, `ORBIT_ACTIVITY_*`) are
 //! injected by the CLI runner or forwarded from the parent when present.
 
+use std::path::Path;
+
 use orbit_common::security::child_env::{
     MCP_MANAGED_CONTEXT_ENV, MCP_MANAGED_RUN_ID_ENV, MCP_MANAGED_SESSION_ID_ENV,
 };
+
+/// Route automatic Python cache writes to a caller-owned scratch location.
+/// Keep an explicit prefix admitted by the child's environment policy.
+pub(crate) fn default_python_cache_prefix(env: &mut Vec<(String, String)>, prefix: &Path) {
+    const VAR: &str = "PYTHONPYCACHEPREFIX";
+    if env
+        .iter()
+        .any(|(key, value)| key == VAR && !value.is_empty())
+    {
+        return;
+    }
+    env.retain(|(key, _)| key != VAR);
+    env.push((VAR.to_string(), prefix.to_string_lossy().into_owned()));
+}
 
 #[derive(Debug, Default)]
 pub(crate) struct ProvenanceEnv<'a> {

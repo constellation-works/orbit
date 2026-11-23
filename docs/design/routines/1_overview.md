@@ -46,7 +46,7 @@ initialization and persisted debt. [3_vision.md](./3_vision.md) holds deferred w
 `.orbit/routines/`. Their routine names use hyphens and the registered workspace name as a
 suffix (for example, `task-pilot-<workspace-name>`). `worktree_gc` and `task_pilot` are
 seeded enabled in a newly initialized workspace [ORB-22802], as is `crew_memory_dream`, whose action
-mints nothing while `crew_memory.enabled` is false [ORB-23115]; a workspace seeded earlier keeps
+mints nothing unless a memory experiment runs [ORB-23115]; a workspace seeded earlier keeps
 its `enabled` value, because a template refresh never changes it. Other defaults are
 `enabled: false`. `crew_performance_refresh` ([ORB-17816]), once seeded enabled, was retired
 with crew-performance weighting in [ORB-22804]; `orbit workspace sync` removes an unedited
@@ -186,6 +186,6 @@ fragmentation this feature exists to end.
 - [ORB-22802] seeded `worktree_gc` and `task_pilot` enabled in newly initialized workspaces.
 - [ORB-22844] retired the `finding_verification`, `pilot_warning_triage`, `evolution_pass` and `ux-rules` routines.
 - [ORB-22688] split the clock into its own `orbit-clock` crate to cut serial `orbit-core` compile work.
-- [ORB-23115] added the seeded `crew_memory_dream` routine, which mints nothing until `crew_memory.enabled` is set.
+- [ORB-23115] added the seeded `crew_memory_dream` routine, which mints nothing unless a memory experiment runs.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

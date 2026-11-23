@@ -1,8 +1,8 @@
 ---
 title: "Scope: Script steps"
 owner: claude
-last_updated: 2026-11-06
-last_validated: 2026-11-06
+last_updated: 2026-11-21
+last_validated: 2026-11-21
 status: Draft
 stage: building
 next: "File the explicit script_grant raise surface for orbit-office proposals (phase 4 part; unfiled)"
@@ -251,6 +251,10 @@ repository. The manifest is the catalog entry; the entry file is the code. Scrip
 workspace-only: the global root's `resources/` holds no scripts, so no script reaches
 every workspace on a host.
 
+The catalog records an invalid manifest as unavailable with its diagnostic; only a job
+that references that script is refused. Other valid scripts remain available. [ORB-23140]
+confined invalid manifests to their users; directory-level catalog errors still fail the load.
+
 ```yaml
 # .orbit/resources/scripts/package.yaml
 schemaVersion: 1
@@ -360,7 +364,7 @@ record carries:
 | `network` | `none` (default), `https` or `any` (§3) |
 | `read_roots`, `write_roots` | Extra absolute paths beyond the defaults in §3 |
 | `env_pass` | Variable names copied into the child env; `ORBIT_*` refused |
-| `limits` | `timeout_max_seconds`, `memory_max`, `tasks_max`, `scratch_max_bytes`, output-file caps; each at or below the host's `machine.worker_*` and `machine.script_*` ceilings (Configuration) |
+| `limits` | `timeout_max_seconds`, `scratch_max_bytes`, output-file caps, and the optional scope ceilings `memory_max_bytes`, `tasks_max` and `cpu_quota_percent` (§3 Resources). An unset scope ceiling takes the host's `machine.worker_*` value; a set one is capped at it when the scope is built. Unset ceilings are omitted from the record, so a grant made before they existed keeps its witness, and an older binary refuses a grant that sets one rather than run without it |
 | `host_role` | `owner` (default) or `follower` (§7) |
 | `grantor`, `granted_at`, `provenance` | Human label, time, and `cli`, `dashboard` or `decision-channel <name>` |
 | `expires_at` | Optional; none by default |
@@ -377,8 +381,9 @@ forged row has no matching witness.
    resolved interpreter paths. `orbit script revoke <name>` removes a grant.
 2. **Dashboard.** An operator-session action with the same diff and capability view.
 3. **A decision request** (phase 4, §9.1). A `script_grant` request binds workspace,
-   name, digest and capability set. Anyone may raise one, including an agent or a
-   plugin. Only the human funnel or a registered decision channel's
+   name, digest and capability set. The intended explicit raise surface would let an
+   agent or plugin request one; it is not yet filed. Only the human funnel or a
+   registered decision channel's
    `orbit.decision.submit` can answer it. The request is superseded when the digest
    changes.
 
@@ -519,8 +524,14 @@ it is listed in `read_roots` and isn't under a credential-deny path. A dedicated
   warning when its scope is unavailable, and `off` runs it without a worker scope
   (with a warning on Linux).
   When systemd can create it, the script also gets its own transient scope,
-  `orbit-script-<run>-<step>.scope`, with `MemoryMax`, `TasksMax` and `CPUQuota` from
-  the grant, each capped at the machine value. If that per-script scope is unavailable,
+  `orbit-script-<run>-<step>.scope`, with `MemoryHigh`, `MemoryMax`, `TasksMax` and
+  `CPUQuota` from the machine's `machine.worker_*` values, narrowed by the grant: each
+  scope ceiling the grant sets (`orbit script grant --memory-max`, `--tasks-max`,
+  `--cpu-quota`; [ORB-26739]) replaces the machine value only where it is lower, and
+  `MemoryHigh` drops to a narrowed `MemoryMax`. A percentage machine memory value is
+  resolved against `/proc/meminfo`; a grant `CPUQuota` applies even when the machine
+  sets none. Only the CLI sets these ceilings; a grant answered from the dashboard or a
+  decision request takes the machine values. If that per-script scope is unavailable,
   `warn` or `off` permits the step to continue in the worker's cgroup; `strict` refuses
   the step. A worker with an unavailable scope is likewise refused under `strict`.
   Thus a script may run with neither scope under the default mode and can exhaust
@@ -797,8 +808,8 @@ the run, isn't kept with the run and can't be read from another host's dashboard
 | Sandbox | Landlock or Seatbelt with the plugin's grants | The script profile (§3) |
 | Talks to Orbit | Through `orbit_tools` callbacks | Never; later steps do |
 
-A plugin that only wraps one script, as `office.script-run` does, should become a
-script step now that phase 4 has shipped.
+A plugin that only wraps one script, as `office.script-run` does, can become a
+script-step wrapper once the explicit proposal grant-request surface lands (§9.1).
 
 **Why.** It keeps one execution surface per kind of code. A plugin answers "share
 this tool", and a script step answers "run this chore here".
@@ -892,9 +903,13 @@ a binary that can't enforce its grant.
 | `machine.script_timeout_max_seconds` | `3600` | Ceiling on any grant's `timeout_max_seconds` on this host |
 | `machine.script_scratch_max_bytes` | `1GiB` | Ceiling on any grant's scratch size |
 | `machine.worker_containment` | (existing; defaults to `warn`) | `warn` permits uncontained worker/script fallbacks, with a Linux warning when a scope is unavailable (on macOS a worker runs an in-worker watchdog instead, [ORB-19251], which is not kernel containment); `off` skips worker scopes with a Linux warning; `strict` refuses a worker or script step whose required scope can't be created, and every script step on macOS (§3) |
+| `machine.worker_memory_max`, `machine.worker_memory_high`, `machine.worker_tasks_max`, `machine.worker_cpu_quota` | (existing) | The per-script scope's limits, and the ceilings a grant's `memory_max_bytes`, `tasks_max` and `cpu_quota_percent` are capped at when the scope is built (§3 Resources) |
 
-Host keys, not workspace keys. Each grant's limits must sit at or below them. Output-file
-caps have no key: their ceilings are fixed at 64 files, 64 MiB per file and 256 MiB per
+Host keys, not workspace keys, meant as ceilings on every grant's limits. As built, the
+two `machine.script_*` keys are not loaded yet: a grant's timeout is bounded only by
+`1..=4294967295` seconds and its scratch cap is the 1 GiB default. The `machine.worker_*`
+ceilings are applied at run time, not at grant time, so a later lower machine value
+still wins. Output-file caps have no key: their ceilings are fixed at 64 files, 64 MiB per file and 256 MiB per
 set (§4 Files out).
 
 ### Surfaces
@@ -1228,7 +1243,8 @@ A script that rewrites itself during a run changes nothing for that run (§2,
 
 - A job step `target: script:<name>` whose manifest is missing, whose `entry` escapes the
   workspace, or which uses inline-code interpreter flags fails to load, and the error
-  names the file. `type: shell` and routine `target: script:` stay load errors.
+  names the file; unrelated valid scripts remain available ([ORB-23140]). `type: shell`
+  and routine `target: script:` stay load errors.
 - With no grant, a stale grant or a request beyond the grant, the step refuses before
   spawn with a non-retryable typed error recorded on the run, and nothing executes.
 - Editing a granted script's manifest or entry, in the workspace or in a run worktree,
@@ -1263,11 +1279,13 @@ A script that rewrites itself during a run changes nothing for that run (§2,
 - [ORB-19294] — designs script steps (this doc).
 - [ORB-19983] — phase 1: added script manifests, `target: script:` parsing, the grant store and `orbit script grant|revoke|list|show`; nothing executes.
 - [ORB-19985] — phase 2: Linux execution under `linux-bwrap-script-v1`, `script.execution` audit and `orbit script history`.
+- [ORB-23140] — confined invalid script manifests to jobs that reference them.
 - [ORB-21299] — phase 4: `script_grant` decision requests raised by refused steps, human and channel answers that write digest-bound grants, and the dashboard Scripts view.
 - [ORB-20866] — phase 3 part: declared output files kept as run-owned, digest-verified sets exposed as `steps.<id>.files`, with grant output caps.
 - [ORB-21297] — phase 3 part (Linux): declared `files.inputs` bound read-only at `in/<as>` and recorded with their SHA-256, and the `attach_script_files` action.
 - [ORB-21298] — phase 3 part (macOS): the `macos-sandbox-script-v1` profile, `RLIMIT_CPU` and `RLIMIT_NOFILE` on both platforms, grant-time and pre-spawn root probes with TCC reporting, nested-sandbox refusal, `strict` refusing on macOS, and the doctor `script-sandbox` row.
 - [ORB-21301] — phase 5 (Linux): `network: https` and `any` grants, `env_pass`, and redaction of passed values.
+- [ORB-26739] — per-grant script scope ceilings (`--memory-max`, `--tasks-max`, `--cpu-quota`), capped at the machine's `machine.worker_*` values.
 - [ORB-00374] — removed the v2 `shell` activity instead of sandboxing it; this doc takes its retrofit alternative.
 - [ORB-00363] — found that the shell allowlist came from the YAML it guarded.
 - [ORB-11294] — restored `local_shell` as a deterministic action; the Bearing and

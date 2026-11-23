@@ -68,7 +68,7 @@ export function buildInlineFieldEditor({
   const showEditor = () => {
     const input = el(multiline ? "textarea" : "input", { class: "field-editor-input mono" });
     if (!multiline) input.type = "text";
-    input.value = value;
+    input.value = typeof value === "function" ? value() : value;
     if (placeholder) input.placeholder = placeholder;
     input.setAttribute("aria-label", accessibleName);
 
@@ -139,7 +139,8 @@ export function buildInlineFieldEditor({
     }
 
     const children = [input];
-    if (hint) children.push(el("div", { class: "field-editor-hint", text: hint }));
+    const hintText = typeof hint === "function" ? hint() : hint;
+    if (hintText) children.push(el("div", { class: "field-editor-hint", text: hintText }));
     if (toggleRow) children.push(toggleRow);
     children.push(el("div", { class: "field-editor-controls" }, [saveButton, cancelButton, status]));
     children.push(error);

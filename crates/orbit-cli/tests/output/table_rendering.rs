@@ -27,6 +27,8 @@ use serde_json::Value;
 const BOX_GLYPHS: &[char] = &['─', '│', '┌', '┐', '└', '┘', '├', '┤', '┬', '┴', '┼'];
 
 const LONG_TITLE: &str = "Terminal tables are borderless with a one-line row invariant, and this title is deliberately far longer than any terminal is wide so that it has to be truncated rather than wrapped";
+const SHORTENING_HINT: &str =
+    "Table details shortened. Use --format plain or --json for full output.";
 
 #[test]
 fn task_list_renders_one_line_per_task() {
@@ -38,6 +40,102 @@ fn task_list_renders_one_line_per_task() {
     );
 
     assert_both_forms(&workspace, &["task", "list"], 3, "orbit task list");
+}
+
+/// Terminal tables identify when their cells or columns are shortened, while
+/// pipe and machine-readable output keep their existing full-text forms.
+#[cfg(unix)]
+#[test]
+fn shortened_cli_tables_print_a_hint_only_in_terminal_table_mode() {
+    let workspace = workspace();
+    workspace.seed_tasks(&[workspace.task_seed(LONG_TITLE)]);
+
+    for (args, label) in [
+        (vec!["task", "list"], "task list"),
+        (vec!["tool", "list"], "tool list"),
+        (vec!["tool", "show", "github.run.logs"], "tool show"),
+    ] {
+        let output = run_cli_on_terminal_at_width(&workspace, &args, "80");
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert_eq!(
+            stderr.matches(SHORTENING_HINT).count(),
+            1,
+            "{label} reports one shortening hint on stderr at 80 columns: {stderr:?}"
+        );
+        assert!(
+            !stdout.contains(SHORTENING_HINT),
+            "{label} stdout contains only the table payload: {stdout:?}"
+        );
+        assert!(
+            !stdout.trim().is_empty(),
+            "{label} keeps its table payload on stdout: {stdout:?}"
+        );
+    }
+
+    let doctor = run_cli_on_terminal_at_width(&workspace, &["doctor"], "20");
+    let doctor_stdout = String::from_utf8_lossy(&doctor.stdout);
+    let doctor_stderr = String::from_utf8_lossy(&doctor.stderr);
+    let doctor_stderr_collapsed = doctor_stderr
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    assert_eq!(
+        doctor_stderr_collapsed.matches(SHORTENING_HINT).count(),
+        1,
+        "doctor reports one shortening hint on stderr at 20 columns: {doctor_stderr:?}"
+    );
+    assert!(
+        !doctor_stdout.contains(SHORTENING_HINT),
+        "doctor stdout contains only the table payload: {doctor_stdout:?}"
+    );
+    assert!(
+        !doctor_stdout.trim().is_empty(),
+        "doctor keeps its table payload on stdout: {doctor_stdout:?}"
+    );
+
+    let wide = run_cli_on_terminal_at_width(&workspace, &["task", "list"], "500");
+    let wide_stdout = String::from_utf8_lossy(&wide.stdout);
+    let wide_stderr = String::from_utf8_lossy(&wide.stderr);
+    assert!(
+        !wide_stdout.contains(SHORTENING_HINT) && !wide_stderr.contains(SHORTENING_HINT),
+        "a table that fits its terminal has no shortening hint: {wide:?}"
+    );
+
+    let empty =
+        run_cli_on_terminal_at_width(&workspace, &["task", "list", "--status", "done"], "80");
+    let empty_stdout = String::from_utf8_lossy(&empty.stdout);
+    let empty_stderr = String::from_utf8_lossy(&empty.stderr);
+    assert!(
+        !empty_stdout.contains(SHORTENING_HINT) && !empty_stderr.contains(SHORTENING_HINT),
+        "a table with no rows has no shortened content: {empty:?}"
+    );
+
+    for (args, label) in [
+        (vec!["task", "list"], "task list"),
+        (vec!["tool", "list"], "tool list"),
+        (vec!["tool", "show", "github.run.logs"], "tool show"),
+    ] {
+        let piped = workspace.run(&args, label);
+        let explicit_plain = workspace.run(
+            &[args.clone(), vec!["--format", "plain"]].concat(),
+            "explicit plain output",
+        );
+        assert_eq!(piped.stdout, explicit_plain.stdout, "{label} plain bytes");
+        assert!(
+            !String::from_utf8_lossy(&piped.stdout).contains(SHORTENING_HINT),
+            "{label} pipe output has no terminal hint"
+        );
+
+        let mut json_args = args.clone();
+        json_args.push("--json");
+        let json = workspace.run(&json_args, "JSON output");
+        assert!(
+            !String::from_utf8_lossy(&json.stdout).contains(SHORTENING_HINT),
+            "{label} JSON output has no terminal hint"
+        );
+        serde_json::from_slice::<Value>(&json.stdout).expect("valid JSON output");
+    }
 }
 
 /// Attention keeps its repair command beside the reason at narrow terminal
@@ -541,6 +639,44 @@ fn workspace() -> TestWorkspace {
     TestWorkspace::new("table-rendering-test", template)
 }
 
+/// The shortening hint is advisory. A stderr pipe whose reader is gone must not
+/// turn a table that already reached stdout into a panic (exit 101), and the
+/// same invocation with a writable stderr still prints the hint exactly once.
+#[cfg(unix)]
+#[test]
+fn shortened_table_survives_a_closed_stderr_pipe() {
+    let workspace = workspace();
+    workspace.seed_tasks(&[workspace.task_seed(LONG_TITLE)]);
+
+    let (reader, writer) = std::io::pipe().expect("stderr pipe");
+    drop(reader);
+    let closed = run_cli_on_terminal_at_width_with_operator(
+        &workspace,
+        &["task", "list"],
+        "120",
+        false,
+        writer.into(),
+    );
+    let closed_stdout = String::from_utf8_lossy(&closed.stdout);
+    assert!(
+        closed_stdout.contains("Terminal tables"),
+        "task list writes its table to stdout when stderr is closed: {closed_stdout:?}"
+    );
+
+    let writable = run_cli_on_terminal_at_width(&workspace, &["task", "list"], "120");
+    let writable_stdout = String::from_utf8_lossy(&writable.stdout);
+    let writable_stderr = String::from_utf8_lossy(&writable.stderr);
+    assert_eq!(
+        writable_stderr.trim(),
+        SHORTENING_HINT,
+        "a writable stderr receives only the one shortening hint: {writable_stderr:?}"
+    );
+    assert!(
+        writable_stdout.contains("Terminal tables") && !writable_stdout.contains(SHORTENING_HINT),
+        "the hint stays off stdout, which carries the table payload: {writable_stdout:?}"
+    );
+}
+
 #[cfg(unix)]
 fn run_on_terminal(workspace: &TestWorkspace, args: &[&str]) -> Output {
     run_cli_on_terminal_at_width(workspace, args, "120")
@@ -552,7 +688,13 @@ pub(super) fn run_cli_on_terminal_at_width(
     args: &[&str],
     width: &str,
 ) -> Output {
-    run_cli_on_terminal_at_width_with_operator(workspace, args, width, false)
+    run_cli_on_terminal_at_width_with_operator(
+        workspace,
+        args,
+        width,
+        false,
+        std::process::Stdio::piped(),
+    )
 }
 
 #[cfg(unix)]
@@ -561,15 +703,24 @@ fn run_cli_on_terminal_at_width_as_operator(
     args: &[&str],
     width: &str,
 ) -> Output {
-    run_cli_on_terminal_at_width_with_operator(workspace, args, width, true)
+    run_cli_on_terminal_at_width_with_operator(
+        workspace,
+        args,
+        width,
+        true,
+        std::process::Stdio::piped(),
+    )
 }
 
+/// `child_stderr` is the child's fd 2. A pipe whose reader is already gone is
+/// the stream an early consumer leaves behind; the returned stderr is then empty.
 #[cfg(unix)]
 fn run_cli_on_terminal_at_width_with_operator(
     workspace: &TestWorkspace,
     args: &[&str],
     width: &str,
     operator: bool,
+    child_stderr: std::process::Stdio,
 ) -> Output {
     use std::io::Read;
     use std::os::fd::FromRawFd;
@@ -616,6 +767,9 @@ fn run_cli_on_terminal_at_width_with_operator(
     if operator {
         command.env("ORBIT_OPERATOR", "1");
     }
+    if let Some(filter) = workspace.child_log_filter {
+        command.env("RUST_LOG", filter);
+    }
     let mut child = command
         .current_dir(&workspace.work)
         .env("HOME", &workspace.home)
@@ -627,7 +781,7 @@ fn run_cli_on_terminal_at_width_with_operator(
         .args(args)
         .stdin(Stdio::null())
         .stdout(Stdio::from(slave))
-        .stderr(Stdio::piped())
+        .stderr(child_stderr)
         .spawn()
         .expect("run CLI on terminal");
     drop(command);
@@ -638,15 +792,12 @@ fn run_cli_on_terminal_at_width_with_operator(
     }
     let status = child.wait().expect("wait for CLI");
     let mut stderr = Vec::new();
-    child
-        .stderr
-        .take()
-        .expect("captured stderr")
-        .read_to_end(&mut stderr)
-        .expect("read CLI stderr");
+    if let Some(mut pipe) = child.stderr.take() {
+        pipe.read_to_end(&mut stderr).expect("read CLI stderr");
+    }
     assert!(
         status.success(),
-        "CLI command failed\nstdout:\n{}\nstderr:\n{}",
+        "CLI command failed with {status}\nstdout:\n{}\nstderr:\n{}",
         String::from_utf8_lossy(&stdout),
         String::from_utf8_lossy(&stderr)
     );

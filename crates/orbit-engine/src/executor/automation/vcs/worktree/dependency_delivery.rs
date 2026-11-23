@@ -195,8 +195,16 @@ fn undelivered_detail(base_ref: &str, undelivered: &[UndeliveredDependency]) -> 
         })
         .collect::<Vec<_>>()
         .join("; ");
+    let mut dependents = undelivered
+        .iter()
+        .map(|entry| entry.task_id.as_str())
+        .collect::<Vec<_>>();
+    dependents.sort_unstable();
+    dependents.dedup();
     format!(
         "{findings}; merge the dependency work into '{base_ref}' (or wait for its PR to land) and re-dispatch, \
-         or pass input.dependency_delivery='ignore' if it was delivered under a different commit"
+         or, if it was delivered under a different commit, re-ship with \
+         `orbit run ship {} --ignore-dependency-delivery`",
+        dependents.join(" ")
     )
 }

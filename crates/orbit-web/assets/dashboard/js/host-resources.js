@@ -1,6 +1,6 @@
 // These live chips observe the selected host (the serving host unless the host
 // picker names another), independently of workspace scope.
-import { el, findRegisteredHost, getHost, getServingHost, hostDisplayName, infoHint, isHostUnavailable } from './common.js';
+import { resourcePillTone, el, findRegisteredHost, getHost, getServingHost, hostDisplayName, infoHint, isHostUnavailable } from './common.js';
 import { renderProviderUsage } from './provider-usage.js';
 
 export { describeProviderReading, providerReadingAge, renderProviderUsage } from './provider-usage.js';
@@ -286,7 +286,7 @@ function renderHostDetail(payload, rows, verdict, tone, pill, alarm) {
   panel.replaceChildren(
     el('div', { class: 'host-detail-head' }, [
       el('span', { class: 'host-detail-name', id: 'host-detail-name', text: name }),
-      el('span', { class: `host-detail-pill ${tone}`, text: pill }),
+      el('span', { class: 'pill', 'data-tone': resourcePillTone(tone), text: pill, title: pill }),
       infoHint(verdict.reason),
       el('span', { class: 'host-detail-age', text: verdict.age === 'age unknown' ? 'age unknown' : `sampled ${verdict.age}` }),
     ]),

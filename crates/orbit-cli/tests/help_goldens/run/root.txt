@@ -45,4 +45,5 @@ Examples:
   orbit run cancel <run_id> --confirm
 
 `orbit run <COMMAND> -h` lists a command's flags. Drain admission, concurrency
-and window rules: installed orbit-orchestrate skill `references/orchestration.md`.
+and window rules: installed orbit-orchestrate skill `references/orchestration-dispatch.md`
+and `references/orchestration-drain-control.md`.

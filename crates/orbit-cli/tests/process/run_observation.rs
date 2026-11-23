@@ -598,6 +598,56 @@ fn readiness_bootstrap_preserves_stale_runs_and_held_reservations() {
         .failure();
     fixture.assert_snapshot(&before, "invalid readiness must also preserve state");
 }
+fn readiness_repeated_task_ids_are_counted_once_before_limit() {
+    use orbit_core::TaskStatus;
+
+    let fixture = Fixture::init();
+    let task_id = fixture
+        .runtime()
+        .add_task(task_params(
+            "selected readiness task".into(),
+            "Repeated IDs select this task once.".into(),
+            TaskStatus::Backlog,
+        ))
+        .unwrap()
+        .id
+        .to_string();
+    let output = fixture
+        .orbit()
+        .args([
+            "run",
+            "readiness",
+            task_id.as_str(),
+            task_id.as_str(),
+            "--limit",
+            "1",
+            "--json",
+        ])
+        .output()
+        .expect("spawn readiness CLI");
+    assert!(
+        output.status.success(),
+        "duplicate explicit IDs should count once against the limit; stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let payload: Value = serde_json::from_slice(&output.stdout).expect("readiness JSON");
+    let tasks = payload["tasks"].as_array().expect("readiness task rows");
+    assert_eq!(
+        tasks.len(),
+        1,
+        "one task row for the repeated ID: {payload}"
+    );
+    assert_eq!(tasks[0]["task_id"], task_id);
+
+    let blank = fixture
+        .orbit()
+        .args(["run", "readiness", "", "--json"])
+        .output()
+        .expect("spawn readiness CLI with a blank ID");
+    assert!(!blank.status.success(), "blank task IDs remain invalid");
+    let error: Value = serde_json::from_slice(&blank.stderr).expect("read blank-ID error");
+    assert_eq!(error["code"], "invalid_input");
+}
 /// Make every login profile the fixture home's shell reads record a probe in
 /// `login-probes` and fail, so validation cannot resolve the login shell:
 /// each resolution then probes twice (interactive, then login-only).
@@ -2142,6 +2192,10 @@ contract!(
     shipped_security_job_uses_the_fixed_floor_unless_run_input_overrides_it,
     readiness_bootstrap_preserves_stale_runs_and_held_reservations,
     readiness_reports_total_and_notifies_only_when_backlog_is_truncated
+);
+contract!(
+    readiness_selection_contract,
+    readiness_repeated_task_ids_are_counted_once_before_limit
 );
 contract!(
     run_observation_contracts_1,

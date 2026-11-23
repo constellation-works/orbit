@@ -24,6 +24,8 @@ use orbit_types::plugin::is_full_commit_id;
 use orbit_types::workflow::MergeMessage;
 use serde_json::Value;
 
+pub use super::pr_forge_refresh::{BaseMergeInspection, inspect_base_merge};
+
 /// One open pull request as the closure policy matches it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ForgePullRequest {
@@ -77,9 +79,19 @@ pub struct PullRequestBlockers {
     /// Required checks on the head that have not finished, by name.
     pub pending_required_checks: Vec<String>,
     /// Required checks on the head that passed, skipped or ended neutral, by
-    /// name. With the other two lists empty, an empty list means the head
-    /// reports no required check at all.
+    /// name. When `failed_required_checks` and `pending_required_checks` are
+    /// also empty, an empty list means the head reports no required check
+    /// (`requires_status_checks == Some(false)` distinguishes a repository with
+    /// none configured from missing check runs).
     pub passed_required_checks: Vec<String>,
+    /// Configured required check names (classic branch protection, or a
+    /// ruleset when readable) that no required context on the head reported
+    /// at all, so they are neither passed, failed nor pending above. A head
+    /// whose reported required checks are all green still lacks these.
+    pub unreported_required_checks: Vec<String>,
+    /// Whether the PR's base branch requires any status checks when known
+    /// (`Some(false)` when neither branch protection nor rulesets require any).
+    pub requires_status_checks: Option<bool>,
 }
 
 /// Open pull request state needed for an operator's failure-handoff landing.
@@ -101,6 +113,10 @@ pub struct CheckRerunOutcome {
     /// The first request whose outcome could not be confirmed, and its error.
     pub uncertain: Option<(u64, String, String)>,
 }
+
+/// How a request to refresh a pull request's head with its base branch ended;
+/// shared with the delivery pipeline's base-inherited refresh [ORB-26860].
+pub use orbit_types::workflow::PullRequestRefreshOutcome;
 
 /// How a request to merge a pull request ended when the forge answered it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -243,6 +259,26 @@ pub trait TaskPrForge: Send + Sync {
     ) -> Result<PullRequestMergeOutcome, OrbitError> {
         Err(OrbitError::Execution(format!(
             "this forge cannot merge pull request #{number}"
+        )))
+    }
+
+    /// Bring pull request `number`'s `head_branch` at `expected_head_sha` up
+    /// to the tip of `base_branch` as one conflict-free merge commit, without
+    /// rebasing, rewriting or force-pushing, starting required checks on the
+    /// new head. Returns [`PullRequestRefreshOutcome::AlreadyUpToDate`] when
+    /// the head already includes the base tip and
+    /// [`PullRequestRefreshOutcome::Conflicting`] with the conflicting paths
+    /// when the merge would conflict.
+    fn update_pull_request_branch(
+        &self,
+        _repo_root: &Path,
+        number: u64,
+        _head_branch: &str,
+        _base_branch: &str,
+        _expected_head_sha: &str,
+    ) -> Result<PullRequestRefreshOutcome, OrbitError> {
+        Err(OrbitError::Execution(format!(
+            "this forge cannot refresh pull request #{number}"
         )))
     }
 
@@ -446,9 +482,10 @@ impl TaskPrForge for GhTaskPrForge {
         ) {
             return Err(unreadable_pull_request_blockers(number));
         }
-        pull_request_blockers_from_json(number, &pull)
-            .map(Some)
-            .ok_or_else(|| unreadable_pull_request_blockers(number))
+        let mut blockers = pull_request_blockers_from_json(number, &pull)
+            .ok_or_else(|| unreadable_pull_request_blockers(number))?;
+        populate_requires_status_checks(repo_root, &pull, &mut blockers);
+        Ok(Some(blockers))
     }
 
     fn handoff_landing_pull_request(
@@ -468,8 +505,9 @@ impl TaskPrForge for GhTaskPrForge {
         ) {
             return Err(unreadable_pull_request_blockers(number));
         }
-        let blockers = pull_request_blockers_from_json(number, &pull)
+        let mut blockers = pull_request_blockers_from_json(number, &pull)
             .ok_or_else(|| unreadable_pull_request_blockers(number))?;
+        populate_requires_status_checks(repo_root, &pull, &mut blockers);
         let base_branch = pull
             .get("baseRefName")
             .and_then(Value::as_str)
@@ -495,14 +533,14 @@ impl TaskPrForge for GhTaskPrForge {
         let Some(pull) = open_pull_request_document(repo_root, number)? else {
             return Ok(None);
         };
-        pull_request_blockers_from_json(number, &pull)
-            .map(Some)
-            .ok_or_else(|| {
-                OrbitError::Execution(format!(
-                    "gh api graphql did not report the author, head and complete required \
-                     checks of pull request #{number}"
-                ))
-            })
+        let mut blockers = pull_request_blockers_from_json(number, &pull).ok_or_else(|| {
+            OrbitError::Execution(format!(
+                "gh api graphql did not report the author, head and complete required \
+                 checks of pull request #{number}"
+            ))
+        })?;
+        populate_requires_status_checks(repo_root, &pull, &mut blockers);
+        Ok(Some(blockers))
     }
 
     /// Waits up to 120 seconds for in-progress workflows on the head, then
@@ -576,6 +614,23 @@ impl TaskPrForge for GhTaskPrForge {
         }
     }
 
+    fn update_pull_request_branch(
+        &self,
+        repo_root: &Path,
+        number: u64,
+        head_branch: &str,
+        base_branch: &str,
+        expected_head_sha: &str,
+    ) -> Result<PullRequestRefreshOutcome, OrbitError> {
+        super::pr_forge_refresh::update_pull_request_branch_with_gh(
+            repo_root,
+            number,
+            head_branch,
+            base_branch,
+            expected_head_sha,
+        )
+    }
+
     fn authenticated_login(&self, repo_root: &Path) -> Result<String, OrbitError> {
         let stdout = task_forge_gh_request(
             orbit_tools::github_cli::authenticated_login_request(),
@@ -606,7 +661,7 @@ impl TaskPrForge for GhTaskPrForge {
     }
 }
 
-fn view_pull_request(repo_root: &Path, number: u64) -> Result<Value, OrbitError> {
+pub(super) fn view_pull_request(repo_root: &Path, number: u64) -> Result<Value, OrbitError> {
     let stdout = task_forge_gh_request(
         orbit_tools::github_cli::view_pull_request_request(number),
         repo_root,
@@ -619,7 +674,7 @@ fn view_pull_request(repo_root: &Path, number: u64) -> Result<Value, OrbitError>
 /// request: an HTTP 4xx, which `gh` reports as `gh: <reason> (HTTP 405)`. A
 /// timed-out request or rate limit, a server error and a transport failure
 /// leave the outcome unknown or say nothing about the request.
-fn forge_refused_request(stderr: &str) -> bool {
+pub(super) fn forge_refused_request(stderr: &str) -> bool {
     stderr
         .rsplit_once("(HTTP ")
         .and_then(|(_, status)| status.split_once(')'))
@@ -636,7 +691,7 @@ fn has_state(entry: &Value, state: &str) -> bool {
 
 /// The forge drives a task's own pull request through leasing, landing, merge
 /// and its terminal close, so it spends the host's GitHub quota as delivery.
-const FORGE_QUOTA_CALLER: orbit_tools::github_quota::GithubCaller =
+pub(super) const FORGE_QUOTA_CALLER: orbit_tools::github_quota::GithubCaller =
     orbit_tools::github_quota::GithubCaller::Delivery;
 
 /// Run one forge `gh` request in `repo_root` under the host's GitHub quota
@@ -764,6 +819,25 @@ fn pull_request_blockers_from_json(number: u64, pull: &Value) -> Option<PullRequ
             }
         }
     }
+    let requires_status_checks = if !failed_required_checks.is_empty()
+        || !pending_required_checks.is_empty()
+        || !passed_required_checks.is_empty()
+        || classic_branch_protection_requires_checks(pull) == Some(true)
+    {
+        Some(true)
+    } else {
+        None
+    };
+    let mut unreported_required_checks = classic_required_contexts(pull);
+    unreported_required_checks.retain(|configured| {
+        ![
+            &failed_required_checks,
+            &pending_required_checks,
+            &passed_required_checks,
+        ]
+        .into_iter()
+        .any(|observed| observed.contains(configured))
+    });
     Some(PullRequestBlockers {
         pull: ForgePullRequest {
             number,
@@ -780,5 +854,110 @@ fn pull_request_blockers_from_json(number: u64, pull: &Value) -> Option<PullRequ
         failed_required_checks,
         pending_required_checks,
         passed_required_checks,
+        unreported_required_checks,
+        requires_status_checks,
     })
+}
+
+/// The check names classic branch protection requires on the base branch. An
+/// entry without a readable name is kept under a placeholder that no check
+/// reports, so it can never be taken as satisfied.
+fn classic_required_contexts(pull: &Value) -> Vec<String> {
+    let Some(checks) = pull
+        .pointer("/baseRef/branchProtectionRule/requiredStatusChecks")
+        .and_then(Value::as_array)
+    else {
+        return Vec::new();
+    };
+    checks
+        .iter()
+        .map(|check| {
+            check
+                .get("context")
+                .and_then(Value::as_str)
+                .unwrap_or("unnamed required check")
+                .to_string()
+        })
+        .collect()
+}
+
+fn classic_branch_protection_requires_checks(pull: &Value) -> Option<bool> {
+    let base_ref = pull.get("baseRef").filter(|value| !value.is_null())?;
+    let rule = base_ref.get("branchProtectionRule")?;
+    if rule.is_null() {
+        return Some(false);
+    }
+    let checks = rule.get("requiredStatusChecks")?.as_array()?;
+    Some(!checks.is_empty())
+}
+
+fn populate_requires_status_checks(
+    repo_root: &Path,
+    pull: &Value,
+    blockers: &mut PullRequestBlockers,
+) {
+    // Classic protection that is configured or unreadable is already decided.
+    // With none, a ruleset may still require checks the head never reported,
+    // so the rules are read even when some required check was observed.
+    if classic_branch_protection_requires_checks(pull) != Some(false) {
+        return;
+    }
+    let Some(base_branch) = pull
+        .get("baseRefName")
+        .and_then(Value::as_str)
+        .filter(|base| !base.is_empty())
+    else {
+        return;
+    };
+    let Ok(stdout) = task_forge_gh_request(
+        orbit_tools::github_cli::branch_protection_rules_request(base_branch),
+        repo_root,
+        "gh api rules/branches",
+    ) else {
+        return;
+    };
+    let Ok(Value::Array(rules)) =
+        orbit_tools::github_cli::parse_gh_json(&stdout, "gh api rules/branches")
+    else {
+        return;
+    };
+    if rules.len() >= 100 {
+        return;
+    }
+    let mut configured = Vec::new();
+    for rule in &rules {
+        if rule.get("type").and_then(Value::as_str) == Some("required_status_checks") {
+            let Some(checks) = rule
+                .pointer("/parameters/required_status_checks")
+                .and_then(Value::as_array)
+            else {
+                return;
+            };
+            configured.extend(checks.iter().map(|check| {
+                check
+                    .get("context")
+                    .and_then(Value::as_str)
+                    .unwrap_or("unnamed required check")
+                    .to_string()
+            }));
+        }
+    }
+    if configured.is_empty() {
+        blockers.requires_status_checks.get_or_insert(false);
+        return;
+    }
+    blockers.requires_status_checks = Some(true);
+    for name in configured {
+        let reported = [
+            &blockers.failed_required_checks,
+            &blockers.pending_required_checks,
+            &blockers.passed_required_checks,
+            &blockers.unreported_required_checks,
+        ]
+        .into_iter()
+        .any(|names| names.contains(&name));
+        if !reported {
+            blockers.unreported_required_checks.push(name);
+        }
+    }
 }

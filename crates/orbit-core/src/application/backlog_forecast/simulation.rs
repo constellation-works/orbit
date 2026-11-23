@@ -551,6 +551,36 @@ pub(super) fn simulate_backlog_forecast(
     let deadline = arrivals_active.then_some(deadline);
     let max_generated = rework::max_generated();
     let expired = || deadline.is_some_and(|deadline| Instant::now() >= deadline);
+    // Give each task a replayable stream. This makes its correction
+    // anchors exact for the sampled scripts without retaining every script.
+    let mut item_seeds = SplitMix64::seeded(FORECAST_SEED.wrapping_add(1));
+    let draw_script = |index, rng: &mut SplitMix64, script: &mut Script| {
+        let delivery = model::draw_forecast_delivery(rng, &resolved[index], history);
+        model::draw_forecast_attempts(
+            rng,
+            &items[index],
+            &resolved[index],
+            episodes,
+            delivery,
+            script,
+        );
+        delivery.hours
+    };
+    let mut item_draws: Vec<_> = items
+        .iter()
+        .enumerate()
+        .map(|(index, item)| {
+            let seed = item_seeds.next_u64();
+            let adjustment = if expired() {
+                Default::default()
+            } else {
+                correction.prepare_script_correction(&item.complexity, seed, |rng, script| {
+                    draw_script(index, rng, script);
+                })
+            };
+            (SplitMix64::seeded(seed), adjustment)
+        })
+        .collect();
     for _ in 0..ITERATIONS {
         if expired() {
             for outcome in &mut outcomes {
@@ -561,22 +591,14 @@ pub(super) fn simulate_backlog_forecast(
             break;
         }
         // Both scenarios replay the same attempts.
-        for (index, item) in items.iter().enumerate() {
-            let delivery = model::draw_forecast_delivery(&mut rng, &resolved[index], history);
-            hours[index] = delivery.hours;
-            model::draw_forecast_attempts(
-                &mut rng,
-                item,
-                &resolved[index],
-                episodes,
-                delivery,
-                &mut scripts[index],
-            );
-            let base = correction::script_spend(&scripts[index]);
+        for (index, (rng, adjustment)) in item_draws.iter_mut().enumerate() {
+            let script = &mut scripts[index];
+            hours[index] = draw_script(index, rng, script);
+            let base = correction::script_spend(script);
             base_usage[index][0].push(base.hours);
             base_usage[index][1].push(base.tokens);
             base_usage[index][2].push(base.usd);
-            correction::apply_script(correction, &item.complexity, &mut scripts[index]);
+            correction::apply_script_correction(adjustment, script);
         }
         let scenarios = [Some(&backlog_scenario), approved_scenario.as_ref()];
         'scenarios: for (scenario_index, (scenario, outcome)) in
@@ -597,6 +619,7 @@ pub(super) fn simulate_backlog_forecast(
                     episodes,
                     &mut rng,
                     correction,
+                    deadline,
                 )
             } else {
                 (Vec::new(), false)
@@ -622,7 +645,12 @@ pub(super) fn simulate_backlog_forecast(
                         &mut rng,
                         correction,
                         &mut generated,
+                        deadline,
                     );
+                    if expired() {
+                        outcome.cut = Some(SimulationCut::ComputeBudget);
+                        continue 'scenarios;
+                    }
                 }
                 let templates: Vec<usize> = (0..items.len())
                     .chain(generated.iter().map(|node| node.template))

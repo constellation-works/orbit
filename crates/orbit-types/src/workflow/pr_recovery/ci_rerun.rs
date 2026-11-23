@@ -1,4 +1,5 @@
 //! Unchanged-head CI retries, reserved before external mutation.
+use super::auto_fix::pr_auto_fix_no_edit_reruns;
 use crate::plugin::is_sha1_commit_id;
 use crate::task::{TaskDecision, TaskHistoryEntry};
 use serde::{Deserialize, Serialize};
@@ -8,9 +9,10 @@ use serde_json::Value;
 pub const CI_RERUN_RESERVED_EVENT: &str = "ci_check_rerun_reserved";
 
 /// The independently classified root of a workflow-wide failed-jobs retry.
-/// `classification` is `transient`, `flaky` or `unattributed`: a failure
-/// whose cause no evidence established yet, rerun once per head so its
-/// [`CiFailureClass`](super::CiFailureClass) can be told apart.
+/// `classification` is `transient`, `flaky`, `unattributed`, or
+/// `no_edit_repair`: a failure whose cause no evidence established yet, or
+/// which an admitted auto-fix check repair left with no edit, rerun once per
+/// head.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CiRerunRoot {
@@ -736,9 +738,24 @@ pub fn decide_ci_rerun_with_policy(
         || plan.roots.iter().any(|root| {
             !matches!(
                 root.classification.as_str(),
-                "transient" | "flaky" | "unattributed"
+                "transient" | "flaky" | "unattributed" | "no_edit_repair"
             )
         })
+    {
+        return CiRerunAdmission::Refused(CiRerunRefusal::InvalidAuthorization);
+    }
+    let no_edit_repair = plan
+        .roots
+        .iter()
+        .any(|root| root.classification == "no_edit_repair");
+    if no_edit_repair
+        && (plan
+            .roots
+            .iter()
+            .any(|root| root.classification != "no_edit_repair")
+            || !pr_auto_fix_no_edit_reruns(history, &plan.pr_number)
+                .into_iter()
+                .any(|record| record.head_sha == plan.head_sha))
     {
         return CiRerunAdmission::Refused(CiRerunRefusal::InvalidAuthorization);
     }

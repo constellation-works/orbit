@@ -285,9 +285,10 @@ Each destination reports its own health as part of its candidate read, once per 
 workspace checkout: one `host_unhealthy` item when any default `orbit doctor` workspace check
 fails or warns, with `detail.cause = doctor` and the failing checks in `detail.checks` (errors
 first, at most 32). Those checks include the follower's latest pull drain, so an owner refusing
-its `orbit.drain.probe` on protocol skew appears here. Severity is `critical` when the answering
-host owns the workspace, otherwise `high`; `since` is `null` because the doctor records no
-onset, and the fingerprint covers each failing check's name and status, not its message. A
+its `orbit.drain.probe` on protocol skew appears here. Severity is `critical` only when the
+answering host owns the workspace and a check errors; a result with warnings alone is `high`, as
+is any non-owner result. `since` is `null` because the doctor records no onset, and the
+fingerprint covers each failing check's name and status, not its message. A
 session without the Operator capability gets a `degraded` entry with code `capability` instead.
 
 ### CLI routing

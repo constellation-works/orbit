@@ -465,6 +465,7 @@ def self_test():
     process_observation_denial_self_test(harness, scratch)
     darwin_process_observation_self_test(harness, scratch)
     dashboard_builtin_self_test(harness, scratch)
+    website_install_redaction_self_test(harness, scratch)
     retired_cases_orphan_proof_self_test(harness, scratch)
     source_identity_self_test(harness, scratch)
     scratch_cleanup_race_self_test(harness, scratch)
@@ -2181,9 +2182,28 @@ if mode == "descendant-pipe":
                       "import os, sys, time; os.setsid(); "
                       "open(sys.argv[1], 'w').write(str(os.getpid())); time.sleep(45)",
                       os.environ["QA_DASHBOARD_HOLDER"]])
-body = {"/healthz": "ok",
-        "/api/workspaces": json.dumps([{"repo_root": os.getcwd()}]),
-        "/api/tasks": json.dumps([{"id": "QAF-1"}])}
+shape = os.environ.get("QA_DASHBOARD_SHAPE", "valid")
+# The real API shapes: a bare array of workspace rows with a `root`, and a
+# task envelope whose `items` hold the rows. Each other shape breaks one
+# contract and, where it can, plants the expected identifier elsewhere.
+health = {"health-starting": "starting", "health-prefix": "ok but starting"}.get(shape, "ok")
+root = {"wrong-root": os.getcwd() + "-other", "no-root": None}.get(shape, os.getcwd())
+row = {"id": "ws-1", "name": os.getcwd(), "orbit_dir": os.getcwd() + "/.orbit"}
+if root is not None:
+    row["root"] = root
+if shape == "root-in-other-field":
+    row.pop("root", None)
+    row["root_note"] = os.getcwd()
+task_id = {"wrong-task": "QAF-2"}.get(shape, "QAF-1")
+task_row = {"id": task_id, "title": "QAF-1 mentioned only in the title"}
+tasks = {"items": [task_row], "total": 1}
+if shape == "tasks-bare-list":
+    tasks = [task_row]
+if shape == "task-in-other-field":
+    tasks = {"items": [{"id": "QAF-2", "title": "QAF-1"}], "total": 1, "echo": "QAF-1"}
+body = {"/healthz": health,
+        "/api/workspaces": json.dumps([row]),
+        "/api/tasks": json.dumps(tasks)}
 
 class Handler(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
@@ -2197,6 +2217,71 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
 http.server.HTTPServer(("127.0.0.1", port), Handler).serve_forever()
 """
+
+
+# Synthetic diagnostics only: reserved example hosts and documentation addresses.
+INSTALL_REDACTION_NPM = r"""
+import sys
+print("SKIP: registry unreachable at https://user:hunter2@registry.example.test/pkg?x=1", file=sys.stderr)
+print("DEFERRED: proxy 192.0.2.7 refused the connection")
+print("skipping optional dependency, Authorization: Bearer synthetic-value")
+print("npm http fetch GET 200 https://registry.example.test/left-pad 12ms")
+print("npm warn config //registry.example.test/:_authToken=synthetic-value", file=sys.stderr)
+"""
+
+
+def website_install_redaction_self_test(harness, scratch):
+    """No report projection of the npm install keeps raw URLs, addresses or credentials."""
+    from unittest import mock
+    qa = runpy.run_path(str(harness))
+    raw = ("registry.example.test", "192.0.2.7", "hunter2", "synthetic-value")
+    notices = {"SKIP:", "DEFERRED:", "skipping"}
+    for refuse_cleanup in (False, True):
+        print(f"website install redaction regression: cleanup_refused={refuse_cleanup}", flush=True)
+        with tempfile.TemporaryDirectory(prefix="qa-install-", dir=scratch) as tmp:
+            temp = Path(tmp).resolve()
+            repo = temp / "repo"
+            (repo / "website").mkdir(parents=True)
+            (repo / "website/package.json").write_text("{}")
+            (repo / "CHANGELOG.md").write_text("fixture changelog")
+            npm = temp / "bin/npm"
+            npm.parent.mkdir()
+            npm.write_text(f"#!{sys.executable}\n" + INSTALL_REDACTION_NPM)
+            npm.chmod(0o755)
+            env = {**os.environ, "PATH": f"{npm.parent}:{os.environ['PATH']}"}
+            work = temp / "work"
+            work.mkdir()
+            qa["_LOCAL_COMMAND_CLEANUP"].clear()
+            try:
+                if refuse_cleanup:
+                    with mock.patch("os.killpg", side_effect=PermissionError("fixture cleanup refusal")):
+                        evidence = qa["website_build_evidence"](repo, work, env, ["true"])
+                else:
+                    evidence = qa["website_build_evidence"](repo, work, env, ["true"])
+                preparation = evidence["preparation"]
+                projections = {"preparation": preparation,
+                               "unverified_commands": qa["unverified_local_commands"](),
+                               "notices": qa["execution_notices"](evidence)}
+                for name, value in projections.items():
+                    text = json.dumps(value)
+                    assert not any(item in text for item in raw), (name, value)
+                # Classification survives: each notice keeps its marker.
+                markers = {marker for marker in notices
+                           if any(item.lower().startswith(marker.lower()) for item in preparation["capability_notices"])}
+                assert markers == notices, preparation["capability_notices"]
+                assert preparation["command"] == ["npm", "--prefix", "website", "ci"], preparation
+                expected_exit = None if refuse_cleanup else 0
+                assert preparation["exit_code"] == expected_exit, preparation
+                assert preparation["cleanup_verified"] is (not refuse_cleanup), preparation
+                if refuse_cleanup:
+                    unverified = projections["unverified_commands"]
+                    assert len(unverified) == 1 and unverified[0]["command"] == preparation["command"], unverified
+                    assert unverified[0]["exit_code"] == expected_exit, unverified
+                    assert "fixture cleanup refusal" in unverified[0]["stderr"], unverified
+                else:
+                    assert projections["unverified_commands"] == [], projections
+            finally:
+                qa["_LOCAL_COMMAND_CLEANUP"].clear()
 
 
 def dashboard_builtin_self_test(harness, scratch):
@@ -2213,6 +2298,18 @@ def dashboard_builtin_self_test(harness, scratch):
         holder = temp / "holder.pid"
         assertions = ["healthz-is-ready", "workspace-api-identifies-bound-checkout",
                       "task-api-reads-persisted-task"]
+        # Each response contract is judged alone: breaking one fails the row
+        # even when the workspace path and task ID appear in another field.
+        for shape in ("health-starting", "health-prefix", "no-root", "wrong-root",
+                      "root-in-other-field", "wrong-task", "task-in-other-field",
+                      "tasks-bare-list"):
+            print(f"dashboard builtin negative control: {shape}", flush=True)
+            env = {**os.environ, "TMPDIR": str(temp), "QA_DASHBOARD_HOLDER": str(holder),
+                   "QA_DASHBOARD_MODE": "ready", "QA_DASHBOARD_SHAPE": shape}
+            result = qa["dashboard_api_boundary"](str(orbit), temp / "home", work, env,
+                                                  "QAF-1", "fixture-candidate")
+            assert result["outcome"] == "FAIL" and result["assertions"] == [], (shape, result)
+            assert result["cleanup_verified"] is True, (shape, result)
         for mode in ("ready", "descendant-pipe", "cleanup-refused"):
             print(f"dashboard builtin regression: {mode}", flush=True)
             env = {**os.environ, "TMPDIR": str(temp), "QA_DASHBOARD_HOLDER": str(holder),

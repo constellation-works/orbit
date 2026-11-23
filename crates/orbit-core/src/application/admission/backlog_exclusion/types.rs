@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use chrono::{DateTime, Utc};
 use orbit_types::task::{Task, TaskReferenceIndex, TaskStatus};
@@ -171,6 +171,11 @@ pub(crate) enum BacklogTaskExclusionReason {
     /// work is in flight or ranked ahead, so a multi-slot ship leaves it for a
     /// run where it goes alone [ORB-15191]. `detail` names the fix.
     AwaitingExclusiveSlot,
+    /// The task needs the host-wide perf lane and another perf task on this
+    /// host holds it: a claim, an in-progress run, or a task an owner wave
+    /// admitted that has not started. It waits until that holder leaves the
+    /// lane; `detail` names the holder.
+    PerfLaneBusy,
 }
 
 /// The overlap `orbit task eligible` reports, so a conflict means the same
@@ -207,6 +212,8 @@ pub(crate) struct BacklogSnapshot {
     /// selection, exclusion reasons, and the lock-wait diagnostic all name the
     /// same holder for the same selector [ORB-11973].
     pub(crate) lock_holders: BTreeMap<String, Vec<String>>,
+    /// Tasks with live execution claims on a different machine.
+    pub(crate) remote_claims: BTreeSet<String>,
     /// Backlog tasks minted over a frozen delivery batch that nears its
     /// admission deadline, with that deadline [ORB-14624]. They sort ahead of
     /// same-priority backlog in `admissible_leaves`.

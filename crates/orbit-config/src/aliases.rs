@@ -38,7 +38,6 @@
 use std::path::Path;
 
 use orbit_common::OrbitError;
-use orbit_common::security::redaction::redact_home_dir;
 
 use crate::config_document;
 use crate::operation::{
@@ -191,7 +190,7 @@ fn translate_sweep_pools(document: &mut toml::Value, config_path: &Path) -> Resu
         return Err(OrbitError::InvalidInput(format!(
             "{}: {keys} (deprecated) name different pools, and every sweep-filed task now draws \
              from one: set {SWEEP_TASKS_CREWS_KEY} and delete them",
-            display_path(config_path)
+            config_document::redacted_display(config_path)
         )));
     }
     let first = first.clone();
@@ -259,7 +258,7 @@ fn translate_review_timing(
                  (deprecated) would both be on, counting a half this file leaves to the global \
                  file; there is one review layer before landing, so set {REVIEW_TIMING_KEY} to \
                  one of them",
-                display_path(config_path)
+                config_document::redacted_display(config_path)
             ))
         })?;
     // The old policy took its timing's layer from the half that decided it:
@@ -310,7 +309,7 @@ fn translate_worker_containment(
             return Err(OrbitError::InvalidInput(format!(
                 "{}: {LEGACY_WORKER_CONTAINMENT_STRICT_KEY}=true requires \
                  {WORKER_CONTAINMENT_KEY}=true; set {WORKER_CONTAINMENT_KEY} = \"strict\" instead",
-                display_path(config_path)
+                config_document::redacted_display(config_path)
             )));
         }
         (true, true) => "strict",
@@ -390,8 +389,4 @@ pub(crate) fn has_legacy_worker_containment(document: &toml::Value) -> bool {
         config_document::config_value_at_path(document, WORKER_CONTAINMENT_KEY),
         Some(toml::Value::Boolean(_))
     )
-}
-
-fn display_path(config_path: &Path) -> String {
-    redact_home_dir(&config_path.display().to_string())
 }

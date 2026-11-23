@@ -97,7 +97,16 @@ def main() -> None:
         + '      extensible: sourceModel\n    data:\n'
         + '      - ["orbit_barrier_probe::tainted_input", "ReturnValue", "remote", "manual"]\n',
         encoding="utf-8")
-    environment = dict(os.environ, ORBIT_SCRATCH_DIR=str(fixture / ".orbit/tmp"))
+    environment = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+    environment.update(
+        ORBIT_SCRATCH_DIR=str(fixture / ".orbit/tmp"),
+        GIT_CONFIG_GLOBAL=os.devnull,
+        GIT_CONFIG_NOSYSTEM="1",
+        GIT_CEILING_DIRECTORIES=str(scratch),
+    )
+    subprocess.run(["git", "init", "-q"], cwd=fixture, env=environment, check=True)
+    subprocess.run(["git", "add", "Cargo.toml", "src", "scripts", ".github"],
+                   cwd=fixture, env=environment, check=True)
     command = [str(fixture / "scripts/codeql-rust-local.sh"), "--ram", "16384", SUITE]
     log = fixture / "runner.log"
     print(f"CodeQL barrier fixture: {fixture}", flush=True)

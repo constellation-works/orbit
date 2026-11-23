@@ -48,27 +48,43 @@ pub(crate) const WORKFLOW_SHIP_OPERATION_ID: &str = "orbit.workflow.ship";
 /// Canonical tool name of a delivery pull request's landing.
 pub(crate) const WORKFLOW_LAND_OPERATION_ID: &str = "orbit.workflow.land";
 
+/// Canonical tool name of a delivery pull request's base-branch refresh.
+pub(crate) const WORKFLOW_REFRESH_OPERATION_ID: &str = "orbit.workflow.refresh";
+
 /// Canonical tool name of `orbit.task.recover` action `repilot`.
 pub(crate) const TASK_REPILOT_OPERATION_ID: &str = "orbit.task.repilot";
 
 /// Canonical tool name of `orbit.task.recover` action `requeue`.
 pub(crate) const TASK_REQUEUE_OPERATION_ID: &str = "orbit.task.requeue";
 
+/// Canonical tool name of `orbit.task.recover` action `resume_delivery`.
+pub(crate) const TASK_RESUME_DELIVERY_OPERATION_ID: &str = "orbit.task.resume_delivery";
+
 /// The operator-row tools a resident cycle reaches through its mandate's
 /// rights instead: ship, re-pilot and requeue under `dispatch`, land under
-/// `merge`. Every other operator row, the other recover actions included,
-/// holds a cycle to the operator capability.
-const RESIDENT_CYCLE_RIGHT_GATED_OPERATIONS: [&str; 4] = [
+/// `merge`, refresh under `refresh`, and delivery recovery under `recover`. Every other operator row, the other
+/// recover actions included, holds a cycle to the operator capability.
+const RESIDENT_CYCLE_RIGHT_GATED_OPERATIONS: [&str; 6] = [
     WORKFLOW_SHIP_OPERATION_ID,
     WORKFLOW_LAND_OPERATION_ID,
+    WORKFLOW_REFRESH_OPERATION_ID,
     TASK_REPILOT_OPERATION_ID,
     TASK_REQUEUE_OPERATION_ID,
+    TASK_RESUME_DELIVERY_OPERATION_ID,
 ];
 
 /// Whether `tool` is an operator-row tool a resident cycle reaches through
 /// its mandate's rights rather than the operator capability.
 pub fn is_resident_cycle_right_gated_operation(tool: &str) -> bool {
     RESIDENT_CYCLE_RIGHT_GATED_OPERATIONS.contains(&tool)
+}
+
+/// Routing hint for a nested client. The resident broker authenticates the
+/// caller and resolves the target workspace against the live cycle's grant.
+pub fn route_resident_delivery_recovery_to_broker(tool: &str) -> bool {
+    tool == TASK_RESUME_DELIVERY_OPERATION_ID
+        && std::env::var_os("ORBIT_PLUGIN_BROKER").is_some()
+        && crate::run_input::managed_run_context_run_id_from_env().is_some()
 }
 
 /// Identity facts retained after operator admission.

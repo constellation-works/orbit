@@ -244,7 +244,9 @@ impl<H: RuntimeHost + ?Sized> PollDriver<'_, H> {
                 "reconciliation did not confirm matching MERGED evidence".into(),
             ));
         }
-        ensure_pr_head_is_reviewed(&status, self.pr_number, self.reviewed_head_sha.as_deref())?;
+        if !self.base_adopted {
+            ensure_pr_head_is_reviewed(&status, self.pr_number, self.reviewed_head_sha.as_deref())?;
+        }
         self.delivered_merge(&status).map(Some)
     }
 

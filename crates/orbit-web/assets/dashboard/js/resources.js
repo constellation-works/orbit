@@ -239,7 +239,7 @@ function units() {
 
 function emptySection() {
   const p = lastPayload;
-  return el("section", { class: "mx-card rp-card", "aria-label": "Resource profiles" }, [
+  return el("section", { class: "card mx-card rp-card", "aria-label": "Resource profiles" }, [
     el("div", { class: "mx-empty" }, [
       el("div", { class: "mx-empty-title", text: "No resource profiles on this host for this workspace yet" }),
       el("div", { class: "mx-empty-detail", text: `A profile is learned from the CPU and memory each delivery's workers recorded on this host. It appears once a delivery the drain admitted here finishes; each covers the last ${p.profile_window} completed deliveries of its kind, whatever their age.` }),
@@ -264,7 +264,7 @@ function profileSection() {
   const shown = all.filter((series) => !hidden.has(series.key));
   const visible = shown.length ? shown : all;
   const u = units();
-  return el("section", { class: "mx-card rp-card", "aria-label": "Resource profiles" }, [
+  return el("section", { class: "card mx-card rp-card", "aria-label": "Resource profiles" }, [
     el("div", { class: "rp-head" }, [
       classPicker(classes, workClass),
       historyPicker(),
@@ -321,7 +321,9 @@ function historyPicker() {
     });
     button.dataset.history = key ?? "window";
     button.addEventListener("click", () => {
-      if (view.last === key) return;
+      // Compare with the history on screen, not the last pick: a pick whose
+      // read failed must stay retryable.
+      if ((lastPayload?.last ?? null) === key) return;
       view.last = key;
       view.hover = null;
       fetchAndRenderResources();
@@ -361,42 +363,48 @@ function focusIn(selector) {
 
 function seriesCards(all, hidden, workClass, u) {
   const min = lastPayload.min_profile_deliveries;
-  return el("div", { class: "mx-series", role: "group", "aria-label": "Series" }, all.map((series) => {
-    const on = !hidden.has(series.key);
-    const peakCpu = series.profile.peak_cpu_cores || {};
-    const peakMem = series.profile.peak_memory_bytes || {};
-    const button = el("button", {
-      class: `mx-sc rp-s-${series.key}${on ? " on" : " off"}${series.sparse ? " rp-sparse" : ""}`,
-      type: "button",
-      "aria-pressed": on ? "true" : "false",
-      "aria-description": `${on ? "Hide" : "Show"} ${series.label}${series.sparse ? ` (sparse: fewer than ${min} deliveries)` : ""}`,
-    }, [
-      el("span", { class: "mx-sc-label" }, [
-        el("span", { class: "mx-swatch", "aria-hidden": "true" }),
-        series.label,
-        series.tag && series.tag !== series.label.toLowerCase() ? el("span", { class: "mx-sc-tag", text: series.tag }) : null,
-      ]),
-      el("span", { class: "mx-sc-value", text: u.cpuText(peakCpu.value) }),
-      el("span", { class: "mx-sc-delta" }, [
-        el("span", { class: "mx-sc-sub", text: `peak at +${peakCpu.minute ?? 0}m · mem p90 ${u.memText(peakMem.value)}` }),
-      ]),
-      el("span", { class: "mx-sc-foot" }, [
-        el("span", { class: series.sparse ? "rp-n low" : "rp-n", text: `${series.deliveries} deliveries` }),
-        series.sparse ? el("span", { class: "rp-sparse-tag", text: "sparse" }) : null,
-        el("span", { text: ` · to +${series.horizon}m` }),
-      ]),
-    ]);
-    button.addEventListener("click", () => {
-      const next = new Set(hidden);
-      if (next.has(series.key)) next.delete(series.key);
-      else next.add(series.key);
-      // The charts always keep one series.
-      if (!all.some((entry) => !next.has(entry.key))) return;
-      view.hidden[workClass] = [...next];
-      rerender();
-    });
-    return button;
-  }));
+  return el("div", { class: "stat-tiles" }, [
+    el("div", { class: "stat-tiles-row", role: "group", "aria-label": "Series" }, all.map((series) => {
+      const on = !hidden.has(series.key);
+      const peakCpu = series.profile.peak_cpu_cores || {};
+      const peakMem = series.profile.peak_memory_bytes || {};
+      const cpuText = u.cpuText(peakCpu.value);
+      const button = el("button", {
+        class: `stat-tile rp-s-${series.key}${on ? "" : " off"}${series.sparse ? " rp-sparse" : ""}`,
+        type: "button",
+        "aria-pressed": on ? "true" : "false",
+        "aria-description": `${on ? "Hide" : "Show"} ${series.label}${series.sparse ? ` (sparse: fewer than ${min} deliveries)` : ""}`,
+        "data-state": cpuText === "—" ? "unknown" : null,
+      }, [
+        el("span", { class: "stat-tile-label" }, [
+          el("span", { class: "mx-swatch", "aria-hidden": "true" }),
+          el("span", { class: "stat-tile-label-text", text: series.label }),
+          series.tag && series.tag !== series.label.toLowerCase() ? el("span", { class: "stat-tile-tag", text: series.tag }) : null,
+        ]),
+        el("span", { class: "stat-tile-figure", text: cpuText }),
+        el("span", { class: "stat-tile-compare" }, [
+          el("span", { text: `peak at +${peakCpu.minute ?? 0}m · mem p90 ${u.memText(peakMem.value)}` }),
+        ]),
+        el("span", { class: "stat-tile-note" }, [
+          el("span", { class: "profile-sample-count" }, [
+            el("span", { class: series.sparse ? "rp-n low" : "rp-n", text: `${series.deliveries} deliveries` }),
+            series.sparse ? el("span", { class: "badge", "data-tone": "warning", text: "sparse" }) : null,
+          ]),
+          el("span", { text: ` · to +${series.horizon}m` }),
+        ]),
+      ]);
+      button.addEventListener("click", () => {
+        const next = new Set(hidden);
+        if (next.has(series.key)) next.delete(series.key);
+        else next.add(series.key);
+        // The charts always keep one series.
+        if (!all.some((entry) => !next.has(entry.key))) return;
+        view.hidden[workClass] = [...next];
+        rerender();
+      });
+      return button;
+    })),
+  ]);
 }
 
 // ---- charts ---------------------------------------------------------------

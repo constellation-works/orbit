@@ -8,6 +8,7 @@ import select
 import shutil
 import signal
 import subprocess
+import sys
 import tempfile
 import time
 
@@ -105,11 +106,19 @@ if tool == "rm":
             event["owned_paths"].append(str(resolved))
     ready = os.environ.get("BENCH_BLOCK")
     if ready and (Path(ready) / "ready.json").exists():
-        event["live_pids"] = [
-            pid for pid in json.loads((Path(ready) / "ready.json").read_text(encoding="utf-8"))["pids"]
-            if Path("/proc", str(pid), "stat").exists()
-            and Path("/proc", str(pid), "stat").read_text().rsplit(")", 1)[1].split()[0] != "Z"
-        ]
+        def pid_is_live(pid):
+            try:
+                stat = Path("/proc", str(pid), "stat").read_text(encoding="utf-8")
+            except OSError:
+                return False
+            parts = stat.rsplit(")", 1)
+            return len(parts) == 2 and parts[1].split()[0] != "Z"
+
+        try:
+            recorded_pids = json.loads((Path(ready) / "ready.json").read_text(encoding="utf-8"))["pids"]
+        except (OSError, ValueError, KeyError):
+            recorded_pids = []
+        event["live_pids"] = [pid for pid in recorded_pids if pid_is_live(pid)]
     record()
     if event["unsafe"]:
         raise SystemExit("cleanup escaped the benchmark workdir")
@@ -381,14 +390,6 @@ def scenario_fresh_run(root, script, processes="1", inherited=None):
     return errors
 
 
-def pid_alive(pid):
-    try:
-        state = Path("/proc", str(pid), "stat").read_text(encoding="utf-8").rsplit(")", 1)[1].split()[0]
-    except OSError:
-        return False
-    return state != "Z"
-
-
 def read_arm_proc_identity(pid):
     """Return (process group, start time) for one live or zombie pid."""
     text = Path("/proc", str(pid), "stat").read_text(encoding="utf-8")
@@ -505,6 +506,7 @@ class OwnedArmIdentity:
 
     def __init__(self):
         self.fds = []
+        self.pid_fds = []
         self.retired = False
 
     def pin(self, pgid, extra_pids, expected_starts=None):
@@ -522,11 +524,27 @@ class OwnedArmIdentity:
             fd = pin_arm_pid(pid, pgid, expected_start)
             if fd is not None:
                 self.fds.append(fd)
+                self.pid_fds.append((pid, fd))
+
+    def live_pids(self, subset=None):
+        """Return pinned PIDs whose reserved incarnation is still alive."""
+        allowed = None if subset is None else set(subset)
+        live = []
+        for pid, fd in self.pid_fds:
+            if allowed is not None and pid not in allowed:
+                continue
+            try:
+                if pidfd_is_alive(fd):
+                    live.append(pid)
+            except OSError:
+                continue
+        return live
 
     def release_unsignaled(self):
         """Close captured pidfds without signalling them."""
         fds = self.fds
         self.fds = []
+        self.pid_fds = []
         for fd in fds:
             try:
                 os.close(fd)
@@ -556,6 +574,7 @@ class OwnedArmIdentity:
                 except OSError:
                     pass
             self.fds = []
+            self.pid_fds = []
 
 
 def retire_cancellation_processes(reservation, process):
@@ -612,7 +631,7 @@ def scenario_cancellation(root, script):
             return errors
         if process.returncode != 143:
             errors.append(f"cancellation did not report SIGTERM failure (exit {process.returncode})")
-        survivors = [pid for pid in pids if pid_alive(pid)]
+        survivors = reservation.live_pids(pids)
         if survivors:
             errors.append(f"arm processes survived the benchmark command: {survivors}")
         cleanup = [event for event in read_events(events) if event["tool"] == "rm"]
@@ -635,6 +654,7 @@ def scenario_cancellation_spawn_window(root, script):
     os.mkfifo(block / "parent-release")
     env["BENCH_BLOCK"] = str(block)
     env["RACE_ROOT"] = str(block)
+    env["HOOK_PYTHON"] = sys.executable
     hook = case / "bash-env"
     hook.write_text(
         "set -T\n"
@@ -683,7 +703,7 @@ def scenario_cancellation_spawn_window(root, script):
             return errors
         if process.returncode != 143:
             errors.append(f"spawn-window cancellation did not report SIGTERM failure (exit {process.returncode})")
-        survivors = [pid for pid in pids if pid_alive(pid)]
+        survivors = reservation.live_pids(pids)
         if survivors:
             errors.append(f"arm processes survived the spawn-window cancellation: {survivors}")
         cleanup = [event for event in read_events(events) if event["tool"] == "rm"]
@@ -706,6 +726,7 @@ def scenario_cancellation_flag_clear(root, script):
     os.mkfifo(block / "parent-release")
     env["BENCH_BLOCK"] = str(block)
     env["RACE_ROOT"] = str(block)
+    env["HOOK_PYTHON"] = sys.executable
     hook = case / "bash-env"
     # The hook publishes arm-owned only while it still holds the arm. Pending
     # cancel runs stop_arm as soon as record_arm returns, so an expired wait
@@ -763,27 +784,36 @@ def scenario_cancellation_flag_clear(root, script):
         "  \"${REAL_RM:-/bin/rm}\" -f -- \"$RACE_ROOT/arm-owned\" \"$RACE_ROOT/arm-owned.tmp\"",
         "  printf '%s\\n' expired > \"$RACE_ROOT/handshake-expired\"",
         "}",
+        "wait_for_path() {",
+        "  local mode=\"$1\" target=\"$2\"",
+        "  \"${HOOK_PYTHON:-python3}\" -c '",
+        "import os, sys, time",
+        "mode, target = sys.argv[1], sys.argv[2]",
+        "deadline = time.monotonic() + 5.0",
+        "while time.monotonic() < deadline:",
+        "    if mode == \"nonempty\":",
+        "        try:",
+        "            if os.path.getsize(target) > 0:",
+        "                sys.exit(0)",
+        "        except OSError:",
+        "            pass",
+        "    elif os.path.isfile(target):",
+        "        sys.exit(0)",
+        "    time.sleep(0.02)",
+        "sys.exit(1)",
+        "' \"$mode\" \"$target\"",
+        "}",
         "record_arm() {",
         "  if [[ \"$BASH_COMMAND\" == 'ARM_PGID=\"$group_pid\"' && \"$BASHPID\" == \"$$\" ]]; then",
         "    trap - DEBUG",
         "    printf '%s\\n' \"$group_pid\" > \"$RACE_ROOT/arm-pgid\"",
-        "    local waited",
-        "    for waited in $(seq 1 250); do",
-        "      if [[ -s \"$RACE_ROOT/ready.json\" ]]; then",
-        "        break",
-        "      fi",
-        "      sleep 0.02",
-        "    done",
-        "    if [[ ! -s \"$RACE_ROOT/ready.json\" ]] || ! publish_owned_arm \"$group_pid\"; then",
+        "    if ! wait_for_path nonempty \"$RACE_ROOT/ready.json\" || ! publish_owned_arm \"$group_pid\"; then",
         "      abandon_flag_clear_handshake",
         "      return 0",
         "    fi",
-        "    for waited in $(seq 1 250); do",
-        "      if [[ -f \"$RACE_ROOT/identity-pinned\" ]]; then",
-        "        return 0",
-        "      fi",
-        "      sleep 0.02",
-        "    done",
+        "    if wait_for_path file \"$RACE_ROOT/identity-pinned\"; then",
+        "      return 0",
+        "    fi",
         "    abandon_flag_clear_handshake",
         "  fi",
         "}",
@@ -880,7 +910,7 @@ def scenario_cancellation_flag_clear(root, script):
             except (OSError, ValueError, KeyError):
                 errors.append("flag-clear arm identity was not recorded")
                 pids = []
-        survivors = [pid for pid in pids if pid_alive(pid)]
+        survivors = reservation.live_pids(pids)
         if survivors:
             errors.append(f"arm processes survived the flag-clear cancellation: {survivors}")
         cleanup = [event for event in read_events(events) if event["tool"] == "rm"]
@@ -912,12 +942,11 @@ def probe_expired_flag_clear_hook(hook_text, root):
         json.dumps({"pids": [424243, 424244]}), encoding="utf-8")
     script = probe_root / "probe.sh"
     script.write_text("\n".join([
-        "seq() { printf '1\\n'; }",
-        "sleep() { :; }",
         "publish_owned_arm() {",
         "  printf '%s\\n' '424242 100' '424243 101' '424244 102' > \"$RACE_ROOT/arm-owned\"",
         "}",
         hook_text[start:end].rstrip("\n"),
+        "wait_for_path() { [[ \"$1\" == nonempty && -s \"$2\" ]]; }",
         "trap record_arm DEBUG",
         "group_pid=424242",
         "ARM_PGID=\"$group_pid\"",
@@ -944,7 +973,13 @@ def probe_expired_flag_clear_hook(hook_text, root):
 
 
 def scenario_cancellation_identity(root, script):
-    """Run both real cancellation teardowns against intercepted identities.
+    """Harness self-check of this file's cancellation teardown helpers.
+
+    This scenario does not execute bench-build-budget.sh. subprocess.Popen is
+    replaced by an in-process benchmark, so a regression in the real script
+    cannot fail it. The script is covered by scenario_cancellation,
+    scenario_cancellation_spawn_window, and scenario_cancellation_flag_clear.
+    `script` is checked only so this harness still receives that path.
 
     Reaping retires the arm group and permits a replacement in this model.
     A signal is unsafe when it targets a numeric PID/PGID or a pidfd whose
@@ -954,6 +989,8 @@ def scenario_cancellation_identity(root, script):
     the original arm retired before capture, and replacement pidfds are live.
     Parent liveness alone must not adopt that group.
     """
+    if Path(script).name != "bench-build-budget.sh":
+        return [f"harness self-check expected bench-build-budget.sh, not {script}"]
     import errno
     from unittest import mock
 
@@ -1123,9 +1160,6 @@ def scenario_cancellation_identity(root, script):
                     return None
                 return real_close(fd)
 
-            def fake_pid_alive(pid):
-                return mode == "assertion" and pid in (shim, child)
-
             with mock.patch("os.pidfd_open", fake_pidfd_open), \
                     mock.patch("os.kill", fake_kill), \
                     mock.patch("os.killpg", fake_killpg), \
@@ -1133,8 +1167,7 @@ def scenario_cancellation_identity(root, script):
                     mock.patch("signal.pidfd_send_signal", fake_send), \
                     mock.patch("select.select", fake_select), \
                     mock.patch("subprocess.Popen", FakeBenchmark), \
-                    mock.patch(f"{__name__}.read_arm_proc_identity", fake_read), \
-                    mock.patch(f"{__name__}.pid_alive", fake_pid_alive):
+                    mock.patch(f"{__name__}.read_arm_proc_identity", fake_read):
                 try:
                     scenario_errors = scenario(case_root, script)
                 except Exception as exc:
@@ -1237,7 +1270,8 @@ def main():
         ("cancellation", scenario_cancellation),
         ("cancellation-spawn-window", scenario_cancellation_spawn_window),
         ("cancellation-flag-clear", scenario_cancellation_flag_clear),
-        ("cancellation-identity", scenario_cancellation_identity),
+        # Harness self-check of the teardown helpers. It does not run the script.
+        ("cancellation-identity-harness-self-check", scenario_cancellation_identity),
     )
     failures = 0
     with tempfile.TemporaryDirectory(prefix="bench-build-budget-", dir=scratch) as directory:

@@ -59,6 +59,8 @@ pub(crate) const RIGHTS: &[EnumValue] = &[
     EnumValue::plain("promote"),
     EnumValue::plain("merge"),
     EnumValue::plain("plugin_upgrade"),
+    EnumValue::plain("refresh"),
+    EnumValue::plain("recover"),
 ];
 
 const ATTRIBUTION: &[ParamSpec] = &[mcp_only(
@@ -80,9 +82,9 @@ const GRANT_PARAMS: &[ParamSpec] = &[
     both(
         "add",
         ParamType::EnumList(RIGHTS),
-        "Rights to add: dispatch, promote, merge or plugin_upgrade. Widening.",
+        "Rights to add: dispatch, promote, merge, plugin_upgrade, refresh or recover. Widening.",
         CliArgKind::flag("add"),
-        "Right to add (dispatch, promote, merge, plugin_upgrade), repeatable",
+        "Right to add (dispatch, promote, merge, plugin_upgrade, refresh, recover), repeatable",
     ),
     both(
         "workspaces",
@@ -125,7 +127,7 @@ const GRANT: OperationSpec<ResidentVerb> = OperationSpec {
     verb: ResidentVerb::Grant,
     cli_path: &["grant"],
     tool_name: "orbit.resident.grant",
-    tool_description: "Widen or narrow a resident mandate's authority: its rights (dispatch, promote, merge, plugin_upgrade) and covered workspaces. Widening (add, workspaces) is the human's: from an operator it applies at once; from any other caller it changes nothing and raises one resident_authority decision request that quotes `quote` verbatim and names your session, and the authority changes only if a human answers grant. An open request for the same addition is returned, not duplicated; any authority change supersedes it. Narrowing (remove, drop_workspaces, a shorter deadline) applies at once for any caller that can write the assignment and is recorded with that caller. A call may not widen and narrow at once. Output {outcome, authority, request?} with outcome granted, requested or narrowed.",
+    tool_description: "Widen or narrow a resident mandate's authority: its rights (dispatch, promote, merge, plugin_upgrade, refresh, recover) and covered workspaces. Narrowing applies at once; widening is the human's. Rules and output: the orbit skill's tool-surface-registry.md reference, section `Resident tools`.",
     cli_about: "Widen or narrow a resident mandate's authority",
     cli_help: CliHelp::NONE,
     effect: Effect::Write,
@@ -216,7 +218,7 @@ const METRICS: OperationSpec<ResidentVerb> = OperationSpec {
     verb: ResidentVerb::Metrics,
     cli_path: &["metrics"],
     tool_name: "orbit.resident.metrics",
-    tool_description: "Report the resident widening measures over a window, derived read-only from task history, decision requests, checkpoints and audit rows: manual interventions (per mandate and per active mandate-day), escalation load (per mandate-day and per human-day, median answer latency, share answered with the recommended option, expired-unanswered), reversal rate (resident decisions and actions a human undid within 7 days, each counted once) and crashed-cycle recovery cost (cycles without a checkpoint, time to the next good checkpoint, recovery slot minutes, repeated actions, human interventions needed). With baseline, the same measures for an interactive assignment task; a measure that cannot be derived reports not_derivable, never zero. Read-only.",
+    tool_description: "Report the resident widening measures over a window, derived read-only from task history, decision requests, checkpoints and audit rows: interventions, escalation load, reversals and crash-recovery cost. Read-only. Measure definitions: the orbit skill's tool-surface-registry.md reference, section `Resident tools`.",
     cli_about: "Report resident interventions, escalation load, reversals and recovery cost",
     cli_help: CliHelp::NONE,
     effect: Effect::Read,

@@ -8,7 +8,6 @@
 //! entries, and a read that failed to the deadline is its own outcome.
 use orbit_common::{OrbitError, protocol::tool_input::parse_duration_seconds};
 use serde_json::Value;
-use std::collections::BTreeSet;
 use std::time::{Duration, Instant};
 
 /// Default and minimum gap between polls, in seconds.
@@ -27,7 +26,8 @@ pub enum AttentionWaitStatus {
     /// The deadline passed with an empty delta and an unchanged `degraded` set.
     /// The answer still lists whatever was degraded.
     TimedOut,
-    /// Every read up to the deadline failed, so nothing is known.
+    /// The final read before the deadline failed, so the current state is unknown.
+    /// Earlier reads may have succeeded.
     Unreadable,
 }
 
@@ -44,21 +44,29 @@ pub struct AttentionWaitOutcome {
     pub waited_seconds: u64,
 }
 
-/// The identity of a degraded entry, ignoring its free-text message.
-fn degraded_signature(response: &Value) -> BTreeSet<String> {
-    response["degraded"]
+type DegradedKey = (String, String, String, String);
+
+/// The identity of the degraded entries, sorted so a repeated identity counts.
+///
+/// An entry is its scope, kind, code and optional stable `subject` identity
+/// (such as a workflow key when `ci_red` degrades per workflow), ignoring
+/// free-text diagnostic messages.
+fn degraded_signature(response: &Value) -> Vec<DegradedKey> {
+    let mut signature: Vec<DegradedKey> = response["degraded"]
         .as_array()
         .into_iter()
         .flatten()
         .map(|entry| {
-            format!(
-                "{}|{}|{}",
-                entry["scope"].as_str().unwrap_or_default(),
-                entry["kind"].as_str().unwrap_or_default(),
-                entry["code"].as_str().unwrap_or_default()
+            (
+                entry["scope"].as_str().unwrap_or_default().to_owned(),
+                entry["kind"].as_str().unwrap_or_default().to_owned(),
+                entry["code"].as_str().unwrap_or_default().to_owned(),
+                entry["subject"].as_str().unwrap_or_default().to_owned(),
             )
         })
-        .collect()
+        .collect();
+    signature.sort();
+    signature
 }
 
 /// Wait for the attention delta since `input.since` to become non-empty or
@@ -89,7 +97,7 @@ pub(crate) fn wait_for_attention_delta(
     };
     let started = Instant::now();
     let deadline = started + Duration::from_secs(timeout_seconds);
-    let mut baseline: Option<BTreeSet<String>> = None;
+    let mut baseline: Option<Vec<DegradedKey>> = None;
     let mut last: Option<Value> = None;
     let mut last_error: Option<String>;
     loop {

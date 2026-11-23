@@ -471,8 +471,11 @@ function tableNode(chosen) {
 function cohortText() {
   const counted = series().reduce((sum, each) => sum + each.tasks, 0);
   const { immature = 0, no_size: noSize = 0 } = curves.excluded || {};
-  const tier = complexity ? `${TIER_LABELS[complexity] || complexity} · ` : "";
-  return `${tier}${plural(counted, "landed task")} counted · excluding ${plural(immature, "task")} too recent and ${plural(noSize, "task")} with no recorded diff size`;
+  if (complexity) {
+    const tier = TIER_LABELS[complexity] || complexity;
+    return `${tier}: ${plural(counted, "landed task")} counted · all complexities: excluding ${plural(immature, "task")} too recent and ${plural(noSize, "task")} with no recorded diff size`;
+  }
+  return `${plural(counted, "landed task")} counted · excluding ${plural(immature, "task")} too recent and ${plural(noSize, "task")} with no recorded diff size`;
 }
 
 function render({ scorecard, rerender }) {
@@ -513,7 +516,7 @@ function panelHint() {
   const lines = ["Share of landed tasks with a regression_from link observed within 7 days of completion, by lines changed, one curve per crew reference as dispatched. The Wilson 95% interval shows for the hovered or focused series; each point's count and interval are on hover and keyboard focus. Shown, not scored."];
   if (curves && !curves.failed) {
     lines.push(`Counts tasks with ${curves.follow_up_days} days of follow-up: too recent and no recorded diff size are excluded from the counted total.`);
-    lines.push(`Buckets with fewer than ${curves.min_bucket_tasks} tasks are not drawn. Hollow markers have fewer than ${curves.sparse_outcomes} regressed tasks: their rate rests on very few outcomes. Marker size grows with its bucket's task count. Crews with ${curves.min_series_tasks} or more tasks are drawn by default; the count beside each crew is regressed/landed tasks.`);
+    lines.push(`Buckets with fewer than ${curves.min_bucket_tasks} tasks are not drawn. Hollow markers have fewer than ${curves.sparse_outcomes} regressed tasks: their rate rests on very few outcomes. Marker size grows with its bucket's task count. Crews with ${curves.min_series_tasks} or more tasks and at least one drawn bucket (${curves.min_bucket_tasks}+ tasks) are selected by default; the count beside each crew is regressed/landed tasks.`);
   }
   return lines.join("\n");
 }

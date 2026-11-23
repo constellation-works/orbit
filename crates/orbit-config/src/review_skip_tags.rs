@@ -12,12 +12,12 @@ use std::path::Path;
 
 use orbit_common::OrbitError;
 use orbit_common::fs::path_filter::PathFilter;
-use orbit_common::security::redaction::redact_home_dir;
 use orbit_types::task::{
     LIGHT_DELIVERY_TAGS, MAX_REVIEW_SKIP_TAGS, REVIEW_SKIP_TAGS_KEY, ReviewSkipProfile,
 };
 use orbit_types::workflow::normalize_instruction_tag;
 
+use crate::config_document;
 use crate::tag_instructions::repository_path;
 
 /// The admitted review-skip table, keyed by normalized tag.
@@ -72,12 +72,7 @@ pub(crate) fn review_skip_tags_from_document(
     else {
         return Ok(ReviewSkipSettings::default());
     };
-    let invalid = |detail: String| {
-        OrbitError::InvalidInput(format!(
-            "invalid runtime config '{}': {detail}",
-            redact_home_dir(&config_path.display().to_string())
-        ))
-    };
+    let invalid = |detail: String| config_document::invalid_runtime_config(config_path, detail);
     let Some(table) = value.as_table() else {
         return Err(invalid(format!(
             "'{REVIEW_SKIP_TAGS_KEY}' must be a table of `[{REVIEW_SKIP_TAGS_KEY}.<tag>]` tables"

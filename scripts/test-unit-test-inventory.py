@@ -203,6 +203,15 @@ class UnitTestRatchetTests(unittest.TestCase):
             "lib.rs::one", "lib.rs::r#type", "lib.rs::two",
         ])
 
+    def test_unicode_test_identity_precedes_unannotated_function(self):
+        for name in ("café", "e\u0301"):
+            for suffix in ("", "fn unrelated() {}\n"):
+                self.write("crates/alpha/src/lib.rs", f"#[test]\nfn {name}() {{}}\n" + suffix)
+                result = self.run_inventory()
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(json.loads(result.stdout)["crates"]["alpha"]["test_function_paths"],
+                                 [f"lib.rs::{name}"])
+
     def test_same_line_attributes_before_test_fail_an_empty_baseline(self):
         # A test attribute later on the line is still a unit test. An empty
         # schema-v2 baseline must refuse it; literals and comments must not.

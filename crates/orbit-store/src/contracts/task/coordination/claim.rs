@@ -397,15 +397,24 @@ pub struct ClaimFailure {
     /// `transient` release.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub owner_busy: bool,
+    /// Set on a task-scoped delivery hold (such as a retained stale-branch
+    /// setup refusal) that needs operator inspection of the task's retained
+    /// state rather than blaming the executing host or its crew.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub delivery_hold: bool,
 }
 
 impl ClaimFailure {
     /// Whether the executing drain stops running the leaf's crew for the rest
     /// of its window: its class [says so](orbit_types::workflow::ClaimFailureClass::excludes_crew)
-    /// and it is neither a provider's content refusal nor a busy owner.
+    /// and it is neither a provider's content refusal, a busy owner, nor a
+    /// task-scoped delivery hold.
     #[must_use]
     pub fn excludes_crew(&self) -> bool {
-        self.class.excludes_crew() && !self.provider_refusal && !self.owner_busy
+        self.class.excludes_crew()
+            && !self.provider_refusal
+            && !self.owner_busy
+            && !self.delivery_hold
     }
 
     /// Whether a release for this failure counts against the task's release

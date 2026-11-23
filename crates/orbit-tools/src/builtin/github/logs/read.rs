@@ -174,7 +174,7 @@ fn selection_not_found_error(
     let detail = if let Some(step) = &selection.step {
         if selection_unsupported {
             format!(
-                "log step selection unsupported: \"{step}\" in run {}{job}: raw job logs name steps only by their `Run <command>` display group, not by workflow step name, so this step's identity and runtime boundaries cannot be reliably established in the raw log",
+                "log step selection unsupported: \"{step}\" in run {}{job}: raw job logs name steps only by their `Run <command>` display group, not by workflow step name, so this step's identity and runtime boundaries cannot be reliably established in the raw log; omit `step` and read by `job` with `scope` or a byte/line window",
                 requests.run_id
             )
         } else {

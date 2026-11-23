@@ -80,7 +80,22 @@ impl OrbitRuntime {
                     OrbitError::InvalidInput(format!("application read needs a `{key}` string"))
                 })
         };
-        let task = self.get_task(string("id")?)?;
+        let task_id = if input.get("id").is_some()
+            && input
+                .get(orbit_common::governance::task::TASK_ID_WIRE_ALIAS)
+                .is_some()
+        {
+            return Err(orbit_common::governance::task::task_id_alias_conflict_error());
+        } else if input.get("id").is_none()
+            && input
+                .get(orbit_common::governance::task::TASK_ID_WIRE_ALIAS)
+                .is_some()
+        {
+            string(orbit_common::governance::task::TASK_ID_WIRE_ALIAS)?
+        } else {
+            string("id")?
+        };
+        let task = self.get_task(task_id)?;
         let output = if tool == "orbit.task.show" {
             let fields: Vec<String> = match input.get("fields") {
                 None => APPLICATION_TASK_SHOW_FIELDS

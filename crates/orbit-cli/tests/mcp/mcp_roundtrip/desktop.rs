@@ -59,6 +59,49 @@ fn desktop_writes_reconcile_after_restart_and_reject_stale_or_implicit_destinati
     );
     assert_eq!(snapshot["revision"], again["snapshot"]["revision"]);
     assert_eq!(snapshot["actions"]["complete"]["enabled"], false);
+    let projected = client.call_tool_ok(
+        "orbit_task_show",
+        json!({"workspace":selector,"id":id,"snapshot":true,"fields":["revision"]}),
+    );
+    assert_eq!(projected["revision"], snapshot["revision"]);
+    assert_eq!(projected.as_object().unwrap().len(), 2);
+    let single = client.call_tool_ok(
+        "orbit_task_show",
+        json!({"workspace":selector,"id":id,"snapshot":true,"field":"revision"}),
+    );
+    assert_eq!(single["value"], snapshot["revision"]);
+    let limited = client.call_tool_ok(
+        "orbit_task_show",
+        json!({"workspace":selector,"id":id,"snapshot":true,"limit":1}),
+    );
+    assert_eq!(limited["revision"], snapshot["revision"]);
+    assert!(limited["note"].as_str().unwrap().contains("ignored"));
+    let review = client.call_tool_ok("orbit_task_update", json!({"workspace":selector,"id":id,"request_id":"projected-review","expected_revision":"stale","verdict":{"decision":"accept","rationale":"reviewed","criteria":[],"evidence":[]},"fields":["conflict"]}));
+    assert_eq!(review["conflict"]["code"], "revision_conflict");
+    assert_eq!(review.as_object().unwrap().len(), 2);
+    for (input, mode) in [
+        (
+            json!({"workspace":selector,"id":id,"snapshot":true,"bogus":true}),
+            "snapshot",
+        ),
+        (
+            json!({"workspace":selector,"id":id,"view":"bounded","fields":["title"]}),
+            "view: bounded",
+        ),
+        (
+            json!({"workspace":selector,"id":id,"request_id":"bad-review","expected_revision":"stale","verdict":{},"bogus":true}),
+            "guarded update",
+        ),
+    ] {
+        let tool = if mode == "guarded update" {
+            "orbit_task_update"
+        } else {
+            "orbit_task_show"
+        };
+        let error = client.call_tool_err(tool, input);
+        assert!(error.to_string().contains(mode), "{error}");
+    }
+
     let list = client.call_tool_ok("orbit_task_list", json!({"workspace":selector,"view":"bounded","search":"Desktop","status":"proposed","limit":1}));
     assert_eq!(list["total"], 1);
     assert_eq!(list["items"][0]["id"], id);
@@ -232,7 +275,7 @@ fn domain_automation_stdio_preserves_observed_routine_state_and_refuses_dispatch
     assert_eq!(unchanged["changed"], false, "{unchanged}");
     assert_eq!(std::fs::read(&routine_path).unwrap(), after_toggle);
     drop(client);
-    let mut client = workspace.serve_with_args(&["--operator"]);
+    let mut client = workspace.serve_with_args(&["--operator", "--toolset", "pipelines"]);
     let reopened = client.call_tool_ok(
         "orbit_routine_control",
         json!({"workspace":selector,"action":"list"}),
@@ -293,7 +336,8 @@ fn domain_automation_stdio_preserves_observed_routine_state_and_refuses_dispatch
         "disabled and mixed-input refusals do not submit runs"
     );
     drop(client);
-    let mut unprivileged = workspace.serve_with_args(&["--toolset", "automation,dispatch,runs"]);
+    let mut unprivileged =
+        workspace.serve_with_args(&["--toolset", "routines,pipelines,dispatch,runs"]);
     for (tool, input) in [
         (
             "orbit_routine_control",
@@ -338,7 +382,7 @@ fn replica_routine_control_enables_only_worktree_gc_and_names_the_owner_for_the_
     let auto_task_path = workspace.work.join(".orbit/auto_tasks/qa-sweep.yaml");
     let ci_sweep_before = std::fs::read(&ci_sweep_path).unwrap();
     let auto_task_before = std::fs::read(&auto_task_path).unwrap();
-    let mut client = workspace.serve_with_args(&["--operator"]);
+    let mut client = workspace.serve_with_args(&["--operator", "--toolset", "automation"]);
 
     let listed = client.call_tool_ok(
         "orbit_routine_control",
@@ -613,6 +657,17 @@ fn desktop_governed_status_approval_and_crew_preserve_receipts_and_review_gates(
         )["revision"],
         snap["revision"]
     );
+    client.call_tool_ok(
+        "orbit_task_update",
+        json!({"id":id,"execution_summary":"Review evidence"}),
+    );
+    let fresh = operator.call_tool_ok(
+        "orbit_task_show",
+        json!({"workspace":selector,"id":id,"snapshot":true}),
+    );
+    let reviewed = operator.call_tool_ok("orbit_task_update", json!({"workspace":selector,"id":id,"request_id":"project-review-success","expected_revision":fresh["revision"],"verdict":{"decision":"changes_requested","rationale":"Needs work","criteria":[{"criterion":"No duplicate approval","met":false,"evidence":["execution_summary"]}],"evidence":["execution_summary"]},"fields":["snapshot","replayed"]}));
+    assert_eq!(reviewed["replayed"], false, "{reviewed}");
+    assert_ne!(reviewed["snapshot"]["revision"], fresh["revision"]);
 }
 
 /// The bounded run detail reads a fixed metadata budget however long the

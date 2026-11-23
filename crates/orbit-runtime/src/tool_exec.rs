@@ -188,7 +188,29 @@ impl RuntimeKernel {
         // workspace reaches the registry through this function, so this is the
         // only place a governed tool operation is authorized — a per-command
         // guard would be reopened by the next entry point that skips it.
-        self.authorize_tool_operation(name, &tool_context.session_context, capability_enforcement)?;
+        //
+        // A live resident cycle may read drain readiness (`orbit.workflow.auto`
+        // action `status`) in its covered workspaces without operator
+        // capability; controls and every other caller stay held to the row.
+        let resident_drain_status = if name == "orbit.workflow.auto"
+            && input
+                .get("action")
+                .and_then(Value::as_str)
+                .is_some_and(|action| action.trim() == "status")
+            && let Some(run_id) = resident_cycle_run_id(tool_context)
+        {
+            self.application
+                .resident_cycle_drain_status_allowed(self, &run_id, input)?
+        } else {
+            false
+        };
+        if !resident_drain_status {
+            self.authorize_tool_operation(
+                name,
+                &tool_context.session_context,
+                capability_enforcement,
+            )?;
+        }
         // Domain extensions preserve the authority of the operations they expose.
         // Discovery and a client-supplied mode never grant operator capabilities.
         if name == "orbit.pipeline.invoke"
@@ -266,6 +288,22 @@ impl RuntimeKernel {
         }
         Ok(())
     }
+}
+
+fn resident_cycle_run_id(tool_context: &ToolContext) -> Option<String> {
+    tool_context
+        .orbit_host
+        .as_ref()
+        .and_then(|host| host.task_scope().run_id)
+        .or_else(|| {
+            tool_context
+                .activity_binding
+                .as_ref()
+                .map(|binding| binding.job_run_id.clone())
+        })
+        .or_else(crate::run_input::managed_run_context_run_id_from_env)
+        .map(|id| id.trim().to_string())
+        .filter(|id| !id.is_empty())
 }
 
 /// Reject scrubbed protocol identities without exempting arbitrary hash-shaped

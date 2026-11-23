@@ -51,17 +51,11 @@ impl Execute for ReadinessCommand {
 
 // pub(super) widened for sibling-layout tests in run/tests/readiness.rs
 fn validate_task_ids(task_ids: &[String]) -> Result<(), OrbitError> {
-    let mut seen = std::collections::BTreeSet::new();
     for task_id in task_ids {
         if task_id.trim().is_empty() {
             return Err(OrbitError::InvalidInput(
                 "task id in readiness selection must not be empty".to_string(),
             ));
-        }
-        if !seen.insert(task_id) {
-            return Err(OrbitError::InvalidInput(format!(
-                "duplicate task id '{task_id}' in readiness selection"
-            )));
         }
     }
     Ok(())
@@ -244,6 +238,7 @@ fn readiness_lines(payload: &Value, formatter: &WaitingTaskFormatter) -> Vec<Str
                     | "provider_limit"
                     | "awaiting_footprint"
                     | "awaiting_exclusive_slot"
+                    | "perf_lane_busy"
             ) {
                 let detail = if reason == "host_os_mismatch" {
                     task["host_os_wait"]

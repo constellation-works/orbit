@@ -56,13 +56,19 @@ impl OrbitRuntime {
         let run_id = blocking_run_id(entry)
             .map(str::to_string)
             .or_else(|| task.job_run_id.clone())?;
-        let resumable = self.task_run_is_local(task)
+        let requeue_override = self.backlog_return_refused_locally(task);
+        let live_cancel = requeue_override
+            .as_deref()
+            .is_some_and(|cmd| cmd.starts_with("orbit run cancel "));
+        let resumable = !live_cancel
+            && self.task_run_is_local(task)
             && self
                 .observed_job_run(&run_id)
                 .is_ok_and(|run| is_resumable(&run));
         Some(BlockedNextStep {
             resume_command: resumable.then(|| format!("orbit job resume {run_id}")),
-            requeue_command: format!("orbit task update {} --status backlog", task.id),
+            requeue_command: requeue_override
+                .unwrap_or_else(|| format!("orbit task update {} --status backlog", task.id)),
             run_id,
         })
     }

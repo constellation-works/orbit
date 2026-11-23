@@ -138,10 +138,11 @@ impl<V: 'static> OperationSpec<V> {
             .map(|(param, _)| param.name)
             .collect::<Vec<_>>();
         for param in self.wire_params() {
-            for name in std::iter::once(&param.name).chain(param.aliases) {
-                if !declared.contains(name) {
-                    declared.push(name);
-                }
+            // Unadvertised aliases were already canonicalized (or refused) before
+            // reaching here; keep them out of `declared` so `did you mean`
+            // suggests only canonical parameter names.
+            if !declared.contains(&param.name) {
+                declared.push(param.name);
             }
         }
         declared.extend(TOOL_INPUT_IDENTITY_KEYS);

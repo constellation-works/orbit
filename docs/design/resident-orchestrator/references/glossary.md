@@ -21,7 +21,7 @@ where they are used.
 | Term | Meaning |
 |---|---|
 | Action key | `resident:<mandate>:<cycle>:<n>`, attached to every mutating action so a recovery cycle never repeats one ([2_design.md §5](../2_design.md#5-the-cycle)) |
-| Authority | The rights (`dispatch`, `promote`, `merge`, `plugin_upgrade`) and covered workspaces a mandate grants; widened only by the human ([mandate-and-authority](../specs/mandate-and-authority.md)) |
+| Authority | The rights (`dispatch`, `promote`, `merge`, `plugin_upgrade`, `refresh`, `recover`) and covered workspaces a mandate grants; widened only by the human ([mandate-and-authority](../specs/mandate-and-authority.md)) |
 | Cadence floor | Minimum interval between cycle starts for one mandate ([2_design.md §4.3](../2_design.md#43-cadence-floor)) |
 | Checkpoint | The `resident.checkpoint` comment a cycle leaves; the resident's memory ([checkpoint-contract](../specs/checkpoint-contract.md)) |
 | Cost event | One `costs[]` entry: a workaround, manual step, retry or wait, with its cost and wished-for capability ([evolution-ledger](../specs/evolution-ledger.md#cost-event)) |

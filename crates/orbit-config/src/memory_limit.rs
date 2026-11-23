@@ -86,6 +86,25 @@ impl MemoryLimit {
         (amount > 0).then_some(Self::Bytes { amount, unit })
     }
 
+    /// The limit in bytes when it is an absolute amount, saturating at
+    /// `u64::MAX`. `None` for a percentage (systemd resolves it against
+    /// physical RAM) and for `infinity`.
+    pub fn byte_count(self) -> Option<u64> {
+        match self {
+            Self::Bytes { amount, unit } => {
+                let factor: u64 = match unit {
+                    None => 1,
+                    Some(MemoryUnit::K) => 1 << 10,
+                    Some(MemoryUnit::M) => 1 << 20,
+                    Some(MemoryUnit::G) => 1 << 30,
+                    Some(MemoryUnit::T) => 1 << 40,
+                };
+                Some(amount.saturating_mul(factor))
+            }
+            Self::Percent(_) | Self::Infinity => None,
+        }
+    }
+
     /// The systemd form, for a `systemd-run --property=` argument.
     ///
     /// Same text as `Display`, but written from the destructured integers and

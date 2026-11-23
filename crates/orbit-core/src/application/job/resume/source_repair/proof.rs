@@ -14,6 +14,8 @@ pub(crate) struct NativePublicationProof {
     pub(super) adopted: Option<SourceRepairBinding>,
     /// The unpublished tip the source's certified chases carried `head` to.
     pub(super) certified_tip: Option<super::certified_rebase::CertifiedRebaseTip>,
+    /// The preserved landing-review fix commit carried to a durable ref.
+    pub(super) preserved_review_tip: Option<super::publication::PreservedReviewTip>,
 }
 
 impl From<NativePublicationProof> for NativePublicationIdentity {
@@ -90,7 +92,8 @@ impl OrbitRuntime {
             return Err(refuse("task specification changed after publication"));
         }
         let job = self.source_repair_definition(&source)?;
-        let proof = self.authenticate_publication_chain(&source, task, &state, &job, false)?;
+        let proof =
+            self.authenticate_publication_chain(&source, task, &state, &job, false, None)?;
         let url = proof
             .url
             .as_deref()
@@ -185,7 +188,7 @@ impl OrbitRuntime {
                 ));
             }
         }
-        self.authenticate_publication_chain(&source, task, &state, &job, false)
+        self.authenticate_publication_chain(&source, task, &state, &job, false, None)
     }
 
     pub(super) fn authenticate_publication_chain(
@@ -195,8 +198,13 @@ impl OrbitRuntime {
         state: &PipelineState,
         job: &JobV2,
         explicit: bool,
+        held_retry_lineage: Option<&[String]>,
     ) -> Result<NativePublicationProof, OrbitError> {
         let source_id = source.run_id.as_str();
+        let owner_id = held_retry_lineage
+            .and_then(|lineage| lineage.first())
+            .map(String::as_str)
+            .unwrap_or(source_id);
         let task_id = task.id.as_str();
         let checkpoint = |id: &str, action: &str| authenticated_checkpoint(job, state, id, action);
         let worktree = checkpoint("worktree", "worktree_setup")?;
@@ -241,7 +249,7 @@ impl OrbitRuntime {
                 checkpoint("resume_candidate", "candidate_resume")?,
             )?)
         } else {
-            self.read_owner_publication_binding(source_id, false)?
+            self.read_owner_publication_binding(owner_id, false)?
         };
         // Setup precedes adoption and keeps its per-run branch. Only the
         // authenticated operator continuation may replace that branch identity.
@@ -255,8 +263,8 @@ impl OrbitRuntime {
             job,
             state,
             &checkpoint,
-            sync,
-            push,
+            source.state,
+            (sync, push),
             branch,
             &self.paths().repo_root,
         )?;
@@ -273,8 +281,10 @@ impl OrbitRuntime {
         // Orbit's own auto-fix may have published repaired heads on this
         // pull request after the source's push. Follow the chain the source
         // recorded; any other move of the branch is still refused below.
+        let single_source = [source_id.to_string()];
+        let push_lineage = held_retry_lineage.unwrap_or(&single_source);
         let advanced =
-            auto_fix_advanced_head(&self.get_task_history(task_id)?, source_id, number, head);
+            auto_fix_advanced_head(&self.get_task_history(task_id)?, push_lineage, number, head);
         let head = advanced.as_str();
         // An incomplete before-landing review's failure handoff may have
         // pushed the reviewer's commit onto that head [ORB-25671]. Follow
@@ -298,7 +308,7 @@ impl OrbitRuntime {
                     pr.get("pr_url").and_then(Value::as_str)
                         != Some(binding.pull_request_url.as_str())
                 })
-        }) || field(worktree, "job_run_id")? != source_id
+        }) || field(worktree, "job_run_id")? != owner_id
             || field(prepared, "phase")? != "prepare"
             || field(sync, "phase")? != "rebase"
             || field(push, "phase")? != "push"
@@ -369,6 +379,13 @@ impl OrbitRuntime {
         // branch past `head` without publishing it. Binding still checks the
         // remote and the pull request against `head` exactly.
         let certified_tip = self.certified_rebase_tip(source_id, state, head)?;
+        let preserved_review_tip = publication::preserved_landing_review_head(
+            job,
+            state,
+            (source_id, task),
+            head,
+            &self.paths().repo_root,
+        )?;
         Ok(NativePublicationProof {
             branch: branch.into(),
             head: head.into(),
@@ -380,6 +397,7 @@ impl OrbitRuntime {
                 .transpose()?,
             adopted,
             certified_tip,
+            preserved_review_tip,
         })
     }
 }

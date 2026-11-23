@@ -73,7 +73,12 @@ impl PullWaiting {
             .deferred_conflicts
             .iter()
             .map(|diagnostic| {
-                let code = if !diagnostic.blocked_by.is_empty() {
+                let code = if diagnostic
+                    .reason
+                    .starts_with(orbit_types::task::PERF_LANE_BUSY_PREFIX)
+                {
+                    "perf_lane_busy"
+                } else if !diagnostic.blocked_by.is_empty() {
                     FOOTPRINT_HELD
                 } else if diagnostic
                     .reason

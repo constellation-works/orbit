@@ -402,9 +402,7 @@ pub(super) fn normalize_path(path: &Path) -> PathBuf {
 }
 
 pub(super) fn unsupported_cli_workspace(selector: &str) -> OrbitError {
-    OrbitError::InvalidInput(format!(
-        "unknown workspace selector '{selector}'; run `orbit workspace list` to see registered workspaces, then pass a registered workspace name, a logical workspace ID, or an absolute local checkout path"
-    ))
+    OrbitError::unknown_workspace_selector(selector)
 }
 
 pub(super) fn inactive_cli_workspace(
@@ -645,6 +643,12 @@ pub(super) fn attach_registry_context(
         });
     let mut runtime = runtime.with_automation_execution_location(location);
     if let Some(registry) = registry {
+        // Core projects the workspace identity from this same load; it must
+        // not read `workspaces.json` again after the binding is settled.
+        let opened =
+            workspace_registry::find_workspace_by_path(registry, &runtime.paths().repo_root)
+                .map(|workspace| (workspace.id.clone(), workspace.name.clone()));
+        runtime = runtime.with_opened_registered_workspace(opened);
         runtime = runtime.with_composition_snapshot(Arc::new(OpenedSelectorInputs {
             identity: identity.clone(),
             registry: registry.clone(),

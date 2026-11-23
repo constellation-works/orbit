@@ -40,8 +40,8 @@ template:
       (tag filters use AND semantics) and read its artifact with
       `orbit tool run orbit.task.artifact --input '{"action":"get","id":"<id>","path":"escape-to-guard.json","model":"<agent-family>"}'`.
     - Before filing a task, read the installed `orbit` skill's
-      task-authoring reference (`references/task-authoring.md`) and
-      follow it for task shape. Tool-created tasks start `proposed`;
+      task-authoring references (`references/task-authoring-contract.md` and `references/task-authoring-create.md`) and
+      follow them for task shape. Tool-created tasks start `proposed`;
       leave them `proposed` and never approve one.
     - Fail open. A window with no regression links, or with no cluster
       at the bar below, is a successful no-op. Do not invent work to
@@ -88,7 +88,7 @@ template:
        stored values points at a `contract_drift` nature and a
        `no_test` escape when no test covers stored-value reads.
     3. Pick one nature and one escape from the `regression_from` values in the
-       installed `orbit` skill's `references/task-fields.md`, from that evidence
+       installed `orbit` skill's `references/task-fields-relations.md`, from that evidence
        alone. Choose `unclassified` rather than guess.
 
     `severity` is how much the defect matters, on the one five-level scale
@@ -97,7 +97,7 @@ template:
     unchanged. An `absent` link is new to classification and is refused
     without one, so rate it from the same evidence: the worst real impact, not
     the size of the fix, taking the lower level when torn. The scale is the
-    Severity rubric in the installed `orbit` skill's `references/task-fields.md`.
+    Severity rubric in the installed `orbit` skill's `references/task-fields-review.md`.
 
     Record each settled classification through the supported relation
     write: read the regression task's current `relations`, then send

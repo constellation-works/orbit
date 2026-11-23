@@ -122,12 +122,12 @@ Confirm the selected workspace before you act.
 |---|---|
 | **[Tasks](#tasks)** | Tasks, with the ones waiting on you first. The right dock holds **Drain**, a live **Log**, **[Notices](#notices)**, and **[Residents](#residents)**. |
 | **Drain** | Only in windows 1315px wide or narrower, where it opens the dock's Drain tab in place of the task list. |
-| **[Jobs](#runs-and-errors)** | **Live** (runs pending or running now), **History** (every run, with run detail), and **Catalogue** (jobs you can run by hand). |
+| **[Jobs](#runs-and-errors)** | **History** (runs, opening on the ones pending or running now, with run detail) and **Catalogue** (jobs you can run by hand). |
 | **Leases** | Active and queued path leases by path: who holds each one, who waits, and recent landings that changed a leased path. Read-only. The rail hides it for a workspace where path leases are off. |
 | **Health** | What is broken now: **Incidents** (grouped failures, with **Events** and **Errors** tabs) and **Doctor**. |
 | **[Analytics](#analytics)** | How delivery is trending: **Metrics**, **Reliability**, **Codebase**, **Resources**, **Forecast**, **Cost**, **[Agents](#agents)**, and **Experiments**. |
 | **[Automation](#automation)** | **Routines** (with the host scheduler clock), **Auto-tasks**, and **Scripts**. |
-| **Knowledge** | **Frictions** (friction records) and **Memory** (crew memory). |
+| **Knowledge** | **Frictions** (friction records). |
 | **[Plugins](#plugins)** | Installed plugins and the panels they add. |
 | **[Fleet](#fleet)** | Registered hosts with their health, drains, and provider capacity. |
 | **[Settings](#settings)** | Workflow, Execution, Review, Crews, Machine, and Other. |
@@ -251,8 +251,13 @@ time. Edits change the task record; they do not dispatch work. A failed save
 keeps your draft open with the error.
 
 Context files take one selector per line: `file:…`, `dir:…`, or `symbol:…`.
-The server checks that each file or directory exists. If the task will create
-the target, check **allow missing context** before you save.
+When a `file:` selector names a missing file whose parent directory exists,
+saving records a creation grant for that exact path automatically. You can
+leave **allow missing context** unchecked in that case. A selector with a
+retained grant also needs no checkbox. Check it for another missing selector
+you want to explicitly authorize, such as a file whose parent directory is
+missing or a missing directory selector. The checkbox grants every missing
+selector in the list, so review the full list before enabling it.
 
 ### Distributed tasks
 
@@ -422,7 +427,7 @@ To start a window:
 | **Window length** | Whole hours from 1 to 24 (`--for`). The default is `1h`. |
 | **Parallel tasks** | How many tasks run at once. Blank uses the default of 5. |
 | **Mark shipped tasks done** | Off (default) leaves shipped tasks in `review`. On moves every task the window ships to `done` (`--complete`). |
-| **Approve qualifying proposals** | Off (default) leaves `proposed` tasks for you. On (`--approve-proposed`) lets each pass approve proposed tasks that have context files, an assessed complexity (or the `no-diff-expected` tag), and a clean task-pilot verification. Tasks tagged `no-auto-approve` are skipped. |
+| **Approve qualifying proposals** | Off (default) leaves `proposed` tasks for you. On (`--approve-proposed`) lets each pass approve proposed tasks that have context files and an assessed complexity, or the `no-diff-expected` tag, and a clean task-pilot verification. Tasks tagged `no-drain` or `no-auto-approve` are skipped. |
 | **Auto-fix PR blockers** | Off by default. On (`--auto-fix`) repairs failed required checks and merge conflicts on the window's own pull requests. It does not merge or approve anything. |
 | **Review before landing** | On adds before-landing review to this window only (`--review before-landing`). When workspace policy already sets `review.timing`, the switch is on and locked: a window can add review, never remove it. It is refused when no reviewer crew is configured and for local-only delivery. See [Review layers](/concepts/tasks/#adding-review-to-one-run). |
 | **Stop** | Stops new admissions (`orbit run auto --stop`). Admitted workers keep running; this is not cancellation. |
@@ -489,9 +494,23 @@ first. Select a mandate to answer its requests and steer it:
 
 ## Runs and errors
 
-**Jobs › History** lists job runs for the selected workspace. Filter by
-**All** or **Failed**, narrow the list with a task ID or job ID, and pick a
-time window.
+**Jobs › History** lists job runs for the selected workspace. It opens on
+**Running**, the runs pending or running now. Tasks with multiple in-flight runs are
+grouped; a shared run appears in every group for a task that has multiple runs, and
+appears once as a plain row when none of its tasks has a group. A task group's header names
+its task and shows the most severe state among its runs (failed, timeout, interrupted, running,
+then pending). Its expanded child rows always show the job, run ID, age, and duration. A
+child shows its state only when that differs from the header's, and lists only the tasks the
+header does not name, leaving the cell blank when none remain. So a child whose state matches
+the header's, such as a running child of a running group, has a blank State cell. Its Task
+cell is blank only when the run names no task besides the group's task: two running children
+that name only that task show neither cell, while a running child that also names task B keeps
+a link to B. A child of a group of repeated failures of one job keeps its task links, because
+that header names no task. Under **Running**, the panel header counts
+the tasks and runs in flight as `N tasks, M runs in flight` (`nothing in flight` when none is);
+**All** and **Failed** show the number of runs listed instead. Switch to **All**
+or **Failed**, narrow the list with a task ID or job ID, and pick a time window (**Running**
+ignores the window).
 
 Click a run for its steps, events, and child runs. A failed, timed-out, or
 interrupted run opens on the step it stopped at and the error it recorded.
@@ -512,6 +531,7 @@ These counts answer different questions:
 | Where | Counts |
 |---|---|
 | **Jobs** rail count | Job runs pending or running now, not tasks. It ignores the History window and filters. |
+| **Jobs › History**, **Running** | Runs pending or running now, whatever the window. |
 | **Jobs › History**, **Failed** | Failed, timed-out, and interrupted runs in the selected window. |
 | **Health → Incidents → Events** | Audited calls. It opens on **failure + denied**; choose **all** to list every status. |
 | **Health → Incidents → Errors** | Step and event failures in the selected window. |
@@ -539,14 +559,16 @@ tasks are finishing, and what each task costs in tokens and rework.
 | Trend | Counts |
 |---|---|
 | **Implementation time** | Wall-clock time of implementation runs, by complexity. **Succeeded** (default) counts runs that committed a candidate; **All** adds failed, cancelled, and no-diff runs. |
+| **Tasks completed** | Tasks that reached done, grouped by complexity, plus rejected and archived counts. |
 | **Tokens per task**, **Tokens** | Mean and total normalized tokens of the tasks that closed in each bucket. |
 | **Turns to first edit** | Tool calls before the first file edit in a task's first implement invocation. |
 | **Lines changed** | Lines added and deleted by landed deliveries. `workflow.test_paths` and `workflow.non_code_paths` set which paths count as tests or non-code. |
 | **Delivery friction** | Recoveries, PR auto-fixes, merge conflicts, failed CI, cost, and tokens. **Per done task** divides by the tasks done in the same bucket. |
 | **Defects** | Bug tasks filed, grouped by **Lineage** (what `regression_from` names as the cause) or **Origin** (the review or sweep that filed them). |
 
-Below the chart, **Actors within a complexity** always covers the last 30
-days and **Outcome by complexity** covers all time.
+On the **Implementation time** tab, **Actors within a complexity** always
+covers the last 30 days. On **Tasks completed**, **Outcome by complexity**
+shows the all-time distribution.
 
 ### Codebase
 
@@ -625,8 +647,8 @@ ownership. Interactive session overhead is excluded.
 
 **Provider-reported** dollars come first. **Derived estimate** is an estimate
 with its own coverage. Do not add the two: compare them under
-**Same-invocation comparison**. `<$0.01` is a non-zero amount that rounds to
-zero, and **unknown** means the figure was not reported.
+**Same-invocation comparison**. `<$0.01` is a non-zero amount under one cent,
+and **unknown** means the figure was not reported.
 
 ### Reliability
 
@@ -796,18 +818,6 @@ the status filter. Select a row to open the full record and triage it:
 Nothing here files a task or moves a record to another workspace. For both,
 see [Report and triage friction](/how-to/friction/).
 
-## Knowledge › Memory
-
-**Memory** shows crew memory for the selected workspace. It is read-only.
-While `crew_memory.enabled` is false (the default), the panel says Memory is
-off for this workspace.
-
-Select a key to read its current revision, evidence, files, and history, or
-**Global proposals** to see open and recently closed proposals. To accept or
-reject a proposal or write memory, use the
-[crew memory CLI commands](/reference/cli/#crew-memory-experimental). To turn
-memory on, see [Give models a memory](/how-to/crew-memory/).
-
 ## Plugins
 
 **Plugins** lists the plugins installed on the selected host and how the
@@ -954,11 +964,19 @@ in place of **Save**. Creating the file changes execution inheritance: **Seed
 from global** copies the global policy, and **Start empty** uses built-in
 security defaults.
 
-**Remove workspace value** deletes the workspace entry. Check **if removed**
-first. To tidy the whole workspace file, open **Other**: **Keys that only
-repeat the global or built-in value** lists the workspace values you can
-remove without changing anything, and **Remove all N workspace values**
-removes them.
+**Remove workspace value** deletes the workspace entry without the guarded
+check below, so check **if removed** first. To tidy the whole workspace file,
+open **Other**. **Keys that only repeat the global or built-in value** lists
+the workspace values that match their removal fallback. Treat each one as a
+candidate, not a promise. **Remove all N workspace values** sends a guarded
+removal for each candidate, and the server re-checks each key under the config
+write lock. It refuses a key, and keeps that key's entry, when the value or
+fallback changed after load. It also refuses when the removal would drop the
+workspace policy layer or change the effective value, even though the value
+matches its fallback. For example, a workspace file whose only other content
+is `[plugin_enablement]` no longer counts as a policy layer once its last
+dotted key is removed. The refusal is reported with the server's message, and
+the other keys are still removed.
 
 ### Crews
 

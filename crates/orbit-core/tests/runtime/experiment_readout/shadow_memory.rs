@@ -20,7 +20,7 @@ fn shadow_memory_arm_reports_captured_digest_with_null_revisions() {
     std::fs::create_dir_all(&workspace).unwrap();
     std::fs::write(
         workspace.join("config.toml"),
-        "[experiments]\nenabled = true\n[crew_memory]\nenabled = true\n",
+        "[experiments]\nenabled = true\n",
     )
     .unwrap();
     let runtime = OrbitRuntime::from_roots(&global, &workspace).unwrap();
@@ -186,7 +186,7 @@ fn shadow_readout_uses_input_capture_despite_unreadable_checkpoint() {
     std::fs::create_dir_all(&workspace).unwrap();
     std::fs::write(
         workspace.join("config.toml"),
-        "[experiments]\nenabled = true\n[crew_memory]\nenabled = true\n",
+        "[experiments]\nenabled = true\n",
     )
     .unwrap();
     let runtime = OrbitRuntime::from_roots(&global, &workspace).unwrap();
@@ -290,7 +290,7 @@ fn live_readout_succeeds_with_unreadable_checkpoint_and_no_capture() {
     std::fs::create_dir_all(&workspace).unwrap();
     std::fs::write(
         workspace.join("config.toml"),
-        "[experiments]\nenabled = true\n[crew_memory]\nenabled = true\n",
+        "[experiments]\nenabled = true\n",
     )
     .unwrap();
     let runtime = OrbitRuntime::from_roots(&global, &workspace).unwrap();

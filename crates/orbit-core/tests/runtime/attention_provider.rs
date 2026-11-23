@@ -364,6 +364,52 @@ fn ci_red_lists_newest_failed_run_on_head() {
     assert!(items[0]["fingerprint"].as_str().unwrap().starts_with("fp_"));
 }
 
+/// `detail.since_source` names the timestamp `since` was taken from: the
+/// run's `updated_at` when usable, otherwise its `created_at`.
+fn ci_red_since_source_names_the_timestamp_used() {
+    let fixture = Fixture::new(true);
+    let hours_ago = |hours: i64| (chrono::Utc::now() - chrono::Duration::hours(hours)).to_rfc3339();
+    let instant = |text: &str| chrono::DateTime::parse_from_rfc3339(text).unwrap();
+
+    // The projection passes a missing `updatedAt` through as null, so the
+    // onset falls back to the creation time and the label must say so.
+    let created = hours_ago(30);
+    let mut without_update = fixture.run(42, "failure", &created, &fixture.head);
+    without_update["updatedAt"] = Value::Null;
+    fixture.set_runs(json!([without_update]));
+    let response = call(&fixture.runtime, json!({"kind": "ci_red"}));
+    let items = response["items"].as_array().unwrap();
+    assert_eq!(items.len(), 1, "{response}");
+    assert_eq!(
+        items[0]["detail"]["since_source"], "created_at",
+        "{response}"
+    );
+    assert_eq!(
+        instant(items[0]["since"].as_str().unwrap()),
+        instant(created.as_str()),
+        "{response}"
+    );
+
+    // A usable update time keeps updated_at provenance and wins over creation.
+    let head = fixture.advance_remote_head();
+    let updated = hours_ago(5);
+    let mut with_update = fixture.run(43, "failure", &hours_ago(30), &head);
+    with_update["updatedAt"] = json!(updated);
+    fixture.set_runs(json!([with_update]));
+    let response = call(&fixture.runtime, json!({"kind": "ci_red"}));
+    let items = response["items"].as_array().unwrap();
+    assert_eq!(items.len(), 1, "{response}");
+    assert_eq!(
+        items[0]["detail"]["since_source"], "updated_at",
+        "{response}"
+    );
+    assert_eq!(
+        instant(items[0]["since"].as_str().unwrap()),
+        instant(updated.as_str()),
+        "{response}"
+    );
+}
+
 fn ci_red_exclude_kind_makes_no_provider_call() {
     let fixture = Fixture::new(true);
     fixture.set_runs(json!([fixture.run(
@@ -654,11 +700,608 @@ fn ci_red_unavailable_base_head_degrades() {
     );
 }
 
+fn ci_red_survives_a_pending_run_on_a_newer_base_head() {
+    // Reproduces a base that keeps landing while red: completed failures on
+    // older heads and a pending run on the newest head. The red result must
+    // not vanish behind the pending run; a newer green completion clears it.
+    let fixture = Fixture::new(true);
+    // Chain each advance on the previous one so every head is distinct.
+    let advance = || {
+        let head = fixture.advance_remote_head();
+        git(&fixture.repo, &["update-ref", "refs/heads/main", &head]);
+        head
+    };
+    let older = fixture.head.clone();
+    let middle = advance();
+    let newest = advance();
+    let minutes_ago =
+        |minutes: i64| (chrono::Utc::now() - chrono::Duration::minutes(minutes)).to_rfc3339();
+    let mut pending = fixture.run(53, "", &minutes_ago(1), &newest);
+    pending["status"] = json!("in_progress");
+    pending["conclusion"] = json!("");
+    fixture.set_runs(json!([
+        pending,
+        fixture.run(52, "failure", &minutes_ago(5), &middle),
+        fixture.run(51, "failure", &minutes_ago(9), &older),
+    ]));
+    let response = call(&fixture.runtime, json!({"kind": "ci_red"}));
+    let items = response["items"].as_array().unwrap();
+    assert_eq!(items.len(), 1, "red base behind a pending head: {response}");
+    assert_eq!(items[0]["refs"]["run_id"], "52", "{response}");
+    assert_eq!(
+        items[0]["detail"]["reported_head_sha"], middle,
+        "{response}"
+    );
+
+    // A newer head whose run completed green clears the red result, even
+    // while the head after it is pending.
+    let green = newest;
+    let pending_head = advance();
+    let mut pending = fixture.run(54, "", &minutes_ago(0), &pending_head);
+    pending["status"] = json!("queued");
+    pending["conclusion"] = json!("");
+    fixture.set_runs(json!([
+        pending,
+        fixture.run(53, "success", &minutes_ago(1), &green),
+        fixture.run(52, "failure", &minutes_ago(5), &middle),
+        fixture.run(51, "failure", &minutes_ago(9), &older),
+    ]));
+    let cleared = call(&fixture.runtime, json!({"kind": "ci_red"}));
+    assert!(
+        cleared["items"].as_array().unwrap().is_empty(),
+        "a newer green completion must clear ci_red: {cleared}"
+    );
+}
+
+fn ci_red_degrades_when_full_page_omits_pending_workflow_history() {
+    let fixture = Fixture::new(true);
+    let now = chrono::Utc::now().to_rfc3339();
+    let mut pending = fixture.run(101, "", &now, &fixture.head);
+    pending["status"] = json!("queued");
+    let mut runs = vec![pending];
+    for id in 1..100 {
+        let mut run = fixture.run(id, "success", &now, &fixture.head);
+        run["workflowName"] = json!("Other");
+        runs.push(run);
+    }
+    fixture.set_runs(json!(runs));
+    let response = call(&fixture.runtime, json!({"kind": "ci_red"}));
+    assert!(
+        response["degraded"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|entry| {
+                entry["kind"] == "ci_red"
+                    && entry["code"] == "source_unavailable"
+                    && entry["message"]
+                        .as_str()
+                        .is_some_and(|message| message.contains("CI"))
+            }),
+        "missing CI history must be reported: {response}"
+    );
+}
+
+fn ci_red_uses_workflow_run_order_when_created_at_ties() {
+    let fixture = Fixture::new(true);
+    let advance = || {
+        let head = fixture.advance_remote_head();
+        git(&fixture.repo, &["update-ref", "refs/heads/main", &head]);
+        head
+    };
+    let older = fixture.head.clone();
+    let middle = advance();
+    let pending_head = advance();
+    let minutes_ago =
+        |minutes: i64| (chrono::Utc::now() - chrono::Duration::minutes(minutes)).to_rfc3339();
+    let run_with_times = |id: u64, conclusion: &str, created: &str, updated: &str, sha: &str| {
+        let mut entry = fixture.run(id, conclusion, updated, sha);
+        entry["createdAt"] = json!(created);
+        entry["startedAt"] = json!(created);
+        entry
+    };
+
+    // Older failure (run 51) finished after newer green (run 52), both sharing
+    // createdAt, with a pending run on the current head: the newer green wins.
+    let shared_created = minutes_ago(10);
+    let mut pending = fixture.run(53, "", &minutes_ago(1), &pending_head);
+    pending["status"] = json!("in_progress");
+    pending["conclusion"] = json!("");
+    fixture.set_runs(json!([
+        pending,
+        run_with_times(51, "failure", &shared_created, &minutes_ago(3), &older),
+        run_with_times(52, "success", &shared_created, &minutes_ago(6), &middle),
+    ]));
+    let cleared = call(&fixture.runtime, json!({"kind": "ci_red"}));
+    assert!(
+        cleared["items"].as_array().unwrap().is_empty(),
+        "older failure that finished later must not override newer green run: {cleared}"
+    );
+
+    // Advance the remote head to invalidate the CI cache and check the inverse:
+    // older green (run 54) finished after newer failure (run 55), both sharing
+    // createdAt, with a pending run on the current head: the newer failure wins.
+    let newer_middle = pending_head;
+    let next_pending_head = advance();
+    let shared_created_2 = minutes_ago(5);
+    let mut next_pending = fixture.run(56, "", &minutes_ago(0), &next_pending_head);
+    next_pending["status"] = json!("queued");
+    next_pending["conclusion"] = json!("");
+    fixture.set_runs(json!([
+        next_pending,
+        run_with_times(
+            55,
+            "failure",
+            &shared_created_2,
+            &minutes_ago(4),
+            &newer_middle
+        ),
+        run_with_times(54, "success", &shared_created_2, &minutes_ago(2), &middle),
+    ]));
+    let red = call(&fixture.runtime, json!({"kind": "ci_red"}));
+    let items = red["items"].as_array().unwrap();
+    assert_eq!(
+        items.len(),
+        1,
+        "older green that finished later must not hide newer failure: {red}"
+    );
+    assert_eq!(items[0]["refs"]["run_id"], "55", "{red}");
+    assert_eq!(
+        items[0]["detail"]["reported_head_sha"], newer_middle,
+        "{red}"
+    );
+}
+
+fn ci_red_keeps_same_named_workflows_apart() {
+    let fixture = Fixture::new(true);
+    let advance = || {
+        let head = fixture.advance_remote_head();
+        git(&fixture.repo, &["update-ref", "refs/heads/main", &head]);
+        head
+    };
+    let older = fixture.head.clone();
+    let pending_head = advance();
+    let minutes_ago =
+        |minutes: i64| (chrono::Utc::now() - chrono::Duration::minutes(minutes)).to_rfc3339();
+    // Two workflow files that both declare `name: CI`; run numbers are
+    // per workflow, so B's counter is far ahead of A's.
+    let workflow_run = |id: u64,
+                        number: u64,
+                        workflow_id: u64,
+                        conclusion: &str,
+                        created: &str,
+                        updated: &str,
+                        sha: &str| {
+        let mut entry = fixture.run(id, conclusion, updated, sha);
+        entry["number"] = json!(number);
+        entry["workflowDatabaseId"] = json!(workflow_id);
+        entry["createdAt"] = json!(created);
+        entry["startedAt"] = json!(created);
+        entry
+    };
+
+    // Current head pending: A's failure (updated later) and B's success share
+    // a creation time. B's higher number must not suppress A's failure.
+    let shared_created = minutes_ago(10);
+    let mut pending = workflow_run(
+        103,
+        2,
+        1,
+        "",
+        &minutes_ago(1),
+        &minutes_ago(1),
+        &pending_head,
+    );
+    pending["status"] = json!("in_progress");
+    let mut pending_b = workflow_run(
+        104,
+        193,
+        2,
+        "",
+        &minutes_ago(1),
+        &minutes_ago(1),
+        &pending_head,
+    );
+    pending_b["status"] = json!("in_progress");
+    fixture.set_runs(json!([
+        pending,
+        pending_b,
+        workflow_run(
+            101,
+            1,
+            1,
+            "failure",
+            &shared_created,
+            &minutes_ago(3),
+            &older
+        ),
+        workflow_run(
+            102,
+            192,
+            2,
+            "success",
+            &shared_created,
+            &minutes_ago(4),
+            &older
+        ),
+    ]));
+    let red = call(&fixture.runtime, json!({"kind": "ci_red"}));
+    let items = red["items"].as_array().unwrap();
+    assert_eq!(
+        items.len(),
+        1,
+        "a same-named workflow's success must not hide the failure: {red}"
+    );
+    assert_eq!(items[0]["refs"]["run_id"], "101", "{red}");
+    assert_eq!(items[0]["detail"]["workflow"], "CI", "{red}");
+
+    // Both completed on the current head with tied update times: the other
+    // workflow's higher number must not replace the failure.
+    let head = advance();
+    let tied = minutes_ago(2);
+    fixture.set_runs(json!([
+        workflow_run(201, 3, 1, "failure", &tied, &tied, &head),
+        workflow_run(202, 194, 2, "success", &tied, &tied, &head),
+    ]));
+    let red = call(&fixture.runtime, json!({"kind": "ci_red"}));
+    let items = red["items"].as_array().unwrap();
+    assert_eq!(
+        items.len(),
+        1,
+        "tied same-named success must not hide the failure: {red}"
+    );
+    assert_eq!(items[0]["refs"]["run_id"], "201", "{red}");
+}
+
+fn ci_red_keeps_id_workflow_apart_from_name_spelling_its_key() {
+    // Workflow id 7 (display name CI) and a workflow with no provider id
+    // whose display name is `id:7`: distinct workflows that must not share a
+    // CI decision.
+    let fixture = Fixture::new(true);
+    let now = chrono::Utc::now().to_rfc3339();
+    let run_for = |id: u64,
+                   number: u64,
+                   workflow_id: Option<u64>,
+                   name: &str,
+                   conclusion: &str,
+                   sha: &str| {
+        let mut entry = fixture.run(id, conclusion, &now, sha);
+        entry["number"] = json!(number);
+        entry["workflowName"] = json!(name);
+        if let Some(workflow_id) = workflow_id {
+            entry["workflowDatabaseId"] = json!(workflow_id);
+        }
+        entry
+    };
+
+    // The name-only success, at the same timestamp with the higher run
+    // number, must not hide the id-7 failure.
+    fixture.set_runs(json!([
+        run_for(101, 1, Some(7), "CI", "failure", &fixture.head),
+        run_for(102, 99, None, "id:7", "success", &fixture.head),
+    ]));
+    let red = call(&fixture.runtime, json!({"kind": "ci_red"}));
+    let items = red["items"].as_array().unwrap();
+    assert_eq!(
+        items.len(),
+        1,
+        "a name-only success must not hide the id-7 failure: {red}"
+    );
+    assert_eq!(items[0]["refs"]["run_id"], "101", "{red}");
+
+    // Both fail on a fresh head: two distinct items, each keeping its own
+    // display name.
+    let head = fixture.advance_remote_head();
+    fixture.set_runs(json!([
+        run_for(201, 1, Some(7), "CI", "failure", &head),
+        run_for(202, 99, None, "id:7", "failure", &head),
+    ]));
+    let red = call(&fixture.runtime, json!({"kind": "ci_red"}));
+    let items = red["items"].as_array().unwrap();
+    assert_eq!(items.len(), 2, "both workflows failed: {red}");
+    assert_ne!(items[0]["id"], items[1]["id"], "{red}");
+    let mut names: Vec<&str> = items
+        .iter()
+        .map(|item| item["detail"]["workflow"].as_str().unwrap())
+        .collect();
+    names.sort_unstable();
+    assert_eq!(names, ["CI", "id:7"], "{red}");
+}
+
+/// A wait on `ci_red` wakes with `degraded_changed` when the set of workflows
+/// with missing history shrinks but one stays degraded, and keeps waiting
+/// while that membership holds.
+fn ci_red_wait_wakes_when_degraded_workflow_membership_changes() {
+    use orbit_core::application::attention::AttentionWaitStatus;
+    let fixture = Fixture::new(true);
+    let minted = call_with(
+        &fixture.runtime,
+        json!({"wait_grant": true}),
+        ToolSessionContext {
+            effective_capabilities: [McpCapability::Agent].into(),
+            ..Default::default()
+        },
+    );
+    let token = minted["wait_grant"]["token"].as_str().unwrap().to_owned();
+    let cursor = minted["cursor"]["next"].as_str().unwrap().to_owned();
+
+    let commit_on = |parent: &str, message: &str| {
+        let mut command = std::process::Command::new("git");
+        command
+            .args(["commit-tree", "HEAD^{tree}", "-p", parent, "-m", message])
+            .current_dir(&fixture.repo);
+        let output = orbit_common::process::run_bounded(
+            &mut command,
+            orbit_common::fs::git::GIT_LOCAL_TIMEOUT,
+        )
+        .unwrap();
+        assert!(output.status.success());
+        String::from_utf8(output.stdout).unwrap().trim().to_string()
+    };
+    let first_head = commit_on(&fixture.head, "first remote head");
+    let second_head = commit_on(&first_head, "second remote head");
+    git(
+        &fixture.repo,
+        &["update-ref", "refs/remotes/origin/main", &first_head],
+    );
+
+    // A full listing page, so a pending workflow without a completed run in it
+    // is reported as missing history. `a_done` turns workflow A green.
+    let now = chrono::Utc::now().to_rfc3339();
+    let listing = |head: &str, a_done: bool| {
+        let mut a = fixture.run(101, if a_done { "success" } else { "" }, &now, head);
+        a["workflowName"] = json!("CI-A");
+        a["workflowDatabaseId"] = json!(1);
+        if !a_done {
+            a["status"] = json!("queued");
+        }
+        let mut b = fixture.run(102, "", &now, head);
+        b["workflowName"] = json!("CI-B");
+        b["workflowDatabaseId"] = json!(2);
+        b["status"] = json!("queued");
+        let mut runs = vec![a, b];
+        for id in 1..99 {
+            let mut other = fixture.run(id, "success", &now, head);
+            other["workflowName"] = json!("Other");
+            other["workflowDatabaseId"] = json!(3);
+            runs.push(other);
+        }
+        json!(runs)
+    };
+    fixture.set_runs(listing(&first_head, false));
+    std::fs::write(
+        fixture.state.join("next-runs.json"),
+        serde_json::to_string(&listing(&second_head, true)).unwrap(),
+    )
+    .unwrap();
+    std::fs::write(fixture.state.join("next-head"), &second_head).unwrap();
+    // The first `gh run list` after this answers with the current runs, then
+    // publishes the next listing and moves the fetched base head, so the
+    // following poll reads a refreshed full listing.
+    let gh = fixture.repo.parent().unwrap().join("bin/gh");
+    let script = format!(
+        "#!/bin/sh\nstate='{state}'\nprintf '%s\\n' \"$*\" >> \"$state/calls\"\ncase \"$1 ${{2:-}}\" in\n  \"auth status\") exit 0 ;;\n  \"run list\") cat \"$state/runs.json\"\n    if [ -f \"$state/next-runs.json\" ]; then\n      mv \"$state/next-runs.json\" \"$state/runs.json\"\n      git -C '{repo}' update-ref refs/remotes/origin/main \"$(cat \"$state/next-head\")\"\n    fi ;;\n  *) echo \"fake gh: unsupported: $*\" >&2; exit 2 ;;\nesac\n",
+        state = fixture.state.display(),
+        repo = fixture.repo.display()
+    );
+    std::fs::write(&gh, script).unwrap();
+
+    let outcome = fixture
+        .runtime
+        .attention_wait(
+            &token,
+            json!({"since": cursor, "kind": "ci_red"}),
+            "20s",
+            Some("5s"),
+        )
+        .unwrap();
+    assert_eq!(
+        outcome.status,
+        AttentionWaitStatus::DegradedChanged,
+        "one workflow leaving the degraded set must wake the wait: {:?}",
+        outcome.response
+    );
+    let response = outcome.response.unwrap();
+    assert!(
+        response["items"].as_array().unwrap().is_empty(),
+        "{response}"
+    );
+    let degraded = response["degraded"].as_array().unwrap();
+    assert_eq!(degraded.len(), 1, "{response}");
+    assert!(
+        degraded[0]["message"].as_str().unwrap().contains("CI-B"),
+        "{response}"
+    );
+
+    // The same membership and no new item keeps waiting to the deadline.
+    let cursor = response["cursor"]["next"].as_str().unwrap().to_owned();
+    let outcome = fixture
+        .runtime
+        .attention_wait(
+            &token,
+            json!({"since": cursor, "kind": "ci_red"}),
+            "6s",
+            Some("5s"),
+        )
+        .unwrap();
+    assert_eq!(outcome.status, AttentionWaitStatus::TimedOut);
+}
+
+/// A grant-backed `ci_red` wait keeps polling when consecutive provider
+/// failures differ only in diagnostic text, and surfaces the latest
+/// diagnostic on timeout.
+fn ci_red_wait_keeps_polling_when_provider_diagnostic_changes() {
+    use orbit_core::application::attention::AttentionWaitStatus;
+    let fixture = Fixture::new(true);
+    let minted = call_with(
+        &fixture.runtime,
+        json!({"wait_grant": true}),
+        ToolSessionContext {
+            effective_capabilities: [McpCapability::Agent].into(),
+            ..Default::default()
+        },
+    );
+    let token = minted["wait_grant"]["token"].as_str().unwrap().to_owned();
+    let cursor = minted["cursor"]["next"].as_str().unwrap().to_owned();
+    // Advance the remote head so the wait's first poll does not reuse the
+    // empty run list cached while minting the grant.
+    fixture.advance_remote_head();
+
+    let gh = fixture.repo.parent().unwrap().join("bin/gh");
+    let script = format!(
+        "#!/bin/sh\nstate='{state}'\nprintf '%s\\n' \"$*\" >> \"$state/calls\"\ncase \"$1 ${{2:-}}\" in\n  \"auth status\") exit 0 ;;\n  \"run list\")\n    n=1\n    if [ -f \"$state/served\" ]; then\n      n=$(($(wc -l < \"$state/served\") + 1))\n    fi\n    marker=\"req-$n\"\n    printf '%s\\n' \"$marker\" >> \"$state/served\"\n    echo \"HTTP 503 Service Unavailable (request=$marker)\" >&2\n    exit 1 ;;\n  *) echo \"fake gh: unsupported: $*\" >&2; exit 2 ;;\nesac\n",
+        state = fixture.state.display(),
+    );
+    std::fs::write(&gh, script).unwrap();
+
+    let outcome = fixture
+        .runtime
+        .attention_wait(
+            &token,
+            json!({"since": cursor, "kind": "ci_red"}),
+            "6s",
+            Some("5s"),
+        )
+        .unwrap();
+    assert_eq!(
+        outcome.status,
+        AttentionWaitStatus::TimedOut,
+        "diagnostic-only changes in repeated provider failures must keep polling: {:?}",
+        outcome.response
+    );
+    let served: Vec<String> = std::fs::read_to_string(fixture.state.join("served"))
+        .unwrap()
+        .lines()
+        .map(str::to_owned)
+        .collect();
+    assert!(
+        served.len() >= 2,
+        "wait must poll at least twice before timing out: {served:?}"
+    );
+    let response = outcome.response.unwrap();
+    assert!(
+        response["items"].as_array().unwrap().is_empty(),
+        "{response}"
+    );
+    let degraded = response["degraded"].as_array().unwrap();
+    assert_eq!(degraded.len(), 1, "{response}");
+    assert_eq!(degraded[0]["kind"], "ci_red", "{response}");
+    assert_eq!(degraded[0]["code"], "source_unavailable", "{response}");
+    assert!(
+        degraded[0].get("subject").is_none(),
+        "workspace-level provider failure must not carry a workflow subject: {response}"
+    );
+    let message = degraded[0]["message"].as_str().unwrap();
+    let first = &served[0];
+    let latest = served.last().unwrap();
+    assert_ne!(first, latest, "{served:?}");
+    assert!(
+        message.contains(latest) && !message.contains(first),
+        "timeout must keep the latest diagnostic ({latest}), got: {message}"
+    );
+}
+
+/// Two workflows sharing one display name use their stable workflow identity
+/// when swapping degraded membership, so the wait still wakes with
+/// `degraded_changed`.
+fn ci_red_wait_wakes_when_same_named_degraded_workflows_swap() {
+    use orbit_core::application::attention::AttentionWaitStatus;
+    let fixture = Fixture::new(true);
+    let minted = call_with(
+        &fixture.runtime,
+        json!({"wait_grant": true}),
+        ToolSessionContext {
+            effective_capabilities: [McpCapability::Agent].into(),
+            ..Default::default()
+        },
+    );
+    let token = minted["wait_grant"]["token"].as_str().unwrap().to_owned();
+    let cursor = minted["cursor"]["next"].as_str().unwrap().to_owned();
+
+    let first_head = fixture.advance_remote_head();
+    let second_head = {
+        let output = std::process::Command::new("git")
+            .args([
+                "commit-tree",
+                "HEAD^{tree}",
+                "-p",
+                &first_head,
+                "-m",
+                "second remote head",
+            ])
+            .current_dir(&fixture.repo)
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        String::from_utf8(output.stdout).unwrap().trim().to_string()
+    };
+    git(
+        &fixture.repo,
+        &["update-ref", "refs/remotes/origin/main", &first_head],
+    );
+
+    let now = chrono::Utc::now().to_rfc3339();
+    let listing = |head: &str, pending_workflow_id: u64| {
+        let mut pending = fixture.run(101, "", &now, head);
+        pending["workflowName"] = json!("CI");
+        pending["workflowDatabaseId"] = json!(pending_workflow_id);
+        pending["status"] = json!("queued");
+        let mut runs = vec![pending];
+        for id in 1..100 {
+            let mut other = fixture.run(id, "success", &now, head);
+            other["workflowName"] = json!("Other");
+            other["workflowDatabaseId"] = json!(3);
+            runs.push(other);
+        }
+        json!(runs)
+    };
+    fixture.set_runs(listing(&first_head, 1));
+    std::fs::write(
+        fixture.state.join("next-runs.json"),
+        serde_json::to_string(&listing(&second_head, 2)).unwrap(),
+    )
+    .unwrap();
+    std::fs::write(fixture.state.join("next-head"), &second_head).unwrap();
+
+    let gh = fixture.repo.parent().unwrap().join("bin/gh");
+    let script = format!(
+        "#!/bin/sh\nstate='{state}'\nprintf '%s\\n' \"$*\" >> \"$state/calls\"\ncase \"$1 ${{2:-}}\" in\n  \"auth status\") exit 0 ;;\n  \"run list\") cat \"$state/runs.json\"\n    if [ -f \"$state/next-runs.json\" ]; then\n      mv \"$state/next-runs.json\" \"$state/runs.json\"\n      git -C '{repo}' update-ref refs/remotes/origin/main \"$(cat \"$state/next-head\")\"\n    fi ;;\n  *) echo \"fake gh: unsupported: $*\" >&2; exit 2 ;;\nesac\n",
+        state = fixture.state.display(),
+        repo = fixture.repo.display()
+    );
+    std::fs::write(&gh, script).unwrap();
+
+    let outcome = fixture
+        .runtime
+        .attention_wait(
+            &token,
+            json!({"since": cursor, "kind": "ci_red"}),
+            "20s",
+            Some("5s"),
+        )
+        .unwrap();
+    assert_eq!(
+        outcome.status,
+        AttentionWaitStatus::DegradedChanged,
+        "swapping same-named degraded workflows must wake the wait: {:?}",
+        outcome.response
+    );
+    let response = outcome.response.unwrap();
+    assert!(
+        response["items"].as_array().unwrap().is_empty(),
+        "{response}"
+    );
+    let degraded = response["degraded"].as_array().unwrap();
+    assert_eq!(degraded.len(), 1, "{response}");
+    assert_eq!(degraded[0]["subject"], "id:2", "{response}");
+}
+
 crate::scenario_table!(
     attention_provider,
     replica_owner_only_candidate_reads_are_silent_and_make_no_provider_call,
     replica_direct_reads_identify_owner_only_sources_without_provider_call,
     ci_red_lists_newest_failed_run_on_head,
+    ci_red_since_source_names_the_timestamp_used,
     ci_red_exclude_kind_makes_no_provider_call,
     ci_red_missing_auth_degrades_without_failing,
     ci_red_ignores_a_failed_run_on_a_stale_head,
@@ -668,5 +1311,13 @@ crate::scenario_table!(
     ci_red_ignores_retained_failure_on_stale_local_head,
     ci_red_advancing_remote_head_invalidates_cache,
     ci_red_unavailable_base_head_degrades,
+    ci_red_survives_a_pending_run_on_a_newer_base_head,
+    ci_red_degrades_when_full_page_omits_pending_workflow_history,
+    ci_red_uses_workflow_run_order_when_created_at_ties,
+    ci_red_keeps_same_named_workflows_apart,
+    ci_red_keeps_id_workflow_apart_from_name_spelling_its_key,
+    ci_red_wait_wakes_when_degraded_workflow_membership_changes,
+    ci_red_wait_keeps_polling_when_provider_diagnostic_changes,
+    ci_red_wait_wakes_when_same_named_degraded_workflows_swap,
     friction_untriaged_lists_only_open,
 );

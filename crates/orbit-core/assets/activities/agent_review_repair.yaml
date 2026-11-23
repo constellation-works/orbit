@@ -157,7 +157,7 @@ spec:
        against RELEASING.md's checklist and style rules.
     6. Record each finding with a stable `id`, `severity`, `summary` and `paths`.
        Before rating any finding, read the Severity rubric in the installed
-       Orbit skill's `references/task-fields.md`; follow its five grades,
+       Orbit skill's `references/task-fields-review.md`; follow its five grades,
        examples, and lower-level tie rule.
        Fix every concrete correctness, test or documentation defect inside the
        accepted intent: disposition `repaired`, every changed path in `paths`,
@@ -578,6 +578,7 @@ spec:
     - orbit.run:resume
     - orbit.run:show
     - orbit.workflow:land
+    - orbit.workflow:refresh
     - orbit.workflow:ship
   proc_disallowed_programs:
     - sudo

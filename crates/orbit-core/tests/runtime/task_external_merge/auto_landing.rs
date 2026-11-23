@@ -18,6 +18,7 @@ crate::scenario_table!(
     auto_landing,
     a_held_authorised_run_whose_checks_went_green_is_merged_by_the_owner_tick,
     a_held_absent_runs_delivery_is_not_merged_until_a_required_check_passes,
+    a_held_inconclusive_evidence_delivery_is_not_merged_without_a_passed_check_and_its_merge_is_audited,
     a_succeeded_authorised_run_with_a_passed_observation_is_merged,
     a_delivery_without_completion_authority_records_who_merges_it,
     a_stopped_authorised_run_is_not_reported_as_unauthorised,
@@ -35,7 +36,7 @@ fn delivery_run(
     completion: &str,
     state: JobRunState,
     code: Option<&str>,
-) {
+) -> String {
     let jobs = orbit_store::compose::workspace_job_run_store(
         fx.runtime.sqlite_store().unwrap(),
         fx.runtime.workspace_id().unwrap(),
@@ -71,6 +72,7 @@ fn delivery_run(
     .unwrap();
     jobs.finalize_job_run(&run.run_id, state, Utc::now(), Some(1))
         .unwrap();
+    run.run_id
 }
 
 /// The watch's `passed` observation of the scripted pull request.
@@ -162,6 +164,66 @@ fn a_held_absent_runs_delivery_is_not_merged_until_a_required_check_passes() {
         "the same delivery merges once a required check passes"
     );
     fx.assert_done(&task, "the owner settles the merged task");
+}
+
+fn a_held_inconclusive_evidence_delivery_is_not_merged_without_a_passed_check_and_its_merge_is_audited()
+ {
+    // ORB-26389: scribe#89's complete_pr held because its required-check read
+    // failed, and the owner sweep merged it 14 s later, before CI ran: the
+    // forge then reported no required check, which read as no blocker. The
+    // merge also left no audit row.
+    let (fx, forge, task) = mergeability_land(&[], MergeabilityAnswer::Mergeable);
+    let run_id = delivery_run(
+        &fx,
+        &task,
+        "done",
+        JobRunState::Held,
+        Some("delivery_check_evidence_inconclusive"),
+    );
+    forge.report_no_required_checks(true);
+    for _ in 0..2 {
+        tick(&fx, false, false);
+    }
+    assert!(
+        forge.merges().is_empty(),
+        "a held delivery whose head shows no passed required check is never merged"
+    );
+    fx.assert_status(&task, TaskStatus::Review, "waits for check evidence");
+    forge.report_no_required_checks(false);
+    tick(&fx, false, false);
+    assert_eq!(
+        forge.merges(),
+        vec![(LAND_PR, LAND_HEAD.to_string())],
+        "the delivery merges once a required check passed on its head"
+    );
+    fx.assert_done(&task, "the owner settles the merged task");
+    let rows = fx
+        .runtime
+        .list_audit_events_with_kind(None, None, Some("pull_request".into()), None, None, 50)
+        .unwrap();
+    let phases = rows
+        .iter()
+        .filter(|row| row.command == "pr_merge")
+        .map(|row| {
+            let payload: serde_json::Value =
+                serde_json::from_str(row.arguments_json.as_deref().unwrap()).unwrap();
+            assert_eq!(
+                row.job_run_id.as_deref(),
+                Some(run_id.as_str()),
+                "the merge audit row names the delivery run it acts on"
+            );
+            assert_eq!(
+                payload["step"], "owner_sweep.auto_land",
+                "the merge audit row names the step that merged"
+            );
+            row.subcommand.clone().unwrap()
+        })
+        .collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(
+        phases,
+        ["merged".to_string(), "requested".to_string()].into(),
+        "the one merge is audited before and after the forge call"
+    );
 }
 
 fn a_succeeded_authorised_run_with_a_passed_observation_is_merged() {

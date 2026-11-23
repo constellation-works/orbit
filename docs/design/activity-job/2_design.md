@@ -3,8 +3,8 @@ summary: "Activity / Job — Design"
 type: design
 title: "Activity / Job — Design"
 owner: codex
-last_updated: 2026-11-14
-last_validated: 2026-11-14
+last_updated: 2026-11-22
+last_validated: 2026-11-22
 status: Draft
 feature: activity-job
 doc_role: design
@@ -264,9 +264,12 @@ against the binary's embedded defaults when their bytes match their recorded
 managed digest. This pass is independent of the host-global defaults stamp.
 `orbit workspace sync` performs the same pass, and `--check` reports it without
 writing. It only refreshes existing tracked files: it never creates missing
-workspace catalog defaults, adopts untracked files, changes opt-outs, or retires
-files. Modified copies and user-authored definitions keep their bytes and
-provenance. Existing retirement and preservation paths remain unchanged.
+workspace catalog defaults, adopts untracked files, or changes opt-outs.
+Tracked files whose activity or job is no longer shipped are retired by their
+recorded digest: unmodified files are removed, while modified files move to the
+catalog's `.retired-managed/` area and sync reports the destination. Modified
+copies of still-shipped defaults and user-authored definitions keep their bytes
+and provenance.
 An unreadable legacy manifest or denied refresh warns without preventing
 unrelated jobs from opening; explicit sync returns the repair error. Doctor
 checks these workspace manifests too, naming an unmodified stale managed copy
@@ -759,7 +762,7 @@ After [ORB-16784], a repair that changed only prose need not rerun the whole req
 
 After [ORB-16784], a conflict on a `workflow.generated_paths` match is regenerated, not merged. `pr_conflict_recovery`'s input lists the matches as `regenerated_paths`, and the leaf leaves them conflicted. After the leaf exits and the continuation has authenticated the stopped-rebase metadata, HEAD, branch and index, the host writes one side of each match into the worktree (`checkout --ours`, the upstream side while rebasing, else `--theirs`). It then runs each distinct command once in the checkout under the validation environment, and authenticates metadata, HEAD, branch and index again before the usual staging, `git add --all` over conflict and companion paths. A command that fails, times out or leaves conflict markers refuses the continuation like any other refusal. A regenerated path is exempt from the repaired-by-the-provider check and from `diff --check`, which judge hand merges. Files the command rewrites beyond the conflict set join the commit as companions. The certified continuation records `regenerated_paths`. Keys: [CONFIG.md](../../CONFIG.md#generated-paths-are-regenerated-not-merged).
 
-After [ORB-14268], an allocated slot with no file written no longer admits the attempt by itself. Just before the provider launches, the executor observes the slot's worktree (the HEAD, index, tracked and untracked fingerprint `git_fingerprint` computes; ignored scratch such as `.orbit/tmp/` is outside it), the tip of the run's `base_ref` (the failed step's own `base_ref` input, else the completed step output naming that worktree), and a secret-safe hash of the complete effective `validation_subprocess_environment`. It observes them again after a successful dispatch. The attempt runs only when one of them differs, and the decision's `detail` names which; otherwise it returns the original failure. A component it cannot observe never counts as a change. A third verdict, `external_blocker`, carries `blocker: {kind, evidence}` (the implementer's token rules; no other verdict may carry `blocker`, and a malformed one is `invalid`). It skips the attempt and fails the step with `AgentBlocker::step_failure_message` ahead of the original diagnostic: the `[task_blocked_by_agent]` marker and kind for an ordinary kind, so final recovery and `pr_failure_handoff` treat it like the implementer blocker below, or the `[upgrade_pending]` marker for a kind that names an upgrade refusal (`AgentBlockerClass::of_kind`, below), which follows the upgrade-pending outcome instead of blocking: an owner run requeues the task to the backlog (`upgrade_pending_requeued`), a claimed release within budget returns it to the backlog (`claim_released`), and an exhausted release budget holds it as `blocked` (`claim_release_budget_exhausted`).
+After [ORB-14268], an allocated slot with no file written no longer admits the attempt by itself. Just before the provider launches, the executor observes the slot's worktree (the HEAD, index, tracked and untracked fingerprint `git_fingerprint` computes; ignored scratch such as `.orbit/tmp/` is outside it), the tip of the run's `base_ref` (the failed step's own `base_ref` input, else the completed step output naming that worktree), and a secret-safe hash of the complete effective `validation_subprocess_environment`. It observes them again after a successful dispatch. The attempt runs only when one of them differs, and the decision's `detail` names which; otherwise it returns the original failure, except for the narrow check-repair exception recorded in the [ORB-14152] paragraph below. A component it cannot observe never counts as a change. The `external_blocker` verdict carries `blocker: {kind, evidence}` (the implementer's token rules); every `external_blocker` decision must carry one, no other verdict may, and a malformed or mismatched blocker is `invalid`. It skips the attempt and fails the step with `AgentBlocker::step_failure_message` ahead of the original diagnostic: the `[task_blocked_by_agent]` marker and kind for an ordinary kind, so final recovery and `pr_failure_handoff` treat it like the implementer blocker below, or the `[upgrade_pending]` marker for a kind that names an upgrade refusal (`AgentBlockerClass::of_kind`, below), which follows the upgrade-pending outcome instead of blocking: an owner run requeues the task to the backlog (`upgrade_pending_requeued`), a claimed release within budget returns it to the backlog (`claim_released`), and an exhausted release budget holds it as `blocked` (`claim_release_budget_exhausted`).
 
 After [ORB-14269], an implementer declares a blocker by returning `blocker: {kind, evidence}` from `implement_one` instead of writing task status `blocked`. A well-formed value (a short `kind` token and non-empty `evidence`) fails that step with the `[task_blocked_by_agent]` marker before retry. Step recovery and final recovery skip it, and the failure activity's `error_code` is `task_blocked_by_agent`. `pr_failure_handoff` returns `blocked_by_agent`: no commit, push, or `[BLOCKED]` PR, and the task is blocked under `task_blocked_by_agent` with the kind in the note. The worktree, dirty or clean, is left as the implementer left it. `orbit.task.update` from that activity refuses `status: blocked`, including a guarded edit. A malformed blocker is ordinary output. Resume does not undo the block. Operator description: [CONFIG.md](../../CONFIG.md#agent-declared-blockers-stop-the-run).
 
@@ -788,7 +791,7 @@ Run finalization moves the task to `backlog` under a `provider_failure_hold` his
 
 After [ORB-14697], admission also reads the host's `provider_limit_observations` before dispatch. A live reading that is exhausted, or used at or above 90% (or the provider's `workflow.provider_limit_overrides` entry; the threshold is fixed since [ORB-22808]), removes that provider's crews (or its model's) from the draw that follows the hold. An override written `provider:off` leaves every reading of that provider, including a ledger budget reading, out of that draw; the reading is still recorded and shown, and a usage-limit failure still holds the task. It counts until its reset, else for its window's length, or 60 minutes when the length is unknown, or 30 minutes for an exhausted error reading. A purpose-sourced task retries the unlimited members of its purpose pool before any complexity-pool fallback. A pool or default task falls back to the unlimited members of its complexity pool, never to the default. An explicit crew waits under `workflow.provider_limit_explicit_crews = "wait"`, as does a usage-limit hold on it, and draws from the pool under `"pool"`. With nothing left, the backlog snapshot excludes the task with `provider_limit`. An explicit run-input crew is not gated; `crew_selection.provider_limit` records the reading. A provider that reports no usage can be given a `workflow.provider_limit_budgets` entry [ORB-14699]: admission then reads its spend from the host invocation ledger as a `ledger` observation, computed on each read, which a live stored reading of the provider overrides.
 
-After [ORB-14152], `step_failure_recovery` records its decision about the post-recovery attempt in a file it writes, not in its final response. Before dispatch the executor asks the host (`RuntimeHost::allocate_step_recovery_decision`) for a slot: Core resolves the failed step's absolute `workspace_path`, creates `.orbit/tmp/step-recovery/` beneath the canonical worktree root one real directory at a time (a link or non-directory component refuses the slot and the recovery, with `failure_phase: "decision"`, before any provider launches), and names a fresh file bound to the run id, failed step id, attempt and a 128-bit nonce. The executor injects `recovery_decision {path, schema_version, run_id, failed_step_id, attempt, nonce}` into the recovery input. `.orbit/tmp/` is already the leaf's writable run-local scratch under the default sandbox and is never delivered, so no profile changes and a claimed follower writes only into its own worktree, with no owner task write. The leaf writes `{schema_version, run_id, failed_step_id, attempt, nonce, decision: "retry" | "not_recovered", reason?}`. Only after a successful dispatch does the executor ask the host to read it back (`read_step_recovery_decision`): every directory on the path must still be a real directory, the file a regular file opened without following links and unchanged between inspection and open, at most 16 KiB, of exactly that shape (unknown fields refused), with every binding equal to the slot's. A verified `retry` admits exactly one post-recovery attempt, whose own deterministic checks remain authoritative; a verified `not_recovered` skips it and returns the original failure. A host without the capability allocates no slot and keeps the legacy retry-on-success. A malformed, stale, mismatched or unsafe file is `invalid` and a read failure is `unavailable`; neither ever admits the attempt. The response's `recovered` field and result content stay diagnostics; an unsuccessful dispatch (including a missing completion frame or `status: failed`) is never read and never retried. Provider-unavailable and validation-environment skips, authority refusals and the sandbox are unchanged, and `pr_conflict_recovery` and custom recovery activities keep the dispatch-success gate. `step.recovery_attempted` carries `decision {status: verified | absent | invalid | unavailable, verdict, retry_admitted, detail}` beside `recovery_succeeded`, which still means only that the activity completed; `step.post_recovery_attempt` records the retried step's outcome, and `orbit run show` lists both `decision` and `retry_admitted` per recovery attempt.
+After [ORB-14152], `step_failure_recovery` records its decision about the post-recovery attempt in a file it writes, not in its final response. Before dispatch the executor asks the host (`RuntimeHost::allocate_step_recovery_decision`) for a slot: Core resolves the failed step's absolute `workspace_path`, creates `.orbit/tmp/step-recovery/` beneath the canonical worktree root one real directory at a time (a link or non-directory component refuses the slot and the recovery, with `failure_phase: "decision"`, before any provider launches), and names a fresh file bound to the run id, failed step id, attempt and a 128-bit nonce. The executor injects `recovery_decision {path, schema_version, run_id, failed_step_id, attempt, nonce}` into the recovery input. `.orbit/tmp/` is already the leaf's writable run-local scratch under the default sandbox and is never delivered, so no profile changes and a claimed follower writes only into its own worktree, with no owner task write. The leaf writes `{schema_version, run_id, failed_step_id, attempt, nonce, decision: "retry" | "not_recovered" | "external_blocker", reason?, blocker?}`, where `blocker` is `{kind, evidence}` and is required on `external_blocker` and refused on every other verdict. Only after a successful dispatch does the executor ask the host to read it back (`read_step_recovery_decision`): every directory on the path must still be a real directory, the file a regular file opened without following links and unchanged between inspection and open, at most 16 KiB, of exactly that shape (unknown fields refused), with every binding equal to the slot's. A verified `retry` is input to retry admission, not an unconditional attempt: it admits exactly one post-recovery attempt, whose own deterministic checks remain authoritative, only once the admission checks below pass. For an admitted `--auto-fix` check repair (`pr_auto_fix_check_repair`) routed to `step_failure_recovery`, a verified `retry` or an `absent` decision with an observed change (including a base-ref or validation-environment change) first binds the repair (`check_scope::bind`). A delivery edit requires a scope record matching the admitted run and head, then is committed under [ORB-14822] before the attempt. If there is neither a delivery edit nor a scope record, `check_scope::bind` records the rerun in the per-PR ledger against the unchanged candidate head and returns `NoEdit`, so the host runs the post-recovery attempt without creating a repair commit. A worktree edit with no scope record refuses. When the scope check or the no-edit ledger write refuses, the step fails with the refusal followed by the original diagnostic, no post-recovery attempt runs, and `decision.retry_admitted` is `false`. A host commit refusal under [ORB-14822] also fails the step without its retry. Both are step failures, not a `RepairDispatched` hold. A verified `external_blocker` skips the attempt and fails the step as the typed agent blocker described at [ORB-14268] above, for a check repair too. For an admitted check repair whose recovery ran and admitted no retry, the caller returns the typed `RepairDispatched` hold (`delivery_repair_dispatched`) embedding the original diagnostic, and the admission stays recorded. That covers a `not_recovered` decision, or an `absent` decision with no observed change, while `step_failure_recovery` left a worktree delivery edit or wrote a scope record; it also covers an unsuccessful recovery and an `invalid` or `unavailable` decision. Ordinary recovery returns the original failure in those same no-admission cases and never holds. The clean no-edit rerun is the exception: when the check repair made no worktree delivery edit and wrote no scope record, a verified `not_recovered` decision or an `absent` decision with no observed change takes the clean-only preflight (`check_scope::bind_no_edit_only`), while a verified `retry` or an `absent` decision with an observed change reaches `check_scope::bind`; either route records the rerun in the per-PR ledger and admits one post-recovery check-rerun attempt on the unchanged head. That attempt emits `step.recovery_attempted` with `decision.retry_admitted = true` while preserving the recorded `decision.status`, `decision.verdict`, and `decision.detail`, and suppresses the no-retry warning. If the no-edit ledger write refuses, the step fails as above with `retry_admitted` `false`. A host without the capability allocates no slot and keeps the legacy retry-on-success. A malformed, stale, mismatched or unsafe file is `invalid` and a read failure is `unavailable`; neither ever admits the attempt. The response's `recovered` field and result content stay diagnostics; an unsuccessful dispatch (including a missing completion frame or `status: failed`) is never read and never retried. Provider-unavailable and validation-environment skips, authority refusals and the sandbox are unchanged, and `pr_conflict_recovery` and custom recovery activities keep the dispatch-success gate. `step.recovery_attempted` carries `decision {status: verified | absent | invalid | unavailable, verdict, retry_admitted, detail}` beside `recovery_succeeded`, which still means only that the activity completed; `step.post_recovery_attempt` records the retried step's outcome, and `orbit run show` lists both `decision` and `retry_admitted` per recovery attempt.
 
 After [ORB-14822], the host commits a step recovery's working-tree repair. The recovery sandbox mounts the worktree's Git metadata read-only, so `step_failure_recovery` edits files and leaves them uncommitted. When it admits the retry of a deterministic step other than `git_commit`, and the run's pipeline already holds a `git_commit` outcome (`phase: commit`), the executor commits every tracked change and untracked path outside `.orbit/tmp/` before the post-recovery attempt. This covers `validate` in `task_pr_pipeline`, `task_local_pipeline` and `task_claimed_pr_pipeline`, whose `claim_validate` step now has step recovery. The commit is authored `orbit[<recovery model>] <recovery@orbit.invalid>` using the recovery activity's resolved model (`orbit <recovery@orbit.invalid>` when unavailable), committed by Orbit, follows the [commit-message standard](../../CONFIG.md#the-commit-message-standard) with the task type's subject, and carries `Orbit-Recovery-Run`, `Orbit-Recovery-Step` and `Orbit-Recovery-Activity` trailers; the retried step on that head is the evidence. Before staging anything the host refuses, and the step fails without its retry under `recovery_commit_refused:<reason>`, when the repair changes Git or `.orbit` metadata, an environment file or a malformed path (`protected_path`), leaves a symlink or gitlink that footprint widening cannot accept (`outside_footprint`), follows a commit step that skipped a no-diff-expected candidate (`no_diff_route`), or would move a head that a before-PR review attempt was admitted on or settled, bypassing that review (`reviewed_candidate`; a pin on an earlier head, as after a final-recovery `resume`, does not count). The repair stays uncommitted. A recovery before or of the `commit` step leaves the repair to that step; agent steps, whose changes the commit step or review settlement own, and `pr_conflict_recovery`, whose host continuation commits its resolution, are unaffected; a clean worktree retries as before.
 
@@ -814,7 +817,7 @@ and absent evidence stop earlier. Cancellation admission and the explicit
 completion authorization remain owned by their existing Core and `pr_complete`
 gates; checkpoint refresh cannot grant either.
 
-The provider boundary now admits only worktree-file changes from an implementation provider. Any assigned HEAD or branch movement is a typed `worktree_content_conflict` regardless of commit count, message trailers, or changed paths; Orbit does not try to prove that provider history belongs to the task. `git_commit` stages the task worktree diff, creates exactly one workflow-owned commit, and returns that SHA. It never enumerates or adopts commits above the pinned base, parses `Agent-*` trailers, or validates a commit against `context_files`. An owner (local) delivery refuses, before staging, any candidate Git would not stage as a regular file or a removal: a symlink, a path with a `.git` component, or a directory such as an agent-created nested repository, which `git add` would commit as a gitlink. The error names the paths and leaves the index unchanged; claimed delivery keeps its own new-path validation.
+The provider boundary now admits only worktree-file changes from an implementation provider. Any assigned HEAD or branch movement is a typed `worktree_content_conflict` regardless of commit count, message trailers, or changed paths; Orbit does not try to prove that provider history belongs to the task. `git_commit` stages the task worktree diff, creates exactly one workflow-owned commit, and returns that SHA. It never enumerates or adopts commits above the pinned base, parses `Agent-*` trailers, or validates a commit against `context_files`. An owner (local) delivery refuses, before staging, any candidate Git would not stage as a regular file or a removal: a symlink, a path with a `.git` component, or a directory such as an agent-created nested repository, which `git add` would commit as a gitlink. The error names the paths and leaves the index unchanged; claimed delivery keeps its own new-path validation. Every delivery commit (owner, claimed, claimed partial snapshot and step-recovery repair) also refuses, before staging, a candidate whose name is not valid UTF-8: delivery stages and records paths by their UTF-8 names, and a lossy U+FFFD name would make staging omit the native path (or address a distinct tracked one) while the rest committed. The error shows each such name with its bytes escaped (`loose-\xff.pyc`) and leaves the index, HEAD and files unchanged; such names under `.orbit/tmp/` are ignored like any scratch.
 
 Host Git children always carry a finite `ExecRequest.timeout_ms`. Light commands default to 30s; `fetch` 60s; `worktree add` and `rebase` 120s. Activity input may overlay those values with `git_timeout_ms` or `git_timeouts` (`default`, `fetch`, `worktree_add`, `rebase`); 0, non-integers, unknown keys, and values above 600s are rejected, and the request never uses an unbounded deadline. A fetch under the shared `orbit-git-fetch` lock is further bounded: each attempt gets at most 15s and the lock is held at most 25s in total across attempts and backoff, so it never outlasts the 30s wait of other lock waiters; a larger `fetch` overlay does not lengthen that hold. This budget also covers the linked-worktree snapshots taken before and after provider execution and the host's authorized rebase continuation. Snapshot stdout and hash-object stdin remain byte-preserving. A timeout raises a typed host Git error and terminates the owned process group; recovery continuation leaves its stopped-rebase metadata in place for diagnosis rather than aborting it. Hook disabling (`core.hooksPath=/dev/null`, `gc.auto=0`, `--no-verify` on commit/push), `core.fsmonitor=false`, `diff.ignoreSubmodules=all` (porcelain status and diff never recurse into a gitlink's checkout, so its own repository config such as a filter never runs on the host) and the cleared VCS environment stay in force. Host Git children use `LC_ALL=C` with no `LANGUAGE` so stderr classification is independent of the operator's locale. Source inspection applies the same locale, hook, maintenance and fsmonitor disabling policy; its shared Git runner discards inherited `GIT_DIR`, `GIT_CONFIG` and `GIT_CONFIG_*` overrides, leaving repository selection and admitted configuration to explicit argv.
 
@@ -1367,6 +1370,15 @@ activity that observed them:
   not, and `candidate_validate` over a reviewer commit attributes the rest;
 - `git_commit` widens anything still uncovered, as a fallback.
 
+Cache-shaped paths such as `__pycache__/` entries and `*.pyc` fixtures
+follow the same Git rules as other files. Clean-tree checks report visible
+untracked files, including in the owner's checkout before a local landing.
+Required validation commands and provider invocations default automatic Python
+cache writes to their own private temporary scratch when bytecode is enabled.
+Orbit removes that scratch at the end of the invocation without using Trash.
+Explicit cache prefixes and files written directly into the checkout retain
+ordinary Git treatment.
+
 A per-task bundle assigns each path to exactly one task instead of refusing an
 ambiguous path: the task whose agent's widening history names it, else the
 task with the exact `file:` selector, else the first owner; a path no selector
@@ -1807,7 +1819,7 @@ Workflow admission stays separate from operator lifecycle updates and generic de
 
 Activity-authored status writes carry the status the worker observed and compare it again under the task lock. If an operator reclassifies, archives, restores, or reopens the task before the delayed worker writes, the activity loses without applying its status or accompanying execution evidence. Completion authorization and delivery checks remain at their own boundaries rather than being inferred from a task's status label.
 
-After [ORB-10464] / [Workflow admission verifies dependency delivery into the pinned base, not just lifecycle completion](./4_decisions.md#workflow-admission-verifies-dependency-delivery-into-the-pinned-base-not-just-lifecycle-completion), status is only half of readiness. `worktree_setup` also verifies that every dependency the task declares `done` has actually been delivered into the base it pins — the check runs after `base_sha` is resolved and before the worktree, the branch, or the `in-progress` transition exist, so a refusal leaves nothing behind. Delivery is decided by the `[ORB-NNNNN]` marker or `Orbit-Task: ORB-NNNNN` trailer every Orbit commit message carries (an older `[ORB-1, ORB-2]` subject list also matches), since squash and rebase merges rewrite the sha but preserve the message: a dependency is refused only when the repository holds marked commits for it (`git log --all`, remote-tracking refs included) and none is reachable from `base_sha`. Only the commit's own subject, body markers and `Orbit-Task` trailers establish delivery; quoted subjects on `Fixes:` lines do not. History searches filter those quotes before limiting accepted matches, so a newer repair quote cannot hide an older genuine delivery. A dependency with no marked commit anywhere is not refused. The refusal is the typed `OrbitError::DependencyNotDelivered`, naming the task, the dependency, the base ref and sha, and the commits found elsewhere; `input.dependency_delivery: 'ignore'` disables the gate for work delivered under a different commit message. Nothing in the check reads GitHub, so PR-backed and local-only dependencies verify identically.
+After [ORB-10464] / [Workflow admission verifies dependency delivery into the pinned base, not just lifecycle completion](./4_decisions.md#workflow-admission-verifies-dependency-delivery-into-the-pinned-base-not-just-lifecycle-completion), status is only half of readiness. `worktree_setup` also verifies that every dependency the task declares `done` has actually been delivered into the base it pins — the check runs after `base_sha` is resolved and before the worktree, the branch, or the `in-progress` transition exist, so a refusal leaves nothing behind. Delivery is decided by the `[ORB-NNNNN]` marker or `Orbit-Task: ORB-NNNNN` trailer every Orbit commit message carries (an older `[ORB-1, ORB-2]` subject list also matches), since squash and rebase merges rewrite the sha but preserve the message: a dependency is refused only when the repository holds marked commits for it (`git log --all`, remote-tracking refs included) and none is reachable from `base_sha`. Only the commit's own subject, body markers and `Orbit-Task` trailers establish delivery; quoted subjects on `Fixes:` lines do not. History searches filter those quotes before limiting accepted matches, so a newer repair quote cannot hide an older genuine delivery. A dependency with no marked commit anywhere is not refused. The refusal is the typed `OrbitError::DependencyNotDelivered`, naming the task, the dependency, the base ref and sha, and the commits found elsewhere; `input.dependency_delivery: 'ignore'` disables the gate for work delivered under a different commit message. The refusal names the operator command, `orbit run ship <task> --ignore-dependency-delivery`: the flag sets the input on the ship run, and `task_auto_pipeline`, `task_gate_pipeline` and each delivery leaf forward it unchanged to `worktree_setup`, so it reaches the check from either entry point. The flag needs named tasks, and the `orbit.workflow.ship` tool and the dashboard do not offer it. Nothing in the check reads GitHub, so PR-backed and local-only dependencies verify identically.
 
 
 ### 8.11 Task PR handoff summaries
@@ -1934,6 +1946,116 @@ Raw task `done` never supplies it. `reuse_when` judges the definition's latest a
 result, which settles the step only after the same revalidation ([ORB-22649]). [ORB-20397] (shipped) consumes accepted-result history for condition facts (`self.last_succeeded_at`);
 [ORB-20166] (disabled example) ships the disabled, nonseeded release-readiness job/routine composition examples, installed only after owner prerequisites. No live
 readiness configuration, provider work or release is authorized by these primitives.
+
+### 8.15 Base-inherited delivery refresh
+
+[ORB-26860] An `--auto-fix` delivery whose required check fails on a test or
+advisory the base branch has since fixed refreshes its own pull request to the
+base tip, reruns the required checks on the new head and lands, with no operator
+and no new implementation. `pull_request` CI tests the PR head, so no rerun of
+the old head can pass; before this, such a delivery held as
+`delivery_repair_dispatched` until an operator updated the branch by hand
+(PRs #10592 and #10601 on 2026-11-22). The rule is recorded in
+[Held deliveries refresh to the base tip when the failure is base-inherited](./4_decisions.md#held-deliveries-refresh-to-the-base-tip-when-the-failure-is-base-inherited).
+
+**Order.** The refresh is the step after [ORB-26854]'s single no-edit rerun, never
+instead of it: it runs only in `complete_pr`'s check recovery, when the admitted
+check repair made no edit, its one rerun on the unchanged head was sent, and a
+later authenticated attempt of that rerun failed again
+(`CiRerunStep::NoEditRerunFailed`). Every earlier outcome (rerun not yet sent,
+still observing, budget spent with no rerun result, a red rerun outside the
+no-edit route) keeps its existing behavior.
+
+**Trigger: what counts as base-inherited.** All of these must hold on the failed
+head, or the run holds exactly as before with the reason extended by why no
+refresh ran:
+
+- Every required failure is red-then-fixed on the base branch since the PR's base:
+  `base_tip_check_evidence` reads, along the base branch's first-parent history
+  from its current tip, the newest commit whose same job ran to a result, and
+  classes the set as `base_refresh`. That means each failed job passed on that
+  newer base commit, no required sibling fails on the base the same way
+  (`known_red_base`), and the base tip is not already in the head. The
+  `base_refresh` class alone does not need the fork point to have failed; this
+  trigger does. The head's fork point must have conclusively failed each failed
+  job (`fork_point_failed`): the newest success or failure of that job on its
+  first-parent history, searching at most eight commits including the fork
+  point and reading past commits whose job was skipped. If the search finds no
+  decisive result within those eight commits, or the result is pending,
+  ambiguous or unreadable, the refresh is held.
+- No failure is the candidate's: no failed required job's log cites a path the
+  candidate changed against its fork point (`cites_changed_candidate`, the same
+  attribution check landing recovery uses). An unreadable log or a stopped job
+  with no log is not proof, and holds.
+- An advisory fixed by a base lockfile change is the same case at check level:
+  the dependency check (for example `cargo-deny`) fails at the fork point and
+  passes on the base commit that changed the lockfile. A candidate that itself
+  changed the cited lockfile fails the citation check and holds.
+
+**Evidence recorded.** Before the write, the run reserves the PR's one provider
+base update in the shared `pr_base_update_reserved` ledger on the owning task
+(`PrBaseUpdateReservation`, `evidence.cause = "base_inherited_refresh"`), with the
+rerun's failure reason, the fork point and the per-check base evidence (failed
+job, passing base job and base commit). The refresh operation itself records its
+`pr_refresh` audit rows (`requested`, then `updated`, `already_up_to_date`,
+`refused` or `failed`), naming the run as actor.
+
+**Reuse: one implementation.** The engine asks the host through
+`RuntimeHost::refresh_delivery_pull_request`. Core answers it with the same
+operation [ORB-26834] built for `orbit.workflow` action `refresh`
+(`OrbitRuntime::refresh_open_delivery_head` behind
+`OrbitRuntime::refresh_task_pull_request`): a read-only `git merge-tree`
+conflict inspection, then GitHub's `update-branch` with the exact expected head,
+which merges the base tip into the head as one merge commit. Only the authority
+gate differs: the resident tool refuses a PR owned by a live run, while the
+pipeline call is accepted only from the live run that owns the task, on the
+owning host, for the open delivery PR whose head, head branch and base branch
+still match its pin.
+
+**Candidate identity.** The refreshed head carries only base commits: it is a
+first-parent chain of conflict-free two-parent merges onto the candidate, each
+merging a commit the base branch contains, with a tree equal to the clean merge
+of its parents. On every poll, before any delivery-identity check, the run adopts
+a moved head only when its PR has a `base_inherited_refresh` reservation for the
+pinned candidate and `verify_refreshed_head_from_base` accepts the move. It then
+pins the refreshed head as the candidate (`DeliveryPin::adopt_refreshed_candidate`,
+the previous head kept as provenance) and treats the reviewed-head check as
+satisfied, the same way it treats an adopted provider base update. So `complete_pr`
+conditions the merge on the refreshed head and records delivery evidence for it,
+with no `delivery_evidence_stale`. A head that moved any other way is not adopted
+and still refuses. The review recorded for the pre-refresh head still covers it,
+per [ORB-26834]'s decision that base-only merge commits need no re-review, so no
+`reconcile_review` is owed. After a merge, `orbit task settle-merged` accepts the
+landing through `verify_merged_base_refresh`: the merged head reaches the published
+candidate through clean base merges, and the merge commit's tree is that head
+merged onto the landing tip.
+
+**Bounds.**
+
+- Conflict-free only. A refresh that would conflict changes nothing and is
+  refused with the conflicting paths. The delivery then holds as
+  `delivery_repair_dispatched`, and the hold reason names the rerun, the refused
+  refresh and those paths. Unrelated history, a moved head and a forge refusal
+  hold the same way.
+- A base that lands a conflicting edit beside the fix does not change this. When
+  the forge reports the head `DIRTY` after the rerun was sent while it was
+  `BLOCKED`, the rerun's recorded failed, authenticated result still takes this
+  refresh-or-hold step, read back without sending or reserving another rerun. A
+  `DIRTY` pull request without that result keeps the ordinary conflict handling.
+- At most one refresh per head. The reservation shares the cumulative per-PR
+  provider base-update budget, so a head is never refreshed twice. A refreshed
+  head that fails again takes the ordinary repair path and never a second
+  refresh. A reservation that exists without a moved head (for example, a lost
+  reply) is observed, not sent again, and holds.
+- It never edits candidate code: the only new content is the base branch's
+  commits, merged by the forge. It never rebases, rewrites or force-pushes.
+- It never skips, retries in a loop or weakens a check: the forge reruns the
+  required checks on the new head, and `complete_pr` merges only when branch
+  protection reports them passing. Branch protection is unchanged.
+
+The claimed handoff landing keeps its own inherited-failure update, and the
+review-time CI watch keeps holding on a failed no-edit rerun. Neither calls this
+refresh.
 
 ## 9. Filesystem Policy and `fsProfile`
 
@@ -2116,7 +2238,10 @@ Read-only history does not need the same dependencies as live execution: retired
 - **[ORB-13907]** — Run the job-level `final_recovery_activity` once per run after step recovery is spent and before `failure_activity`: engine-owned phase-bounded `resume`, applier-owned settlement, and claimed decisions carried by the failure settlement to the owner.
 - **[ORB-13990]** — Let implementer, recovery and review agents change any path the work requires: delivery widens task selectors with per-step provenance instead of refusing, and footprint locks become a scheduling hint.
 - **[ORB-14152]** — Gate step recovery's single post-recovery attempt on a host-allocated, nonce-bound decision file the recovery activity writes, verified without following links; the final response's `recovered` field stays diagnostic.
-- **[ORB-14268]** — An absent step-recovery decision admits the post-recovery attempt only on an engine-observed worktree, base or validation-environment change, and an `external_blocker` decision fails the step as a typed agent blocker that final recovery skips.
+- **[ORB-14268]** — An absent step-recovery decision admits the post-recovery attempt only on an engine-observed worktree, base or validation-environment change (or the narrow check-repair exception of [ORB-26854]), and an `external_blocker` decision fails the step as a typed agent blocker that final recovery skips.
+- **[ORB-26854]** — Let a clean, admitted `--auto-fix` check repair that made no edit and wrote no scope record rerun its failed checks once on the unchanged head: its no-edit rerun is recorded in the per-PR ledger, which admits the post-recovery attempt for an absent or verified `not_recovered` decision.
+- **[ORB-26860]** — After that no-edit rerun fails again, refresh a delivery whose failure is base-inherited to its base tip through [ORB-26834]'s refresh operation, at most once per head and only conflict-free, adopting the verified base-only head as the candidate ([§8.15](#815-base-inherited-delivery-refresh)).
+- **[ORB-26905]** — Report that admitted no-edit rerun in `step.recovery_attempted` as `retry_admitted = true` beside the recorded decision status, verdict and detail, suppressing the no-retry warning, and as `retry_admitted = false` when the ledger write refuses.
 - **[ORB-14822]** — Commit a step recovery's working-tree repair on the host before the post-recovery attempt of a step after `commit`, refusing protected, non-regular, no-diff-route and post-review repairs with a typed `recovery_commit_refused` reason; recovery agents stay read-only on Git metadata.
 - **[ORB-15584]** — persist the execution summary an implementer returned but did not write, attributed to the run's crew, before deriving one.
 - [DANI-10438] — Run configured step recovery for unsuccessful dispatch outcomes as well as errors.

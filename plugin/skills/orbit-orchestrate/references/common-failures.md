@@ -1,5 +1,14 @@
 # Common Job-Run Failures
 
+## Contents
+
+- [Stale Task Lock Reservation With No Owner Run](#stale-task-lock-reservation-with-no-owner-run)
+- [Stale Installed Job Or Workspace Catalog Drift](#stale-installed-job-or-workspace-catalog-drift)
+- [No Repo Diff For PR Creation](#no-repo-diff-for-pr-creation)
+- [Sandboxed Child Tool Cannot Write Required Orbit Store](#sandboxed-child-tool-cannot-write-required-orbit-store)
+- [Recovery Rebuilds The Wrong Store](#recovery-rebuilds-the-wrong-store)
+- [Transient SQLite Database Lock](#transient-sqlite-database-lock)
+
 Use this reference after the first failed or suspicious step is identified. Match symptoms conservatively, confirm with the listed checks, then apply the smallest remedy that preserves audit history.
 
 Keep this file portable. Do not add local task IDs, run IDs, reservation IDs, personal paths, or incident-specific names. Use placeholders such as `<run_id>`, `<task_id>`, `<reservation_id>`, and `<workspace_path>`.
@@ -66,7 +75,7 @@ Solution:
 
 - Start with `orbit workspace sync --check`; use `orbit workspace sync` for
   managed defaults. Locally edited overrides are preserved and require deliberate
-  reconciliation. See [maintenance.md](../../orbit-setup/references/maintenance.md).
+  reconciliation. See [maintenance-upgrades.md](../../orbit-setup/references/maintenance-upgrades.md).
 - If a workspace `.orbit/resources` job shadows the global job, remove or update the workspace override.
 - If the already-loaded run cannot recover because it captured the stale definition, start a fresh run after the catalog is corrected.
 

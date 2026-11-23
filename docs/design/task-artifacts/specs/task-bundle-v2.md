@@ -534,7 +534,7 @@ external reference (`github-pr:NUMBER` or `github-pr:https://github.com/OWNER/RE
 It does not create a dependency or enter cycle reachability. Numeric PR
 references resolve in the checkout's repository. The CI-failure filer uses it
 on archived/rejected exact-key sweep tasks to retain operator coverage;
-[CI recovery guidance](../../../../plugin/skills/orbit-orchestrate/references/recovery.md)
+[CI recovery guidance](../../../../plugin/skills/orbit-orchestrate/references/recovery-ci-findings.md)
 describes open, landed, unavailable and abandoned cover handling.
 
 ## Task References

@@ -7,6 +7,11 @@
 //! evidence and the commits it cites, not under whichever readiness gap its
 //! empty selectors happen to leave.
 //!
+//! A `verified_no_diff` task that is a no-diff deliverable rather than an
+//! already-fixed finding is not held: apply tags it `no-diff-expected` in the
+//! pilot write ([`VerifiedNoDiff::expects_no_repository_diff`]), so this
+//! module's hold never sees it again.
+//!
 //! A task Orbit automation filed (a CI-sweep or delivery-review finding, or
 //! any `auto-task:` task) is archived once the cited commits pass the proof
 //! in [`VerifiedNoDiff::covering_proof`]. Any other task waits for a person.
@@ -26,12 +31,16 @@
 //! itself names (any commit in its description, and the landed commit of each
 //! `regression_from` target) never count as covering. A target with no
 //! recorded delivery names no commit. A pinned delivery definition that
-//! cannot be read or parsed is not that case: the observation fails and the
-//! proof is refused, so a citation of the culprit itself cannot close the
-//! finding. When a culprit commit is known, a covering commit must also be a
-//! strict descendant of every one of them, and when the task declares path
-//! selectors it must touch one of those paths. A finding that names no commit
-//! and declares no path has nothing to relate a citation to, so it is never
+//! cannot be read or parsed, and a recorded landing that merged without a
+//! commit that resolves in this repository, are not that case: the proof is
+//! refused, so a citation of the culprit itself or of an older same-path
+//! change cannot close the finding. A local fast-forward records the commit
+//! the base is at after the merge, including one that follows a rebase; an
+//! older checkpoint that omits it is a merged landing without that commit.
+//! When a culprit commit is known, a covering commit must also be a strict
+//! descendant of every one of them, and when the task declares path selectors
+//! it must touch one of those paths. A finding that names no commit and
+//! declares no path has nothing to relate a citation to, so it is never
 //! proven; anything less is not proof.
 
 use orbit_common::OrbitError;
@@ -63,6 +72,20 @@ pub(crate) fn auto_minted(tags: &[String]) -> bool {
     tags.iter().any(|tag| {
         AUTO_MINTED_TAGS.contains(&tag.as_str()) || tag.starts_with(AUTO_TASK_TAG_PREFIX)
     })
+}
+
+/// Whether the task is a finding Orbit or a review filed, whose
+/// `verified_no_diff` means the finding is already fixed.
+fn finding_filed(tags: &[String]) -> bool {
+    let kinds = tags
+        .iter()
+        .map(|tag| {
+            tag.strip_prefix(AUTO_TASK_TAG_PREFIX)
+                .unwrap_or(tag)
+                .to_string()
+        })
+        .collect::<Vec<_>>();
+    super::review_filed(&kinds) || kinds.iter().any(|kind| kind == "ci-failure-sweep")
 }
 
 /// A `verified_no_diff` assessment, reduced to what a hold reports and what
@@ -117,6 +140,59 @@ impl VerifiedNoDiff {
             cited_commits: commit_citations(texts),
             context_files_before: Vec::new(),
         }
+    }
+
+    /// Whether `assessment` verifies that the task expects no repository diff,
+    /// as opposed to a task whose work already landed, duplicates another
+    /// task, awaits an operator release action or rests on an invalid finding.
+    /// Only the first kind is a no-diff deliverable: its evidence cites no
+    /// commit (known non-commit Git objects such as blob or tree checksums do
+    /// not count as commit citations, whereas commits and unknown object IDs
+    /// still fail closed) and the assessment carries none of the typed findings
+    /// that say the work is already done or the task is not work, and `after`
+    /// (the selectors apply keeps) is empty.
+    ///
+    /// A finding task (a review, QA or CI-sweep finding, filed directly or by
+    /// its auto-task) is never one: its `verified_no_diff` says the finding is
+    /// already fixed or does not hold, so it keeps the
+    /// [`PILOT_VERIFIED_NO_DIFF`] hold and its commit proof.
+    pub(super) fn expects_no_repository_diff(
+        assessment: &Value,
+        after: &[String],
+        tags: &[String],
+        source: Option<&dyn SourceGit>,
+    ) -> bool {
+        const NOT_A_DELIVERABLE: [&str; 4] = [
+            "already_landed",
+            "duplicate_of",
+            "release_action_required",
+            super::FINDING_INVALID,
+        ];
+        let Some(finding) = Self::from_assessment(assessment) else {
+            return false;
+        };
+        !finding_filed(tags)
+            && after.is_empty()
+            && !finding.cites_commit(source)
+            && NOT_A_DELIVERABLE
+                .iter()
+                .all(|field| assessment.get(field).is_none_or(Value::is_null))
+    }
+
+    /// Whether any parsed citation may name a commit: empty citations do not;
+    /// without a source reader, every citation fails closed; with one, known
+    /// non-commit objects (such as blobs or trees) are excluded while commits
+    /// and unknown object IDs still count.
+    fn cites_commit(&self, source: Option<&dyn SourceGit>) -> bool {
+        if self.cited_commits.is_empty() {
+            return false;
+        }
+        let Some(source) = source else {
+            return true;
+        };
+        self.cited_commits
+            .iter()
+            .any(|sha| !is_known_non_commit_object(source, sha))
     }
 
     /// One line for a hold's `detail`: the evidence, then what it cites.
@@ -199,7 +275,7 @@ impl VerifiedNoDiff {
         }
         let mut cited = Vec::with_capacity(self.cited_commits.len());
         for sha in &self.cited_commits {
-            let Some(full) = resolve_commit(source, sha) else {
+            let Some(full) = resolve_commit_object(source, sha) else {
                 return Err(format!("cited {sha} is not a commit in this repository"));
             };
             cited.push((sha, full));
@@ -432,26 +508,28 @@ fn hex_tokens<'a>(
 /// The full SHAs of the commits the finding itself names: every commit that
 /// resolves from its description, and the landed commit of each
 /// `regression_from` target that delivery observed as merged. A target never
-/// delivered names no commit. An unreadable or unparseable pinned definition
-/// is an observation failure, not a missing delivery; any such failure
-/// refuses the proof, since a missed culprit would let a proof citing it
-/// close the finding.
+/// delivered names no commit. An unreadable or unparseable pinned definition,
+/// an ambiguous commit prefix, a Git inspection failure, or a merged landing
+/// whose commit is missing or does not resolve refuses the proof, since a
+/// missed culprit would let a proof citing it close the finding.
 fn named_commits(
     runtime: &OrbitRuntime,
     source: &dyn SourceGit,
     task: &Task,
 ) -> Result<Vec<String>, String> {
-    let mut named = hex_tokens([task.description.as_str()], abbreviated_sha)
-        .iter()
-        .filter_map(|sha| resolve_commit(source, sha))
-        .collect::<Vec<_>>();
+    let mut named = Vec::new();
+    for sha in hex_tokens([task.description.as_str()], abbreviated_sha) {
+        if let Some(commit) = resolve_named_commit_object(source, &sha)? {
+            named.push(commit);
+        }
+    }
     for relation in &task.relations {
         if relation.relation_type != TaskRelationType::RegressionFrom {
             continue;
         }
         let observation = match runtime.delivery_observation(relation.target.as_str(), None) {
-            Ok(observation) => Some(observation),
-            Err(OrbitError::TaskDeliveryUnavailable(_)) => None,
+            Ok(observation) => observation,
+            Err(OrbitError::TaskDeliveryUnavailable(_)) => continue,
             Err(error) => {
                 return Err(format!(
                     "the delivery of regression culprit {} could not be read: {error}",
@@ -459,11 +537,41 @@ fn named_commits(
                 ));
             }
         };
-        let landed = observation
-            .filter(|observation| observation.landing.status == LandingObservationStatus::Merged)
-            .and_then(|observation| observation.landing.landed_commit)
-            .and_then(|sha| resolve_commit(source, &sha));
-        named.extend(landed);
+        match observation.landing.status {
+            LandingObservationStatus::Merged => {}
+            // Unreadable landing evidence (a malformed checkpoint, say) could
+            // hide the culprit's commit, so it refuses the proof like an
+            // unreadable delivery does.
+            LandingObservationStatus::Unavailable => {
+                let reason = observation
+                    .landing
+                    .reason
+                    .map_or_else(|| "unreadable".to_string(), |gap| format!("{gap:?}"));
+                return Err(format!(
+                    "the landing of regression culprit {} is unavailable ({reason}), so its identity is unavailable",
+                    relation.target
+                ));
+            }
+            LandingObservationStatus::NotRequested
+            | LandingObservationStatus::NotApplicable
+            | LandingObservationStatus::Pending
+            | LandingObservationStatus::NotReached => continue,
+        }
+        let Some(sha) = observation.landing.landed_commit else {
+            return Err(format!(
+                "the delivery of regression culprit {} landed without a recorded commit, so its identity is unavailable",
+                relation.target
+            ));
+        };
+        match resolve_named_commit_object(source, &sha)? {
+            Some(commit) => named.push(commit),
+            None => {
+                return Err(format!(
+                    "the landed commit {sha} recorded for regression culprit {} does not resolve to a commit, so its identity is unavailable",
+                    relation.target
+                ));
+            }
+        }
     }
     named.sort();
     named.dedup();
@@ -480,6 +588,118 @@ fn resolve_commit(source: &dyn SourceGit, revision: &str) -> Option<String> {
         ])
         .ok()
         .filter(|sha| !sha.is_empty())
+}
+
+/// List all full object IDs matching hexadecimal ID or prefix `object` directly
+/// in Git's object database via `--disambiguate`, ignoring refs (branches or
+/// tags) that share the same spelling. Returns an empty list for non-hex inputs
+/// or unknown IDs, and `Err` on Git errors or unexpected output.
+fn disambiguate_object_ids(source: &dyn SourceGit, object: &str) -> Result<Vec<String>, String> {
+    if object.len() < 4 || !object.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Ok(Vec::new());
+    }
+    let matches = source
+        .git(&["rev-parse", &format!("--disambiguate={object}")])
+        .map_err(|error| format!("could not disambiguate object prefix {object}: {error}"))?;
+    let mut oids = Vec::new();
+    for line in matches.lines().filter(|line| !line.is_empty()) {
+        if !line.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+            return Err(format!(
+                "unexpected git disambiguation output for object prefix {object}"
+            ));
+        }
+        oids.push(line.to_string());
+    }
+    Ok(oids)
+}
+
+/// Resolve a hexadecimal object ID or prefix directly in Git's object database
+/// via `--disambiguate`, ignoring refs (branches or tags) that share the same
+/// spelling. Returns `None` for non-hex inputs, unknown IDs, ambiguous
+/// prefixes, or Git errors.
+fn resolve_unique_object_id(source: &dyn SourceGit, object: &str) -> Option<String> {
+    let mut oids = disambiguate_object_ids(source, object).ok()?;
+    if oids.len() != 1 {
+        return None;
+    }
+    oids.pop()
+}
+
+/// Resolve a hexadecimal commit ID or prefix directly in Git's object database
+/// so a same-name branch or tag cannot shadow a commit prefix or stand in for
+/// an unknown hex token. Requires an unambiguous object ID in the database.
+fn resolve_commit_object(source: &dyn SourceGit, object: &str) -> Option<String> {
+    let oid = resolve_unique_object_id(source, object)?;
+    resolve_commit(source, &oid)
+}
+
+/// Peel a full object ID already located in Git's object database to a commit
+/// SHA, or `Ok(None)` for non-commit objects (blobs, trees, and tags that do
+/// not peel to a commit). Returns `Err` on Git inspection failures.
+fn peel_object_to_commit(source: &dyn SourceGit, oid: &str) -> Result<Option<String>, String> {
+    let kind = source
+        .git(&["cat-file", "-t", oid])
+        .map_err(|error| format!("could not inspect git object {oid}: {error}"))?;
+    match kind.as_str() {
+        "commit" => Ok(Some(oid.to_string())),
+        "blob" | "tree" => Ok(None),
+        "tag" => {
+            let peeled = source
+                .git(&["rev-parse", "--verify", "--quiet", &format!("{oid}^{{}}")])
+                .map_err(|error| format!("could not inspect tag object {oid}: {error}"))?;
+            let peeled_kind = source
+                .git(&["cat-file", "-t", &peeled])
+                .map_err(|error| format!("could not inspect peeled object {peeled}: {error}"))?;
+            Ok((peeled_kind == "commit").then_some(peeled))
+        }
+        other => Err(format!("unexpected git object type {other} for {oid}")),
+    }
+}
+
+/// Resolve a hexadecimal commit token named by a finding directly in Git's
+/// object database. Non-commit objects sharing the same prefix (such as blobs
+/// or trees) do not hide a unique commit culprit, while a prefix matching more
+/// than one distinct commit or failing Git inspection fails closed (`Err`) so
+/// a culprit is never silently dropped.
+fn resolve_named_commit_object(
+    source: &dyn SourceGit,
+    object: &str,
+) -> Result<Option<String>, String> {
+    let mut commit = None;
+    for oid in disambiguate_object_ids(source, object)? {
+        let Some(peeled) = peel_object_to_commit(source, &oid)? else {
+            continue;
+        };
+        match &commit {
+            None => commit = Some(peeled),
+            Some(existing) if existing == &peeled => {}
+            Some(_) => {
+                return Err(format!(
+                    "commit prefix {object} named by the finding is ambiguous in this repository"
+                ));
+            }
+        }
+    }
+    Ok(commit)
+}
+
+/// Whether `object` resolves in Git's object database as an unambiguous
+/// non-commit object (such as a blob, tree, or tag object that does not peel to
+/// a commit). Resolving the object ID first via `--disambiguate` prevents a
+/// matching branch or tag name from shadowing a commit prefix or masquerading as
+/// an unknown hex token. Ambiguous prefixes, unknown SHAs, and Git errors
+/// return `false` so callers fail closed.
+fn is_known_non_commit_object(source: &dyn SourceGit, object: &str) -> bool {
+    let Some(oid) = resolve_unique_object_id(source, object) else {
+        return false;
+    };
+    if resolve_commit(source, &oid).is_some() {
+        return false;
+    }
+    source
+        .git(&["cat-file", "-t", &oid])
+        .ok()
+        .is_some_and(|kind| !kind.is_empty() && kind != "commit")
 }
 
 /// Whether `commit` changes a path any of the task's selectors cover. A merge

@@ -27,5 +27,6 @@ pub use paths::path_rows;
 pub use purposes::crew_purposes_view;
 pub use view::{effective_view, file_view, key_catalog, parse_config_scope};
 pub use write::{
-    ConfigWriteInit, ConfigWriteOutcome, delete_crew, set_crew, set_key, set_key_literal, unset_key,
+    ConfigUnsetRefusal, ConfigWriteInit, ConfigWriteOutcome, GuardedConfigUnset, delete_crew,
+    set_crew, set_key, set_key_literal, unset_key, unset_key_preserving_effective,
 };

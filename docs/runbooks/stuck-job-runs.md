@@ -5,7 +5,7 @@ tags: [operations, jobs, runs, recovery, debugging]
 paths: ["crates/orbit-core/src/application/job/**", "crates/orbit-cli/src/command/run/**", "crates/orbit-runtime/src/audit/run/trail.rs"]
 related_features: [activity-job, auditability]
 related_artifacts: [ORB-10070, ORB-10496, ORB-10801, ORB-17179, ORB-18166]
-last_validated: 2026-10-31
+last_validated: 2026-11-22
 ---
 
 # Recover Stuck Job Runs
@@ -75,8 +75,9 @@ awaiting a recorded decision with `review_decision_pending: true`. Its `kind` st
 decision, with no release-budget charge. Count these separately from leaf failures. Older
 settlements without the flag read as false; absence is not evidence of a pending decision.
 Each settlement's typed `accounting` (`outcome`, `counts_as_failure`, `reason`) says how a
-failure scan counts it: `review_decision_hold`, `evidence_hold`, `operator_cancel` and
-`upgrade_paused` (reason `upgrade_quiesce`: an Orbit upgrade paused the leaf) are held, while `failure`, `baseline_red` and legacy `unrecorded` settlements count. A pending flag on any
+failure scan counts it: `review_decision_hold`, `evidence_hold`, `operator_cancel`,
+`upgrade_paused` (reason `upgrade_quiesce`: an Orbit upgrade paused the leaf) and
+`delivery_hold` (reason `delivery_stale_branch`: `worktree_setup` kept a retained stale branch untouched for inspection) are held, while `failure`, `baseline_red` and legacy `unrecorded` settlements count. A pending flag on any
 settlement other than a failed candidate stays a `failure` with reason
 `review_decision_pending_without_candidate_failure`. Accounting changes no claim or task.
 
@@ -971,52 +972,91 @@ in-run final recovery of the publishing run itself.
 ### An escalated run that published its own pull request
 
 A run can push and open its pull request through its own `push` and `pr_open`
-steps and then fail completion, for example on a required check that later
-passes on a rerun. Its failure handoff keeps that pull request open and
-unmerged (`review_completion_failure` or `landing_review_failure`), and when
-final recovery escalates the task stays `blocked` with no `[BLOCKED]` pull
-request. Requeue can carry a green candidate; explicit source repair can
-authorize repairs to that same publication under fresh operator policy.
+steps and then stop without landing in any of four terminal owner-local states:
 
-Once every required check has passed on the recorded head, requeue the task:
+- `failed`, when its failure handoff kept that pull request open and unmerged
+  (`review_completion_failure` or `landing_review_failure`) and final recovery
+  escalated so the task stayed `blocked` with no `[BLOCKED]` pull request;
+- `cancelled` after pushing and opening the pull request (no failure-handoff
+  receipt);
+- `held` for a before-landing review decision (`review_decision_pending`); or
+- `success` with its pull request open (for example, a review-only run in
+  `review`, or moved to `blocked`).
 
-```bash
-orbit task requeue <task-id> --reason '<why the published head can land>'
-```
+Requeue can carry a green candidate (or one on a forge-confirmed
+zero-required-check base); explicit source repair can authorize repairs to that
+same publication under fresh operator policy.
 
-A plain `orbit task update <task-id> --status backlog` from `blocked` or
-`review` applies the same check. A review task with failed, pending or stale
-required checks stays in review; returning it to backlog cannot authorize
-repair or renew an expired completion deadline.
-The requeue resumes the pull request only when all of these hold, and
-otherwise refuses with nothing written:
+Once every required check has passed on the recorded head (or the forge
+positively confirms the base branch configures no required status checks):
 
-- the failure handoff's receipt names this run and the task, and its
-  recorded task specification still matches the task;
+- from `blocked`, requeue the task with
+  `orbit task requeue <task-id> --reason '<why the published head can land>'`
+  (or `orbit task update <task-id> --status backlog`);
+- from `review`, `orbit task requeue` is refused (`only a blocked task can be
+  requeued; <task-id> is review`), so use the plain backlog return
+  `orbit task update <task-id> --status backlog` (or append
+  `--discard-candidate` to close the pull request and implement fresh).
+
+Both entry points apply the same publication authentication, preserve PR repair
+attempts, and cannot authorize repair or renew an expired completion deadline.
+A `review` task with failed, pending, missing, or stale required checks stays in
+`review`, and its refusal names
+`orbit task update <task-id> --status backlog --discard-candidate` without
+suggesting blocked-only `orbit task requeue`. The requeue resumes the pull
+request only when all of these hold, and otherwise refuses with nothing written:
+
 - the stopped run is this machine's own single-task delivery, conclusively
-  stopped, still the task's newest execution, and its candidate was not
-  discarded;
+  stopped (`finished_at` set and worker stopped) in `failed`, `cancelled`, or
+  `success` state, or `held` for a before-landing review decision
+  (`review_decision_pending`), still the task's newest execution, and its
+  candidate was not discarded;
+- for a `failed` run (and any non-failed run that recorded a `pr_failure_handoff`
+  receipt naming itself), the failure handoff's receipt names this run and the
+  task, keeps the pull request (`review_completion_failure` or
+  `landing_review_failure`), and its recorded task specification still matches
+  the task; for a `cancelled`, `success`, or `review_decision_pending` `held`
+  run without such a receipt, task history records no `task_fields_updated` edit
+  to the task description or acceptance criteria at or after the run started;
 - the run's checkpoints authenticate the branch, and the pull request is open
   and unmerged at the authenticated published head: the recorded pushed head,
   followed through any recorded `pr_auto_fix_pushed` entries and, only for a
-  review-decision hold (an incomplete before-landing review, which ends its run
-  `held`), the host-attested reviewer fast-forward its failure handoff pushed
-  ([review-gate.md](review-gate.md)). That published
-  identity must match the remote branch and pull request exactly, while the
-  retained local branch matches that published head or a host-certified clean
-  base-chase tip;
-- the forge reports every required check on exactly that published head as passed:
-  none failed, none unfinished, and at least one reported. Checks on another
-  head describe a different candidate and are refused.
+  review-decision hold (a before-landing review that did not approve, which ends
+  its run `held` with `review_decision_pending`), the host-attested reviewer
+  fast-forward its failure handoff pushed ([review-gate.md](review-gate.md)).
+  That published identity must match the remote branch and pull request exactly.
+  The retained local branch matches that published head, a host-certified clean
+  base-chase tip, or, for a stopped failed run or review-decision hold, the
+  attested reviewer repair its failure handoff preserved: a commit `R` above the
+  published head `P`, recorded as `reviewer_preservation` with decision
+  `preserved` and kept on `refs/orbit/candidates/<task>/<run>`
+  ([review-gate.md](review-gate.md#before-landing-review)). The requeue answer's
+  `resumes` object reports `P` as `head_sha`, `R` as `candidate_head_sha` and the
+  ref as `candidate_ref`. `P` stays the remote branch and pull request head, and
+  the successor adopts `R` and publishes it under a lease on `P`. A
+  `preserve_failed` or `commit_refused` handoff preserves no such commit and is
+  not a candidate (see [review-gate.md](review-gate.md));
+- the pull request does not conflict with its base, and the forge reports every
+  required check on exactly that published head as passed: none failed, none
+  unfinished, none configured by classic branch protection or a readable
+  ruleset missing from the head's results (`required checks have not reported
+  on the recorded head: <names>`), and either at least one required check
+  passed or the forge positively confirms the base branch configures no required status checks
+  (neither classic branch protection `requiredStatusChecks` nor repository or
+  organization rulesets require any status checks, with readable, non-truncated
+  policy). An empty check rollup when branch protection or a ruleset requires
+  checks, or when required-check policy is unreadable or truncated, is refused
+  (`the recorded head reports no required check, so none has passed`). Checks on
+  another head describe a different candidate and are refused.
 
 Requeue resolves the task's bound execution, and that execution must be the
-stopped failed run or review-decision hold that published the candidate, still
-the task's newest execution. A footprint-held run that adopted the publication
-and recommitted it is bound to the task after terminal cleanup, and it is
-neither a failed run nor a review-decision hold, so requeue refuses it. Its
-identical-tree commit is not a requeue input. The next ordinary delivery adopts
-the publication through that run instead (see *A cancelled published source
-repair*).
+stopped `failed`, `cancelled`, or `success` run, or `review_decision_pending`
+`held` run, that published the candidate, still the task's newest execution. A
+footprint-held run that adopted the publication and recommitted it is bound to
+the task after terminal cleanup, and it is none of those admitted source states,
+so requeue refuses it. Its identical-tree commit is not a requeue input. The
+next ordinary delivery adopts the publication through that run instead (see
+*A cancelled published source repair*).
 
 It writes the same `requeued` decision and publication-preservation record a
 final-recovery requeue writes, and the answer's `resumes.source` is
@@ -1870,7 +1910,8 @@ An operator attempting to recover a held or blocked delivery may meet two common
   that case, `orbit task requeue <task-id>` authenticates the candidate and resumes its pull
   request when it remains open at the authenticated published head — the recorded head, or a
   head advanced by recorded auto-fix (`pr_auto_fix_pushed`) or an attested reviewer commit
-  ([review-gate.md](review-gate.md)) — with every required check passed. An unfinished run, an
+  ([review-gate.md](review-gate.md)) — with every required check passed (or a forge-confirmed
+  zero-required-check base). An unfinished run, an
   unexplained moved head, or a held run without that recorded decision still refuses candidate
   preservation. **Workaround:** If the candidate should be retired, save its patch first as a
   task artifact using `orbit task artifact put` (or `orbit task update --artifact`), then discard
@@ -1881,6 +1922,11 @@ An operator attempting to recover a held or blocked delivery may meet two common
   (or `orbit task update <task-id> --status backlog --discard-candidate`).
 - **A task in `review` cannot be requeued:**
   `orbit task requeue` accepts only tasks currently in `blocked` status (`only a blocked task can be requeued; <task-id> is review`).
+  When the task's published candidate is unchanged and its PR is open at the
+  recorded head with every required check green (or zero required checks
+  confirmed by the forge), return it to `backlog` with
+  `orbit task update <task-id> --status backlog` to preserve and resume that
+  publication.
   To continue editing a held run's published candidate, use
   [explicit source repair](#repair-a-held-runs-published-candidate).
   To retire the candidate and implement afresh, move the task to `backlog` with
@@ -2032,8 +2078,17 @@ admits the repair against the pull request's attempt ledger, and the
 edits, then pushes to the same branch. Completion then merges only when the run
 holds `--complete`; a review-only run leaves the repaired pull request in
 `review`. Each hand-back is recorded in task history as `pr_auto_fix_out_of_run`.
-A pull request is handed back at most once per head and blocker, and at most
-three times in all, so a resume that dies before it repairs cannot loop.
+The per-head/blocker limit prevents concurrent repairs: while an attempt is
+live, or its run's end cannot be confirmed, another run cannot repair that same
+head and blocker. Once the run is confirmed ended without publishing a new
+head, its admitted attempt still counts toward the PR's three-attempt budget,
+but a later run may try the same head and blocker while budget remains.
+
+An out-of-run hand-back reserves its head and blocker until the resumed run
+admits an attempt. If that run ends without admitting one, the same head and
+blocker are not handed back again. This prevents a hand-back that never reaches
+repair admission from looping; blocker hand-backs are also capped at three per
+PR.
 
 Repairs take free drain slots after adoption. A pass held by host resource
 pressure starts none, and a pull request found unblocked is not read again for
@@ -2065,30 +2120,62 @@ For the full persisted pass, including every skip and any `pass_error`, run
 - `no_blocker` and `checked_recently`: nothing to repair;
 - `mergeability_unknown`: GitHub is still calculating this pull request's
   mergeability; other candidates in the pass are still checked;
-- `already_repaired`, `already_started` or `budget_exhausted`: the ledger refused;
+- `already_repaired`, `already_started` or `budget_exhausted`: the ledger refused.
+  Every refusal of a pull request that may need a repair ends with its repair
+  attempts spent and remaining, or says the budget is spent. A repair that
+  published no new head leaves its head repairable while attempts remain;
 - `live_run` or `claimed_execution`: another run or machine owns the delivery;
 - `not_resumable`: checkpoint resume refused the run, for example one that
   stopped before its completion step;
 - `store_unreadable`, `forge_unreadable`, `resume_unplannable`, `resume_failed`
   and `task_moved`: a later pass tries again.
+- `publication_identity_changed`: the pull request no longer matches the head
+  the held run published;
 - `completion_held`: a `completion.hold` rule keeps the held task in review
   for a person;
 - a delivery hold code, such as `delivery_check_evidence_inconclusive`: a held
   leaf is waiting out its backoff, or has been handed back 3 times on this head
   for this hold (the detail says which). The same code is also the reason while
-  a `delivery_check_runs_absent` head still reports no required check run; that
+  a `delivery_check_runs_absent` head still reports no required check run and
+  the forge has not positively confirmed zero required checks on the base branch
+  (including when policy requires checks or is missing or unreadable); that
   detail says the hand-back ceiling is not spent. Once spent, resolve it as the
   run-debugging delivery-refusal table describes.
 
-**Held leaves.** A task in `review` whose newest leaf ended `held` with its pull
+**Held leaves.** A held leaf with typed code `delivery_head_changed` or
+`delivery_repair_dispatched` and an `auto_fix_stopped:` diagnostic in its
+message is handed back once the same published head has no conflict, no pending
+or failed required checks, and either at least one passed required check or a
+forge-confirmed zero-required-check base branch (neither classic branch
+protection nor rulesets require status checks; missing or unreadable policy
+stays skipped under `auto_fix_stopped`). Readiness
+reports `checks_green_after_hold`.
+Completion still checks the current review, required checks and branch protection;
+a changed head is refused. The hand-back ceiling applies; this green-check hand-back does not wait for the
+held-leaf backoff.
+
+A held leaf with typed code `delivery_repair_dispatched` whose `step_failure_recovery`
+failed or admitted no retry before publishing (carrying `pr_auto_fix_check_repair:`
+without `auto_fix_stopped:` or a post-recovery `pr_complete` wrapper) is likewise
+observed by an `--auto-fix` drain pass (and **Fix PR**) without waiting for the
+held-leaf backoff: while a blocker remains it retries through the per-PR ledger
+for its remaining attempts (or skips under `budget_exhausted`, `operator_hold`,
+`opted_out`, or `completion_held` with its spent/remaining attempt count in
+readiness), and if all required checks turn green on the same published head it
+hands back to completion as `checks_green_after_hold`.
+
+A task in `review` whose newest leaf ended `held` with its pull
 request open is handed back the same way when the hold is one a fresh forge
 read can clear: `delivery_check_evidence_inconclusive`,
 `delivery_completion_budget_expired`, `delivery_evidence_stale`,
 `delivery_requirements_unsatisfied`, `delivery_base_checks_pending`,
 `delivery_forge_observation_unavailable`, or `delivery_check_runs_absent`
-once the unchanged head reports a pending or passed required check. Until
-that check exists, the pass lists `delivery_check_runs_absent` under that
-code and spends no hand-back. Completion reruns with a fresh budget
+once the unchanged head reports a pending or passed required check or the forge
+positively confirms the base branch configures no required status checks. Until
+that check exists or zero required checks are confirmed — missing or unreadable
+policy is never treated as zero required checks — the pass lists
+`delivery_check_runs_absent` under that code and spends no hand-back. Completion
+reruns with a fresh budget
 and repairs only what its own watcher then finds. A conflict or failed
 required check on the pull request goes through the ledger above; otherwise
 the hand-back spends no repair budget, and the record, started entry and
@@ -2096,8 +2183,10 @@ resumed run's `out_of_run_auto_fix` input carry `hold_code` with a null
 `blocker`. A drain pass hands a held leaf back no earlier than 5 minutes after
 it held, doubled for each earlier hand-back of that pull request for that code,
 and at most 3 times per pull request, head and code. Other holds, such as
-`delivery_head_changed`, `delivery_pr_draft`, `delivery_landing_repair_requeue`
-or `base_chase_exhausted`, keep their own next step; the pass does not list them.
+`delivery_head_changed` or `delivery_repair_dispatched` without an
+`auto_fix_stopped:` or unrepaired `pr_auto_fix_check_repair:` diagnostic, `delivery_pr_draft`,
+`delivery_landing_repair_requeue` or `base_chase_exhausted`, keep their own next
+step; the pass does not list them.
 
 A write-free pass reports `hold_reason: "write_free"` and does not scan or
 persist candidates. A stopped drain or a host shutdown hold also starts no
@@ -2186,7 +2275,13 @@ A task settles only when all of these hold:
   accepted handoff's branch, or the original admission receipt's branch for a
   released or failed claim. A missing or expired admission receipt cannot prove
   that branch. Other delivery pull requests must merge into the base branch of
-  the task's delivery run, else the workspace base branch;
+  the task's delivery run, else the workspace base branch. A local delivery held
+  after it published its pull request is pinned to that publication's number,
+  branch and head. The pull request may also have merged after it was brought up to
+  its base (such as with `gh pr update-branch`), when every commit added after the
+  published head is a clean merge of commits already on the target branch before
+  this merge. The landing note then names the published head and the merged head.
+  A merged head carrying any other commit does not settle the task;
 - it owes no post-deploy acceptance criterion still awaiting an operator's met
   record. Merging the pull request does not discharge that measurement.
 
@@ -2215,7 +2310,23 @@ deadline. It needs all of these:
 - no `completion.hold` rule holds it (a matching rule records `completion_held`
   and leaves the merge to you), and the pre-landing review covers the pull
   request's head;
-- its one open delivery pull request (several open ones record `ambiguous_delivery_pull_requests` and merge nothing) is mergeable with every required check passed.
+- its one open delivery pull request (several open ones record `ambiguous_delivery_pull_requests` and merge nothing) is mergeable with every required check passed. After a held run at least one required check must have passed on the head: a forge read that reports no required check (checks not started yet, or none readable) is not evidence, so a held delivery never merges before its checks ran.
+
+Before calling the forge, Orbit must write a `pr_merge` audit row with phase
+`requested`; if that write fails, Orbit does not request the merge. After the
+forge call, Orbit best-effort writes an outcome row with phase `merged`,
+`auto_merge_enabled`, `refused`, `ambiguous` or `failed`. An outcome-row write
+failure is logged but does not change the forge result, so the audit history
+may contain only the `requested` row.
+
+The rows include the step and pull request, and include a job run ID when one
+is available. For example, an owner sweep row names the held or finished
+delivery run and step `owner_sweep.auto_land`. A direct `orbit.workflow.land`
+call can have no job run ID, so `--run <run-id>` is only a useful filter when
+that ID is known. Inspect all pull request rows with
+`orbit audit list --kind pull_request --json`; match the pull request number
+and step in the row, then use `--run <run-id>` to narrow the listing when run
+attribution is available.
 
 Checks still running, or mergeability GitHub has not computed, are checked again
 on a later tick that reaches the workspace before its deadline. An invocation

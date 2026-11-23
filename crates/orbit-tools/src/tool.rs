@@ -33,6 +33,13 @@ pub trait Tool: Send + Sync {
     fn declared_id_route(&self) -> McpIdRouteDeclaration {
         McpIdRouteDeclaration::Unspecified
     }
+    /// The input spellings this tool accepts besides its canonical parameter
+    /// names, as `(canonical, alias)`. Execution renames an alias before any
+    /// field check, while the advertised schema lists canonical names only, so
+    /// a preview that checks required fields must consult these as well.
+    fn input_aliases(&self) -> Vec<(&'static str, &'static str)> {
+        Vec::new()
+    }
     /// Whether a successful invocation can have externally visible side effects.
     ///
     /// The conservative default keeps audit persistence fail-closed for every

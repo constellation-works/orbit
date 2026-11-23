@@ -4,8 +4,12 @@ use serde::{Deserialize, Serialize};
 
 use super::ReviewAdmission;
 
-/// Reserved run-input key, admitted only by the operator recovery path.
+/// Reserved run-input key, admitted only by governed source recovery.
 pub const SOURCE_REPAIR_KEY: &str = "__source_repair";
+/// Provenance of an authenticated resident recovery reservation.
+pub const RESIDENT_SOURCE_REPAIR_PROVENANCE: &str = "resident_cycle";
+/// Total elapsed minutes available for the resident recovery leaf's agent activities.
+pub const RESIDENT_SOURCE_REPAIR_MINUTES: i64 = 120;
 /// Append-only reservation, written before run admission or source effects.
 pub const SOURCE_REPAIR_RESERVED: &str = "source_repair_reserved";
 /// Append-only link to the one admitted repair run.
@@ -48,6 +52,10 @@ pub struct SourceRepairBinding {
     /// published head.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub candidate_head_sha: Option<String>,
+    /// Durable remote/local ref (e.g. `refs/orbit/candidates/<task>/<run>`)
+    /// where `candidate_head_sha` is preserved when it is not on `origin/<branch>`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub candidate_ref: Option<String>,
 }
 
 impl SourceRepairBinding {
@@ -99,6 +107,14 @@ pub struct SourceRepairAdmission {
     pub attempt: u32,
     /// Current policy captured for this attempt, never inherited from its source.
     pub review: ReviewAdmission,
+}
+
+impl SourceRepairAdmission {
+    /// Shared deadline for agent activities of a resident recovery leaf.
+    pub fn resident_repair_deadline(&self) -> Option<DateTime<Utc>> {
+        (self.authorizer_provenance == RESIDENT_SOURCE_REPAIR_PROVENANCE)
+            .then(|| self.authorized_at + chrono::Duration::minutes(RESIDENT_SOURCE_REPAIR_MINUTES))
+    }
 }
 
 /// Read every durable reservation, refusing unreadable history rather than

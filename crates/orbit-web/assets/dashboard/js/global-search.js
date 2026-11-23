@@ -1,5 +1,7 @@
 // Shared top-bar search. Its requests, selection and feedback never touch the board.
-import { captureWorkspaceVisit, el, getSelectedWorkspaces, getWorkspace, isAggregateView, onWorkspaceChange, persistScopeToUrl, rememberWorkspace, setWorkspace, withHost } from './common.js';
+// It always searches every available workspace, whatever workspace is selected;
+// the selected workspace only ranks its own matches first.
+import { captureWorkspaceVisit, el, getWorkspace, isAggregateView, isOwnedWorkspace, onWorkspaceChange, pushScopedHash, withHost } from './common.js';
 import { navigateToRun } from './router.js';
 import { STATUS_LABELS } from './task-shared.js';
 
@@ -12,6 +14,7 @@ export function initGlobalSearch({ workspaces, workspaceChanged }) {
   const popover = document.getElementById('global-search-popover');
   const list = document.getElementById('global-search-results');
   const status = document.getElementById('global-search-status');
+  const unavailableLine = document.getElementById('global-search-unavailable');
   let generation = 0;
   let controller = null;
   let debounce = null;
@@ -42,14 +45,24 @@ export function initGlobalSearch({ workspaces, workspaceChanged }) {
     matches = [];
     list.replaceChildren();
     status.textContent = '';
+    showUnavailable([]);
   }
 
-  function showSearchMessage(message, kind = '') {
+  // One line counts the workspaces that could not be read; its tooltip names them.
+  function showUnavailable(names) {
+    unavailableLine.textContent = names.length
+      ? `${names.length} ${names.length === 1 ? 'workspace' : 'workspaces'} unavailable` : '';
+    if (names.length) unavailableLine.title = names.join(', ');
+    else unavailableLine.removeAttribute('title');
+  }
+
+  function showSearchMessage(message, kind = '', unavailable = []) {
     matches = [];
     highlighted = -1;
     list.replaceChildren();
     status.textContent = message;
     status.dataset.kind = kind;
+    showUnavailable(unavailable);
     wrap.classList.toggle('error', kind === 'error');
     input.removeAttribute('aria-activedescendant');
     input.setAttribute('aria-expanded', 'true');
@@ -99,20 +112,19 @@ export function initGlobalSearch({ workspaces, workspaceChanged }) {
     showSearchMessage(reason, 'error');
   }
 
-  function adoptSearchWorkspace(workspace) {
-    if (!workspace || workspace === getWorkspace()) return;
-    setWorkspace(workspace);
-    rememberWorkspace();
-    persistScopeToUrl();
-    workspaceChanged();
-  }
-
   function openSearchTask(task) {
     clearGlobalSearch();
-    adoptSearchWorkspace(task.workspace_id);
-    // Assign the destination once. Routing it programmatically first would
-    // replace the origin entry when normalizing a task-page deep link.
-    window.location.hash = `#tasks/${encodeURIComponent(task.id)}`;
+    const hash = `#tasks/${encodeURIComponent(task.id)}`;
+    // Keep the origin history entry on its own workspace/aggregate scope when
+    // jumping across workspaces; push the destination scope as a new entry.
+    if (task.workspace_id && task.workspace_id !== getWorkspace()) {
+      pushScopedHash(hash, { workspace: task.workspace_id, remember: true });
+      workspaceChanged();
+    } else {
+      // Assign the destination once. Routing it programmatically first would
+      // replace the origin entry when normalizing a task-page deep link.
+      window.location.hash = hash;
+    }
     input.blur();
   }
 
@@ -131,7 +143,11 @@ export function initGlobalSearch({ workspaces, workspaceChanged }) {
     matches = payload.items;
     list.replaceChildren(...matches.map((task, index) => {
       const metadata = [el('span', { class: 'mono', text: task.id })];
-      if (isAggregateView()) metadata.push(el('span', { text: task.workspace_name }));
+      // Name the workspace on every row in All workspaces, otherwise only on
+      // rows from a workspace other than the selected one.
+      if (isAggregateView() || task.workspace_id !== getWorkspace()) {
+        metadata.push(el('span', { text: task.workspace_name }));
+      }
       const option = el('div', { id: `global-search-option-${index}`, class: 'global-search-option', role: 'option', 'aria-selected': 'false' }, [
         el('span', { class: 'global-search-task' }, [
           el('span', { class: 'global-search-title', text: task.title }),
@@ -144,9 +160,9 @@ export function initGlobalSearch({ workspaces, workspaceChanged }) {
       return option;
     }));
     const more = Math.max(0, payload.total - matches.length);
-    const unavailable = (payload.unavailable || []).map(source => `${source.workspace_name}: ${source.error}`);
-    status.textContent = [more ? `${more} more` : matches.length ? '' : unavailable.length ? '' : 'No tasks match', ...unavailable].filter(Boolean).join(' · ');
-    status.dataset.kind = unavailable.length ? 'error' : '';
+    status.textContent = more ? `${more} more` : matches.length ? '' : 'No tasks match';
+    status.dataset.kind = '';
+    showUnavailable((payload.unavailable || []).map(source => source.workspace_name));
     wrap.classList.remove('error');
     popover.hidden = false;
     input.setAttribute('aria-expanded', 'true');
@@ -159,8 +175,7 @@ export function initGlobalSearch({ workspaces, workspaceChanged }) {
     if (!query) { clearGlobalSearch(); return; }
     const request = beginSearchRequest();
     const params = new URLSearchParams({ q: query });
-    if (getWorkspace()) params.set('workspace', getWorkspace());
-    else for (const id of getSelectedWorkspaces()) params.append('workspaces', id);
+    if (getWorkspace()) params.set('prefer', getWorkspace());
     try {
       const payload = await searchJson(`/api/tasks/search?${params}`, request);
       if (!request.current()) return;
@@ -171,40 +186,56 @@ export function initGlobalSearch({ workspaces, workspaceChanged }) {
     }
   }
 
-  // Exact IDs probe the selected workspace first, then the remaining active
-  // workspaces. Only confirmed 404 misses permit the search to continue.
+  // Exact IDs probe the selected workspace first, then every other available
+  // workspace. A confirmed 404 is a miss; a workspace that cannot be read is
+  // counted as unavailable instead of failing the lookup, unless none answered.
   async function lookupSearchId(id, kind) {
     const request = beginSearchRequest();
     showSearchMessage(`Looking up ${id}…`);
     const selected = getWorkspace();
-    const others = workspaces().filter(ws => ws.status === 'active' && ws.id !== selected).map(ws => ws.id);
+    const available = workspaces().filter(ws => ws.status === 'active' && isOwnedWorkspace(ws));
+    const others = available.filter(ws => ws.id !== selected).map(ws => ws.id);
+    const nameOf = workspace => available.find(ws => ws.id === workspace)?.name || workspace;
     const path = workspace => `/api/${kind === 'task' ? 'tasks' : 'runs'}/${encodeURIComponent(id)}?workspace=${encodeURIComponent(workspace)}`;
+    const unavailable = [];
+    let failure = null;
+    let answered = 0;
     const read = async workspace => {
       try {
-        return { body: await searchJson(path(workspace), request), workspace };
+        const body = await searchJson(path(workspace), request);
+        answered += 1;
+        // The server may answer a run from the workspace that holds it rather
+        // than the one probed, and names that holder; trust it over the probe.
+        return { body, workspace: kind === 'run' && body.workspace_id ? body.workspace_id : workspace };
       } catch (error) {
-        if (error.status === 404 && !/unknown workspace/i.test(error.message)) return null;
-        throw error;
+        if (error.status === 404 && !/unknown workspace/i.test(error.message)) { answered += 1; return null; }
+        failure ??= error;
+        unavailable.push(nameOf(workspace));
+        return null;
       }
     };
     try {
       let hit = selected ? await read(selected) : null;
       if (!request.current()) return;
       if (!hit) {
-        const probed = await Promise.allSettled(others.map(read));
+        const probed = await Promise.all(others.map(read));
         if (!request.current()) return;
-        hit = probed.find(result => result.status === 'fulfilled' && result.value)?.value;
-        if (!hit) {
-          const failure = probed.find(result => result.status === 'rejected');
-          if (failure) throw failure.reason;
-        }
+        hit = probed.find(Boolean);
       }
-      if (!hit) { showSearchMessage(`${id} not found`); return; }
+      if (!hit) {
+        if (failure && !answered) throw failure;
+        showSearchMessage(`No ${kind} ${id} in any workspace`, '', unavailable.sort());
+        return;
+      }
       if (kind === 'task') openSearchTask({ ...hit.body, workspace_id: hit.workspace });
       else {
         clearGlobalSearch();
-        adoptSearchWorkspace(hit.workspace);
-        navigateToRun(id);
+        if (hit.workspace && hit.workspace !== getWorkspace()) {
+          pushScopedHash(`#runs/${encodeURIComponent(id)}`, { workspace: hit.workspace, remember: true });
+          workspaceChanged();
+        } else {
+          navigateToRun(id);
+        }
         input.blur();
       }
     } catch (error) {

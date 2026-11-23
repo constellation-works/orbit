@@ -34,17 +34,7 @@ pub(super) trait Verifier {
         run_id: &str,
         tested_head: &str,
     ) -> Result<Value, OrbitError> {
-        if git_output(workspace, &["rev-parse", "HEAD"])? != tested_head {
-            return Err(Self::refused(Self::SPEC.head_changed));
-        }
-        if !git_output(
-            workspace,
-            &["status", "--porcelain", "--untracked-files=all"],
-        )?
-        .is_empty()
-        {
-            return Err(Self::refused(Self::SPEC.dirty_tree));
-        }
+        Self::verify_clean_checkout(workspace, tested_head)?;
         Self::check_artifacts(host, task)?;
         Self::verify_at_revision(host, task, workspace, run_id, tested_head)
     }
@@ -87,6 +77,19 @@ pub(super) trait Verifier {
         tested_head: &str,
         supplied_regression_from: &[String],
     ) -> Result<Value, OrbitError> {
+        Self::verify_clean_checkout(workspace, tested_head)?;
+        Self::check_artifacts(host, task)?;
+        Self::verify_at_revision_with_supplied_regression_from(
+            host,
+            task,
+            workspace,
+            run_id,
+            tested_head,
+            supplied_regression_from,
+        )
+    }
+
+    fn verify_clean_checkout(workspace: &Path, tested_head: &str) -> Result<(), OrbitError> {
         if git_output(workspace, &["rev-parse", "HEAD"])? != tested_head {
             return Err(Self::refused(Self::SPEC.head_changed));
         }
@@ -98,15 +101,7 @@ pub(super) trait Verifier {
         {
             return Err(Self::refused(Self::SPEC.dirty_tree));
         }
-        Self::check_artifacts(host, task)?;
-        Self::verify_at_revision_with_supplied_regression_from(
-            host,
-            task,
-            workspace,
-            run_id,
-            tested_head,
-            supplied_regression_from,
-        )
+        Ok(())
     }
 
     /// Promotion and completion require the exact evidence accepted at commit.

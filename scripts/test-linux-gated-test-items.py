@@ -84,6 +84,21 @@ class LinuxGatedTestItemTests(unittest.TestCase):
                 self.check_tree({SUITE: source}, 1, f"test helper {keyword} `LIMIT`")
                 self.check_tree({SUITE: f"{LINUX}\n" + source}, 0)
 
+    def test_cfg_on_a_statement_with_two_braces_gates_the_helper_use(self):
+        # The helper is named only in the second brace. That brace stays linux-gated,
+        # so on macOS the helper has no live use and the guard reports it.
+        source = (
+            "fn helper() {}\n\n"
+            "#[test]\n"
+            "fn linux_only() {\n"
+            "    #[cfg(target_os = \"linux\")]\n"
+            "    let value = if ready() { 1 } else { helper() };\n"
+            "}\n"
+        )
+        self.check_tree({SUITE: source}, 1, "test helper fn `helper`")
+        live = source.replace("    #[cfg(target_os = \"linux\")]\n", "")
+        self.check_tree({SUITE: live}, 0)
+
     def test_ungated_fixture_module_used_only_by_linux_tests_is_reported(self):
         files = {SUITE: "mod support;\n\n" + linux_test("support::command();"),
                  SUPPORT: "pub fn command() {}\n"}
@@ -170,10 +185,25 @@ class LinuxGatedTestItemTests(unittest.TestCase):
 
     def test_inline_format_arguments_and_attribute_arguments_are_uses(self):
         live = '#[test]\nfn portable() { println!("{LIMIT}"); }\n'
-        self.check_tree({SUITE: "const LIMIT: u32 = 7;\n" + linux_test("") + live}, 0)
-        self.check_tree({SUITE: "const LIMIT: u32 = 7;\n" + linux_test('println!("{LIMIT:?}");')}, 1)
-        self.check_tree({SUITE: "use serde::Serialize;\n#[derive(Serialize)]\nstruct Row;\n"
-                         "use std::fs;\n" + linux_test("fs::read(\"x\");")}, 1, "import `fs`")
+        self.check_tree({SUITE: "const LIMIT: u32 = 7;\n" + linux_test("assert_eq!(LIMIT, 7);") + live}, 0)
+        self.check_tree(
+            {SUITE: "const LIMIT: u32 = 7;\n" + linux_test('println!("{LIMIT:?}");')},
+            1,
+            "crates/example/tests/suite.rs:1: test helper const `LIMIT` is not gated, "
+            "but every use is compiled out on macOS",
+        )
+        # Non-inert outer attributes count as live or Linux-gated use sites for
+        # lowercase/UPPER_SNAKE candidates depending on the item they decorate.
+        self.check_tree(
+            {SUITE: "fn fixture() {}\n" + linux_test("fixture();")
+             + "#[custom_attr(fixture)]\nstruct Row;\n"},
+            0,
+        )
+        self.check_tree(
+            {SUITE: "fn fixture() {}\n" + f"{LINUX}\n#[custom_attr(fixture)]\nstruct Row;\n"},
+            1,
+            "crates/example/tests/suite.rs:1:", "test helper fn `fixture`",
+        )
 
     def test_raw_string_format_captures_are_uses_and_linux_only_captures_are_reported(self):
         for literal in ('r#"{LIMIT}"#', 'r##"{LIMIT}"##'):
@@ -212,7 +242,7 @@ class LinuxGatedTestItemTests(unittest.TestCase):
             "fn fixture() {}\n" + linux_test("x.fixture(); other::fixture();"),
             "fn unused() {}\n",
             "use std::fs;\n",
-            "#[test]\nfn only_linux_runs_this_name() {}\n",
+            "#[test]\nfn only_linux_runs_this_name() {}\n" + linux_test("only_linux_runs_this_name();"),
         )
         for source in cases:
             with self.subTest(source=source):
@@ -282,9 +312,14 @@ class LinuxGatedTestItemTests(unittest.TestCase):
         self.check_tree(files, 0)
 
     def test_included_files_share_their_includers_scope(self):
-        files = {SUITE: 'use std::fs;\ninclude!("cases.rs");\n',
-                 "crates/example/tests/cases.rs": "#[test]\nfn reads() { fs::read(\"x\"); }\n"}
+        files = {SUITE: 'use std::fs;\ninclude!("cases.rs");\n' + linux_test('fs::read("x");'),
+                 "crates/example/tests/cases.rs": "#[test]\nfn reads() { fs::read(\"y\"); }\n"}
         self.check_tree(files, 0)
+        self.check_tree(
+            {SUITE: 'use std::fs;\ninclude!("cases.rs");\n',
+             "crates/example/tests/cases.rs": linux_test('fs::read("y");')},
+            1, "crates/example/tests/suite.rs:1:", "import `fs`",
+        )
 
 
 if __name__ == "__main__":

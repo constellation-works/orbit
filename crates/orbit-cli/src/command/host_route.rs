@@ -27,7 +27,7 @@ use super::run::RunSubcommand;
 use super::task::TaskInvocation;
 use super::task::TaskSubcommand;
 use super::tool::{self, ToolSubcommand};
-use super::{Cli, CommandOut, Commands, Payload};
+use super::{Block, Cli, CommandOut, Commands, Payload};
 
 /// What the preflight decided.
 pub(crate) enum Preflight {
@@ -430,12 +430,14 @@ fn routed_task_id(command: &Commands) -> Result<Option<String>, OrbitError> {
             {
                 let input = args.parsed_input()?;
                 if is_id_routed_tool(tool_operation_name(&args.name, &input)) {
-                    input
-                        .get("id")
-                        .and_then(Value::as_str)
-                        .map(str::trim)
-                        .filter(|id| !id.is_empty())
-                        .map(ToOwned::to_owned)
+                    if input.get("id").is_some()
+                        && input
+                            .get(orbit_common::governance::task::TASK_ID_WIRE_ALIAS)
+                            .is_some()
+                    {
+                        return Err(orbit_common::governance::task::task_id_alias_conflict_error());
+                    }
+                    orbit_common::governance::task::task_id_alias_str(&input).map(ToOwned::to_owned)
                 } else {
                     None
                 }
@@ -706,6 +708,7 @@ fn task_call(command: &TaskSubcommand, holder: &HostEntry) -> Result<RoutedCall,
                 render: Render::Requeue,
             },
             TaskVerb::RetryHandoff
+            | TaskVerb::ResumeDelivery
             | TaskVerb::RecoverClaim
             | TaskVerb::RevokeHandoff
             | TaskVerb::LocksList
@@ -818,7 +821,8 @@ fn render(render: Render, value: Value, holder: &HostEntry) -> CommandOut {
             } else {
                 value
             };
-            Ok(Payload::detail(doc, text).into())
+            // Prose, like the local `task show`: a terminal word-wraps it.
+            Ok(Payload::blocks(doc, vec![Block::prose(text)]).into())
         }
         Render::TaskWrite { verb } => {
             let id = value.get("id").and_then(Value::as_str).unwrap_or_default();

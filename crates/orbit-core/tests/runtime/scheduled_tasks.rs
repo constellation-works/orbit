@@ -109,6 +109,7 @@ fn ship(
         strict_containment: false,
         review: None,
         operator_override,
+        ignore_dependency_delivery: false,
     })
 }
 

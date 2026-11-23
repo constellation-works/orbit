@@ -12,6 +12,7 @@ pub(super) mod gap_fit;
 mod job_port;
 pub(super) mod leaf_occupancy;
 pub(crate) mod pass_error;
+pub(crate) mod perf_lane;
 mod published_delivery;
 mod recovery_context;
 pub(crate) mod scan_unresolved;

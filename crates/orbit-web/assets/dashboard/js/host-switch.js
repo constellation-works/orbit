@@ -174,7 +174,7 @@ function buildPicker() {
   label.htmlFor = "host-select";
   const control = el("div", { class: "host-picker-control" });
   control.appendChild(select);
-  if (!current) control.appendChild(el("span", { class: "host-serving-badge", text: "Serving" }));
+  if (!current) control.appendChild(el("span", { class: "badge", text: "Serving" }));
   container.replaceChildren(label, control);
 }
 

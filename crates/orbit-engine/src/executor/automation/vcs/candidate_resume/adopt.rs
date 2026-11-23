@@ -85,6 +85,7 @@ pub(super) fn adopt_published_branch(
         // the identical tree (same content, different timestamp). That is not
         // a divergence; the next adoption re-applies the published head.
         if tip.trim() != candidate.head_sha
+            && tip.trim() != published_head
             && !same_tree(workspace_path, tip.trim(), &candidate.head_sha)?
         {
             return Ok(Adoption::Refused(format!(
@@ -93,7 +94,9 @@ pub(super) fn adopt_published_branch(
                 candidate.head_sha
             )));
         }
-        if candidate.head_sha != published_head || held_by_worktree(workspace_path, &local_ref)? {
+        if (tip.trim() != published_head && candidate.head_sha != published_head)
+            || held_by_worktree(workspace_path, &local_ref)?
+        {
             let suffix = ours.rsplit('-').next().unwrap_or(ours.as_str());
             let aside = format!("{branch}-superseded-{suffix}");
             if let Some(refused) = rename(workspace_path, &["branch", "-m", branch, &aside])? {

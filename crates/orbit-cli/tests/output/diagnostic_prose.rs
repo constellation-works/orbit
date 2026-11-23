@@ -2,9 +2,21 @@
 use super::table_rendering::run_cli_on_terminal_at_width;
 use crate::task_workspace::{TaskSeed, TestWorkspace};
 
+/// `orbit.common.fs.file_lock` warns only when a file lock wait or hold crosses
+/// its threshold, which runner I/O stalls can trigger in one child and not its
+/// sibling. These cases compare child stderr byte for byte, so that target is
+/// silenced for their children. Every other warning stays enabled, as in a
+/// normal CLI run.
+const CHILD_LOG_FILTER: &str = "warn,orbit.common.fs.file_lock=off";
+
+/// A fixture whose children run with [`CHILD_LOG_FILTER`], piped and PTY alike.
+fn diagnostic_workspace(name: &str) -> TestWorkspace {
+    TestWorkspace::new(name, TaskSeed::new("")).with_child_log_filter(CHILD_LOG_FILTER)
+}
+
 #[test]
 fn diagnostic_prose_wraps_on_terminals_and_preserves_pipe_and_json() {
-    let workspace = TestWorkspace::new("diagnostic-prose", TaskSeed::new(""));
+    let workspace = diagnostic_workspace("diagnostic-prose");
     let timestamp = regex::Regex::new(r"\d{4}-\d\d-\d\dT[0-9:.]+(?:Z|[+-]\d\d:\d\d)").unwrap();
     let normalize = |text: &str| {
         timestamp
@@ -88,9 +100,68 @@ fn diagnostic_prose_wraps_on_terminals_and_preserves_pipe_and_json() {
     }
 }
 
+/// `task show` on a terminal wraps its readiness reasons, criteria and
+/// description to the sink width, keeping every word and the item's indent.
+/// Pipes, `--format plain` and `--json` keep their bytes.
+#[test]
+fn task_show_prose_wraps_on_terminals_and_preserves_pipe_and_json() {
+    let workspace = TestWorkspace::new("task-show-prose", TaskSeed::new(""));
+    let mut seed = workspace.task_seed("Wrapped task show");
+    seed.description = "The description is long enough to wrap on a sixty-column terminal.\nA second paragraph keeps its own explicit line break.".into();
+    seed.acceptance_criteria = vec![
+        "The criterion is one long sentence naming several observable outcomes, so it must wrap onto continuation lines at every width the command supports.".into(),
+    ];
+    let seeded = workspace.seed_tasks(&[seed]).remove(0);
+    let id = seeded["id"].as_str().expect("task id").to_owned();
+    let show = ["task", "show", id.as_str()];
+    let plain = ["task", "show", id.as_str(), "--format", "plain"];
+    let json = ["task", "show", id.as_str(), "--json"];
+
+    let ansi = regex::Regex::new(r"\x1b\[[0-9;]*m").unwrap();
+    let piped = workspace.run(&show, "piped task show");
+    let piped_stdout = String::from_utf8(piped.stdout).unwrap();
+    let piped_words = piped_stdout.split_whitespace().collect::<Vec<_>>();
+    assert!(
+        piped_stdout.lines().any(|line| line.chars().count() > 120),
+        "fixture must produce prose wider than the widest checked terminal"
+    );
+    let expected_json: serde_json::Value =
+        serde_json::from_slice(&workspace.run(&json, "JSON task show").stdout).unwrap();
+    for width in ["60", "80", "120"] {
+        let limit = width.parse::<usize>().unwrap();
+        let terminal = run_cli_on_terminal_at_width(&workspace, &show, width);
+        let raw = String::from_utf8(terminal.stdout).unwrap();
+        let stdout = ansi.replace_all(&raw, "").replace("\r\n", "\n");
+        for line in stdout.lines() {
+            assert!(
+                line.chars().count() <= limit,
+                "task show at {width} columns overflows: {line:?}"
+            );
+        }
+        assert_eq!(
+            stdout.split_whitespace().collect::<Vec<_>>(),
+            piped_words,
+            "task show at {width} columns must keep every word, in order"
+        );
+
+        let plain_terminal = run_cli_on_terminal_at_width(&workspace, &plain, width);
+        assert_eq!(
+            String::from_utf8(plain_terminal.stdout)
+                .unwrap()
+                .replace("\r\n", "\n"),
+            piped_stdout,
+            "--format plain at {width} columns must match the pipe"
+        );
+
+        let json_terminal = run_cli_on_terminal_at_width(&workspace, &json, width);
+        let actual_json: serde_json::Value = serde_json::from_slice(&json_terminal.stdout).unwrap();
+        assert_eq!(actual_json, expected_json, "--json at {width} columns");
+    }
+}
+
 #[test]
 fn admission_receipt_summary_wraps_and_plain_bytes_stay_unchanged() {
-    let workspace = TestWorkspace::new("admission-receipt-prose", TaskSeed::new(""));
+    let workspace = diagnostic_workspace("admission-receipt-prose");
     let args = ["doctor", "admission-receipts"];
     let piped = workspace.run(&args, "piped admission-receipt report");
     let plain = workspace.run(
@@ -150,7 +221,7 @@ fn admission_receipt_summary_wraps_and_plain_bytes_stay_unchanged() {
 
 #[test]
 fn failed_run_header_wraps_without_changing_plain_or_json_output() {
-    let workspace = TestWorkspace::new("failed-run-prose", TaskSeed::new(""));
+    let workspace = diagnostic_workspace("failed-run-prose");
     let jobs = workspace.home.join(".orbit/resources/jobs");
     std::fs::create_dir_all(&jobs).unwrap();
     let job = serde_json::json!({

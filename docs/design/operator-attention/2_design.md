@@ -160,8 +160,8 @@ References below; all four implementation tasks are done.
    read and the friction adapter; offline degrade. Consumes the shared §5 fixed values. Depends on slice 1.
    The provider read stays behind `github.run.list` (Orbit stays generic); freshness binds to the
    fetched `origin/<base>` head ([ORB-21680]), pending or unknown observations are not green, and `since` is the
-   failing run's `updated_at` labelled as an onset-time proxy (`detail.since_source`), because the
-   provider projection supplies no exact completion timestamp.
+   failing run's `updated_at` (or its `created_at` when no usable update time is supplied), labelled as an
+   onset-time proxy by `detail.since_source`, because the provider projection supplies no exact completion timestamp.
 4. **Done — federation and `host_unhealthy`** ([ORB-21171]). Authority-per-host derivation, the cross-host
    fan-out and merge, unreachable hosts as items, session-binding refusal, the
    federated-mcp doc amendment, and the local doctor / drain-probe sources for

@@ -509,17 +509,14 @@ struct RootOnlyConfig {
 
 fn configured_root_from_config(config_path: &Path) -> Result<Option<PathBuf>, OrbitError> {
     let raw = fs::read_to_string(config_path).map_err(|err| {
+        let config_path =
+            orbit_common::security::redaction::redact_home_dir(&config_path.display().to_string());
         OrbitError::Io(format!(
-            "failed to read runtime config '{}': {err}",
-            config_path.display()
+            "failed to read runtime config '{config_path}': {err}"
         ))
     })?;
-    let parsed = toml::from_str::<RootOnlyConfig>(&raw).map_err(|err| {
-        OrbitError::InvalidInput(format!(
-            "invalid runtime config '{}': {err}",
-            config_path.display()
-        ))
-    })?;
+    let parsed = toml::from_str::<RootOnlyConfig>(&raw)
+        .map_err(|err| orbit_config::invalid_runtime_config(config_path, err))?;
     let Some(root_value) = parsed.root else {
         return Ok(None);
     };

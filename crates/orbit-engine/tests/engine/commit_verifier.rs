@@ -1442,7 +1442,233 @@ fn commit_verifier_derives_already_landed_requirements_from_the_workspace() {
     assert_eq!(git_head(temp.path()), head);
 }
 
+/// Delivery must keep even untracked work whose paths look like Python caches.
+fn commit_delivers_untracked_files_with_cache_shaped_paths() {
+    let temp = temp_repo();
+    let repo = temp.path();
+    fs::write(repo.join("tracked.pyc"), b"original fixture").unwrap();
+    git_output(repo, &["add", "tracked.pyc"]);
+    git_output(repo, &["commit", "-m", "track bytecode fixture"]);
+    let head = git_head(repo);
+    let host = VerifierHost::new(repo, fixture_task());
+    fs::create_dir_all(repo.join("pkg/__pycache__")).unwrap();
+    let files = [
+        (
+            "pkg/__pycache__/fixture.txt",
+            b"intentional fixture\n".as_slice(),
+        ),
+        (
+            "pkg/__pycache__/mod.cpython-312.pyc",
+            b"\0intentional cached bytecode\xff",
+        ),
+        ("loose.pyc", b"\0intentional standalone bytecode\xff"),
+        ("tracked.pyc", b"\0updated fixture\xff"),
+    ];
+    for (path, content) in files {
+        fs::write(repo.join(path), content).unwrap();
+    }
+
+    let committed = action(&host, &commit_input(repo, &head)).expect("deliver new fixtures");
+
+    assert_eq!(committed["decision"], "performed");
+    assert_eq!(committed["committed"], true);
+    for (path, content) in files {
+        assert_eq!(
+            git_output(repo, &["rev-parse", &format!("HEAD:{path}")]),
+            git_output(repo, &["hash-object", "--no-filters", path])
+        );
+        assert_eq!(fs::read(repo.join(path)).unwrap(), content);
+    }
+    assert!(git_output(repo, &["status", "--porcelain", "--untracked-files=all"]).is_empty());
+}
+
+fn verified_no_diff_promotion_refuses_untracked_bytecode() {
+    let (temp, host, head) = verifier_fixture(fixture_task());
+    let repo = temp.path();
+    let report = evidence_fixture::verifier_no_diff_report(&head, "make test", "No change needed.");
+    host.set_artifacts(
+        TASK_ID,
+        evidence_artifacts("no-diff.json", report, &head, "make test"),
+    );
+    let checkpoint = action(&host, &commit_input(repo, &head)).expect("verify the clean checkout");
+    assert_eq!(checkpoint["decision"], "verified_no_diff");
+
+    let fixture = repo.join("fixture.pyc");
+    fs::write(&fixture, b"intentional bytecode").unwrap();
+    let promote_input = json!({
+        "job_run_id": RUN_ID,
+        "workspace_path": repo,
+        "completed_task_ids": [TASK_ID],
+        "no_diff_expected": true,
+        "already_landed_checkpoint": checkpoint,
+    });
+    let error = execute_deterministic_action(
+        &host,
+        "pr_promote",
+        &json!({}),
+        &promote_input,
+        false,
+        &HashMap::new(),
+        None,
+    )
+    .expect_err("promotion must refuse the dirty checkout");
+
+    assert!(
+        error
+            .to_string()
+            .contains("no_diff_unverified: worktree is not clean")
+    );
+    assert_eq!(fs::read(fixture).unwrap(), b"intentional bytecode");
+    assert_eq!(git_head(repo), head);
+}
+
+/// A native name that is not UTF-8 cannot be staged by its lossy U+FFFD
+/// form: `ls-files` omits it (or matches a distinct tracked path) while the
+/// ordinary change still commits. Delivery must refuse the whole candidate
+/// before touching the index or HEAD, then deliver once the names are gone.
+#[cfg(unix)]
+fn commit_and_no_diff_preserve_non_utf8_and_replacement_colliding_paths() {
+    use std::ffi::OsStr;
+    use std::os::unix::ffi::OsStrExt;
+
+    let temp = temp_repo();
+    let repo = temp.path();
+    let cache_dir = repo.join("pkg/__pycache__");
+    fs::create_dir_all(&cache_dir).unwrap();
+    let tracked_rel = "pkg/__pycache__/mod-\u{FFFD}.pyc";
+    let tracked_bytes = b"tracked replacement fixture\n";
+    fs::write(repo.join(tracked_rel), tracked_bytes).unwrap();
+    git_output(repo, &["add", tracked_rel]);
+    git_output(repo, &["commit", "-m", "track replacement-char fixture"]);
+    let base_head = git_head(repo);
+    let base_tree = git_output(repo, &["rev-parse", "HEAD^{tree}"]);
+
+    let non_utf8_cached = cache_dir.join(OsStr::from_bytes(b"mod-\xff.pyc"));
+    let non_utf8_cached_bytes = b"\0non-utf8 cached bytecode\xff";
+    let non_utf8_loose = repo.join(OsStr::from_bytes(b"loose-\xff.pyc"));
+    let non_utf8_loose_bytes = b"\0non-utf8 loose bytecode\xff";
+    fs::write(&non_utf8_cached, non_utf8_cached_bytes).unwrap();
+    fs::write(&non_utf8_loose, non_utf8_loose_bytes).unwrap();
+    fs::write(repo.join("README.md"), "deliver real edit\n").unwrap();
+    let status_before = git_output(repo, &["status", "--porcelain=v1", "--untracked-files=all"]);
+
+    let host = VerifierHost::new(repo, fixture_task());
+    let refusal = action(&host, &commit_input(repo, &base_head))
+        .expect_err("delivery must refuse names it cannot stage exactly")
+        .to_string();
+    assert!(
+        refusal.contains("not valid UTF-8")
+            && refusal.contains(r"`loose-\xff.pyc`")
+            && refusal.contains(r"`pkg/__pycache__/mod-\xff.pyc`")
+            && refusal.contains("Orbit did not change the index"),
+        "the refusal must name each native path, got: {refusal}"
+    );
+    assert_eq!(git_head(repo), base_head, "refusal must not move HEAD");
+    assert_eq!(
+        git_output(repo, &["write-tree"]),
+        base_tree,
+        "refusal must leave the index at HEAD's tree"
+    );
+    assert_eq!(
+        git_output(repo, &["status", "--porcelain=v1", "--untracked-files=all"]),
+        status_before
+    );
+    assert_eq!(fs::read(repo.join(tracked_rel)).unwrap(), tracked_bytes);
+    assert_eq!(fs::read(&non_utf8_cached).unwrap(), non_utf8_cached_bytes);
+    assert_eq!(fs::read(&non_utf8_loose).unwrap(), non_utf8_loose_bytes);
+    assert_eq!(
+        fs::read_to_string(repo.join("README.md")).unwrap(),
+        "deliver real edit\n"
+    );
+
+    // With the unrepresentable names gone, the ordinary change delivers and
+    // the distinct replacement-character path stays exactly as tracked.
+    fs::remove_file(&non_utf8_cached).unwrap();
+    fs::remove_file(&non_utf8_loose).unwrap();
+    let committed = action(&host, &commit_input(repo, &base_head))
+        .expect("delivery commit must succeed once every name is UTF-8");
+    assert_eq!(committed["decision"], "performed");
+    assert_eq!(committed["committed"], true);
+    let delivered_head = git_head(repo);
+    assert_ne!(delivered_head, base_head);
+    assert_eq!(
+        git_output(repo, &["ls-tree", "-r", "-z", "--name-only", "HEAD"]),
+        format!("README.md\0{tracked_rel}\0")
+    );
+    assert_eq!(
+        git_output(repo, &["show", "HEAD:README.md"]),
+        "deliver real edit"
+    );
+    assert_eq!(
+        git_output(repo, &["rev-parse", &format!("HEAD:{tracked_rel}")]),
+        git_output(repo, &["rev-parse", &format!("{base_head}:{tracked_rel}")])
+    );
+    assert_eq!(fs::read(repo.join(tracked_rel)).unwrap(), tracked_bytes);
+
+    // Clean-tree promotion recheck (`verify_clean_checkout`) must likewise
+    // fail closed on the dirty tree and preserve every entry byte-for-byte.
+    let report = evidence_fixture::verifier_no_diff_report(
+        &delivered_head,
+        "make test",
+        "No change needed.",
+    );
+    host.set_artifacts(
+        TASK_ID,
+        evidence_artifacts("no-diff.json", report, &delivered_head, "make test"),
+    );
+    let checkpoint =
+        action(&host, &commit_input(repo, &delivered_head)).expect("verify clean checkout");
+    assert_eq!(checkpoint["decision"], "verified_no_diff");
+
+    let outside = tempdir().expect("create outside tempdir");
+    let outside_file = outside.path().join("outside.pyc");
+    fs::write(&outside_file, b"outside secret\n").unwrap();
+    let symlink_pyc = cache_dir.join("escape.pyc");
+    std::os::unix::fs::symlink(&outside_file, &symlink_pyc).unwrap();
+    fs::write(&non_utf8_cached, non_utf8_cached_bytes).unwrap();
+    fs::write(&non_utf8_loose, non_utf8_loose_bytes).unwrap();
+
+    let promote_input = json!({
+        "job_run_id": RUN_ID,
+        "workspace_path": repo,
+        "completed_task_ids": [TASK_ID],
+        "no_diff_expected": true,
+        "already_landed_checkpoint": checkpoint,
+    });
+    let error = execute_deterministic_action(
+        &host,
+        "pr_promote",
+        &json!({}),
+        &promote_input,
+        false,
+        &HashMap::new(),
+        None,
+    )
+    .expect_err("promotion must refuse dirty checkout with non-UTF-8 and symlink entries");
+    assert!(
+        error
+            .to_string()
+            .contains("no_diff_unverified: worktree is not clean"),
+        "unexpected refusal: {error}"
+    );
+    assert_eq!(fs::read(repo.join(tracked_rel)).unwrap(), tracked_bytes);
+    assert_eq!(fs::read(&non_utf8_cached).unwrap(), non_utf8_cached_bytes);
+    assert_eq!(fs::read(&non_utf8_loose).unwrap(), non_utf8_loose_bytes);
+    assert!(
+        fs::symlink_metadata(&symlink_pyc)
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
+    assert_eq!(fs::read(&outside_file).unwrap(), b"outside secret\n");
+    assert_eq!(git_head(repo), delivered_head);
+}
+
 commit_contracts!(commit_evidence_contracts_4:
     owner_delivery_refuses_nested_repos_and_never_runs_their_filters,
     commit_verifier_derives_already_landed_requirements_from_the_workspace,
+    commit_delivers_untracked_files_with_cache_shaped_paths,
+    verified_no_diff_promotion_refuses_untracked_bytecode,
+    #[cfg(unix)]
+    commit_and_no_diff_preserve_non_utf8_and_replacement_colliding_paths,
 );

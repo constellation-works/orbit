@@ -156,6 +156,7 @@ pub(in crate::executor::automation::vcs::pr) fn recover_ci_rerun<H: RuntimeHost 
             base.as_deref().unwrap_or_default(),
             &branch,
             deadline_ms,
+            false,
         )? {
             super::super::super::checks::CiRerunStep::Backoff(reason) => {
                 return Ok(CiRerunRecovery::BackingOff(reason));
@@ -167,8 +168,20 @@ pub(in crate::executor::automation::vcs::pr) fn recover_ci_rerun<H: RuntimeHost 
             super::super::super::checks::CiRerunStep::Acted(_) => {
                 return Ok(CiRerunRecovery::Retried);
             }
+            // The repair was already admitted and its one rerun is already
+            // spent (legacy CI history or an exhausted classification). That
+            // proves no rerun result, so it is a typed hold, not a failed
+            // retry and not a generic stop that finalizes the run as failed.
             super::super::super::checks::CiRerunStep::BudgetSpent(reason) => {
-                return Ok(CiRerunRecovery::Stopped(reason));
+                return Ok(CiRerunRecovery::Held {
+                    refusal: DeliveryRefusal::RepairDispatched,
+                    reason,
+                });
+            }
+            // [ORB-26860] The completion decides whether this failure is
+            // base-inherited and refreshes the head once, or holds.
+            super::super::super::checks::CiRerunStep::NoEditRerunFailed(reason) => {
+                return Ok(CiRerunRecovery::NoEditRerunFailed(reason));
             }
             super::super::super::checks::CiRerunStep::NotEligible => {}
         }
@@ -202,6 +215,59 @@ pub(in crate::executor::automation::vcs::pr) fn recover_ci_rerun<H: RuntimeHost 
         super::super::super::checks::CiRerunStep::BudgetSpent(reason) => {
             Ok(CiRerunRecovery::Stopped(reason))
         }
+        super::super::super::checks::CiRerunStep::NoEditRerunFailed(reason) => {
+            Ok(CiRerunRecovery::Held {
+                refusal: DeliveryRefusal::RepairDispatched,
+                reason,
+            })
+        }
+    }
+}
+
+/// [ORB-27076] The failure of the no-edit repair's one rerun, read back for a
+/// pull request the forge reports `DIRTY`. It sends and reserves nothing: a
+/// head whose no-edit repair is not recorded, whose rerun was never reserved
+/// or has not yet produced a later authenticated failed attempt, or whose
+/// evidence cannot be read, is `None` and keeps the ordinary conflict route.
+pub(in crate::executor::automation::vcs::pr) fn failed_no_edit_rerun<H: RuntimeHost + ?Sized>(
+    host: &H,
+    auto_fix: &admission::AutoFix,
+    input: &Value,
+    workspace_path: &str,
+    pr_number: &str,
+    status: &PullRequestStatus,
+    deadline_ms: u64,
+) -> Option<String> {
+    let head = status.head_sha.as_deref()?;
+    status.head_branch.as_ref()?;
+    let base_name = input_string_field(input, "base")?;
+    if !no_edit_repair_recorded(host, auto_fix, pr_number, head) {
+        return None;
+    }
+    let failed = super::super::super::checks::failed_checks(status);
+    if failed.is_empty() {
+        return None;
+    }
+    let (failed, _) = required_failures(host, workspace_path, pr_number, head, &failed).ok()?;
+    let workspace = Path::new(workspace_path);
+    let (base, branch, _) = git::resolve_pr_base(workspace, input, &base_name, Some(head)).ok()?;
+    match super::super::super::checks::request_no_edit_repair_rerun(
+        host,
+        workspace,
+        &auto_fix.task_ids,
+        status,
+        &failed,
+        base.as_deref().unwrap_or_default(),
+        &branch,
+        deadline_ms,
+        true,
+    ) {
+        Ok(super::super::super::checks::CiRerunStep::NoEditRerunFailed(reason)) => Some(reason),
+        Ok(_) => None,
+        Err(error) => {
+            tracing::debug!(%error, "no-edit rerun readback deferred to ordinary conflict handling");
+            None
+        }
     }
 }
 
@@ -219,6 +285,18 @@ pub(in crate::executor::automation::vcs::pr) enum CiRerunRecovery {
     /// The retry budget is spent on stopped jobs or logged infrastructure
     /// failures. The reason names the hold. Do not admit a repair.
     Stopped(String),
+    /// The no-edit repair's rerun failed again, or its one rerun budget is
+    /// already spent; hold with the named typed delivery refusal instead of
+    /// failing.
+    Held {
+        refusal: DeliveryRefusal,
+        reason: String,
+    },
+    /// [ORB-26860] The no-edit repair's one rerun on the unchanged head
+    /// failed again, for the named reason. The caller holds as
+    /// `RepairDispatched` unless the failure is base-inherited and the head's
+    /// one base refresh runs.
+    NoEditRerunFailed(String),
 }
 
 /// Whether a repair of `head` on a task this run watches ended with no
@@ -422,7 +500,7 @@ type RequiredFailures = (Vec<(Option<String>, String)>, RequiredChecks);
 /// would otherwise read as the blocker. Nothing required failing, or an
 /// answer that cannot show it, is a stop. The head-bound read is returned
 /// with the failures, for the identities of the required checks.
-fn required_failures<H: RuntimeHost + ?Sized>(
+pub(super) fn required_failures<H: RuntimeHost + ?Sized>(
     host: &H,
     workspace_path: &str,
     pr_number: &str,

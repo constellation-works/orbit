@@ -32,7 +32,7 @@ import {
   COMPLEXITY_LABELS, scheduleShowsReview,
 } from './forecast-shared.js';
 import {
-  UNREPORTED_FORECAST_REASON, forecastBoundedGap, forecastUnavailableInfo, forecastBaselineFigures, formatForecastHours,
+  UNREPORTED_FORECAST_REASON, SUBSET_REASON, forecastMetricReason, forecastBoundedGap, forecastUnavailableInfo, forecastBaselineFigures, formatForecastHours,
   formatForecastQuantileRange, formatForecastTokens, formatForecastUsd, fmtParallelism, fmtRank, fmtRate,
   fmtShare, forecastCount, hasHorizonCensoringEvidence, num, quantilePair, recordedPoolsContainGaps,
   regressionGapBecause, regressionHistoryIsAbsent, forecastDrainScope,
@@ -96,7 +96,53 @@ let tabPickListener = null;
 // read succeeds in the workspace, so an unknown count never reads as zero.
 let proposedKnown = null;
 
+// Single size observer for the currently mounted one-row forecast header.
+// Allocated only once a header is mounted (never for discarded candidate nodes)
+// and released on replacement, empty render or workspace reset.
+let headerResizeObserver = null;
+let observedHeader = null;
+
+function releaseHeaderObservation() {
+  if (headerResizeObserver && observedHeader) {
+    headerResizeObserver.unobserve(observedHeader);
+    observedHeader = null;
+  }
+}
+
+function observeMountedHeader(body) {
+  const header = body?.querySelector(".fc-header-row") || null;
+  if (!header) {
+    releaseHeaderObservation();
+    return;
+  }
+  if (header === observedHeader) {
+    fitForecastHeaderRow(header);
+    return;
+  }
+  releaseHeaderObservation();
+  if (typeof ResizeObserver === "function") {
+    headerResizeObserver ||= new ResizeObserver((entries) => {
+      for (const entry of entries) {
+        if (!entry.target.isConnected) {
+          headerResizeObserver.unobserve(entry.target);
+          if (observedHeader === entry.target) observedHeader = null;
+          continue;
+        }
+        fitForecastHeaderRow(entry.target);
+      }
+    });
+    observedHeader = header;
+    headerResizeObserver.observe(header);
+    header.teardown = () => {
+      if (headerResizeObserver) headerResizeObserver.unobserve(header);
+      if (observedHeader === header) observedHeader = null;
+    };
+  }
+  fitForecastHeaderRow(header);
+}
+
 function clearForecast() {
+  releaseHeaderObservation();
   view.payload = null;
   liveRefresh = null;
   view.historyPage = 0;
@@ -269,6 +315,7 @@ export function renderForecast() {
   root.dataset.key = "forecast-view";
   root.dataset.hash = JSON.stringify([view.history, view.scenario, view.payload, view.historyPage, view.residualMetric]);
   syncNodes(body, [root]);
+  observeMountedHeader(body);
   applyForecastTab();
 }
 view.render = renderForecast;
@@ -324,6 +371,8 @@ function applyForecastTab() {
     button.tabIndex = on ? 0 : -1;
   }
   for (const node of body.querySelectorAll(".fc-tabbed")) node.hidden = node.dataset.fcTab !== view.tab;
+  const header = body.querySelector(".fc-header-row");
+  if (header && !header.hidden) fitForecastHeaderRow(header);
   // A long residual series scrolls inside its plot; start at the newest
   // forecast, which needs the plot on screen to measure.
   for (const plot of body.querySelectorAll(".fc-res-plot")) {
@@ -425,9 +474,7 @@ function fitForecastHeaderRow(header) {
 }
 
 function oneRowHeader(children, extraClass = "") {
-  const header = el("div", { class: `fc-header fc-header-row${extraClass}` }, children);
-  if (typeof ResizeObserver === "function") new ResizeObserver(() => fitForecastHeaderRow(header)).observe(header);
-  return header;
+  return el("div", { class: `fc-header fc-header-row${extraClass}` }, children);
 }
 
 function tabbedHeader(tab, children) {
@@ -470,6 +517,7 @@ function renderViewControls() {
   // learned count must replace the node rather than reuse the old one.
   root.dataset.hash = JSON.stringify(["controls", view.history, view.scenario, proposedKnown]);
   syncNodes(body, [root]);
+  observeMountedHeader(body);
 }
 
 // ---- scenario -------------------------------------------------------------
@@ -543,17 +591,8 @@ function arrivalsText() {
 
 // ---- totals ---------------------------------------------------------------
 
-// Unforecastable dependencies withhold every full total, whatever the history.
-const SUBSET_REASON = "Not every task can be scheduled.";
-
 function metricReason(scenario, quantiles, metric) {
-  if (quantiles?.p90 != null) return metric === "tokens" ? "Normalized tokens." : null;
-  if (scenario.source?.schedulable_subset) return SUBSET_REASON;
-  const coverage = scenario.coverage;
-  if (metric === "tokens" && num(coverage.uncovered_model)) return "Some tasks have no priced history.";
-  if (metric === "usd" && num(coverage.uncosted)) return "Some tasks have no costed history.";
-  if (view.payload.arrivals?.coverage?.[`missing_${metric}`]) return metric === "tokens" ? "Some history is missing token telemetry." : "Some history is missing cost telemetry.";
-  return metric === "tokens" ? "Not enough priced history." : "Not enough costed history.";
+  return forecastMetricReason(scenario, quantiles, metric, view.payload.arrivals);
 }
 
 function drainReason(scenario, quantiles) {
@@ -621,9 +660,17 @@ function rangeText(quantiles, fmt) {
 }
 
 function totalTile(label, value, lines, className) {
-  return el("div", { class: `mx-sc fc-fig fc-total ${className}`, role: "group", "aria-label": label }, [
-    el("span", { class: "mx-sc-label" }, [label, pinnedInfoHint(lines.filter(Boolean).join("\n"))]),
-    el("span", { class: value.known ? "fc-total-value" : "fc-total-value fc-total-unknown", text: value.text }),
+  return el("div", {
+    class: `stat-tile ${className}`,
+    role: "group",
+    "aria-label": label,
+    "data-state": value.known ? null : "unknown",
+  }, [
+    el("span", { class: "stat-tile-label" }, [
+      el("span", { class: "stat-tile-label-text", text: label }),
+      pinnedInfoHint(lines.filter(Boolean).join("\n")),
+    ]),
+    el("span", { class: "stat-tile-figure", text: value.text }),
   ]);
 }
 
@@ -762,18 +809,24 @@ function totalsNodes(scenario) {
   const inputs = view.payload.inputs || {};
   if (!(source.tasks ?? view.payload.forecast?.tasks)) return [emptyState("Nothing to forecast", "No backlog or in-progress tasks in this workspace.")];
   if (inputs.history_deliveries === 0) {
-    return [emptyState("No delivery history to sample", inputs.history_tasks != null
+    const state = emptyState("No delivery history to sample", inputs.history_tasks != null
       ? `None of the newest ${inputs.history_tasks} completed tasks has recorded agent runs.`
-      : `No task finished with recorded agent runs in the last ${inputs.lookback_days} days or among the newest ${inputs.min_history_tasks ?? 50} completions. Widen the history.`)];
+      : `No task finished with recorded agent runs in the last ${inputs.lookback_days} days or among the newest ${inputs.min_history_tasks ?? 50} completions. Widen the history.`);
+    if (info) state.dataset.forecastReason = info.kind;
+    return [state];
   }
   if (!info) {
     const boundedGap = forecastBoundedGap(source);
-    const figures = el("section", { class: "fc-figures", "aria-label": "Totals" }, adjustedTiles(scenario, boundedGap));
+    const figures = el("section", { class: "stat-tiles", "aria-label": "Totals" }, [
+      el("div", { class: "stat-tiles-row" }, adjustedTiles(scenario, boundedGap)),
+    ]);
     if (boundedGap) figures.dataset.boundedGap = "true";
     return [figures, boundedGapNote(boundedGap), subsetNote(source)];
   }
   const hasBaseline = Boolean(forecastBaselineFigures(source.pre_regression_baseline));
-  const figures = el("section", { class: hasBaseline ? "fc-figures fc-baseline" : "fc-figures", "aria-label": "Totals" }, withheldTiles(scenario));
+  const figures = el("section", { class: "stat-tiles", "aria-label": "Totals" }, [
+    el("div", { class: "stat-tiles-row" }, withheldTiles(scenario)),
+  ]);
   if (hasBaseline) figures.dataset.forecastBaseline = "pre-regression";
   return [
     figures,

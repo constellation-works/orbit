@@ -19,18 +19,21 @@ use orbit_types::task::TASK_SHOW_DELIVERY_FIELD;
 use orbit_types::tool::{McpIdRouteDeclaration, McpToolScope};
 
 use super::lifecycle_operations::{
-    BLOCK_TRIAGE, DELETE, RECONCILE_REVIEW, RECOVER_CLAIM, REJECT, REPILOT, REQUEUE, RETRY_HANDOFF,
-    REVIEW_RESET, REVOKE_HANDOFF,
+    BLOCK_TRIAGE, DELETE, RECONCILE_REVIEW, RECOVER_CLAIM, REJECT, REPILOT, REQUEUE,
+    RESUME_DELIVERY, RETRY_HANDOFF, REVIEW_RESET, REVOKE_HANDOFF,
 };
 use super::nested_operations::{
     ARTIFACT_GET, ARTIFACT_PUT, LOCKS_LIST, LOCKS_RELEASE, LOCKS_RESERVE,
 };
 use super::write_operations::{ADD, UPDATE};
+use crate::OrbitError;
 use crate::governance::operation::{
     CliArgKind, CliGroup, CliHelp, Description, Effect, EnumValue, NounSpec, OperationSpec,
     ParamSpec, ParamType, RETIRED_AGENT_FIELD, ToolOnlyRegistration, UnknownFields, aliased, both,
     cli_only, defaulted, mcp_only, operation_registry, preserve_empty,
 };
+use crate::protocol::tool_input::required_string;
+use serde_json::{Map, Value};
 
 operation_registry! {
     noun: TASK;
@@ -74,6 +77,8 @@ operation_registry! {
         /// Requeue a blocked task onto its published candidate, as an
         /// operator decision.
         Requeue => REQUEUE,
+        /// Continue a blocked delivery in a bounded recovery leaf.
+        ResumeDelivery => RESUME_DELIVERY,
         /// Explicitly request one new task-pilot assessment.
         Repilot => REPILOT,
         /// Read escalated blocks awaiting triage, or record one triage
@@ -203,24 +208,24 @@ pub(crate) const ELIGIBLE_STATUS_VALUES: &[EnumValue] =
 /// `--help` for the `--host` flag every id-routed task command takes.
 pub const TASK_HOST_HELP: &str = "Host that `--workspace` names (`orbit host list` name or `machine_id`); without it a task id routes by its prefix";
 
-/// The `view: "bounded"` selector of the dashboard's bounded reads.
+/// The `view: "bounded"` selector of `orbit.task.show`.
 const BOUNDED_VIEW_PARAM: ParamSpec = mcp_only(
     "view",
     ParamType::String,
-    "Bounded metadata view; requires `workspace`. The only accepted value is `bounded`.",
+    "Bounded view; requires `workspace`, rejects `fields`, `field`, `run_id`, `snapshot`. The only accepted value is `bounded`.",
 );
 
 const LIST: TaskOperation = TaskOperation {
     verb: TaskVerb::List,
     cli_path: &["list"],
     tool_name: "orbit.task.list",
-    tool_description: "List tasks as {tasks, total, truncated}; rules are in the installed Orbit skill `references/task-fields.md`.",
+    tool_description: "List tasks as {tasks, total, truncated}; rules are in the installed Orbit skill `references/task-fields-projections.md`.",
     cli_about: "List tasks with optional filters",
     cli_help: CliHelp {
         constraints: &[],
         long_about: None,
         after_help: Some(
-            "Status meanings, lifecycle and listing-order rules: installed Orbit skill `references/task-fields.md`.\n\nExamples:\n  orbit task list\n  orbit task list --limit 100\n  orbit task list --status backlog\n  orbit task list --status in-progress,review\n  orbit task list --type feature\n  orbit task list --origin operator_request\n  orbit task list --priority high\n  orbit task list --parent T12345678-123456\n  orbit task list --ref jira:ENG-1234\n  orbit task list --has-ref jira\n  orbit task list --tag perf --tag bench\n  orbit task list --path src/auth/login.rs\n  orbit task list --json",
+            "Status meanings, lifecycle and listing-order rules: installed Orbit skill `references/task-fields-projections.md`.\n\nExamples:\n  orbit task list\n  orbit task list --limit 100\n  orbit task list --status backlog\n  orbit task list --status in-progress,review\n  orbit task list --type feature\n  orbit task list --origin operator_request\n  orbit task list --priority high\n  orbit task list --parent T12345678-123456\n  orbit task list --ref jira:ENG-1234\n  orbit task list --has-ref jira\n  orbit task list --tag perf --tag bench\n  orbit task list --path src/auth/login.rs\n  orbit task list --json",
         ),
         flag_order: &[
             "status",
@@ -249,7 +254,7 @@ const LIST: TaskOperation = TaskOperation {
         both(
             "status",
             ParamType::EnumList(TASK_STATUS_VALUES),
-            "Filter by status name.",
+            "Statuses.",
             CliArgKind::Flag {
                 long: "status",
                 delimiter: Some(','),
@@ -264,7 +269,7 @@ const LIST: TaskOperation = TaskOperation {
             both(
                 "parent_id",
                 ParamType::String,
-                "Parent task ID.",
+                "Parent ID.",
                 CliArgKind::flag("parent"),
                 "Filter to subtasks belonging to a parent task",
             ),
@@ -274,7 +279,7 @@ const LIST: TaskOperation = TaskOperation {
             both(
                 "type",
                 ParamType::Enum(TASK_TYPE_VALUES),
-                "Filter by task type.",
+                "Task type.",
                 CliArgKind::Flag {
                     long: "type",
                     delimiter: None,
@@ -290,35 +295,35 @@ const LIST: TaskOperation = TaskOperation {
         both(
             "scheduled",
             ParamType::Switch,
-            "Keep only future schedules, soonest first.",
+            "Future schedules, soonest first.",
             CliArgKind::flag("scheduled"),
             "List future-scheduled tasks soonest first, including proposed tasks labelled by status",
         ),
         preserve_empty(both(
             "not_before_from",
             ParamType::String,
-            "Inclusive lower schedule bound as RFC 3339.",
+            "Min `not_before` (RFC 3339).",
             CliArgKind::flag("not-before-from"),
             "Inclusive lower schedule bound (RFC 3339 with an offset)",
         )),
         preserve_empty(both(
             "not_before_until",
             ParamType::String,
-            "Inclusive upper schedule bound as RFC 3339.",
+            "Max `not_before` (RFC 3339).",
             CliArgKind::flag("not-before-until"),
             "Inclusive upper schedule bound (RFC 3339 with an offset)",
         )),
         both(
             "origin",
             ParamType::Enum(TASK_ORIGIN_VALUES),
-            "Filter by task origin.",
+            "Origin.",
             CliArgKind::flag("origin"),
             "Filter by task origin (operator_request, orchestrator_initiative, automation); tasks without a recorded origin never match",
         ),
         both(
             "job_run_id",
             ParamType::String,
-            "Filter by job run ID",
+            "Job run ID.",
             CliArgKind::flag("job-run-id"),
             "Filter by job run ID",
         ),
@@ -326,7 +331,7 @@ const LIST: TaskOperation = TaskOperation {
             both(
                 "tag",
                 ParamType::StringList,
-                "Filter by tag; an array matches every listed tag.",
+                "All tags must match.",
                 CliArgKind::Flag {
                     long: "tag",
                     delimiter: Some(','),
@@ -346,28 +351,28 @@ const LIST: TaskOperation = TaskOperation {
                 EnumValue::helped("macos", "macOS hosts"),
                 EnumValue::helped("windows", "Windows hosts"),
             ]),
-            "Filter by effective host OS.",
+            "Host OS.",
             CliArgKind::flag("runs-on"),
             "Filter by effective host OS: tags intersected with the stored crew executor; unrestricted tasks match, unresolved crews and conflicts do not",
         ),
         both(
             "pilot_warnings",
             ParamType::Switch,
-            "Keep proposed tasks held by pilot warnings.",
+            "Only pilot-warned proposed.",
             CliArgKind::flag("pilot-warnings"),
             "Keep proposed tasks held by pilot warning findings",
         ),
         both(
             "ready",
             ParamType::Switch,
-            "Keep tasks whose dependencies are satisfied.",
+            "Only satisfied dependencies.",
             CliArgKind::flag("ready"),
             "Keep only tasks whose dependencies are already satisfied",
         ),
         both(
             "path",
             ParamType::String,
-            "Filter by context selector path.",
+            "Matching context path.",
             CliArgKind::flag("path"),
             "Filter to tasks whose `context_files` selectors apply to this path",
         ),
@@ -375,7 +380,7 @@ const LIST: TaskOperation = TaskOperation {
             both(
                 "limit",
                 ParamType::Integer,
-                "Maximum number of tasks to return.",
+                "Max tasks (default 50).",
                 CliArgKind::flag("limit"),
                 "Maximum number of tasks to return (default 50). Must be at least 1",
             ),
@@ -386,31 +391,31 @@ const LIST: TaskOperation = TaskOperation {
             ParamType::StringList,
             "Name fields, or fetch one task with `orbit.task.show`; compact rows match `orbit tool run orbit.task.list`.",
         ),
-        BOUNDED_VIEW_PARAM,
-        mcp_only("offset", ParamType::Integer, "Bounded view list offset."),
         mcp_only(
-            "search",
+            "view",
             ParamType::String,
-            "Bounded view key or title substring.",
+            "Bounded view; requires `workspace`, rejects `fields` and non-bounded filters (`status`, `priority`, `search`, `offset`, `limit` only). Only value: `bounded`.",
         ),
+        mcp_only("offset", ParamType::Integer, "Bounded offset."),
+        mcp_only("search", ParamType::String, "Bounded key/title filter."),
         both(
             "priority",
             ParamType::Enum(TASK_PRIORITY_VALUES),
-            "Filter by priority.",
+            "Priority.",
             CliArgKind::flag("priority"),
             "Filter by priority level",
         ),
         both(
             "external_ref",
             ParamType::String,
-            "Exact external reference in system:id form.",
+            "External ref (`system:id`).",
             CliArgKind::flag("ref"),
             "Filter by exact external reference in `system:id` form",
         ),
         both(
             "has_ref",
             ParamType::String,
-            "Keep tasks with a reference in this system.",
+            "Has ref in system.",
             CliArgKind::flag("has-ref"),
             "Filter by external reference system",
         ),
@@ -461,7 +466,7 @@ const ELIGIBLE: TaskOperation = TaskOperation {
         both(
             "status",
             ParamType::EnumList(ELIGIBLE_STATUS_VALUES),
-            "Candidate statuses: `backlog`, `proposed`, or both (the default). Pass a comma-separated string or an array.",
+            "Statuses (default: both).",
             CliArgKind::Flag {
                 long: "status",
                 delimiter: Some(','),
@@ -475,7 +480,7 @@ const ELIGIBLE: TaskOperation = TaskOperation {
         both(
             "path",
             ParamType::String,
-            "Keep only candidates whose `context_files` selectors apply to this path, matched as `orbit.task.list` matches `path`.",
+            "Match `context_files` path.",
             CliArgKind::flag("path"),
             "Keep only candidates whose `context_files` selectors apply to this path, matched as `orbit task list --path` matches",
         ),
@@ -483,7 +488,7 @@ const ELIGIBLE: TaskOperation = TaskOperation {
             both(
                 "limit",
                 ParamType::Integer,
-                "Maximum eligible tasks to return (default 50). Must be at least 1.",
+                "Max tasks (default 50, >=1).",
                 CliArgKind::flag("limit"),
                 "Maximum eligible tasks to list (default 50). Must be at least 1",
             ),
@@ -492,7 +497,7 @@ const ELIGIBLE: TaskOperation = TaskOperation {
         both(
             "explain",
             ParamType::Switch,
-            "When true, also return `conflicting`: every held-back candidate with the overlapping selector and the in-progress or review task holding it.",
+            "Also return `conflicting`.",
             CliArgKind::flag("explain"),
             "Also list the held-back candidates, each with the overlapping file and the in-progress or review task holding it",
         ),
@@ -508,7 +513,7 @@ const SHOW: TaskOperation = TaskOperation {
     verb: TaskVerb::Show,
     cli_path: &["show"],
     tool_name: "orbit.task.show",
-    tool_description: "Fetch a task as JSON by globally unique `id`; optional `workspace` is a fail-closed filter. Use `fields` (alias `field`) for projections, or `field: \"delivery\"` for bounded commit/landing evidence. Projection, routing and delivery details: installed Orbit skill `references/task-fields.md`.",
+    tool_description: "Fetch a task as JSON by globally unique `id`; optional `workspace` is a fail-closed filter. Use `fields` (alias `field`) for projections, or `field: \"delivery\"` for bounded commit/landing evidence. Projection, routing and delivery details: installed Orbit skill `references/task-fields-projections.md`.",
     cli_about: "Show detailed information about a task, found by ID with an optional workspace filter",
     cli_help: CliHelp {
         long_about: Some(
@@ -536,7 +541,7 @@ const SHOW: TaskOperation = TaskOperation {
             mcp_only(
                 "snapshot",
                 ParamType::Boolean,
-                "True returns a bounded versioned snapshot with opaque revision and available actions. Requires explicit workspace; snapshot grants no authority and cannot combine with field projections.",
+                "Bounded versioned snapshot; requires `workspace`, rejects `run_id`, `view`, offsets; snapshot grants no authority.",
             ),
         ],
         &[
@@ -549,7 +554,7 @@ const SHOW: TaskOperation = TaskOperation {
                 default: None,
                 redact: crate::governance::operation::Redaction::None,
                 mcp_description: Some(Description::Static(
-                    "Fields to return, keyed (even one); `delivery` alone selects delivery evidence. Not with pagination on a claimed read. A paginated claimed read accepts only `id`, `model`, `limit`, `comments_offset`, `history_offset` and `artifacts_offset`: drop the projection to page the full task, or drop pagination for a projection.",
+                    "Keyed response fields (`delivery`: commit/landing evidence). Rejects `snapshot`, `view`, pagination.",
                 )),
                 cli: Some(crate::governance::operation::CliBinding {
                     required: false,
@@ -562,14 +567,14 @@ const SHOW: TaskOperation = TaskOperation {
                         multiple: true,
                     },
                     help: Description::Static(
-                        "Print only the specified field projection(s), for example `--fields title,status`. Repeat the flag or use a comma-separated list. Valid names and JSON output shapes: installed Orbit skill `references/task-fields.md`. No pagination with a projection on a claimed read: drop the projection to page the full task, or drop pagination for a projection.",
+                        "Print only the specified field projection(s), for example `--fields title,status`. Repeat the flag or use a comma-separated list. Valid names and JSON output shapes: installed Orbit skill `references/task-fields-projections.md`. No pagination with a projection on a claimed read: drop the projection to page the full task, or drop pagination for a projection.",
                     ),
                 }),
             },
             mcp_only(
                 "field",
                 ParamType::String,
-                "Alias for `fields` taking one field, for example `field: \"artifacts\"`. Not with pagination on a claimed read. A paginated claimed read accepts only `id`, `model`, `limit`, `comments_offset`, `history_offset` and `artifacts_offset`: drop the projection to page the full task, or drop pagination for a projection.",
+                "Single-field alias for `fields` (e.g. `\"artifacts\"`). Rejects `snapshot`, `view`, pagination.",
             ),
             ParamSpec {
                 mcp_description: Some(Description::Computed(show_run_id_description)),
@@ -584,22 +589,22 @@ const SHOW: TaskOperation = TaskOperation {
             mcp_only(
                 "limit",
                 ParamType::Integer,
-                "Detail page size for a paginated claimed read; not with a projection. That read accepts only `id`, `model`, `limit`, `comments_offset`, `history_offset` and `artifacts_offset`: drop any `fields`, `field` or `run_id` value to page the full task, or drop pagination for a projection.",
+                "Claimed read page size; not with `snapshot` or projections.",
             ),
             mcp_only(
                 "comments_offset",
                 ParamType::Integer,
-                "Comment offset for a paginated claimed read; not with a projection. That read accepts only `id`, `model`, `limit`, `comments_offset`, `history_offset` and `artifacts_offset`: drop any `fields`, `field` or `run_id` value to page the full task, or drop pagination for a projection.",
+                "Comment page offset; not with `snapshot` or projections.",
             ),
             mcp_only(
                 "history_offset",
                 ParamType::Integer,
-                "History offset for a paginated claimed read; not with a projection. That read accepts only `id`, `model`, `limit`, `comments_offset`, `history_offset` and `artifacts_offset`: drop any `fields`, `field` or `run_id` value to page the full task, or drop pagination for a projection.",
+                "History page offset; not with `snapshot` or projections.",
             ),
             mcp_only(
                 "artifacts_offset",
                 ParamType::Integer,
-                "Artifact metadata offset for a paginated claimed read; not with a projection. That read accepts only `id`, `model`, `limit`, `comments_offset`, `history_offset` and `artifacts_offset`: drop any `fields`, `field` or `run_id` value to page the full task, or drop pagination for a projection.",
+                "Artifact page offset; not with `snapshot` or projections.",
             ),
         ],
     ],
@@ -620,7 +625,7 @@ const LINT: TaskOperation = TaskOperation {
         constraints: &[],
         long_about: None,
         after_help: Some(
-            "Status meanings and lifecycle rules: installed Orbit skill `references/task-fields.md`.\n\nExamples:\n  orbit task lint <TASK_ID>                   # findings for one task\n  orbit task lint                             # sweep active tasks for context that needs repair\n  orbit task lint <TASK_ID> --restore-pruned  # re-declare selectors an old prune recorded\n  orbit task lint --restore-pruned            # apply the restoration across the sweep\n  orbit task lint --status review",
+            "Status meanings and lifecycle rules: installed Orbit skill `references/task-fields-projections.md`.\n\nExamples:\n  orbit task lint <TASK_ID>                   # findings for one task\n  orbit task lint                             # sweep active tasks for context that needs repair\n  orbit task lint <TASK_ID> --restore-pruned  # re-declare selectors an old prune recorded\n  orbit task lint --restore-pruned            # apply the restoration across the sweep\n  orbit task lint --status review",
         ),
         flag_order: &[],
     },
@@ -628,13 +633,13 @@ const LINT: TaskOperation = TaskOperation {
     // without it.
     effect: Effect::Write,
     params: &[&[
-        both(
+        aliased_task_id(both(
             "id",
             ParamType::String,
             "Task ID. Omit to sweep the active tasks for `context_files` that need repair.",
             CliArgKind::Positional,
             "Task ID. Omit to sweep all active tasks for `context_files` that need repair",
-        ),
+        )),
         both(
             "restore_pruned",
             ParamType::Switch,
@@ -664,20 +669,90 @@ const LINT: TaskOperation = TaskOperation {
     id_route: McpIdRouteDeclaration::Unspecified,
 };
 
+/// Unadvertised wire alias for `id` on id-keyed task tools.
+///
+/// ORB-26989: `#8734` removed deprecated aliases deliberately, and Daniel made
+/// this one an exception because `task_id` without `id` caused 34% of
+/// task-tool refusals while costing 0 schema tokens (`ParamSpec::aliases` is
+/// omitted from every advertised schema).
+pub const TASK_ID_WIRE_ALIAS: &str = "task_id";
+
+const TASK_ID_ALIASES: &[&str] = &[TASK_ID_WIRE_ALIAS];
+
+/// Attach the unadvertised `task_id` wire alias to a task operation's `id`
+/// parameter (ORB-26989 exception to `#8734`).
+pub(crate) const fn aliased_task_id(param: ParamSpec) -> ParamSpec {
+    aliased(param, TASK_ID_ALIASES)
+}
+
+/// Refusal when a caller sets both `id` and its `task_id` alias.
+pub fn task_id_alias_conflict_error() -> OrbitError {
+    OrbitError::InvalidInput(format!(
+        "`{TASK_ID_WIRE_ALIAS}` is an alias of `id`; set one or the other, not both"
+    ))
+}
+
+/// Rename `task_id` to `id` on a JSON object when `id` is absent, refusing
+/// when both keys are set.
+///
+/// Used by pre-spec handlers (guarded writes, preloaded artifact puts) that
+/// run before `OperationSpec::parse_input_fields`. See [`TASK_ID_WIRE_ALIAS`]
+/// for why this ORB-26989 exception exists after `#8734`.
+pub fn normalize_task_id_alias(object: &mut Map<String, Value>) -> Result<(), OrbitError> {
+    let Some(task_id) = object.remove(TASK_ID_WIRE_ALIAS) else {
+        return Ok(());
+    };
+    if object.contains_key("id") {
+        return Err(task_id_alias_conflict_error());
+    }
+    object.insert("id".to_string(), task_id);
+    Ok(())
+}
+
+/// Read `id` from `input`, falling back to the unadvertised `task_id` alias
+/// when `id` is absent, and refusing when both are set.
+///
+/// See [`TASK_ID_WIRE_ALIAS`] for why this ORB-26989 exception exists after
+/// `#8734`.
+pub fn resolve_task_id_alias(input: &Value) -> Result<String, OrbitError> {
+    if input.get("id").is_some() && input.get(TASK_ID_WIRE_ALIAS).is_some() {
+        return Err(task_id_alias_conflict_error());
+    }
+    required_string(input, &["id", TASK_ID_WIRE_ALIAS], "id")
+}
+
+/// Borrow `id`, or `task_id` when `id` is absent, as a non-empty trimmed string
+/// for pre-dispatch routing; returns `None` when both are set or neither is a
+/// non-empty string.
+///
+/// See [`TASK_ID_WIRE_ALIAS`] for why this ORB-26989 exception exists after
+/// `#8734`.
+pub fn task_id_alias_str(input: &Value) -> Option<&str> {
+    if input.get("id").is_some() && input.get(TASK_ID_WIRE_ALIAS).is_some() {
+        return None;
+    }
+    input
+        .get("id")
+        .or_else(|| input.get(TASK_ID_WIRE_ALIAS))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|id| !id.is_empty())
+}
+
 /// The globally unique task id `show` addresses.
 const TASK_ID_PARAM: ParamSpec = ParamSpec {
     required: true,
-    ..both(
+    ..aliased_task_id(both(
         "id",
         ParamType::String,
-        "Globally unique task ID. Resolved through the host task registry by default; a workspace argument is not required.",
+        "Globally unique task ID.",
         CliArgKind::Positional,
         "Task ID",
-    )
+    ))
 };
 
 fn show_run_id_description() -> String {
     format!(
-        "Delivery run to report, with `field: \"{TASK_SHOW_DELIVERY_FIELD}\"` only; not with pagination on a claimed read. Omitted, the newest task-delivery run submitted with this task is used. A paginated claimed read accepts only `id`, `model`, `limit`, `comments_offset`, `history_offset` and `artifacts_offset`: drop `run_id` (and any projection) to page the full task, or drop pagination for a projection."
+        "Delivery run for `field: \"{TASK_SHOW_DELIVERY_FIELD}\"` (default: newest). Rejects `snapshot`, `view`, pagination."
     )
 }

@@ -43,8 +43,8 @@ Each gate can also pass without you, but only when you opt in:
 | `review → done` | A run started with `--complete`, or the owner's `workflow.distributed_completion = "done"` for distributed handoffs. See [Completing work with `--complete`](/getting-started/workflows/#completing-work-with---complete). |
 
 `--approve-proposed` is off by default and refused with `--pull`: only the
-owner approves work. The `no-auto-approve` tag keeps a task proposed through
-such a drain. Completion never approves `proposed` work.
+owner approves work. The `no-auto-approve` and `no-drain` tags each keep a
+task proposed through such a drain. Completion never approves `proposed` work.
 
 A task minted by an [auto-task](/concepts/scheduling/#auto-task) enters
 `proposed` by default.

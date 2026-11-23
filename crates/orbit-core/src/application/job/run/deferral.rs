@@ -1,9 +1,9 @@
 //! Runs that stopped without failing because their work was deferred, as
 //! Incidents reads them [ORB-15517].
 //!
-//! A local provider capacity, usage-limit or unavailability hold, or a claimed leaf's usage
-//! limit, ends `held`, and a CI
-//! sweep whose only gaps were run-scoped retryable errors ends `success`.
+//! A local provider capacity, usage-limit or unavailability hold, a busy-footprint
+//! hold, or a claimed leaf's usage limit, ends `held`, and a CI sweep whose only
+//! gaps were run-scoped retryable errors ends `success`.
 //! Neither leaves a failed run behind, so each records one
 //! [`RUN_DEFERRED_SURFACE`] audit row, which the incident classifier lists
 //! as `deferred` rather than as a failure.

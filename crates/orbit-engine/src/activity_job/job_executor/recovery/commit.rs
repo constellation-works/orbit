@@ -66,31 +66,7 @@ pub(in crate::activity_job::job_executor) fn commit_recovery_repair_after_commit
     let Some(workspace_path) = bound.get("workspace_path").and_then(Value::as_str) else {
         return Ok(());
     };
-    // A review admitted on or settling this head pins it. An older pin, from
-    // before a final-recovery resume moved the candidate, does not.
-    let reviewed_heads = outputs
-        .iter()
-        .flat_map(|output| {
-            let admitted_head =
-                ReviewGateAdmissionOutput::from_value(output)
-                    .ok()
-                    .and_then(|admission| {
-                        admission
-                            .admitted()
-                            .filter(|admitted| !admitted.attempt_id.is_empty())
-                            .map(|admitted| admitted.head_sha.clone())
-                    });
-            [
-                admitted_head,
-                output
-                    .get("reviewed_head_sha")
-                    .and_then(Value::as_str)
-                    .map(str::to_string),
-            ]
-        })
-        .flatten()
-        .filter(|head| !head.is_empty() && !review_follows)
-        .collect::<Vec<_>>();
+    let reviewed_heads = blocking_reviewed_heads(&step.id, &outputs, review_follows);
     let task_ids = match (bound.get("task_id"), bound.get("task_ids")) {
         (Some(Value::String(id)), _) => vec![id.clone()],
         (_, Some(Value::Array(ids))) => ids
@@ -266,4 +242,40 @@ pub(in crate::activity_job::job_executor) fn commit_final_recovery_repair(
         false,
         recovery_model,
     )
+}
+
+/// Review pins that prohibit a recovery commit on `HEAD` unless a later
+/// review follows in the plan. Unsettled `BeforeLanding` admissions on
+/// `landing_review` itself are excluded when recovering mid-review before
+/// rewinding past `commit` -> `landing_review`.
+fn blocking_reviewed_heads(step_id: &str, outputs: &[Value], review_follows: bool) -> Vec<String> {
+    let is_current_landing_review = step_id == "landing_review";
+    outputs
+        .iter()
+        .flat_map(|output| {
+            let admitted_head =
+                ReviewGateAdmissionOutput::from_value(output)
+                    .ok()
+                    .and_then(|admission| {
+                        admission
+                            .admitted()
+                            .filter(|admitted| {
+                                !admitted.attempt_id.is_empty()
+                                    && !(is_current_landing_review
+                                        && admitted.timing
+                                            == orbit_types::workflow::ReviewTiming::BeforeLanding)
+                            })
+                            .map(|admitted| admitted.head_sha.clone())
+                    });
+            [
+                admitted_head,
+                output
+                    .get("reviewed_head_sha")
+                    .and_then(Value::as_str)
+                    .map(str::to_string),
+            ]
+        })
+        .flatten()
+        .filter(|head| !head.is_empty() && !review_follows)
+        .collect()
 }

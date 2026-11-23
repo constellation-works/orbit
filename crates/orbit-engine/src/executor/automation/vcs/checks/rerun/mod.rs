@@ -39,6 +39,9 @@ pub(in crate::executor::automation::vcs) enum CiRerunStep {
     /// Admitted reruns are spent. The reason names the stopped jobs or the
     /// exhausted infrastructure classification and count; no repair runs.
     BudgetSpent(String),
+    /// A no-edit repair's one unchanged-head rerun failed again; callers hold
+    /// with `DeliveryRefusal::RepairDispatched`.
+    NoEditRerunFailed(String),
 }
 
 const NO_AUTHENTICATED_PLAN: &str = "CI retry adapter returned no authenticated plan";

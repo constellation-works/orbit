@@ -106,14 +106,17 @@ pub(super) fn pr_landing_fixture_activity(name: &str, action: &str) -> ActivityV
     }
 }
 
-fn run_job(
+fn run_job_with_audit(
     host: &DeliveryHost,
     mut job: orbit_types::workflow::JobV2,
     activities: &[(&str, &str)],
     run_id: &str,
     input: Value,
     resume: Option<&PipelineState>,
-) -> JobResult {
+) -> (
+    JobResult,
+    Vec<orbit_types::workflow::activity_job::V2AuditEvent>,
+) {
     let mut catalog = V2ActivityCatalog::new();
     for &(name, action) in activities {
         catalog.insert(name.to_string(), pr_landing_fixture_activity(name, action));
@@ -121,7 +124,20 @@ fn run_job(
     resolve_job_catalog_refs_for_execution(&mut job, &catalog).unwrap();
     let audit = tempfile::tempdir().unwrap();
     let (writer, _, _) = build_writer_and_sinks(audit.path(), run_id);
-    execute_job_with_resume(&job, input, run_id, writer, host, resume)
+    let result = execute_job_with_resume(&job, input, run_id, writer.clone(), host, resume);
+    let events = writer.events_snapshot().unwrap();
+    (result, events)
+}
+
+fn run_job(
+    host: &DeliveryHost,
+    job: orbit_types::workflow::JobV2,
+    activities: &[(&str, &str)],
+    run_id: &str,
+    input: Value,
+    resume: Option<&PipelineState>,
+) -> JobResult {
+    run_job_with_audit(host, job, activities, run_id, input, resume).0
 }
 
 const REPAIR_ACTS: &[(&str, &str)] = &[
@@ -140,6 +156,23 @@ fn repair_job(input: Value) -> orbit_types::workflow::JobV2 {
 
 fn run_repair_job(host: &DeliveryHost, input: Value) -> JobResult {
     run_job(
+        host,
+        repair_job(input),
+        REPAIR_ACTS,
+        RUN_ID,
+        json!({}),
+        None,
+    )
+}
+
+fn run_repair_job_with_audit(
+    host: &DeliveryHost,
+    input: Value,
+) -> (
+    JobResult,
+    Vec<orbit_types::workflow::activity_job::V2AuditEvent>,
+) {
+    run_job_with_audit(
         host,
         repair_job(input),
         REPAIR_ACTS,
@@ -194,13 +227,15 @@ fn run_undeclared_recovery_repair_job(host: &DeliveryHost, input: Value) -> JobR
 /// activity runs and fails, the in-budget handoff holds the run instead of
 /// ending it as a `pr_complete` failure [ORB-23738]. With none
 /// configured, the in-budget handoff holds the run. An exhausted repair
-/// budget still fails it. Adding recovery after the hold cannot re-admit
-/// the same head, even from a new delivery run.
+/// budget still fails it. While the prior run may still be live, a new run on
+/// the same head holds as `delivery_repair_dispatched`; once the held run is
+/// terminal, a new authorized run with recovery configured admits another
+/// repair attempt on that head while per-PR budget remains.
 #[test]
 fn admitted_check_repair_handoff_routes_holds_or_fails_with_the_budget() {
     auto_fix_table(
         "auto_fix::admitted_check_repair_handoff_routes_holds_or_fails_with_the_budget",
-        "routed recovery_failed held exhausted",
+        "routed recovery_failed held exhausted mixed_exhausted source_exhausted",
         |case, row| {
             let (fx, host) = docs_only_pr(row);
             let mode = if case == "recovery_failed" {
@@ -217,6 +252,34 @@ fn admitted_check_repair_handoff_routes_holds_or_fails_with_the_budget() {
             fx.script_checks(&["source_contract"]);
             if case == "exhausted" {
                 seed_spent(&host, 1, PrAutoFixBlocker::FailedChecks, RUN_ID);
+            } else if matches!(case, "mixed_exhausted" | "source_exhausted") {
+                let reservations = if case == "mixed_exhausted" { 1 } else { 3 };
+                for n in 1..=reservations {
+                    seed_auto_fix_history(
+                        &host,
+                        orbit_types::workflow::SOURCE_REPAIR_RESERVED,
+                        &json!({
+                            "request_key": format!("source-{n}"),
+                            "binding": {
+                                "schema_version": 1, "workspace_id": "workspace", "task_id": TASK_ID,
+                                "source_run_id": "source-run", "machine_id": "machine",
+                                "source_digest": "digest", "task_digest": "digest", "repository": "owner/repo",
+                                "remote_url": "https://example.test/repo.git", "branch": "branch",
+                                "pull_request": PR_NUMBER, "pull_request_url": "https://example.test/pr",
+                                "head_sha": "source-head", "base_sha": "base", "base_branch": "main"
+                            },
+                            "diagnosis": "repair", "authorized_by": "operator", "authorizer_provenance": "operator",
+                            "authorized_at": Utc::now(), "attempt": n,
+                            "review": {"contract_version": orbit_types::workflow::REVIEW_CONTRACT_VERSION,
+                                "policy_version": 1, "timing": "none", "timing_source": "global",
+                                "crew_source": "global", "budget": {"minutes": 30}, "captured_at": Utc::now()}
+                        }),
+                    );
+                }
+                if case == "mixed_exhausted" {
+                    seed_attempt(&host, "spent-1", PrAutoFixBlocker::FailedChecks, 1, RUN_ID);
+                    seed_attempt(&host, "spent-2", PrAutoFixBlocker::FailedChecks, 2, RUN_ID);
+                }
             }
             let input = auto_fix_input(&fx);
             let outcome = if matches!(case, "routed" | "recovery_failed") {
@@ -294,6 +357,12 @@ fn admitted_check_repair_handoff_routes_holds_or_fails_with_the_budget() {
                                 message.contains("attempt 1 of 3"),
                                 "in-budget handoff must stay on the hold: {message}"
                             );
+                            assert!(
+                                message.contains(
+                                    "starting a new authorized delivery run on the same head admits another repair attempt while per-PR budget remains"
+                                ),
+                                "hold diagnostic must explain same-head retry from a new authorized run: {message}"
+                            );
                             assert!(is_check_repair(&message), "{message}");
                         }
                         other => panic!("expected a typed hold, got {other}"),
@@ -307,30 +376,31 @@ fn admitted_check_repair_handoff_routes_holds_or_fails_with_the_budget() {
                     assert_eq!(fx.remote_tip(BRANCH), fx.candidate, "{case}");
                     assert_no_merge_or_landing(&fx, &host, TaskStatus::Review, case);
 
-                    // The missing activity did not undo admission. A new
-                    // delivery with recovery configured must explain why
-                    // the same head still cannot enter repair.
+                    // While the prior run may still be live, a new delivery on
+                    // the same head holds as a duplicate and leaves the head
+                    // untouched.
                     let attempts = repair_attempts(&host);
-                    let retry_run = "jrun-recovery-configured";
-                    assert_ne!(attempts[0].run_id, retry_run);
+                    host.record_run_state(RUN_ID, orbit_types::workflow::JobRunState::Running);
+                    let live_retry_run = "jrun-live-prior";
+                    assert_ne!(attempts[0].run_id, live_retry_run);
                     host.tasks
                         .lock()
                         .unwrap()
                         .get_mut(TASK_ID)
                         .unwrap()
-                        .job_run_id = Some(retry_run.into());
-                    let mut input = auto_fix_input(&fx);
-                    input["run_id"] = json!(retry_run);
-                    input["job_run_id"] = json!(retry_run);
+                        .job_run_id = Some(live_retry_run.into());
+                    let mut live_input = auto_fix_input(&fx);
+                    live_input["run_id"] = json!(live_retry_run);
+                    live_input["job_run_id"] = json!(live_retry_run);
                     let retry_error = run_job(
                         &host,
-                        repair_job(input),
+                        repair_job(live_input),
                         REPAIR_ACTS,
-                        retry_run,
+                        live_retry_run,
                         json!({}),
                         None,
                     )
-                    .expect_err("a new run on the admitted head holds as a duplicate");
+                    .expect_err("a new run while the prior run may be live holds as a duplicate");
                     assert_eq!(
                         retry_error.failure_code(),
                         "delivery_repair_dispatched",
@@ -342,14 +412,62 @@ fn admitted_check_repair_handoff_routes_holds_or_fails_with_the_budget() {
                     assert_eq!(fx.head(), fx.candidate);
                     assert_eq!(fx.remote_tip(BRANCH), fx.candidate);
                     assert_no_merge_or_landing(&fx, &host, TaskStatus::Review, case);
+                    let retry_message = retry_error.to_string();
                     assert!(
-                        retry_error
-                            .to_string()
-                            .contains("repair and publish a new head"),
-                        "a held admission needs an actionable remedy, not a wait for a repair that never ran: {retry_error}"
+                        retry_message
+                            .contains("starting a new authorized delivery run on the same head")
+                            && retry_message.contains("repair and publish a new head"),
+                        "a duplicate hold must give actionable guidance for both live-run wait and terminal retry: {retry_error}"
+                    );
+
+                    // Once the held prior run is recorded as terminal, a new
+                    // authorized delivery run with recovery configured admits a
+                    // second attempt on the same head and repairs it.
+                    host.record_run_state(RUN_ID, orbit_types::workflow::JobRunState::Held);
+                    let retry_run = "jrun-recovery-configured";
+                    assert_ne!(attempts[0].run_id, retry_run);
+                    host.tasks
+                        .lock()
+                        .unwrap()
+                        .get_mut(TASK_ID)
+                        .unwrap()
+                        .job_run_id = Some(retry_run.into());
+                    let mut input = auto_fix_input(&fx);
+                    input["run_id"] = json!(retry_run);
+                    input["job_run_id"] = json!(retry_run);
+                    let retry_result = run_job(
+                        &host,
+                        repair_job(input),
+                        REPAIR_ACTS,
+                        retry_run,
+                        json!({}),
+                        None,
+                    )
+                    .expect("a new authorized run after a terminal Held run admits another attempt on the same head");
+                    assert!(
+                        retry_result.success,
+                        "configured check repair after a terminal Held run must succeed: {retry_result:?}"
+                    );
+                    assert!(
+                        scripted_ran(&host, "test_ci_repair"),
+                        "the check-repair activity must run on the new authorized attempt"
+                    );
+                    let updated_attempts = repair_attempts(&host);
+                    assert_eq!(updated_attempts.len(), 2, "{case}");
+                    assert_eq!(updated_attempts[1].attempt, 2, "{case}");
+                    assert_eq!(updated_attempts[1].run_id, retry_run, "{case}");
+                    assert_eq!(updated_attempts[1].head_sha, fx.candidate, "{case}");
+                    let head = fx.head();
+                    assert_green_repair_published_for_run(
+                        &fx,
+                        &host,
+                        &retry_result.pipeline["complete_pr"]["merge"],
+                        &head,
+                        retry_run,
+                        case,
                     );
                 }
-                "exhausted" => {
+                "exhausted" | "mixed_exhausted" | "source_exhausted" => {
                     let error = match outcome {
                         Ok(result) => {
                             assert!(!result.success, "{result:?}");
@@ -371,7 +489,20 @@ fn admitted_check_repair_handoff_routes_holds_or_fails_with_the_budget() {
                         !scripted_ran(&host, "test_ci_repair"),
                         "an exhausted budget does not enter check repair"
                     );
-                    assert_eq!(repair_attempts(&host).len(), 3, "{case}");
+                    let (reservations, watcher_count) = match case {
+                        "mixed_exhausted" => (1, 2),
+                        "source_exhausted" => (3, 0),
+                        _ => (0, 3),
+                    };
+                    assert!(error.contains("3 repairs are spent"), "{case}: {error}");
+                    assert!(
+                        error.contains(&format!("{reservations} source-repair reservations")),
+                        "{case}: {error}"
+                    );
+                    for n in 1..=watcher_count {
+                        assert!(error.contains(&format!("spent-{n}")), "{case}: {error}");
+                    }
+                    assert_eq!(repair_attempts(&host).len(), watcher_count, "{case}");
                     assert_no_merge_or_landing(&fx, &host, TaskStatus::Review, case);
                 }
                 other => panic!("unknown case {other}"),
@@ -460,13 +591,18 @@ fn assert_candidate_head_unchanged(fx: &Fixture, case: &str) {
     assert_eq!(fx.remote_tip(BRANCH), fx.candidate, "{case}");
 }
 
-/// The validated head recorded for this run; the refusal names its table case.
-fn assert_validated_head(host: &DeliveryHost, expected: &str, case: &str) {
+/// The validated head recorded for `run_id`; the refusal names its table case.
+fn assert_validated_head_for_run(host: &DeliveryHost, run_id: &str, expected: &str, case: &str) {
     assert_eq!(
-        host.validation_log(TASK_ID, &format!("validation/{RUN_ID}/0.json"))["tested_head"],
+        host.validation_log(TASK_ID, &format!("validation/{run_id}/0.json"))["tested_head"],
         expected,
         "{case}"
     );
+}
+
+/// The validated head recorded for this run; the refusal names its table case.
+fn assert_validated_head(host: &DeliveryHost, expected: &str, case: &str) {
+    assert_validated_head_for_run(host, RUN_ID, expected, case);
 }
 
 /// A green repair is published on the same PR and watched to a mergeable
@@ -478,11 +614,22 @@ fn assert_green_repair_published(
     head: &str,
     case: &str,
 ) {
+    assert_green_repair_published_for_run(fx, host, merge, head, RUN_ID, case);
+}
+
+fn assert_green_repair_published_for_run(
+    fx: &Fixture,
+    host: &DeliveryHost,
+    merge: &Value,
+    head: &str,
+    run_id: &str,
+    case: &str,
+) {
     assert_ne!(head, fx.candidate, "{case}");
     assert_eq!(fx.remote_tip(BRANCH), head, "{case}");
     assert_eq!(merge["head_sha"], head, "{case}");
     assert_eq!(merge["reason"], "auto_fix_mergeable", "{case}");
-    assert_validated_head(host, head, case);
+    assert_validated_head_for_run(host, run_id, head, case);
 }
 
 /// Row timer reporting its case identity and elapsed time; dropping the timer
@@ -1131,6 +1278,13 @@ pub(super) fn ci_answer(host: &DeliveryHost, operation: &str, input: &Value) -> 
         }
         "ci.commit_jobs" => {
             let commit = input["commit"].as_str().unwrap();
+            if repair_mode == "no_edit_base_missing_fork"
+                && forge.join("rerun-attempt").exists()
+                && input["latest_push_branch"].is_string()
+                && commit != git(&host.repo, &["rev-parse", BASE])
+            {
+                return Some(json!({"jobs":[]}));
+            }
             // The base tip's own job stays green here. A shared source file is
             // still a candidate failure; a base whose job fails the same way
             // is planted through the substitute `gh`.
@@ -1139,7 +1293,10 @@ pub(super) fn ci_answer(host: &DeliveryHost, operation: &str, input: &Value) -> 
             } else {
                 contract(commit)
             };
-            let run = u64::from_str_radix(&commit[..12], 16).unwrap();
+            let run = fs::read_to_string(forge.join("rerun-run-id"))
+                .ok()
+                .and_then(|value| value.trim().parse().ok())
+                .unwrap_or_else(|| u64::from_str_radix(&commit[..12], 16).unwrap());
             let attempt = rerun_attempt(&forge, &repair_mode);
             if repair_mode == "no_edit_delayed_green"
                 && attempt == 1
@@ -1182,7 +1339,16 @@ pub(super) fn ci_answer(host: &DeliveryHost, operation: &str, input: &Value) -> 
         // Sending the rerun flips the forge's checks only on the green row;
         // the red row's rerun concludes with the same source-contract failure.
         "ci.rerun_failed" if repair_mode.starts_with("no_edit") => {
-            if repair_mode == "no_edit_green" {
+            if repair_mode.starts_with("no_edit_base_") {
+                // [ORB-26860] The rerun fails again, and meanwhile the base
+                // branch lands the fix the head lacks.
+                fs::write(forge.join("rerun-attempt"), "2\n").unwrap();
+                let mut files = vec![("src/contract", "fixed\n")];
+                if repair_mode == "no_edit_base_conflict" {
+                    files.push(("README.md", "the base rewrites the readme\n"));
+                }
+                land_base_fix(&host.repo, &files);
+            } else if repair_mode == "no_edit_green" {
                 fs::write(forge.join("checks"), "success\n").unwrap();
             } else if repair_mode == "no_edit_red" {
                 fs::write(forge.join("rerun-attempt"), "2\n").unwrap();
@@ -1193,6 +1359,12 @@ pub(super) fn ci_answer(host: &DeliveryHost, operation: &str, input: &Value) -> 
                     format!("{}\n", reads.trim()),
                 )
                 .unwrap();
+            } else if repair_mode == "no_edit_replacement_run" {
+                let run = input["run_id"]
+                    .as_u64()
+                    .or_else(|| input["run_id"].as_str().and_then(|text| text.parse().ok()))
+                    .unwrap();
+                fs::write(forge.join("rerun-run-id"), format!("{}\n", run + 1000)).unwrap();
             }
             Some(json!({"stdout":"", "stderr":""}))
         }
@@ -1242,6 +1414,165 @@ pub(super) fn ci_answer(host: &DeliveryHost, operation: &str, input: &Value) -> 
         }
         _ => None,
     }
+}
+
+/// [ORB-26860] Land a base commit writing `files` while the worktree stays on
+/// the candidate branch: a private index builds the tree, then the local and
+/// remote base refs advance to it.
+fn land_base_fix(repo: &std::path::Path, files: &[(&str, &str)]) {
+    let index = repo.join(".git/orbit-base-fix-index");
+    let blob_file = repo.join(".git/orbit-base-fix-blob");
+    let run = |args: &[&str]| -> String {
+        let output = std::process::Command::new("git")
+            .current_dir(repo)
+            .env("GIT_INDEX_FILE", &index)
+            .env("GIT_AUTHOR_NAME", "Base")
+            .env("GIT_AUTHOR_EMAIL", "base@example.invalid")
+            .env("GIT_COMMITTER_NAME", "Base")
+            .env("GIT_COMMITTER_EMAIL", "base@example.invalid")
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "git {args:?}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8(output.stdout).unwrap().trim().to_string()
+    };
+    let parent = run(&["rev-parse", BASE]);
+    run(&["read-tree", &parent]);
+    for (path, contents) in files {
+        fs::write(&blob_file, contents).unwrap();
+        let blob = run(&["hash-object", "-w", blob_file.to_str().unwrap()]);
+        run(&[
+            "update-index",
+            "--add",
+            "--cacheinfo",
+            &format!("100644,{blob},{path}"),
+        ]);
+    }
+    let tree = run(&["write-tree"]);
+    let commit = run(&[
+        "commit-tree",
+        &tree,
+        "-p",
+        &parent,
+        "-m",
+        "base fixes the shared source contract",
+    ]);
+    run(&[
+        "update-ref",
+        &format!("refs/heads/{BASE}"),
+        &commit,
+        &parent,
+    ]);
+    run(&["push", "origin", &format!("{commit}:refs/heads/{BASE}")]);
+    fs::remove_file(&index).unwrap();
+    fs::remove_file(&blob_file).unwrap();
+}
+
+/// [ORB-26860] The forge's `update-branch` over the substitute remote: merge
+/// the base tip into the pull request head as one merge commit, answering a
+/// conflict with its paths and changing nothing. Every call is recorded.
+pub(super) fn refresh_pull_request(
+    host: &DeliveryHost,
+    request: &orbit_types::workflow::DeliveryRefreshRequest,
+) -> Result<orbit_types::workflow::PullRequestRefreshOutcome, orbit_common::OrbitError> {
+    use orbit_types::workflow::PullRequestRefreshOutcome;
+    host.scripted_inputs
+        .lock()
+        .unwrap()
+        .entry("refresh_delivery_pull_request".into())
+        .or_insert_with(|| json!([]))
+        .as_array_mut()
+        .unwrap()
+        .push(json!({
+            "pr_number": request.pr_number,
+            "head_branch": request.head_branch,
+            "base_branch": request.base_branch,
+            "expected_head_sha": request.expected_head_sha,
+        }));
+    let remote = host.repo.parent().unwrap().join("forge/remote.git");
+    let bare = |args: &[&str]| {
+        std::process::Command::new("git")
+            .arg(format!("--git-dir={}", remote.display()))
+            .env("GIT_AUTHOR_NAME", "Forge")
+            .env("GIT_AUTHOR_EMAIL", "forge@example.invalid")
+            .env("GIT_COMMITTER_NAME", "Forge")
+            .env("GIT_COMMITTER_EMAIL", "forge@example.invalid")
+            .args(args)
+            .output()
+            .unwrap()
+    };
+    let text = |output: std::process::Output| String::from_utf8(output.stdout).unwrap();
+    let head_ref = format!("refs/heads/{}", request.head_branch);
+    let head = text(bare(&["rev-parse", &head_ref])).trim().to_string();
+    if head != request.expected_head_sha {
+        return Ok(PullRequestRefreshOutcome::Refused {
+            reason: format!("head moved to {head}"),
+        });
+    }
+    let base = text(bare(&[
+        "rev-parse",
+        &format!("refs/heads/{}", request.base_branch),
+    ]))
+    .trim()
+    .to_string();
+    if bare(&["merge-base", "--is-ancestor", &base, &head])
+        .status
+        .success()
+    {
+        return Ok(PullRequestRefreshOutcome::AlreadyUpToDate { head_sha: head });
+    }
+    let merged = bare(&[
+        "merge-tree",
+        "--write-tree",
+        "--name-only",
+        "-z",
+        "--no-messages",
+        &head,
+        &base,
+    ]);
+    let clean = merged.status.success();
+    let output = text(merged);
+    let mut fields = output.split('\0').filter(|field| !field.is_empty());
+    let tree = fields.next().unwrap().trim().to_string();
+    if !clean {
+        return Ok(PullRequestRefreshOutcome::Conflicting {
+            conflicting_paths: fields.map(ToOwned::to_owned).collect(),
+            reason: format!("merging {base} into {head} conflicts"),
+        });
+    }
+    let commit = text(bare(&[
+        "commit-tree",
+        &tree,
+        "-p",
+        &head,
+        "-p",
+        &base,
+        "-m",
+        "Merge the base branch into the pull request",
+    ]))
+    .trim()
+    .to_string();
+    assert!(
+        bare(&["update-ref", &head_ref, &commit, &head])
+            .status
+            .success()
+    );
+    Ok(PullRequestRefreshOutcome::Updated { head_sha: commit })
+}
+
+/// The refreshes the run asked the host for, in order.
+fn refresh_calls(host: &DeliveryHost) -> Vec<Value> {
+    host.scripted_inputs
+        .lock()
+        .unwrap()
+        .get("refresh_delivery_pull_request")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default()
 }
 
 pub(super) fn perform_ci_repair(
@@ -1365,7 +1696,37 @@ fn docs_only_auto_fix_repairs_shared_source_and_watches_published_green_head() {
             if mode == "budget" {
                 seed_spent(&host, 1, PrAutoFixBlocker::FailedChecks, RUN_ID);
             }
-            let outcome = run_repair_job(&host, input);
+            if matches!(mode, "unrelated" | "repair") {
+                host.script_step_recovery_decision(
+                    orbit_engine::StepRecoveryDecisionRead::Verified {
+                        verdict: orbit_engine::StepRecoveryVerdict::Retry,
+                        reason: Some("fixed the source contract".into()),
+                        blocker: None,
+                    },
+                );
+            }
+            let (outcome, events) = run_repair_job_with_audit(&host, input);
+            if matches!(mode, "unrelated" | "repair") {
+                let decision = events
+                    .iter()
+                    .find_map(|event| {
+                        match &event.kind {
+                    orbit_types::workflow::activity_job::V2AuditEventKind::StepRecoveryAttempted {
+                        decision: Some(decision), ..
+                    } => Some(decision),
+                    _ => None,
+                }
+                    })
+                    .expect("recovery decision recorded");
+                assert_eq!(decision.status, "verified", "{mode}");
+                assert_eq!(decision.verdict.as_deref(), Some("retry"), "{mode}");
+                assert_eq!(decision.retry_admitted, mode == "repair", "{mode}");
+                let retried = events.iter().any(|event| matches!(
+                    event.kind,
+                    orbit_types::workflow::activity_job::V2AuditEventKind::StepPostRecoveryAttempt { .. }
+                ));
+                assert_eq!(retried, mode == "repair", "{mode}");
+            }
             if matches!(mode, "repair" | "landed") {
                 let result = outcome.expect(mode);
                 assert!(result.success, "{result:?}");
@@ -1535,6 +1896,12 @@ fn no_edit_check_repair_reruns_failed_checks_once() {
         |mode, row| {
             let (fx, host) = docs_only_pr(row);
             host.script("test_ci_repair", json!({"mode":mode}));
+            if mode.contains("red") {
+                host.script(
+                    "ci.job_log",
+                    json!({"log":"test contracts::flaky_smoke ... FAILED\n"}),
+                );
+            }
             host.script(
                 "test_checkpoint",
                 json!({"phase":"commit","task_id":TASK_ID,"commit_sha":fx.candidate}),
@@ -1555,6 +1922,10 @@ fn no_edit_check_repair_reruns_failed_checks_once() {
             );
             assert_eq!(reruns, 1, "{mode}: exactly one rerun is sent");
             assert_eq!(repair_attempts(&host).len(), 1, "{mode}");
+            assert!(
+                refresh_calls(&host).is_empty(),
+                "{mode}: a failure the base never fixed asks for no base refresh"
+            );
             assert_candidate_head_unchanged(&fx, mode);
             if mode.contains("green") {
                 let result = outcome.expect(mode);
@@ -1568,23 +1939,833 @@ fn no_edit_check_repair_reruns_failed_checks_once() {
                     "{mode}: the green rerun clears the unchanged head"
                 );
             } else {
-                let error = match outcome {
-                    Ok(result) => {
-                        assert!(!result.success, "{mode}: {result:?}");
-                        result.message.unwrap_or_default()
+                let message = match outcome {
+                    Err(DispatchError::DeliveryRefused {
+                        refusal, message, ..
+                    }) => {
+                        assert_eq!(
+                            refusal,
+                            orbit_types::workflow::DeliveryRefusal::RepairDispatched,
+                            "{mode}: {message}"
+                        );
+                        message
                     }
-                    Err(error) => error.to_string(),
+                    other => panic!("{mode}: expected RepairDispatched hold, got {other:?}"),
                 };
                 assert!(
-                    error.contains("made no edit and wrote no scope record")
-                        && error.contains("failed again"),
-                    "{mode}: {error}"
+                    message.contains("made no edit and wrote no scope record")
+                        && message.contains("rerun")
+                        && message.contains("failed again")
+                        && message.contains("CI / test")
+                        && message.contains("contracts::flaky_smoke")
+                        && message.contains("not refreshed to its base tip"),
+                    "{mode}: {message}"
                 );
                 assert!(
-                    !error.contains("No such file or directory"),
-                    "{mode}: {error}"
+                    !message.contains("No such file or directory"),
+                    "{mode}: {message}"
                 );
                 assert_no_merge_or_landing(&fx, &host, TaskStatus::Review, mode);
+            }
+        },
+    );
+}
+
+/// [ORB-26860] After the no-edit repair's one rerun fails again on a failure
+/// the base branch has since fixed, the run refreshes its pull request to the
+/// base tip once and lands the refreshed head: a merge commit carrying only
+/// base commits, which settlement's merged-refresh proof accepts. A refresh
+/// that would conflict is refused with its paths and the run holds with that
+/// reason; a pull request whose one base update is already spent holds
+/// without asking. Every row sends exactly the one ORB-26854 rerun, and the
+/// refresh only follows its failure.
+#[test]
+fn no_edit_rerun_failure_inherited_from_a_fixed_base_refreshes_the_head_once() {
+    auto_fix_table(
+        "auto_fix::no_edit_rerun_failure_inherited_from_a_fixed_base_refreshes_the_head_once",
+        "refreshed conflict spent missing_fork",
+        |case, row| {
+            let (fx, host) = docs_only_pr(row);
+            let mode = if case == "conflict" {
+                "no_edit_base_conflict"
+            } else if case == "missing_fork" {
+                "no_edit_base_missing_fork"
+            } else {
+                "no_edit_base_fixed"
+            };
+            host.script("test_ci_repair", json!({"mode":mode}));
+            host.script(
+                "test_checkpoint",
+                json!({"phase":"commit","task_id":TASK_ID,"commit_sha":fx.candidate}),
+            );
+            host.require_commands(&["true"]);
+            fx.script_checks(&["source_contract"]);
+            if case == "spent" {
+                // An earlier refresh of this head spent the PR's one base update.
+                seed_auto_fix_history(
+                    &host,
+                    PR_BASE_UPDATE_RESERVED_EVENT,
+                    &PrBaseUpdateReservation {
+                        execution: RUN_ID.into(),
+                        repository: "forge/remote".into(),
+                        pr_number: PR_NUMBER.into(),
+                        head_sha: fx.candidate.clone(),
+                        head_branch: BRANCH.into(),
+                        base_branch: BASE.into(),
+                        base_sha: fx.base_sha.clone(),
+                        deadline_ms: 1_100_000,
+                        evidence: json!({
+                            "cause": orbit_types::workflow::PR_BASE_INHERITED_REFRESH_CAUSE
+                        }),
+                    },
+                );
+            }
+            let mut input = auto_fix_input(&fx);
+            input["completion"] = json!("done");
+            let outcome = run_repair_job(&host, input);
+            let history = host.history(TASK_ID);
+            let rerun_at = history
+                .iter()
+                .position(|entry| entry.event == "ci_check_rerun");
+            assert_eq!(
+                history
+                    .iter()
+                    .filter(|entry| entry.event == "ci_check_rerun")
+                    .count(),
+                1,
+                "{case}: exactly the one no-edit rerun is sent, never another: {outcome:?}"
+            );
+            assert_eq!(repair_attempts(&host).len(), 1, "{case}");
+            let refreshes = refresh_calls(&host);
+            if case == "refreshed" {
+                let result = outcome.expect(case);
+                assert!(result.success, "{case}: {result:?}");
+                assert_eq!(refreshes.len(), 1, "{case}: one refresh per head");
+                assert_eq!(refreshes[0]["expected_head_sha"], fx.candidate, "{case}");
+                let reserved_at = history.iter().position(|entry| {
+                    entry.event == PR_BASE_UPDATE_RESERVED_EVENT
+                        && entry.note.as_deref().is_some_and(|note| {
+                            note.contains(orbit_types::workflow::PR_BASE_INHERITED_REFRESH_CAUSE)
+                        })
+                });
+                assert!(
+                    rerun_at.is_some() && reserved_at.is_some() && rerun_at < reserved_at,
+                    "{case}: the refresh is reserved only after the rerun"
+                );
+                let forge = fx.repo.parent().unwrap().join("forge");
+                let refreshed = fs::read_to_string(forge.join("merged-head"))
+                    .unwrap()
+                    .trim()
+                    .to_string();
+                let landed = fs::read_to_string(forge.join("merged"))
+                    .unwrap()
+                    .trim()
+                    .to_string();
+                git(&fx.repo, &["fetch", "--quiet", "origin", BASE]);
+                let parents = git(&fx.repo, &["rev-list", "--parents", "-n", "1", &refreshed]);
+                let parents: Vec<&str> = parents.split_whitespace().skip(1).collect();
+                assert_eq!(parents.len(), 2, "{case}: one merge commit");
+                assert_eq!(
+                    parents[0], fx.candidate,
+                    "{case}: candidate is the first parent"
+                );
+                let landed_onto = git(&fx.repo, &["rev-parse", &format!("{landed}^")]);
+                assert_eq!(
+                    git(
+                        &fx.repo,
+                        &["rev-list", &refreshed, "--not", &fx.candidate, &landed_onto]
+                    ),
+                    refreshed,
+                    "{case}: past the candidate, the head carries only base commits"
+                );
+                assert!(
+                    fx.merge_requests()
+                        .iter()
+                        .any(|request| request.contains(&format!("sha={refreshed}"))),
+                    "{case}: the merge is conditioned on the refreshed head: {:?}",
+                    fx.merge_requests()
+                );
+                orbit_engine::verify_merged_base_refresh(
+                    &fx.repo,
+                    &orbit_engine::MergedBaseRefresh {
+                        published_head: &fx.candidate,
+                        merged_head: &refreshed,
+                        source_branch: BRANCH,
+                        landing_branch: BASE,
+                        pull_request: 42,
+                        merge_commit: &landed,
+                    },
+                )
+                .unwrap_or_else(|error| panic!("{case}: settle-merged refuses: {error}"));
+                assert_eq!(host.status(TASK_ID), TaskStatus::Done, "{case}");
+                return;
+            }
+            let message = match outcome {
+                Err(DispatchError::DeliveryRefused {
+                    refusal, message, ..
+                }) => {
+                    assert_eq!(
+                        refusal,
+                        orbit_types::workflow::DeliveryRefusal::RepairDispatched,
+                        "{case}: {message}"
+                    );
+                    message
+                }
+                other => panic!("{case}: expected RepairDispatched hold, got {other:?}"),
+            };
+            assert!(
+                message.contains("failed again") && message.contains("not refreshed"),
+                "{case}: {message}"
+            );
+            if case == "conflict" {
+                assert_eq!(refreshes.len(), 1, "{case}");
+                assert!(
+                    message.contains("conflicting paths: README.md"),
+                    "{case}: {message}"
+                );
+            } else if case == "missing_fork" {
+                assert!(
+                    refreshes.is_empty(),
+                    "{case}: no refresh without fork evidence"
+                );
+                assert!(
+                    !history
+                        .iter()
+                        .any(|entry| entry.event == PR_BASE_UPDATE_RESERVED_EVENT),
+                    "{case}: no base update reserved"
+                );
+            } else {
+                assert!(
+                    refreshes.is_empty(),
+                    "{case}: a spent head asks for no refresh"
+                );
+                assert!(
+                    message.contains("already spent its one base update"),
+                    "{case}: {message}"
+                );
+            }
+            assert_candidate_head_unchanged(&fx, case);
+            assert_no_merge_or_landing(&fx, &host, TaskStatus::Review, case);
+        },
+    );
+}
+
+/// [ORB-27076] The forge reports BLOCKED while the no-edit rerun is sent;
+/// the base then lands both the CI fix and an edit that conflicts with the
+/// head, so it reports DIRTY beside the rerun's failed, authenticated result.
+/// That head still takes the base-inherited refresh step: the refresh is
+/// refused with its conflicting paths and the run holds as `RepairDispatched`
+/// with the head unchanged. An ordinary DIRTY pull request with no failed
+/// rerun of its own sends no rerun, asks for no refresh and keeps the
+/// ordinary conflict handling.
+#[test]
+fn dirty_head_after_a_failed_no_edit_rerun_holds_with_the_conflicting_paths() {
+    auto_fix_table(
+        "auto_fix::dirty_head_after_a_failed_no_edit_rerun_holds_with_the_conflicting_paths",
+        "failed_rerun ordinary_dirty",
+        |case, row| {
+            let (fx, host) = docs_only_pr(row);
+            host.script(
+                "test_ci_repair",
+                json!({"mode": if case == "failed_rerun" { "no_edit_base_conflict" } else { "." }}),
+            );
+            host.script(
+                "test_checkpoint",
+                json!({"phase":"commit","task_id":TASK_ID,"commit_sha":fx.candidate}),
+            );
+            host.require_commands(&["true"]);
+            fx.script_checks(&["source_contract_dirty"]);
+            if case == "ordinary_dirty" {
+                land_base_fix(
+                    &host.repo,
+                    &[("README.md", "the base rewrites the readme\n")],
+                );
+            }
+            let mut input = auto_fix_input(&fx);
+            input["completion"] = json!("done");
+            let outcome = run_repair_job(&host, input);
+            let history = host.history(TASK_ID);
+            let reruns = history
+                .iter()
+                .filter(|entry| entry.event == "ci_check_rerun")
+                .count();
+            let refreshes = refresh_calls(&host);
+            if case == "ordinary_dirty" {
+                assert_eq!(
+                    reruns, 0,
+                    "{case}: no rerun without a repair that made no edit"
+                );
+                assert!(
+                    refreshes.is_empty(),
+                    "{case}: no base-inherited refresh without a failed rerun"
+                );
+                assert!(
+                    !matches!(
+                        &outcome,
+                        Err(DispatchError::DeliveryRefused {
+                            refusal: orbit_types::workflow::DeliveryRefusal::RepairDispatched,
+                            ..
+                        })
+                    ),
+                    "{case}: ordinary conflict handling, not the failed-rerun hold: {outcome:?}"
+                );
+                assert_no_merge_or_landing(&fx, &host, TaskStatus::Review, case);
+                return;
+            }
+            assert_eq!(reruns, 1, "{case}: exactly the one no-edit rerun is sent");
+            assert_eq!(repair_attempts(&host).len(), 1, "{case}");
+            assert_eq!(refreshes.len(), 1, "{case}: one refresh per head");
+            let message = match outcome {
+                Err(DispatchError::DeliveryRefused {
+                    refusal, message, ..
+                }) => {
+                    assert_eq!(
+                        orbit_types::workflow::DeliveryRefusal::RepairDispatched,
+                        refusal,
+                        "{case}: {message}"
+                    );
+                    message
+                }
+                other => panic!("{case}: expected RepairDispatched hold, got {other:?}"),
+            };
+            assert!(
+                message.contains("failed again")
+                    && message.contains("conflicting paths: README.md")
+                    && message.contains("the head is unchanged"),
+                "{case}: {message}"
+            );
+            assert_candidate_head_unchanged(&fx, case);
+            assert_no_merge_or_landing(&fx, &host, TaskStatus::Review, case);
+        },
+    );
+}
+
+#[test]
+fn no_edit_check_repair_decision_slot_flake_lands_to_done_and_enforces_edit_guard() {
+    auto_fix_table(
+        "auto_fix::no_edit_check_repair_decision_slot_flake_lands_to_done_and_enforces_edit_guard",
+        "not_recovered absent not_recovered_with_edit not_recovered_ledger_refused retry_ledger_refused",
+        |case, row| {
+            let (fx, host) = if case == "not_recovered_with_edit" {
+                one_char_pr(row)
+            } else {
+                docs_only_pr(row)
+            };
+            match case {
+                "not_recovered" => {
+                    host.script_step_recovery_decision(
+                        orbit_engine::StepRecoveryDecisionRead::Verified {
+                            verdict: orbit_engine::StepRecoveryVerdict::NotRecovered,
+                            reason: Some("flake outside candidate".into()),
+                            blocker: None,
+                        },
+                    );
+                    host.script("test_ci_repair", json!({"mode":"no_edit_green"}));
+                }
+                "absent" => {
+                    host.script_step_recovery_decision(
+                        orbit_engine::StepRecoveryDecisionRead::Absent,
+                    );
+                    host.script("test_ci_repair", json!({"mode":"no_edit_green"}));
+                }
+                "not_recovered_with_edit" => {
+                    host.script_step_recovery_decision(
+                        orbit_engine::StepRecoveryDecisionRead::Verified {
+                            verdict: orbit_engine::StepRecoveryVerdict::NotRecovered,
+                            reason: Some("partial edit left behind".into()),
+                            blocker: None,
+                        },
+                    );
+                    host.script("test_ci_repair", json!({"mode":"one_char_modified"}));
+                }
+                "not_recovered_ledger_refused" => {
+                    host.script_step_recovery_decision(
+                        orbit_engine::StepRecoveryDecisionRead::Verified {
+                            verdict: orbit_engine::StepRecoveryVerdict::NotRecovered,
+                            reason: Some("flake outside candidate".into()),
+                            blocker: None,
+                        },
+                    );
+                    *locked(&host.fail_history_events) =
+                        vec![orbit_types::workflow::PR_AUTO_FIX_NO_EDIT_RERUN_EVENT.into()];
+                    host.script("test_ci_repair", json!({"mode":"no_edit_green"}));
+                }
+                "retry_ledger_refused" => {
+                    host.script_step_recovery_decision(
+                        orbit_engine::StepRecoveryDecisionRead::Verified {
+                            verdict: orbit_engine::StepRecoveryVerdict::Retry,
+                            reason: Some("flake outside candidate".into()),
+                            blocker: None,
+                        },
+                    );
+                    *locked(&host.fail_history_events) =
+                        vec![orbit_types::workflow::PR_AUTO_FIX_NO_EDIT_RERUN_EVENT.into()];
+                    host.script("test_ci_repair", json!({"mode":"no_edit_green"}));
+                }
+                _ => unreachable!(),
+            }
+            host.script(
+                "test_checkpoint",
+                json!({"phase":"commit","task_id":TASK_ID,"commit_sha":fx.candidate}),
+            );
+            host.require_commands(&["true"]);
+            fx.script_checks(&["source_contract"]);
+            let mut input = auto_fix_input(&fx);
+            input["completion"] = json!("done");
+            let (outcome, events) = run_repair_job_with_audit(&host, input);
+            assert_candidate_head_unchanged(&fx, case);
+            assert_eq!(repair_attempts(&host).len(), 1, "{case}");
+            let recovery_decision = events
+                .iter()
+                .find_map(|event| {
+                    match &event.kind {
+                    orbit_types::workflow::activity_job::V2AuditEventKind::StepRecoveryAttempted {
+                        recovery_succeeded,
+                        decision,
+                        ..
+                    } => {
+                        assert!(recovery_succeeded, "{case}: recovery activity completed");
+                        decision.clone()
+                    }
+                    _ => None,
+                }
+                })
+                .unwrap_or_else(|| {
+                    panic!("{case}: missing StepRecoveryAttempted decision in {events:?}")
+                });
+            let post_recovery_outcomes: Vec<&str> = events
+                .iter()
+                .filter_map(|event| {
+                    match &event.kind {
+                    orbit_types::workflow::activity_job::V2AuditEventKind::StepPostRecoveryAttempt {
+                        outcome,
+                        ..
+                    } => Some(outcome.as_str()),
+                    _ => None,
+                }
+                })
+                .collect();
+            match case {
+                "not_recovered" => {
+                    assert_eq!(recovery_decision.status, "verified", "{case}");
+                    assert_eq!(
+                        recovery_decision.verdict.as_deref(),
+                        Some("not_recovered"),
+                        "{case}: preserve decision file verdict"
+                    );
+                    assert_eq!(
+                        recovery_decision.detail.as_deref(),
+                        Some("flake outside candidate"),
+                        "{case}"
+                    );
+                    assert!(
+                        recovery_decision.retry_admitted,
+                        "{case}: clean no-edit check repair must record retry_admitted=true"
+                    );
+                    assert_eq!(post_recovery_outcomes, vec!["success"], "{case}");
+                    let result = outcome.expect(case);
+                    assert!(result.success, "{case}: {result:?}");
+                    assert_eq!(
+                        host.history(TASK_ID)
+                            .iter()
+                            .filter(|entry| entry.event == "ci_check_rerun")
+                            .count(),
+                        1,
+                        "{case}: exactly one rerun is sent"
+                    );
+                    assert_eq!(
+                        host.status(TASK_ID),
+                        TaskStatus::Done,
+                        "{case}: lands without operator action"
+                    );
+                    assert_eq!(fx.merge_requests().len(), 1, "{case}");
+                }
+                "absent" => {
+                    assert_eq!(recovery_decision.status, "absent", "{case}");
+                    assert_eq!(
+                        recovery_decision.verdict, None,
+                        "{case}: preserve absent verdict"
+                    );
+                    assert!(
+                        recovery_decision.retry_admitted,
+                        "{case}: clean no-edit check repair must record retry_admitted=true"
+                    );
+                    assert_eq!(post_recovery_outcomes, vec!["success"], "{case}");
+                    let result = outcome.expect(case);
+                    assert!(result.success, "{case}: {result:?}");
+                    assert_eq!(
+                        host.history(TASK_ID)
+                            .iter()
+                            .filter(|entry| entry.event == "ci_check_rerun")
+                            .count(),
+                        1,
+                        "{case}: exactly one rerun is sent"
+                    );
+                    assert_eq!(
+                        host.status(TASK_ID),
+                        TaskStatus::Done,
+                        "{case}: lands without operator action"
+                    );
+                    assert_eq!(fx.merge_requests().len(), 1, "{case}");
+                }
+                "not_recovered_with_edit" => {
+                    assert_eq!(recovery_decision.status, "verified", "{case}");
+                    assert_eq!(
+                        recovery_decision.verdict.as_deref(),
+                        Some("not_recovered"),
+                        "{case}"
+                    );
+                    assert_eq!(
+                        recovery_decision.detail.as_deref(),
+                        Some("partial edit left behind"),
+                        "{case}"
+                    );
+                    assert!(
+                        !recovery_decision.retry_admitted,
+                        "{case}: refused no-edit check must report retry_admitted=false"
+                    );
+                    assert!(post_recovery_outcomes.is_empty(), "{case}");
+                    match outcome {
+                        Err(DispatchError::DeliveryRefused { refusal, .. }) => {
+                            assert_eq!(
+                                refusal,
+                                orbit_types::workflow::DeliveryRefusal::RepairDispatched,
+                                "{case}"
+                            );
+                        }
+                        other => panic!("{case}: expected RepairDispatched hold, got {other:?}"),
+                    }
+                    assert_eq!(
+                        host.history(TASK_ID)
+                            .iter()
+                            .filter(|entry| entry.event == "ci_check_rerun")
+                            .count(),
+                        0,
+                        "{case}: an edited worktree with not_recovered must not rerun checks"
+                    );
+                    assert_no_merge_or_landing(&fx, &host, TaskStatus::Review, case);
+                }
+                "not_recovered_ledger_refused" | "retry_ledger_refused" => {
+                    let expected_verdict = if case == "retry_ledger_refused" {
+                        "retry"
+                    } else {
+                        "not_recovered"
+                    };
+                    assert_eq!(recovery_decision.status, "verified", "{case}");
+                    assert_eq!(
+                        recovery_decision.verdict.as_deref(),
+                        Some(expected_verdict),
+                        "{case}"
+                    );
+                    assert_eq!(
+                        recovery_decision.detail.as_deref(),
+                        Some("flake outside candidate"),
+                        "{case}"
+                    );
+                    assert!(
+                        !recovery_decision.retry_admitted,
+                        "{case}: refused ledger write must report retry_admitted=false"
+                    );
+                    assert!(post_recovery_outcomes.is_empty(), "{case}");
+                    let error = outcome.expect_err("ledger write refusal must fail the step");
+                    assert!(
+                        error.to_string().contains("history write for task"),
+                        "{case}: {error}"
+                    );
+                    assert_eq!(
+                        host.history(TASK_ID)
+                            .iter()
+                            .filter(|entry| entry.event == "ci_check_rerun")
+                            .count(),
+                        0,
+                        "{case}: refused ledger write must not rerun checks"
+                    );
+                    assert_no_merge_or_landing(&fx, &host, TaskStatus::Review, case);
+                }
+                _ => unreachable!(),
+            }
+        },
+    );
+}
+
+#[test]
+fn no_edit_check_repair_repeat_failure_holds_and_caps_rerun_at_one_per_head() {
+    auto_fix_table(
+        "auto_fix::no_edit_check_repair_repeat_failure_holds_and_caps_rerun_at_one_per_head",
+        "not_recovered_repeat_failure",
+        |case, row| {
+            let (fx, host) = docs_only_pr(row);
+            host.script_step_recovery_decision(orbit_engine::StepRecoveryDecisionRead::Verified {
+                verdict: orbit_engine::StepRecoveryVerdict::NotRecovered,
+                reason: Some("flaky integration test".into()),
+                blocker: None,
+            });
+            host.script("test_ci_repair", json!({"mode":"no_edit_red"}));
+            host.script(
+                "ci.job_log",
+                json!({"log":"FAIL [ 0.042s] orbit-engine::tests integration::stale_clock\n"}),
+            );
+            host.script(
+                "test_checkpoint",
+                json!({"phase":"commit","task_id":TASK_ID,"commit_sha":fx.candidate}),
+            );
+            host.require_commands(&["true"]);
+            fx.script_checks(&["source_contract"]);
+            let first = run_repair_job(&host, auto_fix_input(&fx));
+            let first_msg = match first {
+                Err(DispatchError::DeliveryRefused {
+                    refusal, message, ..
+                }) => {
+                    assert_eq!(
+                        refusal,
+                        orbit_types::workflow::DeliveryRefusal::RepairDispatched,
+                        "{case}: {message}"
+                    );
+                    message
+                }
+                other => panic!("{case}: expected RepairDispatched hold, got {other:?}"),
+            };
+            assert!(
+                first_msg.contains("rerun")
+                    && first_msg.contains("CI / test")
+                    && first_msg.contains("integration::stale_clock"),
+                "{case}: {first_msg}"
+            );
+            assert_eq!(
+                host.history(TASK_ID)
+                    .iter()
+                    .filter(|entry| entry.event == "ci_check_rerun")
+                    .count(),
+                1,
+                "{case}: first repeat failure stops after one rerun"
+            );
+            assert_candidate_head_unchanged(&fx, case);
+
+            let second = action(&host, "pr_complete", &auto_fix_input(&fx));
+            match second {
+                Err(OrbitError::DeliveryRefused {
+                    refusal, message, ..
+                }) => {
+                    assert_eq!(
+                        refusal,
+                        orbit_types::workflow::DeliveryRefusal::RepairDispatched,
+                        "{case}: {message}"
+                    );
+                    assert!(
+                        message.contains("rerun") && message.contains("CI / test"),
+                        "{case}: {message}"
+                    );
+                }
+                other => panic!("{case}: expected DeliveryRefused on repeat poll, got {other:?}"),
+            }
+            assert_eq!(
+                host.history(TASK_ID)
+                    .iter()
+                    .filter(|entry| entry.event == "ci_check_rerun")
+                    .count(),
+                1,
+                "{case}: rerun happens at most once per head and repair"
+            );
+            assert_eq!(repair_attempts(&host).len(), 1, "{case}");
+            assert_candidate_head_unchanged(&fx, case);
+            assert_no_merge_or_landing(&fx, &host, TaskStatus::Review, case);
+        },
+    );
+}
+
+/// Regression for ORB-26904: an independently created replacement workflow run
+/// on the same head, a reservation whose rerun attempt has not appeared, and
+/// legacy `SharedBudgetSpent` never claim the reserved rerun failed again or
+/// send a second rerun, while the reserved run's own later failed attempt still
+/// produces the `RepairDispatched` hold with its checks and tests.
+#[test]
+fn no_edit_distinct_run_unobserved_reservation_and_legacy_budget_never_report_rerun_failed() {
+    auto_fix_table(
+        "auto_fix::no_edit_distinct_run_unobserved_reservation_and_legacy_budget_never_report_rerun_failed",
+        "replacement_run reserved_without_result legacy_budget_spent",
+        |case, row| {
+            let (fx, host) = docs_only_pr(row);
+            let test_name = match case {
+                "replacement_run" => "contracts::replacement_run_smoke",
+                "reserved_without_result" => "contracts::no_result_smoke",
+                "legacy_budget_spent" => "contracts::legacy_budget_smoke",
+                _ => unreachable!(),
+            };
+            host.script(
+                "ci.job_log",
+                json!({"log": format!("test {test_name} ... FAILED\n")}),
+            );
+            host.script(
+                "test_checkpoint",
+                json!({"phase":"commit","task_id":TASK_ID,"commit_sha":fx.candidate}),
+            );
+            host.require_commands(&["true"]);
+            fx.script_checks(&["source_contract"]);
+            if case == "legacy_budget_spent" {
+                host.script("test_ci_repair", json!({"mode":"no_edit_red"}));
+                seed_attempt(
+                    &host,
+                    &fx.candidate,
+                    PrAutoFixBlocker::FailedChecks,
+                    1,
+                    RUN_ID,
+                );
+                seed_auto_fix_history(
+                    &host,
+                    orbit_types::workflow::PR_AUTO_FIX_NO_EDIT_RERUN_EVENT,
+                    &orbit_types::workflow::PrAutoFixNoEditRerun {
+                        pr_number: PR_NUMBER.into(),
+                        head_sha: fx.candidate.clone(),
+                        run_id: RUN_ID.into(),
+                        attempt: 1,
+                    },
+                );
+                seed_auto_fix_history(
+                    &host,
+                    orbit_types::workflow::CI_CHECK_RERUN_EVENT,
+                    &orbit_types::workflow::CiCheckRerunRecord {
+                        head: Some(fx.candidate.clone()),
+                        pr_number: Some(42),
+                        run_id: Some(12_345),
+                        event: Some(orbit_types::workflow::CiCheckRerunEvent::PullRequest),
+                        jobs: Vec::new(),
+                        legacy_pull_requests: Vec::new(),
+                    },
+                );
+                let error = super::complete_with_logical_clock(&host, &auto_fix_input(&fx))
+                    .expect_err("legacy spent budget holds without a second send");
+                assert!(
+                    matches!(
+                        error,
+                        OrbitError::DeliveryRefused {
+                            refusal: orbit_types::workflow::DeliveryRefusal::RepairDispatched,
+                            ..
+                        }
+                    ),
+                    "{case}: legacy budget exhaustion holds as RepairDispatched: {error}"
+                );
+                let message = error.to_string();
+                assert!(
+                    message.contains("the no-edit repair rerun is spent"),
+                    "{case}: {message}"
+                );
+                assert!(
+                    !message.contains("its one rerun")
+                        && !message.contains("failed again")
+                        && !message.contains(test_name),
+                    "{case}: must not falsely report rerun failure: {message}"
+                );
+                assert_eq!(
+                    host.history(TASK_ID)
+                        .iter()
+                        .filter(|entry| entry.event == orbit_types::workflow::CI_CHECK_RERUN_EVENT)
+                        .count(),
+                    1,
+                    "{case}: legacy budget prevents any rerun send"
+                );
+                assert_eq!(repair_attempts(&host).len(), 1, "{case}");
+                assert_candidate_head_unchanged(&fx, case);
+                assert_no_merge_or_landing(&fx, &host, TaskStatus::Review, case);
+                return;
+            }
+
+            let repair_mode = if case == "replacement_run" {
+                "no_edit_replacement_run"
+            } else {
+                "no_edit_reserved_no_result"
+            };
+            host.script("test_ci_repair", json!({"mode": repair_mode}));
+            let outcome =
+                super::with_completion_clock(|| run_repair_job(&host, auto_fix_input(&fx)));
+            let message = match outcome {
+                Err(DispatchError::DeliveryRefused {
+                    refusal, message, ..
+                }) => {
+                    assert_eq!(
+                        refusal,
+                        orbit_types::workflow::DeliveryRefusal::RepairDispatched,
+                        "{case}: {message}"
+                    );
+                    message
+                }
+                other => panic!("{case}: expected RepairDispatched hold, got {other:?}"),
+            };
+            let stop_message = message
+                .split("; original error before recovery:")
+                .next()
+                .unwrap();
+            assert!(
+                stop_message.contains("already admitted")
+                    && !stop_message.contains("its one rerun")
+                    && !stop_message.contains("failed again")
+                    && !stop_message.contains(test_name),
+                "{case}: must not falsely attribute unobserved/distinct run failure to the reserved rerun: {message}"
+            );
+            let history = host.history(TASK_ID);
+            assert!(
+                history
+                    .iter()
+                    .any(|entry| entry.event == "pr_auto_fix_ci_rerun_hold"),
+                "{case}: planner waits and observes instead of claiming rerun failure"
+            );
+            assert_eq!(
+                history
+                    .iter()
+                    .filter(|entry| entry.event == orbit_types::workflow::CI_CHECK_RERUN_EVENT)
+                    .count(),
+                1,
+                "{case}: existing budget prevents a second send"
+            );
+            assert_eq!(
+                history
+                    .iter()
+                    .filter(|entry| entry.event == orbit_types::workflow::CI_RERUN_RESERVED_EVENT)
+                    .count(),
+                1,
+                "{case}: exactly one rerun reservation is created"
+            );
+            assert_eq!(repair_attempts(&host).len(), 1, "{case}");
+            assert_candidate_head_unchanged(&fx, case);
+            assert_no_merge_or_landing(&fx, &host, TaskStatus::Review, case);
+
+            if case == "replacement_run" {
+                fs::remove_file(fx.forge.join("rerun-run-id")).unwrap();
+                fs::write(fx.forge.join("rerun-attempt"), "2\n").unwrap();
+                host.script(
+                    "ci.job_log",
+                    json!({"log": "test contracts::same_run_retry ... FAILED\n"}),
+                );
+                let later = super::complete_with_logical_clock(&host, &auto_fix_input(&fx));
+                let later_msg = match later {
+                    Err(OrbitError::DeliveryRefused {
+                        refusal, message, ..
+                    }) => {
+                        assert_eq!(
+                            refusal,
+                            orbit_types::workflow::DeliveryRefusal::RepairDispatched,
+                            "{case}: {message}"
+                        );
+                        message
+                    }
+                    other => panic!(
+                        "{case}: expected RepairDispatched hold on same-run later attempt, got {other:?}"
+                    ),
+                };
+                assert!(
+                    later_msg.contains("its one rerun")
+                        && later_msg.contains("failed again")
+                        && later_msg.contains("CI / test")
+                        && later_msg.contains("contracts::same_run_retry"),
+                    "{case}: same-run later failed attempt still reports checks and tests: {later_msg}"
+                );
+                assert_eq!(
+                    host.history(TASK_ID)
+                        .iter()
+                        .filter(|entry| entry.event == orbit_types::workflow::CI_CHECK_RERUN_EVENT)
+                        .count(),
+                    1,
+                    "{case}: still only one rerun sent"
+                );
             }
         },
     );

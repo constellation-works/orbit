@@ -1256,6 +1256,52 @@ fn mcp_serve_tools_list_matches_production_snapshot() {
     );
 }
 
+/// The control-center resource tells the Jobs view which calls this session
+/// serves. `orbit_run` is advertised when any action is served, so a
+/// dispatch-only session lists it with `resume` but not the `list` catalog
+/// read; the panel must see that read as withheld. Adding `runs` serves it,
+/// and the Run job write stays gated by `pipelines`.
+#[test]
+fn control_center_withholds_the_jobs_catalog_read_without_the_runs_toolset() {
+    let workspace = McpWorkspace::init();
+    let session_tools = |client: &mut McpClient| -> Value {
+        let resource = client.request(
+            "resources/read",
+            json!({"uri":"ui://orbit/control-center/v1/index.html"}),
+        );
+        let html = resource["result"]["contents"][0]["text"]
+            .as_str()
+            .expect("control-center html")
+            .to_string();
+        let open = "<script type=\"application/json\" id=\"orbit-session-tools\">";
+        let start = html.find(open).expect("session tools block") + open.len();
+        let end = html[start..].find("</script>").expect("block end") + start;
+        serde_json::from_str(&html[start..end]).expect("session tools JSON")
+    };
+
+    let mut dispatch_only =
+        workspace.serve_with_args(&["--operator", "--role", "agent", "--toolset", "dispatch,ui"]);
+    let names = tool_names(&dispatch_only.tools_list())
+        .into_iter()
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    assert!(names.iter().any(|name| name == "orbit_run"), "{names:?}");
+    let tools = session_tools(&mut dispatch_only);
+    assert_eq!(tools["orbit_run:list"], false, "{tools}");
+    assert_eq!(tools["orbit_pipeline_invoke"], false, "{tools}");
+
+    let mut with_runs = workspace.serve_with_args(&[
+        "--operator",
+        "--role",
+        "agent",
+        "--toolset",
+        "dispatch,runs,ui",
+    ]);
+    let tools = session_tools(&mut with_runs);
+    assert_eq!(tools["orbit_run:list"], true, "{tools}");
+    assert_eq!(tools["orbit_pipeline_invoke"], false, "{tools}");
+}
+
 /// A managed caller can leave `ORBIT_ACTIVITY_MCP_TOOLSETS` on the test
 /// process after the pre-`main` scrub. The default `tools/list` fixture must
 /// still match the committed snapshot, including the bytes the snapshot-update
@@ -1396,6 +1442,76 @@ fn operator_tools_list_stays_within_byte_budget() {
     );
 }
 
+/// `orbit_task_add` takes `dependencies` in the creation write and validates
+/// them as `orbit_task_update` does: a blank id is refused, an id this
+/// workspace cannot read is stored with a warning, and a new task has no id
+/// yet, so it cannot close a cycle.
+#[test]
+fn task_add_accepts_dependencies_in_the_creation_write() {
+    let workspace = McpWorkspace::init();
+    let mut client = workspace.serve();
+    let first_id = client.add_task("Prerequisite", "Disposable prerequisite");
+
+    let added = client.call_tool_ok(
+        "orbit_task_add",
+        json!({
+            "title": "Dependent", "description": "Disposable dependent",
+            "complexity": "low", "model": "codex",
+            "dependencies": [first_id.clone()],
+        }),
+    );
+    let shown = client.call_tool_ok("orbit_task_show", json!({"id": added["id"]}));
+    assert_eq!(shown["dependencies"], json!([first_id]));
+
+    let refused_blank = client.call_tool_err(
+        "orbit_task_add",
+        json!({
+            "title": "Blank", "description": "Never stored", "complexity": "low",
+            "model": "codex", "dependencies": [" "],
+        }),
+    );
+    assert!(
+        refused_blank
+            .to_string()
+            .contains("entries must not be empty"),
+        "{refused_blank}"
+    );
+
+    let unknown = client.call_tool_ok(
+        "orbit_task_add",
+        json!({
+            "title": "Unknown", "description": "Disposable unknown prerequisite",
+            "complexity": "low", "model": "codex", "dependencies": ["ORB-99999"],
+        }),
+    );
+    assert!(
+        unknown
+            .to_string()
+            .contains("dependency task 'ORB-99999' was not found"),
+        "{unknown}"
+    );
+    let updated = client.call_tool_ok(
+        "orbit_task_update",
+        json!({"id": added["id"], "model": "codex", "dependencies": ["ORB-99999"]}),
+    );
+    assert!(
+        updated
+            .to_string()
+            .contains("dependency task 'ORB-99999' was not found"),
+        "{updated}"
+    );
+
+    let guarded = client.call_tool_err(
+        "orbit_task_add",
+        json!({
+            "title": "Guarded", "description": "Never stored", "complexity": "low",
+            "model": "codex", "request_id": "deps-guarded-1", "dependencies": [first_id],
+            "workspace": workspace.work.to_str().unwrap(),
+        }),
+    );
+    assert!(guarded.to_string().contains("dependencies"), "{guarded}");
+}
+
 /// ORB-23869: no advertised description is cut mid-clause, and the value
 /// lists a shortened description drops are carried whole by a schema `enum`.
 #[test]
@@ -1465,7 +1581,14 @@ fn advertised_descriptions_are_complete_and_value_lists_move_to_enums() {
         (
             "orbit_resident_grant",
             "add",
-            &["dispatch", "promote", "merge", "plugin_upgrade"],
+            &[
+                "dispatch",
+                "promote",
+                "merge",
+                "plugin_upgrade",
+                "refresh",
+                "recover",
+            ],
         ),
     ];
     for (tool_name, field, expected) in enum_cases {
@@ -1486,7 +1609,7 @@ fn advertised_descriptions_are_complete_and_value_lists_move_to_enums() {
     let attention = find_tool(&tools, "orbit_attention");
     let description = attention["description"].as_str().unwrap_or("");
     assert!(
-        description.contains("references/attention.md"),
+        description.contains("references/attention-reading.md"),
         "orbit_attention lost its docs pointer: {description}"
     );
 }
@@ -1799,9 +1922,19 @@ fn mcp_server_hides_uncallable_governed_tools_but_preserves_direct_call_denials(
     let response = client.tools_list();
     let names = tool_names(&response);
 
+    let run_bound = run_bound_tool_names();
     for definition in orbit_mcp::canonical_mcp_tool_definitions().expect("canonical definitions") {
         let canonical = definition.schema.name.as_str();
         let name = mcp_advertised_tool_name(canonical);
+        // A run-bound tool is served only to a managed run whose dispatch
+        // stamp names it, never to an operator or agent session.
+        if run_bound.contains(canonical) {
+            assert!(
+                !operator_names.contains(&name.as_str()) && !names.contains(&name.as_str()),
+                "run-bound {name} must not be listed"
+            );
+            continue;
+        }
         assert!(
             operator_names.contains(&name.as_str()),
             "operator missing {name}"
@@ -2289,7 +2422,7 @@ fn compact_agent_answers_have_a_serialized_budget() {
             "#!/bin/sh\ncat > /dev/null\ncat {}\n",
             orbit_common::process::shell::quote_posix_arg(response_file.to_str().unwrap())
         ),
-        &["--operator"],
+        &["--operator", "--toolset", "pipelines"],
         &[("ORBIT_CLI_RUNNER_OUTPUT_CAPTURE_LIMIT_BYTES", "2097152")],
     );
     let large_text = "界🙂\n\"\\".repeat(24_000);
@@ -2386,7 +2519,7 @@ fn an_invocation_without_a_response_envelope_fails_with_its_reason() {
     let workspace = McpWorkspace::init();
     let mut client = workspace.serve_agent(
         "#!/bin/sh\ncat > /dev/null\nprintf '%s\\n' 'I looked around and everything seems fine.'\n",
-        &["--operator"],
+        &["--operator", "--toolset", "pipelines"],
         &[],
     );
     let submitted = client.call_tool_ok(
@@ -2959,6 +3092,48 @@ fn missing_artifact_names_the_listing_in_each_surface_syntax() {
     );
 }
 
+/// [ORB-26501] A run-bound tool is served only to the dispatch stamp Orbit
+/// writes for a managed run. An operator's `--toolset tool:<name>` names it
+/// to no effect, while that stamp still lists it.
+#[test]
+fn operator_toolset_grant_does_not_serve_a_run_bound_tool() {
+    let advertised = orbit_types::tool::mcp_advertised_tool_name("orbit.memory.show");
+    let workspace = McpWorkspace::init();
+
+    let mut operator = workspace.serve_with_args(&["--toolset", "tool:orbit.memory.show"]);
+    let operator_list = operator.tools_list();
+    assert!(
+        !tool_names(&operator_list).contains(&advertised.as_str()),
+        "an operator's tool grant must not list the run-bound {advertised}"
+    );
+
+    let mut stamped = workspace.serve_with_args_and_env(
+        &[],
+        &[(
+            orbit_common::security::child_env::ACTIVITY_MCP_TOOLSETS_ENV,
+            "core,tool:orbit.memory.show",
+        )],
+    );
+    let stamped_list = stamped.tools_list();
+    assert!(
+        tool_names(&stamped_list).contains(&advertised.as_str()),
+        "a managed run's dispatch stamp must list {advertised}"
+    );
+}
+
+/// The builtin tools in the run-bound toolset, which no operator's `mcp serve`
+/// selection enables.
+fn run_bound_tool_names() -> BTreeSet<String> {
+    let mut registry = orbit_tools::ToolRegistry::new();
+    registry.register_builtins();
+    registry
+        .all_schemas()
+        .into_iter()
+        .map(|schema| schema.name)
+        .filter(|name| registry.is_run_bound(name))
+        .collect()
+}
+
 /// [ORB-12254 / ORB-14449] Audit the canonical surface: optional selectors must
 /// resolve without one; required selectors fail closed. Task reads route by ID.
 fn every_workspace_scoped_tool_behavior_matches_its_advertised_selector_requirement() {
@@ -2984,10 +3159,11 @@ fn every_workspace_scoped_tool_behavior_matches_its_advertised_selector_requirem
     // Global-scope tools never go through the session-selector gate at all;
     // only `WorkspaceRequired` tools carry the selector contract this test
     // checks.
-    for definition in definitions
-        .iter()
-        .filter(|definition| definition.scope == orbit_types::tool::McpToolScope::WorkspaceRequired)
-    {
+    let run_bound = run_bound_tool_names();
+    for definition in definitions.iter().filter(|definition| {
+        definition.scope == orbit_types::tool::McpToolScope::WorkspaceRequired
+            && !run_bound.contains(definition.schema.name.as_str())
+    }) {
         let name = definition.schema.name.as_str();
         let advertised_name = orbit_types::tool::mcp_advertised_tool_name(name);
         let advertised_tool = advertised
@@ -3292,6 +3468,25 @@ fn mcp_serve_round_trips_records_against_a_temp_workspace() {
     assert_eq!(shown["crew"], "sol");
     assert_eq!(shown["orchestrator"], "sol");
     assert_eq!(shown["job_run_id"], "jrun-mcp-projection");
+    let identity = shown["workspace"].clone();
+    assert!(identity["id"].is_string() && identity["name"].is_string());
+    assert_eq!(
+        client.call_tool_ok(
+            "orbit_task_show",
+            json!({"id": task_id, "fields": ["workspace"]})
+        ),
+        json!({"workspace": identity})
+    );
+    let updated = client.call_tool_ok(
+        "orbit_task_update",
+        json!({"id": task_id, "priority": "medium", "fields": ["workspace"]}),
+    );
+    assert_eq!(updated["workspace"], identity);
+    let added_workspace = client.call_tool_ok(
+        "orbit_task_add",
+        json!({"title": "Workspace projection", "description": "Projection regression", "complexity": "low", "fields": ["workspace"]}),
+    );
+    assert_eq!(added_workspace["workspace"], identity);
     for (input, expected) in [
         (
             json!({ "id": task_id, "fields": ["crew", "orchestrator"] }),

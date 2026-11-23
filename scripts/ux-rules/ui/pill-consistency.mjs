@@ -9,7 +9,7 @@
 // candidate: it is compared only inside a group that holds a true pill, so a
 // square-cornered badge among round pills fails on border-radius. The
 // markup is not consulted, so a `span.chip`, an `a.chip` and a
-// `.delivery-attention-badge` are all pills when they look like one.
+// `span.pill` are all pills when they look like one.
 //
 // Filter chips are a different kind and are never candidates: a pill that is a
 // button, a form control, a tab/radio/switch/option, carries `aria-pressed`,

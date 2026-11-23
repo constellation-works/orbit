@@ -1,7 +1,7 @@
 ---
 title: Resident Orchestrator — Design
 owner: claude
-last_updated: 2026-11-15
+last_updated: 2026-11-22
 last_validated: 2026-11-08
 status: Draft
 feature: resident-orchestrator
@@ -11,7 +11,7 @@ summary: "Roles, mandate and authority, resident lifecycle and fires, the bounde
 tags: [resident-orchestrator]
 paths: ["crates/orbit-core/src/application/resident/**", "crates/orbit-core/assets/jobs/**", "crates/orbit-core/assets/activities/**", "crates/orbit-types/src/workflow/automation/members.rs", "crates/orbit-types/src/task/decision/request/**"]
 related_features: [routines, condition-triggers, activity-job, human-decision-channel, operator-attention, fleet-notices, mid-run-steering, decision-assistance, granted-tools]
-related_artifacts: [ORB-21229, ORB-21263]
+related_artifacts: [ORB-21229, ORB-21263, ORB-26833]
 ---
 
 # Resident Orchestrator — Design
@@ -87,11 +87,18 @@ not the prompt.
 
 - **Rights.** `dispatch` (start or requeue leaf runs and drains), `promote` (move a `proposed` task
   to `backlog`, where the drain can admit it), `merge` (land a reviewed PR), `plugin_upgrade`
-  (install or upgrade a workspace plugin). Task-pilot assessment is a separate gate: it can assess
-  eligible `proposed` or `backlog` tasks. Reading, commenting, filing `proposed` tasks and friction,
-  and checkpointing need no right. Anything not listed (releases, tags, publishing, host changes,
-  config edits, secrets) is not grantable to a resident in v1.
-- **Scope.** A list of covered workspaces. A tool call naming another workspace is refused.
+  (install or upgrade a workspace plugin), `refresh` (merge the base tip into a held or review
+  delivery PR and start its required checks, when the merge is conflict-free), and `recover`
+  (start a review-only recovery of a stopped delivery's preserved candidate). Task-pilot assessment
+  is a separate gate: it can assess
+  eligible `proposed` or `backlog` tasks. Reading, commenting, filing `proposed` tasks, filing
+  friction records in the mandate's own workspace, updating friction records in any covered
+  workspace (without moving them via `rehome_to`), and checkpointing need no right. Anything not
+  listed (releases, tags, publishing, host changes, config edits, secrets) is not grantable to a
+  resident in v1.
+- **Scope.** A list of covered workspaces. A tool call naming a workspace outside the list is
+  refused. Friction updates and delivery recovery may also write in another covered workspace on
+  the same host; every other write stays in the mandate's own workspace.
 - **Enforcement.** The cycle's tool grant is computed from the authority at cycle start and frozen
   for the cycle, like a dispatched attempt's [granted tools](../granted-tools/1_scope.md). A right the
   mandate lacks is a tool the cycle cannot call; a workspace outside scope fails the call in core.
@@ -118,6 +125,27 @@ not the prompt.
   ([4_decisions.md](./4_decisions.md#narrowing-is-free-widening-needs-the-human)).
 - **What always goes to the human.** Product scope, architecture, security, material cost, and
   anything beyond the mandate. [§8](#8-escalation) lists the classes.
+
+### 3.1 Recover a preserved delivery
+
+With `recover`, the cycle calls `orbit.task.recover` action `resume_delivery` for a blocked
+task and its exact stopped, failed or held delivery run. The host authenticates the published
+candidate, records the cycle's action key, and admits a separate recovery leaf. The leaf
+continues the preserved changes on the current base and updates the same PR through Orbit's
+ordinary publication gates. It runs current candidate validation and review, and returns the
+task for handoff. The cycle acts through Orbit tools from a read-only checkout. The recovery
+leaf makes all source changes. Landing a changed head still requires `land` under `merge`,
+with review evidence and branch protection checks current on that head.
+
+The operator retains decision answers, claim recovery, review resets and reconciliation, handoff
+retry and revocation, and general source-repair submission and reconciliation. An open
+final-recovery request permits recovery only when every offered answer is explicitly routine or
+reversible and the request requires no separate human action. Other open requests, unknown risk
+and irreversible options hold recovery. Starting a leaf never records a decision answer.
+
+A cycle can attempt one recovery. A task can reserve one resident recovery per rolling 24 hours
+across all mandates. Each reservation permits at most 120 minutes of agent slot time, using one
+shared deadline from admission. The task's usual source-repair and review budgets still apply.
 
 ## 4. Lifecycle
 
@@ -424,11 +452,13 @@ left `started` is refused as `resident_action_in_doubt` for the agent to check b
   resident when the pipeline blocks the task or files a repair task it watches.
 - Info notices and a notice's edits that keep its status do not wake (§7 says any notice change
   does); they still reach the brief.
-- Writes from a resident run that this workspace's runtime does not hold (a cycle run in another
-  catalog workspace) are refused as `resident_scope_refused`: cross-workspace writes through another
-  workspace's MCP server are not supported in this slice.
-- `plugin_upgrade` maps to no builtin tool yet; `orbit.task.update` with `approve` or `force`,
-  `orbit.notice.close` and `orbit.resident.grant` are refused to a cycle.
+- Writes other than `orbit.friction` action `update` from a resident run that this workspace's runtime does not hold (a cycle run in another
+  catalog workspace) are refused as `resident_scope_refused`: cross-workspace task writes through another
+  workspace's MCP server are not supported in this slice. `orbit.friction` action `update` in a covered workspace on the same host records its action ledger row on the mandate's home workspace, while updates carrying `rehome_to` or `move` are refused as `resident_tool_refused`.
+- `plugin_upgrade` maps to no builtin tool yet; `orbit.task.update` with `approve` or `force`
+  and `orbit.resident.grant` are refused to a cycle. `orbit.notice.close` is admitted only for
+  notices posted by the mandate's own cycles in its own workspace; a cycle cannot post a
+  `maintenance` notice, so it cannot close the notice that narrows its authority.
 - The heartbeat counts from the last cycle start, not the last checkpoint, so a cycle that never
   checkpoints still cannot fire faster than the heartbeat.
 
@@ -473,7 +503,7 @@ only):
 
 | View action | Route | Mechanism |
 |---|---|---|
-| List mandates, ended ones included, with state, stalled flag, effective rights and workspaces, deadline, open requests, live cycle and latest checkpoint | `GET /api/residents?all=true` | Batched core card read `list_resident_mandate_cards`: what `orbit.resident.show` reports, plus `goal`, `open_decisions` and `cycle_authority`, in one bundle read per mandate and one notice scan |
+| List mandates, ended ones included, with state, stalled flag, effective rights and workspaces, deadline, open requests, live cycle and latest checkpoint | `GET /api/residents?all=true` | Batched core card read `list_resident_mandate_cards`: what `orbit.resident.show` reports, with the checkpoint time moved to `latest_checkpoint.at` (below), including `ended_at` from the ending stop or terminal status event (null when unknown), plus `goal`, `open_decisions` and `cycle_authority`, in one bundle read per mandate and one notice scan |
 | Show one mandate, with its grant and narrow history and the latest checkpoint's wake digest | `GET /api/residents/{id}` | `orbit.resident.show` |
 | Create a mandate | `POST /api/residents` | One action: the `resident`-tagged assignment and its `resident/mandate.json`. The draft is checked first by the rule every mandate read applies (the `resident.mandate/v1` parser plus a configured crew), and a refused draft returns that message and writes nothing |
 | Widen | `POST /api/residents/{id}/grant` with rights or workspaces to add and a quote | The request-and-answer of [§3](#3-authority), recorded `via: decision:<id>` |
@@ -483,15 +513,13 @@ only):
 | Relay a direction | `POST /api/residents/{id}/relay` | `orbit.resident.relay`, source `via: dashboard` |
 | Enable or disable the workspace's resident cycle routine | `POST /api/routines/toggle` | The existing routine toggle, audited like other operator toggles |
 
-`GET /api/residents` and `GET /api/residents/{id}` add two reads beside that show payload: `cycle_authority` is the grant recorded for the live cycle, or for the latest checkpoint's cycle when none is live, and `open_decisions` is every open decision on the mandate plus a checkpoint request that is still open on another task. `open_requests` remains the open `resident_authority` grants. An answer whose risk tier is `irreversible` confirms the chosen label and its consequence before `POST /api/decisions/{id}/answer`; cancelling sends no request. Other answers, including a `resident_authority` grant, still post on click.
+`GET /api/residents` and `GET /api/residents/{id}` add two reads beside that show payload: `cycle_authority` is the grant recorded for the live cycle, or for the latest checkpoint's cycle when none is live, and `open_decisions` is every open decision on the mandate plus a checkpoint request that is still open on another task. `open_requests` remains the open `resident_authority` grants. Both HTTP reads also move the checkpoint comment time: `orbit.resident.show` and `orbit resident show --json` keep it top-level as `latest_checkpoint_at`, while the GET reads put it at `latest_checkpoint.at` (the persisted time of the latest checkpoint comment, not the cycle id's minute) and drop the top-level field. With no checkpoint, `latest_checkpoint` is null and has no `at`; the parsed `latest_checkpoint` record is otherwise unchanged ([checkpoint contract](specs/checkpoint-contract.md#implemented-write-and-read-boundary)). An answer whose risk tier is `irreversible` confirms the chosen label and its consequence before `POST /api/decisions/{id}/answer`; cancelling sends no request. Other answers, including a `resident_authority` grant, still post on click.
 
 The dashboard runs the tools with its own session envelope (Agent, plus Operator when served
 `--operator`), never the terminal it was started from. So the tools' own authority rules apply
 unchanged.
 
-The start flow opens in a dialog so it fits the dock at phone widths. Legacy
-`#operations/residents` links open Tasks with that dock tab selected. The tab
-counts non-ended mandates, omitting the count at zero.
+The dock keeps one compact card per live resident: its one-line ellipsised goal, status pill, task id, crew, deadline, next wake, last checkpoint time, and its warning line when present. Ended mandates stay behind the `Ended (N)` disclosure and collapse to one row each (goal, `ended`, task id, and when it stopped). Each card has a `Details` button that opens a wide native modal `<dialog>` (`#resident-detail-dialog`) holding the full mandate state — Status (the full-status grid, status line, open requests and controls), Current authority (effective rights, workspaces, effect, and the widen/narrow form), Latest checkpoint (actions, decisions, costs, requests, and notes), and History (exit criteria and authority history) — with all existing controls and gating unchanged. Opening a resident's details sets `#tasks/residents/<task-id>` so reload, Back/Forward and pasted links reopen that dialog; closing via `Esc` or the `esc` close button returns to `#tasks/residents` and restores focus to the card's `Details` button, and following a task link inside the dialog closes it and navigates. Background refreshes keep an open dialog open, preserve each `detailsPanel` disclosure's open state, and keep its scroll position. Both the details dialog and the start flow (`#resident-start-dialog`) fill the viewport at phone widths. Legacy `#operations/residents` links normalize in place to `#tasks/residents`. The tab counts non-ended mandates, omitting the count at zero.
 
 The start flow offers the assessed complexity tiers `low`, `medium`, `hard` and `xhard`;
 the API validates the submitted tier. Repeating a widening whose rights and workspaces are
@@ -902,5 +930,6 @@ Slices 1–9 have landed (slice 3 as [§5.1](#51-slice-3-as-implemented) describ
 - [ORB-21642] — fixed `orbit resident metrics --baseline` failing on a baseline task in another workspace
 - [ORB-22844] — removed the evolution pass routine, job and proposal filing; the ledger and manager digest stay
 - [ORB-25105] — wake only on changes the mandate acts on, honour the planned next wake, default the floor to the heartbeat
+- [ORB-26833] — let resident cycles update friction records in covered workspaces without a right and without `rehome_to`
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

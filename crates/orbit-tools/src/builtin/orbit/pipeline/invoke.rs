@@ -21,27 +21,36 @@ impl Tool for OrbitPipelineInvokeTool {
         let mut parameters = vec![
             ToolParam {
                 name: "job_name".to_string(),
-                description: "Registered v2 job name to invoke.".to_string(),
+                description: "Registered v2 job name.".to_string(),
                 param_type: "string".to_string(),
                 required: true,
             },
             ToolParam {
                 name: "input".to_string(),
-                description: "Required unless default_input:true: JSON object forwarded as the run input payload.".to_string(),
+                description: "Input object (unless `default_input`).".to_string(),
                 param_type: "object".to_string(),
                 required: false,
             },
             ToolParam {
                 name: "priority".to_string(),
-                description: "Optional queue priority (`low`, `medium`, `high`, or `critical`)."
-                    .to_string(),
+                description: "low|medium|high|critical".to_string(),
                 param_type: "string".to_string(),
                 required: false,
             },
         ];
         parameters.extend([
-            crate::tool::tool_param("workspace", "Explicit workspace required for default-input catalog submission", "string", false),
-            crate::tool::tool_param("default_input", "True submits an enabled, no-input catalog job with its defaults. Requires trusted operator authority and forbids managed-run invocation, input and priority. After a lost reply inspect runs; never automatically replay.", "boolean", false),
+            crate::tool::tool_param(
+                "workspace",
+                orbit_common::governance::tool_schema::WORKSPACE_SELECTOR_DESCRIPTION,
+                "string",
+                false,
+            ),
+            crate::tool::tool_param(
+                "default_input",
+                "Run no-input catalog job (operator; no input).",
+                "boolean",
+                false,
+            ),
         ]);
 
         ToolSchema {

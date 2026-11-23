@@ -1791,11 +1791,21 @@ def candidate_source(repo: Path, excluded_paths=()):
             untracked.append((path, *untracked_entry_identity(repo / path)))
         except FileNotFoundError:
             continue  # removed since listing: no longer part of the candidate
+    changed_paths = list(dict.fromkeys([path for code, path, _ in entries if code != "??"]
+                                       + [path for path, *_ in untracked]))
     material = json.dumps({"head": head, "diff": hashlib.sha256(diff).hexdigest(),
                            "untracked": untracked}, sort_keys=True).encode()
     return {"head": head, "diff_sha256": hashlib.sha256(diff).hexdigest(),
             "untracked": untracked, "candidate_id": hashlib.sha256(material).hexdigest(),
             "status": status_lines, "changed_paths": changed_paths}
+
+
+def changed_file_hashes(repo, candidate):
+    return {
+        path: untracked_entry_identity(repo / path)[1]
+        for path in candidate["changed_paths"]
+        if (repo / path).is_symlink() or (repo / path).is_file()
+    }
 
 
 def execute_retired_case_commands(scenario, *, repo, env, candidate_id, excluded_paths):
@@ -2270,6 +2280,38 @@ def redacted_install_line(line: str) -> str:
     return line[:_INSTALL_LINE_CHARS]
 
 
+_INSTALL_NOTICE = re.compile(r"(?i)^(?:SKIP:|DEFERRED:|skipping\b)")
+
+
+def redacted_install_output(text: str) -> str:
+    """Redact every line of raw npm output, keeping a capability notice's prefix.
+
+    A notice whose line is replaced whole still opens with its `SKIP:`,
+    `DEFERRED:` or `skipping` marker, so classification survives the redaction
+    while no URL, address or credential-bearing text does."""
+    lines = []
+    for line in text.splitlines():
+        if not line.strip():
+            continue
+        redacted = redacted_install_line(line)
+        notice = _INSTALL_NOTICE.match(line)
+        if notice and not _INSTALL_NOTICE.match(redacted):
+            redacted = f"{notice.group(0)} {redacted}"
+        lines.append(redacted)
+    return "\n".join(lines)
+
+
+def redact_install_evidence(install: dict) -> dict:
+    """Apply the install redactor to the record in place, before any projection.
+
+    The same dict is held by the local-command cleanup registry, so redacting
+    here also covers `scratch_cleanup.unverified_commands`. Command identity,
+    status and cleanup truth are untouched."""
+    for field in ("stdout", "stderr"):
+        install[field] = redacted_install_output(install.get(field) or "")
+    return install
+
+
 def install_last_progress(cache: Path, finished: float):
     """Describe the newest npm debug log: when it last advanced and its redacted tail."""
     try:
@@ -2293,9 +2335,12 @@ def install_last_progress(cache: Path, finished: float):
 def install_record(install: dict, cache: Path, duration_seconds: float, timeout_seconds: int):
     """Project one `npm ci` run into bounded, redacted report fields.
 
-    The raw output stays on the in-memory record for classification; the report
-    gets the attribution (duration, timeout, outcome), the capability notices read
-    from that output, and redacted tails of its stdout, stderr and debug log.
+    The caller has already redacted `install` in place (`redact_install_evidence`),
+    so its stdout and stderr hold only redacted lines and raw output is not kept on
+    the in-memory record. The report gets the attribution (duration, timeout,
+    outcome), the capability notices read from that redacted output (their
+    `SKIP:`, `DEFERRED:` and `skipping` prefixes survive redaction), and redacted
+    tails of its stdout, stderr and debug log.
     """
     def tail(text: str):
         return [redacted_install_line(line) for line in text.splitlines() if line.strip()][-_INSTALL_TAIL_LINES:]
@@ -2325,8 +2370,8 @@ def website_build_evidence(repo: Path, temp: Path, env: dict, command, install_t
     website_env = {**env, "npm_config_cache": str(root / "npm-cache"),
                    "ASTRO_TELEMETRY_DISABLED": "1"}
     started = time.monotonic()
-    install = observe_local_command(run(["npm", "--prefix", "website", "ci"],
-                                        cwd=root, env=website_env, timeout=install_timeout))
+    install = redact_install_evidence(observe_local_command(
+        run(["npm", "--prefix", "website", "ci"], cwd=root, env=website_env, timeout=install_timeout)))
     preparation = install_record(install, root / "npm-cache", time.monotonic() - started, install_timeout)
     if preparation["outcome"] == "PASS":
         evidence = observe_local_command(run(command, cwd=root, env=website_env, timeout=1800))
@@ -3064,7 +3109,8 @@ try:
     deadline = time.monotonic() + float(ready_seconds)
     while answer is None and web.poll() is None and time.monotonic() < deadline:
         try:
-            health = urllib.request.urlopen(base + "/healthz", timeout=1).read().decode()
+            with urllib.request.urlopen(base + "/healthz", timeout=1) as reply:
+                health = {"status": reply.status, "body": reply.read().decode()}
             workspaces = json.loads(urllib.request.urlopen(base + "/api/workspaces", timeout=1).read())
             tasks = json.loads(urllib.request.urlopen(base + "/api/tasks", timeout=1).read())
             answer = {"health": health, "workspaces": workspaces, "tasks": tasks}
@@ -3081,6 +3127,35 @@ print("qa-dashboard-responses: " + json.dumps(answer), flush=True)
 raise SystemExit(0 if answer is not None else 1)
 """
 _DASHBOARD_READY_SECONDS = 20
+
+
+def check_dashboard_answer(answer, work, task_id, home=None):
+    """Judge each dashboard response against its own contract.
+
+    Readiness is a 200 whose body is exactly `ok`. The workspace listing is an
+    array of rows and one row's `root` is the bound checkout, as the server
+    renders it (home-abbreviated to `~`). The task listing is an envelope whose
+    `items` holds a row with the persisted task ID. An identifier that appears
+    only in some other field earns nothing."""
+    health = answer.get("health")
+    if not isinstance(health, dict) or health.get("status") != 200 or health.get("body") != "ok":
+        raise ValueError("dashboard /healthz is not a 200 ready response")
+    accepted = {str(work)}
+    if home:
+        home_path = Path(home).resolve()
+        if work == home_path:
+            accepted.add("~")
+        elif home_path in work.parents:
+            accepted.add(f"~/{work.relative_to(home_path)}")
+    workspaces = answer.get("workspaces")
+    if (not isinstance(workspaces, list)
+            or not any(isinstance(row, dict) and row.get("root") in accepted for row in workspaces)):
+        raise ValueError("workspace API has no row rooted at the bound checkout")
+    tasks = answer.get("tasks")
+    items = tasks.get("items") if isinstance(tasks, dict) else None
+    if (not isinstance(items, list)
+            or not any(isinstance(row, dict) and row.get("id") == task_id for row in items)):
+        raise ValueError("task API has no row for the persisted task")
 
 
 def dashboard_api_boundary(orbit_bin, root, work, env, task_id, candidate_id, *, port=None):
@@ -3113,9 +3188,7 @@ def dashboard_api_boundary(orbit_bin, root, work, env, task_id, candidate_id, *,
         answer = json.loads(marked[-1].split(": ", 1)[1]) if marked else None
         if not isinstance(answer, dict):
             raise ValueError("dashboard did not become ready")
-        combined = json.dumps(answer)
-        if str(Path(work).resolve()) not in combined or task_id not in combined:
-            raise ValueError("API responses do not identify the fixture workspace and task")
+        check_dashboard_answer(answer, Path(work).resolve(), task_id, env.get("HOME"))
     except (ValueError, json.JSONDecodeError) as error:
         failure = str(error)
     return finalize_result(evidence, web_assertions, candidate_id, failure)
@@ -4698,15 +4771,27 @@ def self_test():
             git_identity = ["-c", "user.name=qa-full-sweep", "-c", "user.email=qa@example.invalid",
                             "-c", "commit.gpgsign=false"]
             (path_repo / "old.md").write_text("moved\n", encoding="utf-8")
-            for git_args in (["init", "-q"], ["add", "old.md"],
+            (path_repo / "tracked-link").symlink_to("old.md")
+            for git_args in (["init", "-q"], ["add", "old.md", "tracked-link"],
                              [*git_identity, "commit", "-q", "-m", "fixture"],
                              ["mv", "old.md", "renamed.md"]):
                 subprocess.run(["git", "-C", str(path_repo), *git_args],
                                check=True, capture_output=True, text=True)
             (path_repo / "with space.md").write_text("spaced\n", encoding="utf-8")
             (path_repo / "café.md").write_text("accented\n", encoding="utf-8")
-            changed = set(candidate_source(path_repo)["changed_paths"])
-            if changed != {"renamed.md", "with space.md", "café.md"}:
+            (path_repo / "new").mkdir()
+            (path_repo / "new/leaf.md").write_text("leaf\n")
+            (path_repo / "link.md").symlink_to("missing-target")
+            (path_repo / "tracked-link").unlink()
+            (path_repo / "tracked-link").symlink_to("renamed.md")
+            source = candidate_source(path_repo)
+            changed = set(source["changed_paths"])
+            hashes = changed_file_hashes(path_repo, source)
+            identities = {path: digest for path, _, digest in source["untracked"]}
+            if (hashes.get("link.md") != identities["link.md"] or "new/leaf.md" not in hashes
+                    or hashes.get("tracked-link") != hashlib.sha256(b"renamed.md").hexdigest()):
+                raise AssertionError(f"candidate changed file identities disagree: {hashes}")
+            if changed != {"renamed.md", "with space.md", "café.md", "new/leaf.md", "link.md", "tracked-link"}:
                 raise AssertionError(f"candidate changed paths drop quoted or renamed files: {sorted(changed)}")
 
         # Exercise the shell boundary too: python3 is a capture fixture, so no
@@ -5280,10 +5365,7 @@ def main():
                             "outcome":"NOT_RUN", "assertions":[], "candidate_id":candidate_id})
     full_pass, decision_failures = scenario_decision(inventory, results, candidate_id)
     full_pass = full_pass and not errors
-    changed_hashes = {
-        path: hashlib.sha256((repo / path).read_bytes()).hexdigest()
-        for path in candidate["changed_paths"] if (repo / path).is_file()
-    }
+    changed_hashes = changed_file_hashes(repo, candidate)
     report = {
         "schema_version": 2, "generated_at": datetime.now(timezone.utc).isoformat(),
         "candidate": {"id":candidate_id, "source_revision":candidate["head"]},

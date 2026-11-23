@@ -19,6 +19,8 @@ use std::{
     time::{Duration, Instant},
 };
 
+const CI_BRANCH_RUN_LIMIT: usize = 100;
+
 struct CachedRuns {
     fetched_at: Instant,
     base_branch: String,
@@ -113,7 +115,7 @@ fn call_provider(
                 let listed = runtime
                     .run_tool_command_with_session(
                         "github.run.list",
-                        json!({"branch": branch, "limit": 100}),
+                        json!({"branch": branch, "limit": CI_BRANCH_RUN_LIMIT}),
                         None,
                         None,
                         session,
@@ -165,6 +167,124 @@ fn build_repair_lookup(
         }
     }
     lookup
+}
+
+/// A run's timestamp from `primary`, falling back to `secondary`, else the
+/// epoch so an undated run never outranks a dated one.
+fn run_time(run: &Value, primary: &str, secondary: &str) -> DateTime<Utc> {
+    parse_time(&run[primary])
+        .or_else(|| parse_time(&run[secondary]))
+        .unwrap_or(DateTime::<Utc>::UNIX_EPOCH)
+}
+
+/// A run's per-workflow sequence number (`run_number`), defaulting to `0`
+/// when absent so unnumbered runs do not outrank numbered ones.
+fn run_number(run: &Value) -> u64 {
+    run["run_number"]
+        .as_u64()
+        .or_else(|| run["run_number"].as_str().and_then(|s| s.parse().ok()))
+        .unwrap_or(0)
+}
+
+/// The operator-facing workflow name: the display name, else the run id.
+fn workflow_label(run: &Value) -> String {
+    let workflow = value_string(&run["workflow"]);
+    if workflow.is_empty() {
+        value_string(&run["run_id"])
+    } else {
+        workflow
+    }
+}
+
+/// The run that decides each workflow's CI state on the base branch, keyed
+/// by the provider's workflow id (else the workflow name, else the run id).
+///
+/// A workflow with a completed run on the current base head is decided by
+/// its newest such run (by `updated_at`, then `run_number`). A workflow
+/// whose only runs on the current head are still pending is decided by its
+/// newest completed run on the base branch (by `created_at` push order,
+/// then `run_number`, then `updated_at`), whatever head it ran on: a base
+/// that keeps landing always has a pending run on its newest head, and a
+/// red result must not vanish behind it, while a newer green completion
+/// still clears it. A workflow with no run on the current head is not
+/// decided: an older head's result alone is not current.
+fn newest_red_candidates(
+    runs: &[Value],
+    base_branch: &str,
+    head_sha: &str,
+) -> (BTreeMap<String, Value>, Vec<(String, String)>) {
+    // A run number belongs to its underlying workflow, and distinct workflows
+    // can share a display name, so the provider's workflow id (when it gives
+    // one) is the identity; the display name is the fallback. Each source has
+    // its own prefix, so a display name can never spell another workflow's
+    // key: a workflow named `id:7` is not workflow id 7.
+    let workflow_key = |run: &Value| {
+        let workflow_id = value_string(&run["workflow_id"]);
+        if !workflow_id.is_empty() {
+            return format!("id:{workflow_id}");
+        }
+        let workflow = value_string(&run["workflow"]);
+        if workflow.is_empty() {
+            format!("run:{}", value_string(&run["run_id"]))
+        } else {
+            format!("name:{workflow}")
+        }
+    };
+    let head_order = |run: &Value| (run_time(run, "updated_at", "created_at"), run_number(run));
+    let branch_order = |run: &Value| {
+        (
+            run_time(run, "created_at", "updated_at"),
+            run_number(run),
+            run_time(run, "updated_at", "created_at"),
+        )
+    };
+    let mut on_head: BTreeMap<String, Value> = BTreeMap::new();
+    let mut pending_on_head: BTreeMap<String, String> = BTreeMap::new();
+    let mut on_branch: BTreeMap<String, Value> = BTreeMap::new();
+    for run in runs {
+        if value_string(&run["head_branch"]) != base_branch {
+            continue;
+        }
+        let reported = value_string(&run["reported_head_sha"]);
+        let current = !reported.is_empty() && reported == head_sha;
+        let status = value_string(&run["status"]);
+        let key = workflow_key(run);
+        if status != "completed" {
+            if current && !status.is_empty() {
+                pending_on_head.insert(key, workflow_label(run));
+            }
+            continue;
+        }
+        if value_string(&run["conclusion"]).is_empty() {
+            continue;
+        }
+        if current {
+            let newer = on_head
+                .get(&key)
+                .is_none_or(|existing| head_order(run) > head_order(existing));
+            if newer {
+                on_head.insert(key.clone(), run.clone());
+            }
+        }
+        let newer = on_branch
+            .get(&key)
+            .is_none_or(|existing| branch_order(run) > branch_order(existing));
+        if newer {
+            on_branch.insert(key, run.clone());
+        }
+    }
+    let mut missing_history = Vec::new();
+    for (key, label) in pending_on_head {
+        if on_head.contains_key(&key) {
+            continue;
+        }
+        if let Some(run) = on_branch.remove(&key) {
+            on_head.insert(key, run);
+        } else if runs.len() >= CI_BRANCH_RUN_LIMIT {
+            missing_history.push((key, label));
+        }
+    }
+    (on_head, missing_history)
 }
 
 pub(super) fn read_ci_attention(
@@ -270,49 +390,19 @@ pub(super) fn read_ci_attention(
             }
         }
     };
-    // Freshness: only runs on the current base-branch head count. Pending
-    // or unknown observations are neither green nor evidence that an older
-    // red head is current.
-    let mut newest_by_workflow: BTreeMap<String, Value> = BTreeMap::new();
-    for run in &runs {
-        if value_string(&run["head_branch"]) != base_branch {
-            continue;
-        }
-        if !head_sha.is_empty() {
-            let reported = value_string(&run["reported_head_sha"]);
-            if reported.is_empty() || reported != head_sha {
-                continue;
-            }
-        }
-        if value_string(&run["status"]) != "completed" {
-            continue;
-        }
-        let conclusion = value_string(&run["conclusion"]);
-        if conclusion.is_empty() {
-            continue;
-        }
-        let workflow = value_string(&run["workflow"]);
-        let key = if workflow.is_empty() {
-            value_string(&run["run_id"])
-        } else {
-            workflow.clone()
-        };
-        let run_time = parse_time(&run["updated_at"])
-            .or_else(|| parse_time(&run["created_at"]))
-            .unwrap_or(DateTime::<Utc>::UNIX_EPOCH);
-        match newest_by_workflow.get(&key) {
-            Some(existing) => {
-                let existing_time = parse_time(&existing["updated_at"])
-                    .or_else(|| parse_time(&existing["created_at"]))
-                    .unwrap_or(DateTime::<Utc>::UNIX_EPOCH);
-                if run_time > existing_time {
-                    newest_by_workflow.insert(key, run.clone());
-                }
-            }
-            None => {
-                newest_by_workflow.insert(key, run.clone());
-            }
-        }
+    let (newest_by_workflow, missing_history) =
+        newest_red_candidates(&runs, &base_branch, &head_sha);
+    for (workflow_key, workflow) in missing_history {
+        let mut entry = workspace_degraded(
+            workspace,
+            AttentionKind::CiRed.as_str(),
+            "source_unavailable",
+            format!(
+                "CI workflow {workflow} is pending; its latest completed result may be outside the branch run listing"
+            ),
+        );
+        entry.subject = Some(workflow_key);
+        candidates.degraded.push(entry);
     }
     // A pending task commit makes the repair-task association
     // unavailable: history reads would settle it. The CI evidence itself
@@ -336,9 +426,14 @@ pub(super) fn read_ci_attention(
         }
         let run_id = value_string(&run["run_id"]);
         // `since` is the failing run's `updated_at`, the nearest
-        // completion-time proxy the provider projection supplies.
-        let Some(since) = parse_time(&run["updated_at"]).or_else(|| parse_time(&run["created_at"]))
-        else {
+        // completion-time proxy the provider projection supplies. When that
+        // is unusable it falls back to `created_at`, and `since_source`
+        // reports the field actually used.
+        let (since, since_source) = if let Some(time) = parse_time(&run["updated_at"]) {
+            (time, "updated_at")
+        } else if let Some(time) = parse_time(&run["created_at"]) {
+            (time, "created_at")
+        } else {
             continue;
         };
         let age = (now - since).num_seconds().max(0) as u64;
@@ -348,11 +443,7 @@ pub(super) fn read_ci_attention(
         } else {
             AttentionSeverity::High
         };
-        let workflow = if workflow_key.is_empty() {
-            run_id.clone()
-        } else {
-            workflow_key.clone()
-        };
+        let workflow = workflow_label(&run);
         let repair = if run_id.is_empty() || pending_commit.is_some() {
             None
         } else {
@@ -408,7 +499,7 @@ pub(super) fn read_ci_attention(
                 AttentionKind::CiRed,
                 &host.machine_id,
                 &workspace.id,
-                &json!(workflow),
+                &json!(workflow_key),
             ),
             kind: AttentionKind::CiRed,
             severity,
@@ -425,8 +516,9 @@ pub(super) fn read_ci_attention(
                 "conclusion": conclusion,
                 "branch": base_branch,
                 "reported_head_sha": value_string(&run["reported_head_sha"]),
+                "base_head_sha": head_sha,
                 "url": run["url"],
-                "since_source": "updated_at",
+                "since_source": since_source,
                 "since_is_proxy": true,
             }),
             next,

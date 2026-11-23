@@ -167,8 +167,12 @@ fn run_single_pass_drain(
         )
         .expect("the replica submits its pull drain");
     let run_id = submitted.run_id;
-    // These fixtures test outcomes, not poll cadence. The real workers and
-    // settlement path remain; zero intervals skip only idle sleep activities.
+    // These fixtures test outcomes, not poll cadence: an idle owner ends the
+    // pass at once. A pass that waits on a leaf still sleeps one second.
+    // The drain loop counts passes, not time, and stops after its
+    // `max_iterations` (6000) as a success. With no poll sleep, a loaded host
+    // ran those passes before a slow leaf worker exited, so the drain ended
+    // with a claim unsettled [ORB-27064].
     let store = pair.follower.sqlite_store().unwrap();
     let workspace = pair.follower.workspace_id().unwrap();
     store
@@ -177,7 +181,7 @@ fn run_single_pass_drain(
                 .connection()
                 .execute(
                     "UPDATE job_runs SET input_json = json_set(input_json, \
-                     '$.poll_sleep_seconds', 0, '$.idle_sleep_seconds', 0) \
+                     '$.poll_sleep_seconds', 1, '$.idle_sleep_seconds', 0) \
                      WHERE workspace_id = ?1 AND run_id = ?2",
                     [workspace.as_str(), run_id.as_str()],
                 )
@@ -191,6 +195,13 @@ fn run_single_pass_drain(
     let executed = follower.execute_pipeline_run_worker(&run_id);
     std::fs::write(root.join(format!("started-{run_id}")), "").unwrap();
     executed.expect("the drain runs to its end");
+    let state = pair.follower.read_run_state(&run_id).unwrap().unwrap();
+    assert_eq!(
+        state.pipeline["drain"]["broke"], true,
+        "the drain must end on a pass that reports done, not by running out of \
+         iterations with claims unsettled [ORB-27064]: {}",
+        state.pipeline["drain"]
+    );
     run_id
 }
 

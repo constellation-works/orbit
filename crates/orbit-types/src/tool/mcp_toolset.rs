@@ -29,22 +29,28 @@ pub enum McpToolset {
     TasksRead,
     /// Task, artifact and friction writes.
     TasksWrite,
-    /// Delivery repair verbs (requeue, review reset, handoff recovery, …).
+    /// Delivery repair verbs (`orbit.task.recover`: requeue, review reset,
+    /// handoff recovery, …).
     TaskRepair,
+    /// Pilot-warning triage (`orbit.task.block_triage`).
+    TaskTriage,
     /// Decision requests: list, show and raise.
     Decisions,
     /// Workflow run reads.
     Runs,
-    /// Workflow dispatch: ship, auto, resume and pipeline invocation.
+    /// Workflow dispatch: ship, land, auto, refresh and run resume.
     Dispatch,
-    /// Auto-tasks, routines and the condition-trigger explain.
+    /// Direct catalog pipeline invocation (`orbit.pipeline.invoke`).
+    Pipelines,
+    /// Routine status and enablement controls (`orbit.routine.control`).
+    Routines,
+    /// Auto-task definitions and condition-trigger explain.
     Automation,
     /// Codebase analytics reads.
     Codebase,
     /// Lexical search over tasks and frictions.
     Search,
-    /// UI tools. Empty since `orbit.visual.capture` was removed
-    /// [ORB-22807]; kept so a server or role that names `ui` still loads.
+    /// UI presentation entrypoints (`orbit_ui`).
     Ui,
     /// Command execution.
     Exec,
@@ -67,6 +73,12 @@ pub enum McpToolset {
     /// Tools no MCP server advertises: `orbit tool run` and managed
     /// activities reach them. Naming it in a selection advertises nothing.
     Local,
+    /// Tools only a managed run that may call them is served: a server
+    /// advertises one only when its dispatch stamp names it (`tool:<name>`,
+    /// see [`McpToolsetSelection::with_stamped_names`]). No toolset name,
+    /// role, `all` or operator `tool:` entry enables it, so it is not in
+    /// [`Self::ALL`].
+    RunBound,
 }
 
 impl McpToolset {
@@ -88,14 +100,17 @@ impl McpToolset {
     }
 
     /// Every toolset, in declaration order.
-    pub const ALL: [Self; 20] = [
+    pub const ALL: [Self; 23] = [
         Self::Core,
         Self::TasksRead,
         Self::TasksWrite,
         Self::TaskRepair,
+        Self::TaskTriage,
         Self::Decisions,
         Self::Runs,
         Self::Dispatch,
+        Self::Pipelines,
+        Self::Routines,
         Self::Automation,
         Self::Codebase,
         Self::Search,
@@ -117,15 +132,15 @@ impl McpToolset {
 
     /// Every name a `machine.mcp.toolsets` entry takes: each toolset's
     /// name in [`Self::ALL`] order, then `all` and `default` [ORB-22809].
-    pub const SELECTION_NAMES: [&'static str; 22] = {
-        let mut names = [""; 22];
+    pub const SELECTION_NAMES: [&'static str; 25] = {
+        let mut names = [""; 25];
         let mut index = 0;
         while index < Self::ALL.len() {
             names[index] = Self::ALL[index].as_str();
             index += 1;
         }
-        names[20] = "all";
-        names[21] = "default";
+        names[23] = "all";
+        names[24] = "default";
         names
     };
 
@@ -136,9 +151,12 @@ impl McpToolset {
             Self::TasksRead => "tasks-read",
             Self::TasksWrite => "tasks-write",
             Self::TaskRepair => "task-repair",
+            Self::TaskTriage => "task-triage",
             Self::Decisions => "decisions",
             Self::Runs => "runs",
             Self::Dispatch => "dispatch",
+            Self::Pipelines => "pipelines",
+            Self::Routines => "routines",
             Self::Automation => "automation",
             Self::Codebase => "codebase",
             Self::Search => "search",
@@ -152,6 +170,7 @@ impl McpToolset {
             Self::Notice => "notice",
             Self::Resident => "resident",
             Self::Local => "local",
+            Self::RunBound => "run-bound",
         }
     }
 
@@ -268,10 +287,8 @@ impl McpRole {
                 T::Decisions,
                 T::Runs,
                 T::Dispatch,
-                T::Automation,
-                T::Codebase,
+                T::Routines,
                 T::Search,
-                T::Ui,
                 T::Exec,
                 T::Plugins,
             ],
@@ -288,6 +305,7 @@ impl McpRole {
                 T::TasksWrite,
                 T::Runs,
                 T::Dispatch,
+                T::Pipelines,
                 T::Decisions,
                 T::Notice,
                 T::Resident,
@@ -349,6 +367,9 @@ pub struct McpToolsetSelection {
     enabled: BTreeSet<McpToolset>,
     role: Option<McpRole>,
     explicit_tools: BTreeSet<String>,
+    /// Run-bound tools a dispatch stamp named ([`Self::with_stamped_names`]).
+    /// Only these serve a [`McpToolset::RunBound`] definition.
+    run_bound_tools: BTreeSet<String>,
 }
 
 impl Default for McpToolsetSelection {
@@ -367,6 +388,7 @@ impl McpToolsetSelection {
                 .collect(),
             role: None,
             explicit_tools: BTreeSet::new(),
+            run_bound_tools: BTreeSet::new(),
         }
     }
 
@@ -376,6 +398,7 @@ impl McpToolsetSelection {
             enabled: McpToolset::ALL.into_iter().collect(),
             role: None,
             explicit_tools: BTreeSet::new(),
+            run_bound_tools: BTreeSet::new(),
         }
     }
 
@@ -387,6 +410,7 @@ impl McpToolsetSelection {
             enabled,
             role: Some(role),
             explicit_tools: BTreeSet::new(),
+            run_bound_tools: BTreeSet::new(),
         }
     }
 
@@ -423,12 +447,34 @@ impl McpToolsetSelection {
         Ok(self)
     }
 
+    /// [`Self::with_names`] for the dispatch stamp Orbit writes for a managed
+    /// run. Its `tool:` entries also name the run-bound tools that run may
+    /// call, which no operator-written selection can name.
+    pub fn with_stamped_names<'a>(
+        mut self,
+        names: impl IntoIterator<Item = &'a str>,
+    ) -> Result<Self, McpToolsetError> {
+        let names: Vec<&str> = names.into_iter().collect();
+        for name in &names {
+            if let Some(tool) = name
+                .trim()
+                .strip_prefix("tool:")
+                .filter(|tool| !tool.is_empty())
+            {
+                self.run_bound_tools.insert(tool.to_string());
+            }
+        }
+        self.with_names(names)
+    }
+
     /// This selection with every toolset `other` enables added. The role is
     /// kept.
     pub fn union(mut self, other: &Self) -> Self {
         self.enabled.extend(other.enabled.iter().copied());
         self.explicit_tools
             .extend(other.explicit_tools.iter().cloned());
+        self.run_bound_tools
+            .extend(other.run_bound_tools.iter().cloned());
         self
     }
 
@@ -438,7 +484,11 @@ impl McpToolsetSelection {
     }
 
     /// Whether a named definition is included by its toolset or an explicit grant.
+    /// A [`McpToolset::RunBound`] definition only when a dispatch stamp named it.
     pub fn enables_tool(&self, toolset: McpToolset, name: &str) -> bool {
+        if toolset == McpToolset::RunBound {
+            return self.run_bound_tools.contains(name);
+        }
         self.enables(toolset) || self.grants_tool(name)
     }
 
@@ -446,6 +496,9 @@ impl McpToolsetSelection {
     /// actions' toolsets is enabled, or a grant names it or one of its
     /// actions (`tool:orbit.decision:list`).
     pub fn enables_definition(&self, rules: &McpToolRules, name: &str) -> bool {
+        if rules.toolset == McpToolset::RunBound {
+            return self.enables_tool(rules.toolset, name);
+        }
         self.enables_tool(rules.toolset, name)
             || rules
                 .action_toolsets
@@ -478,13 +531,6 @@ impl McpToolsetSelection {
                     .strip_suffix('*')
                     .is_some_and(|prefix| name.starts_with(prefix))
             })
-    }
-
-    /// Whether every toolset is enabled, so nothing is withheld.
-    pub fn enables_all(&self) -> bool {
-        McpToolset::ALL
-            .into_iter()
-            .all(|toolset| self.enables(toolset))
     }
 
     /// The role this selection serves, when one was configured.

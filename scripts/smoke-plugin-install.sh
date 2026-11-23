@@ -32,12 +32,26 @@ for relative in ("plugin/plugin.json", "plugin/.codex-plugin/plugin.json"):
     payload["version"] = "not-semver"
     path.write_text(json.dumps(payload), encoding="utf-8")
 PY
-if "$repo_root/scripts/validate-codex-plugin.sh" "$invalid_root" >/dev/null 2>&1; then
+# A non-zero status alone is not the refusal: a validator that crashes
+# (traceback, missing support file) must not count as the not-semver rejection.
+codex_refusal="$scratch_root/codex-refusal"
+if "$repo_root/scripts/validate-codex-plugin.sh" "$invalid_root" >"$codex_refusal" 2>&1; then
   echo "smoke-plugin-install: invalid plugin candidate was not refused by the Codex validator" >&2
   exit 1
 fi
-if "$repo_root/scripts/validate-agent-plugin.sh" "$invalid_root" >/dev/null 2>&1; then
+if ! grep -F -q -e "plugin.json.version must use strict semver" "$codex_refusal"; then
+  echo "smoke-plugin-install: Codex validator did not report the not-semver version refusal" >&2
+  cat "$codex_refusal" >&2
+  exit 1
+fi
+agent_refusal="$scratch_root/agent-refusal"
+if "$repo_root/scripts/validate-agent-plugin.sh" "$invalid_root" >"$agent_refusal" 2>&1; then
   echo "smoke-plugin-install: invalid plugin candidate was not refused by the Agent Plugins validator" >&2
+  exit 1
+fi
+if ! grep -F -q -e "plugin/plugin.json.version must use strict semver" "$agent_refusal"; then
+  echo "smoke-plugin-install: Agent Plugins validator did not report the not-semver version refusal" >&2
+  cat "$agent_refusal" >&2
   exit 1
 fi
 echo "smoke-plugin-install: plugin-invalid-install-is-refused: invalid plugin candidate refused by plugin validators"

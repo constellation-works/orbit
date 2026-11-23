@@ -294,6 +294,7 @@ const ADMITTED_SUBCOMMANDS: &[&str] = &[
     "fetch",
     "for-each-ref",
     "init",
+    "log",
     "ls-tree",
     "ls-remote",
     "merge-base",
@@ -307,7 +308,13 @@ const ADMITTED_SUBCOMMANDS: &[&str] = &[
 
 /// Long options that hand Git a program to execute. Git accepts any unique
 /// prefix of a long option, so a prefix of these is refused too.
-const PROGRAM_OPTIONS: &[&str] = &["upload-pack", "receive-pack", "exec"];
+const PROGRAM_OPTIONS: &[&str] = &[
+    "upload-pack",
+    "receive-pack",
+    "exec",
+    "ext-diff",
+    "textconv",
+];
 
 /// Admit an argv for `git` before it reaches the process boundary.
 ///
@@ -405,21 +412,12 @@ pub fn run_git(workspace_path: &Path, args: &[&str]) -> Result<GitCommandOutput,
     run_git_within(workspace_path, args, GIT_LOCAL_TIMEOUT)
 }
 
-/// [`run_git`] with an explicit `deadline`.
-///
-/// Git runs in its own process group with [`GIT_OUTPUT_LIMIT`] of each stream
-/// kept, and never prompts on a terminal. When `deadline` elapses the group is
-/// killed and the error is [`OrbitError::ProcessTimeout`] naming the argv and
-/// the workspace: a timeout is never an exit status, so a caller cannot read
-/// it as Git's answer.
-/// Children use the C locale without `LANGUAGE` so stderr classification is
-/// stable, and discard inherited `GIT_DIR` and `GIT_CONFIG*` overrides. Callers
-/// select repositories and admitted configuration explicitly through argv.
-pub fn run_git_within(
-    workspace_path: &Path,
-    args: &[&str],
-    deadline: Duration,
-) -> Result<GitCommandOutput, OrbitError> {
+/// Build a sanitized `git` [`Command`] rooted at `workspace_path` after
+/// validating `args` through the same argv admission rules as [`run_git`].
+/// The child runs under the C locale without `LANGUAGE`, so stderr
+/// classification is stable, never prompts (`GIT_TERMINAL_PROMPT=0`), and has
+/// inherited `GIT_DIR` and `GIT_CONFIG*` overrides removed.
+pub fn git_command(workspace_path: &Path, args: &[&str]) -> Result<Command, OrbitError> {
     let admitted = admitted_git_args(args)?;
     let mut command = Command::new("git");
     command
@@ -436,6 +434,25 @@ pub fn run_git_within(
             command.env_remove(name);
         }
     }
+    Ok(command)
+}
+
+/// [`run_git`] with an explicit `deadline`.
+///
+/// Git runs in its own process group with [`GIT_OUTPUT_LIMIT`] of each stream
+/// kept, and never prompts on a terminal. When `deadline` elapses the group is
+/// killed and the error is [`OrbitError::ProcessTimeout`] naming the argv and
+/// the workspace: a timeout is never an exit status, so a caller cannot read
+/// it as Git's answer.
+/// Children use the C locale without `LANGUAGE` so stderr classification is
+/// stable, and discard inherited `GIT_DIR` and `GIT_CONFIG*` overrides. Callers
+/// select repositories and admitted configuration explicitly through argv.
+pub fn run_git_within(
+    workspace_path: &Path,
+    args: &[&str],
+    deadline: Duration,
+) -> Result<GitCommandOutput, OrbitError> {
+    let mut command = git_command(workspace_path, args)?;
     let output =
         run_bounded_capped(&mut command, deadline, GIT_OUTPUT_LIMIT).map_err(
             |error| match error {

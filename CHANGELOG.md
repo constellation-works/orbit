@@ -2,6 +2,38 @@
 
 ## Unreleased
 
+## 0.54.0 — 2026-11-23
+
+### Breaking Changes
+
+- **orbit.search refuses unknown keys**: `orbit_search` now rejects undeclared input keys with a did-you-mean hint. ([ORB-26985])
+  `orbit_search` undeclared keys removed → use declared parameters (`q` → `query`)
+- **Source repair binding gains `candidate_ref`**: A landing review's own fix commit is no longer lost when the verdict is not accept, and the `SourceRepairBinding` record now carries `candidate_ref`. ([ORB-27226])
+  Older binaries refuse a binding a newer one wrote → update every host together
+
+### Highlights
+
+- **Global dashboard search**: Dashboard search finds tasks and run IDs across every workspace from any page. ([ORB-27329])
+- **Held PRs refresh to base**: Delivery refreshes a held PR to its base tip when its failure is inherited from the base, and a new `refresh` resident right lets a resident do the same and re-run checks. ([ORB-26860])
+- **Residents do more**: A resident cycle can read drain status and update friction records in its covered workspaces. ([ORB-26833])
+- **Friendlier task writes**: `orbit.task.add` accepts `dependencies` in the same write, id-keyed task tools accept `task_id` as an unadvertised alias for `id`, and a missing `file:` selector under an existing directory is recorded as creation intent with a warning. ([ORB-26984])
+- **Clearer search and task output**: Multi-word `orbit search` zero-hit results carry a note on how matching works, and `orbit task show` prints readiness. ([ORB-26665])
+
+## 0.53.0 — 2026-11-22
+
+### Breaking Changes
+
+- **Crew memory surface removed**: The `orbit memory` CLI, the `orbit.memory.*` tool listing and grants, the `crew_memory.enabled` key and the dashboard's Knowledge › Memory page are gone. Crew memory now runs only under an experiment with a memory arm. ([ORB-26501])
+  `orbit memory` and `crew_memory.enabled` removed → run crew memory through an experiment's memory arm
+
+### Highlights
+
+- **Jobs opens on Running**: Jobs folds its Live subtab into History, whose state filter now reads Running, All and Failed with Running selected. History and Catalogue are the two subtabs. ([ORB-26506])
+- **One tool-failures card**: Audit › Tools shows tool-call failures in one card with By tool and By model tabs, and the MCP vs CLI split is gone. ([ORB-26507])
+- **Tab-specific Metrics panels**: Each Analytics › Metrics trend tab shows its own panels. Turns to first edit adds a turns-by-provider comparison, also returned as `provider_summary` in its API. ([ORB-26290])
+- **Faster resident list**: The Tasks dock's resident list now reads in under 500 ms on a live-sized store. ([ORB-26324])
+- **Reproducible perf timing**: `scripts/perf` checks in a paired timing protocol: a frozen store snapshot, a locked base and candidate build, and interleaved timed rounds. Paired runs share one perf lane per host, and each fixture reset re-copies only the files that changed. ([ORB-26322])
+
 ## 0.52.0 — 2026-11-21
 
 ### Breaking Changes

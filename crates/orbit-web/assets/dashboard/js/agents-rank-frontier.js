@@ -117,7 +117,7 @@ function chartCard(chart, minCoverage) {
     ? plotWrap(chart, label)
     : el("p", { class: "agents-rank-note", text: `No ranked model on ${label} has both a tier score and a recorded cost to plot.` });
   if (chart.plot.length) body.tabIndex = 0;
-  return el("div", { class: "agents-rank-box agents-rank-chart" }, [
+  return el("div", { class: "card agents-rank-box agents-rank-chart" }, [
     el("div", { class: "agents-rank-box-head" }, [
       el("h4", { text: `${label} tier · ${rankFormat.plural(chart.plot.length, "model")} plotted` }),
       el("span", { class: "agents-rank-box-meta", text: "Cost axis is logarithmic · $ per task at list price" }),
@@ -273,6 +273,25 @@ function scatterPlot(chart, width, host) {
   });
   const labels = placeLabels(items, { left: left + 4, right: width - 4, top: top + 8, bottom: height - bottom - 8, fixed });
   const tip = tooltipNode(width, height, family);
+  // Hover and keyboard focus own the shared tooltip independently (STD-07 §R34):
+  // ending pointer hover restores any still-focused point, blur retains any
+  // hovered point, and Escape hides the tooltip.
+  let hovered = null;
+  let focused = null;
+  let visible = null;
+  const showEntry = (entry) => {
+    visible = entry;
+    tip.show(entry.lines, entry.x, entry.y);
+  };
+  const hideTip = () => {
+    visible = null;
+    tip.hide();
+  };
+  const endSource = (ended, remaining) => {
+    if (visible !== ended) return;
+    if (remaining) showEntry(remaining);
+    else hideTip();
+  };
   for (const { point, name, x, y, ly, flip } of labels) {
     const group = svgEl("g", {
       class: `agents-rank-point${point.frontier ? " is-frontier" : ""}${point.underpriced ? " is-underpriced" : ""}`,
@@ -294,14 +313,39 @@ function scatterPlot(chart, width, host) {
       { text: rankFormat.plural(point.tasks || 0, "task") },
       ...(partialCoverage(point) ? [{ text: `${rankFormat.num(point.cost_coverage * 100, 0)}% of tasks priced` }] : []),
     ];
-    const open = () => tip.show(lines, x, y);
-    group.addEventListener("mouseenter", open);
-    group.addEventListener("mouseleave", tip.hide);
-    group.addEventListener("focus", open);
-    group.addEventListener("blur", tip.hide);
-    group.addEventListener("keydown", (event) => { if (event.key === "Escape") tip.hide(); });
+    const entry = { lines, x, y };
+    group.addEventListener("mouseenter", () => {
+      hovered = entry;
+      showEntry(entry);
+    });
+    group.addEventListener("mouseleave", () => {
+      if (hovered === entry) hovered = null;
+      endSource(entry, focused);
+    });
+    group.addEventListener("focus", () => {
+      focused = entry;
+      showEntry(entry);
+    });
+    group.addEventListener("blur", () => {
+      if (focused === entry) focused = null;
+      endSource(entry, hovered);
+    });
+    group.addEventListener("keydown", (event) => {
+      if (event.key === "Escape" && visible) {
+        event.preventDefault();
+        event.stopPropagation();
+        hideTip();
+      }
+    });
     svg.append(group);
   }
+  svg.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && visible) {
+      event.preventDefault();
+      event.stopPropagation();
+      hideTip();
+    }
+  });
   svg.append(tip.node);
   return svg;
 }
@@ -396,7 +440,7 @@ function tierTable(chart) {
     const name = el("span", { class: "agents-rank-model" }, [
       rankFormat.providerDot(point.model),
       el("span", { class: "agents-rank-model-name", text: point.model || "—", title: point.model || "" }),
-      point.frontier ? el("span", { class: "agents-rank-badge", text: "FRONTIER" }) : null,
+      point.frontier ? el("span", { class: "badge", "data-tone": "accent", text: "FRONTIER" }) : null,
     ]);
     const tr = el("tr", { class: point.underpriced ? "is-underpriced" : "" }, [
       el("td", {}, [name]),
@@ -412,7 +456,7 @@ function tierTable(chart) {
     return tr;
   });
   const skipped = groupSkipped(chart.skipped);
-  return el("aside", { class: "agents-rank-box agents-rank-tier-table", "aria-label": `${label} tier table` }, [
+  return el("aside", { class: "card agents-rank-box agents-rank-tier-table", "aria-label": `${label} tier table` }, [
     el("h4", { text: `${label} tier, by tier score` }),
     el("div", { class: "agents-table-wrap" }, [
       el("table", { class: "agents-table" }, [

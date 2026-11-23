@@ -518,6 +518,314 @@ mod task_route {
             "{down}"
         );
     }
+
+    #[test]
+    fn task_id_alias_canonicalizes_to_id_and_refuses_conflict() {
+        let (host, log) = routed(None);
+
+        let remote = call(
+            &host,
+            "orbit.task.update",
+            json!({"task_id": "OWN-7", "comment": "hi"}),
+        )
+        .expect("remote prefix delivered via task_id");
+        let local =
+            call(&host, "orbit.task.show", json!({"task_id": "LB-3"})).expect("local prefix");
+        let artifact = call(
+            &host,
+            "orbit.task.artifact",
+            json!({"action": "get", "task_id": "OWN-7", "path": "a.txt"}),
+        )
+        .expect("artifact get via task_id");
+        let workspace_routed = call(
+            &host,
+            "orbit.task.show",
+            json!({"workspace": format!("{OWNER_MACHINE}/ws_orbit"), "task_id": "OWN-7"}),
+        )
+        .expect("workspace-selected call canonicalizes task_id to id");
+        let non_aliased = call(
+            &host,
+            "orbit.task.eligible",
+            json!({"workspace": format!("{OWNER_MACHINE}/ws_orbit"), "task_id": "OWN-7"}),
+        )
+        .expect("non-aliased tool keeps task_id unchanged");
+
+        assert_eq!(remote["id"], "OWN-7");
+        assert!(remote.get("task_id").is_none(), "{remote}");
+        assert_eq!(local["id"], "LB-3");
+        assert!(local.get("task_id").is_none(), "{local}");
+        assert_eq!(artifact["id"], "OWN-7");
+        assert!(artifact.get("task_id").is_none(), "{artifact}");
+        assert_eq!(workspace_routed["id"], "OWN-7");
+        assert!(
+            workspace_routed.get("task_id").is_none(),
+            "{workspace_routed}"
+        );
+        assert_eq!(non_aliased["task_id"], "OWN-7");
+        assert!(non_aliased.get("id").is_none(), "{non_aliased}");
+        assert_eq!(
+            log.calls(),
+            vec![
+                (
+                    OWNER_MACHINE.to_string(),
+                    "orbit.task.update".to_string(),
+                    json!({"id": "OWN-7", "comment": "hi"}),
+                ),
+                (
+                    LOCAL_MACHINE.to_string(),
+                    "orbit.task.show".to_string(),
+                    json!({"id": "LB-3"}),
+                ),
+                (
+                    OWNER_MACHINE.to_string(),
+                    "orbit.task.artifact".to_string(),
+                    json!({"action": "get", "id": "OWN-7", "path": "a.txt"}),
+                ),
+                (
+                    OWNER_MACHINE.to_string(),
+                    "orbit.task.show".to_string(),
+                    json!({"workspace": "ws_orbit", "id": "OWN-7"}),
+                ),
+                (
+                    OWNER_MACHINE.to_string(),
+                    "orbit.task.eligible".to_string(),
+                    json!({"workspace": "ws_orbit", "task_id": "OWN-7"}),
+                ),
+            ]
+        );
+
+        let calls_before = log.calls().len();
+        for conflicting in [
+            json!({"id": "OWN-7", "task_id": "LB-3"}),
+            json!({"id": "OWN-7", "task_id": "OWN-7"}),
+            json!({"workspace": format!("{OWNER_MACHINE}/ws_orbit"), "id": "OWN-7", "task_id": "OWN-7"}),
+        ] {
+            let error = call(&host, "orbit.task.show", conflicting.clone())
+                .expect_err("conflicting id and task_id must be refused");
+            let message = error.to_string();
+            assert!(
+                message.contains("id") && message.contains("task_id"),
+                "conflict refusal must name both `id` and `task_id` for {conflicting}: {message}"
+            );
+        }
+        assert_eq!(
+            log.calls().len(),
+            calls_before,
+            "conflicting id and task_id must not dispatch to a destination"
+        );
+    }
+
+    #[test]
+    fn id_only_owner_serves_federated_task_reads_for_id_and_task_id() {
+        use std::sync::Mutex;
+
+        use orbit_mcp::federated::{DestinationProbe, RoutedSession};
+        use orbit_tools::OwnerCoordinator;
+        use orbit_types::task::ExecutionLocation;
+        use orbit_types::tool::{WorkerInvocation, mcp_advertised_tool_name};
+
+        struct IdOnlyOwnerProbe {
+            snapshot: DestinationSnapshot,
+            calls: Arc<Mutex<Vec<(String, Value)>>>,
+        }
+
+        struct IdOnlyOwnerSession {
+            snapshot: DestinationSnapshot,
+            calls: Arc<Mutex<Vec<(String, Value)>>>,
+        }
+
+        impl DestinationProbe for IdOnlyOwnerProbe {
+            fn probe(&self, _destination: &Destination) -> Result<DestinationSnapshot, OrbitError> {
+                Ok(self.snapshot.clone())
+            }
+
+            fn open_route(
+                &self,
+                _destination: &Destination,
+            ) -> Result<Box<dyn RoutedSession>, OrbitError> {
+                Ok(Box::new(IdOnlyOwnerSession {
+                    snapshot: self.snapshot.clone(),
+                    calls: Arc::clone(&self.calls),
+                }))
+            }
+        }
+
+        impl RoutedSession for IdOnlyOwnerSession {
+            fn snapshot(&mut self) -> Result<DestinationSnapshot, OrbitError> {
+                Ok(self.snapshot.clone())
+            }
+
+            fn advertised_tools(&mut self) -> Result<Vec<String>, OrbitError> {
+                Ok(orbit_mcp::canonical_mcp_tool_definitions()
+                    .expect("canonical tools")
+                    .into_iter()
+                    .map(|definition| mcp_advertised_tool_name(&definition.schema.name))
+                    .collect())
+            }
+
+            fn supports_tool_argument(
+                &mut self,
+                name: &str,
+                argument: &str,
+            ) -> Result<bool, OrbitError> {
+                Ok(orbit_mcp::canonical_mcp_tool_definitions()
+                    .expect("canonical tools")
+                    .into_iter()
+                    .any(|definition| {
+                        definition.schema.name == name
+                            && definition
+                                .schema
+                                .parameters
+                                .iter()
+                                .any(|parameter| parameter.name == argument)
+                    }))
+            }
+
+            fn call_tool(
+                &mut self,
+                name: &str,
+                arguments: Value,
+                _session_context: ToolSessionContext,
+            ) -> Result<Value, OrbitError> {
+                self.calls
+                    .lock()
+                    .expect("calls")
+                    .push((name.to_string(), arguments.clone()));
+                if arguments.get("task_id").is_some() {
+                    return Err(OrbitError::InvalidInput(
+                        "unknown parameter `task_id` on preceding id-only owner".into(),
+                    ));
+                }
+                let id = arguments
+                    .get("id")
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .filter(|id| !id.is_empty())
+                    .ok_or_else(|| {
+                        OrbitError::InvalidInput("missing required parameter `id`".into())
+                    })?;
+                Ok(json!({ "id": id, "title": "Owner task", "status": "backlog" }))
+            }
+        }
+
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let probe = IdOnlyOwnerProbe {
+            snapshot: snapshot(OWNER_MACHINE, &[("ws_orbit", "orbit")]),
+            calls: Arc::clone(&calls),
+        };
+        let host =
+            FederatedMcpHost::new(vec![destination("owner", OWNER_MACHINE)], Arc::new(probe))
+                .with_task_prefix_routing(TaskPrefixTable::new(
+                    None,
+                    vec![entry("owner", OWNER_MACHINE, "OWN")],
+                ));
+
+        // 1. Operator tools/list remains unchanged (never advertises `task_id`).
+        let definitions = host
+            .list_mcp_tool_definitions()
+            .expect("operator tools/list");
+        for definition in &definitions {
+            if definition.schema.name.starts_with("orbit.task.") {
+                assert!(
+                    definition
+                        .schema
+                        .parameters
+                        .iter()
+                        .all(|param| param.name != "task_id"),
+                    "{} must not advertise `task_id`",
+                    definition.schema.name
+                );
+            }
+        }
+
+        // 2. Prefix-routed reads succeed with either `id` or `task_id`.
+        let by_id = call(&host, "orbit.task.show", json!({"id": "OWN-7"}))
+            .expect("id spelling on id-only owner");
+        let by_alias = call(&host, "orbit.task.show", json!({"task_id": "OWN-7"}))
+            .expect("task_id spelling on id-only owner");
+        assert_eq!(by_id, by_alias);
+        assert_eq!(by_alias["id"], "OWN-7");
+
+        // 3. Explicit workspace selector reads succeed with `task_id`.
+        let by_selector = call(
+            &host,
+            "orbit.task.show",
+            json!({"workspace": format!("{OWNER_MACHINE}/ws_orbit"), "task_id": "OWN-7"}),
+        )
+        .expect("workspace-qualified task_id on id-only owner");
+        assert_eq!(by_selector, by_id);
+
+        // 4. Worker owner route (`OwnerCoordinator`) also canonicalizes `task_id`.
+        let worker_session = ToolSessionContext {
+            worker_invocation: Some(WorkerInvocation {
+                owner_machine_id: OWNER_MACHINE.to_string(),
+                owner_workspace_id: "ws_orbit".to_string(),
+                owner_destination: format!("{OWNER_MACHINE}/ws_orbit"),
+                task_id: "OWN-7".to_string(),
+                claim_id: "claim-1".to_string(),
+                execution: ExecutionLocation {
+                    machine_id: REPLICA_MACHINE.to_string(),
+                    machine_name: None,
+                },
+                bound_run_id: "run-1".to_string(),
+            }),
+            ..ToolSessionContext::default()
+        };
+        let by_worker = OwnerCoordinator::call(
+            &host,
+            "orbit.task.show",
+            json!({"workspace": format!("{OWNER_MACHINE}/ws_orbit"), "task_id": "OWN-7"}),
+            worker_session.clone(),
+        )
+        .expect("owner coordinator canonicalizes task_id");
+        assert_eq!(by_worker, by_id);
+
+        assert_eq!(
+            *calls.lock().expect("calls"),
+            vec![
+                ("orbit.task.show".to_string(), json!({"id": "OWN-7"})),
+                ("orbit.task.show".to_string(), json!({"id": "OWN-7"})),
+                (
+                    "orbit.task.show".to_string(),
+                    json!({"workspace": "ws_orbit", "id": "OWN-7"}),
+                ),
+                (
+                    "orbit.task.show".to_string(),
+                    json!({"workspace": "ws_orbit", "id": "OWN-7"}),
+                ),
+            ]
+        );
+
+        // 5. Conflicting pair is rejected before dispatch on both routes.
+        let calls_before = calls.lock().expect("calls").len();
+        let conflict = call(
+            &host,
+            "orbit.task.show",
+            json!({"id": "OWN-7", "task_id": "OWN-8"}),
+        )
+        .expect_err("conflicting pair must fail");
+        assert!(
+            conflict.to_string().contains("id") && conflict.to_string().contains("task_id"),
+            "{conflict}"
+        );
+        let worker_conflict = OwnerCoordinator::call(
+            &host,
+            "orbit.task.show",
+            json!({"workspace": format!("{OWNER_MACHINE}/ws_orbit"), "id": "OWN-7", "task_id": "OWN-7"}),
+            worker_session,
+        )
+        .expect_err("conflicting pair on owner route must fail");
+        assert!(
+            worker_conflict.to_string().contains("id")
+                && worker_conflict.to_string().contains("task_id"),
+            "{worker_conflict}"
+        );
+        assert_eq!(
+            calls.lock().expect("calls").len(),
+            calls_before,
+            "conflicting pair must not dispatch"
+        );
+    }
 }
 
 mod notice_aggregation {

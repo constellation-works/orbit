@@ -242,7 +242,7 @@ impl OrbitRuntime {
         let now = chrono::Utc::now();
         let cycle_routine_disabled = self.resident_cycle_routine_disabled();
         let mut tasks: Vec<Task> = Vec::new();
-        for task in self.list_task_metadata()? {
+        for task in self.list_resident_task_metadata()? {
             if !task.tags.iter().any(|tag| tag == RESIDENT_TAG) {
                 continue;
             }
@@ -349,12 +349,20 @@ impl OrbitRuntime {
         Ok(mandates)
     }
 
+    /// The tasks tagged `resident`, newest first, selected from the task
+    /// index by tag. On a large workspace the full metadata listing was
+    /// most of a resident list read (ORB-26324), and only the mandates are
+    /// needed. Callers still keep only the exact tag.
+    fn list_resident_task_metadata(&self) -> Result<Vec<Task>, OrbitError> {
+        self.list_task_metadata_with_any_tag(&BTreeSet::from([RESIDENT_TAG.to_string()]))
+    }
+
     /// `orbit.resident.list`: every task tagged `resident`, ended ones only
     /// with `include_ended`.
     pub fn list_resident_mandates(&self, include_ended: bool) -> Result<Value, OrbitError> {
         let cycle_routine_disabled = self.resident_cycle_routine_disabled();
         let mut rows = Vec::new();
-        for task in self.list_task_metadata()? {
+        for task in self.list_resident_task_metadata()? {
             if !task.tags.iter().any(|tag| tag == RESIDENT_TAG) {
                 continue;
             }
@@ -396,6 +404,39 @@ impl OrbitRuntime {
     }
 }
 
+// The first ending event in the current terminal spell is the stop time.
+// A later archive of an already stopped mandate does not stop it again.
+fn resident_ended_at(
+    view: &ResidentView,
+    history: &[TaskHistoryEntry],
+) -> Option<chrono::DateTime<chrono::Utc>> {
+    if view.state().0 != ResidentMandateState::Ended {
+        return None;
+    }
+    let stop_at = view.control.as_ref().ok().and_then(|control| {
+        control.last.as_ref().and_then(|(entry, at)| {
+            (entry.action == control::ResidentControlAction::Stop).then_some(*at)
+        })
+    });
+    let mut terminal_at = None;
+    for entry in history {
+        if let Some(to) = entry.to_status {
+            if resident_mandate_ended(to) {
+                if terminal_at.is_none() {
+                    terminal_at = Some(entry.at);
+                }
+            } else {
+                terminal_at = None;
+            }
+        }
+    }
+    match (stop_at, terminal_at) {
+        (Some(stop), Some(terminal)) => Some(stop.min(terminal)),
+        (Some(at), None) | (None, Some(at)) => Some(at),
+        (None, None) => None,
+    }
+}
+
 fn resident_show_json(
     view: &ResidentView,
     comments: &[TaskComment],
@@ -405,17 +446,19 @@ fn resident_show_json(
     status_line: Value,
     now: chrono::DateTime<chrono::Utc>,
 ) -> Result<Value, OrbitError> {
-    let latest_checkpoint =
-        comments.iter().rev().find_map(|comment| {
-            match ResidentComment::parse(&comment.message).ok()? {
-                record @ ResidentComment::Checkpoint(_)
-                    if record.mandate() == view.task.id.as_str() =>
-                {
-                    Some(view::to_json(&record))
-                }
-                _ => None,
+    let latest_checkpoint_pair = comments.iter().rev().find_map(|comment| {
+        match ResidentComment::parse(&comment.message).ok()? {
+            ResidentComment::Checkpoint(record) if record.mandate == view.task.id.as_str() => {
+                Some((
+                    view::to_json(&ResidentComment::Checkpoint(record)),
+                    comment.at,
+                ))
             }
-        });
+            _ => None,
+        }
+    });
+    let latest_checkpoint_at = latest_checkpoint_pair.as_ref().map(|(_, at)| at.to_owned());
+    let latest_checkpoint = latest_checkpoint_pair.map(|(checkpoint, _)| checkpoint);
     let live_cycle = cycle::live_cycle_from_history(history)?.filter(|live| live.expires_at > now);
     let (state, reason) = view.state();
     let mut value = json!({
@@ -428,9 +471,11 @@ fn resident_show_json(
         "title": view.task.title,
         "status": view.task.status,
         "latest_checkpoint": latest_checkpoint,
+        "latest_checkpoint_at": latest_checkpoint_at,
         "status_line": status_line,
         "live_cycle": live_cycle,
         "state": state,
+        "ended_at": resident_ended_at(view, history),
         "mandate": view.mandate.as_ref().ok().map(view::to_json),
         "effective_authority": view::to_json(&view.effective()),
         "authority": view.authority.as_ref().ok().map(view::to_json),

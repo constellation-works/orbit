@@ -1,8 +1,8 @@
 ---
 title: "Scope: conflict budget for footprint admission"
 owner: claude
-last_updated: 2026-11-07
-last_validated: 2026-11-07
+last_updated: 2026-11-22
+last_validated: 2026-11-21
 status: Draft
 stage: parked
 next: "Parked for free time (Daniel, 2026-11-02); on pickup settle open questions, file phase 1"
@@ -19,16 +19,26 @@ Bearing: admission holds a context lock for every declared `context_files` selec
 candidate on any overlap with a held claim, reservation or wave member
 (`footprints_block`, defined in [`lock_mode.rs`](../../../crates/orbit-common/src/fs/lock_mode.rs), is consulted by [`coordination/admission/footprint.rs`](../../../crates/orbit-store/src/repository/task/coordination/admission/footprint.rs),
 via the `overlaps` closure in `selection.rs`, and by `owner_wave.rs` and the runtime lock index;
-a footprint-less editing task was treated as a whole-tree lock in multi-slot drains by [ORB-15191]). Two settings already relax
-that per path: [`workflow.unlocked_context_paths`](../../CONFIG.md#unlocked-context-paths)
-(globs, default `["**/*.md"]`) takes no lock, and
+a footprint-less editing task was treated as a whole-tree lock in multi-slot drains by [ORB-15191]). Three settings already
+relax that per path: [`workflow.unlocked_context_paths`](../../CONFIG.md#unlocked-context-paths)
+takes no lock for a matching entry of a task that also declares a non-matching one, so the lock
+never blocks it on that path; a task whose every entry matches keeps them all locked, because two
+rewrites of one document are where a merge produces contradictory text (built-in default
+`["**/*.md"]`; init template value `["**/*.json", "**/*.txt", "**/*.md", "**/mod.rs", "**/*.toml"]`);
 [`workflow.generated_paths`](../../CONFIG.md#generated-paths-are-regenerated-not-merged)
-([ORB-16784]) regenerates a conflicting generated file at landing instead of merging it, and
+([ORB-16784]) regenerates a conflicting generated file at landing instead of merging it; and
 [`workflow.lock_modes`](../../CONFIG.md#footprint-lock-modes) ([ORB-18157], done) waives an
-overlap at a path whose mode is `shared`. A
-conflict that reaches landing is repaired by `pr_conflict_recovery`, whose crew comes from
-`workflow.purpose_crews.failure_recovery` ([ORB-15663]); ws_orbit draws it from
-`gemini-flash, haiku, luna, muse-spark`. This scope makes the lock a priced decision instead of a
+overlap at a path whose mode is `shared`. `unlocked_context_paths` filters the context lock only.
+A live execution claim in a footprint-protecting phase is a separate check: the work-start guard
+([ORB-23894]) compares a candidate's whole canonical context, unlocked paths included, with the
+claim's frozen footprint, and admission defers the candidate on that answer until the claim settles.
+That comparison takes only the lock-mode table, so a `shared` path is waived there too, while
+`unlocked_context_paths` and `generated_paths` do not waive it. Backlog discovery, classification,
+readiness, explicit selection and local drain admission all apply it. So a task that mixes a
+Markdown file with distinct code is still deferred by a claim on that Markdown file: `design.md`
+beside `queued.rs` takes no lock, yet a live claim holding `design.md` defers the task until it
+settles. A conflict that reaches landing is repaired by `pr_conflict_recovery`, whose crew comes from
+`workflow.purpose_crews.failure_recovery` ([ORB-15663]). This scope makes the lock a priced decision instead of a
 static allow-list.
 
 ## Problem
@@ -71,7 +81,9 @@ The operator sets how much expected conflict-repair work Orbit may take on to ru
 tasks together, and can set it higher during working hours than overnight. Admission admits an
 overlapping candidate when the expected repair cost of its overlaps, estimated per path from
 recorded history, fits that budget. With the budget at its default of zero, admission is exactly
-today's: every locked path is exclusive and `unlocked_context_paths` still takes no lock. Landing,
+today's: an overlap at a `shared` path (`workflow.lock_modes`) is waived as it is now, every other
+locked path is exclusive, and `unlocked_context_paths` still takes no lock for a matching entry
+beside a non-matching one. Landing,
 conflict recovery and review are unchanged; the budget changes only which work runs at the same
 time.
 
@@ -128,10 +140,14 @@ admit when overlap_risk(candidate) ≤ budget(now)
 ```
 
 `holders(path)` counts the tasks already holding it, because the k-th task to land on a busy
-path rebases against k−1 changes. Paths matching `unlocked_context_paths` keep taking no lock
-(`risk = 0`); paths matching `workflow.exclusive_context_paths` are never shared at any budget.
+path rebases against k−1 changes. A matching path keeps taking no lock (`risk = 0`) when its task
+also declares a non-matching selector; a task whose every selector matches keeps those paths
+locked, so they are priced like any other locked path. An overlap at a path whose
+`workflow.lock_modes` entry is `shared` is already waived today, so it is not in the overlap set:
+it adds no risk at any budget, and a zero budget admits it as before. Paths matching
+`workflow.exclusive_context_paths` are never shared at any budget.
 Owner pull admission applies the same rule, which also closes today's gap where it checks a
-claim's full footprint, unlocked paths included, against in-flight work.
+candidate's full declared context, unlocked paths included, against in-flight claims.
 
 Worked example, ws_orbit's eleven catalog tasks at a daytime budget of 15 and the default cap of
 4 holders, if neither shared file were unlocked:
@@ -167,7 +183,7 @@ be explained later.
 
 | Key | Default | Meaning |
 |---|---|---|
-| `workflow.conflict_budget` | `0` (or a `{default, windows}` table) | Expected repair cost, in recovery agent-minutes, that admission may take on per candidate by running it beside overlapping work. `0` keeps today's exclusive locks. |
+| `workflow.conflict_budget` | `0` (or a `{default, windows}` table) | Expected repair cost, in recovery agent-minutes, that admission may take on per candidate by running it beside overlapping work. `0` keeps today's admission: exclusive locks, with overlaps at `workflow.lock_modes` `shared` paths still waived. |
 | `workflow.exclusive_context_paths` | `[]` | Path globs (`unlocked_context_paths` syntax) that are never shared at any budget. |
 | `workflow.conflict_budget_max_holders` | `4` | Most tasks that may hold one path at once. |
 | `workflow.conflict_risk.window_days`, `.min_support`, `.priors` | `30`, `5`, per class | Scoring window, support needed before history replaces a class prior, and the priors; following the task riskiness model's window and support. |
@@ -264,12 +280,28 @@ parallelism that broke nothing.
 
 ## Phasing
 
-0. **Configuration only, today (ws_orbit).** Add `**/mod.rs` and
+0. **Configuration-only baseline (proposed for ws_orbit).** Add `**/mod.rs` and
    `crates/orbit-config/assets/default-config.toml` to `workflow.unlocked_context_paths`, and
    map `crates/orbit-core/assets/auto_tasks/body-history.json` to
-   `python3 scripts/update-auto-task-body-history.py` in `workflow.generated_paths`. This unblocks
-   the catalog tasks with no code change and is the baseline the later phases are measured
-   against.
+   `python3 scripts/update-auto-task-body-history.py` in `workflow.generated_paths`. This is the
+   baseline the later phases are measured against. The built-in `unlocked_context_paths` default is
+   `**/*.md`, so these additions alone leave `body-history.json` locked. The `orbit init` template
+   already includes `**/*.json`; a workspace without it must add a matching entry. Two settings do
+   different jobs, and these mixed-footprint catalog tasks need both:
+   - An unlock glob filters the ordinary context lock, for a task that also declares a non-matching
+     selector such as its own YAML file. It lets two such tasks that share `mod.rs` or
+     `body-history.json` pass ordinary context-lock admission together.
+   - An effective `shared` entry in `workflow.lock_modes` waives the overlap at that path for every
+     footprint check, including the live execution-claim guard ([ORB-23894]). An unlock glob does
+     not reach that guard. It compares the task's whole canonical context, unlocked paths included,
+     with the claim's frozen footprint, and decides overlap from the lock-mode table alone.
+   So while the first catalog task holds a protecting claim, a second one that shares
+   `body-history.json` and `mod.rs` with it stays deferred unless both paths have an effective
+   `shared` mode: `[[workflow.lock_modes]]` entries with `mode = "shared"` for `(^|/)mod\.rs$` and
+   `^crates/orbit-core/assets/auto_tasks/body-history\.json$`. Waiving only the JSON still leaves
+   `mod.rs` blocking the claimed case. `workflow.generated_paths` is a separate step and waives
+   neither lock: its command runs later, during landing recovery, to regenerate the file after a
+   rebase conflict. This configuration-only baseline makes no code change.
 1. **Record and show.** Conflict records on the owner for local runs and claimed leaves
    (Shape §1), the `orbit codebase show` conflict section, and wait minutes per path. Before
    anything is built on them, verify whether drain-wave deferrals are persisted; if they are not,

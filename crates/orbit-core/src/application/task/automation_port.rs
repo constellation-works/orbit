@@ -120,4 +120,12 @@ pub(in crate::application) trait TaskAutomationPort {
         &self,
         task_id: &str,
     ) -> Result<BTreeMap<String, Value>, OrbitError>;
+
+    /// Whether `task_id` owes an open (`Claimed` or `Admitted`) delivery
+    /// batch attempt in this workspace.
+    fn has_open_delivery_batch_attempt(&self, task_id: &str) -> Result<bool, OrbitError>;
+
+    /// Whether `run_id` is the local Orbit run owning `task` for coverage
+    /// evidence attribution.
+    fn is_task_own_orbit_run(&self, task: &Task, run_id: Option<&str>) -> Result<bool, OrbitError>;
 }

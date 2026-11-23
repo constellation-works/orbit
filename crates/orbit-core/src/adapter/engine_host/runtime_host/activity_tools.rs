@@ -153,7 +153,12 @@ pub(super) fn resolve_activity_tool_denials(
         requested_tools,
         effective_tools,
         omitted_requirement_notes,
-        granted_tools: grants.lifted.into_iter().collect(),
+        // A stored grant of a suppressed tool lifts nothing for this run.
+        granted_tools: grants
+            .lifted
+            .into_iter()
+            .filter(|tool| !suppressed_tools.contains(tool))
+            .collect(),
         suppressed_tools,
     })
 }

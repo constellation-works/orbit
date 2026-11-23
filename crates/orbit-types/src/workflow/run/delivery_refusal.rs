@@ -64,6 +64,10 @@ pub enum DeliveryRefusal {
     /// either repair explicitly or discard. The refusal message is unchanged.
     /// Integrity and authority refusals stay failures.
     SourceRepairDecision,
+    /// `worktree_setup` found an existing branch or registered checkout whose
+    /// tip does not match the freshly resolved base. Setup leaves the branch
+    /// and checkout untouched for operator inspection.
+    StaleBranch,
     /// A `verify-mock-ui` delivery's capture was not established. Visual
     /// review was removed [ORB-22807]: nothing raises this any more, and it
     /// stays so runs recorded before then still read their refusal.
@@ -99,6 +103,7 @@ impl DeliveryRefusal {
             Self::LandingRepairRequeue => "delivery_landing_repair_requeue",
             Self::ReviewBudgetExhausted => "review_budget_exhausted",
             Self::SourceRepairDecision => "delivery_source_repair_decision",
+            Self::StaleBranch => "delivery_stale_branch",
         }
     }
 
@@ -127,6 +132,7 @@ impl DeliveryRefusal {
             "delivery_landing_repair_requeue" => Some(Self::LandingRepairRequeue),
             "review_budget_exhausted" => Some(Self::ReviewBudgetExhausted),
             "delivery_source_repair_decision" => Some(Self::SourceRepairDecision),
+            "delivery_stale_branch" => Some(Self::StaleBranch),
             _ => None,
         }
     }
@@ -144,7 +150,7 @@ impl DeliveryRefusal {
                 "Re-establish the pinned identity and confirm the merge evidence, then start a new delivery attempt.".into()
             }
             Self::RepairDispatched => {
-                "If a repair is running, let it finish. If none ran because the job lacked step_failure_recovery, configure recovery for future heads; if it ran and failed, inspect the recovery attempt. Then repair and publish a new head and start a new delivery attempt.".into()
+                "If a repair is running, let it finish. Once the prior run ends, inspect the hold reason and any recovery attempt. If the no-edit repair's unchanged-head rerun is spent and checks still fail, repair and publish a new head before starting a new delivery attempt. If check recovery was absent or unsuccessful and the no-edit rerun is not spent, configure step_failure_recovery if missing; a new authorized delivery run can use remaining per-PR repair budget on the same head, or you can repair and publish a new head.".into()
             }
             Self::PullRequestDraft => {
                 "Mark the pull request ready for review, then start a new delivery attempt.".into()
@@ -180,7 +186,7 @@ impl DeliveryRefusal {
                 "Wait for the origin to recover; a later normal admission retries the work. A task already in progress follows ordinary run failure handling instead.".into()
             }
             Self::CheckRepairActivityAbsent => {
-                "Adding step_failure_recovery and retrying the same head holds again as delivery_repair_dispatched; it does not run the repair. Configure recovery for future heads, repair and publish a new head, then start a new delivery attempt. A new head can receive another repair only while the per-PR budget remains; exhausting it still fails the run.".into()
+                "Configure step_failure_recovery and start a new authorized delivery run on the same head to admit another repair attempt while per-PR budget remains (this held run is terminal), or repair and publish a new head, then start a new delivery attempt. Exhausting the per-PR budget fails the run.".into()
             }
             Self::CheckRunsAbsent => {
                 "An auto-fix pass hands this task back to completion once the head reports a required check run. If none appear, confirm the forge runs workflows for this repository, then start the required checks on that head by hand or push a new head.".into()
@@ -193,6 +199,9 @@ impl DeliveryRefusal {
             }
             Self::SourceRepairDecision => {
                 "Inspect explicit source repair for the publishing run, or discard the candidate (orbit task update <task-id> --status backlog --discard-candidate) so the next run implements fresh. The task is unchanged; do not resume this held run.".into()
+            }
+            Self::StaleBranch => {
+                "Inspect the retained branch or worktree, then move the branch aside or delete it only after confirming no retained work is needed; retrying setup without that recovery will refuse again.".into()
             }
             Self::VisualNotEstablished | Self::VisualReviewUnresolved => {
                 "Inspect the held run. This refusal is no longer raised.".into()

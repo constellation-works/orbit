@@ -9,6 +9,8 @@ mod workflow;
 
 pub(super) use evidence::evidence;
 pub(super) use observe::observe;
-pub(super) use snapshot::{Snapshot, checked_run, poll_interval_ms, snapshot, snapshot_once};
+pub(super) use snapshot::{
+    PullRequestSelector, Snapshot, checked_run, poll_interval_ms, snapshot, snapshot_once,
+};
 pub(super) use support::{api, complete_list, encoded, unreadable};
 pub(super) use workflow::{gate_passed, gate_present, workflow};

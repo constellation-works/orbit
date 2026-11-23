@@ -210,8 +210,8 @@ hits=$(grep -rnE --include='*.rs' --exclude-dir=tests "$PATTERN" crates \
 if [[ -n "$hits" ]]; then echo "$hits" >&2; echo "std streams belong to $OUTPUT_DIR only" >&2; exit 1; fi
 ```
 
-The constellation Rust CLI template (`operations/templates/rust-cli/` in the constellation
-root) ships the full version as `scripts/check-terminal-guard.sh`. List any justified
+The constellation Rust CLI template (`constellation-works/rust-cli-template`, checked out
+at `codebases/rust-cli-template`) ships the full version as `scripts/check-terminal-guard.sh`. List any justified
 exception (R15) as an extra `grep -v` with a comment giving its reason.
 
 ## Dependency-direction check (R1–R7, R17)

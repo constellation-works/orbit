@@ -5,10 +5,11 @@ use std::path::{Path, PathBuf};
 
 use orbit_common::OrbitError;
 
-use super::super::git::{git_output, git_output_paths, git_output_with_env};
+use super::super::git::{git_output, git_output_with_env};
 use super::author::{GitAuthor, reviewer_author};
 use super::scope::{
-    NewPathPolicy, irregular_candidate_paths, task_candidate_paths, validate_claim_new_paths,
+    NewPathPolicy, exact_delivery_paths, irregular_candidate_paths, task_candidate_paths,
+    validate_claim_new_paths,
 };
 
 /// Name of the scratch index, under the worktree's private Git directory.
@@ -44,7 +45,7 @@ pub(in crate::executor::automation::vcs) fn commit_claimed_partial(
     // Ordinary worktree diffs ignore submodules to avoid executing a nested
     // repository's config. Inspect staged changes without worktree traversal
     // as well, so a newly staged gitlink cannot disappear from the refusal.
-    paths.extend(git_output_paths(
+    paths.extend(exact_delivery_paths(
         workspace_path,
         &[
             "diff",

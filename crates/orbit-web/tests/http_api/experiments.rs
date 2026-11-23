@@ -91,6 +91,21 @@ fn experiment_authoring_routes_are_operator_only_and_record_core_events() {
             let id = created["id"].as_str().expect("experiment id").to_string();
             let one = route(&format!("/{id}"));
             let start = route(&format!("/{id}/start"));
+            let readout = route(&format!("/{id}/readout"));
+
+            let mut oversized = draft();
+            oversized["name"] = json!("oversized");
+            oversized["max_days"] = json!(u32::MAX);
+            assert!(
+                refusal(server.send("POST", &route(""), oversized), 400).contains("`max_days`")
+            );
+            assert!(
+                refusal(
+                    server.send("PATCH", &one, json!({ "max_days": u32::MAX })),
+                    400
+                )
+                .contains("`max_days`")
+            );
 
             let unknown = refusal(
                 server.send("PATCH", &one, json!({ "primary_metric": "speed" })),
@@ -104,7 +119,7 @@ fn experiment_authoring_routes_are_operator_only_and_record_core_events() {
             let updated = json_ok(server.send(
                 "PATCH",
                 &one,
-                json!({ "primary_metric": "first_pass_acceptance", "reason": "pick a metric" }),
+                json!({ "primary_metric": "first_pass_acceptance", "max_days": 14, "reason": "pick a metric" }),
             ));
             assert_eq!(updated["primary_metric"], json!("first_pass_acceptance"));
 
@@ -123,8 +138,37 @@ fn experiment_authoring_routes_are_operator_only_and_record_core_events() {
             let mut text = fs::read_to_string(&config).unwrap_or_default();
             text.push_str("\n[experiments]\nenabled = true\n");
             fs::write(&config, text).unwrap();
+
+            // Seed the value a legacy writer could have persisted, without
+            // bypassing any public boundary under test.
+            let seed_horizon = |days: u32| {
+                fixture.runtime.sqlite_store().unwrap().with_transaction(|tx| {
+                    tx.connection()
+                        .execute(
+                            "UPDATE experiments SET max_days = ?1 WHERE id = ?2 AND workspace_id = ?3",
+                            (days, &id, "ws_http_fixture"),
+                        )
+                        .map_err(|error| orbit_core::OrbitError::Store(error.to_string()))?;
+                    Ok(())
+                }).unwrap();
+            };
+            seed_horizon(u32::MAX);
+            assert!(
+                refusal(server.send("POST", &start, json!({ "reason": "go" })), 400)
+                    .contains("`max_days`")
+            );
+            assert_eq!(json_ok(server.get(&one))["status"], "draft");
+            seed_horizon(14);
+
             let started = json_ok(server.send("POST", &start, json!({ "reason": "go" })));
             assert_eq!(started["status"], json!("running"), "{started}");
+            let start_at =
+                chrono::DateTime::parse_from_rfc3339(started["events"][2]["at"].as_str().unwrap())
+                    .unwrap();
+            assert_eq!(
+                started["horizon_at"],
+                (start_at + chrono::Duration::days(14)).to_rfc3339()
+            );
 
             let locked = refusal(
                 server.send("PATCH", &one, json!({ "hypothesis": "x" })),
@@ -155,6 +199,30 @@ fn experiment_authoring_routes_are_operator_only_and_record_core_events() {
                     ("started", "dashboard", "go"),
                 ],
                 "one event per accepted write, refusals record none: {shown}"
+            );
+
+            seed_horizon(u32::MAX);
+            let historical = json_ok(server.get(&one));
+            assert_eq!(historical["max_days"], u32::MAX);
+            assert_eq!(historical["horizon_at"], Value::Null);
+            let historical = json_ok(server.get(&readout));
+            assert_eq!(historical["experiment"]["max_days"], u32::MAX);
+            assert_eq!(historical["experiment"]["horizon_at"], Value::Null);
+            assert_eq!(historical["verdict"]["horizon_reached"], false);
+            assert!(
+                historical["warnings"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|warning| warning["kind"] == "horizon_unavailable")
+            );
+            seed_horizon(14);
+            // The detail response exposes the ordinary horizon using the
+            // same calendar and origin as the public runtime readout.
+            let ordinary = fixture.runtime.experiment_readout(&id, None).unwrap();
+            assert_eq!(
+                ordinary.experiment.horizon_at.as_deref(),
+                started["horizon_at"].as_str()
             );
         },
     );

@@ -40,7 +40,7 @@ Global options (see 'orbit --help' for descriptions):
   --header
 
 ROLE says how a run was submitted: top-level directly, child by a parent run.
-JSON shapes, ROLE markers and how --incidents and --failures fold runs: installed orbit-orchestrate skill `references/run-debugging.md`.
+JSON shapes, ROLE markers and how --incidents and --failures fold runs: installed orbit-orchestrate skill `references/run-debugging-history.md`.
 Examples:
   orbit run history
   orbit run history -j task_local_pipeline --limit 20

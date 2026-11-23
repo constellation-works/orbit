@@ -4,10 +4,86 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use orbit_common::OrbitError;
 use orbit_types::task::{ExecutorOsLimit, HostOs, Task, TaskOsRequirement};
+use serde::Serialize;
 use serde_json::{Map, Value, json};
 
 use crate::OrbitRuntime;
 use crate::application::host_labels::{FleetLabelHost, label_placement_wait};
+
+#[derive(Serialize)]
+pub(crate) struct TaskOsRequirementSource {
+    tags: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    crew: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    executor: Option<String>,
+}
+
+pub(crate) enum EffectiveTaskOsRequirement {
+    Unrestricted,
+    Restricted {
+        requirement: TaskOsRequirement,
+        source: TaskOsRequirementSource,
+        describe: String,
+    },
+    Invalid {
+        requirement: TaskOsRequirement,
+        source: TaskOsRequirementSource,
+        describe: String,
+    },
+    Unresolved {
+        invalid: Vec<String>,
+        source: TaskOsRequirementSource,
+        reason: String,
+        describe: String,
+    },
+    Conflict {
+        source: TaskOsRequirementSource,
+        reason: String,
+        describe: String,
+    },
+}
+
+impl EffectiveTaskOsRequirement {
+    fn into_json(self) -> Value {
+        match self {
+            Self::Unrestricted => Value::Null,
+            Self::Restricted {
+                requirement,
+                source,
+                describe,
+            } => json!({
+                "any_of": requirement.any_of, "invalid": requirement.invalid,
+                "state": "restricted", "describe": describe, "source": source
+            }),
+            Self::Invalid {
+                requirement,
+                source,
+                describe,
+            } => json!({
+                "any_of": requirement.any_of, "invalid": requirement.invalid,
+                "state": "invalid", "describe": describe, "source": source
+            }),
+            Self::Unresolved {
+                invalid,
+                source,
+                reason,
+                describe,
+            } => json!({
+                "any_of": [], "invalid": invalid, "state": "unresolved",
+                "source": source, "reason": reason, "describe": describe
+            }),
+            Self::Conflict {
+                source,
+                reason,
+                describe,
+            } => json!({
+                "any_of": [], "invalid": [], "state": "conflict",
+                "source": source, "reason": reason, "describe": describe
+            }),
+        }
+    }
+}
 
 /// A request's configured crew constraints and the fleet's capability
 /// labels. Reuse it across list rows so executor assets and the executor
@@ -55,10 +131,21 @@ impl TaskOsReadout {
     /// leaves automatic routing undecided; this readout does not predict draws
     /// or substitute the crew recorded by an earlier run.
     pub fn requirement(&self, task: &Task) -> Value {
+        self.effective_requirement(task).into_json()
+    }
+
+    fn effective_requirement(&self, task: &Task) -> EffectiveTaskOsRequirement {
         let tags = TaskOsRequirement::from_tags(&task.tags);
-        let mut source = json!({"tags": task.tags.iter()
-            .filter(|tag| tag.trim().to_ascii_lowercase().starts_with("os:"))
-            .collect::<Vec<_>>()});
+        let mut source = TaskOsRequirementSource {
+            tags: task
+                .tags
+                .iter()
+                .filter(|tag| tag.trim().to_ascii_lowercase().starts_with("os:"))
+                .cloned()
+                .collect(),
+            crew: None,
+            executor: None,
+        };
         let crew = task
             .crew
             .as_deref()
@@ -72,31 +159,46 @@ impl TaskOsReadout {
             let canonical = match self.crews.get(&base) {
                 Some(Ok(name)) => name,
                 unresolved => {
-                    source["crew"] = json!(name);
+                    source.crew = Some(name.to_string());
                     let reason = match unresolved {
                         Some(Err(reason)) => reason.clone(),
                         _ => format!("crew `{name}` is not configured on this host"),
                     };
-                    return json!({"any_of": [], "invalid": tags.invalid,
-                        "state": "unresolved", "source": source, "reason": reason,
-                        "describe": format!("unresolved (crew {name}): {reason}")});
+                    let describe = format!("unresolved (crew {name}): {reason}");
+                    return EffectiveTaskOsRequirement::Unresolved {
+                        invalid: tags.invalid,
+                        source,
+                        reason,
+                        describe,
+                    };
                 }
             };
             if let Some(limit) = self.limits.get(canonical) {
-                source["crew"] = json!(canonical);
-                source["executor"] = json!(limit.executor);
+                source.crew = Some(canonical.clone());
+                source.executor = Some(limit.executor.clone());
                 match tags.intersect_executor(canonical, &limit.executor, Some(&limit.hosts)) {
                     Ok(requirement) => effective = requirement,
                     Err(reason) => {
-                        return json!({"any_of": [], "invalid": [],
-                        "state": "conflict", "source": source, "reason": reason,
-                        "describe": format!("no host: {reason}")});
+                        let describe = format!("no host: {reason}");
+                        return EffectiveTaskOsRequirement::Conflict {
+                            source,
+                            reason,
+                            describe,
+                        };
                     }
                 }
             }
         }
         if effective.is_unrestricted() {
-            return Value::Null;
+            return EffectiveTaskOsRequirement::Unrestricted;
+        }
+        if !effective.invalid.is_empty() {
+            let describe = format!("no host until retagged ({})", effective.invalid.join(", "));
+            return EffectiveTaskOsRequirement::Invalid {
+                requirement: effective,
+                source,
+                describe,
+            };
         }
         let hosts = effective
             .any_of
@@ -108,42 +210,30 @@ impl TaskOsReadout {
             })
             .collect::<Vec<_>>()
             .join(" or ");
-        let mut origins = source["tags"]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .filter_map(Value::as_str)
-            .map(str::to_string)
-            .collect::<Vec<_>>();
+        let mut origins = source.tags.clone();
         if effective.crew.is_some() {
             origins.push(format!("crew {}", crew.unwrap_or_default()));
         }
-        let (state, describe) = if effective.invalid.is_empty() {
-            (
-                "restricted",
-                format!("{hosts} hosts ({})", origins.join(", ")),
-            )
-        } else {
-            (
-                "invalid",
-                format!("no host until retagged ({})", effective.invalid.join(", ")),
-            )
-        };
-        json!({"any_of": effective.any_of, "invalid": effective.invalid,
-            "state": state, "describe": describe, "source": source})
+        let describe = format!("{hosts} hosts ({})", origins.join(", "));
+        EffectiveTaskOsRequirement::Restricted {
+            requirement: effective,
+            source,
+            describe,
+        }
     }
 
     /// Whether a known effective requirement admits `host`. Unknown crews,
     /// invalid tags and conflicting constraints admit no host in this filter.
     pub fn admits(&self, task: &Task, host: HostOs) -> bool {
-        let requirement = self.requirement(task);
-        requirement.is_null()
-            || (requirement["state"] == "restricted"
-                && requirement["any_of"].as_array().is_some_and(|hosts| {
-                    hosts
-                        .iter()
-                        .any(|value| value.as_str() == Some(host.as_str()))
-                }))
+        match self.effective_requirement(task) {
+            EffectiveTaskOsRequirement::Unrestricted => true,
+            EffectiveTaskOsRequirement::Restricted { requirement, .. } => {
+                requirement.any_of.contains(&host)
+            }
+            EffectiveTaskOsRequirement::Invalid { .. }
+            | EffectiveTaskOsRequirement::Unresolved { .. }
+            | EffectiveTaskOsRequirement::Conflict { .. } => false,
+        }
     }
 
     /// Why `task` waits for a host carrying its `requires_labels`, while no
@@ -158,11 +248,13 @@ impl TaskOsReadout {
     /// Replace any tags-only base enrichment with this host's derived value,
     /// and name the label placement wait when there is one.
     pub fn insert_into(&self, task: &Task, object: &mut Map<String, Value>) {
-        let requirement = self.requirement(task);
-        if requirement.is_null() {
-            object.remove("os_requirement");
-        } else {
-            object.insert("os_requirement".to_string(), requirement);
+        match self.effective_requirement(task) {
+            EffectiveTaskOsRequirement::Unrestricted => {
+                object.remove("os_requirement");
+            }
+            requirement => {
+                object.insert("os_requirement".to_string(), requirement.into_json());
+            }
         }
         match self.placement_wait(task) {
             Some(wait) => {

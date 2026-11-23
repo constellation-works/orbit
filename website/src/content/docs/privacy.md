@@ -68,10 +68,11 @@ remotes. They use the GitHub CLI (`gh`) to open, update, and merge pull requests
 and to read code-scanning and Dependabot alerts. These requests go to the Git
 host you configured, under that host's terms. Scheduled routines that contact
 GitHub or perform delivery are shipped disabled until you enable them. When
-selected by the seeding policy, the local `worktree-gc`, `task-pilot` and
-`crew-memory-dream` routines seed enabled (`crew-memory-dream` mints
-nothing while `crew_memory.enabled` is false or no running memory-arm
-experiment applies). The local `host-health`
+selected by the seeding policy, the local `worktree-gc` and `task-pilot`
+routines seed enabled, as does a local experiment routine that does nothing
+unless a running experiment has a memory arm. Agent memory notes are written
+only while such an experiment runs, and notes already written stay in your
+workspace's local store after it ends. The local `host-health`
 auto-task seeds disabled, like the other shipped auto-tasks. Unattended scheduled runs require the
 host's Orbit scheduler clock to be enabled.
 

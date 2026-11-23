@@ -85,4 +85,4 @@ Examples:
 
 Prints the run ID and returns; follow it with `orbit run show <RUN_ID>`.
 Run-wide flags cover every task the window admits, even ones filed later.
-Details: the orbit-orchestrate skill, references/orchestration.md.
+Details: the orbit-orchestrate skill, references/orchestration-dispatch.md.

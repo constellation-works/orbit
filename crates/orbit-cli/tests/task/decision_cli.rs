@@ -1170,4 +1170,19 @@ fn resident_grant_from_an_unidentified_cli_caller_raises_a_request() {
         .clone();
     let granted: serde_json::Value = serde_json::from_slice(&granted).unwrap();
     assert_eq!(granted["outcome"], "granted", "{granted}");
+
+    let recovered = fixture
+        .command(&["resident", "grant", &task_id, "--add", "recover", "--json"])
+        .env("ORBIT_OPERATOR", "1")
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let recovered: serde_json::Value = serde_json::from_slice(&recovered).unwrap();
+    assert_eq!(held(&recovered), serde_json::json!(["merge", "recover"]));
+    let narrowed = fixture.json(&[
+        "resident", "grant", &task_id, "--remove", "recover", "--json",
+    ]);
+    assert_eq!(held(&narrowed), serde_json::json!(["merge"]));
 }

@@ -11,10 +11,17 @@
 use std::fmt;
 
 use orbit_common::{OrbitError, TaskPilotRefusalCode};
+use orbit_engine::activity_job::{
+    ACTIVITY_REF_PREFIX, V2ActivityCatalog, evaluate_job_step_when_at_admission,
+    render_job_step_input_at_admission,
+};
 use orbit_types::task::TaskStatus;
-use orbit_types::workflow::{JobRunState, JobRunTrigger, TASK_PILOT_PIPELINE_JOB};
+use orbit_types::workflow::{
+    ActivityV2Spec, CoreDeterministicAction, JobRunState, JobRunTrigger, JobV2, JobV2Step,
+    JobV2StepBody, TASK_PILOT_PIPELINE_JOB,
+};
 use serde::Serialize;
-use serde_json::json;
+use serde_json::{Value, json};
 
 use super::automation_port::JobAutomationPort;
 use super::{JobRunListParams, PipelineInvokeResult};
@@ -64,7 +71,7 @@ impl fmt::Display for TaskPilotRefusal {
         match self {
             Self::UnsupportedStatus { task_id, status } => write!(
                 f,
-                "explicit task-pilot selection refuses {task_id} (status {status}); only proposed and backlog tasks may be assessed"
+                "task {task_id} has status `{status}`; only proposed and backlog tasks may be repiloted. An operator can run `orbit task repilot {task_id}` on the owner once the task is in one of those statuses."
             ),
             Self::HumanCrew { task_id, crew } => write!(
                 f,
@@ -333,4 +340,588 @@ impl OrbitRuntime {
         }
         self.pilot_holder_run(task_id)
     }
+
+    /// Reject caller-provided string `task_ids` (such as CLI `--input
+    /// task_ids=...`) when the admitted job definition renders `input.task_ids`
+    /// into an invalid `task_ids` value for a `prepare_task_pilot` step.
+    ///
+    /// Runs against the resolved `JobV2` definition (`Snapshot` for direct YAML
+    /// paths, `load_v2_job_asset_by_name` for catalog jobs) before admission
+    /// persists any run or reclaims worktrees. A step whose `when` guard is
+    /// not known true at admission is ignored: a false guard skips it, and a
+    /// guard that needs runtime `steps`, `item` or `iteration` state is left
+    /// to execution, which still refuses invalid string `task_ids` if that
+    /// guard becomes true.
+    pub(crate) fn validate_pilot_string_task_ids_input(
+        &self,
+        job_name: &str,
+        spec: &JobV2,
+        input: &Value,
+    ) -> Result<(), OrbitError> {
+        let Some(raw_task_ids) = input.get("task_ids").and_then(Value::as_str) else {
+            return Ok(());
+        };
+        let mut catalog = None;
+        let Some((step_id, target_label)) =
+            self.first_step_forwarding_task_ids_to_pilot(spec, &spec.steps, input, &mut catalog)?
+        else {
+            return Ok(());
+        };
+        Err(OrbitError::InvalidInput(format!(
+            "invalid `--input task_ids={raw_task_ids}` for `{job_name}` (step `{step_id}`, \
+             {target_label}): `--input key=value` only passes string values, while `{}` \
+             requires `task_ids` to be an array of strings. Use `orbit run task-pilot <TASK_ID>...` for \
+             explicit tasks, or omit `--input task_ids=...` (or run `orbit run task-pilot`) \
+             for automatic discovery; custom jobs can also supply an array `task_ids` in `default_input`",
+            CoreDeterministicAction::PrepareTaskPilot.name(),
+        )))
+    }
+
+    fn first_step_forwarding_task_ids_to_pilot(
+        &self,
+        spec: &JobV2,
+        steps: &[JobV2Step],
+        input: &Value,
+        catalog: &mut Option<V2ActivityCatalog>,
+    ) -> Result<Option<(String, String)>, OrbitError> {
+        for step in steps {
+            if pilot_step_when_inactive_at_admission(
+                spec.default_input.as_ref(),
+                input,
+                step.when.as_deref(),
+            ) {
+                continue;
+            }
+            match &step.body {
+                JobV2StepBody::Parallel { parallel } => {
+                    if let Some(hit) = self.first_step_forwarding_task_ids_to_pilot(
+                        spec,
+                        &parallel.branches,
+                        input,
+                        catalog,
+                    )? {
+                        return Ok(Some(hit));
+                    }
+                }
+                JobV2StepBody::FanOut { fan_out, .. } => {
+                    if let Some(hit) = self.first_step_forwarding_task_ids_to_pilot(
+                        spec,
+                        std::slice::from_ref(fan_out.worker.as_ref()),
+                        input,
+                        catalog,
+                    )? {
+                        return Ok(Some(hit));
+                    }
+                }
+                JobV2StepBody::Loop { loop_ } => {
+                    if let Some(hit) = self.first_step_forwarding_task_ids_to_pilot(
+                        spec,
+                        &loop_.steps,
+                        input,
+                        catalog,
+                    )? {
+                        return Ok(Some(hit));
+                    }
+                }
+                JobV2StepBody::Target(target) => {
+                    if is_prepare_task_pilot_spec(&target.spec)
+                        && default_input_renders_invalid_pilot_task_ids(
+                            spec.default_input.as_ref(),
+                            input,
+                            target.default_input.as_ref(),
+                            target.input_schema_json.as_ref(),
+                        )
+                    {
+                        return Ok(Some((
+                            step.id.clone(),
+                            format!(
+                                "action `{}`",
+                                CoreDeterministicAction::PrepareTaskPilot.name()
+                            ),
+                        )));
+                    }
+                }
+                JobV2StepBody::TargetRef(reference) => {
+                    if !default_input_may_use_caller_task_ids(reference.default_input.as_ref()) {
+                        continue;
+                    }
+                    let Some(activity_name) = reference.target.strip_prefix(ACTIVITY_REF_PREFIX)
+                    else {
+                        continue;
+                    };
+                    let loaded = match catalog {
+                        Some(loaded) => loaded,
+                        None => {
+                            let built = self.v2_activity_catalog().map_err(|err| {
+                                OrbitError::InvalidInput(format!("build activity catalog: {err}"))
+                            })?;
+                            catalog.insert(built)
+                        }
+                    };
+                    let resolved_schema = match loaded.get(activity_name) {
+                        Some(activity) if is_prepare_task_pilot_spec(&activity.spec) => {
+                            Some(Some(&activity.input_schema_json))
+                        }
+                        Some(_) => None,
+                        None if loaded.unavailable_reason(activity_name).is_none()
+                            && activity_name
+                                == CoreDeterministicAction::PrepareTaskPilot.name() =>
+                        {
+                            Some(None)
+                        }
+                        None => None,
+                    };
+                    if let Some(input_schema) = resolved_schema
+                        && default_input_renders_invalid_pilot_task_ids(
+                            spec.default_input.as_ref(),
+                            input,
+                            reference.default_input.as_ref(),
+                            input_schema,
+                        )
+                    {
+                        return Ok(Some((
+                            step.id.clone(),
+                            format!(
+                                "target `{}` -> `{}`",
+                                reference.target,
+                                CoreDeterministicAction::PrepareTaskPilot.name()
+                            ),
+                        )));
+                    }
+                }
+            }
+        }
+        Ok(None)
+    }
+}
+
+/// Whether admission must ignore this step when looking for a pilot forward.
+///
+/// A missing guard stays active. Anything other than `Ok(true)` does not:
+/// a false guard will not run, and an error cannot be told apart from a
+/// runtime-only `steps`, `item` or `iteration` reference at admission.
+fn pilot_step_when_inactive_at_admission(
+    job_default_input: Option<&Value>,
+    caller_input: &Value,
+    when_expr: Option<&str>,
+) -> bool {
+    let Some(when_expr) = when_expr else {
+        return false;
+    };
+    !matches!(
+        evaluate_job_step_when_at_admission(job_default_input, caller_input, when_expr),
+        Ok(true)
+    )
+}
+
+/// Non-JSON plain-string probe used beside the caller's actual string `task_ids`
+/// to distinguish templates that wrap a string input into a JSON array (such as
+/// `["{{ input.task_ids }}"]`) from bare pass-throughs (`{{ input.task_ids }}`)
+/// that only happen to parse when a caller passes JSON text via `--input`.
+const PILOT_TASK_IDS_STRING_PROBE: &str = "__orbit_pilot_task_id_probe__";
+/// JSON-quoted string fragment probe for templates that compose a JSON array
+/// around an unquoted placeholder (such as `[{{ input.task_ids }}]`) when a
+/// caller supplies quoted JSON text via `--input`.
+const PILOT_TASK_IDS_JSON_STRING_PROBE: &str = "\"__orbit_pilot_task_id_probe__\"";
+
+fn is_prepare_task_pilot_spec(spec: &ActivityV2Spec) -> bool {
+    matches!(
+        spec,
+        ActivityV2Spec::Deterministic(det)
+            if det.action == CoreDeterministicAction::PrepareTaskPilot.name()
+    )
+}
+
+fn default_input_may_use_caller_task_ids(default_input: Option<&Value>) -> bool {
+    match default_input {
+        None => true,
+        Some(Value::String(template)) => {
+            if is_exact_whole_input_template(template) {
+                true
+            } else if let Some(projected_task_ids) =
+                project_json_object_template_field(template, "task_ids")
+            {
+                projected_task_ids
+                    .is_some_and(|raw| template_references_input_field(raw, "task_ids"))
+            } else {
+                template_references_input_field(template, "task_ids")
+            }
+        }
+        Some(Value::Object(map)) => map
+            .get("task_ids")
+            .is_some_and(|entry| value_references_input_field(entry, "task_ids")),
+        Some(Value::Null | Value::Bool(_) | Value::Number(_) | Value::Array(_)) => false,
+    }
+}
+
+fn default_input_renders_invalid_pilot_task_ids(
+    job_default_input: Option<&Value>,
+    caller_input: &Value,
+    step_default_input: Option<&Value>,
+    input_schema: Option<&Value>,
+) -> bool {
+    if !default_input_may_use_caller_task_ids(step_default_input) {
+        return false;
+    }
+    if rendered_step_has_invalid_pilot_task_ids(
+        job_default_input,
+        caller_input,
+        step_default_input,
+        input_schema,
+    ) {
+        return true;
+    }
+    let accepts_string_probe = [
+        PILOT_TASK_IDS_STRING_PROBE,
+        PILOT_TASK_IDS_JSON_STRING_PROBE,
+    ]
+    .into_iter()
+    .any(|probe| {
+        let mut probe_input = caller_input.clone();
+        if let Some(map) = probe_input.as_object_mut() {
+            map.insert("task_ids".to_string(), Value::String(probe.to_string()));
+        }
+        !rendered_step_has_invalid_pilot_task_ids(
+            job_default_input,
+            &probe_input,
+            step_default_input,
+            input_schema,
+        )
+    });
+    !accepts_string_probe
+}
+
+fn rendered_step_has_invalid_pilot_task_ids(
+    job_default_input: Option<&Value>,
+    caller_input: &Value,
+    step_default_input: Option<&Value>,
+    input_schema: Option<&Value>,
+) -> bool {
+    let scoped_object;
+    let candidate = match step_default_input {
+        None => {
+            scoped_object = json!({
+                "task_ids": caller_input.get("task_ids").cloned().unwrap_or(Value::Null)
+            });
+            Some(&scoped_object)
+        }
+        Some(Value::String(template)) => {
+            if let Some(projected_task_ids) =
+                project_json_object_template_field(template, "task_ids")
+            {
+                let Some(raw_task_ids) = projected_task_ids else {
+                    return false;
+                };
+                // Render only `task_ids` so unrelated sibling fields referencing
+                // prior step outputs do not block admission validation.
+                scoped_object = Value::String(format!("{{\"task_ids\":{raw_task_ids}}}"));
+                Some(&scoped_object)
+            } else {
+                step_default_input
+            }
+        }
+        Some(Value::Object(map)) => {
+            let Some(task_ids) = map.get("task_ids") else {
+                return false;
+            };
+            // Render only `task_ids` so unrelated sibling fields referencing
+            // prior step outputs do not block admission validation.
+            scoped_object = json!({ "task_ids": task_ids });
+            Some(&scoped_object)
+        }
+        Some(Value::Null | Value::Bool(_) | Value::Number(_) | Value::Array(_)) => return false,
+    };
+    let Ok(rendered) = render_job_step_input_at_admission(
+        job_default_input,
+        caller_input,
+        candidate,
+        input_schema,
+    ) else {
+        // Templates that depend on runtime-only step/item/iteration outputs
+        // cannot be evaluated at admission; defer to execution rather than
+        // claiming a type mismatch we could not verify.
+        return false;
+    };
+    !rendered_pilot_input_has_valid_task_ids(&rendered)
+}
+
+const MAX_JSON_TEMPLATE_DEPTH: usize = 64;
+
+/// Project the raw value slice of top-level `target_field` from a static-key
+/// JSON-object string template.
+///
+/// Returns `Some(Some(raw_value))` for the final `target_field` entry (matching
+/// `serde_json` last-key-wins semantics), `Some(None)` when the static-key JSON
+/// object has no `target_field` key, and `None` when the template is not a
+/// static-key JSON object (such as `{{ input }}` or dynamic top-level keys) so
+/// callers fall back to rendering the whole template.
+fn project_json_object_template_field<'a>(
+    template: &'a str,
+    target_field: &str,
+) -> Option<Option<&'a str>> {
+    let mut parser = JsonTemplateParser {
+        src: template,
+        pos: 0,
+    };
+    parser.skip_ws();
+    if !parser.eat_byte(b'{') {
+        return None;
+    }
+    parser.skip_ws();
+    let mut projected = None;
+    if !parser.eat_byte(b'}') {
+        loop {
+            parser.skip_ws();
+            let raw_key = parser.parse_template_string()?;
+            if raw_key.contains("{{") {
+                return None;
+            }
+            let key = serde_json::from_str::<String>(raw_key).ok()?;
+            parser.skip_ws();
+            if !parser.eat_byte(b':') {
+                return None;
+            }
+            let value = parser.parse_value(1)?;
+            if key == target_field {
+                projected = Some(value);
+            }
+            parser.skip_ws();
+            if parser.eat_byte(b',') {
+                continue;
+            }
+            if parser.eat_byte(b'}') {
+                break;
+            }
+            return None;
+        }
+    }
+    parser.skip_ws();
+    (parser.pos == template.len()).then_some(projected)
+}
+
+struct JsonTemplateParser<'a> {
+    src: &'a str,
+    pos: usize,
+}
+
+impl<'a> JsonTemplateParser<'a> {
+    fn remaining(&self) -> &'a str {
+        &self.src[self.pos..]
+    }
+
+    fn peek_byte(&self) -> Option<u8> {
+        self.src.as_bytes().get(self.pos).copied()
+    }
+
+    fn skip_ws(&mut self) {
+        while matches!(self.peek_byte(), Some(b' ' | b'\t' | b'\n' | b'\r')) {
+            self.pos += 1;
+        }
+    }
+
+    fn eat_byte(&mut self, expected: u8) -> bool {
+        if self.peek_byte() == Some(expected) {
+            self.pos += 1;
+            true
+        } else {
+            false
+        }
+    }
+
+    fn eat_template_token(&mut self) -> bool {
+        let Some(end) = self
+            .remaining()
+            .strip_prefix("{{")
+            .and_then(|after_open| after_open.find("}}"))
+        else {
+            return false;
+        };
+        self.pos += end + 4;
+        true
+    }
+
+    fn parse_template_string(&mut self) -> Option<&'a str> {
+        let start = self.pos;
+        if !self.eat_byte(b'"') {
+            return None;
+        }
+        while let Some(byte) = self.peek_byte() {
+            if self.remaining().starts_with("{{") {
+                if !self.eat_template_token() {
+                    return None;
+                }
+                continue;
+            }
+            match byte {
+                b'"' => {
+                    self.pos += 1;
+                    return Some(&self.src[start..self.pos]);
+                }
+                b'\\' => {
+                    self.pos += 1;
+                    self.pos += self.remaining().chars().next()?.len_utf8();
+                }
+                0x00..=0x1F => return None,
+                _ => self.pos += self.remaining().chars().next()?.len_utf8(),
+            }
+        }
+        None
+    }
+
+    fn parse_value(&mut self, depth: usize) -> Option<&'a str> {
+        if depth > MAX_JSON_TEMPLATE_DEPTH {
+            return None;
+        }
+        self.skip_ws();
+        let start = self.pos;
+        if self.remaining().starts_with("{{") {
+            while self.remaining().starts_with("{{") {
+                if !self.eat_template_token() {
+                    return None;
+                }
+            }
+            return Some(&self.src[start..self.pos]);
+        }
+        match self.peek_byte()? {
+            b'"' => {
+                self.parse_template_string()?;
+            }
+            b'{' => self.parse_nested_object(depth + 1)?,
+            b'[' => self.parse_array(depth + 1)?,
+            b't' if self.remaining().starts_with("true") => self.pos += 4,
+            b'f' if self.remaining().starts_with("false") => self.pos += 5,
+            b'n' if self.remaining().starts_with("null") => self.pos += 4,
+            b'-' | b'0'..=b'9' => self.parse_number()?,
+            _ => return None,
+        }
+        Some(&self.src[start..self.pos])
+    }
+
+    fn parse_nested_object(&mut self, depth: usize) -> Option<()> {
+        if depth > MAX_JSON_TEMPLATE_DEPTH || !self.eat_byte(b'{') {
+            return None;
+        }
+        self.skip_ws();
+        if self.eat_byte(b'}') {
+            return Some(());
+        }
+        loop {
+            self.skip_ws();
+            if self.remaining().starts_with("{{") {
+                if !self.eat_template_token() {
+                    return None;
+                }
+            } else {
+                self.parse_template_string()?;
+                self.skip_ws();
+                if !self.eat_byte(b':') {
+                    return None;
+                }
+                self.parse_value(depth)?;
+            }
+            self.skip_ws();
+            if self.eat_byte(b',') {
+                continue;
+            }
+            return self.eat_byte(b'}').then_some(());
+        }
+    }
+
+    fn parse_array(&mut self, depth: usize) -> Option<()> {
+        if depth > MAX_JSON_TEMPLATE_DEPTH || !self.eat_byte(b'[') {
+            return None;
+        }
+        self.skip_ws();
+        if self.eat_byte(b']') {
+            return Some(());
+        }
+        loop {
+            self.parse_value(depth)?;
+            self.skip_ws();
+            if self.eat_byte(b',') {
+                continue;
+            }
+            return self.eat_byte(b']').then_some(());
+        }
+    }
+
+    fn parse_number(&mut self) -> Option<()> {
+        self.eat_byte(b'-');
+        match self.peek_byte()? {
+            b'0' => self.pos += 1,
+            b'1'..=b'9' => {
+                self.pos += 1;
+                self.skip_digits();
+            }
+            _ => return None,
+        }
+        if self.eat_byte(b'.') && !self.skip_digits() {
+            return None;
+        }
+        if matches!(self.peek_byte(), Some(b'e' | b'E')) {
+            self.pos += 1;
+            if matches!(self.peek_byte(), Some(b'+' | b'-')) {
+                self.pos += 1;
+            }
+            if !self.skip_digits() {
+                return None;
+            }
+        }
+        Some(())
+    }
+
+    fn skip_digits(&mut self) -> bool {
+        let start = self.pos;
+        while matches!(self.peek_byte(), Some(b'0'..=b'9')) {
+            self.pos += 1;
+        }
+        self.pos > start
+    }
+}
+
+fn rendered_pilot_input_has_valid_task_ids(rendered: &Value) -> bool {
+    let Some(map) = rendered.as_object() else {
+        return false;
+    };
+    match map.get("task_ids") {
+        None | Some(Value::Null) => true,
+        Some(Value::Array(items)) => items.iter().all(Value::is_string),
+        Some(Value::Bool(_) | Value::Number(_) | Value::String(_) | Value::Object(_)) => false,
+    }
+}
+
+fn is_exact_whole_input_template(template: &str) -> bool {
+    template
+        .strip_prefix("{{")
+        .and_then(|token| token.strip_suffix("}}"))
+        .is_some_and(|token| token.trim() == "input")
+}
+
+fn value_references_input_field(value: &Value, field: &str) -> bool {
+    match value {
+        Value::String(template) => template_references_input_field(template, field),
+        Value::Array(items) => items
+            .iter()
+            .any(|item| value_references_input_field(item, field)),
+        Value::Object(map) => map
+            .values()
+            .any(|entry| value_references_input_field(entry, field)),
+        Value::Null | Value::Bool(_) | Value::Number(_) => false,
+    }
+}
+
+fn template_references_input_field(template: &str, field: &str) -> bool {
+    let mut remaining = template;
+    while let Some(start) = remaining.find("{{") {
+        let after_start = &remaining[start + 2..];
+        let Some(end) = after_start.find("}}") else {
+            break;
+        };
+        let token = after_start[..end].trim();
+        if token.strip_prefix("input.").is_some_and(|key| key == field) {
+            return true;
+        }
+        remaining = &after_start[end + 2..];
+    }
+    false
 }

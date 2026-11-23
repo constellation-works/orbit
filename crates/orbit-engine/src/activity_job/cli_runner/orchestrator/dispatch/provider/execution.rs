@@ -364,6 +364,7 @@ pub(in super::super) fn dispatch_prepared_provider(
     let environment::PreparedProviderEnvironment {
         scratch_dir,
         build_wait_directory,
+        python_cache_directory: _python_cache_directory,
     } = environment::prepare_provider_environment(environment::ProviderEnvironmentInput {
         context,
         provider: &provider,

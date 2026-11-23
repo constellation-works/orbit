@@ -123,6 +123,53 @@ fn a_review_report_is_validated_on_attach_naming_the_mismatched_field() {
     assert_eq!(*host.calls.lock().expect("host call"), 1);
 }
 
+#[test]
+fn a_negative_control_that_passed_is_refused_on_attach_naming_its_record() {
+    let workspace = tempfile::tempdir().expect("workspace");
+    let host = RecordingHost::default();
+    let ctx = ToolContext {
+        cwd: Some(workspace.path().to_string_lossy().into_owned()),
+        workspace_root: Some(workspace.path().to_path_buf()),
+        orbit_host: Some(Arc::new(host.clone())),
+        ..ToolContext::default()
+    };
+    let source = workspace.path().join("report.json");
+    let put = |outcome: &str| {
+        let report = json!({
+            "schema_version": 1,
+            "attempt_id": "rvw-1",
+            "verdict": "accept",
+            "summary": "Clean.",
+            "validation": [{
+                "command": "cargo test guard",
+                "outcome": outcome,
+                "role": "expected_failure",
+                "control": "counterfactual",
+                "sources": ["tests/guard.rs"],
+                "note": "the control exited 101",
+            }],
+        });
+        std::fs::write(&source, report.to_string()).expect("write report");
+        registry().execute(
+            "orbit.task.artifact.put",
+            &ctx,
+            json!({"id": "ORB-00001", "source_path": source, "path": "review-report.json"}),
+        )
+    };
+
+    let error = put("passed").expect_err("an expected_failure record that passed is refused");
+    let message = error.to_string();
+    assert!(
+        message.contains("validation[0]") && message.contains("cargo test guard"),
+        "{message}"
+    );
+    assert_invalid_input(error);
+    assert_eq!(*host.calls.lock().expect("host call"), 0);
+
+    put("failed").expect("a negative control that failed attaches");
+    assert_eq!(*host.calls.lock().expect("host call"), 1);
+}
+
 fn registry() -> ToolRegistry {
     let mut registry = ToolRegistry::new();
     registry.register_builtins();

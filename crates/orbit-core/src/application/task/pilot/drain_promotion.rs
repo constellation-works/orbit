@@ -210,6 +210,9 @@ pub(super) struct DrainAdmissionTask<'a> {
     pub(super) complexity: TaskComplexity,
     pub(super) dependencies: &'a [String],
     pub(super) is_done: &'a dyn Fn(&str) -> bool,
+    /// The pilot's write adds `no-diff-expected` to this task, so it is
+    /// judged as the tagged task it becomes.
+    pub(super) no_diff_expected: bool,
 }
 
 /// The first promotion condition a task fails. Fresh apply records
@@ -322,7 +325,24 @@ pub(super) fn assess_drain_admission(
         complexity,
         dependencies,
         is_done,
+        no_diff_expected,
     } = task;
+    // The pilot write adds the tag in the same atomic mutation, so judge the
+    // task as the tagged one it becomes: the verdict that earned the tag must
+    // not also hold the task as an already-fixed finding.
+    let tagged;
+    let snapshot =
+        if no_diff_expected && !snapshot.tags.iter().any(|tag| tag == NO_DIFF_EXPECTED_TAG) {
+            let mut tags = snapshot.tags.clone();
+            tags.push(NO_DIFF_EXPECTED_TAG.to_string());
+            tagged = PreparedTaskSnapshot {
+                tags,
+                ..snapshot.clone()
+            };
+            &tagged
+        } else {
+            snapshot
+        };
     let findings = promotion_findings(action, task_id, assessment, dependencies, is_done)?;
     let (decision, classification, evidence) = match classify_promotion(
         snapshot,
@@ -772,6 +792,7 @@ fn certified_snapshot(task: &Task) -> PreparedTaskSnapshot {
         validation_tool_warnings: Vec::new(),
         context_creation_identity: None,
         pilot_mode: Default::default(),
+        comment_hygiene_batch: None,
     }
 }
 
@@ -799,6 +820,7 @@ fn certified_validated_task(
         required_machine: None,
         post_deploy: Vec::new(),
         user_facing_ui: false,
+        no_diff_expected: false,
         applied_material: Some(written),
         pilot_run_id: Some(pilot_run_id),
         pilot_crew: None,

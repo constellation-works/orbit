@@ -65,7 +65,7 @@ pub struct ReadoutExperiment {
     /// treatment arm the verdict is withheld.
     pub min_delivered_rate: f64,
     pub started_at: Option<String>,
-    /// `started_at` plus `max_days`.
+    /// `started_at` plus `max_days`, when the date is representable.
     pub horizon_at: Option<String>,
 }
 
@@ -198,13 +198,14 @@ pub struct MemoryRevisionStratum {
     pub digests: Vec<String>,
 }
 
-/// How many of an arm's analysed tasks received its treatment: every
-/// activity role the overlay targets had a dispatch that received the
-/// overlay, in a step that then finished successfully.
+/// How many of an arm's analysed tasks received its treatment, measured
+/// by successful targeted dispatch steps and crew admission as applicable.
 #[derive(Debug, Clone, Serialize)]
 pub struct ArmDelivery {
     /// The activity roles the arm's overlay targets.
     pub roles: Vec<String>,
+    /// Whether the arm also requires evidence of crew admission.
+    pub crew: bool,
     /// Analysed tasks assigned to the arm.
     pub assigned: usize,
     pub delivered: usize,
@@ -401,7 +402,7 @@ pub struct ReadoutWarning {
     /// `sample_ratio`, `drift`, `undelivered`, `lagging`,
     /// `primary_all_unmeasured`, `first_edit_incomplete`,
     /// `tool_trace_incomplete`, `explorer_trace_incomplete`, `crew_mismatch` or
-    /// `crew_mismatch_unavailable`.
+    /// `crew_mismatch_unavailable` or `horizon_unavailable`.
     pub kind: &'static str,
     pub message: String,
 }

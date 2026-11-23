@@ -64,7 +64,11 @@ Per-invocation fields include `id`, `execution_id`, `timestamp`, `command`, `sub
 `stderr_truncated`, `error_message`, `host`, `pid`, `session_id`, `task_id`, `job_run_id`,
 `activity_id`, and `step_index`. MCP rows add optional `workspace_id`, caller/process
 `machine_id` and display `machine_name`, `transport`, the complete `effective_capabilities` set,
-`origin_session_id`, `mcp_call_id`, and `lease_id`.
+`origin_session_id`, `mcp_call_id`, and `lease_id`. A tool call refused as invalid input stores
+its secret-redacted arguments in `arguments_json`; past 4,096 bytes of redacted JSON the row keeps
+only a JSON array of the top-level key names that fit in that limit, in argument order. Each name
+that does not fit is left out and counted by a final `+N more` entry, so the row stays valid JSON
+within 4,096 bytes even when the names alone are longer than that.
 
 JSON list, show and export include `self_reported_actor` (an unverified caller
 claim), `plugin` (name, version, manifest digest and grants), `plugin_secrets`
@@ -145,8 +149,8 @@ CI tests do not turn a wall-clock measurement into a flaky correctness check.
 
 ## Find recent failures and causes
 
-The dashboard's **Tool call failures by tool** table retains the raw failed,
-total and rate columns. Failed means `status=failure`, including documented
+The dashboard's **Tool call failures** card, on its **By tool** tab, retains the raw
+failed, total and rate columns. Its **By model** tab splits the same calls by model. Failed means `status=failure`, including documented
 negative paths such as invalid input and missing records. Total counts only
 successful and failed invocations (`command=tool`, `run` or `run-mcp`); denied
 rows appear in their own column and are excluded from the rate. Unexpected

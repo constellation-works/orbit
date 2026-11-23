@@ -34,7 +34,7 @@ pub(super) fn render(
             // before rendering either surface.
             let value = single_field_value(&value, &fields);
             let text = fields_text(&value, &fields)?;
-            Ok(Payload::detail(value, text).into())
+            Ok(Payload::blocks(value, vec![Block::prose(text)]).into())
         }
         None => record(runtime, input, value),
     }
@@ -391,7 +391,9 @@ fn record(runtime: &OrbitRuntime, input: &Map<String, Value>, value: Value) -> C
         bold("Updated:"),
         dimmed(&timestamp(field("updated_at").unwrap_or_default()))
     );
-    Ok(Payload::blocks(doc, vec![Block::text(out)]).into())
+    // Prose: a terminal word-wraps each line to its width, keeping the indent;
+    // pipes and `--format plain` keep the text whole.
+    Ok(Payload::blocks(doc, vec![Block::prose(out)]).into())
 }
 
 /// The operator-facing run summary belongs only on active and review tasks.
@@ -704,15 +706,16 @@ fn history_text_words(value: &str) -> String {
 /// The words after `Next:` on a task show. Local and routed text both use this.
 pub(crate) fn next_step_text(next: &Value) -> String {
     let part = |key: &str| next.get(key).and_then(Value::as_str).unwrap_or_default();
-    match next.get("resume_command").and_then(Value::as_str) {
-        Some(resume) => format!(
-            "run `{resume}` to retry the failed work, or move the task back to backlog with `{}`",
-            part("requeue_command")
-        ),
-        None => format!(
-            "move the task back to backlog with `{}` to run it again",
-            part("requeue_command")
-        ),
+    let requeue = part("requeue_command");
+    if let Some(resume) = next.get("resume_command").and_then(Value::as_str) {
+        return format!(
+            "run `{resume}` to retry the failed work, or move the task back to backlog with `{requeue}`"
+        );
+    }
+    if requeue.starts_with("orbit run cancel ") {
+        format!("stop the live run with `{requeue}` before moving the task back to backlog")
+    } else {
+        format!("move the task back to backlog with `{requeue}` to run it again")
     }
 }
 

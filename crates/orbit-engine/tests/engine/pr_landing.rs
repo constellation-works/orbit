@@ -41,9 +41,9 @@ use orbit_types::workflow::{
     ProviderFailureClass, REVIEW_MANIFEST_ARTIFACT, REVIEW_REPORT_ARTIFACT, ReviewBudget,
     ReviewConsumption, ReviewGateAdmissionOutput, ReviewGateAdmitted, ReviewGateDecision,
     ReviewGateRefusal, ReviewGateReviewer, ReviewTiming, ReviewVerdict, SEATBELT_APPLY_PROBE,
-    decide_pr_auto_fix, decide_pr_base_update, decide_pr_infrastructure, is_baseline_red_failure,
-    is_task_blocked_by_agent, is_validation_environment_failure, pr_auto_fix_attempts,
-    provider_failure_text, task_blocked_by_agent_message,
+    decide_pr_auto_fix_settled, decide_pr_base_update, decide_pr_infrastructure,
+    is_baseline_red_failure, is_task_blocked_by_agent, is_validation_environment_failure,
+    pr_auto_fix_attempts, provider_failure_text, task_blocked_by_agent_message,
 };
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -942,13 +942,20 @@ fn assert_lease_lost(fx: &Fixture, host: &DeliveryHost, pipeline: &str, started:
 }
 fn a_merged_lease_preserves_the_review_repair_and_any_other_move_loses_the_lease(sandbox: &Path) {
     for pipeline in ["task_pr_pipeline.yaml", "task_claimed_pr_pipeline.yaml"] {
-        for method in ["squash", "merge"] {
+        for (method, delete_branch) in [
+            ("squash", true),
+            ("merge", true),
+            ("squash", false),
+            ("merge", false),
+        ] {
             let fx = Fixture::new(sandbox);
             let lease = fx.candidate.clone();
             let first = commit_local(&fx, "src/repair-a.txt", "repair a\n");
             let second = commit_local(&fx, "src/repair-b.txt", "repair b\n");
             merge_remote_head(&fx, &lease, method);
-            delete_remote_branch(&fx, BRANCH);
+            if delete_branch {
+                delete_remote_branch(&fx, BRANCH);
+            }
             let host = landing_host(&fx, pipeline);
             let error = run_shipped_landing_push(&fx, &host, pipeline).unwrap_err();
             assert!(error.contains("review_repair_after_merge:"));
@@ -959,7 +966,10 @@ fn a_merged_lease_preserves_the_review_repair_and_any_other_move_loses_the_lease
             let evidence = format!("refs/heads/orbit-evidence/{BRANCH}");
             assert!(error.contains(&evidence), "{pipeline} {method}: {error}");
             assert_eq!(remote_ref(&fx, &evidence).as_deref(), Some(second.as_str()));
-            assert!(remote_ref(&fx, &format!("refs/heads/{BRANCH}")).is_none());
+            assert_eq!(
+                remote_ref(&fx, &format!("refs/heads/{BRANCH}")).as_deref(),
+                (!delete_branch).then_some(lease.as_str())
+            );
             assert_eq!(host.status(TASK_ID), TaskStatus::Blocked);
             let recipes: Vec<_> = host
                 .comments(TASK_ID)
@@ -2037,6 +2047,48 @@ fn required_validation_refuses_a_failing_candidate_until_a_committed_repair_pass
     );
     assert_eq!(host.validation_log(TASK_ID, &archive), failed);
 }
+fn required_validation_cleans_its_python_cache_with_readonly_trash(sandbox: &Path) {
+    let (fx, host) = fx_host(sandbox);
+    let home = sandbox.join("home");
+    for dir in [home.join(".local/share/Trash"), home.join(".Trash")] {
+        fs::create_dir_all(&dir).unwrap();
+        fs::set_permissions(&dir, fs::Permissions::from_mode(0o555)).unwrap();
+    }
+    fx.write_repo("orbit_validation_fixture.py", "answer = 42\n");
+    fx.git(&["add", "orbit_validation_fixture.py"]);
+    fx.git(&["commit", "-m", "add validation import"]);
+    host.require_commands(&[r#"unset PYTHONDONTWRITEBYTECODE
+python3 -c 'from pathlib import Path
+import orbit_validation_fixture as fixture
+cache = Path(fixture.__cached__)
+assert fixture.answer == 42 and cache.is_file(), cache
+print(cache)'"#]);
+
+    let validated = validate_ok(&fx, &host);
+
+    assert_eq!(validated["decision"], "passed");
+    let log = host.run_log("0.json");
+    let cache = Path::new(log["output"].as_str().unwrap());
+    assert!(cache.is_absolute());
+    assert!(
+        !cache.starts_with(&fx.repo),
+        "run cache was in the checkout: {cache:?}"
+    );
+    assert!(!cache.exists(), "run cache survived validation: {cache:?}");
+    assert!(!fx.repo.join("__pycache__").exists());
+
+    fx.write_repo("fixture.pyc", "intentional fixture");
+    let dirty = validate_err(&fx, &host);
+    assert!(
+        dirty.contains("staged, tracked, or untracked changes"),
+        "expected the normal dirty checkout refusal: {dirty}"
+    );
+    assert_eq!(
+        fs::read(fx.repo.join("fixture.pyc")).unwrap(),
+        b"intentional fixture"
+    );
+}
+
 fn required_validation_retains_reported_evidence_after_scratch_lifetime(sandbox: &Path) {
     let fx = Fixture::new(sandbox);
     let script = sandbox.join("report-evidence.py");
@@ -5775,6 +5827,7 @@ struct DeliveryHost {
     /// The workspace's PR settings and delivery conventions.
     pr_config: Mutex<orbit_engine::PrConfig>,
     completion_hold_rules: Mutex<Vec<orbit_types::workflow::CompletionHoldRule>>,
+    step_recovery_decision: Mutex<Option<orbit_engine::StepRecoveryDecisionRead>>,
 }
 type Widening = (String, ContextWideningStep, String, Vec<String>);
 type StatusEvent = (
@@ -5822,6 +5875,9 @@ impl DeliveryHost {
     }
     fn baseline_commands(&self, commands: &[&str]) {
         *locked(&self.baseline_commands) = commands.iter().map(ToString::to_string).collect();
+    }
+    fn script_step_recovery_decision(&self, decision: orbit_engine::StepRecoveryDecisionRead) {
+        *locked(&self.step_recovery_decision) = Some(decision);
     }
     /// Require `true` and name `gate` as the deferred baseline gate.
     fn gate_commands(&self, gate: &Gate) {
@@ -5948,6 +6004,18 @@ impl DeliveryHost {
                 .cloned(),
         }
     }
+    fn record_run_state(&self, run_id: &str, state: orbit_types::workflow::JobRunState) {
+        let run: JobRun = serde_json::from_value(json!({
+            "run_id": run_id,
+            "job_id": "task_pr_pipeline",
+            "attempt": 1,
+            "state": state,
+            "scheduled_at": Utc::now(),
+            "created_at": Utc::now(),
+        }))
+        .unwrap();
+        locked(&self.runs).insert(run_id.to_string(), run);
+    }
     fn seed_reserved(&self, event: &str, note: &impl serde::Serialize, file: &str) {
         auto_fix::seed_auto_fix_history(self, event, note);
         fs::write(self.repo.parent().unwrap().join(file), "reserved").unwrap();
@@ -5967,8 +6035,20 @@ impl orbit_engine::test_support::NullRuntimeHost for DeliveryHost {
         Ok(locked(&self.runs).get(run_id).cloned())
     }
     fn admit_pr_auto_fix(&self, request: &PrAutoFixRequest) -> Res<PrAutoFixAdmission> {
-        let attempts = pr_auto_fix_attempts(&self.history(TASK_ID), &request.pr_number);
-        let decision = decide_pr_auto_fix(
+        let history = self.history(TASK_ID);
+        let attempts = pr_auto_fix_attempts(&history, &request.pr_number);
+        let source_repairs = orbit_types::workflow::source_repair_reservations(&history)
+            .unwrap()
+            .iter()
+            .filter(|record| record.binding.pull_request == request.pr_number)
+            .count() as u32;
+        let ended = |attempt: &PrAutoFixAttempt| {
+            matches!(
+                RuntimeHost::get_job_run(self, &attempt.run_id),
+                Ok(Some(run)) if run.state.is_terminal()
+            )
+        };
+        let decision = decide_pr_auto_fix_settled(
             &attempts,
             &PrAutoFixClaim {
                 pr_number: &request.pr_number,
@@ -5976,14 +6056,18 @@ impl orbit_engine::test_support::NullRuntimeHost for DeliveryHost {
                 blocker: request.blocker,
                 run_id: &request.run_id,
             },
-            PR_AUTO_FIX_BUDGET,
+            PR_AUTO_FIX_BUDGET.saturating_sub(source_repairs),
             "fixture",
             "fixture",
+            &ended,
         );
         if let PrAutoFixDecision::Admit(attempt) = &decision {
             auto_fix::seed_auto_fix_history(self, PR_AUTO_FIX_ADMITTED_EVENT, attempt);
         }
-        Ok(PrAutoFixAdmission::Decided(decision))
+        Ok(PrAutoFixAdmission::Decided {
+            decision,
+            source_repairs,
+        })
     }
     fn admit_pr_base_update(
         &self,
@@ -5999,6 +6083,12 @@ impl orbit_engine::test_support::NullRuntimeHost for DeliveryHost {
             );
         }
         Ok(decision)
+    }
+    fn refresh_delivery_pull_request(
+        &self,
+        request: &orbit_types::workflow::DeliveryRefreshRequest,
+    ) -> Res<orbit_types::workflow::PullRequestRefreshOutcome> {
+        auto_fix::refresh_pull_request(self, request)
     }
     fn admit_ci_rerun(
         &self,
@@ -6514,6 +6604,31 @@ impl orbit_engine::test_support::NullRuntimeHost for DeliveryHost {
         }
         Ok(())
     }
+    fn allocate_step_recovery_decision(
+        &self,
+        request: &orbit_engine::StepRecoveryDecisionRequest,
+    ) -> Res<Option<orbit_engine::StepRecoveryDecisionSlot>> {
+        if locked(&self.step_recovery_decision).is_none() {
+            return Ok(None);
+        }
+        let root = PathBuf::from(&request.workspace_path);
+        Ok(Some(orbit_engine::StepRecoveryDecisionSlot {
+            run_id: request.run_id.clone(),
+            failed_step_id: request.failed_step_id.clone(),
+            attempt: request.attempt,
+            nonce: "fixture-nonce".to_string(),
+            path: root.join(".orbit/tmp/step-recovery-decision.json"),
+            workspace_root: root,
+        }))
+    }
+    fn read_step_recovery_decision(
+        &self,
+        _slot: &orbit_engine::StepRecoveryDecisionSlot,
+    ) -> Res<orbit_engine::StepRecoveryDecisionRead> {
+        Ok(locked(&self.step_recovery_decision)
+            .clone()
+            .unwrap_or(orbit_engine::StepRecoveryDecisionRead::Absent))
+    }
 }
 fn git(current_dir: &Path, args: &[&str]) -> String {
     git_fixture::run(current_dir, args)
@@ -6613,6 +6728,18 @@ status() {
             observed=success
         else
             observed=failure
+        fi
+    fi
+    # [ORB-27076] As `source_contract`, but the forge reports DIRTY while the
+    # base tip no longer merges into the head, so a conflict the base lands
+    # after the rerun was sent shows as the real Git conflict it is.
+    if [ "$observed" = source_contract_dirty ]; then
+        if [ "$(git --git-dir="$remote" show "$(head_sha):src/contract" )" = fixed ]; then
+            observed=success
+        elif git --git-dir="$remote" merge-tree --write-tree "$(head_sha)" "$pr_base" >/dev/null 2>&1; then
+            observed=failure
+        else
+            observed=dirty_failure
         fi
     fi
     # A provider app's required aggregate fails beside its passing analysis
@@ -7462,6 +7589,10 @@ fn validation_repairs_and_logs() {
                     "required_validation_refuses_a_failing_candidate_until_a_committed_repair_passes",
                     required_validation_refuses_a_failing_candidate_until_a_committed_repair_passes
                         as fn(&Path),
+                ),
+                (
+                    "required_validation_cleans_its_python_cache_with_readonly_trash",
+                    required_validation_cleans_its_python_cache_with_readonly_trash as fn(&Path),
                 ),
             ],
         );

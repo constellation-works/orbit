@@ -109,15 +109,25 @@ fn published_lists_cover_initialized_defaults_and_owner_pinned_routines() {
         global.join("skills/orbit-setup/references"),
         repo.join("plugin/skills/orbit-setup/references"),
     ] {
-        let auto_page = references.join("auto-tasks.md");
+        let auto_pages = [
+            ("auto-tasks-catalog-reviews.md", "seeded definitions"),
+            ("auto-tasks-catalog-audits.md", "audits and health"),
+        ];
+        let published: BTreeSet<String> = auto_pages
+            .iter()
+            .flat_map(|(file, heading)| {
+                let page = references.join(file);
+                catalog_names(
+                    &std::fs::read_to_string(&page).expect("auto-task reference"),
+                    heading,
+                )
+            })
+            .collect();
         assert_eq!(
-            catalog_names(
-                &std::fs::read_to_string(&auto_page).expect("auto-task reference"),
-                "seeded definitions"
-            ),
+            published,
             auto_tasks,
             "published defaults must match initialization [ORB-17809]: {}",
-            auto_page.display()
+            references.display()
         );
         let host_page = references.join("multi-host.md");
         assert_eq!(

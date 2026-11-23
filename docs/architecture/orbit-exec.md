@@ -12,7 +12,7 @@ Sandboxes and runner entry points for commands run under an `FsProfile`; process
 
 ## Main modules and types
 
-`runner` (`run_process`, `ExecRequest`, `ExecutionResult`), `sandbox` (`Sandbox`), `browser_kit`, `linux_sandbox`, `macos_sandbox`, `build_sandbox`, `supervision`. See ``crates/orbit-exec/src/lib.rs``.
+`runner` (`run_process`, `ExecRequest`), `result` (re-exports `ExecutionResult` from `orbit-types`), `sandbox` (`Sandbox`), `browser_kit`, `linux_sandbox`, `macos_sandbox`, `build_sandbox`, `supervision`. See ``crates/orbit-exec/src/lib.rs``.
 
 ## Dependencies
 

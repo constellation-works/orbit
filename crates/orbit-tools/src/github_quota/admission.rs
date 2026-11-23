@@ -46,7 +46,7 @@ pub(super) fn remaining_millis(deadline: Instant) -> u64 {
 /// [`OrbitError::ProcessTimeout`], the same budget error a caller returns for
 /// a request admitted too late; a caller maps it to its own timeout outcome.
 pub fn admit_gh_request(caller: GithubCaller, request: &ExecRequest) -> Result<(), OrbitError> {
-    let deadline = gh_request_deadline(request, Instant::now());
+    let deadline = gh_request_deadline(request, store::monotonic_now());
     admit_by_deadline(caller, request, deadline).map_err(|decided| {
         if deadline.is_some_and(store::budget_spent) {
             return OrbitError::ProcessTimeout {
@@ -76,7 +76,7 @@ pub fn admit_gh_request_within_budget(
     if request.timeout_ms == Some(0) {
         return Err(exhausted());
     }
-    let deadline = gh_request_deadline(request, Instant::now());
+    let deadline = gh_request_deadline(request, store::monotonic_now());
     let admitted = admit_by_deadline(caller, request, deadline);
     // As in `run_gh_request`, a spent budget wins over the refusal it caused,
     // and a refusal is counted only once it is certain to be delivered.
@@ -234,7 +234,7 @@ pub fn run_gh_request(
     if request.timeout_ms == Some(0) {
         return Ok(timed_out_before_start(0));
     }
-    let started = Instant::now();
+    let started = store::monotonic_now();
     let deadline = gh_request_deadline(request, started);
     let admitted = admit_by_deadline(caller, request, deadline);
     // The budget is checked before a refusal propagates: a refusal decided
@@ -242,7 +242,12 @@ pub fn run_gh_request(
     // only a refusal that survives this check is counted.
     let Some(bounded_request) = remaining_request_budget(request, deadline) else {
         return Ok(timed_out_before_start(
-            u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
+            u64::try_from(
+                store::monotonic_now()
+                    .saturating_duration_since(started)
+                    .as_millis(),
+            )
+            .unwrap_or(u64::MAX),
         ));
     };
     admitted.map_err(|decided| decided.deliver(request, true))?;

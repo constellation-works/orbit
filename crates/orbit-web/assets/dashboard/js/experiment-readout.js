@@ -79,12 +79,8 @@ export function armSwatch(className, extra = "") {
   return el("span", { class: `mx-swatch ${className}${extra}`, "aria-hidden": "true" });
 }
 
-export function experimentBadge(text, className) {
-  return el("span", { class: `ex-badge ${className}`, text });
-}
-
 export function experimentCard(title, children, { meta = null, className = "", hint = null } = {}) {
-  return el("section", { class: `mx-card ex-card ${className}`.trim(), "aria-label": title }, [
+  return el("section", { class: `card mx-card ex-card ${className}`.trim(), "aria-label": title }, [
     el("div", { class: "mx-card-head" }, [
       el("h2", { class: "mx-card-title" }, [title, hint ? pinnedInfoHint(hint) : null]),
       meta ? el("span", { class: "mx-card-meta", text: meta }) : null,
@@ -140,25 +136,31 @@ export function armCards(experiment, readout, primary, color) {
     }).filter(Boolean);
     const estimateDifference = num(difference?.overall?.estimate);
     const verdict = forestVerdict(orientedInterval(difference?.overall?.interval, primary?.better === "lower" ? -1 : 1));
-    return el("div", { class: `mx-sc ex-arm${state.startsWith("winner") ? " ex-arm-winner" : ""}`, role: "group", "aria-label": `Arm ${arm.name}` }, [
-      el("span", { class: "mx-sc-label" }, [
+    const figure = estimate ? fmtValue(estimate.mean, unit) : "—";
+    return el("div", {
+      class: `stat-tile ex-arm${state.startsWith("winner") ? " ex-arm-winner" : ""}`,
+      role: "group",
+      "aria-label": `Arm ${arm.name}`,
+      "data-state": estimate ? null : "unknown",
+    }, [
+      el("span", { class: "stat-tile-label" }, [
         armSwatch(armColor(color(arm.name))),
-        el("span", { class: "ex-arm-title", text: arm.name }),
-        el("span", { class: "mx-sc-tag", text: `weight ${arm.weight}` }),
-        arm.drifted ? el("span", { class: "mx-sc-tag ex-warn-text", text: "drifted" }) : null,
-        deliveryIsLow(arm.delivery, readout) ? el("span", { class: "mx-sc-tag ex-warn-text", text: "low delivery" }) : null,
+        el("span", { class: "stat-tile-label-text ex-arm-title", text: arm.name }),
+        el("span", { class: "stat-tile-tag", text: `weight ${arm.weight}` }),
+        arm.drifted ? el("span", { class: "stat-tile-tag ex-warn-text", text: "drifted" }) : null,
+        deliveryIsLow(arm.delivery, readout) ? el("span", { class: "stat-tile-tag ex-warn-text", text: "low delivery" }) : null,
         el("span", { class: `ex-arm-verdict ex-arm-verdict-${state.replace(/\W+/g, "-").replace(/-$/, "")}`, text: state }),
       ]),
       el("span", { class: "ex-arm-figure" }, [
-        el("span", { class: "mx-sc-value", text: estimate ? fmtValue(estimate.mean, unit) : "—" }),
+        el("span", { class: "stat-tile-figure", text: figure }),
         estimateDifference != null ? el("span", {
           class: `ex-arm-diff ex-forest-${verdict}`,
           text: `${fmtValue(estimateDifference, unit, { diff: true })} vs control`,
           title: FOREST_VERDICTS[verdict],
         }) : null,
       ]),
-      el("span", { class: "mx-sc-foot", text: interval ? `95% ${interval}` : "no interval yet" }),
-      el("span", { class: "mx-sc-sub ex-arm-n" }, [
+      interval ? el("span", { class: "stat-tile-note", text: `95% ${interval}` }) : null,
+      el("span", { class: "stat-tile-compare ex-arm-n" }, [
         `n ${arm.n}`,
         estimate ? ` · ${estimate.n} settled` : "",
         estimate?.open ? ` · ${estimate.open} open` : "",
@@ -168,7 +170,7 @@ export function armCards(experiment, readout, primary, color) {
   });
   const title = primary ? `Arms · ${metricLabel(primary.metric)}` : "Arms";
   const meta = primary ? `${primary.kind === "rate" ? "rate" : "mean"}, ${primary.better} is better · ${unitLabel(primary.unit)}` : "no primary metric";
-  return experimentCard(title, [el("div", { class: "mx-series ex-arms" }, cards)], { meta });
+  return experimentCard(title, [el("div", { class: "stat-tiles" }, [el("div", { class: "stat-tiles-row" }, cards)])], { meta });
 }
 
 // One row per arm of what sits behind its card: delivery,
@@ -179,18 +181,26 @@ export function armEvidenceCard(readout) {
   const unit = (readout.metrics || []).find((metric) => metric.metric === primaryName)?.unit;
   const cost = (readout.metrics || []).find((metric) => metric.metric === "cost_usd");
   const costOf = (arm) => cost?.arms?.find((row) => row.arm === arm.name)?.cost_coverage;
-  const deliveryRoles = arms.find((arm) => arm.delivery)?.delivery.roles || [];
   const minDelivered = Math.round((readout.experiment?.min_delivered_rate ?? 0) * 100);
   const columns = [
     arms.some((arm) => arm.delivery) ? {
       head: "Delivered",
-      hint: `Settled tasks whose ${deliveryRoles.join(", ")} step received this arm's overlay and finished successfully. Below ${minDelivered}% the verdict is withheld. Pending tasks are in flight and not yet delivered.`,
-      cell: (arm) => (arm.delivery ? {
-        text: `${arm.delivery.delivered} of ${arm.delivery.assigned - arm.delivery.pending}`
-          + (arm.delivery.rate != null ? ` (${Math.round(arm.delivery.rate * 100)}%)` : "")
-          + (arm.delivery.pending ? ` · ${arm.delivery.pending} pending` : ""),
-        className: deliveryIsLow(arm.delivery, readout) ? "ex-warn-text" : null,
-      } : { text: "—" }),
+      hint: `Tasks with evidence of the arm's treatment. Below ${minDelivered}% the verdict is withheld. Pending tasks are in flight and excluded from the rate.`,
+      cell: (arm) => {
+        const delivery = arm.delivery;
+        if (!delivery) return { text: "—" };
+        const roles = delivery.roles || [];
+        const evidence = [];
+        if (roles.length) evidence.push(`Steps for ${roles.join(", ")} received the overlay and succeeded.`);
+        if (delivery.crew ?? !roles.length) evidence.push("Admission recorded the arm’s crew overlay.");
+        return {
+          text: `${delivery.delivered} of ${delivery.assigned - delivery.pending}`
+            + (delivery.rate != null ? ` (${Math.round(delivery.rate * 100)}%)` : "")
+            + (delivery.pending ? ` · ${delivery.pending} pending` : ""),
+          hint: evidence.join(" "),
+          className: deliveryIsLow(delivery, readout) ? "ex-warn-text" : null,
+        };
+      },
     } : null,
     readout.per_protocol ? {
       head: "Per-protocol",
@@ -221,7 +231,7 @@ export function armEvidenceCard(readout) {
       el("th", { scope: "row" }, [el("span", { class: "ex-arm-name" }, [armSwatch(armColor(index)), arm.name])]),
       ...columns.map((column) => {
         const cell = column.cell(arm);
-        return el("td", { class: cell.className || null, text: cell.text });
+        return el("td", { class: cell.className || null }, [cell.text, cell.hint ? pinnedInfoHint(cell.hint) : null]);
       }),
     ]))),
   ]);
@@ -313,7 +323,7 @@ export function forestCard(experiment, readout, color) {
     return el("div", { class: "ex-forest-group" }, [
       el("div", { class: "ex-forest-metric" }, [
         el("span", { class: "ex-forest-name", text: metricLabel(metric.metric) }),
-        ...tags.map((tag) => el("span", { class: "mx-sc-tag", text: tag })),
+        ...tags.map((tag) => el("span", { class: "stat-tile-tag", text: tag })),
       ]),
       el("div", { class: "ex-forest-rows", role: "list" }, rows),
     ]);
@@ -411,8 +421,12 @@ export function cumulativeCard(readout, primary, color) {
   }
   let lo = Math.min(...values);
   let hi = Math.max(...values);
-  if (unit === "rate") { lo = 0; hi = Math.max(hi, 1e-9) > 0.5 ? 1 : Math.min(1, hi * 1.2); }
-  else {
+  if (unit === "rate") {
+    lo = 0;
+    // A settled all-zero rate keeps zero at the baseline under a readable
+    // nondegenerate percent span (0%, 5%, 10%) rather than collapsing ticks.
+    hi = hi <= 0 ? 0.1 : hi > 0.5 ? 1 : Math.min(1, Math.max(hi * 1.2, 0.01));
+  } else {
     const pad = (hi - lo) * 0.1 || Math.abs(hi) * 0.1 || 1;
     lo = Math.max(0, lo - pad);
     hi += pad;
@@ -447,41 +461,105 @@ export function cumulativeCard(readout, primary, color) {
   tip.hidden = true;
   const cursor = el("div", { class: "mx-cursor" });
   cursor.hidden = true;
-  const hover = el("div", { class: "ex-cum-hover" });
+  const hover = el("div", { class: "ex-cum-hover", role: "group", "aria-label": "Cumulative buckets: use left and right arrow keys to inspect each bucket" });
+  const columns = [];
+  let hoveredIndex = null;
+  let focusedIndex = null;
+  let visibleIndex = null;
+  const hideBucket = () => {
+    visibleIndex = null;
+    tip.hidden = true;
+    cursor.hidden = true;
+  };
+  const showBucket = (index) => {
+    visibleIndex = index;
+    tip.replaceChildren(
+      el("div", { class: "mx-tip-title", text: cumulativeHover(firstPoints[index]?.start, bucketSeconds, bucketUntil, index === buckets - 1) }),
+      ...arms.map((arm) => {
+        const point = arm.points?.[index] || {};
+        return el("div", { class: "mx-tip-row" }, [
+          el("span", { class: "mx-tip-name" }, [armSwatch(armColor(color(arm.arm))), el("span", { text: arm.arm })]),
+          el("span", { class: "mx-tip-n", text: `n ${point.n ?? 0}` }),
+          el("span", { class: "mx-tip-value", text: fmtValue(point.value, unit) }),
+        ]);
+      }),
+    );
+    const left = xOf(index);
+    cursor.style.left = `${left}%`;
+    tip.hidden = false;
+    // This narrow card can sit against the pane's clipped right edge even
+    // at its middle bucket. Measure the shown tip, then keep it inside both
+    // the plot and the viewport, including when its CSS width changes.
+    const bounds = hover.getBoundingClientRect();
+    const minLeft = Math.max(bounds.left, 0);
+    const maxRight = Math.min(bounds.right, document.documentElement.clientWidth);
+    tip.style.maxWidth = `${Math.max(0, maxRight - minLeft)}px`;
+    const tipWidth = tip.getBoundingClientRect().width;
+    const anchor = bounds.left + bounds.width * left / 100;
+    const preferred = anchor + 14 + tipWidth <= maxRight ? anchor + 14 : anchor - 14 - tipWidth;
+    tip.style.left = `${Math.max(minLeft, Math.min(preferred, maxRight - tipWidth)) - bounds.left}px`;
+    cursor.hidden = false;
+  };
+  const setRovingBucket = (activeIndex) => {
+    columns.forEach((col, i) => { col.tabIndex = i === activeIndex ? 0 : -1; });
+  };
   for (let index = 0; index < buckets; index += 1) {
-    const column = el("span", { class: "ex-cum-col" });
-    const show = () => {
-      tip.replaceChildren(
-        el("div", { class: "mx-tip-title", text: cumulativeHover(firstPoints[index]?.start, bucketSeconds, bucketUntil, index === buckets - 1) }),
-        ...arms.map((arm) => {
-          const point = arm.points?.[index] || {};
-          return el("div", { class: "mx-tip-row" }, [
-            el("span", { class: "mx-tip-name" }, [armSwatch(armColor(color(arm.arm))), el("span", { text: arm.arm })]),
-            el("span", { class: "mx-tip-n", text: `n ${point.n ?? 0}` }),
-            el("span", { class: "mx-tip-value", text: fmtValue(point.value, unit) }),
-          ]);
-        }),
-      );
-      const left = xOf(index);
-      cursor.style.left = `${left}%`;
-      tip.hidden = false;
-      // This narrow card can sit against the pane's clipped right edge even
-      // at its middle bucket. Measure the shown tip, then keep it inside both
-      // the plot and the viewport, including when its CSS width changes.
-      const bounds = hover.getBoundingClientRect();
-      const minLeft = Math.max(bounds.left, 0);
-      const maxRight = Math.min(bounds.right, document.documentElement.clientWidth);
-      tip.style.maxWidth = `${Math.max(0, maxRight - minLeft)}px`;
-      const tipWidth = tip.getBoundingClientRect().width;
-      const anchor = bounds.left + bounds.width * left / 100;
-      const preferred = anchor + 14 + tipWidth <= maxRight ? anchor + 14 : anchor - 14 - tipWidth;
-      tip.style.left = `${Math.max(minLeft, Math.min(preferred, maxRight - tipWidth)) - bounds.left}px`;
-      cursor.hidden = false;
-    };
-    column.addEventListener("mouseenter", show);
+    const windowText = cumulativeHover(firstPoints[index]?.start, bucketSeconds, bucketUntil, index === buckets - 1);
+    const bucketSummary = `${windowText}: ${arms.map((arm) => {
+      const point = arm.points?.[index] || {};
+      return `${arm.arm} n=${point.n ?? 0} ${fmtValue(point.value, unit)}`;
+    }).join(", ")}`;
+    const column = el("span", {
+      class: "ex-cum-col",
+      role: "img",
+      "aria-label": bucketSummary,
+    });
+    column.tabIndex = index === 0 ? 0 : -1;
+    column.addEventListener("mouseenter", () => {
+      hoveredIndex = index;
+      showBucket(index);
+    });
+    column.addEventListener("focus", () => {
+      focusedIndex = index;
+      setRovingBucket(index);
+      showBucket(index);
+    });
+    column.addEventListener("blur", () => {
+      if (focusedIndex === index) focusedIndex = null;
+      if (visibleIndex === index) {
+        if (hoveredIndex != null) showBucket(hoveredIndex);
+        else hideBucket();
+      }
+    });
+    columns.push(column);
     hover.appendChild(column);
   }
-  hover.addEventListener("mouseleave", () => { tip.hidden = true; cursor.hidden = true; });
+  hover.addEventListener("mouseleave", () => {
+    hoveredIndex = null;
+    if (focusedIndex != null) showBucket(focusedIndex);
+    else hideBucket();
+  });
+  hover.addEventListener("keydown", (event) => {
+    const current = focusedIndex ?? visibleIndex ?? 0;
+    if (event.key === "Escape") {
+      if (visibleIndex != null) {
+        event.preventDefault();
+        event.stopPropagation();
+        hideBucket();
+      }
+      return;
+    }
+    let next = null;
+    if (event.key === "ArrowRight") next = Math.min(buckets - 1, current + 1);
+    else if (event.key === "ArrowLeft") next = Math.max(0, current - 1);
+    else if (event.key === "Home") next = 0;
+    else if (event.key === "End") next = buckets - 1;
+    if (next == null) return;
+    event.preventDefault();
+    setRovingBucket(next);
+    columns[next]?.focus();
+    showBucket(next);
+  });
   const legend = el("div", { class: "ex-legend" }, arms.map((arm) =>
     el("span", { class: "ex-legend-item" }, [armSwatch(armColor(color(arm.arm))), arm.arm])));
   const width = series.window?.bucket_seconds;
@@ -492,7 +570,7 @@ export function cumulativeCard(readout, primary, color) {
   }).join(", ")}`;
   return experimentCard(title, [
     legend,
-    el("div", { class: "ex-cum", role: "img", "aria-label": label }, [
+    el("div", { class: "ex-cum", role: "region", "aria-label": label }, [
       el("div", { class: "ex-cum-y" }, ticks),
       el("div", { class: "ex-cum-frame" }, [plot, ...ends, cursor, hover, tip]),
     ]),

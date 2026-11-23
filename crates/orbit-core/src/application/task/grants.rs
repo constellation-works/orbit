@@ -40,4 +40,23 @@ impl OrbitRuntime {
         }
         Ok(())
     }
+
+    /// Refuse a run-bound tool in `field`. Such a tool is served only to
+    /// the managed runs Orbit itself mints for it, so no operator or task
+    /// may name it as a requirement or a grant.
+    pub(crate) fn refuse_run_bound_tool_names(
+        &self,
+        field: &str,
+        names: &[String],
+    ) -> Result<(), OrbitError> {
+        match normalize_required_tools(names.to_vec())
+            .into_iter()
+            .find(|name| self.tool_registry().is_run_bound(name))
+        {
+            Some(name) => Err(OrbitError::InvalidInput(format!(
+                "{field} cannot name '{name}': it is served only to the runs Orbit starts for it"
+            ))),
+            None => Ok(()),
+        }
+    }
 }

@@ -7,8 +7,8 @@
 use std::path::Path;
 
 use orbit_common::OrbitError;
-use orbit_common::security::redaction::redact_home_dir;
 
+use crate::config_document;
 use crate::config_io::read_config_file;
 
 /// Read an admitted config leaf and parse it as one TOML document.
@@ -21,10 +21,7 @@ pub(crate) fn read_config_toml(path: &Path) -> Result<Option<toml::Value>, Orbit
     let Some(raw) = read_config_file(path)? else {
         return Ok(None);
     };
-    toml::from_str(&raw).map(Some).map_err(|error| {
-        OrbitError::InvalidInput(format!(
-            "invalid runtime config '{}': {error}",
-            redact_home_dir(&path.display().to_string())
-        ))
-    })
+    toml::from_str(&raw)
+        .map(Some)
+        .map_err(|error| config_document::invalid_runtime_config(path, error))
 }

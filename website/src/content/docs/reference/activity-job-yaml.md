@@ -595,7 +595,7 @@ orbit script history package
 orbit script revoke package
 ```
 
-`orbit script grant` takes `--network`, `--read-root`, `--write-root`, `--env-pass`, `--follower`, `--output-max-files` and `--output-max-file-bytes`. `list` and `show` report each script as `granted`, `stale`, `ungranted` or `orphaned`. `history` lists every attempt, refusals included.
+`orbit script grant` takes `--network`, `--read-root`, `--write-root`, `--env-pass`, `--follower`, `--output-max-files`, `--output-max-file-bytes`, `--memory-max`, `--tasks-max` and `--cpu-quota`. The last three set the script's own systemd scope on Linux; each defaults to this host's `machine.worker_*` value and is capped at it. `list` and `show` report each script as `granted`, `stale`, `ungranted` or `orphaned`. `history` lists every attempt, refusals included.
 
 ### How a script runs
 

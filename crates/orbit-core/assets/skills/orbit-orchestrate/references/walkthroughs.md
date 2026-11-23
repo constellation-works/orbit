@@ -1,5 +1,16 @@
 # Common orchestration decisions
 
+## Contents
+
+- [Correct a running task's course](#correct-a-running-tasks-course)
+- [Missing context](#missing-context)
+- [Duplicate or already-landed warning](#duplicate-or-already-landed-warning)
+- [Dependency or file lock](#dependency-or-file-lock)
+- [Missing operator capability](#missing-operator-capability)
+- [CI reports a failure after the fix merged](#ci-reports-a-failure-after-the-fix-merged)
+- [Provider limits change during a window](#provider-limits-change-during-a-window)
+- [Window expires or the user stops](#window-expires-or-the-user-stops)
+
 ## Correct a running task's course
 
 First check whether the task's existing acceptance criteria still describe the
@@ -20,7 +31,9 @@ Verify delivery in `orbit task show <task-id>` by finding the
 `steering_delivered` history event for the run and step and checking that the
 comment appears under `delivered`. A comment under `truncated` was not carried
 in full. The delivery watermark is internal host state; the history event is
-the operator-facing receipt. Agent narrative in the execution summary can
+the operator-facing receipt.
+
+Agent narrative in the execution summary can
 provide diagnostic context, but is not required to confirm delivery.
 
 Before `commit`, the owner PR and local pipelines and their claimed variants
@@ -29,7 +42,9 @@ the uncommitted candidate back through the implementer, up to
 `workflow.mid_run_steering.max_rounds` (default `2`, allowed `1`–`10`).
 If rounds are exhausted, or a round carries none of the still-outstanding
 comments, the task is held with `steering_unconsumed`; no candidate is
-committed. Read the outstanding comments and decide whether to requeue, reply
+committed.
+
+Read the outstanding comments and decide whether to requeue, reply
 with more guidance, or accept the candidate through the normal review record.
 
 If the task's actual scope or acceptance criteria changed, use a fresh run:
@@ -78,7 +93,7 @@ Check the connected server's advertised tools and schemas. A missing option
 may have an authorized administrative equivalent on the same host; a denied
 capability is not permission to bypass that boundary. Report the specific gap
 if no supported route exists. A managed leaf worker cannot dispatch follow-up
-runs. See [tool-surface.md](../../orbit/references/tool-surface.md).
+runs. See [tool-surface-routing.md](../../orbit/references/tool-surface-routing.md).
 
 ## CI reports a failure after the fix merged
 
@@ -101,7 +116,9 @@ authorized, establish the original deadline, confirm how to stop new admissions
 without cancelling existing children, and verify the old coordinator stopped
 before starting its replacement. Use only the remaining duration and preserve
 completion authority (`--complete` when originally authorized), scope, and
-capacity. If that cannot be done safely, leave the run unchanged and report
+capacity.
+
+If that cannot be done safely, leave the run unchanged and report
 the limitation. No fresh window is implied.
 
 ## Window expires or the user stops

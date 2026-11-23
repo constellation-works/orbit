@@ -262,6 +262,11 @@ pub(super) const DASHBOARD_FILES: &[(&str, &str, &[u8])] = &[
         include_bytes!("../assets/dashboard/js/field-editor.js"),
     ),
     (
+        "/static/js/friction-detail.js",
+        JS,
+        include_bytes!("../assets/dashboard/js/friction-detail.js"),
+    ),
+    (
         "/static/js/audit.js",
         JS,
         include_bytes!("../assets/dashboard/js/audit.js"),
@@ -325,6 +330,11 @@ pub(super) const DASHBOARD_FILES: &[(&str, &str, &[u8])] = &[
         "/static/js/metrics.js",
         JS,
         include_bytes!("../assets/dashboard/js/metrics.js"),
+    ),
+    (
+        "/static/js/metrics-panels.js",
+        JS,
+        include_bytes!("../assets/dashboard/js/metrics-panels.js"),
     ),
     (
         "/static/js/metrics-tokens.js",
@@ -575,11 +585,6 @@ pub(super) const DASHBOARD_FILES: &[(&str, &str, &[u8])] = &[
         "/static/js/notices.js",
         JS,
         include_bytes!("../assets/dashboard/js/notices.js"),
-    ),
-    (
-        "/static/js/memory.js",
-        JS,
-        include_bytes!("../assets/dashboard/js/memory.js"),
     ),
 ];
 pub(super) const DASHBOARD_CSP: &str = concat!(

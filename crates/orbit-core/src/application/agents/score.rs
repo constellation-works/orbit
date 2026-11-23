@@ -437,6 +437,12 @@ fn resampled_interval(
 
 /// A term's part of the raw score: weight × (rate − expected rate), or 0
 /// while the term has no units or is below its own minimum support.
+///
+/// Per-task expectations are accumulated in `f64`, so mathematically equal
+/// observed and expected rates can differ by a few ULPs. Noise within
+/// floating-point rounding snaps to positive `0.0` so equal rates plot on the
+/// middle ring, while every genuine excess keeps full `f64` precision for
+/// both `raw` and `contributions`.
 fn contribution(input: &RowInput<'_>, per_100: &BTreeMap<&'static str, f64>, term: &Term) -> f64 {
     if input.provisional_term(term.key) || input.units_of(term.key) == 0 {
         return 0.0;
@@ -447,7 +453,14 @@ fn contribution(input: &RowInput<'_>, per_100: &BTreeMap<&'static str, f64>, ter
         .and_then(|counts| counts.get(term.key))
         .copied()
         .unwrap_or(0.0);
-    term.weight * (per_100[term.key] - expected * 100.0 / input.units_of(term.key).max(1) as f64)
+    let observed_rate = per_100[term.key];
+    let expected_rate = expected * 100.0 / input.units_of(term.key).max(1) as f64;
+    let tolerance = 32.0 * f64::EPSILON * observed_rate.abs().max(expected_rate.abs());
+    if (observed_rate - expected_rate).abs() <= tolerance {
+        return 0.0;
+    }
+    let excess = term.weight * (observed_rate - expected_rate);
+    if excess == 0.0 { 0.0 } else { excess }
 }
 
 impl Scored<'_> {
@@ -531,6 +544,16 @@ impl Scored<'_> {
                     .collect::<serde_json::Map<String, Value>>()
             );
             payload["score_base"] = json!(100);
+            // The rounded `expected` and `per_100` fields stay the display
+            // contract. The chart and score breakdown need the same full-
+            // precision signed excess the raw score sums, including a term
+            // whose displayed expected count rounds to zero or is below 1e-9.
+            payload["contributions"] = json!(
+                terms
+                    .iter()
+                    .map(|term| (term.key.to_string(), json!(self.contribution(term))))
+                    .collect::<serde_json::Map<String, Value>>()
+            );
         }
         payload
     }

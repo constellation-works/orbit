@@ -29,7 +29,7 @@ use orbit_types::workflow::handoff::{HandoffCandidate, HandoffDelivery, LandingS
 use super::TaskCommitBoundary;
 use super::admission::{ADMISSION_RESERVATION_TTL_SECONDS, RECEIPT_KIND, StoredReceipt, digest};
 use super::lifecycle::{CLAIM, STATE, decode_state, encode, row};
-use super::selection::Screen;
+use super::selection::{DependencyReach, Screen};
 use crate::contracts::*;
 
 /// How long a pending repair waits for its original executor before the
@@ -56,9 +56,16 @@ struct RepairCandidate<'a> {
 impl TaskCommitBoundary {
     /// Admit the first pending repair this pull may take, as a new claim.
     ///
-    /// Returns `true` when a repair claim was committed. Pending repairs this
-    /// executor may not take, or cannot run, are reported on `receipt` and
-    /// left for one that can. Caller holds the admission boundary.
+    /// Returns `Ok(Some(true))` when a repair claim was committed,
+    /// `Ok(Some(false))` when none was admitted, and `Ok(None)` when admitting
+    /// a perf-lane repair requires the host-wide admission section.
+    /// Pending repairs this executor may not take, or cannot run, are reported
+    /// on `receipt` and left for one that can. Caller holds the admission
+    /// boundary.
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "mirrors the admission section state passed by admit_locked plus DependencyReach"
+    )]
     pub(super) fn admit_repair_locked(
         &self,
         screen: &Screen<'_>,
@@ -67,17 +74,16 @@ impl TaskCommitBoundary {
         tasks: &[Task],
         receipt: &mut AdmissionReceipt,
         guidance_capture: &super::admission::AdmissionGuidanceCapture<'_>,
-    ) -> Result<bool, OrbitError> {
-        let candidates = self.repair_candidates(
-            screen.identity,
-            screen.request,
-            tasks,
-            receipt,
-            screen.executor_host_os,
-            screen.tag_label_requirements,
-        )?;
+        reach: DependencyReach,
+    ) -> Result<Option<bool>, OrbitError> {
+        let candidates = self.repair_candidates(screen, tasks, receipt)?;
         receipt.queue_depth += candidates.len();
         for candidate in candidates {
+            if reach == DependencyReach::Partition
+                && orbit_types::task::needs_perf_lane(&candidate.task.tags)
+            {
+                return Ok(None);
+            }
             let guidance = guidance_capture(candidate.task)?;
             receipt.experiments = Some(guidance.experiments);
             if self.commit_repair_claim(
@@ -88,10 +94,10 @@ impl TaskCommitBoundary {
                 &candidate,
                 &guidance.artifacts,
             )? {
-                return Ok(true);
+                return Ok(Some(true));
             }
         }
-        Ok(false)
+        Ok(Some(false))
     }
 
     /// Every `repair_pending` claim, with its original executor and why
@@ -118,13 +124,11 @@ impl TaskCommitBoundary {
 
     fn repair_candidates<'a>(
         &self,
-        identity: &AdmissionIdentity,
-        request: &AdmissionRequest,
+        screen: &Screen<'_>,
         tasks: &'a [Task],
         receipt: &mut AdmissionReceipt,
-        executor_host_os: &std::collections::BTreeMap<String, orbit_types::task::ExecutorOsLimit>,
-        tag_label_requirements: &orbit_types::task::TagLabelRequirements,
     ) -> Result<Vec<RepairCandidate<'a>>, OrbitError> {
+        let (identity, request) = (screen.identity, screen.request);
         let mut candidates = Vec::new();
         for state in self.live_claim_states_locked()? {
             if state.claim.phase != ExecutionClaimPhase::RepairPending {
@@ -161,7 +165,7 @@ impl TaskCommitBoundary {
                 receipt.invalid_candidates.push(diagnose(reason));
                 continue;
             }
-            if let Some(reason) = os_unavailable(request.os, task, executor_host_os) {
+            if let Some(reason) = os_unavailable(request.os, task, screen.executor_host_os) {
                 receipt.os_unavailable.push(diagnose(reason));
                 continue;
             }
@@ -169,7 +173,7 @@ impl TaskCommitBoundary {
                 request.os,
                 &request.labels,
                 task,
-                tag_label_requirements,
+                screen.tag_label_requirements,
             ) {
                 receipt.labels_unavailable.push(diagnose(reason));
                 continue;
@@ -192,6 +196,19 @@ impl TaskCommitBoundary {
                 .and_then(|fit| fit.unfit_reason(task))
             {
                 receipt.capacity_unavailable.push(diagnose(reason));
+                continue;
+            }
+            if orbit_types::task::needs_perf_lane(&task.tags)
+                && let Some(holder) = screen
+                    .perf_lane_holders
+                    .iter()
+                    .find(|holder| holder.as_str() != task.id.as_str())
+            {
+                receipt.deferred_conflicts.push(AdmissionDiagnostic {
+                    task_id: task_id.clone(),
+                    reason: orbit_types::task::perf_lane_hold_reason(holder),
+                    blocked_by: vec![holder.clone()],
+                });
                 continue;
             }
             let stop_evidence = self

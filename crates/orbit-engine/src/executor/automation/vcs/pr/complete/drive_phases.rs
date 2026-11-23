@@ -31,6 +31,7 @@ use super::absent_check_runs::{AbsentCheckRunPoll, AbsentCheckRuns};
 use super::ci_rerun_hold::{CiRerunHold, CiRerunHoldStep, CiRerunRecoveryOutcome};
 use super::conflict::is_blocked_merge_state;
 use super::drive::Delivery;
+use super::inherited_refresh::RerunFailureStep;
 use super::mutation::{checked_required_check_observation_failure, observation_failure};
 use super::reviewed::{ensure_pr_head_is_reviewed, merge_wait_timeout};
 
@@ -104,6 +105,8 @@ pub(super) struct PollDriver<'a, H: RuntimeHost + ?Sized> {
     pub(super) requested_landed_commit: Option<String>,
     pub(super) conflict_refresh_attempted: bool,
     pub(super) landed_refresh_attempted: bool,
+    /// [ORB-26860] This completion refreshed a base-inherited failure's head.
+    pub(super) inherited_refresh_attempted: bool,
     pub(super) merge_capabilities: Option<PermittedMerge>,
     pub(super) base_modified_refusals: u32,
     pub(super) base_race: Option<String>,
@@ -273,7 +276,8 @@ impl<H: RuntimeHost + ?Sized> PollDriver<'_, H> {
         let mutated = self.merge_requested
             || self.auto_merge_requested
             || self.conflict_refresh_attempted
-            || self.landed_refresh_attempted;
+            || self.landed_refresh_attempted
+            || self.inherited_refresh_attempted;
         self.mutated = mutated;
         let observed = |error| observation_failure(host, input, mutated, observation_budget, error);
         let status = if max_wait_seconds == 0 {
@@ -308,6 +312,9 @@ impl<H: RuntimeHost + ?Sized> PollDriver<'_, H> {
         let mut base_refresh_wait = false;
         if let Some(auto_fix) = auto_fix {
             self.pin.ensure_candidate_identity(&status, pr_number)?;
+            // [ORB-26860] A reserved, verified base-only refresh of the
+            // candidate becomes the candidate before any head check.
+            self.adopt_inherited_refresh(auto_fix, &status);
             // Honor a durable wait before any head/base log diagnosis, including
             // conflict and resumed paths. The freshly read head was pinned above.
             if has_failures
@@ -508,26 +515,18 @@ impl<H: RuntimeHost + ?Sized> PollDriver<'_, H> {
         let pending_required = observed_poll.pending_required;
         let base_refresh_wait = observed_poll.infrastructure_wait;
         let mut infrastructure_wait = base_refresh_wait;
-        if let Some(auto_fix) = auto_fix
-            && !base_refresh_wait
-            && matches!(
-                observed_poll.state,
-                PrMergeState::Mergeable | PrMergeState::Pending | PrMergeState::Blocked(_)
-            )
-        {
-            let verdict = blocked_verdict(status, self.unsettled_polls, pending_required);
-            let diagnose = is_blocked_merge_state(status)
-                && (matches!(verdict, BlockedVerdict::RepairChecks(_))
-                    || !self.unreported.failed_workflow_runs.is_empty());
-            if let BlockedVerdict::Stop(BlockedStopReason::CheckRefusal(reason)) = &verdict {
-                let error = stopped(pr_number, &reason.to_string());
-                return Err(match reason.delivery_refusal() {
-                    Some(code) => hold_auto_fix_stop(error, code),
-                    None => error,
-                });
-            }
-            if diagnose {
-                let retry = super::super::auto_fix::recover_ci_rerun(
+        // [ORB-27076] The forge can report DIRTY once the base lands a
+        // conflicting edit after the no-edit rerun was sent on a BLOCKED head.
+        // The rerun's failed result is still the base-inherited evidence, so
+        // that conflicting PR takes the refresh-or-hold step below; one
+        // without that evidence keeps the ordinary conflict route.
+        let conflict_rerun_failure = match auto_fix {
+            Some(auto_fix)
+                if matches!(observed_poll.state, PrMergeState::Conflict)
+                    && !base_refresh_wait
+                    && observed_poll.base_red_reason.is_none() =>
+            {
+                super::super::auto_fix::failed_no_edit_rerun(
                     host,
                     auto_fix,
                     input,
@@ -535,8 +534,60 @@ impl<H: RuntimeHost + ?Sized> PollDriver<'_, H> {
                     pr_number,
                     status,
                     completion_deadline_ms,
-                    &mut *self.diagnostic,
-                );
+                )
+            }
+            _ => None,
+        };
+        if let Some(auto_fix) = auto_fix
+            && !base_refresh_wait
+            && (conflict_rerun_failure.is_some()
+                || matches!(
+                    observed_poll.state,
+                    PrMergeState::Mergeable | PrMergeState::Pending | PrMergeState::Blocked(_)
+                ))
+        {
+            let verdict = blocked_verdict(status, self.unsettled_polls, pending_required);
+            let diagnose = conflict_rerun_failure.is_some()
+                || (is_blocked_merge_state(status)
+                    && (matches!(verdict, BlockedVerdict::RepairChecks(_))
+                        || !self.unreported.failed_workflow_runs.is_empty()));
+            if conflict_rerun_failure.is_none()
+                && let BlockedVerdict::Stop(BlockedStopReason::CheckRefusal(reason)) = &verdict
+            {
+                let error = stopped(pr_number, &reason.to_string());
+                return Err(match reason.delivery_refusal() {
+                    Some(code) => hold_auto_fix_stop(error, code),
+                    None => error,
+                });
+            }
+            if diagnose {
+                let retry = match conflict_rerun_failure {
+                    Some(reason) => Ok(CiRerunRecovery::NoEditRerunFailed(reason)),
+                    None => super::super::auto_fix::recover_ci_rerun(
+                        host,
+                        auto_fix,
+                        input,
+                        workspace_path,
+                        pr_number,
+                        status,
+                        completion_deadline_ms,
+                        &mut *self.diagnostic,
+                    ),
+                };
+                // [ORB-26860] The no-edit rerun failed again: refresh a
+                // base-inherited failure's head once, or hold.
+                let retry = match retry {
+                    Ok(CiRerunRecovery::NoEditRerunFailed(reason)) => {
+                        match self.refresh_after_failed_rerun(auto_fix, status, &reason)? {
+                            RerunFailureStep::Repoll => return Ok(RecoveryFlow::ContinuePoll),
+                            RerunFailureStep::Hold(reason) => Ok(CiRerunRecovery::Held {
+                                refusal: DeliveryRefusal::RepairDispatched,
+                                reason,
+                            }),
+                        }
+                    }
+                    other => other,
+                };
                 let waited_seconds = self.waited_seconds;
                 let last_poll = waited_seconds.saturating_add(self.poll_interval_seconds)
                     >= self.max_wait_seconds;
@@ -551,6 +602,16 @@ impl<H: RuntimeHost + ?Sized> PollDriver<'_, H> {
                     Ok(CiRerunRecovery::NotEligible) => CiRerunRecoveryOutcome::NotEligible,
                     Ok(CiRerunRecovery::Stopped(reason)) => {
                         CiRerunRecoveryOutcome::Stopped(reason.as_str())
+                    }
+                    Ok(CiRerunRecovery::Held { refusal, reason }) => CiRerunRecoveryOutcome::Held {
+                        refusal: *refusal,
+                        reason: reason.as_str(),
+                    },
+                    Ok(CiRerunRecovery::NoEditRerunFailed(reason)) => {
+                        CiRerunRecoveryOutcome::Held {
+                            refusal: DeliveryRefusal::RepairDispatched,
+                            reason: reason.as_str(),
+                        }
                     }
                     Err(error) => {
                         let deferred = self
@@ -595,6 +656,9 @@ impl<H: RuntimeHost + ?Sized> PollDriver<'_, H> {
                     }
                     CiRerunHoldStep::Stop(reason) => {
                         return Err(stopped(pr_number, &reason));
+                    }
+                    CiRerunHoldStep::HoldRefused { refusal, reason } => {
+                        return Err(hold_auto_fix_stop(stopped(pr_number, &reason), refusal));
                     }
                     CiRerunHoldStep::PreserveHold => {}
                 }

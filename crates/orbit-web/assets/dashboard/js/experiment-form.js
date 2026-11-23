@@ -129,6 +129,9 @@ function blankArm(name, control) {
     skills: { rows: [], roles: ["implement"] },
     config: { rows: [], roles: ["implement"] },
     open: {},
+    // A stored memory treatment has no control in this form. It rides along
+    // unchanged so editing any other surface never drops it.
+    memory: null,
   };
 }
 
@@ -158,6 +161,7 @@ function armFromView(arm) {
   const overlay = arm.overlay && typeof arm.overlay === "object" ? arm.overlay : {};
   const state = blankArm(text(arm.name), Boolean(arm.control));
   state.weight = text(arm.weight ?? 1);
+  if (overlay.memory != null) state.memory = JSON.parse(JSON.stringify(overlay.memory));
   state.crew = (overlay.crew?.pool || []).map((member) => ({ key: key(), crew: text(member.crew), weight: text(member.weight ?? 1) }));
   for (const role of ROLES) {
     const value = overlay.instructions?.[role];
@@ -279,6 +283,7 @@ function armBody(arm) {
       roles: [...arm.config.roles],
     };
   }
+  if (arm.memory != null) overlay.memory = arm.memory;
   return { name: arm.name.trim(), control: arm.control, weight: count(arm.weight), overlay };
 }
 
@@ -307,11 +312,15 @@ function definitionBody(state) {
   };
   // Empty-value contract, shared by create, edit and Save and start: a blank
   // optional field is omitted, and an omitted field leaves the stored draft
-  // unchanged. Blank is a value only when the stored draft has none; edit
-  // callers must refuse `clearedOptionalFields` before sending.
+  // unchanged. Also omit an unchanged horizon so an older draft with an
+  // out-of-range value can still be edited. Start validates its saved horizon.
   if (fields.primary_metric) body.primary_metric = fields.primary_metric;
   for (const name of ["min_sample", "max_days"]) {
-    if (fields[name].trim()) body[name] = count(fields[name]);
+    const value = fields[name].trim();
+    if (value) {
+      if (name === "max_days" && value === text(state.original?.max_days)) continue;
+      body[name] = count(value);
+    }
   }
   if (fields.reason.trim()) body.reason = fields.reason.trim();
   const name = fields.name.trim();
@@ -323,14 +332,10 @@ function definitionBody(state) {
 // omitted field the stored draft already sets would silently keep its old
 // value, so callers refuse it before reporting a successful save. Create
 // mode has no stored draft, so nothing is ever cleared there.
-function clearedOptionalFields(original, body) {
+function clearedOptionalFields({ original, fields }) {
   if (!original) return [];
-  const cleared = [];
-  if (body.primary_metric === undefined && text(original.primary_metric).trim() !== "") cleared.push("primary_metric");
-  for (const name of ["min_sample", "max_days"]) {
-    if (body[name] === undefined && text(original[name]).trim() !== "") cleared.push(name);
-  }
-  return cleared;
+  return ["primary_metric", "min_sample", "max_days"]
+    .filter((name) => !fields[name].trim() && text(original[name]).trim());
 }
 
 const CLEAR_REFUSAL = {
@@ -415,7 +420,7 @@ async function submit(start) {
   // old value, so refuse it next to its field instead of saving. This one
   // check covers ordinary Save and the captured Save-and-start body.
   if (state.mode === "edit") {
-    const cleared = clearedOptionalFields(state.original, body);
+    const cleared = clearedOptionalFields(state);
     if (cleared.length) {
       showClearRefusal(state, cleared);
       return;
@@ -675,7 +680,7 @@ function rolePicker(roles, label) {
 function formView(state) {
   const fields = state.fields;
   const title = state.mode === "create" ? "New experiment" : `Edit draft ${state.original?.name || state.id}`;
-  const root = el("form", { class: "mx-card exf", "aria-label": title });
+  const root = el("form", { class: "card mx-card exf", "aria-label": title });
   root.dataset.key = "experiment-form";
   root.noValidate = true;
   root.setAttribute("aria-busy", String(state.pending));
@@ -760,9 +765,9 @@ function armView(state, arm, index) {
     state.errors = {};
     rerender();
   }, "exf-remove");
-  const card = el("section", { class: "exf-arm", "aria-label": `Arm ${index + 1}` }, [
+  const card = el("section", { class: "card card-dense exf-arm", "aria-label": `Arm ${index + 1}` }, [
     el("div", { class: "exf-arm-head" }, [
-      el("span", { class: "mx-sc-tag", text: arm.control ? "control" : "treatment" }),
+      el("span", { class: "stat-tile-tag", text: arm.control ? "control" : "treatment" }),
       remove,
     ]),
     el("div", { class: "exf-grid" }, [
@@ -932,7 +937,7 @@ function actionsView(state) {
       // Refuse a cleared optional field before confirming, so Save and start
       // cannot capture a body that would silently keep its old value.
       if (state.mode === "edit") {
-        const cleared = clearedOptionalFields(state.original, definitionBody(state));
+        const cleared = clearedOptionalFields(state);
         if (cleared.length) {
           showClearRefusal(state, cleared);
           return;

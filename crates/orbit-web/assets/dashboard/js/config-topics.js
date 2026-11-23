@@ -2,7 +2,7 @@
 // from the shared blocks in settings-ui.js.
 // Rows come from /api/config/effective; the shared drawer writes via
 // PUT/DELETE /api/config/keys/:key and re-reads via context.reload.
-import { captureWorkspaceVisit, el, fetchJson, requestJson } from './common.js';
+import { captureWorkspaceVisit, el, escCloseButton, fetchJson, requestJson } from './common.js';
 import { settingsEditButton, settingsIcon, settingsKeyName, settingsLabelName, settingsLayerLabel, settingsReadOnlyAction, settingsRow, settingsRowSource, settingsSearchField, settingsSection, settingsSource, syncSettingsBarHeight } from './settings-ui.js';
 
 let drawer = null; // {row, scope, text, error, pending, visit, lockGlobal}
@@ -25,6 +25,12 @@ window.addEventListener('hashchange', (event) => {
 const NOTICE_MS = 10000;
 
 export function resetTopics() { drawer = null; bulkRemoval = null; workflowQuery = ''; workflowCollapsed = new Set(); workflowSearchCollapsed = new Set(); expandedValues = new Set(); rawScope = null; rawText = null; notice = null; landedOtherHash = null; }
+
+// The Machine page's key drawer is this module's state. config.js's host
+// poll must not rebuild the tab while it is open.
+export function topicDrawerOpen() {
+  return drawer != null;
+}
 
 export function flatten(payload) {
   return (payload?.sections || []).flatMap((s) => s.keys || []);
@@ -98,12 +104,33 @@ const WORKFLOW_SECTIONS = [
   ['Steering', (k) => k.startsWith('workflow.mid_run_steering.')],
 ];
 
-function openDrawer(row, context, lockGlobal) {
-  if (!context.canEdit || row.settable === false) return;
+function openDrawer(row, context, lockGlobal, sectionTitle) {
+  // The drawer rows stay reachable behind it, so an Edit on another row must
+  // not replace a write still in flight: its result would be dropped.
+  if (!context.canEdit || row.settable === false || drawer?.pending) return;
   drawer = { row, scope: (lockGlobal || row.global_only) ? 'global' : (row.source?.layer === 'global' ? 'global' : 'workspace'),
     text: isStructured(row) ? JSON.stringify(row.value ?? (isTable(row) ? {} : []), null, 2) : Array.isArray(row.value) ? row.value.join('\n') : display(row.value) === '–' ? '' : String(row.value ?? ''),
-    error: null, pending: false, visit: captureWorkspaceVisit(), lockGlobal: !!(lockGlobal || row.global_only) };
+    error: null, pending: false, visit: captureWorkspaceVisit(), lockGlobal: !!(lockGlobal || row.global_only),
+    sectionTitle: sectionTitle || null };
   context.rerender?.();
+  document.querySelector('.config-drawer .settings-input')?.focus();
+}
+// Closing the drawer rebuilds the page, so the Edit control that opened it is
+// gone. Focus goes to the rebuilt Edit control for the same key; a row that is
+// no longer shown keeps whatever focus the rerender left.
+function focusRowEdit(key, sectionTitle) {
+  const rows = [...document.querySelectorAll('#config-body [data-key]')].filter((node) => node.dataset.key === key);
+  const section = sectionTitle ? sectionSlug(sectionTitle) : '';
+  const row = (section && rows.find((node) => node.id.startsWith(`key-${section}-`))) || rows[0];
+  row?.querySelector('.settings-edit')?.focus();
+}
+function closeDrawer(session, context) {
+  // A write in flight keeps its editor open: its result, success or refusal,
+  // lands in this drawer, and dismissing it would drop that result.
+  if (session.pending) return;
+  drawer = null;
+  context.rerender?.();
+  focusRowEdit(session.row.key, session.sectionTitle);
 }
 function shellQuote(text) {
   return `'${text.replace(/'/g, "'\\''")}'`;
@@ -221,13 +248,25 @@ function hasValue(v) {
 }
 function tagsNode(entries) {
   return el('div', { class: 'settings-tags' }, entries.map(([text, note]) =>
-    el('span', { class: 'settings-tag' }, [text, note == null ? null : el('span', { class: 'settings-tag-note', text: note })])));
+    el('span', { class: 'badge mono', title: note == null ? text : `${text} ${note}` }, [text, note == null ? null : el('span', { class: 'settings-tag-note', text: note })])));
 }
-// A crew pool as tags, each with its share of the draw (`name:weight`, weight 1 when absent).
+// A missing weight is one ticket. Weight 0 parks the crew: it stays listed
+// and takes none of the draw (`CrewPoolEntry`).
+function poolWeight(raw) {
+  if (raw == null || String(raw).trim() === '') return 1;
+  const weight = Number(raw);
+  return Number.isFinite(weight) ? weight : 1;
+}
+// A crew pool as tags, each with its share of the draw (`name:weight`).
+// Shares use every weight, so a parked entry is 0% and the others split
+// only what still draws.
 function poolTags(values) {
-  const parts = values.map((v) => { const [name, w] = String(v).split(':'); return { name, weight: Number(w) || 1 }; });
+  const parts = values.map((v) => { const [name, w] = String(v).split(':'); return { name, weight: poolWeight(w) }; });
   const total = parts.reduce((sum, p) => sum + p.weight, 0);
-  return tagsNode(parts.map((p) => [p.name, `${total ? Math.round((p.weight / total) * 100) : 0}%`]));
+  return tagsNode(parts.map((p) => {
+    const share = total ? Math.round((p.weight / total) * 100) : 0;
+    return [p.name, p.weight === 0 ? `${share}% (parked)` : `${share}%`];
+  }));
 }
 // A table, or a list of tables, as key/value lines; past three the rest sit
 // behind an "N more" toggle whose state survives a re-render.
@@ -290,7 +329,7 @@ function valueMeta(row) {
 function rowNode(row, context, opts = {}) {
   let action = null;
   if (context.canEdit && row.settable !== false && !opts.readOnly) {
-    action = el('div', { class: 'settings-act' }, [settingsEditButton(() => openDrawer(row, context, opts.lockGlobal), `Edit ${row.key}`)]);
+    action = el('div', { class: 'settings-act' }, [settingsEditButton(() => openDrawer(row, context, opts.lockGlobal, opts.sectionTitle), `Edit ${row.key}`)]);
   } else if (row.read_only_reason || opts.readOnly) {
     action = settingsReadOnlyAction(row.read_only_reason);
   }
@@ -302,8 +341,25 @@ function rowNode(row, context, opts = {}) {
     dim: opts.inactive,
   });
   node.dataset.key = row.key;
-  node.id = `key-${row.key.replace(/[^a-z0-9]+/gi, '-')}`;
+  node.id = rowDomId(row.key, opts.sectionTitle, opts.usedIds);
   return node;
+}
+// One id per rendered row. The section keeps a key that also appears in
+// another section (Settings › Other lists some keys twice) from sharing an
+// id, and a suffix separates keys whose slugs collide (`a.b` and `a-b`).
+function rowDomId(key, sectionTitle, used) {
+  const slug = String(key).replace(/[^a-z0-9]+/gi, '-').replace(/^-+|-+$/g, '') || 'key';
+  const section = sectionSlug(sectionTitle || 'settings');
+  let id = `key-${section}-${slug}`;
+  if (used) {
+    let n = 2;
+    while (used.has(id)) {
+      id = `key-${section}-${slug}-${n}`;
+      n += 1;
+    }
+    used.add(id);
+  }
+  return id;
 }
 function sectionSlug(title) {
   return title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
@@ -314,7 +370,8 @@ function keySection(title, rows, context, opts = {}) {
   const lead = opts.lead || [];
   if (!rows.length && !lead.length) body.appendChild(el('div', { class: 'settings-empty', text: 'No keys in this section.' }));
   body.append(...lead);
-  for (const r of rows) body.appendChild(rowNode(r, context, opts));
+  const used = new Set();
+  for (const r of rows) body.appendChild(rowNode(r, context, { ...opts, sectionTitle: title, usedIds: used }));
   return section;
 }
 
@@ -322,19 +379,37 @@ function ownsDrawerMutation(session) {
   return drawer === session && session.visit.isCurrent();
 }
 
-async function submitDrawerMutation(session, context, request) {
+async function submitDrawerMutation(session, context, request, savedSummary = 'Changes saved') {
   if (!ownsDrawerMutation(session) || session.pending) return;
   session.pending = true; session.error = null; context.rerender?.();
   try {
     await request(session.visit);
-    if (!ownsDrawerMutation(session)) return;
-    drawer = null;
-    await context.reload();
   } catch (error) {
     if (!ownsDrawerMutation(session)) return;
     session.pending = false; session.error = error.message || String(error);
     context.rerender?.();
+    // The rerender rebuilt the pressed Save or Remove control. Keep focus in the
+    // drawer, on the field the error is about, so Escape still reaches it.
+    document.querySelector('.config-drawer .settings-input')?.focus();
+    return;
   }
+  if (!ownsDrawerMutation(session)) return;
+  drawer = null;
+  let readbackError = null;
+  try {
+    await context.reload();
+  } catch (error) {
+    readbackError = error;
+  }
+  // The reload can outlive its visit: a switch to another workspace while it
+  // is in flight superseded it, and that visit's editor must keep focus. Only
+  // an uninterrupted save closes the drawer and returns focus to its Edit control.
+  if (!session.visit.isCurrent()) return;
+  if (readbackError) {
+    context.reportReadbackFailure?.(savedSummary, readbackError);
+    if (!drawer) context.rerender?.();
+  }
+  if (!drawer) focusRowEdit(session.row.key, session.sectionTitle);
 }
 
 // Whether this workspace has no config policy file yet: none at all, or one
@@ -353,28 +428,33 @@ function drawerNode(payload, context) {
   if (!drawer.visit.isCurrent()) { drawer = null; return null; }
   const session = drawer;
   const row = byKey(payload).get(session.row.key) || session.row;
-  const panel = el('aside', { class: 'config-drawer' });
+  const panel = el('aside', { class: 'config-drawer dialog-surface dialog-drawer' });
   panel.setAttribute('role', 'dialog'); panel.setAttribute('aria-label', `Edit ${row.key}`);
-  panel.appendChild(el('h3', { text: row.label || row.key }));
-  panel.appendChild(el('div', { class: 'config-key mono', text: row.key }));
-  if (row.description) panel.appendChild(el('p', { text: row.description }));
-  if (row.detail) panel.appendChild(el('p', { class: 'drawer-detail', text: row.detail }));
-  if (row.allowed?.summary) panel.appendChild(el('div', { class: 'config-note drawer-allowed', text: `Accepts: ${row.allowed.summary}` }));
+  panel.addEventListener('keydown', event => {
+    if (event.key === 'Escape' && !session.pending) { event.preventDefault(); closeDrawer(session, context); }
+  });
+  panel.appendChild(el('header', { class: 'dialog-header' }, [el('h3', { text: row.label || row.key }), escCloseButton('Close editor (Esc)', { onClick: () => closeDrawer(session, context) })]));
+  const body = el('div', { class: 'dialog-body' });
+  panel.appendChild(body);
+  body.appendChild(el('div', { class: 'config-key mono', text: row.key }));
+  if (row.description) body.appendChild(el('p', { text: row.description }));
+  if (row.detail) body.appendChild(el('p', { class: 'drawer-detail', text: row.detail }));
+  if (row.allowed?.summary) body.appendChild(el('div', { class: 'config-note drawer-allowed', text: `Accepts: ${row.allowed.summary}` }));
   const chain = el('div', { class: 'drawer-chain' });
   chain.appendChild(el('div', { text: `built-in: ${display(row.built_in?.value)}` }));
   for (const s of row.shadowed_by || []) chain.appendChild(el('div', { text: `${s.layer}: ${display(s.value)}` }));
   chain.appendChild(el('div', { text: `effective (${row.source?.layer || row.state}): ${display(row.value)}` }));
   if (row.fallback) chain.appendChild(el('div', { text: `if removed → ${row.fallback.layer}: ${display(row.fallback.value)}` }));
-  panel.appendChild(chain);
+  body.appendChild(chain);
   for (const scope of ['workspace', 'global']) {
     const label = el('label', { class: 'drawer-scope' });
     const input = document.createElement('input'); input.type = 'radio'; input.name = 'drawer-scope'; input.value = scope;
     input.checked = session.scope === scope; input.disabled = session.lockGlobal && scope !== 'global';
     input.addEventListener('change', () => { session.scope = scope; context.rerender?.(); });
     label.append(input, document.createTextNode(scope === 'workspace' ? ' This workspace (.orbit/config.toml)' : ' Every workspace on this machine (~/.orbit/config.toml)'));
-    panel.appendChild(label);
+    body.appendChild(label);
   }
-  if (session.lockGlobal) panel.appendChild(el('div', { class: 'config-note', text: 'This key can only be written to the global file.' }));
+  if (session.lockGlobal) body.appendChild(el('div', { class: 'config-note', text: 'This key can only be written to the global file.' }));
   let field;
   if ((row.options || []).length) {
     const options = row.options;
@@ -396,16 +476,20 @@ function drawerNode(payload, context) {
     field = el('textarea', { class: 'settings-input' }); field.value = session.text; field.rows = isTableList(row) ? 8 : Array.isArray(row.value) ? 4 : 2;
     field.addEventListener('input', () => { session.text = field.value; const c = panel.querySelector('.drawer-cli'); if (c) c.textContent = cliCmd(row, session.scope, session.text); });
   }
-  panel.appendChild(field);
-  panel.appendChild(el('div', { class: 'drawer-cli mono', text: cliCmd(row, session.scope, session.text) }));
-  if (session.error) panel.appendChild(el('div', { class: 'config-warning', text: session.error }));
-  const actions = el('div', { class: 'drawer-actions' });
-  const saveWith = (init) => () => submitDrawerMutation(session, context, (visit) =>
-    requestJson(`/api/config/keys/${encodeURIComponent(row.key)}`, 'PUT', { value: parseDraft(row, session.text), scope: session.scope, ...(init ? { init } : {}) }, visit));
+  body.appendChild(field);
+  body.appendChild(el('div', { class: 'drawer-cli mono', text: cliCmd(row, session.scope, session.text) }));
+  if (session.error) body.appendChild(el('div', { class: 'config-warning', text: session.error }));
+  const actions = el('div', { class: 'dialog-actions' });
+  const saveWith = (init) => () => submitDrawerMutation(
+    session,
+    context,
+    (visit) => requestJson(`/api/config/keys/${encodeURIComponent(row.key)}`, 'PUT', { value: parseDraft(row, session.text), scope: session.scope, ...(init ? { init } : {}) }, visit),
+    `Saved ${row.key}`,
+  );
   // A first workspace write offers only the explicit choices, so no click
-  // creates the policy file implicitly; Close leaves it uncreated.
+  // creates the policy file implicitly; closing the drawer leaves it uncreated.
   const choosesInit = session.scope === 'workspace' && workspacePolicyMissing(payload);
-  if (choosesInit) panel.appendChild(el('div', { class: 'config-note drawer-init-note', text: 'This workspace has no config policy file yet, and saving creates one. Seed from global copies the global policy (orbit config set --seed-from-global); Start empty uses built-in security defaults (--fresh).' }));
+  if (choosesInit) body.appendChild(el('div', { class: 'config-note drawer-init-note', text: 'This workspace has no config policy file yet, and saving creates one. Seed from global copies the global policy (orbit config set --seed-from-global); Start empty uses built-in security defaults (--fresh).' }));
   const saves = choosesInit
     ? [['Seed from global', 'seed-from-global'], ['Start empty', 'fresh']]
     : [['Save', null]];
@@ -419,11 +503,14 @@ function drawerNode(payload, context) {
   // Remove clears the global value; the label names the scope it removes.
   const removeScope = session.lockGlobal ? 'global' : 'workspace';
   const remove = el('button', { class: 'settings-btn ghost', text: `Remove ${removeScope} value` }); remove.type = 'button'; remove.disabled = session.pending;
-  remove.addEventListener('click', () => submitDrawerMutation(session, context, (visit) =>
-    requestJson(`/api/config/keys/${encodeURIComponent(row.key)}?scope=${removeScope}`, 'DELETE', undefined, visit)));
-  const close = el('button', { class: 'settings-btn ghost', text: 'Close' }); close.type = 'button';
-  close.addEventListener('click', () => { drawer = null; context.rerender?.(); });
-  actions.append(remove, close); panel.appendChild(actions);
+  remove.addEventListener('click', () => submitDrawerMutation(
+    session,
+    context,
+    (visit) => requestJson(`/api/config/keys/${encodeURIComponent(row.key)}?scope=${removeScope}`, 'DELETE', undefined, visit),
+    `Removed ${removeScope} value for ${row.key}`,
+  ));
+  // The header's esc control is the drawer's one dismiss control [STD-07 §R44].
+  actions.append(remove); panel.appendChild(actions);
   return panel;
 }
 // The bulk-removal outcome. A clean removal expires on its own; one that names
@@ -627,7 +714,8 @@ export function renderMachine(body, payload, context, throttleNode) {
   const nodes = [];
   const identity = ['machine.id','machine.name','machine.task_prefix'].map((k) => map.get(k)).filter(Boolean);
   const idSec = settingsSection('Machine identity', { count: keyCount(identity.length) });
-  for (const r of identity) idSec.body.appendChild(rowNode(r, context, { lockGlobal: true, readOnly: r.key !== 'machine.name' }));
+  const identityUsed = new Set();
+  for (const r of identity) idSec.body.appendChild(rowNode(r, context, { lockGlobal: true, readOnly: r.key !== 'machine.name', sectionTitle: 'Machine identity', usedIds: identityUsed }));
   nodes.push(idSec.section);
   nodes.push(keySection('Auto-concurrency', flatten(eff).filter((r) => r.key.startsWith('machine.auto_concurrency.')), context, { lockGlobal: true }));
   nodes.push(keySection('Machine', flatten(eff).filter((r) => r.key.startsWith('machine.') && !r.key.startsWith('machine.auto_concurrency.') && !identity.includes(r)), context, { lockGlobal: true }));
@@ -708,7 +796,9 @@ export function renderOther(body, payload, context) {
         for (const r of restates) {
           if (!ownsRemoval()) return;
           try {
-            await requestJson(`/api/config/keys/${encodeURIComponent(r.key)}?scope=workspace`, 'DELETE', undefined, operation.visit);
+            // Guarded removal: the server re-checks under the config write lock
+            // that the current effective value still matches its removal fallback.
+            await requestJson(`/api/config/keys/${encodeURIComponent(r.key)}?scope=workspace&preserve_effective=true`, 'DELETE', undefined, operation.visit);
             if (!ownsRemoval()) return;
             ok++;
           } catch (error) {
@@ -716,8 +806,14 @@ export function renderOther(body, payload, context) {
             failures.push(`${r.key}: ${error.message}`);
           }
         }
-        showNotice({ text: `Removed ${ok} workspace value(s).${failures.length ? ' Failed: ' + failures.join('; ') : ''}`, failed: failures.length > 0 }, context);
-        await context.reload();
+        const summary = `Removed ${ok} workspace value(s).${failures.length ? ' Failed: ' + failures.join('; ') : ''}`;
+        showNotice({ text: summary, failed: failures.length > 0 }, context);
+        try {
+          await context.reload();
+        } catch (error) {
+          if (!ownsRemoval()) return;
+          context.reportReadbackFailure?.(summary, error);
+        }
       } finally {
         if (ownsRemoval()) { bulkRemoval = null; context.rerender?.(); }
       }
@@ -742,7 +838,9 @@ export function renderOther(body, payload, context) {
   // raw-file reads, reloads and drawer rerenders. Other keys route elsewhere.
   const linked = new URLSearchParams((window.location.hash.split('?')[1] || '')).get('key');
   if (linked && window.location.hash !== landedOtherHash && rows.some((r) => r.key === linked)) {
-    const target = document.getElementById(`key-${linked.replace(/[^a-z0-9]+/gi, '-')}`);
+    // The Other list is rendered first, so a key that is also in the repeat
+    // section scrolls to that first copy. Ids differ per row.
+    const target = [...document.querySelectorAll('#config-body [data-key]')].find((node) => node.dataset.key === linked);
     if (target && typeof target.scrollIntoView === 'function') {
       target.scrollIntoView({ block: 'start' });
       landedOtherHash = window.location.hash;

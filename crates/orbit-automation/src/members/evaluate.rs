@@ -11,6 +11,7 @@ use crate::delivery::definition_epoch;
 use crate::{AutomationError, DeferredReason};
 use chrono::{DateTime, Duration, Utc};
 use orbit_store::contracts::AutomationStoreBackend;
+use orbit_types::workflow::automation;
 use orbit_types::workflow::automation::{members::*, *};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -322,7 +323,7 @@ pub fn evaluate(
     let attempt = MemberAttempt {
         consumer: consumer.into(),
         kind: trigger.kind,
-        action_key: format!("automation:{id}:1"),
+        action_key: automation::attempt_action_key(&id, 1),
         id,
         member,
         members: admitted,

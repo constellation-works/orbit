@@ -13,7 +13,7 @@ use super::format::summarize_error_message;
 follower hosts sent this owner; `orbit run history` here never lists them. EVIDENCE is the most \
 specific class the settlement carried.\n\
 Evidence classes, failure accounting, run evidence and the JSON fields: installed Orbit skill \
-`references/setup/distributed-drain.md`.\n\
+`references/setup/distributed-drain-owner-surface.md`.\n\
 Examples:\n  orbit run settlements\n  orbit run settlements --since 7d\n  \
 orbit run settlements --since 2026-10-01T00:00:00Z --no-reconcile --json"
 )]

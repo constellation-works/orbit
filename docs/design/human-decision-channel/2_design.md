@@ -49,13 +49,18 @@ the mechanisms below are built inside them.
    from a decision request is screened by the task-pilot preparation and
    admission checks before promotion
    (`crates/orbit-core/src/application/task/decision/answering.rs::ensure_proposal_admissible`):
-   while a pilot admission hold or a `verified_no_diff` finding stands, or the
-   task has no prepared footprint (empty `context_files` without the
-   `no-diff-expected` disposition, or an unassessed complexity), the answer is
-   refused, nothing is written and the request stays open — it never lands in
-   `backlog` with an empty footprint. The direct operator approval beside its
-   warnings stays advisory. No `--force`, no free-form task edits, no requeue
-   by email.
+   while a pilot admission hold or an untagged `verified_no_diff` finding
+   stands, or the task has no prepared footprint or complexity (empty
+   `context_files` or an unassessed complexity; a task tagged `no-diff-expected`
+   has neither gap), the answer is refused, nothing is written and the request
+   stays open — it never lands in `backlog` with an empty footprint. An eligible
+   no-diff deliverable is tagged in the same pilot write as its assessment; that
+   tag clears the finding hold, permits its intentionally empty footprint and
+   satisfies the complexity check, subject to the other admission checks. A later
+   `verified_no_diff` assessment does not reinstate that hold while the task remains
+   tagged. The direct operator approval beside
+   its warnings stays advisory. No `--force`, no free-form task edits, no
+   requeue by email.
 4. **Host: dk-server-2**, owner of the workspaces the channel serves. The channel
    registration, plugin install, and secrets all live on that host; a claimed or
    remote run never submits a decision.
@@ -98,13 +103,14 @@ per request:
   current field is refused (`answer_not_applicable`) before anything is written, so the task
   stays blocked and the request open. The same card shape serves `proposed_approval` for
   pilot-warning triage, where an option approves or re-pilots the held proposed task.
-  `re_pilot` explicitly submits one pilot even without a field rewrite; while a pilot is
-  pending or running, the answer is refused (`answer_not_applicable`, nothing applied, the
-  request stays open) until that pilot settles. The first routine assessment is automatic. A certified
-  description or acceptance-criteria edit later queues a fresh routine pilot unless a live execution claim or an unresolved failed pilot holds the task; edits to other material or policy never queue one through the routine, but an `--approve-proposed` drain repilots a stale assessment automatically when its certified description/criteria or other material drifted and no live execution claim holds it; delivery waits for a new
-  assessment of edited description/criteria (drain repilot, `orbit task repilot <id>`,
-  `orbit.task.recover` action `repilot`, or task update `repilot: true`). A held warning retains
-  one decision across routine windows until answered or explicitly reassessed.
+  `re_pilot` explicitly submits one pilot even without a field rewrite. While a pilot is
+  pending or running, that explicit answer is refused (`answer_not_applicable`) and the
+  request stays open until the pilot settles. When another answer rewrites the description
+  or criteria and leaves a proposed or backlog task with a stale assessment, Orbit requests
+  a fresh pilot after recording the answer. Delivery waits for the new assessment. If
+  automatic submission fails, the answer stands and the task receives a comment with the
+  reason and the operator command to request a pilot. A held warning retains one decision
+  across routine windows until answered or explicitly reassessed.
 - **Accept a failure handoff:** a block request with a plain requeue option also offers
   **Approve and land** (`land`). This is derived when read, so a request raised just before
   publication and requests stored by older builds gain it without rewriting history.

@@ -56,7 +56,7 @@ fn stdio_artifact_put_reopens_intact_bytes_and_refuses_workspace_escape() {
 fn stdio_auto_task_crud_mints_without_dispatch_and_reopens_definition_state() {
     let workspace = McpWorkspace::init();
     let selector = workspace.work.to_str().unwrap();
-    let mut client = workspace.serve_with_args(&["--operator"]);
+    let mut client = workspace.serve_with_args(&["--operator", "--toolset", "automation"]);
     let added=client.call_tool_ok("orbit_auto_task",json!({"action": "add", "workspace":selector,"name":"stdio-chore","description":"Initial","schedule":{"every_minutes":60},"template":{"title":"Wire chore","description":"No provider dispatch","acceptance_criteria":["Persisted"],"complexity":"low","status":"proposed"}}));
     assert_eq!(added["name"], "stdio-chore");
     let definition = workspace.work.join(".orbit/auto_tasks/stdio-chore.yaml");
@@ -75,7 +75,7 @@ fn stdio_auto_task_crud_mints_without_dispatch_and_reopens_definition_state() {
     );
     let bytes = std::fs::read(&definition).unwrap();
     drop(client);
-    let mut client = workspace.serve_with_args(&["--operator"]);
+    let mut client = workspace.serve_with_args(&["--operator", "--toolset", "automation"]);
     let definitions = client.call_tool_ok(
         "orbit_auto_task",
         json!({"action": "list", "workspace":selector}),
@@ -203,7 +203,7 @@ fn stdio_auto_task_crud_mints_without_dispatch_and_reopens_definition_state() {
             .args(["auto-task", "delete", "stdio-chore", "--force"]),
     );
     assert!(!definition.exists());
-    let mut client = workspace.serve_with_args(&["--operator"]);
+    let mut client = workspace.serve_with_args(&["--operator", "--toolset", "automation"]);
     let definitions = client.call_tool_ok(
         "orbit_auto_task",
         json!({"action": "list", "workspace":selector}),
@@ -1151,7 +1151,7 @@ fn stdio_task_writes_refuse_unknown_retired_and_cli_only_fields() {
         assert_eq!(persisted["tags"], tags);
         if !enabled {
             for arguments in [
-                json!({"id":added_id,"model":"codex","title":"Never stored","context_files":["file:unauthorized.rs"],"allow_missing_context":flag}),
+                json!({"id":added_id,"model":"codex","title":"Never stored","context_files":["file:missing-parent/unauthorized.rs"],"allow_missing_context":flag}),
                 json!({"id":added_id,"model":"codex","title":"Never stored","tags":["docs"],"allow_drop_system_tags":flag}),
             ] {
                 client.call_tool_err("orbit_task_update", arguments);
@@ -1213,9 +1213,9 @@ fn stdio_task_writes_refuse_unknown_retired_and_cli_only_fields() {
         (
             "orbit_task_add",
             &add,
-            "dependencies",
-            json!(["x"]),
-            "unknown field 'dependencies'",
+            "parent_id",
+            json!("x"),
+            "unknown field 'parent_id'",
         ),
         (
             "orbit_task_add",

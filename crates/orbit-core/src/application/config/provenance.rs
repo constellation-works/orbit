@@ -38,6 +38,24 @@ pub(super) fn fallback_json(fallback: Option<&ConfigFallback>) -> JsonValue {
     })
 }
 
+/// Whether removing `entry` from `layer` leaves the admitted effective value
+/// unchanged.
+///
+/// Shared between read-side provenance inspection and the guarded bulk-removal
+/// write boundary: the entry must currently resolve from `layer`, must have an
+/// admitted removal fallback (never `None`), and its current value must match
+/// that fallback value under plain JSON equality.
+pub(super) fn fallback_preserves_effective(
+    entry: &EffectiveConfigValue,
+    layer: ConfigValueSourceKind,
+) -> bool {
+    entry.source.kind() == layer
+        && entry
+            .fallback
+            .as_ref()
+            .is_some_and(|fallback| entry.value == fallback.value)
+}
+
 /// Whether `value` restates the global value (null when the global file does
 /// not set the key) and the built-in default.
 pub(super) fn equals_json(

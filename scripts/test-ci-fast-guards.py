@@ -54,8 +54,12 @@ class GuardrailTests(unittest.TestCase):
                         GUARD_TEST_LOG=str(self.log), GUARD_TEST_METADATA=str(self.metadata),
                         GUARD_TEST_BIN=str(self.bin / "fixture-test-bin"),
                         GUARD_TEST_CALLS=str(self.guard_calls))
-        for key in ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "NEXTEST_SHARDS", "NEXTEST_PARTITIONS",
-                    "GUARD_TEST_NICE_ATTEMPTED"):
+        for key in ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR",
+                    "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+                    "NEXTEST_SHARDS", "NEXTEST_PARTITIONS", "GUARD_TEST_NICE_ATTEMPTED",
+                    "CI_SELF_TESTS", "CI_TEST_SCOPE", "CI_TEST_BASE",
+                    "RUSTC_WORKSPACE_WRAPPER", "ORBIT_COMMAND_EVIDENCE_DIR",
+                    "ORBIT_COMMAND_EVIDENCE_INVOCATION"):
             self.env.pop(key, None)
         # A caller already at the host's nice ceiling cannot be observed running
         # lower, so the fallback `nice` marks the processes it lowered. It runs
@@ -441,6 +445,33 @@ exec {shlex.quote(sys.executable)} "$@"
             self.assert_self_tests(True, mode)
             if mode != "--guards-core":
                 self.assertEqual((self.guard_calls / "test-qa-full-sweep.py").read_text().split(), ["--check"])
+
+    def test_server_json_and_release_readiness_manifest_select_self_tests(self):
+        """PR-mode runs the self-tests that read these two inputs.
+
+        server.json feeds the QA npm fixture, so the sweep runs full --check.
+        The release-readiness manifest feeds the adapter self-test.
+        """
+        self.prepare_ci()
+        self.init_ci_git()
+        self.env["CI_TEST_BASE"] = self.git("rev-parse", "HEAD").stdout.strip()
+        for path in ("server.json",
+                     "examples/release-readiness/scripts/release-readiness.yaml"):
+            target = self.root / path
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text("# changed input\n")
+            for flag, env in (("--fast", None),
+                              ("--guards", {"CI_SELF_TESTS": "changed"}),
+                              ("--guards-core", {"CI_SELF_TESTS": "changed"}),
+                              ("--guards-qa", {"CI_SELF_TESTS": "changed"})):
+                with self.subTest(path=path, flag=flag):
+                    result = self.run_guard("ci-guardrails.sh", flag, env_overrides=env)
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assert_self_tests(True, flag)
+                    if flag != "--guards-qa":
+                        self.assertTrue(
+                            (self.guard_calls / "test-release-readiness-adapter.py").exists())
+            target.unlink()
 
     def test_listener_sudo_recipe_selects_self_tests_and_ordinary_docs_do_not(self):
         """A recipe-only edit runs the executable fixture. Ordinary Markdown does not."""
@@ -2537,6 +2568,49 @@ sys.exit(int(os.environ.get("FAKE_DENY_EXIT", "0")))
                 self.fail("cargo-deny must be installed in CI")
             self.skipTest("cargo-deny not installed")
 
+    def _isolated_cargo_env(self):
+        env = {
+            key: value for key, value in os.environ.items()
+            if not key.startswith(("CARGO_DENY_", "ORBIT_CARGO_DENY_", "GIT_"))
+            and key not in {
+                "CARGO_HOME", "HOME",
+                "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY",
+                "http_proxy", "https_proxy", "all_proxy", "no_proxy",
+            }
+        }
+        isolated_home = self.root / "isolated-home"
+        isolated_home.mkdir(exist_ok=True)
+        cargo_home = self.root / "cargo-home"
+        cargo_home.mkdir(exist_ok=True)
+        if "RUSTUP_HOME" not in env and os.environ.get("HOME"):
+            env["RUSTUP_HOME"] = str(Path(os.environ["HOME"]) / ".rustup")
+        env.update(
+            HOME=str(isolated_home),
+            CARGO_HOME=str(cargo_home),
+            CARGO_NET_OFFLINE="true",
+            GIT_CONFIG_GLOBAL=os.devnull,
+            GIT_CONFIG_NOSYSTEM="1",
+            GIT_CEILING_DIRECTORIES=str(self.root),
+        )
+        return env
+
+    def _create_isolated_workspace(self, name, env):
+        workspace = self.root / name
+        (workspace / "src").mkdir(parents=True)
+        (workspace / "src/lib.rs").write_text("")
+        (workspace / "Cargo.toml").write_text(
+            '[workspace]\n[package]\nname = "deny-fixture"\nversion = "0.1.0"\n'
+            'edition = "2021"\n'
+        )
+        lock = subprocess.run(
+            ["cargo", "generate-lockfile", "--offline", "--manifest-path",
+             str(workspace / "Cargo.toml")],
+            env=env,
+            capture_output=True, text=True,
+        )
+        self.assertEqual(lock.returncode, 0, lock.stdout + lock.stderr)
+        return workspace
+
     def _write_minimal_advisory_db(self, fixture):
         db = fixture / "advisory-db-3157b0e258782691"
         advisory_dir = db / "crates" / "fixture-unused-crate"
@@ -2546,28 +2620,32 @@ sys.exit(int(os.environ.get("FAKE_DENY_EXIT", "0")))
             'date = "2099-01-01"\nurl = "https://example.invalid/advisory"\n```\n\n'
             "# Fixture\n\nUnused offline fixture advisory.\n"
         )
+        git_env = self._isolated_cargo_env()
         for args in (
             ("init", "-q"),
             ("config", "user.name", "Guard fixture"),
             ("config", "user.email", "guard@example.invalid"),
             ("remote", "add", "origin", "https://github.com/RustSec/advisory-db"),
             ("add", "."),
-            ("commit", "-qm", "fixture advisory db"),
+            ("-c", "commit.gpgsign=false", "commit", "-qm", "fixture advisory db"),
         ):
-            subprocess.run(["git", "-C", str(db), *args], check=True, capture_output=True, text=True)
+            subprocess.run(["git", "-C", str(db), *args], env=git_env,
+                           check=True, capture_output=True, text=True)
 
     def test_real_cargo_deny_with_writable_fixture(self):
         self._require_real_cargo_deny()
         fixture = self.root / "fixture-advisory-dbs"
-        system_advisory = Path.home() / ".cargo/advisory-dbs"
-        if system_advisory.exists():
-            shutil.copytree(str(system_advisory), str(fixture))
-        else:
-            self._write_minimal_advisory_db(fixture)
-        env = dict(os.environ, CARGO_DENY_DB_PATH=str(fixture), CARGO_DENY_DISABLE_FETCH="1")
+        self._write_minimal_advisory_db(fixture)
+        env = self._isolated_cargo_env()
+        workspace = self._create_isolated_workspace("fixture-workspace", env)
+        env.update(
+            CARGO_DENY_DB_PATH=str(fixture),
+            CARGO_DENY_DISABLE_FETCH="1",
+        )
         res = subprocess.run(
             ["/bin/bash", str(SCRIPTS / "cargo-deny.sh"), "check", "advisories"],
             env=env,
+            cwd=workspace,
             capture_output=True,
             text=True,
         )
@@ -2578,10 +2656,16 @@ sys.exit(int(os.environ.get("FAKE_DENY_EXIT", "0")))
         self._require_real_cargo_deny()
         empty_fixture = self.root / "empty-dbs"
         empty_fixture.mkdir()
-        env = dict(os.environ, CARGO_DENY_DB_PATH=str(empty_fixture), CARGO_DENY_DISABLE_FETCH="1")
+        env = self._isolated_cargo_env()
+        workspace = self._create_isolated_workspace("empty-fixture-workspace", env)
+        env.update(
+            CARGO_DENY_DB_PATH=str(empty_fixture),
+            CARGO_DENY_DISABLE_FETCH="1",
+        )
         res = subprocess.run(
             ["/bin/bash", str(SCRIPTS / "cargo-deny.sh"), "check", "advisories"],
             env=env,
+            cwd=workspace,
             capture_output=True,
             text=True,
         )
@@ -3369,8 +3453,8 @@ mod fixtures {
                      "orbit-mcp", "orbit-runtime", "orbit-store", "orbit-types"):
             directory = crates / name
             directory.mkdir(parents=True)
-            (directory / "CLAUDE.md").write_text("Guide\n")
-            (directory / "AGENTS.md").symlink_to("CLAUDE.md")
+            (directory / "AGENTS.md").write_text("Guide\n")
+            (directory / "CLAUDE.md").write_text("@AGENTS.md\n")
         bin_dir = self.root / "bin"
         bin_dir.mkdir()
         for tool in ("dirname", "find", "sort", "readlink"):
@@ -3379,6 +3463,26 @@ mod fixtures {
                                 env=dict(os.environ, PATH=str(bin_dir)))
         self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn("ripgrep", result.stderr)
+
+    def test_crate_guides_reject_empty_root_guide(self):
+        guard = self.root / "scripts/check-crate-agent-guides.sh"
+        shutil.copy2(SCRIPTS / guard.name, guard)
+        for name in ("orbit-cli", "orbit-cmd", "orbit-common", "orbit-core", "orbit-engine",
+                     "orbit-mcp", "orbit-runtime", "orbit-store", "orbit-types"):
+            directory = self.root / "crates" / name
+            directory.mkdir(parents=True)
+            (directory / "AGENTS.md").write_text("Guide\n")
+            (directory / "CLAUDE.md").write_text("@AGENTS.md\n")
+        (self.root / "CLAUDE.md").write_text("@AGENTS.md\n")
+        root_guide = self.root / "AGENTS.md"
+        root_guide.write_text("")
+        result = subprocess.run(["/bin/bash", str(guard)], capture_output=True, text=True)
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("AGENTS.md is empty", result.stdout)
+        root_guide.write_text("# Workspace rules\n")
+        result = subprocess.run(["/bin/bash", str(guard)], capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("crate agent guide guard passed", result.stdout)
 
     def test_cache_rejects_unset_or_empty_home_before_any_path_operation(self):
         guard = SCRIPTS / "compiler-cache.sh"
@@ -3805,6 +3909,259 @@ class RemovedDashboardLabelTests(unittest.TestCase):
         self.assertIn(self.PANEL, result.stderr)
         self.assertIn(f"{self.DOC}:3", result.stderr)
         self.assertNotIn("action approve", result.stderr)
+
+    def test_cli_command_in_both_shipped_maintenance_copies_is_not_a_label(self):
+        label = "orbit host"
+        self.panel.write_text(f'export const title = "{label}";\n')
+        self.git("add", ".")
+        self.git("commit", "-qm", "dashboard label base")
+        self.env["CI_TEST_BASE"] = self.git("rev-parse", "HEAD").stdout.strip()
+        self.panel.write_text("export const title = 'New Panel';\n")
+
+        command_reference = "The owner must be registered with `orbit host add`.\n"
+        maintenance_paths = (
+            "crates/orbit-core/assets/skills/orbit-setup/references/maintenance-diagnose.md",
+            "plugin/skills/orbit-setup/references/maintenance-diagnose.md",
+        )
+        for relative in maintenance_paths:
+            path = self.root / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(command_reference)
+
+        result = self.run_check()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotIn(label, result.stderr)
+
+    def test_code_command_prefix_is_ignored_but_exact_code_and_prose_still_count(self):
+        label = "orbit host"
+        self.panel.write_text(f'export const title = "{label}";\n')
+        self.git("add", ".")
+        self.git("commit", "-qm", "dashboard label base")
+        self.env["CI_TEST_BASE"] = self.git("rev-parse", "HEAD").stdout.strip()
+        self.panel.write_text("export const title = 'New Panel';\n")
+        self.doc.write_text(
+            f"The exact UI label is `{label}`.\n"
+            f"The CLI reference is `{label} add`.\n"
+            "```sh\n"
+            f"{label} add\n"
+            "```\n"
+            f"The {label} panel title is still visible prose.\n")
+
+        result = self.run_check()
+        self.assertNotEqual(result.returncode, 0, result.stdout)
+        self.assertIn(f"{self.DOC}:1", result.stderr)
+        self.assertIn(f"{self.DOC}:6", result.stderr)
+        self.assertNotIn(f"{self.DOC}:2", result.stderr)
+        self.assertNotIn(f"{self.DOC}:4", result.stderr)
+
+    def test_removed_dashboard_comments_do_not_supply_labels(self):
+        comment_labels = (
+            ("js-comments.js", '// `JavaScript comment label`\n'),
+            ("css-comments.css", '/* "CSS comment label" */\n'),
+            ("html-comments.html", '<!-- "HTML comment label" -->\n'),
+        )
+        for name, content in comment_labels:
+            path = self.root / self.PANEL.replace("panel.js", name)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(content)
+        self.doc.write_text(
+            "JavaScript comment label, CSS comment label, and HTML comment label.\n")
+        self.git("add", ".")
+        self.git("commit", "-qm", "comment-only dashboard labels base")
+        self.env["CI_TEST_BASE"] = self.git("rev-parse", "HEAD").stdout.strip()
+
+        self.panel.write_text("export const title = 'New Panel';\n")
+        for name, _ in comment_labels:
+            path = self.root / self.PANEL.replace("panel.js", name)
+            path.write_text("")
+
+        result = self.run_check()
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_removed_dashboard_label_in_html_class_attribute_is_not_a_mention(self):
+        label = "fleet-phase visually-hidden"
+        self.panel.write_text(f'export const title = "{label}";\n')
+        self.git("add", ".")
+        self.git("commit", "-qm", "class-list label base")
+        self.env["CI_TEST_BASE"] = self.git("rev-parse", "HEAD").stdout.strip()
+        self.panel.write_text("export const title = 'New Panel';\n")
+        self.doc.write_text(f'<span class="{label}">idle</span>\n')
+
+        result = self.run_check()
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+
+class ReleaseAndSmokeScriptRegressionTests(unittest.TestCase):
+    """Regress release-check, sync-plugin-skills stderr, and smoke-npm-install hygiene."""
+
+    def setUp(self):
+        scratch = SCRIPTS.parent / ".orbit/tmp"
+        scratch.mkdir(parents=True, exist_ok=True)
+        self.temporary = tempfile.TemporaryDirectory(prefix="release-smoke-reg-", dir=scratch)
+        self.addCleanup(self.temporary.cleanup)
+        self.root = Path(self.temporary.name)
+
+    def test_release_check_rejects_empty_local_plugin_versions(self):
+        if not shutil.which("jq"):
+            self.skipTest("jq not installed")
+        repo_root = SCRIPTS.parent
+        fixture = self.root / "repo"
+        (fixture / "scripts").mkdir(parents=True)
+        shutil.copy2(SCRIPTS / "release-check.sh", fixture / "scripts/release-check.sh")
+        for helper in ("sync-plugin-skills.sh", "validate-codex-plugin.sh", "validate-agent-plugin.sh"):
+            stub = fixture / "scripts" / helper
+            stub.write_text("#!/bin/sh\nexit 0\n")
+            stub.chmod(0o755)
+        for rel in (
+            "Cargo.toml",
+            "desktop/Cargo.toml",
+            "npm/package.json",
+            "server.json",
+            "plugin/.claude-plugin/plugin.json",
+            "plugin/.codex-plugin/plugin.json",
+            "plugin/plugin.json",
+            "plugin/mcp.json",
+            "plugin/.mcp.json",
+            ".claude-plugin/marketplace.json",
+        ):
+            dest = fixture / rel
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(repo_root / rel, dest)
+        no_remote_bin = self.root / "bin"
+        no_remote_bin.mkdir()
+        for tool in ("bash", "jq", "awk", "dirname", "printf", "cat"):
+            found = shutil.which(tool)
+            if found:
+                (no_remote_bin / tool).symlink_to(found)
+        env = dict(os.environ, PATH=str(no_remote_bin))
+        for manifest in (
+            "plugin/.claude-plugin/plugin.json",
+            "plugin/.codex-plugin/plugin.json",
+            "plugin/plugin.json",
+        ):
+            with self.subTest(manifest=manifest):
+                path = fixture / manifest
+                original = path.read_text()
+                try:
+                    data = json.loads(original)
+                    data["version"] = ""
+                    path.write_text(json.dumps(data, indent=2) + "\n")
+                    res = subprocess.run(
+                        ["/bin/bash", str(fixture / "scripts/release-check.sh")],
+                        env=env, capture_output=True, text=True, timeout=30,
+                    )
+                    self.assertEqual(res.returncode, 1, res.stdout + res.stderr)
+                    self.assertIn("DRIFT:", res.stderr)
+                    self.assertIn(manifest, res.stderr)
+                finally:
+                    path.write_text(original)
+
+    def test_sync_plugin_skills_check_writes_diff_to_stderr(self):
+        repo_root = SCRIPTS.parent
+        fixture = self.root / "skills-repo"
+        (fixture / "scripts").mkdir(parents=True)
+        shutil.copy2(SCRIPTS / "sync-plugin-skills.sh", fixture / "scripts/sync-plugin-skills.sh")
+        shutil.copytree(repo_root / "crates/orbit-core/assets/skills",
+                        fixture / "crates/orbit-core/assets/skills")
+        shutil.copytree(repo_root / "plugin/skills", fixture / "plugin/skills")
+        skill_md = next((fixture / "plugin/skills").glob("*/SKILL.md"))
+        skill_md.write_text(skill_md.read_text() + "\nDRIFT_SENTINEL\n")
+        res = subprocess.run(
+            ["/bin/bash", str(fixture / "scripts/sync-plugin-skills.sh"), "--check"],
+            capture_output=True, text=True, timeout=30,
+        )
+        self.assertEqual(res.returncode, 1, res.stdout + res.stderr)
+        self.assertEqual(res.stdout, "", f"diff leaked to stdout: {res.stdout}")
+        self.assertIn("DRIFT_SENTINEL", res.stderr)
+
+    def test_smoke_npm_install_escapes_workspace_json_and_cleans_tmpdir(self):
+        if not shutil.which("node"):
+            self.skipTest("node not installed")
+        repo_root = SCRIPTS.parent
+        fixture = self.root / 'repo\\with"chars'
+        (fixture / "scripts").mkdir(parents=True)
+        shutil.copy2(SCRIPTS / "smoke-npm-install.sh", fixture / "scripts/smoke-npm-install.sh")
+        for rel in ("server.json", "npm/package.json"):
+            dest = fixture / rel
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(repo_root / rel, dest)
+        version = json.loads((fixture / "npm/package.json").read_text())["version"]
+        captured_rpc = self.root / "captured-rpc.jsonl"
+        fake_orbit = self.root / "fake-orbit"
+        fake_orbit.write_text(
+            f"#!{sys.executable}\n"
+            "import json, os, sys\n"
+            f"VERSION = {version!r}\n"
+            f"CAPTURED = {str(captured_rpc)!r}\n"
+            "args = sys.argv[1:]\n"
+            "if args == ['--version']:\n"
+            "    print(f'orbit {VERSION}')\n"
+            "    raise SystemExit(0)\n"
+            "if args[:1] == ['init']:\n"
+            "    os.makedirs(os.path.join(os.environ['HOME'], '.orbit'), exist_ok=True)\n"
+            "    raise SystemExit(0)\n"
+            "if args[:2] == ['workspace', 'init']:\n"
+            "    if os.path.basename(os.getcwd()) == 'credential-workspace':\n"
+            "        print('must not contain credentials', file=sys.stderr)\n"
+            "        raise SystemExit(1)\n"
+            "    print(json.dumps({'browser_kit': {'status': 'no_web_ui'}}))\n"
+            "    raise SystemExit(0)\n"
+            "if args[:2] == ['mcp', 'serve']:\n"
+            "    raw = sys.stdin.read()\n"
+            "    with open(CAPTURED, 'w', encoding='utf-8') as f:\n"
+            "        f.write(raw)\n"
+            "    for line in raw.splitlines():\n"
+            "        if line.strip():\n"
+            "            json.loads(line)\n"
+            "    if os.environ.get('SMOKE_FAKE_MCP_SUCCESS') == '1':\n"
+            "        frames = [\n"
+            "            {'jsonrpc': '2.0', 'id': 1, 'result': {'serverInfo': {'name': 'orbit'}}},\n"
+            "            {'jsonrpc': '2.0', 'id': 2, 'result': {'tools': [{'name': 'orbit_workspace_list'}, {'name': 'orbit_friction', 'inputSchema': {'properties': {'tags': {'items': {'enum': ['incident']}}}}}]}},\n"
+            "            {'jsonrpc': '2.0', 'id': 3, 'result': {'structuredContent': {'message': 'Operator only'}}},\n"
+            "            {'jsonrpc': '2.0', 'id': 4, 'result': {'structuredContent': {'message': 'Use orbit_workspace_list; returned `ws_*` ID; run orbit workspace init; never infers one from the server process cwd'}}},\n"
+            "            {'jsonrpc': '2.0', 'id': 5, 'result': {'structuredContent': {'machine_name': 'smoke-npm-install', 'workspaces': [{'id': 'ws_workspace'}]}}},\n"
+            "            {'jsonrpc': '2.0', 'id': 6, 'result': {'structuredContent': {'tasks': []}}},\n"
+            "            {'jsonrpc': '2.0', 'id': 7, 'result': {'structuredContent': {'status': 'proposed'}}},\n"
+            "        ]\n"
+            "        for frame in frames:\n"
+            "            print(json.dumps(frame, separators=(',', ':')))\n"
+            "        raise SystemExit(0)\n"
+            "    raise SystemExit(9)\n"
+            "raise SystemExit(1)\n"
+        )
+        fake_orbit.chmod(0o755)
+        env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+        env.update(GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM="1")
+        success_env = dict(env, SMOKE_FAKE_MCP_SUCCESS="1")
+        success_res = subprocess.run(
+            ["/bin/bash", str(fixture / "scripts/smoke-npm-install.sh"),
+             "--local-binary-check", str(fake_orbit)],
+            cwd=fixture, env=success_env, capture_output=True, text=True, timeout=60,
+        )
+        self.assertEqual(success_res.returncode, 0, success_res.stdout + success_res.stderr)
+        self.assertIn("PASS: local candidate functional smoke", success_res.stdout)
+        self.assertNotIn("smoke diagnostics:", success_res.stdout)
+        success_leftovers = list((fixture / ".orbit/tmp").glob("npm-smoke.*"))
+        self.assertEqual(success_leftovers, [], f"TMPDIR_ROOT leaked after success: {success_leftovers}")
+
+        res = subprocess.run(
+            ["/bin/bash", str(fixture / "scripts/smoke-npm-install.sh"),
+             "--local-binary-check", str(fake_orbit)],
+            cwd=fixture, env=env, capture_output=True, text=True, timeout=60,
+        )
+        self.assertEqual(res.returncode, 1, res.stdout + res.stderr)
+        self.assertIn("mcp serve exited with 9", res.stderr)
+        frames = [json.loads(line) for line in captured_rpc.read_text().splitlines() if line.strip()]
+        workspaces = [
+            frame["params"]["arguments"]["workspace"]
+            for frame in frames
+            if frame.get("method") == "tools/call"
+            and "workspace" in frame.get("params", {}).get("arguments", {})
+        ]
+        self.assertEqual(len(workspaces), 3, frames)
+        self.assertTrue(all('repo\\with"chars' in ws for ws in workspaces), workspaces)
+        leftovers = list((fixture / ".orbit/tmp").glob("npm-smoke.*"))
+        self.assertEqual(leftovers, [], f"TMPDIR_ROOT leaked: {leftovers}")
 
 
 # These cases assert rendezvous, relative completion times or lane ordering.

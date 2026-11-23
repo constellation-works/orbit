@@ -90,8 +90,11 @@ Notices under a `resident:` key (such as status lines) and notices authored by
 the mandate's own assignment task are excluded from wake evaluation so a cycle's
 own reports do not trigger immediate re-wakes.
 
-A live cycle may read runtime attention for its own workspace and the
-workspaces its grant covers. That read does not widen what it can write.
+A live cycle may read runtime attention and drain status (`orbit.workflow`
+action `auto` with `mode: "status"`) for its own workspace and the workspaces
+its grant covers, with or without any granted right. Neither read widens what
+it can write, and drain controls (`start`, `stop`, `resize`) remain
+operator-only.
 
 Each cycle's checkpoint plans the next wake in `next_wake.not_before`. Without
 a change that wakes it sooner, the next cycle starts then, but never sooner
@@ -123,7 +126,11 @@ rejected appear only with `--all`. `show` reports one mandate in full.
 
 `show --json` returns `state`, `state_reason`, `control`, `stalled`,
 `stalled_reason`, `mandate`, `effective_authority`, `authority`,
-`open_requests`, `latest_checkpoint` and, while a cycle is live, `live_cycle`.
+`open_requests`, `latest_checkpoint`, `latest_checkpoint_at` and, while a cycle
+is live, `live_cycle`. `latest_checkpoint` is the latest checkpoint's complete
+record, unchanged and with no time field, or null. Its `cycle` names the cycle
+the record belongs to, not the time it was written. `latest_checkpoint_at` is that checkpoint comment's write time,
+a top-level field, and is null when the mandate has no checkpoint.
 `mandate_error` or `authority_error` appears when that record cannot be read.
 `list --json` adds each mandate's deadline, authority revision and `stalled`
 flag.
@@ -136,10 +143,44 @@ flag.
 | `promote` | Move a `proposed` task to `backlog`. |
 | `merge` | Land a reviewed pull request. |
 | `plugin_upgrade` | Install or upgrade a workspace plugin. |
+| `refresh` | Merge the base branch tip into a held or review delivery pull request head (conflict-free) and re-run its required checks. |
+| `recover` | Start a recovery leaf for a blocked task’s preserved delivery. |
 
 The effective authority is what the resident can act on now: the granted
 rights, in the granted workspaces that the mandate also lists. It is empty for
 an `ended` or `invalid` mandate.
+
+Refreshing a delivery pull request (`orbit.workflow` action `refresh`, gated by
+the `refresh` right) brings a held (`blocked`) or `review` task's open Orbit
+delivery pull request up to the tip of its base branch as one conflict-free
+merge commit and starts its required checks. It never rebases, rewrites or
+force-pushes, makes no code edits, refuses conflicts (naming the conflicting
+paths) as well as pull requests owned by a live run or not published by Orbit,
+treats a head already at the base tip as a no-op, and lands nothing (landing
+stays `merge`). A refreshed head keeps its prior review when every commit after
+the reviewed head is a conflict-free refresh merge of the base branch, while
+`land` still requires the required checks to pass on the refreshed head.
+
+Use `orbit.task.recover` with action `resume_delivery`, the task ID, the failed
+or held run ID, and a diagnosis. Orbit verifies the preserved PR and starts a
+leaf in the covered workspace. The leaf continues the candidate on the
+current base and runs fresh validation and review. Use `land` with the
+`merge` right to land once the head's required checks pass.
+
+A cycle can attempt recovery once. A task can reserve one resident recovery
+in 24 hours, with up to 120 minutes for the leaf's agent activities. An open
+final-recovery decision allows the leaf only when every option is explicitly
+routine or reversible and there is no separate human action. Decision
+answers and irreversible options stay with the operator.
+
+Updating friction records (`orbit.friction` action `update`) in covered
+workspaces requires no granted right — observe-only cycles may record landing
+evidence on or close frictions too — and each write is keyed on the cycle's
+action ledger. Updates for workspaces outside the mandate's authority are
+refused as `resident_scope_refused`, and any update carrying `rehome_to` (or
+`move`) is refused as `resident_tool_refused` regardless of granted rights;
+moving friction records between workspaces stays with the operator and the
+curation pass.
 
 | Caller | Widen | Narrow |
 |---|---|---|

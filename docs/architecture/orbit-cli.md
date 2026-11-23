@@ -32,3 +32,7 @@ Enforced by `scripts/check-dependency-direction.sh`; table in `ARCHITECTURE.md`.
 Start reading at `crates/orbit-cli/src/main.rs`.
 
 Design intent: [docs/design/terminal-interface/](../../docs/design/terminal-interface/) — this page describes the code as it is; the design folder holds intent.
+
+## Part-migrated nouns
+
+`lease` and `agents` flatten `Operation(Invocation<V>)`, and `task` flattens `Operation(TaskInvocation)`, where `TaskInvocation` is `Registry(Invocation<TaskVerb>)` plus the hand-wired `locks contention` command. A `TaskVerb` with an empty `cli_path` (`BlockTriage`, `Reject`, `Delete`) gets no `orbit task` subcommand.

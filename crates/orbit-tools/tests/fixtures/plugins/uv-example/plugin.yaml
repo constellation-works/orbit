@@ -1,5 +1,5 @@
 # An exec backend with a third-party Python dependency, run through uv
-# (orbit-setup `references/plugins.md`, "Python backends with dependencies").
+# (orbit-setup `references/plugins-backends.md`, "Python backends with dependencies").
 # The environment is built under {{plugin_state}} on first call, so the tree
 # holds no virtualenv and passes the install-time symlink walk.
 schemaVersion: 2

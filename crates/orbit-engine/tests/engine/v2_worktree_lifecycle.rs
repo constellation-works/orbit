@@ -60,6 +60,7 @@ mod conflict_adoption;
 #[cfg(unix)]
 mod declared_reclaim;
 mod dependency_delivery;
+mod dependency_delivery_dispatch;
 #[cfg(unix)]
 mod dirty_rescue;
 #[cfg(unix)]
@@ -758,6 +759,51 @@ fn local_landing_precheck_uses_the_normalized_base_checkout() {
 // ---------------------------------------------------------------------------
 // Local delivery: operator-owned untracked files in the landing checkout
 // ---------------------------------------------------------------------------
+
+fn local_landing_reports_the_actual_landing() {
+    for scenario in ["fast_forward", "rebase", "ancestor", "moving_ref"] {
+        let (fixture, host) = Fixture::hosted();
+        let run_id = "jrun-identity";
+        let checkout = landing_checkout(&host, BASE, run_id);
+        let candidate = commit_file(&checkout.path, "candidate.txt", "candidate\n");
+        if scenario == "rebase" {
+            commit_file(&fixture.repo, "base-advance.txt", "base\n");
+        } else if scenario == "ancestor" {
+            git(&fixture.repo, &["merge", "--ff-only", &candidate]);
+            commit_file(&fixture.repo, "base-advance.txt", "base\n");
+        } else if scenario == "moving_ref" {
+            *host.landing_advance.lock().unwrap() = Some(checkout.path.clone());
+        }
+        let before = head(&fixture.repo);
+        let output = merge(&host, run_id, BASE, &checkout.path).unwrap();
+        let actual = head(&fixture.repo);
+        assert_eq!(output["base_commit"], actual, "{scenario}");
+        assert_eq!(output["completion_held"], false, "{scenario}");
+        assert_eq!(
+            output["already_contained"],
+            scenario == "ancestor",
+            "{scenario}"
+        );
+        if scenario == "ancestor" {
+            assert_eq!(actual, before);
+            assert_eq!(output["merged"], false);
+            assert!(output.get("landed_commit").is_none());
+        } else {
+            assert_eq!(output["merged"], true);
+            assert_eq!(output["landed_commit"], actual, "{scenario}");
+            assert_ne!(actual, before);
+            if scenario == "rebase" {
+                assert_ne!(actual, candidate);
+                assert_eq!(actual, head(&checkout.path));
+            } else {
+                assert_eq!(actual, candidate);
+            }
+            if scenario == "moving_ref" {
+                assert_ne!(head(&checkout.path), actual);
+            }
+        }
+    }
+}
 
 fn local_landing_preserves_unrelated_untracked_files() {
     for linked in [false, true] {
@@ -3672,6 +3718,7 @@ struct LifecycleHost {
     kept_claim: Mutex<Option<KeptClaimCandidate>>,
     /// Deterministically model an operator write immediately before landing.
     landing_write: Mutex<Option<(PathBuf, Vec<u8>)>>,
+    landing_advance: Mutex<Option<PathBuf>>,
     /// Scripted answers of host-run deterministic actions, by action name.
     stubs: Mutex<BTreeMap<String, Result<Value, DispatchError>>>,
     /// Every stubbed action call, as (action, input), in order.
@@ -3772,6 +3819,7 @@ impl LifecycleHost {
             machine: copied(&self.machine),
             kept_claim: copied(&self.kept_claim),
             landing_write: copied(&self.landing_write),
+            landing_advance: copied(&self.landing_advance),
             stubs: copied(&self.stubs),
             stub_calls: copied(&self.stub_calls),
             final_recovery_admissions: copied(&self.final_recovery_admissions),
@@ -4067,6 +4115,9 @@ impl orbit_engine::test_support::NullRuntimeHost for LifecycleHost {
         &self,
         _request: &orbit_types::workflow::automation::DirectLandingRequest,
     ) -> Result<(), OrbitError> {
+        if let Some(path) = self.landing_advance.lock().unwrap().take() {
+            commit_file(&path, "racing.txt", "later candidate\n");
+        }
         if let Some((path, bytes)) = self.landing_write.lock().unwrap().take() {
             fs::write(path, bytes).unwrap();
         }
@@ -4713,8 +4764,14 @@ fn landing_input(field: &str, spelling: &str, run_id: &str) -> Value {
 fn assert_stale_refusal(error: &OrbitError, branch: &str, tip: &str, base: &str) {
     let message = error.to_string();
     assert!(
-        matches!(error, OrbitError::Execution(_)),
-        "expected an execution refusal, got {error:?}"
+        matches!(
+            error,
+            OrbitError::DeliveryRefused {
+                refusal: orbit_types::workflow::DeliveryRefusal::StaleBranch,
+                ..
+            }
+        ),
+        "expected a stale-branch delivery refusal, got {error:?}"
     );
     for fragment in ["refusing stale branch", &format!("'{branch}'"), tip, base] {
         assert!(
@@ -4894,6 +4951,7 @@ macro_rules! worktree_families {
 }
 
 worktree_families! {
+    landing_identity: [local_landing_reports_the_actual_landing],
     worktree_contracts_1: [
         worktree_gc_keeps_every_protected_checkout_and_reaps_settled_ones,
         replica_worktree_gc_reclaims_settled_claims_and_says_why_it_keeps_the_rest,

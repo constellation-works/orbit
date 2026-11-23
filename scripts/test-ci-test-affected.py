@@ -83,9 +83,13 @@ class AffectedTestGateTests(unittest.TestCase):
         self.env = dict(os.environ, PATH=f"{self.bin}:{os.environ['PATH']}",
                         GUARD_TEST_LOG=str(self.log), GUARD_TEST_METADATA=str(self.metadata),
                         BUILD_BUDGET=str(self.bin / "build-budget"), CARGO="cargo")
-        for name in ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "CI_TEST_BASE",
-                     "ORBIT_VALIDATION_SUMMARY", "ORBIT_VALIDATION_SELECTION", "ORBIT_VALIDATION_GATE"):
+        for name in ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR",
+                     "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+                     "CI_TEST_BASE", "ORBIT_VALIDATION_SUMMARY", "ORBIT_VALIDATION_SELECTION",
+                     "ORBIT_VALIDATION_GATE", "ORBIT_COMMAND_EVIDENCE_DIR",
+                     "ORBIT_COMMAND_EVIDENCE_INVOCATION"):
             self.env.pop(name, None)
+        self.env.update(GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM="1")
         packages = []
         # Renamed, build and dev edges must all contribute to the transitive
         # reverse closure: engine -> core -> cmd -> web -> cli; tools stays independent.
@@ -377,7 +381,7 @@ exit "${GUARD_TEST_MACOS_EXIT:-0}"
             "scripts/release-readiness-adapter.py": sorted({*self.core_dependents, "orbit-engine"}),
             "examples/release-readiness/scripts/release-readiness.yaml": sorted({*self.core_dependents, "orbit-engine"}),
             "docs/design/auto-tasks/1_overview.md": self.core_dependents,
-            "plugin/skills/orbit-setup/references/auto-tasks.md": self.core_dependents,
+            "plugin/skills/orbit-setup/references/auto-tasks-authoring.md": self.core_dependents,
             "crates/orbit-tools/tests/fixtures/plugins/uv-example/plugin.yaml": ["orbit-cli", "orbit-tools"],
         }
         for relative, expected in readers.items():
@@ -1095,8 +1099,9 @@ class ObservedPipeDrainTests(unittest.TestCase):
                     try:
                         stdout, stderr = proc.communicate(timeout=self.DEADLINE_SECONDS)
                     except subprocess.TimeoutExpired:
-                        stop_owned_helper(proc)
                         self.fail("run_observed hung after a relay failure with a full pipe")
+                    finally:
+                        stop_owned_helper(proc)
                     self.assertEqual(proc.returncode, 0, (stdout + stderr).decode(errors="replace"))
                     result = json.loads((root / "result.json").read_text())
                     self.assertTrue(result["same_exception"], result)
@@ -1191,9 +1196,10 @@ class ObservedPipeDrainTests(unittest.TestCase):
         try:
             stdout, stderr = proc.communicate(timeout=self.DEADLINE_SECONDS)
         except subprocess.TimeoutExpired:
-            stop_owned_helper(proc)
             self.fail("run_observed blocked past its deadline on a partial stdout line "
                       "while stderr held more than a pipe of data")
+        finally:
+            stop_owned_helper(proc)
         self.assertEqual(proc.returncode, 0, stderr.decode("utf-8", errors="replace"))
         recorded = json.loads(result_path.read_text())
         output = recorded["output"]

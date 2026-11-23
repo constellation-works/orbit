@@ -84,7 +84,8 @@ template:
     real impact the evidence shows, not the size of the fix, and take the lower
     level when torn. Choose `unclassified` rather than guess. The scale and the
     `nature` and `escape` values are the Severity rubric and `regression_from`
-    fields in the installed `orbit` skill's `references/task-fields.md`; use only
+    fields in the installed `orbit` skill's `references/task-fields-review.md` and
+    `references/task-fields-relations.md`; use only
     those values and its guidance for choosing the escape.
 
     A non-duplicate failing test that blocks the repository's

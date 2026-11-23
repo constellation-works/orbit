@@ -110,6 +110,10 @@ spec:
     mode: pr
     base_branch: main
     base_sync: remote
+    # Forwarded unchanged to each leaf's worktree setup. `ignore` skips the
+    # dependency-delivery check for work delivered under a different commit
+    # message (`orbit run ship --ignore-dependency-delivery`).
+    dependency_delivery: enforce
     # ORB-10644: forwarded to the child pipeline; empty means the base is the
     # landing branch.
     landing_branch: ""
@@ -175,6 +179,7 @@ spec:
           task_ids: "{{ input.task_ids }}"
           base_branch: "{{ input.base_branch }}"
           base_sync: "{{ input.base_sync }}"
+          dependency_delivery: "{{ input.dependency_delivery }}"
           landing_branch: "{{ input.landing_branch }}"
           completion: "{{ input.completion }}"
           auto_fix: "{{ input.auto_fix }}"

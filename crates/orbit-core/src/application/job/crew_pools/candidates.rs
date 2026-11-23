@@ -254,7 +254,7 @@ impl OrbitRuntime {
         if assigned && !crew_source.as_ref().is_some_and(CrewSource::is_automatic) {
             return Ok((candidates, source, reason));
         }
-        let refusals = self.task_muse_model_refusals(&task.id)?;
+        let refusals = self.pass_workspace_muse_model_refusals()?;
         let mut excluded = BTreeSet::new();
         let mut keep = |candidate: &CrewCandidate| {
             if !refusals.rejects_crew_model(&candidate.crew) {
