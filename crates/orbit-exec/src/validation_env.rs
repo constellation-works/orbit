@@ -19,6 +19,12 @@
 //! the one validation runs, and every other resolved PATH entry after their
 //! own ([`ValidationEnvironment::extend_agent_environment`]).
 //!
+//! Validation environments (including launcher fallback), agent `proc.spawn`
+//! commands and provider sessions in every lane also receive
+//! `PYTHONDONTWRITEBYTECODE=1` when the value is unset or empty. A supplied
+//! nonempty value is preserved. This keeps Python validation scripts from
+//! writing `.pyc` files or `__pycache__` directories into delivery worktrees.
+//!
 //! The probe runs `<shell> -i -l -c "exec /bin/sh -c '<printer>'"`, reading
 //! interactive rc files as well as profiles. Startup failure, nonzero exit,
 //! timeout or a missing marker triggers a fallback to `<shell> -l -c …`.
@@ -206,7 +212,9 @@ impl ValidationEnvPolicy {
     /// would reread login profiles is told not to while
     /// [`Self::pins_agent_path`] holds, since a profile can reorder PATH
     /// (macOS `path_helper`). A PATH that already starts with the
-    /// entries (a nested Orbit process inside an agent) is kept as is.
+    /// entries (a nested Orbit process inside an agent) is kept as is. Agent
+    /// command environments also default `PYTHONDONTWRITEBYTECODE` to `1`
+    /// when unset or empty, preserving a supplied nonempty value.
     pub fn agent_environment(&self, mut env: Vec<(String, String)>) -> Vec<(String, String)> {
         ensure_python_no_bytecode_vec(&mut env);
         let configured = self.expanded_path(lookup(&env, "HOME")).join(":");
@@ -472,7 +480,9 @@ pub struct ValidationEnvironment {
 }
 
 impl ValidationEnvironment {
-    /// `base` as is: what a host without a resolver runs commands with.
+    /// Use `base` for commands on a host without a resolver, adding
+    /// `PYTHONDONTWRITEBYTECODE=1` when that value is unset or empty. A
+    /// supplied nonempty value is preserved.
     pub fn launcher(mut base: Vec<(String, String)>) -> Self {
         ensure_python_no_bytecode_vec(&mut base);
         Self {
@@ -509,7 +519,9 @@ impl ValidationEnvironment {
     }
 
     /// Combine `base`, a login-shell probe result (`None` when disabled) and
-    /// the configured PATH entries.
+    /// the configured PATH entries. The environment defaults
+    /// `PYTHONDONTWRITEBYTECODE` to `1` when unset or empty, and preserves a
+    /// nonempty value from `base`.
     pub fn compose(
         base: Vec<(String, String)>,
         policy: &ValidationEnvPolicy,
