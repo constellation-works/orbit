@@ -209,7 +209,10 @@ requeue, or the decision answer that requeues the task, resumes the same PR at
 and required-check rules apply unchanged at `P`: the PR must be open and unmerged
 at `P`, and every required check must have passed on `P`. The requeue refuses
 unless the attestation names this run and task, the published head `P`, the
-expected ref and a commit that descends from `P`. The successor adopts `R` and
+expected ref and a commit that descends from `P`. When the review settled a fix
+and its owner revalidation or `landing_push` then failed, `R` must also be the
+head that settlement names; a failed revalidation certified nothing, so the
+requeue authenticates the settlement only. The successor adopts `R` and
 publishes it under a lease on `P`; its review follows its own captured timing, as
 described above. Only the `preserved` decision is resumable. For
 `preserve_failed` and `commit_refused`, the requeue does not carry the repair
