@@ -312,7 +312,8 @@ fn preserve_landing_reviewer_repair_inner<H: RuntimeHost + ?Sized>(
         Err(error) => {
             let patch = git_output_raw(&worktree, &["diff", &published, &head_sha])
                 .ok()
-                .filter(|diff| !diff.trim().is_empty());
+                .filter(|diff| !diff.trim().is_empty())
+                .map(|diff| orbit_common::security::redaction::redact_all(&diff));
             if let Some(diff) = patch {
                 let artifact_path = format!("landing-review-fix-{run_id}.patch");
                 (

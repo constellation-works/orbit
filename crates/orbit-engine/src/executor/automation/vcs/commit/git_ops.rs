@@ -112,7 +112,7 @@ pub(super) fn stage_paths(workspace_path: &Path, files: &[String]) -> Result<(),
 /// Per-path `:(literal)` magic, rather than a leading `--literal-pathspecs`,
 /// keeps `commit` as the first argument so the shared Git wrapper still
 /// injects `--no-verify`.
-fn literal_pathspec(path: &str) -> String {
+pub(super) fn literal_pathspec(path: &str) -> String {
     format!(":(literal){path}")
 }
 

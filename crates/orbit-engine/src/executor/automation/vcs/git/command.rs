@@ -330,8 +330,8 @@ pub(crate) fn git_output_raw(current_dir: &Path, args: &[&str]) -> Result<String
     Ok(outcome.stdout)
 }
 
-/// Run Git with `env` added to its secured environment; its trimmed stdout.
-pub(crate) fn git_output_with_env(
+/// Run Git with `env` added to its secured environment; its raw stdout.
+pub(crate) fn git_output_raw_with_env(
     current_dir: &Path,
     args: &[&str],
     env: &[(&str, &str)],
@@ -345,6 +345,14 @@ pub(crate) fn git_output_with_env(
         );
     }
     let result = run_process(&request, &NoSandbox)?;
+    if result.timed_out {
+        return Err(git_timeout_error(
+            current_dir,
+            args,
+            timeout_ms,
+            &result.stderr,
+        ));
+    }
     if !result.success {
         return Err(git_failure_error(
             current_dir,
@@ -353,7 +361,32 @@ pub(crate) fn git_output_with_env(
             &result.stderr,
         ));
     }
-    Ok(result.stdout.trim().to_string())
+    Ok(result.stdout)
+}
+
+/// Run Git with `env` added to its secured environment; its trimmed stdout.
+pub(crate) fn git_output_with_env(
+    current_dir: &Path,
+    args: &[&str],
+    env: &[(&str, &str)],
+) -> Result<String, OrbitError> {
+    Ok(git_output_raw_with_env(current_dir, args, env)?
+        .trim()
+        .to_string())
+}
+
+/// Run Git with `env` added to its secured environment; NUL-separated paths.
+pub(crate) fn git_output_paths_with_env(
+    current_dir: &Path,
+    args: &[&str],
+    env: &[(&str, &str)],
+) -> Result<Vec<String>, OrbitError> {
+    let raw = git_output_raw_with_env(current_dir, args, env)?;
+    Ok(raw
+        .split('\0')
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+        .collect())
 }
 
 pub(crate) fn git_success(current_dir: &Path, args: &[&str]) -> Result<(), OrbitError> {
