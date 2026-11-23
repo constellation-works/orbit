@@ -52,7 +52,6 @@ pub use install::{
     PluginAddOptions, PluginPermissionChange, PluginUpgradeOptions, PluginUpgradeResult,
     install_plugin, upgrade_plugin,
 };
-pub(crate) use lifecycle::workspace_plugin_toggles;
 pub use lifecycle::{
     PluginEnableOptions, PluginEnableResult, PluginMigrateRequest, PluginRemoveOptions,
     PluginSyncOutcome, SidecarManifest, disable_plugin, disable_plugin_in_workspace, enable_plugin,
