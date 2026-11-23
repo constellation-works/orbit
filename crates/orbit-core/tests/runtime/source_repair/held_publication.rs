@@ -749,31 +749,114 @@ fn held_run_outside_the_task_lineage_is_still_refused_as_unbound() {
     );
 }
 
-fn resident_starts_preserved_delivery_on_current_base() {
+fn resident_recovery_cycle(
+    f: &Fixture,
+) -> (String, orbit_core::runtime::plugin::broker::PluginBroker) {
     use crate::resident_cycle::{call, resident_test_broker};
     use orbit_core::application::task::{TaskAddParams, TaskUpdateParams};
-    use orbit_core::runtime::plugin::broker::{ForwardCallError, forward_call_with_status};
-    use orbit_engine::PluginBrokerHandle;
     use orbit_types::task::TaskArtifact;
     use orbit_types::tool::McpCapability;
+
+    let workspace = f.runtime.workspace_id().unwrap();
+    let mandate = f
+        .runtime
+        .add_task(TaskAddParams {
+            title: "[orchestration]: exercise preserved delivery recovery".into(),
+            tags: vec!["resident".into()],
+            ..Default::default()
+        })
+        .unwrap()
+        .id;
+    f.runtime
+        .update_task_as_human(
+            &mandate,
+            TaskUpdateParams {
+                upsert_artifacts: vec![TaskArtifact::from_text(
+                    "resident/mandate.json",
+                    json!({
+                        "schema": "resident.mandate/v1",
+                        "goal": "Recover the held delivery",
+                        "exit_criteria": ["The candidate passes review"],
+                        "workspaces": [workspace],
+                        "watch": {"tasks": [f.task]},
+                        "crew": "fixture",
+                        "cadence": {"heartbeat_minutes": 120}
+                    })
+                    .to_string(),
+                )],
+                ..Default::default()
+            },
+            "human:operator".into(),
+        )
+        .unwrap();
+    call(
+        &f.runtime,
+        "orbit.resident.grant",
+        json!({"task_id": mandate, "add": ["recover"], "workspaces": [workspace]}),
+        McpCapability::Operator,
+    )
+    .unwrap();
+    let run = f
+        .runtime
+        .insert_job_run(
+            "resident_cycle_pipeline",
+            1,
+            Utc::now(),
+            Some(json!({"task_ids": [mandate]})),
+            None,
+        )
+        .unwrap();
+    f.runtime
+        .begin_resident_cycle(&run.run_id, Utc::now())
+        .unwrap();
+    let broker = resident_test_broker(&f.runtime, &mandate, &run.run_id);
+    (mandate, broker)
+}
+
+fn resident_resume_delivery(
+    f: &Fixture,
+    broker: &orbit_core::runtime::plugin::broker::PluginBroker,
+) -> Result<Value, orbit_common::OrbitError> {
+    use orbit_core::runtime::plugin::broker::{ForwardCallError, forward_call_with_status};
+    use orbit_engine::PluginBrokerHandle;
+
+    let workspace = f.runtime.workspace_id().unwrap();
+    forward_call_with_status(
+        broker.socket_path(),
+        "orbit.task.resume_delivery",
+        json!({
+            "id": f.task, "run_id": f.source.run_id, "workspace": workspace,
+            "diagnosis": "Finish the preserved compiler repair on the current base",
+        }),
+        &std::env::current_dir().unwrap(),
+        Some(&workspace),
+        "mcp",
+    )
+    .map_err(|error| match error {
+        ForwardCallError::CallerAudit(error) | ForwardCallError::BrokerAudit(error) => error,
+    })
+}
+
+fn block_fixture_task(f: &Fixture) {
+    f.runtime
+        .apply_task_automation_update(
+            &f.task,
+            TaskAutomationUpdate {
+                status: Some(TaskStatus::Blocked),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+}
+
+fn resident_starts_preserved_delivery_on_current_base() {
     use orbit_types::workflow::{SOURCE_REPAIR_KEY, SourceRepairAdmission};
 
     let f = held_completion_fixture_with_policy(
         DeliveryRefusal::CheckEvidenceInconclusive,
         "before-pr",
     );
-    let block = || {
-        f.runtime
-            .apply_task_automation_update(
-                &f.task,
-                TaskAutomationUpdate {
-                    status: Some(TaskStatus::Blocked),
-                    ..Default::default()
-                },
-            )
-            .unwrap();
-    };
-    block();
+    block_fixture_task(&f);
     git(&f.repo, &["checkout", "-q", "main"]);
     std::fs::write(f.repo.join("current-base.txt"), "new current base\n").unwrap();
     git(&f.repo, &["add", "current-base.txt"]);
@@ -783,80 +866,9 @@ fn resident_starts_preserved_delivery_on_current_base() {
     );
     git(&f.repo, &["push", "-q", "origin", "main"]);
     let current_base = git(&f.repo, &["rev-parse", "HEAD"]);
-    let workspace = f.runtime.workspace_id().unwrap();
-    let make_cycle = || {
-        let mandate = f
-            .runtime
-            .add_task(TaskAddParams {
-                title: "[orchestration]: exercise preserved delivery recovery".into(),
-                tags: vec!["resident".into()],
-                ..Default::default()
-            })
-            .unwrap()
-            .id;
-        f.runtime
-            .update_task_as_human(
-                &mandate,
-                TaskUpdateParams {
-                    upsert_artifacts: vec![TaskArtifact::from_text(
-                        "resident/mandate.json",
-                        json!({
-                            "schema": "resident.mandate/v1",
-                            "goal": "Recover the held delivery",
-                            "exit_criteria": ["The candidate passes review"],
-                            "workspaces": [workspace],
-                            "watch": {"tasks": [f.task]},
-                            "crew": "fixture",
-                            "cadence": {"heartbeat_minutes": 120}
-                        })
-                        .to_string(),
-                    )],
-                    ..Default::default()
-                },
-                "human:operator".into(),
-            )
-            .unwrap();
-        call(
-            &f.runtime,
-            "orbit.resident.grant",
-            json!({"task_id": mandate, "add": ["recover"], "workspaces": [workspace]}),
-            McpCapability::Operator,
-        )
-        .unwrap();
-        let run = f
-            .runtime
-            .insert_job_run(
-                "resident_cycle_pipeline",
-                1,
-                Utc::now(),
-                Some(json!({"task_ids": [mandate]})),
-                None,
-            )
-            .unwrap();
-        f.runtime
-            .begin_resident_cycle(&run.run_id, Utc::now())
-            .unwrap();
-        let broker = resident_test_broker(&f.runtime, &mandate, &run.run_id);
-        (mandate, broker)
-    };
-    let recover = |broker: &orbit_core::runtime::plugin::broker::PluginBroker| {
-        forward_call_with_status(
-            broker.socket_path(),
-            "orbit.task.resume_delivery",
-            json!({
-                "id": f.task, "run_id": f.source.run_id, "workspace": workspace,
-                "diagnosis": "Finish the preserved compiler repair on the current base",
-            }),
-            &std::env::current_dir().unwrap(),
-            Some(&workspace),
-            "mcp",
-        )
-        .map_err(|error| match error {
-            ForwardCallError::CallerAudit(error) | ForwardCallError::BrokerAudit(error) => error,
-        })
-    };
-    let (mandate, broker) = make_cycle();
-    let admitted = recover(&broker).unwrap_or_else(|error| panic!("{error:?}"));
+    let (mandate, broker) = resident_recovery_cycle(&f);
+    let admitted =
+        resident_resume_delivery(&f, &broker).unwrap_or_else(|error| panic!("{error:?}"));
     let id = admitted["run_id"].as_str().unwrap();
     assert_eq!(admitted["retry_source_run_id"], f.source.run_id);
     assert_eq!(admitted["completion"], "review");
@@ -875,7 +887,7 @@ fn resident_starts_preserved_delivery_on_current_base() {
     assert_eq!(input["completion"], "review");
     assert_eq!(input["auto_fix"], false);
 
-    let refused = recover(&broker).unwrap_err();
+    let refused = resident_resume_delivery(&f, &broker).unwrap_err();
     assert!(
         format!("{refused:?}").contains("resident_recovery_limit"),
         "{refused:?}"
@@ -930,13 +942,299 @@ fn resident_starts_preserved_delivery_on_current_base() {
     assert_ne!(git(&checkout, &["rev-parse", "HEAD"]), f.head);
     f.assert_original();
 
-    block();
-    let (_, other_mandate) = make_cycle();
-    let refused = recover(&other_mandate).unwrap_err();
+    block_fixture_task(&f);
+    let (_, other_mandate) = resident_recovery_cycle(&f);
+    let refused = resident_resume_delivery(&f, &other_mandate).unwrap_err();
     assert!(
         format!("{refused:?}").contains("resident_recovery_limit"),
         "{refused:?}"
     );
+}
+
+fn drive_resident_leaf_publication(
+    f: &Fixture,
+    id: &str,
+    content: &str,
+    validate: bool,
+) -> (PathBuf, Value, String) {
+    use super::published_owner::checkpoint;
+
+    f.wait(id);
+    f.start_actions(id);
+    let setup = f.action(
+        "worktree_setup",
+        json!({"job_run_id": id, "run_id": id, "task_ids": [f.task], "base": "main", "base_sync": "remote"}),
+    );
+    checkpoint(f, id, 0, "worktree", setup.clone());
+    let checkout = PathBuf::from(setup["workspace_path"].as_str().unwrap());
+    let resumed = f.action(
+        "candidate_resume",
+        json!({
+            "job_run_id": id, "task_ids": [f.task], "workspace_path": checkout,
+            "base_sha": setup["base_sha"], "prior_job_run_id": f.source.run_id,
+        }),
+    );
+    assert_eq!(
+        resumed["repair"]["failed_step_id"],
+        "resident_source_repair"
+    );
+    checkpoint(f, id, 6, "resume_candidate", resumed);
+
+    std::fs::write(checkout.join("source.txt"), content).unwrap();
+    if validate {
+        f.runtime
+            .apply_task_automation_update(
+                &f.task,
+                TaskAutomationUpdate {
+                    execution_summary: Some(
+                        "Outcome: success\nChanges: repaired candidate in resident recovery leaf."
+                            .into(),
+                    ),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+    }
+    let commit = f.action(
+        "git_commit",
+        json!({
+            "job_run_id": id, "scope": "all", "workspace_path": checkout,
+            "base_sha": setup["base_sha"], "base_ref": setup["base_ref"],
+        }),
+    );
+    checkpoint(f, id, 1, "commit", commit);
+    let input = json!({
+        "job_run_id": id, "completed_task_ids": [f.task], "workspace_path": checkout,
+        "head": f.branch, "branch": f.branch, "base": "main",
+        "base_ref": setup["base_ref"], "base_sha": setup["base_sha"],
+    });
+    let prepared = f.action("pr_prepare", input.clone());
+    checkpoint(f, id, 2, "prepare_branch", prepared.clone());
+    let mut rebase_input = input.clone();
+    for (key, value) in prepared.as_object().unwrap() {
+        rebase_input[key] = value.clone();
+    }
+    let synced = f.action("git_rebase", rebase_input);
+    checkpoint(f, id, 3, "sync_base", synced);
+    if validate {
+        let validated = f.action("candidate_validate", input.clone());
+        assert_eq!(validated["decision"], "passed");
+    }
+    let pushed = f.action("git_push", input.clone());
+    checkpoint(f, id, 4, "push", pushed);
+    let new_head = git(&checkout, &["rev-parse", "HEAD"]);
+    assert_ne!(new_head, f.head);
+    let mut answer: Value = serde_json::from_slice(&std::fs::read(&f.answer).unwrap()).unwrap();
+    answer["headRefOid"] = json!(new_head);
+    std::fs::write(&f.answer, answer.to_string()).unwrap();
+    let opened = f.action("pr_open", input.clone());
+    assert_eq!(opened["pr_number"], "17");
+    assert_eq!(opened["pr_reused"], true);
+    checkpoint(f, id, 5, "pr_open", opened);
+    (checkout, input, new_head)
+}
+
+fn resident_recovery_leaf_publication_is_adopted_by_subsequent_observation() {
+    use super::published_owner::save_run;
+    use orbit_types::desktop::DesktopTaskSnapshot;
+    use orbit_types::task::ExternalRef;
+    use orbit_types::tool::{McpCapability, ToolSessionContext};
+    use std::collections::BTreeSet;
+
+    {
+        let mut f = held_completion_fixture_with_policy(
+            DeliveryRefusal::CheckEvidenceInconclusive,
+            "before-pr",
+        );
+        f.enable_final_recovery();
+        block_fixture_task(&f);
+        let (_, broker) = resident_recovery_cycle(&f);
+        let admitted =
+            resident_resume_delivery(&f, &broker).unwrap_or_else(|error| panic!("{error:?}"));
+        let id = admitted["run_id"].as_str().unwrap().to_string();
+
+        let (checkout, mut promote_input, new_head) = drive_resident_leaf_publication(
+            &f,
+            &id,
+            "resident recovery candidate repaired and published\n",
+            true,
+        );
+        promote_input["pr_number"] = json!("17");
+        promote_input["pr_url"] = json!("https://github.com/owner/repository/pull/17");
+        promote_input["workspace_path"] = json!(checkout);
+        f.action("pr_promote", promote_input);
+
+        let mut leaf_run = f.runtime.show_job_run_observed(&id).unwrap();
+        leaf_run.state = JobRunState::Success;
+        leaf_run.finished_at = Some(Utc::now());
+        leaf_run.pid = None;
+        save_run(&f, &leaf_run);
+        let mut leaf_state = f.runtime.read_run_state(&id).unwrap().unwrap();
+        leaf_state.compact_for_terminal(JobRunState::Success);
+        f.runtime.write_run_state(&id, &leaf_state).unwrap();
+
+        // 1. Desktop native publication proof with multiple PR external_refs bound to the successful resident leaf.
+        let mut refs = f.runtime.get_task(&f.task).unwrap().external_refs;
+        refs.insert(
+            0,
+            ExternalRef {
+                system: "github-pr".into(),
+                id: "16".into(),
+                url: Some("https://github.com/owner/repository/pull/16".into()),
+            },
+        );
+        f.replace_refs(refs);
+        let operator = ToolSessionContext {
+            effective_capabilities: BTreeSet::from([McpCapability::Operator]),
+            ..Default::default()
+        };
+        let snapshot: DesktopTaskSnapshot =
+            f.runtime.desktop_task_snapshot(&f.task, &operator).unwrap();
+        assert_eq!(
+            snapshot.reviewed_head.as_deref(),
+            Some(new_head.as_str()),
+            "{:?}",
+            snapshot.reviewed_head_reason
+        );
+
+        // 2. Subsequent operator source-repair inspection (`observe_source_repair`) on the resident leaf.
+        let inspect_req =
+            json!({"id": id, "source_repair": {"action": "inspect", "task_id": f.task}});
+        let inspected = f
+            .runtime
+            .run_tool_as_human("orbit.workflow.run.resume", inspect_req.clone())
+            .unwrap_or_else(|error| panic!("resident leaf inspect must succeed: {error}"));
+        assert_eq!(inspected["binding"]["source_run_id"], id);
+        assert_eq!(inspected["binding"]["head_sha"], new_head);
+
+        // Reject mismatched repair.failed_step_id on the resident recovery leaf.
+        let original_leaf_state = f.runtime.read_run_state(&id).unwrap().unwrap();
+        for bad_step in ["operator_source_repair", "unexpected_step"] {
+            let mut mutated = original_leaf_state.clone();
+            mutated.pipeline["resume_candidate"]["repair"]["failed_step_id"] = json!(bad_step);
+            mutated
+                .step_outputs
+                .insert(6, mutated.pipeline["resume_candidate"].clone());
+            f.runtime.write_run_state(&id, &mutated).unwrap();
+            let err = f
+                .runtime
+                .run_tool_as_human("orbit.workflow.run.resume", inspect_req.clone())
+                .unwrap_err()
+                .to_string();
+            assert!(
+                err.contains("successful branch adoption disagrees with prior repair admission"),
+                "resident leaf must reject {bad_step}: {err}"
+            );
+        }
+        f.runtime
+            .write_run_state(&id, &original_leaf_state)
+            .unwrap();
+    }
+
+    // 3. Operator source-repair run still requires `operator_source_repair`
+    //    and rejects `resident_source_repair`.
+    {
+        let op_f = Fixture::with_policy("before-landing");
+        let op_admitted = op_f
+            .runtime
+            .run_tool_as_human("orbit.workflow.run.resume", op_f.submit(op_f.inspect()))
+            .unwrap();
+        let op_id = op_admitted["run_id"].as_str().unwrap().to_string();
+        let op_head = super::generations::publish_and_cancel(&op_f, &op_id, 1);
+        let op_inspect_req =
+            json!({"id": op_id, "source_repair": {"action": "inspect", "task_id": op_f.task}});
+        let op_inspected = op_f
+            .runtime
+            .run_tool_as_human("orbit.workflow.run.resume", op_inspect_req.clone())
+            .unwrap();
+        assert_eq!(op_inspected["binding"]["head_sha"], op_head);
+
+        let original_op_state = op_f.runtime.read_run_state(&op_id).unwrap().unwrap();
+        for bad_step in ["resident_source_repair", "unexpected_step"] {
+            let mut mutated = original_op_state.clone();
+            mutated.pipeline["resume_candidate"]["repair"]["failed_step_id"] = json!(bad_step);
+            mutated
+                .step_outputs
+                .insert(6, mutated.pipeline["resume_candidate"].clone());
+            op_f.runtime.write_run_state(&op_id, &mutated).unwrap();
+            let err = op_f
+                .runtime
+                .run_tool_as_human("orbit.workflow.run.resume", op_inspect_req.clone())
+                .unwrap_err()
+                .to_string();
+            assert!(
+                err.contains("successful branch adoption disagrees with prior repair admission"),
+                "operator repair must reject {bad_step}: {err}"
+            );
+        }
+        op_f.runtime
+            .write_run_state(&op_id, &original_op_state)
+            .unwrap();
+    }
+
+    // 4. Subsequent `owner_published_candidate` after final-recovery requeue of a resident leaf.
+    {
+        let f2 = held_completion_fixture_with_policy(
+            DeliveryRefusal::CheckEvidenceInconclusive,
+            "before-pr",
+        );
+        block_fixture_task(&f2);
+        let (_, broker2) = resident_recovery_cycle(&f2);
+        let admitted2 =
+            resident_resume_delivery(&f2, &broker2).unwrap_or_else(|error| panic!("{error:?}"));
+        let id2 = admitted2["run_id"].as_str().unwrap().to_string();
+        let (_, _, head2) = drive_resident_leaf_publication(
+            &f2,
+            &id2,
+            "resident recovery candidate requeued\n",
+            false,
+        );
+
+        // Mark the resident recovery leaf requeued by final recovery, stop it as Failed,
+        // and verify `owner_published_candidate` and `candidate_resume` on the successor run adopt it.
+        let task2 = f2.runtime.get_task(&f2.task).unwrap();
+        let observed2 = f2.runtime.final_recovery_revision(&task2).unwrap();
+        let outcome = f2
+            .runtime
+            .apply_final_recovery(
+                &orbit_core::application::task::FinalRecoveryRequest {
+                    task_id: f2.task.clone(),
+                    run_id: id2.clone(),
+                    observed: observed2,
+                    repo_root: f2.repo.clone(),
+                    base_ref: "origin/main".into(),
+                    completion: orbit_core::application::task::FinalRecoveryCompletion::Review,
+                    requeue_bound: Default::default(),
+                },
+                Some(&json!({"decision": "requeue", "reason": "retry delivery on published resident leaf"})),
+            )
+            .unwrap();
+        assert_eq!(
+            outcome,
+            orbit_core::application::task::FinalRecoveryOutcome::Requeued
+        );
+        let mut run2 = f2.runtime.show_job_run_observed(&id2).unwrap();
+        run2.state = JobRunState::Failed;
+        run2.finished_at = Some(Utc::now());
+        run2.pid = None;
+        save_run(&f2, &run2);
+        let mut state2 = f2.runtime.read_run_state(&id2).unwrap().unwrap();
+        state2.compact_for_terminal(JobRunState::Failed);
+        f2.runtime.write_run_state(&id2, &state2).unwrap();
+
+        let (next_run, setup_next) = super::published_owner::next(&f2);
+        let checkout_next = PathBuf::from(setup_next["workspace_path"].as_str().unwrap());
+        let resumed_next = f2.action(
+            "candidate_resume",
+            json!({
+                "job_run_id": next_run.run_id, "task_ids": [f2.task], "workspace_path": checkout_next,
+                "base_sha": setup_next["base_sha"], "prior_job_run_id": id2,
+            }),
+        );
+        assert_eq!(resumed_next["source_run_id"], id2);
+        assert_eq!(resumed_next["source_sha"], head2);
+        assert_eq!(resumed_next["prior_pull_request"], "17");
+    }
 }
 
 crate::scenario_table!(
@@ -951,4 +1249,5 @@ crate::scenario_table!(
     held_owner_refused_while_its_handback_is_newer_names_the_handback,
     held_run_outside_the_task_lineage_is_still_refused_as_unbound,
     resident_starts_preserved_delivery_on_current_base,
+    resident_recovery_leaf_publication_is_adopted_by_subsequent_observation,
 );
