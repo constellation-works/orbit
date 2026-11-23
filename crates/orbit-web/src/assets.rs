@@ -262,6 +262,11 @@ pub(super) const DASHBOARD_FILES: &[(&str, &str, &[u8])] = &[
         include_bytes!("../assets/dashboard/js/field-editor.js"),
     ),
     (
+        "/static/js/friction-detail.js",
+        JS,
+        include_bytes!("../assets/dashboard/js/friction-detail.js"),
+    ),
+    (
         "/static/js/audit.js",
         JS,
         include_bytes!("../assets/dashboard/js/audit.js"),

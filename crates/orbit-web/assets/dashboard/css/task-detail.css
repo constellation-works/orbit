@@ -31,7 +31,8 @@
   to { opacity: 1; transform: translateY(0); }
 }
 
-.task-detail-pane .row-detail {
+.task-detail-pane .row-detail,
+.friction-pane .row-detail {
   padding: var(--space-16) var(--space-20);
   background: transparent;
   border-bottom: 0;
@@ -1653,7 +1654,8 @@ input.field-editor-input {
   flex-wrap: wrap;
   grid-column: 1 / -1;
 }
-.task-detail-pane .row-detail .actions {
+.task-detail-pane .row-detail .actions,
+.friction-pane .row-detail .actions {
   padding-top: var(--space-16);
   border-top: 1px solid var(--hair);
 }
@@ -1675,7 +1677,8 @@ input.field-editor-input {
 .task-action-footer[hidden] { display: none; }
 /* An open editor empties its footer's edit slot; drop the empty bar. */
 .task-action-footer:has(> .field-actions:empty) { display: none; }
-.task-detail-pane .row-detail .task-action-footer .actions { padding-top: 0; border-top: 0; }
+.task-detail-pane .row-detail .task-action-footer .actions,
+.friction-pane .row-detail .task-action-footer .actions { padding-top: 0; border-top: 0; }
 .task-action-footer .reject-form { animation: none; }
 /* ORB-25102: let the comments region meet its pinned composer across the
    task-detail gap. */

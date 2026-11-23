@@ -106,36 +106,6 @@
   gap: var(--space-6);
   min-width: 0;
 }
-.knowledge-detail-list {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--space-6);
-}
-.friction-detail-body {
-  margin: 0;
-  background: var(--bg);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-2xs);
-  padding: var(--space-10) var(--space-12);
-  font-family: var(--font-mono);
-  font-size: var(--text-sm);
-  line-height: 1.5;
-  color: var(--fg-soft);
-  white-space: pre-wrap;
-  word-break: break-word;
-  max-height: 420px;
-  overflow: auto;
-}
-.friction-tag-options {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--space-8);
-}
-.friction-tag-options input {
-  flex: none;
-  accent-color: var(--accent);
-}
-
 .knowledge-row {
   display: grid;
   grid-template-columns: 1fr;
@@ -199,8 +169,7 @@
   font-size: var(--text-xs);
   color: var(--fg-dim);
 }
-.knowledge-row .meta .dot,
-.knowledge-detail-head .sub .dot {
+.knowledge-row .meta .dot {
   color: rgba(255, 255, 255, 0.15);
 }
 
@@ -252,9 +221,6 @@
     border-bottom: 1px solid var(--hair);
     animation: fadeIn 0.3s ease;
   }
-  .friction-accordion-detail .knowledge-detail-body {
-    overflow-y: visible;
-  }
 }
 #friction-detail {
   padding: 0;
@@ -263,113 +229,16 @@
   gap: 0;
   background: var(--bg);
 }
-.knowledge-detail-head {
-  padding: var(--space-14) var(--space-20);
-  border-bottom: 1px solid var(--border);
-  background: var(--bg);
-  display: grid;
-  gap: var(--space-8);
+/* The friction detail is the task detail's layout (js/friction-detail.js):
+   its head, metadata card, markdown panel and sticky footer use the task
+   detail's classes. These rules only give those classes the same room here
+   that .task-detail-pane gives them, and the container the footer's narrow
+   padding is measured against. */
+.friction-pane {
+  container: task-pane / inline-size;
 }
-.knowledge-detail-head .crumb,
-.knowledge-detail-head .sub {
-  display: flex;
-  align-items: center;
-  gap: var(--space-10);
-  flex-wrap: wrap;
-  font-family: var(--font-mono);
-  font-size: var(--text-xs);
-  color: var(--fg-dim);
-}
-.knowledge-detail-head .crumb .id {
-  color: var(--fg);
-}
-.knowledge-detail-head h2 {
-  margin: 0;
-  font-size: var(--text-lg);
-  font-weight: 500;
-  color: var(--fg);
-  line-height: 1.35;
-}
-.knowledge-detail-head .actions {
-  display: flex;
-  gap: var(--space-8);
-  margin-top: var(--space-4);
-}
-.knowledge-btn {
-  font: inherit;
-  font-family: var(--font-sans);
-  font-size: var(--text-sm);
-  padding: var(--space-6) var(--space-12);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-2xs);
-  background: var(--bg-elev);
-  color: var(--fg);
-  cursor: pointer;
-}
-.knowledge-btn::first-letter { text-transform: uppercase; }
-.knowledge-btn:hover:not(:disabled) {
-  border-color: var(--fg-dim);
-}
-.knowledge-btn.primary {
-  border-color: var(--fg-dim);
-  background: transparent;
-}
-.knowledge-btn:disabled {
-  opacity: 0.55;
-  cursor: not-allowed;
-}
-
-/* The detail pane is a column beside the list, so its body and metadata
-   stack: side by side they left the report ~140px wide. */
-.knowledge-detail-body {
-  flex: 1;
-  overflow-y: auto;
-  display: grid;
-  grid-template-columns: minmax(0, 1fr);
-}
-.knowledge-body {
-  padding: var(--space-20) var(--space-24) var(--space-32);
-  min-width: 0;
-}
-.knowledge-body .markdown-body {
-  font-size: var(--text-base);
-  line-height: 1.65;
-  color: var(--fg-soft);
-}
-/* The metadata card sits above the report. It reuses the task detail's
-   .task-delivery-card / .property-row look; only the controls and the task
-   link need to be told apart from plain fact rows. */
-.knowledge-side {
-  border-bottom: 1px solid var(--hair);
-  padding: var(--space-14) var(--space-24);
-  background: var(--bg);
-}
-.knowledge-meta-card .property-row.fact .value.mono { font-size: var(--text-sm); }
-.knowledge-meta-card .property-row.triage { align-items: start; }
-.knowledge-meta-card .property-row.triage .label { line-height: 28px; }
-.knowledge-link-row {
-  width: 100%;
-  display: flex;
-  align-items: center;
-  gap: var(--space-8);
-  padding: var(--space-6) var(--space-8);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-2xs);
-  background: var(--bg-elev);
-  cursor: pointer;
-  font-family: var(--font-mono);
-  font-size: var(--text-xs);
-  color: var(--fg);
-  text-align: left;
-}
-.knowledge-link-row:hover {
-  border-color: var(--fg-dim);
-}
-.knowledge-meta-card .knowledge-link-row {
-  width: auto;
-  padding: 0;
-  border: 0;
-  background: none;
-  color: var(--accent);
-}
-.knowledge-meta-card .knowledge-link-row:hover { text-decoration: underline; }
+.friction-pane > .task-pane-head { flex: none; }
+.friction-pane > .task-pane-head .task-levers { margin-top: var(--space-12); }
+.friction-pane > .friction-content { flex: 1 0 auto; display: flex; flex-direction: column; }
+/* The During task id reads at the size of the other metadata values. */
+.friction-pane .property-row.fact .task-delivery-relation { font-size: var(--text-md); }
