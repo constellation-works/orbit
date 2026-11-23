@@ -91,12 +91,20 @@ It cannot be combined with `--pull` or `--stop`.
   `delivery_evidence_stale`, `delivery_requirements_unsatisfied`,
   `delivery_base_checks_pending`, `delivery_forge_observation_unavailable`, or
   `delivery_check_runs_absent` once the unchanged head reports a pending or
-  passed required check.
+  passed required check or the forge positively confirms the base branch
+  configures no required status checks (neither classic branch protection nor
+  rulesets require checks).
 
-  - Until that check exists the pass lists
+  - Until that check exists or zero required checks are confirmed — missing or
+    unreadable policy stays unconfirmed — the pass lists
     `delivery_check_runs_absent` under its code and spends no hand-back.
     Completion reruns with a fresh budget and repairs only what its own watcher
     then finds; the record and started entry carry `hold_code`.
+  - An `auto_fix_stopped:` held leaf (`delivery_head_changed` or
+    `delivery_repair_dispatched`) is likewise handed back once the unchanged
+    published head has no conflict or pending/failed required checks and either
+    at least one passed required check or a forge-confirmed zero-required-check
+    base (missing or unreadable policy stays skipped under `auto_fix_stopped`).
 
   - A blocker on the
     PR goes through the ledger as above; otherwise the hand-back spends no

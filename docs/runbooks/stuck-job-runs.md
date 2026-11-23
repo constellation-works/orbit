@@ -972,31 +972,52 @@ in-run final recovery of the publishing run itself.
 ### An escalated run that published its own pull request
 
 A run can push and open its pull request through its own `push` and `pr_open`
-steps and then fail completion, for example on a required check that later
-passes on a rerun. Its failure handoff keeps that pull request open and
-unmerged (`review_completion_failure` or `landing_review_failure`), and when
-final recovery escalates the task stays `blocked` with no `[BLOCKED]` pull
-request. Requeue can carry a green candidate; explicit source repair can
-authorize repairs to that same publication under fresh operator policy.
+steps and then stop without landing in any of four terminal owner-local states:
 
-Once every required check has passed on the recorded head, requeue the task:
+- `failed`, when its failure handoff kept that pull request open and unmerged
+  (`review_completion_failure` or `landing_review_failure`) and final recovery
+  escalated so the task stayed `blocked` with no `[BLOCKED]` pull request;
+- `cancelled` after pushing and opening the pull request (no failure-handoff
+  receipt);
+- `held` for a before-landing review decision (`review_decision_pending`); or
+- `succeeded` with its pull request open (for example, a review-only run in
+  `review`, or moved to `blocked`).
 
-```bash
-orbit task requeue <task-id> --reason '<why the published head can land>'
-```
+Requeue can carry a green candidate (or one on a forge-confirmed
+zero-required-check base); explicit source repair can authorize repairs to that
+same publication under fresh operator policy.
 
-A plain `orbit task update <task-id> --status backlog` from `blocked` or
-`review` applies the same check. A review task with failed, pending or stale
-required checks stays in review; returning it to backlog cannot authorize
-repair or renew an expired completion deadline.
-The requeue resumes the pull request only when all of these hold, and
-otherwise refuses with nothing written:
+Once every required check has passed on the recorded head (or the forge
+positively confirms the base branch configures no required status checks):
 
-- the failure handoff's receipt names this run and the task, and its
-  recorded task specification still matches the task;
+- from `blocked`, requeue the task with
+  `orbit task requeue <task-id> --reason '<why the published head can land>'`
+  (or `orbit task update <task-id> --status backlog`);
+- from `review`, `orbit task requeue` is refused (`only a blocked task can be
+  requeued; <task-id> is review`), so use the plain backlog return
+  `orbit task update <task-id> --status backlog` (or append
+  `--discard-candidate` to close the pull request and implement fresh).
+
+Both entry points apply the same publication authentication, preserve PR repair
+attempts, and cannot authorize repair or renew an expired completion deadline.
+A `review` task with failed, pending, missing, or stale required checks stays in
+`review`, and its refusal names
+`orbit task update <task-id> --status backlog --discard-candidate` without
+suggesting blocked-only `orbit task requeue`. The requeue resumes the pull
+request only when all of these hold, and otherwise refuses with nothing written:
+
 - the stopped run is this machine's own single-task delivery, conclusively
-  stopped, still the task's newest execution, and its candidate was not
-  discarded;
+  stopped (`finished_at` set and worker stopped) in `failed`, `cancelled`, or
+  `succeeded` state, or `held` for a before-landing review decision
+  (`review_decision_pending`), still the task's newest execution, and its
+  candidate was not discarded;
+- for a `failed` run (and any non-failed run that recorded a `pr_failure_handoff`
+  receipt naming itself), the failure handoff's receipt names this run and the
+  task, keeps the pull request (`review_completion_failure` or
+  `landing_review_failure`), and its recorded task specification still matches
+  the task; for a `cancelled`, `succeeded`, or `review_decision_pending` `held`
+  run without such a receipt, task history records no `task_fields_updated` edit
+  to the task description or acceptance criteria at or after the run started;
 - the run's checkpoints authenticate the branch, and the pull request is open
   and unmerged at the authenticated published head: the recorded pushed head,
   followed through any recorded `pr_auto_fix_pushed` entries and, only for a
@@ -1015,18 +1036,25 @@ otherwise refuses with nothing written:
   the successor adopts `R` and publishes it under a lease on `P`. A
   `preserve_failed` or `commit_refused` handoff preserves no such commit and is
   not a candidate (see [review-gate.md](review-gate.md));
-- the forge reports every required check on exactly that published head as passed:
-  none failed, none unfinished, and at least one reported. Checks on another
-  head describe a different candidate and are refused.
+- the pull request does not conflict with its base, and the forge reports every
+  required check on exactly that published head as passed: none failed, none
+  unfinished, and either at least one required check passed or the forge
+  positively confirms the base branch configures no required status checks
+  (neither classic branch protection `requiredStatusChecks` nor repository or
+  organization rulesets require any status checks, with readable, non-truncated
+  policy). An empty check rollup when branch protection or a ruleset requires
+  checks, or when required-check policy is unreadable or truncated, is refused
+  (`the recorded head reports no required check, so none has passed`). Checks on
+  another head describe a different candidate and are refused.
 
 Requeue resolves the task's bound execution, and that execution must be the
-stopped failed run or review-decision hold that published the candidate, still
-the task's newest execution. A footprint-held run that adopted the publication
-and recommitted it is bound to the task after terminal cleanup, and it is
-neither a failed run nor a review-decision hold, so requeue refuses it. Its
-identical-tree commit is not a requeue input. The next ordinary delivery adopts
-the publication through that run instead (see *A cancelled published source
-repair*).
+stopped `failed`, `cancelled`, or `succeeded` run, or `review_decision_pending`
+`held` run, that published the candidate, still the task's newest execution. A
+footprint-held run that adopted the publication and recommitted it is bound to
+the task after terminal cleanup, and it is none of those admitted source states,
+so requeue refuses it. Its identical-tree commit is not a requeue input. The
+next ordinary delivery adopts the publication through that run instead (see
+*A cancelled published source repair*).
 
 It writes the same `requeued` decision and publication-preservation record a
 final-recovery requeue writes, and the answer's `resumes.source` is
@@ -1880,7 +1908,8 @@ An operator attempting to recover a held or blocked delivery may meet two common
   that case, `orbit task requeue <task-id>` authenticates the candidate and resumes its pull
   request when it remains open at the authenticated published head — the recorded head, or a
   head advanced by recorded auto-fix (`pr_auto_fix_pushed`) or an attested reviewer commit
-  ([review-gate.md](review-gate.md)) — with every required check passed. An unfinished run, an
+  ([review-gate.md](review-gate.md)) — with every required check passed (or a forge-confirmed
+  zero-required-check base). An unfinished run, an
   unexplained moved head, or a held run without that recorded decision still refuses candidate
   preservation. **Workaround:** If the candidate should be retired, save its patch first as a
   task artifact using `orbit task artifact put` (or `orbit task update --artifact`), then discard
@@ -1891,6 +1920,11 @@ An operator attempting to recover a held or blocked delivery may meet two common
   (or `orbit task update <task-id> --status backlog --discard-candidate`).
 - **A task in `review` cannot be requeued:**
   `orbit task requeue` accepts only tasks currently in `blocked` status (`only a blocked task can be requeued; <task-id> is review`).
+  When the task's published candidate is unchanged and its PR is open at the
+  recorded head with every required check green (or zero required checks
+  confirmed by the forge), return it to `backlog` with
+  `orbit task update <task-id> --status backlog` to preserve and resume that
+  publication.
   To continue editing a held run's published candidate, use
   [explicit source repair](#repair-a-held-runs-published-candidate).
   To retire the candidate and implement afresh, move the task to `backlog` with
@@ -2098,14 +2132,19 @@ For the full persisted pass, including every skip and any `pass_error`, run
 - a delivery hold code, such as `delivery_check_evidence_inconclusive`: a held
   leaf is waiting out its backoff, or has been handed back 3 times on this head
   for this hold (the detail says which). The same code is also the reason while
-  a `delivery_check_runs_absent` head still reports no required check run; that
+  a `delivery_check_runs_absent` head still reports no required check run and
+  the forge has not positively confirmed zero required checks on the base branch
+  (including when policy requires checks or is missing or unreadable); that
   detail says the hand-back ceiling is not spent. Once spent, resolve it as the
   run-debugging delivery-refusal table describes.
 
 **Held leaves.** A held leaf with typed code `delivery_head_changed` or
 `delivery_repair_dispatched` and an `auto_fix_stopped:` diagnostic in its
-message is handed back once the same published head has at least one passed
-required check and no pending or failed required checks or conflict. Readiness
+message is handed back once the same published head has no conflict, no pending
+or failed required checks, and either at least one passed required check or a
+forge-confirmed zero-required-check base branch (neither classic branch
+protection nor rulesets require status checks; missing or unreadable policy
+stays skipped under `auto_fix_stopped`). Readiness
 reports `checks_green_after_hold`.
 Completion still checks the current review, required checks and branch protection;
 a changed head is refused. The hand-back ceiling applies; this green-check hand-back does not wait for the
@@ -2117,9 +2156,12 @@ read can clear: `delivery_check_evidence_inconclusive`,
 `delivery_completion_budget_expired`, `delivery_evidence_stale`,
 `delivery_requirements_unsatisfied`, `delivery_base_checks_pending`,
 `delivery_forge_observation_unavailable`, or `delivery_check_runs_absent`
-once the unchanged head reports a pending or passed required check. Until
-that check exists, the pass lists `delivery_check_runs_absent` under that
-code and spends no hand-back. Completion reruns with a fresh budget
+once the unchanged head reports a pending or passed required check or the forge
+positively confirms the base branch configures no required status checks. Until
+that check exists or zero required checks are confirmed — missing or unreadable
+policy is never treated as zero required checks — the pass lists
+`delivery_check_runs_absent` under that code and spends no hand-back. Completion
+reruns with a fresh budget
 and repairs only what its own watcher then finds. A conflict or failed
 required check on the pull request goes through the ledger above; otherwise
 the hand-back spends no repair budget, and the record, started entry and
