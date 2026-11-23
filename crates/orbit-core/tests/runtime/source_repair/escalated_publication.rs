@@ -83,6 +83,7 @@ pub(super) fn green_forge(f: &mut Fixture) -> ChecksForge {
         failed_required_checks: Vec::new(),
         pending_required_checks: Vec::new(),
         passed_required_checks: vec!["Check".into(), "Test".into()],
+        requires_status_checks: Some(true),
     })));
     f.runtime = f
         .runtime
@@ -403,11 +404,288 @@ fn a_resume_whose_worktree_is_gone_is_refused_before_the_task_moves() {
     assert_eq!(answer["resumes"]["head_sha"], f.head);
 }
 
+fn record_pr_auto_fix_attempt(f: &Fixture) {
+    use orbit_types::task::TaskHistoryEntry;
+    use orbit_types::workflow::{
+        PR_AUTO_FIX_ADMITTED_EVENT, PR_AUTO_FIX_BUDGET, PrAutoFixAttempt, PrAutoFixBlocker,
+    };
+
+    let note = serde_json::to_string(&PrAutoFixAttempt {
+        pr_number: "17".into(),
+        head_sha: f.head.clone(),
+        blocker: PrAutoFixBlocker::FailedChecks,
+        attempt: 1,
+        budget: PR_AUTO_FIX_BUDGET,
+        run_id: f.source.run_id.clone(),
+        crew: "repair".into(),
+        crew_source: "default".into(),
+    })
+    .unwrap();
+    f.runtime
+        .apply_task_automation_update(
+            &f.task,
+            TaskAutomationUpdate {
+                append_history: vec![TaskHistoryEntry {
+                    at: Utc::now(),
+                    by: "system".into(),
+                    event: PR_AUTO_FIX_ADMITTED_EVENT.into(),
+                    note: Some(note),
+                    from_status: None,
+                    to_status: None,
+                    operation_id: None,
+                    decision: None,
+                }],
+                ..Default::default()
+            },
+        )
+        .unwrap();
+}
+
+/// A cancelled run that pushed and opened its PR has no failure-handoff
+/// receipt; requeuing without discarding preserves the PR and repair budget,
+/// while a subsequent specification edit refuses without saying checks can pass
+/// and updates `blocked_next_step` to name the discard command.
+fn cancelled_publication_with_green_checks_is_requeued_preserving_repair_budget() {
+    let (mut f, _, _) = escalated_completion_fixture();
+    let mut state = f.runtime.read_run_state(&f.source.run_id).unwrap().unwrap();
+    state.failure_activity_checkpoint = None;
+    f.runtime.write_run_state(&f.source.run_id, &state).unwrap();
+    f.source.state = JobRunState::Cancelled;
+    published_owner::save_run(&f, &f.source);
+    record_pr_auto_fix_attempt(&f);
+    green_forge(&mut f);
+
+    let answer = requeue(&f, false).unwrap();
+    assert_eq!(answer["status"], "backlog", "{answer}");
+    assert_eq!(answer["resumes"]["source"], "pipeline", "{answer}");
+    assert_eq!(answer["resumes"]["pull_request"], "17", "{answer}");
+    let history = f.runtime.get_task_history(&f.task).unwrap();
+    assert_eq!(
+        orbit_types::workflow::pr_auto_fix_attempts(&history, "17").len(),
+        1,
+        "candidate requeue must not reset PR repair attempts"
+    );
+    assert_next_run_resumes_the_published_candidate(&f);
+    drop(f);
+
+    let (mut f, _, _) = escalated_completion_fixture();
+    let mut state = f.runtime.read_run_state(&f.source.run_id).unwrap().unwrap();
+    state.failure_activity_checkpoint = None;
+    f.runtime.write_run_state(&f.source.run_id, &state).unwrap();
+    f.source.state = JobRunState::Cancelled;
+    published_owner::save_run(&f, &f.source);
+    green_forge(&mut f);
+    f.runtime
+        .update_task_as_human(
+            &f.task,
+            orbit_core::application::task::TaskUpdateParams {
+                description: Some("A new specification after cancellation".into()),
+                ..Default::default()
+            },
+            "human".into(),
+        )
+        .unwrap();
+    let error = refused(&f, false, "cancelled with changed specification");
+    assert!(error.contains("specification changed"), "{error}");
+    assert!(error.contains("--discard-candidate"), "{error}");
+    assert!(
+        !error.contains("requeue again when they pass"),
+        "spec change cannot pass by waiting for checks: {error}"
+    );
+    let task = f.runtime.get_task(&f.task).unwrap();
+    let history = f.runtime.get_task_history(&f.task).unwrap();
+    let next = f
+        .runtime
+        .blocked_next_step(&task, &history)
+        .expect("blocked next step");
+    assert_eq!(
+        next.requeue_command,
+        format!(
+            "orbit task update {} --status backlog --discard-candidate",
+            f.task
+        )
+    );
+}
+
+/// While a run is still live, `blocked_next_step` never points at a failing
+/// plain backlog move and instead names `orbit run cancel`.
+fn live_run_refusal_and_next_step_name_cancel() {
+    let (mut f, _, _) = escalated_completion_fixture();
+    f.source.state = JobRunState::Running;
+    f.source.finished_at = None;
+    published_owner::save_run(&f, &f.source);
+
+    let error = refused(&f, false, "live run");
+    assert!(!error.is_empty());
+    let task = f.runtime.get_task(&f.task).unwrap();
+    let history = f.runtime.get_task_history(&f.task).unwrap();
+    let next = f
+        .runtime
+        .blocked_next_step(&task, &history)
+        .expect("blocked next step");
+    assert_eq!(next.resume_command, None);
+    assert_eq!(
+        next.requeue_command,
+        format!("orbit run cancel {} --confirm", f.source.run_id)
+    );
+}
+
+/// A run that succeeded into `review` with an open PR can be returned to backlog
+/// or requeued without discarding, keeps its PR repair attempts, and any
+/// refusal on `review` names `orbit task update ... --discard-candidate` without
+/// naming `orbit task requeue`.
+fn succeeded_review_publication_is_requeued_preserving_repair_budget() {
+    let (mut f, _, _) = escalated_completion_fixture();
+    let mut state = f.runtime.read_run_state(&f.source.run_id).unwrap().unwrap();
+    state.failure_activity_checkpoint = None;
+    f.runtime.write_run_state(&f.source.run_id, &state).unwrap();
+    f.source.state = JobRunState::Success;
+    published_owner::save_run(&f, &f.source);
+    record_pr_auto_fix_attempt(&f);
+    let forge = green_forge(&mut f);
+
+    f.runtime
+        .apply_task_automation_update(
+            &f.task,
+            TaskAutomationUpdate {
+                status: Some(TaskStatus::Review),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+    forge.set(&f.head, &["Check"], &[], &["Test"]);
+    let review_err = super::handoff_requeue::plain_backlog(&f, false)
+        .unwrap_err()
+        .to_string();
+    assert!(
+        review_err.contains(&format!(
+            "orbit task update {} --status backlog --discard-candidate",
+            f.task
+        )),
+        "{review_err}"
+    );
+    assert!(
+        !review_err.contains("orbit task requeue"),
+        "review refusal must not suggest blocked-only requeue: {review_err}"
+    );
+
+    forge.set(&f.head, &[], &[], &["Check", "Test"]);
+    super::handoff_requeue::plain_backlog(&f, false).unwrap();
+    let history = f.runtime.get_task_history(&f.task).unwrap();
+    assert_eq!(
+        orbit_types::workflow::pr_auto_fix_attempts(&history, "17").len(),
+        1,
+        "review backlog return must preserve PR repair attempts"
+    );
+    assert_next_run_resumes_the_published_candidate(&f);
+    drop(f);
+
+    let (mut f, _, _) = escalated_completion_fixture();
+    let mut state = f.runtime.read_run_state(&f.source.run_id).unwrap().unwrap();
+    state.failure_activity_checkpoint = None;
+    f.runtime.write_run_state(&f.source.run_id, &state).unwrap();
+    f.source.state = JobRunState::Success;
+    published_owner::save_run(&f, &f.source);
+    green_forge(&mut f);
+    let answer = requeue(&f, false).unwrap();
+    assert_eq!(answer["status"], "backlog", "{answer}");
+    assert_eq!(answer["resumes"]["source"], "pipeline", "{answer}");
+}
+
+/// Repositories with neither classic required checks nor required ruleset
+/// checks distinguish themselves from repositories that require checks missing
+/// from the head's rollup.
+fn repository_with_no_required_checks_allows_requeue_and_distinguishes_absent_checks() {
+    let (mut f, _, _) = escalated_completion_fixture();
+    let graphql = f._root.path().join("graphql.json");
+    let rules = f._root.path().join("rules.json");
+    std::fs::write(
+        f._root.path().join("bin/gh"),
+        format!(
+            "#!/bin/sh\ncase \"$1 $2\" in\n'pr view') cat '{}' ;;\n'api graphql') cat '{}' ;;\n'api repos/'*) cat '{}' ;;\n'api user') echo orbit-bot ;;\n*) exit 99 ;;\nesac\n",
+            f.answer.display(),
+            graphql.display(),
+            rules.display(),
+        ),
+    )
+    .unwrap();
+    f.runtime = f
+        .runtime
+        .clone()
+        .with_task_pr_forge(Arc::new(GhTaskPrForge));
+
+    let base_graphql = |rule: Value| {
+        json!({"data":{"repository":{"pullRequest":{
+            "number":17, "state":"OPEN", "headRefName":f.branch, "headRefOid":f.head,
+            "baseRefName":"main", "isDraft":false,
+            "baseRef":{"branchProtectionRule":rule},
+            "author":{"login":"orbit-bot"}, "body":format!("Delivers {}.", f.task),
+            "mergeable":"MERGEABLE", "commits":{"nodes":[{"commit":{
+                "oid":f.head, "statusCheckRollup":{"contexts":{
+                    "pageInfo":{"hasNextPage":false}, "nodes":[]
+                }}
+            }}]}
+        }}}})
+    };
+
+    // Classic required check missing from rollup -> refused.
+    std::fs::write(
+        &graphql,
+        base_graphql(json!({"requiredStatusChecks":[{"context":"CI"}]})).to_string(),
+    )
+    .unwrap();
+    std::fs::write(&rules, "[]").unwrap();
+    assert_eq!(
+        GhTaskPrForge
+            .pull_request_blockers(&f.repo, 17)
+            .unwrap()
+            .unwrap()
+            .requires_status_checks,
+        Some(true)
+    );
+    let classic_err = refused(&f, false, "classic branch protection");
+    assert!(classic_err.contains("no required check"), "{classic_err}");
+
+    // Ruleset required check missing from rollup -> refused.
+    std::fs::write(&graphql, base_graphql(Value::Null).to_string()).unwrap();
+    std::fs::write(
+        &rules,
+        json!([{"type":"required_status_checks","parameters":{"required_status_checks":[{"context":"Rule CI"}]}}]).to_string(),
+    )
+    .unwrap();
+    assert_eq!(
+        GhTaskPrForge
+            .pull_request_blockers(&f.repo, 17)
+            .unwrap()
+            .unwrap()
+            .requires_status_checks,
+        Some(true)
+    );
+    let ruleset_err = refused(&f, false, "ruleset required checks");
+    assert!(ruleset_err.contains("no required check"), "{ruleset_err}");
+
+    // Neither classic branch protection nor rulesets require checks -> allowed.
+    std::fs::write(&rules, "[]").unwrap();
+    let blockers = GhTaskPrForge
+        .pull_request_blockers(&f.repo, 17)
+        .unwrap()
+        .unwrap();
+    assert_eq!(blockers.requires_status_checks, Some(false));
+    let answer = requeue(&f, false).unwrap();
+    assert_eq!(answer["status"], "backlog", "{answer}");
+    assert_eq!(answer["resumes"]["pull_request"], "17", "{answer}");
+}
+
 crate::scenario_table!(
     escalated_publication_scenarios,
     an_escalated_publication_with_green_checks_is_requeued_onto_its_pull_request,
     escalated_publication_requeue_refuses_unreadable_required_flags,
     escalated_publication_requeue_keeps_its_neighbouring_refusals,
     escalated_publication_requeue_refuses_a_changed_specification_and_terminal_tasks,
-    a_resume_whose_worktree_is_gone_is_refused_before_the_task_moves
+    a_resume_whose_worktree_is_gone_is_refused_before_the_task_moves,
+    cancelled_publication_with_green_checks_is_requeued_preserving_repair_budget,
+    live_run_refusal_and_next_step_name_cancel,
+    succeeded_review_publication_is_requeued_preserving_repair_budget,
+    repository_with_no_required_checks_allows_requeue_and_distinguishes_absent_checks
 );

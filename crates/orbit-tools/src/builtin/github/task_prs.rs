@@ -104,7 +104,8 @@ pub fn bound_branch_pull_request(branch: &str) -> ExecRequest {
 /// required, so this asks the GraphQL API, as completion's watcher does.
 pub fn pull_request_blockers(number: u64) -> ExecRequest {
     let query = "query($owner:String!,$repo:String!,$pr:Int!){repository(owner:$owner,name:$repo){\
-        pullRequest(number:$pr){state body author{login} headRefName headRefOid baseRefName isDraft mergeable \
+        pullRequest(number:$pr){state body author{login} headRefName headRefOid baseRefName \
+        baseRef{branchProtectionRule{requiredStatusChecks{context}}} isDraft mergeable \
         commits(last:1){nodes{commit{oid statusCheckRollup{contexts(first:100){\
         pageInfo{hasNextPage} nodes{__typename \
         ... on CheckRun{name status conclusion isRequired(pullRequestNumber:$pr)} \
@@ -121,6 +122,28 @@ pub fn pull_request_blockers(number: u64) -> ExecRequest {
             format!("pr={number}"),
             "-f".into(),
             format!("query={query}"),
+        ],
+        None,
+        TIMEOUT_DEFAULT_MS,
+    )
+}
+
+/// Effective repository and organization rules targeting `base_branch`.
+pub fn branch_protection_rules(base_branch: &str) -> ExecRequest {
+    let encoded: String = base_branch
+        .bytes()
+        .map(|byte| {
+            if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.') {
+                (byte as char).to_string()
+            } else {
+                format!("%{byte:02X}")
+            }
+        })
+        .collect();
+    super::gh_exec_request(
+        vec![
+            "api".into(),
+            format!("repos/{{owner}}/{{repo}}/rules/branches/{encoded}?per_page=100"),
         ],
         None,
         TIMEOUT_DEFAULT_MS,

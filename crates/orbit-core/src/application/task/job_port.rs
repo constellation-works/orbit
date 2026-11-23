@@ -173,6 +173,16 @@ pub(in crate::application) trait TaskJobPort {
     /// binds, so the next admission would refuse it.
     fn unbound_publication(&self, task: &Task) -> Result<bool, OrbitError>;
 
+    /// Local precondition check for requeuing `task` onto the `[BLOCKED]`
+    /// failure-handoff PR its stopped run published. Contacts neither remotes
+    /// nor the forge; `Err` carries the refusal a requeue reports.
+    fn check_failure_handoff_requeue(&self, task: &Task) -> Result<(), OrbitError>;
+
+    /// Local precondition check for requeuing `task` onto the escalated or
+    /// pipeline publication of its stopped run. Contacts neither remotes nor
+    /// the forge; `Err` carries the refusal a requeue reports.
+    fn check_escalated_publication_requeue(&self, task: &Task) -> Result<(), OrbitError>;
+
     /// The validation gates this process holds a candidate to: a claimed
     /// leaf's captured owner gates, else this host's configuration.
     fn candidate_validation_gates(&self) -> HostValidationGates;

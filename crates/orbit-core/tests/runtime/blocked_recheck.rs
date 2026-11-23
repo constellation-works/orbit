@@ -128,6 +128,7 @@ impl TaskPrForge for GreenForge {
             failed_required_checks: Vec::new(),
             pending_required_checks: Vec::new(),
             passed_required_checks: vec!["CI".into()],
+            requires_status_checks: None,
         }))
     }
     fn authenticated_login(&self, _: &Path) -> Result<String, OrbitError> {

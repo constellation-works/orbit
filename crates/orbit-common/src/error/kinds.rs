@@ -753,7 +753,8 @@ pub enum SourceRepairRunStateRefusal {
     /// worker is not conclusively gone.
     StillRunning,
     /// The run is terminal but is not a conclusively stopped failed delivery
-    /// or review-decision hold.
+    /// or review-decision hold (or, for a pipeline publication, a stopped
+    /// cancelled or succeeded delivery).
     NotStoppedFailed,
 }
 

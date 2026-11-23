@@ -381,6 +381,7 @@ impl Fixture {
                 failed_required_checks: failed.iter().map(|name| name.to_string()).collect(),
                 pending_required_checks: Vec::new(),
                 passed_required_checks: Vec::new(),
+                requires_status_checks: None,
             },
         );
     }
@@ -410,6 +411,28 @@ impl Fixture {
                 failed_required_checks: Vec::new(),
                 pending_required_checks: pending.iter().map(|name| (*name).to_string()).collect(),
                 passed_required_checks: passed.iter().map(|name| (*name).to_string()).collect(),
+                requires_status_checks: None,
+            },
+        );
+    }
+
+    /// The forge reports that `leaf`'s base branch configures no required checks.
+    pub(super) fn report_no_required_checks(&self, leaf: &Leaf, head_sha: &str, author: &str) {
+        self.forge.0.lock().unwrap().blockers.insert(
+            leaf.number,
+            PullRequestBlockers {
+                pull: ForgePullRequest {
+                    number: leaf.number,
+                    head_branch: leaf.head.clone(),
+                    body: format!("Delivers {}.", leaf.task),
+                    author: author.to_string(),
+                },
+                head_sha: head_sha.to_string(),
+                conflicting: false,
+                failed_required_checks: Vec::new(),
+                pending_required_checks: Vec::new(),
+                passed_required_checks: Vec::new(),
+                requires_status_checks: Some(false),
             },
         );
     }

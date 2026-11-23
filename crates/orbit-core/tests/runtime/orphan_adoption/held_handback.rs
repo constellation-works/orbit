@@ -307,10 +307,26 @@ fn auto_fix_stop_waits_for_green_on_published_head_then_resumes_completion() {
     assert_eq!(retries[0].input.as_ref().unwrap()["completion"], "done");
 }
 
+fn a_repo_with_no_required_checks_hands_back_check_runs_absent_hold() {
+    let fx = fixture();
+    let code = "delivery_check_runs_absent";
+    let leaf = fx.delivered_leaf(411, "done", Shelf::Review, LeafEnd::Held(code));
+    let head = "no-checks-repo-head";
+    fx.report_no_required_checks(&leaf, head, "orbit-bot");
+    let drain = fx.drain();
+
+    let pass = fx.pass(&drain, "done", true);
+    let entry = started(&pass, &leaf.task).unwrap_or_else(|| panic!("{pass}"));
+    assert_eq!(entry["hold_code"], code, "{pass}");
+    assert_eq!(entry["blocker"], Value::Null, "{pass}");
+    assert_eq!(fx.retries(&leaf.run).len(), 1);
+}
+
 crate::scenario_table!(
     held_handback_scenarios,
     auto_fix_stop_waits_for_green_on_published_head_then_resumes_completion,
     held_delivery_leaves_are_handed_back_to_completion,
     a_lineage_that_keeps_holding_on_the_same_head_stops_at_the_ceiling,
     a_check_runs_absent_hold_is_handed_back_once_the_head_reports_a_check,
+    a_repo_with_no_required_checks_hands_back_check_runs_absent_hold,
 );

@@ -74,12 +74,14 @@ pub(in crate::application::job::resume::source_repair) fn footprint_held(run: &J
         })
 }
 
-/// A publication the next run may adopt: a stopped failed or cancelled
-/// delivery, or a stopped review-decision hold.
+/// A publication the next run may adopt: a stopped failed, cancelled, or
+/// succeeded delivery, or a stopped review-decision hold.
 pub(super) fn adoptable_published_source(source: &JobRun) -> bool {
     source_owner_is_gone(source)
-        && (matches!(source.state, JobRunState::Failed | JobRunState::Cancelled)
-            || held_for_review_decision(source))
+        && (matches!(
+            source.state,
+            JobRunState::Failed | JobRunState::Cancelled | JobRunState::Success
+        ) || held_for_review_decision(source))
 }
 
 /// What to tell the operator when `source` cannot be repaired, naming an
@@ -121,6 +123,18 @@ pub(in crate::application::job::resume::source_repair) fn require_stopped_failed
     source: &JobRun,
 ) -> Result<(), OrbitError> {
     if repairable_stopped_source(source) {
+        return Ok(());
+    }
+    Err(stopped_source_refusal(source))
+}
+
+/// Refuse unless `source` is a conclusively stopped failed, cancelled, or
+/// succeeded delivery, or a conclusively stopped review-decision hold.
+/// A delivery that is still running stays refused.
+pub(in crate::application::job::resume::source_repair) fn require_stopped_published_requeue_source(
+    source: &JobRun,
+) -> Result<(), OrbitError> {
+    if adoptable_published_source(source) {
         return Ok(());
     }
     Err(stopped_source_refusal(source))
