@@ -717,7 +717,13 @@ fn cli_dispatch_hands_workers_only_a_verified_browser_kit() -> Result<(), Box<dy
     );
 
     // Losing the execute bits after the recorded verify withdraws the kit.
-    set_mode(0o644)?;
+    // Root may execute a file with any execute bit.
+    let denied_mode = if unsafe { libc::geteuid() } == 0 {
+        0o000
+    } else {
+        0o001
+    };
+    set_mode(denied_mode)?;
     let non_executable = observe(home.path(), "browser-kit-non-executable")?;
     assert_eq!(
         non_executable, unverified,

@@ -448,7 +448,26 @@ fn a_ui_repair_waits_for_a_verified_browser_kit() {
     let verified = TempDir::new_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
     super::super::host_ui_routing::write_kit(verified.path(), true);
     let unverified = TempDir::new_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
-    super::super::host_ui_routing::write_kit(unverified.path(), false);
+    super::super::host_ui_routing::write_kit(unverified.path(), true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let shell = orbit_exec::browser_kit::KitLayout::for_home(unverified.path())
+            .browsers()
+            .join("chromium_headless_shell-1248/chrome-headless-shell");
+        // Root may execute a file with any execute bit.
+        let denied_mode = if unsafe { libc::geteuid() } == 0 {
+            0o000
+        } else {
+            0o001
+        };
+        std::fs::set_permissions(shell, std::fs::Permissions::from_mode(denied_mode)).unwrap();
+    }
+    #[cfg(not(unix))]
+    std::fs::remove_file(
+        orbit_exec::browser_kit::KitLayout::for_home(unverified.path()).verification_file(),
+    )
+    .unwrap();
 
     host(&mut owner, verified.path());
     let first = owner.handed_off_leaf(|checkout, _| {
