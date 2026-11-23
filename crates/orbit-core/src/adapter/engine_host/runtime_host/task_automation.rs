@@ -201,15 +201,42 @@ pub(super) fn apply_task_automation_update(
                 .collect::<Vec<_>>()
                 .join("\n")
         });
-        runtime.route_worker_host_tool("orbit.task.update", serde_json::json!({
-            "id": task_id,
-            "_worker_update": orbit_store::contracts::ClaimWorkerUpdate {
-                status: update.status, plan: update.plan, context_files: update.context_files,
-                external_refs: update.external_refs, status_note: update.status_note,
-                evidence: orbit_store::contracts::ClaimEvidence {review_settlement: None, summary: update.execution_summary, comment, artifacts: vec![], provider_unavailable: None, baseline_red: None, final_recovery: None, failure: None, evidence_hold: None, held_pull_request: None, forge_hold: None, claimed_review: None, crew: None, crew_model: None, leaf_run: None},
+        let worker_update = orbit_store::contracts::ClaimWorkerUpdate {
+            status: update.status,
+            plan: update.plan,
+            context_files: update.context_files,
+            external_refs: update.external_refs,
+            status_note: update.status_note,
+            evidence: orbit_store::contracts::ClaimEvidence {
+                summary: update.execution_summary,
+                comment,
                 ..Default::default()
+            },
+            ..Default::default()
+        };
+        // The owner rejects artifacts inside `_worker_update`; send them
+        // through the separately fenced artifact adapter so transport errors
+        // surface to callers (such as `persist_uncommitted_diff_artifact`).
+        if !update.upsert_artifacts.is_empty() {
+            runtime.route_worker_tool(
+                "orbit.task.artifact.put",
+                serde_json::json!({
+                    "id": task_id,
+                    "artifacts": update.upsert_artifacts,
+                }),
+                Default::default(),
+            )?;
+            if worker_update == orbit_store::contracts::ClaimWorkerUpdate::default() {
+                return Ok(());
             }
-        }))?;
+        }
+        runtime.route_worker_host_tool(
+            "orbit.task.update",
+            serde_json::json!({
+                "id": task_id,
+                "_worker_update": worker_update,
+            }),
+        )?;
         return Ok(());
     }
     apply_locked_task_automation_update(runtime, task_id, update)
