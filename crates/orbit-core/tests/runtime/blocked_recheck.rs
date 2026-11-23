@@ -128,6 +128,7 @@ impl TaskPrForge for GreenForge {
             failed_required_checks: Vec::new(),
             pending_required_checks: Vec::new(),
             passed_required_checks: vec!["CI".into()],
+            unreported_required_checks: Vec::new(),
             requires_status_checks: None,
         }))
     }

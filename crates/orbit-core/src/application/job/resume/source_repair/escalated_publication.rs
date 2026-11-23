@@ -136,8 +136,9 @@ impl OrbitRuntime {
     /// Refuse unless every required check on `binding`'s pull request has
     /// passed on exactly its recorded head (or the repository configures no
     /// required checks). Checks on another head describe a different
-    /// candidate, and an empty rollup in a configured or unreadable repository
-    /// proves nothing.
+    /// candidate, an empty rollup in a configured or unreadable repository
+    /// proves nothing, and a configured check the head never reported is not
+    /// green just because the reported ones are.
     fn require_green_required_checks(
         &self,
         binding: &SourceRepairBinding,
@@ -185,6 +186,12 @@ impl OrbitRuntime {
             return Err(refuse(
                 "the recorded head reports no required check, so none has passed",
             ));
+        }
+        if !blockers.unreported_required_checks.is_empty() {
+            return Err(refuse(format!(
+                "required checks have not reported on the recorded head: {}",
+                blockers.unreported_required_checks.join(", ")
+            )));
         }
         Ok(())
     }

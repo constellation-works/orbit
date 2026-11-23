@@ -84,6 +84,11 @@ pub struct PullRequestBlockers {
     /// (`requires_status_checks == Some(false)` distinguishes a repository with
     /// none configured from missing check runs).
     pub passed_required_checks: Vec<String>,
+    /// Configured required check names (classic branch protection, or a
+    /// ruleset when readable) that no required context on the head reported
+    /// at all, so they are neither passed, failed nor pending above. A head
+    /// whose reported required checks are all green still lacks these.
+    pub unreported_required_checks: Vec<String>,
     /// Whether the PR's base branch requires any status checks when known
     /// (`Some(false)` when neither branch protection nor rulesets require any).
     pub requires_status_checks: Option<bool>,
@@ -823,6 +828,16 @@ fn pull_request_blockers_from_json(number: u64, pull: &Value) -> Option<PullRequ
     } else {
         None
     };
+    let mut unreported_required_checks = classic_required_contexts(pull);
+    unreported_required_checks.retain(|configured| {
+        ![
+            &failed_required_checks,
+            &pending_required_checks,
+            &passed_required_checks,
+        ]
+        .into_iter()
+        .any(|observed| observed.contains(configured))
+    });
     Some(PullRequestBlockers {
         pull: ForgePullRequest {
             number,
@@ -839,8 +854,31 @@ fn pull_request_blockers_from_json(number: u64, pull: &Value) -> Option<PullRequ
         failed_required_checks,
         pending_required_checks,
         passed_required_checks,
+        unreported_required_checks,
         requires_status_checks,
     })
+}
+
+/// The check names classic branch protection requires on the base branch. An
+/// entry without a readable name is kept under a placeholder that no check
+/// reports, so it can never be taken as satisfied.
+fn classic_required_contexts(pull: &Value) -> Vec<String> {
+    let Some(checks) = pull
+        .pointer("/baseRef/branchProtectionRule/requiredStatusChecks")
+        .and_then(Value::as_array)
+    else {
+        return Vec::new();
+    };
+    checks
+        .iter()
+        .map(|check| {
+            check
+                .get("context")
+                .and_then(Value::as_str)
+                .unwrap_or("unnamed required check")
+                .to_string()
+        })
+        .collect()
 }
 
 fn classic_branch_protection_requires_checks(pull: &Value) -> Option<bool> {
@@ -858,9 +896,10 @@ fn populate_requires_status_checks(
     pull: &Value,
     blockers: &mut PullRequestBlockers,
 ) {
-    if blockers.requires_status_checks.is_some()
-        || classic_branch_protection_requires_checks(pull) != Some(false)
-    {
+    // Classic protection that is configured or unreadable is already decided.
+    // With none, a ruleset may still require checks the head never reported,
+    // so the rules are read even when some required check was observed.
+    if classic_branch_protection_requires_checks(pull) != Some(false) {
         return;
     }
     let Some(base_branch) = pull
@@ -885,6 +924,7 @@ fn populate_requires_status_checks(
     if rules.len() >= 100 {
         return;
     }
+    let mut configured = Vec::new();
     for rule in &rules {
         if rule.get("type").and_then(Value::as_str) == Some("required_status_checks") {
             let Some(checks) = rule
@@ -893,11 +933,31 @@ fn populate_requires_status_checks(
             else {
                 return;
             };
-            if !checks.is_empty() {
-                blockers.requires_status_checks = Some(true);
-                return;
-            }
+            configured.extend(checks.iter().map(|check| {
+                check
+                    .get("context")
+                    .and_then(Value::as_str)
+                    .unwrap_or("unnamed required check")
+                    .to_string()
+            }));
         }
     }
-    blockers.requires_status_checks = Some(false);
+    if configured.is_empty() {
+        blockers.requires_status_checks.get_or_insert(false);
+        return;
+    }
+    blockers.requires_status_checks = Some(true);
+    for name in configured {
+        let reported = [
+            &blockers.failed_required_checks,
+            &blockers.pending_required_checks,
+            &blockers.passed_required_checks,
+            &blockers.unreported_required_checks,
+        ]
+        .into_iter()
+        .any(|names| names.contains(&name));
+        if !reported {
+            blockers.unreported_required_checks.push(name);
+        }
+    }
 }

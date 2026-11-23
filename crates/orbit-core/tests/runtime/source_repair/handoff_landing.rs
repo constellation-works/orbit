@@ -42,6 +42,7 @@ impl Forge {
                     failed_required_checks: vec![],
                     pending_required_checks: vec![],
                     passed_required_checks: vec!["Check".into()],
+                    unreported_required_checks: Vec::new(),
                     requires_status_checks: None,
                 },
                 base_branch: "main".into(),

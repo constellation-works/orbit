@@ -83,6 +83,7 @@ pub(super) fn green_forge(f: &mut Fixture) -> ChecksForge {
         failed_required_checks: Vec::new(),
         pending_required_checks: Vec::new(),
         passed_required_checks: vec!["Check".into(), "Test".into()],
+        unreported_required_checks: Vec::new(),
         requires_status_checks: Some(true),
     })));
     f.runtime = f
@@ -725,7 +726,7 @@ fn repository_with_no_required_checks_allows_requeue_and_distinguishes_absent_ch
         .clone()
         .with_task_pr_forge(Arc::new(GhTaskPrForge));
 
-    let base_graphql = |rule: Value| {
+    let rollup_graphql = |rule: Value, nodes: Value| {
         json!({"data":{"repository":{"pullRequest":{
             "number":17, "state":"OPEN", "headRefName":f.branch, "headRefOid":f.head,
             "baseRefName":"main", "isDraft":false,
@@ -733,11 +734,13 @@ fn repository_with_no_required_checks_allows_requeue_and_distinguishes_absent_ch
             "author":{"login":"orbit-bot"}, "body":format!("Delivers {}.", f.task),
             "mergeable":"MERGEABLE", "commits":{"nodes":[{"commit":{
                 "oid":f.head, "statusCheckRollup":{"contexts":{
-                    "pageInfo":{"hasNextPage":false}, "nodes":[]
+                    "pageInfo":{"hasNextPage":false}, "nodes":nodes
                 }}
             }}]}
         }}}})
     };
+
+    let base_graphql = |rule: Value| rollup_graphql(rule, json!([]));
 
     // Classic required check missing from rollup -> refused.
     std::fs::write(
@@ -787,11 +790,108 @@ fn repository_with_no_required_checks_allows_requeue_and_distinguishes_absent_ch
     assert_eq!(answer["resumes"]["pull_request"], "17", "{answer}");
 }
 
+/// A head that reports only some of the configured required checks is not
+/// green: the one passing result must not stand for the missing one.
+fn partially_reported_required_checks_refuse_requeue_until_every_check_passes() {
+    let (mut f, _, _) = escalated_completion_fixture();
+    let graphql = f._root.path().join("graphql.json");
+    let rules = f._root.path().join("rules.json");
+    std::fs::write(
+        f._root.path().join("bin/gh"),
+        format!(
+            "#!/bin/sh\ncase \"$1 $2\" in\n'pr view') cat '{}' ;;\n'api graphql') cat '{}' ;;\n'api repos/'*) cat '{}' ;;\n'api user') echo orbit-bot ;;\n*) exit 99 ;;\nesac\n",
+            f.answer.display(),
+            graphql.display(),
+            rules.display(),
+        ),
+    )
+    .unwrap();
+    f.runtime = f
+        .runtime
+        .clone()
+        .with_task_pr_forge(Arc::new(GhTaskPrForge));
+    let node = |name: &str| {
+        json!({"__typename":"CheckRun", "name":name, "status":"COMPLETED",
+            "conclusion":"SUCCESS", "isRequired":true})
+    };
+    let graphql_with = |rule: Value, nodes: Vec<Value>| {
+        json!({"data":{"repository":{"pullRequest":{
+            "number":17, "state":"OPEN", "headRefName":f.branch, "headRefOid":f.head,
+            "baseRefName":"main", "isDraft":false,
+            "baseRef":{"branchProtectionRule":rule},
+            "author":{"login":"orbit-bot"}, "body":format!("Delivers {}.", f.task),
+            "mergeable":"MERGEABLE", "commits":{"nodes":[{"commit":{
+                "oid":f.head, "statusCheckRollup":{"contexts":{
+                    "pageInfo":{"hasNextPage":false}, "nodes":nodes
+                }}
+            }}]}
+        }}}})
+        .to_string()
+    };
+
+    // Classic protection requires Build and Test; only Build reported.
+    let classic = json!({"requiredStatusChecks":[{"context":"Build"},{"context":"Test"}]});
+    std::fs::write(&rules, "[]").unwrap();
+    std::fs::write(&graphql, graphql_with(classic.clone(), vec![node("Build")])).unwrap();
+    let blockers = GhTaskPrForge
+        .pull_request_blockers(&f.repo, 17)
+        .unwrap()
+        .unwrap();
+    assert_eq!(blockers.passed_required_checks, vec!["Build"]);
+    assert_eq!(blockers.unreported_required_checks, vec!["Test"]);
+    let error = refused(&f, false, "classic partial");
+    assert!(error.contains("have not reported"), "{error}");
+    assert!(error.contains("Test"), "{error}");
+    assert!(
+        f.runtime
+            .get_task_history(&f.task)
+            .unwrap()
+            .iter()
+            .all(|entry| entry.event != "published_owner_requeued"),
+        "a refused requeue preserved nothing"
+    );
+
+    // Both reported and passing -> eligible.
+    std::fs::write(
+        &graphql,
+        graphql_with(classic, vec![node("Build"), node("Test")]),
+    )
+    .unwrap();
+    let blockers = GhTaskPrForge
+        .pull_request_blockers(&f.repo, 17)
+        .unwrap()
+        .unwrap();
+    assert!(blockers.unreported_required_checks.is_empty());
+
+    // A ruleset requiring Build and Test with only Build reported -> refused.
+    std::fs::write(&graphql, graphql_with(Value::Null, vec![node("Build")])).unwrap();
+    std::fs::write(
+        &rules,
+        json!([{"type":"required_status_checks","parameters":{"required_status_checks":[
+            {"context":"Build"},{"context":"Test"}]}}])
+        .to_string(),
+    )
+    .unwrap();
+    let error = refused(&f, false, "ruleset partial");
+    assert!(error.contains("have not reported"), "{error}");
+    assert!(error.contains("Test"), "{error}");
+
+    // Every ruleset check reported and passing -> eligible.
+    std::fs::write(
+        &graphql,
+        graphql_with(Value::Null, vec![node("Build"), node("Test")]),
+    )
+    .unwrap();
+    let answer = requeue(&f, false).unwrap();
+    assert_eq!(answer["status"], "backlog", "{answer}");
+}
+
 crate::scenario_table!(
     escalated_publication_scenarios,
     an_escalated_publication_with_green_checks_is_requeued_onto_its_pull_request,
     escalated_publication_requeue_refuses_unreadable_required_flags,
     escalated_publication_requeue_keeps_its_neighbouring_refusals,
+    partially_reported_required_checks_refuse_requeue_until_every_check_passes,
     escalated_publication_requeue_refuses_a_changed_specification_and_terminal_tasks,
     a_resume_whose_worktree_is_gone_is_refused_before_the_task_moves,
     cancelled_publication_with_green_checks_is_requeued_preserving_repair_budget,

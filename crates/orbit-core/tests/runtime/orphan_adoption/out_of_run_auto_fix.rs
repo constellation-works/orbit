@@ -407,6 +407,7 @@ impl Fixture {
                 failed_required_checks: failed.iter().map(|name| name.to_string()).collect(),
                 pending_required_checks: Vec::new(),
                 passed_required_checks: Vec::new(),
+                unreported_required_checks: Vec::new(),
                 requires_status_checks: None,
             },
         );
@@ -437,6 +438,7 @@ impl Fixture {
                 failed_required_checks: Vec::new(),
                 pending_required_checks: pending.iter().map(|name| (*name).to_string()).collect(),
                 passed_required_checks: passed.iter().map(|name| (*name).to_string()).collect(),
+                unreported_required_checks: Vec::new(),
                 requires_status_checks: None,
             },
         );
@@ -458,6 +460,7 @@ impl Fixture {
                 failed_required_checks: Vec::new(),
                 pending_required_checks: Vec::new(),
                 passed_required_checks: Vec::new(),
+                unreported_required_checks: Vec::new(),
                 requires_status_checks: Some(false),
             },
         );

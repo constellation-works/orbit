@@ -155,6 +155,7 @@ impl TaskPrForge for RefreshForge {
                 .get(&number)
                 .cloned()
                 .unwrap_or_default(),
+            unreported_required_checks: Vec::new(),
             requires_status_checks: None,
         }))
     }
