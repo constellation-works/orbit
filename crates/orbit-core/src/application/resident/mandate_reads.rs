@@ -413,17 +413,19 @@ fn resident_show_json(
     status_line: Value,
     now: chrono::DateTime<chrono::Utc>,
 ) -> Result<Value, OrbitError> {
-    let latest_checkpoint =
-        comments.iter().rev().find_map(|comment| {
-            match ResidentComment::parse(&comment.message).ok()? {
-                ResidentComment::Checkpoint(record) if record.mandate == view.task.id.as_str() => {
-                    let mut checkpoint = view::to_json(&ResidentComment::Checkpoint(record));
-                    checkpoint["at"] = json!(comment.at);
-                    Some(checkpoint)
-                }
-                _ => None,
+    let latest_checkpoint_pair = comments.iter().rev().find_map(|comment| {
+        match ResidentComment::parse(&comment.message).ok()? {
+            ResidentComment::Checkpoint(record) if record.mandate == view.task.id.as_str() => {
+                Some((
+                    view::to_json(&ResidentComment::Checkpoint(record)),
+                    comment.at,
+                ))
             }
-        });
+            _ => None,
+        }
+    });
+    let latest_checkpoint_at = latest_checkpoint_pair.as_ref().map(|(_, at)| at.to_owned());
+    let latest_checkpoint = latest_checkpoint_pair.map(|(checkpoint, _)| checkpoint);
     let live_cycle = cycle::live_cycle_from_history(history)?.filter(|live| live.expires_at > now);
     let (state, reason) = view.state();
     let mut value = json!({
@@ -436,6 +438,7 @@ fn resident_show_json(
         "title": view.task.title,
         "status": view.task.status,
         "latest_checkpoint": latest_checkpoint,
+        "latest_checkpoint_at": latest_checkpoint_at,
         "status_line": status_line,
         "live_cycle": live_cycle,
         "state": state,

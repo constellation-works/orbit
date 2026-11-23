@@ -389,6 +389,21 @@ fn reported_cycle_authority(shown: &Value, target: &str) -> Value {
     Value::Object(body)
 }
 
+/// Put the checkpoint comment time on the HTTP card without changing the
+/// parsed checkpoint record returned by the resident read model.
+fn expose_latest_checkpoint_at(shown: &mut Value) {
+    let latest_checkpoint_at = shown
+        .as_object_mut()
+        .and_then(|object| object.remove("latest_checkpoint_at"));
+    if let Some(at) = latest_checkpoint_at.filter(|at| !at.is_null())
+        && let Some(checkpoint) = shown
+            .get_mut("latest_checkpoint")
+            .filter(|checkpoint| checkpoint.is_object())
+    {
+        checkpoint["at"] = at;
+    }
+}
+
 /// `GET /api/residents`.
 pub(super) async fn list_residents(
     State(state): State<DashboardState>,
@@ -398,7 +413,10 @@ pub(super) async fn list_residents(
     let operator = state.operator_session();
     let include_ended = query.all;
     match blocking("resident list", move || {
-        let mandates = runtime.list_resident_mandate_cards(include_ended)?;
+        let mut mandates = runtime.list_resident_mandate_cards(include_ended)?;
+        for mandate in &mut mandates {
+            expose_latest_checkpoint_at(mandate);
+        }
         let crews = serde_json::to_value(runtime.configured_crew_registry_projection())
             .unwrap_or(Value::Null);
         let crew_names: Vec<Value> = crews["crews"]
@@ -440,6 +458,7 @@ pub(super) async fn show_resident(
             json!({"task_id": id}),
             dashboard_session(operator),
         )?;
+        expose_latest_checkpoint_at(&mut shown);
         attach_resident_card(&runtime, &mut shown);
         Ok(shown)
     })
