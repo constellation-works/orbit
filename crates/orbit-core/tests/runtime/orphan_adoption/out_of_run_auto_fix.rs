@@ -1139,6 +1139,93 @@ fn the_pull_requests_auto_fix_budget_bounds_out_of_run_repairs() {
     assert_eq!(fx.retries(&resumed).len(), 1);
 }
 
+/// Record `count` admitted attempts for `pr`, all by `run` on `head`.
+fn record_attempts(fx: &Fixture, task: &str, pr: &str, head: &str, run: &str, count: u32) {
+    let attempts = (1..=count)
+        .map(|attempt| orbit_types::task::TaskHistoryEntry {
+            at: Utc::now(),
+            by: "system".into(),
+            event: PR_AUTO_FIX_ADMITTED_EVENT.into(),
+            note: Some(
+                json!({"pr_number": pr, "head_sha": head, "blocker": "failed_checks",
+                    "attempt": attempt, "budget": 3, "run_id": format!("{run}-{attempt}"),
+                    "crew": "fixer", "crew_source": "pool"})
+                .to_string(),
+            ),
+            from_status: None,
+            to_status: None,
+            operation_id: None,
+            decision: None,
+        })
+        .collect();
+    fx.runtime
+        .apply_task_automation_update(
+            task,
+            TaskAutomationUpdate {
+                append_history: attempts,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+}
+
+fn a_repair_that_published_nothing_leaves_the_heads_unspent_attempts_usable() {
+    let fx = fixture();
+    // One admitted repair published no head: the head is still red and two of
+    // three attempts are unspent.
+    let stranded = fx.stopped_leaf(131, "review", Shelf::Escalated);
+    fx.blocked(&stranded, "ggg1", "orbit-bot", false, &["Check"]);
+    record_attempts(&fx, &stranded.task, "131", "ggg1", "jrun-earlier", 1);
+    // Another pull request spent all three attempts, the last on its head.
+    let spent = fx.stopped_leaf(132, "review", Shelf::Escalated);
+    fx.blocked(&spent, "hhh1", "orbit-bot", false, &["Check"]);
+    record_attempts(&fx, &spent.task, "132", "hhh1", "jrun-spent", 3);
+    let drain = fx.drain();
+
+    let pass = fx.pass(&drain, "review", true);
+    assert!(
+        started(&pass, &stranded.task).is_some(),
+        "the unchanged red head is admitted a second attempt: {pass}"
+    );
+    assert_eq!(
+        repair_skip(&pass, &spent.task).as_deref(),
+        Some("budget_exhausted"),
+        "{pass}"
+    );
+    let detail = pass["auto_fix"]["skipped"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| entry["task_id"] == spent.task)
+        .and_then(|entry| entry["detail"].as_str())
+        .unwrap_or_default();
+    assert!(
+        detail.contains("repair budget spent: 3 of 3 attempts used"),
+        "{pass}"
+    );
+}
+
+fn a_skipped_head_lists_the_attempts_spent_and_remaining() {
+    let fx = fixture();
+    let leaf = fx.stopped_leaf(141, "review", Shelf::OptedOut);
+    fx.blocked(&leaf, "iii1", "orbit-bot", false, &["Check"]);
+    record_attempts(&fx, &leaf.task, "141", "iii1", "jrun-earlier", 1);
+    let drain = fx.drain();
+
+    let pass = fx.pass(&drain, "review", true);
+    let detail = pass["auto_fix"]["skipped"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| entry["task_id"] == leaf.task)
+        .and_then(|entry| entry["detail"].as_str())
+        .unwrap_or_default();
+    assert!(
+        detail.contains("repair attempts: 1 of 3 spent, 2 remaining"),
+        "{pass}"
+    );
+}
+
 fn a_stuck_pull_request_is_repaired_however_many_deliveries_ran_since() {
     let fx = fixture();
     let leaf = fx.stopped_leaf(110, "review", Shelf::Escalated);
@@ -1355,6 +1442,8 @@ crate::scenario_table!(
     a_genuine_forge_failure_still_defers_later_blocker_reads,
     holds_opt_outs_missing_grants_and_foreign_pull_requests_are_never_repaired,
     the_pull_requests_auto_fix_budget_bounds_out_of_run_repairs,
+    a_repair_that_published_nothing_leaves_the_heads_unspent_attempts_usable,
+    a_skipped_head_lists_the_attempts_spent_and_remaining,
     a_stuck_pull_request_is_repaired_however_many_deliveries_ran_since,
     a_newer_finished_delivery_of_the_task_keeps_its_older_stopped_leaf_from_resuming,
 );

@@ -15,7 +15,7 @@ use orbit_engine::{PrAutoFixAdmission, PrAutoFixRequest, RuntimeHost, TaskAutoma
 use orbit_types::task::{TaskComplexity, TaskHistoryEntry};
 use orbit_types::workflow::{
     CrewPurpose, PR_AUTO_FIX_ADMITTED_EVENT, PR_AUTO_FIX_BUDGET, PR_AUTO_FIX_CREWS_KEY,
-    PrAutoFixClaim, PrAutoFixDecision, decide_pr_auto_fix, pr_auto_fix_attempts,
+    PrAutoFixClaim, PrAutoFixDecision, decide_pr_auto_fix_settled, pr_auto_fix_attempts,
 };
 use serde_json::json;
 
@@ -96,12 +96,21 @@ impl OrbitRuntime {
             .with_task_write_lock(primary, &mut || {
                 let history = self.get_task_history(primary)?;
                 let attempts = pr_auto_fix_attempts(&history, &request.pr_number);
-                let decided = decide_pr_auto_fix(
+                // An earlier run's attempt on this head that ended without
+                // publishing a new head leaves the head repairable.
+                let ended = |attempt: &orbit_types::workflow::PrAutoFixAttempt| {
+                    matches!(
+                        self.stores().jobs().get_job_run(&attempt.run_id),
+                        Ok(Some(run)) if run.state.is_terminal()
+                    )
+                };
+                let decided = decide_pr_auto_fix_settled(
                     &attempts,
                     &claim,
                     pr_auto_fix_budget(&history, &request.pr_number)?,
                     &crew.name,
                     &crew_source,
+                    &ended,
                 );
                 if let PrAutoFixDecision::Admit(attempt) = &decided {
                     let note = serde_json::to_string(attempt).map_err(|error| {

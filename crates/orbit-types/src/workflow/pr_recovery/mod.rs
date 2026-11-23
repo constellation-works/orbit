@@ -16,8 +16,9 @@ pub use auto_fix::{
     PR_AUTO_FIX_NO_EDIT_RERUN_EVENT, PR_AUTO_FIX_PUSHED_EVENT, PR_AUTO_FIX_READ_DEFERRED_EVENT,
     PrAutoFixAttempt, PrAutoFixBaseRed, PrAutoFixBlocker, PrAutoFixClaim, PrAutoFixDecision,
     PrAutoFixFailedCheck, PrAutoFixHeadFailure, PrAutoFixNoEditRerun, PrAutoFixPush,
-    PrAutoFixReadDeferral, PrAutoFixReadReset, decide_pr_auto_fix, is_pr_auto_fix_check_repair,
-    pr_auto_fix_attempts, pr_auto_fix_no_edit_reruns, pr_auto_fix_pushes,
+    PrAutoFixReadDeferral, PrAutoFixReadReset, decide_pr_auto_fix, decide_pr_auto_fix_settled,
+    is_pr_auto_fix_check_repair, pr_auto_fix_attempts, pr_auto_fix_no_edit_reruns,
+    pr_auto_fix_pushes,
 };
 pub use base_suspect_reclassified::{
     CI_BASE_SUSPECT_RECLASSIFIED_EVENT, CiBaseSuspectReclassification,

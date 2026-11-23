@@ -2066,7 +2066,10 @@ For the full persisted pass, including every skip and any `pass_error`, run
 - `no_blocker` and `checked_recently`: nothing to repair;
 - `mergeability_unknown`: GitHub is still calculating this pull request's
   mergeability; other candidates in the pass are still checked;
-- `already_repaired`, `already_started` or `budget_exhausted`: the ledger refused;
+- `already_repaired`, `already_started` or `budget_exhausted`: the ledger refused.
+  Every refusal of a pull request that may need a repair ends with its repair
+  attempts spent and remaining, or says the budget is spent. A repair that
+  published no new head leaves its head repairable while attempts remain;
 - `live_run` or `claimed_execution`: another run or machine owns the delivery;
 - `not_resumable`: checkpoint resume refused the run, for example one that
   stopped before its completion step;
