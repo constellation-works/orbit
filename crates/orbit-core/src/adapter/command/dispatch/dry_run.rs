@@ -85,6 +85,20 @@ impl OrbitRuntime {
         // A family carries an operation's own `action` input as `mode`.
         let takes_mode =
             tool_family_of_operation(name).is_some_and(|(_, action)| action.takes_mode);
+        // Dispatch renames an alias to its canonical field and reads an explicit
+        // null as absent, so a field is supplied under its own spelling or a
+        // declared alias with a non-null value.
+        let aliases = self.tool_registry().input_aliases(name);
+        let supplied = |canonical: &str, field: &str| {
+            std::iter::once(field)
+                .chain(
+                    aliases
+                        .iter()
+                        .filter(|(declared, _)| *declared == canonical)
+                        .map(|(_, alias)| *alias),
+                )
+                .any(|key| input.get(key).is_some_and(|value| !value.is_null()))
+        };
         let missing_params = schema
             .parameters
             .iter()
@@ -92,7 +106,7 @@ impl OrbitRuntime {
                 TOOL_ACTION_FIELD if takes_mode => (param, TOOL_MODE_FIELD.to_string()),
                 _ => (param, param.name.clone()),
             })
-            .filter(|(param, field)| param.required && input.get(field).is_none())
+            .filter(|(param, field)| param.required && !supplied(&param.name, field.as_str()))
             .map(|(_, field)| field)
             .collect();
 
