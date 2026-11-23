@@ -707,6 +707,76 @@ fn ci_red_survives_a_pending_run_on_a_newer_base_head() {
     );
 }
 
+fn ci_red_uses_workflow_run_order_when_created_at_ties() {
+    let fixture = Fixture::new(true);
+    let advance = || {
+        let head = fixture.advance_remote_head();
+        git(&fixture.repo, &["update-ref", "refs/heads/main", &head]);
+        head
+    };
+    let older = fixture.head.clone();
+    let middle = advance();
+    let pending_head = advance();
+    let minutes_ago =
+        |minutes: i64| (chrono::Utc::now() - chrono::Duration::minutes(minutes)).to_rfc3339();
+    let run_with_times = |id: u64, conclusion: &str, created: &str, updated: &str, sha: &str| {
+        let mut entry = fixture.run(id, conclusion, updated, sha);
+        entry["createdAt"] = json!(created);
+        entry["startedAt"] = json!(created);
+        entry
+    };
+
+    // Older failure (run 51) finished after newer green (run 52), both sharing
+    // createdAt, with a pending run on the current head: the newer green wins.
+    let shared_created = minutes_ago(10);
+    let mut pending = fixture.run(53, "", &minutes_ago(1), &pending_head);
+    pending["status"] = json!("in_progress");
+    pending["conclusion"] = json!("");
+    fixture.set_runs(json!([
+        pending,
+        run_with_times(51, "failure", &shared_created, &minutes_ago(3), &older),
+        run_with_times(52, "success", &shared_created, &minutes_ago(6), &middle),
+    ]));
+    let cleared = call(&fixture.runtime, json!({"kind": "ci_red"}));
+    assert!(
+        cleared["items"].as_array().unwrap().is_empty(),
+        "older failure that finished later must not override newer green run: {cleared}"
+    );
+
+    // Advance the remote head to invalidate the CI cache and check the inverse:
+    // older green (run 54) finished after newer failure (run 55), both sharing
+    // createdAt, with a pending run on the current head: the newer failure wins.
+    let newer_middle = pending_head;
+    let next_pending_head = advance();
+    let shared_created_2 = minutes_ago(5);
+    let mut next_pending = fixture.run(56, "", &minutes_ago(0), &next_pending_head);
+    next_pending["status"] = json!("queued");
+    next_pending["conclusion"] = json!("");
+    fixture.set_runs(json!([
+        next_pending,
+        run_with_times(
+            55,
+            "failure",
+            &shared_created_2,
+            &minutes_ago(4),
+            &newer_middle
+        ),
+        run_with_times(54, "success", &shared_created_2, &minutes_ago(2), &middle),
+    ]));
+    let red = call(&fixture.runtime, json!({"kind": "ci_red"}));
+    let items = red["items"].as_array().unwrap();
+    assert_eq!(
+        items.len(),
+        1,
+        "older green that finished later must not hide newer failure: {red}"
+    );
+    assert_eq!(items[0]["refs"]["run_id"], "55", "{red}");
+    assert_eq!(
+        items[0]["detail"]["reported_head_sha"], newer_middle,
+        "{red}"
+    );
+}
+
 crate::scenario_table!(
     attention_provider,
     replica_owner_only_candidate_reads_are_silent_and_make_no_provider_call,
@@ -722,5 +792,6 @@ crate::scenario_table!(
     ci_red_advancing_remote_head_invalidates_cache,
     ci_red_unavailable_base_head_degrades,
     ci_red_survives_a_pending_run_on_a_newer_base_head,
+    ci_red_uses_workflow_run_order_when_created_at_ties,
     friction_untriaged_lists_only_open,
 );

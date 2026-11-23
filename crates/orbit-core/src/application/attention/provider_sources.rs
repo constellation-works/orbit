@@ -175,17 +175,27 @@ fn run_time(run: &Value, primary: &str, secondary: &str) -> DateTime<Utc> {
         .unwrap_or(DateTime::<Utc>::UNIX_EPOCH)
 }
 
+/// A run's per-workflow sequence number (`run_number`), defaulting to `0`
+/// when absent so unnumbered runs do not outrank numbered ones.
+fn run_number(run: &Value) -> u64 {
+    run["run_number"]
+        .as_u64()
+        .or_else(|| run["run_number"].as_str().and_then(|s| s.parse().ok()))
+        .unwrap_or(0)
+}
+
 /// The run that decides each workflow's CI state on the base branch, keyed
 /// by workflow (or run id when the workflow is unnamed).
 ///
 /// A workflow with a completed run on the current base head is decided by
-/// its newest such run (by `updated_at`). A workflow whose only runs on the
-/// current head are still pending is decided by its newest completed run
-/// on the base branch (by `created_at`, the push order), whatever head it
-/// ran on: a base that keeps landing always has a pending run on its newest
-/// head, and a red result must not vanish behind it, while a newer green
-/// completion still clears it. A workflow with no run on the current head
-/// is not decided: an older head's result alone is not current.
+/// its newest such run (by `updated_at`, then `run_number`). A workflow
+/// whose only runs on the current head are still pending is decided by its
+/// newest completed run on the base branch (by `created_at` push order,
+/// then `run_number`, then `updated_at`), whatever head it ran on: a base
+/// that keeps landing always has a pending run on its newest head, and a
+/// red result must not vanish behind it, while a newer green completion
+/// still clears it. A workflow with no run on the current head is not
+/// decided: an older head's result alone is not current.
 fn newest_red_candidates(
     runs: &[Value],
     base_branch: &str,
@@ -198,6 +208,14 @@ fn newest_red_candidates(
         } else {
             workflow
         }
+    };
+    let head_order = |run: &Value| (run_time(run, "updated_at", "created_at"), run_number(run));
+    let branch_order = |run: &Value| {
+        (
+            run_time(run, "created_at", "updated_at"),
+            run_number(run),
+            run_time(run, "updated_at", "created_at"),
+        )
     };
     let mut on_head: BTreeMap<String, Value> = BTreeMap::new();
     let mut pending_on_head: std::collections::BTreeSet<String> = Default::default();
@@ -220,23 +238,16 @@ fn newest_red_candidates(
             continue;
         }
         if current {
-            let newer = on_head.get(&key).is_none_or(|existing| {
-                run_time(run, "updated_at", "created_at")
-                    > run_time(existing, "updated_at", "created_at")
-            });
+            let newer = on_head
+                .get(&key)
+                .is_none_or(|existing| head_order(run) > head_order(existing));
             if newer {
                 on_head.insert(key.clone(), run.clone());
             }
         }
-        let newer = on_branch.get(&key).is_none_or(|existing| {
-            (
-                run_time(run, "created_at", "updated_at"),
-                run_time(run, "updated_at", "created_at"),
-            ) > (
-                run_time(existing, "created_at", "updated_at"),
-                run_time(existing, "updated_at", "created_at"),
-            )
-        });
+        let newer = on_branch
+            .get(&key)
+            .is_none_or(|existing| branch_order(run) > branch_order(existing));
         if newer {
             on_branch.insert(key, run.clone());
         }
