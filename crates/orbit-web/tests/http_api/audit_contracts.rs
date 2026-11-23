@@ -5,6 +5,7 @@ use orbit_core::{AutoTaskAddParams, TaskStatus};
 use orbit_types::task::{TaskComplexity, TaskPriority, TaskType};
 use orbit_types::workflow::{AutoTaskSchedule, AutoTaskTemplate, DedupePolicy, JobRunState};
 use serde_json::{Value, json};
+use std::io::{Read, Write};
 use std::sync::Arc;
 fn chore_params(name: &str) -> AutoTaskAddParams {
     AutoTaskAddParams {
@@ -111,6 +112,79 @@ fn require_localhost_origin_rejects_forged_host_get_without_origin() {
             assert_eq!(
                 response.json::<Value>().unwrap()["error"],
                 "cross-origin requests not allowed"
+            );
+        },
+    );
+}
+
+#[test]
+fn dashboard_shell_and_assets_validate_host() {
+    isolated(
+        "audit_contracts::dashboard_shell_and_assets_validate_host",
+        || {
+            let fixture = Fixture::new();
+            let server = fixture.server(true);
+            // `origin` is `http://127.0.0.1:<port>`; the approved Host values reuse its port.
+            let authority = server.origin.trim_start_matches("http://").to_owned();
+            let port = authority.rsplit_once(':').unwrap().1.to_owned();
+            for route in ["/", "/static/app.js"] {
+                for host in [
+                    "attacker.example:7878",
+                    "localhost.evil.com",
+                    "localhost:not-a-port",
+                    "",
+                ] {
+                    let response = server
+                        .request("GET", route)
+                        .header("host", host)
+                        .send()
+                        .unwrap();
+                    assert_eq!(
+                        response.status(),
+                        StatusCode::FORBIDDEN,
+                        "{route} with Host {host:?}"
+                    );
+                    assert_eq!(
+                        response.headers()["x-content-type-options"],
+                        "nosniff",
+                        "{route} with Host {host:?}"
+                    );
+                }
+                for host in [
+                    format!("127.0.0.1:{port}"),
+                    format!("localhost:{port}"),
+                    format!("[::1]:{port}"),
+                ] {
+                    let response = server
+                        .request("GET", route)
+                        .header("host", &host)
+                        .send()
+                        .unwrap();
+                    assert_eq!(
+                        response.status(),
+                        StatusCode::OK,
+                        "{route} with approved Host {host}"
+                    );
+                    let headers = response.headers();
+                    assert!(
+                        headers.contains_key(header::CONTENT_SECURITY_POLICY),
+                        "{route} keeps the dashboard CSP"
+                    );
+                    assert_eq!(headers[header::CACHE_CONTROL], "no-cache", "{route}");
+                    assert!(headers.contains_key(header::ETAG), "{route}");
+                }
+            }
+            // reqwest always sends Host, so a request without one goes over a raw socket.
+            let mut stream = std::net::TcpStream::connect(&authority).unwrap();
+            stream
+                .write_all(b"GET / HTTP/1.0\r\nConnection: close\r\n\r\n")
+                .unwrap();
+            let mut reply = String::new();
+            stream.read_to_string(&mut reply).unwrap();
+            assert_eq!(
+                reply.split_whitespace().nth(1),
+                Some("403"),
+                "a request without Host is refused: {reply}"
             );
         },
     );
