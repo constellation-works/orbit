@@ -1607,6 +1607,28 @@ and runner CPU strata, plus `nextest-repack: mode=extract` `write_ops=` and
 extraction wall times from the shard logs. Hosted compliance is **not run, owed
 after publication**.
 
+### Four-tier carrier starts early (2026-11-23)
+
+ORB-27481 read the latest 20 completed `pull_request` `ci.yml` runs (45143640074 to 45151396598, created 09:03–09:55 UTC on 2026-11-23). Seventeen executed Check, all succeeded; two skipped (docs scope); one was cancelled. Executed Check durations were 302, 320, 395, 443, 444, 472, 474, 479, 493, 502, 505, 508, 522, 530, 559, 562 and 620 s. Nearest-rank p90 (rank 16) is **562 s**, median 493 s, and 14 of 17 exceeded 400 s. Every Test build was a cache hit. Partition 12 was the last awaited job in 14 of 17 runs. Its `agents_implementers::four_tier_sub_grid_excess_keeps_its_score_sign` (the ORB-26791 guard for the +3.3e-10 sub-grid score sign) took 98.6–99.8 s in runs 45147214119, 45148597228 and 45150485047, where it completed as the 259th of 259 tests. Across the 16 runs whose partition-12 log carried it, it took 39.9–112.7 s.
+
+**Change.** `.config/nextest.toml` adds the test to the `profile.ci` priority-100 override, so it starts before the ordinary queue. This is scheduling only: the test body, the fixture, the count partitions, applicability and group caps are unchanged, and no other carrier was added. No assertion, row, retry, skip or required check changed.
+
+**Fixture cost, not reduced.** The four tier counts fix the work: 1,260 landed tasks plus 627 rated-regression tasks, all created through the public `add_task` path. A local decomposition from temporary timers (reverted before the timed series) showed landed `add_task` at 2.8 ms per call, flat across the run (2.90 ms for the first 100 calls, 2.71 ms for the last 100), totalling about 3.0–3.5 s of a 6.6–7.8 s run. `implementation_run` took 0.43–0.56 s, the two history `append`s per task 0.32–0.51 s, the scorecard GET 0.67–0.79 s and server start about 0.1 s. The regression creations share the `add_task` path and were not timed separately. Removing rows or helper writes would change the recorded attempt history or the sub-grid inputs, and the create path is product code. So no fixture change was made.
+
+**Local timing (criterion 1).** Command, after `scripts/build-budget.py -- cargo nextest run --locked --profile ci --no-run` with the same filter: `/usr/bin/time -f 'elapsed_seconds=%e' cargo nextest run --locked --profile ci --test-threads 1 -p orbit-cli -p orbit-web -E 'package(=orbit-web) & binary(=http_api) & test(=agents_implementers::four_tier_sub_grid_excess_keeps_its_score_sign)'`. One Linux worktree and its own `target/`, Rust 1.98.1, nextest 0.9.136, the default test profile (debuginfo on, unlike CI's `CARGO_PROFILE_TEST_DEBUG=0`), serial, one untimed warmup per series. Each sample ran and passed exactly one test.
+
+| Series (revision, diff hash) | Samples (s) | Median | Range | Load (1-min, before → after) |
+|---|---|---|---|---|
+| baseline (`86456d27a`, empty diff) | 7.77, 8.02, 8.05, 7.95, 7.79 | 7.95 | 7.77–8.05 | 10.8 → 12.7 |
+| control (same build) | 7.47, 7.58, 7.51, 7.71, 6.93 | 7.51 | 6.93–7.71 | 13.7 → 12.6 |
+| candidate (priority change, `282bf92e`) | 7.33, 7.35, 7.31, 6.93, 7.19 | 7.31 | 6.93–7.35 | 19.1 → 15.0 |
+
+Warmups (excluded): baseline 9.26 s, candidate 7.23 s; the control series ran without one. The noise bound is the full range of the ten unchanged-build observations, 6.93–8.05 s (1.12 s). The candidate's median change is −0.64 s against the baseline median and −0.20 s against the control median, both inside that bound, so the timing is **inconclusive**. The expected result: a priority change does not shorten a single run. The host is shared; its one-minute load ran 10.8–19.1 on 32 cores, and no series was interrupted by admission. These local figures cannot establish a hosted change, since they run about 13 times faster than the hosted samples.
+
+**Verification.** `cargo nextest show-config test-groups --profile ci` parses the config (exit 0). `scripts/check-nextest-partitions.py --shards 13 -- cargo nextest list --workspace --locked --profile ci` reports 4,383 tests, each selected exactly once. `cargo nextest run --locked --profile ci -p orbit-cli -p orbit-web -E 'package(=orbit-web) & binary(=http_api) & test(/^agents_implementers::/)'` passes 13 of 13.
+
+**Hosted compliance is not restored by this change, and is owed after merge.** The operator runs `python3 scripts/ci-p90.py --limit 20 --budget-seconds 400` once the latest 20 completed PR `ci.yml` runs carry this revision, under the [hosted CI budget handoff](../DEVELOPMENT.md#hosted-ci-budget-handoff), and reports executed, skipped, cancelled and missing counts separately from elapsed time.
+
 ## Why
 
 On 2026-10-03, unit tests under `crates/*/src/**` were about 295k lines and 7,675 test functions, more lines than the production code they covered. Crate-root integration tests were 37k lines. Most unit tests pinned internals, so a refactor that kept behaviour unchanged still broke dozens of them, and each break cost an agent tokens to repair a test rather than find a bug. A review of all of them kept 180 (2.3%).
