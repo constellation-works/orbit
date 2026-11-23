@@ -37,7 +37,7 @@ Related operations share one tool and a required `action` field:
 
 | Tool | Actions |
 |---|---|
-| `orbit_task_recover` | `recover_claim`, `requeue`, `repilot`, `retry_handoff`, `revoke_handoff`, `review_reset`, `reconcile_review` |
+| `orbit_task_recover` | `recover_claim`, `requeue`, `resume_delivery`, `repilot`, `retry_handoff`, `revoke_handoff`, `review_reset`, `reconcile_review` |
 | `orbit_run` | `list`, `show`, `observe`, `resume` |
 | `orbit_workflow` | `auto`, `ship`, `land`, `refresh` |
 | `orbit_auto_task` | `list`, `add`, `update`, `mint` |

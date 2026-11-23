@@ -146,7 +146,7 @@ operation:
 |---|---|
 | `orbit.run` | `list`, `show`, `observe`, `resume` |
 | `orbit.workflow` | `ship`, `land`, `auto`, `refresh` (`auto`'s sub-command goes in `mode`) |
-| `orbit.task.recover` | `requeue`, `review_reset`, `retry_handoff`, `revoke_handoff`, `recover_claim`, `repilot`, `reconcile_review` (its sub-command goes in `mode`) |
+| `orbit.task.recover` | `requeue`, `resume_delivery`, `review_reset`, `retry_handoff`, `revoke_handoff`, `recover_claim`, `repilot`, `reconcile_review` (its sub-command goes in `mode`) |
 | `orbit.task.artifact` | `get`, `put` |
 | `orbit.friction` | `add`, `update` |
 | `orbit.decision` | `list`, `show`, `raise` |

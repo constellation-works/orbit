@@ -168,12 +168,15 @@ For ship, land, re-pilot and requeue, the managed-run environment is a routing h
 broker's authenticated run can exercise the resident exemption. An in-process call still faces
 the operator capability check and cannot use a resident grant or replay its ledger entries.
 
-**A resident cycle's re-pilot and requeue.** `orbit.task.recover` action `repilot` submits a pilot run
-whose worker, like a ship's leaf, must start beside the cycle's read-only sandbox, and action `requeue`
-restores a held task and its preserved candidate, which the read-only sandbox cannot write. The nested `orbit` forwards both
-on the same terms as the ship, and the broker runs them through the tool host for the run it serves,
-so the cycle guard decides the live grant, the `dispatch` right and the workspace. No other
-`orbit.task.recover` action is brokered.
+**A resident cycle's re-pilot, requeue and delivery recovery.** `orbit.task.recover` action `repilot`
+submits a pilot run whose worker, like a ship's leaf, must start beside the cycle's read-only
+sandbox; action `requeue` restores a held task and its preserved candidate; and action
+`resume_delivery` starts a recovery leaf for a stopped delivery's preserved candidate. The latter
+two need to write state the read-only sandbox cannot write. The nested `orbit` forwards all three on
+the same terms as the ship, and the broker runs them through the tool host for the run it serves. The
+cycle guard decides the live grant and workspace, requiring `dispatch` for `repilot` and `requeue`
+and `recover` for `resume_delivery`. Delivery recovery may target another covered workspace on the
+same host.
 
 **A resident cycle's decision raise.** A cycle escalates with `orbit.decision` action `raise`, whose
 workspace-wide raise lock lies in `.orbit`, which the cycle's sandbox mounts read-only. The nested
