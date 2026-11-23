@@ -16,7 +16,11 @@ without repeating its fields; the host still checks them.
 write also requires `request_id` and `expected_revision` from task show with
 `snapshot` true. Snapshot reads accept `fields` or `field` over the snapshot,
 including `revision`; a supplied `limit` is ignored and noted. Guarded review
-writes also accept `fields` or `field` over the returned result.
+writes also accept `fields` or `field` over a successful result. A revision
+conflict, pre-mutation refusal, or accepted write whose refresh failed returns
+the complete outcome receipt regardless of projection. Inspect its `conflict`,
+`mutation_applied`/`refusal`, or `accepted`/`refresh_error` fields before
+interpreting the result or retrying.
 
 Relation types and `regression_from` attribution are in
 [Behavior-affecting optional fields](task-fields-relations.md#behavior-affecting-optional-fields).
