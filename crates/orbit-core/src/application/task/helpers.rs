@@ -57,6 +57,8 @@ pub(crate) fn crew_assigned_history(
                 Some(assignment.source.clone()),
             ),
         ))),
+        surface: None,
+        caller: None,
     }
 }
 

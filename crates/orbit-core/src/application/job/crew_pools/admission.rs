@@ -671,6 +671,8 @@ impl OrbitRuntime {
                                 ),
                             ),
                         )),
+                        surface: None,
+                        caller: None,
                     }],
                     ..Default::default()
                 },
@@ -780,6 +782,8 @@ impl OrbitRuntime {
                                     ),
                                 ),
                             )),
+                            surface: None,
+                            caller: None,
                         }],
                         ..Default::default()
                     },

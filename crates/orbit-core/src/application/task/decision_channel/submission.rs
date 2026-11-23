@@ -374,6 +374,8 @@ impl OrbitRuntime {
             to_status: None,
             operation_id: Some(request.id.clone()),
             decision: None,
+            surface: None,
+            caller: None,
         };
         self.stores().task_records().update(
             &request.task_id,

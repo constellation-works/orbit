@@ -1715,6 +1715,8 @@ fn append_history(
         to_status: None,
         operation_id: None,
         decision: None,
+        surface: None,
+        caller: None,
     };
     let params = orbit_store::contracts::TaskHistoryUpdateParams {
         actor: actor.into(),

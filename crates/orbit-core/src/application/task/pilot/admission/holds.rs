@@ -70,6 +70,8 @@ impl HostOperationalHold {
                 operation_id: operation_id.into(),
                 hold: json!(self),
             }),
+            surface: None,
+            caller: None,
         }
     }
 }
@@ -185,6 +187,8 @@ impl OperatorValidationHold {
                 operation_id: operation_id.into(),
                 hold: json!(self),
             }),
+            surface: None,
+            caller: None,
         }
     }
 }

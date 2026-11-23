@@ -1170,6 +1170,8 @@ fn the_pull_requests_auto_fix_budget_bounds_out_of_run_repairs() {
             to_status: None,
             operation_id: None,
             decision: None,
+            surface: None,
+            caller: None,
         })
         .collect();
     fx.runtime
@@ -1241,6 +1243,8 @@ fn record_attempts(fx: &Fixture, task: &str, pr: &str, head: &str, run: &str, co
             to_status: None,
             operation_id: None,
             decision: None,
+            surface: None,
+            caller: None,
         })
         .collect();
     fx.runtime
@@ -1563,6 +1567,8 @@ fn an_unrepaired_check_repair_hold_retries_in_budget_reports_exhausted_and_honor
                     to_status: None,
                     operation_id: None,
                     decision: None,
+                    surface: None,
+                    caller: None,
                 }],
                 ..Default::default()
             },
@@ -1882,6 +1888,8 @@ fn record_source_repair_reservation(fx: &Fixture, task: &str, pr: &str, head: &s
                     to_status: None,
                     operation_id: None,
                     decision: None,
+                    surface: None,
+                    caller: None,
                 }],
                 ..Default::default()
             },
@@ -2255,6 +2263,8 @@ fn early_job_store_failures_preserve_errors_and_report_available_or_unavailable_
                     to_status: None,
                     operation_id: None,
                     decision: None,
+                    surface: None,
+                    caller: None,
                 }],
                 ..Default::default()
             },
@@ -2290,6 +2300,8 @@ fn early_job_store_failures_preserve_errors_and_report_available_or_unavailable_
                     to_status: None,
                     operation_id: None,
                     decision: None,
+                    surface: None,
+                    caller: None,
                 }],
                 ..Default::default()
             },

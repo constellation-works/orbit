@@ -167,6 +167,8 @@ fn apply_findings_change(
                         to_status: Some(status),
                         operation_id: None,
                         decision: None,
+                        surface: None,
+                        caller: None,
                     }],
                     ..Default::default()
                 },

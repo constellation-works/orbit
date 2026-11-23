@@ -308,6 +308,8 @@ fn lint_sweep_reports_the_surface_a_restoration_leaves(workspace: &TestWorkspace
             to_status: None,
             operation_id: None,
             decision: None,
+            surface: None,
+            caller: None,
         }]
     };
     let mut proposed = workspace.task_seed("Pruned while proposed");

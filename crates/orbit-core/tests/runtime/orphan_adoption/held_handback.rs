@@ -63,6 +63,8 @@ fn held_delivery_leaves_are_handed_back_to_completion() {
                         matched_task_id: None,
                         run_id: completion_held.run.clone(),
                     })),
+                    surface: None,
+                    caller: None,
                 }],
                 ..Default::default()
             },

@@ -580,6 +580,8 @@ pub(super) fn record_known_red(
                                     decision: Some(TaskDecision::KnownRedValidation(
                                         record.clone(),
                                     )),
+                                    surface: None,
+                                    caller: None,
                                 }],
                                 ..Default::default()
                             },

@@ -95,6 +95,8 @@ fn owner_reservation_survives_concurrent_sibling_and_reopened_store() {
                 to_status: None,
                 operation_id: None,
                 decision: None,
+                surface: None,
+                caller: None,
             }],
             ..Default::default()
         },
@@ -211,6 +213,8 @@ fn base_update_reservation_is_shared_by_causes_and_survives_reopen() {
                 to_status: None,
                 operation_id: None,
                 decision: None,
+                surface: None,
+                caller: None,
             }],
             ..Default::default()
         },

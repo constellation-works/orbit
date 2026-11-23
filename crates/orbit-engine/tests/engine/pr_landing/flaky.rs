@@ -132,6 +132,8 @@ fn pr_open_keeps_latest_matching_flaky_history() {
                         to_status: None,
                         operation_id: None,
                         decision: None,
+                        surface: None,
+                        caller: None,
                     }));
                 expected.push(record);
                 handed.push(newer);

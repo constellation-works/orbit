@@ -98,6 +98,9 @@ pub(in crate::state) struct StateInner {
     /// stamp operator onto the dashboard session envelope. The only operator
     /// grant: the server's TTY and `ORBIT_OPERATOR` are ignored [ORB-23047].
     operator: AtomicBool,
+    /// Server-instance identifier (`web-operator-<uuid>`), reported as the
+    /// caller on web task mutations when `--operator` is enabled.
+    session_id: String,
     /// Test seam: paused just before a freshly-built runtime is published.
     #[cfg(test)]
     pub(super) on_pre_publish: Mutex<Option<PrePublishHook>>,
@@ -251,6 +254,9 @@ impl DashboardState {
                 agents: RuntimeMemo::new("agent scorecard scan"),
                 doctor_reports: DoctorReports::new(),
                 operator: AtomicBool::new(false),
+                session_id: orbit_common::observability::audit_id::audit_execution_id(
+                    "web-operator",
+                ),
                 #[cfg(test)]
                 on_pre_publish: Mutex::new(None),
                 #[cfg(test)]
@@ -414,6 +420,13 @@ impl DashboardState {
     /// before the server accepts requests.
     pub(crate) fn set_operator_session(&self, enabled: bool) {
         self.inner.operator.store(enabled, Ordering::Relaxed);
+    }
+
+    /// Server-instance operator session identifier (`web-operator-<uuid>`) when
+    /// this server runs with `--operator`, else `None`.
+    pub(crate) fn operator_session_id(&self) -> Option<&str> {
+        self.operator_session()
+            .then_some(self.inner.session_id.as_str())
     }
 
     /// Observe the native host clock.

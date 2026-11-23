@@ -91,6 +91,7 @@ fn desktop_concurrent_status_receipts_are_atomic_and_durable() {
         .id;
     let revision = store.task.desktop_task_revision(&id).unwrap();
     let request = DesktopTaskMutationParams {
+        write_provenance: None,
         actor: "codex".into(),
         request_id: "approval".into(),
         payload_digest: "a".repeat(64),

@@ -63,6 +63,7 @@ fn authorize_creation(state: &DashboardState) -> Result<(), AuthorizationDenial>
 
 pub(in crate::api) async fn create_proposal(
     State(state): State<DashboardState>,
+    headers: axum::http::HeaderMap,
     RawQuery(query): RawQuery,
     body: Result<Json<ProposedTaskInput>, JsonRejection>,
 ) -> Response {
@@ -83,8 +84,15 @@ pub(in crate::api) async fn create_proposal(
     };
     if workspace.trim().is_empty() {
         return bad_request("select exactly one explicit workspace".into());
-    }
+    };
     let workspace = workspace.clone();
+    let meta = super::writes::WebTaskMutationMeta::new(
+        &state,
+        &headers,
+        "create_proposal",
+        None,
+        json!({ "workspace": workspace }),
+    );
     match blocking("create proposed task", move || {
         Ok((|| {
             authorize_creation(&state)
@@ -131,7 +139,12 @@ pub(in crate::api) async fn create_proposal(
                 ));
             }
             let request_id = body.request_id.clone();
-            let id = runtime.create_proposed_task(body)?;
+            let id = super::writes::run_audited_web_task_mutation(
+                &runtime,
+                meta,
+                |created_id: &String| Some(created_id.clone()),
+                move |runtime| runtime.create_proposed_task(body),
+            )?;
             Ok(json!({"id": id, "workspace_id": workspace, "request_id": request_id}))
         })())
     })

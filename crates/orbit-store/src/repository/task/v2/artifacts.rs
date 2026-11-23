@@ -407,6 +407,11 @@ impl TaskV2Store {
                 now,
                 &mut pending_events,
             )?;
+            stamp_pending_events(
+                &mut bundle.events,
+                &mut pending_events,
+                fields.write_provenance.as_ref(),
+            );
             self.bundle_store.append_events(id, &pending_events)?;
             bundle.envelope.updated_at = now;
             self.bundle_store.rewrite_envelope(id, &bundle.envelope)?;

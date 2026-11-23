@@ -687,6 +687,8 @@ fn observation_fences_a_committed_decision_whose_lease_was_lost() {
                 to_status: None,
                 operation_id: None,
                 decision: None,
+                surface: None,
+                caller: None,
             }],
             ..Default::default()
         })

@@ -226,6 +226,13 @@ impl OrbitToolServer {
         trusted.self_reported_actor = announced.self_reported_actor;
         // Replaced, like the actor claim: a re-initialize never inherits it.
         trusted.mcp_client_name = announced.mcp_client_name;
+        if trusted.transport == Some(orbit_types::tool::McpTransport::SshMcp) {
+            if let Some(origin_session_id) = announced.origin_session_id {
+                trusted.origin_session_id = Some(origin_session_id);
+            }
+            trusted.write_surface = announced.write_surface;
+            trusted.write_caller = announced.write_caller;
+        }
         trusted.trace_id = None;
         self.replace_session_context(trusted);
     }
@@ -755,14 +762,30 @@ pub(super) fn session_context_from_initialize(
 ) -> ToolSessionContext {
     // rmcp moves wire `_meta` to the request context. Prefer params-level meta
     // for in-process callers, then fall back to the transport-level value.
-    let workspace = meta_string(request.meta.as_ref().map(|meta| &meta.0), "workspace")
+    let request_meta = request.meta.as_ref().map(|meta| &meta.0);
+    let workspace = meta_string(request_meta, "workspace")
         .or_else(|| meta_string(Some(&transport_meta.0), "workspace"));
+    let orbit_field = |key: &str| {
+        request_meta
+            .and_then(|meta| meta.get("orbit"))
+            .or_else(|| transport_meta.0.get("orbit"))
+            .and_then(|orbit| orbit.get(key))
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned)
+    };
+    let write_surface = orbit_field("write_surface")
+        .and_then(|raw| raw.parse::<orbit_types::task::TaskWriteSurface>().ok());
 
     ToolSessionContext {
         workspace,
         self_reported_actor: self_reported_actor_from_initialize(request, transport_meta),
         mcp_client_name: Some(request.client_info.name.trim().to_string())
             .filter(|name| !name.is_empty()),
+        origin_session_id: orbit_field("origin_session_id"),
+        write_surface,
+        write_caller: orbit_field("write_caller"),
         ..ToolSessionContext::default()
     }
 }

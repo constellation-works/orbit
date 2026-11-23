@@ -318,6 +318,8 @@ pub(super) fn cancelled_published_repair_accepts_fresh_generation() {
             at: Utc::now(), by: "system".into(), event: "pr_auto_fix_admitted".into(),
             note: Some(json!({"pr_number":"17","head_sha":f.base,"blocker":"failed_checks","attempt":1,"budget":3,"run_id":"earlier-automatic-fix","crew":"fixture","crew_source":"fixture"}).to_string()),
             from_status: None, to_status: None, operation_id: None, decision: None,
+            surface: None,
+            caller: None,
         }], ..Default::default()
     }).unwrap();
     let mut submit = f.submit(inspected["binding"].clone());
@@ -375,6 +377,8 @@ pub(super) fn cancelled_published_repair_accepts_fresh_generation() {
                     to_status: None,
                     operation_id: None,
                     decision: None,
+                    surface: None,
+                    caller: None,
                 }],
                 ..Default::default()
             },

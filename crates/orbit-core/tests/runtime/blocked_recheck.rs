@@ -185,6 +185,8 @@ fn record_base_red(fx: &Fixture, task: &str, head: &str, storage: BaseRedStorage
                 to_status: None,
                 operation_id: None,
                 decision,
+                surface: None,
+                caller: None,
             }],
             ..Default::default()
         },

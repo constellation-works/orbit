@@ -237,6 +237,8 @@ fn filed_finding(fixture: &Fixture, filer: &str, verdict: &str, severity: Option
         to_status: None,
         operation_id: None,
         decision: None,
+        surface: None,
+        caller: None,
     };
     let mut file = fs::OpenOptions::new().append(true).open(events).unwrap();
     writeln!(file, "{}", serde_json::to_string(&row).unwrap()).unwrap();

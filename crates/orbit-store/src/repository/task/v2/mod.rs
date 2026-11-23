@@ -87,6 +87,20 @@ pub(crate) fn task_from_bundle(bundle: TaskBundleV2) -> Task {
     )
 }
 
+pub(super) fn stamp_pending_events(
+    bundle_events: &mut [TaskEventRowV2],
+    pending_events: &mut [TaskEventRowV2],
+    provenance: Option<&orbit_types::task::TaskWriteProvenance>,
+) {
+    for event in pending_events.iter_mut() {
+        event.stamp_human_provenance(provenance);
+    }
+    let start = bundle_events.len().saturating_sub(pending_events.len());
+    for event in &mut bundle_events[start..] {
+        event.stamp_human_provenance(provenance);
+    }
+}
+
 pub(crate) struct TaskV2Store {
     registry: TaskRegistryStore,
     bundle_store: TaskBundleStoreV2,
