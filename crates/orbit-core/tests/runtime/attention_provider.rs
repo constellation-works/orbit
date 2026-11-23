@@ -1026,11 +1026,15 @@ fn ci_red_wait_wakes_when_degraded_workflow_membership_changes() {
     let cursor = minted["cursor"]["next"].as_str().unwrap().to_owned();
 
     let commit_on = |parent: &str, message: &str| {
-        let output = std::process::Command::new("git")
+        let mut command = std::process::Command::new("git");
+        command
             .args(["commit-tree", "HEAD^{tree}", "-p", parent, "-m", message])
-            .current_dir(&fixture.repo)
-            .output()
-            .unwrap();
+            .current_dir(&fixture.repo);
+        let output = orbit_common::process::run_bounded(
+            &mut command,
+            orbit_common::fs::git::GIT_LOCAL_TIMEOUT,
+        )
+        .unwrap();
         assert!(output.status.success());
         String::from_utf8(output.stdout).unwrap().trim().to_string()
     };
