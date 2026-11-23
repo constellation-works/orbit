@@ -14,8 +14,8 @@ use super::super::super::stdout_preview::{
 use super::super::limit::{record_limit, record_usage_windows, structured_provider_limit};
 use super::ProviderExit;
 use super::frames::{
-    provider_reported, provider_reported_failure, structured_provider_auth_error,
-    structured_provider_quota_error, structured_provider_refusal,
+    PROVIDER_FAILURE_PREDICATES, provider_reported, provider_reported_failure,
+    structured_provider_auth_error, structured_provider_quota_error, structured_provider_refusal,
 };
 use super::{failure, frames};
 use crate::activity_job::dispatcher::{DispatchError, DispatchInvocationTrace, DispatchOutcome};
@@ -24,9 +24,8 @@ use orbit_agent::{
     ParsedStdout, antigravity_background_task_diagnostic, antigravity_terminal_error_diagnostic,
     assign_recorded_tool_calls, is_missing_envelope_violation, is_success_carrying_error_violation,
     latest_assistant_message, muse_terminal_failure_diagnostic, muse_terminal_rejects_model,
-    normalize_cli_stdout, project_cli_response, provider_authentication_failure,
-    provider_capacity_exhausted, provider_content_refusal, provider_invocation_diagnostic,
-    provider_long_prompt_requests, provider_quota_exceeded, provider_usage_limit,
+    normalize_cli_stdout, project_cli_response, provider_invocation_diagnostic,
+    provider_long_prompt_requests,
 };
 use orbit_common::security::redaction::redact_all_json;
 use orbit_types::workflow::activity_job::Provider;
@@ -57,15 +56,7 @@ fn provider_reported_ending(
     terminal_error.is_some()
         || antigravity_background_task_diagnostic(provider, stdout, duration, str::to_string)
             .is_some()
-        || [
-            provider_authentication_failure as fn(&str) -> bool,
-            provider_usage_limit,
-            provider_quota_exceeded,
-            provider_capacity_exhausted,
-            provider_content_refusal,
-        ]
-        .into_iter()
-        .any(|matches| {
+        || PROVIDER_FAILURE_PREDICATES.into_iter().any(|matches| {
             provider_reported(provider.as_str(), stdout, stderr, None, matches).is_some()
         })
 }
