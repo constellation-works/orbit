@@ -73,7 +73,7 @@ Paths are relative to `codebases/orbit/`.
   `crates/orbit-common/src/test_env.rs#clear_inherited_authority`;
   `crates/orbit-cli/tests/ambient_authority_isolation.rs`; `.config/nextest.toml` (`stateful-runtime`
   test group).
-- R21 — `docs/LESSONS.md#3. The September 2026 Test Fixture Fork Storm`;
+- R21 — `docs/lessons/L03-september-2026-test-fixture-fork-storm.md`;
   `crates/orbit-core/src/application/job/pipeline/worker/scope.rs` (module doc).
 - R22 — `crates/orbit-config/src/registry/settings.rs#DEFAULT_WORKER_TASKS_MAX` (with
   `DEFAULT_WORKER_MEMORY_HIGH` and `DEFAULT_WORKER_MEMORY_MAX`);
