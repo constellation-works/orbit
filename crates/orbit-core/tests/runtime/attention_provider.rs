@@ -907,6 +907,61 @@ fn ci_red_keeps_same_named_workflows_apart() {
     assert_eq!(items[0]["refs"]["run_id"], "201", "{red}");
 }
 
+fn ci_red_keeps_id_workflow_apart_from_name_spelling_its_key() {
+    // Workflow id 7 (display name CI) and a workflow with no provider id
+    // whose display name is `id:7`: distinct workflows that must not share a
+    // CI decision.
+    let fixture = Fixture::new(true);
+    let now = chrono::Utc::now().to_rfc3339();
+    let run_for = |id: u64,
+                   number: u64,
+                   workflow_id: Option<u64>,
+                   name: &str,
+                   conclusion: &str,
+                   sha: &str| {
+        let mut entry = fixture.run(id, conclusion, &now, sha);
+        entry["number"] = json!(number);
+        entry["workflowName"] = json!(name);
+        if let Some(workflow_id) = workflow_id {
+            entry["workflowDatabaseId"] = json!(workflow_id);
+        }
+        entry
+    };
+
+    // The name-only success, at the same timestamp with the higher run
+    // number, must not hide the id-7 failure.
+    fixture.set_runs(json!([
+        run_for(101, 1, Some(7), "CI", "failure", &fixture.head),
+        run_for(102, 99, None, "id:7", "success", &fixture.head),
+    ]));
+    let red = call(&fixture.runtime, json!({"kind": "ci_red"}));
+    let items = red["items"].as_array().unwrap();
+    assert_eq!(
+        items.len(),
+        1,
+        "a name-only success must not hide the id-7 failure: {red}"
+    );
+    assert_eq!(items[0]["refs"]["run_id"], "101", "{red}");
+
+    // Both fail on a fresh head: two distinct items, each keeping its own
+    // display name.
+    let head = fixture.advance_remote_head();
+    fixture.set_runs(json!([
+        run_for(201, 1, Some(7), "CI", "failure", &head),
+        run_for(202, 99, None, "id:7", "failure", &head),
+    ]));
+    let red = call(&fixture.runtime, json!({"kind": "ci_red"}));
+    let items = red["items"].as_array().unwrap();
+    assert_eq!(items.len(), 2, "both workflows failed: {red}");
+    assert_ne!(items[0]["id"], items[1]["id"], "{red}");
+    let mut names: Vec<&str> = items
+        .iter()
+        .map(|item| item["detail"]["workflow"].as_str().unwrap())
+        .collect();
+    names.sort_unstable();
+    assert_eq!(names, ["CI", "id:7"], "{red}");
+}
+
 /// A wait on `ci_red` wakes with `degraded_changed` when the set of workflows
 /// with missing history shrinks but one stays degraded, and keeps waiting
 /// while that membership holds.
@@ -1040,6 +1095,7 @@ crate::scenario_table!(
     ci_red_degrades_when_full_page_omits_pending_workflow_history,
     ci_red_uses_workflow_run_order_when_created_at_ties,
     ci_red_keeps_same_named_workflows_apart,
+    ci_red_keeps_id_workflow_apart_from_name_spelling_its_key,
     ci_red_wait_wakes_when_degraded_workflow_membership_changes,
     friction_untriaged_lists_only_open,
 );
