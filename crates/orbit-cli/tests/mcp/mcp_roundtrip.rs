@@ -3345,6 +3345,25 @@ fn mcp_serve_round_trips_records_against_a_temp_workspace() {
     assert_eq!(shown["crew"], "sol");
     assert_eq!(shown["orchestrator"], "sol");
     assert_eq!(shown["job_run_id"], "jrun-mcp-projection");
+    let identity = shown["workspace"].clone();
+    assert!(identity["id"].is_string() && identity["name"].is_string());
+    assert_eq!(
+        client.call_tool_ok(
+            "orbit_task_show",
+            json!({"id": task_id, "fields": ["workspace"]})
+        ),
+        json!({"workspace": identity})
+    );
+    let updated = client.call_tool_ok(
+        "orbit_task_update",
+        json!({"id": task_id, "priority": "medium", "fields": ["workspace"]}),
+    );
+    assert_eq!(updated["workspace"], identity);
+    let added_workspace = client.call_tool_ok(
+        "orbit_task_add",
+        json!({"title": "Workspace projection", "description": "Projection regression", "complexity": "low", "fields": ["workspace"]}),
+    );
+    assert_eq!(added_workspace["workspace"], identity);
     for (input, expected) in [
         (
             json!({ "id": task_id, "fields": ["crew", "orchestrator"] }),
