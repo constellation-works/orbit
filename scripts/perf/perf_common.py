@@ -338,7 +338,7 @@ def main(argv: list[str] | None = None) -> int:
     commands = parser.add_subparsers(dest="command", required=True)
     for name, helptext in (
         ("disk-gate", "refuse when the filesystem that will hold TARGET is at or above 80%%"),
-        ("require-absent-or-empty", "refuse a non-empty PATH; remove an empty directory"),
+        ("require-absent-or-empty", "refuse a non-empty PATH"),
     ):
         sub = commands.add_parser(name, help=helptext)
         sub.add_argument("--entry", required=True, help="script name, prefixed to a refusal")
