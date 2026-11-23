@@ -200,8 +200,8 @@ impl orbit_engine::test_support::NullRuntimeHost for ClaimedRecoveryHost {
             }),
             "decide" => {
                 let repo = Path::new(self.worktree_output["workspace_path"].as_str().unwrap());
-                std::fs::write(repo.join("candidate.txt"), "repaired\n").unwrap();
-                std::fs::write(repo.join(".env"), "TOKEN=x\n").unwrap();
+                std::fs::write(repo.join("candidate.txt"), "repaired\nTOKEN=x\n").unwrap();
+                std::fs::write(repo.join(".env"), "PROTECTED_ENV_CANARY=x\n").unwrap();
                 Ok(json!({
                     "decision": "resume",
                     "fault": "implementer",
