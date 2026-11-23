@@ -30,6 +30,134 @@ pub(crate) fn atomic_write_private_bytes(path: &Path, content: &[u8]) -> io::Res
     staged.commit()
 }
 
+/// Atomically save private text beneath a root using a relative directory.
+/// Refuses symlinked directory components, traversal and non-file names.
+#[cfg(unix)]
+pub fn write_private_text_beneath(
+    root: &Path,
+    directory: &Path,
+    name: &str,
+    content: &str,
+) -> io::Result<()> {
+    use std::ffi::CString;
+    use std::os::fd::{AsRawFd, FromRawFd};
+    use std::os::unix::ffi::OsStrExt;
+
+    let mut components = Path::new(name).components();
+    if !matches!(
+        (components.next(), components.next()),
+        (Some(std::path::Component::Normal(_)), None)
+    ) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "scratch artifact must be a single file name",
+        ));
+    }
+    let name = CString::new(name).map_err(|_| {
+        io::Error::new(io::ErrorKind::InvalidInput, "scratch artifact contains NUL")
+    })?;
+    let root = fs::canonicalize(root)?;
+    let mut dir = File::open(root)?;
+    for component in directory.components() {
+        let std::path::Component::Normal(component) = component else {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "directory must be relative and contain no traversal",
+            ));
+        };
+        let name = CString::new(component.as_bytes()).map_err(io::Error::other)?;
+        // SAFETY: dir and name remain valid for both calls; mkdirat creates no file through a link.
+        let created = unsafe { libc::mkdirat(dir.as_raw_fd(), name.as_ptr(), 0o700) };
+        if created != 0 {
+            let error = io::Error::last_os_error();
+            if error.kind() != io::ErrorKind::AlreadyExists {
+                return Err(error);
+            }
+        }
+        // SAFETY: openat returns a new owned descriptor on success.
+        let fd = unsafe {
+            libc::openat(
+                dir.as_raw_fd(),
+                name.as_ptr(),
+                libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+            )
+        };
+        if fd < 0 {
+            return Err(io::Error::last_os_error());
+        }
+        // SAFETY: fd is newly opened and owned by this File.
+        dir = unsafe { File::from_raw_fd(fd) };
+    }
+    let serial = TEMP_FILE_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let temp = CString::new(format!(".orbit-scratch-{}-{serial}", std::process::id()))
+        .map_err(io::Error::other)?;
+    // SAFETY: dir and temp are valid; O_EXCL and O_NOFOLLOW prevent following a planted file.
+    let fd = unsafe {
+        libc::openat(
+            dir.as_raw_fd(),
+            temp.as_ptr(),
+            libc::O_WRONLY | libc::O_CREAT | libc::O_EXCL | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+            0o600,
+        )
+    };
+    if fd < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    struct StagingCleanup<'a> {
+        dir: &'a File,
+        name: &'a std::ffi::CStr,
+        armed: bool,
+    }
+    impl Drop for StagingCleanup<'_> {
+        fn drop(&mut self) {
+            if self.armed {
+                // SAFETY: the directory and staging name outlive this guard.
+                unsafe {
+                    libc::unlinkat(self.dir.as_raw_fd(), self.name.as_ptr(), 0);
+                }
+            }
+        }
+    }
+    let mut cleanup = StagingCleanup {
+        dir: &dir,
+        name: &temp,
+        armed: true,
+    };
+    // SAFETY: fd is newly opened and owned by this File.
+    let mut file = unsafe { File::from_raw_fd(fd) };
+    file.write_all(content.as_bytes())?;
+    sync_file(&file)?;
+    // renameat replaces a final symlink itself and never follows it.
+    // SAFETY: both names and the held directory descriptor remain valid.
+    if unsafe {
+        libc::renameat(
+            dir.as_raw_fd(),
+            temp.as_ptr(),
+            dir.as_raw_fd(),
+            name.as_ptr(),
+        )
+    } != 0
+    {
+        return Err(io::Error::last_os_error());
+    }
+    cleanup.armed = false;
+    sync_parent_dir(&dir)
+}
+
+/// Fail closed where descriptor-relative scratch writes are unavailable.
+#[cfg(not(unix))]
+pub fn write_private_text_beneath(
+    _root: &Path,
+    _directory: &Path,
+    _name: &str,
+    _content: &str,
+) -> io::Result<()> {
+    Err(io::Error::new(
+        io::ErrorKind::Unsupported,
+        "contained writes are unavailable on this platform",
+    ))
+}
+
 /// Publish `content` at `path` with private permissions, failing with
 /// [`io::ErrorKind::AlreadyExists`] when it is already there.
 ///
