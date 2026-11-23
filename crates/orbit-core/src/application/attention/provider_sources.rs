@@ -167,6 +167,91 @@ fn build_repair_lookup(
     lookup
 }
 
+/// A run's timestamp from `primary`, falling back to `secondary`, else the
+/// epoch so an undated run never outranks a dated one.
+fn run_time(run: &Value, primary: &str, secondary: &str) -> DateTime<Utc> {
+    parse_time(&run[primary])
+        .or_else(|| parse_time(&run[secondary]))
+        .unwrap_or(DateTime::<Utc>::UNIX_EPOCH)
+}
+
+/// The run that decides each workflow's CI state on the base branch, keyed
+/// by workflow (or run id when the workflow is unnamed).
+///
+/// A workflow with a completed run on the current base head is decided by
+/// its newest such run (by `updated_at`). A workflow whose only runs on the
+/// current head are still pending is decided by its newest completed run
+/// on the base branch (by `created_at`, the push order), whatever head it
+/// ran on: a base that keeps landing always has a pending run on its newest
+/// head, and a red result must not vanish behind it, while a newer green
+/// completion still clears it. A workflow with no run on the current head
+/// is not decided: an older head's result alone is not current.
+fn newest_red_candidates(
+    runs: &[Value],
+    base_branch: &str,
+    head_sha: &str,
+) -> BTreeMap<String, Value> {
+    let workflow_key = |run: &Value| {
+        let workflow = value_string(&run["workflow"]);
+        if workflow.is_empty() {
+            value_string(&run["run_id"])
+        } else {
+            workflow
+        }
+    };
+    let mut on_head: BTreeMap<String, Value> = BTreeMap::new();
+    let mut pending_on_head: std::collections::BTreeSet<String> = Default::default();
+    let mut on_branch: BTreeMap<String, Value> = BTreeMap::new();
+    for run in runs {
+        if value_string(&run["head_branch"]) != base_branch {
+            continue;
+        }
+        let reported = value_string(&run["reported_head_sha"]);
+        let current = !reported.is_empty() && reported == head_sha;
+        let status = value_string(&run["status"]);
+        let key = workflow_key(run);
+        if status != "completed" {
+            if current && !status.is_empty() {
+                pending_on_head.insert(key);
+            }
+            continue;
+        }
+        if value_string(&run["conclusion"]).is_empty() {
+            continue;
+        }
+        if current {
+            let newer = on_head.get(&key).is_none_or(|existing| {
+                run_time(run, "updated_at", "created_at")
+                    > run_time(existing, "updated_at", "created_at")
+            });
+            if newer {
+                on_head.insert(key.clone(), run.clone());
+            }
+        }
+        let newer = on_branch.get(&key).is_none_or(|existing| {
+            (
+                run_time(run, "created_at", "updated_at"),
+                run_time(run, "updated_at", "created_at"),
+            ) > (
+                run_time(existing, "created_at", "updated_at"),
+                run_time(existing, "updated_at", "created_at"),
+            )
+        });
+        if newer {
+            on_branch.insert(key, run.clone());
+        }
+    }
+    for key in pending_on_head {
+        if on_head.contains_key(&key) {
+            continue;
+        }
+        if let Some(run) = on_branch.remove(&key) {
+            on_head.insert(key, run);
+        }
+    }
+    on_head
+}
+
 pub(super) fn read_ci_attention(
     context: &AttentionSourceContext<'_>,
     session: &ToolSessionContext,
@@ -270,50 +355,7 @@ pub(super) fn read_ci_attention(
             }
         }
     };
-    // Freshness: only runs on the current base-branch head count. Pending
-    // or unknown observations are neither green nor evidence that an older
-    // red head is current.
-    let mut newest_by_workflow: BTreeMap<String, Value> = BTreeMap::new();
-    for run in &runs {
-        if value_string(&run["head_branch"]) != base_branch {
-            continue;
-        }
-        if !head_sha.is_empty() {
-            let reported = value_string(&run["reported_head_sha"]);
-            if reported.is_empty() || reported != head_sha {
-                continue;
-            }
-        }
-        if value_string(&run["status"]) != "completed" {
-            continue;
-        }
-        let conclusion = value_string(&run["conclusion"]);
-        if conclusion.is_empty() {
-            continue;
-        }
-        let workflow = value_string(&run["workflow"]);
-        let key = if workflow.is_empty() {
-            value_string(&run["run_id"])
-        } else {
-            workflow.clone()
-        };
-        let run_time = parse_time(&run["updated_at"])
-            .or_else(|| parse_time(&run["created_at"]))
-            .unwrap_or(DateTime::<Utc>::UNIX_EPOCH);
-        match newest_by_workflow.get(&key) {
-            Some(existing) => {
-                let existing_time = parse_time(&existing["updated_at"])
-                    .or_else(|| parse_time(&existing["created_at"]))
-                    .unwrap_or(DateTime::<Utc>::UNIX_EPOCH);
-                if run_time > existing_time {
-                    newest_by_workflow.insert(key, run.clone());
-                }
-            }
-            None => {
-                newest_by_workflow.insert(key, run.clone());
-            }
-        }
-    }
+    let newest_by_workflow = newest_red_candidates(&runs, &base_branch, &head_sha);
     // A pending task commit makes the repair-task association
     // unavailable: history reads would settle it. The CI evidence itself
     // is still safe to report, degraded explicitly below.
@@ -425,6 +467,7 @@ pub(super) fn read_ci_attention(
                 "conclusion": conclusion,
                 "branch": base_branch,
                 "reported_head_sha": value_string(&run["reported_head_sha"]),
+                "base_head_sha": head_sha,
                 "url": run["url"],
                 "since_source": "updated_at",
                 "since_is_proxy": true,

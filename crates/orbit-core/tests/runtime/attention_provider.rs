@@ -654,6 +654,59 @@ fn ci_red_unavailable_base_head_degrades() {
     );
 }
 
+fn ci_red_survives_a_pending_run_on_a_newer_base_head() {
+    // Reproduces a base that keeps landing while red: completed failures on
+    // older heads and a pending run on the newest head. The red result must
+    // not vanish behind the pending run; a newer green completion clears it.
+    let fixture = Fixture::new(true);
+    // Chain each advance on the previous one so every head is distinct.
+    let advance = || {
+        let head = fixture.advance_remote_head();
+        git(&fixture.repo, &["update-ref", "refs/heads/main", &head]);
+        head
+    };
+    let older = fixture.head.clone();
+    let middle = advance();
+    let newest = advance();
+    let minutes_ago =
+        |minutes: i64| (chrono::Utc::now() - chrono::Duration::minutes(minutes)).to_rfc3339();
+    let mut pending = fixture.run(53, "", &minutes_ago(1), &newest);
+    pending["status"] = json!("in_progress");
+    pending["conclusion"] = json!("");
+    fixture.set_runs(json!([
+        pending,
+        fixture.run(52, "failure", &minutes_ago(5), &middle),
+        fixture.run(51, "failure", &minutes_ago(9), &older),
+    ]));
+    let response = call(&fixture.runtime, json!({"kind": "ci_red"}));
+    let items = response["items"].as_array().unwrap();
+    assert_eq!(items.len(), 1, "red base behind a pending head: {response}");
+    assert_eq!(items[0]["refs"]["run_id"], "52", "{response}");
+    assert_eq!(
+        items[0]["detail"]["reported_head_sha"], middle,
+        "{response}"
+    );
+
+    // A newer head whose run completed green clears the red result, even
+    // while the head after it is pending.
+    let green = newest;
+    let pending_head = advance();
+    let mut pending = fixture.run(54, "", &minutes_ago(0), &pending_head);
+    pending["status"] = json!("queued");
+    pending["conclusion"] = json!("");
+    fixture.set_runs(json!([
+        pending,
+        fixture.run(53, "success", &minutes_ago(1), &green),
+        fixture.run(52, "failure", &minutes_ago(5), &middle),
+        fixture.run(51, "failure", &minutes_ago(9), &older),
+    ]));
+    let cleared = call(&fixture.runtime, json!({"kind": "ci_red"}));
+    assert!(
+        cleared["items"].as_array().unwrap().is_empty(),
+        "a newer green completion must clear ci_red: {cleared}"
+    );
+}
+
 crate::scenario_table!(
     attention_provider,
     replica_owner_only_candidate_reads_are_silent_and_make_no_provider_call,
@@ -668,5 +721,6 @@ crate::scenario_table!(
     ci_red_ignores_retained_failure_on_stale_local_head,
     ci_red_advancing_remote_head_invalidates_cache,
     ci_red_unavailable_base_head_degrades,
+    ci_red_survives_a_pending_run_on_a_newer_base_head,
     friction_untriaged_lists_only_open,
 );
