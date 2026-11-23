@@ -47,13 +47,8 @@ pub fn run_auto_task_scheduler_at(
         let definition = &loaded.definition;
         let report = fire_definition(host, definition, &loaded.path, &state_path, now, options)
             .unwrap_or_else(|error| AutoTaskFireReport {
-                name: definition.name.clone(),
-                action: "error",
                 reason: Some(error.to_string()),
-                slot: None,
-                task_id: None,
-                blocking_task_id: None,
-                automation: None,
+                ..action(definition, "error")
             });
         reports.push(report);
     }
@@ -229,13 +224,10 @@ fn fire_delivery(
         .and_then(|attempt| attempt.action_id.clone());
 
     Ok(AutoTaskFireReport {
-        name: definition.name.clone(),
-        action: "delivery",
         reason: Some(diagnostic.reason.clone()),
-        slot: None,
         task_id,
-        blocking_task_id: None,
         automation: Some(diagnostic),
+        ..action(definition, "delivery")
     })
 }
 
@@ -256,13 +248,9 @@ fn fire_condition(
         reason = format!("would_fire: {}", diagnostic.would_fire.join(", "));
     }
     Ok(AutoTaskFireReport {
-        name: definition.name.clone(),
-        action: "condition",
         reason: Some(reason),
-        slot: None,
         task_id,
-        blocking_task_id: None,
-        automation: None,
+        ..action(definition, "condition")
     })
 }
 

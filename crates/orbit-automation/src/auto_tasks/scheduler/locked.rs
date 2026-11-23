@@ -135,15 +135,12 @@ fn recover_pending(
         {
             Ok(()) => Ok(Some(pending_claim_report(definition, &pending))),
             Err(error) => Ok(Some(AutoTaskFireReport {
-                name: definition.name.clone(),
-                action: "fired",
                 reason: Some(format!(
                     "cursor not advanced; retry will reconcile from pending mint evidence or report unresolved: {error}"
                 )),
                 slot: Some(pending.slot),
                 task_id: Some(task_id),
-                blocking_task_id: None,
-                automation: None,
+                ..action(definition, "fired")
             })),
         };
     }
@@ -183,13 +180,11 @@ fn fire_slot(
             );
             session.save()?;
             return Ok(AutoTaskFireReport {
-                name: definition.name.clone(),
-                action: "skipped",
-                reason: Some(format!("mint failed; slot not consumed: {error}")),
                 slot: Some(slot),
-                task_id: None,
-                blocking_task_id: None,
-                automation: None,
+                ..skipped(
+                    definition,
+                    &format!("mint failed; slot not consumed: {error}"),
+                )
             });
         }
     };
@@ -209,13 +204,9 @@ fn fire_slot(
 
     match checkpoint_consumed(session, definition, &cursor, &slot, &task, now) {
         Ok(()) => Ok(AutoTaskFireReport {
-            name: definition.name.clone(),
-            action: "fired",
-            reason: None,
             slot: Some(slot),
             task_id: Some(task),
-            blocking_task_id: None,
-            automation: None,
+            ..action(definition, "fired")
         }),
         Err(error) => {
             session.state.definitions.insert(
@@ -233,16 +224,13 @@ fn fire_slot(
                 .err()
                 .map(|save_error| format!("; mint evidence also unpersisted: {save_error}"));
             Ok(AutoTaskFireReport {
-                name: definition.name.clone(),
-                action: "fired",
                 reason: Some(format!(
                     "cursor not advanced; retry will reconcile from pending mint evidence or report unresolved: {error}{}",
                     evidence.unwrap_or_default()
                 )),
                 slot: Some(slot),
                 task_id: Some(task),
-                blocking_task_id: None,
-                automation: None,
+                ..action(definition, "fired")
             })
         }
     }
