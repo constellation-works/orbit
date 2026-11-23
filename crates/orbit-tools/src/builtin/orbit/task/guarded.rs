@@ -269,7 +269,14 @@ fn guarded_required_string(input: &Value, field: &str, create: bool) -> Result<S
         suggestions,
     ))
 }
-pub(super) fn write(ctx: &ToolContext, input: Value, create: bool) -> Result<Value, OrbitError> {
+pub(super) fn write(
+    ctx: &ToolContext,
+    mut input: Value,
+    create: bool,
+) -> Result<Value, OrbitError> {
+    if !create && let Some(object) = input.as_object_mut() {
+        orbit_common::governance::task::normalize_task_id_alias(object)?;
+    }
     let (allowed, mode) = guarded_mode(create, &input);
     validate_guarded_write_fields(&input, create, allowed)?;
     let workspace = guarded_required_string(&input, "workspace", create)?;

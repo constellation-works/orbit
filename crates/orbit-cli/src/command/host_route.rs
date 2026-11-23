@@ -430,12 +430,14 @@ fn routed_task_id(command: &Commands) -> Result<Option<String>, OrbitError> {
             {
                 let input = args.parsed_input()?;
                 if is_id_routed_tool(tool_operation_name(&args.name, &input)) {
-                    input
-                        .get("id")
-                        .and_then(Value::as_str)
-                        .map(str::trim)
-                        .filter(|id| !id.is_empty())
-                        .map(ToOwned::to_owned)
+                    if input.get("id").is_some()
+                        && input
+                            .get(orbit_common::governance::task::TASK_ID_WIRE_ALIAS)
+                            .is_some()
+                    {
+                        return Err(orbit_common::governance::task::task_id_alias_conflict_error());
+                    }
+                    orbit_common::governance::task::task_id_alias_str(&input).map(ToOwned::to_owned)
                 } else {
                     None
                 }

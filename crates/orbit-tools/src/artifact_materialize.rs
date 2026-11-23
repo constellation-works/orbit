@@ -45,7 +45,7 @@ pub(crate) fn source_presence_error(input: &Value) -> Option<OrbitError> {
     allowed.extend(TOOL_INPUT_IDENTITY_KEYS.iter().copied());
     let result = (|| {
         reject_unknown_tool_fields(input, &allowed)?;
-        orbit_common::protocol::tool_input::required_string(input, &["id"], "id")?;
+        orbit_common::governance::task::resolve_task_id_alias(input)?;
         Err::<(), _>(OrbitError::InvalidInput(format!(
             "missing `source_path`; {SOURCE_PATH_REMEDY}"
         )))

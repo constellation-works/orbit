@@ -28,10 +28,14 @@ pub(super) fn preempt(ctx: &ToolContext, input: &Value) -> Option<Result<Value, 
                 "preloaded task artifact payloads cannot be combined with source_path; send either the artifacts payload or a source_path".to_string(),
             ));
         }
-        reject_unknown_tool_fields(input, &["id", "artifacts", "model"])?;
+        let mut normalized = input.clone();
+        if let Some(object) = normalized.as_object_mut() {
+            orbit_common::governance::task::normalize_task_id_alias(object)?;
+        }
+        reject_unknown_tool_fields(&normalized, &["id", "artifacts", "model"])?;
         super::super::execute_host_action(
             ctx,
-            input.clone(),
+            normalized,
             OrbitBuiltinAction::Task(TaskVerb::ArtifactPut),
         )
     })())

@@ -17,6 +17,9 @@ pub fn is_id_routed_tool(name: &str) -> bool {
 /// the v1 server's own reading. A non-string `workspace` is left for the
 /// destination to refuse rather than read as absent, so a malformed selector
 /// never turns into a prefix route.
+///
+/// Accepts `task_id` when `id` is absent (`orbit_common::governance::task::TASK_ID_WIRE_ALIAS`
+/// — ORB-26989 exception to `#8734`); returns `None` when both are present.
 pub fn id_only_task_target<'a>(name: &str, input: &'a Value) -> Option<&'a str> {
     if !is_id_routed_tool(orbit_types::tool::tool_operation_name(name, input)) {
         return None;
@@ -26,9 +29,5 @@ pub fn id_only_task_target<'a>(name: &str, input: &'a Value) -> Option<&'a str> 
         Some(Value::String(selector)) if selector.trim().is_empty() => {}
         Some(_) => return None,
     }
-    input
-        .get("id")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|id| !id.is_empty())
+    orbit_common::governance::task::task_id_alias_str(input)
 }

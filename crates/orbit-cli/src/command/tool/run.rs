@@ -136,9 +136,17 @@ impl ToolRunArgs {
         }
         if crate::command::mcp::ID_RESOLVED_WORKSPACE_TOOLS
             .contains(&tool_operation_name(&self.name, &value))
-            && let Some(task_id) = trimmed_string_field(&value, "id")
         {
-            return Ok(ToolRunBootstrap::TaskOwner(task_id));
+            if value.get("id").is_some()
+                && value
+                    .get(orbit_common::governance::task::TASK_ID_WIRE_ALIAS)
+                    .is_some()
+            {
+                return Err(orbit_common::governance::task::task_id_alias_conflict_error());
+            }
+            if let Some(task_id) = orbit_common::governance::task::task_id_alias_str(&value) {
+                return Ok(ToolRunBootstrap::TaskOwner(task_id.to_owned()));
+            }
         }
         Ok(ToolRunBootstrap::CwdWorkspace)
     }
@@ -200,7 +208,7 @@ impl ToolRunArgs {
         {
             return None;
         }
-        trimmed_string_field(&value, "id")
+        orbit_common::governance::task::task_id_alias_str(&value).map(ToOwned::to_owned)
     }
 }
 
