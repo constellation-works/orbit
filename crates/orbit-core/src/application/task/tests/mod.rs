@@ -9,7 +9,6 @@ mod human_format;
 mod lifecycle;
 mod paths;
 mod records;
-mod requeue;
 mod resolves;
 mod retained_candidate;
 mod selector_match;

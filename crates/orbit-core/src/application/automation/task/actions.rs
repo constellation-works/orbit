@@ -1,8 +1,8 @@
 //! Task/job adapters retain existing creation and evidence provenance boundaries.
 
-use super::{COVERAGE_ARTIFACT, consumer_states, source::Source};
 use crate::OrbitRuntime;
 use crate::application::automation::AutomationAutoTaskPort;
+use crate::application::automation::{COVERAGE_ARTIFACT, consumer_states, source::Source};
 use crate::runtime::run_input::recorded_task_ids;
 use chrono::{DateTime, Utc};
 use orbit_automation::{
@@ -21,7 +21,7 @@ use orbit_types::workflow::{AutoTaskDefinition, JobRunState};
 use std::collections::BTreeMap;
 use std::ops::ControlFlow;
 
-pub(super) fn mint(
+pub(in crate::application::automation) fn mint(
     runtime: &OrbitRuntime,
     definition: &AutoTaskDefinition,
     attempt: &BatchAttempt,
@@ -30,7 +30,9 @@ pub(super) fn mint(
     // [ORB-13896] After-landing review is reviewed by `workflow.purpose_crews.review`,
     // one crew drawn per batch when it is a pool [ORB-15195], from the members
     // whose executor can run under the task's `os:` tags.
-    if let Some(crew) = super::after_landing::minted_review_crew(runtime, definition, attempt)? {
+    if let Some(crew) = crate::application::automation::after_landing::minted_review_crew(
+        runtime, definition, attempt,
+    )? {
         params.crew = Some(crew);
         params.crew_source = Some(CrewSource::Other(orbit_config::REVIEW_CREW_KEY.to_string()));
     }
@@ -77,7 +79,7 @@ pub(super) fn mint(
 const REVIEW_WITHOUT_EXECUTION_SUMMARY: &str = "review_closed_without_execution_summary";
 
 /// The admitted task's outcome as settlement sees it.
-pub(super) fn outcome(
+pub(in crate::application::automation) fn outcome(
     runtime: &OrbitRuntime,
     source: &Source<'_>,
     attempt: &BatchAttempt,
@@ -207,7 +209,10 @@ fn blocked_run_stopped(runtime: &OrbitRuntime, task: &Task) -> Result<bool, Auto
 /// run's failure wrote (`workflow_run_failed` naming `run_id`). Only the
 /// latest transition counts: a later move — a requeue, a resume, an
 /// operator's block — supersedes the failure's block.
-pub(super) fn blocked_by_failed_run(history: &[TaskHistoryEntry], run_id: &str) -> bool {
+pub(in crate::application::automation) fn blocked_by_failed_run(
+    history: &[TaskHistoryEntry],
+    run_id: &str,
+) -> bool {
     history
         .iter()
         .rev()
@@ -297,7 +302,7 @@ fn validated_evidence(
 
 /// A claim can survive the mint but miss the action-id checkpoint. Resolve
 /// its permanent key without replaying creation against a changed definition.
-pub(super) fn action_id(
+pub(in crate::application::automation) fn action_id(
     runtime: &OrbitRuntime,
     attempt: &BatchAttempt,
 ) -> Result<Option<String>, OrbitError> {
@@ -311,7 +316,7 @@ pub(super) fn action_id(
         .map(|task| task.id))
 }
 
-pub(super) fn job_outcome(
+pub(in crate::application::automation) fn job_outcome(
     runtime: &OrbitRuntime,
     source: &Source<'_>,
     attempt: &BatchAttempt,
@@ -383,7 +388,9 @@ pub(super) fn job_outcome(
 fn source_verified(source: &Source<'_>, batch: &CoverageBatch) -> Result<bool, AutomationError> {
     match source.verify_batch(batch) {
         Ok(()) => Ok(true),
-        Err(error) if super::source::is_batch_mismatch(&error) => Ok(false),
+        Err(error) if crate::application::automation::source::is_batch_mismatch(&error) => {
+            Ok(false)
+        }
         Err(error) => Err(error),
     }
 }
