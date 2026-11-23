@@ -98,6 +98,7 @@ impl OrbitRuntime {
             &landing_prs,
             &closure_comment(task, note),
             "closed an Orbit-authored pull request on the task's terminal decision",
+            "could not close an Orbit-authored pull request after the task's terminal decision",
         )
     }
 
@@ -155,6 +156,7 @@ impl OrbitRuntime {
             &keep,
             &requeue_comment(task, note),
             "closed an Orbit-authored pull request the task's requeue left undelivered",
+            "could not close an Orbit-authored pull request after the task's requeue",
         )
     }
 
@@ -167,6 +169,7 @@ impl OrbitRuntime {
         keep: &BTreeSet<u64>,
         comment: &str,
         closed_message: &'static str,
+        warning_message: &'static str,
     ) -> bool {
         // Orbit records every PR it opens on the task, and every follower PR it
         // accepts on the claim. A task with neither never had an Orbit PR, so it
@@ -185,7 +188,7 @@ impl OrbitRuntime {
         let open = match forge.open_pull_requests(&repo_root) {
             Ok(open) => open,
             Err(error) => {
-                self.warn_pr_closure(&task.id, None, &error);
+                self.warn_pr_closure(&task.id, None, &error, warning_message);
                 return false;
             }
         };
@@ -199,7 +202,7 @@ impl OrbitRuntime {
                     if current.status == task.status && current.updated_at == task.updated_at => {}
                 Ok(_) => return true,
                 Err(error) => {
-                    self.warn_pr_closure(&task.id, None, &error);
+                    self.warn_pr_closure(&task.id, None, &error, warning_message);
                     return false;
                 }
             }
@@ -230,7 +233,7 @@ impl OrbitRuntime {
             // Without a delivery identity only accepted follower PRs can be
             // proven Orbit's; the rest stay open.
             Err(error) => {
-                self.warn_pr_closure(&task.id, None, &error);
+                self.warn_pr_closure(&task.id, None, &error, warning_message);
                 settled = false;
                 Vec::new()
             }
@@ -272,12 +275,13 @@ impl OrbitRuntime {
                             &OrbitError::Execution(format!(
                                 "pull request was closed, but recording its task history failed: {error}"
                             )),
+                            warning_message,
                         );
                         settled = false;
                     }
                 }
                 Err(error) => {
-                    self.warn_pr_closure(&task.id, Some(pr.number), &error);
+                    self.warn_pr_closure(&task.id, Some(pr.number), &error, warning_message);
                     settled = false;
                 }
             }
@@ -486,14 +490,19 @@ impl OrbitRuntime {
             .collect()
     }
 
-    fn warn_pr_closure(&self, task_id: &str, pr_number: Option<u64>, error: &OrbitError) {
+    fn warn_pr_closure(
+        &self,
+        task_id: &str,
+        pr_number: Option<u64>,
+        error: &OrbitError,
+        warning_message: &'static str,
+    ) {
         tracing::warn!(
             target: "orbit.core.pr_closure",
             task_id,
             pr = pr_number,
             error = %error,
-            "could not close an Orbit-authored pull request after the task's terminal decision; \
-             the transition stands"
+            "{warning_message}; the transition stands"
         );
     }
 }
