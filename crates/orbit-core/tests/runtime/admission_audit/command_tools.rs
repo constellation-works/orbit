@@ -561,6 +561,63 @@ fn credential_shaped_property_name_is_redacted_in_the_key_list_fallback() {
     assert_eq!(keys.len(), 5, "every member keeps one entry: {raw}");
 }
 
+fn colliding_credential_property_names_and_literal_suffixes_are_preserved_on_refusal() {
+    let _env = unmanaged_tool_env_guard();
+    let (_root, runtime, repo_root) = test_runtime();
+    let secrets = [
+        "sk-abcdefghijklmnopqrstuvwxyz012345a",
+        "sk-abcdefghijklmnopqrstuvwxyz012345b",
+        "sk-abcdefghijklmnopqrstuvwxyz012345c",
+    ];
+    let mut input = json!({
+        "argv": ["echo", "ok"],
+        "working_directory": repo_root.display().to_string(),
+        "timeout_ms": 0,
+        "model": "claude",
+    });
+    let object = input
+        .as_object_mut()
+        .expect("refusal input is a JSON object");
+    object.insert("[REDACTED_SECRET]#2".to_string(), json!("literal-two"));
+    object.insert(secrets[0].to_string(), json!("first"));
+    object.insert(secrets[1].to_string(), json!("second"));
+    object.insert(secrets[2].to_string(), json!("third"));
+    object.insert(
+        "[REDACTED_SECRET]#3".to_string(),
+        json!("literal-three-after"),
+    );
+
+    audited_exec_refusal(&runtime, input);
+
+    let raw = refused_exec_audit_arguments(&runtime);
+    for secret in secrets {
+        assert!(
+            !raw.contains(secret),
+            "colliding credential property name must not be persisted: {raw}"
+        );
+    }
+    let payload: Value = serde_json::from_str(&raw).expect("refusal arguments are JSON");
+    let recorded = payload
+        .as_object()
+        .expect("refusal arguments are recorded as a JSON object");
+    assert_eq!(
+        recorded.len(),
+        9,
+        "every colliding and literal-suffix member must be preserved: {payload}"
+    );
+    assert_eq!(recorded.get("[REDACTED_SECRET]"), Some(&json!("first")));
+    assert_eq!(
+        recorded.get("[REDACTED_SECRET]#2"),
+        Some(&json!("literal-two"))
+    );
+    assert_eq!(recorded.get("[REDACTED_SECRET]#3"), Some(&json!("second")));
+    assert_eq!(recorded.get("[REDACTED_SECRET]#4"), Some(&json!("third")));
+    assert_eq!(
+        recorded.get("[REDACTED_SECRET]#3#2"),
+        Some(&json!("literal-three-after"))
+    );
+}
+
 #[cfg(unix)]
 fn oversized_argv_reports_actionable_size_limit() {
     // [ORB-20181] E2BIG at spawn must explain the OS size limit without echoing values.
@@ -754,7 +811,8 @@ crate::scenario_table!(
     oversized_refusal_arguments_are_stored_as_top_level_key_names,
     oversized_key_name_alone_is_summarized_within_the_storage_limit,
     credential_shaped_property_name_is_redacted_on_a_refusal_row,
-    credential_shaped_property_name_is_redacted_in_the_key_list_fallback
+    credential_shaped_property_name_is_redacted_in_the_key_list_fallback,
+    colliding_credential_property_names_and_literal_suffixes_are_preserved_on_refusal
 );
 
 crate::scenario_table!(

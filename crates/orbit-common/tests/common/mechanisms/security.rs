@@ -9,11 +9,13 @@ use orbit_common::security::operator_env::{
     SecretFileError, parse_env_text, read_env_file, read_secret_file,
 };
 use orbit_common::security::redaction::{
-    is_high_confidence_single_token_credential, redact_all, redact_sensitive_env_text,
+    is_high_confidence_single_token_credential, redact_all, redact_all_json_with_keys,
+    redact_sensitive_env_text,
 };
 use orbit_common::security::release::{TrustedReleaseKey, verify_checksum_signature};
 use orbit_common::test_env::scoped;
 use orbit_types::identity::CrewEnvVar;
+use serde_json::{Value, json};
 
 fn env_names(env: &[(String, String)]) -> Vec<&str> {
     env.iter().map(|(name, _)| name.as_str()).collect()
@@ -661,5 +663,81 @@ fn tampered_manifest_fails_signature_verification() {
             .to_string()
             .contains("no trusted release signing key matched"),
         "{error}"
+    );
+}
+
+#[test]
+fn redact_all_json_with_keys_preserves_literal_suffixes_and_bounds_collision_allocations() {
+    // Warm up process-cached regexes before counting per-call allocations.
+    let _ = redact_all_json_with_keys(json!({ "sk-warmup0000000000000000000000": 1 }));
+
+    // 1. Literal suffix names before and after colliding redacted keys, plus an
+    // independent colliding prefix group (`Bearer ...`).
+    let mut mixed = serde_json::Map::new();
+    mixed.insert("[REDACTED_SECRET]#2".to_string(), json!(100));
+    mixed.insert("[REDACTED_SECRET]#4".to_string(), json!(101));
+    mixed.insert("sk-collisionkey0000000000000000a".to_string(), json!(1));
+    mixed.insert("sk-collisionkey0000000000000000b".to_string(), json!(2));
+    mixed.insert("sk-collisionkey0000000000000000c".to_string(), json!(3));
+    mixed.insert("sk-collisionkey0000000000000000d".to_string(), json!(4));
+    mixed.insert("[REDACTED_SECRET]#3".to_string(), json!(102));
+    mixed.insert("sk-collisionkey0000000000000009#3".to_string(), json!(103));
+    mixed.insert("Bearer bearercollision0000000001".to_string(), json!(201));
+    mixed.insert("Bearer bearercollision0000000002".to_string(), json!(202));
+
+    let redacted_mixed = redact_all_json_with_keys(Value::Object(mixed));
+    let obj = redacted_mixed
+        .as_object()
+        .expect("redacted result is an object");
+    assert_eq!(obj.len(), 10, "all members preserved: {obj:?}");
+    assert_eq!(obj.get("[REDACTED_SECRET]#2"), Some(&json!(100)));
+    assert_eq!(obj.get("[REDACTED_SECRET]#4"), Some(&json!(101)));
+    assert_eq!(obj.get("[REDACTED_SECRET]"), Some(&json!(1)));
+    assert_eq!(obj.get("[REDACTED_SECRET]#3"), Some(&json!(2)));
+    assert_eq!(obj.get("[REDACTED_SECRET]#5"), Some(&json!(3)));
+    assert_eq!(obj.get("[REDACTED_SECRET]#6"), Some(&json!(4)));
+    assert_eq!(obj.get("[REDACTED_SECRET]#3#2"), Some(&json!(102)));
+    assert_eq!(obj.get("[REDACTED_SECRET]#3#3"), Some(&json!(103)));
+    assert_eq!(obj.get("Bearer [REDACTED_AUTH]"), Some(&json!(201)));
+    assert_eq!(obj.get("Bearer [REDACTED_AUTH]#2"), Some(&json!(202)));
+
+    // 2. Large collision group: quadratic rescanning allocates O(k^2) suffix
+    // probes; per-name progress tracking keeps allocations within O(k),
+    // comparable to redacting the same count of distinct redacted keys.
+    const COLLISIONS: usize = 2000;
+    let mut distinct = serde_json::Map::with_capacity(COLLISIONS);
+    let mut colliding = serde_json::Map::with_capacity(COLLISIONS);
+    for i in 0..COLLISIONS {
+        distinct.insert(
+            format!("key{i:04} sk-distinctkey0000000000000000"),
+            json!(i),
+        );
+        colliding.insert(format!("sk-groupcollision000000000000{i:04}"), json!(i));
+    }
+
+    super::ALLOCATED.with(|count| count.set(Some(0)));
+    let redacted_distinct = redact_all_json_with_keys(Value::Object(distinct));
+    let distinct_allocated = super::ALLOCATED.with(|count| count.replace(None).unwrap());
+
+    super::ALLOCATED.with(|count| count.set(Some(0)));
+    let redacted_large = redact_all_json_with_keys(Value::Object(colliding));
+    let colliding_allocated = super::ALLOCATED.with(|count| count.replace(None).unwrap());
+
+    assert_eq!(
+        redacted_distinct.as_object().map(|obj| obj.len()),
+        Some(COLLISIONS)
+    );
+    let large_obj = redacted_large
+        .as_object()
+        .expect("large redacted result is an object");
+    assert_eq!(large_obj.len(), COLLISIONS);
+    assert_eq!(large_obj.get("[REDACTED_SECRET]"), Some(&json!(0)));
+    assert_eq!(
+        large_obj.get(&format!("[REDACTED_SECRET]#{COLLISIONS}")),
+        Some(&json!(COLLISIONS - 1))
+    );
+    assert!(
+        colliding_allocated <= distinct_allocated * 2,
+        "colliding member-name redaction must avoid quadratic suffix scans: {colliding_allocated} bytes vs {distinct_allocated} distinct-key bytes for {COLLISIONS} keys"
     );
 }
