@@ -126,7 +126,11 @@ rejected appear only with `--all`. `show` reports one mandate in full.
 
 `show --json` returns `state`, `state_reason`, `control`, `stalled`,
 `stalled_reason`, `mandate`, `effective_authority`, `authority`,
-`open_requests`, `latest_checkpoint` and, while a cycle is live, `live_cycle`.
+`open_requests`, `latest_checkpoint`, `latest_checkpoint_at` and, while a cycle
+is live, `live_cycle`. `latest_checkpoint` is the latest checkpoint's complete
+record, unchanged and with no time field, or null. Its `cycle` names the cycle
+the record belongs to, not the time it was written. `latest_checkpoint_at` is that checkpoint comment's write time,
+a top-level field, and is null when the mandate has no checkpoint.
 `mandate_error` or `authority_error` appears when that record cannot be read.
 `list --json` adds each mandate's deadline, authority revision and `stalled`
 flag.
