@@ -2,7 +2,7 @@
 type: context
 summary: Bound test synchronization, reap every spawned child on every exit path, and contain descendants at the sandbox as a separate layer.
 created_date: 2026-09-06
-last_validated: 2026-10-29
+last_validated: 2026-11-23
 ---
 
 # L03. The September 2026 Test Fixture Fork Storm
