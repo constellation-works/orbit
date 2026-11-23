@@ -210,9 +210,21 @@ of its actions is enabled.
 With no role and no `--operator`, and with no `machine.mcp.role`, a server
 lists `core`, `tasks-read`, `tasks-write`, and `search`. `--operator` with no
 `--role` serves the operator role. The name `default` stands for that set, and
-`all` enables every toolset. Add toolsets for one server with `--toolset`, or
-for every server on the host with the global `machine.mcp.toolsets` key. The
-flag replaces the key.
+`all` enables every toolset. `--toolset` adds the named toolsets to the role, or
+to that default set when no role applies.
+
+The global `machine.mcp.toolsets` key is the default toolset list for
+`orbit mcp serve` launches on the host. It is added to the role's toolsets, or
+to the default set, for operator and agent sessions alike. Three cases decide
+which list a server uses:
+
+- Outside a managed run, a server with no `--toolset` uses
+  `machine.mcp.toolsets`.
+- An explicit `--toolset` replaces `machine.mcp.toolsets` for that server. The
+  role's toolsets still apply, so with `pipelines` set on the host,
+  `orbit mcp serve --operator --toolset ui` does not enable `pipelines`.
+- A managed server, one Orbit starts for a run, uses the selection Orbit stamped
+  for that run. Neither `machine.mcp.toolsets` nor `--toolset` changes it.
 
 ```bash
 orbit mcp serve --toolset experiments,analytics
@@ -240,8 +252,10 @@ orbit mcp serve --operator \
   --toolset automation,codebase,pipelines,task-triage,ui
 ```
 
-For every server on the host, include them in
-`machine.mcp.toolsets`; that setting applies to all MCP servers on the host.
+For every server on the host, include them in `machine.mcp.toolsets`. Each
+launch that passes no `--toolset` then gets them, agent sessions included; a
+managed run does not. A server started with its own `--toolset` needs the names
+in that flag.
 
 ### If a call returns `toolset_not_enabled`
 
