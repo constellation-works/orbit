@@ -1146,7 +1146,7 @@ def restore_root(snapshot: Path, into: Path, manifest: dict | None = None) -> di
         manifest = verify_snapshot(snapshot)
     common.require_absent_or_empty(into)
     common.disk_gate(into)
-    into.mkdir(parents=True)
+    into.mkdir(parents=True, exist_ok=True)
     try:
         return _populate_root(snapshot, into, manifest)
     except BaseException:

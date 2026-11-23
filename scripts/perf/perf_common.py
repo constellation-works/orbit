@@ -264,7 +264,7 @@ class CreatedDirs:
 
     def create(self, path: Path, *, output: bool = False) -> Path:
         disk_gate(path)
-        path.mkdir(parents=True)
+        path.mkdir(parents=True, exist_ok=True)
         self.paths.append(path)
         if output:
             self.keep_on_success.add(path)
@@ -292,8 +292,6 @@ class CreatedDirs:
 def require_absent_or_empty(path: Path) -> None:
     if path.exists() and (not path.is_dir() or any(path.iterdir())):
         raise PerfRefusal(f"{path} already exists and is not empty")
-    if path.exists():
-        path.rmdir()
 
 
 def json_text(value) -> str:
