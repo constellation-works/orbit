@@ -179,7 +179,8 @@ everything for debugging.
   base, is that case. Time it only after a change that produces a different binary.
   Until then the evidence is the diff plus the perf script tests
   (`python3 -I scripts/perf/test_paired_cli.py`,
-  `python3 -I scripts/perf/test_fixture_cli.py`, and
+  `python3 -I scripts/perf/test_fixture_cli.py`,
+  `python3 -I scripts/perf/test_perf_common_cli.py`, and
   `python3 -I scripts/perf/test_build_pair_worktree.py` when `build-pair.sh` itself
   changes). Do not pass the same commit twice to get past the refusal, and do not
   delete the check: the candidate would silently measure the baseline.

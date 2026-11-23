@@ -336,11 +336,17 @@ def _run_in_lane(entry: str, wait_seconds: float, command: list[str]) -> int:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Perf host guards for shell entry points.")
     commands = parser.add_subparsers(dest="command", required=True)
-    for name, helptext in (
-        ("disk-gate", "refuse when the filesystem that will hold TARGET is at or above 80%%"),
-        ("require-absent-or-empty", "refuse a non-empty PATH"),
+    for name, helptext, detail in (
+        ("disk-gate", "refuse when the filesystem that will hold TARGET is at or above 80%%", None),
+        (
+            "require-absent-or-empty",
+            "refuse a non-empty PATH",
+            "Refuse PATH when it exists and is not an empty directory. "
+            "An absent or empty PATH is accepted and left unchanged.",
+        ),
     ):
-        sub = commands.add_parser(name, help=helptext)
+        # `help` is the parent listing; `description` is the subcommand's own --help.
+        sub = commands.add_parser(name, help=helptext, description=detail)
         sub.add_argument("--entry", required=True, help="script name, prefixed to a refusal")
         sub.add_argument("path", type=Path)
     lane = commands.add_parser("lane-exec", help="run COMMAND while holding the host-wide lane")
