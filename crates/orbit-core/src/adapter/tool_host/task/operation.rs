@@ -30,15 +30,13 @@ use super::super::json::{
 use super::write::{TaskWriteOutput, write_response_fields};
 
 /// Run one migrated task verb. A write also answers the id it persisted, for
-/// the redaction audit. `resident_cycle_admitted` says the resident cycle guard
-/// ledgered this call for a live cycle holding the right the verb needs; it
-/// replaces the operator check only for the verbs a resident's `dispatch`
-/// right covers (`repilot`, `requeue`).
+/// the redaction audit. A resident action key comes from the authenticated
+/// broker and records that the live cycle held the right this write needs.
 pub(in crate::adapter::tool_host) fn dispatch(
     runtime: &OrbitRuntime,
     caller: ToolCaller<'_>,
     operator: bool,
-    resident_cycle_admitted: bool,
+    resident_action_key: Option<&str>,
     verb: TaskVerb,
     input: Value,
 ) -> Result<(Value, Option<String>), OrbitError> {
@@ -50,6 +48,7 @@ pub(in crate::adapter::tool_host) fn dispatch(
     }
     // Re-wraps the input the tool entry already parsed; see `parse_input`.
     let input = verb.spec().parse_input(input)?;
+    let resident_cycle_admitted = resident_action_key.is_some();
     let read = |value: Result<Value, OrbitError>| value.map(|value| (value, None));
     let written = |output: Result<TaskWriteOutput, OrbitError>| {
         output.map(|output| (output.response, Some(output.persisted_id)))
@@ -161,6 +160,28 @@ pub(in crate::adapter::tool_host) fn dispatch(
             } else {
                 runtime.requeue_blocked_task(&id, &reason, discard)?
             };
+            Ok((response, Some(id)))
+        }
+        TaskVerb::ResumeDelivery => {
+            let key = resident_action_key.ok_or_else(|| {
+                OrbitError::CapabilityDenied(
+                    "delivery recovery requires an authenticated resident cycle".into(),
+                )
+            })?;
+            let id = input.required_string("id")?;
+            let run_id = input.required_string("run_id")?;
+            let diagnosis = input.required_string("diagnosis")?;
+            let actor = orbit_types::identity::require_canonical_agent_family(
+                caller.agent.as_deref(),
+                caller.model.as_deref(),
+            )?
+            .ok_or_else(|| {
+                OrbitError::CapabilityDenied(
+                    "delivery recovery requires the cycle run's agent identity".into(),
+                )
+            })?;
+            let response =
+                runtime.submit_resident_delivery_recovery(&id, &run_id, &diagnosis, key, &actor)?;
             Ok((response, Some(id)))
         }
         TaskVerb::BlockTriage => block_triage(runtime, caller, &input),

@@ -19,8 +19,8 @@ use orbit_types::task::TASK_SHOW_DELIVERY_FIELD;
 use orbit_types::tool::{McpIdRouteDeclaration, McpToolScope};
 
 use super::lifecycle_operations::{
-    BLOCK_TRIAGE, DELETE, RECONCILE_REVIEW, RECOVER_CLAIM, REJECT, REPILOT, REQUEUE, RETRY_HANDOFF,
-    REVIEW_RESET, REVOKE_HANDOFF,
+    BLOCK_TRIAGE, DELETE, RECONCILE_REVIEW, RECOVER_CLAIM, REJECT, REPILOT, REQUEUE,
+    RESUME_DELIVERY, RETRY_HANDOFF, REVIEW_RESET, REVOKE_HANDOFF,
 };
 use super::nested_operations::{
     ARTIFACT_GET, ARTIFACT_PUT, LOCKS_LIST, LOCKS_RELEASE, LOCKS_RESERVE,
@@ -77,6 +77,8 @@ operation_registry! {
         /// Requeue a blocked task onto its published candidate, as an
         /// operator decision.
         Requeue => REQUEUE,
+        /// Continue a blocked delivery in a bounded recovery leaf.
+        ResumeDelivery => RESUME_DELIVERY,
         /// Explicitly request one new task-pilot assessment.
         Repilot => REPILOT,
         /// Read escalated blocks awaiting triage, or record one triage

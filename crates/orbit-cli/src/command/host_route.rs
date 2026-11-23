@@ -708,6 +708,7 @@ fn task_call(command: &TaskSubcommand, holder: &HostEntry) -> Result<RoutedCall,
                 render: Render::Requeue,
             },
             TaskVerb::RetryHandoff
+            | TaskVerb::ResumeDelivery
             | TaskVerb::RecoverClaim
             | TaskVerb::RevokeHandoff
             | TaskVerb::LocksList

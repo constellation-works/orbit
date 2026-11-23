@@ -64,7 +64,7 @@ currently refused, and the calls each caller class made in the current window.
 ### Resident tools
 
 `orbit.resident.grant` widens or narrows a resident mandate's authority: its
-rights (`dispatch`, `promote`, `merge`, `plugin_upgrade`, `refresh`) and covered workspaces.
+rights (`dispatch`, `promote`, `merge`, `plugin_upgrade`, `refresh`, `recover`) and covered workspaces.
 
 - **Widening** (`add`, `workspaces`) is the human's. From an operator it applies
   at once. From any other caller it changes nothing and raises one

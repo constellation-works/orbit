@@ -190,7 +190,11 @@ impl OrbitRuntime {
         #[cfg(unix)]
         let resident_call = (crate::runtime::plugin::broker::is_brokered_resident_tool(name)
             || crate::runtime::plugin::broker::is_brokered_resident_completion(name, &input))
-            && self.env_names_resident_cycle();
+            && (self.env_names_resident_cycle()
+                || (name
+                    == crate::runtime::plugin::broker::BROKERED_RESIDENT_RESUME_DELIVERY_TOOL
+                    && crate::runtime::run_input::managed_run_context_run_id_from_env()
+                        .is_some_and(|run_id| self.is_live_resident_cycle_run(&run_id))));
         #[cfg(unix)]
         if let Some(socket) = std::env::var_os("ORBIT_PLUGIN_BROKER")
             && session_context.application.is_none()

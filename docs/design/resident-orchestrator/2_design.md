@@ -88,14 +88,17 @@ not the prompt.
 - **Rights.** `dispatch` (start or requeue leaf runs and drains), `promote` (move a `proposed` task
   to `backlog`, where the drain can admit it), `merge` (land a reviewed PR), `plugin_upgrade`
   (install or upgrade a workspace plugin), `refresh` (merge the base tip into a held or review
-  delivery PR and start its required checks, when the merge is conflict-free). Task-pilot
-  assessment is a separate gate: it can assess
+  delivery PR and start its required checks, when the merge is conflict-free), and `recover`
+  (start a review-only recovery of a stopped delivery's preserved candidate). Task-pilot assessment
+  is a separate gate: it can assess
   eligible `proposed` or `backlog` tasks. Reading, commenting, filing `proposed` tasks, filing
   friction records in the mandate's own workspace, updating friction records in any covered
   workspace (without moving them via `rehome_to`), and checkpointing need no right. Anything not
   listed (releases, tags, publishing, host changes, config edits, secrets) is not grantable to a
   resident in v1.
-- **Scope.** A list of covered workspaces. A tool call naming a workspace outside the list is refused. Inside the list, only `orbit.friction` action `update` (without `rehome_to` or `move`) may name another covered workspace for a write; every other write stays in the mandate's own workspace.
+- **Scope.** A list of covered workspaces. A tool call naming a workspace outside the list is
+  refused. Friction updates and delivery recovery may also write in another covered workspace on
+  the same host; every other write stays in the mandate's own workspace.
 - **Enforcement.** The cycle's tool grant is computed from the authority at cycle start and frozen
   for the cycle, like a dispatched attempt's [granted tools](../granted-tools/1_scope.md). A right the
   mandate lacks is a tool the cycle cannot call; a workspace outside scope fails the call in core.
@@ -122,6 +125,27 @@ not the prompt.
   ([4_decisions.md](./4_decisions.md#narrowing-is-free-widening-needs-the-human)).
 - **What always goes to the human.** Product scope, architecture, security, material cost, and
   anything beyond the mandate. [§8](#8-escalation) lists the classes.
+
+### 3.1 Recover a preserved delivery
+
+With `recover`, the cycle calls `orbit.task.recover` action `resume_delivery` for a blocked
+task and its exact stopped, failed or held delivery run. The host authenticates the published
+candidate, records the cycle's action key, and admits a separate recovery leaf. The leaf
+continues the preserved changes on the current base and updates the same PR through Orbit's
+ordinary publication gates. It runs current candidate validation and review, and returns the
+task for handoff. The cycle acts through Orbit tools from a read-only checkout. The recovery
+leaf makes all source changes. Landing a changed head still requires `land` under `merge`,
+with review evidence and branch protection checks current on that head.
+
+The operator retains decision answers, claim recovery, review resets and reconciliation, handoff
+retry and revocation, and general source-repair submission and reconciliation. An open
+final-recovery request permits recovery only when every offered answer is explicitly routine or
+reversible and the request requires no separate human action. Other open requests, unknown risk
+and irreversible options hold recovery. Starting a leaf never records a decision answer.
+
+A cycle can attempt one recovery. A task can reserve one resident recovery per rolling 24 hours
+across all mandates. Each reservation permits at most 120 minutes of agent slot time, using one
+shared deadline from admission. The task's usual source-repair and review budgets still apply.
 
 ## 4. Lifecycle
 

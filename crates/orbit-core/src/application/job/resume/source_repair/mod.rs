@@ -13,6 +13,7 @@ mod proof;
 mod publication;
 mod published_owner;
 mod reconciliation;
+mod resident;
 mod resumed_recovery;
 mod successor;
 

@@ -72,6 +72,18 @@ fn admit(
     let Some(run) = runtime.stores().jobs().get_job_run(run_id)? else {
         return Ok(skipped("the run does not exist"));
     };
+    if run
+        .input
+        .as_ref()
+        .and_then(|input| input.get(orbit_types::workflow::SOURCE_REPAIR_KEY))
+        .and_then(|admission| admission.get("authorizer_provenance"))
+        .and_then(serde_json::Value::as_str)
+        == Some(orbit_types::workflow::RESIDENT_SOURCE_REPAIR_PROVENANCE)
+    {
+        return Ok(skipped(
+            "resident recovery already used this leaf's recovery attempt",
+        ));
+    }
     let observed = if runtime.claimed_leaf_admission(run_id)?.is_some() {
         None
     } else {

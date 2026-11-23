@@ -19,6 +19,7 @@
 use std::collections::BTreeSet;
 
 use chrono::Utc;
+use orbit_common::governance::{operation::OperationVerb, task::TaskVerb};
 use orbit_common::{NotFoundKind, OrbitError};
 use orbit_types::task::TaskHistoryEntry;
 use orbit_types::workflow::{
@@ -77,6 +78,12 @@ impl std::fmt::Debug for ResidentActionTicket {
             .field("task_id", &self.task_id)
             .field("row", &self.row)
             .finish()
+    }
+}
+
+impl ResidentActionTicket {
+    pub(crate) fn resident_action_key(&self) -> &str {
+        &self.row.key
     }
 }
 
@@ -210,6 +217,51 @@ fn require_right(
 }
 
 impl OrbitRuntime {
+    /// Route a brokered recovery to the named, covered owner on this host.
+    /// Check the home grant before opening any other workspace.
+    pub(crate) fn resident_recovery_workspace(
+        &self,
+        run_id: &str,
+        input: &Value,
+    ) -> Result<Self, OrbitError> {
+        let Some(selector) = input.get("workspace").and_then(Value::as_str) else {
+            return Ok(self.clone());
+        };
+        let (home_ids, grant) = self
+            .live_cycle_home_grant_local(run_id)
+            .ok_or_else(|| refused("resident_cycle_stale", "no live resident cycle"))?;
+        let in_home = !self.resident_workspace_ids(selector).is_disjoint(&home_ids);
+        let allowed = self.covered_workspaces_from_grant(home_ids, &grant);
+        self.ensure_named_workspaces_in_scope(&allowed, input)?;
+        require_right(
+            &grant,
+            TaskVerb::ResumeDelivery.tool_name(),
+            ResidentRight::Recover,
+        )?;
+        if in_home {
+            return Ok(self.clone());
+        }
+        let catalog = self
+            .workspace_catalog()
+            .ok_or_else(|| refused("resident_scope_refused", "no registered workspace catalog"))?;
+        let targets =
+            catalog.resolve_scope(&WorkspaceScope::Selectors(vec![selector.to_string()]))?;
+        let [target] = targets.as_slice() else {
+            return Err(refused(
+                "resident_scope_refused",
+                "recovery requires one local owner workspace",
+            ));
+        };
+        if !allowed.contains(&target.workspace_id) {
+            return Err(refused(
+                "resident_scope_refused",
+                format!("workspace `{selector}` is outside the resident mandate's authority"),
+            ));
+        }
+        let runtime = Self::from_kernel(catalog.open(target)?);
+        Ok(runtime.with_workspace_catalog(catalog.clone()))
+    }
+
     /// Locate the registered workspace holding `run_id` as a
     /// `resident_cycle_pipeline` run when `self` does not hold it.
     fn resident_cycle_home_target(&self, run_id: &str) -> Option<FederatedWorkspaceTarget> {
@@ -437,7 +489,9 @@ impl OrbitRuntime {
                     let Some(target) = self.resident_cycle_home_target(run_id) else {
                         return Ok(ResidentCallAdmission::Proceed);
                     };
-                    if tool != RESIDENT_FRICTION_UPDATE_TOOL {
+                    if tool != RESIDENT_FRICTION_UPDATE_TOOL
+                        && tool != TaskVerb::ResumeDelivery.tool_name()
+                    {
                         return Err(refused(
                             "resident_scope_refused",
                             "a resident cycle writes only through its mandate's own workspace",
@@ -676,7 +730,16 @@ impl OrbitRuntime {
         self.stores()
             .tasks()
             .with_task_write_lock(task_id, &mut || {
-                let next = action_rows(&self.get_task_history(task_id)?, &grant.cycle).len() + 1;
+                let rows = action_rows(&self.get_task_history(task_id)?, &grant.cycle);
+                if tool == TaskVerb::ResumeDelivery.tool_name()
+                    && rows.iter().any(|row| row.tool == tool)
+                {
+                    return Err(refused(
+                        "resident_recovery_limit",
+                        "this cycle already attempted delivery recovery",
+                    ));
+                }
+                let next = rows.len() + 1;
                 row.key = format!("resident:{task_id}:{}:{next}", grant.cycle);
                 self.append_resident_action_row(task_id, &row)
             })?;

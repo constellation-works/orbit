@@ -223,9 +223,8 @@ fn unclassified_id_addressing_builtin_fails_closed_in_this_target() {
 
 #[test]
 fn every_builtin_id_route_is_declared_and_preserves_the_former_tables() {
-    // The pre-change hand-kept tables, duplicates removed, are the baseline:
-    // every one of these tools must keep its classification and, for
-    // workspace-local tools, its reason string verbatim.
+    // Preserve the route tables and the workspace-local reason strings.
+    // New ID-routed operations also declare their expected route here.
     let task_routed = [
         "orbit.task.show",
         "orbit.task.update",
@@ -237,6 +236,7 @@ fn every_builtin_id_route_is_declared_and_preserves_the_former_tables() {
         "orbit.task.review_reset",
         "orbit.task.reconcile_review",
         "orbit.task.requeue",
+        "orbit.task.resume_delivery",
     ];
     for name in task_routed {
         assert_eq!(

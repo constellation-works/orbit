@@ -2,16 +2,14 @@
 //! `orbit.task.recover` (ORB-25959). Both were refused `capability_denied`
 //! whatever the grant, because the operator row ran before the cycle guard, so
 //! every re-pilot or requeue a resident needed became an escalation. The guard
-//! that admits a cycle's ship now decides these two actions; every other
-//! operator-only recover, run and pipeline tool stays refused.
+//! that admits a cycle's ship also decides these actions and the separate
+//! `recover` right's `resume_delivery` action.
 
 use orbit_engine::{RuntimeHost, TaskAutomationUpdate};
 
 use super::*;
 
-/// `orbit.task.recover` actions other than `repilot` and `requeue`, and the
-/// run and pipeline tools the `dispatch` row of the spec lists, with an input
-/// each would otherwise accept.
+/// Operator recovery, run and pipeline tools outside the resident grant.
 fn operator_only_calls(task: &str, run: &str, workspace: &str) -> Vec<(&'static str, Value)> {
     vec![
         (
@@ -313,4 +311,154 @@ fn environment_only_cycle_cannot_exercise_operator_rights() {
         }
     });
     assert_eq!(fx.runtime.get_task_history(&mandate).unwrap(), history);
+}
+
+#[cfg(unix)]
+#[test]
+fn delivery_recovery_refuses_missing_right_scope_and_irreversible_decisions() {
+    use orbit_types::task::{
+        DecisionAction, DecisionAnswer, DecisionBinding, DecisionGate, DecisionOption,
+        DecisionRequest, DecisionRequestState, DecisionRiskTier,
+    };
+
+    if !super::super::dispatch_admission::isolated(
+        "resident_cycle::recover::delivery_recovery_refuses_missing_right_scope_and_irreversible_decisions",
+    ) {
+        return;
+    }
+    let mut fx = fixture();
+    let (other_workspace, other_runtime, _keep_other) =
+        super::friction_update::add_host_workspace(&mut fx);
+    let task = blocked_task(&fx, "Delivery requires a human decision");
+    let workspace = fx.runtime.workspace_id().unwrap();
+    let request_call =
+        |workspace: &str| {
+            fx.agent_call("orbit.task.resume_delivery", json!({
+            "id": task, "run_id": "jrun-unobserved", "diagnosis": "Repair the preserved change",
+            "workspace": workspace
+        }))
+        };
+    let limited = fx.mandate(&task);
+    fx.grant(&limited, &["dispatch", "refresh"]);
+    let run = fx.cycle_run(&limited, "limited-recovery");
+    fx.begin_cycle(&run, Utc::now());
+    fx.as_brokered_cycle(&limited, &run, || {
+        let error = request_call(&workspace).unwrap_err();
+        assert!(error.contains("resident_right_refused"), "{error}");
+    });
+
+    let mandate = fx.mandate(&task);
+    fx.grant(&mandate, &["recover"]);
+    let run = fx.cycle_run(&mandate, "authorized-recovery");
+    fx.begin_cycle(&run, Utc::now());
+    let episode = fx
+        .runtime
+        .get_task_history(&task)
+        .unwrap()
+        .into_iter()
+        .rfind(|entry| entry.to_status == Some(TaskStatus::Blocked))
+        .unwrap();
+    let mut reject = DecisionAnswer::plain("reject", "Reject the task", "End the delivery");
+    reject.option = Some(DecisionOption {
+        summary: "Reject the task".into(),
+        rewrite: None,
+        action: Some(DecisionAction::Reject),
+    });
+    let request = DecisionRequest::new(
+        task.clone(),
+        DecisionGate::BlockTriage,
+        vec![reject],
+        DecisionBinding::BlockEpisode {
+            episode: episode
+                .at
+                .to_rfc3339_opts(chrono::SecondsFormat::Nanos, true),
+        },
+        "final_recovery".into(),
+        Utc::now(),
+    );
+    assert_eq!(request.answers[0].risk_tier, DecisionRiskTier::Irreversible);
+    fx.runtime
+        .stores()
+        .task_history()
+        .update_task_history(
+            &task,
+            orbit_store::contracts::TaskHistoryUpdateParams {
+                actor: "system".into(),
+                append_history: vec![request.history_entry("system")],
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    fx.as_brokered_cycle(&mandate, &run, || {
+        let error = request_call(&other_workspace).unwrap_err();
+        assert!(error.contains("resident_scope_refused"), "{error}");
+        let error = fx
+            .agent_call(
+                "orbit.decision.answer",
+                json!({"id": request.id, "answer": "reject"}),
+            )
+            .unwrap_err();
+        assert!(
+            error.contains("inactive on the agent tool surface"),
+            "{error}"
+        );
+        let error = request_call(&workspace).unwrap_err();
+        assert!(
+            error.contains("resident_recovery_decision_refused"),
+            "{error}"
+        );
+        let error = request_call(&workspace).unwrap_err();
+        assert!(error.contains("resident_recovery_limit"), "{error}");
+    });
+    let requests = fx.runtime.get_task_decision_requests(&task).unwrap();
+    let still_open = requests.iter().find(|item| item.id == request.id).unwrap();
+    assert_eq!(still_open.state, DecisionRequestState::Open);
+    assert!(still_open.resolution.is_none());
+    assert_eq!(
+        fx.runtime.get_task(&task).unwrap().status,
+        TaskStatus::Blocked
+    );
+
+    // A second mandate covers the other workspace. Its recovery reaches the
+    // exact target there and accounts for the attempt on the home mandate.
+    let foreign_task = other_runtime
+        .add_task(TaskAddParams {
+            title: "Foreign workspace's held task".into(),
+            ..Default::default()
+        })
+        .unwrap()
+        .id;
+    other_runtime
+        .apply_task_automation_update(
+            &foreign_task,
+            TaskAutomationUpdate {
+                status: Some(TaskStatus::Blocked),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    let covered = super::friction_update::multi_workspace_mandate(
+        &fx,
+        &task,
+        &[&workspace, &other_workspace],
+        &["recover"],
+    );
+    let run = fx.cycle_run(&covered, "covered-workspace-recovery");
+    let brief = fx.begin_cycle(&run, Utc::now());
+    fx.as_brokered_cycle(&covered, &run, || {
+        let refusal = call(
+            &other_runtime,
+            "orbit.task.resume_delivery",
+            json!({
+                "id": foreign_task, "run_id": "jrun-unobserved",
+                "workspace": other_workspace, "diagnosis": "Continue the held delivery",
+            }),
+            McpCapability::Agent,
+        )
+        .unwrap_err();
+        assert!(refusal.contains("source run missing"), "{refusal}");
+    });
+    let row = fx.latest_action_row(&covered, brief["cycle"].as_str().unwrap());
+    assert_eq!(row.tool, "orbit.task.resume_delivery");
+    assert_eq!(row.subject.as_deref(), Some(foreign_task.as_str()));
 }

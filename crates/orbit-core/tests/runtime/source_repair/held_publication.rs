@@ -7,7 +7,11 @@ fn held_completion_fixture() -> Fixture {
 }
 
 fn held_completion_fixture_with(code: DeliveryRefusal) -> Fixture {
-    let mut f = Fixture::new();
+    held_completion_fixture_with_policy(code, "none")
+}
+
+fn held_completion_fixture_with_policy(code: DeliveryRefusal, timing: &str) -> Fixture {
+    let mut f = Fixture::with_policy(timing);
     f.source.state = JobRunState::Held;
     f.runtime
         .sqlite_store()
@@ -745,6 +749,196 @@ fn held_run_outside_the_task_lineage_is_still_refused_as_unbound() {
     );
 }
 
+fn resident_starts_preserved_delivery_on_current_base() {
+    use crate::resident_cycle::{call, resident_test_broker};
+    use orbit_core::application::task::{TaskAddParams, TaskUpdateParams};
+    use orbit_core::runtime::plugin::broker::{ForwardCallError, forward_call_with_status};
+    use orbit_engine::PluginBrokerHandle;
+    use orbit_types::task::TaskArtifact;
+    use orbit_types::tool::McpCapability;
+    use orbit_types::workflow::{SOURCE_REPAIR_KEY, SourceRepairAdmission};
+
+    let f = held_completion_fixture_with_policy(
+        DeliveryRefusal::CheckEvidenceInconclusive,
+        "before-pr",
+    );
+    let block = || {
+        f.runtime
+            .apply_task_automation_update(
+                &f.task,
+                TaskAutomationUpdate {
+                    status: Some(TaskStatus::Blocked),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+    };
+    block();
+    git(&f.repo, &["checkout", "-q", "main"]);
+    std::fs::write(f.repo.join("current-base.txt"), "new current base\n").unwrap();
+    git(&f.repo, &["add", "current-base.txt"]);
+    git(
+        &f.repo,
+        &["commit", "-qm", "advance after held publication"],
+    );
+    git(&f.repo, &["push", "-q", "origin", "main"]);
+    let current_base = git(&f.repo, &["rev-parse", "HEAD"]);
+    let workspace = f.runtime.workspace_id().unwrap();
+    let make_cycle = || {
+        let mandate = f
+            .runtime
+            .add_task(TaskAddParams {
+                title: "[orchestration]: exercise preserved delivery recovery".into(),
+                tags: vec!["resident".into()],
+                ..Default::default()
+            })
+            .unwrap()
+            .id;
+        f.runtime
+            .update_task_as_human(
+                &mandate,
+                TaskUpdateParams {
+                    upsert_artifacts: vec![TaskArtifact::from_text(
+                        "resident/mandate.json",
+                        json!({
+                            "schema": "resident.mandate/v1",
+                            "goal": "Recover the held delivery",
+                            "exit_criteria": ["The candidate passes review"],
+                            "workspaces": [workspace],
+                            "watch": {"tasks": [f.task]},
+                            "crew": "fixture",
+                            "cadence": {"heartbeat_minutes": 120}
+                        })
+                        .to_string(),
+                    )],
+                    ..Default::default()
+                },
+                "human:operator".into(),
+            )
+            .unwrap();
+        call(
+            &f.runtime,
+            "orbit.resident.grant",
+            json!({"task_id": mandate, "add": ["recover"], "workspaces": [workspace]}),
+            McpCapability::Operator,
+        )
+        .unwrap();
+        let run = f
+            .runtime
+            .insert_job_run(
+                "resident_cycle_pipeline",
+                1,
+                Utc::now(),
+                Some(json!({"task_ids": [mandate]})),
+                None,
+            )
+            .unwrap();
+        f.runtime
+            .begin_resident_cycle(&run.run_id, Utc::now())
+            .unwrap();
+        let broker = resident_test_broker(&f.runtime, &mandate, &run.run_id);
+        (mandate, broker)
+    };
+    let recover = |broker: &orbit_core::runtime::plugin::broker::PluginBroker| {
+        forward_call_with_status(
+            broker.socket_path(),
+            "orbit.task.resume_delivery",
+            json!({
+                "id": f.task, "run_id": f.source.run_id, "workspace": workspace,
+                "diagnosis": "Finish the preserved compiler repair on the current base",
+            }),
+            &std::env::current_dir().unwrap(),
+            Some(&workspace),
+            "mcp",
+        )
+        .map_err(|error| match error {
+            ForwardCallError::CallerAudit(error) | ForwardCallError::BrokerAudit(error) => error,
+        })
+    };
+    let (mandate, broker) = make_cycle();
+    let admitted = recover(&broker).unwrap_or_else(|error| panic!("{error:?}"));
+    let id = admitted["run_id"].as_str().unwrap();
+    assert_eq!(admitted["retry_source_run_id"], f.source.run_id);
+    assert_eq!(admitted["completion"], "review");
+    let key = admitted["resident_action_key"].as_str().unwrap();
+    assert!(
+        key.starts_with(&format!("resident:{mandate}:")),
+        "{admitted}"
+    );
+    let run = f.runtime.show_job_run_observed(id).unwrap();
+    let input = run.input.unwrap();
+    let reservation: SourceRepairAdmission =
+        serde_json::from_value(input[SOURCE_REPAIR_KEY].clone()).unwrap();
+    assert_eq!(reservation.request_key, key);
+    assert!(reservation.review.gates_pr());
+    assert!(reservation.resident_repair_deadline().is_some());
+    assert_eq!(input["completion"], "review");
+    assert_eq!(input["auto_fix"], false);
+
+    let refused = recover(&broker).unwrap_err();
+    assert!(
+        format!("{refused:?}").contains("resident_recovery_limit"),
+        "{refused:?}"
+    );
+    f.wait(id);
+    f.start_actions(id);
+    let setup = f.action("worktree_setup", json!({
+        "job_run_id": id, "run_id": id, "task_ids": [f.task], "base": "main", "base_sync": "remote",
+    }));
+    let checkout = PathBuf::from(setup["workspace_path"].as_str().unwrap());
+    assert_eq!(setup["base_sha"], current_base);
+    let resumed = f.action(
+        "candidate_resume",
+        json!({
+            "job_run_id": id, "task_ids": [f.task], "workspace_path": checkout,
+            "base_sha": setup["base_sha"], "prior_job_run_id": f.source.run_id,
+        }),
+    );
+    assert_eq!(resumed["source_sha"], f.head);
+    assert_eq!(resumed["reused_branch"], f.branch);
+    assert_eq!(resumed["prior_pull_request"], "17");
+    assert_eq!(resumed["implement"], true);
+    assert_eq!(
+        resumed["repair"]["failed_step_id"],
+        "resident_source_repair"
+    );
+    assert!(checkout.join("current-base.txt").is_file());
+    assert_eq!(
+        std::fs::read_to_string(checkout.join("source.txt")).unwrap(),
+        "candidate needing repair\n"
+    );
+    std::fs::write(
+        checkout.join("source.txt"),
+        "candidate repaired on the current base\n",
+    )
+    .unwrap();
+    f.action(
+        "git_commit",
+        json!({
+            "job_run_id": id, "scope": "all", "workspace_path": checkout,
+            "base_sha": setup["base_sha"], "base_ref": setup["base_ref"],
+        }),
+    );
+    let validated = f.action(
+        "candidate_validate",
+        json!({
+            "job_run_id": id, "completed_task_ids": [f.task], "workspace_path": checkout,
+            "base_sha": setup["base_sha"], "base_ref": setup["base_ref"],
+        }),
+    );
+    assert_eq!(validated["decision"], "passed");
+    assert_ne!(git(&checkout, &["rev-parse", "HEAD"]), f.head);
+    f.assert_original();
+
+    block();
+    let (_, other_mandate) = make_cycle();
+    let refused = recover(&other_mandate).unwrap_err();
+    assert!(
+        format!("{refused:?}").contains("resident_recovery_limit"),
+        "{refused:?}"
+    );
+}
+
 crate::scenario_table!(
     held_publication_source_repair,
     published_completion_hold_starts_repair_at_published_head,
@@ -756,4 +950,5 @@ crate::scenario_table!(
     held_auto_fix_handback_with_spent_budget_refuses_as_budget_exhausted,
     held_owner_refused_while_its_handback_is_newer_names_the_handback,
     held_run_outside_the_task_lineage_is_still_refused_as_unbound,
+    resident_starts_preserved_delivery_on_current_base,
 );

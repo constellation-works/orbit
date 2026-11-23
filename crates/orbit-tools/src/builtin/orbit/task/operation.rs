@@ -8,7 +8,9 @@
 //! contract and schema conditionals, and `update` refuses an implementation
 //! activity's `blocked` status before any field check. The operator review
 //! and recovery verbs refuse a managed run before any field check, except a
-//! resident cycle's `repilot` and `requeue`, which its cycle guard decides.
+//! resident cycle’s brokered recovery actions, which its cycle guard decides.
+//! `resume_delivery` also checks its declared input shape before refusing a
+//! call without that broker.
 
 use orbit_common::OrbitError;
 use orbit_common::governance::operation::OperationInput;
@@ -149,6 +151,9 @@ impl GuardedModes for TaskVerb {
             TaskVerb::Requeue => {
                 managed_run_refusal(ctx, "managed agents cannot requeue blocked tasks")
             }
+            TaskVerb::ResumeDelivery => Some(Err(OrbitError::CapabilityDenied(
+                "delivery recovery requires an authenticated resident cycle".into(),
+            ))),
             TaskVerb::Show
             | TaskVerb::List
             | TaskVerb::Eligible
@@ -161,6 +166,10 @@ impl GuardedModes for TaskVerb {
             | TaskVerb::Reject
             | TaskVerb::Delete => None,
         }
+    }
+
+    fn preempt_after_input_check(self) -> bool {
+        matches!(self, TaskVerb::ResumeDelivery)
     }
 
     fn normalize_input(self, input: &mut Value) {
@@ -180,6 +189,7 @@ impl GuardedModes for TaskVerb {
             | TaskVerb::ReviewReset
             | TaskVerb::Repilot
             | TaskVerb::Requeue
+            | TaskVerb::ResumeDelivery
             | TaskVerb::BlockTriage
             | TaskVerb::ReconcileReview
             | TaskVerb::RetryHandoff
@@ -268,6 +278,7 @@ impl GuardedModes for TaskVerb {
             | TaskVerb::ReviewReset
             | TaskVerb::Repilot
             | TaskVerb::Requeue
+            | TaskVerb::ResumeDelivery
             | TaskVerb::BlockTriage
             | TaskVerb::ReconcileReview
             | TaskVerb::RetryHandoff
@@ -318,6 +329,7 @@ impl GuardedModes for TaskVerb {
             | TaskVerb::ReviewReset
             | TaskVerb::Repilot
             | TaskVerb::Requeue
+            | TaskVerb::ResumeDelivery
             | TaskVerb::BlockTriage
             | TaskVerb::ReconcileReview
             | TaskVerb::RetryHandoff
@@ -344,6 +356,7 @@ impl GuardedModes for TaskVerb {
             | TaskVerb::ReviewReset
             | TaskVerb::Repilot
             | TaskVerb::Requeue
+            | TaskVerb::ResumeDelivery
             | TaskVerb::BlockTriage
             | TaskVerb::ReconcileReview
             | TaskVerb::RetryHandoff
