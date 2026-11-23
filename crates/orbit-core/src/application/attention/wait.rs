@@ -8,7 +8,6 @@
 //! entries, and a read that failed to the deadline is its own outcome.
 use orbit_common::{OrbitError, protocol::tool_input::parse_duration_seconds};
 use serde_json::Value;
-use std::collections::BTreeSet;
 use std::time::{Duration, Instant};
 
 /// Default and minimum gap between polls, in seconds.
@@ -44,21 +43,34 @@ pub struct AttentionWaitOutcome {
     pub waited_seconds: u64,
 }
 
-/// The identity of a degraded entry, ignoring its free-text message.
-fn degraded_signature(response: &Value) -> BTreeSet<String> {
-    response["degraded"]
+/// The identity of the degraded entries, sorted so a repeated identity counts.
+///
+/// An entry is its scope, kind and code, ignoring its free-text message, with
+/// one exception: `ci_red` entries share one scope and code per workspace and
+/// name the workflow whose history is missing only in the message, so the
+/// message is part of their identity. A change in which workflows are
+/// degraded is then a change in the set.
+fn degraded_signature(response: &Value) -> Vec<String> {
+    let mut signature: Vec<String> = response["degraded"]
         .as_array()
         .into_iter()
         .flatten()
         .map(|entry| {
+            let kind = entry["kind"].as_str().unwrap_or_default();
+            let message = if kind == "ci_red" {
+                entry["message"].as_str().unwrap_or_default()
+            } else {
+                ""
+            };
             format!(
-                "{}|{}|{}",
+                "{}|{kind}|{}|{message}",
                 entry["scope"].as_str().unwrap_or_default(),
-                entry["kind"].as_str().unwrap_or_default(),
                 entry["code"].as_str().unwrap_or_default()
             )
         })
-        .collect()
+        .collect();
+    signature.sort();
+    signature
 }
 
 /// Wait for the attention delta since `input.since` to become non-empty or
@@ -89,7 +101,7 @@ pub(crate) fn wait_for_attention_delta(
     };
     let started = Instant::now();
     let deadline = started + Duration::from_secs(timeout_seconds);
-    let mut baseline: Option<BTreeSet<String>> = None;
+    let mut baseline: Option<Vec<String>> = None;
     let mut last: Option<Value> = None;
     let mut last_error: Option<String>;
     loop {
