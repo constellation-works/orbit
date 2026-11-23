@@ -284,7 +284,8 @@ impl OrbitRuntime {
                 "job run '{}' is {} — resume requires an interrupted, failed, or timed-out run, \
                  one held because the host manager stopped its worker, or one held because the \
                  forge refused its push, could not be read, check evidence was inconclusive, \
-                 the base chase exhausted, or review admission exhausted its budget",
+                 the base chase exhausted, review admission exhausted its budget, or an auto-fix \
+                 stop's pull request now reports green required checks",
                 source_run_id, source.state
             )));
         }

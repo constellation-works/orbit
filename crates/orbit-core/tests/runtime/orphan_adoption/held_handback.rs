@@ -149,7 +149,7 @@ fn a_lineage_that_keeps_holding_on_the_same_head_stops_at_the_ceiling() {
         newest = retries[0].run_id.clone();
         // The resumed completion holds again for the same reason on the
         // same head; the fixture backdates it past the backoff.
-        fx.hold(&newest, 4, INCONCLUSIVE);
+        fx.hold(&newest, 4, INCONCLUSIVE, "worker process exited");
     }
     let pass = fx.pass(&drain, "done", true);
     assert_eq!(
@@ -230,12 +230,9 @@ fn a_check_runs_absent_hold_is_handed_back_once_the_head_reports_a_check() {
 
 fn auto_fix_stop_waits_for_green_on_published_head_then_resumes_completion() {
     let fx = fixture();
-    let leaf = fx.delivered_leaf(
-        10678,
-        "done",
-        Shelf::Review,
-        LeafEnd::Held("auto_fix_stopped"),
-    );
+    // The step a real stop stores: the typed refusal `hold_auto_fix_stop`
+    // gives it, with the `auto_fix_stopped` diagnostic in its message.
+    let leaf = fx.delivered_leaf(10678, "done", Shelf::Review, LeafEnd::HeldAutoFixStop);
     // A skipped reviewer push may leave a null output; the initial push
     // remains the published head in that case.
     let mut state = fx.jobs.read_run_state(&leaf.run).unwrap().unwrap();

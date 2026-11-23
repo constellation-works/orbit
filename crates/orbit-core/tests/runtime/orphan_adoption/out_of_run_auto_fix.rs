@@ -13,7 +13,7 @@
 //! completion step itself is not executed here.
 
 use orbit_core::runtime::task_pr_forge::{ForgePullRequest, PullRequestBlockers};
-use orbit_types::workflow::PR_AUTO_FIX_ADMITTED_EVENT;
+use orbit_types::workflow::{DeliveryRefusal, PR_AUTO_FIX_ADMITTED_EVENT};
 
 use super::*;
 
@@ -63,6 +63,11 @@ pub(super) enum LeafEnd {
     /// Its completion step held the run with this delivery refusal code, an
     /// hour ago.
     Held(&'static str),
+    /// Its completion step stopped auto-fix on a head that moved, as
+    /// `hold_auto_fix_stop` records it: the typed `delivery_head_changed`
+    /// code, with the `auto_fix_stopped` diagnostic inside the step message
+    /// the dispatcher wraps.
+    HeldAutoFixStop,
 }
 
 /// How a stopped leaf left its task.
@@ -215,7 +220,21 @@ impl Fixture {
             }
             LeafEnd::Held(code) => {
                 self.jobs.write_run_state(&run, &state).unwrap();
-                self.hold(&run, 4, code);
+                self.hold(&run, 4, code, "worker process exited");
+            }
+            LeafEnd::HeldAutoFixStop => {
+                self.jobs.write_run_state(&run, &state).unwrap();
+                self.hold(
+                    &run,
+                    4,
+                    DeliveryRefusal::HeadChanged.error_code(),
+                    &format!(
+                        "deterministic action `complete_pr` refused: auto_fix_stopped: pull \
+                         request #{number} cannot be repaired automatically (required checks \
+                         name another head); no repair agent runs, the pull request stays open \
+                         and the task stays in review"
+                    ),
+                );
             }
         }
         self.runtime
@@ -283,14 +302,21 @@ impl Fixture {
 
     /// `run`'s completion step at `index` holds it with the delivery refusal
     /// `code`, an hour ago, as a fail-closed completion decision does.
-    pub(super) fn hold(&self, run: &str, index: usize, code: &str) {
+    pub(super) fn hold(&self, run: &str, index: usize, code: &str, message: &str) {
         let current = self.jobs.get_job_run(run).unwrap().unwrap();
         if current.state == JobRunState::Pending {
             self.jobs
                 .mark_job_run_running(run, Utc::now(), std::process::id())
                 .unwrap();
         }
-        self.step(run, index, "complete_pr", JobRunState::Failed, Some(code));
+        self.step_with_message(
+            run,
+            index,
+            "complete_pr",
+            JobRunState::Failed,
+            Some(code),
+            Some(message),
+        );
         self.jobs
             .finalize_job_run(
                 run,
