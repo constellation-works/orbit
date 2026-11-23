@@ -1,6 +1,5 @@
-//! Lexical search hydrates its hits from the task documents alone: a cold
-//! search over a workspace whose matching bundles carry megabytes of
-//! artifacts neither reads nor verifies those payloads. Friction search reads
+//! A cold lexical search succeeds with corrupted artifact payloads that
+//! canonical task reads reject. Friction search reads
 //! bounded pages and stops after its matching truncation lookahead.
 
 use std::path::{Path, PathBuf};

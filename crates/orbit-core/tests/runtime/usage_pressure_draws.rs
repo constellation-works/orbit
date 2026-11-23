@@ -238,8 +238,8 @@ fn read_example_week(fx: &Fixture) {
     fx.week("codex", 0.0, Duration::days(7));
 }
 
-/// Criterion 1: unset, `static`, and `usage_pressure` at strength 0 record
-/// the selection exactly as before, whatever the readings, and never
+/// Criterion 1: unset and `static` selection record the choice exactly as
+/// before, whatever the readings, and never
 /// re-draw or rewrite a task's assigned crew. A task with no pool assignment
 /// records the crew its admission drew [ORB-19416].
 fn static_selection_draws_and_records_as_before() {
