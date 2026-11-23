@@ -130,6 +130,39 @@ fn desktop_writes_reconcile_after_restart_and_reject_stale_or_implicit_destinati
         assert!(error.to_string().contains(mode), "{error}");
     }
 
+    for (tool, input, mode) in [
+        (
+            "orbit_task_show",
+            json!({"workspace":selector,"id":id,"snapshot":true,"limt":1}),
+            "snapshot: true",
+        ),
+        (
+            "orbit_task_show",
+            json!({"workspace":selector,"id":id,"view":"bounded","limt":1}),
+            "view: bounded",
+        ),
+        (
+            "orbit_task_list",
+            json!({"workspace":selector,"view":"bounded","limt":1}),
+            "view: bounded",
+        ),
+    ] {
+        let error = client.call_tool_err(tool, input);
+        assert_eq!(error["code"], "invalid_input", "{error}");
+        assert_eq!(error["did_you_mean"], json!(["limit"]), "{error}");
+        let message = error["message"].as_str().unwrap();
+        assert!(
+            message.contains("limt") && message.contains(mode),
+            "{error}"
+        );
+    }
+
+    let bounded = client.call_tool_ok(
+        "orbit_task_show",
+        json!({"workspace":selector,"id":id,"view":"bounded","limit":1}),
+    );
+    assert_eq!(bounded["task"]["id"], id, "{bounded}");
+
     let list = client.call_tool_ok("orbit_task_list", json!({"workspace":selector,"view":"bounded","search":"Desktop","status":"proposed","limit":1}));
     assert_eq!(list["total"], 1);
     assert_eq!(list["items"][0]["id"], id);
