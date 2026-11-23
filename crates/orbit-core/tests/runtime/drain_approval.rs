@@ -386,6 +386,8 @@ impl Workspace {
             .unwrap();
         let mut merge = json!({
             "merged": merged,
+            "already_contained": !merged,
+            "completion_held": false,
             "base": "main",
             "base_commit": commit_sha,
             "workspace_path": self.repo.display().to_string(),

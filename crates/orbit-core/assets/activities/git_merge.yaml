@@ -9,10 +9,12 @@ spec:
     merging the associated GitHub pull request. A successful fast-forward records
     `landed_commit` when it moves the base, including a fast-forward that
     follows a rebase. If the base already contains the candidate, the output
-    reports `merged: false` and `base_commit` without a task landing. A fast-forward whose input
+    reports `merged: false`, `already_contained: true`, `completion_held: false`,
+    and `base_commit` without a task landing. A fast-forward whose input
     carries `completion: done` first decides the `completion.hold` rules
     against the candidate's diff; a held candidate is not merged and the
-    output reports `merged: false` with the held tasks and the hold.
+    output reports `merged: false` and `completion_held: true` with the held
+    tasks and the hold.
   input_schema_json:
     type: object
     properties:
@@ -56,6 +58,17 @@ spec:
         description: >
           Full commit id landed by a fast-forward that moved the base.
           Absent when the step merged nothing.
+      already_contained:
+        type: boolean
+        description: >
+          True when the fast-forward was a no-op because the base already
+          contained the candidate.
+      completion_held:
+        type: boolean
+        description: >
+          True when a `completion.hold` rule held completion before merging.
+          False when the fast-forward ran (including an already-contained
+          no-op).
       reason:
         type: string
       held_task_ids:
