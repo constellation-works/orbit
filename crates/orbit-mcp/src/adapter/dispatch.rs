@@ -719,8 +719,14 @@ impl ServerHandler for OrbitToolServer {
                 Some(serde_json::json!({ "code": "resource_not_found" })),
             ));
         }
+        let definitions = self
+            .load_tool_definitions()
+            .map_err(invalid_definitions_mcp_error)?;
         Ok(ReadResourceResponse::Complete(ReadResourceResult::new(
-            vec![presentation::resource_content(&request.uri)],
+            vec![presentation::resource_content(
+                &request.uri,
+                definitions.as_ref(),
+            )],
         )))
     }
 
