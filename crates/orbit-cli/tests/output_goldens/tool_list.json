@@ -491,7 +491,7 @@
       },
       {
         "name": "schedule",
-        "description": "add: One of {cron}, {every_minutes}, {deliveries_landed: {branch, threshold, max_wait_minutes, coverage, owner_machine?, max_items?, retries?}}, or {condition}; optional `when`, `guard_miss` (`wait`|`skip`); update: Replacement schedule (same shape as `add`).",
+        "description": "add: One of {cron}, {every_minutes}, {deliveries_landed: {branch, threshold, max_wait_minutes, coverage, owner_machine?, max_items?, retries?}}, or {condition}; optional `when` guards cron, every_minutes and deliveries_landed, and a condition takes no guard; `guard_miss` (`wait`|`skip`) requires `when` and applies to cron and every_minutes only; update: Replacement schedule (same shape as `add`).",
         "param_type": "object",
         "required": false
       },
