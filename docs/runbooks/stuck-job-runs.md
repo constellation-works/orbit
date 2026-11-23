@@ -2084,9 +2084,11 @@ For the full persisted pass, including every skip and any `pass_error`, run
   detail says the hand-back ceiling is not spent. Once spent, resolve it as the
   run-debugging delivery-refusal table describes.
 
-**Held leaves.** An `auto_fix_stopped` hold is handed back once the same
-published head has at least one passed required check and no pending or failed
-required checks or conflict. Readiness reports `checks_green_after_hold`.
+**Held leaves.** A held leaf with typed code `delivery_head_changed` or
+`delivery_repair_dispatched` and an `auto_fix_stopped:` diagnostic in its
+message is handed back once the same published head has at least one passed
+required check and no pending or failed required checks or conflict. Readiness
+reports `checks_green_after_hold`.
 Completion still checks the current review, required checks and branch protection;
 a changed head is refused. The hand-back ceiling applies; this green-check hand-back does not wait for the
 held-leaf backoff.
@@ -2107,8 +2109,10 @@ resumed run's `out_of_run_auto_fix` input carry `hold_code` with a null
 `blocker`. A drain pass hands a held leaf back no earlier than 5 minutes after
 it held, doubled for each earlier hand-back of that pull request for that code,
 and at most 3 times per pull request, head and code. Other holds, such as
-`delivery_head_changed`, `delivery_pr_draft`, `delivery_landing_repair_requeue`
-or `base_chase_exhausted`, keep their own next step; the pass does not list them.
+`delivery_head_changed` or `delivery_repair_dispatched` without an
+`auto_fix_stopped:` diagnostic, `delivery_pr_draft`,
+`delivery_landing_repair_requeue` or `base_chase_exhausted`, keep their own next
+step; the pass does not list them.
 
 A write-free pass reports `hold_reason: "write_free"` and does not scan or
 persist candidates. A stopped drain or a host shutdown hold also starts no
