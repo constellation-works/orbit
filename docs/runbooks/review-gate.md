@@ -2,10 +2,10 @@
 type: runbook
 summary: Inspect before-PR and before-landing review verdicts, findings, and evidence holds, then decide how to resume a task.
 tags: [operations, review-gate, delivery]
-paths: ["crates/orbit-core/src/application/review/**", "crates/orbit-core/assets/jobs/task_pr_pipeline.yaml", "crates/orbit-core/assets/jobs/task_claimed_pr_pipeline.yaml", "crates/orbit-engine/src/executor/automation/vcs/failure/handoff.rs"]
+paths: ["crates/orbit-core/src/application/review/**", "crates/orbit-core/src/application/job/resume/source_repair/**", "crates/orbit-core/assets/jobs/task_pr_pipeline.yaml", "crates/orbit-core/assets/jobs/task_claimed_pr_pipeline.yaml", "crates/orbit-engine/src/executor/automation/vcs/failure/handoff.rs", "crates/orbit-engine/src/executor/automation/vcs/failure/ownership.rs"]
 related_features: [review-gate]
 related_artifacts: ["ORB-13989", "ORB-13992", "ORB-14194", "ORB-14849", "ORB-22808"]
-last_validated: 2026-11-16
+last_validated: 2026-11-22
 ---
 
 # Operate the Review Gate
@@ -160,7 +160,7 @@ With `review.timing = "before_landing"` captured, the table above applies to the
 | `accept` | completion merges the reviewed head | `done` with `--complete`, else `review` |
 | `accept_with_fixes` | owner validation reruns on the reviewer commit, which `landing_push` pushes onto the published head under a lease; hosted CI restarts and completion merges that head | `done` with `--complete`, else `review` |
 | `review_repair_after_merge` | the pull request was merged (merge or squash) at the published head the review settled on, whether or not its head branch still exists; `landing_push` pushes the unpublished repair commits to `refs/heads/orbit-evidence/<branch>` on origin, or to `refs/orbit/candidates/<task>/<run>` if that push fails | the task is `blocked`; the handoff comment names the merged pull request, the repair commits and the preserved ref, and the commands to fetch that ref, cherry-pick the repair onto the base and open a follow-up pull request |
-| `reject`, any `incomplete` (evidence-only included), reviewer timeout, failed revalidation, `push_lease_lost` | open and unmerged; only a fix the review settled was pushed, except that an `incomplete` review's reviewer commit is pushed unvalidated to the PR branch under a lease on the published head (`reviewer_push` in the handoff) | stays `review`; a comment starting "Before-landing review did not approve PR #…" names the typed reason, and the failure handoff decision is `landing_review_failure` |
+| `reject`, any `incomplete` (evidence-only included), reviewer timeout, failed revalidation, `push_lease_lost` | open and unmerged; only a fix the review settled was pushed, except that an `incomplete` review's reviewer commit is pushed unvalidated to the PR branch under a lease on the published head (`reviewer_push` in the handoff). For `reject`, a reviewer timeout or a failed revalidation the PR branch and head stay at the published head, and any reviewer commit is kept on `refs/orbit/candidates/<task>/<run>` on origin (`reviewer_preservation`, decision `preserved`). If that push fails, the handoff saves the diff as a task artifact: `landing-review-fix-<run>.patch` (decision `preserve_failed`), or `landing-review-uncommitted-<run>.patch` for an uncommitted repair it could not commit (decision `commit_refused`) | stays `review`; a comment starting "Before-landing review did not approve PR #…" names the typed reason, and the failure handoff decision is `landing_review_failure` |
 
 A refusal that leaves the PR open for a recorded decision (`reject`, any
 `incomplete`, or an abandoned review below) ends the run `held` with code
@@ -195,8 +195,26 @@ timing:
 
 To obtain independent review on the successor, select a review layer for that
 run. A requeue is refused when the local or remote
-branch, or the PR head, is anywhere else, when the receipt names another
-published head, branch or run, or when the task specification changed.
+branch, or the PR head, is anywhere else than the head the handoff authenticates,
+when the receipt names another published head, branch or run, or when the task
+specification changed.
+
+When the handoff instead records `reviewer_preservation` with decision
+`preserved`, the reviewer commit `R` was not pushed. It is a commit above the
+published head `P` on the run's branch and on `refs/orbit/candidates/<task>/<run>`
+on origin, and the remote branch and the PR head stay at `P`. An operator
+requeue, or the decision answer that requeues the task, resumes the same PR at
+`P` and carries `R` as the candidate. Its `resumes` answer reports `head_sha`
+(`P`), `candidate_head_sha` (`R`) and `candidate_ref` separately. The PR identity
+and required-check rules apply unchanged at `P`: the PR must be open and unmerged
+at `P`, and every required check must have passed on `P`. The requeue refuses
+unless the attestation names this run and task, the published head `P`, the
+expected ref and a commit that descends from `P`. The successor adopts `R` and
+publishes it under a lease on `P`; its review follows its own captured timing, as
+described above. Only the `preserved` decision is resumable. For
+`preserve_failed` and `commit_refused`, the requeue does not carry the repair
+forward; the handoff's task artifact named in the table above, when it was saved,
+holds the diff for an operator to review and apply by hand.
 
 A reviewer that exits cleanly with only its initial placeholder report is
 released, not settled: the refusal leads with `review_abandoned:`, the failure
