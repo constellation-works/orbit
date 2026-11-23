@@ -155,6 +155,7 @@ impl TaskPrForge for RefreshForge {
                 .get(&number)
                 .cloned()
                 .unwrap_or_default(),
+            requires_status_checks: None,
         }))
     }
 

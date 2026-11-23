@@ -430,7 +430,8 @@ impl OrbitRuntime {
             && (blockers.conflicting
                 || !blockers.failed_required_checks.is_empty()
                 || !blockers.pending_required_checks.is_empty()
-                || blockers.passed_required_checks.is_empty())
+                || (blockers.passed_required_checks.is_empty()
+                    && blockers.requires_status_checks != Some(false)))
         {
             return skip(
                 "auto_fix_stopped",
@@ -453,6 +454,7 @@ impl OrbitRuntime {
                 if refusal == DeliveryRefusal::CheckRunsAbsent.error_code()
                     && blockers.pending_required_checks.is_empty()
                     && blockers.passed_required_checks.is_empty()
+                    && blockers.requires_status_checks != Some(false)
                 {
                     return skip(
                         refusal,

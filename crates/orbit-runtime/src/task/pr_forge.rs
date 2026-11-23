@@ -79,9 +79,14 @@ pub struct PullRequestBlockers {
     /// Required checks on the head that have not finished, by name.
     pub pending_required_checks: Vec<String>,
     /// Required checks on the head that passed, skipped or ended neutral, by
-    /// name. With the other two lists empty, an empty list means the head
-    /// reports no required check at all.
+    /// name. When `failed_required_checks` and `pending_required_checks` are
+    /// also empty, an empty list means the head reports no required check
+    /// (`requires_status_checks == Some(false)` distinguishes a repository with
+    /// none configured from missing check runs).
     pub passed_required_checks: Vec<String>,
+    /// Whether the PR's base branch requires any status checks when known
+    /// (`Some(false)` when neither branch protection nor rulesets require any).
+    pub requires_status_checks: Option<bool>,
 }
 
 /// Open pull request state needed for an operator's failure-handoff landing.
@@ -472,9 +477,10 @@ impl TaskPrForge for GhTaskPrForge {
         ) {
             return Err(unreadable_pull_request_blockers(number));
         }
-        pull_request_blockers_from_json(number, &pull)
-            .map(Some)
-            .ok_or_else(|| unreadable_pull_request_blockers(number))
+        let mut blockers = pull_request_blockers_from_json(number, &pull)
+            .ok_or_else(|| unreadable_pull_request_blockers(number))?;
+        populate_requires_status_checks(repo_root, &pull, &mut blockers);
+        Ok(Some(blockers))
     }
 
     fn handoff_landing_pull_request(
@@ -494,8 +500,9 @@ impl TaskPrForge for GhTaskPrForge {
         ) {
             return Err(unreadable_pull_request_blockers(number));
         }
-        let blockers = pull_request_blockers_from_json(number, &pull)
+        let mut blockers = pull_request_blockers_from_json(number, &pull)
             .ok_or_else(|| unreadable_pull_request_blockers(number))?;
+        populate_requires_status_checks(repo_root, &pull, &mut blockers);
         let base_branch = pull
             .get("baseRefName")
             .and_then(Value::as_str)
@@ -521,14 +528,14 @@ impl TaskPrForge for GhTaskPrForge {
         let Some(pull) = open_pull_request_document(repo_root, number)? else {
             return Ok(None);
         };
-        pull_request_blockers_from_json(number, &pull)
-            .map(Some)
-            .ok_or_else(|| {
-                OrbitError::Execution(format!(
-                    "gh api graphql did not report the author, head and complete required \
-                     checks of pull request #{number}"
-                ))
-            })
+        let mut blockers = pull_request_blockers_from_json(number, &pull).ok_or_else(|| {
+            OrbitError::Execution(format!(
+                "gh api graphql did not report the author, head and complete required \
+                 checks of pull request #{number}"
+            ))
+        })?;
+        populate_requires_status_checks(repo_root, &pull, &mut blockers);
+        Ok(Some(blockers))
     }
 
     /// Waits up to 120 seconds for in-progress workflows on the head, then
@@ -807,6 +814,15 @@ fn pull_request_blockers_from_json(number: u64, pull: &Value) -> Option<PullRequ
             }
         }
     }
+    let requires_status_checks = if !failed_required_checks.is_empty()
+        || !pending_required_checks.is_empty()
+        || !passed_required_checks.is_empty()
+        || classic_branch_protection_requires_checks(pull) == Some(true)
+    {
+        Some(true)
+    } else {
+        None
+    };
     Some(PullRequestBlockers {
         pull: ForgePullRequest {
             number,
@@ -823,5 +839,65 @@ fn pull_request_blockers_from_json(number: u64, pull: &Value) -> Option<PullRequ
         failed_required_checks,
         pending_required_checks,
         passed_required_checks,
+        requires_status_checks,
     })
+}
+
+fn classic_branch_protection_requires_checks(pull: &Value) -> Option<bool> {
+    let base_ref = pull.get("baseRef").filter(|value| !value.is_null())?;
+    let rule = base_ref.get("branchProtectionRule")?;
+    if rule.is_null() {
+        return Some(false);
+    }
+    let checks = rule.get("requiredStatusChecks")?.as_array()?;
+    Some(!checks.is_empty())
+}
+
+fn populate_requires_status_checks(
+    repo_root: &Path,
+    pull: &Value,
+    blockers: &mut PullRequestBlockers,
+) {
+    if blockers.requires_status_checks.is_some()
+        || classic_branch_protection_requires_checks(pull) != Some(false)
+    {
+        return;
+    }
+    let Some(base_branch) = pull
+        .get("baseRefName")
+        .and_then(Value::as_str)
+        .filter(|base| !base.is_empty())
+    else {
+        return;
+    };
+    let Ok(stdout) = task_forge_gh_request(
+        orbit_tools::github_cli::branch_protection_rules_request(base_branch),
+        repo_root,
+        "gh api rules/branches",
+    ) else {
+        return;
+    };
+    let Ok(Value::Array(rules)) =
+        orbit_tools::github_cli::parse_gh_json(&stdout, "gh api rules/branches")
+    else {
+        return;
+    };
+    if rules.len() >= 100 {
+        return;
+    }
+    for rule in &rules {
+        if rule.get("type").and_then(Value::as_str) == Some("required_status_checks") {
+            let Some(checks) = rule
+                .pointer("/parameters/required_status_checks")
+                .and_then(Value::as_array)
+            else {
+                return;
+            };
+            if !checks.is_empty() {
+                blockers.requires_status_checks = Some(true);
+                return;
+            }
+        }
+    }
+    blockers.requires_status_checks = Some(false);
 }

@@ -706,15 +706,16 @@ fn history_text_words(value: &str) -> String {
 /// The words after `Next:` on a task show. Local and routed text both use this.
 pub(crate) fn next_step_text(next: &Value) -> String {
     let part = |key: &str| next.get(key).and_then(Value::as_str).unwrap_or_default();
-    match next.get("resume_command").and_then(Value::as_str) {
-        Some(resume) => format!(
-            "run `{resume}` to retry the failed work, or move the task back to backlog with `{}`",
-            part("requeue_command")
-        ),
-        None => format!(
-            "move the task back to backlog with `{}` to run it again",
-            part("requeue_command")
-        ),
+    let requeue = part("requeue_command");
+    if let Some(resume) = next.get("resume_command").and_then(Value::as_str) {
+        return format!(
+            "run `{resume}` to retry the failed work, or move the task back to backlog with `{requeue}`"
+        );
+    }
+    if requeue.starts_with("orbit run cancel ") {
+        format!("stop the live run with `{requeue}` before moving the task back to backlog")
+    } else {
+        format!("move the task back to backlog with `{requeue}` to run it again")
     }
 }
 

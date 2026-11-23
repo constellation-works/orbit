@@ -12,7 +12,7 @@ mod source_checks;
 
 use serde::{Deserialize, Serialize};
 
-pub(super) use source_checks::{footprint_held, require_stopped_failed_requeue_source};
+pub(super) use source_checks::{footprint_held, require_stopped_published_requeue_source};
 
 const PRESERVED: &str = "published_owner_requeued";
 

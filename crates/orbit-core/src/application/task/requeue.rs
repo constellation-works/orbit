@@ -86,14 +86,22 @@ pub(crate) const OPERATOR_REQUEUED_EVENT: &str = "operator_requeued";
 /// CLI discard route, or the discard option of a blocked task's requeue, which
 /// the dashboard and the CLI's `orbit task requeue` carry. `orbit.task.update`
 /// MCP does not accept `discard_candidate`, which is CLI-only.
-fn operator_discard_hint(id: &str) -> String {
-    format!(
-        "discard the candidate with `orbit task update {id} --status backlog --discard-candidate` \
-         on the operator CLI (orbit.task.update MCP does not accept `discard_candidate`), or \
-         requeue the blocked task with the discard option (the dashboard's requeue, or \
-         `orbit task requeue {id} --discard-candidate`), to close it and let the next run \
-         implement fresh"
-    )
+fn operator_discard_hint(id: &str, status: TaskStatus) -> String {
+    if status == TaskStatus::Blocked {
+        format!(
+            "discard the candidate with `orbit task update {id} --status backlog --discard-candidate` \
+             on the operator CLI (orbit.task.update MCP does not accept `discard_candidate`), or \
+             requeue the blocked task with the discard option (the dashboard's requeue, or \
+             `orbit task requeue {id} --discard-candidate`), to close it and let the next run \
+             implement fresh"
+        )
+    } else {
+        format!(
+            "discard the candidate with `orbit task update {id} --status backlog --discard-candidate` \
+             on the operator CLI (orbit.task.update MCP does not accept `discard_candidate`) to \
+             close it and let the next run implement fresh"
+        )
+    }
 }
 
 /// The publication a failure handoff recorded, read from its receipt without
@@ -654,10 +662,19 @@ impl OrbitRuntime {
     /// conclusively stopped.
     fn ensure_requeueable(&self, task: &Task) -> Result<(), OrbitError> {
         if task.status != TaskStatus::Blocked {
-            return Err(OrbitError::InvalidInput(format!(
-                "only a blocked task can be requeued; {} is {}",
-                task.id, task.status
-            )));
+            return Err(OrbitError::InvalidInput(if task.status == TaskStatus::Review {
+                format!(
+                    "only a blocked task can be requeued; {} is {}. Return it to backlog with \
+                     `orbit task update {} --status backlog` (or append `--discard-candidate` to \
+                     close its PR and start fresh)",
+                    task.id, task.status, task.id
+                )
+            } else {
+                format!(
+                    "only a blocked task can be requeued; {} is {}",
+                    task.id, task.status
+                )
+            }));
         }
         if let Some(reason) = self.unsettled_run(task)? {
             return Err(OrbitError::InvalidInput(format!(
@@ -703,7 +720,7 @@ impl OrbitRuntime {
                  was changed. To {}.",
                 kept.candidate.head_sha,
                 kept.candidate.branch,
-                operator_discard_hint(&task.id)
+                operator_discard_hint(&task.id, task.status)
             ))),
         }
     }
@@ -919,12 +936,74 @@ impl OrbitRuntime {
     /// failure handoff's publication when there is one, else nothing, refusing
     /// exactly what the next admission would refuse. The preservation record
     /// is `None` when the task already holds that same record.
+    /// Whether returning `task` to the backlog without `--discard-candidate` is
+    /// already guaranteed to fail based solely on local state (without querying
+    /// remotes or the forge), and the exact CLI command that can succeed.
+    pub(crate) fn backlog_return_refused_locally(&self, task: &Task) -> Option<String> {
+        let discard = format!("orbit task update {} --status backlog --discard-candidate", task.id);
+        let cancel_if_live = |run_id: &str| {
+            self.observed_job_run(run_id)
+                .ok()
+                .filter(|run| !run.state.is_terminal())
+                .map(|_| format!("orbit run cancel {run_id} --confirm"))
+        };
+        if let Ok(Some((live_run_id, _))) = super::lifecycle::live_local_run_owning(self, &task.id)
+        {
+            return Some(format!("orbit run cancel {live_run_id} --confirm"));
+        }
+        if self.unsettled_run(task).ok().flatten().is_some() {
+            if let Some(run_id) = task.job_run_id.as_deref()
+                && let Some(cancel) = cancel_if_live(run_id)
+            {
+                return Some(cancel);
+            }
+            return Some(discard);
+        }
+        if task.job_run_id.is_none() {
+            return self.kept_claim_requeue(task).is_err().then_some(discard);
+        }
+        if let Ok(Some(receipt)) = self.handoff_receipt(task) {
+            if !task.spec_digest_matches(&receipt.task_spec_digest) {
+                return Some(discard);
+            }
+            if let Err(err) = self.failure_handoff_local_gate(task) {
+                if err.source_repair_run_state_refusal().is_some()
+                    && err.to_string().contains("orbit run cancel")
+                    && let Some(cancel) = cancel_if_live(&receipt.run_id)
+                {
+                    return Some(cancel);
+                }
+                return Some(discard);
+            }
+            return None;
+        }
+        if self.run_published_through_pipeline(task).ok() == Some(true) {
+            if let Err(err) = self.escalated_publication_local_gate(task) {
+                if err.source_repair_run_state_refusal().is_some()
+                    && err.to_string().contains("orbit run cancel")
+                    && let Some(run_id) = task.job_run_id.as_deref()
+                    && let Some(cancel) = cancel_if_live(run_id)
+                {
+                    return Some(cancel);
+                }
+                return Some(discard);
+            }
+            return None;
+        }
+        if self.unbound_publication(task).ok() == Some(true)
+            || self.kept_claim_requeue(task).is_err()
+        {
+            return Some(discard);
+        }
+        None
+    }
+
     fn authenticate_operator_requeue(
         &self,
         task: &Task,
         receipt: Option<&HandoffReceipt>,
     ) -> Result<Option<(Option<TaskHistoryEntry>, SourceRepairBinding)>, OrbitError> {
-        let discard_hint = operator_discard_hint(&task.id);
+        let discard_hint = operator_discard_hint(&task.id, task.status);
         if let Some(receipt) = receipt {
             if !task.spec_digest_matches(&receipt.task_spec_digest) {
                 return Err(OrbitError::InvalidInput(format!(
@@ -942,16 +1021,21 @@ impl OrbitRuntime {
             return authenticated
                 .map(Some)
                 .map_err(|error| match error.job_validation_message() {
+                    Some(refusal)
+                        if error.source_repair_run_state_refusal().is_some()
+                            && refusal.contains("orbit run cancel") =>
+                    {
+                        OrbitError::InvalidInput(format!("{refusal}. Nothing was changed."))
+                    }
                     Some(refusal) => OrbitError::InvalidInput(format!(
                         "{refusal}. Nothing was changed. To {discard_hint}."
                     )),
                     None => error,
                 });
         }
-        // The run pushed and opened its pull request itself, then failed
-        // completion and was escalated: the requeue resumes that pull request,
-        // as a final-recovery requeue would, once it is still open at the
-        // recorded head with every required check passed.
+        // The run pushed and opened its pull request itself: the requeue
+        // resumes that pull request, as a final-recovery requeue would, once it
+        // is still open at the recorded head with every required check passed.
         if self.run_published_through_pipeline(task)? {
             let authenticated = self
                 .escalated_publication_preservation(task)
@@ -959,10 +1043,20 @@ impl OrbitRuntime {
             return authenticated
                 .map(Some)
                 .map_err(|error| match error.job_validation_message() {
-                    // A refusal whose cause is the run's state, not the pull
-                    // request's checks: requeuing again cannot succeed while the
-                    // delivery is running or is not a stopped failed delivery.
-                    Some(refusal) if error.source_repair_run_state_refusal().is_some() => {
+                    // A refusal whose cause is a live non-terminal run:
+                    // discard fails until the run is cancelled.
+                    Some(refusal)
+                        if error.source_repair_run_state_refusal().is_some()
+                            && refusal.contains("orbit run cancel") =>
+                    {
+                        OrbitError::InvalidInput(format!("{refusal}. Nothing was changed."))
+                    }
+                    // A refusal whose cause is the run's state or changed spec,
+                    // not the pull request's checks: retrying later cannot pass.
+                    Some(refusal)
+                        if error.source_repair_run_state_refusal().is_some()
+                            || refusal.contains("the task specification changed") =>
+                    {
                         OrbitError::InvalidInput(format!(
                             "{refusal}. Nothing was changed. To {discard_hint}."
                         ))
