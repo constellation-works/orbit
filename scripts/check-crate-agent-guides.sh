@@ -56,6 +56,9 @@ done
 if [[ ! -f AGENTS.md || -L AGENTS.md ]]; then
   echo "crate-agent-guides: AGENTS.md must exist as a regular file at the repository root"
   fail=1
+elif [[ ! -s AGENTS.md ]]; then
+  echo "crate-agent-guides: AGENTS.md is empty; the root guide must hold the shared workspace rules"
+  fail=1
 fi
 
 # Any AGENTS.md at the root or under crates/ — required or not — is a regular
