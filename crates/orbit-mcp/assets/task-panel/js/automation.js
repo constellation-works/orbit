@@ -91,7 +91,7 @@ window.OrbitAutomation = ({el, ui, tool, open, current}) => {
   async function refresh(){
     const workspace=current(), expectedScope=scope, g=++revision;
     fresh=false;renderDetail();
-    const readName=scope==='jobs'?'orbit_run':writeTool[scope];
+    const readName=scope==='jobs'?'orbit_run:list':writeTool[scope];
     if(!toolReady(readName)){
       if(g!==revision||workspace!==current()||expectedScope!==scope)return;
       showGap(gapMessage(scope==='jobs'?'jobs-read':scope));

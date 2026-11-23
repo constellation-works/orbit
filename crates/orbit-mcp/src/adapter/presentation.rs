@@ -102,8 +102,14 @@ pub(super) fn resource() -> Resource {
         .with_mime_type(MIME)
 }
 
-/// Advertised names the Automation view must not call when this server withholds them.
-fn session_automation_tools(definitions: &[McpToolDefinition]) -> String {
+/// Calls the Automation view must not make when this server withholds them.
+/// `orbit_run:list` is keyed by action: the family is advertised when any
+/// action is served, so a dispatch-only session lists `orbit_run` without
+/// the catalog read.
+fn session_automation_tools(
+    definitions: &[McpToolDefinition],
+    serves: impl Fn(&str, Option<&str>) -> bool,
+) -> String {
     let advertised = definitions
         .iter()
         .map(|definition| mcp_advertised_tool_name(&definition.schema.name))
@@ -112,13 +118,17 @@ fn session_automation_tools(definitions: &[McpToolDefinition]) -> String {
     json!({
         "orbit_routine_control": enabled("orbit_routine_control"),
         "orbit_auto_task": enabled("orbit_auto_task"),
-        "orbit_run": enabled("orbit_run"),
+        "orbit_run:list": enabled("orbit_run") && serves("orbit_run", Some("list")),
         "orbit_pipeline_invoke": enabled("orbit_pipeline_invoke"),
     })
     .to_string()
 }
 
-pub(super) fn resource_content(uri: &str, definitions: &[McpToolDefinition]) -> ResourceContents {
+pub(super) fn resource_content(
+    uri: &str,
+    definitions: &[McpToolDefinition],
+    serves: impl Fn(&str, Option<&str>) -> bool,
+) -> ResourceContents {
     // Task content is never interpolated into executable HTML. The only
     // session value inserted is a JSON boolean map of advertised tool names,
     // in a non-executed block, so the panel can hide writes this server refuses.
@@ -129,7 +139,7 @@ pub(super) fn resource_content(uri: &str, definitions: &[McpToolDefinition]) -> 
         )
         .replace(
             "/* ORBIT_SESSION_TOOLS */",
-            &session_automation_tools(definitions),
+            &session_automation_tools(definitions, serves),
         )
         .replace(
             "/* ORBIT_PANEL_SCRIPT */",

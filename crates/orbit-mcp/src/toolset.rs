@@ -236,6 +236,19 @@ impl McpHost for ToolsetFilteredHost {
         self.inner.presentation_disabled_error()
     }
 
+    fn serves_tool_call(&self, name: &str, action: Option<&str>) -> bool {
+        let Ok(surface) = self.surface() else {
+            return false;
+        };
+        if surface.withheld.contains_key(name) {
+            return false;
+        }
+        match surface.per_action.get(name) {
+            Some((canonical, rules)) => self.selection.enables_call(rules, canonical, action),
+            None => self.inner.serves_tool_call(name, action),
+        }
+    }
+
     fn list_mcp_tool_definitions(&self) -> Result<Vec<McpToolDefinition>, OrbitError> {
         self.surface()
             .map(|surface| surface.advertised.as_ref().clone())

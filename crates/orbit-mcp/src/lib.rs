@@ -91,6 +91,14 @@ pub trait McpHost: Send + Sync + 'static {
         true
     }
 
+    /// Whether a call to the advertised or canonical tool `name` selecting
+    /// `action` is served here, so the UI panel can avoid a call the host
+    /// would refuse. A family is advertised when any action is served, so
+    /// the listing alone does not answer this. The default serves every call.
+    fn serves_tool_call(&self, _name: &str, _action: Option<&str>) -> bool {
+        true
+    }
+
     /// Refusal for a presentation tool call when [`Self::presentation_enabled`]
     /// is false.
     fn presentation_disabled_error(&self) -> OrbitError {
