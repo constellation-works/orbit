@@ -3,6 +3,7 @@
 
 use std::time::Instant;
 
+use orbit_common::security::redaction::redact_all_json;
 use orbit_common::{NotFoundKind, OrbitError};
 use orbit_store::contracts::{AuditEventInsertParams, AuditInvocationFields};
 use orbit_tools::ToolExecutionKind;
@@ -118,6 +119,9 @@ where
     // row's id as `entry_execution_id`. The frame pops when this dispatch
     // ends, including when the tool fails.
     let execution_frame = DispatchAuditFrame::enter();
+    // `dispatch` consumes the input, and only a refusal records it, so the
+    // copy is kept for the refusal row alone.
+    let refused_input = input.clone();
     let result = dispatch(input);
     let application = crate::runtime::application_authority::take_application_audit();
     crate::runtime::application_authority::finish_application_dispatch();
@@ -169,6 +173,13 @@ where
         ),
     };
 
+    let arguments_json = match &result {
+        Err(OrbitError::InvalidInput(_) | OrbitError::InvalidInputDiagnostic { .. }) => {
+            Some(refused_arguments_json(refused_input))
+        }
+        _ => None,
+    };
+
     let params = AuditEventInsertParams {
         execution_id: execution_frame.id().to_owned(),
         command: "tool".to_string(),
@@ -183,7 +194,7 @@ where
         exit_code,
         duration_ms,
         working_directory,
-        arguments_json: None,
+        arguments_json,
         stdout_truncated: None,
         stderr_truncated: None,
         error_message,
@@ -292,6 +303,26 @@ where
     // (ORB-16383). Finding M1 (SECURITY-REVIEW-2026-07-15) still holds for
     // the silent case: a missing audit row is reported on the success value.
     finalize_successful_dispatch(name, execution_kind, value, audit_write)
+}
+
+/// Largest serialized redacted argument payload an invalid-input refusal row
+/// stores. Past it the row keeps only the top-level key names.
+const REFUSED_ARGUMENTS_MAX_BYTES: usize = 4096;
+
+/// The `arguments_json` of an invalid-input refusal: the refused call's
+/// arguments after secret redaction, or just their top-level key names, as a
+/// JSON array, when the redacted JSON exceeds [`REFUSED_ARGUMENTS_MAX_BYTES`].
+fn refused_arguments_json(arguments: Value) -> String {
+    let redacted = redact_all_json(arguments);
+    let serialized = redacted.to_string();
+    if serialized.len() <= REFUSED_ARGUMENTS_MAX_BYTES {
+        return serialized;
+    }
+    let keys = redacted
+        .as_object()
+        .map(|object| object.keys().cloned().map(Value::String).collect())
+        .unwrap_or_default();
+    Value::Array(keys).to_string()
 }
 
 /// This dispatch's audit execution id, pushed before the tool runs and popped
