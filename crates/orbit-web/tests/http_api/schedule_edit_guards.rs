@@ -480,3 +480,90 @@ fn dashboard_schedule_edit_reports_missing_and_already_matched_without_writing()
         },
     );
 }
+
+/// Both Operations editors send a cron with the weekday AND modifier as typed.
+/// The leading `+MON` saves; a plus anywhere else stays the server's refusal,
+/// and the refused edit writes nothing.
+#[test]
+fn weekday_and_modifier_saves_and_misplaced_plus_is_refused() {
+    isolated(
+        "schedule_edit_guards::weekday_and_modifier_saves_and_misplaced_plus_is_refused",
+        || {
+            let fixture = Fixture::new();
+            fixture.job("task_pilot_pipeline");
+            let routines = fixture.work.join("routines");
+            fs::create_dir_all(&routines).unwrap();
+            fs::write(
+                routines.join("weekday-routine.yaml"),
+                "schemaVersion: 1\nname: weekday-routine\nenabled: true\ntarget: job:task_pilot_pipeline\ntrigger: {\"cron\":\"0 0 * * *\",\"missed_run\":\"skip\"}\n",
+            )
+            .unwrap();
+            auto_tasks::seed_auto_task_with_schedule(
+                &fixture,
+                "weekday-auto",
+                AutoTaskSchedule::cron("0 0 * * *"),
+            );
+            let server = fixture.server(true);
+            let routine_trigger = || {
+                let report = json_ok(server.get("/api/routines?workspace=ws_http_fixture"));
+                report["routines"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .find(|row| row["name"] == "weekday-routine")
+                    .unwrap()
+                    .clone()
+            };
+            let auto_schedule = || {
+                serde_json::to_value(
+                    fixture
+                        .runtime
+                        .auto_task_show("weekday-auto")
+                        .unwrap()
+                        .unwrap()
+                        .schedule,
+                )
+                .unwrap()
+            };
+            let post_routine = |row: &Value, cron: &str| {
+                server.send(
+                    "POST",
+                    "/api/routines/trigger?workspace=ws_http_fixture",
+                    json!({
+                        "name": "weekday-routine", "source": row["source"], "target": row["target"],
+                        "machine_name": "fixture", "expected_trigger": row["trigger"],
+                        "trigger": {"cron": cron, "missed_run": "skip"},
+                    }),
+                )
+            };
+            let post_auto = |expected: &Value, cron: &str| {
+                server.send(
+                    "POST",
+                    "/api/auto-tasks/schedule?workspace=ws_http_fixture",
+                    json!({"name": "weekday-auto", "expected_schedule": expected, "schedule": {"cron": cron}}),
+                )
+            };
+
+            let row = routine_trigger();
+            json_ok(post_routine(&row, "0 0 1 * +MON"));
+            let row = routine_trigger();
+            assert_eq!(row["trigger"]["cron"], "0 0 1 * +MON");
+            json_ok(post_auto(&auto_schedule(), "0 0 1 * +MON"));
+            assert_eq!(auto_schedule()["cron"], "0 0 1 * +MON");
+
+            let refused = post_routine(&row, "0 0 +1 * MON");
+            assert_eq!(refused.status().as_u16(), 400);
+            let body = refused.json::<Value>().unwrap();
+            assert!(
+                body["error"]
+                    .as_str()
+                    .is_some_and(|error| error.contains("0 0 +1 * MON")),
+                "{body}"
+            );
+            assert_eq!(routine_trigger()["trigger"]["cron"], "0 0 1 * +MON");
+            let refused = post_auto(&auto_schedule(), "0 0 +1 * MON");
+            assert_eq!(refused.status().as_u16(), 400);
+            assert_eq!(auto_schedule()["cron"], "0 0 1 * +MON");
+        },
+    );
+}

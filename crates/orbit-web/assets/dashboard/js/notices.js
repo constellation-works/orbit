@@ -34,6 +34,32 @@ function noticesPath() {
 const NOTICES_READ_SHARE_MS = 15_000;
 let noticesRead = null;
 
+// One fence for every banner and dock-count paint, whichever caller (the
+// banner poll, the Notices panel or the combined chrome read) brought the
+// payload. Each read is numbered when it starts. A paint never goes back to an
+// older read than the last one painted, and a post or close retires every read
+// started before it, so a response captured before the write cannot restore
+// what the write changed even when it arrives last.
+let noticeReadSeq = 0;
+let paintedNoticeSeq = 0;
+let noticeWriteFloor = 0;
+const noticeReadSeqs = new WeakMap();
+
+function retireNoticeReads() {
+  noticesRead = null;
+  noticeWriteFloor = noticeReadSeq + 1;
+}
+
+// Whether a payload may paint the banner and count; records it when it may.
+// A payload this module did not read (none today) is not fenced.
+function admitBannerPaint(payload) {
+  const seq = payload && typeof payload === "object" ? noticeReadSeqs.get(payload) : undefined;
+  if (seq === undefined) return true;
+  if (seq < noticeWriteFloor || seq < paintedNoticeSeq) return false;
+  paintedNoticeSeq = seq;
+  return true;
+}
+
 function fetchNotices({ shareRecent = false, read: request = null } = {}) {
   const key = `${getHostRevision()}:${getWorkspaceRevision()}:${noticesPath()}`;
   if (!request && noticesRead?.key === key
@@ -41,10 +67,12 @@ function fetchNotices({ shareRecent = false, read: request = null } = {}) {
     return noticesRead.promise;
   }
   const read = { key, pending: true, at: 0, promise: null };
+  const seq = ++noticeReadSeq;
   read.promise = (request || fetchJson(noticesPath())).then(
     (payload) => {
       read.pending = false;
       read.at = Date.now();
+      if (payload && typeof payload === "object" && !noticeReadSeqs.has(payload)) noticeReadSeqs.set(payload, seq);
       return payload;
     },
     (error) => {
@@ -133,6 +161,7 @@ onWorkspaceChange(() => {
 export function renderNoticeBanner(payload) {
   const banner = $("notice-banner");
   if (!banner) return;
+  if (!admitBannerPaint(payload)) return;
   const reasons = degradedReasons(payload);
   const openCount = Array.isArray(payload?.open) ? payload.open.length : 0;
   setDockNoticeCount(openCount, reasons);
@@ -352,7 +381,7 @@ async function closeChosenNotice(session) {
   // The write stands whichever session asked, so the shared read is dropped. A
   // reply for a session that has been replaced or left leaves the page alone: the
   // newer session owns the draft, the open rows and the focus.
-  noticesRead = null;
+  retireNoticeReads();
   if (!isCurrentSession()) {
     if (session.visit.isCurrent()) await refreshNoticesAfterWrite();
     return;
@@ -609,7 +638,7 @@ function wirePostDialog() {
       if (session) syncSubmit();
     }
     // The post stands whichever session sent it, so the shared read is dropped.
-    noticesRead = null;
+    retireNoticeReads();
     if (isCurrentSession()) {
       resetDraft();
       dialog.close();

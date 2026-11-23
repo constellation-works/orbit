@@ -14,7 +14,7 @@
 // metrics.js, which passes its helpers in.
 
 import { el } from './common.js';
-import { COMPLEXITIES, axisScale, option, runningModel, trendSource } from './metrics-running.js';
+import { COMPLEXITIES, axisScale, dayLeadHasData, option, runningModel, trendSource } from './metrics-running.js';
 
 const GROUPS = [["lines", "Line kind"], ["crew", "Crew"]];
 const STATS = [["sum", "Totals"], ["mean", "Mean"], ["median", "Median"]];
@@ -161,7 +161,7 @@ export function diffModel(payload, { windowKey, shown, countView, bucketTitle, b
   });
 
   const scope = filters.complexity ? `${COMPLEXITIES.find(([key]) => key === filters.complexity)[1].toLowerCase()} ` : "";
-  if (!total.n) {
+  if (!total.n && !dayLeadHasData(countView, seconds, (payload.overall.lead_points || []).map((cell) => cell.n))) {
     return {
       blurb,
       cards,

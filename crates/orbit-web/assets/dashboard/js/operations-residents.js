@@ -412,9 +412,13 @@ function startForm(payload) {
   return form;
 }
 
+// A settled answer belongs to the visit that sent it. After a workspace or
+// host round trip it is stale whichever way it went: its partial-write receipt
+// and its navigation are not the new visit's.
 async function post(path, body, visit) {
   try {
-    return { ok: true, result: await requestJson(path, "POST", body, visit) };
+    const result = await requestJson(path, "POST", body, visit);
+    return visit.isCurrent() ? { ok: true, result } : { stale: true };
   } catch (error) {
     if (!visit.isCurrent() || error?.code === "stale_workspace_visit") return { stale: true };
     return { ok: false, message: error?.message || String(error) };
@@ -465,7 +469,22 @@ async function startResident(form, controls, status) {
     return;
   }
   const id = created.result.task_id;
+  // The start form still open is this flow's own: only then does the result
+  // close it and open the new mandate's detail. Once the operator dismissed
+  // it, navigated away or opened another start form, the receipt goes to the
+  // dock's feedback and the current route, drafts and focus stay as they are.
+  const ownsForm = () => ui.startForm === form && Boolean(document.getElementById("resident-start-dialog")?.open);
   const finish = async (kind, message) => {
+    if (!visit.isCurrent()) return;
+    if (!ownsForm()) {
+      feedback(FEEDBACK, kind, message);
+      try {
+        await fetchAndRenderResidents();
+      } catch (_) {
+        // The background read reports its own failure in the panel.
+      }
+      return;
+    }
     closeResidentStart();
     ui.selected = id;
     ui.lastOpenedBy = id;
@@ -959,7 +978,10 @@ const ACTION = {
 
 function control(mandate, action, reason, controls) {
   const id = mandate.task_id;
-  const settled = () => { ui.pending = null; };
+  // Only the composer this write came from closes when it settles; one the
+  // operator opened since, here or on another resident, keeps its draft.
+  const owner = ui.pending?.task === id && ui.pending.action === action ? ui.pending : null;
+  const settled = () => { if (owner && ui.pending === owner) ui.pending = null; };
   if (action === "relay") {
     return write(`/api/residents/${encodeURIComponent(id)}/relay`, { quote: reason }, `Relayed to ${id}.`, controls, settled);
   }

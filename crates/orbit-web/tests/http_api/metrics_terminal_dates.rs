@@ -422,3 +422,82 @@ fn metrics_trends_memo_keys_separate_filters_with_separator_text() {
         },
     );
 }
+
+/// Per day sums the lead into the first trailing day. A task that closed only
+/// in the lead, with an empty window, still reaches the completion and token
+/// lead (under the model and tag filters too), while the window totals stay
+/// zero. An empty workspace's lead is empty.
+#[test]
+fn lead_only_closures_reach_completion_and_token_leads() {
+    isolated(
+        "metrics_terminal_dates::lead_only_closures_reach_completion_and_token_leads",
+        || {
+            let fixture = Fixture::new();
+            let completions = format!("/api/diagnostics/completions?since=24h&{WS}");
+            let tokens =
+                |filters: &str| format!("/api/diagnostics/task_tokens?since=24h&{WS}{filters}");
+            let lead_tasks = |body: &Value, cohort: Option<&str>| {
+                body["series"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .filter(|series| cohort.is_none_or(|cohort| series["cohort"] == cohort))
+                    .flat_map(|series| series["lead_points"].as_array().unwrap())
+                    .map(|cell| cell["n"].as_u64().unwrap())
+                    .sum::<u64>()
+            };
+            let lead_done = |body: &Value| {
+                body["lead_buckets"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|bucket| bucket["done"]["total"].as_u64().unwrap())
+                    .sum::<u64>()
+            };
+
+            let server = fixture.server(false);
+            let empty = json_ok(server.get(&completions));
+            assert_eq!(lead_done(&empty), 0, "an empty lead stays empty");
+            assert_eq!(lead_tasks(&json_ok(server.get(&tokens(""))), None), 0);
+
+            let width = empty["window"]["bucket_seconds"].as_i64().unwrap();
+            let start: DateTime<Utc> = empty["window"]["since"].as_str().unwrap().parse().unwrap();
+            let closed_at = start - Duration::seconds(width / 2);
+            let task = complete_at(&fixture, closed_at);
+            // No invocation predates its task, which the fixture created just now.
+            record_delivery(&fixture, &task, Utc::now());
+
+            // The trends memo keeps the first answer, so read on a fresh server.
+            let server = fixture.server(false);
+            let done = json_ok(server.get(&completions));
+            assert_eq!(
+                done["current"]["done"]["total"], 0,
+                "the window has no closure"
+            );
+            assert_eq!(lead_done(&done), 1);
+
+            let all = json_ok(server.get(&tokens("")));
+            assert_eq!(all["total"]["n"], 0, "window totals stay the window's own");
+            assert_eq!(lead_tasks(&all, None), 1);
+            let model = json_ok(server.get(&tokens("&model=gpt-6.1-sol")));
+            assert_eq!(
+                lead_tasks(&model, None),
+                1,
+                "the lead task ran the filtered model"
+            );
+            let other = json_ok(server.get(&tokens("&model=another-model")));
+            assert_eq!(
+                lead_tasks(&other, None),
+                0,
+                "the model filter applies to the lead"
+            );
+            let tagged = json_ok(server.get(&tokens("&tags=lead-tag")));
+            assert_eq!(lead_tasks(&tagged, Some("with")), 0);
+            assert_eq!(
+                lead_tasks(&tagged, Some("without")),
+                1,
+                "the tag filter splits the lead"
+            );
+        },
+    );
+}

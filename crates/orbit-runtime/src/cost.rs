@@ -132,6 +132,11 @@ pub struct NormalizedTokenSummary {
     /// Linked tasks with no uncovered invocation in this summary.
     #[serde(default)]
     pub covered_linked_task_count: u64,
+    /// The part of `normalized_token_total` from covered invocations linked to
+    /// at least one task; taskless invocations are left out, so it pairs with
+    /// `covered_linked_task_count`. Absent from older hosts' payloads.
+    #[serde(default)]
+    pub linked_normalized_token_total: u64,
     pub unknown_input_basis_or_model_count: u64,
 }
 

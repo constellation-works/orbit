@@ -1,5 +1,5 @@
 import { backlogForecastFailureSummary, backlogForecastSummary, drainBacklogForecastLink, fetchBacklogForecast } from './forecast.js';
-import { getWindow, getWorkspaceRevision, isAggregateView, el, scopedHashHref } from './common.js';
+import { getHost, getServingHost, getWindow, getWorkspaceRevision, isAggregateView, el, scopedHashHref } from './common.js';
 import { sparkline, svg } from './sparkline.js';
 import { $, autoDrainNumber, operationsState, registerOperationsReset, selectedWorkspace, taskLink, time } from './operations-shared.js';
 
@@ -299,7 +299,20 @@ function placeBacklogForecast(section) {
   if (backlogForecastCache.revision !== getWorkspaceRevision() || backlogForecastCache.status === "pending") return;
   const summary = backlogForecastCache.status === "failed" ? backlogForecastFailureSummary()
     : backlogForecastCache.status === "ready" || backlogForecastCache.status === "unavailable" ? backlogForecastCache.summary : null;
-  section.append(drainBacklogForecastLink(summary));
+  const link = drainBacklogForecastLink(summary);
+  // The backlog forecast is always the rail selection's: it was read there, and
+  // it links there whichever order it and the card's readiness arrive in. On a
+  // card showing a follower host, the line names that owner scope, so the
+  // owner's backlog is not read as the follower's.
+  link.dataset.drainScope = "rail";
+  const follower = section.closest("[data-drain-follower]")?.dataset.drainFollower;
+  const owner = getHost() || getServingHost()?.name;
+  if (follower) {
+    const note = `Backlog of ${owner || "this host"}, not ${follower}`;
+    link.prepend(el("span", { class: "drain-forecast-meta drain-backlog-forecast-owner", text: note }));
+    link.title = `${note}\n${link.title}`;
+  }
+  section.append(link);
 }
 
 function paintBacklogForecast() {

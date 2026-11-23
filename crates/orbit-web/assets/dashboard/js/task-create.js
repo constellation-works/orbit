@@ -18,7 +18,8 @@ export function initTaskCreate({ getWorkspaces }) {
   // The serving host compares as null: a submission saved before /api/hosts
   // named it stored null, and must stay in scope once the name arrives.
   const hostKey = name => (name && name !== getServingHost()?.name ? name : null);
-  const inScope = () => !saved || (hostKey(saved.host) === hostKey(host()) && (!getWorkspace() || saved.workspace === getWorkspace()));
+  const ownsScope = submission => hostKey(submission.host) === hostKey(host()) && (!getWorkspace() || submission.workspace === getWorkspace());
+  const inScope = () => !saved || ownsScope(saved);
   const feedback = message => { $('feedback').textContent = message; };
   const persist = value => {
     // Saving must succeed before a request can begin, including on reload.
@@ -155,6 +156,7 @@ export function initTaskCreate({ getWorkspaces }) {
     // authorization refusal on a retry is never proof of no commit: the
     // server checks authorization before the idempotent request_id lookup.
     const wasUncertain = submission.uncertain;
+    let failure = '';
     try {
       persist({ ...submission, uncertain: true });
       const response = await fetch(submission.path, {
@@ -190,10 +192,16 @@ export function initTaskCreate({ getWorkspaces }) {
       }
       persist({ ...submission, receipt });
     } catch (error) {
-      if (visit.isCurrent()) feedback(`${error.message} ${saved ? 'Keep this submission and retry to recover its receipt.' : 'Correct the fields and submit again.'}`);
+      failure = `${error.message} ${saved ? 'Keep this submission and retry to recover its receipt.' : 'Correct the fields and submit again.'}`;
     } finally {
       pending = false;
-      if (visit.isCurrent()) paint();
+      // The visit that sent the request, or a dialog reopened over the same
+      // frozen submission after a scope round trip (it reads Creating… until
+      // this settles), shows the outcome. Another scope gets none of it.
+      if (visit.isCurrent() || ($('panel').open && ownsScope(submission))) {
+        if (failure) feedback(failure);
+        paint();
+      }
     }
   });
   onWorkspaceChange(() => {

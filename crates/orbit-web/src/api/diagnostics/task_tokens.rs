@@ -182,11 +182,12 @@ fn task_token_trend(
     filters: &Filters,
 ) -> Result<Value, orbit_core::OrbitError> {
     let cohort_window = CohortWindowData::load(runtime, range, &filters.cohort, true)?;
-    let totals: BTreeMap<String, TaskTokenTotals> = if cohort_window.in_window.is_empty() {
-        BTreeMap::new()
-    } else {
-        runtime.task_token_totals(cohort_window.invocation_read_since())?
-    };
+    let totals: BTreeMap<String, TaskTokenTotals> =
+        if cohort_window.in_window.is_empty() && cohort_window.lead_rows.is_empty() {
+            BTreeMap::new()
+        } else {
+            runtime.task_token_totals(cohort_window.invocation_read_since())?
+        };
 
     let mut series = CohortSeriesMap::<Cell>::new(&filters.cohort, &cohort_window.window);
     let mut tag_counts: BTreeMap<&str, u64> = BTreeMap::new();

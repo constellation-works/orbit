@@ -3,7 +3,7 @@ import { el, pinnedInfoHint } from './common.js';
 
 const STATE_WORDS = {
   done: "done", active: "in progress", current: "current", pending: "not yet",
-  failed: "failed", cancelled: "cancelled", awaiting: "awaiting approval",
+  failed: "failed", cancelled: "cancelled", awaiting: "awaiting approval", held: "held",
 };
 
 export function buildProgressStrip(steps, { className, label }) {
@@ -17,7 +17,7 @@ export function buildProgressStrip(steps, { className, label }) {
       class: "progress-strip-hint", "aria-label": fullText,
     }, [el("span", { class: "progress-strip-label", text: step.label })]);
     const label = trigger.firstElementChild;
-    const hasExtraInfo = Boolean(step.hint) || state === "failed" || state === "cancelled";
+    const hasExtraInfo = Boolean(step.hint) || state === "failed" || state === "cancelled" || state === "held";
     if (hasExtraInfo) {
       trigger.classList.add("progress-strip-tooltip-needed");
     } else {

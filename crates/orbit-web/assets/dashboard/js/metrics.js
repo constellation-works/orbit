@@ -22,7 +22,7 @@ import {
 } from './common.js';
 import { linePath, svg } from './sparkline.js';
 import { fetchTokens, isCurrentTokensPayload, tokenSpendModel, tokensModel, tokensQuery, tokensTools } from './metrics-tokens.js';
-import { TERMINAL_TIME_NOTE, availableCountViews, countViewHash, countViewsFromQuery, delta, fmtMs, isCountTrend, previousLabel, resolveCountView, runningModel, undatedNote } from './metrics-running.js';
+import { TERMINAL_TIME_NOTE, availableCountViews, countViewHash, countViewsFromQuery, dayLeadHasData, delta, fmtMs, isCountTrend, previousLabel, resolveCountView, runningModel, undatedNote } from './metrics-running.js';
 import { fetchTurns, isCurrentTurnsPayload, turnsModel, turnsQuery, turnsTools, turnsView } from './metrics-turns.js';
 import { diffModel, diffQuery, diffTools, diffView, fetchDiff, isCurrentDiffPayload } from './metrics-diff.js';
 import { fetchFriction, frictionModel, frictionQuery, frictionTools, frictionView, isCurrentFrictionPayload } from './metrics-friction.js';
@@ -713,7 +713,8 @@ function completedModel(countView) {
 
   const blurb = "Tasks that moved to done in each bucket, by complexity.";
   const undated = undatedNote(payload.undated && payload.undated.done.total);
-  if (!current.done.total && !current.rejected && !current.archived) {
+  if (!current.done.total && !current.rejected && !current.archived
+    && !dayLeadHasData(countView, seconds, (payload.lead_buckets || []).map((bucket) => doneCount(bucket, "all")))) {
     return { blurb, cards, empty: { title: `No tasks closed in the last ${windowKeyValue === "all" ? "recorded history" : windowKeyValue}`, detail: undated || "" } };
   }
 
@@ -862,7 +863,7 @@ function defectsModel(countView) {
   const blurb = lineageOn
     ? "Bug tasks filed in each bucket, by what their regression_from relation names as the cause. Fix-for-a-fix names a bug fix, other regression names another type of task, and unattributed defects have no cause recorded."
     : "Bug tasks filed in each bucket, by the review or sweep that filed them.";
-  if (!current.total) {
+  if (!current.total && !dayLeadHasData(countView, seconds, (payload.lead_buckets || []).map((bucket) => bucket.total))) {
     return { blurb, cards, empty: { title: `No defects filed in the last ${windowKeyValue === "all" ? "recorded history" : windowKeyValue}`, detail: "" } };
   }
 
