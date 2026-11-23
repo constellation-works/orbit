@@ -19,6 +19,9 @@ mod workflow_read;
 #[cfg(test)]
 mod tests;
 
+pub(super) use check_annotations::{
+    CiAnnotationLevel, CiCheckAnnotationsAnswer, CiCheckConclusion,
+};
 use ci::log_answer as ci_log_answer;
 use ci::rerun as ci_rerun;
 pub(super) use ci::{
