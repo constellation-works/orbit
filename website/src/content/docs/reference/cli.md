@@ -178,7 +178,7 @@ Each `orbit gc` command reports what it would remove; `--confirm` removes it.
 | Command | Purpose |
 |---|---|
 | `orbit attention` | [List what waits on an operator](/how-to/attention/): pilot holds, blocked tasks, failed runs, open decisions, review waits, red CI and more. `--all` reads every workspace and registered host. |
-| `orbit attention wait --since <cursor>` | Block until the attention list changes, with no model turn. It needs a wait grant: call `orbit.attention` with `wait_grant` over MCP and export the token as `ORBIT_ATTENTION_WAIT_TOKEN`. `--timeout` defaults to 30m. Exit codes: 0 changed, 3 timeout, 4 degraded set changed, 5 every read failed. |
+| `orbit attention wait --since <cursor>` | Block until the attention list changes, with no model turn. It needs a wait grant: call `orbit.attention` with `wait_grant` over MCP and export the token as `ORBIT_ATTENTION_WAIT_TOKEN`. `--timeout` defaults to 30m. Exit codes: 0 changed, 3 timeout, 4 degraded set changed, 5 the final read failed (every read failed, or only the last after earlier reads succeeded; no envelope is printed). |
 | `orbit audit list\|stats` \| `show <id>` \| `export --output <file>` \| `prune --older-than <duration>` | Query, export and prune the audit event log. |
 | `orbit log tail` | Print recent lines of the unified Orbit log feed. `-f` follows it. |
 | `orbit doctor` | Check workspace health: config, database, disk, indexes, locks and runs. `--problems` prints only failures and warnings; the `--fix-*` flags run opt-in repairs. |

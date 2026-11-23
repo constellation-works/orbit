@@ -52,7 +52,7 @@ To wait without spending a model turn, mint a grant on a read and block in the s
 
 The grant lasts two hours, covers only the workspaces that read named, and gives agent-level reads (operator kinds stay `degraded`); a shell without one is refused with `capability_denied`, and so is a plain `orbit attention` that names `--workspace`, `--host` or `--all`: a selector is not a capability.
 
-Exit `0`: new items, printed with the next cursor. Exit `3`: timeout with no change. Exit `4`: the `degraded` set changed. Exit `5`: every read failed. A timeout still lists `degraded`, and `wait.all_sources_readable` is false while any source is unreadable: not all-clear. Re-mint when the grant expires.
+Exit `0`: new items, printed with the next cursor. Exit `3`: timeout with no change. Exit `4`: the `degraded` set changed. Exit `5`: the final read before the deadline failed, either every read failed or only the last one after earlier reads succeeded. No envelope is printed and the `wait` record carries the error, so exit `5` alone does not show that every poll failed. A timeout still lists `degraded`, and `wait.all_sources_readable` is false while any source is unreadable: not all-clear. Re-mint when the grant expires.
 
 ## Fixed values
 

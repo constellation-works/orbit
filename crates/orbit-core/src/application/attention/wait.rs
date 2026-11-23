@@ -26,7 +26,8 @@ pub enum AttentionWaitStatus {
     /// The deadline passed with an empty delta and an unchanged `degraded` set.
     /// The answer still lists whatever was degraded.
     TimedOut,
-    /// Every read up to the deadline failed, so nothing is known.
+    /// The final read before the deadline failed, so the current state is unknown.
+    /// Earlier reads may have succeeded.
     Unreadable,
 }
 
