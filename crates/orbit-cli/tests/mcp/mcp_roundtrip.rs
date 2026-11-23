@@ -1256,6 +1256,52 @@ fn mcp_serve_tools_list_matches_production_snapshot() {
     );
 }
 
+/// The control-center resource tells the Jobs view which calls this session
+/// serves. `orbit_run` is advertised when any action is served, so a
+/// dispatch-only session lists it with `resume` but not the `list` catalog
+/// read; the panel must see that read as withheld. Adding `runs` serves it,
+/// and the Run job write stays gated by `pipelines`.
+#[test]
+fn control_center_withholds_the_jobs_catalog_read_without_the_runs_toolset() {
+    let workspace = McpWorkspace::init();
+    let session_tools = |client: &mut McpClient| -> Value {
+        let resource = client.request(
+            "resources/read",
+            json!({"uri":"ui://orbit/control-center/v1/index.html"}),
+        );
+        let html = resource["result"]["contents"][0]["text"]
+            .as_str()
+            .expect("control-center html")
+            .to_string();
+        let open = "<script type=\"application/json\" id=\"orbit-session-tools\">";
+        let start = html.find(open).expect("session tools block") + open.len();
+        let end = html[start..].find("</script>").expect("block end") + start;
+        serde_json::from_str(&html[start..end]).expect("session tools JSON")
+    };
+
+    let mut dispatch_only =
+        workspace.serve_with_args(&["--operator", "--role", "agent", "--toolset", "dispatch,ui"]);
+    let names = tool_names(&dispatch_only.tools_list())
+        .into_iter()
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    assert!(names.iter().any(|name| name == "orbit_run"), "{names:?}");
+    let tools = session_tools(&mut dispatch_only);
+    assert_eq!(tools["orbit_run:list"], false, "{tools}");
+    assert_eq!(tools["orbit_pipeline_invoke"], false, "{tools}");
+
+    let mut with_runs = workspace.serve_with_args(&[
+        "--operator",
+        "--role",
+        "agent",
+        "--toolset",
+        "dispatch,runs,ui",
+    ]);
+    let tools = session_tools(&mut with_runs);
+    assert_eq!(tools["orbit_run:list"], true, "{tools}");
+    assert_eq!(tools["orbit_pipeline_invoke"], false, "{tools}");
+}
+
 /// A managed caller can leave `ORBIT_ACTIVITY_MCP_TOOLSETS` on the test
 /// process after the pre-`main` scrub. The default `tools/list` fixture must
 /// still match the committed snapshot, including the bytes the snapshot-update

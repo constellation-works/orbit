@@ -726,6 +726,7 @@ impl ServerHandler for OrbitToolServer {
             vec![presentation::resource_content(
                 &request.uri,
                 definitions.as_ref(),
+                |name, action| self.host.serves_tool_call(name, action),
             )],
         )))
     }
