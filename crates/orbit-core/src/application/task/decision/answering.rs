@@ -5,7 +5,7 @@ use orbit_types::identity::is_automation_actor;
 use orbit_types::task::{
     ACCEPT_FINDINGS_ANSWER_ID, DECISION_ANSWERED_EVENT, DecisionAction, DecisionAnswer,
     DecisionGate, DecisionOption, DecisionRequest, DecisionRequestState, DecisionResolution,
-    PilotAdmissionOperatorRecord, PilotAdmissionVerdict, ReadinessGap, ReadinessStage,
+    PilotAdmissionOperatorRecord, PilotAdmissionVerdict, ReadinessGap, ReadinessStage, TaskComment,
     TaskHistoryEntry, TaskRelation, TaskRelationType, TaskStatus, readiness_gaps,
 };
 
@@ -15,6 +15,7 @@ use super::super::transitions::DeferredApprovalEffects;
 use crate::OrbitRuntime;
 use crate::application::task::{
     PilotAdmissionHold, TaskCorpusPort, TaskJobPort, TaskRecords, TaskResidentPort, TriageTarget,
+    pilot_assessable_status,
 };
 
 /// Whether a block-triage option returns the blocked task to `backlog`.
@@ -31,6 +32,12 @@ fn option_returns_blocked_task_to_backlog(action: &Option<DecisionAction>) -> bo
 /// published or kept candidate, which the rewritten specification no longer
 /// matches.
 const CANDIDATE_DISCARDED_NOTE: &str = "\nCandidate discarded: the rewrite changed the specification the task's published candidate implements, so that candidate (and its open pull request) is closed and the next run implements fresh.";
+
+#[derive(Default)]
+struct DecisionAnswerEffects {
+    deferred_approval: Option<DeferredApprovalEffects>,
+    requirements_rewritten: bool,
+}
 
 impl OrbitRuntime {
     /// Apply `answer_id` to the open request `request_id` as the human
@@ -148,16 +155,19 @@ impl OrbitRuntime {
                 } else {
                     None
                 };
-                if !lands_handoff {
-                    deferred = self.apply_decision_answer(
+                let effects = if lands_handoff {
+                    DecisionAnswerEffects::default()
+                } else {
+                    self.apply_decision_answer(
                         &request,
                         answer_id,
                         note.as_deref(),
                         &actor_label,
                         provenance.as_deref(),
                         early.clone().unwrap_or_default(),
-                    )?;
-                }
+                    )?
+                };
+                deferred = effects.deferred_approval;
                 if early.is_none() {
                     let (resolution, entry, corpus_append) = compose()?;
                     if lands_handoff {
@@ -174,6 +184,9 @@ impl OrbitRuntime {
                             },
                         )?;
                     }
+                }
+                if effects.requirements_rewritten {
+                    self.request_pilot_after_decision_rewrite(&task_id, &actor_label);
                 }
                 answered = self
                     .get_task_decision_requests(&task_id)?
@@ -195,8 +208,10 @@ impl OrbitRuntime {
 
     /// The gate's own write for one allowed answer, as the human. The
     /// caller holds the task's write lock and has already refused every
-    /// stale or disallowed answer. An approval returns the effects it
-    /// deferred until that lock is released. `resolution_history` is
+    /// stale or disallowed answer. The returned effects include any
+    /// approval work deferred until that lock is released, and whether
+    /// a rewrite may need a pilot once the resolution is recorded.
+    /// `resolution_history` is
     /// non-empty only for a blocked task's reject option, which writes it in
     /// its own status update; every other answer's caller records it after.
     fn apply_decision_answer(
@@ -207,7 +222,7 @@ impl OrbitRuntime {
         actor_label: &str,
         provenance: Option<&str>,
         resolution_history: Vec<TaskHistoryEntry>,
-    ) -> Result<Option<DeferredApprovalEffects>, OrbitError> {
+    ) -> Result<DecisionAnswerEffects, OrbitError> {
         let task_id = request.task_id.as_str();
         let via = provenance.unwrap_or("operator surface");
         let chosen = request
@@ -249,7 +264,7 @@ impl OrbitRuntime {
                         },
                         actor_label.to_string(),
                     )?;
-                    return Ok(None);
+                    return Ok(DecisionAnswerEffects::default());
                 }
                 let edit = self.triage_option_edit(task_id, answer_id)?;
                 let consequence = format!(
@@ -287,7 +302,10 @@ impl OrbitRuntime {
                     &consequence,
                 ));
                 self.update_task_as_human(task_id, params, actor_label.to_string())?;
-                Ok(None)
+                Ok(DecisionAnswerEffects {
+                    requirements_rewritten: true,
+                    ..Default::default()
+                })
             }
             DecisionGate::PilotAdmission => {
                 let verdict = match answer_id {
@@ -354,7 +372,7 @@ impl OrbitRuntime {
                     },
                     actor_label.to_string(),
                 )?;
-                Ok(None)
+                Ok(DecisionAnswerEffects::default())
             }
             DecisionGate::AgentRequest => {
                 let task = self.get_task(task_id)?;
@@ -380,7 +398,7 @@ impl OrbitRuntime {
                     },
                     actor_label.to_string(),
                 )?;
-                Ok(None)
+                Ok(DecisionAnswerEffects::default())
             }
             DecisionGate::ProposedApproval | DecisionGate::ReviewApproval => {
                 let comment = decision_comment(request, answer_id, chosen, via, note, "");
@@ -394,14 +412,17 @@ impl OrbitRuntime {
                             note.map(str::to_string),
                             Some(comment),
                         )?;
-                        Ok(Some(effects))
+                        Ok(DecisionAnswerEffects {
+                            deferred_approval: Some(effects),
+                            ..Default::default()
+                        })
                     }
                     "reject" => {
                         let reason = note.map(str::to_string).unwrap_or_else(|| {
                             format!("rejected via decision request {}", request.id)
                         });
                         self.reject_task(task_id, reason, Some(comment))?;
-                        Ok(None)
+                        Ok(DecisionAnswerEffects::default())
                     }
                     other => Err(OrbitError::decision_refused(
                         DecisionRefusalCode::AnswerNotAllowed,
@@ -422,11 +443,11 @@ impl OrbitRuntime {
             )),
             DecisionGate::ResidentAuthority => {
                 self.apply_resident_authority_decision_answer(request, answer_id, actor_label)?;
-                Ok(None)
+                Ok(DecisionAnswerEffects::default())
             }
             DecisionGate::ScriptGrant => {
                 self.answer_script_grant_decision(request, answer_id, actor_label, via)?;
-                Ok(None)
+                Ok(DecisionAnswerEffects::default())
             }
         }
     }
@@ -448,7 +469,7 @@ impl OrbitRuntime {
         option: &DecisionOption,
         (note, actor_label, via): (Option<&str>, &str, &str),
         resolution_history: Vec<TaskHistoryEntry>,
-    ) -> Result<Option<DeferredApprovalEffects>, OrbitError> {
+    ) -> Result<DecisionAnswerEffects, OrbitError> {
         let task_id = request.task_id.as_str();
         let task = self.get_task(task_id)?;
         let refuse = |reason: &str| {
@@ -634,10 +655,13 @@ impl OrbitRuntime {
                         Some(comment),
                         resolution_history,
                     )?;
-                    return Ok(Some(effects));
+                    return Ok(DecisionAnswerEffects {
+                        deferred_approval: Some(effects),
+                        ..Default::default()
+                    });
                 }
                 self.reject_task(task_id, reason, Some(comment))?;
-                return Ok(None);
+                return Ok(DecisionAnswerEffects::default());
             }
             Some(DecisionAction::Land) => {
                 return Err(refuse("landing requires the operator handoff route"));
@@ -647,7 +671,8 @@ impl OrbitRuntime {
             }
         }
         self.update_task_as_human(task_id, params, actor)?;
-        if matches!(option.action, Some(DecisionAction::RePilot)) {
+        let explicit_pilot = matches!(option.action, Some(DecisionAction::RePilot));
+        if explicit_pilot {
             self.request_explicit_task_pilot(
                 task_id,
                 Some(actor_label),
@@ -655,15 +680,64 @@ impl OrbitRuntime {
             )
             .map_err(|error| OrbitError::Execution(format!("The decision option's task edits were saved, but its pilot request failed and the decision resolution was not recorded. Inspect the task and decision before requesting another pilot: {error}")))?;
         }
-        if approves {
+        let deferred_approval = if approves {
             let (_, effects) = self.approve_task_guarded_deferring_effects(
                 task_id,
                 note.map(str::to_string),
                 None,
             )?;
-            return Ok(Some(effects));
+            Some(effects)
+        } else {
+            None
+        };
+        Ok(DecisionAnswerEffects {
+            deferred_approval,
+            requirements_rewritten: rewrites && !explicit_pilot,
+        })
+    }
+
+    /// Under the answer's task lock, request the assessment of the edited
+    /// requirements. Record the answer first so a re-check sees the choice
+    /// in its inputs, and preserve it if job submission fails.
+    fn request_pilot_after_decision_rewrite(&self, task_id: &str, actor_label: &str) {
+        let request_pilot = || -> Result<(), OrbitError> {
+            let task = self.get_task(task_id)?;
+            if pilot_assessable_status(task.status)
+                && !self.is_human_crew(task.crew.as_deref())
+                && matches!(
+                    self.pilot_admission_hold(task_id)?,
+                    Some(PilotAdmissionHold::StaleAssessment(_))
+                )
+            {
+                self.request_explicit_task_pilot(
+                    task_id,
+                    Some(actor_label),
+                    orbit_types::workflow::JobRunTrigger::cli(),
+                )
+                .map_err(OrbitError::Execution)?;
+            }
+            Ok(())
+        };
+        if let Err(error) = request_pilot() {
+            let message = format!(
+                "The decision answer was saved, but Orbit could not request a fresh pilot. {error}. An operator can run `orbit task repilot {task_id}` on the owner once the task is eligible."
+            );
+            if let Err(record_error) = self.stores().task_records().update(
+                task_id,
+                TaskRecordUpdateParams {
+                    actor: "system".into(),
+                    append_comments: vec![TaskComment {
+                        at: chrono::Utc::now(),
+                        by: "system".into(),
+                        message: message.clone(),
+                        operation_id: None,
+                    }],
+                    ..Default::default()
+                },
+            ) {
+                tracing::warn!(task_id, %message, %record_error, "could not record the pilot submission failure");
+            }
         }
-        Ok(None)
     }
 
     /// The task-pilot preparation and admission checks a digest-raised

@@ -49,7 +49,8 @@ A person's or agent session's `context_files` edit on such a task whose latest a
 Other material edits (title, plan, and selectors not covered by that rule) or policy never queue one through the routine; every other later routine assessment requires an explicit
 request: `orbit task repilot <id>`, `orbit.task.recover` action `repilot` with `id` and the
 owning `workspace`, or `orbit task update <id> --repilot` / `orbit.task.update`
-with `repilot: true`.
+with `repilot: true`. The update flag requires operator capability, and the
+task must start and finish the update in `proposed` or `backlog`.
 
 An `--approve-proposed` drain still queues a fresh pilot automatically when a stale explicit/routine assessment's certified description/criteria or other material drifted and no live execution claim holds the task, while scheduled discovery still queues one automatically only when its certified description/criteria drifted and no live execution claim holds the task; a failed repilot holds it until its meaning changes again or an operator acts.
 
@@ -59,6 +60,12 @@ holds the task, or on a replica. A refusal reports the same stable `code` on
 the CLI, MCP and dashboard (`task_pilot_unsupported_status`, `_human_crew`,
 `_already_running`, `_delivery_running` or `_replica_checkout`). A decision option with action `re_pilot`
 also explicitly requests one pilot; it needs no material rewrite.
+
+An answered decision that rewrites the description or acceptance criteria of
+a previously assessed task queues a pilot when the task returns to backlog
+with a stale assessment. Dispatch can proceed when the new assessment clears
+admission. If submission fails, the task comment names the operator command
+to request the pilot.
 
 Existing
 `orbit run task-pilot <id>` remains an explicit assessment command.

@@ -503,16 +503,29 @@ fn explicit_repilot_tool_and_update_submit_once_with_live_dedup() {
         if update {
             input["repilot"] = json!(true);
         }
-        assert!(
-            workspace.runtime.run_tool(tool, input.clone()).is_err(),
-            "an unprivileged caller cannot request a new pilot"
-        );
+        let refused = workspace.runtime.run_tool(tool, input.clone()).unwrap_err();
+        if update {
+            let message = refused.to_string();
+            assert!(message.contains("`operator` capability"), "{message}");
+            assert!(message.contains("orbit task repilot"), "{message}");
+        }
         let human = runtime_at(
             &workspace.runtime.global_root(),
             &workspace.repo.join(".orbit"),
         )
         .with_actor(orbit_core::ActorIdentity::human("human:operator"));
         let _operator = orbit_common::test_env::scoped([("ORBIT_OPERATOR", Some("1"))]);
+        if update {
+            let mut unsupported = input.clone();
+            unsupported["status"] = json!("someday");
+            let message = human.run_tool(tool, unsupported).unwrap_err().to_string();
+            assert!(message.contains("someday"), "{message}");
+            assert!(message.contains("orbit task repilot"), "{message}");
+            assert_eq!(
+                human.get_task(&task.id).unwrap().status,
+                TaskStatus::Proposed
+            );
+        }
         let response = human.run_tool(tool, input.clone()).unwrap();
         let runs = workspace.jobs.list_job_runs("task_pilot_pipeline").unwrap();
         assert_eq!(runs.len(), 1, "{response}");
@@ -531,6 +544,95 @@ fn explicit_repilot_tool_and_update_submit_once_with_live_dedup() {
         );
         workspace.runtime.cancel_job_run(&runs[0].run_id).unwrap();
     }
+}
+
+#[cfg(unix)]
+fn decision_rewrite_repilots_before_dispatch() {
+    use orbit_core::application::task::{FinalRecoveryCompletion, FinalRecoveryRequest};
+    use orbit_types::task::DecisionRequestState;
+
+    orbit_core::test_support::install_substitute_pipeline_worker(["sh", "-c", "exec sleep 30"]);
+    let workspace = Workspace::new();
+    workspace.install_pilot_job();
+    let task = workspace.task("decision recovery");
+    apply_explicit_pilot_assessment(&workspace, &task, false);
+    let runtime = &workspace.runtime;
+    runtime.approve_task(&task.id, None, None).unwrap();
+    RuntimeHost::admit_task_for_workflow(runtime, &task.id, "worktree_setup").unwrap();
+    let running = runtime.get_task(&task.id).unwrap();
+    let observed = runtime.final_recovery_revision(&running).unwrap();
+    let criteria = ["Verify the retry also covers the failure path."];
+    runtime
+        .apply_final_recovery(
+            &FinalRecoveryRequest {
+                task_id: task.id.clone(),
+                run_id: "jrun-decision-rewrite".into(),
+                observed,
+                repo_root: workspace.repo.clone(),
+                base_ref: "main".into(),
+                completion: FinalRecoveryCompletion::Review,
+                requeue_bound: Default::default(),
+            },
+            Some(&json!({
+                "decision": "decide",
+                "summary": "Choose which requirements the next attempt should cover.",
+                "options": [
+                    {
+                        "summary": "Cover the failure path",
+                        "consequence": "The next attempt verifies failure handling.",
+                        "rewrite": {"acceptance_criteria": criteria},
+                        "action": {"kind": "requeue"}
+                    },
+                    {
+                        "summary": "Retire the task",
+                        "consequence": "There is no next attempt.",
+                        "action": {"kind": "archive"}
+                    }
+                ],
+                "recommended": 1
+            })),
+        )
+        .unwrap();
+    let blocked = runtime.get_task(&task.id).unwrap();
+    assert_eq!(blocked.status, TaskStatus::Blocked);
+    let request = runtime
+        .list_decision_requests(None, Some(&task.id), false)
+        .unwrap()
+        .pop()
+        .unwrap();
+    let answered = runtime
+        .answer_decision_request_as_human(&request.id, "1", None, "human:operator".into(), None)
+        .unwrap();
+    assert_eq!(answered.state, DecisionRequestState::Answered);
+    let ready_for_pilot = runtime.get_task(&task.id).unwrap();
+    assert_eq!(ready_for_pilot.status, TaskStatus::Backlog);
+    assert_eq!(ready_for_pilot.acceptance_criteria, criteria);
+    assert_eq!(ready_for_pilot.description, blocked.description);
+    assert_eq!(ready_for_pilot.tags, blocked.tags);
+
+    let held = RuntimeHost::admit_task_for_workflow(runtime, &task.id, "worktree_setup")
+        .unwrap_err()
+        .to_string();
+    assert!(held.contains("changed after its latest pilot"), "{held}");
+    let runs = workspace.jobs.list_job_runs("task_pilot_pipeline").unwrap();
+    assert_eq!(runs.len(), 1, "the answer must request a new pilot");
+    let run = &runs[0];
+    assert_eq!(run.input.as_ref().unwrap()["task_ids"], json!([task.id]));
+    let prepared = workspace.prepare_in_run(&run.run_id, &[&task.id]);
+    assert_eq!(prepared["task_ids"], json!([task.id]), "{prepared}");
+    let applied = workspace.action(
+        "apply_task_pilot_results",
+        apply_input(&workspace, &prepared),
+    );
+    assert_eq!(applied["applied_count"], 1, "{applied}");
+    workspace.record_steps(&run.run_id, &[("prepare", &prepared), ("apply", &applied)]);
+    runtime.cancel_job_run(&run.run_id).unwrap();
+    assert_eq!(
+        RuntimeHost::admit_task_for_workflow(runtime, &task.id, "worktree_setup")
+            .unwrap()
+            .status,
+        TaskStatus::InProgress
+    );
 }
 
 #[cfg(unix)]
@@ -713,6 +815,7 @@ crate::scenario_table!(
 #[cfg(unix)]
 crate::scenario_table!(
     explicit_repilot_request_scenarios,
+    decision_rewrite_repilots_before_dispatch,
     explicit_repilot_tool_and_update_submit_once_with_live_dedup,
     held_warning_keeps_one_decision_until_explicit_decision_repilot,
     a_never_piloted_task_is_automatically_admitted_once
