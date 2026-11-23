@@ -42,12 +42,16 @@ readout to a `pilot_assessment_unavailable` finding and keep serving every other
 task. Drain admission, re-pilot and attention still fail closed on the same
 resolution. The dashboard warnings path, which had aborted the whole list on one
 missing artifact, was corrected to degrade per task by [ORB-23707].
+[ORB-23750] and [ORB-23760] extended task-show degradation to unreadable,
+dangling and corrupt assessment blobs while keeping admission fail-closed.
 
 All assessment consumers resolve the reference, including attention, warning
 holds and admission, preparation and drain reuse, requirement edit tracking,
 legacy targetless markers, rechecks, post-deploy obligations, no-diff closure,
 codebase grading, pilot scorecards and task hands. Raw task/comment projections
 keep the compact message; readers that need inline audits use a resolved view.
+[ORB-25120] adds a structured pilot projection so the CLI and dashboard show the
+summary while retaining the raw receipt.
 Historical malformed inline records retain each reader's existing failure policy.
 
 ## A no-diff verdict tags the task
@@ -122,5 +126,8 @@ the release, consumer and remaining-record retirement checks in
 - [ORB-26836] — a no-diff deliverable verdict tags the task `no-diff-expected`.
 - [ORB-26851] — known non-commit Git object IDs do not block `no-diff-expected` tagging.
 - [ORB-23707] — makes the dashboard pilot-warnings readout degrade per task when an artifact is missing.
+- [ORB-25120] — projects a readable summary while preserving the raw receipt.
+- [ORB-23750] — degrades task show when pilot evidence is unreadable or invalid.
+- [ORB-23760] — degrades task show for dangling or corrupt pilot blobs.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

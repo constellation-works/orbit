@@ -1,8 +1,8 @@
 ---
 title: Process Supervision — Design
 owner: claude
-last_updated: 2026-10-31
-last_validated: 2026-10-31
+last_updated: 2026-11-22
+last_validated: 2026-11-22
 status: Draft
 feature: process-supervision
 doc_role: design
@@ -417,13 +417,13 @@ must pass the existing tests of the code it replaces.
 
 | Step | Change | Fixes on landing | Task |
 |------|--------|------------------|------|
-| 1 | Add `OwnedChild` to `orbit_common::process`; bounded runner and `SupervisedChild` hold their child through it; fold the three group-signal helpers into it | Bounded runner leak on `?` | [ORB-15826] |
-| 2 | Hold every ad-hoc child through `OwnedChild`: engine `SpawnedChild` and `spawn_with_timeout`, plugin exec `bind_pid` failure, MCP session, build phase, automation source-command child | Engine and plugin leaks on failure and panic | [ORB-15827] |
-| 3 | Move exec's supervisor into `orbit_common::process::supervisor` with the §4.2 options exec needs; `orbit-exec::supervision` becomes an adapter | Single implementation of the loop | [ORB-15828] |
-| 4 | Re-implement `run_bounded*` on the supervisor; delete bounded's loop | Bounded callers gain the drain bound and kill-on-drop | [ORB-15829] |
-| 5 | Run the engine provider runner on the supervisor (adds `on_spawn`, the periodic hook, extendable deadline, stopped reporter, flag fallback, test seams) | Engine loop and readers deleted | [ORB-15830] |
-| 6 | Run plugin build phases on the supervisor | Build-phase loop and detached readers replaced | [ORB-15831] |
-| 7 | Run automation source commands on the supervisor | Last ad-hoc loop deleted | [ORB-15832] |
+| 1 | Add `OwnedChild` to `orbit_common::process`; bounded runner and `SupervisedChild` hold their child through it; fold the three group-signal helpers into it | Bounded runner leak on `?` | Done: [ORB-15826] |
+| 2 | Hold every ad-hoc child through `OwnedChild`: engine `SpawnedChild` and `spawn_with_timeout`, plugin exec `bind_pid` failure, MCP session, build phase, automation source-command child | Engine and plugin leaks on failure and panic | Done: [ORB-15827] |
+| 3 | Move exec's supervisor into `orbit_common::process::supervisor` with the §4.2 options exec needs; `orbit-exec::supervision` becomes an adapter | Single implementation of the loop | Done: [ORB-15828] |
+| 4 | Re-implement `run_bounded*` on the supervisor; delete bounded's loop | Bounded callers gain the drain bound and kill-on-drop | Done: [ORB-15829] |
+| 5 | Run the engine provider runner on the supervisor (adds `on_spawn`, the periodic hook, extendable deadline, stopped reporter, flag fallback, test seams) | Engine loop and readers deleted | Done: [ORB-15830] |
+| 6 | Run plugin build phases on the supervisor | Build-phase loop and detached readers replaced | Done: [ORB-15831] |
+| 7 | Run automation source commands on the supervisor | Last ad-hoc loop deleted | Done: [ORB-15832] |
 
 Steps 1 and 2 come first because they close the leak class without
 touching any wait loop, so they are safe to land alone. Step 3 must come
