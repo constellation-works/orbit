@@ -142,7 +142,7 @@ const ADD: AutoTaskOperation = AutoTaskOperation {
         required(mcp_only(
             "schedule",
             ParamType::Object,
-            "One of {cron}, {every_minutes}, {deliveries_landed: {branch, threshold, max_wait_minutes, coverage, owner_machine?, max_items?, retries?}}, or {condition}; optional `when`, `guard_miss` (`wait`|`skip`).",
+            "One of {cron}, {every_minutes}, {deliveries_landed: {branch, threshold, max_wait_minutes, coverage, owner_machine?, max_items?, retries?}}, or {condition}; optional `when` guards cron, every_minutes and deliveries_landed, and a condition takes no guard; `guard_miss` (`wait`|`skip`) requires `when` and applies to cron and every_minutes only.",
         )),
         cli_only(
             "cron",
