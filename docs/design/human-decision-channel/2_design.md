@@ -48,7 +48,7 @@ the mechanisms below are built inside them.
    verdicts, proposed approve/reject (digest), review approve. A proposed approval
    from a decision request is screened by the task-pilot preparation and
    admission checks before promotion
-   (`crates/orbit-core/src/application/task/decision/answering.rs::ensure_proposal_admissible`):
+   (`crates/orbit-core/src/application/task/decision/answering/options.rs::ensure_proposal_admissible`):
    while a pilot admission hold or an untagged `verified_no_diff` finding
    stands, or the task has no prepared footprint or complexity (empty
    `context_files` or an unassessed complexity; a task tagged `no-diff-expected`
@@ -859,7 +859,7 @@ scribe's design at its `agent-main` `87bf521` (scribe S6, [ORB-21795]).
 ### 12.1 What is missing today
 
 Every gate's effect is a hard-coded arm of the one apply step
-(`OrbitRuntime::apply_decision_answer`, `application/task/decision/answering.rs`): an
+(`OrbitRuntime::apply_decision_answer`, `application/task/decision/answering/record.rs`): an
 option rewrite, a pilot verdict, `approve_task_guarded_deferring_effects`, a resident
 grant, a script grant. `DecisionGate` (`orbit-types/src/task/decision/request/gates.rs`)
 is a closed, persisted enum, so each new effect has so far meant a new core gate

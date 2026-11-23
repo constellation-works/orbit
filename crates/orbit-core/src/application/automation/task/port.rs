@@ -9,9 +9,9 @@ use orbit_types::task::Task;
 use orbit_types::workflow::automation::members::{MemberAttempt, PreparationPolicy};
 use serde_json::Value;
 
-use super::source::Source;
-use super::{members, pilot_reservation, preparation};
 use crate::OrbitRuntime;
+use crate::application::automation::source::Source;
+use crate::application::automation::{members, pilot_reservation, preparation};
 use crate::application::contracts::PilotFingerprints;
 use crate::application::contracts::PilotTaskReservation;
 use crate::application::task::{SourceGit, TaskAutomationPort};
@@ -117,10 +117,10 @@ impl TaskAutomationPort for OrbitRuntime {
     }
 
     fn has_open_delivery_batch_attempt(&self, task_id: &str) -> Result<bool, OrbitError> {
-        super::task::has_open_delivery_batch_attempt(self, task_id)
+        super::actions::has_open_delivery_batch_attempt(self, task_id)
     }
 
     fn is_task_own_orbit_run(&self, task: &Task, run_id: Option<&str>) -> Result<bool, OrbitError> {
-        super::task::is_task_own_orbit_run(self, task, run_id)
+        super::actions::is_task_own_orbit_run(self, task, run_id)
     }
 }

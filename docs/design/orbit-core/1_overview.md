@@ -133,7 +133,7 @@ source scan, enforces the runtime direction.
 | Shared application constants and DTOs | `crates/orbit-core/src/application/contracts/` | [ORB-17924] |
 | Clock settings and schedule display state below `routines` | `crates/orbit-clock/src/clock_settings.rs` (re-exported from `contracts`), `crates/orbit-core/src/application/contracts/schedule_display.rs` | [ORB-22623], [ORB-22688] |
 | Host sweep clock (settings, unit install, pause, cadence, convergence, health), outside Core | `crates/orbit-clock/src/`, re-exported as `routines::clock` | [ORB-22688] |
-| Task-to-automation port | `crates/orbit-core/src/application/task/automation_port.rs`, implemented in `automation/task_port.rs` | [ORB-17924], [ORB-17943] |
+| Task-to-automation port | `crates/orbit-core/src/application/task/automation_port.rs`, implemented in `automation/task/port.rs` | [ORB-17924], [ORB-17943] |
 | Task-owned ports to job, review, distributed, sweep_filing and workspace_auto | `crates/orbit-core/src/application/task/*_port.rs`, implemented in each module's `task_port.rs` | [ORB-17936] |
 | Task-owned notice closure on done | `crates/orbit-core/src/application/task/notice_port.rs` (`TaskNoticePort`), implemented in `notice/close.rs` | [ORB-23017] |
 | Task-owned checkpoint cost projection | `crates/orbit-core/src/application/task/evolution_port.rs` (`TaskEvolutionPort`), implemented in `evolution/operations.rs` | [ORB-23018] |

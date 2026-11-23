@@ -7,10 +7,10 @@ use orbit_store::TaskReservationReleaseReason;
 use orbit_types::task::{TaskDecision, TaskHistoryEntry, TaskStatus};
 use orbit_types::workflow::{CANDIDATE_HELD_EVENT, HeldCandidate, JobRunState};
 
-use super::{enter_isolated_child, test_runtime};
 use crate::application::task::TaskAddParams;
 use crate::application::task::params::TaskRecordUpdateParams;
 use crate::application::task::records::TaskRecords;
+use crate::application::task::tests::{enter_isolated_child, test_runtime};
 
 #[test]
 fn requeue_reports_the_candidate_its_stopped_run_held() {
