@@ -71,7 +71,7 @@ impl fmt::Display for TaskPilotRefusal {
         match self {
             Self::UnsupportedStatus { task_id, status } => write!(
                 f,
-                "task {task_id} has status `{status}`. An operator can run `orbit task repilot {task_id}` on the owner once the task is proposed or backlog."
+                "task {task_id} has status `{status}`; only proposed and backlog tasks may be repiloted. An operator can run `orbit task repilot {task_id}` on the owner once the task is in one of those statuses."
             ),
             Self::HumanCrew { task_id, crew } => write!(
                 f,
