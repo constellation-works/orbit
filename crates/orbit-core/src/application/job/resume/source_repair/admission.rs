@@ -756,9 +756,13 @@ impl OrbitRuntime {
                 "successful publication is superseded by a newer task binding",
             ));
         }
+        let mut held_retry_lineage = None;
         if source.state == JobRunState::Held {
             if task.job_run_id.as_deref() != Some(source_id) {
-                return Err(refuse("held publication is no longer the task's bound run"));
+                held_retry_lineage = self.held_completion_retry_lineage(&source, &task)?;
+                if held_retry_lineage.is_none() {
+                    return Err(refuse("held publication is no longer the task's bound run"));
+                }
             }
             self.require_current_requeue_source(
                 &task,
@@ -785,7 +789,10 @@ impl OrbitRuntime {
             && super::inline_publication::kept_inline_publication(&state);
         let superseded = if inline {
             Some(self.observe_inline_repair_lineage(&source, &task, None)?)
-        } else if resumed_owner.is_none() && task.job_run_id.as_deref() != Some(source_id) {
+        } else if resumed_owner.is_none()
+            && held_retry_lineage.is_none()
+            && task.job_run_id.as_deref() != Some(source_id)
+        {
             Some(self.observe_source_successor(&source, &task)?)
         } else {
             None
@@ -809,7 +816,10 @@ impl OrbitRuntime {
                 "task status does not allow source repair for this run; inspect the task's current status and run binding",
             ));
         }
-        let (source, task, mut binding) = self.observe_published_source(source, task, true)?;
+        let (source, task, mut binding) = match held_retry_lineage.as_deref() {
+            Some(lineage) => self.observe_held_retry_source(source, task, lineage)?,
+            None => self.observe_published_source(source, task, true)?,
+        };
         binding.superseded = superseded;
         Ok((source, task, binding))
     }
