@@ -384,3 +384,77 @@ fn search_refuses_unknown_keys_with_did_you_mean_and_closes_schema() {
         "unknown key without synonym must still be named: {unhinted}"
     );
 }
+
+/// [ORB-27340] The advertised `limit` default must match the runtime for both
+/// friction forms: a friction query keeps the default of 10, a queryless
+/// friction listing defaults to 1000, and an explicit zero means the same
+/// default for each form. The defaults are advertised on the raw tool list;
+/// MCP `tools/list` slims property prose, so it is not asserted here.
+#[test]
+fn friction_query_and_listing_limit_defaults_match_the_advertised_text() {
+    let workspace = McpWorkspace::init();
+    let mut client = workspace.serve();
+
+    let tools: Vec<Value> = serde_json::from_slice(
+        &orbit_ok(
+            McpWorkspace::orbit_command(&workspace.work, &workspace.home)
+                .args(["tool", "list", "--json"]),
+        )
+        .stdout,
+    )
+    .unwrap();
+    let search = tools
+        .iter()
+        .find(|tool| tool["name"] == "orbit.search")
+        .expect("the raw tool list carries orbit.search");
+    let limit = search["parameters"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|parameter| parameter["name"] == "limit")
+        .expect("orbit.search advertises limit");
+    let text = limit["description"].as_str().unwrap();
+    for phrase in ["Omitted or 0", "default: 10", "1000 for a friction listing"] {
+        assert!(
+            text.contains(phrase),
+            "the advertised limit must state `{phrase}`: {text}"
+        );
+    }
+
+    for index in 1..=12 {
+        client.call_tool_ok(
+            "orbit_friction",
+            json!({
+                "action": "add",
+                "title": format!("limit probe {index}"),
+                "body": "Default-limit fixture",
+                "model": "codex"
+            }),
+        );
+    }
+    let hits = |response: &Value| response["results"].as_array().unwrap().len();
+
+    // A friction query keeps the default of 10, omitted or zero, over MCP and CLI.
+    let query = json!({"query": "limit probe", "kind": "friction", "model": "codex"});
+    assert_eq!(hits(&client.call_tool_ok("orbit_search", query)), 10);
+    let zero_query =
+        json!({"query": "limit probe", "kind": "friction", "limit": 0, "model": "codex"});
+    assert_eq!(hits(&client.call_tool_ok("orbit_search", zero_query)), 10);
+    let cli = orbit_ok(
+        McpWorkspace::orbit_command(&workspace.work, &workspace.home).args([
+            "search",
+            "limit probe",
+            "--kind",
+            "friction",
+            "--json",
+        ]),
+    );
+    let cli: Value = serde_json::from_slice(&cli.stdout).unwrap();
+    assert_eq!(hits(&cli), 10);
+
+    // A queryless friction listing defaults to 1000, so all twelve records return.
+    let listing = json!({"kind": "friction", "model": "codex"});
+    assert_eq!(hits(&client.call_tool_ok("orbit_search", listing)), 12);
+    let zero_listing = json!({"kind": "friction", "limit": 0, "model": "codex"});
+    assert_eq!(hits(&client.call_tool_ok("orbit_search", zero_listing)), 12);
+}

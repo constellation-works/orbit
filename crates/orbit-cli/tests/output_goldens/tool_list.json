@@ -2328,7 +2328,7 @@
       },
       {
         "name": "limit",
-        "description": "Max results, <=1000 (default: 10; 1000 for friction).",
+        "description": "Max results, <=1000. Omitted or 0 uses the default: 10, or 1000 for a friction listing (`kind: friction` with no `query`).",
         "param_type": "integer",
         "required": false
       },

@@ -72,7 +72,7 @@ const QUERY: OperationSpec<SearchVerb> = OperationSpec {
             both(
                 "limit",
                 ParamType::Integer,
-                "Max results, <=1000 (default: 10; 1000 for friction).",
+                "Max results, <=1000. Omitted or 0 uses the default: 10, or 1000 for a friction listing (`kind: friction` with no `query`).",
                 flag("limit"),
                 "Maximum total results returned (across all kinds when --kind all; round-robin per kind to ensure fair representation). 0 uses the default: 10",
             ),
