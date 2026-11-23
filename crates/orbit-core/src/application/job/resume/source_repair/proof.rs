@@ -263,8 +263,8 @@ impl OrbitRuntime {
             job,
             state,
             &checkpoint,
-            sync,
-            push,
+            source.state,
+            (sync, push),
             branch,
             &self.paths().repo_root,
         )?;

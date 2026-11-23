@@ -115,12 +115,23 @@ fn require_input(job: &JobV2, id: &str, key: &str, expected: &str) -> Result<(),
     Ok(())
 }
 
+fn landing_push_recorded(job: &JobV2, state: &PipelineState) -> bool {
+    job.steps
+        .iter()
+        .position(|step| step.id == "landing_push")
+        .is_some_and(|idx| state.step_states.get(&(idx as u32)) == Some(&JobRunState::Success))
+        || state
+            .pipeline
+            .get("landing_push")
+            .is_some_and(|v| !v.is_null())
+}
+
 pub(super) fn published_head<'a>(
     job: &JobV2,
     state: &'a PipelineState,
     checkpoint: &impl Fn(&str, &str) -> Result<&'a Value, OrbitError>,
-    sync: &'a Value,
-    push: &'a Value,
+    source_state: JobRunState,
+    (sync, push): (&'a Value, &'a Value),
     branch: &str,
     repo: &std::path::Path,
 ) -> Result<&'a str, OrbitError> {
@@ -140,14 +151,19 @@ pub(super) fn published_head<'a>(
         ));
     }
     let head = reviewed_head(job, state, checkpoint, true, initial, (branch, base), repo)?;
+    let landing_push_done = landing_push_recorded(job, state);
+    // A failed `landing_push` that recorded no output or step success left
+    // the PR and origin branch at `initial`; `preserved_landing_review_head`
+    // authenticates its preserved repair tip separately.
+    let failed_landing_push = source_state != JobRunState::Success
+        && !landing_push_done
+        && state
+            .failure_activity_checkpoint
+            .as_ref()
+            .is_some_and(|receipt| receipt.failed_step_id == "landing_push");
     // A later publication must never be accepted without a settled correction,
     // even if a corrupted output happens to repeat the initial published head.
-    if head != initial
-        || state
-            .pipeline
-            .get("landing_push")
-            .is_some_and(|value| !value.is_null())
-    {
+    if landing_push_done || (head != initial && !failed_landing_push) {
         if head == initial {
             return Err(refuse(
                 "later publication lacks an authenticated reviewer correction",
@@ -173,8 +189,9 @@ pub(super) fn published_head<'a>(
         {
             return Err(refuse("review publication branch, head or lease disagrees"));
         }
+        return Ok(head);
     }
-    Ok(head)
+    Ok(if failed_landing_push { initial } else { head })
 }
 
 /// The before-landing settlement whose `incomplete` verdict the failure
@@ -284,8 +301,9 @@ pub(super) struct PreservedReviewTip {
 }
 
 /// Read and authenticate `reviewer_preservation` recorded by `pr_failure_handoff`
-/// for a non-accept before-landing review (`reject`, `landing_review` timeout,
-/// or `landing_review_validate` failure).
+/// for a non-accept or failed-push before-landing review (`reject`,
+/// `landing_review` timeout, `landing_review_validate` failure, or failed
+/// `landing_push`).
 pub(super) fn preserved_landing_review_head(
     job: &JobV2,
     state: &PipelineState,
@@ -326,6 +344,7 @@ pub(super) fn preserved_landing_review_head(
         "landing_review",
         "landing_review_gate_settle",
         "landing_review_validate",
+        "landing_push",
     ];
     if !LANDING_STEPS.contains(&receipt.failed_step_id.as_str())
         || output["failed_step_id"] != receipt.failed_step_id
@@ -347,22 +366,19 @@ pub(super) fn preserved_landing_review_head(
         .steps
         .iter()
         .position(|step| step.id == receipt.failed_step_id);
-    if opened
-        .zip(failed_step_pos)
-        .is_none_or(|(open_idx, fail_idx)| fail_idx <= open_idx)
-    {
+    let Some((open_idx, fail_idx)) = opened.zip(failed_step_pos) else {
+        return Err(disagrees("the definition places the review before PR open"));
+    };
+    if fail_idx <= open_idx {
         return Err(disagrees("the definition places the review before PR open"));
     }
-    let landing_push_done = job
-        .steps
-        .iter()
-        .position(|step| step.id == "landing_push")
-        .is_some_and(|idx| state.step_states.get(&(idx as u32)) == Some(&JobRunState::Success))
-        || state
-            .pipeline
-            .get("landing_push")
-            .is_some_and(|v| !v.is_null());
-    if landing_push_done {
+    if receipt.failed_step_id == "landing_push"
+        && !matches!(&job.steps[fail_idx].body, JobV2StepBody::Target(t)
+            if matches!(&t.spec, ActivityV2Spec::Deterministic(s) if s.action == "git_push"))
+    {
+        return Err(disagrees("landing_push is not the host git_push action"));
+    }
+    if landing_push_recorded(job, state) {
         return Err(disagrees("the before-landing review already landed"));
     }
     let commit_sha = preserved
@@ -381,6 +397,18 @@ pub(super) fn preserved_landing_review_head(
     {
         return Err(disagrees(
             "it is not an attested preservation commit descending from the published head",
+        ));
+    }
+    if receipt.failed_step_id == "landing_push"
+        && state
+            .pipeline
+            .get(LANDING_SETTLE)
+            .and_then(|v| v.get("reviewed_head_sha"))
+            .and_then(Value::as_str)
+            != Some(commit_sha)
+    {
+        return Err(disagrees(
+            "it is not the settled before-landing reviewer repair",
         ));
     }
     Ok(Some(PreservedReviewTip {
