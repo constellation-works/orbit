@@ -707,6 +707,35 @@ fn ci_red_survives_a_pending_run_on_a_newer_base_head() {
     );
 }
 
+fn ci_red_degrades_when_full_page_omits_pending_workflow_history() {
+    let fixture = Fixture::new(true);
+    let now = chrono::Utc::now().to_rfc3339();
+    let mut pending = fixture.run(101, "", &now, &fixture.head);
+    pending["status"] = json!("queued");
+    let mut runs = vec![pending];
+    for id in 1..100 {
+        let mut run = fixture.run(id, "success", &now, &fixture.head);
+        run["workflowName"] = json!("Other");
+        runs.push(run);
+    }
+    fixture.set_runs(json!(runs));
+    let response = call(&fixture.runtime, json!({"kind": "ci_red"}));
+    assert!(
+        response["degraded"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|entry| {
+                entry["kind"] == "ci_red"
+                    && entry["code"] == "source_unavailable"
+                    && entry["message"]
+                        .as_str()
+                        .is_some_and(|message| message.contains("CI"))
+            }),
+        "missing CI history must be reported: {response}"
+    );
+}
+
 fn ci_red_uses_workflow_run_order_when_created_at_ties() {
     let fixture = Fixture::new(true);
     let advance = || {
@@ -792,6 +821,7 @@ crate::scenario_table!(
     ci_red_advancing_remote_head_invalidates_cache,
     ci_red_unavailable_base_head_degrades,
     ci_red_survives_a_pending_run_on_a_newer_base_head,
+    ci_red_degrades_when_full_page_omits_pending_workflow_history,
     ci_red_uses_workflow_run_order_when_created_at_ties,
     friction_untriaged_lists_only_open,
 );

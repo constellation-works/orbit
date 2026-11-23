@@ -96,7 +96,10 @@ Notes that bind implementations:
 - **Network sources degrade, they do not fail.** `ci_red` needs provider authentication
   (`github.auth.status`); with none, or on timeout, it yields `degraded` code
   `source_unavailable`. On the workspace owner, a workspace with no recognisable remote
-  contributes no `ci_red` and no degradation. A direct read on a replica checkout degrades
+  contributes no `ci_red` and no degradation. When the 100-run branch listing is full
+  and a workflow pending on the current head has no completed result in that listing,
+  the workflow degrades with `source_unavailable`: its history may extend beyond the listing.
+  A direct read on a replica checkout degrades
   with `source_unavailable` before the remote is checked, so it degrades whether or not the
   checkout has a remote. A candidate read (Orbit's own fan-out) on a replica contributes
   nothing and no degradation; the owner's read is the one that reports.

@@ -19,6 +19,8 @@ use std::{
     time::{Duration, Instant},
 };
 
+const CI_BRANCH_RUN_LIMIT: usize = 100;
+
 struct CachedRuns {
     fetched_at: Instant,
     base_branch: String,
@@ -113,7 +115,7 @@ fn call_provider(
                 let listed = runtime
                     .run_tool_command_with_session(
                         "github.run.list",
-                        json!({"branch": branch, "limit": 100}),
+                        json!({"branch": branch, "limit": CI_BRANCH_RUN_LIMIT}),
                         None,
                         None,
                         session,
@@ -200,7 +202,7 @@ fn newest_red_candidates(
     runs: &[Value],
     base_branch: &str,
     head_sha: &str,
-) -> BTreeMap<String, Value> {
+) -> (BTreeMap<String, Value>, Vec<String>) {
     let workflow_key = |run: &Value| {
         let workflow = value_string(&run["workflow"]);
         if workflow.is_empty() {
@@ -252,15 +254,18 @@ fn newest_red_candidates(
             on_branch.insert(key, run.clone());
         }
     }
+    let mut missing_history = Vec::new();
     for key in pending_on_head {
         if on_head.contains_key(&key) {
             continue;
         }
         if let Some(run) = on_branch.remove(&key) {
             on_head.insert(key, run);
+        } else if runs.len() >= CI_BRANCH_RUN_LIMIT {
+            missing_history.push(key);
         }
     }
-    on_head
+    (on_head, missing_history)
 }
 
 pub(super) fn read_ci_attention(
@@ -366,7 +371,16 @@ pub(super) fn read_ci_attention(
             }
         }
     };
-    let newest_by_workflow = newest_red_candidates(&runs, &base_branch, &head_sha);
+    let (newest_by_workflow, missing_history) =
+        newest_red_candidates(&runs, &base_branch, &head_sha);
+    for workflow in missing_history {
+        candidates.degraded.push(workspace_degraded(
+            workspace,
+            AttentionKind::CiRed.as_str(),
+            "source_unavailable",
+            format!("CI workflow {workflow} is pending; its latest completed result may be outside the branch run listing"),
+        ));
+    }
     // A pending task commit makes the repair-task association
     // unavailable: history reads would settle it. The CI evidence itself
     // is still safe to report, degraded explicitly below.
