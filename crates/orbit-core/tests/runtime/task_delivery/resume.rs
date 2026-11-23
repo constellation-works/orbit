@@ -31,7 +31,7 @@ impl Fixture {
             "schemaVersion: 2\nkind: Job\nmetadata:\n  name: fixture_delivery\nspec:\n  state: enabled\n  task_delivery: {}\n  steps:\n    - id: locks\n      target: activity:release_locks\n    - id: commit\n      target: activity:git_commit\n    - id: complete_pr\n      target: activity:pr_complete\n").unwrap();
     }
 
-    fn save_run(&self, run: &JobRun) {
+    pub(super) fn save_run(&self, run: &JobRun) {
         self.runtime
             .sqlite_store()
             .unwrap()
@@ -39,7 +39,7 @@ impl Fixture {
             .unwrap();
     }
 
-    fn step(&self, run: &JobRun, index: u32, id: &str) {
+    pub(super) fn step(&self, run: &JobRun, index: u32, id: &str) {
         self.runtime
             .complete_job_run_step(
                 &run.run_id,

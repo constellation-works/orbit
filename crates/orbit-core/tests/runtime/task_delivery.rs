@@ -11,9 +11,11 @@ use orbit_types::workflow::{CommitObservationStatus, JobRun, JobRunState};
 use serde_json::{Value, json};
 use tempfile::TempDir;
 
+mod local_landing;
 mod resume;
 #[path = "source_repair.rs"]
 mod source_repair;
+use local_landing::completion_held_local_merge_is_observed_as_no_landing;
 use resume::{
     already_resolved_checkpoint_is_observed_as_no_change,
     inherited_commit_refuses_invalid_parent_evidence,
@@ -404,5 +406,6 @@ crate::scenario_table!(
     inherited_commit_refuses_invalid_parent_evidence,
     repeated_resume_authenticates_each_parent_and_requires_current_landing,
     legacy_checkpoint_and_wire_shape_remain_readable_after_resume,
-    already_resolved_checkpoint_is_observed_as_no_change
+    already_resolved_checkpoint_is_observed_as_no_change,
+    completion_held_local_merge_is_observed_as_no_landing
 );
