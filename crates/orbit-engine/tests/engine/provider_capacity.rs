@@ -252,6 +252,27 @@ impl orbit_engine::test_support::NullRuntimeHost for CapacityHost {
                 message: "tests failed".to_string(),
             });
         }
+        if action == "test_stub_post_recovery_completion_observation" {
+            // The first attempt is an ordinary failure; the post-recovery
+            // attempt meets a transient forge read failure.
+            let count = self
+                .actions
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|(name, _)| name == action)
+                .count();
+            if count >= 2 {
+                return Err(DispatchError::CompletionObservationUnavailable {
+                    action: action.to_string(),
+                    message: "net/http: TLS handshake timeout".to_string(),
+                });
+            }
+            return Err(DispatchError::DeterministicActionFailed {
+                action: action.to_string(),
+                message: "tests failed".to_string(),
+            });
+        }
         Ok(match action {
             "setup" => json!({ "workspace_path": self.worktree, "base_ref": "main" }),
             _ => json!({ "action": action }),
@@ -779,6 +800,54 @@ fn a_declared_owner_route_failure_skips_recovery() {
         "the skip is audited"
     );
     assert_eq!(host.calls("handoff").len(), 1);
+}
+
+/// [ORB-27443] An ordinary failure reaches recovery; the post-recovery
+/// attempt then meets a transient forge read failure. The typed
+/// `CompletionObservationUnavailable` survives `post_recovery_attempt` with
+/// both diagnostics, so the executor holds the run as
+/// `ForgeObservationUnavailable` instead of failing it as `JobExecution`.
+fn post_recovery_completion_observation_failures_hold() {
+    let worktree = tempfile::tempdir().unwrap();
+    let fake = FakeProvider::new("claude", "", "", 0, "");
+    let host = CapacityHost::new(&fake.path, worktree.path());
+    let mut job = implementation_job(agent_spec(Provider::Claude));
+    job.final_recovery_activity = None;
+    job.resolved_final_recovery_activity = None;
+    let JobV2StepBody::Target(target) = &mut job.steps[1].body else {
+        panic!("the deterministic fixture is a target step");
+    };
+    target.spec = ActivityV2Spec::Deterministic(DeterministicSpec {
+        action: "test_stub_post_recovery_completion_observation".to_string(),
+        config: json!({}),
+    });
+    let run = run_job(&job, &host, "post-recovery-completion-observation");
+    let Err(error) = &run.outcome else {
+        panic!("the hold is an error: {:?}", run.outcome);
+    };
+    let DispatchError::DeliveryRefused {
+        refusal, message, ..
+    } = error
+    else {
+        panic!("the run holds instead of failing as JobExecution: {error}");
+    };
+    assert_eq!(
+        *refusal,
+        orbit_types::workflow::DeliveryRefusal::ForgeObservationUnavailable
+    );
+    assert!(
+        message.contains("TLS handshake timeout")
+            && message.contains("post-recovery attempt error")
+            && message.contains("tests failed"),
+        "post-recovery and original diagnostics are retained: {message}"
+    );
+    assert_eq!(
+        host.calls("test_stub_post_recovery_completion_observation")
+            .len(),
+        2
+    );
+    assert_eq!(host.calls("step_fix").len(), 1, "step recovery ran once");
+    assert!(host.calls("handoff").is_empty(), "no failure handoff runs");
 }
 
 /// [ORB-23470] An ordinary failure reaches recovery; the post-recovery
@@ -1322,6 +1391,10 @@ fn provider_failure_contracts_2() {
             (
                 "post_recovery_owner_route_failures_keep_their_code",
                 post_recovery_owner_route_failures_keep_their_code,
+            ),
+            (
+                "post_recovery_completion_observation_failures_hold",
+                post_recovery_completion_observation_failures_hold,
             ),
             (
                 "a_declared_validation_route_failure_skips_recovery",

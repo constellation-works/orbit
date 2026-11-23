@@ -497,6 +497,18 @@ fn post_recovery_attempt(
                 message: format!("{message}; original error before recovery: {original}"),
             }))
         }
+        // [ORB-27443] A transient forge read the post-recovery `pr_complete`
+        // met keeps its typed variant, as an initial one does: `execute` and
+        // final recovery hold it as `ForgeObservationUnavailable` instead of
+        // failing the run. The original diagnostic stays on the message.
+        Err(DispatchError::CompletionObservationUnavailable { action, message }) => {
+            PostRecovery::Settled(Err(DispatchError::CompletionObservationUnavailable {
+                action,
+                message: format!(
+                    "post-recovery attempt {outcome}: {message}; original error before recovery: {original}"
+                ),
+            }))
+        }
         // The unsuccessful-outcome form of the same failure: keep the
         // outcome shape (and its typed code) so `execute` records
         // `owner_route_unavailable` instead of a code-less `JobExecution`.
