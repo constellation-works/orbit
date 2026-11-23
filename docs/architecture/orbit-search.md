@@ -12,7 +12,7 @@ Lexical retrieval: SQLite chunk + FTS5 schema, chunking, task-field extraction, 
 
 ## Main modules and types
 
-`lexical` (`LexicalIndex` in `crates/orbit-search/src/lib.rs`). See ``crates/orbit-search/src/lib.rs``.
+`lexical` (`LexicalIndex`, defined in `crates/orbit-search/src/lexical/index.rs` and re-exported from `crates/orbit-search/src/lib.rs`). See ``crates/orbit-search/src/lib.rs``.
 
 ## Dependencies
 
