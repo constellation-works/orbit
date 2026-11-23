@@ -451,11 +451,14 @@ impl OrbitRuntime {
             );
         }
         // An auto-fix stop is reconsidered only after positive, complete check
-        // evidence. Red, pending or absent checks must not trigger another repair.
+        // evidence. Red, pending, unreported or absent checks must not trigger
+        // another repair: a configured required check that has not reported
+        // on the head is not green, even when its siblings passed.
         if auto_fix_hold
             && (blockers.conflicting
                 || !blockers.failed_required_checks.is_empty()
                 || !blockers.pending_required_checks.is_empty()
+                || !blockers.unreported_required_checks.is_empty()
                 || (blockers.passed_required_checks.is_empty()
                     && blockers.requires_status_checks != Some(false)))
         {
@@ -466,10 +469,11 @@ impl OrbitRuntime {
         }
         // An unrepaired check repair retries through the ledger while a blocker
         // and budget remain; if no blocker remains, it hands back only once
-        // the published head reports complete green checks.
+        // the published head reports every configured required check green.
         if unrepaired_repair_hold
             && blocker.is_none()
             && (!blockers.pending_required_checks.is_empty()
+                || !blockers.unreported_required_checks.is_empty()
                 || (blockers.passed_required_checks.is_empty()
                     && blockers.requires_status_checks != Some(false)))
         {

@@ -444,6 +444,39 @@ impl Fixture {
         );
     }
 
+    /// The forge reports `leaf`'s open pull request at `head_sha`, authored by
+    /// the delivery identity, with `failed`, `passed` and `unreported`
+    /// required checks. A name in `unreported` is configured by the base
+    /// branch and has not reported on the head at all.
+    pub(super) fn report_partial_required_checks(
+        &self,
+        leaf: &Leaf,
+        head_sha: &str,
+        failed: &[&str],
+        passed: &[&str],
+        unreported: &[&str],
+    ) {
+        let names = |names: &[&str]| names.iter().map(|name| name.to_string()).collect();
+        self.forge.0.lock().unwrap().blockers.insert(
+            leaf.number,
+            PullRequestBlockers {
+                pull: ForgePullRequest {
+                    number: leaf.number,
+                    head_branch: leaf.head.clone(),
+                    body: format!("Delivers {}.", leaf.task),
+                    author: "orbit-bot".to_string(),
+                },
+                head_sha: head_sha.to_string(),
+                conflicting: false,
+                failed_required_checks: names(failed),
+                pending_required_checks: Vec::new(),
+                passed_required_checks: names(passed),
+                unreported_required_checks: names(unreported),
+                requires_status_checks: Some(true),
+            },
+        );
+    }
+
     /// The forge reports that `leaf`'s base branch configures no required checks.
     pub(super) fn report_no_required_checks(&self, leaf: &Leaf, head_sha: &str, author: &str) {
         self.forge.0.lock().unwrap().blockers.insert(
@@ -1567,6 +1600,91 @@ fn an_unrepaired_check_repair_hold_retries_in_budget_reports_exhausted_and_honor
     assert_eq!(fx.retries(&cleared.run).len(), 1, "{green}");
 }
 
+/// A configured required check that has not reported on the held head is not
+/// green, even while its siblings passed. An auto-fix stop and an unrepaired
+/// check-recovery hold each wait on that partial rollup: no completion retry
+/// and no hand-back start is recorded. Both hand back only once every
+/// configured required check passes on the same published head.
+fn a_partially_reported_rollup_hands_back_only_once_every_required_check_passes() {
+    let fx = fixture();
+    let drain = fx.drain();
+    let unrepaired = fx.delivered_leaf(
+        149,
+        "done",
+        Shelf::Review,
+        LeafEnd::HeldUnrepairedCheckRepair,
+    );
+    let stopped = fx.delivered_leaf(150, "done", Shelf::Review, LeafEnd::HeldAutoFixStop);
+    for leaf in [&unrepaired, &stopped] {
+        fx.report_partial_required_checks(leaf, "published-head", &[], &["Build"], &["Test"]);
+    }
+    record_attempts(
+        &fx,
+        &unrepaired.task,
+        "149",
+        "published-head",
+        &unrepaired.run,
+        1,
+    );
+
+    let waiting = fx.pass(&drain, "done", true);
+    assert_eq!(
+        repair_skip(&waiting, &unrepaired.task).as_deref(),
+        Some("delivery_repair_dispatched"),
+        "{waiting}"
+    );
+    assert!(
+        skip_detail(&waiting, &unrepaired.task)
+            .contains("repair attempts: 1 of 3 spent, 2 remaining"),
+        "{waiting}"
+    );
+    assert_eq!(
+        repair_skip(&waiting, &stopped.task).as_deref(),
+        Some("auto_fix_stopped"),
+        "{waiting}"
+    );
+    assert!(started(&waiting, &unrepaired.task).is_none(), "{waiting}");
+    assert!(started(&waiting, &stopped.task).is_none(), "{waiting}");
+    assert!(fx.retries(&unrepaired.run).is_empty(), "{waiting}");
+    assert!(fx.retries(&stopped.run).is_empty(), "{waiting}");
+
+    for leaf in [&unrepaired, &stopped] {
+        fx.report_partial_required_checks(leaf, "published-head", &[], &["Build", "Test"], &[]);
+    }
+    let green = fx.pass(&drain, "done", true);
+    for leaf in [&unrepaired, &stopped] {
+        let entry = started(&green, &leaf.task).unwrap_or_else(|| panic!("{green}"));
+        assert_eq!(entry["reason"], "checks_green_after_hold", "{green}");
+        assert_eq!(fx.retries(&leaf.run).len(), 1, "{green}");
+    }
+}
+
+/// A confirmed zero-required-check base still hands back an auto-fix stop, and
+/// a failed required check on an unrepaired check-recovery hold still takes
+/// the repair ledger path while another configured check has not reported.
+fn a_zero_check_base_and_a_failed_check_keep_their_repair_paths() {
+    let fx = fixture();
+    let drain = fx.drain();
+    let zero = fx.delivered_leaf(151, "done", Shelf::Review, LeafEnd::HeldAutoFixStop);
+    fx.report_no_required_checks(&zero, "published-head", "orbit-bot");
+    let failed = fx.delivered_leaf(
+        152,
+        "done",
+        Shelf::Review,
+        LeafEnd::HeldUnrepairedCheckRepair,
+    );
+    fx.report_partial_required_checks(&failed, "published-head", &["Check"], &["Build"], &["Test"]);
+    record_attempts(&fx, &failed.task, "152", "published-head", &failed.run, 1);
+
+    let pass = fx.pass(&drain, "done", true);
+    let handed = started(&pass, &zero.task).unwrap_or_else(|| panic!("{pass}"));
+    assert_eq!(handed["reason"], "checks_green_after_hold", "{pass}");
+    assert_eq!(fx.retries(&zero.run).len(), 1, "{pass}");
+    let repaired = started(&pass, &failed.task).unwrap_or_else(|| panic!("{pass}"));
+    assert_eq!(repaired["blocker"], "failed_checks", "{pass}");
+    assert_eq!(fx.retries(&failed.run).len(), 1, "{pass}");
+}
+
 /// An unrepaired check-repair hold is judged on the head its newest
 /// completion round published. After re-review republished the pull request
 /// through `re_push`, green checks on that head hand completion back through
@@ -2061,6 +2179,8 @@ crate::scenario_table!(
     a_skipped_head_lists_the_attempts_spent_and_remaining,
     an_unrepaired_check_repair_hold_retries_in_budget_reports_exhausted_and_honors_holds,
     an_unrepaired_check_repair_hold_is_judged_on_its_newest_publication,
+    a_partially_reported_rollup_hands_back_only_once_every_required_check_passes,
+    a_zero_check_base_and_a_failed_check_keep_their_repair_paths,
     a_source_repair_and_a_watcher_attempt_share_the_pull_requests_budget,
     source_repairs_alone_spend_the_shared_budget_in_the_refusal,
     a_stuck_pull_request_is_repaired_however_many_deliveries_ran_since,
