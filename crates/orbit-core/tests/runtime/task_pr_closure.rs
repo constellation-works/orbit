@@ -22,6 +22,11 @@ use orbit_types::task::{ExternalRef, TaskStatus};
 use orbit_types::workflow::JobRunState;
 use serde_json::{Value, json};
 use tempfile::TempDir;
+use tracing::{
+    Event, Subscriber,
+    field::{Field, Visit},
+};
+use tracing_subscriber::{Layer, layer::Context, prelude::*};
 
 const BOT: &str = "orbit-bot";
 
@@ -113,6 +118,35 @@ impl TaskPrForge for FakeForge {
         state.open.remove(&number);
         state.closed.push((number, comment.to_string()));
         Ok(())
+    }
+}
+
+#[derive(Default)]
+struct PrClosureWarnings(Arc<Mutex<Vec<String>>>);
+
+impl<S: Subscriber> Layer<S> for PrClosureWarnings {
+    fn on_event(&self, event: &Event<'_>, _context: Context<'_, S>) {
+        if event.metadata().target() != "orbit.core.pr_closure"
+            || *event.metadata().level() != tracing::Level::WARN
+        {
+            return;
+        }
+        let mut message = CapturedMessage::default();
+        event.record(&mut message);
+        if let Some(message) = message.0 {
+            self.0.lock().unwrap().push(message);
+        }
+    }
+}
+
+#[derive(Default)]
+struct CapturedMessage(Option<String>);
+
+impl Visit for CapturedMessage {
+    fn record_debug(&mut self, field: &Field, value: &dyn std::fmt::Debug) {
+        if field.name() == "message" {
+            self.0 = Some(format!("{value:?}"));
+        }
     }
 }
 
@@ -481,6 +515,51 @@ fn forge_errors_are_warnings_and_never_fail_the_transition() {
         fx.forge.closed_numbers(),
         vec![13],
         "the other PR still closes"
+    );
+}
+
+#[test]
+fn pr_closure_warnings_name_the_requeue_or_terminal_decision() {
+    if !super::dispatch_admission::isolated(
+        "task_pr_closure::pr_closure_warnings_name_the_requeue_or_terminal_decision",
+    ) {
+        return;
+    }
+    let fx = Fixture::new();
+    let requeued = fx.add_task("Requeue warning");
+    let terminal = fx.add_task("Terminal warning");
+    fx.record_prs(&requeued, &[11]);
+    fx.record_prs(&terminal, &[13]);
+    fx.move_to_review(&requeued);
+
+    fx.forge.state().fail_list = true;
+    let warnings = Arc::new(Mutex::new(Vec::new()));
+    let subscriber = tracing_subscriber::registry().with(PrClosureWarnings(Arc::clone(&warnings)));
+    tracing::subscriber::with_default(subscriber, || {
+        fx.update(json!({
+            "id": requeued,
+            "status": "backlog",
+            "note": "try again",
+            "model": "codex"
+        }));
+        fx.runtime
+            .archive_task_as_operator(&terminal, false)
+            .expect("a failed PR lookup does not fail the archive");
+    });
+
+    let warnings = warnings.lock().unwrap();
+    assert_eq!(warnings.len(), 2, "{warnings:?}");
+    assert!(
+        warnings.iter().any(|message| {
+            message.contains("after the task's requeue") && !message.contains("terminal decision")
+        }),
+        "{warnings:?}"
+    );
+    assert!(
+        warnings
+            .iter()
+            .any(|message| message.contains("after the task's terminal decision")),
+        "{warnings:?}"
     );
 }
 
