@@ -22,6 +22,7 @@ mod comments;
 mod control;
 mod create;
 mod cycle;
+mod cycle_tools;
 mod digest;
 mod due;
 mod grant;
@@ -47,6 +48,7 @@ pub use control::{
     ResidentRelayParams,
 };
 pub use create::ResidentMandateCreateParams;
+pub(crate) use cycle_tools::RESIDENT_CYCLE_ACTIVITY;
 pub(crate) use due::ResidentDue;
 pub(crate) use grant::resident_grant_params_from_input;
 pub use grant::{

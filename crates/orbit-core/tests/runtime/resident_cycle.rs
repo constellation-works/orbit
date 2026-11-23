@@ -10,6 +10,7 @@ mod assignment_lifecycle;
 mod attention_read;
 mod checkpoint_history;
 mod control_admission;
+mod cycle_tools;
 mod deadline_expiry;
 mod drain_status_read;
 mod friction_update;
