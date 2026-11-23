@@ -980,7 +980,7 @@ steps and then stop without landing in any of four terminal owner-local states:
 - `cancelled` after pushing and opening the pull request (no failure-handoff
   receipt);
 - `held` for a before-landing review decision (`review_decision_pending`); or
-- `succeeded` with its pull request open (for example, a review-only run in
+- `success` with its pull request open (for example, a review-only run in
   `review`, or moved to `blocked`).
 
 Requeue can carry a green candidate (or one on a forge-confirmed
@@ -1008,14 +1008,14 @@ request only when all of these hold, and otherwise refuses with nothing written:
 
 - the stopped run is this machine's own single-task delivery, conclusively
   stopped (`finished_at` set and worker stopped) in `failed`, `cancelled`, or
-  `succeeded` state, or `held` for a before-landing review decision
+  `success` state, or `held` for a before-landing review decision
   (`review_decision_pending`), still the task's newest execution, and its
   candidate was not discarded;
 - for a `failed` run (and any non-failed run that recorded a `pr_failure_handoff`
   receipt naming itself), the failure handoff's receipt names this run and the
   task, keeps the pull request (`review_completion_failure` or
   `landing_review_failure`), and its recorded task specification still matches
-  the task; for a `cancelled`, `succeeded`, or `review_decision_pending` `held`
+  the task; for a `cancelled`, `success`, or `review_decision_pending` `held`
   run without such a receipt, task history records no `task_fields_updated` edit
   to the task description or acceptance criteria at or after the run started;
 - the run's checkpoints authenticate the branch, and the pull request is open
@@ -1048,7 +1048,7 @@ request only when all of these hold, and otherwise refuses with nothing written:
   another head describe a different candidate and are refused.
 
 Requeue resolves the task's bound execution, and that execution must be the
-stopped `failed`, `cancelled`, or `succeeded` run, or `review_decision_pending`
+stopped `failed`, `cancelled`, or `success` run, or `review_decision_pending`
 `held` run, that published the candidate, still the task's newest execution. A
 footprint-held run that adopted the publication and recommitted it is bound to
 the task after terminal cleanup, and it is none of those admitted source states,
