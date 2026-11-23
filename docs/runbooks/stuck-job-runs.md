@@ -5,7 +5,7 @@ tags: [operations, jobs, runs, recovery, debugging]
 paths: ["crates/orbit-core/src/application/job/**", "crates/orbit-cli/src/command/run/**", "crates/orbit-runtime/src/audit/run/trail.rs"]
 related_features: [activity-job, auditability]
 related_artifacts: [ORB-10070, ORB-10496, ORB-10801, ORB-17179, ORB-18166]
-last_validated: 2026-10-31
+last_validated: 2026-11-22
 ---
 
 # Recover Stuck Job Runs
@@ -1000,12 +1000,21 @@ otherwise refuses with nothing written:
 - the run's checkpoints authenticate the branch, and the pull request is open
   and unmerged at the authenticated published head: the recorded pushed head,
   followed through any recorded `pr_auto_fix_pushed` entries and, only for a
-  review-decision hold (an incomplete before-landing review, which ends its run
-  `held`), the host-attested reviewer fast-forward its failure handoff pushed
-  ([review-gate.md](review-gate.md)). That published
-  identity must match the remote branch and pull request exactly, while the
-  retained local branch matches that published head or a host-certified clean
-  base-chase tip;
+  review-decision hold (a before-landing review that did not approve, which ends
+  its run `held` with `review_decision_pending`), the host-attested reviewer
+  fast-forward its failure handoff pushed ([review-gate.md](review-gate.md)).
+  That published identity must match the remote branch and pull request exactly.
+  The retained local branch matches that published head, a host-certified clean
+  base-chase tip, or, for a stopped failed run or review-decision hold, the
+  attested reviewer repair its failure handoff preserved: a commit `R` above the
+  published head `P`, recorded as `reviewer_preservation` with decision
+  `preserved` and kept on `refs/orbit/candidates/<task>/<run>`
+  ([review-gate.md](review-gate.md#before-landing-review)). The requeue answer's
+  `resumes` object reports `P` as `head_sha`, `R` as `candidate_head_sha` and the
+  ref as `candidate_ref`. `P` stays the remote branch and pull request head, and
+  the successor adopts `R` and publishes it under a lease on `P`. A
+  `preserve_failed` or `commit_refused` handoff preserves no such commit and is
+  not a candidate (see [review-gate.md](review-gate.md));
 - the forge reports every required check on exactly that published head as passed:
   none failed, none unfinished, and at least one reported. Checks on another
   head describe a different candidate and are refused.
