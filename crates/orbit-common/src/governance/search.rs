@@ -181,7 +181,7 @@ const QUERY: OperationSpec<SearchVerb> = OperationSpec {
             "unknown parameter `semanticModel`; search supports lexical queries only",
         ),
     ],
-    unknown_fields: UnknownFields::Warn,
+    unknown_fields: UnknownFields::Refuse,
     mcp_scope: Some(McpToolScope::WorkspaceRequired),
     id_route: McpIdRouteDeclaration::Unspecified,
 };

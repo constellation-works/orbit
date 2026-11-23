@@ -485,3 +485,75 @@ fn unknown_task_tools_suggest_visible_registered_tools_without_aliasing() {
         "tool not found: orbit.task.get; see `orbit tool list` or MCP `tools/list` for valid tool names"
     );
 }
+
+#[test]
+fn search_refuses_unknown_keys_with_did_you_mean_and_omits_friction_without_friction_kind() {
+    let root = tempfile::tempdir().expect("fixture");
+    let home = root.path().join("home");
+    let work = root.path().join("work");
+    std::fs::create_dir_all(&home).expect("fixture home");
+    git_repo::init(&work);
+    orbit_command(&work, &home)
+        .args(["workspace", "init", "--name", "search-input-hints"])
+        .assert()
+        .success();
+
+    for input in [json!({ "q": "x" }), json!({ "q": "x", "model": "codex" })] {
+        let output = orbit_command(&work, &home)
+            .args([
+                "tool",
+                "run",
+                "orbit.search",
+                "--input",
+                &input.to_string(),
+                "--format",
+                "json",
+            ])
+            .assert()
+            .failure()
+            .get_output()
+            .clone();
+        assert!(output.stdout.is_empty(), "{output:?}");
+        let error: Value = serde_json::from_slice(&output.stderr).expect("JSON tool error");
+        assert_eq!(error["code"], "invalid_input", "{error}");
+        assert_eq!(error["did_you_mean"], json!(["query"]), "{error}");
+        let message = error["error"].as_str().expect("error string");
+        assert!(
+            message.contains("'q'") && message.contains("did you mean 'query'"),
+            "unknown key `q` must be named with a `query` suggestion: {error}"
+        );
+        assert!(
+            !message.contains("friction"),
+            "refusal for `{input}` must not mention friction: {error}"
+        );
+    }
+
+    for input in [json!({}), json!({ "kind": "task" })] {
+        let output = orbit_command(&work, &home)
+            .args([
+                "tool",
+                "run",
+                "orbit.search",
+                "--input",
+                &input.to_string(),
+                "--format",
+                "json",
+            ])
+            .assert()
+            .failure()
+            .get_output()
+            .clone();
+        assert!(output.stdout.is_empty(), "{output:?}");
+        let error: Value = serde_json::from_slice(&output.stderr).expect("JSON tool error");
+        assert_eq!(error["code"], "invalid_input", "{error}");
+        let message = error["error"].as_str().expect("error string");
+        assert!(
+            message.contains("query") && message.contains("tag"),
+            "missing-query refusal should name supported fields: {error}"
+        );
+        assert!(
+            !message.contains("friction"),
+            "missing-query refusal without kind: friction must not mention friction: {error}"
+        );
+    }
+}

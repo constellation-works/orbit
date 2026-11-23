@@ -269,22 +269,32 @@ fn search_queryless_refusal_names_supported_fields_and_lists_reachable_alternati
     let workspace = McpWorkspace::init();
     let mut client = workspace.serve();
 
-    let refused = client.call_tool_err("orbit_search", json!({ "model": "codex" }));
-    assert_eq!(
-        refused["code"], "invalid_input",
-        "wrong error category: {refused}"
-    );
-    let message = refused["message"].as_str().unwrap_or_default();
-    for field in ["query", "tag", "kind", "friction"] {
+    for input in [
+        json!({ "model": "codex" }),
+        json!({ "kind": "task", "model": "codex" }),
+        json!({ "kind": "all", "model": "codex" }),
+    ] {
+        let refused = client.call_tool_err("orbit_search", input.clone());
+        assert_eq!(
+            refused["code"], "invalid_input",
+            "wrong error category for {input}: {refused}"
+        );
+        let message = refused["message"].as_str().unwrap_or_default();
+        for field in ["query", "tag"] {
+            assert!(
+                message.contains(field),
+                "the refusal should name a supported search field (`{field}`): {refused}"
+            );
+        }
         assert!(
-            message.contains(field),
-            "the refusal should name a supported search field (`{field}`): {refused}"
+            !message.contains("friction"),
+            "the missing-query refusal without kind: friction must not mention friction: {refused}"
+        );
+        assert!(
+            !message.contains("path") && !message.contains("--"),
+            "the refusal must not steer toward the retired path option or CLI-only flags: {refused}"
         );
     }
-    assert!(
-        !message.contains("path") && !message.contains("--"),
-        "the refusal must not steer toward the retired path option or CLI-only flags: {refused}"
-    );
 
     let seeded = client.call_tool_ok(
         "orbit_task_add",
@@ -327,5 +337,50 @@ fn search_queryless_refusal_names_supported_fields_and_lists_reachable_alternati
             .as_array()
             .is_some_and(|hits| hits.iter().any(|hit| hit["id"] == seeded_id)),
         "the refused `query` alternative must reach the seeded task: {by_query}"
+    );
+}
+
+#[test]
+fn search_refuses_unknown_keys_with_did_you_mean_and_closes_schema() {
+    let workspace = McpWorkspace::init();
+    let mut client = workspace.serve();
+
+    let listed = client.tools_list();
+    let search_schema = find_tool(tools_array(&listed), "orbit_search");
+    assert_eq!(
+        search_schema["inputSchema"]["additionalProperties"],
+        json!(false),
+        "orbit_search schema must forbid undeclared keys: {search_schema}"
+    );
+
+    for input in [
+        json!({ "q": "x" }),
+        json!({ "q": "x", "model": "codex" }),
+        json!({ "q": "x", "kind": "task" }),
+    ] {
+        let refused = client.call_tool_err("orbit_search", input.clone());
+        assert_eq!(refused["code"], "invalid_input", "{input}: {refused}");
+        assert_eq!(
+            refused["did_you_mean"],
+            json!(["query"]),
+            "{input}: {refused}"
+        );
+        let message = refused["message"].as_str().unwrap_or_default();
+        assert!(
+            message.contains("'q'") && message.contains("did you mean 'query'"),
+            "unknown key `q` must be named with a `query` suggestion for {input}: {refused}"
+        );
+        assert!(
+            !message.contains("friction"),
+            "unknown-key refusal for {input} must not mention friction: {refused}"
+        );
+    }
+
+    let unhinted = client.call_tool_err("orbit_search", json!({ "bogus": "x" }));
+    assert_eq!(unhinted["code"], "invalid_input", "{unhinted}");
+    let unhinted_message = unhinted["message"].as_str().unwrap_or_default();
+    assert!(
+        unhinted_message.contains("'bogus'"),
+        "unknown key without synonym must still be named: {unhinted}"
     );
 }

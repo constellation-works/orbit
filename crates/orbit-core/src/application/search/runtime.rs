@@ -106,10 +106,12 @@ impl OrbitRuntime {
 
         let listing = params.is_friction_listing();
         if query_owned.is_none() && !has_path && tag_filter.is_empty() && !listing {
-            return Err(OrbitError::InvalidInput(
+            let message = if params.kind == super::GlobalSearchKind::Friction {
                 "search requires a `query` or a `tag`; with `kind` `friction` and neither, it lists friction records"
-                    .to_string(),
-            ));
+            } else {
+                "search requires a `query` or a `tag`"
+            };
+            return Err(OrbitError::InvalidInput(message.to_string()));
         }
 
         let mut branches = Vec::new();
