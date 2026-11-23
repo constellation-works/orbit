@@ -1164,6 +1164,13 @@ pub(super) fn ci_answer(host: &DeliveryHost, operation: &str, input: &Value) -> 
         }
         "ci.commit_jobs" => {
             let commit = input["commit"].as_str().unwrap();
+            if repair_mode == "no_edit_base_missing_fork"
+                && forge.join("rerun-attempt").exists()
+                && input["latest_push_branch"].is_string()
+                && commit != git(&host.repo, &["rev-parse", BASE])
+            {
+                return Some(json!({"jobs":[]}));
+            }
             // The base tip's own job stays green here. A shared source file is
             // still a candidate failure; a base whose job fails the same way
             // is planted through the substitute `gh`.
@@ -1862,11 +1869,13 @@ fn no_edit_check_repair_reruns_failed_checks_once() {
 fn no_edit_rerun_failure_inherited_from_a_fixed_base_refreshes_the_head_once() {
     auto_fix_table(
         "auto_fix::no_edit_rerun_failure_inherited_from_a_fixed_base_refreshes_the_head_once",
-        "refreshed conflict spent",
+        "refreshed conflict spent missing_fork",
         |case, row| {
             let (fx, host) = docs_only_pr(row);
             let mode = if case == "conflict" {
                 "no_edit_base_conflict"
+            } else if case == "missing_fork" {
+                "no_edit_base_missing_fork"
             } else {
                 "no_edit_base_fixed"
             };
@@ -1999,6 +2008,17 @@ fn no_edit_rerun_failure_inherited_from_a_fixed_base_refreshes_the_head_once() {
                 assert!(
                     message.contains("conflicting paths: README.md"),
                     "{case}: {message}"
+                );
+            } else if case == "missing_fork" {
+                assert!(
+                    refreshes.is_empty(),
+                    "{case}: no refresh without fork evidence"
+                );
+                assert!(
+                    !history
+                        .iter()
+                        .any(|entry| entry.event == PR_BASE_UPDATE_RESERVED_EVENT),
+                    "{case}: no base update reserved"
                 );
             } else {
                 assert!(
