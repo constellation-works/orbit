@@ -63,6 +63,21 @@ impl OrbitRuntime {
             return Ok(Vec::new());
         }
         let warnings = self.validate_task_tool_names("required_tools", required_tools)?;
+        for name in normalize_required_tools(required_tools.to_vec()) {
+            let name = tool_requirement_name(&name);
+            if self
+                .tool_registry()
+                .plugin_binding(&name)
+                .is_some_and(|binding| {
+                    binding.execution_kind == orbit_types::plugin::PluginExecutionKind::Mutating
+                        && !binding.agent_callable
+                })
+            {
+                return Err(OrbitError::InvalidInput(format!(
+                    "required_tools cannot require '{name}': its mutating plugin tool requires operator or runner capability and cannot be called by agent_implement; have an operator perform the step separately"
+                )));
+            }
+        }
         let Some(disallow_list) = self.required_tool_implementer_disallow_list()? else {
             return Ok(warnings);
         };
