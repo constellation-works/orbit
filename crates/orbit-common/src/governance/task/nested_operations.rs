@@ -1,5 +1,6 @@
 //! Nested task operations, preserving the shipped CLI and MCP contracts.
 
+use super::aliased_task_id;
 use super::operations::{TaskOperation, TaskVerb};
 use crate::governance::operation::{
     CliArgKind, CliConstraint, CliHelp, Effect, ParamType, RETIRED_AGENT_FIELD, UnknownFields,
@@ -21,13 +22,13 @@ pub(super) const ARTIFACT_PUT: TaskOperation = TaskOperation {
     },
     effect: Effect::Write,
     params: &[&[
-        required(both(
+        required(aliased_task_id(both(
             "id",
             ParamType::String,
             "task ID",
             CliArgKind::Positional,
             "Task ID",
-        )),
+        ))),
         required(aliased(
             both(
                 "source_path",
@@ -98,13 +99,13 @@ pub(super) const ARTIFACT_GET: TaskOperation = TaskOperation {
     effect: Effect::Read,
     params: &[
         &[
-            required(both(
+            required(aliased_task_id(both(
                 "id",
                 ParamType::String,
                 "Globally unique task ID that owns the artifact.",
                 CliArgKind::Positional,
                 "Task ID that owns the artifact",
-            )),
+            ))),
             required(aliased(
                 both(
                     "path",

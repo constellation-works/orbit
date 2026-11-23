@@ -8,7 +8,6 @@ use orbit_cmd::registry_runtime::{RegisteredRuntimeFactory, ResolvedWorkspaceSel
 use orbit_cmd::task_owner::{TaskOwnerLookup, WorkspaceIdentity};
 use orbit_common::governance::operation::OperationVerb;
 use orbit_common::governance::workflow::WorkflowVerb;
-use orbit_common::protocol::tool_input::required_string;
 use orbit_common::{NotFoundKind, OrbitError};
 use orbit_core::OrbitRuntime;
 use orbit_core::adapter::command::{
@@ -499,7 +498,7 @@ impl ServerMcpHost {
         let explicit = call_workspace_selector(input)?;
         let operation = tool_operation_name(name, input);
         if explicit.is_none() && federated::is_id_routed_tool(operation) {
-            let task_id = required_string(input, &["id"], "id")?;
+            let task_id = orbit_common::governance::task::resolve_task_id_alias(input)?;
             // A v1 server does not relay [ORB-14449]: an id another
             // registered host writes is refused with where it lives, never
             // answered from a local mirror or reported as not found.

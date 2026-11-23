@@ -26,11 +26,14 @@ use super::nested_operations::{
     ARTIFACT_GET, ARTIFACT_PUT, LOCKS_LIST, LOCKS_RELEASE, LOCKS_RESERVE,
 };
 use super::write_operations::{ADD, UPDATE};
+use crate::OrbitError;
 use crate::governance::operation::{
     CliArgKind, CliGroup, CliHelp, Description, Effect, EnumValue, NounSpec, OperationSpec,
     ParamSpec, ParamType, RETIRED_AGENT_FIELD, ToolOnlyRegistration, UnknownFields, aliased, both,
     cli_only, defaulted, mcp_only, operation_registry, preserve_empty,
 };
+use crate::protocol::tool_input::required_string;
+use serde_json::{Map, Value};
 
 operation_registry! {
     noun: TASK;
@@ -628,13 +631,13 @@ const LINT: TaskOperation = TaskOperation {
     // without it.
     effect: Effect::Write,
     params: &[&[
-        both(
+        aliased_task_id(both(
             "id",
             ParamType::String,
             "Task ID. Omit to sweep the active tasks for `context_files` that need repair.",
             CliArgKind::Positional,
             "Task ID. Omit to sweep all active tasks for `context_files` that need repair",
-        ),
+        )),
         both(
             "restore_pruned",
             ParamType::Switch,
@@ -664,16 +667,86 @@ const LINT: TaskOperation = TaskOperation {
     id_route: McpIdRouteDeclaration::Unspecified,
 };
 
+/// Unadvertised wire alias for `id` on id-keyed task tools.
+///
+/// ORB-26989: `#8734` removed deprecated aliases deliberately, and Daniel made
+/// this one an exception because `task_id` without `id` caused 34% of
+/// task-tool refusals while costing 0 schema tokens (`ParamSpec::aliases` is
+/// omitted from every advertised schema).
+pub const TASK_ID_WIRE_ALIAS: &str = "task_id";
+
+const TASK_ID_ALIASES: &[&str] = &[TASK_ID_WIRE_ALIAS];
+
+/// Attach the unadvertised `task_id` wire alias to a task operation's `id`
+/// parameter (ORB-26989 exception to `#8734`).
+pub(crate) const fn aliased_task_id(param: ParamSpec) -> ParamSpec {
+    aliased(param, TASK_ID_ALIASES)
+}
+
+/// Refusal when a caller sets both `id` and its `task_id` alias.
+pub fn task_id_alias_conflict_error() -> OrbitError {
+    OrbitError::InvalidInput(format!(
+        "`{TASK_ID_WIRE_ALIAS}` is an alias of `id`; set one or the other, not both"
+    ))
+}
+
+/// Rename `task_id` to `id` on a JSON object when `id` is absent, refusing
+/// when both keys are set.
+///
+/// Used by pre-spec handlers (guarded writes, preloaded artifact puts) that
+/// run before `OperationSpec::parse_input_fields`. See [`TASK_ID_WIRE_ALIAS`]
+/// for why this ORB-26989 exception exists after `#8734`.
+pub fn normalize_task_id_alias(object: &mut Map<String, Value>) -> Result<(), OrbitError> {
+    let Some(task_id) = object.remove(TASK_ID_WIRE_ALIAS) else {
+        return Ok(());
+    };
+    if object.contains_key("id") {
+        return Err(task_id_alias_conflict_error());
+    }
+    object.insert("id".to_string(), task_id);
+    Ok(())
+}
+
+/// Read `id` from `input`, falling back to the unadvertised `task_id` alias
+/// when `id` is absent, and refusing when both are set.
+///
+/// See [`TASK_ID_WIRE_ALIAS`] for why this ORB-26989 exception exists after
+/// `#8734`.
+pub fn resolve_task_id_alias(input: &Value) -> Result<String, OrbitError> {
+    if input.get("id").is_some() && input.get(TASK_ID_WIRE_ALIAS).is_some() {
+        return Err(task_id_alias_conflict_error());
+    }
+    required_string(input, &["id", TASK_ID_WIRE_ALIAS], "id")
+}
+
+/// Borrow `id`, or `task_id` when `id` is absent, as a non-empty trimmed string
+/// for pre-dispatch routing; returns `None` when both are set or neither is a
+/// non-empty string.
+///
+/// See [`TASK_ID_WIRE_ALIAS`] for why this ORB-26989 exception exists after
+/// `#8734`.
+pub fn task_id_alias_str(input: &Value) -> Option<&str> {
+    if input.get("id").is_some() && input.get(TASK_ID_WIRE_ALIAS).is_some() {
+        return None;
+    }
+    input
+        .get("id")
+        .or_else(|| input.get(TASK_ID_WIRE_ALIAS))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|id| !id.is_empty())
+}
+
 /// The globally unique task id `show` addresses.
 const TASK_ID_PARAM: ParamSpec = ParamSpec {
     required: true,
-    ..both(
+    ..aliased_task_id(both(
         "id",
         ParamType::String,
         "Globally unique task ID. Resolved through the host task registry by default; a workspace argument is not required.",
         CliArgKind::Positional,
         "Task ID",
-    )
+    ))
 };
 
 fn show_run_id_description() -> String {

@@ -85,3 +85,36 @@ fn every_declared_route_matches_one_id_with_optional_workspace() {
         }
     }
 }
+
+#[test]
+fn id_only_task_target_accepts_task_id_alias_when_id_absent() {
+    use orbit_mcp::federated::id_only_task_target;
+    use serde_json::json;
+
+    assert_eq!(
+        id_only_task_target("orbit.task.show", &json!({"task_id": " ORB-1 "})),
+        Some("ORB-1")
+    );
+    assert_eq!(
+        id_only_task_target("orbit.task.update", &json!({"task_id": "ORB-2"})),
+        Some("ORB-2")
+    );
+    assert_eq!(
+        id_only_task_target(
+            "orbit.task.artifact",
+            &json!({"action": "get", "task_id": "ORB-3", "path": "a.txt"})
+        ),
+        Some("ORB-3")
+    );
+    assert_eq!(
+        id_only_task_target(
+            "orbit.task.show",
+            &json!({"id": "ORB-1", "task_id": "ORB-2"})
+        ),
+        None
+    );
+    assert_eq!(
+        id_only_task_target("orbit.task.eligible", &json!({"task_id": "ORB-1"})),
+        None
+    );
+}

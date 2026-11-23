@@ -518,6 +518,68 @@ mod task_route {
             "{down}"
         );
     }
+
+    #[test]
+    fn task_id_alias_routes_by_prefix_when_id_absent_and_refuses_conflict() {
+        let (host, log) = routed(None);
+
+        let remote = call(
+            &host,
+            "orbit.task.update",
+            json!({"task_id": "OWN-7", "comment": "hi"}),
+        )
+        .expect("remote prefix delivered via task_id");
+        let local =
+            call(&host, "orbit.task.show", json!({"task_id": "LB-3"})).expect("local prefix");
+        let artifact = call(
+            &host,
+            "orbit.task.artifact",
+            json!({"action": "get", "task_id": "OWN-7", "path": "a.txt"}),
+        )
+        .expect("artifact get via task_id");
+
+        assert_eq!(remote["task_id"], "OWN-7");
+        assert_eq!(local["task_id"], "LB-3");
+        assert_eq!(artifact["task_id"], "OWN-7");
+        assert_eq!(
+            log.calls(),
+            vec![
+                (
+                    OWNER_MACHINE.to_string(),
+                    "orbit.task.update".to_string(),
+                    json!({"task_id": "OWN-7", "comment": "hi"}),
+                ),
+                (
+                    LOCAL_MACHINE.to_string(),
+                    "orbit.task.show".to_string(),
+                    json!({"task_id": "LB-3"}),
+                ),
+                (
+                    OWNER_MACHINE.to_string(),
+                    "orbit.task.artifact".to_string(),
+                    json!({"action": "get", "task_id": "OWN-7", "path": "a.txt"}),
+                ),
+            ]
+        );
+
+        let calls_before = log.calls().len();
+        let error = call(
+            &host,
+            "orbit.task.show",
+            json!({"id": "OWN-7", "task_id": "LB-3"}),
+        )
+        .expect_err("conflicting id and task_id must be refused");
+        let message = error.to_string();
+        assert!(
+            message.contains("id") && message.contains("task_id"),
+            "conflict refusal must name both `id` and `task_id`: {message}"
+        );
+        assert_eq!(
+            log.calls().len(),
+            calls_before,
+            "conflicting id and task_id must not dispatch to a destination"
+        );
+    }
 }
 
 mod notice_aggregation {

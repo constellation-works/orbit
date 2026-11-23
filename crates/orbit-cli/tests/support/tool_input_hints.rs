@@ -16,23 +16,23 @@ pub(crate) fn cases() -> Vec<HintCase> {
         ("orbit.task.artifact", Some("put")),
         ("orbit.task.artifact", Some("get")),
     ] {
-        for field in ["task_id", "taskId"] {
-            let mut input = json!({field: "ORB-99999999", "model": "codex"});
-            if let Some(action) = action {
-                input["action"] = json!(action);
-            }
-            cases.push(HintCase {
-                tool,
-                input,
-                suggestions: vec!["id"],
-            });
+        // `task_id` is accepted as an unadvertised alias for `id` (ORB-26989);
+        // `taskId` remains an unknown field suggesting `id`.
+        let mut input = json!({"taskId": "ORB-99999999", "model": "codex"});
+        if let Some(action) = action {
+            input["action"] = json!(action);
         }
+        cases.push(HintCase {
+            tool,
+            input,
+            suggestions: vec!["id"],
+        });
     }
-    // The audit also recorded artifact uploads with both task_id and name;
+    // The audit also recorded artifact uploads with both taskId and name;
     // an earlier unhinted field must not hide the actionable id suggestion.
     cases.push(HintCase {
         tool: "orbit.task.artifact",
-        input: json!({"action": "put", "name": "evidence.json", "task_id": "ORB-99999999", "model": "codex"}),
+        input: json!({"action": "put", "name": "evidence.json", "taskId": "ORB-99999999", "model": "codex"}),
         suggestions: vec!["id"],
     });
     for tool in ["github.run.view", "github.run.logs"] {

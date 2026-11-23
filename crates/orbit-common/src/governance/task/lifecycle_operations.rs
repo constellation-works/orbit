@@ -12,6 +12,7 @@
 
 use orbit_types::tool::{McpIdRouteDeclaration, McpToolScope};
 
+use super::aliased_task_id;
 use super::operations::{TASK_HOST_HELP, TaskOperation, TaskVerb};
 use super::write_operations::WRITE_PROJECTION_PARAMS;
 use crate::governance::operation::{
@@ -162,7 +163,11 @@ pub(super) const RECONCILE_REVIEW: TaskOperation = TaskOperation {
             ),
             RECONCILE_CLI_ACTIONS,
         )),
-        required(mcp_only("id", ParamType::String, RECONCILE_ID_HELP)),
+        required(aliased_task_id(mcp_only(
+            "id",
+            ParamType::String,
+            RECONCILE_ID_HELP,
+        ))),
         mcp_only(
             "request_key",
             ParamType::String,
@@ -209,13 +214,13 @@ pub(super) const REVIEW_RESET: TaskOperation = TaskOperation {
     params: &[&[
         HOST_PARAM,
         WORKSPACE_PARAM,
-        required(both(
+        required(aliased_task_id(both(
             "id",
             ParamType::String,
             "Task in the selected lineage",
             CliArgKind::Positional,
             "Task belonging to the selected lineage",
-        )),
+        ))),
         required(both(
             "lineage_key",
             ParamType::String,
@@ -258,13 +263,13 @@ pub(super) const REQUEUE: TaskOperation = TaskOperation {
     params: &[&[
         HOST_PARAM,
         WORKSPACE_PARAM,
-        required(both(
+        required(aliased_task_id(both(
             "id",
             ParamType::String,
             "Blocked task to requeue",
             CliArgKind::Positional,
             "Blocked task to requeue",
-        )),
+        ))),
         required(free_text(both(
             "reason",
             ParamType::String,
@@ -304,13 +309,13 @@ pub(super) const REPILOT: TaskOperation = TaskOperation {
     params: &[&[
         HOST_PARAM,
         WORKSPACE_PARAM,
-        required(both(
+        required(aliased_task_id(both(
             "id",
             ParamType::String,
             "Task to assess again",
             CliArgKind::Positional,
             "Task to assess again",
-        )),
+        ))),
         both(
             "full",
             ParamType::Switch,
@@ -358,11 +363,11 @@ pub(super) const BLOCK_TRIAGE: TaskOperation = TaskOperation {
             ParamType::Enum(BLOCK_TRIAGE_SUBJECT_VALUES),
             "Triage subject, only pilot_warning (default); a proposed task's pilot warning hold",
         ),
-        mcp_only(
+        aliased_task_id(mcp_only(
             "id",
             ParamType::String,
             "Pilot-held task ID, for propose and report",
-        ),
+        )),
         free_text(mcp_only(
             "summary",
             ParamType::String,
@@ -407,7 +412,11 @@ pub(super) const BLOCK_TRIAGE: TaskOperation = TaskOperation {
 };
 
 /// The task a lifecycle tool acts on.
-const TASK_ID_PARAM: ParamSpec = required(mcp_only("id", ParamType::String, "task ID"));
+const TASK_ID_PARAM: ParamSpec = required(aliased_task_id(mcp_only(
+    "id",
+    ParamType::String,
+    "task ID",
+)));
 
 // Task rejection is a human/operator decision: CLI and dashboard only.
 pub(super) const REJECT: TaskOperation = TaskOperation {

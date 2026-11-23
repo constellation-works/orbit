@@ -20,6 +20,7 @@
 
 use orbit_types::tool::{McpIdRouteDeclaration, McpToolScope};
 
+use super::aliased_task_id;
 use super::operations::{
     TASK_COMPLEXITY_VALUES, TASK_HOST_HELP, TASK_ORIGIN_VALUES, TASK_PRIORITY_VALUES,
     TASK_TYPE_VALUES, TaskOperation, TaskVerb,
@@ -472,13 +473,13 @@ pub(super) const UPDATE: TaskOperation = TaskOperation {
                 CliArgKind::flag("repilot"),
                 "Request one new pilot after updating (operator only)",
             ),
-            required(both(
+            required(aliased_task_id(both(
                 "id",
                 ParamType::String,
                 "Task ID.",
                 CliArgKind::Positional,
                 "Task ID",
-            )),
+            ))),
             free_text(both(
                 "title",
                 ParamType::String,

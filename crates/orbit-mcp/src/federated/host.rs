@@ -522,6 +522,15 @@ impl crate::McpHost for FederatedMcpHost {
         if name == FEDERATED_WORKSPACE_LIST_TOOL {
             return self.list_workspaces(&input);
         }
+        if super::task_route::is_id_routed_tool(orbit_types::tool::tool_operation_name(
+            name, &input,
+        )) && input.get("id").is_some()
+            && input
+                .get(orbit_common::governance::task::TASK_ID_WIRE_ALIAS)
+                .is_some()
+        {
+            return Err(orbit_common::governance::task::task_id_alias_conflict_error());
+        }
         if let Some(task_id) = self
             .prefix_routed_task(name, &input, &session_context)
             .map(str::to_string)

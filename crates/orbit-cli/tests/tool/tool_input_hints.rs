@@ -360,7 +360,7 @@ fn cli_keeps_shared_hint_case(case: &crate::tool_input_hint_cases::HintCase) -> 
         return true;
     }
     if case.tool == "orbit.task.show"
-        && case.input.get("task_id").is_some()
+        && case.input.get("taskId").is_some()
         && case.input.get("name").is_none()
     {
         return true;
@@ -556,4 +556,88 @@ fn search_refuses_unknown_keys_with_did_you_mean_and_omits_friction_without_fric
             "missing-query refusal without kind: friction must not mention friction: {error}"
         );
     }
+}
+
+#[test]
+fn tool_run_accepts_task_id_alias_and_refuses_conflicting_ids() {
+    let root = tempfile::tempdir().expect("fixture");
+    let home = root.path().join("home");
+    let work = root.path().join("work");
+    let elsewhere = root.path().join("elsewhere");
+    std::fs::create_dir_all(&home).expect("fixture home");
+    std::fs::create_dir_all(&elsewhere).expect("elsewhere dir");
+    git_repo::init(&work);
+    orbit_command(&work, &home)
+        .args(["workspace", "init", "--name", "tool-run-task-id-alias"])
+        .assert()
+        .success();
+
+    let created = tool_stdout_json(
+        &work,
+        &home,
+        &[
+            "orbit.task.add",
+            "--input",
+            &json!({
+                "title": "CLI task_id alias fixture",
+                "description": "Verify orbit tool run accepts task_id",
+                "complexity": "low",
+                "model": "codex",
+            })
+            .to_string(),
+        ],
+    );
+    let task_id = created["id"].as_str().expect("created task id").to_string();
+
+    // `orbit.task.show` with `task_id` resolves the task owner even from outside
+    // the checkout and matches `id`.
+    let shown_by_id = tool_stdout_json(
+        &elsewhere,
+        &home,
+        &[
+            "orbit.task.show",
+            "--input",
+            &json!({"id": task_id}).to_string(),
+        ],
+    );
+    let shown_by_task_id = tool_stdout_json(
+        &elsewhere,
+        &home,
+        &[
+            "orbit.task.show",
+            "--input",
+            &json!({"task_id": task_id}).to_string(),
+        ],
+    );
+    assert_eq!(shown_by_task_id, shown_by_id);
+
+    // `orbit.task.update` with `task_id` updates identically to `id`.
+    let updated = tool_stdout_json(
+        &work,
+        &home,
+        &[
+            "orbit.task.update",
+            "--input",
+            &json!({"task_id": task_id, "priority": "high", "model": "codex"}).to_string(),
+        ],
+    );
+    assert_eq!(updated["id"], task_id);
+    assert_eq!(updated["priority"], "high");
+
+    // Differing `id` and `task_id` are refused, naming both.
+    let conflict = run_tool(
+        &elsewhere,
+        &home,
+        &[
+            "orbit.task.show",
+            "--input",
+            &json!({"id": task_id, "task_id": "ORB-99999999"}).to_string(),
+            "--format",
+            "json",
+        ],
+    );
+    assert!(
+        conflict.contains("id") && conflict.contains("task_id"),
+        "conflict refusal must name both `id` and `task_id`: {conflict}"
+    );
 }
