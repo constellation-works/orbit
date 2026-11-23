@@ -14,7 +14,8 @@
 //! The requeue is admitted only while the publication is still what the run
 //! recorded and ready to land: the run's failure handoff (for failed runs) or
 //! task history (for cancelled, held, or succeeded runs) confirms the task
-//! specification did not change after publication, the checkpoints authenticate
+//! specification did not change after publication (a pending edit carried by
+//! the candidate task counts as a change), the checkpoints authenticate
 //! the PR as open and unmerged at the recorded head, and every required check on
 //! that head has passed (or the repository configures no required check).
 use super::*;
@@ -96,15 +97,17 @@ impl OrbitRuntime {
             })
         {
             validate_failure_handoff_receipt(receipt, &source_id, task)?;
-        } else if entries.iter().any(|entry| {
-            entry.at >= source.created_at
-                && entry.event == TASK_FIELDS_UPDATED_EVENT
-                && entry.note.as_deref().is_some_and(|note| {
-                    task_fields_updated_documents(note).into_iter().any(|doc| {
-                        doc == DESCRIPTION_DOCUMENT || doc == ACCEPTANCE_CRITERIA_DOCUMENT
+        } else if self.get_task(&task.id)?.spec_digest() != task.spec_digest()
+            || entries.iter().any(|entry| {
+                entry.at >= source.created_at
+                    && entry.event == TASK_FIELDS_UPDATED_EVENT
+                    && entry.note.as_deref().is_some_and(|note| {
+                        task_fields_updated_documents(note).into_iter().any(|doc| {
+                            doc == DESCRIPTION_DOCUMENT || doc == ACCEPTANCE_CRITERIA_DOCUMENT
+                        })
                     })
-                })
-        }) {
+            })
+        {
             return Err(refuse(format!(
                 "the task specification changed after run `{source_id}` started, so its \
                  published pull request no longer implements this task"
