@@ -88,8 +88,16 @@ Your activities and jobs live under `.orbit/resources/activities/` and
 ship: a workspace file named like a shipped default is ignored.
 
 Older releases seeded copies of the shipped defaults into these directories.
-`orbit workspace sync` refreshes the copies you haven't edited and leaves
-edited copies and your own files alone.
+Orbit keeps those copies in step with the release:
+
+- `orbit workspace sync`, and each time Orbit opens the workspace for writing,
+  refreshes the copies you haven't edited. Edited copies of defaults Orbit
+  still ships stay where they are. Your own files are never touched.
+- A default that a release stops shipping is retired. Its unedited copy is
+  removed. An edited copy moves out of the active catalog into
+  `.orbit/resources/.retired-managed/activities/` or
+  `.orbit/resources/.retired-managed/jobs/`, and sync reports where it went.
+  Review that file, then migrate it under a name of your own or delete it.
 
 ### If a workspace activity is stale
 
