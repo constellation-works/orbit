@@ -500,7 +500,10 @@ fn cancelled_publication_with_green_checks_is_requeued_preserving_repair_budget(
         .expect("blocked next step");
     assert_eq!(
         next.requeue_command,
-        format!("orbit task update {} --status backlog --discard-candidate", f.task)
+        format!(
+            "orbit task update {} --status backlog --discard-candidate",
+            f.task
+        )
     );
 }
 

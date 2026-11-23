@@ -662,19 +662,21 @@ impl OrbitRuntime {
     /// conclusively stopped.
     fn ensure_requeueable(&self, task: &Task) -> Result<(), OrbitError> {
         if task.status != TaskStatus::Blocked {
-            return Err(OrbitError::InvalidInput(if task.status == TaskStatus::Review {
-                format!(
-                    "only a blocked task can be requeued; {} is {}. Return it to backlog with \
+            return Err(OrbitError::InvalidInput(
+                if task.status == TaskStatus::Review {
+                    format!(
+                        "only a blocked task can be requeued; {} is {}. Return it to backlog with \
                      `orbit task update {} --status backlog` (or append `--discard-candidate` to \
                      close its PR and start fresh)",
-                    task.id, task.status, task.id
-                )
-            } else {
-                format!(
-                    "only a blocked task can be requeued; {} is {}",
-                    task.id, task.status
-                )
-            }));
+                        task.id, task.status, task.id
+                    )
+                } else {
+                    format!(
+                        "only a blocked task can be requeued; {} is {}",
+                        task.id, task.status
+                    )
+                },
+            ));
         }
         if let Some(reason) = self.unsettled_run(task)? {
             return Err(OrbitError::InvalidInput(format!(
@@ -940,7 +942,10 @@ impl OrbitRuntime {
     /// already guaranteed to fail based solely on local state (without querying
     /// remotes or the forge), and the exact CLI command that can succeed.
     pub(crate) fn backlog_return_refused_locally(&self, task: &Task) -> Option<String> {
-        let discard = format!("orbit task update {} --status backlog --discard-candidate", task.id);
+        let discard = format!(
+            "orbit task update {} --status backlog --discard-candidate",
+            task.id
+        );
         let cancel_if_live = |run_id: &str| {
             self.observed_job_run(run_id)
                 .ok()
