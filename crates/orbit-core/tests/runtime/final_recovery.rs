@@ -30,7 +30,8 @@ mod revision;
 mod terminalization;
 
 struct Fixture {
-    _root: TempDir,
+    // Shared with worker guards, which retain it if a worker outlives teardown.
+    _root: Arc<TempDir>,
     global: PathBuf,
     runtime: OrbitRuntime,
     repo: PathBuf,
@@ -58,7 +59,7 @@ fn fixture(pool: &str) -> Fixture {
         runtime.workspace_id().unwrap(),
     );
     Fixture {
-        _root: root,
+        _root: Arc::new(root),
         global,
         runtime,
         repo,
@@ -555,6 +556,7 @@ fn a_resumed_run_inherits_its_sources_final_recovery_checkpoint() {
     // before the fixture workspace is dropped, even on an assertion failure.
     let release = fixture._root.path().join("worker-release");
     let mut worker = crate::worker_fixture::install_owned_workers(&release, fixture.repo.clone());
+    worker.retain_workspace(fixture._root.clone());
     let jobs_dir = fixture.global.join("resources/jobs");
     std::fs::create_dir_all(&jobs_dir).unwrap();
     std::fs::write(

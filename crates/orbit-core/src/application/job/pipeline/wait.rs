@@ -129,6 +129,34 @@ pub fn pipeline_worker_observer_completed(workspace: &Path, run_id: &str, worker
         })
 }
 
+#[cfg(feature = "test-support")]
+static SPAWNED_WORKERS: Mutex<Vec<(PathBuf, String, u32)>> = Mutex::new(Vec::new());
+
+/// Record that a worker for `run_id` was launched and handed to its startup
+/// observer, before any identity handshake (test support only). The observer
+/// reaps it, so a fixture that owns the launch can wait for its exit.
+#[cfg(feature = "test-support")]
+pub(super) fn record_worker_spawn(workspace: &Path, run_id: &str, worker_pid: u32) {
+    SPAWNED_WORKERS
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .push((workspace.to_path_buf(), run_id.to_string(), worker_pid));
+}
+
+/// Every `(run_id, worker_pid)` launched for this workspace in this process,
+/// including launches whose worker has not yet identified itself. Only
+/// recorded under `test-support`.
+#[cfg(feature = "test-support")]
+pub fn pipeline_workers_spawned(workspace: &Path) -> Vec<(String, u32)> {
+    SPAWNED_WORKERS
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .iter()
+        .filter(|(observed_workspace, _, _)| observed_workspace == workspace)
+        .map(|(_, run, pid)| (run.clone(), *pid))
+        .collect()
+}
+
 /// Sleep for up to `duration` while the count still equals `exits_seen`.
 /// Spurious condvar wakeups resume the sleep; only a count change or the
 /// timeout ends it, so a missed wake costs at most the poll interval.

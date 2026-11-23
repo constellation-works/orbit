@@ -47,6 +47,9 @@ pub(super) fn install_owned_with_identity_gate(
 /// each worker is reaped and its supervisor observer has completed, so the
 /// caller may delete the marker and temporary root only after no substitute
 /// remains. Drop performs the same bounded cleanup on failure/unwind paths.
+/// Launches count from the supervisor's handoff, before their identity
+/// handshake, so a worker held there is settled like an identified one. When
+/// settling fails, a root given to [`OwnedWorkers::retain_workspace`] is kept.
 #[cfg(unix)]
 pub(super) struct OwnedWorkers {
     marker: std::path::PathBuf,
@@ -58,6 +61,10 @@ pub(super) struct OwnedWorkers {
     // Rendezvous for the delayed-reap regression, consumed at most once.
     before_kill_signal: Option<Box<dyn FnOnce() + Send>>,
     after_kill_deadline: Option<Box<dyn FnOnce() + Send>>,
+    // Launches that predate this guard belong to someone else's teardown.
+    before_install: Vec<(String, u32)>,
+    // This guard's share of the workspace root, kept when teardown fails.
+    root: Option<std::sync::Arc<tempfile::TempDir>>,
 }
 
 #[cfg(unix)]
@@ -79,9 +86,21 @@ fn reaped(pid: u32) -> bool {
 
 #[cfg(unix)]
 pub(super) fn install_owned_workers(path: &Path, repo: std::path::PathBuf) -> OwnedWorkers {
+    install_owned_workers_with_identity_gate(path, repo, "")
+}
+
+/// As [`install_owned_workers`], with each substitute held at `identity_gate`
+/// before its identity line (see [`install_owned_with_identity_gate`]).
+#[cfg(unix)]
+pub(super) fn install_owned_workers_with_identity_gate(
+    path: &Path,
+    repo: std::path::PathBuf,
+    identity_gate: &str,
+) -> OwnedWorkers {
     use std::io::BufRead;
     use std::sync::atomic::Ordering;
-    let listener = install_owned(path);
+    let listener = install_owned_with_identity_gate(path, identity_gate);
+    let before_install = orbit_core::test_support::pipeline_workers_spawned(&repo);
     let workers: std::sync::Arc<std::sync::Mutex<Vec<OwnedWorker>>> =
         std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
     let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
@@ -140,6 +159,8 @@ pub(super) fn install_owned_workers(path: &Path, repo: std::path::PathBuf) -> Ow
         cleaned: false,
         before_kill_signal: None,
         after_kill_deadline: None,
+        before_install,
+        root: None,
     }
 }
 
@@ -151,6 +172,21 @@ impl OwnedWorkers {
         if let Err(error) = self.cleanup(expected, Duration::from_secs(30)) {
             panic!("owned worker teardown failed: {error}");
         }
+    }
+
+    /// Hand the guard a share of the fixture's workspace root. When teardown
+    /// cannot confirm that every worker is reaped and observed, the guard
+    /// keeps its share, so the root outlives a worker that may still use it.
+    pub(super) fn retain_workspace(&mut self, root: std::sync::Arc<tempfile::TempDir>) {
+        self.root = Some(root);
+    }
+
+    /// Launches recorded for this workspace since the guard was installed.
+    fn launched_since_install(&self) -> Vec<(String, u32)> {
+        orbit_core::test_support::pipeline_workers_spawned(&self.repo)
+            .into_iter()
+            .filter(|launch| !self.before_install.contains(launch))
+            .collect()
     }
 
     fn cleanup(&mut self, expected: &[String], timeout: Duration) -> Result<(), String> {
@@ -210,7 +246,10 @@ impl OwnedWorkers {
             let expected_owned = expected
                 .iter()
                 .all(|run| snapshot.iter().any(|(owned, _)| owned == run));
-            let all_settled = snapshot.iter().all(|(run, pid)| {
+            // A launch counts from its handoff, so a worker still held before
+            // its identity is settled like an identified one.
+            let launched = self.launched_since_install();
+            let all_settled = snapshot.iter().chain(&launched).all(|(run, pid)| {
                 reaped(*pid)
                     && orbit_core::test_support::pipeline_worker_observer_completed(
                         &self.repo, run, *pid,
@@ -264,7 +303,7 @@ impl OwnedWorkers {
             }
             if Instant::now() >= deadline {
                 break Err(format!(
-                    "workers not reaped/observed before deadline: {snapshot:?} expected_owned={expected_owned}"
+                    "workers not reaped/observed before deadline: {snapshot:?} launched={launched:?} expected_owned={expected_owned}"
                 ));
             }
             std::thread::sleep(Duration::from_millis(20));
@@ -272,6 +311,12 @@ impl OwnedWorkers {
         self.stop.store(true, Ordering::SeqCst);
         if let Some(acceptor) = self.acceptor.take() {
             let _ = acceptor.join();
+        }
+        if result.is_err()
+            && let Some(root) = self.root.take()
+        {
+            // Never release this share: the root stays while a worker may use it.
+            std::mem::forget(root);
         }
         result
     }
@@ -405,6 +450,107 @@ fn released_workers_exiting_around_the_kill_deadline_are_not_forced_kills() {
     }
 }
 
+/// A substitute launched and held before its identity handshake must keep its
+/// workspace through an assertion unwind: teardown cannot confirm its exit, so
+/// the guard keeps the root. The test removes that root only after the
+/// substitute is reaped and its startup observer has completed.
+#[cfg(unix)]
+#[test]
+fn a_held_pre_handshake_worker_keeps_its_workspace_through_an_assertion_unwind() {
+    use orbit_core::OrbitRuntime;
+    use orbit_core::test_support::{pipeline_worker_observer_completed, pipeline_workers_spawned};
+    use std::sync::Arc;
+
+    if !crate::dispatch_admission::isolated(
+        "worker_fixture::a_held_pre_handshake_worker_keeps_its_workspace_through_an_assertion_unwind",
+    ) {
+        return;
+    }
+    fn until(what: &str, mut ready: impl FnMut() -> bool) {
+        let deadline = Instant::now() + Duration::from_secs(30);
+        while !ready() {
+            assert!(Instant::now() < deadline, "{what} timed out");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    let root =
+        Arc::new(tempfile::TempDir::new_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap());
+    let root_path = root.path().to_path_buf();
+    let global = root_path.join("global");
+    let repo = root_path.join("repo");
+    let jobs_dir = global.join("resources/jobs");
+    std::fs::create_dir_all(&jobs_dir).unwrap();
+    std::fs::create_dir_all(repo.join(".orbit")).unwrap();
+    std::fs::write(
+        jobs_dir.join("held_identity.yaml"),
+        "schemaVersion: 2\nkind: Job\nmetadata:\n  name: held_identity\nspec:\n  state: enabled\n  steps:\n    - id: nap\n      spec:\n        type: deterministic\n        action: sleep\n        config: {}\n",
+    )
+    .unwrap();
+    let gate = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    gate.set_nonblocking(true).unwrap();
+    let gate_addr = gate.local_addr().unwrap().to_string();
+    let marker = root_path.join("worker-release");
+    let runtime = OrbitRuntime::from_roots(&global, &repo.join(".orbit"))
+        .unwrap()
+        .with_host_resource_probe(crate::dispatch_admission::PressureProbe::calm());
+
+    let mut held = None;
+    let mut launched = None;
+    let unwound = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        // Moved in: the unwind drops the guard, then this share of the root.
+        let root = root;
+        let mut owned = install_owned_workers_with_identity_gate(&marker, repo.clone(), &gate_addr);
+        owned.retain_workspace(root.clone());
+        let run = runtime
+            .submit_pipeline_run("held_identity", serde_json::json!({}), None, None)
+            .unwrap()
+            .run_id;
+        // The substitute connects to the gate only after its control socket,
+        // and it writes no identity until the gate permits it.
+        let mut accepted = None;
+        until("the substitute reached its identity gate", || {
+            gate.accept()
+                .map(|(stream, _)| accepted = Some(stream))
+                .is_ok()
+        });
+        held = accepted;
+        let pid = pipeline_workers_spawned(&repo)
+            .into_iter()
+            .find_map(|(recorded, pid)| (recorded == run).then_some(pid))
+            .expect("the launch is recorded before submission returns");
+        launched = Some((run, pid));
+        assert!(
+            owned.workers.lock().unwrap().is_empty(),
+            "no identity is announced while the substitute is held"
+        );
+        panic!("assertion unwind while the substitute is held before its identity");
+    }));
+    assert!(unwound.is_err(), "the unwind reached the guard");
+    let (run, pid) = launched.expect("the substitute was launched before the unwind");
+    assert!(
+        root_path.exists(),
+        "an unwind must not delete a workspace whose substitute is still held"
+    );
+    assert!(!reaped(pid), "the held substitute is still alive");
+    assert!(
+        !pipeline_worker_observer_completed(&repo, &run, pid),
+        "its startup observer is still active"
+    );
+
+    // Opening the gate lets the substitute identify itself. Its control socket
+    // is closed, so it exits on the release read and its observer reaps it.
+    let mut held: std::net::TcpStream = held.expect("the gate connection");
+    held.write_all(&[1]).unwrap();
+    until("the held substitute is reaped", || reaped(pid));
+    until("its startup observer completes", || {
+        pipeline_worker_observer_completed(&repo, &run, pid)
+    });
+    // Nothing uses the root now, so the test removes it; the guard's share
+    // was retained, so this is the only deletion.
+    std::fs::remove_dir_all(&root_path).unwrap();
+}
+
 /// Non-Unix fallback: no owned handshake exists there, so retain the
 /// original marker-only contract.
 #[cfg(not(unix))]
@@ -425,6 +571,10 @@ impl OwnedWorkers {
     pub(super) fn release_and_wait(&mut self, _expected: &[String]) {
         std::fs::write(&self.marker, "").unwrap();
     }
+
+    /// No launch record exists here to confirm an exit, so the root is not
+    /// retained: the non-Unix contract stays marker-only.
+    pub(super) fn retain_workspace(&mut self, _root: std::sync::Arc<tempfile::TempDir>) {}
 }
 
 fn install_with_control(path: &Path, mode: &str, control: &str, identity_gate: &str) {
