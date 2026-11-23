@@ -78,6 +78,18 @@ See [Granting tools to every minted
 task](auto-tasks-managing.md#granting-tools-to-every-minted-task) and inspect the
 stored grant with `orbit auto-task show <name>`.
 
+Two persisted records also need lockstep updates:
+
+- A newer binary can write `candidate_ref` in a `SourceRepairBinding`; older
+  binaries refuse the binding because they do not know that field. The field
+  arrived in 0.54.0, so update every host that can read these bindings together.
+- A newer binary can write `model_refused` in an after-landing review hold;
+  older binaries reject the hold as unknown data. Upgrade every host that reads
+  review state to 0.52.0 or later.
+
+Check each host's installed binary with `orbit --version`; `orbit host list`
+reports live versions for registered hosts.
+
 `orbit update` run inside an initialized workspace immediately runs
 `migrate --confirm` followed by `workspace sync` as post-replacement
 convergence. Run from a directory that is not inside any initialized workspace
