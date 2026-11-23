@@ -139,6 +139,13 @@ where
         self.0.id_route
     }
 
+    fn input_aliases(&self) -> Vec<(&'static str, &'static str)> {
+        self.0
+            .wire_params()
+            .flat_map(|param| param.aliases.iter().map(move |alias| (param.name, *alias)))
+            .collect()
+    }
+
     fn input_schema(&self) -> Option<Value> {
         let extend = self.0.verb.schema_extension()?;
         let mut schema = Value::Object(tool_input_schema(&self.schema()));

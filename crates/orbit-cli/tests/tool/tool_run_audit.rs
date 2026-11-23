@@ -124,6 +124,66 @@ fn dry_run_reports_activity_admission_without_executing_permitted_mutations() {
     }
 }
 
+/// Regression: an unadvertised alias supplies its canonical field in a preview,
+/// as it does at dispatch, and omitting both spellings still reports the field.
+#[test]
+fn dry_run_counts_an_unadvertised_alias_as_supplying_its_field() {
+    let root = tempfile::tempdir().expect("fixture");
+    let home = root.path().join("home");
+    let work = root.path().join("work");
+    std::fs::create_dir_all(&home).expect("fixture home");
+    git_repo::init(&work);
+    fixture_orbit(&work, &home)
+        .args(["workspace", "init", "--name", "dry-run-alias"])
+        .assert()
+        .success();
+    let added = fixture_orbit(&work, &home)
+        .args([
+            "tool",
+            "run",
+            "orbit.task.add",
+            "--input",
+            r#"{"title":"Alias preview fixture","description":"Dry-run alias presence","complexity":"low","model":"codex"}"#,
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let task: Value = serde_json::from_slice(&added).expect("added task");
+    let id = task["id"].as_str().expect("task id").to_string();
+    let preview = |input: Value| -> Value {
+        let output = fixture_orbit(&work, &home)
+            .args([
+                "tool",
+                "run",
+                "orbit.task.show",
+                "--dry-run",
+                "--format",
+                "json",
+                "--input",
+                &input.to_string(),
+            ])
+            .assert()
+            .success()
+            .get_output()
+            .stdout
+            .clone();
+        serde_json::from_slice(&output).expect("task.show preview")
+    };
+
+    let by_id = preview(json!({"id": id}));
+    assert_eq!(by_id["missing_params"], json!([]), "{by_id}");
+    let by_alias = preview(json!({"task_id": id}));
+    assert_eq!(by_alias["policy_allowed"], true, "{by_alias}");
+    assert_eq!(by_alias["missing_params"], json!([]), "{by_alias}");
+    assert_eq!(preview(json!({}))["missing_params"], json!(["id"]));
+    assert_eq!(
+        preview(json!({"task_id": null}))["missing_params"],
+        json!(["id"])
+    );
+}
+
 #[test]
 fn dry_run_uses_capability_floors_including_input_dependent_authority() {
     let root = tempfile::tempdir().expect("fixture");
