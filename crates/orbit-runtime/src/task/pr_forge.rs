@@ -896,10 +896,10 @@ fn populate_requires_status_checks(
     pull: &Value,
     blockers: &mut PullRequestBlockers,
 ) {
-    // Classic protection that is configured or unreadable is already decided.
-    // With none, a ruleset may still require checks the head never reported,
-    // so the rules are read even when some required check was observed.
-    if classic_branch_protection_requires_checks(pull) != Some(false) {
+    // An unreadable classic rule cannot establish whether rulesets add checks.
+    // When classic protection is readable, rulesets still layer on top of it,
+    // so inspect them whether classic protection requires checks or not.
+    if classic_branch_protection_requires_checks(pull).is_none() {
         return;
     }
     let Some(base_branch) = pull
