@@ -23,9 +23,20 @@ operational and contributor procedures, feature designs, and incident reviews.
 | [Orbit Configuration](./CONFIG.md) | Orbit Configuration |
 | [Orbit Data Handling](./DATA_HANDLING.md) | Orbit Data Handling — what stays on your machine, what leaves it, and to whom |
 | [Development Reference](./DEVELOPMENT.md) | Orbit development reference: validation, tests, docs index, MSRV, supply chain, vendored JS |
-| [Lessons Learned While Building Orbit](./LESSONS.md) | Lessons Learned While Building Orbit |
 | [Optimistic Merging](./OPTIMISTIC_MERGING.md) | Optimistic Merging: Orbit's preferred delivery mode. Merge fast, review after landing, keep the queue draining |
 | [Orbit Positioning](./POSITIONING.md) | Orbit Positioning |
+
+### Lessons
+
+Lessons learned while building Orbit, one file each under `docs/lessons/`. They may not
+apply to everyone or in every case, but they shaped some of the decisions we made.
+
+| Lesson | Summary |
+| --- | --- |
+| [L01. Tool surface decides which fight your tool has to win](./lessons/L01-tool-surface-decides-which-fight-your-tool-has-to-win.md) | A specialized tool wins use only where it does not compete with familiar primitives; the access surface, not the backend, decides it. |
+| [L02. The May 2026 Artifact Loss Incident](./lessons/L02-may-2026-artifact-loss-incident.md) | Backup and recovery are not optional for long-lived artifacts. |
+| [L03. The September 2026 Test Fixture Fork Storm](./lessons/L03-september-2026-test-fixture-fork-storm.md) | Bound test synchronization, reap every spawned child on every exit path, and contain descendants at the sandbox as a separate layer. |
+| [L04. A measurement protocol can make a task impossible](./lessons/L04-a-measurement-protocol-can-make-a-task-impossible.md) | Price a task's measurement protocol before dispatch, and give the implementer a way out when the harness, not the change, is what fails. |
 
 ### Architecture
 

@@ -409,6 +409,12 @@ render_index() {
     printf '| Guide | Purpose |\n'
     printf '| --- | --- |\n'
     render_guide_rows "$docs_dir"
+    printf '\n### Lessons\n\n'
+    printf 'Lessons learned while building Orbit, one file each under `docs/lessons/`. They may not\n'
+    printf 'apply to everyone or in every case, but they shaped some of the decisions we made.\n\n'
+    printf '| Lesson | Summary |\n'
+    printf '| --- | --- |\n'
+    render_guide_rows "$docs_dir/lessons"
     printf '\n### Architecture\n\n'
     printf 'Code map of the current tree: end-to-end data flow, store and federation, surfaces, and one page per crate. Design intent stays in `docs/design/`.\n\n'
     printf '| Page | Purpose |\n'
