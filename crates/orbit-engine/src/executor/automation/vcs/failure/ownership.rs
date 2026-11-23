@@ -2,6 +2,7 @@ use std::path::Path;
 
 use chrono::Utc;
 use orbit_common::OrbitError;
+use orbit_common::fs::selector::claim_new_path_is_safe;
 use orbit_types::task::{TaskArtifact, TaskComment, TaskStatus};
 use orbit_types::workflow::{
     CommitType, FailureHandoffDecision, REVIEW_PR_MERGED_OUTSIDE_ORBIT, ReviewGateAdmissionOutput,
@@ -16,7 +17,7 @@ use crate::executor::automation::input::{
 use super::super::claim::carry_to_durable_ref;
 use super::super::commit::{capture_uncommitted_diff, partial_repair_message};
 use super::super::freshness::{commit_sha, rebase_belongs_to_attempt, rebase_provenance_summary};
-use super::super::git::{git_output, git_output_raw};
+use super::super::git::{git_output, git_output_paths, git_output_raw};
 use super::super::push::push_batch_changes_inner;
 use super::super::resume::ensure_retry_descends_from;
 use super::super::review_gate::{commit_reviewer_repairs, uncommitted_paths};
@@ -310,10 +311,43 @@ fn preserve_landing_reviewer_repair_inner<H: RuntimeHost + ?Sized>(
             None,
         ),
         Err(error) => {
-            let patch = git_output_raw(&worktree, &["diff", &published, &head_sha])
-                .ok()
-                .filter(|diff| !diff.trim().is_empty())
-                .map(|diff| orbit_common::security::redaction::redact_all(&diff));
+            // Disable rename detection for both the inventory and patch: each
+            // endpoint must pass the path guard independently, including deletions.
+            let patch = git_output_paths(
+                &worktree,
+                &[
+                    "diff",
+                    "--no-renames",
+                    "--name-only",
+                    "-z",
+                    &published,
+                    &head_sha,
+                ],
+            )
+            .ok()
+            .and_then(|paths| {
+                let safe = paths
+                    .into_iter()
+                    .filter(|path| claim_new_path_is_safe(path))
+                    .map(|path| format!(":(literal){path}"))
+                    .collect::<Vec<_>>();
+                if safe.is_empty() {
+                    return None;
+                }
+                let mut args = vec![
+                    "diff",
+                    "--no-renames",
+                    "--no-ext-diff",
+                    "--no-textconv",
+                    &published,
+                    &head_sha,
+                    "--",
+                ];
+                args.extend(safe.iter().map(String::as_str));
+                git_output_raw(&worktree, &args).ok()
+            })
+            .filter(|diff| !diff.trim().is_empty())
+            .map(|diff| orbit_common::security::redaction::redact_all(&diff));
             if let Some(diff) = patch {
                 let artifact_path = format!("landing-review-fix-{run_id}.patch");
                 (
