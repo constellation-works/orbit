@@ -13,7 +13,21 @@ pub(super) use repairs::repair_author_label;
 pub(super) use verdict::extend_note;
 
 use orbit_automation::review::ValidationContext;
-use orbit_types::workflow::{RetainedObligation, RetiredValidation, ReviewVerdict};
+use orbit_types::workflow::automation::SourceRevision;
+use orbit_types::workflow::{CommitIdentity, RetainedObligation, RetiredValidation, ReviewVerdict};
+
+use super::context::GateContext;
+
+/// The settlement inputs the host checks of a review share: the gate's
+/// context, the final candidate, the reviewer's repair commit when it made
+/// one, and the validation scope.
+#[derive(Clone, Copy)]
+pub(super) struct SettlementInputs<'a> {
+    pub(super) context: &'a GateContext,
+    pub(super) candidate: &'a SourceRevision,
+    pub(super) repair: Option<&'a CommitIdentity>,
+    pub(super) scope: &'a [String],
+}
 
 /// The reviewer's claims, checked against the repository and the task scope.
 pub(super) struct Judgement {

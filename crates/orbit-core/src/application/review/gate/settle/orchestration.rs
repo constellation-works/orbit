@@ -22,7 +22,9 @@ use crate::application::review::gate::admit::reviewer_identity;
 use crate::application::review::gate::baseline;
 use crate::application::review::gate::context::GateContext;
 use crate::application::review::gate::host_gates::admitted_host_gates;
-use crate::application::review::gate::judgement::{Judgement, repair_author_label, write_artifact};
+use crate::application::review::gate::judgement::{
+    Judgement, SettlementInputs, repair_author_label, write_artifact,
+};
 use crate::application::review::gate::owed::{
     BubblewrapReach, defers_linux_codeql, owed_evidence, owed_hold_received, split_owner_owed,
 };
@@ -432,15 +434,13 @@ fn settle(
         &final_candidate,
         &validation_scope,
     )?;
-    judgement.reconcile_external_evidence(
-        runtime,
+    let inputs = SettlementInputs {
         context,
-        &final_candidate,
-        repair.as_ref(),
-        &validation_scope,
-        carry.carried(),
-        host,
-    )?;
+        candidate: &final_candidate,
+        repair: repair.as_ref(),
+        scope: &validation_scope,
+    };
+    judgement.reconcile_external_evidence(runtime, inputs, carry.carried(), host)?;
     // [ORB-14434] Check the reviewer's red-base claims on the final
     // candidate before the verdict is reconciled: a refused claim settles
     // the review incomplete. [ORB-15122] A check the host passes on the
@@ -451,12 +451,9 @@ fn settle(
     // with the base replay's share reserved.
     let baseline_red = judgement.verify_baseline_claims(
         runtime,
-        context,
+        inputs,
         &reviewed.base,
-        &final_candidate,
         &context.base_ref(),
-        &validation_scope,
-        repair.as_ref(),
         ReplayBudget::new(Duration::from_secs(
             u64::from(ledger.budget.minutes).saturating_mul(60),
         )),
