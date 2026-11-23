@@ -52,3 +52,9 @@ removed or changed in meaning.
 - **v13 (2026-11-17):** R41 reverses button hover help: a button shows no hover or focus bubble or native tooltip, its effect goes in its accessible description, and a consequence or disabled reason goes behind an info icon or in its confirmation (the owner's Fleet correction, ORB-25398).
   R32's closing sentence now says buttons carry no tooltip, following R41 (ORB-25398).
 - **v14 (2026-11-17):** adds R44 (a close button on a surface Esc closes is labelled "esc", not ×, "Close" or "Back to list"; its accessible name still says what it closes) (the owner's direction after ORB-25406, ORB-25389).
+- **v15 (2026-11-21):** adds `## Principles`, P1–P8, above the rules: the reasons the rules
+  share, for judging a case no rule covers yet. Each principle is distilled from corrections
+  the owner made more than once, and lists the rules it explains. No rule changes. From the
+  owner's request to "build up our own philosophy" after the Astryx and Linear research
+  (ORB-26273).
+- **v16 (2026-11-22):** adds R45 (a text colour follows the text's role: the strongest colour for titles, naming labels and scanned values, the step below it for prose; ids, code and links inside prose keep their own colour) (the owner's correction on a dashboard notice card, 2026-11-22).
