@@ -47,9 +47,10 @@ pub(super) fn install_owned_with_identity_gate(
 /// each worker is reaped and its supervisor observer has completed, so the
 /// caller may delete the marker and temporary root only after no substitute
 /// remains. Drop performs the same bounded cleanup on failure/unwind paths.
-/// Launches count from the supervisor's handoff, before their identity
-/// handshake, so a worker held there is settled like an identified one. When
-/// settling fails, a root given to [`OwnedWorkers::retain_workspace`] is kept.
+/// Launches count once the parent publishes their record, whether or not the
+/// worker has identified itself, so a worker still held there is settled like
+/// an identified one. When settling fails, a root given to
+/// [`OwnedWorkers::retain_workspace`] is kept.
 /// A release marker that cannot be written is reported after the same settling.
 #[cfg(unix)]
 pub(super) struct OwnedWorkers {
@@ -251,8 +252,8 @@ impl OwnedWorkers {
             let expected_owned = expected
                 .iter()
                 .all(|run| snapshot.iter().any(|(owned, _)| owned == run));
-            // A launch counts from its handoff, so a worker still held before
-            // its identity is settled like an identified one.
+            // A launch counts once its record is published, so a worker still
+            // held before identifying itself is settled like an identified one.
             let launched = self.launched_since_install();
             let all_settled = snapshot.iter().chain(&launched).all(|(run, pid)| {
                 reaped(*pid)
