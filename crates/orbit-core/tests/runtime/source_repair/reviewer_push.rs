@@ -267,9 +267,18 @@ fn a_rejected_landing_review_requeue_resumes_the_preserved_fix_commit() {
     );
     assert_eq!(output["decision"], "landing_review_failure", "{output}");
     assert_eq!(output["reviewer_push"], Value::Null, "{output}");
-    assert_eq!(output["reviewer_preservation"]["decision"], "preserved", "{output}");
-    assert_eq!(output["reviewer_preservation"]["commit_sha"], reviewed, "{output}");
-    assert_eq!(output["reviewer_preservation"]["ref"], expected_ref, "{output}");
+    assert_eq!(
+        output["reviewer_preservation"]["decision"], "preserved",
+        "{output}"
+    );
+    assert_eq!(
+        output["reviewer_preservation"]["commit_sha"], reviewed,
+        "{output}"
+    );
+    assert_eq!(
+        output["reviewer_preservation"]["ref"], expected_ref,
+        "{output}"
+    );
     assert!(
         git(&f.repo, &["ls-remote", "origin", &f.branch]).starts_with(&published),
         "reject never pushes to the PR head branch"

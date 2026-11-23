@@ -253,19 +253,20 @@ fn blocking_reviewed_heads(step_id: &str, outputs: &[Value], review_follows: boo
     outputs
         .iter()
         .flat_map(|output| {
-            let admitted_head = ReviewGateAdmissionOutput::from_value(output)
-                .ok()
-                .and_then(|admission| {
-                    admission
-                        .admitted()
-                        .filter(|admitted| {
-                            !admitted.attempt_id.is_empty()
-                                && !(is_current_landing_review
-                                    && admitted.timing
-                                        == orbit_types::workflow::ReviewTiming::BeforeLanding)
-                        })
-                        .map(|admitted| admitted.head_sha.clone())
-                });
+            let admitted_head =
+                ReviewGateAdmissionOutput::from_value(output)
+                    .ok()
+                    .and_then(|admission| {
+                        admission
+                            .admitted()
+                            .filter(|admitted| {
+                                !admitted.attempt_id.is_empty()
+                                    && !(is_current_landing_review
+                                        && admitted.timing
+                                            == orbit_types::workflow::ReviewTiming::BeforeLanding)
+                            })
+                            .map(|admitted| admitted.head_sha.clone())
+                    });
             [
                 admitted_head,
                 output
@@ -334,8 +335,12 @@ mod tests {
     fn unsettled_before_landing_admission_does_not_block_landing_review_recovery() {
         let landing_admit = admission_output("head-landing", ReviewTiming::BeforeLanding);
         assert!(
-            blocking_reviewed_heads("landing_review", std::slice::from_ref(&landing_admit), false)
-                .is_empty()
+            blocking_reviewed_heads(
+                "landing_review",
+                std::slice::from_ref(&landing_admit),
+                false
+            )
+            .is_empty()
         );
 
         let before_pr_admit = admission_output("head-pr", ReviewTiming::BeforePr);

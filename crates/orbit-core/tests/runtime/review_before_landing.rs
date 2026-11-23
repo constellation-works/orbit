@@ -738,7 +738,10 @@ fn a_rejected_before_landing_review_pushes_nothing() {
     let stranded = stranded("reject");
     let reviewer_commit = git(&stranded.fixture.repo, &["rev-parse", "HEAD"]);
     let run_id = stranded.fixture.input["job_run_id"].as_str().unwrap();
-    let expected_ref = format!("refs/orbit/candidates/{}/{run_id}", stranded.fixture.task_id);
+    let expected_ref = format!(
+        "refs/orbit/candidates/{}/{run_id}",
+        stranded.fixture.task_id
+    );
 
     let handoff = stranded.handoff();
 
@@ -804,7 +807,11 @@ fn setup_before_landing_remote() -> (Fixture, PathBuf, String) {
 /// the PR branch), and names the commit and ref in the delivery comment.
 fn a_timed_out_before_landing_review_preserves_uncommitted_repairs_on_a_durable_ref() {
     let (fixture, bare, published_head) = setup_before_landing_remote();
-    std::fs::write(fixture.repo.join("candidate.txt"), "timed out reviewer repair\n").unwrap();
+    std::fs::write(
+        fixture.repo.join("candidate.txt"),
+        "timed out reviewer repair\n",
+    )
+    .unwrap();
     let run_id = fixture.input["job_run_id"].as_str().unwrap();
     let expected_ref = format!("refs/orbit/candidates/{}/{run_id}", fixture.task_id);
 
@@ -834,7 +841,10 @@ fn a_timed_out_before_landing_review_preserves_uncommitted_repairs_on_a_durable_
         .to_string();
     assert_ne!(preserved_commit, published_head);
     assert_eq!(handoff["reviewer_preservation"]["ref"], expected_ref);
-    assert_eq!(git(&bare, &["rev-parse", "refs/heads/candidate"]), published_head);
+    assert_eq!(
+        git(&bare, &["rev-parse", "refs/heads/candidate"]),
+        published_head
+    );
     assert_eq!(git(&bare, &["rev-parse", &expected_ref]), preserved_commit);
     assert_eq!(
         git(&bare, &["rev-parse", &format!("{preserved_commit}^")]),
@@ -858,11 +868,18 @@ fn a_timed_out_before_landing_review_saves_uncommittable_diff_as_artifact_and_na
     let right_path = fixture.repo.join("right.tmp");
     std::fs::write(&left_path, "ours\n").unwrap();
     std::fs::write(&right_path, "theirs\n").unwrap();
-    let left_sha = git(&fixture.repo, &["hash-object", "-w", left_path.to_str().unwrap()]);
-    let right_sha = git(&fixture.repo, &["hash-object", "-w", right_path.to_str().unwrap()]);
+    let left_sha = git(
+        &fixture.repo,
+        &["hash-object", "-w", left_path.to_str().unwrap()],
+    );
+    let right_sha = git(
+        &fixture.repo,
+        &["hash-object", "-w", right_path.to_str().unwrap()],
+    );
     std::fs::remove_file(&left_path).unwrap();
     std::fs::remove_file(&right_path).unwrap();
-    let index_input = format!("100644 {left_sha} 2\tconflict.txt\n100644 {right_sha} 3\tconflict.txt\n");
+    let index_input =
+        format!("100644 {left_sha} 2\tconflict.txt\n100644 {right_sha} 3\tconflict.txt\n");
     let mut child = std::process::Command::new("git")
         .args(["update-index", "--index-info"])
         .current_dir(&fixture.repo)
@@ -870,7 +887,12 @@ fn a_timed_out_before_landing_review_saves_uncommittable_diff_as_artifact_and_na
         .spawn()
         .unwrap();
     use std::io::Write;
-    child.stdin.as_mut().unwrap().write_all(index_input.as_bytes()).unwrap();
+    child
+        .stdin
+        .as_mut()
+        .unwrap()
+        .write_all(index_input.as_bytes())
+        .unwrap();
     assert!(child.wait().unwrap().success());
     std::fs::write(fixture.repo.join("conflict.txt"), "resolved locally\n").unwrap();
 
@@ -896,11 +918,12 @@ fn a_timed_out_before_landing_review_saves_uncommittable_diff_as_artifact_and_na
         handoff["reviewer_preservation"]["diff_artifact"], expected_artifact,
         "{handoff}"
     );
-    let reason = handoff["reviewer_preservation"]["error"]
-        .as_str()
-        .unwrap();
+    let reason = handoff["reviewer_preservation"]["error"].as_str().unwrap();
     assert!(!reason.is_empty());
-    assert_eq!(git(&bare, &["rev-parse", "refs/heads/candidate"]), published_head);
+    assert_eq!(
+        git(&bare, &["rev-parse", "refs/heads/candidate"]),
+        published_head
+    );
 
     let artifact = fixture
         .runtime

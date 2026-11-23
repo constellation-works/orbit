@@ -347,7 +347,10 @@ pub(super) fn preserved_landing_review_head(
         .steps
         .iter()
         .position(|step| step.id == receipt.failed_step_id);
-    if opened.zip(failed_step_pos).is_none_or(|(open_idx, fail_idx)| fail_idx <= open_idx) {
+    if opened
+        .zip(failed_step_pos)
+        .is_none_or(|(open_idx, fail_idx)| fail_idx <= open_idx)
+    {
         return Err(disagrees("the definition places the review before PR open"));
     }
     let landing_push_done = job
@@ -366,10 +369,7 @@ pub(super) fn preserved_landing_review_head(
         .get("commit_sha")
         .and_then(Value::as_str)
         .unwrap_or("");
-    let durable_ref = preserved
-        .get("ref")
-        .and_then(Value::as_str)
-        .unwrap_or("");
+    let durable_ref = preserved.get("ref").and_then(Value::as_str).unwrap_or("");
     let expected_ref = format!("refs/orbit/candidates/{}/{source_id}", task.id);
     if preserved["decision"] != "preserved"
         || preserved["published_head_sha"] != published

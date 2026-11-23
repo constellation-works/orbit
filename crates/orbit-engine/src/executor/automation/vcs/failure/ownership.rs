@@ -191,7 +191,9 @@ fn preserve_landing_reviewer_repair_inner<H: RuntimeHost + ?Sized>(
     let admission = pipeline_step(input, "landing_review_gate_admit")
         .ok()
         .and_then(|output| ReviewGateAdmissionOutput::from_value(output).ok());
-    let admitted = admission.as_ref().and_then(ReviewGateAdmissionOutput::admitted);
+    let admitted = admission
+        .as_ref()
+        .and_then(ReviewGateAdmissionOutput::admitted);
     let Some(published) = pipeline_checkpoint_string(input, "push", "local_sha")
         .or_else(|| admitted.map(|entry| entry.head_sha.clone()))
         .filter(|sha| !sha.is_empty())
@@ -218,13 +220,8 @@ fn preserve_landing_reviewer_repair_inner<H: RuntimeHost + ?Sized>(
             .map(|entry| entry.attempt_id.trim())
             .filter(|id| !id.is_empty());
         let commit_type = CommitType::for_bundle(std::iter::once(task.task_type));
-        let message = partial_repair_message(
-            commit_type,
-            &task.id,
-            run_id,
-            "landing_review",
-            attempt_id,
-        );
+        let message =
+            partial_repair_message(commit_type, &task.id, run_id, "landing_review", attempt_id);
         match commit_reviewer_repairs(&worktree, reviewer_model, &message) {
             Ok(Some(_)) => committed_by_handoff = true,
             Ok(None) => {}
@@ -454,7 +451,11 @@ fn reviewer_outcome_sentence(
             let commit_sha = field("commit_sha").unwrap_or("unknown");
             let published_head = field("published_head_sha").unwrap_or("unknown");
             let durable_ref = field("ref").unwrap_or("unknown");
-            if preserved.get("committed_by_handoff").and_then(Value::as_bool) == Some(true) {
+            if preserved
+                .get("committed_by_handoff")
+                .and_then(Value::as_bool)
+                == Some(true)
+            {
                 format!(
                     "Orbit committed the stopped reviewer's edits at `{commit_sha}` and \
                      preserved the commit on `{durable_ref}` (on top of published head \

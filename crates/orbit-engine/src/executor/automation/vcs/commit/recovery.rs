@@ -232,11 +232,7 @@ pub(in crate::executor::automation::vcs) fn capture_uncommitted_diff(
     }
     super::super::git::git_output_with_env(workspace_path, &["add", "--all", "--", "."], &env)?;
     let diff = if has_head {
-        super::super::git::git_output_with_env(
-            workspace_path,
-            &["diff", "--cached", "HEAD"],
-            &env,
-        )?
+        super::super::git::git_output_with_env(workspace_path, &["diff", "--cached", "HEAD"], &env)?
     } else {
         super::super::git::git_output_with_env(workspace_path, &["diff", "--cached"], &env)?
     };
