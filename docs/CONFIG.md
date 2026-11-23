@@ -2333,9 +2333,12 @@ existing recovery activities, final validation and push do the repair:
   attempt's run ended (it published nothing, or the head still fails) is
   admitted as a new attempt; an attempt whose run may still be live keeps
   refusing. The
-  ledger caps each PR at three repairs across all heads and runs. When the budget
-  runs out, the watcher stops with `auto_fix_budget_exhausted` and lists the
-  attempts.
+  ledger caps each PR at three repairs across all heads and runs. Source-repair
+  reservations for the same PR draw from that budget too, so each one leaves the
+  watcher one fewer attempt. When the budget runs out, the watcher stops with
+  `auto_fix_budget_exhausted`. Its message reports the combined spend (`N repairs
+  are spent`), the source-repair reservation count and the watcher attempts, which
+  can be an empty list when reservations use up the budget.
 - A resumed job inherits repair admissions and contiguous publication edges
   only from its durable, same-job retry ancestors. It can keep watching a
   published repair or validate and lease-push an admitted local repair left
