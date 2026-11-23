@@ -3464,6 +3464,26 @@ mod fixtures {
         self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn("ripgrep", result.stderr)
 
+    def test_crate_guides_reject_empty_root_guide(self):
+        guard = self.root / "scripts/check-crate-agent-guides.sh"
+        shutil.copy2(SCRIPTS / guard.name, guard)
+        for name in ("orbit-cli", "orbit-cmd", "orbit-common", "orbit-core", "orbit-engine",
+                     "orbit-mcp", "orbit-runtime", "orbit-store", "orbit-types"):
+            directory = self.root / "crates" / name
+            directory.mkdir(parents=True)
+            (directory / "AGENTS.md").write_text("Guide\n")
+            (directory / "CLAUDE.md").write_text("@AGENTS.md\n")
+        (self.root / "CLAUDE.md").write_text("@AGENTS.md\n")
+        root_guide = self.root / "AGENTS.md"
+        root_guide.write_text("")
+        result = subprocess.run(["/bin/bash", str(guard)], capture_output=True, text=True)
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("AGENTS.md is empty", result.stdout)
+        root_guide.write_text("# Workspace rules\n")
+        result = subprocess.run(["/bin/bash", str(guard)], capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("crate agent guide guard passed", result.stdout)
+
     def test_cache_rejects_unset_or_empty_home_before_any_path_operation(self):
         guard = SCRIPTS / "compiler-cache.sh"
         bin_dir = self.root / "bin"
