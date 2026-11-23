@@ -699,7 +699,7 @@ unclaimed task), unless an authorized operator skips pilot
 admission with `no-pilot`. Other readiness, dependency, lock and delivery gates
 still apply. For the operator's explicit `orbit task repilot <id>` procedure,
 no-pilot authority and bounded re-check/full behavior, follow
-[task-pilot orchestration](../../orbit-orchestrate/references/orchestration.md).
+[task-pilot orchestration](../../orbit-orchestrate/references/orchestration-pilot-admission.md).
 
 **Upgrading from the cron form.** A workspace seeded before the state form
 holds a cron `task_pilot.yaml` (`*/40 * * * *`). `orbit workspace sync` refreshes
@@ -775,7 +775,7 @@ owner (`orbit workspace list`), is the clock unit running and not paused
 (`orbit clock status`), and did the tick itself error
 (`orbit log tail --level warn --since 1h`)? For a fire
 that started and then failed, the run is the evidence —
-[run-debugging.md](../../orbit-orchestrate/references/run-debugging.md).
+[run-debugging-triage.md](../../orbit-orchestrate/references/run-debugging-triage.md).
 
 ## GitHub evidence sweeps
 
@@ -824,7 +824,7 @@ not evidence of a clean repository. Read the collect/file step outcomes. CI
 filing honors operator `covered_by` relations and timed archive/reject
 suppression of the same evidenced cause
 (a fixed 6 hours; see
-[recovery](../../orbit-orchestrate/references/recovery.md)). Equal normalized
+[recovery](../../orbit-orchestrate/references/recovery-ci-findings.md)). Equal normalized
 failing-test signatures consolidate across jobs with every job retained.
 A job whose log has a line starting with an entry of
 `workflow.ci_infrastructure_signatures` is listed under `infrastructure`, not
@@ -850,7 +850,7 @@ That is not fuzzy title similarity: a shared workflow, generic npx/cargo
 exit, or the same affected file is not enough, and completion alone
 does not suppress a later recurrence. Completed owners can cover an exact pre-fix
 observation only after the bounded structured reassessment described in
-[workflows.md](../../orbit-orchestrate/references/workflows.md#completed-ci-repair-reassessment). Coverage retains
+[workflows-ci-reassessment.md](../../orbit-orchestrate/references/workflows-ci-reassessment.md#completed-ci-repair-reassessment). Coverage retains
 source and validation references on the existing owner and creates no new pilot
 candidate. Missing or contradictory proof is explicitly unresolved. Discovery,
 filing, and dedupe-lookup errors must remain visible and retryable. A previous done repair is evidence

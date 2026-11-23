@@ -39,7 +39,7 @@ impl ShipMode {
                   records which readiness gates and lock holders it overrode.\n\
                   Shipment is asynchronous: prints the run ID and returns before\n\
                   the work completes. Follow it with `orbit run show <RUN_ID>`.\n\
-                  Details: the orbit-orchestrate skill, references/orchestration.md."
+                  Details: the orbit-orchestrate skill, references/orchestration-dispatch.md."
 )]
 pub struct ShipCommand {
     /// Optional task IDs to seed explicit gated shipment. Omit for auto mode.

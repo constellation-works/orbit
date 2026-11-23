@@ -26,7 +26,7 @@ Global options (see 'orbit --help' for descriptions):
   --json
   --header
 
-JSON shape, step index base and duration units: installed orbit-orchestrate skill `references/run-debugging.md`.
+JSON shape, step index base and duration units: installed orbit-orchestrate skill `references/run-debugging-audit-output.md`.
 
 Examples:
   orbit run show

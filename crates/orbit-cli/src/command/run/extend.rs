@@ -17,7 +17,7 @@ use crate::parse::parse_duration_seconds;
 instead of starting another `orbit run auto`, which would queue behind it. An extension never \
 shortens or reopens a drain.\n\
 Refusals and how `--concurrency` counts pull-drain review: installed orbit-orchestrate skill \
-`references/orchestration.md`.\n\nExamples:\n  \
+`references/orchestration-drain-control.md`.\n\nExamples:\n  \
 orbit run extend jrun-20260905-0546 --for 4h\n  orbit run extend jrun-20260905-0546 --for 2h \
 --concurrency 5 --reason 'overnight backlog'"
 )]

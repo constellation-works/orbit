@@ -1,0 +1,24 @@
+{
+  "skill": "orbit-orchestrate",
+  "cases": [
+    {
+      "id": "load-backlog-supervision",
+      "kind": "should_load",
+      "prompt": "Inspect my Orbit backlog, promote the ready tasks I approved and supervise the current drain.",
+      "expected": "Loads orbit-orchestrate, begins with attention and readiness on the owning host, and verifies task state before promoting eligible work."
+    },
+    {
+      "id": "not-for-assigned-implementation",
+      "kind": "should_not_load",
+      "prompt": "Implement the Orbit task assigned in this execution envelope and validate its acceptance criteria.",
+      "expected": "Loads orbit for the assigned implementation. Leaves dispatch and delivery to the managed pipeline.",
+      "should_load_instead": "orbit"
+    },
+    {
+      "id": "inspect-inherited-hosted-check",
+      "kind": "task",
+      "prompt": "An Orbit delivery is held after a required GitHub check failed. Determine whether the base already fails that check. Inspect only.",
+      "expected": "Reads references/run-debugging-hosted-checks.md. Finds the exact failed PR job, attempt and emitted diagnostic, then compares the same job on the accepted base. Classifies a matching base failure as inherited and records missing or inconclusive evidence as a gap. Leaves the PR, task and run state untouched."
+    }
+  ]
+}

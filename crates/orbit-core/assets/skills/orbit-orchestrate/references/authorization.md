@@ -1,5 +1,12 @@
 # Dispatch and completion authorization
 
+## Contents
+
+- [Choose the requested delivery behavior](#choose-the-requested-delivery-behavior)
+- [Keep authorized work moving](#keep-authorized-work-moving)
+- [Window expiry and stopping](#window-expiry-and-stopping)
+- [Report an evidence-backed handoff](#report-an-evidence-backed-handoff)
+
 ## Choose the requested delivery behavior
 
 Default shipping ends in `review`. In PR mode it prepares a PR and stops with it
@@ -25,7 +32,9 @@ options. `orbit_workflow` action `ship` intentionally has no completion input an
 submits review-only work. If completion is authorized, use `orbit run ship
 <task-id> --complete` through an available authorized operator command surface
 on the owning host; do not invent a `completion` argument, silently submit a
-review-only run, or use a local shadow store. See
+review-only run, or use a local shadow store.
+
+See
 [tool-surface-routing.md](../../orbit/references/tool-surface-routing.md).
 
 `--complete` is default-off and applies to that submitted run:
@@ -47,7 +56,9 @@ separate, default-off authorization for that drain to approve qualifying
 `proposed` tasks into the backlog on every pass, including tasks filed during
 the window. Use it only when the user authorized promotion as well as delivery.
 It cannot be combined with `--pull`. Tag a task `no-auto-approve` to keep it out
-of every automatic approval, the CI sweep's included. A `no-drain` tag also
+of every automatic approval, the CI sweep's included.
+
+A `no-drain` tag also
 opts the task out of this drain's automatic approval.
 
 `orbit run auto --auto-fix` is the separate, default-off authorization for that
@@ -55,12 +66,12 @@ drain to repair failed required checks and merge conflicts on the PRs its runs
 opened, using the low-complexity crew pool and a budget of three repairs per PR.
 It never merges: pair it with `--complete` only when delivery through `done` is
 also authorized. It cannot be combined with `--pull`. See
-[orchestration.md](orchestration.md#auto-fix-authorization).
+[orchestration-auto-fix.md](orchestration-auto-fix.md#auto-fix-authorization).
 
 Use the configured base branch and ship mode unless the user requests an
 explicit override. Inspect effective inputs; `--base` and `--mode` are deliberate
 overrides. Never replace a user's branch choice with a hardcoded convention.
-Full delivery semantics: [orchestration.md](orchestration.md).
+Full delivery semantics: [orchestration-completion.md](orchestration-completion.md).
 
 ## Keep authorized work moving
 
@@ -80,7 +91,9 @@ delivery resource use and forecast quality. `machine.auto_concurrency.mode`
 worker ceiling. Neither grants authority to resize a drain or change machine
 policy. An authorized local drain may select an explicit mode with
 `--auto-concurrency`; that choice does not itself authorize submitting work or
-changing global settings. Inspect effective settings before attributing a wait
+changing global settings.
+
+Inspect effective settings before attributing a wait
 to capacity; do not raise concurrency or forecast thresholds, disable
 forecasting, or start another drain to bypass a wait without operator
 authorization.
@@ -96,14 +109,18 @@ Sustained host pressure throttles admissions on its own: readiness tasks read
 start/ship responses name the resource, value, threshold and since-when.
 Running workers continue. Report the throttle and wait for it to clear; do not
 raise `--concurrency`, start another drain, or disable
-`workflow.resource_throttle` to push work through unless the user asks. On
+`workflow.resource_throttle` to push work through unless the user asks.
+
+On
 Linux the throttle also reads disk I/O stall (`io full`, from
 `/proc/pressure/io`); a host that saturates its disk before its CPU holds
 admissions with CPU idle, so lower the drain ceiling or build slots rather
 than raising the mark. While
 CPU alone is held, `no-diff-expected` auto-tasks (marked `cpu-light`) still
 start in up to two reserved slots, and one waiting on
-that spent budget reads `cpu_light_budget_full`. A task whose frozen delivery
+that spent budget reads `cpu_light_budget_full`.
+
+A task whose frozen delivery
 batch is within two hours of its deadline already sorts ahead of same-priority
 backlog, so do not raise it to critical just to beat the throttle.
 Delivery-coverage auto-tasks accept `automation-coverage.json` only from their own Orbit run; dispatch them with `orbit run ship <task-id>` (a singleton run, no drain needed) instead of running them in a manual session.
@@ -113,7 +130,9 @@ excludes others. On an explicit `ship`, an excluded task is refused before its
 run is created; on an auto drain, excluded backlog tasks are skipped. Neither
 path automatically remaps a task.
 It is scoped to the run and checked against resolved crew identity, including
-system activities; it does not cancel already-running workers. On a replica
+system activities; it does not cancel already-running workers.
+
+On a replica
 pull drain (`--pull <selector> --allow-crew ...`) it limits the crews the drain
 declares to the owner for its whole life, resume included; the owner's
 before-PR reviewer is not restricted but must still run on that host.

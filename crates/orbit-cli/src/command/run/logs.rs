@@ -16,7 +16,7 @@ use super::steps::{RunRead, resolve_run, resolve_step_filter};
 
 #[derive(Args)]
 #[command(
-    after_help = "JSON shape and --follow records: installed orbit-orchestrate skill `references/run-debugging.md`.\n\nExamples:\n  orbit run logs\n  orbit run logs jrun-20260426-0631 --follow\n  orbit run logs jrun-20260426-0631 -s implement_one --json"
+    after_help = "JSON shape and --follow records: installed orbit-orchestrate skill `references/run-debugging-audit-output.md`.\n\nExamples:\n  orbit run logs\n  orbit run logs jrun-20260426-0631 --follow\n  orbit run logs jrun-20260426-0631 -s implement_one --json"
 )]
 pub struct RunLogsArgs {
     /// Run ID to inspect. Defaults to the most recently scheduled run globally.
