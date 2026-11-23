@@ -65,6 +65,19 @@ fn desktop_writes_reconcile_after_restart_and_reject_stale_or_implicit_destinati
     );
     assert_eq!(projected["revision"], snapshot["revision"]);
     assert_eq!(projected.as_object().unwrap().len(), 2);
+    for projection in [json!({"fields":["revison"]}), json!({"field":"revison"})] {
+        let mut input = json!({"workspace":selector,"id":id,"snapshot":true});
+        input
+            .as_object_mut()
+            .unwrap()
+            .extend(projection.as_object().unwrap().clone());
+        let refused = client.call_tool_err("orbit_task_show", input);
+        let message = refused["message"].as_str().unwrap_or_default();
+        assert!(
+            message.contains("revison") && message.contains("revision"),
+            "{refused}"
+        );
+    }
     let single = client.call_tool_ok(
         "orbit_task_show",
         json!({"workspace":selector,"id":id,"snapshot":true,"field":"revision"}),
@@ -680,7 +693,26 @@ fn desktop_governed_status_approval_and_crew_preserve_receipts_and_review_gates(
         "orbit_task_show",
         json!({"workspace":selector,"id":id,"snapshot":true}),
     );
-    let review_input = json!({"workspace":selector,"id":id,"request_id":"project-review-success","expected_revision":fresh["revision"],"verdict":{"decision":"changes_requested","rationale":"Needs work","criteria":[{"criterion":"No duplicate approval","met":false,"evidence":["execution_summary"]}],"evidence":["execution_summary"]},"fields":["snapshot","replayed"]});
+    let mut review_input = json!({"workspace":selector,"id":id,"request_id":"project-review-success","expected_revision":fresh["revision"],"verdict":{"decision":"changes_requested","rationale":"Needs work","criteria":[{"criterion":"No duplicate approval","met":false,"evidence":["execution_summary"]}],"evidence":["execution_summary"]},"fields":["replayd"]});
+    let refused_name = operator.call_tool_err("orbit_task_update", review_input.clone());
+    assert!(
+        refused_name["message"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("replayd"),
+        "{refused_name}"
+    );
+    let after_refusal = operator.call_tool_ok(
+        "orbit_task_show",
+        json!({"workspace":selector,"id":id,"snapshot":true}),
+    );
+    assert_eq!(
+        after_refusal["revision"], fresh["revision"],
+        "a refused review must not mutate"
+    );
+    assert_eq!(after_refusal["history_total"], fresh["history_total"]);
+    // A known selector absent from the applied outcome (`conflict`) stays valid.
+    review_input["fields"] = json!(["snapshot", "replayed", "conflict"]);
     let reviewed = operator.call_tool_ok("orbit_task_update", review_input.clone());
     assert_eq!(reviewed["replayed"], false, "{reviewed}");
     assert_ne!(reviewed["snapshot"]["revision"], fresh["revision"]);

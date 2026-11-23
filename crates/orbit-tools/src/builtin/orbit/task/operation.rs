@@ -417,7 +417,7 @@ fn snapshot(ctx: &ToolContext, mut input: Value) -> Result<Value, OrbitError> {
         ))
     })?;
     required_string(&input, &["workspace"], "workspace")?;
-    let projection = response_projection(&input)?;
+    let projection = response_projection(&input, SNAPSHOT_RESPONSE_FIELDS)?;
     let ignored_limit = input.get("limit").is_some();
     if let Some(object) = input.as_object_mut() {
         for key in ["snapshot", "fields", "field", "limit"] {
@@ -436,13 +436,83 @@ fn snapshot(ctx: &ToolContext, mut input: Value) -> Result<Value, OrbitError> {
     Ok(result)
 }
 
+/// Top-level fields of a `snapshot: true` response, plus the routing
+/// `workspace` echo. Mirrors the serialized desktop task snapshot.
+const SNAPSHOT_RESPONSE_FIELDS: &[&str] = &[
+    "schema_version",
+    "observed_at",
+    "revision",
+    "task",
+    "actions",
+    "comments",
+    "history",
+    "artifacts",
+    "comments_total",
+    "history_total",
+    "artifacts_total",
+    "reviewed_head",
+    "reviewed_head_reason",
+    "truncated_fields",
+    "content_truncated",
+    "review",
+    "review_reason",
+    "workspace",
+];
+
+/// Every top-level field a guarded review can answer with across all its
+/// outcomes (applied or replayed, revision conflict, refusal, accepted with a
+/// refresh error). A field absent from one outcome is still a valid selector,
+/// so validity never depends on what the write does.
+pub(super) const GUARDED_REVIEW_RESPONSE_FIELDS: &[&str] = &[
+    "snapshot",
+    "replayed",
+    "conflict",
+    "mutation_applied",
+    "refusal",
+    "accepted",
+    "task_id",
+    "refresh_error",
+    "workspace",
+];
+
+/// Parses the response projection and refuses names outside `allowed` before
+/// any host action, so a refused request has no effect.
 pub(super) fn response_projection(
     input: &Value,
+    allowed: &[&str],
 ) -> Result<Option<(Vec<String>, bool)>, OrbitError> {
-    Ok(
-        optional_csv_or_string_list_alias(input, &["fields", "field"])?
-            .map(|fields| (fields, input.get("fields").is_some())),
-    )
+    let Some(fields) = optional_csv_or_string_list_alias(input, &["fields", "field"])? else {
+        return Ok(None);
+    };
+    let unknown = fields
+        .iter()
+        .filter(|field| !allowed.contains(&field.as_str()))
+        .map(|field| (field.clone(), Value::Null))
+        .collect::<serde_json::Map<_, _>>();
+    if !unknown.is_empty() {
+        let hint = match reject_unknown_tool_fields(&Value::Object(unknown.clone()), allowed) {
+            Err(error) => error
+                .did_you_mean()
+                .map(<[String]>::to_vec)
+                .unwrap_or_default(),
+            Ok(()) => Vec::new(),
+        };
+        let names = unknown.keys().cloned().collect::<Vec<_>>();
+        let suggestion = hint
+            .first()
+            .map(|name| format!(" (did you mean '{name}'?)"))
+            .unwrap_or_default();
+        return Err(OrbitError::invalid_input_with_suggestions(
+            format!(
+                "unknown response field{} '{}'{suggestion}; valid values: {}",
+                if names.len() == 1 { "" } else { "s" },
+                names.join("', '"),
+                allowed.join(", ")
+            ),
+            hint,
+        ));
+    }
+    Ok(Some((fields, input.get("fields").is_some())))
 }
 
 pub(super) fn project_response(result: Value, projection: Option<(Vec<String>, bool)>) -> Value {
