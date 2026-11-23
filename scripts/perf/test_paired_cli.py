@@ -754,6 +754,67 @@ class PairedCliTestCase(unittest.TestCase):
         return [int(line) for line in pids_file.read_text().splitlines() if line.strip()]
 
 
+class PairedCliArgumentValidationTest(PairedCliTestCase):
+    def run_invalid_arguments(self, *extra: str,
+                              surface: tuple[str, ...] = ("--cli", "timed"),
+                              env_overrides: dict[str, str] | None = None,
+                              omit_lane_wait: bool = False) -> subprocess.CompletedProcess[str]:
+        out = Path(self.temp.name) / "out-invalid-arguments"
+        argv = self.paired_argv(out, surface, *extra)
+        if omit_lane_wait:
+            index = argv.index("--lane-wait")
+            del argv[index:index + 2]
+        env = self.paired_env()
+        env.update(env_overrides or {})
+        result = subprocess.run(
+            argv,
+            cwd=REPO,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 2, result.stderr + result.stdout)
+        self.assertFalse(out.exists(), "a parse error must not create --out")
+        self.assertFalse(self.lane_lock.exists(), "a parse error must not touch the perf lane")
+        self.assertNotIn("Traceback", result.stderr)
+        return result
+
+    def test_cli_rejects_empty_whitespace_and_malformed_shell_commands(self) -> None:
+        for value in ("", "   ", "'"):
+            with self.subTest(value=value):
+                result = self.run_invalid_arguments(surface=("--cli", value))
+                self.assertIn("argument --cli:", result.stderr)
+
+    def test_warmup_and_gap_reject_negative_integers(self) -> None:
+        for flag in ("--warmup", "--gap-ms"):
+            with self.subTest(flag=flag):
+                result = self.run_invalid_arguments(flag, "-1")
+                self.assertIn(f"argument {flag}:", result.stderr)
+
+    def test_bound_rejects_non_positive_and_non_finite_values(self) -> None:
+        for value in ("0", "-1", "nan", "inf", "-inf"):
+            with self.subTest(value=value):
+                result = self.run_invalid_arguments("--bound-ms", value)
+                self.assertIn("argument --bound-ms:", result.stderr)
+
+    def test_lane_wait_flag_rejects_negative_non_finite_and_invalid_values(self) -> None:
+        for value in ("-1", "nan", "inf", "-inf", "invalid"):
+            with self.subTest(value=value):
+                result = self.run_invalid_arguments("--lane-wait", value)
+                self.assertIn("argument --lane-wait:", result.stderr)
+
+    def test_lane_wait_environment_value_is_validated_when_flag_is_omitted(self) -> None:
+        for value in ("-1", "nan", "inf", "-inf", "invalid"):
+            with self.subTest(value=value):
+                result = self.run_invalid_arguments(
+                    env_overrides={"ORBIT_PERF_LANE_WAIT_SECONDS": value},
+                    omit_lane_wait=True,
+                )
+                self.assertIn("ORBIT_PERF_LANE_WAIT_SECONDS", result.stderr)
+
+
 class PairedCliParityTest(PairedCliTestCase):
     def assert_no_passing_verdict(
         self, result: subprocess.CompletedProcess[str], out: Path,
