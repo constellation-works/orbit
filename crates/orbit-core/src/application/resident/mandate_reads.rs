@@ -404,6 +404,39 @@ impl OrbitRuntime {
     }
 }
 
+// The first ending event in the current terminal spell is the stop time.
+// A later archive of an already stopped mandate does not stop it again.
+fn resident_ended_at(
+    view: &ResidentView,
+    history: &[TaskHistoryEntry],
+) -> Option<chrono::DateTime<chrono::Utc>> {
+    if view.state().0 != ResidentMandateState::Ended {
+        return None;
+    }
+    let stop_at = view.control.as_ref().ok().and_then(|control| {
+        control.last.as_ref().and_then(|(entry, at)| {
+            (entry.action == control::ResidentControlAction::Stop).then_some(*at)
+        })
+    });
+    let mut terminal_at = None;
+    for entry in history {
+        if let Some(to) = entry.to_status {
+            if resident_mandate_ended(to) {
+                if terminal_at.is_none() {
+                    terminal_at = Some(entry.at);
+                }
+            } else {
+                terminal_at = None;
+            }
+        }
+    }
+    match (stop_at, terminal_at) {
+        (Some(stop), Some(terminal)) => Some(stop.min(terminal)),
+        (Some(at), None) | (None, Some(at)) => Some(at),
+        (None, None) => None,
+    }
+}
+
 fn resident_show_json(
     view: &ResidentView,
     comments: &[TaskComment],
@@ -442,6 +475,7 @@ fn resident_show_json(
         "status_line": status_line,
         "live_cycle": live_cycle,
         "state": state,
+        "ended_at": resident_ended_at(view, history),
         "mandate": view.mandate.as_ref().ok().map(view::to_json),
         "effective_authority": view::to_json(&view.effective()),
         "authority": view.authority.as_ref().ok().map(view::to_json),

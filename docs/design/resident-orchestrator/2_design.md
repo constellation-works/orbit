@@ -479,7 +479,7 @@ only):
 
 | View action | Route | Mechanism |
 |---|---|---|
-| List mandates, ended ones included, with state, stalled flag, effective rights and workspaces, deadline, open requests, live cycle and latest checkpoint | `GET /api/residents?all=true` | Batched core card read `list_resident_mandate_cards`: what `orbit.resident.show` reports, plus `goal`, `open_decisions` and `cycle_authority`, in one bundle read per mandate and one notice scan |
+| List mandates, ended ones included, with state, stalled flag, effective rights and workspaces, deadline, open requests, live cycle and latest checkpoint | `GET /api/residents?all=true` | Batched core card read `list_resident_mandate_cards`: what `orbit.resident.show` reports, including `ended_at` from the ending stop or terminal status event (null when unknown), plus `goal`, `open_decisions` and `cycle_authority`, in one bundle read per mandate and one notice scan |
 | Show one mandate, with its grant and narrow history and the latest checkpoint's wake digest | `GET /api/residents/{id}` | `orbit.resident.show` |
 | Create a mandate | `POST /api/residents` | One action: the `resident`-tagged assignment and its `resident/mandate.json`. The draft is checked first by the rule every mandate read applies (the `resident.mandate/v1` parser plus a configured crew), and a refused draft returns that message and writes nothing |
 | Widen | `POST /api/residents/{id}/grant` with rights or workspaces to add and a quote | The request-and-answer of [§3](#3-authority), recorded `via: decision:<id>` |
