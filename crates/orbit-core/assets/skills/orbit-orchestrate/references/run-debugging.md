@@ -680,7 +680,10 @@ alone does not establish a code defect or an abandoned run.
    - `pr_base_update_reserved`: `execution`, `repository`, `pr_number`,
      `head_sha`, `base_sha`, `base_branch`, `deadline_ms` and `evidence`.
      Inherited handoff recovery names `evidence.cause: "inherited"` and
-     `evidence.handoff_id`; count reservations for that PR, not polls.
+     `evidence.handoff_id`; count reservations for that PR, not polls. A
+     no-edit rerun's refresh uses `evidence.cause: "base_inherited_refresh"`
+     with `trigger: "no_edit_rerun_failed"`, `rerun_failure`, `fork_point`,
+     `landed_base` and `checks` ([no-edit refresh](#a-failed-no-edit-rerun-refresh-before-hold)).
    - `landing_stopped`: the stop reason, including classification, diagnostic
      signature/log excerpt or the evidence that could not be read. The owner
      claim's stopped landing attempt retains the full evidence: structured PR
@@ -1019,7 +1022,7 @@ its reason, and the next step is yours.
 |---|---|---|
 | `delivery_head_changed` | The pull request reports a head different from the one this run published. | Compare the pull-request head against the published candidate, then start a new delivery attempt on the current head. |
 | `delivery_evidence_stale` | Pinned delivery identity is missing or cannot be confirmed, or merge evidence is contradictory. An owner landing of an already-landed or no-diff delivery also holds here, with the stop recorded and the candidate kept in review, when the task's scope (requirements, selectors, relations or comments) changed after the evidence was captured (`already_landed_unverified: task scope changed at scope.<field>`); revalidate against the current task, then hand off again. | *Auto-fix pass:* the next pass hands it back and completion re-reads its pins. When the pass reports it spent, re-establish the pinned identity and confirm the merge evidence, then start a new delivery attempt. |
-| `delivery_repair_dispatched` | A repair was already admitted for the blocked head, including a check repair held before execution because recovery was absent, and an in-budget check repair whose recovery ran and did not repair the head. | If a repair is running, let it finish. If none ran because the job lacked `step_failure_recovery`, configure recovery for future heads; if it ran and failed, inspect the recovery attempt. Then repair and publish a new head and start a new delivery attempt. |
+| `delivery_repair_dispatched` | A repair was already admitted for the blocked head. This includes a check repair held before execution because recovery was absent, an in-budget check repair whose recovery ran and did not repair the head, and a no-edit repair whose one unchanged-head rerun is already spent in CI history (no rerun or refresh is sent). When the no-edit rerun ran and failed again, completion first tries one base refresh of the head; see [A failed no-edit rerun](#a-failed-no-edit-rerun-refresh-before-hold). A run still `running` after that refresh is pending recovery, not a hold. A `held` run with this code is a confirmed hold; its reason says whether the refresh was refused or was not attempted. | *Pending:* do not push or start a new attempt; a new head would be refused as `delivery_head_changed`. *Confirmed:* follow the matching case in that section. If a repair is running, let it finish. If none ran because the job lacked `step_failure_recovery`, configure recovery for future heads; if it ran and failed, inspect the recovery attempt. Otherwise repair and publish a new head, then start a new delivery attempt. |
 | `delivery_pr_draft` | The pull request is still a draft. | Mark the pull request ready for review, then start a new delivery attempt. |
 | `delivery_pr_closed` | The pull request closed without merging. | Reopen the pull request or open a new one, then start a new delivery attempt. |
 | `delivery_task_not_promotable` | The task's current status refuses promotion. | Move the task to a promotable status, then start a new delivery attempt. |
@@ -1037,6 +1040,78 @@ its reason, and the next step is yours.
 | `delivery_source_repair_decision` | `candidate_resume` refused a published candidate that an operator must either inspect as explicit source repair or discard. The held reasons are no unique requeue binding, a publication that predates the current binding, a retained local branch that moved, a source that is not an exact owner-local single-task execution, and a source that is live, discarded, changed, or lacks an applied requeue. The run is held, outside failure counts, without retry, recovery or a failure handoff. The refusal message is unchanged. The task status is unchanged: nothing requeues, discards, or resumes. Untrusted preservation, a missing operator reservation, a changed remote or pull-request identity, a missing local identity, and other authority refusals still fail the run. | Follow the message: inspect explicit source repair for the publishing run, or discard the candidate with `orbit task update <task-id> --status backlog --discard-candidate` so the next run implements fresh. Do not resume this held run. |
 | `delivery_stale_branch` | `worktree_setup` found an existing branch or registered checkout whose tip does not match the freshly resolved base. Setup leaves the retained branch and worktree untouched for operator inspection and refuses to reset or discard unexplained history. The run is held, outside failure counts, without retry, recovery or a failure handoff; a claimed leaf settles as `delivery_hold` (`counts_as_failure: false`) and holds the owner task for an operator decision without suppressing the drain's host or crew. | Inspect the retained branch or worktree, then move the branch aside or delete it only after confirming no retained work is needed; retrying setup without that recovery will refuse again. |
 | `owner_signoff_required` | The implementer stopped because recorded owner approval is still missing; no agent can record it. The run is held, the task is blocked with the declared message, and the candidate is committed on the run's branch. The handoff tries to carry it to a durable ref and names it in a system comment and `candidate_held` history entry. No PR was opened. If the push fails, the comment says the candidate is host-local; a run on another host cannot fetch it. | Record the approval on the task, move it back to `backlog` (or `in-progress`), and start a new delivery run. A successful push lets that run resume the candidate from any host. If the comment says host-local, recover or push the named head before routing the run to another host. Do not resume this held run. |
+
+### A failed no-edit rerun: refresh before hold
+
+An auto-fix check repair that made no edit gets one rerun of its failed checks
+on the unchanged head. If that rerun fails again, completion decides once
+whether the failure is inherited from the base.
+
+**Refresh.** The refresh applies only when all of these hold:
+
+- Each failed required check passed on a newer base commit where the head's
+  fork point did not pass it.
+- No failed required check also fails on the base the same way.
+- No failed required job's log cites a file the candidate changed.
+- The base tip is not already in the head.
+
+The run then reserves the pull request's base update in task history and
+merges the base tip into the head as one conflict-free merge commit. It never
+rebases or force-pushes. Completion adopts the refreshed head only after
+checking that it carries base commits alone, and the forge reruns the required
+checks on it. The refresh runs at most once per head. A refreshed head that
+fails again goes through the ordinary check path and is never refreshed a
+second time.
+
+**Evidence.** Inspect these records:
+
+- `pr_base_update_reserved` in task history with
+  `evidence.cause: "base_inherited_refresh"`, `trigger: "no_edit_rerun_failed"`,
+  the `rerun_failure`, `fork_point`, `landed_base` and per-check `checks`. It is
+  written before the forge write. A reservation whose head did not move means
+  the write was sent, or its reply was lost, and it is not sent again.
+- `pr_refresh` audit rows: `requested`, then `updated`, `already_up_to_date`,
+  `refused` or `failed`, naming the run as actor.
+
+**Pending automatic recovery: do not republish.** No operator action is needed
+when either of these holds:
+
+- The refresh row is `updated` and the run is still `running`. Completion is
+  waiting for the required checks on the refreshed head within its normal
+  completion budget.
+- A throttled failed-job log read was recorded as `pr_auto_fix_read_deferred`.
+  Completion repolls after the forge's reset.
+
+If the refreshed checks fail again, the ordinary check path takes over. If they
+do not settle within the completion budget, the run holds as
+`delivery_completion_budget_expired`.
+
+**Confirmed hold: needs intervention.** The run is `held` with
+`delivery_repair_dispatched`. Every refresh hold's reason contains
+`the head is not refreshed to its base tip:` followed by the cause, so search
+for that text. The only exception is the spent rerun, which holds before any
+refresh. Use the reason to find the case:
+
+- *The rerun was already spent in CI history.* The refresh was never reached.
+  Repair and publish a new head, then start a new delivery attempt.
+- *Not base-inherited, or the base tip is already in the head.* The base does
+  not fix this failure for this head. Repair the candidate, publish a new head,
+  then start a new delivery attempt.
+- *Conflicts with the base.* The reason names the conflicting paths, and the
+  head is unchanged. Inspect them with read-only `git merge-tree`, resolve on
+  the branch, revalidate, publish a new head, then start a new delivery attempt.
+- *The forge refused the refresh, or the refreshed head is not a base-only
+  merge.* Read the `pr_refresh` row and the pull request on the forge. The head
+  is unchanged. Fix what the refusal names, publish a new head, then start a new
+  delivery attempt.
+- *A refresh was already reserved for this head, or the pull request's base
+  update is spent.* The refresh is not sent again. Check the pull request head
+  and its `pr_refresh` rows, then publish a new head and start a new delivery
+  attempt. The base-update budget is shared, so a later head may also get no
+  refresh.
+- *Missing pull-request fields, an unnamed origin, an unresolved base, or
+  unreadable check evidence.* Fix the input the reason names, then start a new
+  delivery attempt. Do not resume the held run.
 
 ## Check Git State For Workflow Failures
 

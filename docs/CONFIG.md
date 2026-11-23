@@ -1174,7 +1174,7 @@ within a backoff and ceiling (see [PR auto-fix repairs](#pr-auto-fix-repairs)):
 | --- | --- |
 | `delivery_head_changed` | The PR reports a head different from the one this run published. |
 | `delivery_evidence_stale` | Pinned delivery identity is missing or cannot be confirmed, or merge evidence is contradictory. An owner landing of an already-landed or no-diff delivery also holds here when the task's scope changed after the evidence was captured. |
-| `delivery_repair_dispatched` | A repair was already admitted for the blocked head. This includes a check repair held before execution because the job lacked `step_failure_recovery`, an in-budget check repair whose `step_failure_recovery` ran but returned an unsuccessful outcome or admitted no retry, and a no-edit repair whose one unchanged-head rerun is already spent in CI history (the hold keeps the candidate and sends no further rerun). If a repair is running, let it finish. If none ran, configure recovery for future heads; if it ran and failed, inspect the recovery attempt. Then repair and publish a new head and start a new delivery attempt. |
+| `delivery_repair_dispatched` | A repair was already admitted for the blocked head. This includes a check repair held before execution because the job lacked `step_failure_recovery`, an in-budget check repair whose `step_failure_recovery` ran but returned an unsuccessful outcome or admitted no retry, and a no-edit repair whose one unchanged-head rerun is already spent in CI history (no rerun or refresh is sent). When that no-edit rerun ran and failed again, completion first refreshes the head to its base tip once when the failure is base-inherited (see [PR auto-fix repairs](#pr-auto-fix-repairs)). A refresh that applied is pending automatic recovery, not a hold; a `held` run names the refused or unattempted refresh in its reason. If a repair is running, let it finish. If none ran, configure recovery for future heads; if it ran and failed, inspect the recovery attempt. Otherwise, repair and publish a new head and start a new delivery attempt, but not while a refresh is pending: a new head would be refused as `delivery_head_changed`. |
 | `delivery_pr_draft` | The PR is still a draft. |
 | `delivery_pr_closed` | The PR closed without merging. |
 | `delivery_task_not_promotable` | The task's current status refuses promotion. |
@@ -2363,6 +2363,28 @@ existing recovery activities, final validation and push do the repair:
   admission history. Missing refresh or known-red evidence leaves the
   inherited-failure wait and the ordinary diagnosis path in
   place.
+- A no-edit repair's unchanged-head rerun that fails again gets one
+  base-inherited refresh of the pull request. The refresh applies when every
+  failed required check passed on a newer base commit where the head's fork
+  point did not, no failed required check also fails on the base the same way,
+  no failed log cites a path the candidate changed, and the base tip is not
+  already in the head. The run reserves the pull request's base update before
+  the write, recording `pr_base_update_reserved` with
+  `evidence.cause: "base_inherited_refresh"` (the rerun failure, fork point,
+  landed base and per-check evidence) and `pr_refresh` rows. The write merges
+  the base tip into the head as one conflict-free merge commit; it never
+  rebases or force-pushes. Completion adopts the refreshed head only when it
+  carries base commits alone, then waits for the required checks on it. A head
+  is refreshed at most once, and a refreshed head that fails again takes the
+  ordinary check path. An applied refresh and a deferred throttled read are
+  pending automatic recovery, not holds. A hold's reason names why no refresh
+  ran or why it was refused: the failure is not base-inherited, the base tip is
+  already in the head, the write conflicts with the base (the conflicting paths
+  are named and the head is unchanged), the forge refused it or returned a
+  result that is not a base-only merge, a reservation exists whose head did not
+  move, the pull request's base update is spent, or the pull request, base or
+  evidence cannot be read. A rerun already spent in CI history holds without a
+  refresh.
 - Closed or merged PRs, and heads superseded by a newer push, get no repair.
 
 ### Setting `task.crew`
