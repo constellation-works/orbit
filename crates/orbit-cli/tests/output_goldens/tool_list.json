@@ -3100,7 +3100,7 @@
       },
       {
         "name": "limit",
-        "description": "Claimed/bounded page size; ignored (noted) with `snapshot`; not with projections.",
+        "description": "Claimed/bounded page size; no projections, except `snapshot` (ignores it, noted).",
         "param_type": "integer",
         "required": false
       },

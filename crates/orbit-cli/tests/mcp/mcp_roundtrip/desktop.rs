@@ -89,6 +89,28 @@ fn desktop_writes_reconcile_after_restart_and_reject_stale_or_implicit_destinati
     );
     assert_eq!(limited["revision"], snapshot["revision"]);
     assert!(limited["note"].as_str().unwrap().contains("ignored"));
+    let projected_limit = client.call_tool_ok(
+        "orbit_task_show",
+        json!({"workspace":selector,"id":id,"snapshot":true,"field":"revision","limit":1}),
+    );
+    assert_eq!(
+        projected_limit["value"], snapshot["revision"],
+        "{projected_limit}"
+    );
+    assert_eq!(
+        projected_limit["note"],
+        "limit was ignored for snapshot: true"
+    );
+    let fields_limit = client.call_tool_ok(
+        "orbit_task_show",
+        json!({"workspace":selector,"id":id,"snapshot":true,"fields":["revision"],"limit":1}),
+    );
+    assert_eq!(
+        fields_limit["revision"], snapshot["revision"],
+        "{fields_limit}"
+    );
+    assert_eq!(fields_limit["note"], "limit was ignored for snapshot: true");
+    assert_eq!(fields_limit.as_object().unwrap().len(), 3, "{fields_limit}");
     let review = client.call_tool_ok("orbit_task_update", json!({"workspace":selector,"id":id,"request_id":"projected-review","expected_revision":"stale","verdict":{"decision":"accept","rationale":"reviewed","criteria":[],"evidence":[]},"fields":["conflict"]}));
     assert_eq!(review["conflict"]["code"], "revision_conflict");
     assert_eq!(review["snapshot"]["revision"], snapshot["revision"]);
