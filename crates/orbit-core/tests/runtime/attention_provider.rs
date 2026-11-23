@@ -907,6 +907,121 @@ fn ci_red_keeps_same_named_workflows_apart() {
     assert_eq!(items[0]["refs"]["run_id"], "201", "{red}");
 }
 
+/// A wait on `ci_red` wakes with `degraded_changed` when the set of workflows
+/// with missing history shrinks but one stays degraded, and keeps waiting
+/// while that membership holds.
+fn ci_red_wait_wakes_when_degraded_workflow_membership_changes() {
+    use orbit_core::application::attention::AttentionWaitStatus;
+    let fixture = Fixture::new(true);
+    let minted = call_with(
+        &fixture.runtime,
+        json!({"wait_grant": true}),
+        ToolSessionContext {
+            effective_capabilities: [McpCapability::Agent].into(),
+            ..Default::default()
+        },
+    );
+    let token = minted["wait_grant"]["token"].as_str().unwrap().to_owned();
+    let cursor = minted["cursor"]["next"].as_str().unwrap().to_owned();
+
+    let commit_on = |parent: &str, message: &str| {
+        let output = std::process::Command::new("git")
+            .args(["commit-tree", "HEAD^{tree}", "-p", parent, "-m", message])
+            .current_dir(&fixture.repo)
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        String::from_utf8(output.stdout).unwrap().trim().to_string()
+    };
+    let first_head = commit_on(&fixture.head, "first remote head");
+    let second_head = commit_on(&first_head, "second remote head");
+    git(
+        &fixture.repo,
+        &["update-ref", "refs/remotes/origin/main", &first_head],
+    );
+
+    // A full listing page, so a pending workflow without a completed run in it
+    // is reported as missing history. `a_done` turns workflow A green.
+    let now = chrono::Utc::now().to_rfc3339();
+    let listing = |head: &str, a_done: bool| {
+        let mut a = fixture.run(101, if a_done { "success" } else { "" }, &now, head);
+        a["workflowName"] = json!("CI-A");
+        a["workflowDatabaseId"] = json!(1);
+        if !a_done {
+            a["status"] = json!("queued");
+        }
+        let mut b = fixture.run(102, "", &now, head);
+        b["workflowName"] = json!("CI-B");
+        b["workflowDatabaseId"] = json!(2);
+        b["status"] = json!("queued");
+        let mut runs = vec![a, b];
+        for id in 1..99 {
+            let mut other = fixture.run(id, "success", &now, head);
+            other["workflowName"] = json!("Other");
+            other["workflowDatabaseId"] = json!(3);
+            runs.push(other);
+        }
+        json!(runs)
+    };
+    fixture.set_runs(listing(&first_head, false));
+    std::fs::write(
+        fixture.state.join("next-runs.json"),
+        serde_json::to_string(&listing(&second_head, true)).unwrap(),
+    )
+    .unwrap();
+    std::fs::write(fixture.state.join("next-head"), &second_head).unwrap();
+    // The first `gh run list` after this answers with the current runs, then
+    // publishes the next listing and moves the fetched base head, so the
+    // following poll reads a refreshed full listing.
+    let gh = fixture.repo.parent().unwrap().join("bin/gh");
+    let script = format!(
+        "#!/bin/sh\nstate='{state}'\nprintf '%s\\n' \"$*\" >> \"$state/calls\"\ncase \"$1 ${{2:-}}\" in\n  \"auth status\") exit 0 ;;\n  \"run list\") cat \"$state/runs.json\"\n    if [ -f \"$state/next-runs.json\" ]; then\n      mv \"$state/next-runs.json\" \"$state/runs.json\"\n      git -C '{repo}' update-ref refs/remotes/origin/main \"$(cat \"$state/next-head\")\"\n    fi ;;\n  *) echo \"fake gh: unsupported: $*\" >&2; exit 2 ;;\nesac\n",
+        state = fixture.state.display(),
+        repo = fixture.repo.display()
+    );
+    std::fs::write(&gh, script).unwrap();
+
+    let outcome = fixture
+        .runtime
+        .attention_wait(
+            &token,
+            json!({"since": cursor, "kind": "ci_red"}),
+            "20s",
+            Some("5s"),
+        )
+        .unwrap();
+    assert_eq!(
+        outcome.status,
+        AttentionWaitStatus::DegradedChanged,
+        "one workflow leaving the degraded set must wake the wait: {:?}",
+        outcome.response
+    );
+    let response = outcome.response.unwrap();
+    assert!(
+        response["items"].as_array().unwrap().is_empty(),
+        "{response}"
+    );
+    let degraded = response["degraded"].as_array().unwrap();
+    assert_eq!(degraded.len(), 1, "{response}");
+    assert!(
+        degraded[0]["message"].as_str().unwrap().contains("CI-B"),
+        "{response}"
+    );
+
+    // The same membership and no new item keeps waiting to the deadline.
+    let cursor = response["cursor"]["next"].as_str().unwrap().to_owned();
+    let outcome = fixture
+        .runtime
+        .attention_wait(
+            &token,
+            json!({"since": cursor, "kind": "ci_red"}),
+            "6s",
+            Some("5s"),
+        )
+        .unwrap();
+    assert_eq!(outcome.status, AttentionWaitStatus::TimedOut);
+}
+
 crate::scenario_table!(
     attention_provider,
     replica_owner_only_candidate_reads_are_silent_and_make_no_provider_call,
@@ -925,5 +1040,6 @@ crate::scenario_table!(
     ci_red_degrades_when_full_page_omits_pending_workflow_history,
     ci_red_uses_workflow_run_order_when_created_at_ties,
     ci_red_keeps_same_named_workflows_apart,
+    ci_red_wait_wakes_when_degraded_workflow_membership_changes,
     friction_untriaged_lists_only_open,
 );
