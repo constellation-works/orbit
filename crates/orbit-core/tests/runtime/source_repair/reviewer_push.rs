@@ -15,6 +15,8 @@ use super::*;
 use std::path::Path;
 
 const SETTLE: &str = "landing_review_gate_settle";
+const VALIDATE: &str = "landing_review_validate";
+const LANDING_PUSH: &str = "landing_push";
 
 /// A receipt case: its name and how it rewrites the handoff receipt.
 type ReceiptCase<'a> = (&'a str, &'a dyn Fn(&mut Value));
@@ -361,10 +363,310 @@ fn a_rejected_landing_review_requeue_resumes_the_preserved_fix_commit() {
     );
 }
 
+/// Completed and validated before-landing review whose `landing_push` failed
+/// while keeping PR 17 and `origin/<branch>` at `published` P, with
+/// `pr_failure_handoff` preserving R on `refs/orbit/candidates/<task>/<run>`.
+fn failed_landing_push_fixture() -> (Fixture, PathBuf, String, String) {
+    let mut f = Fixture::new();
+    let path = f
+        ._root
+        .path()
+        .join("global/resources/jobs/task_pr_pipeline.yaml");
+    let yaml = std::fs::read_to_string(&path).unwrap();
+    std::fs::write(
+        &path,
+        yaml.replace(
+            "  task_delivery: {}",
+            "  task_delivery: {}\n  failure_activity: pr_failure_handoff",
+        ) + &format!(
+            "    - {{id: {SETTLE}, target: 'activity:review_gate_settle'}}\n\
+             \x20   - {{id: {VALIDATE}, target: 'activity:candidate_validate', default_input: {{ownership_base_sha: \"{{{{ steps.{SETTLE}.output.implementation_head_sha }}}}\"}}}}\n\
+             \x20   - {{id: {LANDING_PUSH}, target: 'activity:git_push', default_input: {{lease_remote_sha: \"{{{{ steps.push.output.local_sha }}}}\", pr_number: \"{{{{ steps.pr_open.output.pr_number }}}}\"}}}}\n"
+        ),
+    )
+    .unwrap();
+    let checkout = published_owner::publication(&mut f);
+    let published = f.head.clone();
+    std::fs::write(checkout.join("review.txt"), "landing push repair\n").unwrap();
+    git(&checkout, &["add", "review.txt"]);
+    git(
+        &checkout,
+        &["commit", "-qm", "review: validated fix before landing_push"],
+    );
+    let reviewed = git(&checkout, &["rev-parse", "HEAD"]);
+
+    let settle_output = json!({
+        "gate": "passed",
+        "reviewer_fixed": true,
+        "implementation_head_sha": published,
+        "reviewed_head_sha": reviewed,
+        "reviewed_base_sha": f.base,
+    });
+    let validate_output = json!({
+        "phase": "validate",
+        "decision": "passed",
+        "tested_head": reviewed,
+        "branch": f.branch,
+    });
+    published_owner::checkpoint(&f, &f.source.run_id, 8, SETTLE, settle_output);
+    published_owner::checkpoint(&f, &f.source.run_id, 9, VALIDATE, validate_output);
+    f.state = f.runtime.read_run_state(&f.source.run_id).unwrap().unwrap();
+
+    let expected_ref = format!("refs/orbit/candidates/{}/{}", f.task, f.source.run_id);
+    let handoff = f.action(
+        "pr_failure_handoff",
+        json!({
+            "run_id": f.source.run_id,
+            "failed_step_id": LANDING_PUSH,
+            "activity_name": "git_push",
+            "error_code": "execution",
+            "error_message": "git push failed: remote rejected temporary hook",
+            "job_input": f.source.input,
+            "pipeline": f.state.pipeline,
+        }),
+    );
+    assert_eq!(handoff["decision"], "landing_review_failure", "{handoff}");
+    assert_eq!(handoff["failed_step_id"], LANDING_PUSH, "{handoff}");
+    assert_eq!(handoff["reviewer_push"], Value::Null, "{handoff}");
+    assert_eq!(
+        handoff["reviewer_preservation"]["decision"], "preserved",
+        "{handoff}"
+    );
+    assert_eq!(
+        handoff["reviewer_preservation"]["commit_sha"], reviewed,
+        "{handoff}"
+    );
+    assert_eq!(
+        handoff["reviewer_preservation"]["published_head_sha"], published,
+        "{handoff}"
+    );
+    assert_eq!(
+        handoff["reviewer_preservation"]["ref"], expected_ref,
+        "{handoff}"
+    );
+    assert!(
+        git(&f.repo, &["ls-remote", "origin", &f.branch]).starts_with(&published),
+        "failed landing_push leaves origin PR branch at published head P"
+    );
+    assert!(
+        git(&f.repo, &["ls-remote", "origin", &expected_ref]).starts_with(&reviewed),
+        "failed landing_push fix commit R is reachable on durable ref"
+    );
+
+    escalate(&f, &f.source.run_id);
+    let mut state = f.runtime.read_run_state(&f.source.run_id).unwrap().unwrap();
+    state.record_failure_activity("pr_failure_handoff".into(), LANDING_PUSH.into(), handoff);
+    f.runtime.write_run_state(&f.source.run_id, &state).unwrap();
+    f.state = state;
+
+    let mut run = f.runtime.show_job_run_observed(&f.source.run_id).unwrap();
+    run.state = JobRunState::Failed;
+    run.pid = None;
+    run.pid_start_time = None;
+    run.finished_at = Some(Utc::now());
+    save_run(&f, &run);
+    f.source = f.runtime.show_job_run_observed(&run.run_id).unwrap();
+    green_forge(&mut f);
+    (f, checkout, published, reviewed)
+}
+
+/// A failed `landing_push` whose PR and origin branch remained at `published` P
+/// admits its preserved reviewer repair R through explicit `source_repair`
+/// (`inspect` + `submit`) and applies R onto the successor checkout, including
+/// when the local branch in `repo` stayed at P.
+fn a_failed_landing_push_source_repair_admits_and_applies_preserved_fix() {
+    let (f, checkout, published, reviewed) = failed_landing_push_fixture();
+    let expected_ref = format!("refs/orbit/candidates/{}/{}", f.task, f.source.run_id);
+    // Simulate a run whose worktree detached or left `refs/heads/{branch}` at P
+    // while R lives on the durable candidate ref.
+    git(&checkout, &["checkout", "--quiet", "--detach"]);
+    force_branch(&f.repo, &f.branch, &published, false);
+
+    let inspection = f
+        .runtime
+        .run_tool_as_human("orbit.workflow.run.resume", f.request("inspect"))
+        .unwrap();
+    assert_eq!(inspection["binding"]["head_sha"], published);
+    assert_eq!(inspection["binding"]["candidate_head_sha"], reviewed);
+    assert_eq!(inspection["binding"]["candidate_ref"], expected_ref);
+
+    let mut submit = f.submit(inspection["binding"].clone());
+    submit["source_repair"]["policy_digest"] = inspection["policy_digest"].clone();
+    submit["source_repair"]["unmet_acceptance"] = json!(
+        "landing_push failed after validated before-landing review; carry the preserved repair."
+    );
+    let submitted = f
+        .runtime
+        .run_tool_as_human("orbit.workflow.run.resume", submit)
+        .unwrap();
+    let id = submitted["run_id"].as_str().unwrap();
+    f.wait(id);
+    f.start_actions(id);
+
+    let setup = f.action(
+        "worktree_setup",
+        json!({"job_run_id":id,"task_ids":[f.task],"base":"main","base_sync":"remote"}),
+    );
+    let next_checkout = PathBuf::from(setup["workspace_path"].as_str().unwrap());
+    let resumed = f.action(
+        "candidate_resume",
+        json!({"job_run_id":id,"task_ids":[f.task],"workspace_path":next_checkout,"base_sha":setup["base_sha"]}),
+    );
+    assert_eq!(resumed["outcome"], "resumed_repaired", "{resumed}");
+    assert_eq!(resumed["reused_head_sha"], published);
+    assert_eq!(resumed["source_sha"], reviewed);
+    assert_eq!(resumed["reused_branch"], f.branch);
+    assert_eq!(
+        std::fs::read_to_string(next_checkout.join("review.txt")).unwrap(),
+        "landing push repair\n"
+    );
+}
+
+/// An operator requeue after a failed `landing_push` also resumes PR 17 at P
+/// while carrying the preserved reviewer fix commit R onto the successor checkout.
+fn a_failed_landing_push_requeue_resumes_the_preserved_fix_commit() {
+    let (f, _, published, reviewed) = failed_landing_push_fixture();
+    let expected_ref = format!("refs/orbit/candidates/{}/{}", f.task, f.source.run_id);
+
+    let answer = requeue(&f, false).unwrap();
+    assert_eq!(answer["status"], "backlog", "{answer}");
+    assert_eq!(answer["resumes"]["pull_request"], "17");
+    assert_eq!(answer["resumes"]["head_sha"], published);
+    assert_eq!(answer["resumes"]["candidate_head_sha"], reviewed);
+    assert_eq!(answer["resumes"]["candidate_ref"], expected_ref);
+
+    let (run, setup) = super::published_owner::next(&f);
+    let next_checkout = PathBuf::from(setup["workspace_path"].as_str().unwrap());
+    let resumed = f.action(
+        "candidate_resume",
+        json!({"job_run_id":run.run_id,"task_ids":[f.task],
+        "workspace_path":next_checkout,"base_sha":setup["base_sha"]}),
+    );
+    assert_eq!(resumed["outcome"], "resumed_carried", "{resumed}");
+    assert_eq!(resumed["reused_head_sha"], published);
+    assert_eq!(resumed["source_sha"], reviewed);
+    assert_eq!(
+        std::fs::read_to_string(next_checkout.join("review.txt")).unwrap(),
+        "landing push repair\n"
+    );
+}
+
+/// A completed `landing_push`, changed PR/origin/local lease, or mismatched
+/// preservation receipt stays refused with nothing written.
+fn failed_landing_push_keeps_completed_lease_and_receipt_refusals() {
+    let (f, checkout, published, reviewed) = failed_landing_push_fixture();
+    git(&checkout, &["checkout", "--quiet", "--detach"]);
+    let branch = f.branch.clone();
+    let clean_state =
+        serde_json::to_value(f.runtime.read_run_state(&f.source.run_id).unwrap()).unwrap();
+    let clean_answer = std::fs::read_to_string(&f.answer).unwrap();
+    let restore = |f: &Fixture| {
+        f.runtime
+            .write_run_state(
+                &f.source.run_id,
+                &serde_json::from_value(clean_state.clone()).unwrap(),
+            )
+            .unwrap();
+        std::fs::write(&f.answer, &clean_answer).unwrap();
+        force_branch(&f.repo, &branch, &reviewed, false);
+        force_branch(&checkout, &branch, &published, true);
+    };
+    let assert_both_refuse = |f: &Fixture, case: &str| {
+        let requeue_err = refused(f, false, case);
+        let repair_err = f
+            .runtime
+            .run_tool_as_human("orbit.workflow.run.resume", f.request("inspect"))
+            .expect_err(&format!("{case}: inspect unexpectedly succeeded"))
+            .to_string();
+        assert!(
+            requeue_err.contains("source repair") || requeue_err.contains("Nothing was changed"),
+            "{case}: requeue={requeue_err}"
+        );
+        assert!(
+            repair_err.contains("source repair refused"),
+            "{case}: repair={repair_err}"
+        );
+    };
+
+    // 1. Completed landing_push (output present and step succeeded, or either alone).
+    for mode in ["both", "output_only", "step_only"] {
+        let mut state = f.runtime.read_run_state(&f.source.run_id).unwrap().unwrap();
+        let output = json!({
+            "phase": "push",
+            "branch": branch,
+            "local_sha": reviewed,
+            "remote_sha_before": published,
+        });
+        if mode != "step_only" {
+            state.record_pipeline_output(LANDING_PUSH, output.clone());
+        }
+        if mode != "output_only" {
+            state.record_step(10, JobRunState::Success, Some(output), None);
+        }
+        f.runtime.write_run_state(&f.source.run_id, &state).unwrap();
+        assert_both_refuse(&f, &format!("completed_landing_push_{mode}"));
+        restore(&f);
+    }
+
+    // 2. Changed lease: origin moved, PR head moved, or local branch diverged.
+    force_branch(&checkout, &branch, &reviewed, true);
+    assert_both_refuse(&f, "origin_lease_moved");
+    restore(&f);
+
+    let mut answer: Value = serde_json::from_str(&clean_answer).unwrap();
+    answer["headRefOid"] = json!(reviewed);
+    std::fs::write(&f.answer, answer.to_string()).unwrap();
+    assert_both_refuse(&f, "pr_head_moved");
+    restore(&f);
+
+    force_branch(&f.repo, &branch, &f.base, false);
+    assert_both_refuse(&f, "local_branch_diverged");
+    restore(&f);
+
+    // 3. Mismatched preservation receipt (including a different descendant commit).
+    std::fs::write(checkout.join("other.txt"), "other commit\n").unwrap();
+    git(&checkout, &["add", "other.txt"]);
+    git(&checkout, &["commit", "-qm", "other descendant commit"]);
+    let other_descendant = git(&checkout, &["rev-parse", "HEAD"]);
+    let cases: [ReceiptCase; 5] = [
+        ("mismatched_published_head", &|o| {
+            o["reviewer_preservation"]["published_head_sha"] = json!(reviewed);
+        }),
+        ("mismatched_commit_vs_settled", &|o| {
+            o["reviewer_preservation"]["commit_sha"] = json!(other_descendant);
+        }),
+        ("mismatched_ref", &|o| {
+            o["reviewer_preservation"]["ref"] = json!("refs/orbit/candidates/other/run");
+        }),
+        ("mismatched_run", &|o| {
+            o["handoff_run_id"] = json!("jrun-other");
+        }),
+        ("mismatched_decision", &|o| {
+            o["decision"] = json!("blocked_failure_pr");
+        }),
+    ];
+    for (case, edit) in cases {
+        let original = rewrite_receipt(&f, edit);
+        assert_both_refuse(&f, case);
+        restore_receipt(&f, original);
+    }
+
+    // Confirm the uncorrupted fixture still admits after all refusal checks.
+    let inspection = f
+        .runtime
+        .run_tool_as_human("orbit.workflow.run.resume", f.request("inspect"))
+        .unwrap();
+    assert_eq!(inspection["binding"]["head_sha"], published);
+    assert_eq!(inspection["binding"]["candidate_head_sha"], reviewed);
+}
+
 crate::scenario_table!(
     reviewer_push_scenarios,
     a_held_incomplete_review_requeue_resumes_the_attested_reviewer_head,
     unattested_or_moved_reviewer_heads_stay_refused,
     a_changed_specification_refuses_the_reviewer_head,
-    a_rejected_landing_review_requeue_resumes_the_preserved_fix_commit
+    a_rejected_landing_review_requeue_resumes_the_preserved_fix_commit,
+    a_failed_landing_push_source_repair_admits_and_applies_preserved_fix,
+    a_failed_landing_push_requeue_resumes_the_preserved_fix_commit,
+    failed_landing_push_keeps_completed_lease_and_receipt_refusals
 );
