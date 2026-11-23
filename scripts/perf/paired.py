@@ -559,10 +559,30 @@ class RowMask:
 
     @classmethod
     def parse(cls, text: str) -> RowMask:
-        key, _separator, rest = text.partition("=")
+        """Split and validate `KEY=VALUE:FIELD[,FIELD...]`; raise `ValueError` if malformed."""
+        key, separator, rest = text.partition("=")
         field_at = rest.rfind(":")
-        fields = tuple(rest[field_at + 1:].split(","))
-        return cls(key, rest[:field_at], fields, text)
+        value = rest[:field_at] if field_at >= 0 else ""
+        fields = tuple(rest[field_at + 1:].split(",")) if field_at >= 0 else ()
+
+        def spaced(item: str) -> bool:
+            return any(char.isspace() for char in item)
+
+        if (
+            not separator
+            or field_at <= 0
+            or not key
+            or spaced(key)
+            or not value
+            or spaced(value)
+            or not fields
+            or any(not field or spaced(field) for field in fields)
+        ):
+            raise ValueError(
+                "expected KEY=VALUE:FIELD, for example check=disk-space:message "
+                "(a colon inside VALUE is kept; FIELD is the text after the last colon)"
+            )
+        return cls(key, value, fields, text)
 
 
 def _drop_masked_fields(row: dict, row_masks: list[RowMask], hits: set[int]) -> dict:
@@ -1059,28 +1079,10 @@ def row_mask_value(value: str) -> str:
     selector that matches no row is refused later, once each arm's output
     has been read; this check only rejects a value that is not a selector.
     """
-    key, separator, rest = value.partition("=")
-    field_at = rest.rfind(":")
-    fields = rest[field_at + 1:].split(",") if field_at >= 0 else []
-    value_text = rest[:field_at] if field_at >= 0 else ""
-
-    def spaced(text: str) -> bool:
-        return any(char.isspace() for char in text)
-
-    if (
-        not separator
-        or field_at <= 0
-        or not key
-        or spaced(key)
-        or not value_text
-        or spaced(value_text)
-        or not fields
-        or any(not field or spaced(field) for field in fields)
-    ):
-        raise argparse.ArgumentTypeError(
-            "expected KEY=VALUE:FIELD, for example check=disk-space:message "
-            "(a colon inside VALUE is kept; FIELD is the text after the last colon)"
-        )
+    try:
+        RowMask.parse(value)
+    except ValueError as error:
+        raise argparse.ArgumentTypeError(str(error)) from None
     return value
 
 
