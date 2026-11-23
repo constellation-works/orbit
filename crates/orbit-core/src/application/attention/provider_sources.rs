@@ -215,7 +215,9 @@ fn newest_red_candidates(
 ) -> (BTreeMap<String, Value>, Vec<String>) {
     // A run number belongs to its underlying workflow, and distinct workflows
     // can share a display name, so the provider's workflow id (when it gives
-    // one) is the identity; the display name is the fallback.
+    // one) is the identity; the display name is the fallback. Each source has
+    // its own prefix, so a display name can never spell another workflow's
+    // key: a workflow named `id:7` is not workflow id 7.
     let workflow_key = |run: &Value| {
         let workflow_id = value_string(&run["workflow_id"]);
         if !workflow_id.is_empty() {
@@ -223,9 +225,9 @@ fn newest_red_candidates(
         }
         let workflow = value_string(&run["workflow"]);
         if workflow.is_empty() {
-            value_string(&run["run_id"])
+            format!("run:{}", value_string(&run["run_id"]))
         } else {
-            workflow
+            format!("name:{workflow}")
         }
     };
     let head_order = |run: &Value| (run_time(run, "updated_at", "created_at"), run_number(run));
