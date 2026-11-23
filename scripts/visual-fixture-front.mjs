@@ -921,7 +921,7 @@ async function main() {
       }
       if (req.method === 'GET' && fixtureHosts.some((host) => (
         host.reachable === false
-        && pathname === `/api/on/${encodeURIComponent(host.name)}/fleet/drains`
+        && pathname === `/api/on/${host.name}/fleet/drains`
       ))) {
         // An unreachable seeded host has no readable drains. Answer locally so
         // the fixture can show its unavailable host state without proxying a

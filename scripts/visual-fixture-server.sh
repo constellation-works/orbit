@@ -290,7 +290,14 @@ echo "visual-fixture-server: fixture=$fixture seed_rows=$seed_rows server_clock=
 log="$scratch/server.log"
 "$@" >"$log" 2>&1 &
 server_pid=$!
-trap 'kill "$server_pid" 2>/dev/null || true' INT TERM EXIT
+front_pid=""
+cleanup() {
+  [ -z "$front_pid" ] || kill "$front_pid" 2>/dev/null || true
+  [ -z "$server_pid" ] || kill "$server_pid" 2>/dev/null || true
+}
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 url=""
 attempt=0
 while [ "$attempt" -lt 120 ]; do
@@ -301,6 +308,7 @@ while [ "$attempt" -lt 120 ]; do
     [ -n "$url" ] && break
   fi
   if ! kill -0 "$server_pid" 2>/dev/null; then
+    server_pid=""
     echo "visual-fixture-server: server exited; log follows" >&2
     cat "$log" >&2 || true
     exit 1
@@ -332,5 +340,10 @@ else
 fi
 node "$repo_root/scripts/visual-fixture-front.mjs" &
 front_pid=$!
-trap 'kill "$front_pid" "$server_pid" 2>/dev/null || true' INT TERM EXIT
-wait "$front_pid"
+if wait "$front_pid"; then
+  front_status=0
+else
+  front_status=$?
+fi
+front_pid=""
+exit "$front_status"
