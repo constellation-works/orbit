@@ -1050,7 +1050,10 @@ whether the failure is inherited from the base.
 **Refresh.** The refresh applies only when all of these hold:
 
 - Each failed required check passed on a newer base commit where the head's
-  fork point did not pass it.
+  fork point conclusively failed the same job. The fork point's result is the
+  newest success or failure of that job on its first-parent history; a commit
+  whose job was skipped is read past. A missing, pending, ambiguous or
+  unreadable result holds the refresh.
 - No failed required check also fails on the base the same way.
 - No failed required job's log cites a file the candidate changed.
 - The base tip is not already in the head.
