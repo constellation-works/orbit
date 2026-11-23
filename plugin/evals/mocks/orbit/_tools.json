@@ -601,7 +601,7 @@
     },
     {
       "name": "orbit_task_add",
-      "description": "Create a task and return its JSON; rules are in the installed Orbit skill `references/task-fields-projections.md` (selectors, status) and `references/task-fields-tools.md` (grants).",
+      "description": "Create a task and return its JSON; rules are in the installed Orbit skill `references/task-fields-*.md` references.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -1171,7 +1171,7 @@
     },
     {
       "name": "orbit_task_update",
-      "description": "Update a task and return its JSON; rules are in the installed Orbit skill `references/task-fields-projections.md` (Human CLI task update).",
+      "description": "Update a task and return its JSON; rules are in the installed Orbit skill `references/task-fields-*.md` references.",
       "inputSchema": {
         "type": "object",
         "properties": {
