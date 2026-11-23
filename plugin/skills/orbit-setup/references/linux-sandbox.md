@@ -12,12 +12,16 @@ When needed, onboarding uses the distribution package manager to install
 Bubblewrap. If the host still has no Bubblewrap with `--bind-fd`, it installs
 the signed, static Bubblewrap published with the Orbit release, root-owned at
 `/usr/local/libexec/orbit/bwrap`; it is never setuid and never replaces a host
-`bwrap` that qualifies. On Ubuntu, a UID-map denial loads only the packaged
+`bwrap` that qualifies.
+
+On Ubuntu, a UID-map denial loads only the packaged
 `bwrap-userns-restrict` AppArmor profile, and refuses to overwrite a custom
 profile. Interactive onboarding uses the normal administrator authentication
 prompt. `orbit init --non-interactive` requires root or already-authorized
 passwordless sudo and never waits for a password.
-A failed preparation stops `orbit init` before it writes anything. When an
+A failed preparation stops `orbit init` before it writes anything.
+
+When an
 administrator or image build owns the host's packages, `orbit init
 --skip-host-prerequisites` (or `ORBIT_SKIP_HOST_PREREQUISITES=1`) seeds Orbit
 without touching the host; `linux-bwrap` dispatch stays fail-closed until
@@ -29,7 +33,9 @@ RHEL, Rocky, AlmaLinux and CentOS use dnf; Arch uses pacman; openSUSE
 (`opensuse`, `opensuse-leap`, `opensuse-tumbleweed`) and SUSE (`suse`, `sles`)
 use zypper. A host whose Bubblewrap is missing or lacks `--bind-fd`
 gets the bundled binary, and any other preparation failure is an explicit
-unsupported result. Package availability has been checked; native
+unsupported result.
+
+Package availability has been checked; native
 package/security-policy and sandboxed subprocess integration has **not yet
 been validated** for these families. The actual user-scoped capability probe
 is always the readiness gate.
@@ -40,7 +46,9 @@ Use `orbit doctor providers --json` to compare configured `sandbox` with
 `orbit update` refreshes an installed bundled Bubblewrap. A false readiness result can
 mean missing privileges, package failure, incompatible Bubblewrap, a custom
 profile conflict, AppArmor denial, or an enclosing container/kernel blocking
-user namespaces. Correct the reported cause and rerun `orbit init`. Do not
+user namespaces.
+
+Correct the reported cause and rerun `orbit init`. Do not
 weaken global namespace policy, enable `allow_fallback`, install a setuid
 workaround, or switch the executor off as an automatic recovery step.
 

@@ -1,5 +1,15 @@
 # Workspaces on multiple hosts
 
+## Contents
+
+- [Owners and replicas](#owners-and-replicas)
+- [What travels](#what-travels)
+- [Upgrading a workspace together](#upgrading-a-workspace-together)
+- [Task-ID allocation](#task-id-allocation)
+- [Register and select a host](#register-and-select-a-host)
+- [Scheduling and claims](#scheduling-and-claims)
+- [Verify another host](#verify-another-host)
+
 A repository checkout, a logical workspace, and a machine's live task store are
 different things. Sharing Git history does not synchronize Orbit's control
 plane. Select one authoritative owner for a logical workspace and use the CLI
@@ -55,13 +65,17 @@ checkpoint markers. Older writers drop the marker, and older readers restore a
 skipped step's null as an output on resume, changing downstream template
 behavior. The layout fence protects the workspace; the marker field itself is
 not necessarily rejected by older binaries. Layout version 8 also protects
-script output files and parallel script-branch checkpoints. Before any host
+script output files and parallel script-branch checkpoints.
+
+Before any host
 opens or migrates a workspace to version 9, update the Orbit binary on every
 host that can access it, including replicas. Plan one coordinated rollout.
 Auto-task tool grants need the same lockstep: an older binary refuses a
 definition or settings file that sets `granted_tools`, so upgrade every host
-before setting a grant. See [Granting tools to every minted
-task](auto-tasks.md#granting-tools-to-every-minted-task) and inspect the
+before setting a grant.
+
+See [Granting tools to every minted
+task](auto-tasks-managing.md#granting-tools-to-every-minted-task) and inspect the
 stored grant with `orbit auto-task show <name>`.
 
 `orbit update` run inside an initialized workspace immediately runs
@@ -73,12 +87,14 @@ from outside the workspace, then migrate once:
 
 1. Inventory the owner and every host with a checkout that can open the
    workspace. Stop active Orbit clients as required by the [upgrade
-   procedure](maintenance.md#persistent-mcp-clients-during-upgrades).
+   procedure](maintenance-upgrades.md#persistent-mcp-clients-during-upgrades).
 2. On each host, from a directory that is not inside an initialized Orbit
    workspace (for example `$HOME`), with no `--root` or `ORBIT_ROOT` override,
    update Orbit while clients remain stopped. Check each installed
    version with `orbit --version`; `orbit update --check` reports release
-   availability, not workspace compatibility. The JSON report showing
+   availability, not workspace compatibility.
+
+   The JSON report showing
    `"workspace_root": null` with the `migrate --confirm` and
    `workspace sync` steps skipped is the expected signal that no migration
    ran yet. Do not run `orbit update` from inside the shared workspace
@@ -99,7 +115,7 @@ it before allowing it to open the workspace again.
 Task publications are the supported explicit snapshot path; ordinary source
 Git sync is not live task replication. Publication inspection preserves the
 snapshot's authority/freshness labels and does not import records.
-See [publication.md](publication.md).
+See [publication-bind.md](publication-bind.md).
 
 ## Task-ID allocation
 
@@ -129,7 +145,9 @@ CLI or federated MCP, an ID-only task show/update routes to the host whose
 prefix the ID carries, without an SSH command or `--workspace`. An explicit
 workspace selects that store instead; writes still obey the sole-writer rule.
 Workspace-scoped operations such as task creation, listing and eligibility do
-not route by prefix. The full routed-tool list and typed-error remedies are in
+not route by prefix.
+
+The full routed-tool list and typed-error remedies are in
 [tool-surface-routing.md](../../orbit/references/tool-surface-routing.md#task-ids-and-host-selection).
 
 For a remote workspace-scoped tool call, use `--host <name-or-machine_id>`
@@ -145,7 +163,7 @@ Without `--host`, `--pull` requires the full host-qualified selector copied
 unchanged from federated discovery. Host-local commands such as `workspace`,
 `doctor` and `run show` do not accept this routing flag; use them on the
 execution host. Registration, the doctor's `hosts` row and retired
-destinations-file recovery are in [remote-access.md](remote-access.md).
+destinations-file recovery are in [remote-access-mcp.md](remote-access-mcp.md).
 
 ## Scheduling and claims
 
@@ -160,9 +178,11 @@ seeded state routines declare `trigger.state.owner_machine` and
 The pins are rendered from the seeding host's stable machine id and the
 registered base branch. Only that
 machine evaluates their state triggers; copy those definitions with their pins
-in mind. See [automation.md](automation.md#the-ten-seeded-routines). Inspect
+in mind. See [automation-routines.md](automation-routines.md#the-seeded-routines). Inspect
 their seeded names with `orbit routine list`. Definitions and enablement are
-per-user, gitignored checkout state; copy changes deliberately. Last-fire timestamps and pauses stay host-local. Two hosts running the same
+per-user, gitignored checkout state; copy changes deliberately. Last-fire timestamps and pauses stay host-local.
+
+Two hosts running the same
 cron routine each evaluate it independently, and `overlap: forbid` is local — pause
 it on the hosts that should not run it.
 
@@ -188,7 +208,9 @@ routine pins, and the actual executable/version before enabling work there.
 `orbit sweep --dry-run` and `orbit doctor` give local operational evidence.
 From a client, discover through the authoritative MCP connection and use the
 returned workspace selector. For federation, preserve its host qualification.
-See [remote-access.md](remote-access.md). Matching binaries, a replica role and
+See [remote-access-mcp.md](remote-access-mcp.md).
+
+Matching binaries, a replica role and
 a working owner probe are installation; the rollout is an explicit
 `orbit run auto --pull <selector>` on the replica. There is no destination
 callers file and no follower merge. Command-first setup, the pull drain,

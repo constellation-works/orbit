@@ -1,0 +1,24 @@
+{
+  "skill": "orbit-setup",
+  "cases": [
+    {
+      "id": "load-first-install",
+      "kind": "should_load",
+      "prompt": "Install Orbit on this laptop, initialize it in my repository and register it with my agent client.",
+      "expected": "Loads orbit-setup, detects what is already installed, reads references/first-run-machine.md and references/first-run-workspace.md, and ends with an audited operation through the real client rather than a version string."
+    },
+    {
+      "id": "not-for-task-dispatch",
+      "kind": "should_not_load",
+      "prompt": "Promote the approved tasks in my Orbit backlog and start a drain for the next two hours.",
+      "expected": "Loads orbit-orchestrate for promotion and dispatch. Does not install, configure or enable scheduler components.",
+      "should_load_instead": "orbit-orchestrate"
+    },
+    {
+      "id": "seed-fewer-routines",
+      "kind": "task",
+      "prompt": "This existing workspace should carry only the worktree-gc and store-gc routines and the doc-duties auto-task. Narrow what it seeds.",
+      "expected": "Reads references/configuration-layers.md. Inspects effective values with orbit config show --all, saves local definition edits, sets seeding.routines and seeding.auto_tasks as name lists, previews with orbit workspace sync --check --json before applying, and verifies with orbit workspace show. Enables nothing the user did not ask for."
+    }
+  ]
+}

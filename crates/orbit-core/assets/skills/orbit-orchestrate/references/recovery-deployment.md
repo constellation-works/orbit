@@ -29,6 +29,6 @@ only an intermediate result. On the owning host:
    Restore temporarily changed routines/settings unless the user made the
    change permanent.
 
-See [maintenance.md](../../orbit-setup/references/maintenance.md) for supported
+See [maintenance-upgrades.md](../../orbit-setup/references/maintenance-upgrades.md) for supported
 sync/upgrade mechanics. If capability or authority is missing, report it;
 never create a shadow store or edit runtime state directly to bypass the gap.

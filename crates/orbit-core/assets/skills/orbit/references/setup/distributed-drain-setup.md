@@ -29,7 +29,7 @@ invent tools for approval, write a callers file, or start a second owner store.
 Owner/replica registration lives in
 [multi-host.md](../../../orbit-setup/references/multi-host.md). SSH federation
 and session authority live in
-[remote-access.md](../../../orbit-setup/references/remote-access.md). Tool
+[remote-access-mcp.md](../../../orbit-setup/references/remote-access-mcp.md). Tool
 routing is in [tool-surface-routing.md](../tool-surface-routing.md).
 
 ## What v1 does not do

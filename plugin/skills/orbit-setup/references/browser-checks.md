@@ -1,5 +1,15 @@
 # Browser kit for UI checks
 
+## Contents
+
+- [What workers receive](#what-workers-receive)
+- [Launching Chromium in a worker](#launching-chromium-in-a-worker)
+- [Which tasks need it](#which-tasks-need-it)
+- [Layout and pin](#layout-and-pin)
+- [Linux libraries](#linux-libraries)
+- [Diagnose](#diagnose)
+- [Remove](#remove)
+
 Use this on a host whose workers change web pages (a dashboard, a docs site,
 any UI) and must show the rendered result. Orbit gives agents no interactive
 browser. A worker checks UI by scripting headless Chromium through Playwright:
@@ -11,7 +21,9 @@ something a user sees hands its screenshots off as task artifacts. Owner mode
 attaches each with `orbit.task.artifact` action `put`; a claimed implementer returns
 each scratch file in `task_artifacts`, setting `path` to its stable
 stored path and `source_path` to its file under `.orbit/tmp/`, for deterministic
-attachment. Capture each changed view in every theme it supports, at a 375px
+attachment.
+
+Capture each changed view in every theme it supports, at a 375px
 phone width when the layout is responsive; use paths such as
 `screenshots/<view>-<theme>-<width>.png`, keep each file under the 1 MiB
 artifact limit, and list the paths in the handoff. A worker on a host without
@@ -103,6 +115,7 @@ A task tagged `ui` runs only on a host whose kit is verified. A local drain,
 ship discovery and `orbit run ship` start it only there, and a pull-drain
 owner hands it only to a follower that reports a verified kit. Admission reads
 the kit on every pass, so a kit installed mid-window counts at the next one.
+
 Elsewhere the task stays in `backlog` as `browser_kit_missing`, with the wait
 (`waits for a host with the browser kit (ui)`, naming `orbit config browser-kit
 install`) in readiness, `orbit run show` and the dashboard Drain card. A kit
@@ -153,7 +166,9 @@ headless shell with `ldd` and closes any gap one of three ways:
   without root. It unpacks only the archive apt would write for each package's
   current version and architecture (`apt-get download --print-uris`), including
   when that exact file is already in `debs/`. Older or other-architecture
-  archives left in that cache stay on disk and are not unpacked. When
+  archives left in that cache stay on disk and are not unpacked.
+
+  When
   `fc-list` finds no font it also unpacks fontconfig and
   DejaVu and writes `fonts.conf`; a server without fonts crashes Chromium in
   Skia/FontConfig. `env.sh` then exports `LD_LIBRARY_PATH` and
@@ -181,7 +196,9 @@ decodes that screenshot with the kit's pinned `pngjs` pixel helper, and
 records the pass in
 `orbit-kit.json`. Starting verification clears any
 earlier pass: a timeout, failed spawn or failed smoke test leaves workers
-without the kit until verification succeeds again. A failed smoke test
+without the kit until verification succeeds again.
+
+A failed smoke test
 prints the likely cause:
 a missing `lib*.so` or a Skia/FontConfig crash is a library or font gap, and
 `Executable doesn't exist` means the module and browser revision are out of

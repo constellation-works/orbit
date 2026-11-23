@@ -19,7 +19,7 @@ group and the safe termination order.
 - A known failure signature, once the failing step is identified →
   [common-failures.md](common-failures.md).
 - Host-level incident, service warning, or missing run output →
-  [operational-logs.md](../../orbit-setup/references/operational-logs.md).
+  [operational-logs-triage.md](../../orbit-setup/references/operational-logs-triage.md).
 
 **Safety, up front:**
 

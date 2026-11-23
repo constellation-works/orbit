@@ -163,7 +163,7 @@ such a finding.
 When every
 finding names one OS and the task carries no `os:` tag, the same atomic write
 adds that tag (`os:linux`), so admission routes the task by its tags and a host
-of another OS waits as `host_os_mismatch` (see [Executor definitions](../../orbit-setup/references/configuration.md#executor-definitions)). The pilot never removes or replaces
+of another OS waits as `host_os_mismatch` (see [Executor definitions](../../orbit-setup/references/configuration-execution.md#executor-definitions)). The pilot never removes or replaces
 an `os:` tag already on the task.
 
 While those tags do not name the required OS

@@ -40,7 +40,7 @@ protected result uses that reference's narrowly proved HTTP-prerequisite
 infrastructure rerun, not this failed-job classification.
 
 Local required
-validation failures use [red-base validation holds](../../orbit-setup/references/automation.md#built-in-re-checking-tasks-held-for-a-red-base),
+validation failures use [red-base validation holds](../../orbit-setup/references/automation-built-in.md#built-in-re-checking-tasks-held-for-a-red-base),
 not hosted landing waits. None of these diagnoses authorizes manual requeue,
 a second drain, weaker checks or a merge. A stopped authorized owner landing
 with typed `waiting_gate` evidence resumes automatically after a fresh

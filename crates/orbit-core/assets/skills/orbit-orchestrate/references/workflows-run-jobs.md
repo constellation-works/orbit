@@ -4,7 +4,7 @@
 
 Orbit's execution layer. This covers the mechanics; for deciding *what* to
 dispatch see [orchestration-dispatch.md](orchestration-dispatch.md), and for scheduling it see
-[automation.md](../../orbit-setup/references/automation.md).
+[automation-scheduler.md](../../orbit-setup/references/automation-scheduler.md).
 
 ## Concepts
 

@@ -192,7 +192,7 @@ drain still requires operator authorization.
 | `protocol_skew` | Deploy matching Orbit builds and restart long-lived processes on both endpoints before a new pull drain. |
 
 Registration errors, the doctor's `hosts` row and the retired destinations file
-recovery are in [remote-access.md](../../orbit-setup/references/remote-access.md).
+recovery are in [remote-access-mcp.md](../../orbit-setup/references/remote-access-mcp.md).
 
 ## Common MCP arguments
 

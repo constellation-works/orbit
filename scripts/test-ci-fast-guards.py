@@ -3920,8 +3920,8 @@ class RemovedDashboardLabelTests(unittest.TestCase):
 
         command_reference = "The owner must be registered with `orbit host add`.\n"
         maintenance_paths = (
-            "crates/orbit-core/assets/skills/orbit-setup/references/maintenance.md",
-            "plugin/skills/orbit-setup/references/maintenance.md",
+            "crates/orbit-core/assets/skills/orbit-setup/references/maintenance-diagnose.md",
+            "plugin/skills/orbit-setup/references/maintenance-diagnose.md",
         )
         for relative in maintenance_paths:
             path = self.root / relative

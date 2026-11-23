@@ -34,7 +34,7 @@ so are the removed pass's thresholds
 
 Settings inherit per key: workspace overrides global, global fills omissions, built-in defaults fill the rest. Keep a workspace file to genuine overrides.
 
-Routine and auto-task schedules are not config keys: they live in the definitions under `<workspace>/.orbit/routines/` and `<workspace>/.orbit/auto_tasks/`. Change a schedule with `orbit auto-task update`, `orbit.routine.control` `set_trigger`, or the **edit** link on the dashboard's Automation rows, which edits only the schedule or trigger; see [`automation.md`](../crates/orbit-core/assets/skills/orbit-setup/references/automation.md#changing-a-routines-trigger).
+Routine and auto-task schedules are not config keys: they live in the definitions under `<workspace>/.orbit/routines/` and `<workspace>/.orbit/auto_tasks/`. Change a schedule with `orbit auto-task update`, `orbit.routine.control` `set_trigger`, or the **edit** link on the dashboard's Automation rows, which edits only the schedule or trigger; see [`automation-routines.md`](../crates/orbit-core/assets/skills/orbit-setup/references/automation-routines.md#changing-a-routines-trigger).
 
 `orbit workspace init` seeds missing review keys for the registered ship mode
 (a new registration defaults to `pr`; `--force` retains its mode unless
@@ -436,7 +436,7 @@ resource throttle's memory percentage both measure non-reclaimable memory.
 - `machine.worker_cpu_quota` adds `CPUQuota=` to each scope, so one run cannot take every core. Only an unsigned integer loads, with no upper bound. `orbit doctor`'s `worker-containment` row reads `info` while it is unset and `ok` once it is set. systemd enforces it only where the user manager delegates the cpu controller; elsewhere the property is accepted and not enforced.
 - A Linux script step's own `orbit-script-*` scope takes the same `machine.worker_*` limits. `orbit script grant --memory-max`, `--tasks-max` and `--cpu-quota` narrow them for that script: each grant value applies only where it is lower than the machine value, and a grant CPU quota applies even while `machine.worker_cpu_quota` is unset.
 - A macOS watchdog breach names top-consuming child commands and memory bytes in `orbit run show`. The same snapshot is kept with the run as resource evidence, one bounded record per run until that run is deleted, and survives worker termination; `orbit run show --json` returns it under `worker_resource_limit`.
-- A run that fails after hitting a worker limit carries error code `worker_resource_limit` in `orbit run show`. A run interrupted because its worker vanished names the worker's exit and scope evidence instead ([stuck job runs › How the worker ended](runbooks/stuck-job-runs.md#how-the-worker-ended)). A run the host manager stopped (a terminating signal whose recorded sender is `systemd`, with no memory or task-limit breach) is `held` with `operator_stopped` and is not a failure. Inspecting scopes: [operational logs › Worker Resource Containment](../crates/orbit-core/assets/skills/orbit-setup/references/operational-logs.md#worker-resource-containment).
+- A run that fails after hitting a worker limit carries error code `worker_resource_limit` in `orbit run show`. A run interrupted because its worker vanished names the worker's exit and scope evidence instead ([stuck job runs › How the worker ended](runbooks/stuck-job-runs.md#how-the-worker-ended)). A run the host manager stopped (a terminating signal whose recorded sender is `systemd`, with no memory or task-limit breach) is `held` with `operator_stopped` and is not a failure. Inspecting scopes: [operational logs › Worker Resource Containment](../crates/orbit-core/assets/skills/orbit-setup/references/operational-logs-containment.md#worker-resource-containment).
 - Admitted names reach the contained worker through its environment, not the `systemd-run` command line. Orbit passes each name as `--setenv=NAME` with no value. systemd (211 and later, including 259) copies the value from the wrapper process, which already holds the allow-listed environment. That includes pass-listed provider credentials and clock-file defaults. A toolchain `PATH` override, an explicit removal, and the workspace allowlist are unchanged. Agent subprocesses still start from a cleared environment.
 
 ---
@@ -2008,7 +2008,7 @@ option and moves the task out of `blocked` in one operation. The seeded
 `blocked_task_triage` routine and its `block_escalated` trigger are retired: a
 `blocked-task-triage-*` routine file loads inert and `orbit workspace sync`
 retires a seeded copy. See
-[final recovery](../plugin/skills/orbit-setup/references/automation.md#built-in-final-recovery-of-blocked-tasks).
+[final recovery](../plugin/skills/orbit-setup/references/automation-built-in.md#built-in-final-recovery-of-blocked-tasks).
 
 ### PR auto-fix repairs
 
@@ -3028,7 +3028,7 @@ available for reuse; retention does not run `VACUUM`.
 Several housekeeping bounds are fixed [ORB-22808]; their former keys are [deprecated](#validation-and-errors):
 
 - **CI failure suppression.** A CI sweep finding archived or rejected without `covered_by` suppresses recurrences of its evidenced cause for 6 hours from that status event. A recurrence whose retained diagnostic differs files again. One whose cause cannot be established stays held: within the window for a plain archive, and with no expiry under a cover. An explicit task or GitHub PR cover holds that cause while open, or until its landed commit is observed in the failing checkout; if it fails to hold, later completed repairs still own duplicates or defer older failures until their landing is tested. (`ci_failure.operator_suppression_hours`)
-- **Automation stalls.** A delivery-automation consumer that sits on a stuck deferral (`history_diverged`, `repository_changed`, `provider_identity_missing`, `state_missing`) for 60 minutes logs a warning and files one deduped friction. Transient backpressure never escalates. See [auto-tasks](../plugin/skills/orbit-setup/references/auto-tasks.md). (`automation.stall_window_minutes`)
+- **Automation stalls.** A delivery-automation consumer that sits on a stuck deferral (`history_diverged`, `repository_changed`, `provider_identity_missing`, `state_missing`) for 60 minutes logs a warning and files one deduped friction. Transient backpressure never escalates. See [auto-tasks](../plugin/skills/orbit-setup/references/auto-tasks-authoring.md). (`automation.stall_window_minutes`)
 - **Operational log.** The active `orbit.jsonl` rolls past 100 MiB, its archives are pruned oldest first past a 500 MiB total, and `orbit.jsonl` and `orbit-agent.jsonl` archives older than 7 days are deleted.
 - **Commit journal.** `orbit gc journal` may delete a task commit's journal row 14 days after it is applied, for this workspace and unregistered ids. Recovery replays only prepared and committed rows; these, aborted rows and each task's newest applied row stay. Older raw transition diagnostics are lost; published task history, Codebase rankings, `orbit task flow`, friction stats, Cost, auto-concurrency profiles and forecast accuracy keep working. Nothing is deleted until `orbit gc journal --confirm`; the `store-gc` routine does not run it. (`retention.journal_days`)
 - **Store size.** `orbit doctor` warns when the host store file is larger than 1 GiB and this workspace has no enabled `store-gc` routine. The check stays ok under the threshold or while the routine is enabled.
@@ -3230,7 +3230,7 @@ minutes = 45
 
 ## Plugins — `.orbit/plugins.yaml` and `[plugins.<ns>]`
 
-Plugins install once per machine (`~/.orbit/plugins/<ns>/<version>/`); enable state and grants are host-local. A checkout keeps only its gitignored pin file, and `orbit plugin sync` installs what it names. Linked Git worktrees share the main checkout's `.orbit/plugins.yaml`: runtime loading, `orbit plugin sync` and `orbit plugin doctor` read that file and ignore a worktree-local one. Operator guide (installs, grants, source builds, workspace toggles): the orbit-setup [plugins reference](../crates/orbit-core/assets/skills/orbit-setup/references/plugins.md). Manifest spec: [plugin standard](design/plugins/1_scope.md).
+Plugins install once per machine (`~/.orbit/plugins/<ns>/<version>/`); enable state and grants are host-local. A checkout keeps only its gitignored pin file, and `orbit plugin sync` installs what it names. Linked Git worktrees share the main checkout's `.orbit/plugins.yaml`: runtime loading, `orbit plugin sync` and `orbit plugin doctor` read that file and ignore a worktree-local one. Operator guide (installs, grants, source builds, workspace toggles): the orbit-setup [plugins reference](../crates/orbit-core/assets/skills/orbit-setup/references/plugins-install.md). Manifest spec: [plugin standard](design/plugins/1_scope.md).
 
 ```yaml
 # .orbit/plugins.yaml — per-checkout, gitignored

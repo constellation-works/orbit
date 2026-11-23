@@ -26,5 +26,5 @@ unattended:
 
 - Confirm the registered workspace base branch (else `workflow.base_branch`) points where PRs should actually land.
 - Enable worktree GC first — unattended shipping is the fastest way to fill a
-  disk with abandoned worktrees. → [maintenance.md](../../orbit-setup/references/maintenance.md)
+  disk with abandoned worktrees. → [maintenance-worktree-gc.md](../../orbit-setup/references/maintenance-worktree-gc.md)
 - Check `orbit run readiness` across a realistic backlog first.

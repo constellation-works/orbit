@@ -75,7 +75,7 @@ Solution:
 
 - Start with `orbit workspace sync --check`; use `orbit workspace sync` for
   managed defaults. Locally edited overrides are preserved and require deliberate
-  reconciliation. See [maintenance.md](../../orbit-setup/references/maintenance.md).
+  reconciliation. See [maintenance-upgrades.md](../../orbit-setup/references/maintenance-upgrades.md).
 - If a workspace `.orbit/resources` job shadows the global job, remove or update the workspace override.
 - If the already-loaded run cannot recover because it captured the stale definition, start a fresh run after the catalog is corrected.
 

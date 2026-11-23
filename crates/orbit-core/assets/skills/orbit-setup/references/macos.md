@@ -10,13 +10,17 @@ falls back to the Claude Desktop app's shared OAuth login. The Desktop revokes
 that login whenever it refreshes, so a run that started on it fails part-way
 with `claude provider authentication failure (HTTP 401): OAuth token revoked`
 and the task goes `blocked`. Unattended runs use a dedicated worker token
-instead. Orbit enforces this: on macOS a Claude activity whose provider
+instead.
+
+Orbit enforces this: on macOS a Claude activity whose provider
 environment holds neither variable is refused at invocation, before `claude`
 starts, with an error naming the variable. A drain started without the token
 claims no Claude work: its crew window excludes the Claude crews, and the
 submission says so. An explicit `--allow-crew` that names only Claude crews is
 refused. Such a drain usually means a shell that skipped `~/.zprofile`; start
-it from a login shell. A Claude crew whose global `[crews.<name>] env` maps its
+it from a login shell.
+
+A Claude crew whose global `[crews.<name>] env` maps its
 own credential (`env = ["ANTHROPIC_API_KEY=ANTHROPIC_CREDITS_API_KEY_1"]`) is
 checked on that composed environment instead: it runs without the shared
 token, and only its source needs exporting (and, for the clock, a line in
@@ -35,7 +39,9 @@ token, and only its source needs exporting (and, for the clock, a line in
    inherit that list: if its file omits `pass`, it gets the built-in default,
    and a `pass` it sets *replaces* the global list. Add
    `CLAUDE_CODE_OAUTH_TOKEN` to the list each workspace actually resolves
-   (`orbit config show` lists it and the layer it came from). For a workspace
+   (`orbit config show` lists it and the layer it came from).
+
+   For a workspace
    without its own policy file, add it to the global `config.toml`. For any
    other workspace, add it to that workspace's `config.toml`, restating the
    full list it resolves now plus the token. A name missing from the resolved
@@ -82,7 +88,9 @@ the installed clock has no token in `clock.env` that the same `pass` admits (a
 `clock.env` holding only a name the workspace's `pass` omits is a mismatch, and
 the row names it). A routed Claude crew that maps its own credential through
 `env` needs neither: the row instead warns when an installed clock's
-`clock.env` lacks that crew's source. `env-pass` separately reports
+`clock.env` lacks that crew's source.
+
+`env-pass` separately reports
 pass-listed names that neither the shell running `orbit doctor` nor a
 non-empty `clock.env` value supplies, and crew `env` sources that shell does
 not hold; `clock.env` does not clear the crew-source check. A manual drain or
