@@ -141,6 +141,9 @@ pub(super) fn write_v2_step(step: &JobV2Step, indent: usize, out: &mut String) {
             if let Some(break_when) = &loop_.break_when {
                 let _ = writeln!(out, "{pad}{} {}", bold("Break When:"), break_when);
             }
+            if loop_.fail_when_exhausted {
+                let _ = writeln!(out, "{pad}{} true", bold("Fail When Exhausted:"));
+            }
             for nested in &loop_.steps {
                 write_v2_step(nested, indent + 2, out);
             }

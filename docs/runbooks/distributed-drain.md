@@ -1402,7 +1402,7 @@ request is audited on the run (`pipeline.run.window_extend.completed`, with
 `previous_deadline` and `deadline`), and `orbit run show` prints the
 `Window: extended to …` line. The job's loop ceiling (6000 iterations, each
 idle one waiting at least `poll_sleep_seconds`) still bounds a drain extended
-over days; past it the drain ends and a new one carries its admissions. The drain's `--concurrency`, as last
+over days; past it the drain run ends failed with `loop_exhausted` (naming the `drain` step, its iteration count and the ceiling) and a new one carries its admissions. The drain's `--concurrency`, as last
 retuned, is the only ceiling on its leaves: the claimed leaf jobs declare no
 active-run limit of their own. On the follower, `orbit run readiness` with no
 `--concurrency` and no local drain reports that ceiling. Text prints

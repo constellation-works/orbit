@@ -287,6 +287,116 @@ fn loop_iterates_until_break_failure_or_budget() {
         }
     }
 }
+/// `fail_when_exhausted` fails a loop that spends its ceiling without `break_when`; the default, an early break and a spent time budget keep success.
+fn a_loop_opting_in_fails_when_it_exhausts_its_ceiling() {
+    let counting_loop = |opt_in: Option<bool>, stop: bool, timeout: Option<&str>| {
+        let mut block = json!({"max_iterations": 3, "break_when": "{{ steps.body.output.stop }} == true",
+            "steps": [probe_step("body", json!({"label": "tick", "stop": stop, "fail": false, "panic": false, "sleep_ms": 0}))]});
+        if let Some(opt_in) = opt_in {
+            block["fail_when_exhausted"] = json!(opt_in);
+        }
+        if let Some(timeout) = timeout {
+            block["timeout_seconds"] = json!(timeout);
+        }
+        job_asset(json!([{"id": "spin", "loop": block}]))
+    };
+    // (case, opt-in, body stops, timeout, success, iterations, broke, not_converged)
+    let cases = [
+        (
+            "opted in, never breaks",
+            Some(true),
+            false,
+            None,
+            false,
+            3,
+            false,
+            true,
+        ),
+        ("default exhausts", None, false, None, true, 3, false, true),
+        (
+            "explicit false exhausts",
+            Some(false),
+            false,
+            None,
+            true,
+            3,
+            false,
+            true,
+        ),
+        (
+            "opted in, breaks early",
+            Some(true),
+            true,
+            None,
+            true,
+            1,
+            true,
+            false,
+        ),
+        (
+            "opted in, budget spent",
+            Some(true),
+            false,
+            Some("0"),
+            true,
+            0,
+            false,
+            true,
+        ),
+    ];
+    for (case, opt_in, stop, timeout, success, iterations, broke, not_converged) in cases {
+        let run = run_graph_job(&counting_loop(opt_in, stop, timeout), json!({}));
+        assert_eq!(run.succeeded(), success, "{case}: {:?}", run.result);
+        assert_eq!(run.did_not_converge(), not_converged, "{case}");
+        assert_eq!(run.host.calls().len(), iterations, "{case}: body runs");
+        let outcome = run.outcome();
+        if success {
+            let spin = &outcome.pipeline["spin"];
+            assert_eq!(spin["iterations"], json!(iterations), "{case}");
+            assert_eq!(spin["broke"], json!(broke), "{case}");
+            assert!(outcome.failure_code.is_none(), "{case}");
+        } else {
+            let code = outcome.failure_code.as_ref().map(|code| code.as_str());
+            assert_eq!(code, Some("loop_exhausted"), "{case}");
+            let message = outcome.message.as_deref().unwrap_or_default();
+            assert!(
+                message.contains("`spin`")
+                    && message.contains("exhausted 3 iterations")
+                    && message.contains("max_iterations 3"),
+                "{case}: {message}"
+            );
+        }
+    }
+    // Existing jobs serialize unchanged: the field appears only when set.
+    for (opt_in, present) in [(None, false), (Some(false), false), (Some(true), true)] {
+        let serialized =
+            serde_json::to_value(counting_loop(opt_in, false, None)).expect("job serializes");
+        let text = serialized.to_string();
+        assert_eq!(
+            text.contains("fail_when_exhausted"),
+            present,
+            "{opt_in:?}: {text}"
+        );
+    }
+}
+/// The shipped pull drain fails closed when it spends its ceiling.
+fn the_shipped_pull_drain_loop_fails_when_exhausted() {
+    use orbit_types::workflow::activity_job::JobV2StepBody;
+    let path = workspace_root().join("crates/orbit-core/assets/jobs/workspace_pull_pipeline.yaml");
+    let yaml = std::fs::read_to_string(path).expect("read the shipped pull pipeline");
+    let job = load_job_asset(&yaml)
+        .expect("the shipped pull pipeline loads")
+        .spec;
+    let drain = job
+        .steps
+        .iter()
+        .find(|step| step.id == "drain")
+        .expect("drain step");
+    let JobV2StepBody::Loop { loop_ } = &drain.body else {
+        panic!("drain is a loop");
+    };
+    assert!(loop_.fail_when_exhausted && loop_.break_when.is_some());
+}
 /// Non-array JSON items fail naming `fan_out.items`/`loop.items`; arrays and bare `A, B` still parse.
 fn items_expression_rejects_non_array_json() {
     let rejected = [
@@ -1703,7 +1813,7 @@ macro_rules! runtime_contracts {
     };
 }
 runtime_contracts!(runtime_contracts_1: a_deterministic_step_binds_its_task_and_run_from_the_dispatch_not_the_tool_args, parallel_join_policy_decides_the_block_from_its_branches, fan_out_collects_outputs_in_item_order_within_the_worker_cap);
-runtime_contracts!(runtime_contracts_2: fan_in_join_policy_decides_the_block_from_its_workers, loop_iterates_until_break_failure_or_budget, items_expression_rejects_non_array_json, when_false_step_skips_log_below_warn_and_other_skips_keep_warn);
+runtime_contracts!(runtime_contracts_2: fan_in_join_policy_decides_the_block_from_its_workers, loop_iterates_until_break_failure_or_budget, a_loop_opting_in_fails_when_it_exhausts_its_ceiling, the_shipped_pull_drain_loop_fails_when_exhausted, items_expression_rejects_non_array_json, when_false_step_skips_log_below_warn_and_other_skips_keep_warn);
 runtime_contracts!(runtime_contracts_3: incomplete_conflict_diagnostics_survive_resumed_execution_and_success_checkpoint, the_shipped_review_step_retries_then_recovers_a_failing_reviewer, provider_unavailable_dispatch_errors_do_not_attempt_recovery, an_implementer_blocker_ends_implement_one_without_recovery);
 runtime_contracts!(runtime_contracts_4: an_upgrade_refusal_blocker_ends_the_step_as_upgrade_pending, an_upgrade_refusal_ends_any_step_but_a_task_blocker_only_the_implementers, a_malformed_blocker_is_not_a_stop_and_the_catalog_name_is, a_blocker_quoting_another_unrepairable_marker_is_not_retried, malformed_unfiled_findings_fail_implement_one_before_delivery, malformed_claimed_artifacts_fail_implement_one_before_delivery, malformed_regression_from_fails_implement_one_before_delivery);
 runtime_contracts!(runtime_contracts_5: exhausted_review_preflight_stops_the_shipped_pipeline_before_implementation, fan_in_retains_position_aligned_errors_through_successful_join_and_resume, a_skipped_fan_out_does_not_overwrite_a_siblings_collection_on_resume, leaf_completion_records_file_and_store_waits_without_leaking_between_steps);

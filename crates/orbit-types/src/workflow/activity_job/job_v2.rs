@@ -758,6 +758,12 @@ pub struct LoopBlock {
     pub interval_seconds: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub break_when: Option<String>,
+    /// Opt in to failing the loop when it runs out of iterations while
+    /// `break_when` never held. Default false keeps the successful
+    /// `broke: false` outcome; a `timeout_seconds` budget that ends the loop
+    /// is never a failure.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub fail_when_exhausted: bool,
     pub steps: Vec<JobV2Step>,
 }
 
