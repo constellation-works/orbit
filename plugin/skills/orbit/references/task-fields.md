@@ -52,8 +52,8 @@ For the read → full-union update → verify command sequence, see
 `orbit.task.show` resolves `id` globally through the host task registry by
 default. Cwd, MCP initialize metadata and linked-worktree runtime identities
 are not filters. Optional `workspace` is an explicit fail-closed filter
-argument, not a projection field; `workspace` and `workspace_path` do not
-belong in `fields`.
+argument. The `workspace` projection returns the owning registry identity
+`{id, name}` (or `null` when unregistered); `workspace_path` is not a projection field.
 
 For `orbit.task.show`, `orbit.task.add` and `orbit.task.update`, MCP accepts
 `fields` as an array of field names, or `field` as a single-field alias.
@@ -61,7 +61,7 @@ The CLI also accepts a repeated flag or a comma-separated string.
 `fields` takes precedence when both are supplied. The projection catalogue is:
 
 ```text
-id, parent_id, title, description, acceptance_criteria,
+id, workspace, parent_id, title, description, acceptance_criteria,
 dependencies, resolved_dependencies, tags, required_tools, granted_tools,
 requires_labels, not_before, started_at, scheduled_hold, plan,
 execution_summary, context_files,

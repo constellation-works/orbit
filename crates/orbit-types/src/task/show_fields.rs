@@ -36,6 +36,7 @@ macro_rules! define_task_show_projection_fields {
 
 define_task_show_projection_fields!(
     "id",
+    "workspace",
     "parent_id",
     "title",
     "description",
@@ -164,8 +165,8 @@ pub fn unknown_task_show_field_message(name: &str) -> String {
         "steering" => format!(
             "{message}. Read the injected steering snapshot as `task.steering`; `steering` is not an `orbit.task.show` field."
         ),
-        "workspace" | "workspace_path" => format!(
-            "{message}. Pass the workspace filter in the `workspace` argument to `orbit.task.show`; neither name is a projection field."
+        "workspace_path" => format!(
+            "{message}. Pass the workspace filter in the `workspace` argument to `orbit.task.show`; `workspace_path` is not a projection field."
         ),
         "pilot" => format!(
             "{message}. Read the `pilot` object from a task-pilot receipt comment and its assessment from that comment's artifact path; `pilot` is not an `orbit.task.show` field."
