@@ -397,6 +397,36 @@ fn doctor_never_reports_a_match_for_a_host_that_omits_its_version_and_protocol()
     );
 }
 
+#[test]
+fn doctor_hosts_reports_probe_failed_for_a_local_ssh_defaults_write_error() {
+    let fleet = Fleet::new();
+    let alpha = fleet.install("alpha", "alpha", "AL");
+    fleet.route("alpha", &alpha, "plain");
+    fleet.json(&["host", "add", "alpha", "--json"]);
+
+    // A directory at the generated config path makes the local defaults write
+    // fail before ssh is invoked, reproducing an I/O probe failure.
+    let ssh_dir = fleet.local.home.join(".orbit/ssh");
+    for name in ["absolute.conf", "relative.conf"] {
+        let path = ssh_dir.join(name);
+        if path.is_file() {
+            fs::remove_file(&path).expect("remove generated SSH defaults file");
+        }
+        fs::create_dir(&path).expect("block generated SSH defaults path");
+    }
+
+    let doctor = fleet.doctor_hosts_row();
+    let message = doctor["message"].as_str().unwrap_or_default();
+    assert!(
+        message.contains("alpha probe failed (probe_failed):"),
+        "{doctor}"
+    );
+    assert!(!message.contains("alpha is unreachable"), "{doctor}");
+    orbit_common::test_env::record_scenario_pass(
+        "doctor_hosts_reports_probe_failed_for_a_local_ssh_defaults_write_error",
+    );
+}
+
 fn host_file_hand_edits_are_validated_without_rewriting() {
     let fleet = Fleet::new();
     let alpha = fleet.install("alpha", "alpha", "AL");
