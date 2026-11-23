@@ -519,7 +519,24 @@ impl ServerMcpHost {
             return RegisteredRuntimeFactory::resolve_workspace_selector(
                 &self.global_root,
                 selector,
-            );
+            )
+            .map_err(|error| {
+                if let OrbitError::InvalidInput(message) = &error
+                    && message.starts_with("unknown workspace selector '")
+                    && explicit.is_some()
+                    && let Some(bound) = Self::workspace_selector(None, context)
+                    && let Ok(workspace) = RegisteredRuntimeFactory::resolve_workspace_selector(
+                        &self.global_root,
+                        bound,
+                    )
+                {
+                    return OrbitError::InvalidInput(format!(
+                        "{message}; this session is bound to workspace '{}'; omit `workspace`",
+                        workspace.workspace.name
+                    ));
+                }
+                error
+            });
         }
         if self.workspace_optional_aggregate(name, input, context, definition) {
             return self.local_aggregate_selection(name, federated::McpToolClass::ControlPlane);

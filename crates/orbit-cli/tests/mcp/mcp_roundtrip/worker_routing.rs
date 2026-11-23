@@ -562,3 +562,27 @@ spec:
     let called = messages.iter().find(|v| v["id"] == 3).unwrap();
     assert_ne!(called["result"]["isError"], true, "{called}");
 }
+
+#[test]
+fn bound_session_unknown_workspace_explains_binding() {
+    if crate::isolated_test::run_in_child_with_env(
+        "mcp_roundtrip::worker_routing::bound_session_unknown_workspace_explains_binding",
+        &[],
+    ) {
+        return;
+    }
+    let workspace = McpWorkspace::init_with_workspace_name("bound-example");
+    let mut client =
+        workspace.serve_with_args_and_env(&[], &[("ORBIT_WORKSPACE", "bound-example")]);
+    let refused = client.call_tool_err(
+        "orbit_task_show",
+        json!({"id": "TST-1", "workspace": "unknown-example"}),
+    );
+    let message = refused["message"].as_str().expect("refusal message");
+    assert!(
+        message.contains("unknown workspace selector 'unknown-example'"),
+        "{message}"
+    );
+    assert!(message.contains("bound-example"), "{message}");
+    assert!(message.contains("omit `workspace`"), "{message}");
+}
