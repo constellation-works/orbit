@@ -164,7 +164,8 @@ if [ -d STD-10-agent-instruction-files ]; then
 fi
 
 # check_links FILE SKILL_ROOT — a markdown link resolves against FILE's directory only; a backticked
-# path also resolves against the repository root and against SKILL_ROOT (the directory holding SKILL.md).
+# token is checked as a repository path only when its first segment exists as a directory beside
+# FILE, at the repository root, or at SKILL_ROOT (the directory holding SKILL.md).
 check_links() {
   awk '
     { line=$0; t=line; sub(/^[ \t]*/, "", t)
@@ -175,6 +176,19 @@ check_links() {
     }' "$1" | while IFS="$(printf '\t')" read -r kind link; do
     link=${link%%#*}; link=${link%%\?*}; link=${link#./}
     case "$link" in (''|/*|*://*|mailto:*|\$*) continue ;; esac
+    if [ "$kind" = T ]; then
+      case "$link" in
+        ../*)
+          # A leading ../ climbs out of FILE's directory: the first segment after the climb is the one gated.
+          rest=$link; resolved_dir=${1%/*}; [ "$resolved_dir" = "$1" ] && resolved_dir=.
+          while [ "${rest#../}" != "$rest" ]; do rest=${rest#../}; resolved_dir=$resolved_dir/..; done
+          first=${rest%%/*}
+          [ -d "$resolved_dir/$first" ] || [ -d "${1%/*}/$first" ] || [ -d "$first" ] || [ -d "$2/$first" ] || continue ;;
+        */*)
+          first=${link%%/*}
+          [ -d "${1%/*}/$first" ] || [ -d "$first" ] || [ -d "$2/$first" ] || continue ;;
+      esac
+    fi
     if [ -e "${1%/*}/$link" ] || { [ "$kind" = T ] && { [ -e "$link" ] || [ -e "$2/$link" ]; }; }; then :
     else printf '%s: STD-11 §R17: %s resolves 0, required 1\n' "$1" "$link"; fi
   done
@@ -257,7 +271,7 @@ if [ -d STD-11-agent-skills ]; then
             if (t ~ /^```+[^`]*$/ || t ~ /^~~~/) { c=substr(t,1,1); fence=""; while (substr(t,length(fence)+1,1)==c) fence=fence c; next }
           }
           NR<=30 && $0 ~ /^[ \t]*[-*+] +\[/ { text=text "\n" $0 }
-          /^#{1,6}[ \t]+/ { heading=$0; sub(/^#+[ \t]+/,"",heading); sub(/[ \t]+#+[ \t]*$/, "",heading); heading=tolower(heading); gsub(/[^a-z0-9 _-]/,"",heading); gsub(/ /,"-",heading); if (!(heading in headings)) { headings[heading]=1; total++ } }
+          /^#{2,6}[ \t]+/ { heading=$0; sub(/^#+[ \t]+/,"",heading); sub(/[ \t]+#+[ \t]*$/, "",heading); heading=tolower(heading); if (heading ~ /^[ \t]*contents[ \t]*$/) next; gsub(/[^a-z0-9 _-]/,"",heading); gsub(/ /,"-",heading); if (!(heading in headings)) { headings[heading]=1; total++ } }
           END { if (NR>100) { for (h in headings) if (index(text,"](#" h ")")) found++; if (!total || found<total) printf "%s: STD-11 §R10: contents links %d, required %d for %d lines (limit 100)\n",file,found,total,NR } }' "$file" ;;
       esac
     done

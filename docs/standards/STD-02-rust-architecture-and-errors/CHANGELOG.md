@@ -4,6 +4,10 @@ Version history of [STD-02](STD-02.md). Adopting repos pin the `version:` in its
 frontmatter as `STD-02@<version>`; a version changes only when a rule is added,
 removed or changed in meaning.
 
+- **Editorial (2026-11-23, version unchanged):** Orbit trimmed `ARCHITECTURE.md` to its layering
+  rules and edge table (constellation-works/orbit#10858), so the R2, R3, R5, R7 and R16 exemplars
+  now cite the crate pages under `docs/architecture/`, and R4 cites `ARCHITECTURE.md#architecture`.
+  No rule changed.
 - **Editorial (2026-11-22, version unchanged):** `checks.md` now points at the Rust CLI
   template repository `constellation-works/rust-cli-template` (checkout
   `codebases/rust-cli-template`) instead of `operations/templates/rust-cli/`. No rule
