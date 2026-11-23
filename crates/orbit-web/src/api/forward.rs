@@ -18,12 +18,13 @@ use std::time::Duration;
 
 use axum::body::{Body, Bytes};
 use axum::extract::{Path as UrlPath, Request, State};
-use axum::http::{HeaderName, Method, header};
+use axum::http::{HeaderName, HeaderValue, Method, header};
 use axum::response::{IntoResponse, Json, Response};
 use futures_core::Stream;
 use hyper_util::rt::TokioIo;
 use orbit_common::governance::authorization::DASHBOARD_HOST_FORWARD;
 use orbit_registry::hosts::ResolvedHost;
+use orbit_types::task::inline_safe_artifact_media_type;
 use serde::Serialize;
 use serde_json::{Value, json};
 use tower::ServiceExt;
@@ -49,19 +50,23 @@ const FORWARDED_REQUEST_HEADERS: [HeaderName; 4] = [
     HeaderName::from_static("last-event-id"),
 ];
 
-/// Response headers passed back. The remote's artifact sandbox CSP and
-/// attachment disposition survive, and so does the audit listing's
-/// continuation cursor; hop-by-hop headers do not, and this dashboard's own
-/// security and nosniff layers still apply.
-const FORWARDED_RESPONSE_HEADERS: [HeaderName; 7] = [
-    header::CONTENT_TYPE,
+/// Response headers passed back verbatim: encoding, caching and the audit
+/// listing's continuation cursor. Hop-by-hop headers do not survive.
+/// `Content-Type`, `Content-Disposition` and `Content-Security-Policy` are not
+/// here: [`apply_local_response_policy`] decides them, because the remote's
+/// identity proves the destination, not that its bytes are safe to render on
+/// this dashboard's origin.
+const FORWARDED_RESPONSE_HEADERS: [HeaderName; 4] = [
     header::CONTENT_ENCODING,
     header::VARY,
-    header::CONTENT_DISPOSITION,
-    header::CONTENT_SECURITY_POLICY,
     header::CACHE_CONTROL,
     HeaderName::from_static(AUDIT_NEXT_BEFORE_HEADER),
 ];
+
+/// Sandbox policy this dashboard puts on every forwarded response, whatever
+/// the remote sent: no script, no framing, no sub-resources, a unique origin.
+/// The same policy the local artifact route applies.
+const FORWARDED_CSP: &str = "sandbox; default-src 'none'";
 
 /// The host a request names: one of the serving host's registered remotes,
 /// or the serving host itself.
@@ -479,7 +484,65 @@ fn forwarded_response(
             forwarded.headers_mut().append(&name, value.clone());
         }
     }
+    apply_local_response_policy(forwarded.headers_mut(), &parts.headers);
     forwarded
+}
+
+/// Whether a forwarded response of this `Content-Type` may be rendered inline:
+/// the dashboard's JSON and event streams, and the shared inline-safe artifact
+/// allowlist. A missing or unrecognized type, and any script host (HTML, SVG,
+/// XML), is not.
+fn inline_safe_content_type(content_type: Option<&str>) -> bool {
+    let Some(content_type) = content_type else {
+        return false;
+    };
+    let base = content_type
+        .split(';')
+        .next()
+        .unwrap_or_default()
+        .trim()
+        .to_ascii_lowercase();
+    base == "text/event-stream" || inline_safe_artifact_media_type(&base).is_some()
+}
+
+/// Local enforcement on a forwarded response, independent of the upstream's
+/// headers. The sandbox CSP always replaces the remote's. A response whose
+/// media type is not inline-safe is relabelled `application/octet-stream` and
+/// sent as an attachment, so a compromised remote cannot run browser-active
+/// content on this origin. Safe types keep the remote's `Content-Type` and
+/// `Content-Disposition`.
+fn apply_local_response_policy(
+    headers: &mut axum::http::HeaderMap,
+    upstream: &axum::http::HeaderMap,
+) {
+    headers.insert(
+        header::CONTENT_SECURITY_POLICY,
+        HeaderValue::from_static(FORWARDED_CSP),
+    );
+    headers.insert(
+        header::X_CONTENT_TYPE_OPTIONS,
+        HeaderValue::from_static("nosniff"),
+    );
+    // Only the first `Content-Type` counts, so a duplicate cannot disagree
+    // with the one that was judged.
+    let content_type = upstream.get(header::CONTENT_TYPE);
+    if inline_safe_content_type(content_type.and_then(|value| value.to_str().ok()))
+        && let Some(content_type) = content_type
+    {
+        headers.insert(header::CONTENT_TYPE, content_type.clone());
+        if let Some(disposition) = upstream.get(header::CONTENT_DISPOSITION) {
+            headers.insert(header::CONTENT_DISPOSITION, disposition.clone());
+        }
+    } else {
+        headers.insert(
+            header::CONTENT_TYPE,
+            HeaderValue::from_static("application/octet-stream"),
+        );
+        headers.insert(
+            header::CONTENT_DISPOSITION,
+            HeaderValue::from_static("attachment"),
+        );
+    }
 }
 
 struct ForwardedBody {
