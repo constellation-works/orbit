@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+## 0.54.0 — 2026-11-23
+
+### Breaking Changes
+
+- **orbit.search refuses unknown keys**: `orbit_search` now rejects undeclared input keys with a did-you-mean hint. ([ORB-26985])
+  `orbit_search` undeclared keys removed → use declared parameters (`q` → `query`)
+- **TODO (ORB-27226, awaiting confirmation)**: A landing review's own fix commit is lost when the verdict is not accept; the repair binding gains `candidate_ref`, which older binaries reject. ([ORB-27226])
+- **TODO (ORB-26982, awaiting confirmation)**: `task.show` snapshot and guarded `task.update` accept `fields`/`field`; the `orbit_task_update` schema gains enum values. ([ORB-26982])
+
+### Highlights
+
+- **Global dashboard search**: Dashboard search finds tasks and run IDs across every workspace from any page. ([ORB-27329])
+- **Held PRs refresh to base**: Delivery refreshes a held PR to its base tip when its failure is inherited from the base, and a new `refresh` resident right lets a resident do the same and re-run checks. ([ORB-26860])
+- **Residents do more**: A resident cycle can read drain status and update friction records in its covered workspaces. ([ORB-26833])
+- **Friendlier task writes**: `orbit.task.add` accepts `dependencies` in the same write, id-keyed task tools accept `task_id` as an unadvertised alias for `id`, and a missing `file:` selector under an existing directory is recorded as creation intent with a warning. ([ORB-26984])
+- **Clearer search and task output**: Multi-word `orbit search` zero-hit results carry a note on how matching works, and `orbit task show` prints readiness. ([ORB-26665])
+
 ## 0.53.0 — 2026-11-22
 
 ### Breaking Changes
