@@ -84,6 +84,8 @@ pub(in crate::executor::automation) fn merge_batch_worktree_into_base<H: Runtime
 
     let mut output = json!({
         "merged": before != after,
+        "already_contained": before == after,
+        "completion_held": false,
         "base": base,
         "base_commit": after,
         "workspace_path": workspace_path.to_string_lossy().to_string(),

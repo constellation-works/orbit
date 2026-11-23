@@ -113,6 +113,120 @@ fn a_review_ending_run_without_auto_push_publishes_nothing() {
     );
 }
 
+#[test]
+fn already_contained_candidate_honors_auto_push() {
+    git_fixture::isolated(
+        module_path!(),
+        "already_contained_candidate_honors_auto_push",
+        || {
+            let fx = Fixture::new("task.txt", "task\n");
+            let local_head = fx.contain_candidate_locally_and_advance();
+            let outcome = fx.run("review", true);
+            assert!(outcome.success, "{outcome:?}");
+            assert_eq!(outcome.pipeline["merge"]["merged"], false);
+            assert_eq!(outcome.pipeline["merge"]["already_contained"], true);
+            assert_eq!(outcome.pipeline["merge"]["completion_held"], false);
+            assert_eq!(outcome.pipeline["merge"]["base_commit"], local_head);
+            assert!(outcome.pipeline["merge"].get("landed_commit").is_none());
+            assert_eq!(
+                fx.remote("main"),
+                local_head,
+                "auto_push publishes the local base containing the candidate"
+            );
+            assert_eq!(fx.host.status(), TaskStatus::Review);
+            assert!(!fx.host.completed());
+        },
+    );
+}
+
+#[test]
+fn completion_publishes_already_contained_candidate_before_completing() {
+    git_fixture::isolated(
+        module_path!(),
+        "completion_publishes_already_contained_candidate_before_completing",
+        || {
+            let fx = Fixture::new("task.txt", "task\n");
+            let local_head = fx.contain_candidate_locally_and_advance();
+            let outcome = fx.run("done", false);
+            assert!(outcome.success, "{outcome:?}");
+            assert_eq!(outcome.pipeline["merge"]["merged"], false);
+            assert_eq!(outcome.pipeline["merge"]["already_contained"], true);
+            assert_eq!(outcome.pipeline["merge"]["completion_held"], false);
+            assert_eq!(outcome.pipeline["merge"]["base_commit"], local_head);
+            assert!(outcome.pipeline["merge"].get("landed_commit").is_none());
+            assert_eq!(
+                fx.remote("main"),
+                local_head,
+                "completion publishes the local base before completing"
+            );
+            assert_eq!(fx.host.status(), TaskStatus::Done);
+            assert!(fx.host.completed());
+        },
+    );
+}
+
+#[test]
+fn completion_stays_in_review_when_already_contained_publication_is_refused() {
+    git_fixture::isolated(
+        module_path!(),
+        "completion_stays_in_review_when_already_contained_publication_is_refused",
+        || {
+            let fx = Fixture::new("README.md", "task\n");
+            let local_head = fx.contain_candidate_locally_and_advance();
+            let moved = fx.push_from_another_host("README.md", "other\n");
+            let failed = fx.try_run("done", false);
+            let message = format!("{failed:?}");
+            assert!(
+                failed.as_ref().map_or(true, |outcome| !outcome.success),
+                "{message}"
+            );
+            assert!(message.contains("push_integration_failed"), "{message}");
+            assert_eq!(fx.remote("main"), moved, "nothing was published");
+            assert_eq!(fx.local("main"), local_head, "the local base is unchanged");
+            assert!(
+                git(&fx.repo, &["status", "--porcelain"]).is_empty(),
+                "the aborted merge leaves the base checkout clean"
+            );
+            assert_eq!(fx.host.status(), TaskStatus::Review);
+            assert!(!fx.host.completed(), "completion is never reached");
+        },
+    );
+}
+
+#[test]
+fn completion_hold_skips_push_and_leaves_already_contained_candidate_in_review() {
+    git_fixture::isolated(
+        module_path!(),
+        "completion_hold_skips_push_and_leaves_already_contained_candidate_in_review",
+        || {
+            let fx = Fixture::new("task.txt", "task\n");
+            let local_head = fx.contain_candidate_locally_and_advance();
+            let remote_before = fx.remote("main");
+            fx.host.hold_on_tag("sensitive");
+            let outcome = fx.run("done", true);
+            assert!(outcome.success, "{outcome:?}");
+            assert_eq!(outcome.pipeline["merge"]["merged"], false);
+            assert_eq!(outcome.pipeline["merge"]["completion_held"], true);
+            assert_eq!(outcome.pipeline["merge"]["reason"], "completion_held");
+            assert_eq!(
+                fx.remote("main"),
+                remote_before,
+                "a completion hold publishes nothing"
+            );
+            assert_eq!(fx.local("main"), local_head, "the local base is unchanged");
+            assert_eq!(fx.host.status(), TaskStatus::Review);
+            assert!(!fx.host.completed(), "a held completion stays in review");
+            assert!(
+                fx.host
+                    .history()
+                    .iter()
+                    .any(|entry| entry.event == orbit_types::workflow::COMPLETION_HELD_EVENT),
+                "the hold is recorded on the task"
+            );
+        },
+    );
+}
+
 struct Fixture {
     _root: tempfile::TempDir,
     repo: PathBuf,
@@ -188,6 +302,17 @@ impl Fixture {
             task_commit,
             host,
         }
+    }
+
+    /// Fast-forward the candidate into the local base without pushing, then
+    /// advance the local base again so the candidate is a strict ancestor of
+    /// local `main` and absent from `origin/main`.
+    fn contain_candidate_locally_and_advance(&self) -> String {
+        git(&self.repo, &["merge", "--ff-only", &self.task_commit]);
+        std::fs::write(self.repo.join("later.txt"), "later\n").unwrap();
+        git(&self.repo, &["add", "later.txt"]);
+        git(&self.repo, &["commit", "-m", "later local base commit"]);
+        self.local("main")
     }
 
     /// Another host publishes a commit to the remote base.
@@ -302,6 +427,8 @@ fn shipped_tail_job() -> orbit_types::workflow::JobV2 {
 /// `git_push` actions and the real private VCS provider.
 struct Host {
     task: Mutex<orbit_types::task::Task>,
+    history: Mutex<Vec<orbit_types::task::TaskHistoryEntry>>,
+    hold_rules: Mutex<Vec<orbit_types::workflow::CompletionHoldRule>>,
     completed: Mutex<bool>,
     repo: PathBuf,
     worktree: PathBuf,
@@ -326,14 +453,28 @@ impl Host {
         .expect("fixture task");
         Self {
             task: Mutex::new(task),
+            history: Mutex::default(),
+            hold_rules: Mutex::default(),
             completed: Mutex::new(false),
             repo: repo.to_path_buf(),
             worktree: worktree.to_path_buf(),
         }
     }
 
+    fn hold_on_tag(&self, tag: &str) {
+        self.task.lock().expect("task").tags.push(tag.to_string());
+        self.hold_rules
+            .lock()
+            .expect("hold_rules")
+            .push(serde_json::from_value(json!({ "tags": [tag] })).expect("hold rule fixture"));
+    }
+
     fn status(&self) -> TaskStatus {
         self.task.lock().expect("task").status
+    }
+
+    fn history(&self) -> Vec<orbit_types::task::TaskHistoryEntry> {
+        self.history.lock().expect("history").clone()
     }
 
     fn completed(&self) -> bool {
@@ -350,8 +491,31 @@ impl orbit_engine::test_support::NullRuntimeHost for Host {
         Ok(self.task.lock().expect("task").clone())
     }
 
+    fn get_task_history(
+        &self,
+        _: &str,
+    ) -> Result<Vec<orbit_types::task::TaskHistoryEntry>, OrbitError> {
+        Ok(self.history())
+    }
+
     fn list_run_tasks(&self, _: &str) -> Result<Vec<orbit_types::task::Task>, OrbitError> {
         Ok(vec![self.task.lock().expect("task").clone()])
+    }
+
+    fn completion_hold_rules(&self) -> Vec<orbit_types::workflow::CompletionHoldRule> {
+        self.hold_rules.lock().expect("hold_rules").clone()
+    }
+
+    fn apply_task_automation_update(
+        &self,
+        _: &str,
+        update: orbit_engine::TaskAutomationUpdate,
+    ) -> Result<(), OrbitError> {
+        self.history
+            .lock()
+            .expect("history")
+            .extend(update.append_history);
+        Ok(())
     }
 
     fn update_task_from_activity(

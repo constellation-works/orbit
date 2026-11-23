@@ -778,6 +778,12 @@ fn local_landing_reports_the_actual_landing() {
         let output = merge(&host, run_id, BASE, &checkout.path).unwrap();
         let actual = head(&fixture.repo);
         assert_eq!(output["base_commit"], actual, "{scenario}");
+        assert_eq!(output["completion_held"], false, "{scenario}");
+        assert_eq!(
+            output["already_contained"],
+            scenario == "ancestor",
+            "{scenario}"
+        );
         if scenario == "ancestor" {
             assert_eq!(actual, before);
             assert_eq!(output["merged"], false);

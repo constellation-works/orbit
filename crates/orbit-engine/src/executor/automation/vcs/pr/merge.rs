@@ -188,6 +188,7 @@ fn local_completion_hold<H: RuntimeHost + ?Sized>(
     record_completion_hold(host, &task_ids, &hold)?;
     Ok(Some(json!({
         "merged": false,
+        "completion_held": true,
         "reason": "completion_held",
         "held_task_ids": task_ids,
         "completion_hold": hold,
