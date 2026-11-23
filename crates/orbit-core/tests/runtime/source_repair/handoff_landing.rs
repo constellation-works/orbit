@@ -754,6 +754,42 @@ fn a_stopped_publication_merged_with_a_commit_beyond_its_base_does_not_settle() 
     );
 }
 
+fn a_merged_delivery_whose_landing_push_was_when_skipped_settles() {
+    // A review-less run's `landing_push` is `when:`-skipped: checkpointed as a
+    // success with a null output and listed in `skipped_steps`. It published
+    // nothing, so settlement must not demand a reviewer correction for it.
+    let (mut f, checkout, _) = escalated_completion_fixture();
+    let path = f
+        ._root
+        .path()
+        .join("global/resources/jobs/task_pr_pipeline.yaml");
+    let yaml = std::fs::read_to_string(&path).unwrap();
+    std::fs::write(
+        &path,
+        yaml + "    - id: landing_push\n      target: 'activity:git_push'\n      when: '{{ false }}'\n",
+    )
+    .unwrap();
+    let mut state = f.runtime.read_run_state(&f.source.run_id).unwrap().unwrap();
+    state.record_step(8, JobRunState::Success, Some(Value::Null), None);
+    state.record_step_skipped(8, true);
+    state.pipeline["landing_push"] = Value::Null;
+    f.runtime.write_run_state(&f.source.run_id, &state).unwrap();
+    f.state = state;
+    let head = f.head.clone();
+    let (_, merge) = squash_merged_at(&mut f, &checkout, &head);
+
+    let settled = f
+        .runtime
+        .settle_externally_merged_task(&f.task)
+        .expect("a when-skipped landing_push does not block settlement");
+    assert_eq!(settled.pr_number, 17);
+    assert_eq!(settled.merge_commit, merge);
+    assert_eq!(
+        f.runtime.get_task(&f.task).unwrap().status,
+        TaskStatus::Done
+    );
+}
+
 crate::scenario_table!(
     handoff_landing_regressions,
     owner_lands_green_handoff_and_refusals_change_nothing,
@@ -765,4 +801,5 @@ crate::scenario_table!(
     a_stopped_publication_merged_after_a_base_refresh_settles_at_the_merged_head,
     a_merged_base_refresh_with_an_unavailable_origin_reports_verification_failure,
     a_stopped_publication_merged_with_a_commit_beyond_its_base_does_not_settle,
+    a_merged_delivery_whose_landing_push_was_when_skipped_settles,
 );
