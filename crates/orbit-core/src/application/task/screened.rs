@@ -110,8 +110,8 @@ pub enum TaskUpdateAuthority {
 impl OrbitRuntime {
     /// Create a task for an operator or agent surface.
     ///
-    /// Every selector must resolve unless the screen allows missing context,
-    /// which records each missing one as a durable creation grant.
+    /// Missing files with an existing parent receive a durable creation grant;
+    /// the explicit screen option also accepts other missing selectors.
     pub fn add_task_screened(
         &self,
         params: TaskAddParams,
@@ -136,9 +136,9 @@ impl OrbitRuntime {
         params.context_creation = if screen.allow_missing_context {
             self.authorize_missing_context(&params.context_files)?
         } else {
-            self.ensure_context_selectors_exist(&params.context_files)?;
-            ContextCreationAuthorization::default()
+            self.authorize_files_with_existing_parents(&params.context_files)?
         };
+        let creation_warnings = automatic_creation_warnings(&params.context_creation, screen);
         let parent_warning = params
             .parent_id
             .as_deref()
@@ -151,6 +151,7 @@ impl OrbitRuntime {
 
         let (task, mut warnings) =
             self.add_task_validated(params, agent, model, action_key, digest)?;
+        warnings.extend(creation_warnings);
         warnings.extend(parent_warning);
         warnings.extend(dependency_warnings);
         warnings.extend(compute_task_add_warnings(&requested_context_files, &task));
@@ -273,9 +274,9 @@ impl OrbitRuntime {
     ///
     /// With `allow_missing_context` every missing selector becomes a durable
     /// creation grant. Otherwise the strict check runs, keeping a selector
-    /// the task already holds a grant for and relaxing a missing anchor for
-    /// the task's owning run calling from its worktree; those are reported
-    /// as unverified.
+    /// the task already holds a grant for, granting missing files with existing
+    /// parents, and relaxing other missing anchors for the owning run. Only
+    /// the last group is reported as unverified.
     fn write_screened_update(
         &self,
         id: &str,
@@ -338,6 +339,11 @@ impl OrbitRuntime {
             .as_deref()
             .map(|dependencies| self.unreadable_dependency_warnings(dependencies))
             .unwrap_or_default();
+
+        warnings.extend(automatic_creation_warnings(
+            &params.context_creation,
+            screen,
+        ));
 
         // Only readiness-field writes repeat the footprint warning. Comments
         // and other metadata edits still project the task's readiness, but
@@ -495,4 +501,16 @@ fn admit_regression_severity(
         }
     }
     Ok(())
+}
+
+fn automatic_creation_warnings(
+    authorization: &ContextCreationAuthorization,
+    screen: &TaskWriteScreen,
+) -> Vec<String> {
+    if screen.allow_missing_context {
+        return Vec::new();
+    }
+    authorization.authorized().iter().map(|selector| {
+        format!("selector `{selector}` does not exist; recording creation intent because its parent directory exists")
+    }).collect()
 }

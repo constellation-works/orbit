@@ -589,9 +589,10 @@ creation target. Keep evidence references in the finding's description.
 
 Check helper filenames against `.github/codeql/codeql-config.yml` exclusions before prescribing them; production helpers must remain in CodeQL's source selection.
 
-For a known new target, use the supported `allow_missing_context` option and
-explain creation intent; a rejected selector's message names that option. The
-option records each missing selector as durable creation intent for that exact
+For a known new target, explain creation intent. A missing `file:` selector
+whose parent exists is accepted with a warning; other missing targets require
+`allow_missing_context`, which a rejection names. Either route records each
+missing selector as durable creation intent for that exact
 canonical selector (at most 32 per task), committed with the scope change.
 Later writes may re-send a declared selector without the option, and
 task-pilot keeps it as a target to create. Maintained task writes carry intent
@@ -631,15 +632,15 @@ task whose outcome creates a file:
    full `context_files` list plus `allow_missing_context: true`, and say so
    in your summary.
 
-Omitting `allow_missing_context` is correct only when the task creates
-nothing: every `context_files` selector then names an existing target.
+Without `allow_missing_context`, missing files are accepted only when their
+parent directory exists; other missing targets are refused.
 
 A worker updating its own task through `orbit.task.update` or `orbit task
 update` from its run's linked worktree gets the existence relaxation
-automatically for that task, without recording creation intent, and the
-response lists the stored-but-unresolved selectors as
-`context_files_unverified`. A dashboard request is never bound to a run, so it
-keeps the strict check. Task writes on every surface return the same advisory
+automatically for that task. Missing files with an existing parent record
+creation intent and produce a warning; other relaxed selectors do not record
+intent and are listed as `context_files_unverified`. A dashboard request is never bound to a run, so it uses the ordinary
+missing-file rule. Task writes on every surface return the same advisory
 `warnings` (on add: a disabled required tool, an unreadable parent, or a
 proposed task added without `context_files` and without the `no-diff-expected`
 tag, regardless of type; on add and update: an unreadable dependency;

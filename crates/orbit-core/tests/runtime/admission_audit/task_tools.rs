@@ -699,11 +699,71 @@ fn moving_delivery_coverage_task_to_in_progress_outside_orbit_run_warns() {
     );
 }
 
+// A missing file beneath an existing directory was previously refused by
+// task.add even though callers intended to create it.
+fn missing_file_context_records_creation_intent() {
+    use crate::admission_audit::tool_support::run_tool_as_operator;
+    let (_root, runtime, repo_root) = test_runtime();
+    std::fs::create_dir(repo_root.join("src")).expect("create parent");
+    let add = |selector: &str, allow: bool| {
+        run_tool_as_operator(
+            &runtime,
+            "orbit.task.add",
+            json!({
+                "title": "Creation selector", "description": "Create a file",
+                "complexity": "low", "context_files": [selector],
+                "workspace": repo_root.to_string_lossy(), "allow_missing_context": allow
+            }),
+        )
+    };
+    let created = add("file:src/new.rs", false).expect("existing parent accepted");
+    assert_eq!(created["context_files"], json!(["file:src/new.rs"]));
+    assert!(
+        created["warnings"]
+            .as_array()
+            .expect("warnings")
+            .iter()
+            .any(|w| w.as_str().is_some_and(|w| w.contains("file:src/new.rs")))
+    );
+    let id = created["id"].as_str().expect("task id");
+    let history = runtime.get_task_history(id).expect("history");
+    assert!(history.iter().any(|h| {
+        h.event == "context_creation_authorized"
+            && h.note
+                .as_deref()
+                .is_some_and(|n| n.contains("file:src/new.rs"))
+    }));
+    let updated = run_tool_as_operator(
+        &runtime,
+        "orbit.task.update",
+        json!({
+            "id": id, "context_files": ["file:src/new.rs", "file:src/other.rs"]
+        }),
+    )
+    .expect("update accepts another missing file");
+    assert!(
+        updated["warnings"]
+            .as_array()
+            .expect("warnings")
+            .iter()
+            .any(|w| w.as_str().is_some_and(|w| w.contains("file:src/other.rs")))
+    );
+    let error = add("file:absent/new.rs", false)
+        .expect_err("missing parent refused")
+        .to_string();
+    assert!(
+        error.contains("does not resolve to an existing in-workspace target"),
+        "{error}"
+    );
+    add("file:absent/new.rs", true).expect("explicit override still accepts missing parents");
+}
+
 // Related boundary scenarios share the isolated table fixture.
 crate::scenario_table!(
     task_artifacts_retain_trusted_local_provenance_and_reject_ssh_mcp_attribution_scenarios,
     task_artifacts_retain_trusted_local_provenance_and_reject_ssh_mcp_attribution,
     artifact_put_refuses_malformed_coverage_evidence_with_the_parse_error,
     delivery_coverage_write_refuses_outside_own_orbit_run_and_accepts_own_run,
-    moving_delivery_coverage_task_to_in_progress_outside_orbit_run_warns
+    moving_delivery_coverage_task_to_in_progress_outside_orbit_run_warns,
+    missing_file_context_records_creation_intent
 );

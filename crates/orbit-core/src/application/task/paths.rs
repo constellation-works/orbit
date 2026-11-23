@@ -75,8 +75,7 @@ pub(crate) fn normalize_context_files_for_write(
 /// transport field nor a copied value can mint creation intent.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct ContextCreationAuthorization {
-    /// Canonical selectors of this write that `allow_missing_context` accepted
-    /// without an existing target; recorded as durable creation grants.
+    /// Canonical missing selectors accepted as durable creation grants.
     pub(crate) authorize: Vec<String>,
     /// Set when a strict write accepted a missing selector because the task
     /// already holds a grant for it: the identity of that grant, which must
@@ -161,6 +160,7 @@ impl OrbitRuntime {
     /// not-yet-created target, and the rejection names it. `add_task` and
     /// `update_task` themselves stay permissive so internal callers are
     /// unaffected.
+    #[cfg(test)]
     pub(crate) fn ensure_context_selectors_exist(
         &self,
         selectors: &[String],
@@ -176,7 +176,34 @@ impl OrbitRuntime {
         })
     }
 
-    /// [`Self::ensure_context_selectors_exist`] for a screened task update,
+    /// Authorize missing files with an existing parent while retaining strict
+    /// validation for every other selector.
+    pub(crate) fn authorize_files_with_existing_parents(
+        &self,
+        selectors: &[String],
+    ) -> Result<ContextCreationAuthorization, OrbitError> {
+        let mut authorization = ContextCreationAuthorization::default();
+        if selectors.is_empty() {
+            return Ok(authorization);
+        }
+        let roots = self.context_selector_roots()?;
+        for selector in selectors {
+            match ensure_selector_resolves(selector, &roots) {
+                Ok(()) => {}
+                Err(SelectorRejection::Missing { canonical, .. })
+                    if missing_file_has_parent(&canonical, &roots) =>
+                {
+                    if !authorization.authorize.contains(&canonical) {
+                        authorization.authorize.push(canonical);
+                    }
+                }
+                Err(rejection) => return Err(rejection.into_error()),
+            }
+        }
+        Ok(authorization)
+    }
+
+    /// Screen selectors for a task update,
     /// relaxed for the worker that owns the task.
     ///
     /// A managed run's worker declares the files it is about to create before
@@ -224,6 +251,13 @@ impl OrbitRuntime {
                     if grant.selectors().contains(&canonical) =>
                 {
                     authorization.relied_on = grant.identity();
+                }
+                Err(SelectorRejection::Missing { canonical, .. })
+                    if missing_file_has_parent(&canonical, &roots) =>
+                {
+                    if !authorization.authorize.contains(&canonical) {
+                        authorization.authorize.push(canonical);
+                    }
                 }
                 Err(SelectorRejection::Missing { canonical, .. }) if relax_missing => {
                     unverified.push(canonical);
@@ -317,6 +351,20 @@ struct ContextSelectorRoots {
     /// that directory exists there. A managed job run executes in such a
     /// worktree, so a file it just created exists only here until the work merges.
     caller_worktree: Option<PathBuf>,
+}
+
+/// Check only canonical file selectors, against the same checkouts used for
+/// selector resolution. Canonicalization has already enforced containment.
+fn missing_file_has_parent(selector: &str, roots: &ContextSelectorRoots) -> bool {
+    let Some(path) = selector.strip_prefix("file:") else {
+        return false;
+    };
+    let Some(parent) = Path::new(path).parent() else {
+        return false;
+    };
+    std::iter::once(roots.workspace.as_path())
+        .chain(roots.caller_worktree.as_deref())
+        .any(|root| root.join(parent).is_dir())
 }
 
 /// Why an operator-supplied selector was refused.

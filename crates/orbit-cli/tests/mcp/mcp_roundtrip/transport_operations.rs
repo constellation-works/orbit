@@ -1151,7 +1151,7 @@ fn stdio_task_writes_refuse_unknown_retired_and_cli_only_fields() {
         assert_eq!(persisted["tags"], tags);
         if !enabled {
             for arguments in [
-                json!({"id":added_id,"model":"codex","title":"Never stored","context_files":["file:unauthorized.rs"],"allow_missing_context":flag}),
+                json!({"id":added_id,"model":"codex","title":"Never stored","context_files":["file:missing-parent/unauthorized.rs"],"allow_missing_context":flag}),
                 json!({"id":added_id,"model":"codex","title":"Never stored","tags":["docs"],"allow_drop_system_tags":flag}),
             ] {
                 client.call_tool_err("orbit_task_update", arguments);
