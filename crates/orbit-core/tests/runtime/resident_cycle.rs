@@ -1630,6 +1630,57 @@ fn a_killed_cycle_is_recovered_without_repeating_its_completed_actions() {
     assert_eq!(finished["synthesized"], false, "{finished}");
 }
 
+/// A scalar `field` projection answers a ledgered write with its bare value,
+/// which cannot carry the `resident_action_key` a cycle cites. The call is
+/// refused before its ledger row opens, so nothing runs unrecorded; the same
+/// write with a `fields` list keeps its key on the ledger row.
+#[test]
+fn a_scalar_field_projection_is_refused_before_a_ledgered_write_runs() {
+    let fx = isolated_fixture!(a_scalar_field_projection_is_refused_before_a_ledgered_write_runs);
+    let (watched, mandate) = fx.watched_mandate("Ship scribe v2 slice 4");
+    let run = fx.cycle_run(&mandate, "resident-cycle-scalar-field");
+    let brief = fx.begin_cycle(&run, Utc::now());
+    let cycle = brief["cycle"].as_str().unwrap().to_string();
+    let comments = fx.runtime.get_task_comments(&watched).unwrap().len();
+
+    fx.as_cycle_agent(&run, || {
+        let error = fx
+            .agent_call(
+                "orbit.task.update",
+                json!({"id": watched, "comment": "Checked CI.", "field": "id", "model": "codex"}),
+            )
+            .expect_err("a scalar field projection is refused before the write");
+        assert!(error.contains("resident_projection_refused"), "{error}");
+    });
+    assert_eq!(
+        fx.runtime.get_task_comments(&watched).unwrap().len(),
+        comments,
+        "the refused write did not run"
+    );
+    assert!(
+        fx.runtime
+            .get_task_history(&mandate)
+            .unwrap()
+            .iter()
+            .all(|entry| entry.event != RESIDENT_ACTION_EVENT),
+        "the refused write opened no ledger row"
+    );
+
+    let projected = fx.as_cycle_agent(&run, || {
+        fx.agent_call(
+            "orbit.task.update",
+            json!({"id": watched, "comment": "Checked CI.", "fields": ["id"], "model": "codex"}),
+        )
+        .unwrap()
+    });
+    assert_eq!(projected["id"], watched, "{projected}");
+    let key = projected["resident_action_key"]
+        .as_str()
+        .unwrap_or_else(|| panic!("a `fields` projection keeps the key: {projected}"));
+    assert_eq!(key, format!("resident:{mandate}:{cycle}:1"));
+    assert_eq!(fx.latest_action_row(&mandate, &cycle).key, key);
+}
+
 #[test]
 fn reordered_completed_actions_are_already_done_without_repeating() {
     let fx = isolated_fixture!(reordered_completed_actions_are_already_done_without_repeating);
