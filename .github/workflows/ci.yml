@@ -186,7 +186,7 @@ jobs:
         with:
           ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
           token: ${{ secrets.GITHUB_TOKEN }}
-          # The removed-dashboard-label guard compares against the event base.
+          # The removed-dashboard-label and removed-code-identifier guards compare against the event base.
           fetch-depth: 0
 
       # Orchestration follows the workflow revision; candidate checks stay at the PR head.
