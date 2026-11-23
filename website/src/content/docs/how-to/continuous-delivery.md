@@ -263,8 +263,14 @@ The drain watches each pull request it opened:
 - Missing approvals, permissions, admin rules, unknown status and failed
   optional checks start no agent.
 
-Each PR gets at most one repair per head and blocker, and three in total,
-recorded in the task's history. For the crew settings, see
+Only one attempt for a head and blocker may be live at a time. If its run is
+still live or its end cannot be confirmed, that pair remains reserved. Once the
+run is confirmed ended without publishing a new head, its admitted attempt
+still counts toward the PR's three-attempt budget, but another run may try the
+same head and blocker while budget remains. An out-of-run hand-back whose
+resumed run never admits an attempt is not repeated for that head and blocker;
+blocker hand-backs are also capped at three per PR. Attempts are recorded in
+the task's history. For the crew settings, see
 [System work](/reference/config/#system-work).
 
 ### Restrict a window to some crews
