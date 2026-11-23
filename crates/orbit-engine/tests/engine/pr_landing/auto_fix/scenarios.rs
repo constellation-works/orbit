@@ -2036,6 +2036,96 @@ fn no_edit_rerun_failure_inherited_from_a_fixed_base_refreshes_the_head_once() {
     );
 }
 
+/// [ORB-27076] The forge reports BLOCKED while the no-edit rerun is sent;
+/// the base then lands both the CI fix and an edit that conflicts with the
+/// head, so it reports DIRTY beside the rerun's failed, authenticated result.
+/// That head still takes the base-inherited refresh step: the refresh is
+/// refused with its conflicting paths and the run holds as `RepairDispatched`
+/// with the head unchanged. An ordinary DIRTY pull request with no failed
+/// rerun of its own sends no rerun, asks for no refresh and keeps the
+/// ordinary conflict handling.
+#[test]
+fn dirty_head_after_a_failed_no_edit_rerun_holds_with_the_conflicting_paths() {
+    auto_fix_table(
+        "auto_fix::dirty_head_after_a_failed_no_edit_rerun_holds_with_the_conflicting_paths",
+        "failed_rerun ordinary_dirty",
+        |case, row| {
+            let (fx, host) = docs_only_pr(row);
+            host.script(
+                "test_ci_repair",
+                json!({"mode": if case == "failed_rerun" { "no_edit_base_conflict" } else { "." }}),
+            );
+            host.script(
+                "test_checkpoint",
+                json!({"phase":"commit","task_id":TASK_ID,"commit_sha":fx.candidate}),
+            );
+            host.require_commands(&["true"]);
+            fx.script_checks(&["source_contract_dirty"]);
+            if case == "ordinary_dirty" {
+                land_base_fix(
+                    &host.repo,
+                    &[("README.md", "the base rewrites the readme\n")],
+                );
+            }
+            let mut input = auto_fix_input(&fx);
+            input["completion"] = json!("done");
+            let outcome = run_repair_job(&host, input);
+            let history = host.history(TASK_ID);
+            let reruns = history
+                .iter()
+                .filter(|entry| entry.event == "ci_check_rerun")
+                .count();
+            let refreshes = refresh_calls(&host);
+            if case == "ordinary_dirty" {
+                assert_eq!(
+                    reruns, 0,
+                    "{case}: no rerun without a repair that made no edit"
+                );
+                assert!(
+                    refreshes.is_empty(),
+                    "{case}: no base-inherited refresh without a failed rerun"
+                );
+                assert!(
+                    !matches!(
+                        &outcome,
+                        Err(DispatchError::DeliveryRefused {
+                            refusal: orbit_types::workflow::DeliveryRefusal::RepairDispatched,
+                            ..
+                        })
+                    ),
+                    "{case}: ordinary conflict handling, not the failed-rerun hold: {outcome:?}"
+                );
+                assert_no_merge_or_landing(&fx, &host, TaskStatus::Review, case);
+                return;
+            }
+            assert_eq!(reruns, 1, "{case}: exactly the one no-edit rerun is sent");
+            assert_eq!(repair_attempts(&host).len(), 1, "{case}");
+            assert_eq!(refreshes.len(), 1, "{case}: one refresh per head");
+            let message = match outcome {
+                Err(DispatchError::DeliveryRefused {
+                    refusal, message, ..
+                }) => {
+                    assert_eq!(
+                        orbit_types::workflow::DeliveryRefusal::RepairDispatched,
+                        refusal,
+                        "{case}: {message}"
+                    );
+                    message
+                }
+                other => panic!("{case}: expected RepairDispatched hold, got {other:?}"),
+            };
+            assert!(
+                message.contains("failed again")
+                    && message.contains("conflicting paths: README.md")
+                    && message.contains("the head is unchanged"),
+                "{case}: {message}"
+            );
+            assert_candidate_head_unchanged(&fx, case);
+            assert_no_merge_or_landing(&fx, &host, TaskStatus::Review, case);
+        },
+    );
+}
+
 #[test]
 fn no_edit_check_repair_decision_slot_flake_lands_to_done_and_enforces_edit_guard() {
     auto_fix_table(

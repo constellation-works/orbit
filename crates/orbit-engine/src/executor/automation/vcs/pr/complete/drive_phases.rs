@@ -515,26 +515,18 @@ impl<H: RuntimeHost + ?Sized> PollDriver<'_, H> {
         let pending_required = observed_poll.pending_required;
         let base_refresh_wait = observed_poll.infrastructure_wait;
         let mut infrastructure_wait = base_refresh_wait;
-        if let Some(auto_fix) = auto_fix
-            && !base_refresh_wait
-            && matches!(
-                observed_poll.state,
-                PrMergeState::Mergeable | PrMergeState::Pending | PrMergeState::Blocked(_)
-            )
-        {
-            let verdict = blocked_verdict(status, self.unsettled_polls, pending_required);
-            let diagnose = is_blocked_merge_state(status)
-                && (matches!(verdict, BlockedVerdict::RepairChecks(_))
-                    || !self.unreported.failed_workflow_runs.is_empty());
-            if let BlockedVerdict::Stop(BlockedStopReason::CheckRefusal(reason)) = &verdict {
-                let error = stopped(pr_number, &reason.to_string());
-                return Err(match reason.delivery_refusal() {
-                    Some(code) => hold_auto_fix_stop(error, code),
-                    None => error,
-                });
-            }
-            if diagnose {
-                let retry = super::super::auto_fix::recover_ci_rerun(
+        // [ORB-27076] The forge can report DIRTY once the base lands a
+        // conflicting edit after the no-edit rerun was sent on a BLOCKED head.
+        // The rerun's failed result is still the base-inherited evidence, so
+        // that conflicting PR takes the refresh-or-hold step below; one
+        // without that evidence keeps the ordinary conflict route.
+        let conflict_rerun_failure = match auto_fix {
+            Some(auto_fix)
+                if matches!(observed_poll.state, PrMergeState::Conflict)
+                    && !base_refresh_wait
+                    && observed_poll.base_red_reason.is_none() =>
+            {
+                super::super::auto_fix::failed_no_edit_rerun(
                     host,
                     auto_fix,
                     input,
@@ -542,8 +534,46 @@ impl<H: RuntimeHost + ?Sized> PollDriver<'_, H> {
                     pr_number,
                     status,
                     completion_deadline_ms,
-                    &mut *self.diagnostic,
-                );
+                )
+            }
+            _ => None,
+        };
+        if let Some(auto_fix) = auto_fix
+            && !base_refresh_wait
+            && (conflict_rerun_failure.is_some()
+                || matches!(
+                    observed_poll.state,
+                    PrMergeState::Mergeable | PrMergeState::Pending | PrMergeState::Blocked(_)
+                ))
+        {
+            let verdict = blocked_verdict(status, self.unsettled_polls, pending_required);
+            let diagnose = conflict_rerun_failure.is_some()
+                || (is_blocked_merge_state(status)
+                    && (matches!(verdict, BlockedVerdict::RepairChecks(_))
+                        || !self.unreported.failed_workflow_runs.is_empty()));
+            if conflict_rerun_failure.is_none()
+                && let BlockedVerdict::Stop(BlockedStopReason::CheckRefusal(reason)) = &verdict
+            {
+                let error = stopped(pr_number, &reason.to_string());
+                return Err(match reason.delivery_refusal() {
+                    Some(code) => hold_auto_fix_stop(error, code),
+                    None => error,
+                });
+            }
+            if diagnose {
+                let retry = match conflict_rerun_failure {
+                    Some(reason) => Ok(CiRerunRecovery::NoEditRerunFailed(reason)),
+                    None => super::super::auto_fix::recover_ci_rerun(
+                        host,
+                        auto_fix,
+                        input,
+                        workspace_path,
+                        pr_number,
+                        status,
+                        completion_deadline_ms,
+                        &mut *self.diagnostic,
+                    ),
+                };
                 // [ORB-26860] The no-edit rerun failed again: refresh a
                 // base-inherited failure's head once, or hold.
                 let retry = match retry {

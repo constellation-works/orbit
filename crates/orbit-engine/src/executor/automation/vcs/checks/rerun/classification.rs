@@ -99,6 +99,10 @@ pub(in crate::executor::automation::vcs::checks) fn request_classification_rerun
 /// source. The provider adapter still authenticates the complete failed
 /// set, and the shared one-rerun budget of the head is reserved before the
 /// send, so a repeat failure cannot rerun again through this route.
+///
+/// `readback_only` reads the result of a rerun this route already reserved
+/// and never reserves or sends one: a head without that reserved rerun, or
+/// whose rerun has not produced a later failed attempt, is `NotEligible`.
 #[allow(
     clippy::too_many_arguments,
     reason = "the no-edit rerun takes the same landing identity the classification rerun does"
@@ -114,6 +118,7 @@ pub(in crate::executor::automation::vcs) fn request_no_edit_repair_rerun<
     base: &str,
     base_branch: &str,
     deadline_ms: u64,
+    readback_only: bool,
 ) -> Result<CiRerunStep, OrbitError> {
     let (Some(head), Some(pr), Some(branch)) = (
         status.head_sha.as_deref(),
@@ -215,6 +220,23 @@ pub(in crate::executor::automation::vcs) fn request_no_edit_repair_rerun<
             )));
         }
     };
+    if readback_only {
+        let rerun_failed = reserved_no_edit_rerun_attempts(host, tasks, &plan)
+            .any(|attempt| plan.run_attempt > attempt);
+        return Ok(if rerun_failed {
+            CiRerunStep::NoEditRerunFailed(no_edit_rerun_failed_reason(
+                host,
+                workspace,
+                &plan.head_sha,
+                run_id,
+                failed,
+                &run_failed_jobs,
+                deadline_ms,
+            ))
+        } else {
+            CiRerunStep::NotEligible
+        });
+    }
     match host.admit_ci_rerun(
         tasks,
         None,
@@ -277,6 +299,31 @@ pub(in crate::executor::automation::vcs) fn request_no_edit_repair_rerun<
             | CiRerunRefusal::LedgerAbsent),
         ) => Ok(CiRerunStep::Wait(format!("CI retry holds: {reason}"))),
     }
+}
+
+/// The attempts of `plan`'s workflow run whose no-edit repair rerun on the
+/// plan's head is already reserved on a watched task. An unreadable history
+/// reserves nothing.
+fn reserved_no_edit_rerun_attempts<'a, H: RuntimeHost + ?Sized>(
+    host: &'a H,
+    tasks: &'a [String],
+    plan: &'a CiRerunPlan,
+) -> impl Iterator<Item = u64> + 'a {
+    tasks
+        .iter()
+        .filter_map(|task| host.get_task_history(task).ok())
+        .flatten()
+        .filter_map(|entry| CiRerunPlan::from_reservation_entry(&entry))
+        .filter(|previous| {
+            previous.pr_number == plan.pr_number
+                && previous.head_sha == plan.head_sha
+                && previous.run_id == plan.run_id
+                && previous
+                    .roots
+                    .iter()
+                    .any(|root| root.classification == "no_edit_repair")
+        })
+        .map(|previous| previous.run_attempt)
 }
 
 fn no_edit_rerun_failed_reason<H: RuntimeHost + ?Sized>(
