@@ -2038,7 +2038,8 @@ request. If it conflicts with its base or a required check failed on its head,
 the pass resumes the leaf at the last completion round it reached, which pins
 the head the leaf last published, with `auto_fix` granted. The
 watcher there admits the repair against the same attempt ledger and budget (three
-per pull request, one per head and blocker), and the auto-fix crew takes the
+per pull request; a repair that published no new head leaves the head open to the
+next run's attempt while budget remains), and the auto-fix crew takes the
 task's footprint locks before it edits, pushes to the same branch and leaves
 completion to merge. The resume keeps the leaf's own `completion`, so a repair
 never merges a pull request whose leaf lacked `--complete`. Operator holds,
@@ -2325,8 +2326,12 @@ existing recovery activities, final validation and push do the repair:
 - Each admitted attempt is written to the primary task's history, with the
   PR, head, blocker, attempt number, crew and the draw's source, before any
   agent starts. That record removes duplicates across polls, restarts and
-  owner/follower overlap: a PR head gets at most one repair per blocker. It
-  also caps each PR at three repairs across all heads and runs. When the budget
+  owner/follower overlap: one run repairs a PR head at most once per blocker.
+  A later run that finds the same head still blocked after the earlier
+  attempt's run ended (it published nothing, or the head still fails) is
+  admitted as a new attempt; an attempt whose run may still be live keeps
+  refusing. The
+  ledger caps each PR at three repairs across all heads and runs. When the budget
   runs out, the watcher stops with `auto_fix_budget_exhausted` and lists the
   attempts.
 - A resumed job inherits repair admissions and contiguous publication edges

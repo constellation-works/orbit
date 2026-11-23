@@ -37,18 +37,22 @@
 //!   naming the task and authored by a delivery identity;
 //! - it conflicts with its base or a required check failed on its head, and
 //!   the pull request's attempt ledger would admit a repair of that head and
-//!   blocker (at most one per head and blocker, three per pull request);
+//!   blocker (three attempts per pull request). An attempt that published no
+//!   new head, or whose head still fails, leaves that head repairable: the
+//!   next run's watcher admits another attempt while the budget lasts;
 //! - no earlier out-of-run auto-fix resumed delivery for that head and
-//!   blocker, and fewer than the ledger's budget did for the pull request, so
-//!   a resume that dies before it repairs cannot loop;
+//!   blocker without admitting an attempt, and fewer than the ledger's budget
+//!   did for the pull request, so a resume that dies before it repairs cannot
+//!   loop;
 //! - checkpoint resume accepts the rewound run.
 //!
 //! A pass starts at most as many repairs as the drain has free slots after
 //! adoption. A pull request found unblocked is not read again for
 //! [`pass_types::CLEAN_RECHECK`]. A forge read failure defers the pass's remaining reads;
 //! GitHub's `UNKNOWN` mergeability answer skips only that pull request.
-//! Nothing here ends the drain: each refusal is reported in the step output
-//! and a later pass reconsiders it.
+//! Nothing here ends the drain: each refusal is reported in the step output,
+//! with the repair attempts the pull request has spent and has left, and a
+//! later pass reconsiders it.
 //!
 //! A leaf that ended `held` on a delivery refusal a fresh forge read can
 //! clear (`delivery_check_evidence_inconclusive`,

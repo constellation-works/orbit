@@ -3,7 +3,8 @@ use orbit_common::OrbitError;
 use orbit_engine::{RuntimeHost, TaskAutomationUpdate};
 use orbit_types::task::TaskHistoryEntry;
 use orbit_types::workflow::{
-    PrAutoFixBlocker, PrAutoFixClaim, PrAutoFixDecision, decide_pr_auto_fix, pr_auto_fix_attempts,
+    PrAutoFixBlocker, PrAutoFixClaim, PrAutoFixDecision, decide_pr_auto_fix_settled,
+    pr_auto_fix_attempts,
 };
 use serde::{Deserialize, Serialize};
 
@@ -49,11 +50,28 @@ pub(super) fn out_of_run_starts(
         .collect()
 }
 
+/// The repair attempts `pr_number` has spent and has left, for a skip's
+/// detail; `None` when the ledger cannot be read.
+pub(super) fn budget_note(history: &[TaskHistoryEntry], pr_number: &str) -> Option<String> {
+    let budget = pr_auto_fix_budget(history, pr_number).ok()?;
+    let spent = u32::try_from(pr_auto_fix_attempts(history, pr_number).len()).unwrap_or(u32::MAX);
+    Some(if spent >= budget {
+        format!("repair budget spent: {spent} of {budget} attempts used, none remain")
+    } else {
+        format!(
+            "repair attempts: {spent} of {budget} spent, {} remaining",
+            budget - spent
+        )
+    })
+}
+
 /// `Err` with the skip when the pull request's ledger would not admit a
 /// repair of `head_sha` for `blocker`, or an out-of-run auto-fix already
-/// resumed delivery for it, or for as many heads as the budget allows. A
-/// held hand-back without a blocker repairs nothing, so it spends none of
-/// this budget (`held` bounds those).
+/// resumed delivery for it without recording an attempt, or for as many heads
+/// as the budget allows. A repair that published nothing leaves its head
+/// repairable while the budget lasts: the next run's watcher admits another
+/// attempt on it. A held hand-back without a blocker repairs nothing, so it
+/// spends none of this budget (`held` bounds those).
 pub(super) fn ledger_admits(
     history: &[TaskHistoryEntry],
     pr_number: &str,
@@ -69,24 +87,27 @@ pub(super) fn ledger_admits(
         blocker,
         run_id: "",
     };
-    match decide_pr_auto_fix(&attempts, &claim, budget, "", "") {
+    // The pass found nothing of the task live, so every earlier attempt's run
+    // has ended.
+    match decide_pr_auto_fix_settled(&attempts, &claim, budget, "", "", &|_| true) {
         PrAutoFixDecision::Admit(_) | PrAutoFixDecision::Continue(_) => {}
         PrAutoFixDecision::Duplicate(previous) => {
             return Err(Verdict::Skip(
                 "already_repaired",
                 format!(
-                    "run {} already repaired {} on {head_sha} (attempt {} of {})",
+                    "run {} already repaired {} on {head_sha}",
                     previous.run_id,
                     blocker.as_str(),
-                    previous.attempt,
-                    previous.budget
                 ),
             ));
         }
         PrAutoFixDecision::Exhausted(attempts) => {
             return Err(Verdict::Skip(
                 "budget_exhausted",
-                format!("#{pr_number} spent its {} auto-fix repairs", attempts.len()),
+                format!(
+                    "#{pr_number} spent its {} auto-fix repairs, so no attempt remains",
+                    attempts.len()
+                ),
             ));
         }
     }
@@ -94,14 +115,22 @@ pub(super) fn ledger_admits(
         .into_iter()
         .filter(|start| start.blocker.is_some())
         .collect();
-    if let Some(start) = starts
-        .iter()
-        .find(|start| start.head_sha == head_sha && start.blocker == Some(blocker))
-    {
+    // A resume that admitted an attempt on this head and blocker repaired (or
+    // tried to); only one that died before admitting any must not be repeated.
+    if let Some(start) = starts.iter().find(|start| {
+        start.head_sha == head_sha
+            && start.blocker == Some(blocker)
+            && !attempts.iter().any(|attempt| {
+                attempt.head_sha == head_sha
+                    && attempt.blocker == blocker
+                    && attempt.run_id == start.resumed_run_id
+            })
+    }) {
         return Err(Verdict::Skip(
             "already_started",
             format!(
-                "run {} already resumed delivery to repair {} on {head_sha}",
+                "run {} already resumed delivery to repair {} on {head_sha} and has not yet \
+                 admitted an attempt",
                 start.resumed_run_id,
                 blocker.as_str()
             ),

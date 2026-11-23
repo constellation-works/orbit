@@ -181,6 +181,8 @@ impl OrbitRuntime {
                 Verdict::Ignore(..) | Verdict::Repair(_) => {}
                 Verdict::Started(entry) => started.push(entry),
                 Verdict::Skip(reason, detail) => {
+                    let detail =
+                        self.skip_detail_with_budget(task_id, &observation, reason, &detail);
                     tracing::debug!(
                         target: "orbit.core.drain",
                         run_id = %run.run_id,

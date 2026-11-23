@@ -214,17 +214,21 @@ impl OrbitRuntime {
             Verdict::Repair(repair) if mode == Mode::Check => Ok(repair.summary(&run)),
             Verdict::Repair(repair) => match self.start_repair(&run, &authority, *repair) {
                 Verdict::Started(started) => Ok(started),
-                Verdict::Ignore(reason, detail) | Verdict::Skip(reason, detail) => {
-                    refuse(reason, detail)
-                }
+                Verdict::Ignore(reason, detail) => refuse(reason, detail),
+                Verdict::Skip(reason, detail) => refuse(
+                    reason,
+                    self.skip_detail_with_budget(task_id, observation, reason, &detail),
+                ),
                 Verdict::Repair(_) => refuse(
                     "resume_failed",
                     "the repair was decided but not started".to_string(),
                 ),
             },
-            Verdict::Ignore(reason, detail) | Verdict::Skip(reason, detail) => {
-                refuse(reason, detail)
-            }
+            Verdict::Ignore(reason, detail) => refuse(reason, detail),
+            Verdict::Skip(reason, detail) => refuse(
+                reason,
+                self.skip_detail_with_budget(task_id, observation, reason, &detail),
+            ),
             Verdict::Started(started) => Ok(started),
         }
     }

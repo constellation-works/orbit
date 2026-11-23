@@ -369,11 +369,29 @@ pub fn decide_pr_auto_fix(
     crew: &str,
     crew_source: &str,
 ) -> PrAutoFixDecision {
-    if let Some(previous) = attempts
-        .iter()
-        .rev()
-        .find(|attempt| attempt.head_sha == claim.head_sha && attempt.blocker == claim.blocker)
-    {
+    decide_pr_auto_fix_settled(attempts, claim, budget, crew, crew_source, &|_| false)
+}
+
+/// [`decide_pr_auto_fix`], where an attempt of another run that `settled`
+/// reports as ended no longer makes its head and blocker a duplicate.
+///
+/// A repair that published no new head, or whose head still fails, ends with
+/// its run; the pull request's unspent budget stays usable on that unchanged
+/// head by a later run. An attempt of a run that may still be live keeps
+/// refusing, so two runs never repair one head at once.
+pub fn decide_pr_auto_fix_settled(
+    attempts: &[PrAutoFixAttempt],
+    claim: &PrAutoFixClaim<'_>,
+    budget: u32,
+    crew: &str,
+    crew_source: &str,
+    settled: &dyn Fn(&PrAutoFixAttempt) -> bool,
+) -> PrAutoFixDecision {
+    if let Some(previous) = attempts.iter().rev().find(|attempt| {
+        attempt.head_sha == claim.head_sha
+            && attempt.blocker == claim.blocker
+            && (attempt.run_id == claim.run_id || !settled(attempt))
+    }) {
         if claim.blocker == PrAutoFixBlocker::Conflict && previous.run_id == claim.run_id {
             return PrAutoFixDecision::Continue(previous.clone());
         }

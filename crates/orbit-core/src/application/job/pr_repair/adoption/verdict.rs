@@ -2,7 +2,7 @@ use super::super::held::{
     HELD_HANDBACK_CEILING, auto_fix_stopped, handed_back_hold, held_backoff, held_backoff_until,
     held_handbacks, held_refusal,
 };
-use super::super::ledger::ledger_admits;
+use super::super::ledger::{budget_note, ledger_admits};
 use super::pass_types::{BlockerRead, CLEAN_RECHECK, Repair};
 use super::{PassReads, RepairAuthority, RepairObservation, Verdict};
 use crate::OrbitRuntime;
@@ -19,6 +19,26 @@ use serde_json::{Value, json};
 use std::time::Instant;
 
 impl OrbitRuntime {
+    /// `detail` of a refusal, followed by the attempts `observation`'s pull
+    /// request has spent and has left. A pull request with nothing to repair
+    /// (`no_blocker`, `checked_recently`) is reported as it is.
+    pub(in crate::application::job::pr_repair) fn skip_detail_with_budget(
+        &self,
+        task_id: &str,
+        observation: &RepairObservation,
+        reason: &str,
+        detail: &str,
+    ) -> String {
+        if matches!(reason, "no_blocker" | "checked_recently") {
+            return detail.to_string();
+        }
+        observation
+            .pr_number
+            .as_deref()
+            .and_then(|number| budget_note(&self.get_task_history(task_id).ok()?, number))
+            .map_or_else(|| detail.to_string(), |note| format!("{detail}; {note}"))
+    }
+
     /// Whether the pull request of `task_id`'s newest leaf `run` is repaired,
     /// and if not, why. A repair still has to be planned
     /// ([`Self::plan_repair`]) before it starts.
