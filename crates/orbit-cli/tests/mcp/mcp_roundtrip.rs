@@ -1442,6 +1442,76 @@ fn operator_tools_list_stays_within_byte_budget() {
     );
 }
 
+/// `orbit_task_add` takes `dependencies` in the creation write and validates
+/// them as `orbit_task_update` does: a blank id is refused, an id this
+/// workspace cannot read is stored with a warning, and a new task has no id
+/// yet, so it cannot close a cycle.
+#[test]
+fn task_add_accepts_dependencies_in_the_creation_write() {
+    let workspace = McpWorkspace::init();
+    let mut client = workspace.serve();
+    let first_id = client.add_task("Prerequisite", "Disposable prerequisite");
+
+    let added = client.call_tool_ok(
+        "orbit_task_add",
+        json!({
+            "title": "Dependent", "description": "Disposable dependent",
+            "complexity": "low", "model": "codex",
+            "dependencies": [first_id.clone()],
+        }),
+    );
+    let shown = client.call_tool_ok("orbit_task_show", json!({"id": added["id"]}));
+    assert_eq!(shown["dependencies"], json!([first_id]));
+
+    let refused_blank = client.call_tool_err(
+        "orbit_task_add",
+        json!({
+            "title": "Blank", "description": "Never stored", "complexity": "low",
+            "model": "codex", "dependencies": [" "],
+        }),
+    );
+    assert!(
+        refused_blank
+            .to_string()
+            .contains("entries must not be empty"),
+        "{refused_blank}"
+    );
+
+    let unknown = client.call_tool_ok(
+        "orbit_task_add",
+        json!({
+            "title": "Unknown", "description": "Disposable unknown prerequisite",
+            "complexity": "low", "model": "codex", "dependencies": ["ORB-99999"],
+        }),
+    );
+    assert!(
+        unknown
+            .to_string()
+            .contains("dependency task 'ORB-99999' was not found"),
+        "{unknown}"
+    );
+    let updated = client.call_tool_ok(
+        "orbit_task_update",
+        json!({"id": added["id"], "model": "codex", "dependencies": ["ORB-99999"]}),
+    );
+    assert!(
+        updated
+            .to_string()
+            .contains("dependency task 'ORB-99999' was not found"),
+        "{updated}"
+    );
+
+    let guarded = client.call_tool_err(
+        "orbit_task_add",
+        json!({
+            "title": "Guarded", "description": "Never stored", "complexity": "low",
+            "model": "codex", "request_id": "deps-guarded-1", "dependencies": [first_id],
+            "workspace": workspace.work.to_str().unwrap(),
+        }),
+    );
+    assert!(guarded.to_string().contains("dependencies"), "{guarded}");
+}
+
 /// ORB-23869: no advertised description is cut mid-clause, and the value
 /// lists a shortened description drops are carried whole by a schema `enum`.
 #[test]

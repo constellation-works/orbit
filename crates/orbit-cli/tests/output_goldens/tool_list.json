@@ -2398,6 +2398,12 @@
         "required": false
       },
       {
+        "name": "dependencies",
+        "description": "Dependency task IDs.",
+        "param_type": "string_list",
+        "required": false
+      },
+      {
         "name": "tags",
         "description": "Task tags.",
         "param_type": "string_list",

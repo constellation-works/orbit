@@ -55,9 +55,8 @@ pub(super) fn execute(invocation: Invocation<TaskVerb>, runtime: &OrbitRuntime) 
 
 /// `orbit task add`'s CLI-only flags, carried to the handler as its CLI
 /// options under the names it reads.
-const ADD_CLI_OPTIONS: [(&str, &str); 6] = [
+const ADD_CLI_OPTIONS: [(&str, &str); 5] = [
     ("parent_id", "parent_id"),
-    ("dependencies", "dependencies"),
     ("plan", "plan"),
     ("external_refs", "external_refs"),
     ("status", "status"),

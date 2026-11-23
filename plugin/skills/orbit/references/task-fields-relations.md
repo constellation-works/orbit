@@ -19,9 +19,8 @@ Contents:
     task cannot be filed with it. Declared selectors keep their existing
     conflict checks; undeclared edit conflicts surface at landing.
 - `dependencies: ["<task-id>", ...]` — prerequisites must reach a satisfying
-  status first. Not an `orbit.task.add` input: it is refused as an unknown
-  field, like the other creation-time fields below, so set it with
-  `orbit.task.update` after creation.
+  status first. `orbit.task.add` takes it too (guarded creation with
+  `request_id` does not), with the same validation as `orbit.task.update`.
   - Unlike `resolves`, task IDs are global: a prerequisite owned by
     another workspace registered on this machine is read from its owner, and
     completing it there satisfies the dependency here. A prerequisite this
@@ -96,7 +95,7 @@ Contents:
         Mere visibility in the diff is not evidence for `review_missed` when no test
         exercises the broken behavior.
 - `parent_id` is not an `orbit.task.add` input and is refused as an unknown
-  field, like `plan`, `status` and `dependencies`; use a `child_of` relation
+  field, like `plan` and `status`; use a `child_of` relation
   in `relations` when creating a subtask. For bug tasks, set `source_task_id`
   at creation on `orbit.task.add` (or `--source-task` on the CLI), or after
   creation with `orbit.task.update` (which also accepts an empty string to
