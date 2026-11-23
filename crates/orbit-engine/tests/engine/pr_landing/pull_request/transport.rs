@@ -19,6 +19,8 @@ const TLS: &str = "Post \"https://api.github.com/graphql\": net/http: TLS handsh
 const RESET: &str = "Get \"https://api.github.com/repos/orbit/test/pulls/42\": read tcp \
                      10.0.0.2:51234->140.82.112.6:443: read: connection reset by peer";
 const BAD_CREDENTIALS: &str = "gh: Bad credentials (HTTP 401)";
+/// `gh` on a host with no route to GitHub: the GraphQL dial never connects.
+const UNREACHABLE: &str = "Post \"https://api.github.com/graphql\": dial tcp 172.182.252.137:443: connect: network is unreachable";
 /// Only the PR status read carries this field list.
 const STATUS_READ: &str = "--json number,state,isDraft";
 const REQUIRED_READ: &str = "isRequired(pullRequestNumber";
@@ -559,6 +561,104 @@ fn owner_landing_retries_a_base_modified_merge_refusal_on_fresh_evidence() {
                     "every refused intent is resolved before the stop"
                 );
             });
+        },
+    );
+}
+
+/// [ORB-27445] `gh` reports a GraphQL read the host could not dial as
+/// `network is unreachable`. That is a transient observation failure, as a
+/// TLS handshake timeout is: a one-shot failure recovers within completion,
+/// a persistent one holds before any mutation as a resumable observation, and
+/// an exhausted budget holds it as a forge observation hold. None fails the
+/// completion permanently.
+#[test]
+fn completion_retries_and_holds_a_network_unreachable_graphql_read() {
+    isolated(
+        "landing_transport::completion_retries_and_holds_a_network_unreachable_graphql_read",
+        |sandbox| {
+            in_fresh_row(sandbox, |row| {
+                let (fx, host) = setup(row, NEW);
+                fs::write(fx.forge.join("base-applied"), "current").unwrap();
+                fs::write(fx.forge.join("fault-match"), "autoMergeAllowed").unwrap();
+                fs::write(fx.forge.join("fault-stderr"), UNREACHABLE).unwrap();
+
+                let completed = action(&host, "pr_complete", &fx.complete_input())
+                    .expect("a one-shot unreachable read recovers within completion");
+
+                assert!(fx.forge.join("fault-hit").exists());
+                assert_eq!(
+                    calls(&fx, "autoMergeAllowed"),
+                    2,
+                    "the failed read is retried once"
+                );
+                assert_eq!(completed["merge"]["merged"], true);
+                assert_eq!(host.status(TASK_ID), TaskStatus::Done);
+                assert_eq!(mutations(&fx), "merge\n", "one merge and no branch update");
+            });
+
+            for expired_budget in [false, true] {
+                in_fresh_row(sandbox, |row| {
+                    let (fx, host) = setup(row, NEW);
+                    fs::write(fx.forge.join("base-applied"), "current").unwrap();
+                    fs::write(fx.forge.join("fault-match"), "autoMergeAllowed").unwrap();
+                    fs::write(fx.forge.join("fault-stderr"), UNREACHABLE).unwrap();
+                    fs::write(fx.forge.join("fault-repeat"), "repeat").unwrap();
+                    let mut input = fx.complete_input();
+                    input["auto_fix"] = json!(true);
+                    input["max_wait_seconds"] = json!(600);
+                    let hit = fx.forge.join("fault-hit");
+
+                    let outcome = orbit_engine::test_support::with_prerequisite_clock(
+                        move || {
+                            let now = u64::try_from(
+                                std::time::SystemTime::now()
+                                    .duration_since(std::time::UNIX_EPOCH)
+                                    .unwrap()
+                                    .as_millis(),
+                            )
+                            .unwrap();
+                            // An exhausted budget runs out while the failed read is outstanding.
+                            if expired_budget && hit.exists() {
+                                now + 601_000
+                            } else {
+                                now
+                            }
+                        },
+                        |_, _| {},
+                        || action(&host, "pr_complete", &input),
+                    );
+                    let error = outcome.expect_err("a persistent unreachable read holds");
+
+                    assert_eq!(
+                        fx.forge_state("fault-seen").as_deref(),
+                        Some("3"),
+                        "three attempts before the hold"
+                    );
+                    if expired_budget {
+                        assert!(
+                            matches!(
+                                error,
+                                OrbitError::DeliveryRefused {
+                                    refusal: orbit_types::workflow::DeliveryRefusal::ForgeObservationUnavailable,
+                                    ..
+                                }
+                            ),
+                            "an exhausted budget holds the forge observation: {error}"
+                        );
+                    } else {
+                        let failure = error.to_string();
+                        assert!(
+                            failure.contains("completion_observation_unavailable:")
+                                && failure.contains("network is unreachable"),
+                            "a resumable observation hold names the provider error: {failure}"
+                        );
+                    }
+                    assert!(
+                        mutations(&fx).is_empty(),
+                        "no merge or base update before the hold"
+                    );
+                });
+            }
         },
     );
 }

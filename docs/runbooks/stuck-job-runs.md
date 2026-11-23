@@ -778,7 +778,8 @@ credential or permission refusal, also holds as
 `delivery_check_evidence_inconclusive` before or after mutation; it admits
 neither a repair agent nor a merge. Permanent forge-read refusals at other
 boundaries still fail. `gh`'s
-`error connecting to api.github.com` counts as a transport failure.
+`error connecting to api.github.com` and `dial tcp …: connect: network is
+unreachable` count as transport failures.
 
 Changed task meaning, policy, candidate, review repairs, publication,
 a live foreign owner, lease or a dirty checkout refuses reuse of the in-worker
