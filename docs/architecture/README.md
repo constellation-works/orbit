@@ -21,8 +21,9 @@ every edge below.
    as a canonical bundle plus registry rows; task and reservation changes
    commit through one boundary (see `docs/design-patterns/task_commit_boundary.md`).
 2. **Pilot.** `orbit-core`'s `application/task/pilot` prepares and applies the
-   task-pilot assessment, promoting `proposed` → `backlog`
-   (`crates/orbit-core/src/application/`).
+   task-pilot assessment; an authorized `--approve-proposed` drain can
+   promote an eligible task from `proposed` to `backlog`
+   (`crates/orbit-core/src/application/task/pilot/`).
 3. **Dispatch.** `application/admission` decides which backlog tasks automatic
    dispatch may admit; `application/workspace_auto` runs the auto-drain
    (classify, approval, window, readiness); `application/pull_drain` runs a
@@ -30,8 +31,9 @@ every edge below.
    `application/job/pipeline_actions`.
 4. **Activity-job runs.** `orbit-engine` (`crates/orbit-engine/src/activity_job/dispatcher.rs`)
    renders templates, dispatches through `RuntimeHost`
-   (`crates/orbit-engine/src/lib.rs`), runs provider CLIs via `orbit-agent`
-   (`AgentRuntime`), tools via `orbit-tools` (`ToolRegistry` in
+   (`crates/orbit-engine/src/lib.rs`), prepares provider invocations through
+   `orbit-agent` (`Agent` and its provider runtimes) and supervises their CLI
+   processes, runs tools via `orbit-tools` (`ToolRegistry` in
    `crates/orbit-tools/src/registry.rs`), and processes via `orbit-exec`
    (`run_process`) under `orbit-policy` (`PolicyEngine` in
    `crates/orbit-policy/src/engine.rs`). `orbit-runtime` (`RuntimeKernel`)

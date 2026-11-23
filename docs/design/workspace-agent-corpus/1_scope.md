@@ -2,7 +2,7 @@
 title: Workspace agent corpus
 type: design
 owner: Orbit
-last_updated: 2026-11-07
+last_updated: 2026-11-22
 status: Draft
 stage: shipped
 next: "—"
@@ -140,11 +140,12 @@ and reviewed first. Validate generated indexes before ordinary PR delivery.
 
 When the effective `workflow.agent_corpus` mapping names a tracked corpus index and
 the workspace provides `scripts/agent-corpus.py`, the pilot-block-patterns pass proposes
-**every observed group** in that mapped corpus, independently
-of the five-fix-task cap or recurrence threshold, in its own corpus PR. New
-mechanisms get one issue document; known mechanisms receive evidence-backed
-occurrences. Agent-authored synthesis is a reviewed proposal, not an automatic
-append. It also materializes pending deterministic appends when exported source
+**every observed group** for that mapped corpus, independently
+of the five-fix-task cap or recurrence threshold. New
+mechanisms receive a follow-up task naming the exact issue-document path; known
+mechanisms receive evidence-backed occurrences. [ORB-25391] moved new topics to
+follow-up tasks, and [ORB-25426] made their paths follow the mapped corpus.
+Agent-authored synthesis is a reviewed proposal, not an automatic append. It also materializes pending deterministic appends when exported source
 histories are available. Counts and source links must agree with its report;
 its report artifact alone is not the corpus. Historical blocked-task backfill
 is separate and does not happen implicitly during injection. [ORB-20650]
@@ -287,5 +288,8 @@ append producers require separately scoped work.
 - [ORB-21064] — preserves newer curated choices during partial-history replay.
 - [ORB-21097] — adds separately enabled category assistance through the model-answer route.
 - [ORB-22229] — conditions pilot-block-patterns corpus proposals on the mapped corpus and script.
+- [ORB-22808] — removes decision assistance and its category-assistance route.
+- [ORB-25391] — moves new corpus issue documents to specifically scoped follow-up tasks.
+- [ORB-25426] — derives follow-up paths from the mapped corpus directory.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.
