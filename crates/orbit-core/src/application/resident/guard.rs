@@ -20,6 +20,7 @@ use std::collections::BTreeSet;
 
 use chrono::Utc;
 use orbit_common::governance::{operation::OperationVerb, task::TaskVerb};
+use orbit_common::protocol::tool_input::optional_csv_or_string_list_alias;
 use orbit_common::{NotFoundKind, OrbitError};
 use orbit_types::task::TaskHistoryEntry;
 use orbit_types::workflow::{
@@ -151,6 +152,27 @@ fn legacy_input_digest(tool: &str, input: &Value) -> String {
 
 fn is_legacy_digest(digest: &str) -> bool {
     digest.starts_with("sha256:") && !digest.starts_with("sha256:v2:")
+}
+
+/// A `field` projection of one field answers that field's bare value, which
+/// has no object to carry the `resident_action_key` a cycle cites. Refuse it
+/// before the ledger opens, so the write never runs unrecorded. A `fields`
+/// list, or a `field` naming several fields, answers an object and keeps it.
+fn refuse_scalar_field_projection(tool: &str, input: &Value) -> Result<(), OrbitError> {
+    if input.get("fields").is_some() {
+        return Ok(());
+    }
+    let projection = optional_csv_or_string_list_alias(input, &["fields", "field"])?;
+    if projection.is_some_and(|fields| fields.len() == 1) {
+        return Err(refused(
+            "resident_projection_refused",
+            format!(
+                "`{tool}` with a `field` projection answers a bare value, which carries \
+                 no `resident_action_key`; request the field in a `fields` list instead"
+            ),
+        ));
+    }
+    Ok(())
 }
 
 fn subject_of(input: &Value) -> Option<String> {
@@ -717,6 +739,7 @@ impl OrbitRuntime {
         if tool == RESIDENT_CHECKPOINT_TOOL {
             return Ok(ResidentCallAdmission::Proceed);
         }
+        refuse_scalar_field_projection(tool, input)?;
         let mut row = ResidentActionRow {
             key: String::new(),
             cycle: grant.cycle.clone(),

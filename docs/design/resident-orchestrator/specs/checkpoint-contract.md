@@ -32,7 +32,10 @@ mechanical and the evolution and metrics passes possible. The keys here are the 
 numbers each admitted write under the assignment's write lock and returns the key as
 `resident_action_key`. No tool takes a caller-supplied resident key.
 
-Successful object replies carry `resident_action_key` at the top level. An admitted write
+Successful object replies carry `resident_action_key` at the top level. A ledgered write that
+projects one field with the `field` alias answers that field's bare value, which has no object to
+carry the key, so the cycle's guard refuses it as `resident_projection_refused` before the ledger
+opens; a `fields` list answers an object and keeps the key. An admitted write
 that fails as `OrbitError::RemoteTool` carries the same stored key in
 `payload.detail.resident_action_key`; the broker forwards that detail as
 `error.detail.resident_action_key`. The error's code, message and retryability stay unchanged.
