@@ -15,8 +15,8 @@ use orbit_types::task::{
     CONTEXT_CREATION_AUTHORIZED_EVENT, TaskDecision, TaskRelation, TaskRelationType,
 };
 use orbit_types::workflow::{
-    ChildDispatch, ExecutorDef, JobRunState, JobRunTrigger, JobTargetType, LandingMethod,
-    LandingObservationStatus, PipelineState,
+    ChildDispatch, DeliveryEvidenceGap, ExecutorDef, JobRunState, JobRunTrigger, JobTargetType,
+    LandingMethod, LandingObservationStatus, PipelineState,
 };
 use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
@@ -1546,6 +1546,57 @@ fn a_local_fast_forward_culprit_stays_excluded_until_a_later_repair() {
         "the fast-forward culprit is not covering: {comment:?}"
     );
 }
+fn a_local_fast_forward_with_a_malformed_landed_commit_holds_a_relation_only_finding() {
+    let ws = Workspace::new();
+    let culprit = ws.branch_commit_file("culprit", "README.md", "culprit readme\n", "the culprit");
+    ws.git(&["merge", "--ff-only", "culprit"]);
+    let fix = ws.commit("the later repair");
+    let drain = ws.drain();
+    let malformed = ws.readme_task("malformed landed commit");
+    ws.record_local_fast_forward(&malformed, Some("abc"), &culprit, true);
+    let observed = ws
+        .runtime
+        .observe_task_delivery(&malformed.id, None)
+        .expect("a malformed landing checkpoint is still observed");
+    assert_eq!(
+        observed.landing.status,
+        LandingObservationStatus::Unavailable
+    );
+    assert_eq!(
+        observed.landing.reason,
+        Some(DeliveryEvidenceGap::OutputMalformed)
+    );
+    let never_delivered = ws.readme_task("never delivered");
+    let relation = |target: &Task| TaskRelation {
+        relation_type: TaskRelationType::RegressionFrom,
+        target: target.id.clone(),
+        regression: None,
+    };
+    let finding = |title: &str, target: &Task| {
+        ws.readme_finding(
+            title,
+            "A finding that names no commit.".into(),
+            vec![relation(target)],
+        )
+    };
+    let cites_culprit = finding("cites the unreadable culprit", &malformed);
+    let later_repair = finding("later repair of the unreadable culprit", &malformed);
+    let no_delivery = finding("no recorded delivery", &never_delivered);
+    assert_verified_no_diff_outside(
+        &ws,
+        &drain,
+        verified_cases(&[
+            (&cites_culprit, format!("Commit {culprit} is the culprit.")),
+            (&later_repair, format!("Commit {fix} repaired the README.")),
+            (&no_delivery, format!("Commit {fix} repaired the README.")),
+        ]),
+        &[&no_delivery],
+        &[
+            (&cites_culprit, Some("is unavailable (OutputMalformed)")),
+            (&later_repair, Some("is unavailable (OutputMalformed)")),
+        ],
+    );
+}
 fn a_culprit_named_by_an_all_digit_abbreviation_still_does_not_count() {
     let ws = Workspace::new();
     // About 4% of 7-char abbreviations are all digits: recommit until one is.
@@ -1902,6 +1953,10 @@ crate::scenario_table!(
 crate::scenario_table!(
     a_local_fast_forward_culprit_stays_excluded_until_a_later_repair_scenarios,
     a_local_fast_forward_culprit_stays_excluded_until_a_later_repair
+);
+crate::scenario_table!(
+    a_local_fast_forward_with_a_malformed_landed_commit_holds_a_relation_only_finding_scenarios,
+    a_local_fast_forward_with_a_malformed_landed_commit_holds_a_relation_only_finding
 );
 crate::scenario_table!(
     a_culprit_named_by_an_all_digit_abbreviation_still_does_not_count_scenarios,
