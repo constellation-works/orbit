@@ -221,9 +221,11 @@ fn message(request: &RecoveryCommitRequest<'_>) -> String {
 pub(in crate::executor::automation::vcs) fn capture_uncommitted_diff(
     workspace_path: &Path,
 ) -> Result<Option<String>, orbit_common::OrbitError> {
-    let safe_paths = uncommitted_paths(workspace_path)?
-        .into_iter()
+    let changed_paths = uncommitted_paths(workspace_path)?;
+    let safe_paths = changed_paths
+        .iter()
         .filter(|path| claim_new_path_is_safe(path))
+        .cloned()
         .collect::<Vec<_>>();
     if safe_paths.is_empty() {
         return Ok(None);
@@ -252,6 +254,27 @@ pub(in crate::executor::automation::vcs) fn capture_uncommitted_diff(
         git_output_with_env(workspace_path, &["read-tree", "HEAD"], &env)?;
     }
 
+    // A literal pathspec also matches descendants. Exclude protected names
+    // from both the worktree and HEAD: a file/directory replacement can stage
+    // or delete descendants that were never themselves safe pathspecs.
+    let mut protected = changed_paths
+        .into_iter()
+        .filter(|path| !claim_new_path_is_safe(path))
+        .collect::<Vec<_>>();
+    if has_head {
+        protected.extend(
+            git_output_paths_with_env(workspace_path, &["ls-files", "--cached", "-z"], &env)?
+                .into_iter()
+                .filter(|path| !claim_new_path_is_safe(path)),
+        );
+    }
+    protected.sort();
+    protected.dedup();
+    let exclusions = protected
+        .iter()
+        .map(|path| format!(":(exclude,literal){path}"))
+        .collect::<Vec<_>>();
+
     let stageable = stageable_safe_paths(workspace_path, &safe_paths, has_head, &env)?;
     if stageable.is_empty() {
         return Ok(None);
@@ -259,14 +282,17 @@ pub(in crate::executor::automation::vcs) fn capture_uncommitted_diff(
 
     let mut add_args = vec!["add".to_string(), "-A".to_string(), "--".to_string()];
     add_args.extend(stageable.iter().map(|path| literal_pathspec(path)));
+    add_args.extend(exclusions.iter().cloned());
     let add_arg_refs = add_args.iter().map(String::as_str).collect::<Vec<_>>();
     git_output_with_env(workspace_path, &add_arg_refs, &env)?;
 
-    let diff = if has_head {
-        git_output_raw_with_env(workspace_path, &["diff", "--cached", "HEAD"], &env)?
-    } else {
-        git_output_raw_with_env(workspace_path, &["diff", "--cached"], &env)?
-    };
+    let mut diff_args = vec!["diff", "--cached", "--no-renames"];
+    if has_head {
+        diff_args.push("HEAD");
+    }
+    diff_args.push("--");
+    diff_args.extend(exclusions.iter().map(String::as_str));
+    let diff = git_output_raw_with_env(workspace_path, &diff_args, &env)?;
     if diff.trim().is_empty() {
         Ok(None)
     } else {
