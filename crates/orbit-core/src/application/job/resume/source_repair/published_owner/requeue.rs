@@ -361,15 +361,22 @@ impl OrbitRuntime {
                     && run.retry_source_run_id.as_deref() == Some(source_id)
             }) {
                 let held = self.get_job_run_backend(&run.run_id)?;
-                if held
+                let code = held
                     .as_ref()
                     .and_then(|run| run.steps.last())
-                    .and_then(|step| step.error_code.as_deref())
-                    == Some(workflow::DeliveryRefusal::CheckEvidenceInconclusive.error_code())
-                {
+                    .and_then(|step| step.error_code.as_deref());
+                if code == Some(workflow::DeliveryRefusal::CheckEvidenceInconclusive.error_code()) {
                     return Err(refuse(format!(
                         "newer execution makes publication association ambiguous; completion run '{}' is held on inconclusive check evidence; resume it with `orbit job resume {}`",
                         run.run_id, run.run_id
+                    )));
+                }
+                if code == Some(workflow::DeliveryRefusal::RepairDispatched.error_code()) {
+                    // The held hand-back is the run source repair accepts; the
+                    // task stays bound to this owner.
+                    return Err(refuse(format!(
+                        "newer execution makes publication association ambiguous; auto-fix run '{}' is held after a dispatched repair; run `source_repair` on that run instead",
+                        run.run_id
                     )));
                 }
             }
