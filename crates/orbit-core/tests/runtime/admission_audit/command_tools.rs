@@ -465,6 +465,46 @@ fn oversized_refusal_arguments_are_stored_as_top_level_key_names() {
     assert_eq!(keys, ["argv", "model", "timeout_ms", "working_directory"]);
 }
 
+fn oversized_key_name_alone_is_summarized_within_the_storage_limit() {
+    // A single 4,096-byte property name needs 4,100 bytes as a one-element key
+    // list, so the names cannot be stored whole. The row must still be valid
+    // JSON within the limit and keep the names that fit.
+    let _env = unmanaged_tool_env_guard();
+    let (_root, runtime, repo_root) = test_runtime();
+    let long_name = "z".repeat(4096);
+    let mut input = json!({
+        "argv": ["echo", "ok"],
+        "working_directory": repo_root.display().to_string(),
+        "timeout_ms": 0,
+        "model": "claude",
+    });
+    input
+        .as_object_mut()
+        .expect("refusal input is a JSON object")
+        .insert(long_name.clone(), json!(true));
+
+    audited_exec_refusal(&runtime, input);
+
+    let raw = refused_exec_audit_arguments(&runtime);
+    assert!(
+        raw.len() <= 4096,
+        "the refusal summary must stay within 4096 bytes, got {} bytes",
+        raw.len()
+    );
+    let keys: Vec<String> =
+        serde_json::from_str(&raw).expect("key summary is a JSON array of strings");
+    for name in ["argv", "working_directory", "timeout_ms", "model"] {
+        assert!(
+            keys.iter().any(|key| key == name),
+            "{name} fits and must stay in the summary: {raw}"
+        );
+    }
+    assert!(
+        !raw.contains(&long_name),
+        "the oversized name must not be stored whole"
+    );
+}
+
 #[cfg(unix)]
 fn oversized_argv_reports_actionable_size_limit() {
     // [ORB-20181] E2BIG at spawn must explain the OS size limit without echoing values.
@@ -655,7 +695,8 @@ crate::scenario_table!(
     working_directory_in_a_sibling_checkout_is_refused,
     zero_timeout_is_refused_before_the_command_runs,
     invalid_input_refusal_records_redacted_arguments,
-    oversized_refusal_arguments_are_stored_as_top_level_key_names
+    oversized_refusal_arguments_are_stored_as_top_level_key_names,
+    oversized_key_name_alone_is_summarized_within_the_storage_limit
 );
 
 crate::scenario_table!(
