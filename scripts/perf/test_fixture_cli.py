@@ -1453,5 +1453,54 @@ class RewriteDatabaseTests(unittest.TestCase):
         self.assertIn("trigger fired", produced_dump[1][0][1])
 
 
+class ProtectedRootsRegistryTests(unittest.TestCase):
+    """protected_roots() refuses a registry it cannot read or parse; a missing one names no checkouts."""
+
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory(
+            prefix="protected-roots-", dir=_scratch_parent()
+        )
+        self.addCleanup(self.temporary.cleanup)
+        self.base = Path(self.temporary.name)
+        self.home = self.base / "home"
+        self.registry = self.home / ".orbit" / "workspaces.json"
+        self.registry.parent.mkdir(parents=True)
+        self.target = self.base / "restored"
+
+    def test_unreadable_or_malformed_registry_refuses_and_missing_registry_passes(self):
+        env = {key: value for key, value in os.environ.items() if key != "ORBIT_ROOT"}
+        env["HOME"] = str(self.home)
+        cases = {
+            "malformed-json": '{"checkouts": [',
+            "non-object-root": '["/not/a/registry"]',
+            "checkouts-not-a-list": '{"checkouts": {"orbit_dir": "/x"}}',
+            "checkout-without-orbit-dir": '{"checkouts": [{"workspace_id": "ws_fixture"}]}',
+            "unreadable": '{"checkouts": []}',
+        }
+        with unittest.mock.patch.dict(os.environ, env, clear=True), unittest.mock.patch.object(
+            perf_common, "real_home", return_value=self.home
+        ):
+            for label, body in cases.items():
+                with self.subTest(registry=label):
+                    if label == "unreadable" and os.geteuid() == 0:
+                        self.skipTest("root reads a mode-000 file")
+                    self.registry.unlink(missing_ok=True)
+                    self.registry.write_text(body, encoding="utf-8")
+                    if label == "unreadable":
+                        self.registry.chmod(0)
+                    with self.assertRaises(perf_common.PerfRefusal) as caught:
+                        perf_common.protected_roots()
+                    self.assertIn(str(self.registry), str(caught.exception))
+                    with self.assertRaises(perf_common.PerfRefusal):
+                        perf_common.refuse_protected(self.target, "restore into")
+
+            self.registry.unlink()
+            self.assertEqual(
+                perf_common.protected_roots(),
+                [Path(os.path.realpath(self.home / ".orbit"))],
+            )
+            perf_common.refuse_protected(self.target, "restore into")
+
+
 if __name__ == "__main__":
     unittest.main()
