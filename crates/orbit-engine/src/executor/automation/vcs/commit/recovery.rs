@@ -262,8 +262,13 @@ pub(crate) fn persist_uncommitted_diff_artifact<H: crate::RuntimeHost + ?Sized>(
     match host.apply_task_automation_update(task_id, update) {
         Ok(()) => Ok(Some(format!("task artifact `{artifact_path}`"))),
         Err(task_error) => {
-            let fallback = workspace_path.join(".orbit/tmp").join(artifact_path);
-            orbit_common::fs::io::write_text_with_parent(&fallback, &diff).map_err(|io_err| {
+            orbit_common::fs::io::write_private_text_beneath(
+                workspace_path,
+                Path::new(".orbit/tmp"),
+                artifact_path,
+                &diff,
+            )
+            .map_err(|io_err| {
                 format!(
                     "task artifact write failed ({task_error}) and scratch write failed ({io_err})"
                 )

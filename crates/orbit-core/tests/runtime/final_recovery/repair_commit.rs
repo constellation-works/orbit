@@ -104,6 +104,9 @@ impl orbit_engine::test_support::NullRuntimeHost for RepairPipeline<'_> {
         task_id: &str,
         update: orbit_engine::TaskAutomationUpdate,
     ) -> Result<(), OrbitError> {
+        if self.repair.starts_with("scratch-") && !update.upsert_artifacts.is_empty() {
+            return Err(OrbitError::Execution("synthetic artifact refusal".into()));
+        }
         self.fixture
             .runtime
             .apply_task_automation_update(task_id, update)
@@ -204,7 +207,7 @@ impl orbit_engine::test_support::NullRuntimeHost for RepairPipeline<'_> {
                         git(self.fixture, &["add", "candidate.txt"]);
                         git(self.fixture, &["commit", "-m", "repair rejected candidate"]);
                     }
-                    "protected" => {
+                    "protected" | "scratch-ok" | "scratch-redirect" => {
                         std::fs::write(self.fixture.repo.join(".env"), "TOKEN=x\n").unwrap()
                     }
                     #[cfg(unix)]
@@ -766,6 +769,55 @@ fn final_recovery_does_not_authorize_an_unrecorded_head_change() {
     }
 }
 
+#[cfg(unix)]
+fn final_recovery_scratch_fallback_refuses_redirects() {
+    use std::os::unix::fs::{PermissionsExt, symlink};
+
+    for redirect in [false, true] {
+        let fixture = fixture_with_command("test \"$(cat candidate.txt)\" != after");
+        let outside = tempfile::tempdir().unwrap();
+        let scratch = fixture.repo.join(".orbit/tmp");
+        if redirect {
+            symlink(outside.path(), &scratch).unwrap();
+        }
+        let case = if redirect {
+            "scratch-redirect"
+        } else {
+            "scratch-ok"
+        };
+        let (_, outcome) = run_pipeline(&fixture, case);
+        assert!(outcome.is_err());
+        let run = fixture.input["job_run_id"].as_str().unwrap();
+        let checkpoint = fixture
+            .runtime
+            .read_run_state(run)
+            .unwrap()
+            .unwrap()
+            .final_recovery
+            .unwrap();
+        let Some(FinalRecoveryDecision::Escalate { diagnosis, .. }) = checkpoint.decision else {
+            panic!("expected escalation")
+        };
+        let name = format!("recovery-uncommitted-{run}.patch");
+        if redirect {
+            assert!(
+                diagnosis.contains("synthetic artifact refusal")
+                    && diagnosis.contains("scratch write failed"),
+                "{diagnosis}"
+            );
+            assert!(!outside.path().join(name).exists());
+        } else {
+            assert!(diagnosis.contains(&name), "{diagnosis}");
+            let path = scratch.join(name);
+            assert!(std::fs::read_to_string(&path).unwrap().contains("repaired"));
+            assert_eq!(
+                std::fs::metadata(path).unwrap().permissions().mode() & 0o777,
+                0o600
+            );
+        }
+    }
+}
+
 /// Interrupt the original run after its commit and seed a generic resume from
 /// its checkpoints. The reused worktree checkpoint keeps naming the original
 /// batch, which therefore stays the commit step's checkpoint owner.
@@ -1002,4 +1054,10 @@ crate::scenario_table!(
     final_recovery_does_not_authorize_an_unrecorded_head_change,
     final_recovery_persists_repair_evidence_without_task_write_tools,
     resumed_final_recovery_repair_keeps_the_original_checkpoint_owner
+);
+
+#[cfg(unix)]
+crate::scenario_table!(
+    scratch_fallback_scenarios,
+    final_recovery_scratch_fallback_refuses_redirects
 );
