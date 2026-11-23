@@ -426,6 +426,9 @@ task as ready or waiting, naming unmet dependency IDs/statuses, context-lock
 holders, live child-run claims, capacity saturation, and — with `--allow-crew`
 — crew exclusion. It never creates a run, reconciles stale runs, reserves
 files, or mutates a task.
+Explicit task ID selections are treated as a set: repeated valid IDs appear
+once and count once against `--limit`. Blank IDs remain invalid, and unknown
+IDs are refused.
 Without `--concurrency`, the snapshot's ceiling is the live local drain's,
 including an `orbit run concurrency` retune (`capacity.limit_source`
 `run_control`, or `run_input` when the drain still has its submitted value).

@@ -1826,10 +1826,24 @@ fn sustained_host_pressure(kind: HostPressure) {
         let status = runtime
             .run_tool_with_context(
                 "orbit.workflow.auto",
-                json!({"workspace": runtime.workspace_id().unwrap(), "action": "status"}),
+                json!({
+                    "workspace": runtime.workspace_id().unwrap(),
+                    "action": "status",
+                    "task": [queued.id.clone(), queued.id.clone()],
+                    "limit": 1
+                }),
                 operator,
             )
             .expect("mcp status");
+        assert_eq!(
+            status["tasks"].as_array().unwrap().len(),
+            1,
+            "MCP readiness counts repeated IDs once: {status:#}"
+        );
+        assert_eq!(
+            status["tasks"][0]["task_id"], queued.id,
+            "MCP readiness returns the selected task once"
+        );
         assert_eq!(
             status["capacity"]["resource_throttle"]["resources"][0]["high_percent"], 90,
             "{status:#}"
