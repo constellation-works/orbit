@@ -350,10 +350,10 @@ fn hold_absent_check_repair(failure: StepFailure) -> Result<StepOutcome, Dispatc
         message: format!(
             "admitted check repair has no step_failure_recovery on this job; the run holds \
              and no repair agent runs. The admission remains recorded and spends one repair \
-             attempt; adding recovery and retrying the same head holds again as \
-             delivery_repair_dispatched. Configure step_failure_recovery for future heads, \
-             repair and publish a new head, then start a new delivery attempt. \
-             Further repairs require remaining per-PR budget. {diagnostic}"
+             attempt. Because this held run is terminal, configuring step_failure_recovery and \
+             starting a new authorized delivery run on the same head admits another repair \
+             attempt while per-PR budget remains, or repair and publish a new head, then start \
+             a new delivery attempt. Exhausting the per-PR budget fails the run. {diagnostic}"
         ),
     })
 }
@@ -371,10 +371,11 @@ fn hold_unrepaired_check_repair(failure: StepFailure) -> Result<StepOutcome, Dis
         refusal: orbit_types::workflow::DeliveryRefusal::RepairDispatched,
         message: format!(
             "admitted check repair ran step_failure_recovery and it did not repair the head; \
-             the run holds. The admission remains recorded and spends one repair attempt; \
-             retrying the same head holds again as delivery_repair_dispatched. Inspect the \
-             recovery attempt, repair and publish a new head, then start a new delivery \
-             attempt. Further repairs require remaining per-PR budget. {diagnostic}"
+             the run holds. The admission remains recorded and spends one repair attempt. \
+             Inspect the recovery attempt; because this held run is terminal, starting a new \
+             authorized delivery run on the same head admits another repair attempt while \
+             per-PR budget remains, or repair and publish a new head, then start a new delivery \
+             attempt. Exhausting the per-PR budget fails the run. {diagnostic}"
         ),
     })
 }

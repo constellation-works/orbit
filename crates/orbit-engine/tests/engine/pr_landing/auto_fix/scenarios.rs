@@ -227,8 +227,10 @@ fn run_undeclared_recovery_repair_job(host: &DeliveryHost, input: Value) -> JobR
 /// activity runs and fails, the in-budget handoff holds the run instead of
 /// ending it as a `pr_complete` failure [ORB-23738]. With none
 /// configured, the in-budget handoff holds the run. An exhausted repair
-/// budget still fails it. Adding recovery after the hold cannot re-admit
-/// the same head, even from a new delivery run.
+/// budget still fails it. While the prior run may still be live, a new run on
+/// the same head holds as `delivery_repair_dispatched`; once the held run is
+/// terminal, a new authorized run with recovery configured admits another
+/// repair attempt on that head while per-PR budget remains.
 #[test]
 fn admitted_check_repair_handoff_routes_holds_or_fails_with_the_budget() {
     auto_fix_table(
@@ -327,6 +329,12 @@ fn admitted_check_repair_handoff_routes_holds_or_fails_with_the_budget() {
                                 message.contains("attempt 1 of 3"),
                                 "in-budget handoff must stay on the hold: {message}"
                             );
+                            assert!(
+                                message.contains(
+                                    "starting a new authorized delivery run on the same head admits another repair attempt while per-PR budget remains"
+                                ),
+                                "hold diagnostic must explain same-head retry from a new authorized run: {message}"
+                            );
                             assert!(is_check_repair(&message), "{message}");
                         }
                         other => panic!("expected a typed hold, got {other}"),
@@ -340,30 +348,31 @@ fn admitted_check_repair_handoff_routes_holds_or_fails_with_the_budget() {
                     assert_eq!(fx.remote_tip(BRANCH), fx.candidate, "{case}");
                     assert_no_merge_or_landing(&fx, &host, TaskStatus::Review, case);
 
-                    // The missing activity did not undo admission. A new
-                    // delivery with recovery configured must explain why
-                    // the same head still cannot enter repair.
+                    // While the prior run may still be live, a new delivery on
+                    // the same head holds as a duplicate and leaves the head
+                    // untouched.
                     let attempts = repair_attempts(&host);
-                    let retry_run = "jrun-recovery-configured";
-                    assert_ne!(attempts[0].run_id, retry_run);
+                    host.record_run_state(RUN_ID, orbit_types::workflow::JobRunState::Running);
+                    let live_retry_run = "jrun-live-prior";
+                    assert_ne!(attempts[0].run_id, live_retry_run);
                     host.tasks
                         .lock()
                         .unwrap()
                         .get_mut(TASK_ID)
                         .unwrap()
-                        .job_run_id = Some(retry_run.into());
-                    let mut input = auto_fix_input(&fx);
-                    input["run_id"] = json!(retry_run);
-                    input["job_run_id"] = json!(retry_run);
+                        .job_run_id = Some(live_retry_run.into());
+                    let mut live_input = auto_fix_input(&fx);
+                    live_input["run_id"] = json!(live_retry_run);
+                    live_input["job_run_id"] = json!(live_retry_run);
                     let retry_error = run_job(
                         &host,
-                        repair_job(input),
+                        repair_job(live_input),
                         REPAIR_ACTS,
-                        retry_run,
+                        live_retry_run,
                         json!({}),
                         None,
                     )
-                    .expect_err("a new run on the admitted head holds as a duplicate");
+                    .expect_err("a new run while the prior run may be live holds as a duplicate");
                     assert_eq!(
                         retry_error.failure_code(),
                         "delivery_repair_dispatched",
@@ -375,11 +384,59 @@ fn admitted_check_repair_handoff_routes_holds_or_fails_with_the_budget() {
                     assert_eq!(fx.head(), fx.candidate);
                     assert_eq!(fx.remote_tip(BRANCH), fx.candidate);
                     assert_no_merge_or_landing(&fx, &host, TaskStatus::Review, case);
+                    let retry_message = retry_error.to_string();
                     assert!(
-                        retry_error
-                            .to_string()
-                            .contains("repair and publish a new head"),
-                        "a held admission needs an actionable remedy, not a wait for a repair that never ran: {retry_error}"
+                        retry_message
+                            .contains("starting a new authorized delivery run on the same head")
+                            && retry_message.contains("repair and publish a new head"),
+                        "a duplicate hold must give actionable guidance for both live-run wait and terminal retry: {retry_error}"
+                    );
+
+                    // Once the held prior run is recorded as terminal, a new
+                    // authorized delivery run with recovery configured admits a
+                    // second attempt on the same head and repairs it.
+                    host.record_run_state(RUN_ID, orbit_types::workflow::JobRunState::Held);
+                    let retry_run = "jrun-recovery-configured";
+                    assert_ne!(attempts[0].run_id, retry_run);
+                    host.tasks
+                        .lock()
+                        .unwrap()
+                        .get_mut(TASK_ID)
+                        .unwrap()
+                        .job_run_id = Some(retry_run.into());
+                    let mut input = auto_fix_input(&fx);
+                    input["run_id"] = json!(retry_run);
+                    input["job_run_id"] = json!(retry_run);
+                    let retry_result = run_job(
+                        &host,
+                        repair_job(input),
+                        REPAIR_ACTS,
+                        retry_run,
+                        json!({}),
+                        None,
+                    )
+                    .expect("a new authorized run after a terminal Held run admits another attempt on the same head");
+                    assert!(
+                        retry_result.success,
+                        "configured check repair after a terminal Held run must succeed: {retry_result:?}"
+                    );
+                    assert!(
+                        scripted_ran(&host, "test_ci_repair"),
+                        "the check-repair activity must run on the new authorized attempt"
+                    );
+                    let updated_attempts = repair_attempts(&host);
+                    assert_eq!(updated_attempts.len(), 2, "{case}");
+                    assert_eq!(updated_attempts[1].attempt, 2, "{case}");
+                    assert_eq!(updated_attempts[1].run_id, retry_run, "{case}");
+                    assert_eq!(updated_attempts[1].head_sha, fx.candidate, "{case}");
+                    let head = fx.head();
+                    assert_green_repair_published_for_run(
+                        &fx,
+                        &host,
+                        &retry_result.pipeline["complete_pr"]["merge"],
+                        &head,
+                        retry_run,
+                        case,
                     );
                 }
                 "exhausted" => {
@@ -493,13 +550,18 @@ fn assert_candidate_head_unchanged(fx: &Fixture, case: &str) {
     assert_eq!(fx.remote_tip(BRANCH), fx.candidate, "{case}");
 }
 
-/// The validated head recorded for this run; the refusal names its table case.
-fn assert_validated_head(host: &DeliveryHost, expected: &str, case: &str) {
+/// The validated head recorded for `run_id`; the refusal names its table case.
+fn assert_validated_head_for_run(host: &DeliveryHost, run_id: &str, expected: &str, case: &str) {
     assert_eq!(
-        host.validation_log(TASK_ID, &format!("validation/{RUN_ID}/0.json"))["tested_head"],
+        host.validation_log(TASK_ID, &format!("validation/{run_id}/0.json"))["tested_head"],
         expected,
         "{case}"
     );
+}
+
+/// The validated head recorded for this run; the refusal names its table case.
+fn assert_validated_head(host: &DeliveryHost, expected: &str, case: &str) {
+    assert_validated_head_for_run(host, RUN_ID, expected, case);
 }
 
 /// A green repair is published on the same PR and watched to a mergeable
@@ -511,11 +573,22 @@ fn assert_green_repair_published(
     head: &str,
     case: &str,
 ) {
+    assert_green_repair_published_for_run(fx, host, merge, head, RUN_ID, case);
+}
+
+fn assert_green_repair_published_for_run(
+    fx: &Fixture,
+    host: &DeliveryHost,
+    merge: &Value,
+    head: &str,
+    run_id: &str,
+    case: &str,
+) {
     assert_ne!(head, fx.candidate, "{case}");
     assert_eq!(fx.remote_tip(BRANCH), head, "{case}");
     assert_eq!(merge["head_sha"], head, "{case}");
     assert_eq!(merge["reason"], "auto_fix_mergeable", "{case}");
-    assert_validated_head(host, head, case);
+    assert_validated_head_for_run(host, run_id, head, case);
 }
 
 /// Row timer reporting its case identity and elapsed time; dropping the timer
