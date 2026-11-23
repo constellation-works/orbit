@@ -741,7 +741,7 @@ are not redacted or rewritten.
 `orbit.task.lint` are declared in
 [governance/task/operations.rs](../../../crates/orbit-common/src/governance/task/operations.rs)
 and served by `OperationTool<TaskVerb>`. The handlers in
-[task/operation.rs](../../../crates/orbit-core/src/adapter/tool_host/task/operation.rs)
+[task/operation](../../../crates/orbit-core/src/adapter/tool_host/task/operation/mod.rs)
 answer every surface, so the CLI and MCP read the same record: the full `show`
 record (`task_show_json`) carries `next_step` for a run-blocked task and the
 `final_recovery` decision (`run_id`, `decision`, `outcome`, `at`). The
@@ -842,9 +842,10 @@ and `orbit.task.recover` action `retry_handoff`, the operator tools, and the ina
 `orbit.task.reject` and `orbit.task.delete` are declared in
 [lifecycle_operations.rs](../../../crates/orbit-common/src/governance/task/lifecycle_operations.rs)
 and served by `OperationTool<TaskVerb>`. The handler table in
-[task/operation.rs](../../../crates/orbit-core/src/adapter/tool_host/task/operation.rs)
-calls the review application services the old tools reached, and holds the
-reject and delete handlers that moved there. The CLI names stay hyphenated
+[task/operation/dispatch.rs](../../../crates/orbit-core/src/adapter/tool_host/task/operation/dispatch.rs)
+calls the review application services, and the
+[task/operation/lifecycle.rs](../../../crates/orbit-core/src/adapter/tool_host/task/operation/lifecycle.rs)
+module holds the reject and delete handlers. The CLI names stay hyphenated
 (`review-reset`, `reconcile-review`) and the tool names underscored; reject
 and delete have no CLI and no MCP placement.
 
