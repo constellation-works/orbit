@@ -304,7 +304,15 @@ pub(super) fn write(
         };
         operation.insert("kind".into(), json!(kind));
     };
+    let projection = if !create && mode == "review" {
+        super::operation::response_projection(&input)?
+    } else {
+        None
+    };
     let mut keys = vec!["workspace", "request_id", "model"];
+    if !create && mode == "review" {
+        keys.extend(["fields", "field"]);
+    }
     if !create {
         keys.extend(["id", "expected_revision"]);
     }
@@ -324,7 +332,9 @@ pub(super) fn write(
     if let Some(model) = input.get("model") {
         request["model"] = model.clone();
     }
-    super::super::execute_host_action(ctx, request, OrbitBuiltinAction::DesktopTaskWrite)
+    let result =
+        super::super::execute_host_action(ctx, request, OrbitBuiltinAction::DesktopTaskWrite)?;
+    Ok(super::operation::project_response(result, projection))
 }
 
 /// `orbit.task.add`'s schema extension: guarded creation's conditionals,
@@ -355,7 +365,7 @@ pub(super) fn extend_update_schema(value: &mut Value) {
     value["allOf"] = json!([{
         "if":{"anyOf":[{"required":["request_id"]},{"required":["expected_revision"]},{"required":["verdict"]},{"required":["complete"]}]},
         "then":{"required":["workspace","request_id","expected_revision"],"oneOf":[
-            {"required":["verdict"],"propertyNames":{"enum":["workspace","request_id","id","expected_revision","verdict","complete"]}},
+            {"required":["verdict"],"propertyNames":{"enum":["workspace","request_id","id","expected_revision","verdict","complete","fields","field"]}},
             {"required":["comment"],"propertyNames":{"enum":["workspace","request_id","id","expected_revision","comment"]}},
             {"propertyNames":{"enum":["workspace","request_id","id","expected_revision","status","title","description","acceptance_criteria","priority","crew"]},"properties":{"acceptance_criteria":{"type":"array","items":{"type":"string"}}}}
         ]}

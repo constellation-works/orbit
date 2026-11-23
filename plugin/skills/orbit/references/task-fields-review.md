@@ -14,7 +14,9 @@ without repeating its fields; the host still checks them.
 
 `decision`, `rationale`, `criteria` and `evidence` are required. A review
 write also requires `request_id` and `expected_revision` from task show with
-`snapshot` true.
+`snapshot` true. Snapshot reads accept `fields` or `field` over the snapshot,
+including `revision`; a supplied `limit` is ignored and noted. Guarded review
+writes also accept `fields` or `field` over the returned result.
 
 Relation types and `regression_from` attribution are in
 [Behavior-affecting optional fields](task-fields-relations.md#behavior-affecting-optional-fields).

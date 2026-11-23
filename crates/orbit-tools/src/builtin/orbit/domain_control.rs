@@ -103,7 +103,9 @@ pub(super) fn bounded_read(
         )));
     }
     required_string(&input, &["workspace"], "workspace")?;
-    reject_unknown_tool_fields(&input, allowed)?;
+    reject_unknown_tool_fields(&input, allowed).map_err(|error| {
+        OrbitError::InvalidInput(format!("{error}; not accepted with view: bounded; drop it"))
+    })?;
     if let Some(object) = input.as_object_mut() {
         object.remove("view");
     }
