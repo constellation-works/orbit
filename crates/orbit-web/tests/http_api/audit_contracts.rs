@@ -118,9 +118,9 @@ fn require_localhost_origin_rejects_forged_host_get_without_origin() {
 }
 
 #[test]
-fn dashboard_shell_and_assets_validate_host() {
+fn dashboard_shell_and_assets_validate_host_and_origin() {
     isolated(
-        "audit_contracts::dashboard_shell_and_assets_validate_host",
+        "audit_contracts::dashboard_shell_and_assets_validate_host_and_origin",
         || {
             let fixture = Fixture::new();
             let server = fixture.server(true);
@@ -150,10 +150,22 @@ fn dashboard_shell_and_assets_validate_host() {
                         "{route} with Host {host:?}"
                     );
                 }
-                for host in [
-                    format!("127.0.0.1:{port}"),
-                    format!("localhost:{port}"),
-                    format!("[::1]:{port}"),
+                for (host, matching_origin, nonmatching_origin) in [
+                    (
+                        format!("127.0.0.1:{port}"),
+                        format!("http://127.0.0.1:{port}"),
+                        format!("http://localhost:{port}"),
+                    ),
+                    (
+                        format!("localhost:{port}"),
+                        format!("http://localhost:{port}"),
+                        format!("http://127.0.0.1:{port}"),
+                    ),
+                    (
+                        format!("[::1]:{port}"),
+                        format!("http://[::1]:{port}"),
+                        format!("http://localhost:{port}"),
+                    ),
                 ] {
                     let response = server
                         .request("GET", route)
@@ -172,6 +184,32 @@ fn dashboard_shell_and_assets_validate_host() {
                     );
                     assert_eq!(headers[header::CACHE_CONTROL], "no-cache", "{route}");
                     assert!(headers.contains_key(header::ETAG), "{route}");
+
+                    let response = server
+                        .request("GET", route)
+                        .header("host", &host)
+                        .header("origin", &matching_origin)
+                        .send()
+                        .unwrap();
+                    assert_eq!(
+                        response.status(),
+                        StatusCode::OK,
+                        "{route} with approved Host {host} and matching Origin {matching_origin}"
+                    );
+
+                    for origin in ["null".to_owned(), nonmatching_origin] {
+                        let response = server
+                            .request("GET", route)
+                            .header("host", &host)
+                            .header("origin", &origin)
+                            .send()
+                            .unwrap();
+                        assert_eq!(
+                            response.status(),
+                            StatusCode::FORBIDDEN,
+                            "{route} with approved Host {host} and invalid or nonmatching Origin {origin}"
+                        );
+                    }
                 }
             }
             // reqwest always sends Host, so a request without one goes over a raw socket.

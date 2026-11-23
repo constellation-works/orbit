@@ -168,8 +168,8 @@ const SHUTDOWN_GRACE_PERIOD: Duration = Duration::from_secs(10);
 ///
 /// The detailed form returns workspace names and the log-sink path, so it
 /// must not skip the DNS-rebinding Host gate that `/api` already has
-/// (ORB-12531). The dashboard shell and assets take the Host-only gate in
-/// [`build_app`].
+/// (ORB-12531). The dashboard shell and assets take the Host and supplied
+/// Origin checks in [`build_app`].
 pub(crate) fn health_router() -> Router<state::DashboardState> {
     Router::new()
         .route("/healthz", get(health::healthz))
@@ -179,8 +179,9 @@ pub(crate) fn health_router() -> Router<state::DashboardState> {
 }
 
 /// The complete dashboard app: embedded assets, `/healthz` and `/api`, all
-/// behind [`security_headers`]. The embedded assets are Host-gated too
-/// (STD-05 §R16), so a rebound hostname cannot read the shell.
+/// behind [`security_headers`]. The embedded assets require an approved loopback
+/// Host and validate a supplied Origin (STD-05 §§R16–R17), so a rebound
+/// hostname or untrusted Origin cannot read the shell.
 pub(crate) fn build_app(state: state::DashboardState) -> Result<Router, OrbitError> {
     Ok(assets::dashboard_file_router()?
         .layer(middleware::from_fn(api::require_localhost_host))
@@ -482,13 +483,13 @@ pub(crate) async fn drain_with_grace_period(
 /// SECURITY (ORB-00360): the dashboard has no authentication of its own.
 /// Request-level checks in [`api::require_localhost_origin`] mitigate browser
 /// CSRF (`Origin`, ORB-11613) and DNS rebinding (`Host`, ORB-12506), and
-/// [`api::require_localhost_host`] applies the Host check to the shell and
-/// assets. All inspect client-supplied headers and are trivially spoofable by any
-/// non-browser client (curl, a LAN script). They are NOT an access-control
-/// boundary. Binding to a non-loopback address would expose the full
-/// unauthenticated read/write API to the network, so we refuse. For remote
-/// access, bind loopback and front the dashboard with an authenticated
-/// tunnel/reverse proxy (e.g. `ssh -L`).
+/// [`api::require_localhost_host`] applies the Host check and any supplied
+/// Origin check to the shell and assets. All inspect client-supplied headers
+/// and are trivially spoofable by any non-browser client (curl, a LAN script).
+/// They are NOT an access-control boundary. Binding to a non-loopback address
+/// would expose the full unauthenticated read/write API to the network, so we
+/// refuse. For remote access, bind loopback and front the dashboard with an
+/// authenticated tunnel/reverse proxy (e.g. `ssh -L`).
 pub(crate) fn check_bindable_host(host: IpAddr, port: u16) -> Result<(), OrbitError> {
     if host == IpAddr::V4(Ipv4Addr::LOCALHOST) || host == IpAddr::V6(Ipv6Addr::LOCALHOST) {
         return Ok(());
