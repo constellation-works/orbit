@@ -251,8 +251,13 @@ time. Edits change the task record; they do not dispatch work. A failed save
 keeps your draft open with the error.
 
 Context files take one selector per line: `file:…`, `dir:…`, or `symbol:…`.
-The server checks that each file or directory exists. If the task will create
-the target, check **allow missing context** before you save.
+When a `file:` selector names a missing file whose parent directory exists,
+saving records a creation grant for that exact path automatically. You can
+leave **allow missing context** unchecked in that case. A selector with a
+retained grant also needs no checkbox. Check it for another missing selector
+you want to explicitly authorize, such as a file whose parent directory is
+missing or a missing directory selector. The checkbox grants every missing
+selector in the list, so review the full list before enabling it.
 
 ### Distributed tasks
 

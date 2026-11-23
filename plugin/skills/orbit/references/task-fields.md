@@ -37,13 +37,23 @@ the only field is `context_files`.
 - Existence checks verify the filesystem anchor only; a `symbol:` name and
   kind are not looked up. A `symbol:` selector locks its whole file.
 
-A missing `file:` selector whose parent directory exists is accepted with a
-warning and recorded as creation intent. Other missing targets are rejected
-by default; use `allow_missing_context: true` to declare them. Each accepted missing selector
-records durable creation intent for that **exact selector**; later writes and
-task preparation honor it. Re-sending a declared selector needs no flag, and a
-replacement list that omits it revokes the intent. Syntax, workspace
-containment and file/directory kind are still checked.
+Without `allow_missing_context`, a newly submitted missing `file:` selector
+whose parent directory exists gets an automatic creation grant for that exact
+selector and a warning. A later replacement list retains an existing grant
+while it keeps that selector; re-sending that selector needs no flag, and
+omitting it revokes the grant.
+
+`allow_missing_context: true` is an explicit grant for every missing selector
+in the supplied list, including a file without an existing parent or a missing
+directory selector. Review the full list before using it. Syntax, workspace
+containment and file/directory kind checks still apply.
+
+When a worker updates its own task from the run's linked worktree, the write
+also accepts other missing selectors for that task. Selectors accepted only by
+this owner-worker relaxation are returned as `context_files_unverified`; they
+do not receive creation grants. A newly submitted missing file with an
+existing parent still gets the automatic grant above. This fallback does not
+authorize a target for another task or caller.
 
 For the read → full-union update → verify command sequence, see
 [Keep context_files current](task-execution.md#step-4--implement-and-validate).

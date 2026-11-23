@@ -618,36 +618,46 @@ task whose outcome creates a file:
    new file only in prose grants nothing.
 2. List each such path exactly once as its canonical `file:` selector (or
    `dir:` for a new directory) in `context_files`, alongside the verified
-   existing targets, and file with `allow_missing_context: true`. That call —
-   not a later update, comment or plan — records `context_creation_authorized`
-   for each exact missing selector at filing time.
+   existing targets. A missing `file:` whose parent directory exists gets an
+   automatic creation grant for that exact path, with a warning. Use
+   `allow_missing_context: true` when an intended missing target has no
+   existing parent or is another missing selector type; that explicit grant
+   covers every missing selector in the list, so review them all before filing.
 3. If an exact destination cannot be named yet, do not file the task. Record
    the unnamed destination as an evidence gap in your own execution summary or
    artifact instead; never file first and leave task-pilot to hold promotion
    for an operator to authorize a footprint the filer could have granted.
 4. Read the filed task back with `orbit.task.show` and confirm its history
-   carries the creation grant for each new path before recording the task as
-   filed. A filed task naming a new file with no such grant is a filing
-   defect: reauthorize it immediately through `orbit.task.update` with the
-   full `context_files` list plus `allow_missing_context: true`, and say so
-   in your summary.
+   carries a creation grant for each new target that is still missing. If any
+   lacks one, reauthorize through `orbit.task.update` with the full
+   `context_files` list plus `allow_missing_context: true`, and note the
+   correction in your summary.
 
-Without `allow_missing_context`, missing files are accepted only when their
-parent directory exists; other missing targets are refused.
+Without `allow_missing_context`, a newly submitted missing `file:` whose
+parent directory exists receives an automatic grant for that exact selector
+and a warning. A task's existing grant is accepted again without the flag and
+retained while a replacement `context_files` list keeps that exact selector;
+omitting it revokes the grant. Other missing targets are refused unless the
+task's own worker update qualifies for the linked-worktree relaxation below.
+Explicit `allow_missing_context: true` grants every missing selector in the
+supplied list, including targets without an existing parent; review the whole
+list before using it.
 
 A worker updating its own task through `orbit.task.update` or `orbit task
-update` from its run's linked worktree gets the existence relaxation
-automatically for that task. Missing files with an existing parent record
-creation intent and produce a warning; other relaxed selectors do not record
-intent and are listed as `context_files_unverified`. A dashboard request is never bound to a run, so it uses the ordinary
-missing-file rule. Task writes on every surface return the same advisory
+update` from its run's linked worktree gets an existence relaxation for that
+task. A newly declared missing file with an existing parent still receives
+an automatic grant; other missing selectors accepted only by this worker relaxation are
+returned as `context_files_unverified` and do not receive creation grants.
+
+A dashboard request is never bound to a run, so it uses the ordinary
+missing-selector rules. Task writes on every surface return the same advisory
 `warnings` (on add: a disabled required tool, an unreadable parent, or a
 proposed task added without `context_files` and without the `no-diff-expected`
-tag, regardless of type; on add and update: an unreadable dependency;
-on add, approval, or updates to status, tags, context files or complexity:
-a backlog task with no footprint; and on approval: task-pilot blockers).
-Comments and other metadata edits do not repeat the footprint warning;
-readiness remains visible in the task response. Warnings never refuse the write.
+tag, regardless of type; on add and update: an unreadable dependency; on add,
+approval, or updates to status, tags, context files or complexity: a backlog
+task with no footprint; and on approval: task-pilot blockers). Comments and
+other metadata edits do not repeat the footprint warning; readiness remains
+visible in the task response. Warnings never refuse the write.
 `warnings` is optional write-response metadata: it is absent when empty and is
 returned only on an object response, so omit `fields` on the write to receive it.
 It is not a projection selector, so a request selecting `warnings` is refused
