@@ -11,6 +11,45 @@ use std::sync::{
     atomic::{AtomicUsize, Ordering},
 };
 struct ManagedHost(AtomicUsize);
+struct ReceiptHost(Value);
+impl OrbitToolHost for ReceiptHost {
+    fn task_scope(&self) -> OrbitTaskScope {
+        OrbitTaskScope::default()
+    }
+
+    fn execute(
+        &self,
+        _: OrbitBuiltinAction,
+        _: Value,
+        _: Option<String>,
+        _: Option<String>,
+        _: Option<ReservationOwnerContext>,
+    ) -> Result<Value, OrbitError> {
+        Ok(self.0.clone())
+    }
+}
+
+#[test]
+fn projected_review_retains_accepted_refresh_failure() {
+    let receipt = json!({"accepted":true,"task_id":"TST-1","refresh_error":"refresh failed","workspace":"ws_fixture"});
+    let ctx = ToolContext {
+        orbit_host: Some(Arc::new(ReceiptHost(receipt.clone()))),
+        ..Default::default()
+    };
+    for projection in [json!({"fields":["replayed"]}), json!({"field":"snapshot"})] {
+        let mut input = json!({"workspace":"ws_fixture","id":"TST-1","request_id":"review","expected_revision":"rev","verdict":{"decision":"accept","rationale":"ok","criteria":[],"evidence":[]}});
+        input
+            .as_object_mut()
+            .unwrap()
+            .extend(projection.as_object().unwrap().clone());
+        assert_eq!(
+            registry()
+                .execute("orbit.task.update", &ctx, input)
+                .unwrap(),
+            receipt
+        );
+    }
+}
 impl OrbitToolHost for ManagedHost {
     fn task_scope(&self) -> OrbitTaskScope {
         OrbitTaskScope {

@@ -334,6 +334,15 @@ pub(super) fn write(
     }
     let result =
         super::super::execute_host_action(ctx, request, OrbitBuiltinAction::DesktopTaskWrite)?;
+    // Outcome receipts must remain distinguishable even when a caller selects
+    // only a payload field (including the unkeyed `field` form). Keep their
+    // accompanying diagnostics and recovery information together as well.
+    if result.get("conflict").is_some()
+        || result.get("mutation_applied") == Some(&Value::Bool(false))
+        || result.get("accepted") == Some(&Value::Bool(true))
+    {
+        return Ok(result);
+    }
     Ok(super::operation::project_response(result, projection))
 }
 

@@ -78,7 +78,22 @@ fn desktop_writes_reconcile_after_restart_and_reject_stale_or_implicit_destinati
     assert!(limited["note"].as_str().unwrap().contains("ignored"));
     let review = client.call_tool_ok("orbit_task_update", json!({"workspace":selector,"id":id,"request_id":"projected-review","expected_revision":"stale","verdict":{"decision":"accept","rationale":"reviewed","criteria":[],"evidence":[]},"fields":["conflict"]}));
     assert_eq!(review["conflict"]["code"], "revision_conflict");
-    assert_eq!(review.as_object().unwrap().len(), 2);
+    assert_eq!(review["snapshot"]["revision"], snapshot["revision"]);
+    for projection in [json!({"fields":["snapshot"]}), json!({"field":"snapshot"})] {
+        let mut input = json!({"workspace":selector,"id":id,"request_id":"projected-stale-review","expected_revision":"stale","verdict":{"decision":"accept","rationale":"reviewed","criteria":[],"evidence":[]}});
+        input
+            .as_object_mut()
+            .unwrap()
+            .extend(projection.as_object().unwrap().clone());
+        let reply = client.call_tool_ok("orbit_task_update", input);
+        assert_eq!(reply["conflict"]["code"], "revision_conflict", "{reply}");
+        assert_eq!(reply["snapshot"]["revision"], snapshot["revision"]);
+    }
+    let unchanged = client.call_tool_ok(
+        "orbit_task_show",
+        json!({"workspace":selector,"id":id,"snapshot":true}),
+    );
+    assert_eq!(unchanged["revision"], snapshot["revision"]);
     for (input, mode) in [
         (
             json!({"workspace":selector,"id":id,"snapshot":true,"bogus":true}),
@@ -665,9 +680,22 @@ fn desktop_governed_status_approval_and_crew_preserve_receipts_and_review_gates(
         "orbit_task_show",
         json!({"workspace":selector,"id":id,"snapshot":true}),
     );
-    let reviewed = operator.call_tool_ok("orbit_task_update", json!({"workspace":selector,"id":id,"request_id":"project-review-success","expected_revision":fresh["revision"],"verdict":{"decision":"changes_requested","rationale":"Needs work","criteria":[{"criterion":"No duplicate approval","met":false,"evidence":["execution_summary"]}],"evidence":["execution_summary"]},"fields":["snapshot","replayed"]}));
+    let review_input = json!({"workspace":selector,"id":id,"request_id":"project-review-success","expected_revision":fresh["revision"],"verdict":{"decision":"changes_requested","rationale":"Needs work","criteria":[{"criterion":"No duplicate approval","met":false,"evidence":["execution_summary"]}],"evidence":["execution_summary"]},"fields":["snapshot","replayed"]});
+    let reviewed = operator.call_tool_ok("orbit_task_update", review_input.clone());
     assert_eq!(reviewed["replayed"], false, "{reviewed}");
     assert_ne!(reviewed["snapshot"]["revision"], fresh["revision"]);
+    let replayed = operator.call_tool_ok("orbit_task_update", review_input.clone());
+    assert_eq!(replayed["replayed"], true);
+    assert_eq!(
+        replayed["snapshot"]["revision"],
+        reviewed["snapshot"]["revision"]
+    );
+    let mut reused = review_input;
+    reused["verdict"]["rationale"] = json!("Changed payload");
+    reused["fields"] = json!(["replayed"]);
+    let refused = operator.call_tool_ok("orbit_task_update", reused);
+    assert_eq!(refused["mutation_applied"], false, "{refused}");
+    assert_eq!(refused["refusal"]["code"], "desktop_validation_refused");
 }
 
 /// The bounded run detail reads a fixed metadata budget however long the
