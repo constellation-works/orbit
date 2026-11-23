@@ -50,6 +50,7 @@ pub(super) fn install_owned_with_identity_gate(
 /// Launches count from the supervisor's handoff, before their identity
 /// handshake, so a worker held there is settled like an identified one. When
 /// settling fails, a root given to [`OwnedWorkers::retain_workspace`] is kept.
+/// A release marker that cannot be written is reported after the same settling.
 #[cfg(unix)]
 pub(super) struct OwnedWorkers {
     marker: std::path::PathBuf,
@@ -196,8 +197,12 @@ impl OwnedWorkers {
             return Ok(());
         }
         self.cleaned = true;
-        std::fs::write(&self.marker, "")
-            .map_err(|error| format!("write release marker: {error}"))?;
+        // A marker that cannot be written must not skip settling: the workers
+        // still need release, the acceptor still needs joining, and the root
+        // still needs its retention decision. The failure is reported last.
+        let marker_error = std::fs::write(&self.marker, "")
+            .err()
+            .map(|error| format!("write release marker: {error}"));
         let deadline = Instant::now() + timeout;
         let mut killed = false;
         let mut quiet_since: Option<Instant> = None;
@@ -318,7 +323,11 @@ impl OwnedWorkers {
             // Never release this share: the root stays while a worker may use it.
             std::mem::forget(root);
         }
-        result
+        match (marker_error, result) {
+            (None, result) => result,
+            (Some(marker), Ok(())) => Err(marker),
+            (Some(marker), Err(settle)) => Err(format!("{marker}; {settle}")),
+        }
     }
 }
 
@@ -548,6 +557,114 @@ fn a_held_pre_handshake_worker_keeps_its_workspace_through_an_assertion_unwind()
     });
     // Nothing uses the root now, so the test removes it; the guard's share
     // was retained, so this is the only deletion.
+    std::fs::remove_dir_all(&root_path).unwrap();
+}
+
+/// A release marker that cannot be written (a directory stands at its path)
+/// must not skip teardown: cleanup reports the I/O failure, joins the acceptor
+/// within a bound, and keeps the workspace while the gated substitute and its
+/// observer are still active.
+#[cfg(unix)]
+#[test]
+fn an_unwritable_release_marker_still_settles_and_keeps_the_workspace() {
+    use orbit_core::OrbitRuntime;
+    use orbit_core::test_support::{pipeline_worker_observer_completed, pipeline_workers_spawned};
+    use std::sync::Arc;
+
+    if !crate::dispatch_admission::isolated(
+        "worker_fixture::an_unwritable_release_marker_still_settles_and_keeps_the_workspace",
+    ) {
+        return;
+    }
+    fn until(what: &str, mut ready: impl FnMut() -> bool) {
+        let deadline = Instant::now() + Duration::from_secs(30);
+        while !ready() {
+            assert!(Instant::now() < deadline, "{what} timed out");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    let root =
+        Arc::new(tempfile::TempDir::new_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap());
+    let root_path = root.path().to_path_buf();
+    let global = root_path.join("global");
+    let repo = root_path.join("repo");
+    let jobs_dir = global.join("resources/jobs");
+    std::fs::create_dir_all(&jobs_dir).unwrap();
+    std::fs::create_dir_all(repo.join(".orbit")).unwrap();
+    std::fs::write(
+        jobs_dir.join("held_marker.yaml"),
+        "schemaVersion: 2\nkind: Job\nmetadata:\n  name: held_marker\nspec:\n  state: enabled\n  steps:\n    - id: nap\n      spec:\n        type: deterministic\n        action: sleep\n        config: {}\n",
+    )
+    .unwrap();
+    let gate = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    gate.set_nonblocking(true).unwrap();
+    let gate_addr = gate.local_addr().unwrap().to_string();
+    // A directory at the marker path makes the marker write fail with EISDIR.
+    let marker = root_path.join("worker-release");
+    std::fs::create_dir(&marker).unwrap();
+    let runtime = OrbitRuntime::from_roots(&global, &repo.join(".orbit"))
+        .unwrap()
+        .with_host_resource_probe(crate::dispatch_admission::PressureProbe::calm());
+
+    let mut owned = install_owned_workers_with_identity_gate(&marker, repo.clone(), &gate_addr);
+    owned.retain_workspace(root.clone());
+    let run = runtime
+        .submit_pipeline_run("held_marker", serde_json::json!({}), None, None)
+        .unwrap()
+        .run_id;
+    let mut held = None;
+    until("the substitute reached its identity gate", || {
+        gate.accept().map(|(stream, _)| held = Some(stream)).is_ok()
+    });
+    let pid = pipeline_workers_spawned(&repo)
+        .into_iter()
+        .find_map(|(recorded, pid)| (recorded == run).then_some(pid))
+        .expect("the launch is recorded before submission returns");
+
+    let started = Instant::now();
+    let error = owned
+        .cleanup(&[], Duration::from_secs(2))
+        .expect_err("an unwritable marker is reported");
+    assert!(
+        error.contains("write release marker"),
+        "the marker failure is reported: {error}"
+    );
+    assert!(
+        error.contains("before deadline"),
+        "the held worker is still unsettled: {error}"
+    );
+    assert!(
+        started.elapsed() < Duration::from_secs(30),
+        "teardown is bounded: {:?}",
+        started.elapsed()
+    );
+    assert!(
+        owned.acceptor.is_none(),
+        "the acceptor was stopped and joined"
+    );
+    assert!(owned.root.is_none(), "the guard gave up its own share");
+    assert!(
+        Arc::strong_count(&root) > 1,
+        "the guard's share of the root is kept while the substitute may use it"
+    );
+    drop(owned);
+    assert!(root_path.exists(), "the workspace outlives the held worker");
+    assert!(!reaped(pid), "the held substitute is still alive");
+    assert!(
+        !pipeline_worker_observer_completed(&repo, &run, pid),
+        "its startup observer is still active"
+    );
+
+    // Opening the gate lets the substitute continue; its control socket is
+    // closed, so it exits and its observer reaps it.
+    let mut held: std::net::TcpStream = held.expect("the gate connection");
+    held.write_all(&[1]).unwrap();
+    until("the held substitute is reaped", || reaped(pid));
+    until("its startup observer completes", || {
+        pipeline_worker_observer_completed(&repo, &run, pid)
+    });
+    drop(runtime);
     std::fs::remove_dir_all(&root_path).unwrap();
 }
 
