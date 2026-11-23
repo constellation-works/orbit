@@ -177,6 +177,37 @@ impl OrbitRuntime {
         if due.reasons.is_empty() {
             return Ok(skipped(&task_id, "not_due"));
         }
+        let mut may_skip = due.reasons == ["heartbeat"]
+            && due.baseline_unchanged
+            && mandate.deadline.is_none_or(|deadline| deadline > now)
+            && due.maintenance.is_empty();
+        if may_skip {
+            let comments = self.get_task_comments(&task_id)?;
+            let previous = checkpoints(&task_id, &comments);
+            may_skip = previous
+                .last()
+                .is_some_and(|checkpoint| checkpoint.outcome != "incomplete")
+                && !self
+                    .resident_open_requests(&task_id, &mandate, previous.last(), &comments)?
+                    .iter()
+                    .any(|request| request["state"] == "open");
+            // Older acted-on tasks can remain in the baseline after the last
+            // checkpoint stops naming them. Their open decisions matter too.
+            for id in due
+                .wake_items
+                .keys()
+                .filter_map(|key| key.strip_prefix("task:"))
+            {
+                if self
+                    .get_task_decision_requests(id)?
+                    .iter()
+                    .any(|request| request.state == orbit_types::task::DecisionRequestState::Open)
+                {
+                    may_skip = false;
+                    break;
+                }
+            }
+        }
         self.record_resident_cycle_run_crew(run_id, &mandate)?;
         let mut worktree_removal_error = None;
         let recovery_of = match &due.dead_cycle {
@@ -256,6 +287,61 @@ impl OrbitRuntime {
             serde_json::to_string(&grant)
                 .map_err(|error| OrbitError::Execution(format!("serialize grant: {error}")))?,
         )?;
+        if may_skip && grant.reasons == ["heartbeat"] {
+            let record = ResidentCheckpoint {
+                schema: 1,
+                mandate: task_id.clone(),
+                cycle: grant.cycle.clone(),
+                run_id: run_id.to_string(),
+                crew: mandate.crew.clone(),
+                recovery_of: None,
+                wake: ResidentCheckpointWake {
+                    reasons: grant.reasons.clone(),
+                    digest: grant.digest.clone(),
+                },
+                authority: ResidentCheckpointAuthority {
+                    rights: grant.rights.clone(),
+                    observe_only: grant.observe_only,
+                    narrowed_by: grant.narrowed_by.clone(),
+                },
+                actions: Vec::new(),
+                decisions: Vec::new(),
+                requests: Vec::new(),
+                costs: Vec::new(),
+                notes: String::new(),
+                next_wake: ResidentNextWake {
+                    reason: "heartbeat".into(),
+                    // Publication records its own timestamp just after `now`.
+                    // Clamp to its heartbeat rather than scheduling an early wake.
+                    not_before: now.max(Utc::now())
+                        + Duration::minutes(i64::from(mandate.cadence.heartbeat_minutes)),
+                },
+                continuity: "off".into(),
+                outcome: "unchanged".into(),
+                probe: mandate.probe,
+                error: None,
+                conversation_ref: None,
+            };
+            let message = serde_json::to_string(&ResidentComment::Checkpoint(Box::new(record)))
+                .map_err(|error| OrbitError::Execution(format!("serialize checkpoint: {error}")))?;
+            ResidentComment::parse(&message)
+                .map_err(|error| OrbitError::Execution(error.to_string()))?;
+            self.stores().task_records().update(
+                &task_id,
+                TaskRecordUpdateParams {
+                    actor: "system".into(),
+                    append_comments: vec![TaskComment {
+                        at: now,
+                        by: "system".into(),
+                        message,
+                        operation_id: None,
+                    }],
+                    ..Default::default()
+                },
+            )?;
+            self.set_resident_live_cycle(&task_id, Some(&grant.cycle), None)?;
+            return Ok(skipped(&task_id, "unchanged"));
+        }
         // A mandate attached before core owned this status starts here.
         self.activate_resident_assignment(&task_id);
         let history = self.get_task_history(&task_id)?;

@@ -64,7 +64,7 @@ The crew must be a name from your `[crews]` table in
 | `exit_criteria` | Yes | 1 to 8 entries, each one line of at most 240 characters. |
 | `workspaces` | Yes | At least one, unique. The authority's scope stays inside this list. |
 | `crew` | Yes | The name of a configured crew. |
-| `cadence.heartbeat_minutes` | Yes | An integer of at least 5 and at least `floor_minutes`: the most minutes without a cycle. |
+| `cadence.heartbeat_minutes` | Yes | An integer of at least 5 and at least `floor_minutes`: the most minutes between heartbeat checks. |
 | `cadence.floor_minutes` | No | An integer of at least 5: the fewest minutes between two cycles. Defaults to `heartbeat_minutes`. Set it lower only when the mandate must react to a change faster than its heartbeat. |
 | `deadline` | No | An RFC 3339 instant. When it passes, the mandate ends with reason `deadline` and the assignment moves to review, whether or not the cycle routine runs. |
 | `watch` | No | `tasks` (task IDs) and `tags` whose changes wake the resident: any change to these tasks counts. Both default to empty. |
@@ -96,12 +96,11 @@ its grant covers, with or without any granted right. Neither read widens what
 it can write, and drain controls (`start`, `stop`, `resize`) remain
 operator-only.
 
-Each cycle's checkpoint plans the next wake in `next_wake.not_before`. Without
-a change that wakes it sooner, the next cycle starts then, but never sooner
-than `floor_minutes` and never later than `heartbeat_minutes` after the last
-cycle started. A cycle that ended `incomplete` waits for the heartbeat. With
-a 20-minute heartbeat and nothing to react to, a resident runs at most three
-cycles an hour.
+Each checkpoint plans the next check in `next_wake.not_before`, clamped between
+the cadence floor and heartbeat after the last cycle started. A cycle that
+ended `incomplete` waits for the heartbeat. An unchanged heartbeat-only check
+writes an `unchanged` checkpoint without starting a model cycle. Changed wake
+items, open requests, deadlines and other wake reasons still run a cycle.
 
 ## Inspect a mandate
 

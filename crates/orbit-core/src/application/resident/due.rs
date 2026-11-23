@@ -61,6 +61,8 @@ pub(crate) struct ResidentDue {
     /// What a cycle reacts to, one keyed state each; observe records them
     /// in the grant as the next due check's baseline.
     pub(crate) wake_items: ResidentWakeItems,
+    /// Exact equality with the previous checkpoint baseline, when available.
+    pub(crate) baseline_unchanged: bool,
     /// Why a cycle would wake; empty when it would not.
     pub(crate) reasons: Vec<String>,
     /// Why a due mandate may not cycle yet (`cycle_live`, `cadence_floor`).
@@ -683,10 +685,14 @@ impl OrbitRuntime {
             .map_or(task.created_at, |cycle| cycle.at);
         if now - since >= Duration::minutes(i64::from(mandate.cadence.heartbeat_minutes)) {
             reasons.push("heartbeat".into());
-        } else if let Some(cycle) = &last_cycle
-            && now >= planned_wake_at(&mandate, cycle, last)
-        {
-            reasons.push("next_wake".into());
+        }
+        if let Some(cycle) = &last_cycle {
+            let planned = planned_wake_at(&mandate, cycle, last);
+            let heartbeat_at =
+                cycle.at + Duration::minutes(i64::from(mandate.cadence.heartbeat_minutes));
+            if now >= planned && planned < heartbeat_at {
+                reasons.push("next_wake".into());
+            }
         }
         let control = super::control::resident_control_from_history(history)
             .map_err(OrbitError::Execution)?;
@@ -714,6 +720,7 @@ impl OrbitRuntime {
         Ok(ResidentDue {
             mandate,
             digest,
+            baseline_unchanged: baseline.as_ref().is_some_and(|items| *items == wake_items),
             wake_items,
             reasons,
             withheld,

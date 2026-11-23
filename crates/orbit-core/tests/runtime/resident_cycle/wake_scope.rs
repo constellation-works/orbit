@@ -238,3 +238,59 @@ fn a_mandate_without_a_floor_gets_its_heartbeat_as_floor() {
     );
     assert!(fx.would_fire(now + Duration::minutes(21)));
 }
+
+#[test]
+fn heartbeat_skips_unchanged_but_runs_when_watched_state_changes() {
+    if !super::super::dispatch_admission::isolated(
+        "resident_cycle::wake_scope::heartbeat_skips_unchanged_but_runs_when_watched_state_changes",
+    ) {
+        return;
+    }
+    let fx = fixture();
+    let (watched, mandate) = fx.watched_mandate("Heartbeat subject");
+    let now = Utc::now();
+    let first = fx.cycle_run(&mandate, "heartbeat-first");
+    let brief = fx.begin_cycle(&first, now);
+    fx.checkpoint(&brief, &first);
+    fx.finish_cycle(&first);
+    let skip = fx.cycle_run(&mandate, "heartbeat-skip");
+    let result = fx.begin_cycle(&skip, now + Duration::hours(3));
+    assert_eq!(result["cycle_count"], 0, "{result}");
+    assert_eq!(result["skip_reason"], "unchanged", "{result}");
+    let comments = fx.runtime.get_task_comments(&mandate).unwrap();
+    let checkpoint = comments
+        .iter()
+        .filter_map(|comment| {
+            match orbit_types::workflow::ResidentComment::parse(&comment.message).ok()? {
+                orbit_types::workflow::ResidentComment::Checkpoint(checkpoint) => Some(checkpoint),
+                _ => None,
+            }
+        })
+        .next_back()
+        .unwrap();
+    assert_eq!(checkpoint.outcome, "unchanged");
+    assert_eq!(
+        checkpoint.wake.digest,
+        brief["wake"]["digest"].as_str().unwrap()
+    );
+    let shown = fx.runtime.show_resident_mandate(&mandate).unwrap();
+    assert_eq!(shown["stalled"], false, "{shown}");
+    fx.stop_run(&skip, JobRunState::Success);
+    fx.update_task(
+        &watched,
+        TaskUpdateParams {
+            status: Some(TaskStatus::Blocked),
+            ..Default::default()
+        },
+    );
+    let changed = fx.cycle_run(&mandate, "heartbeat-changed");
+    let result = fx.begin_cycle(&changed, now + Duration::hours(6));
+    assert_eq!(result["cycle_count"], 1, "{result}");
+    assert!(
+        result["wake"]["reasons"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|reason| reason == "digest_changed")
+    );
+}
