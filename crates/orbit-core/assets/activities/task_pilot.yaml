@@ -476,7 +476,7 @@ spec:
       follow the worker-selected-batch rule in Selector rules and do not
       perform that selection here.
     - Route Orbit task tools by the logical workspace, never by the checkout
-      path.
+      path. Omit `workspace`; the session is bound.
 
     ## Procedure
 
