@@ -364,6 +364,52 @@ fn ci_red_lists_newest_failed_run_on_head() {
     assert!(items[0]["fingerprint"].as_str().unwrap().starts_with("fp_"));
 }
 
+/// `detail.since_source` names the timestamp `since` was taken from: the
+/// run's `updated_at` when usable, otherwise its `created_at`.
+fn ci_red_since_source_names_the_timestamp_used() {
+    let fixture = Fixture::new(true);
+    let hours_ago = |hours: i64| (chrono::Utc::now() - chrono::Duration::hours(hours)).to_rfc3339();
+    let instant = |text: &str| chrono::DateTime::parse_from_rfc3339(text).unwrap();
+
+    // The projection passes a missing `updatedAt` through as null, so the
+    // onset falls back to the creation time and the label must say so.
+    let created = hours_ago(30);
+    let mut without_update = fixture.run(42, "failure", &created, &fixture.head);
+    without_update["updatedAt"] = Value::Null;
+    fixture.set_runs(json!([without_update]));
+    let response = call(&fixture.runtime, json!({"kind": "ci_red"}));
+    let items = response["items"].as_array().unwrap();
+    assert_eq!(items.len(), 1, "{response}");
+    assert_eq!(
+        items[0]["detail"]["since_source"], "created_at",
+        "{response}"
+    );
+    assert_eq!(
+        instant(items[0]["since"].as_str().unwrap()),
+        instant(created.as_str()),
+        "{response}"
+    );
+
+    // A usable update time keeps updated_at provenance and wins over creation.
+    let head = fixture.advance_remote_head();
+    let updated = hours_ago(5);
+    let mut with_update = fixture.run(43, "failure", &hours_ago(30), &head);
+    with_update["updatedAt"] = json!(updated);
+    fixture.set_runs(json!([with_update]));
+    let response = call(&fixture.runtime, json!({"kind": "ci_red"}));
+    let items = response["items"].as_array().unwrap();
+    assert_eq!(items.len(), 1, "{response}");
+    assert_eq!(
+        items[0]["detail"]["since_source"], "updated_at",
+        "{response}"
+    );
+    assert_eq!(
+        instant(items[0]["since"].as_str().unwrap()),
+        instant(updated.as_str()),
+        "{response}"
+    );
+}
+
 fn ci_red_exclude_kind_makes_no_provider_call() {
     let fixture = Fixture::new(true);
     fixture.set_runs(json!([fixture.run(
@@ -1082,6 +1128,7 @@ crate::scenario_table!(
     replica_owner_only_candidate_reads_are_silent_and_make_no_provider_call,
     replica_direct_reads_identify_owner_only_sources_without_provider_call,
     ci_red_lists_newest_failed_run_on_head,
+    ci_red_since_source_names_the_timestamp_used,
     ci_red_exclude_kind_makes_no_provider_call,
     ci_red_missing_auth_degrades_without_failing,
     ci_red_ignores_a_failed_run_on_a_stale_head,
