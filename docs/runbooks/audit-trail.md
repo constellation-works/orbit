@@ -64,7 +64,9 @@ Per-invocation fields include `id`, `execution_id`, `timestamp`, `command`, `sub
 `stderr_truncated`, `error_message`, `host`, `pid`, `session_id`, `task_id`, `job_run_id`,
 `activity_id`, and `step_index`. MCP rows add optional `workspace_id`, caller/process
 `machine_id` and display `machine_name`, `transport`, the complete `effective_capabilities` set,
-`origin_session_id`, `mcp_call_id`, and `lease_id`.
+`origin_session_id`, `mcp_call_id`, and `lease_id`. A tool call refused as invalid input stores
+its secret-redacted arguments in `arguments_json`; past 4,096 bytes of redacted JSON the row keeps
+only the array of top-level key names.
 
 JSON list, show and export include `self_reported_actor` (an unverified caller
 claim), `plugin` (name, version, manifest digest and grants), `plugin_secrets`

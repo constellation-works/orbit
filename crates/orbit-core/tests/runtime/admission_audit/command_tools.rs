@@ -10,6 +10,8 @@ use super::tool_support::{
     unmanaged_tool_env_guard,
 };
 use orbit_core::OrbitRuntime;
+use orbit_core::adapter::command::ToolEntryPoint;
+use orbit_types::tool::{McpCapability, ToolSessionContext};
 
 /// Acquire the workspace claim as `actor` and return its token.
 fn acquire_claim(runtime: &OrbitRuntime, actor: &str) -> String {
@@ -376,6 +378,93 @@ fn zero_timeout_is_refused_before_the_command_runs() {
     );
 }
 
+/// Call a tool through the audited MCP dispatch, as an operator session.
+fn audited_exec_refusal(runtime: &OrbitRuntime, input: Value) -> String {
+    let error = runtime
+        .execute_tool_command_dispatch_with_session_context(
+            "orbit.command.exec",
+            input,
+            None,
+            None,
+            ToolEntryPoint::Mcp,
+            ToolSessionContext {
+                effective_capabilities: [McpCapability::Operator].into(),
+                ..Default::default()
+            },
+        )
+        .expect_err("a zero deadline cannot be honoured");
+    invalid_input_message::<Value>(Err(error))
+}
+
+/// The audit row a refused `orbit.command.exec` call left behind.
+fn refused_exec_audit_arguments(runtime: &OrbitRuntime) -> String {
+    let events = runtime
+        .list_audit_events(None, None, None, None, 200)
+        .expect("read audit events");
+    events
+        .iter()
+        .find(|event| {
+            event.command == "tool" && event.tool_name.as_deref() == Some("orbit.command.exec")
+        })
+        .expect("the refused call is audited")
+        .arguments_json
+        .clone()
+        .expect("an invalid-input refusal records its arguments")
+}
+
+fn invalid_input_refusal_records_redacted_arguments() {
+    let _env = unmanaged_tool_env_guard();
+    let (_root, runtime, repo_root) = test_runtime();
+    let secret = "sk-abcdefghijklmnopqrstuvwxyz012345";
+
+    audited_exec_refusal(
+        &runtime,
+        json!({
+            "argv": ["echo", secret],
+            "working_directory": repo_root.display().to_string(),
+            "timeout_ms": 0,
+            "model": "claude",
+        }),
+    );
+
+    let raw = refused_exec_audit_arguments(&runtime);
+    assert!(
+        !raw.contains(secret),
+        "the raw secret must not be persisted on a refusal row: {raw}"
+    );
+    let payload: Value = serde_json::from_str(&raw).expect("refusal arguments are JSON");
+    assert_eq!(payload["timeout_ms"], json!(0));
+    assert_eq!(payload["argv"][0], json!("echo"));
+    assert!(
+        payload["argv"][1]
+            .as_str()
+            .expect("redacted arg is a string")
+            .contains("REDACTED"),
+        "unexpected redacted argv value: {payload}"
+    );
+}
+
+fn oversized_refusal_arguments_are_stored_as_top_level_key_names() {
+    let _env = unmanaged_tool_env_guard();
+    let (_root, runtime, repo_root) = test_runtime();
+
+    audited_exec_refusal(
+        &runtime,
+        json!({
+            "argv": ["echo", "x".repeat(8192)],
+            "working_directory": repo_root.display().to_string(),
+            "timeout_ms": 0,
+            "model": "claude",
+        }),
+    );
+
+    let raw = refused_exec_audit_arguments(&runtime);
+    assert!(raw.len() <= 4096, "key names stay under the cap: {raw}");
+    let mut keys: Vec<String> = serde_json::from_str(&raw).expect("key names are a JSON array");
+    keys.sort();
+    assert_eq!(keys, ["argv", "model", "timeout_ms", "working_directory"]);
+}
+
 #[cfg(unix)]
 fn oversized_argv_reports_actionable_size_limit() {
     // [ORB-20181] E2BIG at spawn must explain the OS size limit without echoing values.
@@ -564,7 +653,9 @@ crate::scenario_table!(
     auth_family_env_is_excluded_from_child_and_not_leaked_in_persisted_output,
     secret_argv_reaches_child_but_is_redacted_in_the_audit_record,
     working_directory_in_a_sibling_checkout_is_refused,
-    zero_timeout_is_refused_before_the_command_runs
+    zero_timeout_is_refused_before_the_command_runs,
+    invalid_input_refusal_records_redacted_arguments,
+    oversized_refusal_arguments_are_stored_as_top_level_key_names
 );
 
 crate::scenario_table!(
