@@ -212,7 +212,7 @@ fn newest_red_candidates(
     runs: &[Value],
     base_branch: &str,
     head_sha: &str,
-) -> (BTreeMap<String, Value>, Vec<String>) {
+) -> (BTreeMap<String, Value>, Vec<(String, String)>) {
     // A run number belongs to its underlying workflow, and distinct workflows
     // can share a display name, so the provider's workflow id (when it gives
     // one) is the identity; the display name is the fallback. Each source has
@@ -281,7 +281,7 @@ fn newest_red_candidates(
         if let Some(run) = on_branch.remove(&key) {
             on_head.insert(key, run);
         } else if runs.len() >= CI_BRANCH_RUN_LIMIT {
-            missing_history.push(label);
+            missing_history.push((key, label));
         }
     }
     (on_head, missing_history)
@@ -392,13 +392,17 @@ pub(super) fn read_ci_attention(
     };
     let (newest_by_workflow, missing_history) =
         newest_red_candidates(&runs, &base_branch, &head_sha);
-    for workflow in missing_history {
-        candidates.degraded.push(workspace_degraded(
+    for (workflow_key, workflow) in missing_history {
+        let mut entry = workspace_degraded(
             workspace,
             AttentionKind::CiRed.as_str(),
             "source_unavailable",
-            format!("CI workflow {workflow} is pending; its latest completed result may be outside the branch run listing"),
-        ));
+            format!(
+                "CI workflow {workflow} is pending; its latest completed result may be outside the branch run listing"
+            ),
+        );
+        entry.subject = Some(workflow_key);
+        candidates.degraded.push(entry);
     }
     // A pending task commit makes the repair-task association
     // unavailable: history reads would settle it. The CI evidence itself

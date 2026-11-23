@@ -144,9 +144,10 @@ A session spends a turn per poll. To spend none, mint a wait grant on a read and
    when the delta is non-empty (exit `0`), the `degraded` set differs from its first read (exit
    `4`), the timeout passes with no change (exit `3`), or every read failed (exit `5`). A timeout
    still lists `degraded`; it is not all-clear while any entry remains.
-   An entry is identified by its scope, kind and code, except `ci_red` entries, which also include
-   their message because it names the workflow whose CI history is missing: a change in which
-   workflows are degraded ends the wait with exit `4`.
+   An entry is identified by its scope, kind, code and optional stable `subject` identity (not its
+   free-text diagnostic `message`). Per-workflow `ci_red` missing-history entries set `subject` to
+   the stable workflow key, so a change in which workflows are degraded ends the wait with exit
+   `4` while repeated workspace-level provider failures with changing diagnostic text keep polling.
 
 A shell with no grant, an expired grant or a scope outside the grant is refused with
 `capability_denied`.

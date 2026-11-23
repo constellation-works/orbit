@@ -125,5 +125,6 @@ pub(super) fn host_capability_degraded(
         kind: AttentionKind::HostUnhealthy.as_str().into(),
         code: "capability".into(),
         message: "Host health requires the Operator capability".into(),
+        subject: None,
     }
 }

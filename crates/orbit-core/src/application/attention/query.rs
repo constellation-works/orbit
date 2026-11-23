@@ -328,6 +328,7 @@ pub(crate) fn attention_query(
                 "this read is local to {} ({}) and did not read host {selector}",
                 host.name, host.machine_id
             ),
+            subject: None,
         });
     }
     // Host health is one host-level answer: the session is told it was

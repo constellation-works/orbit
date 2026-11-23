@@ -32,6 +32,7 @@ pub(in super::super) fn workspace_degraded(
         kind: kind.into(),
         code: code.into(),
         message: message.into(),
+        subject: None,
     }
 }
 

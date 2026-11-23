@@ -287,7 +287,10 @@ Ordering of the list: `severity` descending, then `since` ascending (`null` last
   take as a complete candidate read;
   [attention-federation](./attention-federation.md#completeness)), or
   `unreachable_destination`, `tool_not_on_this_host`, `attention_read_refused` (per host, the federated routing
-  identities of [attention-federation](./attention-federation.md)).
+  identities of [attention-federation](./attention-federation.md)). When a source degrades per
+  subject rather than for the whole workspace (such as a `ci_red` workflow with missing branch
+  history), `degraded[].subject` carries the stable subject identity (for example `id:<workflow_id>`,
+  `name:<workflow>`, or `run:<run_id>`).
 - **Empty is explicit.** With no items, `message` is `Nothing needs attention` followed by the
   hosts and workspaces actually read (`hosts read: …`, `workspaces read: …`). When neither
   was read it says `no host or workspace was read`. When `degraded` is non-empty the message

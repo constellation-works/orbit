@@ -220,6 +220,7 @@ impl FederatedMcpHost {
                         kind: AttentionKind::HostUnhealthy.as_str().into(),
                         code: cause.into(),
                         message: message.clone(),
+                        subject: None,
                     });
                     items.push(unhealthy_item(&host, cause, &message, owns));
                     if let Some(snapshot) = snapshot.as_ref() {
@@ -682,6 +683,7 @@ fn note_unread_owners(
             message: format!(
                 "{name} owns workspace '{label}' and this read did not include that host"
             ),
+            subject: None,
         });
     }
 }
@@ -755,6 +757,7 @@ fn truncated_entry(host: &AttentionHost, message: String) -> AttentionDegraded {
         kind: "all".into(),
         code: "response_truncated".into(),
         message,
+        subject: None,
     }
 }
 

@@ -43,29 +43,24 @@ pub struct AttentionWaitOutcome {
     pub waited_seconds: u64,
 }
 
+type DegradedKey = (String, String, String, String);
+
 /// The identity of the degraded entries, sorted so a repeated identity counts.
 ///
-/// An entry is its scope, kind and code, ignoring its free-text message, with
-/// one exception: `ci_red` entries share one scope and code per workspace and
-/// name the workflow whose history is missing only in the message, so the
-/// message is part of their identity. A change in which workflows are
-/// degraded is then a change in the set.
-fn degraded_signature(response: &Value) -> Vec<String> {
-    let mut signature: Vec<String> = response["degraded"]
+/// An entry is its scope, kind, code and optional stable `subject` identity
+/// (such as a workflow key when `ci_red` degrades per workflow), ignoring
+/// free-text diagnostic messages.
+fn degraded_signature(response: &Value) -> Vec<DegradedKey> {
+    let mut signature: Vec<DegradedKey> = response["degraded"]
         .as_array()
         .into_iter()
         .flatten()
         .map(|entry| {
-            let kind = entry["kind"].as_str().unwrap_or_default();
-            let message = if kind == "ci_red" {
-                entry["message"].as_str().unwrap_or_default()
-            } else {
-                ""
-            };
-            format!(
-                "{}|{kind}|{}|{message}",
-                entry["scope"].as_str().unwrap_or_default(),
-                entry["code"].as_str().unwrap_or_default()
+            (
+                entry["scope"].as_str().unwrap_or_default().to_owned(),
+                entry["kind"].as_str().unwrap_or_default().to_owned(),
+                entry["code"].as_str().unwrap_or_default().to_owned(),
+                entry["subject"].as_str().unwrap_or_default().to_owned(),
             )
         })
         .collect();
@@ -101,7 +96,7 @@ pub(crate) fn wait_for_attention_delta(
     };
     let started = Instant::now();
     let deadline = started + Duration::from_secs(timeout_seconds);
-    let mut baseline: Option<Vec<String>> = None;
+    let mut baseline: Option<Vec<DegradedKey>> = None;
     let mut last: Option<Value> = None;
     let mut last_error: Option<String>;
     loop {
