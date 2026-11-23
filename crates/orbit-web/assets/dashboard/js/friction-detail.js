@@ -20,33 +20,26 @@ const TAGS_SPEC = TASK_FIELD_EDITORS.tags;
      openTask(id)   open a task from the During task link
      onChanged(id)  a write landed: reselect `id` and reload the list */
 export function paintFrictionDetail(detail, friction, ctx) {
-  // An open tag editor holds text the operator is still typing: a refresh of
-  // the same friction leaves it alone, as the task detail does.
-  if (detail.dataset.frictionId === friction.id && detail.querySelector(".field-editor-input")) return;
+  // An open tag editor holds text the operator is still typing. Keep that
+  // cell mounted and still repaint the rest of the pane from the saved
+  // record, as the task detail does. Skipping the whole paint leaves the
+  // status pill and the Resolve footer (stuck on "wait") showing the
+  // friction from before the write, and cancelling the editor does not
+  // paint again. The accordion twin is a fresh section with no friction
+  // id, so it never takes this path.
+  const draftCell = frictionTagsDraftCell(detail, friction.id);
+  if (draftCell && repaintFrictionAroundTagsDraft(detail, friction, ctx)) return;
+
   detail.dataset.frictionId = friction.id;
   detail.classList.add("friction-pane");
 
   // The write handlers report a failure on the content card, under the head.
   const content = el("div", { class: "row-detail task-detail friction-content" });
-  const write = (request, failure) => runFrictionWrite(content, friction, ctx, request, failure);
-
-  const status = friction.status || "open";
-  const targets = FRICTION_STATUSES.filter((value) => value !== status);
-  const label = `Update status for ${friction.id}`;
-  const statusCell = buildStatusSelectCell({
-    status,
-    label,
-    title: label,
-    targets,
-    onSelect: (next, select) => write(
-      (visit) => patchJson(frictionPath(visit, friction), { status: next }),
-      () => { select.value = ""; },
-    ),
-  });
+  const write = frictionWrite(content, friction, ctx);
 
   const levers = el("div", { class: "task-levers" }, [
-    statusCell,
-    el("div", { class: "task-levers-tags" }, [buildFrictionTagsEditor(friction, ctx)]),
+    frictionStatusCell(friction, write),
+    el("div", { class: "task-levers-tags" }, [draftCell || buildFrictionTagsEditor(friction, ctx)]),
   ]);
   const title = el("h2", { class: "task-pane-title", text: friction.title || friction.id });
   const head = el("div", { class: "task-pane-head" }, [
@@ -63,6 +56,57 @@ export function paintFrictionDetail(detail, friction, ctx) {
     buildResolveFooter(friction, write),
   );
   syncNodes(detail, [head, content]);
+}
+
+// The tags cell whose editor is open for this same friction, or null when
+// the pane is showing another record or the editor is closed.
+function frictionTagsDraftCell(detail, frictionId) {
+  if (detail.dataset.frictionId !== frictionId) return null;
+  const cell = detail.querySelector(".task-levers-tags .field-editor-cell");
+  if (!cell || !cell.querySelector(".field-editor-input")) return null;
+  return cell;
+}
+
+function frictionWrite(content, friction, ctx) {
+  return (request, failure) => runFrictionWrite(content, friction, ctx, request, failure);
+}
+
+function frictionStatusCell(friction, write) {
+  const status = friction.status || "open";
+  const targets = FRICTION_STATUSES.filter((value) => value !== status);
+  const label = `Update status for ${friction.id}`;
+  return buildStatusSelectCell({
+    status,
+    label,
+    title: label,
+    targets,
+    onSelect: (next, select) => write(
+      (visit) => patchJson(frictionPath(visit, friction), { status: next }),
+      () => { select.value = ""; },
+    ),
+  });
+}
+
+// Replace every painted part except the open tags cell. Returns false when
+// the pane is not the structure a previous paint left, so the caller builds
+// it again and moves the draft cell across.
+function repaintFrictionAroundTagsDraft(detail, friction, ctx) {
+  const content = detail.querySelector(":scope > .friction-content");
+  const title = detail.querySelector(":scope > .task-pane-head .task-pane-title");
+  const oldStatus = detail.querySelector(":scope > .task-pane-head .task-levers > .status-cell");
+  const oldCard = content && content.querySelector(":scope > .task-delivery-card");
+  const oldPanel = content && content.querySelector(":scope > .task-markdown-panel");
+  const oldFooter = content && content.querySelector(":scope > .task-action-footer");
+  if (!content || !title || !oldStatus || !oldCard || !oldPanel || !oldFooter) return false;
+
+  const write = frictionWrite(content, friction, ctx);
+  for (const node of content.querySelectorAll(".action-error")) node.remove();
+  title.textContent = friction.title || friction.id;
+  oldStatus.replaceWith(frictionStatusCell(friction, write));
+  oldCard.replaceWith(buildMetaCard(friction, ctx));
+  oldPanel.replaceWith(taskMarkdownPanel(markdownView(friction.body || friction.title || "_No body._")));
+  oldFooter.replaceWith(buildResolveFooter(friction, write));
+  return true;
 }
 
 function buildFrictionTagsEditor(friction, ctx) {
