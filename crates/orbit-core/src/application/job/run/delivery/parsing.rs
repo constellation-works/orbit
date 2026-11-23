@@ -256,6 +256,9 @@ pub(super) fn parse_landing_output(
         // including a merge that follows a rebase. An older checkpoint
         // omits that SHA. The landing stays merged; the caller treats the
         // missing identity as unresolved rather than as no culprit.
+        if object.get("merged").and_then(Value::as_bool) == Some(false) {
+            return Ok(None);
+        }
         return match object.get("base").and_then(Value::as_str) {
             Some(_) => {
                 let landed_commit = optional_sha(object.get("landed_commit"))?;
