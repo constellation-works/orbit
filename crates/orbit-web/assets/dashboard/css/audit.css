@@ -223,12 +223,12 @@ td.codebase-cell-td { padding: var(--space-6) var(--space-8); }
 .codebase-rate { font-family: var(--font-mono); font-size: var(--text-md); font-weight: 600; font-variant-numeric: tabular-nums; color: var(--fg); }
 .codebase-frac { font-family: var(--font-mono); font-size: var(--text-sm); color: var(--fg-dim); white-space: nowrap; }
 .codebase-extra { font-size: var(--text-sm); color: var(--fg-mute); }
-.codebase-note { margin: 0; font-size: var(--text-md); line-height: 1.5; color: var(--fg-mute); }
+.codebase-note { margin: 0; max-width: 100%; font-size: var(--text-md); line-height: 1.5; color: var(--fg-mute); overflow-wrap: anywhere; }
 .codebase-empty { margin: 0; padding: var(--space-4) 0; font-size: var(--text-md); color: var(--fg-dim); }
 td.codebase-empty { padding: var(--space-16) var(--space-14); }
-.codebase-empty-state { display: flex; flex-direction: column; align-items: flex-start; gap: var(--space-10); padding: var(--space-14) var(--space-16) var(--space-20); }
+.codebase-empty-state { display: flex; flex-direction: column; align-items: flex-start; gap: var(--space-10); padding: var(--space-16); }
 .codebase-empty-state.good { padding-left: 52px; background: no-repeat 16px 14px / 24px 24px url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%2363d297' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Ccircle cx='12' cy='12' r='9'/%3E%3Cpath d='M8 12.5l2.5 2.5 5.5-6'/%3E%3C/svg%3E"); }
-.codebase-empty-title { margin: 0; font-size: var(--text-lg); font-weight: 500; color: var(--fg); }
+.codebase-empty-title { margin: 0; max-width: 100%; font-size: var(--text-lg); font-weight: 500; color: var(--fg); overflow-wrap: anywhere; }
 .codebase-actions { display: flex; flex-wrap: wrap; gap: var(--space-10); }
 .codebase-btn {
   display: inline-flex;

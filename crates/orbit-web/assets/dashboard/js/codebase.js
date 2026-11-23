@@ -95,6 +95,7 @@ let route = { view: "hotspots", path: null };
 let view = { showAll: false, search: "", groupRelease: true, lockSort: "wait", allPairs: false, allLocks: false, allTasks: false, copied: null, copyFailed: null };
 let lastData = null;
 let lastPayloadKey = null;
+let refusedLayer = null;
 let paintedView = null;
 // The file view's related-files request: the key it answers, the selection its
 // data belongs to, its response or error, and a counter that retires superseded
@@ -111,6 +112,7 @@ let requestHashChange = () => {};
 function dropQueryData() {
   lastData = null;
   lastPayloadKey = null;
+  refusedLayer = null;
 }
 
 function resetRelated() {
@@ -119,8 +121,7 @@ function resetRelated() {
 }
 
 onWorkspaceChange(() => {
-  lastData = null;
-  lastPayloadKey = null;
+  dropQueryData();
   resetRelated();
   view = { ...view, search: "", showAll: false, allPairs: false, allLocks: false };
   if ($("codebase-path-search")) $("codebase-path-search").value = "";
@@ -322,16 +323,28 @@ function setMeta(text) {
 
 function fetchAndRenderCodebase() {
   if (isAggregateView()) {
-    lastData = null;
-    lastPayloadKey = null;
+    dropQueryData();
     paintedView = null;
     resetRelated();
     setMeta("");
     renderPanelPlaceholder(BODY_ID);
     return Promise.resolve();
   }
+  const requestedLayer = codebaseQuery.layer;
   const path = analyticsPath();
-  return requestPanel(BODY_ID, path, () => fetchJson(path), (data) => renderCodebase(data));
+  return requestPanel(
+    BODY_ID,
+    path,
+    () => fetchJson(path).catch((error) => {
+      // A bookmarked layer may no longer exist in workspace config; render an
+      // in-page recovery control instead of telling the operator to reload.
+      if (requestedLayer && error && error.status === 400 && !error.routeMissing) {
+        return { refusedLayer: requestedLayer, message: error.message || "" };
+      }
+      throw error;
+    }),
+    (data) => renderCodebase(data),
+  );
 }
 
 // ---- figures ----------------------------------------------------------------
@@ -1383,9 +1396,30 @@ function couplingNodes(model) {
 
 // ---- render -----------------------------------------------------------------
 
+function refusedLayerNode({ layer, message }) {
+  const label = route.view === "hotspots" ? "Clear layer filter" : "Clear layer & open Hotspots";
+  const box = el("section", { class: "card card-flush codebase-hot", role: "alert", "aria-label": "Invalid layer filter" }, [
+    el("div", { class: "codebase-empty-state" }, [
+      el("p", { class: "codebase-empty-title", text: `Layer “${layer}” is not configured in this workspace.` }),
+      message ? note(message) : null,
+      el("div", { class: "codebase-actions" }, [
+        actionButton(label, () => updateQuery({ layer: null }, { view: "hotspots", path: null })),
+      ]),
+    ]),
+  ]);
+  return keyed(box, "refused-layer", { layer, message, view: route.view });
+}
+
 function paint() {
   const body = $(BODY_ID);
-  if (!body || !lastData) return;
+  if (!body) return;
+  if (refusedLayer) {
+    body.dataset.view = route.view;
+    syncNodes(body, [refusedLayerNode(refusedLayer)]);
+    paintedView = `${route.view}\n${route.path ?? ""}`;
+    return;
+  }
+  if (!lastData) return;
   const model = buildModel(lastData);
   const nodes = route.view === "file" ? fileNodes(model)
     : route.view === "coupling" ? couplingNodes(model)
@@ -1403,6 +1437,15 @@ function paint() {
 
 function renderCodebase(data) {
   if (!data) return;
+  if (typeof data.refusedLayer === "string") {
+    dropQueryData();
+    resetRelated();
+    setMeta("");
+    refusedLayer = { layer: data.refusedLayer, message: data.message || "" };
+    paint();
+    return;
+  }
+  refusedLayer = null;
   lastData = data;
   lastPayloadKey = JSON.stringify(data);
   const computed = data.computed_at ? formatDateTime(data.computed_at) : "—";
