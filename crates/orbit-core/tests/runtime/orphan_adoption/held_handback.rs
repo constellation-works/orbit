@@ -179,7 +179,7 @@ fn a_check_runs_absent_hold_is_handed_back_once_the_head_reports_a_check() {
     let fx = fixture();
     let code = "delivery_check_runs_absent";
     let leaf = fx.delivered_leaf(410, "done", Shelf::Review, LeafEnd::Held(code));
-    let head = "absent-head";
+    let head = "published-head";
     fx.blocked(&leaf, head, "orbit-bot", false, &[]);
     let drain = fx.drain();
 
@@ -200,6 +200,57 @@ fn a_check_runs_absent_hold_is_handed_back_once_the_head_reports_a_check() {
     assert!(started(&waiting, &leaf.task).is_none(), "{waiting}");
     assert!(fx.retries(&leaf.run).is_empty(), "{waiting}");
     assert!(out_of_run_records(&fx, &leaf.task).is_empty(), "{waiting}");
+
+    // Evidence from a replacement SHA on the same branch spends no hand-back
+    // and starts no completion retry.
+    let replacement = "replacement-head";
+    let replacement_cases: [&dyn Fn(); 5] = [
+        &|| fx.report_required_checks(&leaf, replacement, "orbit-bot", &[], &["Protected (rust)"]),
+        &|| fx.report_required_checks(&leaf, replacement, "orbit-bot", &["Protected (rust)"], &[]),
+        &|| fx.report_no_required_checks(&leaf, replacement, "orbit-bot"),
+        &|| {
+            fx.blocked(
+                &leaf,
+                replacement,
+                "orbit-bot",
+                false,
+                &["Protected (rust)"],
+            )
+        },
+        &|| fx.blocked(&leaf, replacement, "orbit-bot", false, &[]),
+    ];
+    for setup in replacement_cases {
+        setup();
+        let moved = fx.pass(&drain, "done", true);
+        assert_eq!(
+            repair_skip(&moved, &leaf.task).as_deref(),
+            Some("publication_identity_changed"),
+            "{moved}"
+        );
+        assert!(started(&moved, &leaf.task).is_none(), "{moved}");
+        assert!(fx.retries(&leaf.run).is_empty(), "{moved}");
+        assert!(out_of_run_records(&fx, &leaf.task).is_empty(), "{moved}");
+    }
+    let readiness = fx
+        .runtime
+        .task_pr_auto_fix_readiness(&leaf.task, true)
+        .unwrap();
+    assert_eq!(readiness["available"], false, "{readiness}");
+    assert_eq!(
+        readiness["reason"], "publication_identity_changed",
+        "{readiness}"
+    );
+    match fx
+        .runtime
+        .start_task_pr_auto_fix(&leaf.task, true, Some("dashboard"))
+    {
+        Err(orbit_core::application::job::TaskAutoFixError::Refused(refusal)) => {
+            assert_eq!(refusal.reason(), "publication_identity_changed");
+        }
+        other => panic!("expected publication_identity_changed refusal, got {other:?}"),
+    }
+    assert!(fx.retries(&leaf.run).is_empty());
+    assert!(out_of_run_records(&fx, &leaf.task).is_empty());
 
     // The same head later reports a required check. Completion is handed
     // the pull request; the source leaf stays held and the task stays in review.
@@ -226,6 +277,36 @@ fn a_check_runs_absent_hold_is_handed_back_once_the_head_reports_a_check() {
         fx.jobs.get_job_run(&leaf.run).unwrap().unwrap().state,
         JobRunState::Held
     );
+
+    // Matching-head pending check evidence also allows the documented hand-back.
+    let pending_leaf = fx.delivered_leaf(412, "done", Shelf::Review, LeafEnd::Held(code));
+    fx.report_required_checks(&pending_leaf, head, "orbit-bot", &[], &["Protected (rust)"]);
+    let pending_pass = fx.pass(&drain, "done", true);
+    let pending_entry =
+        started(&pending_pass, &pending_leaf.task).unwrap_or_else(|| panic!("{pending_pass}"));
+    assert_eq!(pending_entry["hold_code"], code, "{pending_pass}");
+    assert_eq!(pending_entry["blocker"], Value::Null, "{pending_pass}");
+    assert_eq!(fx.retries(&pending_leaf.run).len(), 1, "{pending_pass}");
+
+    // Missing published SHA fails closed as publication_identity_changed.
+    let unrecorded = fx.delivered_leaf(413, "done", Shelf::Review, LeafEnd::Held(code));
+    let mut unrecorded_state = fx.jobs.read_run_state(&unrecorded.run).unwrap().unwrap();
+    unrecorded_state
+        .pipeline
+        .as_object_mut()
+        .unwrap()
+        .remove("push");
+    fx.jobs
+        .write_run_state(&unrecorded.run, &unrecorded_state)
+        .unwrap();
+    fx.report_required_checks(&unrecorded, head, "orbit-bot", &["Protected (rust)"], &[]);
+    let missing_pass = fx.pass(&drain, "done", true);
+    assert_eq!(
+        repair_skip(&missing_pass, &unrecorded.task).as_deref(),
+        Some("publication_identity_changed"),
+        "{missing_pass}"
+    );
+    assert!(fx.retries(&unrecorded.run).is_empty(), "{missing_pass}");
 }
 
 fn auto_fix_stop_waits_for_green_on_published_head_then_resumes_completion() {
@@ -311,10 +392,19 @@ fn a_repo_with_no_required_checks_hands_back_check_runs_absent_hold() {
     let fx = fixture();
     let code = "delivery_check_runs_absent";
     let leaf = fx.delivered_leaf(411, "done", Shelf::Review, LeafEnd::Held(code));
-    let head = "no-checks-repo-head";
-    fx.report_no_required_checks(&leaf, head, "orbit-bot");
+    let head = "published-head";
     let drain = fx.drain();
 
+    fx.report_no_required_checks(&leaf, "replacement-head", "orbit-bot");
+    let moved = fx.pass(&drain, "done", true);
+    assert_eq!(
+        repair_skip(&moved, &leaf.task).as_deref(),
+        Some("publication_identity_changed"),
+        "{moved}"
+    );
+    assert!(fx.retries(&leaf.run).is_empty(), "{moved}");
+
+    fx.report_no_required_checks(&leaf, head, "orbit-bot");
     let pass = fx.pass(&drain, "done", true);
     let entry = started(&pass, &leaf.task).unwrap_or_else(|| panic!("{pass}"));
     assert_eq!(entry["hold_code"], code, "{pass}");
