@@ -336,6 +336,31 @@ impl SecretUpdateRefusal {
     }
 }
 
+enum ExpectedSecretVersion<'a> {
+    MissingOrMalformed,
+    Unset,
+    Version(&'a str),
+}
+
+struct PluginSecretUpdateEntry<'a> {
+    value: Option<&'a str>,
+    expected_version: ExpectedSecretVersion<'a>,
+}
+
+impl<'a> PluginSecretUpdateEntry<'a> {
+    fn parse(entry: &'a Value) -> Self {
+        let expected_version = match entry.get("expected_version") {
+            Some(Value::String(version)) => ExpectedSecretVersion::Version(version),
+            Some(Value::Null) => ExpectedSecretVersion::Unset,
+            _ => ExpectedSecretVersion::MissingOrMalformed,
+        };
+        Self {
+            value: entry.get("value").and_then(Value::as_str),
+            expected_version,
+        }
+    }
+}
+
 /// Apply a backend's `secret_updates` (design §3, "Plugin secrets"): `exec`
 /// returns it beside `ok`/`output`, `mcp` as `result._meta.orbit.
 /// secret_updates`. Each entry is `{"value": …, "expected_version": …}`,
@@ -370,7 +395,11 @@ pub(crate) fn apply_secret_updates(
         SECRET_UPDATES.with(|cell| cell.borrow_mut().clear());
         return outcomes;
     };
-    for (name, entry) in entries {
+    let entries: Vec<_> = entries
+        .iter()
+        .map(|(name, entry)| (name, PluginSecretUpdateEntry::parse(entry)))
+        .collect();
+    for (name, entry) in &entries {
         // The name is the backend's own bytes: one that is not a valid
         // secret name is neither logged nor audited, so a value put in a
         // name's place cannot reach either.
@@ -415,8 +444,8 @@ pub(crate) fn apply_secret_updates(
     // refused, is a credential: an applied rotation usually invalidates the
     // delivered value, so the new one is the live secret. Mask it in whatever
     // this call relays next.
-    for (name, entry) in entries {
-        if let Some(value) = entry.get("value").and_then(Value::as_str)
+    for (name, entry) in &entries {
+        if let Some(value) = entry.value
             && spec.secrets.declares(name)
         {
             secrets.also_mask(value);
@@ -430,7 +459,7 @@ pub(crate) fn apply_secret_updates(
 fn apply_secret_update(
     spec: &PluginBackendSpec,
     name: &str,
-    entry: &Value,
+    entry: &PluginSecretUpdateEntry<'_>,
 ) -> Result<String, SecretUpdateRefusal> {
     if !spec.secrets.declares(name) {
         return Err(SecretUpdateRefusal::Undeclared);
@@ -438,13 +467,12 @@ fn apply_secret_update(
     if !spec.secrets.is_rotatable(name) {
         return Err(SecretUpdateRefusal::NotRotatable);
     }
-    let value = entry.get("value").and_then(Value::as_str);
-    let expected_version = match entry.get("expected_version") {
-        Some(Value::String(version)) => Some(Some(version.as_str())),
-        Some(Value::Null) => Some(None),
-        _ => None,
+    let expected_version = match entry.expected_version {
+        ExpectedSecretVersion::Version(version) => Some(version),
+        ExpectedSecretVersion::Unset => None,
+        ExpectedSecretVersion::MissingOrMalformed => return Err(SecretUpdateRefusal::Malformed),
     };
-    let (Some(value), Some(expected_version)) = (value, expected_version) else {
+    let Some(value) = entry.value else {
         return Err(SecretUpdateRefusal::Malformed);
     };
     match spec
