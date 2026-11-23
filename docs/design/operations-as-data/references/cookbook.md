@@ -304,7 +304,7 @@ dashboard needs no field-name check of its own.
 
 ### Step 9. Verify contract stability
 
-Follow the current [workspace gate guidance](../../../../CLAUDE.md#gates) for
+Follow the current [workspace gate guidance](../../../../AGENTS.md#gates) for
 delivery validation. Run focused checks for the changed behavior and Clippy on
 the changed crates. Run `make goldens` when CLI help, MCP text or another
 golden surface changes; use `make goldens UPDATE=1` to regenerate and review

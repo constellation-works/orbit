@@ -600,7 +600,7 @@ in a managed run `{{workspace}}` renders to the task worktree, so the grant reac
 that worktree's file. The leaf, and only the leaf, may be a symbolic link when the
 call has a workspace: the link must sit inside it and its target must resolve to a
 safe regular file inside the same workspace, outside `.git` and `.orbit`. The
-resolved target (`CLAUDE.md` for Orbit's own `AGENTS.md` -> `CLAUDE.md`) is what
+resolved target (the file a repository's `AGENTS.md` links to) is what
 both platforms grant, so a write through the link reaches it and the link itself
 stays. A link whose target leaves the workspace, is missing, or lands in `.git` or
 `.orbit` is refused, as is any link without a workspace. Because an exact-file grant
