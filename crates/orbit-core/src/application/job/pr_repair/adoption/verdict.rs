@@ -462,7 +462,8 @@ impl OrbitRuntime {
         // another repair: a configured required check that has not reported
         // on the head is not green, even when its siblings passed.
         if auto_fix_hold
-            && (blockers.conflicting
+            && (blockers.requires_status_checks.is_none()
+                || blockers.conflicting
                 || !blockers.failed_required_checks.is_empty()
                 || !blockers.pending_required_checks.is_empty()
                 || !blockers.unreported_required_checks.is_empty()
@@ -479,7 +480,8 @@ impl OrbitRuntime {
         // the published head reports every configured required check green.
         if unrepaired_repair_hold
             && blocker.is_none()
-            && (!blockers.pending_required_checks.is_empty()
+            && (blockers.requires_status_checks.is_none()
+                || !blockers.pending_required_checks.is_empty()
                 || !blockers.unreported_required_checks.is_empty()
                 || (blockers.passed_required_checks.is_empty()
                     && blockers.requires_status_checks != Some(false)))

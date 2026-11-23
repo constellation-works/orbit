@@ -439,7 +439,7 @@ impl Fixture {
                 pending_required_checks: pending.iter().map(|name| (*name).to_string()).collect(),
                 passed_required_checks: passed.iter().map(|name| (*name).to_string()).collect(),
                 unreported_required_checks: Vec::new(),
-                requires_status_checks: None,
+                requires_status_checks: Some(true),
             },
         );
     }
@@ -1626,6 +1626,26 @@ fn a_partially_reported_rollup_hands_back_only_once_every_required_check_passes(
         &unrepaired.run,
         1,
     );
+
+    // A passing classic check with an unreadable layered policy is not a
+    // complete green observation for either held route.
+    for leaf in [&unrepaired, &stopped] {
+        fx.report_required_checks(leaf, "published-head", "orbit-bot", &["Build"], &[]);
+        fx.forge
+            .0
+            .lock()
+            .unwrap()
+            .blockers
+            .get_mut(&leaf.number)
+            .unwrap()
+            .requires_status_checks = None;
+    }
+    let unreadable = fx.pass(&drain, "done", true);
+    for leaf in [&unrepaired, &stopped] {
+        assert!(started(&unreadable, &leaf.task).is_none(), "{unreadable}");
+        assert!(fx.retries(&leaf.run).is_empty(), "{unreadable}");
+        fx.report_partial_required_checks(leaf, "published-head", &[], &["Build"], &["Test"]);
+    }
 
     let waiting = fx.pass(&drain, "done", true);
     assert_eq!(
