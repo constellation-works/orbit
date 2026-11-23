@@ -149,15 +149,22 @@ fn require_input(job: &JobV2, id: &str, key: &str, expected: &str) -> Result<(),
     Ok(())
 }
 
+/// Whether `landing_push` ran and left a record. A step its `when:` skipped
+/// (always so under review policy `none`) is checkpointed as a success with a
+/// null output and listed in `skipped_steps`; it published nothing.
 fn landing_push_recorded(job: &JobV2, state: &PipelineState) -> bool {
-    job.steps
+    let index = job
+        .steps
         .iter()
         .position(|step| step.id == "landing_push")
-        .is_some_and(|idx| state.step_states.get(&(idx as u32)) == Some(&JobRunState::Success))
-        || state
-            .pipeline
-            .get("landing_push")
-            .is_some_and(|v| !v.is_null())
+        .map(|idx| idx as u32);
+    let skipped = index.is_some_and(|idx| state.skipped_steps.contains(&idx));
+    !skipped
+        && (index.is_some_and(|idx| state.step_states.get(&idx) == Some(&JobRunState::Success))
+            || state
+                .pipeline
+                .get("landing_push")
+                .is_some_and(|v| !v.is_null()))
 }
 
 pub(super) fn published_head<'a>(
