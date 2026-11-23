@@ -2140,8 +2140,8 @@ existing recovery activities, final validation and push do the repair:
   required check that current branch policy names and a freshly pushed head
   has not reported yet also waits; it is never treated as passed. An
   unclassified or optional pending check grants no wait. Review gates and
-  unreadable or stale evidence still stop the watcher. Untouched-file or
-  flaky attribution does not delay auto-fix: unless the known-red-base path
+  stale evidence stop the watcher. Untouched-file or flaky attribution does
+  not delay auto-fix: unless the known-red-base path
   applies, a source failure goes to repair on its first completion poll,
   without an unchanged-head rerun or eligible-set authorization. Suspicion
   alone never records `pr_auto_fix_base_red`. Every mergeable head is checked
@@ -2185,6 +2185,12 @@ existing recovery activities, final validation and push do the repair:
   authenticated retry ancestors. The stopped rebase's branch and original head
   must both match that repaired head; its target base remains pinned. Missing,
   unrelated or disconnected push records cannot authorize a different head.
+- When a required job's log is unreadable, including a truncated log with
+  no complete failing command, auto-fix can rerun failed jobs once on the
+  unchanged head. The provider must authenticate one workflow and its full
+  failed-job set. This uses the shared unchanged-head rerun budget and the
+  original completion deadline. A second unreadable failure keeps the
+  original stop. A readable result follows its usual classification.
 - CI rerun-planner refusals are retained on the owning task in
   `ci-rerun/<execution>/diagnostics.json`, including the observed PR, head,
   run and job identities, planner stage and a redacted reason header capped
@@ -2330,9 +2336,9 @@ existing recovery activities, final validation and push do the repair:
   the adapter refuses an expired budget and clamps the subprocess timeout to the
   remaining milliseconds. Expiry during a read prevents the next request and
   any new rerun or merge; pre-mutation revalidation uses that same deadline.
-- Approvals, permissions, admin rules, unknown status, unreadable evidence,
-  infrastructure failures outside that narrow prerequisite case and optional
-  checks failing alone launch no agent; the watcher stops with the reason.
+- Approvals, permissions, admin rules, unknown status, unreadable evidence
+  outside the retry above, other infrastructure failures, and optional
+  checks failing alone stop the watcher with the reason.
 - The repaired candidate passes required validation, is pushed only when the
   remote branch is still at the head the repair was admitted for, and the
   watcher then checks the new head. A head that the review gate already

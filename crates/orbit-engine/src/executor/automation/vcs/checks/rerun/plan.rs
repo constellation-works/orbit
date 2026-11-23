@@ -13,6 +13,9 @@ use super::send::{
     infrastructure_backoff, record_cancellation_exhausted, record_retry_exhausted,
     record_retry_history, send_reserved_rerun,
 };
+use super::unreadable_log::{
+    UNREADABLE_LOG_RERUN_PENDING, retry_unreadable_log, unreadable_log_rerun_pending,
+};
 use super::{
     CiRerunStep, PlanMismatch, RerunPlanRequest, authenticated_plan, is_no_authenticated_plan_error,
 };
@@ -21,6 +24,7 @@ use orbit_common::OrbitError;
 use orbit_types::workflow::{
     CI_INFRASTRUCTURE_RETRY_BACKOFF_EVENT, CiBaseSuspectLegacy, CiBaseSuspectRecord,
     CiInfrastructureRetryBackoffRecord, CiRerunAdmission, CiRerunRefusal, CiRerunRoot,
+    PrAutoFixBaseRed,
 };
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -43,6 +47,7 @@ pub(in crate::executor::automation::vcs) fn plan_ci_rerun<H: RuntimeHost + ?Size
     base_branch: &str,
     deadline_ms: u64,
     classified: Option<&[super::super::recovery::FailedJob]>,
+    allow_unreadable_log_rerun: bool,
     execution: &str,
     observation: &mut Option<CiRerunDiagnostic>,
 ) -> Result<CiRerunStep, OrbitError> {
@@ -59,6 +64,7 @@ pub(in crate::executor::automation::vcs) fn plan_ci_rerun<H: RuntimeHost + ?Size
         base_branch,
         deadline_ms,
         classified,
+        allow_unreadable_log_rerun,
         &mut diagnostic,
     );
     *observation = match &result {
@@ -94,6 +100,7 @@ fn plan_ci_rerun_observed<H: RuntimeHost + ?Sized>(
     base_branch: &str,
     deadline_ms: u64,
     classified: Option<&[super::super::recovery::FailedJob]>,
+    allow_unreadable_log_rerun: bool,
     diagnostic: &mut CiRerunDiagnostic,
 ) -> Result<CiRerunStep, OrbitError> {
     let (Some(head), Some(pr), Some(branch)) = (
@@ -125,6 +132,52 @@ fn plan_ci_rerun_observed<H: RuntimeHost + ?Sized>(
         .filter(|job| unsuccessful(job) && failed.iter().any(|check| answers(job, check)))
         .filter_map(|job| job.run_id.number())
         .collect::<BTreeSet<_>>();
+    let owner_history = allow_unreadable_log_rerun
+        .then(|| tasks.iter().min())
+        .flatten()
+        .and_then(|task| host.get_task_history(task).ok());
+    if owner_history.as_ref().is_some_and(|history| {
+        unreadable_log_rerun_pending(history, &pr.to_string(), head, &jobs, &runs)
+    }) {
+        return Ok(CiRerunStep::Wait(UNREADABLE_LOG_RERUN_PENDING.into()));
+    }
+    let recover_unreadable_log = |diagnostic: &CiRerunDiagnostic, error| {
+        if matches!(error, OrbitError::Execution(_))
+            && diagnostic.stage == CiRerunStage::Log
+            && runs.len() == 1
+            && owner_history.as_ref().is_some_and(|history| {
+                !history
+                    .iter()
+                    .filter_map(PrAutoFixBaseRed::from_entry)
+                    .any(|record| record.failed_head == head)
+            })
+            && let Some(job) = jobs.iter().find(|job| {
+                job.run_id.number() == diagnostic.run_id && job.job_id.number() == diagnostic.job_id
+            })
+        {
+            match retry_unreadable_log(
+                host,
+                workspace,
+                tasks,
+                pr,
+                head,
+                branch,
+                base,
+                base_branch,
+                &jobs,
+                failed,
+                job,
+                deadline_ms,
+            ) {
+                Ok(Some(step)) => return Ok(step),
+                Ok(None) => {}
+                Err(retry_error) => {
+                    tracing::debug!(%retry_error, "unreadable job log rerun could not be authorized");
+                }
+            }
+        }
+        Err(error)
+    };
     let mut conclusion_set = false;
     let mut roots = BTreeMap::<u64, Vec<CiRerunRoot>>::new();
     let mut base_jobs = None;
@@ -139,11 +192,17 @@ fn plan_ci_rerun_observed<H: RuntimeHost + ?Sized>(
     // step: the failed-step names are the classification, so no log is read.
     let handoff_set = handoff_step_set(&host.pr_config().ci_handoff_steps, &jobs, failed);
     let roots_preclassified = handoff_set.is_some();
+    let conclusion_roots = if roots_preclassified {
+        None
+    } else {
+        match try_conclusion_transient(host, workspace, &jobs, &runs, deadline_ms, diagnostic) {
+            Ok(roots) => roots,
+            Err(error) => return recover_unreadable_log(diagnostic, error),
+        }
+    };
     if let Some((run_id, handoff_roots)) = handoff_set {
         roots.insert(run_id, handoff_roots);
-    } else if let Some((run_id, pre_roots)) =
-        try_conclusion_transient(host, workspace, &jobs, &runs, deadline_ms, diagnostic)?
-    {
+    } else if let Some((run_id, pre_roots)) = conclusion_roots {
         // Conclusions (and a pure ci-await of them) are the classification.
         // The stopped job's log is not read, so a 404 or a truncated log
         // cannot turn the set inconclusive or ineligible.
@@ -186,7 +245,7 @@ fn plan_ci_rerun_observed<H: RuntimeHost + ?Sized>(
                         other_failure = true;
                         continue;
                     }
-                    return Err(error);
+                    return recover_unreadable_log(diagnostic, error);
                 }
             };
             diagnostic.stage = CiRerunStage::Classification;

@@ -7,7 +7,7 @@ use super::super::{
     recovery_log,
 };
 use orbit_common::OrbitError;
-use orbit_types::workflow::{CiRerunPlan, CiRerunRoot};
+use orbit_types::workflow::{CI_UNREADABLE_LOG_CLASSIFICATION, CiRerunPlan, CiRerunRoot};
 use serde_json::{Value, json};
 use std::{collections::BTreeSet, path::Path};
 
@@ -33,7 +33,11 @@ pub(in crate::executor::automation::vcs::operations) fn ci_rerun_plan(
         || roots.iter().any(|root| {
             !matches!(
                 root.classification.as_str(),
-                "flaky" | "transient" | "unattributed" | "no_edit_repair"
+                "flaky"
+                    | "transient"
+                    | "unattributed"
+                    | "no_edit_repair"
+                    | CI_UNREADABLE_LOG_CLASSIFICATION
             ) || root.signature.is_empty()
         })
     {
@@ -46,6 +50,16 @@ pub(in crate::executor::automation::vcs::operations) fn ci_rerun_plan(
         && roots
             .iter()
             .any(|root| root.classification != "no_edit_repair")
+    {
+        return Err(unreadable("ineligible retry roots"));
+    }
+    let unreadable_log = roots
+        .iter()
+        .any(|root| root.classification == CI_UNREADABLE_LOG_CLASSIFICATION);
+    if unreadable_log
+        && roots
+            .iter()
+            .any(|root| root.classification != CI_UNREADABLE_LOG_CLASSIFICATION)
     {
         return Err(unreadable("ineligible retry roots"));
     }
@@ -193,6 +207,19 @@ pub(in crate::executor::automation::vcs::operations) fn ci_rerun_plan(
     {
         return Err(unreadable("empty or ambiguous retry selection"));
     }
+    if unreadable_log
+        && !failed.iter().any(|job| {
+            roots
+                .iter()
+                .any(|root| job["id"].as_u64() == Some(root.job_id))
+                && snapshot
+                    .required
+                    .iter()
+                    .any(|gate| job["name"] == gate.context)
+        })
+    {
+        return Err(unreadable("retry requires an unreadable required job log"));
+    }
     let (path, blob, source) = prerequisite::workflow(deadline, workspace, &run)?;
     // Trust is rooted in the accepted base, rather than a candidate-authored workflow.
     let trusted = api(
@@ -245,6 +272,14 @@ pub(in crate::executor::automation::vcs::operations) fn ci_rerun_plan(
             // workflow, step and check policy without requiring a full command log.
             root_ids.insert(root.job_id);
             logs.push(json!({"job_id":root.job_id,"authenticated":"no_edit_repair"}));
+            continue;
+        }
+        if root.classification == CI_UNREADABLE_LOG_CLASSIFICATION {
+            verify_unreadable_log(deadline, workspace, run_id, job)?;
+            root_ids.insert(root.job_id);
+            logs.push(
+                json!({"job_id":root.job_id,"authenticated":CI_UNREADABLE_LOG_CLASSIFICATION}),
+            );
             continue;
         }
         if handoff_step_authenticated(root, job) {
@@ -341,6 +376,46 @@ pub(in crate::executor::automation::vcs::operations) fn ci_rerun_plan(
         return Err(unreadable("CI retry authorization exceeds its bound"));
     }
     Ok(json!({"plan":plan}))
+}
+
+/// Re-read the log before authorizing a retry without command evidence.
+/// A readable log or a provider throttle keeps its ordinary route.
+fn verify_unreadable_log(
+    deadline: Deadline,
+    workspace: &Path,
+    run_id: u64,
+    job: &Value,
+) -> Result<(), OrbitError> {
+    let job_id = number(job, "id", unreadable)?;
+    let read = match super::ci_job_log(&json!({
+        "workspace_path": workspace,
+        "run_id": run_id.to_string(),
+        "job_id": job_id.to_string(),
+        "deadline_ms": deadline.0
+    })) {
+        Ok(read) => read,
+        Err(OrbitError::Execution(_)) => return Ok(()),
+        Err(error) => return Err(error),
+    };
+    if !matches!(read.read_throttle, super::CiLogReadThrottle::Absent) {
+        return Err(unreadable("retry root log read was throttled"));
+    }
+    let job_name = text(job, "name", unreadable)?;
+    let mut failed_steps = job["steps"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|step| step["conclusion"] == "failure");
+    let first = failed_steps.next().and_then(|step| step["name"].as_str());
+    let unique = first.filter(|_| failed_steps.next().is_none());
+    if read.fallback_error.is_none()
+        && read
+            .bound_log(Some(job_name), first.unwrap_or(job_name), unique)
+            .is_ok()
+    {
+        return Err(unreadable("retry root log became readable"));
+    }
+    Ok(())
 }
 
 /// A transient root authenticated by the provider conclusion, not a log.

@@ -91,6 +91,7 @@ pub(in crate::executor::automation::vcs) fn recover_failed_checks<H: RuntimeHost
             &context.candidate.base_branch,
             recovery.deadline_ms,
             Some(&jobs),
+            false,
             &context.handoff_id,
             &mut recovery.rerun_diagnostic,
         )

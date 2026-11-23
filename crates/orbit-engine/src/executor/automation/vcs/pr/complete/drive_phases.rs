@@ -571,6 +571,7 @@ impl<H: RuntimeHost + ?Sized> PollDriver<'_, H> {
                         pr_number,
                         status,
                         completion_deadline_ms,
+                        true,
                         &mut *self.diagnostic,
                     ),
                 };

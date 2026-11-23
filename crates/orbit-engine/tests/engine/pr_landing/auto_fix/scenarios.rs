@@ -5345,10 +5345,9 @@ fn auto_fix_settles_staggered_required_failures_before_repair_and_final_recovery
     );
 }
 
-/// A different run's dispatched repair and an unreadable check log both hold
-/// completion without dispatching any recovery, handoff or rerun. Labelled
-/// rows of the former `a_dispatched_repair_...` and `an_unreadable_check_log_...`
-/// scenarios.
+/// A different run's dispatched repair and an unreadable log without an exact
+/// provider attempt both hold completion without dispatching recovery or a rerun.
+/// The rows cover dispatched repair and missing attempt evidence.
 #[test]
 fn auto_fix_holds_typed_refusals_without_dispatching_recovery() {
     auto_fix_table(
@@ -5422,7 +5421,7 @@ fn dispatched_repair_hold(row: &std::path::Path, case: &str) {
     assert_no_unexpected_ran(&host, &unexpected, case);
 }
 
-/// An unreadable check log is an inconclusive auto-fix stop: held, not failed.
+/// An unreadable check log with no provider attempt identity keeps its inconclusive hold.
 fn unreadable_log_hold(row: &std::path::Path, case: &str) {
     let (fx, host) = opened_review(row);
     host.script("ci.prerequisite_evidence", json!({"evidence": null}));
@@ -5455,6 +5454,13 @@ fn unreadable_log_hold(row: &std::path::Path, case: &str) {
         "{case}: {error}"
     );
     assert!(repair_attempts(&host).is_empty());
+    assert!(
+        !host
+            .history(TASK_ID)
+            .iter()
+            .any(|entry| { entry.event == orbit_types::workflow::CI_RERUN_RESERVED_EVENT }),
+        "{case}: an unreadable log with no attempt identity grants no rerun"
+    );
     assert_no_merge_or_landing(&fx, &host, TaskStatus::Review, case);
 }
 

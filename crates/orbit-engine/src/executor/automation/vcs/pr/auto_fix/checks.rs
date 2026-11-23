@@ -116,6 +116,7 @@ pub(in crate::executor::automation::vcs::pr) fn recover_ci_rerun<H: RuntimeHost 
     pr_number: &str,
     status: &PullRequestStatus,
     deadline_ms: u64,
+    allow_unreadable_log_rerun: bool,
     observation: &mut Option<super::super::super::checks::rerun_diagnostic::CiRerunDiagnostic>,
 ) -> Result<CiRerunRecovery, OrbitError> {
     let Some(head) = status.head_sha.as_deref() else {
@@ -198,6 +199,7 @@ pub(in crate::executor::automation::vcs::pr) fn recover_ci_rerun<H: RuntimeHost 
         &branch,
         deadline_ms,
         None,
+        allow_unreadable_log_rerun,
         &auto_fix.run_id,
         observation,
     )? {

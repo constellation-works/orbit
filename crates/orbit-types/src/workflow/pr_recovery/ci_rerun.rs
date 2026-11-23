@@ -8,11 +8,12 @@ use serde_json::Value;
 /// Durable reservation, including unknown provider outcomes.
 pub const CI_RERUN_RESERVED_EVENT: &str = "ci_check_rerun_reserved";
 
+/// A failed required job whose command evidence could not be read.
+pub const CI_UNREADABLE_LOG_CLASSIFICATION: &str = "unreadable_log";
+
 /// The independently classified root of a workflow-wide failed-jobs retry.
-/// `classification` is `transient`, `flaky`, `unattributed`, or
-/// `no_edit_repair`: a failure whose cause no evidence established yet, or
-/// which an admitted auto-fix check repair left with no edit, rerun once per
-/// head.
+/// `classification` is `transient`, `flaky`, `unattributed`, `unreadable_log`,
+/// or `no_edit_repair`. Unreadable logs use the shared one-rerun budget.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CiRerunRoot {
@@ -738,7 +739,11 @@ pub fn decide_ci_rerun_with_policy(
         || plan.roots.iter().any(|root| {
             !matches!(
                 root.classification.as_str(),
-                "transient" | "flaky" | "unattributed" | "no_edit_repair"
+                "transient"
+                    | "flaky"
+                    | "unattributed"
+                    | "no_edit_repair"
+                    | CI_UNREADABLE_LOG_CLASSIFICATION
             )
         })
     {

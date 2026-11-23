@@ -28,7 +28,7 @@ pub(super) use ci::{
     CiCommitJobEvidence, CiCommitJobIdentity, CiCommitJobsAnswer, CiJobConclusion, CiJobEvent,
     CiJobObservation, CiJobStatus,
 };
-pub(super) use ci::{CiJobLogAnswer, CiLogReadThrottle, CiLogSource};
+pub(super) use ci::{CiJobLogAnswer, CiLogReadThrottle};
 pub(crate) use dispatch::run;
 pub(super) use process::{
     GITHUB_TRANSIENT_ATTEMPTS, GITHUB_TRANSIENT_RETRY_DELAY, carry_class, is_transient,
