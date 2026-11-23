@@ -1,12 +1,12 @@
 ---
 id: STD-07-ui-ux
 title: UI and UX — consistent spacing, shared edges, one type scale, minimal words, show each thing once, honest charts, stable layouts, visible state
-summary: Normative rules for every operator-facing screen (dashboards, web apps, sites, panels): sibling spacing and shared edges, layouts that never shift, one type scale, contrast and one meaning per colour, minimal words with helper text behind an info icon, tooltips only where they add something, no redundant or inert elements, answer-first data with honest charts, visible live state, responsive use of width, and turning each owner correction into a rule; follow it in any project that renders a UI.
+summary: Eight principles and the normative rules that serve them, for every operator-facing screen (dashboards, web apps, sites, panels): sibling spacing and shared edges, layouts that never shift, one type scale, contrast and one meaning per colour, minimal words with helper text behind an info icon, tooltips only where they add something, no redundant or inert elements, answer-first data with honest charts, visible live state, responsive use of width, and turning each owner correction into a rule; follow it in any project that renders a UI.
 status: draft
 tags: [standard, ui, ux, design]
-version: 14
+version: 16
 created: 2026-11-09
-updated: 2026-11-17
+updated: 2026-11-22
 last_validated: 2026-11-15
 related: [STD-01-cli-surface, STD-04-testing-and-verification]
 ---
@@ -28,6 +28,43 @@ This standard is a directory. This file holds the binding text. Beside it,
 [`why.md`](why.md) gives the corrections behind each rule, [`checks.md`](checks.md) the
 gate that enforces it, [`exemplars.md`](exemplars.md) worked examples in Orbit, and
 [`CHANGELOG.md`](CHANGELOG.md) what changed in each version.
+
+## Principles
+
+Every rule below serves one of these principles. When no rule covers a case, judge it by
+them and cite the principle (`STD-07 §P3`) the way a rule is cited. A rule is the specific
+decision: where a principle seems to disagree with one, follow the rule and file a
+`standards` friction.
+
+- **P1. One thing, once, in few words.** Every element earns its place by being acted on.
+  Each fact appears once, under the shortest clear label. Explanation waits behind an info
+  icon, and a drill-down adds only what its parent lacks. (R13–R16, R29, R32, R41)
+- **P2. Nothing moves unless the operator moved it.** A screen is calm because it is stable,
+  not because it is sparse. Loading, a status change, a message or a resize never shifts a
+  neighbour, swaps the page the operator is on, or changes how a familiar control looks.
+  (R5, R21, R37, R39, R43)
+- **P3. Even edges are correctness, not polish.** An odd gap, a ragged edge or an orphan is
+  a defect. Siblings share spacing, side-by-side panels share edges, rows share one grid, and
+  one kind of element has one look. When items do not fit evenly, remove the weakest instead
+  of squeezing one in. (R1–R3, R6, R27, R28, R30, R31, R40)
+- **P4. Every value is derived, never guessed.** A size, width, colour or gap comes from the
+  content, from the project's spacing and type scales, or from its theme. A number chosen to
+  make one view look right is a defect that has not surfaced yet. (R8, R11, R30, R35, R42)
+- **P5. Use the room there is.** Width is for use: a second column when the window is wide, a
+  row of controls that runs on before it wraps, prose as wide as the table beside it. When it
+  is narrow, drop the least important thing; never wrap a header, scroll sideways or leave
+  half the page blank. Dense is fine while it stays even (P3) and stable (P2). (R4, R23, R28,
+  R38, R39, R42)
+- **P6. The answer first, the evidence one step away, both honest.** A view leads with what
+  the operator came for, a summary sits with its detail, and the detail opens on demand. A
+  chart is a claim: it agrees with its data and with any ranking beside it. (R14, R17–R19,
+  R29, R34–R36)
+- **P7. State lives on the thing.** Running, stuck, repairing and idle show on the item as a
+  dot, pill or tint, readable at a glance. Idle is still visible, empty says why, and a
+  finished action tidies up after itself. (R10, R20, R22)
+- **P8. Corrections become structure.** A new view starts from an approved mock, each owner
+  correction becomes a rule, and a rule becomes a machine check wherever a machine can see
+  the defect. (R25, R26)
 
 ## Rules
 
@@ -109,6 +146,14 @@ gate that enforces it, [`exemplars.md`](exemplars.md) worked examples in Orbit, 
 - **R12.** Each product MUST declare its default theme (light or dark) in its design docs and
   apply it consistently across its views. A default that is applied MUST NOT be stored as if
   the user had chosen it.
+- **R45.** A text colour MUST follow the text's role, not its length or its view. The
+  product's strongest text colour is for what the operator looks for: titles, labels that
+  name a thing, and scanned values (ids, counts, states). Prose (a description, a comment
+  body, a reason, a message: anything read as sentences) MUST use the step below it, which
+  still meets R10's contrast. A title and the prose under it are never the same colour.
+  Inside prose, ids, code and links keep their own colour, so they stand out from the
+  sentence. Secondary metadata (timestamps, authors, counts beside a title) and hints use
+  the steps below prose. Each product names its steps as theme tokens (R11).
 
 ### Words
 

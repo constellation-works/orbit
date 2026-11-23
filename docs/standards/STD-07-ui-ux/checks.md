@@ -8,6 +8,9 @@ with `node scripts/ux-rules/run.mjs --surface ui` against a live URL or a fixtur
 the QA full sweep's `ux-measurement-browser` scenario. A project without that runner does
 the same review by hand at 375px, 768px and 1440px in each theme it ships.
 
+The principles (P1–P8) have no gate of their own. They are checked through the rules each
+one lists and, for a case no rule covers, in review, citing `STD-07 §Pn`.
+
 | Rule | Gate |
 |---|---|
 | R1 | `ui.sibling-spacing`, `ui.cramped-padding`, `ui.panel-body-padding` |
@@ -53,4 +56,5 @@ the same review by hand at 375px, 768px and 1440px in each theme it ships.
 | R42 | review-only at 375px, 768px and 1440px: compare each select with its longest option. A candidate for a `ui.content-width` rule (fail when a `select` or `button` has a fixed CSS width, or a select's box is more than 24px wider than its longest option plus arrow while its row has no other member that needs the space) |
 | R43 | review-only: on each multi-column page, select a tab or item in each secondary region at full width, then narrow to one column and reload there. A candidate for a `ui.collapse-keeps-primary` rule (after a secondary-region interaction at 1440px, resize to 375px and fail when the primary region is not visible) |
 | R44 | review-only: open each dismissible surface, press Esc and confirm it closes; confirm its close button reads "esc" and its accessible name names what it closes |
+| R45 | review-only: in each view, prose (descriptions, comment bodies, reasons, messages) uses the step below the strongest text colour, and no title shares a colour with the prose under it |
 | R26 | review-only: the fix task quotes the correction and names the rule, or the friction it filed |
