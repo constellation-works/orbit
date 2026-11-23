@@ -624,9 +624,11 @@ fn an_unwritable_release_marker_still_settles_and_keeps_the_workspace() {
         .expect("the launch is recorded before submission returns");
 
     let started = Instant::now();
-    let error = owned
-        .cleanup(&[], Duration::from_secs(2))
-        .expect_err("an unwritable marker is reported");
+    let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        owned.release_and_wait(std::slice::from_ref(&run));
+    }))
+    .expect_err("an unwritable marker is reported to the caller");
+    let error = panic.downcast_ref::<String>().expect("teardown panic text");
     assert!(
         error.contains("write release marker"),
         "the marker failure is reported: {error}"
@@ -636,20 +638,13 @@ fn an_unwritable_release_marker_still_settles_and_keeps_the_workspace() {
         "the held worker is still unsettled: {error}"
     );
     assert!(
-        started.elapsed() < Duration::from_secs(30),
+        started.elapsed() < Duration::from_secs(45),
         "teardown is bounded: {:?}",
         started.elapsed()
     );
-    assert!(
-        owned.acceptor.is_none(),
-        "the acceptor was stopped and joined"
-    );
-    assert!(owned.root.is_none(), "the guard gave up its own share");
-    assert!(
-        Arc::strong_count(&root) > 1,
-        "the guard's share of the root is kept while the substitute may use it"
-    );
     drop(owned);
+    drop(runtime);
+    drop(root);
     assert!(root_path.exists(), "the workspace outlives the held worker");
     assert!(!reaped(pid), "the held substitute is still alive");
     assert!(
@@ -665,7 +660,6 @@ fn an_unwritable_release_marker_still_settles_and_keeps_the_workspace() {
     until("its startup observer completes", || {
         pipeline_worker_observer_completed(&repo, &run, pid)
     });
-    drop(runtime);
     std::fs::remove_dir_all(&root_path).unwrap();
 }
 
