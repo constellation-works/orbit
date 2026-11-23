@@ -9,7 +9,7 @@ and pushing an implementation branch are separate actions.
 
 These are CLI administration operations on the intended host. They are not
 advertised task MCP tools. Apply the authority rules in
-[tool-surface.md](../../orbit/references/tool-surface.md) before using them.
+[tool-surface-routing.md](../../orbit/references/tool-surface-routing.md) before using them.
 
 ## Bind an owned workspace
 

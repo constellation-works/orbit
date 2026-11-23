@@ -341,7 +341,7 @@ pub(super) const BLOCK_TRIAGE: TaskOperation = TaskOperation {
     verb: TaskVerb::BlockTriage,
     cli_path: &[],
     tool_name: "orbit.task.block_triage",
-    tool_description: "Triage proposed tasks a task-pilot warning holds. `candidates` lists held tasks; `propose` opens an operator decision; `report` records a human action. Policy and the proof recipe: the orbit skill's references/tool-surface.md, section `Pilot-warning triage`.",
+    tool_description: "Triage proposed tasks a task-pilot warning holds. `candidates` lists held tasks; `propose` opens an operator decision; `report` records a human action. Policy and the proof recipe: the orbit skill's references/tool-surface-pilot.md, section `Pilot-warning triage`.",
     cli_about: "",
     cli_help: CliHelp::NONE,
     // `candidates` only reads, but the decisions write.

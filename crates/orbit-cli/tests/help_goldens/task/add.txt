@@ -114,4 +114,4 @@ Global options (see 'orbit --help' for descriptions):
   --json
   --header
 
-Status, grant, selector and scheduling rules for these flags: installed Orbit skill `references/task-fields.md`.
+Status, grant, selector and scheduling rules for these flags: installed Orbit skill `references/task-fields-*.md` references.

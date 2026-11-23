@@ -116,7 +116,7 @@ const ADD: AutoTaskOperation = AutoTaskOperation {
         constraints: &[],
         long_about: None,
         after_help: Some(
-            "Minted-task status meanings and lifecycle rules: installed Orbit skill `references/task-fields.md`.",
+            "Minted-task status meanings and lifecycle rules: installed Orbit skill `references/task-fields-projections.md`.",
         ),
         flag_order: &[],
     },
@@ -358,7 +358,7 @@ const UPDATE: AutoTaskOperation = AutoTaskOperation {
         constraints: &[],
         long_about: None,
         after_help: Some(
-            "Minted-task status meanings and lifecycle rules: installed Orbit skill `references/task-fields.md`.",
+            "Minted-task status meanings and lifecycle rules: installed Orbit skill `references/task-fields-projections.md`.",
         ),
         flag_order: &[],
     },

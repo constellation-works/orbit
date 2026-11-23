@@ -1,7 +1,7 @@
 [
   {
     "name": "github.auth.status",
-    "description": "Preflight the GitHub CLI surface: whether a GitHub CLI is present on this execution lane (`available`) and whether it holds usable credentials there (`authenticated`). Neither absence nor a missing credential is an error. Quota fields and detail: the orbit skill's tool-surface.md reference, section `GitHub auth status`.",
+    "description": "Preflight the GitHub CLI surface: whether a GitHub CLI is present on this execution lane (`available`) and whether it holds usable credentials there (`authenticated`). Neither absence nor a missing credential is an error. Quota fields and detail: the orbit skill's tool-surface-registry.md reference, section `GitHub auth status`.",
     "enabled": true,
     "active": true,
     "status": "active",
@@ -93,7 +93,7 @@
   },
   {
     "name": "github.run.logs",
-    "description": "Read a bounded excerpt of one GitHub Actions run's logs — failed steps by default, or the full log — plus runner checkout evidence. Source limits, step mapping and job-log recovery: the orbit skill's tool-surface.md reference, section `GitHub run logs`.",
+    "description": "Read a bounded excerpt of one GitHub Actions run's logs — failed steps by default, or the full log — plus runner checkout evidence. Source limits, step mapping and job-log recovery: the orbit skill's tool-surface-registry.md reference, section `GitHub run logs`.",
     "enabled": true,
     "active": true,
     "status": "active",
@@ -222,7 +222,7 @@
   },
   {
     "name": "orbit.agents.scorecard",
-    "description": "Rank one agent role's models by recorded reasoning effort over the window by weighted outcome rate per 100 units of work. `by_type` and `per_task` switch the output. Scoring rules, switches and cost: the orbit skill's references/tool-surface.md, section `Agent scorecards`.",
+    "description": "Rank one agent role's models by recorded reasoning effort over the window by weighted outcome rate per 100 units of work. `by_type` and `per_task` switch the output. Scoring rules, switches and cost: the orbit skill's references/tool-surface-scorecards.md, section `Agent scorecards`.",
     "enabled": true,
     "active": true,
     "status": "active",
@@ -334,7 +334,7 @@
   },
   {
     "name": "orbit.attention",
-    "description": "List operator waits and suggested next actions; use at session start or on-call triage, checking degraded sources before treating an empty result as clear. Details: installed Orbit skill `references/attention.md`.",
+    "description": "List operator waits and suggested next actions; use at session start or on-call triage, checking degraded sources before treating an empty result as clear. Details: installed Orbit skill `references/attention-reading.md`.",
     "enabled": true,
     "active": true,
     "status": "active",
@@ -554,7 +554,7 @@
   },
   {
     "name": "orbit.automation.explain",
-    "description": "Explain a routine's `trigger.condition`, an auto-task's `schedule.condition`, or `job:<name>` steps against live workspace state. Reports the scope, matches and closest misses, one subject's clause tree with operand values (unreadable values are unknown, never false), and durable tracking; job mode shows the steps checked at load. Read-only: it writes nothing, evaluates no waits and mints nothing; enabled jobs run detached and park while a step waits. Details: installed Orbit skill `references/tool-surface.md`, row `Condition explain`.",
+    "description": "Explain a routine's `trigger.condition`, an auto-task's `schedule.condition`, or `job:<name>` steps against live workspace state. Reports the scope, matches and closest misses, one subject's clause tree with operand values (unreadable values are unknown, never false), and durable tracking; job mode shows the steps checked at load. Read-only: it writes nothing, evaluates no waits and mints nothing; enabled jobs run detached and park while a step waits. Details: installed Orbit skill `references/tool-surface-capability-map.md`, row `Condition explain`.",
     "enabled": true,
     "active": true,
     "status": "active",
@@ -742,7 +742,7 @@
   },
   {
     "name": "orbit.decision.digest",
-    "description": "Raise the approval decision requests a decision channel's digest presents, and return the whole digest in one call. Callable only by the plugin the channel is bound to, through its callback session, or by the operator, never by an agent session. Repeated calls reuse requests for unchanged task bindings; newly eligible tasks can add requests. With the decision channel disabled, it returns no requests. The binding rules and result fields are in the orbit skill's references/tool-surface.md, section `Decision requests`.",
+    "description": "Raise the approval decision requests a decision channel's digest presents, and return the whole digest in one call. Callable only by the plugin the channel is bound to, through its callback session, or by the operator, never by an agent session. Repeated calls reuse requests for unchanged task bindings; newly eligible tasks can add requests. With the decision channel disabled, it returns no requests. The binding rules and result fields are in the orbit skill's references/tool-surface-decisions.md, section `Decision requests`.",
     "enabled": true,
     "active": true,
     "status": "active",
@@ -759,7 +759,7 @@
   },
   {
     "name": "orbit.decision.submit",
-    "description": "Submit a human's answer to one open decision request through a registered decision channel. Callable only by the plugin the channel is bound to, through its callback session, or by the operator testing the channel, never by an agent session. Core verifies the channel, the request's binding, the answer and the single-use token, and checks a forwarded raw message's DKIM signature itself. A refusal returns its error code and applies nothing. The refusal codes, DKIM rules and retry behaviour are in the orbit skill's references/tool-surface.md, section `Decision requests`.",
+    "description": "Submit a human's answer to one open decision request through a registered decision channel. Callable only by the plugin the channel is bound to, through its callback session, or by the operator testing the channel, never by an agent session. Core verifies the channel, the request's binding, the answer and the single-use token, and checks a forwarded raw message's DKIM signature itself. A refusal returns its error code and applies nothing. The refusal codes, DKIM rules and retry behaviour are in the orbit skill's references/tool-surface-decisions.md, section `Decision requests`.",
     "enabled": true,
     "active": true,
     "status": "active",
@@ -847,7 +847,7 @@
   },
   {
     "name": "orbit.drain.claim.effort",
-    "description": "Report, after the fact, the reasoning effort and implementing model a claimed leaf ran at when its settlement carried none. Attribution only; it changes no claim, task or run outcome. Who may call and the conflict refusals: the orbit skill's tool-surface.md reference, section `Distributed drain tools`.",
+    "description": "Report, after the fact, the reasoning effort and implementing model a claimed leaf ran at when its settlement carried none. Attribution only; it changes no claim, task or run outcome. Who may call and the conflict refusals: the orbit skill's tool-surface-registry.md reference, section `Distributed drain tools`.",
     "enabled": true,
     "active": true,
     "status": "active",
@@ -957,7 +957,7 @@
   },
   {
     "name": "orbit.drain.probe",
-    "description": "Read-only preflight for the distributed drain, served by the workspace owner. Reports the owner, version, protocol schema, held capabilities and ship configuration; creates no receipt, claim or task transition. Fields and caller_* inputs: the orbit skill's tool-surface.md reference, section `Distributed drain tools`.",
+    "description": "Read-only preflight for the distributed drain, served by the workspace owner. Reports the owner, version, protocol schema, held capabilities and ship configuration; creates no receipt, claim or task transition. Fields and caller_* inputs: the orbit skill's tool-surface-registry.md reference, section `Distributed drain tools`.",
     "enabled": true,
     "active": true,
     "status": "active",
@@ -1609,7 +1609,7 @@
   },
   {
     "name": "orbit.notice.list",
-    "description": "List fleet notices, open ones unless status says otherwise. Output is {notices, degraded}; `degraded` names any owner that could not be read. Read-only. Scope and merge rules: the orbit skill's tool-surface.md reference, section `Fleet notices`.",
+    "description": "List fleet notices, open ones unless status says otherwise. Output is {notices, degraded}; `degraded` names any owner that could not be read. Read-only. Scope and merge rules: the orbit skill's tool-surface-notices.md reference, section `Fleet notices`.",
     "enabled": true,
     "active": true,
     "status": "active",
@@ -1680,7 +1680,7 @@
   },
   {
     "name": "orbit.notice.post",
-    "description": "Post a fleet notice: a short, scoped note every agent and operator in its scope should see until it stops being true. A repeated dedupe_key updates or corroborates the open one. Poster classes, expiry caps and refusals: the orbit skill's tool-surface.md reference, section `Fleet notices`.",
+    "description": "Post a fleet notice: a short, scoped note every agent and operator in its scope should see until it stops being true. A repeated dedupe_key updates or corroborates the open one. Poster classes, expiry caps and refusals: the orbit skill's tool-surface-notices.md reference, section `Fleet notices`.",
     "enabled": true,
     "active": true,
     "status": "active",
@@ -1961,7 +1961,7 @@
   },
   {
     "name": "orbit.resident.grant",
-    "description": "Widen or narrow a resident mandate's authority: its rights (dispatch, promote, merge, plugin_upgrade, refresh) and covered workspaces. Narrowing applies at once; widening is the human's. Rules and output: the orbit skill's tool-surface.md reference, section `Resident tools`.",
+    "description": "Widen or narrow a resident mandate's authority: its rights (dispatch, promote, merge, plugin_upgrade, refresh) and covered workspaces. Narrowing applies at once; widening is the human's. Rules and output: the orbit skill's tool-surface-registry.md reference, section `Resident tools`.",
     "enabled": true,
     "active": true,
     "status": "active",
@@ -2043,7 +2043,7 @@
   },
   {
     "name": "orbit.resident.metrics",
-    "description": "Report the resident widening measures over a window, derived read-only from task history, decision requests, checkpoints and audit rows: interventions, escalation load, reversals and crash-recovery cost. Read-only. Measure definitions: the orbit skill's tool-surface.md reference, section `Resident tools`.",
+    "description": "Report the resident widening measures over a window, derived read-only from task history, decision requests, checkpoints and audit rows: interventions, escalation load, reversals and crash-recovery cost. Read-only. Measure definitions: the orbit skill's tool-surface-registry.md reference, section `Resident tools`.",
     "enabled": true,
     "active": true,
     "status": "active",
@@ -2367,7 +2367,7 @@
   },
   {
     "name": "orbit.task.add",
-    "description": "Create a task and return its JSON; rules are in the installed Orbit skill `references/task-fields.md`.",
+    "description": "Create a task and return its JSON; rules are in the installed Orbit skill `references/task-fields-*.md` references.",
     "enabled": true,
     "active": true,
     "status": "active",
@@ -2557,7 +2557,7 @@
   },
   {
     "name": "orbit.task.block_triage",
-    "description": "Triage proposed tasks a task-pilot warning holds. `candidates` lists held tasks; `propose` opens an operator decision; `report` records a human action. Policy and the proof recipe: the orbit skill's references/tool-surface.md, section `Pilot-warning triage`.",
+    "description": "Triage proposed tasks a task-pilot warning holds. `candidates` lists held tasks; `propose` opens an operator decision; `report` records a human action. Policy and the proof recipe: the orbit skill's references/tool-surface-pilot.md, section `Pilot-warning triage`.",
     "enabled": true,
     "active": true,
     "status": "active",
@@ -2669,7 +2669,7 @@
   },
   {
     "name": "orbit.task.list",
-    "description": "List tasks as {tasks, total, truncated}; rules are in the installed Orbit skill `references/task-fields.md`.",
+    "description": "List tasks as {tasks, total, truncated}; rules are in the installed Orbit skill `references/task-fields-projections.md`.",
     "enabled": true,
     "active": true,
     "status": "active",
@@ -3032,7 +3032,7 @@
   },
   {
     "name": "orbit.task.show",
-    "description": "Fetch a task as JSON by globally unique `id`; optional `workspace` is a fail-closed filter. Use `fields` (alias `field`) for projections, or `field: \"delivery\"` for bounded commit/landing evidence. Projection, routing and delivery details: installed Orbit skill `references/task-fields.md`.",
+    "description": "Fetch a task as JSON by globally unique `id`; optional `workspace` is a fail-closed filter. Use `fields` (alias `field`) for projections, or `field: \"delivery\"` for bounded commit/landing evidence. Projection, routing and delivery details: installed Orbit skill `references/task-fields-projections.md`.",
     "enabled": true,
     "active": true,
     "status": "active",
@@ -3109,7 +3109,7 @@
   },
   {
     "name": "orbit.task.update",
-    "description": "Update a task and return its JSON; rules are in the installed Orbit skill `references/task-fields.md`.",
+    "description": "Update a task and return its JSON; rules are in the installed Orbit skill `references/task-fields-*.md` references.",
     "enabled": true,
     "active": true,
     "status": "active",

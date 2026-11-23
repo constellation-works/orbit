@@ -98,7 +98,7 @@ const SERVE_CONTRACT_HELP: &str = "\
 Omit `--operator` for any server an agent launches: without it a session holds agent \
 capability only.\n\
 Mode, authority, workspace binding, attribution, role and toolset rules: installed Orbit \
-skill `references/tool-surface.md` (Serving MCP).";
+skill `references/tool-surface-mcp-serve.md` (Serving MCP).";
 
 #[derive(Args)]
 #[command(

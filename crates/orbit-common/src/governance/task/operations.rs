@@ -214,13 +214,13 @@ const LIST: TaskOperation = TaskOperation {
     verb: TaskVerb::List,
     cli_path: &["list"],
     tool_name: "orbit.task.list",
-    tool_description: "List tasks as {tasks, total, truncated}; rules are in the installed Orbit skill `references/task-fields.md`.",
+    tool_description: "List tasks as {tasks, total, truncated}; rules are in the installed Orbit skill `references/task-fields-projections.md`.",
     cli_about: "List tasks with optional filters",
     cli_help: CliHelp {
         constraints: &[],
         long_about: None,
         after_help: Some(
-            "Status meanings, lifecycle and listing-order rules: installed Orbit skill `references/task-fields.md`.\n\nExamples:\n  orbit task list\n  orbit task list --limit 100\n  orbit task list --status backlog\n  orbit task list --status in-progress,review\n  orbit task list --type feature\n  orbit task list --origin operator_request\n  orbit task list --priority high\n  orbit task list --parent T12345678-123456\n  orbit task list --ref jira:ENG-1234\n  orbit task list --has-ref jira\n  orbit task list --tag perf --tag bench\n  orbit task list --path src/auth/login.rs\n  orbit task list --json",
+            "Status meanings, lifecycle and listing-order rules: installed Orbit skill `references/task-fields-projections.md`.\n\nExamples:\n  orbit task list\n  orbit task list --limit 100\n  orbit task list --status backlog\n  orbit task list --status in-progress,review\n  orbit task list --type feature\n  orbit task list --origin operator_request\n  orbit task list --priority high\n  orbit task list --parent T12345678-123456\n  orbit task list --ref jira:ENG-1234\n  orbit task list --has-ref jira\n  orbit task list --tag perf --tag bench\n  orbit task list --path src/auth/login.rs\n  orbit task list --json",
         ),
         flag_order: &[
             "status",
@@ -508,7 +508,7 @@ const SHOW: TaskOperation = TaskOperation {
     verb: TaskVerb::Show,
     cli_path: &["show"],
     tool_name: "orbit.task.show",
-    tool_description: "Fetch a task as JSON by globally unique `id`; optional `workspace` is a fail-closed filter. Use `fields` (alias `field`) for projections, or `field: \"delivery\"` for bounded commit/landing evidence. Projection, routing and delivery details: installed Orbit skill `references/task-fields.md`.",
+    tool_description: "Fetch a task as JSON by globally unique `id`; optional `workspace` is a fail-closed filter. Use `fields` (alias `field`) for projections, or `field: \"delivery\"` for bounded commit/landing evidence. Projection, routing and delivery details: installed Orbit skill `references/task-fields-projections.md`.",
     cli_about: "Show detailed information about a task, found by ID with an optional workspace filter",
     cli_help: CliHelp {
         long_about: Some(
@@ -562,7 +562,7 @@ const SHOW: TaskOperation = TaskOperation {
                         multiple: true,
                     },
                     help: Description::Static(
-                        "Print only the specified field projection(s), for example `--fields title,status`. Repeat the flag or use a comma-separated list. Valid names and JSON output shapes: installed Orbit skill `references/task-fields.md`. No pagination with a projection on a claimed read: drop the projection to page the full task, or drop pagination for a projection.",
+                        "Print only the specified field projection(s), for example `--fields title,status`. Repeat the flag or use a comma-separated list. Valid names and JSON output shapes: installed Orbit skill `references/task-fields-projections.md`. No pagination with a projection on a claimed read: drop the projection to page the full task, or drop pagination for a projection.",
                     ),
                 }),
             },
@@ -620,7 +620,7 @@ const LINT: TaskOperation = TaskOperation {
         constraints: &[],
         long_about: None,
         after_help: Some(
-            "Status meanings and lifecycle rules: installed Orbit skill `references/task-fields.md`.\n\nExamples:\n  orbit task lint <TASK_ID>                   # findings for one task\n  orbit task lint                             # sweep active tasks for context that needs repair\n  orbit task lint <TASK_ID> --restore-pruned  # re-declare selectors an old prune recorded\n  orbit task lint --restore-pruned            # apply the restoration across the sweep\n  orbit task lint --status review",
+            "Status meanings and lifecycle rules: installed Orbit skill `references/task-fields-projections.md`.\n\nExamples:\n  orbit task lint <TASK_ID>                   # findings for one task\n  orbit task lint                             # sweep active tasks for context that needs repair\n  orbit task lint <TASK_ID> --restore-pruned  # re-declare selectors an old prune recorded\n  orbit task lint --restore-pruned            # apply the restoration across the sweep\n  orbit task lint --status review",
         ),
         flag_order: &[],
     },

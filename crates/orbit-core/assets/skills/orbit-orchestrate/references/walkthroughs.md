@@ -78,7 +78,7 @@ Check the connected server's advertised tools and schemas. A missing option
 may have an authorized administrative equivalent on the same host; a denied
 capability is not permission to bypass that boundary. Report the specific gap
 if no supported route exists. A managed leaf worker cannot dispatch follow-up
-runs. See [tool-surface.md](../../orbit/references/tool-surface.md).
+runs. See [tool-surface-routing.md](../../orbit/references/tool-surface-routing.md).
 
 ## CI reports a failure after the fix merged
 

@@ -1486,7 +1486,7 @@ fn advertised_descriptions_are_complete_and_value_lists_move_to_enums() {
     let attention = find_tool(&tools, "orbit_attention");
     let description = attention["description"].as_str().unwrap_or("");
     assert!(
-        description.contains("references/attention.md"),
+        description.contains("references/attention-reading.md"),
         "orbit_attention lost its docs pointer: {description}"
     );
 }

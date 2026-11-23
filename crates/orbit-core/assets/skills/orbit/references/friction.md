@@ -1,5 +1,16 @@
 # Friction
 
+Contents:
+
+- [Record shape](#record-shape)
+- [Listing and JSON response contract](#listing-and-json-response-contract)
+- [Tags](#tags)
+- [Lifecycle](#lifecycle)
+  - [Closing legacy records on a replica](#closing-legacy-records-on-a-replica)
+- [Re-homing a friction to its owning workspace](#re-homing-a-friction-to-its-owning-workspace)
+- [Reading the corpus](#reading-the-corpus)
+- [Rules](#rules)
+
 Friction is a record of **something that made the work harder than it should
 have been**. A confusing error, a missing flag, a build step that fails for
 undocumented reasons, an API that behaves unlike its docs, a misleading prompt,
@@ -31,7 +42,9 @@ Records live in Orbit's store, keyed by `(workspace_id, friction_id)` — IDs ar
 workspace-local and monthly (`F<YYYY>-<MM>-<NNN>`), so the same ID in two
 workspaces is two unrelated records. Agents write them through
 `orbit.friction` (actions `add` and `update`) and read them through
-`orbit.search` (kind `friction`); the `orbit friction` CLI serves people. Any
+`orbit.search` (kind `friction`); the `orbit friction` CLI serves people.
+
+Any
 `.orbit/frictions/` markdown tree is legacy evidence, and editing a file there
 cannot change what a read returns. Creation is durable; `update` can replace the body and triage metadata. New records start `open` and may become `triaged` or `resolved`.
 
@@ -105,7 +118,9 @@ orbit friction tags      # the vocabulary this workspace actually accepts
 Every tag on a friction add or update must come from that vocabulary.
 `orbit friction add --tag <tag>` (repeatable), `orbit.friction` action `add`, and
 `orbit.friction` action `update` with `tags` refuse a tag outside the workspace
-taxonomy. The refusal names each unknown tag and lists the valid tags, and nothing
+taxonomy.
+
+The refusal names each unknown tag and lists the valid tags, and nothing
 is recorded. Run `orbit friction tags` to see the accepted vocabulary before filing.
 Re-homing is the exception: a tag the owning taxonomy does not define is dropped,
 not refused (see [Re-homing](#re-homing-a-friction-to-its-owning-workspace)).
@@ -146,11 +161,14 @@ cause, give that task
 `relations: [{"type":"resolves","target":"<friction-id>"}]`. Unqualified
 friction IDs are workspace-local: auto-resolve looks up that ID only in the
 task's workspace and records `resolved_by_task` when the task reaches `done`.
+
 IDs are not global. Filing the task does not itself resolve anything — the
 record stays open until the fix lands. Owner-side landing also recognizes
 valid friction IDs in the task description and acceptance criteria, deduplicated
 with its `resolves` relations. This includes background citations: keep
-unrelated friction references in comments instead. It resolves open or triaged
+unrelated friction references in comments instead.
+
+It resolves open or triaged
 records transactionally, preserving the entire body and appending the task,
 delivered commit, PR number and time. Already-resolved records stay untouched,
 and the task history names each record this landing resolved. The ordinary
@@ -161,9 +179,12 @@ The implementer never has to close a record with a future merge SHA: a
 Local and already-landed handoffs name the candidate or covering commit;
 verified no-diff handoffs name the synchronized base, with PR `none`. A final
 recovery's completion names the covering commit it verified, also with PR `none`.
+
 Auto-resolve runs on the transition into `done`, not on later writes to the
 done task: a friction reopened afterwards stays open. The transition commits
-each named target as owed in the task's history. A resolution that failed or
+each named target as owed in the task's history.
+
+A resolution that failed or
 never ran, because of a failed write, an unreadable history or a crash, is
 retried by the task's next write, retaining the original delivery evidence.
 A target named only in text, on a completion with no delivered commit, is
@@ -172,7 +193,9 @@ closed out in the task's history and the friction stays open.
 A target that does not exist in this workspace and is not known to belong
 elsewhere is dangling: audit-visible, and it does not block completion. A
 target that exists only in another workspace on this host is **not**
-dangling — completing the task is rejected with `friction_not_local`. Resolve
+dangling — completing the task is rejected with `friction_not_local`.
+
+Resolve
 that friction from its owning workspace — `orbit friction resolve <id>` is the
 operator CLI path; an agent instead runs `orbit tool run orbit.friction
 --input '{"action":"update","id":"<id>","status":"resolved"}'`, which stamps the same resolution
@@ -259,6 +282,7 @@ The `orbit friction` commands above are for people at a terminal. They are not
 `orbit.friction` actions, and that tool refuses `show`, `list` and `comment`. An
 MCP session or `orbit tool run` caller reads and lists only through
 `orbit.search`. `{"kind":"friction","query":"<ID>","all":true}` reads one record.
+
 The query is a substring match over several fields, so take the hit whose `id`
 equals `<ID>`. `all` is required to reach a triaged or resolved record, since a
 query otherwise defaults to open records. Omit `query` to list them, across every

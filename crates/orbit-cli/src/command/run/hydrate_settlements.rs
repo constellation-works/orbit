@@ -23,7 +23,7 @@ use crate::parse::parse_since;
 run record from its follower and keeps it as the claim's immutable `hydrated` evidence; \
 `orbit run settlements --no-reconcile` then reports it as run_evidence.\n\
 Outcomes, claim matching, paging and the JSON shape: installed Orbit skill \
-`references/setup/distributed-drain.md`.\n\
+`references/setup/distributed-drain-owner-surface.md`.\n\
 Examples:\n  orbit run settlements-hydrate --follower-workspace orbit --limit 10\n  \
 orbit run settlements-hydrate --follower-workspace orbit --limit 10 --after <claim-id>\n  \
 orbit run settlements-hydrate --follower-workspace orbit --task <task-id> --recheck --json"

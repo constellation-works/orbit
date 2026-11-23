@@ -528,7 +528,7 @@ fn tool_run_rejects_inactive_tools() {
 
 /// [ORB-12581] `orbit.drain.claims` is off the MCP surface and has no
 /// subcommand of its own, so `orbit tool run` is the operator's only route to
-/// it — the one both copies of the shipped `tool-surface.md` name. Registering
+/// it — the one both copies of the shipped `tool-surface-*.md` references name. Registering
 /// it inactive made that command fail on every surface, with a refusal that
 /// no capability could clear.
 #[test]

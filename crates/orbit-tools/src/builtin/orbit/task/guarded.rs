@@ -324,7 +324,7 @@ pub(super) fn write(ctx: &ToolContext, input: Value, create: bool) -> Result<Val
 /// without weakening ordinary creation's requirements.
 ///
 /// Relation types and `regression_from` attribution are not repeated on the
-/// wire schema; they live in the installed Orbit skill `references/task-fields.md`.
+/// wire schema; they live in the installed Orbit skill `references/task-fields-*.md` references.
 pub(super) fn extend_create_schema(value: &mut Value) {
     value["allOf"] = json!([{
         "if":{"required":["request_id"]},
@@ -338,7 +338,7 @@ pub(super) fn extend_create_schema(value: &mut Value) {
 
 /// `orbit.task.update`'s schema extension: a review verdict is an object, and
 /// guarded writes keep their conditionals. The verdict's fields are documented
-/// in the installed Orbit skill `references/task-fields.md`; the host still
+/// in the installed Orbit skill `references/task-fields-*.md` references; the host still
 /// validates the object.
 pub(super) fn extend_update_schema(value: &mut Value) {
     value["properties"]["verdict"] = json!({

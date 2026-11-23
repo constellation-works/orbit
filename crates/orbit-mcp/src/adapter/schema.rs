@@ -41,7 +41,7 @@ pub(crate) const WORKSPACE_SELECTOR_PARAM: &str = "workspace";
 /// One description for every advertised `workspace` selector.
 ///
 /// Required versus optional stays in the schema `required` array. Routing
-/// rules live in the installed Orbit skill `references/task-fields.md`.
+/// rules live in the installed Orbit skill `references/task-fields-*.md` references.
 pub(crate) const WORKSPACE_SELECTOR_DESCRIPTION: &str =
     "Workspace selector from orbit_workspace_list.";
 

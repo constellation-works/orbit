@@ -1,0 +1,37 @@
+{
+  "skill": "orbit",
+  "cases": [
+    {
+      "id": "load-assigned-task",
+      "kind": "should_load",
+      "prompt": "Pick up the Orbit task assigned to you in this session's execution envelope and implement it; the acceptance criteria are in the task record.",
+      "expected": "Loads the orbit skill, reads `references/task-execution-steps.md`, and reads the task with `orbit tool run orbit.task.show --input '{\"id\":\"<task-id>\"}'` (or MCP `orbit_task_show`) before editing."
+    },
+    {
+      "id": "not-for-drain-dispatch",
+      "kind": "should_not_load",
+      "prompt": "Start an `orbit run auto` drain over the backlog for the next 8 hours and tell me why run jrun-20261120-0412-a1 failed.",
+      "expected": "Does not load orbit; loads orbit-orchestrate, which covers `orbit run` dispatch, drains and failed `jrun-*` runs.",
+      "should_load_instead": "orbit-orchestrate"
+    },
+    {
+      "id": "not-for-machine-setup",
+      "kind": "should_not_load",
+      "prompt": "Install Orbit on this new Linux box, set up the sweep clock and register the MCP server for Claude.",
+      "expected": "Does not load orbit; loads orbit-setup, which covers installation, the scheduler and MCP configuration.",
+      "should_load_instead": "orbit-setup"
+    },
+    {
+      "id": "file-a-bug-task",
+      "kind": "task",
+      "prompt": "File an Orbit task: `orbit task list --origin automation` returns tasks of every origin. Don't start it.",
+      "expected": "Reads `references/task-authoring-contract.md` and `references/task-authoring-create.md`, then calls `orbit.task.add` once with a title, a description naming the observed behaviour, testable acceptance criteria, `context_files` selectors for the files the fix will touch and an `origin`. Reads the returned ID from the response (`fields: [\"id\"]`) instead of inventing one, and neither promotes nor dispatches the task."
+    },
+    {
+      "id": "route-placement-field",
+      "kind": "task",
+      "prompt": "A task must run only on a host with a GPU and not before Monday 09:00 UTC. Which fields do I set, and how?",
+      "expected": "Reads `references/task-fields-placement.md`; answers with `requires_labels: [\"gpu\"]` (all labels required, checked against known serving hosts) and `not_before` as an RFC 3339 instant with offset, set through `orbit.task.update`."
+    }
+  ]
+}

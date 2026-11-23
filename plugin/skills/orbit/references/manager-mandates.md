@@ -1,0 +1,166 @@
+# Acting as a manager: mandates, grants and directions
+
+Contents:
+
+- [Operator CLI forms](#operator-cli-forms)
+- [File a mandate](#file-a-mandate)
+- [Cadence: floor and heartbeat](#cadence-floor-and-heartbeat)
+- [Relay grants verbatim](#relay-grants-verbatim)
+- [Relay directions verbatim](#relay-directions-verbatim)
+- [Boundaries](#boundaries)
+
+A manager is a role an interactive session takes, not a program and not a
+second store. It holds no loop and no state of its own: everything it knows it
+reads from Orbit, and everything it does it writes through Orbit tools. Any
+session serving the `manager` MCP role can act as manager for the read,
+relay, control, and summary steps, and two manager sessions at once are safe
+because neither is authoritative.
+
+Filing, editing, and commenting on the
+mandate assignment need the `tasks-write` toolset, which the plain `manager`
+MCP role does not list: run the manager server with that toolset added to
+the role (for example `orbit mcp serve --role manager --toolset tasks-write`),
+or hand those steps to a session that already has it. Adding the toolset
+changes only which tools the server lists and dispatches; it grants no
+authority.
+
+The manager does four things for the human: files and scopes mandates, relays
+grants, decisions and directions verbatim, controls residents, and summarises
+them from checkpoints and the digest. It never widens a resident's authority
+on its own, and it never answers a resident's escalation for the human.
+
+For the resident's side of the channel, read
+[Resident cycle](resident-cycle-act.md). For raising decisions, read
+[Tool surface](tool-surface-decisions.md#raising-a-decision).
+
+## Operator CLI forms
+
+Use these shell forms with the mandate's assignment task as `<TASK_ID>`:
+
+- **Grant authority:** `orbit resident grant --add <RIGHT> --quote '<VERBATIM_AUTHORIZATION>' <TASK_ID>`; add `--add-workspace <WORKSPACE>` when widening workspace scope. For narrowing, use `--remove <RIGHT>`, `--drop-workspace <WORKSPACE>` or `--deadline <RFC3339>` instead. This widens or narrows authority according to the caller's authority. Verify with `orbit resident show <TASK_ID>`, checking effective authority and any open grant requests separately.
+- **Relay a direction:** `orbit resident relay --quote '<VERBATIM_WORDS>' --source '{"human":"<HUMAN>","via":"<CHANNEL>","said_at":"<RFC3339>"}' [--request-id <REQUEST_ID>] [--reverses <DECISION_ID>] <TASK_ID>`. This records the human's words unchanged and wakes the resident. Verify with `orbit resident show <TASK_ID>` after the next cycle, checking its checkpoint for the relayed direction; see [Resident cycle](resident-cycle-act.md).
+- **Control firing:** `orbit resident control --reason '<REASON>' <TASK_ID> <ACTION> [--status-request] [--by-session <SESSION>]`, where `<ACTION>` is `pause`, `resume`, `stop`, `wake`, `takeover` or `release`, and `--status-request` applies only to `wake`. This pauses, resumes, stops, wakes, takes over or releases a mandate. Verify the resulting state with `orbit resident show <TASK_ID>`; see [Resident cycle](resident-cycle-act.md) for cycle behavior.
+- **Append a checkpoint:** `orbit resident checkpoint --record '<CHECKPOINT_JSON>' <TASK_ID>`. This appends the live cycle's structured outcome and action record. Verify the latest checkpoint with `orbit resident show <TASK_ID>`; see [Resident cycle](resident-cycle-act.md) for the required record and outcomes.
+- **List mandates:** `orbit resident list [--all]`. This lists mandates in the workspace; `--all` includes ended mandates. Verify a selected mandate's details with `orbit resident show <TASK_ID>`.
+
+## File a mandate
+
+A mandate is an `[orchestration]` assignment task tagged `resident`, carrying
+a `resident/mandate.json` artifact, plus a separate authority record. The
+mandate says what to achieve; the authority says what the resident may do.
+
+Filing steps 1–2 need the `tasks-write` toolset (`orbit.task.add` and
+`orbit.task.artifact` action `put` belong to it, so a plain `manager` MCP session is
+refused with `toolset_not_enabled`); reuse an existing assignment when the
+session cannot write, or hand the filing to a session with that surface.
+
+1. File or reuse the assignment in the owning workspace with
+   `orbit.task.add`, tagged `resident`. Give it the goal as its description
+   and exit criteria the resident can check against task state.
+2. Write `resident/mandate.json` with `orbit.task.artifact` action `put`. Schema
+   `resident.mandate/v1`: `goal` (one line), `exit_criteria` (1–8 lines),
+   optional `deadline` (RFC 3339), `workspaces` the mandate is about,
+   `watch` (`tasks` and `tags` whose changes wake the resident), `crew` (any
+   registered crew), `cadence` (`heartbeat_minutes` at least 5, optional
+   `floor_minutes` at least 5 and at most the heartbeat) and `continuity`
+   (`prefer` or `off`). See "Cadence: floor and heartbeat" below.
+3. Submit the authority grant with the human's words verbatim (next section).
+4. The mandate becomes active when it has a valid mandate artifact and its
+   assignment is open (tagged `resident`, control active): a grant is not an
+   activation prerequisite. Without granted rights it still runs observe-only
+   cycles; granted rights authorize action, not activation.
+
+After attaching a mandate, inspect `cycle_routine_disabled`,
+`cycle_routine_name` and the returned warnings. A disabled cycle routine leaves
+the mandate stored but unable to act until the routine is enabled. These
+signals are present in MCP and in the compact default `orbit tool run` output,
+including calls routed with `--host`. `--full` returns the complete tool
+response; an explicit `--fields` filter keeps only the requested fields and
+any `audit_warning`.
+
+Editing the mandate is an ordinary task write (`orbit.task.update`) and needs
+the `tasks-write` toolset, but it is not otherwise gated: an edit cannot
+widen authority — the effective scope is the workspaces both the
+mandate and the authority record cover. `orbit.resident.show` reports both
+records beside the effective authority.
+
+## Cadence: floor and heartbeat
+
+The **heartbeat** is the longest a resident goes without a cycle. The
+**floor** is the shortest gap between two cycles, however much changes; it
+bounds cost when the resident has something to react to. Between them, each
+checkpoint's `next_wake.not_before` picks the next cycle time when nothing
+wakes it sooner.
+
+A resident wakes early only on a change it acts on: any change to a task in
+`watch`, or a state change (blocked, review, review decision, done,
+rejected, a settled decision request) of a task its cycles acted on; a
+warn, incident or maintenance notice opening or clearing (every `resident:`-keyed
+notice, any resident's status line or warn, and notices authored by the assignment
+excluded); an answer, comment or
+mandate or authority change on the assignment.
+
+Edits, run retries and moves
+between active states do not wake it.
+
+Leave `floor_minutes` out: it defaults to the heartbeat. Set a lower floor
+only when the operator asks for faster reaction ("react within 5 minutes");
+"every 20 minutes or as it sees fit" is `heartbeat_minutes: 20` with no
+floor. Keep `watch` for tasks whose every change matters: a watched tag on a
+busy queue makes the floor the interval.
+
+## Relay grants verbatim
+
+Authority rights are `dispatch`, `promote`, `merge`, `plugin_upgrade` and `refresh`.
+Anything else — releases, tags, publishing, host changes, config edits,
+secrets — is not grantable to a resident.
+
+Use `orbit.resident.grant` with `task_id`, and one side only per call:
+
+- Widen: `add` (rights) and/or `workspaces`, plus `quote` — the human's words
+  authorising the widening, unchanged (at most 2000 characters). From any
+  caller but a native-terminal operator this changes nothing and raises one
+  `resident_authority` decision request that quotes `quote` verbatim and
+  names your session.
+  - The authority changes only when the human answers
+    `grant` through the decision channel. An open request for the same addition
+    is returned, not duplicated. Report the outcome (`granted`, `requested` or
+    `narrowed`) to the human; never report a request as a grant.
+- Narrow: `remove`, `drop_workspaces`, or a shorter `deadline`. Narrowing
+  applies at once for any caller that can write the assignment, is recorded
+  with that caller, and takes effect at the next cycle boundary. A call may
+  not widen and narrow at once; narrow first, then ask to widen.
+
+Never paraphrase, summarise or embellish a grant quote. If the human's words
+are ambiguous, ask them rather than guessing: a misread relay costs one
+refused decision, not a silent widening.
+
+## Relay directions verbatim
+
+Use `orbit.resident.relay` with `task_id`, `quote` (the human's words,
+1–4000 characters, unchanged) and `source` (`{human, via, session?, said_at}`:
+who said it, through which channel, and when). Add `request_id` when the
+words answer a resident request, and `reverses` when they undo a resident
+decision recorded in a checkpoint.
+
+- A relay writes one `resident.answer` comment and wakes the resident. It is
+  steering within authority, weighed like task text; the latest relay wins.
+- A relay never changes authority. Input naming rights, workspaces or status
+  is refused; route an authorisation through `orbit.resident.grant` instead.
+- A relayed answer to an escalation is a direction, not the decision answer:
+  the human still answers the decision request itself. The manager only
+  reminds.
+- Text that would need redaction is refused, never rewritten, so the words
+  stay verbatim. Do not work around a refusal by editing the quote.
+
+## Boundaries
+
+- The manager files `proposed` work, relays, narrows and controls. Dispatch,
+  promotion and merging belong to the resident within its grant, or to the
+  normal pipeline — not to the manager improvising outside the mandate.
+- Post a fleet notice with `orbit.notice.post` when the human broadcasts
+  something every agent in scope should see. An open `maintenance` notice in
+  a covered workspace narrows every affected resident to observe-only until
+  it closes; a notice never widens anyone.
+- Repository-specific operating know-how stays in the consuming repository's
+  own skills. This reference is only the provider-neutral manager procedure.

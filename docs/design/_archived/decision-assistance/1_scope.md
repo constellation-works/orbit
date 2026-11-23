@@ -101,7 +101,7 @@ Two practical starting points are:
   asks an agent to categorize evidence into product defects, misclassified holds,
   provider/capacity problems, upstream task quality, environment/flake, or true
   one-offs. This is a small classification inside a much larger investigation.
-- [Task authoring](../../../../crates/orbit-core/assets/skills/orbit/references/task-authoring.md)
+- [Task authoring](../../../../crates/orbit-core/assets/skills/orbit/references/task-authoring-contract.md)
   requires a concrete outcome, coherent scope and observable acceptance criteria.
   The [pilot](../../../../crates/orbit-core/assets/activities/task_pilot.yaml) later
   inspects source contracts, footprints and validation feasibility. A lightweight

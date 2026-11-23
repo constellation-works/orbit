@@ -60,7 +60,7 @@ const QUERY: OperationSpec<AttentionVerb> = OperationSpec {
     verb: AttentionVerb::Query,
     cli_path: &["query"],
     tool_name: "orbit.attention",
-    tool_description: "List operator waits and suggested next actions; use at session start or on-call triage, checking degraded sources before treating an empty result as clear. Details: installed Orbit skill `references/attention.md`.",
+    tool_description: "List operator waits and suggested next actions; use at session start or on-call triage, checking degraded sources before treating an empty result as clear. Details: installed Orbit skill `references/attention-reading.md`.",
     cli_about: "List what waits on an operator",
     cli_help: CliHelp::NONE,
     effect: Effect::Read,

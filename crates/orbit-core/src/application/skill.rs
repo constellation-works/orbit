@@ -29,26 +29,74 @@ pub(crate) fn skill_link_roots(base_root: &Path) -> Vec<PathBuf> {
 /// ordering below groups each skill's files under its router, in the order its
 /// reference table presents them.
 pub(crate) const DEFAULT_SKILL_FILES: &[(&str, &str)] = &[
-    // Everyday task work: the router, then its references in table order.
+    // Everyday task work: the router, its references in table order, then its evaluation cases.
     (
         "orbit/SKILL.md",
         include_str!("../../assets/skills/orbit/SKILL.md"),
     ),
     (
-        "orbit/references/attention.md",
-        include_str!("../../assets/skills/orbit/references/attention.md"),
+        "orbit/references/task-execution-steps.md",
+        include_str!("../../assets/skills/orbit/references/task-execution-steps.md"),
     ),
     (
-        "orbit/references/task-execution.md",
-        include_str!("../../assets/skills/orbit/references/task-execution.md"),
+        "orbit/references/task-execution-handoff-cases.md",
+        include_str!("../../assets/skills/orbit/references/task-execution-handoff-cases.md"),
     ),
     (
-        "orbit/references/task-fields.md",
-        include_str!("../../assets/skills/orbit/references/task-fields.md"),
+        "orbit/references/task-execution-post-deploy.md",
+        include_str!("../../assets/skills/orbit/references/task-execution-post-deploy.md"),
     ),
     (
-        "orbit/references/task-authoring.md",
-        include_str!("../../assets/skills/orbit/references/task-authoring.md"),
+        "orbit/references/task-execution-pr-sections.md",
+        include_str!("../../assets/skills/orbit/references/task-execution-pr-sections.md"),
+    ),
+    (
+        "orbit/references/task-execution-ui-checks.md",
+        include_str!("../../assets/skills/orbit/references/task-execution-ui-checks.md"),
+    ),
+    (
+        "orbit/references/task-fields-projections.md",
+        include_str!("../../assets/skills/orbit/references/task-fields-projections.md"),
+    ),
+    (
+        "orbit/references/task-fields-relations.md",
+        include_str!("../../assets/skills/orbit/references/task-fields-relations.md"),
+    ),
+    (
+        "orbit/references/task-fields-tools.md",
+        include_str!("../../assets/skills/orbit/references/task-fields-tools.md"),
+    ),
+    (
+        "orbit/references/task-fields-placement.md",
+        include_str!("../../assets/skills/orbit/references/task-fields-placement.md"),
+    ),
+    (
+        "orbit/references/task-fields-review.md",
+        include_str!("../../assets/skills/orbit/references/task-fields-review.md"),
+    ),
+    (
+        "orbit/references/task-fields-validation.md",
+        include_str!("../../assets/skills/orbit/references/task-fields-validation.md"),
+    ),
+    (
+        "orbit/references/task-authoring-contract.md",
+        include_str!("../../assets/skills/orbit/references/task-authoring-contract.md"),
+    ),
+    (
+        "orbit/references/task-authoring-create.md",
+        include_str!("../../assets/skills/orbit/references/task-authoring-create.md"),
+    ),
+    (
+        "orbit/references/task-authoring-footprint.md",
+        include_str!("../../assets/skills/orbit/references/task-authoring-footprint.md"),
+    ),
+    (
+        "orbit/references/task-authoring-new-files.md",
+        include_str!("../../assets/skills/orbit/references/task-authoring-new-files.md"),
+    ),
+    (
+        "orbit/references/task-authoring-tags.md",
+        include_str!("../../assets/skills/orbit/references/task-authoring-tags.md"),
     ),
     (
         "orbit/references/task-review.md",
@@ -59,28 +107,102 @@ pub(crate) const DEFAULT_SKILL_FILES: &[(&str, &str)] = &[
         include_str!("../../assets/skills/orbit/references/search.md"),
     ),
     (
-        "orbit/references/friction.md",
-        include_str!("../../assets/skills/orbit/references/friction.md"),
-    ),
-    (
-        "orbit/references/tool-surface.md",
-        include_str!("../../assets/skills/orbit/references/tool-surface.md"),
-    ),
-    (
         "orbit/references/concepts.md",
         include_str!("../../assets/skills/orbit/references/concepts.md"),
     ),
     (
-        "orbit/references/manager.md",
-        include_str!("../../assets/skills/orbit/references/manager.md"),
+        "orbit/references/friction.md",
+        include_str!("../../assets/skills/orbit/references/friction.md"),
     ),
     (
-        "orbit/references/resident-cycle.md",
-        include_str!("../../assets/skills/orbit/references/resident-cycle.md"),
+        "orbit/references/tool-surface-routing.md",
+        include_str!("../../assets/skills/orbit/references/tool-surface-routing.md"),
     ),
     (
-        "orbit/references/setup/distributed-drain.md",
-        include_str!("../../assets/skills/orbit/references/setup/distributed-drain.md"),
+        "orbit/references/tool-surface-capability-map.md",
+        include_str!("../../assets/skills/orbit/references/tool-surface-capability-map.md"),
+    ),
+    (
+        "orbit/references/tool-surface-registry.md",
+        include_str!("../../assets/skills/orbit/references/tool-surface-registry.md"),
+    ),
+    (
+        "orbit/references/tool-surface-mcp-serve.md",
+        include_str!("../../assets/skills/orbit/references/tool-surface-mcp-serve.md"),
+    ),
+    (
+        "orbit/references/tool-surface-evolution.md",
+        include_str!("../../assets/skills/orbit/references/tool-surface-evolution.md"),
+    ),
+    (
+        "orbit/references/tool-surface-codebase.md",
+        include_str!("../../assets/skills/orbit/references/tool-surface-codebase.md"),
+    ),
+    (
+        "orbit/references/tool-surface-pilot.md",
+        include_str!("../../assets/skills/orbit/references/tool-surface-pilot.md"),
+    ),
+    (
+        "orbit/references/tool-surface-decisions.md",
+        include_str!("../../assets/skills/orbit/references/tool-surface-decisions.md"),
+    ),
+    (
+        "orbit/references/tool-surface-scorecards.md",
+        include_str!("../../assets/skills/orbit/references/tool-surface-scorecards.md"),
+    ),
+    (
+        "orbit/references/tool-surface-notices.md",
+        include_str!("../../assets/skills/orbit/references/tool-surface-notices.md"),
+    ),
+    (
+        "orbit/references/attention-reading.md",
+        include_str!("../../assets/skills/orbit/references/attention-reading.md"),
+    ),
+    (
+        "orbit/references/attention-kinds.md",
+        include_str!("../../assets/skills/orbit/references/attention-kinds.md"),
+    ),
+    (
+        "orbit/references/manager-mandates.md",
+        include_str!("../../assets/skills/orbit/references/manager-mandates.md"),
+    ),
+    (
+        "orbit/references/manager-oversight.md",
+        include_str!("../../assets/skills/orbit/references/manager-oversight.md"),
+    ),
+    (
+        "orbit/references/resident-cycle-act.md",
+        include_str!("../../assets/skills/orbit/references/resident-cycle-act.md"),
+    ),
+    (
+        "orbit/references/resident-cycle-escalate.md",
+        include_str!("../../assets/skills/orbit/references/resident-cycle-escalate.md"),
+    ),
+    (
+        "orbit/references/setup/distributed-drain-setup.md",
+        include_str!("../../assets/skills/orbit/references/setup/distributed-drain-setup.md"),
+    ),
+    (
+        "orbit/references/setup/distributed-drain-follower.md",
+        include_str!("../../assets/skills/orbit/references/setup/distributed-drain-follower.md"),
+    ),
+    (
+        "orbit/references/setup/distributed-drain-owner-surface.md",
+        include_str!(
+            "../../assets/skills/orbit/references/setup/distributed-drain-owner-surface.md"
+        ),
+    ),
+    (
+        "orbit/references/setup/distributed-drain-recovery.md",
+        include_str!("../../assets/skills/orbit/references/setup/distributed-drain-recovery.md"),
+    ),
+    (
+        "orbit/references/desktop-navigation.md",
+        include_str!("../../assets/skills/orbit/references/desktop-navigation.md"),
+    ),
+    (
+        "orbit/evals/evals.json",
+        include_str!("../../assets/skills/orbit/evals/evals.json"),
     ),
     // The orchestrator's operating loop, layered on the primitives above.
     (

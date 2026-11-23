@@ -156,13 +156,13 @@ pub(super) const ADD: TaskOperation = TaskOperation {
     verb: TaskVerb::Add,
     cli_path: &["add"],
     tool_name: "orbit.task.add",
-    tool_description: "Create a task and return its JSON; rules are in the installed Orbit skill `references/task-fields.md`.",
+    tool_description: "Create a task and return its JSON; rules are in the installed Orbit skill `references/task-fields-*.md` references.",
     cli_about: "Create a new task",
     cli_help: CliHelp {
         constraints: &[],
         long_about: None,
         after_help: Some(
-            "Status, grant, selector and scheduling rules for these flags: installed Orbit skill `references/task-fields.md`.",
+            "Status, grant, selector and scheduling rules for these flags: installed Orbit skill `references/task-fields-*.md` references.",
         ),
         flag_order: &[
             "parent_id",
@@ -416,13 +416,13 @@ pub(super) const UPDATE: TaskOperation = TaskOperation {
     verb: TaskVerb::Update,
     cli_path: &["update"],
     tool_name: "orbit.task.update",
-    tool_description: "Update a task and return its JSON; rules are in the installed Orbit skill `references/task-fields.md`.",
+    tool_description: "Update a task and return its JSON; rules are in the installed Orbit skill `references/task-fields-*.md` references.",
     cli_about: "Update task fields, or take the next approval step with `--approve` (proposed -> backlog, review -> done)",
     cli_help: CliHelp {
         constraints: &[],
         long_about: None,
         after_help: Some(
-            "Lifecycle, override, selector and scheduling rules for these flags: installed Orbit skill `references/task-fields.md` (Human CLI task update).",
+            "Lifecycle, override, selector and scheduling rules for these flags: installed Orbit skill `references/task-fields-projections.md` (Human CLI task update).",
         ),
         flag_order: &[
             "host",

@@ -176,7 +176,7 @@ const POST: OperationSpec<NoticeVerb> = OperationSpec {
     verb: NoticeVerb::Post,
     cli_path: &["post"],
     tool_name: "orbit.notice.post",
-    tool_description: "Post a fleet notice: a short, scoped note every agent and operator in its scope should see until it stops being true. A repeated dedupe_key updates or corroborates the open one. Poster classes, expiry caps and refusals: the orbit skill's tool-surface.md reference, section `Fleet notices`.",
+    tool_description: "Post a fleet notice: a short, scoped note every agent and operator in its scope should see until it stops being true. A repeated dedupe_key updates or corroborates the open one. Poster classes, expiry caps and refusals: the orbit skill's tool-surface-notices.md reference, section `Fleet notices`.",
     cli_about: "Post a fleet notice, or update or corroborate the open one with its key",
     cli_help: CliHelp {
         long_about: None,
@@ -341,7 +341,7 @@ const LIST: OperationSpec<NoticeVerb> = OperationSpec {
     verb: NoticeVerb::List,
     cli_path: &["list"],
     tool_name: "orbit.notice.list",
-    tool_description: "List fleet notices, open ones unless status says otherwise. Output is {notices, degraded}; `degraded` names any owner that could not be read. Read-only. Scope and merge rules: the orbit skill's tool-surface.md reference, section `Fleet notices`.",
+    tool_description: "List fleet notices, open ones unless status says otherwise. Output is {notices, degraded}; `degraded` names any owner that could not be read. Read-only. Scope and merge rules: the orbit skill's tool-surface-notices.md reference, section `Fleet notices`.",
     cli_about: "List fleet notices",
     cli_help: CliHelp::NONE,
     effect: Effect::Read,

@@ -1193,7 +1193,7 @@ fn fresh_skill_install_writes_every_shipped_reference_and_resolves_links() {
         "a fresh skill install dropped shipped references [ORB-22531]: {missing:?}"
     );
     for required in [
-        "orbit/references/attention.md",
+        "orbit/references/attention-reading.md",
         "orbit-setup/references/applications.md",
         "orbit-setup/references/browser-checks.md",
         "orbit-setup/references/macos.md",

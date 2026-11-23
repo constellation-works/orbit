@@ -2,7 +2,7 @@
   "tools": [
     {
       "name": "orbit_attention",
-      "description": "List operator waits and suggested next actions. Details: installed Orbit skill `references/attention.md`.",
+      "description": "List operator waits and suggested next actions. Details: installed Orbit skill `references/attention-reading.md`.",
       "inputSchema": {
         "type": "object",
         "properties": {

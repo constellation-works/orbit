@@ -291,7 +291,7 @@ passing `--version` alone is not sufficient.
 
 ## Step 6 — Hand off
 
-- **First real task** — route through [task-authoring.md](../../orbit/references/task-authoring.md).
+- **First real task** — route through [task-authoring-contract.md](../../orbit/references/task-authoring-contract.md).
   Create it when requested; setup alone does not authorize unrelated work.
 - **Feature tour** — read the README's feature section and summarize against the
   user's stated goal, not generically.
@@ -318,7 +318,7 @@ initial setup succeeded:
    `workflow.purpose_crews.review`. Check this when the owner's
    `review.timing` enables before-PR or before-landing review, then probe.
    Installation is not pull enablement.
-   → [distributed-drain.md](../../orbit/references/setup/distributed-drain.md)
+   → [distributed-drain-setup.md](../../orbit/references/setup/distributed-drain-setup.md)
 
 ## Anti-patterns
 

@@ -540,7 +540,7 @@ captured at admission: the owner's required validation commands, any review
 gate in effect, and owed post-deploy criteria still hold — a handoff with
 outstanding post-deploy measurements still settles in `review` until an
 operator records each criterion met. For execution mechanics, see
-[Distributed drain](../../orbit/references/setup/distributed-drain.md).
+[Distributed drain](../../orbit/references/setup/distributed-drain-setup.md).
 
 Verify the readback and the effective layer with its source:
 
@@ -663,7 +663,7 @@ decision, not on every tick. List them with
 Two attention kinds report the keeper while it is enabled: `drain_paused`
 (medium) when the intent has been `paused` for over 12 hours while work waits,
 and `drain_breaker_open` (high) while the breaker is open. Neither is raised
-while the keeper is off. See [Attention](../../orbit/references/attention.md).
+while the keeper is off. See [Attention](../../orbit/references/attention-kinds.md#standing-drain-keeper).
 
 ## Fleet notices, attention, evolution ledger and failing jobs
 

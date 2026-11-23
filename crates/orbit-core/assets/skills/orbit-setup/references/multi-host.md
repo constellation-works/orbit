@@ -130,7 +130,7 @@ prefix the ID carries, without an SSH command or `--workspace`. An explicit
 workspace selects that store instead; writes still obey the sole-writer rule.
 Workspace-scoped operations such as task creation, listing and eligibility do
 not route by prefix. The full routed-tool list and typed-error remedies are in
-[tool-surface.md](../../orbit/references/tool-surface.md#task-ids-and-host-selection).
+[tool-surface-routing.md](../../orbit/references/tool-surface-routing.md#task-ids-and-host-selection).
 
 For a remote workspace-scoped tool call, use `--host <name-or-machine_id>`
 with `--workspace <workspace-name-or-ws_id>` on `orbit tool run`. Orbit reads
@@ -193,4 +193,4 @@ a working owner probe are installation; the rollout is an explicit
 `orbit run auto --pull <selector>` on the replica. There is no destination
 callers file and no follower merge. Command-first setup, the pull drain,
 migration and claimed-attempt recovery:
-[distributed-drain.md](../../orbit/references/setup/distributed-drain.md).
+[distributed-drain-setup.md](../../orbit/references/setup/distributed-drain-setup.md).
