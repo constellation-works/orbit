@@ -313,14 +313,16 @@ pub(super) fn write(
         None
     };
     let mut keys = vec!["workspace", "request_id", "model"];
+    let mut accepted = allowed.to_vec();
     if !create && mode == "review" {
         keys.extend(["fields", "field"]);
+        accepted.extend(["fields", "field"]);
     }
     if !create {
         keys.extend(["id", "expected_revision"]);
     }
     keys.extend(allowed);
-    reject_guarded_unknown_fields(&input, &keys, create, mode, allowed)?;
+    reject_guarded_unknown_fields(&input, &keys, create, mode, &accepted)?;
     let values = allowed
         .iter()
         .filter_map(|key| input.get(*key).map(|value| ((*key).into(), value.clone())))

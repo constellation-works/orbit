@@ -127,7 +127,14 @@ fn desktop_writes_reconcile_after_restart_and_reject_stale_or_implicit_destinati
             "orbit_task_show"
         };
         let error = client.call_tool_err(tool, input);
-        assert!(error.to_string().contains(mode), "{error}");
+        let text = error.to_string();
+        assert!(text.contains(mode), "{error}");
+        if mode == "guarded update" {
+            assert!(
+                text.contains("'fields'") && text.contains("'field'"),
+                "guarded review unknown-key error must list both projection forms: {error}"
+            );
+        }
     }
 
     let list = client.call_tool_ok("orbit_task_list", json!({"workspace":selector,"view":"bounded","search":"Desktop","status":"proposed","limit":1}));

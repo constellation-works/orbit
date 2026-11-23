@@ -541,7 +541,7 @@ const SHOW: TaskOperation = TaskOperation {
             mcp_only(
                 "snapshot",
                 ParamType::Boolean,
-                "Bounded versioned snapshot; requires `workspace`, rejects `run_id`, `view`, offsets; snapshot grants no authority.",
+                "Bounded versioned snapshot; requires `workspace`, accepts `fields`/`field`, ignores `limit` (noted), rejects `run_id`, `view`, offsets; snapshot grants no authority.",
             ),
         ],
         &[
@@ -554,7 +554,7 @@ const SHOW: TaskOperation = TaskOperation {
                 default: None,
                 redact: crate::governance::operation::Redaction::None,
                 mcp_description: Some(Description::Static(
-                    "Keyed response fields (`delivery`: commit/landing evidence). Rejects `snapshot`, `view`, pagination.",
+                    "Keyed response fields (task, `snapshot`, or `delivery` evidence). Rejects `view`, claimed pagination.",
                 )),
                 cli: Some(crate::governance::operation::CliBinding {
                     required: false,
@@ -574,7 +574,7 @@ const SHOW: TaskOperation = TaskOperation {
             mcp_only(
                 "field",
                 ParamType::String,
-                "Single-field alias for `fields` (e.g. `\"artifacts\"`). Rejects `snapshot`, `view`, pagination.",
+                "Single-field alias for `fields` (e.g. `\"artifacts\"`; task, `snapshot`, or `delivery`). Rejects `view`, claimed pagination.",
             ),
             ParamSpec {
                 mcp_description: Some(Description::Computed(show_run_id_description)),
@@ -589,7 +589,7 @@ const SHOW: TaskOperation = TaskOperation {
             mcp_only(
                 "limit",
                 ParamType::Integer,
-                "Claimed read page size; not with `snapshot` or projections.",
+                "Claimed/bounded page size; ignored (noted) with `snapshot`; not with projections on claimed or bounded reads.",
             ),
             mcp_only(
                 "comments_offset",
