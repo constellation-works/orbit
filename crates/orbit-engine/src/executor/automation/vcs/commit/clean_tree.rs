@@ -1,6 +1,5 @@
 //! Shared clean-tree guards and checkpoint rechecks for structured evidence.
 
-use std::collections::BTreeSet;
 use std::path::Path;
 
 use orbit_common::OrbitError;
@@ -9,146 +8,7 @@ use serde_json::Value;
 
 use crate::context::RuntimeHost;
 
-use super::super::git::{git_output, git_output_paths};
-
-/// Remove untracked, ignored-by-convention Python interpreter byproducts
-/// (`__pycache__/`, `*.pyc`) directly from `workspace` (never through Trash).
-///
-/// Tracked files (including modified `.pyc` fixtures), staged entries,
-/// symlinks, `.git`/`.orbit` paths, and non-byproduct untracked files are left
-/// untouched.
-pub(in crate::executor::automation::vcs) fn remove_untracked_interpreter_byproducts(
-    workspace: &Path,
-) -> Result<Vec<String>, OrbitError> {
-    let untracked = git_output_paths(
-        workspace,
-        &["ls-files", "--others", "--exclude-standard", "-z", "--"],
-    )?;
-    let mut removed = Vec::new();
-    let mut candidate_dirs = BTreeSet::new();
-    for rel in untracked {
-        if !is_untracked_interpreter_byproduct(&rel)
-            || !untracked_regular_file_without_symlinks(workspace, &rel)
-        {
-            continue;
-        }
-        let abs = workspace.join(&rel);
-        match std::fs::remove_file(&abs) {
-            Ok(()) => {
-                removed.push(rel.clone());
-                collect_pycache_ancestors(&rel, &mut candidate_dirs);
-            }
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(error) => {
-                return Err(OrbitError::Execution(format!(
-                    "remove untracked interpreter byproduct '{}': {error}",
-                    abs.display()
-                )));
-            }
-        }
-    }
-    // Prune now-empty `__pycache__` directories deepest-first without
-    // following symlinks or deleting directories that hold other files.
-    let mut dirs: Vec<String> = candidate_dirs.into_iter().collect();
-    dirs.sort_by(|left, right| right.len().cmp(&left.len()).then_with(|| right.cmp(left)));
-    for rel_dir in dirs {
-        if !real_directory_without_symlinks(workspace, &rel_dir) {
-            continue;
-        }
-        let abs_dir = workspace.join(&rel_dir);
-        match std::fs::remove_dir(&abs_dir) {
-            Ok(()) => {}
-            Err(error)
-                if matches!(
-                    error.kind(),
-                    std::io::ErrorKind::NotFound | std::io::ErrorKind::DirectoryNotEmpty
-                ) => {}
-            Err(error) => {
-                return Err(OrbitError::Execution(format!(
-                    "remove empty interpreter cache directory '{}': {error}",
-                    abs_dir.display()
-                )));
-            }
-        }
-    }
-    Ok(removed)
-}
-
-fn is_untracked_interpreter_byproduct(rel: &str) -> bool {
-    let mut parts = rel.split('/').peekable();
-    let mut in_pycache = false;
-    while let Some(part) = parts.next() {
-        if part.is_empty()
-            || part == "."
-            || part == ".."
-            || part.eq_ignore_ascii_case(".git")
-            || part == ".orbit"
-        {
-            return false;
-        }
-        if parts.peek().is_some() {
-            if part == "__pycache__" {
-                in_pycache = true;
-            }
-        } else {
-            return in_pycache || part.ends_with(".pyc");
-        }
-    }
-    false
-}
-
-fn collect_pycache_ancestors(rel: &str, dirs: &mut BTreeSet<String>) {
-    let mut prefix = String::new();
-    let mut under_pycache = false;
-    let mut parts = rel.split('/').peekable();
-    while let Some(part) = parts.next() {
-        if parts.peek().is_none() {
-            break;
-        }
-        if !prefix.is_empty() {
-            prefix.push('/');
-        }
-        prefix.push_str(part);
-        if part == "__pycache__" {
-            under_pycache = true;
-        }
-        if under_pycache {
-            dirs.insert(prefix.clone());
-        }
-    }
-}
-
-fn untracked_regular_file_without_symlinks(workspace: &Path, rel: &str) -> bool {
-    let mut current = workspace.to_path_buf();
-    let mut parts = rel.split('/').peekable();
-    while let Some(part) = parts.next() {
-        current.push(part);
-        let Ok(metadata) = std::fs::symlink_metadata(&current) else {
-            return false;
-        };
-        let kind = metadata.file_type();
-        if parts.peek().is_some() {
-            if !kind.is_dir() {
-                return false;
-            }
-        } else {
-            return kind.is_file();
-        }
-    }
-    false
-}
-
-fn real_directory_without_symlinks(workspace: &Path, rel_dir: &str) -> bool {
-    let mut current = workspace.to_path_buf();
-    for part in rel_dir.split('/') {
-        current.push(part);
-        if !std::fs::symlink_metadata(&current).is_ok_and(|metadata| metadata.file_type().is_dir())
-        {
-            return false;
-        }
-    }
-    true
-}
+use super::super::git::git_output;
 
 /// The evidence kind's existing checkpoint contract and refusal wording.
 pub(super) struct Specification {
@@ -233,7 +93,6 @@ pub(super) trait Verifier {
         if git_output(workspace, &["rev-parse", "HEAD"])? != tested_head {
             return Err(Self::refused(Self::SPEC.head_changed));
         }
-        remove_untracked_interpreter_byproducts(workspace)?;
         if !git_output(
             workspace,
             &["status", "--porcelain", "--untracked-files=all"],

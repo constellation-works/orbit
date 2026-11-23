@@ -2047,28 +2047,48 @@ fn required_validation_refuses_a_failing_candidate_until_a_committed_repair_pass
     );
     assert_eq!(host.validation_log(TASK_ID, &archive), failed);
 }
-fn required_validation_deletes_python_byproducts_while_refusing_real_untracked_files(
-    sandbox: &Path,
-) {
+fn required_validation_cleans_its_python_cache_with_readonly_trash(sandbox: &Path) {
     let (fx, host) = fx_host(sandbox);
-    host.require_commands(&["echo suite-ok"]);
-    fs::create_dir_all(fx.repo.join("pkg/__pycache__")).unwrap();
-    fx.write_repo("pkg/__pycache__/mod.cpython-312.pyc", "pyc");
-    fx.write_repo("loose.pyc", "pyc");
+    let home = sandbox.join("home");
+    for dir in [home.join(".local/share/Trash"), home.join(".Trash")] {
+        fs::create_dir_all(&dir).unwrap();
+        fs::set_permissions(&dir, fs::Permissions::from_mode(0o555)).unwrap();
+    }
+    fx.write_repo("orbit_validation_fixture.py", "answer = 42\n");
+    fx.git(&["add", "orbit_validation_fixture.py"]);
+    fx.git(&["commit", "-m", "add validation import"]);
+    host.require_commands(&[r#"unset PYTHONDONTWRITEBYTECODE
+python3 -c 'from pathlib import Path
+import orbit_validation_fixture as fixture
+cache = Path(fixture.__cached__)
+assert fixture.answer == 42 and cache.is_file(), cache
+print(cache)'"#]);
 
     let validated = validate_ok(&fx, &host);
-    assert_eq!(validated["decision"], "passed");
-    assert!(!fx.repo.join("pkg/__pycache__").exists());
-    assert!(!fx.repo.join("loose.pyc").exists());
 
-    fx.write_repo("stray.txt", "real untracked work\n");
+    assert_eq!(validated["decision"], "passed");
+    let log = host.run_log("0.json");
+    let cache = Path::new(log["output"].as_str().unwrap());
+    assert!(cache.is_absolute());
+    assert!(
+        !cache.starts_with(&fx.repo),
+        "run cache was in the checkout: {cache:?}"
+    );
+    assert!(!cache.exists(), "run cache survived validation: {cache:?}");
+    assert!(!fx.repo.join("__pycache__").exists());
+
+    fx.write_repo("fixture.pyc", "intentional fixture");
     let dirty = validate_err(&fx, &host);
     assert!(
         dirty.contains("staged, tracked, or untracked changes"),
-        "non-byproduct untracked file must keep today's refusal: {dirty}"
+        "expected the normal dirty checkout refusal: {dirty}"
     );
-    assert!(fx.repo.join("stray.txt").exists());
+    assert_eq!(
+        fs::read(fx.repo.join("fixture.pyc")).unwrap(),
+        b"intentional fixture"
+    );
 }
+
 fn required_validation_retains_reported_evidence_after_scratch_lifetime(sandbox: &Path) {
     let fx = Fixture::new(sandbox);
     let script = sandbox.join("report-evidence.py");
@@ -7571,9 +7591,8 @@ fn validation_repairs_and_logs() {
                         as fn(&Path),
                 ),
                 (
-                    "required_validation_deletes_python_byproducts_while_refusing_real_untracked_files",
-                    required_validation_deletes_python_byproducts_while_refusing_real_untracked_files
-                        as fn(&Path),
+                    "required_validation_cleans_its_python_cache_with_readonly_trash",
+                    required_validation_cleans_its_python_cache_with_readonly_trash as fn(&Path),
                 ),
             ],
         );

@@ -1022,6 +1022,13 @@ Required validation commands and `local_shell` steps run in this environment ove
 
 Orbit also sets `PYTHONDONTWRITEBYTECODE=1` for required validation commands and `local_shell` steps, commands launched through `proc.spawn`, and provider agent sessions in every lane (implementer, before-PR reviewer and before-landing reviewer). On each route, Orbit supplies `1` when the value is unset or empty and preserves an explicit nonempty value. Python then avoids writing `.pyc` files and `__pycache__` directories into delivery worktrees.
 
+Required validation commands and provider agent sessions also default
+`PYTHONPYCACHEPREFIX` to invocation-owned temporary scratch. This keeps
+automatic caches out of the checkout when a command enables bytecode writes.
+Orbit preserves a nonempty prefix admitted by the environment policy and
+cleans up its own scratch after the invocation. Files written into the checkout
+follow the usual Git candidate and clean-worktree rules.
+
 **Probe.** The shell is the account's user-database shell, else `$SHELL`, else `/bin/sh`. Orbit always runs `<shell> -i -l -c …` (login profiles plus interactive rc files: `~/.zshrc`, or `~/.bashrc` when the bash login profile sources it), falling back to `<shell> -l -c …` on startup failure, nonzero exit, timeout or a missing environment marker. Stdin is null; output before the marker and stderr noise on success (bash's job-control warning) are ignored. Each attempt is limited to 10 seconds; the whole outcome, fallback included, is cached two minutes. Only `PATH` and the toolchain allowlist cross: `CARGO_HOME`, `RUSTUP_HOME`, `GOPATH`, `GOROOT`, `GOBIN`, `JAVA_HOME`, `PYENV_ROOT`, `NVM_DIR`, `VOLTA_HOME`, `PNPM_HOME`, `BUN_INSTALL`, `HOMEBREW_*`.
 
 **Recorded.** Each validation log and step output records `validation_env`: the PATH; its `source` (`config` when `path` has entries, else `login_shell` when the probe returned a PATH, else `launcher_fallback`); the shell and any probe error; `probe_mode` (`interactive_login` or `login`, else null); and `fallback_reason` (why interactive startup failed when login-only succeeded, else null). When both probes fail, `login_shell_error` holds both.
@@ -2585,7 +2592,7 @@ Every agent subprocess (bare, Bubblewrap or `sandbox-exec`) starts from a **clea
 | Provider extras | Variables the selected provider runtime declares it needs. |
 | Orbit envelope | Named `ORBIT_*` variables: run, task and session identity (`ORBIT_RUN_ID`, `ORBIT_TASK_ID`, `ORBIT_SESSION_ID`, …), locators (`ORBIT_WORKSPACE`, `ORBIT_WORKTREE_ROOT`, `ORBIT_BIN`, `ORBIT_REGISTRY_ROOT`, …) and activity bindings (`ORBIT_ACTIVITY_*`, `ORBIT_STEP_INDEX`, …). Privilege-bearing names (`ORBIT_OPERATOR`, `ORBIT_WORKSPACE_CLAIM_TOKEN`) are not admitted; an inherited `ORBIT_ROOT` is removed. |
 | Crew `env` | The global `[crews.<name>] env` entries for the crew the agent runs as are applied after `pass`. Each entry's name takes its source's value from the launching process and replaces the same name from `pass`. Other crews never receive it. An unset source leaves the name out for that crew. See [per-crew credentials](#per-crew-credentials-env). |
-| Orbit-managed default | `PYTHONDONTWRITEBYTECODE=1` when unset or empty. A nonempty value already present in the agent environment is preserved. |
+| Orbit-managed defaults | `PYTHONDONTWRITEBYTECODE=1` and, for provider sessions, `PYTHONPYCACHEPREFIX` pointing to private invocation scratch. Nonempty values already present in the agent environment are preserved. |
 
 This is an allowlist, not a secret filter: a benignly named credential such as `DATABASE_URL` never reaches an agent unless you name it in `pass` or in a crew's `env`. Agents keep network access, so this is the boundary against accidental exfiltration.
 
