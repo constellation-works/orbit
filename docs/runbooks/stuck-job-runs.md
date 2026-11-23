@@ -2033,8 +2033,17 @@ admits the repair against the pull request's attempt ledger, and the
 edits, then pushes to the same branch. Completion then merges only when the run
 holds `--complete`; a review-only run leaves the repaired pull request in
 `review`. Each hand-back is recorded in task history as `pr_auto_fix_out_of_run`.
-A pull request is handed back at most once per head and blocker, and at most
-three times in all, so a resume that dies before it repairs cannot loop.
+The per-head/blocker limit prevents concurrent repairs: while an attempt is
+live, or its run's end cannot be confirmed, another run cannot repair that same
+head and blocker. Once the run is confirmed ended without publishing a new
+head, its admitted attempt still counts toward the PR's three-attempt budget,
+but a later run may try the same head and blocker while budget remains.
+
+An out-of-run hand-back reserves its head and blocker until the resumed run
+admits an attempt. If that run ends without admitting one, the same head and
+blocker are not handed back again. This prevents a hand-back that never reaches
+repair admission from looping; blocker hand-backs are also capped at three per
+PR.
 
 Repairs take free drain slots after adoption. A pass held by host resource
 pressure starts none, and a pull request found unblocked is not read again for

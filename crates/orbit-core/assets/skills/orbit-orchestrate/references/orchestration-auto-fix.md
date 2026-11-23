@@ -55,11 +55,16 @@ It cannot be combined with `--pull` or `--stop`.
   under `--auto-fix`. Task complexity and crew are never changed, and nothing
   escalates.
 - Every attempt is written to the primary task's history with the PR, head,
-  blocker, attempt number, crew and draw source before any agent runs. A PR
-  head gets at most one repair per blocker across polls, restarts and
-  owner/follower overlap. Each PR has at most three repairs in total. When they
-  are spent, the leaf stops with `auto_fix_budget_exhausted` and lists the
-  attempts.
+  blocker, attempt number, crew and draw source before any agent runs. Only one
+  attempt for a head and blocker may be live at a time. If its run is still
+  live or its end cannot be confirmed, that pair remains reserved. Once the
+  run is confirmed ended without publishing a new head, its admitted attempt
+  still counts toward the PR's three-attempt budget, but another run may try
+  the same head and blocker while budget remains. A blocker hand-back whose
+  resumed run never admits an attempt is not repeated for that head and
+  blocker; blocker hand-backs are also capped at three per PR. When the attempt
+  budget is spent, the leaf stops with `auto_fix_budget_exhausted` and lists
+  the attempts.
 - Closed or merged PRs and superseded heads get no repair.
 - A blocked Orbit PR whose task no run is delivering any more is repaired out
   of run. Each `--auto-fix` drain pass hands it back to the task's newest
