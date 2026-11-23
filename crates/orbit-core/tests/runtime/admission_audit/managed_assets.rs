@@ -246,6 +246,20 @@ fn runtime_open_refreshes_and_retires_legacy_workspace_catalog_copies() {
     .expect("write modified dropped activity");
     add_managed_manifest_entry(&activity_catalog, "agent_explore", &retired_activity);
     add_managed_manifest_entry(&activity_catalog, "verify_finding", &retired_activity);
+    let job_catalog = workspace.join("resources/jobs");
+    let retired_job =
+        std::fs::read_to_string(global.join("resources/jobs/task_pilot_pipeline.yaml"))
+            .expect("current job body");
+    for (name, content) in [
+        ("removed_default", retired_job.clone()),
+        (
+            "modified_removed",
+            format!("# operator edit\n{retired_job}"),
+        ),
+    ] {
+        std::fs::write(job_catalog.join(format!("{name}.yaml")), content).unwrap();
+        add_managed_manifest_entry(&job_catalog, name, &retired_job);
+    }
     let health = runtime
         .inspect_definition_artifacts()
         .expect("doctor diagnoses legacy copies");
@@ -276,6 +290,48 @@ fn runtime_open_refreshes_and_retires_legacy_workspace_catalog_copies() {
                 .starts_with("# earlier release\n"),
             "doctor and sync --check must not write"
         );
+    }
+    for (directory, name, provenance) in [
+        (
+            "activities",
+            "agent_explore",
+            ArtifactProvenance::OrbitWritten,
+        ),
+        (
+            "activities",
+            "verify_finding",
+            ArtifactProvenance::LocallyModified,
+        ),
+        ("jobs", "removed_default", ArtifactProvenance::OrbitWritten),
+        (
+            "jobs",
+            "modified_removed",
+            ArtifactProvenance::LocallyModified,
+        ),
+    ] {
+        let path = workspace
+            .join("resources")
+            .join(directory)
+            .join(format!("{name}.yaml"));
+        let findings: Vec<_> = health
+            .iter()
+            .flat_map(|health| &health.findings)
+            .filter(|finding| {
+                finding.path == path && finding.condition == ArtifactCondition::Deprecated
+            })
+            .collect();
+        assert_eq!(
+            findings.len(),
+            1,
+            "expected one retired finding for {path:?}: {findings:?}"
+        );
+        assert_eq!(findings[0].provenance, provenance);
+        assert!(findings[0].remediation.contains("orbit workspace sync"));
+        if provenance == ArtifactProvenance::LocallyModified {
+            assert!(findings[0].detail.contains("locally modified"));
+            assert!(findings[0].detail.contains(".retired-managed"));
+        }
+        assert!(path.is_file(), "inspection must not modify the catalog");
     }
     assert!(
         preview.actions.iter().any(|action| {
