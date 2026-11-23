@@ -6660,6 +6660,18 @@ status() {
             observed=failure
         fi
     fi
+    # [ORB-27076] As `source_contract`, but the forge reports DIRTY while the
+    # base tip no longer merges into the head, so a conflict the base lands
+    # after the rerun was sent shows as the real Git conflict it is.
+    if [ "$observed" = source_contract_dirty ]; then
+        if [ "$(git --git-dir="$remote" show "$(head_sha):src/contract" )" = fixed ]; then
+            observed=success
+        elif git --git-dir="$remote" merge-tree --write-tree "$(head_sha)" "$pr_base" >/dev/null 2>&1; then
+            observed=failure
+        else
+            observed=dirty_failure
+        fi
+    fi
     # A provider app's required aggregate fails beside its passing analysis
     # job; the mixed form also fails the workflow check `test`.
     case "$observed" in source_aggregate|source_aggregate_mixed)

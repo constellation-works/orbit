@@ -2019,6 +2019,11 @@ merged onto the landing tip.
   `delivery_repair_dispatched`, and the hold reason names the rerun, the refused
   refresh and those paths. Unrelated history, a moved head and a forge refusal
   hold the same way.
+- A base that lands a conflicting edit beside the fix does not change this. When
+  the forge reports the head `DIRTY` after the rerun was sent while it was
+  `BLOCKED`, the rerun's recorded failed, authenticated result still takes this
+  refresh-or-hold step, read back without sending or reserving another rerun. A
+  `DIRTY` pull request without that result keeps the ordinary conflict handling.
 - At most one refresh per head. The reservation shares the cumulative per-PR
   provider base-update budget, so a head is never refreshed twice. A refreshed
   head that fails again takes the ordinary repair path and never a second
