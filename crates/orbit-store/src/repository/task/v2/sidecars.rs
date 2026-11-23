@@ -5,6 +5,17 @@ use super::*;
 const PARALLEL_BUNDLE_STAMP_MIN_TASKS: usize = 256;
 const MAX_BUNDLE_STAMP_THREADS: usize = 16;
 
+/// Bounds for fanning out settled event-log reads when the calling thread holds
+/// no commit boundary section. Unsettled bundles still fall back to the calling
+/// thread inside the boundary.
+const PARALLEL_HISTORY_READ_MIN_TASKS: usize = 64;
+const MAX_HISTORY_READ_THREADS: usize = 4;
+
+enum SettledHistorySlot {
+    Ready(crate::contracts::TaskHistoryReadOutcome),
+    NeedsBoundary,
+}
+
 impl TaskV2Store {
     pub(crate) fn task_decision_snapshots(
         &self,
@@ -62,6 +73,117 @@ impl TaskV2Store {
             Some(rows) => Ok(rows.map(task_history_from_events)),
             None => self.in_boundary(|| self.settled_task_history(id)),
         }
+    }
+
+    /// Batched [`Self::read_task_history`]: checks partition settledness once
+    /// for the batch instead of once per task, then reads settled event logs
+    /// under each bundle's shared lock (which still refuses an interrupted
+    /// commit on that bundle). Any bundle needing recovery settles on the
+    /// calling thread inside one commit boundary acquisition.
+    pub(crate) fn read_task_histories(
+        &self,
+        ids: &[String],
+    ) -> Result<Vec<crate::contracts::TaskHistoryReadOutcome>, OrbitError> {
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let settled_partition = match &self.coordination {
+            Some(boundary) => boundary.has_nothing_to_recover()?,
+            None => false,
+        };
+        if !settled_partition {
+            return self.in_boundary(|| {
+                self.ensure_recovered()?;
+                Ok(ids
+                    .iter()
+                    .map(|id| {
+                        orbit_types::task::validate_orb_task_id(id)?;
+                        let _span = history_read_span(id);
+                        self.read_settled_bundle_history(id)
+                    })
+                    .collect())
+            });
+        }
+
+        let in_boundary = self
+            .coordination
+            .as_ref()
+            .is_some_and(|boundary| boundary.is_active_on_current_thread());
+        let threads = std::thread::available_parallelism()
+            .map_or(1, |parallelism| parallelism.get())
+            .min(MAX_HISTORY_READ_THREADS);
+        let slots = if !in_boundary && ids.len() >= PARALLEL_HISTORY_READ_MIN_TASKS && threads >= 2
+        {
+            std::thread::scope(|scope| {
+                let chunks = ids
+                    .chunks(ids.len().div_ceil(threads))
+                    .map(|chunk| {
+                        let handle = std::thread::Builder::new()
+                            .spawn_scoped(scope, move || self.read_settled_events_slice(chunk))
+                            .ok();
+                        (chunk, handle)
+                    })
+                    .collect::<Vec<_>>();
+                chunks
+                    .into_iter()
+                    .flat_map(|(chunk, handle)| match handle {
+                        Some(handle) => handle
+                            .join()
+                            .unwrap_or_else(|_| self.read_settled_events_slice(chunk)),
+                        None => self.read_settled_events_slice(chunk),
+                    })
+                    .collect::<Vec<_>>()
+            })
+        } else {
+            self.read_settled_events_slice(ids)
+        };
+
+        let needs_boundary = slots
+            .iter()
+            .any(|slot| matches!(slot, SettledHistorySlot::NeedsBoundary));
+        if !needs_boundary {
+            return Ok(slots
+                .into_iter()
+                .map(|slot| match slot {
+                    SettledHistorySlot::Ready(result) => result,
+                    SettledHistorySlot::NeedsBoundary => unreachable!("checked above"),
+                })
+                .collect());
+        }
+
+        self.in_boundary(|| {
+            self.ensure_recovered()?;
+            Ok(ids
+                .iter()
+                .zip(slots)
+                .map(|(id, slot)| match slot {
+                    SettledHistorySlot::Ready(result) => result,
+                    SettledHistorySlot::NeedsBoundary => self.read_settled_bundle_history(id),
+                })
+                .collect())
+        })
+    }
+
+    fn read_settled_events_slice(&self, ids: &[String]) -> Vec<SettledHistorySlot> {
+        ids.iter()
+            .map(|id| {
+                if let Err(err) = orbit_types::task::validate_orb_task_id(id) {
+                    return SettledHistorySlot::Ready(Err(err.into()));
+                }
+                let _span = history_read_span(id);
+                match self.bundle_store.read_events_if_settled(id) {
+                    Ok(Some(rows)) => {
+                        SettledHistorySlot::Ready(Ok(Some(task_history_from_events(rows))))
+                    }
+                    Ok(None) => SettledHistorySlot::NeedsBoundary,
+                    Err(OrbitError::NotFound {
+                        kind: NotFoundKind::Task,
+                        ..
+                    }) => SettledHistorySlot::Ready(Ok(None)),
+                    Err(err) => SettledHistorySlot::Ready(Err(err)),
+                }
+            })
+            .collect()
     }
 
     /// One sidecar read without entering the boundary: `Some` with the rows,
@@ -251,6 +373,14 @@ impl TaskV2Store {
     /// The history from the whole bundle, once the partition has settled.
     fn settled_task_history(&self, id: &str) -> Result<Option<Vec<TaskHistoryEntry>>, OrbitError> {
         self.ensure_recovered()?;
+        self.read_settled_bundle_history(id)
+    }
+
+    /// Whole-bundle history read after the caller has already settled the partition.
+    fn read_settled_bundle_history(
+        &self,
+        id: &str,
+    ) -> Result<Option<Vec<TaskHistoryEntry>>, OrbitError> {
         match self.bundle_store.read_bundle_lightweight(id) {
             Ok(bundle) => Ok(Some(task_history_from_events(bundle.events))),
             Err(OrbitError::NotFound {

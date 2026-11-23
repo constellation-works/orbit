@@ -386,6 +386,14 @@ impl TaskStoreBackend for TaskV2Store {
         Ok(TaskV2Store::task_change_stamps(self)?.as_ref().clone())
     }
 
+    fn task_lifecycle_stamps_matching(
+        &self,
+        statuses: &[TaskStatus],
+        updated_since: chrono::DateTime<chrono::Utc>,
+    ) -> Result<Vec<crate::contracts::TaskLifecycleStamp>, OrbitError> {
+        self.in_boundary(|| self.task_lifecycle_stamps_matching(statuses, updated_since))
+    }
+
     fn task_ids_with_tag(
         &self,
         tag: &str,
@@ -571,6 +579,13 @@ impl TaskHistoryStoreBackend for TaskV2Store {
 
     fn get_task_history(&self, id: &str) -> Result<Option<Vec<TaskHistoryEntry>>, OrbitError> {
         self.read_task_history(id)
+    }
+
+    fn get_task_histories(
+        &self,
+        ids: &[String],
+    ) -> Result<Vec<crate::contracts::TaskHistoryReadOutcome>, OrbitError> {
+        self.read_task_histories(ids)
     }
 
     fn task_history_stamps(

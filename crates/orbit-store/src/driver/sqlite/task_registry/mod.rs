@@ -89,7 +89,7 @@ pub use crate::contracts::{
     WorkspaceBinding, WorkspaceCheckoutBinding,
 };
 pub(crate) use allocator::parse_orb_task_number;
-pub(crate) use index_snapshot::TaskIndexProofRow;
+pub(crate) use index_snapshot::{TaskIndexProofRow, TaskIndexSnapshot};
 pub(crate) use ledger::registry_compatibility;
 pub use store::TaskRegistryStore;
 
