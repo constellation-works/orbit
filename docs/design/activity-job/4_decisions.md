@@ -3,7 +3,7 @@ summary: "Activity / Job — Decisions"
 type: design
 title: "Activity / Job — Decisions"
 owner: codex
-last_updated: 2026-11-14
+last_updated: 2026-11-22
 last_validated: 2026-11-14
 status: Draft
 feature: activity-job
@@ -1852,6 +1852,79 @@ observed and added to the narrow list.
 
 ---
 
+## Held deliveries refresh to the base tip when the failure is base-inherited
+
+**Recorded:** 2026-11-22 · [ORB-26860] · Requested by Daniel in the chief's chat
+(2026-11-22 21:28Z, "Yes, file the task"; approved 21:29Z)
+
+**Code anchors:** `crates/orbit-engine/src/executor/automation/vcs/checks/inherited.rs`
+`base_inherited_failure`;
+`crates/orbit-engine/src/executor/automation/vcs/pr/auto_fix/inherited_refresh.rs`
+`refresh_inherited_failure`;
+`crates/orbit-engine/src/executor/automation/vcs/pr/complete/inherited_refresh.rs`
+`PollDriver::adopt_inherited_refresh`;
+`crates/orbit-core/src/application/task/external_merge/refresh.rs`
+`OrbitRuntime::refresh_open_delivery_head` and
+`OrbitRuntime::refresh_run_delivery_pull_request`
+
+### Context
+
+On 2026-11-22, #10592 ([ORB-26770]) and #10601 ([ORB-26784]) held for about 12
+hours. Each failed a test that was flaky on `agent-main` and fixed there later,
+and cargo-deny advisory RUSTSEC-2026-0592, fixed by a base lockfile change.
+`pull_request` CI tests the PR head, so [ORB-26854]'s single rerun on the
+unchanged head could not pass. `job resume` refuses a held run, and requeue
+needs the operator capability. Both landed only after a hand
+`gh pr update-branch`. [ORB-26834] gave residents a `refresh` right for this,
+but a delivery should not wait for a resident cycle or an operator.
+
+### Decision
+
+The delivery pipeline refreshes its own held PR, under the rules in
+[§8.15](./2_design.md#815-base-inherited-delivery-refresh):
+
+- **Order:** only after [ORB-26854]'s no-edit rerun of the unchanged head has
+  failed again.
+- **Trigger:** every required failure is red at the head's fork point and passes
+  on a newer base commit (`base_refresh` evidence, with no known-red sibling),
+  and no failure log cites a file the candidate changed. A base-fixed advisory is
+  the same check-level case.
+- **Reuse:** the engine calls `RuntimeHost::refresh_delivery_pull_request`. Core
+  answers with [ORB-26834]'s refresh operation (`orbit.workflow` action
+  `refresh`): one conflict-free merge commit of the base tip, never a rebase or
+  force-push. Only the authority gate differs: the owning live run instead of a
+  resident right.
+- **Candidate identity:** the run adopts the moved head as its candidate only
+  when a `base_inherited_refresh` reservation names the pinned head and
+  `verify_refreshed_head_from_base` accepts the move. The pre-refresh review
+  still counts, per [ORB-26834]'s decision.
+- **Bounds:** a conflict is refused with its paths and the delivery holds as
+  `delivery_repair_dispatched` with that reason. There is at most one refresh per
+  head, through the shared per-PR base-update reservation. Candidate code is never
+  edited, and no check is skipped, looped or weakened. Branch protection is
+  unchanged.
+
+### Rejected alternatives
+
+- **Rebase the head onto the base tip** (the landed-repair route): it rewrites
+  published commits and forces a re-review. [ORB-26834] already ruled for merge
+  commits.
+- **Rerun again, or wait for an operator:** the PR head never contains the fix,
+  so a rerun cannot pass, and waiting is the incident.
+- **A second, engine-local `update-branch` call:** two implementations of one
+  branch mutation would drift. The task requires [ORB-26834]'s operation.
+
+### Consequences
+
+- A base-inherited failure lands after one refresh and a green check run on the
+  refreshed head, with no operator and no implementer.
+- A refreshed PR carries one base merge commit until it is squash-landed.
+  Settlement and landing verify the merge chain in the owner's object store.
+- A failure the evidence cannot prove base-inherited still holds, now with the
+  reason no refresh ran.
+
+---
+
 ## Task References
 
 - [T20260418-2018] — Add `JobV2` DAG constructs (`parallel`, `fan_out`, `loop`, `retry`, `when`).
@@ -2000,5 +2073,6 @@ observed and added to the narrow list.
 - [T20260420-0509-3] — Add Groundhog verb tools.
 - [T20260420-0509-4] — Add Groundhog workspace snapshots.
 - [T20260420-0510] — Add runtime checkpoint verifier.
+- [ORB-26860] — Refresh a held delivery to its base tip when its failure is base-inherited, through [ORB-26834]'s refresh operation, after [ORB-26854]'s no-edit rerun fails.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

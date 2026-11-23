@@ -1087,6 +1087,12 @@ impl RuntimeHost for OrbitRuntime {
     ) -> Result<orbit_types::workflow::PrBaseUpdateAdmission, OrbitError> {
         OrbitRuntime::admit_pr_base_update(self, task_ids, request)
     }
+    fn refresh_delivery_pull_request(
+        &self,
+        request: &orbit_types::workflow::DeliveryRefreshRequest,
+    ) -> Result<orbit_types::workflow::PullRequestRefreshOutcome, OrbitError> {
+        OrbitRuntime::refresh_run_delivery_pull_request(self, request)
+    }
 
     fn admit_ci_rerun(
         &self,

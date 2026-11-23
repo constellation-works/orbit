@@ -103,6 +103,17 @@ macro_rules! review_methods {
             _request: &orbit_types::workflow::PrBaseUpdateReservation,
         ) -> Result<orbit_types::workflow::PrBaseUpdateAdmission, OrbitError>;
 
+        /// [ORB-26860] Merge the base branch tip into this run's own open
+        /// delivery pull request as one conflict-free merge commit, through
+        /// the host's one refresh operation (the one behind `orbit.workflow`
+        /// action `refresh`). Called only after the run reserved the PR's
+        /// base update. A conflict answers its paths; every refusal changes
+        /// nothing. Hosts without the operation refuse.
+        fn refresh_delivery_pull_request(
+            &self,
+            _request: &orbit_types::workflow::DeliveryRefreshRequest,
+        ) -> Result<orbit_types::workflow::PullRequestRefreshOutcome, OrbitError>;
+
         // ── Before-PR review coverage [ORB-11333] ───────────────────────────
 
         /// Record how a reviewed candidate actually landed after a managed

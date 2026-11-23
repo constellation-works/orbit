@@ -1218,7 +1218,16 @@ pub(super) fn ci_answer(host: &DeliveryHost, operation: &str, input: &Value) -> 
         // Sending the rerun flips the forge's checks only on the green row;
         // the red row's rerun concludes with the same source-contract failure.
         "ci.rerun_failed" if repair_mode.starts_with("no_edit") => {
-            if repair_mode == "no_edit_green" {
+            if repair_mode.starts_with("no_edit_base_") {
+                // [ORB-26860] The rerun fails again, and meanwhile the base
+                // branch lands the fix the head lacks.
+                fs::write(forge.join("rerun-attempt"), "2\n").unwrap();
+                let mut files = vec![("src/contract", "fixed\n")];
+                if repair_mode == "no_edit_base_conflict" {
+                    files.push(("README.md", "the base rewrites the readme\n"));
+                }
+                land_base_fix(&host.repo, &files);
+            } else if repair_mode == "no_edit_green" {
                 fs::write(forge.join("checks"), "success\n").unwrap();
             } else if repair_mode == "no_edit_red" {
                 fs::write(forge.join("rerun-attempt"), "2\n").unwrap();
@@ -1284,6 +1293,165 @@ pub(super) fn ci_answer(host: &DeliveryHost, operation: &str, input: &Value) -> 
         }
         _ => None,
     }
+}
+
+/// [ORB-26860] Land a base commit writing `files` while the worktree stays on
+/// the candidate branch: a private index builds the tree, then the local and
+/// remote base refs advance to it.
+fn land_base_fix(repo: &std::path::Path, files: &[(&str, &str)]) {
+    let index = repo.join(".git/orbit-base-fix-index");
+    let blob_file = repo.join(".git/orbit-base-fix-blob");
+    let run = |args: &[&str]| -> String {
+        let output = std::process::Command::new("git")
+            .current_dir(repo)
+            .env("GIT_INDEX_FILE", &index)
+            .env("GIT_AUTHOR_NAME", "Base")
+            .env("GIT_AUTHOR_EMAIL", "base@example.invalid")
+            .env("GIT_COMMITTER_NAME", "Base")
+            .env("GIT_COMMITTER_EMAIL", "base@example.invalid")
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "git {args:?}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8(output.stdout).unwrap().trim().to_string()
+    };
+    let parent = run(&["rev-parse", BASE]);
+    run(&["read-tree", &parent]);
+    for (path, contents) in files {
+        fs::write(&blob_file, contents).unwrap();
+        let blob = run(&["hash-object", "-w", blob_file.to_str().unwrap()]);
+        run(&[
+            "update-index",
+            "--add",
+            "--cacheinfo",
+            &format!("100644,{blob},{path}"),
+        ]);
+    }
+    let tree = run(&["write-tree"]);
+    let commit = run(&[
+        "commit-tree",
+        &tree,
+        "-p",
+        &parent,
+        "-m",
+        "base fixes the shared source contract",
+    ]);
+    run(&[
+        "update-ref",
+        &format!("refs/heads/{BASE}"),
+        &commit,
+        &parent,
+    ]);
+    run(&["push", "origin", &format!("{commit}:refs/heads/{BASE}")]);
+    fs::remove_file(&index).unwrap();
+    fs::remove_file(&blob_file).unwrap();
+}
+
+/// [ORB-26860] The forge's `update-branch` over the substitute remote: merge
+/// the base tip into the pull request head as one merge commit, answering a
+/// conflict with its paths and changing nothing. Every call is recorded.
+pub(super) fn refresh_pull_request(
+    host: &DeliveryHost,
+    request: &orbit_types::workflow::DeliveryRefreshRequest,
+) -> Result<orbit_types::workflow::PullRequestRefreshOutcome, orbit_common::OrbitError> {
+    use orbit_types::workflow::PullRequestRefreshOutcome;
+    host.scripted_inputs
+        .lock()
+        .unwrap()
+        .entry("refresh_delivery_pull_request".into())
+        .or_insert_with(|| json!([]))
+        .as_array_mut()
+        .unwrap()
+        .push(json!({
+            "pr_number": request.pr_number,
+            "head_branch": request.head_branch,
+            "base_branch": request.base_branch,
+            "expected_head_sha": request.expected_head_sha,
+        }));
+    let remote = host.repo.parent().unwrap().join("forge/remote.git");
+    let bare = |args: &[&str]| {
+        std::process::Command::new("git")
+            .arg(format!("--git-dir={}", remote.display()))
+            .env("GIT_AUTHOR_NAME", "Forge")
+            .env("GIT_AUTHOR_EMAIL", "forge@example.invalid")
+            .env("GIT_COMMITTER_NAME", "Forge")
+            .env("GIT_COMMITTER_EMAIL", "forge@example.invalid")
+            .args(args)
+            .output()
+            .unwrap()
+    };
+    let text = |output: std::process::Output| String::from_utf8(output.stdout).unwrap();
+    let head_ref = format!("refs/heads/{}", request.head_branch);
+    let head = text(bare(&["rev-parse", &head_ref])).trim().to_string();
+    if head != request.expected_head_sha {
+        return Ok(PullRequestRefreshOutcome::Refused {
+            reason: format!("head moved to {head}"),
+        });
+    }
+    let base = text(bare(&[
+        "rev-parse",
+        &format!("refs/heads/{}", request.base_branch),
+    ]))
+    .trim()
+    .to_string();
+    if bare(&["merge-base", "--is-ancestor", &base, &head])
+        .status
+        .success()
+    {
+        return Ok(PullRequestRefreshOutcome::AlreadyUpToDate { head_sha: head });
+    }
+    let merged = bare(&[
+        "merge-tree",
+        "--write-tree",
+        "--name-only",
+        "-z",
+        "--no-messages",
+        &head,
+        &base,
+    ]);
+    let clean = merged.status.success();
+    let output = text(merged);
+    let mut fields = output.split('\0').filter(|field| !field.is_empty());
+    let tree = fields.next().unwrap().trim().to_string();
+    if !clean {
+        return Ok(PullRequestRefreshOutcome::Conflicting {
+            conflicting_paths: fields.map(ToOwned::to_owned).collect(),
+            reason: format!("merging {base} into {head} conflicts"),
+        });
+    }
+    let commit = text(bare(&[
+        "commit-tree",
+        &tree,
+        "-p",
+        &head,
+        "-p",
+        &base,
+        "-m",
+        "Merge the base branch into the pull request",
+    ]))
+    .trim()
+    .to_string();
+    assert!(
+        bare(&["update-ref", &head_ref, &commit, &head])
+            .status
+            .success()
+    );
+    Ok(PullRequestRefreshOutcome::Updated { head_sha: commit })
+}
+
+/// The refreshes the run asked the host for, in order.
+fn refresh_calls(host: &DeliveryHost) -> Vec<Value> {
+    host.scripted_inputs
+        .lock()
+        .unwrap()
+        .get("refresh_delivery_pull_request")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default()
 }
 
 pub(super) fn perform_ci_repair(
@@ -1633,6 +1801,10 @@ fn no_edit_check_repair_reruns_failed_checks_once() {
             );
             assert_eq!(reruns, 1, "{mode}: exactly one rerun is sent");
             assert_eq!(repair_attempts(&host).len(), 1, "{mode}");
+            assert!(
+                refresh_calls(&host).is_empty(),
+                "{mode}: a failure the base never fixed asks for no base refresh"
+            );
             assert_candidate_head_unchanged(&fx, mode);
             if mode.contains("green") {
                 let result = outcome.expect(mode);
@@ -1664,7 +1836,8 @@ fn no_edit_check_repair_reruns_failed_checks_once() {
                         && message.contains("rerun")
                         && message.contains("failed again")
                         && message.contains("CI / test")
-                        && message.contains("contracts::flaky_smoke"),
+                        && message.contains("contracts::flaky_smoke")
+                        && message.contains("not refreshed to its base tip"),
                     "{mode}: {message}"
                 );
                 assert!(
@@ -1673,6 +1846,172 @@ fn no_edit_check_repair_reruns_failed_checks_once() {
                 );
                 assert_no_merge_or_landing(&fx, &host, TaskStatus::Review, mode);
             }
+        },
+    );
+}
+
+/// [ORB-26860] After the no-edit repair's one rerun fails again on a failure
+/// the base branch has since fixed, the run refreshes its pull request to the
+/// base tip once and lands the refreshed head: a merge commit carrying only
+/// base commits, which settlement's merged-refresh proof accepts. A refresh
+/// that would conflict is refused with its paths and the run holds with that
+/// reason; a pull request whose one base update is already spent holds
+/// without asking. Every row sends exactly the one ORB-26854 rerun, and the
+/// refresh only follows its failure.
+#[test]
+fn no_edit_rerun_failure_inherited_from_a_fixed_base_refreshes_the_head_once() {
+    auto_fix_table(
+        "auto_fix::no_edit_rerun_failure_inherited_from_a_fixed_base_refreshes_the_head_once",
+        "refreshed conflict spent",
+        |case, row| {
+            let (fx, host) = docs_only_pr(row);
+            let mode = if case == "conflict" {
+                "no_edit_base_conflict"
+            } else {
+                "no_edit_base_fixed"
+            };
+            host.script("test_ci_repair", json!({"mode":mode}));
+            host.script(
+                "test_checkpoint",
+                json!({"phase":"commit","task_id":TASK_ID,"commit_sha":fx.candidate}),
+            );
+            host.require_commands(&["true"]);
+            fx.script_checks(&["source_contract"]);
+            if case == "spent" {
+                // An earlier refresh of this head spent the PR's one base update.
+                seed_auto_fix_history(
+                    &host,
+                    PR_BASE_UPDATE_RESERVED_EVENT,
+                    &PrBaseUpdateReservation {
+                        execution: RUN_ID.into(),
+                        repository: "forge/remote".into(),
+                        pr_number: PR_NUMBER.into(),
+                        head_sha: fx.candidate.clone(),
+                        head_branch: BRANCH.into(),
+                        base_branch: BASE.into(),
+                        base_sha: fx.base_sha.clone(),
+                        deadline_ms: 1_100_000,
+                        evidence: json!({
+                            "cause": orbit_types::workflow::PR_BASE_INHERITED_REFRESH_CAUSE
+                        }),
+                    },
+                );
+            }
+            let mut input = auto_fix_input(&fx);
+            input["completion"] = json!("done");
+            let outcome = run_repair_job(&host, input);
+            let history = host.history(TASK_ID);
+            let rerun_at = history
+                .iter()
+                .position(|entry| entry.event == "ci_check_rerun");
+            assert_eq!(
+                history
+                    .iter()
+                    .filter(|entry| entry.event == "ci_check_rerun")
+                    .count(),
+                1,
+                "{case}: exactly the one no-edit rerun is sent, never another: {outcome:?}"
+            );
+            assert_eq!(repair_attempts(&host).len(), 1, "{case}");
+            let refreshes = refresh_calls(&host);
+            if case == "refreshed" {
+                let result = outcome.expect(case);
+                assert!(result.success, "{case}: {result:?}");
+                assert_eq!(refreshes.len(), 1, "{case}: one refresh per head");
+                assert_eq!(refreshes[0]["expected_head_sha"], fx.candidate, "{case}");
+                let reserved_at = history.iter().position(|entry| {
+                    entry.event == PR_BASE_UPDATE_RESERVED_EVENT
+                        && entry.note.as_deref().is_some_and(|note| {
+                            note.contains(orbit_types::workflow::PR_BASE_INHERITED_REFRESH_CAUSE)
+                        })
+                });
+                assert!(
+                    rerun_at.is_some() && reserved_at.is_some() && rerun_at < reserved_at,
+                    "{case}: the refresh is reserved only after the rerun"
+                );
+                let forge = fx.repo.parent().unwrap().join("forge");
+                let refreshed = fs::read_to_string(forge.join("merged-head"))
+                    .unwrap()
+                    .trim()
+                    .to_string();
+                let landed = fs::read_to_string(forge.join("merged"))
+                    .unwrap()
+                    .trim()
+                    .to_string();
+                git(&fx.repo, &["fetch", "--quiet", "origin", BASE]);
+                let parents = git(&fx.repo, &["rev-list", "--parents", "-n", "1", &refreshed]);
+                let parents: Vec<&str> = parents.split_whitespace().skip(1).collect();
+                assert_eq!(parents.len(), 2, "{case}: one merge commit");
+                assert_eq!(
+                    parents[0], fx.candidate,
+                    "{case}: candidate is the first parent"
+                );
+                let landed_onto = git(&fx.repo, &["rev-parse", &format!("{landed}^")]);
+                assert_eq!(
+                    git(
+                        &fx.repo,
+                        &["rev-list", &refreshed, "--not", &fx.candidate, &landed_onto]
+                    ),
+                    refreshed,
+                    "{case}: past the candidate, the head carries only base commits"
+                );
+                assert!(
+                    fx.merge_requests()
+                        .iter()
+                        .any(|request| request.contains(&format!("sha={refreshed}"))),
+                    "{case}: the merge is conditioned on the refreshed head: {:?}",
+                    fx.merge_requests()
+                );
+                orbit_engine::verify_merged_base_refresh(
+                    &fx.repo,
+                    &orbit_engine::MergedBaseRefresh {
+                        published_head: &fx.candidate,
+                        merged_head: &refreshed,
+                        source_branch: BRANCH,
+                        landing_branch: BASE,
+                        pull_request: 42,
+                        merge_commit: &landed,
+                    },
+                )
+                .unwrap_or_else(|error| panic!("{case}: settle-merged refuses: {error}"));
+                assert_eq!(host.status(TASK_ID), TaskStatus::Done, "{case}");
+                return;
+            }
+            let message = match outcome {
+                Err(DispatchError::DeliveryRefused {
+                    refusal, message, ..
+                }) => {
+                    assert_eq!(
+                        refusal,
+                        orbit_types::workflow::DeliveryRefusal::RepairDispatched,
+                        "{case}: {message}"
+                    );
+                    message
+                }
+                other => panic!("{case}: expected RepairDispatched hold, got {other:?}"),
+            };
+            assert!(
+                message.contains("failed again") && message.contains("not refreshed"),
+                "{case}: {message}"
+            );
+            if case == "conflict" {
+                assert_eq!(refreshes.len(), 1, "{case}");
+                assert!(
+                    message.contains("conflicting paths: README.md"),
+                    "{case}: {message}"
+                );
+            } else {
+                assert!(
+                    refreshes.is_empty(),
+                    "{case}: a spent head asks for no refresh"
+                );
+                assert!(
+                    message.contains("already spent its one base update"),
+                    "{case}: {message}"
+                );
+            }
+            assert_candidate_head_unchanged(&fx, case);
+            assert_no_merge_or_landing(&fx, &host, TaskStatus::Review, case);
         },
     );
 }
