@@ -3,6 +3,7 @@
 
 use super::pull::format_age;
 use crate::doctor::*;
+use orbit_common::storage::timestamp::parse_stored_timestamp;
 
 /// Warn when an enabled cron routine's last success is older than three times
 /// its schedule interval. A routine that has never succeeded is judged from
@@ -79,8 +80,8 @@ fn stale_routine_message(global_root: &std::path::Path) -> Result<Option<String>
         };
         let success = store.routine_latest_succeeded_fire(name)?;
         let reference = match &success {
-            Some(fire) => parse_doctor_time(&fire.updated_at)?,
-            None => parse_doctor_time(baseline)?,
+            Some(fire) => parse_stored_timestamp(&fire.updated_at)?,
+            None => parse_stored_timestamp(baseline)?,
         };
         let age = now.signed_duration_since(reference);
         if age <= limit {
@@ -103,12 +104,6 @@ fn stale_routine_message(global_root: &std::path::Path) -> Result<Option<String>
     } else {
         Ok(Some(stale.join("; ")))
     }
-}
-
-fn parse_doctor_time(raw: &str) -> Result<chrono::DateTime<chrono::Utc>, OrbitError> {
-    chrono::DateTime::parse_from_rfc3339(raw)
-        .map(|value| value.with_timezone(&chrono::Utc))
-        .map_err(|error| OrbitError::Store(format!("invalid stored timestamp '{raw}': {error}")))
 }
 
 /// A host shutdown inside the hold horizon holds every unattended admission —
