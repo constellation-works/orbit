@@ -20,8 +20,8 @@ struct Fixture {
     ran_marker: PathBuf,
 }
 
-/// A workspace with an ungranted `export` script that writes into its
-/// granted `outbox` write root, with `global_config` as the host config.
+/// A workspace with an ungranted `export` script that writes a marker in a
+/// separate granted root, with `global_config` as the host config.
 fn fixture(global_config: &str) -> Fixture {
     crate::scenarios::require_isolated_mutable_fixture("script_roots::fixture");
     let root = tempfile::tempdir_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
@@ -35,7 +35,9 @@ fn fixture(global_config: &str) -> Fixture {
         std::fs::write(global.join("config.toml"), global_config).unwrap();
     }
     let outbox = outbox.canonicalize().unwrap();
-    let ran_marker = outbox.join("ran");
+    let marker_root = root.path().join("marker");
+    std::fs::create_dir_all(&marker_root).unwrap();
+    let ran_marker = marker_root.join("ran");
     std::fs::write(
         repo.join("export.sh"),
         format!(
@@ -65,7 +67,7 @@ fn grant_outbox(fixture: &Fixture, outbox: PathBuf) -> Result<(), orbit_core::Or
         .grant_script(
             "export",
             &ScriptGrantOptions {
-                write_roots: vec![outbox],
+                write_roots: vec![outbox, fixture.ran_marker.parent().unwrap().to_path_buf()],
                 ..Default::default()
             },
         )

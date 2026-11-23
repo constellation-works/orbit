@@ -55,6 +55,11 @@ model = "fixture-blind"
 
 #[test]
 fn explicit_able_then_incapable_crew_submits_no_probe_run() {
+    if !super::dispatch_admission::isolated(
+        "vision_probe::explicit_able_then_incapable_crew_submits_no_probe_run",
+    ) {
+        return;
+    }
     for (incapable, executor, reason) in INCAPABLE {
         let root = TempDir::new_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
         // A submitted canary run spawns this substitute worker, which exits

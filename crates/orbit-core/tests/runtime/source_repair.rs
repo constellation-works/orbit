@@ -267,6 +267,30 @@ fn cancelled_admission_refuses_identity_liveness_lease_and_evidence_drift() {
         "foreign",
         "rebound",
     ] {
+        let expected = match case {
+            "scope" | "footprint" | "binding" | "binding_pr" | "binding_repo" => "binding is stale",
+            "binding_task" => "request and binding identify different source or task",
+            "claimed_input" | "foreign" | "rebound" => {
+                "requires the exact owner-local single-task run"
+            }
+            "before_head" | "checkpoint_base" | "checkpoint_branch" | "checkpoint_lease"
+            | "push_lease" | "checkpoint_copy" => "task, source branch and published PR disagree",
+            "after_head" => "initial publication lacks authenticated review provenance",
+            "checkpoint_pr" => "task PR association is missing",
+            "rewrite_flag" => "authenticated prepare/rebase commit chain is inconsistent",
+            "checkpoint_state" => "prepare_branch checkpoint is not authenticated success",
+            "missing_prepare" => "source lacks prepare_branch evidence",
+            "host_action" => "prepare_branch is not the authenticated host pr_prepare action",
+            "live" => "requires a conclusively stopped task PR pipeline",
+            "local_head" => "retained local branch moved",
+            "remote_head" => "published branch lease drifted or disappeared",
+            "closed" | "merged" | "merged_at" | "merge_intent" | "missing_intent" | "wrong_pr"
+            | "wrong_repo" | "wrong_branch" | "wrong_base" => {
+                "provider PR identity changed, closed/merged, or automatic merge intent is uncertain"
+            }
+            "missing_checkpoint" => "source lacks push evidence",
+            _ => unreachable!("unknown case: {case}"),
+        };
         let mut f = Fixture::new();
         let binding = f.inspect();
         let input = f.submit(binding);
@@ -343,11 +367,13 @@ fn cancelled_admission_refuses_identity_liveness_lease_and_evidence_drift() {
                     .write_run_state(&f.source.run_id, &f.state)
                     .unwrap();
                 // Re-inspection also refuses a self-consistent but foreign chain.
+                let error = f
+                    .runtime
+                    .run_tool_as_human("orbit.workflow.run.resume", f.request("inspect"))
+                    .unwrap_err();
                 assert!(
-                    f.runtime
-                        .run_tool_as_human("orbit.workflow.run.resume", f.request("inspect"))
-                        .is_err(),
-                    "{case}"
+                    error.to_string().contains(expected),
+                    "inspect {case}: {error}"
                 );
             }
             "binding" | "binding_task" | "binding_pr" | "binding_repo" => {
@@ -359,10 +385,21 @@ fn cancelled_admission_refuses_identity_liveness_lease_and_evidence_drift() {
                     _ => ("head_sha", "a".repeat(40)),
                 };
                 input["source_repair"]["binding"][field] = json!(value);
+                let error = f
+                    .runtime
+                    .run_tool_as_human("orbit.workflow.run.resume", input)
+                    .unwrap_err();
                 assert!(
-                    f.runtime
-                        .run_tool_as_human("orbit.workflow.run.resume", input)
-                        .is_err()
+                    error.to_string().contains(expected),
+                    "submit {case}: {error}"
+                );
+                assert!(
+                    !f.runtime
+                        .get_task_history(&f.task)
+                        .unwrap()
+                        .iter()
+                        .any(|e| e.event == "source_repair_reserved"),
+                    "{case} must leave no reservation"
                 );
                 continue;
             }
@@ -451,11 +488,13 @@ fn cancelled_admission_refuses_identity_liveness_lease_and_evidence_drift() {
                 std::fs::write(&f.answer, answer.to_string()).unwrap();
             }
         }
+        let error = f
+            .runtime
+            .run_tool_as_human("orbit.workflow.run.resume", input)
+            .unwrap_err();
         assert!(
-            f.runtime
-                .run_tool_as_human("orbit.workflow.run.resume", input)
-                .is_err(),
-            "{case} must refuse before admission"
+            error.to_string().contains(expected),
+            "submit {case}: {error}"
         );
         assert!(
             !f.runtime

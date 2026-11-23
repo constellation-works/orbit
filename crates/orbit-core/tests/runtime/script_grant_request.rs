@@ -689,16 +689,26 @@ fn agents_and_plugin_callbacks_cannot_answer_or_grant() {
             Some("cli".to_string()),
         )
         .expect_err("an agent label is not a human");
-    assert!(!attributed.to_string().is_empty());
+    assert!(
+        attributed.to_string().contains("`codex` is automation"),
+        "{attributed}"
+    );
     // An agent, and a plugin callback the channel is not bound to, submitting
     // through the channel with a valid token.
-    for caller in [
-        DecisionSubmitCaller::Agent,
-        DecisionSubmitCaller::PluginCallback {
-            plugin: "rogue-plugin".to_string(),
-        },
+    for (caller, reason) in [
+        (
+            DecisionSubmitCaller::Agent,
+            "an agent session never answers for a human",
+        ),
+        (
+            DecisionSubmitCaller::PluginCallback {
+                plugin: "rogue-plugin".to_string(),
+            },
+            "is not bound to plugin `rogue-plugin`",
+        ),
     ] {
-        fx.runtime
+        let error = fx
+            .runtime
             .submit_decision_via_channel(DecisionSubmitParams {
                 channel: CHANNEL.to_string(),
                 request_id: request.id.clone(),
@@ -711,6 +721,7 @@ fn agents_and_plugin_callbacks_cannot_answer_or_grant() {
                 caller: caller.clone(),
             })
             .expect_err("only the bound channel relays a human answer");
+        assert!(error.to_string().contains(reason), "{error}");
     }
     assert!(
         fx.runtime.verified_script_grant(SCRIPT).unwrap().is_none(),
