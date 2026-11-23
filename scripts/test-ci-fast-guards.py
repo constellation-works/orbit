@@ -4093,6 +4093,34 @@ class RemovedCodeIdentifierTests(unittest.TestCase):
         self.assertIn("demo_policy::resolve_symlinks", result.stderr)
         self.assertIn("docs/design/policy-sandbox/2_design.md:1", result.stderr)
 
+    GROUP_BASE = "pub use exports::{\n    KEPT,\n    REMOVED,\n    OTHER,\n};\n"
+
+    def test_removed_member_of_multiline_group_named_in_doc_fails(self):
+        self.write(self.REEXPORT, self.GROUP_BASE)
+        self.write("docs/demo.md", "Use `demo_policy::REMOVED` or `demo_policy::KEPT`.\n")
+        self.commit_base()
+        self.write(self.REEXPORT, "pub use exports::{\n    KEPT,\n    OTHER,\n};\n")
+        result = self.run_check()
+        self.assertNotEqual(result.returncode, 0, result.stdout)
+        self.assertIn('"demo_policy::REMOVED"', result.stderr)
+        self.assertIn("docs/demo.md:1", result.stderr)
+        self.assertNotIn("demo_policy::KEPT", result.stderr)
+        self.assertNotIn("demo_policy::OTHER", result.stderr)
+
+    def test_retained_or_readded_group_member_passes(self):
+        self.write(self.REEXPORT, self.GROUP_BASE)
+        self.write("docs/demo.md", "Use `demo_policy::REMOVED` or `demo_policy::KEPT`.\n")
+        self.commit_base()
+        # Removing a neighbour leaves the retained members, still named, passing.
+        self.write(self.REEXPORT, "pub use exports::{\n    KEPT,\n    REMOVED,\n};\n")
+        result = self.run_check()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        # Moving the member to a single-line re-export in the same file re-adds its path.
+        self.write(self.REEXPORT,
+                   "pub use exports::{\n    KEPT,\n    OTHER,\n};\npub use more::REMOVED;\n")
+        result = self.run_check()
+        self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_removed_css_class_named_in_doc_fails(self):
         self.write("docs/design/user-interface/1_overview.md",
                    "Each row's pill (`.ws-badge`) takes its workspace colour.\n")
