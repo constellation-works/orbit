@@ -200,22 +200,31 @@ pub(in crate::executor::automation) fn pr_failure_handoff<H: RuntimeHost + Sync 
         // is pushed to the PR before the PR is left unmerged. Non-accept
         // landing review failures preserve fixes on a durable candidate ref
         // (never the PR head branch) or save uncommitted diffs as artifacts.
+        // A push the PR branch refused (`push_failed`, such as a lost lease)
+        // leaves the commit only in this worktree, so it takes the same
+        // preservation fallback and the PR branch stays untouched.
         let reviewer_push =
             push_incomplete_landing_reviewer_commit(host, input, failed_step_id, error_message);
-        let (reviewer_preservation, preservation_artifact) = if reviewer_push.is_none() {
-            preserve_landing_reviewer_repair(
-                host,
-                &task,
-                run_id,
-                input,
-                failed_step_id,
-                error_message,
-            )
-            .map(|(value, artifact)| (Some(value), artifact))
-            .unwrap_or((None, None))
-        } else {
-            (None, None)
-        };
+        let push_refused = reviewer_push
+            .as_ref()
+            .and_then(|push| push.get("decision"))
+            .and_then(Value::as_str)
+            == Some("push_failed");
+        let (reviewer_preservation, preservation_artifact) =
+            if reviewer_push.is_none() || push_refused {
+                preserve_landing_reviewer_repair(
+                    host,
+                    &task,
+                    run_id,
+                    input,
+                    failed_step_id,
+                    error_message,
+                )
+                .map(|(value, artifact)| (Some(value), artifact))
+                .unwrap_or((None, None))
+            } else {
+                (None, None)
+            };
         return preserve_completion_failure(
             host,
             &task,
