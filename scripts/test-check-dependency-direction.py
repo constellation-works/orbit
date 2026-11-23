@@ -2001,12 +2001,12 @@ class RelativeImportTests(unittest.TestCase):
 
     def test_config_document_leaf_admits_only_external_crates(self):
         base = self.root / "crates/orbit-config/src"
-        leaf = "config_document.rs"
+        leaf = "document/paths.rs"
         self.check_rejected_exact_rows(base, [
             (leaf, source + "\n", 1) for source in (
                 "use crate::registry::Probe;",
                 "use super::raw::Probe;",
-                "fn probe() { crate::config_io::read(); }",
+                "fn probe() { crate::document::io::read(); }",
                 "use serde_json::Value;",
             )
         ], rg_single_file=True)

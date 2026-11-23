@@ -1,6 +1,6 @@
 //! Shared read-and-parse of one admitted `config.toml`.
 //!
-//! Path admission and the no-follow read stay in `config_io`, which cannot
+//! Path admission and the no-follow read stay in `document::io`, which cannot
 //! parse TOML. This leaf only turns those bytes into a document. Policy and
 //! schema stay with their owners.
 

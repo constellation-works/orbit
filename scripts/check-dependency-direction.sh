@@ -1289,8 +1289,8 @@ fi
 config_src="$repo_root/crates/orbit-config/src"
 # These are policy owners, not optional files. A rename must update the rule,
 # rather than silently dropping that boundary from the scan.
-for module in aliases.rs seeding.rs config_document.rs crew operation provider_limit \
-  layering plugin_enablement.rs unknown.rs resolved/compatibility.rs config_io.rs \
+for module in aliases.rs seeding.rs document/paths.rs crew operation provider_limit \
+  layering plugin_enablement.rs unknown.rs resolved/compatibility.rs document/io.rs \
   registry crew_defaults.rs; do
   if [[ ! -e "$config_src/$module" ]]; then
     echo "dependency scan path missing: $config_src/$module" >&2
@@ -1305,29 +1305,29 @@ for module in aliases.rs operation; do
 done
 # [ORB-22707] The leaf also owns the typed path read, so it may use serde and
 # orbit-common's error and redaction, but never a sibling module.
-if dependency_matches -n '\b(crate|super|self)::|^[[:space:]]*extern crate[[:space:]]' "$config_src/config_document.rs"; then
-  echo "orbit-config config_document must remain a TOML/serde/orbit-common/std leaf"
+if dependency_matches -n '\b(crate|super|self)::|^[[:space:]]*extern crate[[:space:]]' "$config_src/document/paths.rs"; then
+  echo "orbit-config document/paths must remain a TOML/serde/orbit-common/std leaf"
   fail=1
 fi
-if dependency_matches -n '^[[:space:]]*(pub(\([^)]*\))?[[:space:]]+)?use[[:space:]]' "$config_src/config_document.rs" |
+if dependency_matches -n '^[[:space:]]*(pub(\([^)]*\))?[[:space:]]+)?use[[:space:]]' "$config_src/document/paths.rs" |
   grep -vE '[[:space:]]use[[:space:]]+(std|toml|serde|orbit_common)::|:use[[:space:]]+(std|toml|serde|orbit_common)::'; then
-  echo "orbit-config config_document must remain a TOML/serde/orbit-common/std leaf"
+  echo "orbit-config document/paths must remain a TOML/serde/orbit-common/std leaf"
   fail=1
 fi
 
 # [ORB-22707] The key registry sits above the domain admission modules whose
 # admitters and choices its key table calls. Those modules read TOML through
-# config_document and leave snapshot projections to registry/settings, so none
+# document::paths and leave snapshot projections to registry/settings, so none
 # names the registry; its crate-root re-exports count as the same edge.
 config_registry_names='registry|AutoConcurrencySettings|CONFIG_KEY_REGISTRY|ConfigKeyDescriptor|ConfigKeyTier|ConfigSection|ConfigSnapshot|ExperimentSettings|ExploreBriefSettings|ExploreSettings|LeaseListenerSettings|LeaseListenerTlsSettings|MachineSettings|MidRunSteeringSettings|NoticeKindHours|NoticeSettings|RegressionRiskSettings|ResourceThrottleSettings|WorkerContainmentSettings|admit_config_key|admit_settable_config_key|config_key_options|describe_config_key|immutable_key_note|is_global_only_key'
 for module in aliases.rs seeding.rs crew operation provider_limit; do
   if ! super_chains_into "$config_src" "$module" "$config_registry_names" crate-root; then
-    echo "orbit-config ${module} must not name the registry; read TOML through config_document"
+    echo "orbit-config ${module} must not name the registry; read TOML through document::paths"
     fail=1
   fi
 done
 
-# [ORB-22315] File reads and path admission live in the config_io leaf, below
+# [ORB-22315] File reads and path admission live in the document::io leaf, below
 # loading and diagnostics and below the mutable ConfigStore those modules must
 # not reach. The crate-root re-exports of the store's types count as the same
 # edge. The leaf itself uses only std and orbit-common: no sibling module and no
@@ -1335,21 +1335,21 @@ done
 config_store_names='store|ConfigStore|ConfigScope|WorkspaceInitMode'
 for module in layering plugin_enablement.rs unknown.rs seeding.rs; do
   if ! super_chains_into "$config_src" "$module" "$config_store_names" crate-root; then
-    echo "orbit-config ${module} must not name the store; read through config_io"
+    echo "orbit-config ${module} must not name the store; read through document::io"
     fail=1
   fi
 done
 if ! super_chains_into "$config_src" resolved/compatibility.rs store crate-root; then
-  echo "orbit-config resolved/compatibility must read through config_io, not the store"
+  echo "orbit-config resolved/compatibility must read through document::io, not the store"
   fail=1
 fi
-if dependency_matches -n '\b(crate|super|self|toml|toml_edit|serde)::|^[[:space:]]*extern crate[[:space:]]' "$config_src/config_io.rs"; then
-  echo "orbit-config config_io must remain a std/orbit-common leaf"
+if dependency_matches -n '\b(crate|super|self|toml|toml_edit|serde)::|^[[:space:]]*extern crate[[:space:]]' "$config_src/document/io.rs"; then
+  echo "orbit-config document/io must remain a std/orbit-common leaf"
   fail=1
 fi
-if dependency_matches -n '^[[:space:]]*(pub(\([^)]*\))?[[:space:]]+)?use[[:space:]]' "$config_src/config_io.rs" |
+if dependency_matches -n '^[[:space:]]*(pub(\([^)]*\))?[[:space:]]+)?use[[:space:]]' "$config_src/document/io.rs" |
   grep -vE '[[:space:]]use[[:space:]]+(std|orbit_common)::|:use[[:space:]]+(std|orbit_common)::'; then
-  echo "orbit-config config_io must remain a std/orbit-common leaf"
+  echo "orbit-config document/io must remain a std/orbit-common leaf"
   fail=1
 fi
 

@@ -53,13 +53,13 @@
 //!   It sits above the domain admission modules (`aliases`, `crew`,
 //!   `operation`, `provider_limit`, `seeding`) whose admitters its key
 //!   table calls; none of them names it.
-//! - `config_document` — pure TOML path access, the typed dotted-path read
-//!   shared below admission, and the one constructor for
-//!   `invalid runtime config '<path>'` errors.
-//! - `config_io` — no-follow `config.toml` reads and path admission, below
-//!   loading, diagnostics and the store.
-//! - `config_toml` — the shared read-and-parse of one admitted file into a
-//!   TOML document, above `config_io` and below policy admission.
+//! - `document` — the admitted config document leaves. `document::paths` is
+//!   pure TOML path access, the typed dotted-path read shared below admission,
+//!   and the one constructor for `invalid runtime config '<path>'` errors.
+//!   `document::io` is no-follow `config.toml` reads and path admission, below
+//!   loading, diagnostics and the store. `document::parse` is the shared
+//!   read-and-parse of one admitted file into a TOML document, above
+//!   `document::io` and below policy admission.
 //! - `layering` — document reading, per-key merge, replace-only rules, and
 //!   source provenance.
 //! - `lock_modes` — the ordered `workflow.lock_modes` footprint lock-mode
@@ -94,11 +94,9 @@
 
 mod aliases;
 mod completion_hold;
-mod config_document;
-mod config_io;
-mod config_toml;
 mod crew;
 mod crew_defaults;
+mod document;
 mod experiment_keys;
 mod human_crew_seed;
 mod layering;
@@ -124,13 +122,13 @@ mod unknown;
 pub use unknown::{UnknownConfigKey, unknown_config_keys_at, unknown_config_keys_present};
 
 use crew::{auto_effort as crew_auto_effort, pools as crew_pools, task_types as crew_task_types};
+use document::{io as config_io, parse as config_toml, paths as config_document};
 
 use std::path::{Path, PathBuf};
 
 use orbit_common::OrbitError;
 
 pub use aliases::deprecated_key_rewrites;
-pub use config_document::invalid_runtime_config;
 pub use crew_auto_effort::{AUTO_EFFORT_BANDS_KEY, AutoEffortBand, AutoEffortPolicy};
 pub use crew_pools::{
     ComplexityCrewPools, CrewPoolEntry, PurposeCrewPools, TYPE_COMPLEXITY_CREWS_KEY,
@@ -138,6 +136,7 @@ pub use crew_pools::{
     type_complexity_crews_key,
 };
 pub use crew_task_types::{OTHER_TYPE, TASK_TYPES_KEY, TaskTypeDefinition, classify_task_type};
+pub use document::invalid_runtime_config;
 pub use experiment_keys::ExperimentConfigKey;
 pub use human_crew_seed::{
     AgentCrewNames, HumanCrewSeedOutcome, human_crew_seed_collides, normalize_human_crew_name,
