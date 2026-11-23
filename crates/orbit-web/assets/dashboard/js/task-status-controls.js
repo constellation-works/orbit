@@ -11,8 +11,6 @@ import { collapseTask, stopRowInteraction } from './task-nav.js';
 const FORCED_STATUS_GROUP_LABEL = "force (off-table)";
 
 export function buildStatusUpdateControl(task, context) {
-  const cell = el("span", { class: "status-cell" });
-  cell.dataset.status = task.status || "";
   // A human crew's task takes every status directly: no off-table group and
   // no forced confirmation, because the server applies it as the operator's
   // own work and records it as a human-crew bypass.
@@ -31,44 +29,56 @@ export function buildStatusUpdateControl(task, context) {
   const mutable = canMutateTask(task);
   const feedback = taskState.statusFeedback.get(taskDispatchIdentity(task));
   const label = `Update status for ${task.id}`;
-  const select = el("select", {
-    class: "task-status-select mono",
-    title: mutable ? label : aggregateRefusalTitle(label, "change status"),
+  const feedbackNode = buildMutationFeedback(feedback, () => {
+    if (feedback && feedback.undo) applyTaskStatusChange(task, feedback.undo.previousValue, context);
   });
+  return buildStatusSelectCell({
+    status: task.status,
+    label,
+    title: mutable ? label : aggregateRefusalTitle(label, "change status"),
+    targets,
+    forcedTargets,
+    forcedTitle: `Off-table targets — forcing one overrides the lifecycle table for ${task.id}`,
+    disabled: targets.length + forcedTargets.length === 0 || !mutable || Boolean(feedback && feedback.kind === "pending"),
+    onSelect: (targetStatus) => applyTaskStatusChange(task, targetStatus, context),
+    feedbackNode,
+  });
+}
+
+// The status pill both a task's detail and a friction's detail edit through:
+// `cell` carries the status colour, the select shows the current status as its
+// hidden placeholder and offers `targets` (plus a marked `forcedTargets` group).
+// Choosing one calls `onSelect(status)`; what that does is the caller's.
+export function buildStatusSelectCell({ status, label, title, targets, forcedTargets = [], forcedTitle = "", disabled = false, onSelect, feedbackNode = null }) {
+  const cell = el("span", { class: "status-cell" });
+  cell.dataset.status = status || "";
+  const select = el("select", { class: "task-status-select mono", title });
   select.setAttribute("aria-label", label);
-  const placeholder = el("option", { text: STATUS_LABELS[task.status] || task.status || "status" });
+  const placeholder = el("option", { text: STATUS_LABELS[status] || status || "status" });
   placeholder.value = "";
   placeholder.disabled = true;
   placeholder.selected = true;
   placeholder.hidden = true;
   select.appendChild(placeholder);
 
-  for (const status of targets) {
-    const option = el("option", { text: STATUS_LABELS[status] || status });
-    option.value = status;
+  for (const target of targets) {
+    const option = el("option", { text: STATUS_LABELS[target] || target });
+    option.value = target;
     select.appendChild(option);
   }
 
   if (forcedTargets.length > 0) {
-    const group = el("optgroup", {
-      title: `Off-table targets — forcing one overrides the lifecycle table for ${task.id}`,
-    });
+    const group = el("optgroup", { title: forcedTitle });
     group.setAttribute("label", FORCED_STATUS_GROUP_LABEL);
-    for (const status of forcedTargets) {
-      const option = el("option", { text: `${STATUS_LABELS[status] || status} ⚠` });
-      option.value = status;
+    for (const target of forcedTargets) {
+      const option = el("option", { text: `${STATUS_LABELS[target] || target} ⚠` });
+      option.value = target;
       group.appendChild(option);
     }
     select.appendChild(group);
   }
 
-  if (
-    targets.length + forcedTargets.length === 0 ||
-    !mutable ||
-    (feedback && feedback.kind === "pending")
-  ) {
-    select.disabled = true;
-  }
+  if (disabled) select.disabled = true;
 
   stopRowInteraction(cell);
   stopRowInteraction(select);
@@ -76,15 +86,12 @@ export function buildStatusUpdateControl(task, context) {
     event.stopPropagation();
     const targetStatus = select.value;
     if (!targetStatus) return;
-    applyTaskStatusChange(task, targetStatus, context);
+    onSelect(targetStatus, select);
   });
   cell.appendChild(select);
-  const chip = el("span", { class: "task-select-chip", text: task.status || "status" });
+  const chip = el("span", { class: "task-select-chip", text: status || "status" });
   chip.setAttribute("aria-hidden", "true");
   cell.appendChild(chip);
-  const feedbackNode = buildMutationFeedback(feedback, () => {
-    if (feedback && feedback.undo) applyTaskStatusChange(task, feedback.undo.previousValue, context);
-  });
   if (feedbackNode) cell.appendChild(feedbackNode);
   return cell;
 }
