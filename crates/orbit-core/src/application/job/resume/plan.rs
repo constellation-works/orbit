@@ -257,7 +257,9 @@ impl OrbitRuntime {
                 .and_then(DeliveryRefusal::from_error_code)
                 .is_some_and(crate::application::job::pr_repair::handed_back_hold);
         let held_handback = held_handback
-            || (repair.is_some() && crate::application::job::pr_repair::auto_fix_stopped(&source));
+            || (repair.is_some()
+                && (crate::application::job::pr_repair::auto_fix_stopped(&source)
+                    || crate::application::job::pr_repair::unrepaired_check_repair(&source)));
         // A host-manager stop is held, and the interruption note tells the
         // operator to resume it. The alive-owner guard below covers it too:
         // an observer writes the hold, the same way it writes `interrupted`.
@@ -284,8 +286,9 @@ impl OrbitRuntime {
                 "job run '{}' is {} — resume requires an interrupted, failed, or timed-out run, \
                  one held because the host manager stopped its worker, or one held because the \
                  forge refused its push, could not be read, check evidence was inconclusive, \
-                 the base chase exhausted, review admission exhausted its budget, or an auto-fix \
-                 stop's pull request now reports green required checks",
+                 the base chase exhausted, review admission exhausted its budget, an auto-fix \
+                 stop's pull request now reports green required checks, or an unrepaired check \
+                 repair is handed back for another attempt",
                 source_run_id, source.state
             )));
         }

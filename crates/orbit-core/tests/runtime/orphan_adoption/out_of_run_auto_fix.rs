@@ -68,6 +68,12 @@ pub(super) enum LeafEnd {
     /// code, with the `auto_fix_stopped` diagnostic inside the step message
     /// the dispatcher wraps.
     HeldAutoFixStop,
+    /// Its completion step entered `step_failure_recovery` for an admitted
+    /// check repair, recovery failed without publishing, and
+    /// `hold_unrepaired_check_repair` held the run as
+    /// `delivery_repair_dispatched` with the `pr_auto_fix_check_repair`
+    /// diagnostic.
+    HeldUnrepairedCheckRepair,
 }
 
 /// How a stopped leaf left its task.
@@ -233,6 +239,26 @@ impl Fixture {
                          request #{number} cannot be repaired automatically (required checks \
                          name another head); no repair agent runs, the pull request stays open \
                          and the task stays in review"
+                    ),
+                );
+            }
+            LeafEnd::HeldUnrepairedCheckRepair => {
+                self.jobs.write_run_state(&run, &state).unwrap();
+                self.hold(
+                    &run,
+                    4,
+                    DeliveryRefusal::RepairDispatched.error_code(),
+                    &format!(
+                        "deterministic action `complete_pr` refused: admitted check repair ran \
+                         step_failure_recovery and it did not repair the head; the run holds. \
+                         The admission remains recorded and spends one repair attempt. Inspect \
+                         the recovery attempt; because this held run is terminal, starting a new \
+                         authorized delivery run on the same head admits another repair attempt \
+                         while per-PR budget remains, or repair and publish a new head, then start \
+                         a new delivery attempt. Exhausting the per-PR budget fails the run. \
+                         pr_auto_fix_check_repair: pull request #{number} failed required checks \
+                         on head published-head; auto-fix repair attempt 1 of 3 runs as crew \
+                         'fixer' (drawn from workflow.purpose_crews.auto_fix)."
                     ),
                 );
             }
@@ -1249,6 +1275,295 @@ fn a_skipped_head_lists_the_attempts_spent_and_remaining() {
     );
 }
 
+/// ORB-27262: an admitted check repair whose `step_failure_recovery` failed
+/// without publishing holds as `delivery_repair_dispatched` carrying
+/// `pr_auto_fix_check_repair:`. The drain observes it without ignoring it: it
+/// retries while budget remains, reports spent/remaining attempts when
+/// exhausted or held, hands back if checks turn green, honors operator/opt-out
+/// holds, and keeps ignoring other `delivery_repair_dispatched` holds.
+fn an_unrepaired_check_repair_hold_retries_in_budget_reports_exhausted_and_honors_holds() {
+    let fx = fixture();
+
+    // 1. One failed check recovery (1 of 3 spent, 0 pushes, unchanged red head):
+    //    both the drain pass and Fix PR offer/start the next authorized attempt.
+    let retryable = fx.delivered_leaf(
+        142,
+        "done",
+        Shelf::Review,
+        LeafEnd::HeldUnrepairedCheckRepair,
+    );
+    fx.blocked(&retryable, "published-head", "orbit-bot", false, &["Check"]);
+    record_attempts(
+        &fx,
+        &retryable.task,
+        "142",
+        "published-head",
+        &retryable.run,
+        1,
+    );
+    let readiness_fix_pr = fx
+        .runtime
+        .task_pr_auto_fix_readiness(&retryable.task, true)
+        .unwrap();
+    assert_eq!(readiness_fix_pr["available"], true, "{readiness_fix_pr}");
+    assert_eq!(
+        readiness_fix_pr["blocker"], "failed_checks",
+        "{readiness_fix_pr}"
+    );
+
+    // 2. Spent budget (3 of 3 spent) on an unrepaired check-repair hold:
+    //    reported as budget_exhausted with remaining budget in readiness.
+    let exhausted = fx.delivered_leaf(
+        143,
+        "done",
+        Shelf::Review,
+        LeafEnd::HeldUnrepairedCheckRepair,
+    );
+    fx.blocked(&exhausted, "published-head", "orbit-bot", false, &["Check"]);
+    record_attempts(
+        &fx,
+        &exhausted.task,
+        "143",
+        "published-head",
+        &exhausted.run,
+        3,
+    );
+
+    // 3. Unrelated operator hold and no-auto-approve opt-out stay honored and
+    //    report the remaining two attempts in readiness.
+    let op_held = fx.delivered_leaf(
+        144,
+        "done",
+        Shelf::OperatorHold,
+        LeafEnd::HeldUnrepairedCheckRepair,
+    );
+    fx.blocked(&op_held, "published-head", "orbit-bot", false, &["Check"]);
+    record_attempts(&fx, &op_held.task, "144", "published-head", &op_held.run, 1);
+
+    let opted_out = fx.delivered_leaf(
+        145,
+        "done",
+        Shelf::OptedOut,
+        LeafEnd::HeldUnrepairedCheckRepair,
+    );
+    fx.blocked(&opted_out, "published-head", "orbit-bot", false, &["Check"]);
+    record_attempts(
+        &fx,
+        &opted_out.task,
+        "145",
+        "published-head",
+        &opted_out.run,
+        1,
+    );
+
+    // 4. Other `delivery_repair_dispatched` holds (e.g. a spent/failed no-edit
+    //    rerun without `pr_auto_fix_check_repair:`, or a post-recovery hold
+    //    wrapping `; original error before recovery:`) keep their own next step
+    //    and are ignored by the drain pass.
+    let other_hold = fx.delivered_leaf(
+        146,
+        "done",
+        Shelf::Review,
+        LeafEnd::Held("delivery_repair_dispatched"),
+    );
+    fx.blocked(
+        &other_hold,
+        "published-head",
+        "orbit-bot",
+        false,
+        &["Check"],
+    );
+    let post_recovery_hold = fx.delivered_leaf(
+        147,
+        "done",
+        Shelf::Review,
+        LeafEnd::Held("delivery_repair_dispatched"),
+    );
+    fx.step_with_message(
+        &post_recovery_hold.run,
+        4,
+        "complete_pr",
+        JobRunState::Failed,
+        Some(DeliveryRefusal::RepairDispatched.error_code()),
+        Some(
+            "no-edit rerun failed again; original error before recovery: \
+             pr_auto_fix_check_repair: pull request #147 failed required checks",
+        ),
+    );
+    fx.blocked(
+        &post_recovery_hold,
+        "published-head",
+        "orbit-bot",
+        false,
+        &["Check"],
+    );
+
+    let drain = fx.drain();
+    fx.step(&drain, 0, "adopt_orphans", JobRunState::Success, None);
+    let pass = fx.pass(&drain, "done", true);
+
+    // Attempt 2 starts for the in-budget unrepaired check repair.
+    let entry = started(&pass, &retryable.task).unwrap_or_else(|| panic!("{pass}"));
+    assert_eq!(entry["blocker"], "failed_checks", "{pass}");
+    assert_eq!(entry["pr_number"], "142", "{pass}");
+    let retries = fx.retries(&retryable.run);
+    assert_eq!(retries.len(), 1, "{pass}");
+    let seeded = fx.jobs.read_run_state(&retries[0].run_id).unwrap().unwrap();
+    assert_eq!(seeded.next_step_index, 4, "completion reruns: {pass}");
+    assert_eq!(
+        fx.runtime.get_task(&retryable.task).unwrap().status,
+        TaskStatus::Review
+    );
+
+    // Exhausted and held tasks are reported in both pass output and readiness.
+    assert_eq!(
+        repair_skip(&pass, &exhausted.task).as_deref(),
+        Some("budget_exhausted"),
+        "{pass}"
+    );
+    assert!(
+        skip_detail(&pass, &exhausted.task)
+            .contains("repair budget spent: 3 of 3 attempts used, none remain"),
+        "{pass}"
+    );
+    assert_eq!(
+        repair_skip(&pass, &op_held.task).as_deref(),
+        Some("operator_hold"),
+        "{pass}"
+    );
+    assert!(
+        skip_detail(&pass, &op_held.task).contains("repair attempts: 1 of 3 spent, 2 remaining"),
+        "{pass}"
+    );
+    assert_eq!(
+        repair_skip(&pass, &opted_out.task).as_deref(),
+        Some("opted_out"),
+        "{pass}"
+    );
+    assert!(
+        skip_detail(&pass, &opted_out.task).contains("repair attempts: 1 of 3 spent, 2 remaining"),
+        "{pass}"
+    );
+    assert!(fx.retries(&exhausted.run).is_empty(), "{pass}");
+    assert!(fx.retries(&op_held.run).is_empty(), "{pass}");
+    assert!(fx.retries(&opted_out.run).is_empty(), "{pass}");
+    assert_eq!(
+        fx.runtime.get_task(&op_held.task).unwrap().status,
+        TaskStatus::Blocked
+    );
+
+    // Non-matching `delivery_repair_dispatched` holds stay ignored.
+    for ignored in [&other_hold, &post_recovery_hold] {
+        assert!(started(&pass, &ignored.task).is_none(), "{pass}");
+        assert_eq!(repair_skip(&pass, &ignored.task), None, "{pass}");
+        assert!(fx.retries(&ignored.run).is_empty(), "{pass}");
+    }
+
+    let readiness = fx
+        .runtime
+        .workspace_auto_readiness(&[], None, 10, &[])
+        .unwrap();
+    let entries = readiness["out_of_run_auto_fix"].as_array().unwrap();
+    assert!(
+        entries
+            .iter()
+            .any(|item| item["run_id"] == retries[0].run_id && item["pr_number"] == "142"),
+        "{readiness}"
+    );
+    assert!(
+        entries.iter().any(|item| item["pr_number"] == "143"
+            && item["state"] == "skipped"
+            && item["reason"] == "budget_exhausted"
+            && item["hold_code"] == "delivery_repair_dispatched"
+            && item["detail"].as_str().is_some_and(
+                |d| d.contains("repair budget spent: 3 of 3 attempts used, none remain")
+            )),
+        "{readiness}"
+    );
+    assert!(
+        entries.iter().any(|item| item["pr_number"] == "144"
+            && item["state"] == "skipped"
+            && item["reason"] == "operator_hold"
+            && item["hold_code"] == "delivery_repair_dispatched"
+            && item["detail"]
+                .as_str()
+                .is_some_and(|d| d.contains("repair attempts: 1 of 3 spent, 2 remaining"))),
+        "{readiness}"
+    );
+
+    // If the resumed attempt 2 also holds unrepaired, attempt 3 still starts.
+    let resumed_2 = retries[0].run_id.clone();
+    fx.hold(
+        &resumed_2,
+        4,
+        DeliveryRefusal::RepairDispatched.error_code(),
+        "deterministic action `complete_pr` refused: admitted check repair ran \
+         step_failure_recovery and it did not repair the head; \
+         pr_auto_fix_check_repair: pull request #142 failed required checks on head \
+         published-head; auto-fix repair attempt 2 of 3 runs as crew 'fixer'.",
+    );
+    fx.runtime
+        .apply_task_automation_update(
+            &retryable.task,
+            TaskAutomationUpdate {
+                append_history: vec![orbit_types::task::TaskHistoryEntry {
+                    at: Utc::now(),
+                    by: "system".into(),
+                    event: PR_AUTO_FIX_ADMITTED_EVENT.into(),
+                    note: Some(
+                        json!({
+                            "pr_number": "142",
+                            "head_sha": "published-head",
+                            "blocker": "failed_checks",
+                            "attempt": 2,
+                            "budget": 3,
+                            "run_id": resumed_2,
+                            "crew": "fixer",
+                            "crew_source": "pool"
+                        })
+                        .to_string(),
+                    ),
+                    from_status: None,
+                    to_status: None,
+                    operation_id: None,
+                    decision: None,
+                }],
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    let pass_3 = fx.pass(&drain, "done", true);
+    assert!(started(&pass_3, &retryable.task).is_some(), "{pass_3}");
+    assert_eq!(fx.retries(&resumed_2).len(), 1, "{pass_3}");
+
+    // If checks turn green on the same published head after an unrepaired
+    // check-repair hold (with pending checks waiting first), completion is
+    // handed back without spending another repair attempt.
+    let cleared = fx.delivered_leaf(
+        148,
+        "done",
+        Shelf::Review,
+        LeafEnd::HeldUnrepairedCheckRepair,
+    );
+    fx.report_required_checks(&cleared, "published-head", "orbit-bot", &[], &["Check"]);
+    record_attempts(&fx, &cleared.task, "148", "published-head", &cleared.run, 1);
+    let waiting = fx.pass(&drain, "done", true);
+    assert_eq!(
+        repair_skip(&waiting, &cleared.task).as_deref(),
+        Some("delivery_repair_dispatched"),
+        "{waiting}"
+    );
+    assert!(
+        skip_detail(&waiting, &cleared.task).contains("repair attempts: 1 of 3 spent, 2 remaining"),
+        "{waiting}"
+    );
+    fx.report_required_checks(&cleared, "published-head", "orbit-bot", &["Check"], &[]);
+    let green = fx.pass(&drain, "done", true);
+    let handed = started(&green, &cleared.task).unwrap_or_else(|| panic!("{green}"));
+    assert_eq!(handed["reason"], "checks_green_after_hold", "{green}");
+    assert_eq!(fx.retries(&cleared.run).len(), 1, "{green}");
+}
+
 /// Record one source repair reservation of pull request `pr` on `head`, as the
 /// source repair admission writes it. It spends the pull request's shared budget.
 fn record_source_repair_reservation(fx: &Fixture, task: &str, pr: &str, head: &str, attempt: u32) {
@@ -1614,6 +1929,7 @@ crate::scenario_table!(
     the_pull_requests_auto_fix_budget_bounds_out_of_run_repairs,
     a_repair_that_published_nothing_leaves_the_heads_unspent_attempts_usable,
     a_skipped_head_lists_the_attempts_spent_and_remaining,
+    an_unrepaired_check_repair_hold_retries_in_budget_reports_exhausted_and_honors_holds,
     a_source_repair_and_a_watcher_attempt_share_the_pull_requests_budget,
     source_repairs_alone_spend_the_shared_budget_in_the_refusal,
     a_stuck_pull_request_is_repaired_however_many_deliveries_ran_since,

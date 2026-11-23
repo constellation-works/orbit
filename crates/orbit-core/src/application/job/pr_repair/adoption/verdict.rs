@@ -1,6 +1,6 @@
 use super::super::held::{
     HELD_HANDBACK_CEILING, auto_fix_stopped, handed_back_hold, held_backoff, held_backoff_until,
-    held_handbacks, held_refusal,
+    held_handbacks, held_refusal, unrepaired_check_repair,
 };
 use super::super::ledger::{budget_note, ledger_admits};
 use super::pass_types::{BlockerRead, CLEAN_RECHECK, Repair};
@@ -75,10 +75,12 @@ impl OrbitRuntime {
         // way. Every other hold keeps its own next step.
         let mut operator_stopped = false;
         let mut auto_fix_hold = false;
+        let mut unrepaired_repair_hold = false;
         let held = if run.state == JobRunState::Held {
             let refusal = match self.stores().jobs().get_job_run(&run.run_id) {
                 Ok(Some(full)) => {
                     auto_fix_hold = auto_fix_stopped(&full);
+                    unrepaired_repair_hold = unrepaired_check_repair(&full);
                     operator_stopped = orbit_types::workflow::is_operator_stopped(
                         full.state,
                         full.steps
@@ -96,6 +98,7 @@ impl OrbitRuntime {
                 _ if operator_stopped => None,
                 Some(refusal) if handed_back_hold(refusal) => Some(refusal.error_code()),
                 _ if auto_fix_hold => Some("auto_fix_stopped"),
+                _ if unrepaired_repair_hold => Some(DeliveryRefusal::RepairDispatched.error_code()),
                 refusal => {
                     return Verdict::Ignore(
                         "leaf_held",
@@ -198,9 +201,13 @@ impl OrbitRuntime {
                 );
             }
             // An operator asking about one task is not held to the drain's
-            // backoff; the ceiling still binds both.
+            // backoff; the ceiling still binds both. Auto-fix stops and
+            // unrepaired check-repair holds do not use the held-leaf backoff:
+            // stops only clear on green checks and check repairs are bounded
+            // by the PR's repair budget.
             if !reads.fresh
                 && !auto_fix_hold
+                && !unrepaired_repair_hold
                 && let Some(until) = held_backoff_until(
                     run.finished_at,
                     held_backoff(&history, &pr_number, refusal),
@@ -438,6 +445,26 @@ impl OrbitRuntime {
                 format!("#{number} does not yet have all required checks green"),
             );
         }
+        // An unrepaired check repair retries through the ledger while a blocker
+        // and budget remain; if no blocker remains, it hands back only once
+        // the published head reports complete green checks.
+        if unrepaired_repair_hold && blocker.is_none() {
+            if published_sha.as_deref() != Some(blockers.head_sha.as_str()) {
+                return skip(
+                    "publication_identity_changed",
+                    format!("#{number} no longer matches the held run's published head"),
+                );
+            }
+            if !blockers.pending_required_checks.is_empty()
+                || (blockers.passed_required_checks.is_empty()
+                    && blockers.requires_status_checks != Some(false))
+            {
+                return skip(
+                    DeliveryRefusal::RepairDispatched.error_code(),
+                    format!("#{number} does not yet have all required checks green"),
+                );
+            }
+        }
         let hold = match (blocker, held) {
             (Some(blocker), _) => {
                 observation.blocker = Some(blocker);
@@ -503,7 +530,7 @@ impl OrbitRuntime {
         });
         if let Some(hold) = hold {
             marker["hold_code"] = json!(hold);
-            if hold == "auto_fix_stopped" {
+            if hold == "auto_fix_stopped" || unrepaired_repair_hold {
                 marker["reason"] = json!("checks_green_after_hold");
             }
         }
