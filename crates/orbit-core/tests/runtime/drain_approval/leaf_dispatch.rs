@@ -58,6 +58,7 @@ fn a_finished_leaf_is_recorded_terminal_on_the_drain() {
     let release = workspace._root.path().join("release-workers");
     let mut owned_workers =
         crate::worker_fixture::install_owned_workers(&release, workspace.repo.clone());
+    owned_workers.retain_workspace(workspace._root.clone());
     let task = workspace.backlog_task("leaf-dispatch");
 
     let drain = workspace
@@ -163,6 +164,7 @@ fn a_leaf_finished_after_the_drain_ended_is_recorded_terminal() {
     let release = workspace._root.path().join("release-workers");
     let mut owned_workers =
         crate::worker_fixture::install_owned_workers(&release, workspace.repo.clone());
+    owned_workers.retain_workspace(workspace._root.clone());
     let task = workspace.backlog_task("late-leaf-dispatch");
 
     let drain = workspace

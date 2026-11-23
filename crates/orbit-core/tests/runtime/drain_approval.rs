@@ -20,6 +20,7 @@ use orbit_types::workflow::{
 };
 use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use tempfile::TempDir;
 mod advisory;
 #[cfg(unix)]
@@ -33,7 +34,8 @@ mod required_tools;
 mod step_graph;
 mod unresolved_footprint;
 struct Workspace {
-    _root: TempDir,
+    // Shared with the worker guard, which keeps it if a worker outlives teardown.
+    _root: Arc<TempDir>,
     runtime: OrbitRuntime,
     repo: PathBuf,
 }
@@ -89,7 +91,7 @@ impl Workspace {
             .with_host_resource_probe(super::dispatch_admission::PressureProbe::calm())
             .with_automation_machine_identity(Some("fixture-machine".into()));
         Self {
-            _root: root,
+            _root: Arc::new(root),
             runtime,
             repo,
         }

@@ -168,6 +168,7 @@ fn backlog_work_is_admitted_while_the_approval_pilot_runs_and_the_drain_waits_fo
     let release = workspace._root.path().join("release-workers");
     let mut owned_workers =
         crate::worker_fixture::install_owned_workers(&release, workspace.repo.clone());
+    owned_workers.retain_workspace(workspace._root.clone());
     let proposed = workspace.task("proposed", &[], &["file:README.md"], TaskComplexity::Low);
     let eligible = workspace.backlog_task("eligible");
 

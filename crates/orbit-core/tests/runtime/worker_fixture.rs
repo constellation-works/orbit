@@ -669,6 +669,177 @@ fn an_unwritable_release_marker_still_settles_and_keeps_the_workspace() {
     std::fs::remove_dir_all(&root_path).unwrap();
 }
 
+/// The ownership shape of the drain fixtures: the fixture struct owns the
+/// workspace root as an `Arc`, and the guard, declared after it, holds a
+/// second share. Locals drop in reverse order, so the guard settles first.
+#[cfg(unix)]
+struct CallerWorkspace {
+    root: std::sync::Arc<tempfile::TempDir>,
+    repo: std::path::PathBuf,
+    runtime: orbit_core::OrbitRuntime,
+}
+
+#[cfg(unix)]
+impl CallerWorkspace {
+    fn new(job: &str) -> Self {
+        let root = std::sync::Arc::new(
+            tempfile::TempDir::new_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap(),
+        );
+        let global = root.path().join("global");
+        let repo = root.path().join("repo");
+        let jobs_dir = global.join("resources/jobs");
+        std::fs::create_dir_all(&jobs_dir).unwrap();
+        std::fs::create_dir_all(repo.join(".orbit")).unwrap();
+        std::fs::write(
+            jobs_dir.join(format!("{job}.yaml")),
+            format!(
+                "schemaVersion: 2\nkind: Job\nmetadata:\n  name: {job}\nspec:\n  state: enabled\n  steps:\n    - id: nap\n      spec:\n        type: deterministic\n        action: sleep\n        config: {{}}\n"
+            ),
+        )
+        .unwrap();
+        let runtime = orbit_core::OrbitRuntime::from_roots(&global, &repo.join(".orbit"))
+            .unwrap()
+            .with_host_resource_probe(crate::dispatch_admission::PressureProbe::calm());
+        Self {
+            root,
+            repo,
+            runtime,
+        }
+    }
+}
+
+#[cfg(unix)]
+fn until(what: &str, mut ready: impl FnMut() -> bool) {
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while !ready() {
+        assert!(Instant::now() < deadline, "{what} timed out");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+/// A fixture that owns its root, as the drain fixtures do, keeps it through
+/// an assertion unwind while a held substitute may still use it. Only the
+/// guard's retained share survives the fixture's own drop.
+#[cfg(unix)]
+#[test]
+fn a_fixture_owned_root_survives_an_unwind_with_a_held_worker() {
+    use orbit_core::test_support::{pipeline_worker_observer_completed, pipeline_workers_spawned};
+
+    if !crate::dispatch_admission::isolated(
+        "worker_fixture::a_fixture_owned_root_survives_an_unwind_with_a_held_worker",
+    ) {
+        return;
+    }
+    let gate = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    gate.set_nonblocking(true).unwrap();
+    let gate_addr = gate.local_addr().unwrap().to_string();
+
+    let mut root_path = None;
+    let mut held = None;
+    let mut launched = None;
+    let unwound = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let fixture = CallerWorkspace::new("held_fixture_root");
+        root_path = Some(fixture.root.path().to_path_buf());
+        let marker = fixture.root.path().join("release-workers");
+        let mut owned =
+            install_owned_workers_with_identity_gate(&marker, fixture.repo.clone(), &gate_addr);
+        owned.retain_workspace(fixture.root.clone());
+        let run = fixture
+            .runtime
+            .submit_pipeline_run("held_fixture_root", serde_json::json!({}), None, None)
+            .unwrap()
+            .run_id;
+        let mut accepted = None;
+        until("the substitute reached its identity gate", || {
+            gate.accept()
+                .map(|(stream, _)| accepted = Some(stream))
+                .is_ok()
+        });
+        held = accepted;
+        let pid = pipeline_workers_spawned(&fixture.repo)
+            .into_iter()
+            .find_map(|(recorded, pid)| (recorded == run).then_some(pid))
+            .expect("the launch is recorded before submission returns");
+        launched = Some((run, fixture.repo.clone(), pid));
+        panic!("assertion unwind while the substitute is held before its identity");
+    }));
+    assert!(unwound.is_err(), "the unwind reached the guard");
+    let root_path = root_path.expect("the fixture was built");
+    let (run, repo, pid) = launched.expect("the substitute was launched before the unwind");
+    assert!(
+        root_path.exists(),
+        "the fixture's drop must not delete a root a held substitute may use"
+    );
+    assert!(!reaped(pid), "the held substitute is still alive");
+    assert!(
+        !pipeline_worker_observer_completed(&repo, &run, pid),
+        "its startup observer is still active"
+    );
+
+    let mut held: std::net::TcpStream = held.expect("the gate connection");
+    held.write_all(&[1]).unwrap();
+    until("the held substitute is reaped", || reaped(pid));
+    until("its startup observer completes", || {
+        pipeline_worker_observer_completed(&repo, &run, pid)
+    });
+    std::fs::remove_dir_all(&root_path).unwrap();
+}
+
+/// Ordinary teardown settles every worker, so the guard's share is released
+/// with it and the fixture's drop removes the root.
+#[cfg(unix)]
+#[test]
+fn ordinary_teardown_releases_a_fixture_owned_root() {
+    use orbit_core::test_support::pipeline_worker_observer_completed;
+    use orbit_types::workflow::JobRunState;
+
+    if !crate::dispatch_admission::isolated(
+        "worker_fixture::ordinary_teardown_releases_a_fixture_owned_root",
+    ) {
+        return;
+    }
+    let fixture = CallerWorkspace::new("ordinary_fixture_root");
+    let root_path = fixture.root.path().to_path_buf();
+    let marker = root_path.join("release-workers");
+    let mut owned = install_owned_workers(&marker, fixture.repo.clone());
+    owned.retain_workspace(fixture.root.clone());
+    let run = fixture
+        .runtime
+        .submit_pipeline_run("ordinary_fixture_root", serde_json::json!({}), None, None)
+        .unwrap()
+        .run_id;
+    until("the substitute identified itself", || {
+        !owned.workers.lock().unwrap().is_empty()
+    });
+    let pid = owned.workers.lock().unwrap()[0].pid;
+    // The in-process executor would settle the run; only substitute and
+    // observer teardown remain.
+    let jobs = orbit_store::compose::workspace_job_run_store(
+        fixture.runtime.sqlite_store().unwrap(),
+        fixture.runtime.workspace_id().unwrap(),
+    );
+    jobs.mark_job_run_running(&run, chrono::Utc::now(), std::process::id())
+        .unwrap();
+    jobs.finalize_job_run(&run, JobRunState::Success, chrono::Utc::now(), None)
+        .unwrap();
+    owned.release_and_wait(std::slice::from_ref(&run));
+    assert!(reaped(pid));
+    assert!(pipeline_worker_observer_completed(&fixture.repo, &run, pid));
+    assert!(root_path.exists(), "the fixture still owns the root");
+    assert!(
+        std::sync::Arc::strong_count(&fixture.root) > 1,
+        "the guard still holds its share until it drops"
+    );
+    drop(owned);
+    assert_eq!(
+        std::sync::Arc::strong_count(&fixture.root),
+        1,
+        "settled teardown gives its share back"
+    );
+    drop(fixture);
+    assert!(!root_path.exists(), "ordinary teardown removes the root");
+}
+
 /// Non-Unix fallback: no owned handshake exists there, so retain the
 /// original marker-only contract.
 #[cfg(not(unix))]
