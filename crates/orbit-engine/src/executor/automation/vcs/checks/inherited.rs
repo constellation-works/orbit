@@ -29,7 +29,7 @@ pub(in crate::executor::automation::vcs) enum InheritedFailure {
 ///
 /// Inherited means all of: [`base_tip_check_evidence`] classes the set as
 /// `base_refresh` (each failed job passed on a newer base commit while the
-/// head's fork point did not pass it, no required sibling fails on the base
+/// head's fork point conclusively failed it, no required sibling fails on the base
 /// the same way, and the tip is not already in the head), and no failed job's
 /// log cites a path the candidate changed against its fork point. A stopped
 /// job with no log, or a log that cannot be read, proves nothing and is not
@@ -56,6 +56,16 @@ pub(in crate::executor::automation::vcs) fn base_inherited_failure<H: RuntimeHos
             "a required job still fails on '{base_branch}' the same way, so the base has not \
              fixed it"
         )));
+    }
+    if !evidence["checks"].as_array().is_some_and(|checks| {
+        !checks.is_empty()
+            && checks
+                .iter()
+                .all(|check| check["fork_point_failed"] == true)
+    }) {
+        return Ok(InheritedFailure::NotInherited(
+            "the fork point has no conclusive failing job for every required failure".to_string(),
+        ));
     }
     let Ok(fork_point) = git_output(workspace, &["merge-base", head, tip]) else {
         return Ok(InheritedFailure::NotInherited(

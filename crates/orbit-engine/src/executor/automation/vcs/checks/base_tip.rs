@@ -103,18 +103,22 @@ pub(in crate::executor::automation::vcs) fn base_tip_check_evidence<H: RuntimeHo
                     .ok()
                     .map(|fork_point| fork_point.trim().to_string())
             });
-            if fork_point
+            let fork_job = fork_point
                 .clone()
-                .and_then(|fork_point| history.decisive(&fork_point, job))
-                .is_some_and(|(_, fork_point_job)| {
-                    fork_point_job.conclusion.value() == Some(&CiJobConclusion::Success)
-                })
-            {
+                .and_then(|fork_point| history.decisive(&fork_point, job));
+            if fork_job.as_ref().is_some_and(|(_, fork_point_job)| {
+                fork_point_job.conclusion.value() == Some(&CiJobConclusion::Success)
+            }) {
                 candidate_owned = true;
                 continue;
             }
-            evidence
-                .push(json!({"failed_job":job,"passing_job":base_job,"base_commit":base_commit}));
+            let fork_failed = fork_job.is_some_and(|(_, fork_job)| {
+                fork_job.conclusion.value() == Some(&CiJobConclusion::Failure)
+            });
+            evidence.push(
+                json!({"failed_job":job,"passing_job":base_job,"base_commit":base_commit,
+                "fork_point_failed":fork_failed}),
+            );
             continue;
         }
         let (Some(run), Some(id), Some(base_run), Some(base_id)) = (
