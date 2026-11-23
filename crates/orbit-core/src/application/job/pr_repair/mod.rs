@@ -7,5 +7,5 @@ mod held;
 mod ledger;
 mod task_auto_fix;
 
-pub(crate) use held::{handed_back_hold, held_refusal};
+pub(crate) use held::{auto_fix_stopped, handed_back_hold, held_refusal};
 pub use task_auto_fix::{TaskAutoFixError, TaskAutoFixRefusal};

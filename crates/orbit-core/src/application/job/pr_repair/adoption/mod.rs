@@ -65,7 +65,10 @@
 //! back. Its pull request is repaired through the ledger when the forge
 //! reports a blocker; otherwise the hand-back spends none of the ledger and
 //! is bounded per held lineage by a backoff and a ceiling (`held`), after
-//! which the pass reports the task under its hold code. Other holds keep
+//! which the pass reports the task under its hold code. An `auto_fix_stopped`
+//! hold is handed back without backoff only when the published head matches
+//! and has positive, complete green required-check evidence; the ceiling
+//! still applies and completion performs the normal landing checks. Other holds keep
 //! their own documented next step.
 //!
 //! The dashboard's Fix PR action starts the same repair for one task through

@@ -5,7 +5,8 @@
 //! read can clear ([`handed_back_hold`]), an `--auto-fix` drain pass (or the
 //! dashboard's Fix PR) hands the task back to the leaf's completion step, the
 //! same resume a failed, timed-out or interrupted leaf gets. Every other hold
-//! keeps its own documented next step.
+//! keeps its own documented next step, except an auto-fix stop whose
+//! published head subsequently reports green required checks.
 //!
 //! The hand-backs of one held lineage are bounded without the pull request's
 //! repair ledger, which they never spend:
@@ -89,14 +90,10 @@ pub(crate) fn held_refusal(run: &JobRun) -> Option<DeliveryRefusal> {
 
 /// How long after a held leaf ended the next hand-back for `code` waits,
 /// given the pull request's history.
-pub(super) fn held_backoff(
-    history: &[TaskHistoryEntry],
-    pr_number: &str,
-    code: DeliveryRefusal,
-) -> Duration {
+pub(super) fn held_backoff(history: &[TaskHistoryEntry], pr_number: &str, code: &str) -> Duration {
     let earlier = out_of_run_starts(history, pr_number)
         .iter()
-        .filter(|start| start.hold_code.as_deref() == Some(code.error_code()))
+        .filter(|start| start.hold_code.as_deref() == Some(code))
         .count()
         .min(HELD_HANDBACK_CEILING);
     HELD_BACKOFF_BASE.saturating_mul(1 << earlier)
@@ -118,12 +115,23 @@ pub(super) fn held_handbacks(
     history: &[TaskHistoryEntry],
     pr_number: &str,
     head_sha: &str,
-    code: DeliveryRefusal,
+    code: &str,
 ) -> usize {
     out_of_run_starts(history, pr_number)
         .iter()
-        .filter(|start| {
-            start.head_sha == head_sha && start.hold_code.as_deref() == Some(code.error_code())
-        })
+        .filter(|start| start.head_sha == head_sha && start.hold_code.as_deref() == Some(code))
         .count()
+}
+
+/// An untyped auto-fix stop can be reconsidered once checks turn green.
+pub(crate) fn auto_fix_stopped(run: &JobRun) -> bool {
+    run.state == JobRunState::Held
+        && run.steps.last().is_some_and(|step| {
+            step.error_code.as_deref() == Some("auto_fix_stopped")
+                || (step.error_code.is_none()
+                    && step
+                        .error_message
+                        .as_deref()
+                        .is_some_and(|message| message.starts_with("auto_fix_stopped:")))
+        })
 }

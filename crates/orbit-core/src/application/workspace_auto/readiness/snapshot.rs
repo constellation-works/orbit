@@ -584,6 +584,17 @@ pub(super) fn readiness_snapshot_with_detail(
     if let Some(state) = &status_state
         && let Some(pass) = state.pipeline.get("adopt_orphans")
     {
+        for started in pass["auto_fix"]["started"].as_array().into_iter().flatten() {
+            if started["reason"] == "checks_green_after_hold" {
+                repairs.push(json!({
+                    "state": "handed_back", "reason": started["reason"],
+                    "task_ids": [started["task_id"]], "pr_number": started["pr_number"],
+                    "head_sha": started["head_sha"], "source_run_id": started["source_run_id"],
+                    "drain_run_id": status_run_id, "drain_live": active_drain.is_some(),
+                    "observed_at": pass["observed_at"],
+                }));
+            }
+        }
         for skipped in pass["auto_fix"]["skipped"].as_array().into_iter().flatten() {
             repairs.push(json!({
                 "state": "skipped",

@@ -167,7 +167,10 @@ impl Fixture {
                 "worktree",
                 json!({"job_run_id": run, "batch_id": run, "task_ids": [task]}),
             ),
-            ("push", json!({"phase": "push", "branch": head})),
+            (
+                "push",
+                json!({"phase": "push", "branch": head, "local_sha": "published-head"}),
+            ),
             (
                 "pr_open",
                 json!({"phase": "pr_open", "decision": "performed",
