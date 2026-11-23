@@ -296,18 +296,19 @@ fn outside_cwd_validates_against_the_stored_checkout_not_the_orbit_root_parent()
         "task",
         "add",
         "--title",
-        "Bogus data-dir file",
+        "Bogus Orbit-root parent file",
         "--description",
-        "Must not resolve against the Orbit data directory",
+        "Must not record creation intent from parent(orbit-root)",
         "--complexity",
         "low",
         "--context",
-        "file:config.toml",
+        "file:root/config.toml",
     ]);
     let rejected = workspace.run_failure(&workspace.outside, &string_refs(&rejected_file));
     assert!(
-        rejected.contains("file:config.toml"),
-        "a file that exists only under the Orbit data directory must be refused: {rejected}"
+        rejected.contains("file:root/config.toml")
+            && rejected.contains("does not resolve to an existing in-workspace target"),
+        "a missing parent that exists only under parent(orbit-root) must be refused: {rejected}"
     );
 
     let tool_accept = json!({
