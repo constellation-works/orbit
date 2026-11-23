@@ -41,11 +41,12 @@ failed steps by default, or the full log, plus runner checkout evidence.
   and a process timeout. A separate `diagnostic_unit` retains a unique complete
   failing runner command up to 256 KiB; display truncation does not imply
   missing command evidence. Source-limit exhaustion is retryable.
-- **Recovery.** When the run-scoped read succeeds with no output, or GitHub says
-  the parent run is still in progress, the excerpt can be recovered from the log
-  API of a verified completed job belonging to that run; `failed` scope is
-  restricted to unsuccessful jobs. `source` and `source_jobs` identify the
-  recovery. Other errors remain errors.
+- **Recovery.** When the run-scoped read succeeds with no output, GitHub says
+  the parent run is still in progress, or GitHub serves the run's log archive as
+  an invalid zip, the excerpt can be recovered from the log API of a verified
+  completed job belonging to that run; `failed` scope is restricted to
+  unsuccessful jobs. `source` and `source_jobs` identify the recovery. Other
+  errors remain errors.
 
 ### GitHub auth status
 
