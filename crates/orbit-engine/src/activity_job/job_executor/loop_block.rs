@@ -35,6 +35,7 @@ pub(super) fn run_loop(
     }
 
     let mut broke = false;
+    let mut budget_ended = false;
     let mut last_iter: u32 = 0;
     let mut last_output = Value::Null;
     let planned_iterations = loop_items
@@ -45,6 +46,7 @@ pub(super) fn run_loop(
         if timeout
             .is_some_and(|budget| loop_clock::now().saturating_duration_since(started) >= budget)
         {
+            budget_ended = true;
             break;
         }
         let iteration_index = iter - 1;
@@ -137,6 +139,7 @@ pub(super) fn run_loop(
         );
     }
 
+    let exhausted = !broke && block.break_when.is_some() && !budget_ended;
     let out = serde_json::json!({
         "iterations": last_iter,
         "broke": broke,
@@ -144,6 +147,20 @@ pub(super) fn run_loop(
         "last_output": last_output,
     });
     record_pipeline(ctx, &step.id, out.clone());
+
+    if exhausted && block.fail_when_exhausted {
+        return Ok(StepOutcome {
+            failure_code: Some(orbit_types::workflow::StepFailureCode::Other(
+                orbit_types::workflow::LOOP_EXHAUSTED_ERROR_CODE.to_string(),
+            )),
+            success: false,
+            output: out,
+            message: Some(format!(
+                "loop step `{}` exhausted {} iterations without break_when holding (max_iterations {})",
+                step.id, last_iter, block.max_iterations
+            )),
+        });
+    }
 
     Ok(StepOutcome {
         failure_code: None,

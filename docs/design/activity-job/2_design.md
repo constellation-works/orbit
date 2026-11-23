@@ -1650,7 +1650,7 @@ A loop runs either:
 
 `loop.items` uses the same rendering rules as `fan_out.items`. Non-array JSON fails the step with `JobExecution` naming `loop.items` before the first iteration.
 
-The body runs before `break_when`, so steps can populate fields the break expression reads. If `items` exceeds `max_iterations`, execution fails structurally instead of truncating. Exhausting the planned iterations without satisfying `break_when` emits `LoopDidNotConverge` but returns a successful loop outcome with `broke: false`; a workflow that requires convergence must check that output.
+The body runs before `break_when`, so steps can populate fields the break expression reads. If `items` exceeds `max_iterations`, execution fails structurally instead of truncating. Exhausting the planned iterations without satisfying `break_when` emits `LoopDidNotConverge` but returns a successful loop outcome with `broke: false`; a workflow that requires convergence must check that output, or set the optional `fail_when_exhausted: true` (default false, omitted from serialized jobs when false). With it set, exhausting the planned iterations while `break_when` is set and never held keeps the `LoopDidNotConverge` event but fails the step with failure code `loop_exhausted` and a message naming the loop step, its iteration count and `max_iterations`; the failed outcome still carries the usual loop output. A loop ended by its `timeout_seconds` budget keeps its successful outcome. The shipped `workspace_pull_pipeline` `drain` loop sets it.
 
 Optional `timeout_seconds` and `interval_seconds` are templated non-negative,
 finite seconds, rendered once at loop entry. The timeout uses monotonic elapsed

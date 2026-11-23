@@ -65,7 +65,11 @@
 #
 # `max_iterations` is the fail-closed ceiling, not the intended exit. Every
 # iteration that admits nothing waits at least `poll_sleep_seconds`, so 6000
-# covers a 24h window plus a long tail of in-flight leaves.
+# covers a 24h window plus a long tail of in-flight leaves. The loop sets
+# `fail_when_exhausted`: if it runs all 6000 passes without `break_when`
+# holding, the `drain` step and the run end failed with `loop_exhausted`,
+# naming the step, its iteration count and the ceiling (the audit event
+# `loop.did_not_converge` is still emitted), instead of ending `success`.
 
 schemaVersion: 2
 kind: Job
@@ -101,6 +105,7 @@ spec:
     - id: drain
       loop:
         max_iterations: 6000
+        fail_when_exhausted: true
         break_when: "{{ steps.refill.output.done }} == true"
         steps:
           - id: window
