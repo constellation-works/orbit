@@ -1962,9 +1962,13 @@ refresh ran:
   `base_tip_check_evidence` reads, along the base branch's first-parent history
   from its current tip, the newest commit whose same job ran to a result, and
   classes the set as `base_refresh`. That means each failed job passed on that
-  newer base commit while the head's fork point did not pass it, no required
-  sibling fails on the base the same way (`known_red_base`), and the base tip is
-  not already in the head.
+  newer base commit, no required sibling fails on the base the same way
+  (`known_red_base`), and the base tip is not already in the head. The
+  `base_refresh` class alone does not need the fork point to have failed; this
+  trigger does. The head's fork point must have conclusively failed each failed
+  job (`fork_point_failed`): the newest success or failure of that job on its
+  first-parent history, with skipped commits read past. A missing, pending,
+  ambiguous or unreadable result holds the refresh.
 - No failure is the candidate's: no failed required job's log cites a path the
   candidate changed against its fork point (`cites_changed_candidate`, the same
   attribution check landing recovery uses). An unreadable log or a stopped job

@@ -2366,10 +2366,13 @@ existing recovery activities, final validation and push do the repair:
 - A no-edit repair's unchanged-head rerun that fails again gets one
   base-inherited refresh of the pull request. The refresh applies when every
   failed required check passed on a newer base commit where the head's fork
-  point did not, no failed required check also fails on the base the same way,
-  no failed log cites a path the candidate changed, and the base tip is not
-  already in the head. The run reserves the pull request's base update before
-  the write, recording `pr_base_update_reserved` with
+  point conclusively failed the same job, no failed required check also fails
+  on the base the same way, no failed log cites a path the candidate changed,
+  and the base tip is not already in the head. The fork point's result is the
+  newest success or failure of that job on its first-parent history; a commit
+  whose job was skipped is read past. A missing, pending, ambiguous or
+  unreadable result holds the refresh. The run reserves the pull request's base
+  update before the write, recording `pr_base_update_reserved` with
   `evidence.cause: "base_inherited_refresh"` (the rerun failure, fork point,
   landed base and per-check evidence) and `pr_refresh` rows. The write merges
   the base tip into the head as one conflict-free merge commit; it never
