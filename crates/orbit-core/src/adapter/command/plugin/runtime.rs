@@ -110,28 +110,13 @@ impl OrbitRuntime {
         plugin::list_plugins(self)
     }
 
-    /// Whether host plugin lifecycle state changed after this runtime built
-    /// its plugin tool surface.
-    ///
-    /// Long-lived hosts use this cheap row comparison to discard the frozen
-    /// runtime and rebuild it. The replacement then loads manifests, grants,
-    /// tools, panels and links from one coherent pass.
-    pub fn plugin_state_changed(&self) -> Result<bool, OrbitError> {
-        if self.plugin_installed_changed()? {
-            return Ok(true);
-        }
-        // A workspace toggle narrows the same surface, so flipping one in
-        // `[plugin_enablement]` has to rebuild it too.
-        Ok(plugin::workspace_plugin_toggles(self)? != self.plugin_load().workspace_toggles)
-    }
-
     /// Whether the host plugin rows changed after this runtime built its
     /// plugin tool surface, without re-reading the workspace toggles.
     ///
     /// Callers that have already established the workspace config file is
     /// unchanged (a config-layer stamp) have established the toggles are
     /// too, since they live in that file; for them the row comparison is
-    /// the whole of [`Self::plugin_state_changed`] that remains.
+    /// the complete invalidation check for host plugin rows.
     pub fn plugin_installed_changed(&self) -> Result<bool, OrbitError> {
         Ok(self.stores().plugins().list_plugins()? != self.plugin_load().installed)
     }

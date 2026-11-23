@@ -4,8 +4,8 @@ use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
 use orbit_store::contracts::{
     AuditActorAggregate, AuditAttributionAggregate, AuditEventFilter, AuditEventInsertParams,
-    AuditInvocationFields, AuditRoleAggregate, AuditToolAggregate, AuditToolModelAggregate,
-    FailureIncidentQuery, FailureIncidentReport,
+    AuditInvocationFields, AuditToolAggregate, AuditToolModelAggregate, FailureIncidentQuery,
+    FailureIncidentReport,
 };
 use orbit_types::identity::{infer_agent_family_from_model, normalize_attribution_label};
 use orbit_types::telemetry::{AuditEvent, AuditEventStatus, AuditStats};
@@ -693,27 +693,13 @@ impl OrbitRuntime {
             .get_audit_event_aggregates_by_tool_model(since)
     }
 
-    /// Per-role aggregate of audit events at or after `since`, with the
-    /// MCP-vs-CLI surface split (`mcp` = `subcommand='run-mcp'`, `cli` =
-    /// `subcommand='run'`). No dashboard card reads it now; it stays as the raw,
-    /// un-normalized view beside the actor aggregate (ORB-10888).
-    pub fn audit_event_aggregates_by_role(
-        &self,
-        since: &DateTime<Utc>,
-    ) -> Result<Vec<AuditRoleAggregate>, OrbitError> {
-        self.stores()
-            .audit_events()
-            .get_audit_event_aggregates_by_role(since)
-    }
-
     /// Per-canonical-actor aggregate of audit events at or after `since`
     /// [ORB-10888].
     ///
-    /// Same window and same MCP-vs-CLI split as
-    /// [`Self::audit_event_aggregates_by_role`], but grouped on the canonical
-    /// actor: one agent recorded as `claude`, `opus`, and `claude-opus-5` is a
-    /// single row, and `kind` separates synthetic and human actors from real
-    /// agents without matching on the label.
+    /// Same window and same MCP-vs-CLI surface split as the raw role aggregate,
+    /// but grouped on the canonical actor: one agent recorded as `claude`,
+    /// `opus`, and `claude-opus-5` is a single row, and `kind` separates
+    /// synthetic and human actors from real agents without matching on the label.
     pub fn audit_event_aggregates_by_actor(
         &self,
         since: &DateTime<Utc>,
