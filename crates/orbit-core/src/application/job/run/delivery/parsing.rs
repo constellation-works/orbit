@@ -256,7 +256,15 @@ pub(super) fn parse_landing_output(
         // including a merge that follows a rebase. An older checkpoint
         // omits that SHA. The landing stays merged; the caller treats the
         // missing identity as unresolved rather than as no culprit.
-        if object.get("merged").and_then(Value::as_bool) == Some(false) {
+        // An explicit `merged` must be a Boolean, whatever the base says: a
+        // textual value cannot certify a fast-forward. Only a checkpoint that
+        // omits `merged` keeps the base-only reading.
+        let merged = match object.get("merged") {
+            None => None,
+            Some(Value::Bool(merged)) => Some(*merged),
+            Some(_) => return Err(DeliveryEvidenceGap::OutputMalformed),
+        };
+        if merged == Some(false) {
             return Ok(None);
         }
         return match object.get("base").and_then(Value::as_str) {
