@@ -39,6 +39,8 @@ fn tags_changed_event(
         to_status: None,
         operation_id: None,
         decision: Some(TaskDecision::TagsChanged(TagsChanged { previous, tags })),
+        surface: None,
+        caller: None,
     }
 }
 
@@ -106,6 +108,8 @@ impl TaskV2Store {
                     to_status: None,
                     operation_id: None,
                     decision: entry.decision.clone(),
+                    surface: None,
+                    caller: None,
                 };
                 pending_events.push(event.clone());
                 bundle.events.push(event);
@@ -122,6 +126,8 @@ impl TaskV2Store {
                 to_status: status_changed.then_some(fields.status),
                 operation_id: Some(fields.operation_id.clone()),
                 decision: fields.decision.clone(),
+                surface: None,
+                caller: None,
             };
             pending_events.push(event.clone());
             bundle.events.push(event);
@@ -234,6 +240,8 @@ impl TaskV2Store {
                 to_status: None,
                 operation_id: None,
                 decision: None,
+                surface: None,
+                caller: None,
             };
             self.bundle_store
                 .append_events(id, std::slice::from_ref(&event))?;
@@ -498,6 +506,8 @@ impl TaskV2Store {
                     to_status: None,
                     operation_id: None,
                     decision: None,
+                    surface: None,
+                    caller: None,
                 };
                 pending_events.push(event.clone());
                 bundle.events.push(event);
@@ -588,6 +598,8 @@ impl TaskV2Store {
                     to_status: None,
                     operation_id: None,
                     decision: None,
+                    surface: None,
+                    caller: None,
                 };
                 pending_events.push(event.clone());
                 bundle.events.push(event);
@@ -610,6 +622,11 @@ impl TaskV2Store {
                         &mut pending_events,
                     )?;
                 }
+                stamp_pending_events(
+                    &mut bundle.events,
+                    &mut pending_events,
+                    fields.write_provenance.as_ref(),
+                );
                 self.bundle_store.append_events(id, &pending_events)?;
                 bundle.envelope.updated_at = updated_at;
                 self.bundle_store.rewrite_envelope(id, &bundle.envelope)?;
@@ -619,6 +636,11 @@ impl TaskV2Store {
                     "task document update",
                 )?;
             } else {
+                stamp_pending_events(
+                    &mut bundle.events,
+                    &mut pending_events,
+                    fields.write_provenance.as_ref(),
+                );
                 self.bundle_store.append_events(id, &pending_events)?;
                 pending.finish();
             }
@@ -745,6 +767,8 @@ impl TaskV2Store {
                         to_status: None,
                         operation_id: None,
                         decision: None,
+                        surface: None,
+                        caller: None,
                     };
                     pending_events.push(event.clone());
                     bundle.events.push(event);
@@ -793,6 +817,8 @@ impl TaskV2Store {
                     to_status: entry.to_status,
                     operation_id: None,
                     decision: entry.decision.clone(),
+                    surface: entry.surface,
+                    caller: entry.caller.clone(),
                 };
                 pending_events.push(event.clone());
                 bundle.events.push(event);
@@ -829,6 +855,8 @@ impl TaskV2Store {
                     to_status: status_transition.map(|(_, to)| to),
                     operation_id: None,
                     decision: fields.status_decision.clone(),
+                    surface: None,
+                    caller: None,
                 };
                 pending_events.push(event.clone());
                 bundle.events.push(event);
@@ -853,6 +881,11 @@ impl TaskV2Store {
                         &mut pending_events,
                     )?;
                 }
+                stamp_pending_events(
+                    &mut bundle.events,
+                    &mut pending_events,
+                    fields.write_provenance.as_ref(),
+                );
                 self.bundle_store.append_events(id, &pending_events)?;
                 self.bundle_store.append_comments(id, &pending_comments)?;
                 bundle.envelope.status = target_status;
@@ -861,6 +894,11 @@ impl TaskV2Store {
                 pending.finish();
                 self.publish_task_index_and_lease_notices(&bundle.envelope, "task history update")?;
             } else {
+                stamp_pending_events(
+                    &mut bundle.events,
+                    &mut pending_events,
+                    fields.write_provenance.as_ref(),
+                );
                 self.bundle_store.append_events(id, &pending_events)?;
                 self.bundle_store.append_comments(id, &pending_comments)?;
                 pending.finish();

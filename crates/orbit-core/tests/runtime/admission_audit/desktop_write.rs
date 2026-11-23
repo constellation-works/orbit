@@ -84,6 +84,7 @@ fn desktop_legacy_edit_receipt_survives_status_contract_extension() {
         .apply_desktop_task_mutation(
             &snapshot.task.id,
             &orbit_store::contracts::DesktopTaskMutationParams {
+                write_provenance: None,
                 actor: "codex".into(),
                 request_id: "legacy-edit".into(),
                 payload_digest: orbit_common::security::release::sha256_hex(old_payload.as_bytes()),
@@ -146,6 +147,7 @@ fn desktop_typed_receipts_control_runtime_and_store_replay() {
         },
     };
     let params = orbit_store::contracts::DesktopTaskMutationParams {
+        write_provenance: None,
         actor: "codex".into(),
         request_id: request.request_id.clone(),
         payload_digest: orbit_common::security::release::sha256_hex(

@@ -206,6 +206,8 @@ fn supported_retry_refuses_source_audits_and_mutation_history() {
                             to_status: None,
                             operation_id: None,
                             decision: None,
+                            surface: None,
+                            caller: None,
                         }],
                         ..Default::default()
                     },

@@ -4,8 +4,8 @@ use super::faults::{wait_after_load, wait_for_admission_overlap};
 use super::locked::fire_locked;
 use super::preconditions::{Precondition, preconditions};
 use super::report::{
-    AutoTaskFireReport, AutoTaskSchedulerOutcome, SchedulerOptions, action, parse_rfc3339,
-    pending_claim_report, skip_reason, skipped,
+    AutoTaskFireReport, AutoTaskSchedulerOutcome, SchedulerOptions, action, pending_claim_report,
+    skip_reason, skipped,
 };
 use crate::auto_tasks::loader::{collect_auto_tasks, load_definition_file};
 use crate::auto_tasks::schedule::{AutoTaskDueDecision, decide_due};
@@ -13,6 +13,7 @@ use crate::condition::GuardVerdict;
 use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
 use orbit_common::fs::io::with_exclusive_file_lock;
+use orbit_common::storage::timestamp::parse_stored_timestamp;
 use orbit_store::compose::auto_task::{cursor_state_path, load_cursor_state, with_cursor_lock};
 use orbit_types::workflow::automation::ConditionGuardMiss;
 use orbit_types::workflow::{
@@ -46,13 +47,8 @@ pub fn run_auto_task_scheduler_at(
         let definition = &loaded.definition;
         let report = fire_definition(host, definition, &loaded.path, &state_path, now, options)
             .unwrap_or_else(|error| AutoTaskFireReport {
-                name: definition.name.clone(),
-                action: "error",
                 reason: Some(error.to_string()),
-                slot: None,
-                task_id: None,
-                blocking_task_id: None,
-                automation: None,
+                ..action(definition, "error")
             });
         reports.push(report);
     }
@@ -228,13 +224,10 @@ fn fire_delivery(
         .and_then(|attempt| attempt.action_id.clone());
 
     Ok(AutoTaskFireReport {
-        name: definition.name.clone(),
-        action: "delivery",
         reason: Some(diagnostic.reason.clone()),
-        slot: None,
         task_id,
-        blocking_task_id: None,
         automation: Some(diagnostic),
+        ..action(definition, "delivery")
     })
 }
 
@@ -255,13 +248,9 @@ fn fire_condition(
         reason = format!("would_fire: {}", diagnostic.would_fire.join(", "));
     }
     Ok(AutoTaskFireReport {
-        name: definition.name.clone(),
-        action: "condition",
         reason: Some(reason),
-        slot: None,
         task_id,
-        blocking_task_id: None,
-        automation: None,
+        ..action(definition, "condition")
     })
 }
 
@@ -323,8 +312,12 @@ fn dry_run_definition(
         return Ok(action(definition, "would_baseline"));
     };
 
-    let baseline = parse_rfc3339(&cursor.baseline_at)?;
-    let last_slot = cursor.last_slot.as_deref().map(parse_rfc3339).transpose()?;
+    let baseline = parse_stored_timestamp(&cursor.baseline_at)?;
+    let last_slot = cursor
+        .last_slot
+        .as_deref()
+        .map(parse_stored_timestamp)
+        .transpose()?;
     match decide_due(&definition.schedule, baseline, last_slot, now)? {
         AutoTaskDueDecision::NotDue => Ok(skipped(definition, "not_due")),
         AutoTaskDueDecision::Fire { slot } => {

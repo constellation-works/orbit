@@ -436,6 +436,8 @@ fn system_entry(event: &str, note: String) -> TaskHistoryEntry {
         to_status: None,
         operation_id: None,
         decision: None,
+        surface: None,
+        caller: None,
     }
 }
 

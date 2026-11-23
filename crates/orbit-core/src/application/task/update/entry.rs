@@ -165,11 +165,23 @@ impl OrbitRuntime {
         agent: Option<String>,
         model: Option<String>,
     ) -> Result<(Task, Option<TaskRow>), OrbitError> {
+        self.update_task_with_identity_and_note_applied(id, params, agent, model, None)
+    }
+
+    pub(in crate::application::task) fn update_task_with_identity_and_note_applied(
+        &self,
+        id: &str,
+        params: TaskUpdateParams,
+        agent: Option<String>,
+        model: Option<String>,
+        status_note: Option<String>,
+    ) -> Result<(Task, Option<TaskRow>), OrbitError> {
         self.ensure_coordination_task_write_permitted()?;
         self.update_task_applied(
             id,
             params,
             TaskUpdateContext {
+                status_note,
                 operator_decision_authority: agent.is_none()
                     && model.is_none()
                     && self.actor().kind == crate::runtime::context::ActorKind::Human,
@@ -295,11 +307,23 @@ impl OrbitRuntime {
         agent: Option<String>,
         model: Option<String>,
     ) -> Result<(Task, Option<TaskRow>), OrbitError> {
+        self.force_update_task_with_identity_and_note_applied(id, params, agent, model, None)
+    }
+
+    pub(in crate::application::task) fn force_update_task_with_identity_and_note_applied(
+        &self,
+        id: &str,
+        params: TaskUpdateParams,
+        agent: Option<String>,
+        model: Option<String>,
+        status_note: Option<String>,
+    ) -> Result<(Task, Option<TaskRow>), OrbitError> {
         self.ensure_coordination_task_write_permitted()?;
         self.update_task_applied(
             id,
             params,
             TaskUpdateContext {
+                status_note,
                 operator_decision_authority: agent.is_none()
                     && model.is_none()
                     && self.actor().kind == crate::runtime::context::ActorKind::Human,

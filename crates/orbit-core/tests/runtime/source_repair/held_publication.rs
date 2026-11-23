@@ -316,6 +316,8 @@ fn held_review_task_diagnosis_reaches_agent_prompt_and_spends_budget() {
             to_status: None,
             operation_id: None,
             decision: None,
+            surface: None,
+            caller: None,
         });
     }
     let remaining_budget = PR_AUTO_FIX_BUDGET.saturating_sub(
@@ -468,6 +470,8 @@ fn held_completion_retry_on_review_task_carries_diagnosis_and_follows_pushed_hea
                     to_status: None,
                     operation_id: None,
                     decision: None,
+                    surface: None,
+                    caller: None,
                 }],
                 ..Default::default()
             },
@@ -638,6 +642,8 @@ fn spend_pr_auto_fix_budget(f: &Fixture) {
             to_status: None,
             operation_id: None,
             decision: None,
+            surface: None,
+            caller: None,
         })
         .collect();
     f.runtime

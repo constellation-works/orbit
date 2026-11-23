@@ -691,6 +691,8 @@ impl OrbitRuntime {
                         to_status: None,
                         operation_id: None,
                         decision: None,
+                        surface: None,
+                        caller: None,
                     }],
                     append_comments: vec![TaskComment {
                         at: now,

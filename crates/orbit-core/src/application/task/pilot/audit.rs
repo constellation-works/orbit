@@ -163,6 +163,7 @@ impl OrbitRuntime {
         self.stores().task_artifacts().upsert_task_artifacts(
             task_id,
             TaskArtifactUpdateParams {
+                write_provenance: None,
                 origin: None,
                 actor: super::PILOT_ACTOR.into(),
                 owner_run_id: None,

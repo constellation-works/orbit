@@ -9,6 +9,9 @@
 An operator on the owning host can inspect a published candidate without
 resuming its failed attempt:
 
+For version coordination across owner and replica hosts, see [Upgrading a
+workspace together](../../orbit-setup/references/multi-host.md#upgrading-a-workspace-together).
+
 ```bash
 orbit tool run orbit.run --input '{"action":"resume","id":"<source-run>","source_repair":{"action":"inspect","task_id":"<task-id>"}}'
 ```

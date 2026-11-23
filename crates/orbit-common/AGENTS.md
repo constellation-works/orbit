@@ -13,5 +13,6 @@ Mechanisms every layer needs: `OrbitError` plus responsibility-named modules, li
   - `fs::selector` — owns `SelectorParseError` and its `OrbitError` translator; no caller crate may translate it.
   - `error` — owns the `impl From<orbit_types::…Error> for OrbitError` translators, since `orbit-types` cannot name `OrbitError`; each is listed in `from_registry` in `scripts/check-error-translation.sh`.
   - `migration` — forward-only, read-time YAML migration; no rollback, no write-back. One-shot importers belong in `orbit-store::workflow`.
+  - `storage::timestamp` — `parse_stored_timestamp`, the sole parser for RFC 3339 timestamps read from stored automation records shared by scheduler, sweep, breaker, and doctor; it converts offsets to UTC and reports malformed values as `OrbitError::Store`.
 - `governance::operation` is the operations-as-data kernel; specs live here, handlers live in `orbit-core` joined by the verb enum. Keep it transport/runtime-agnostic: no clap, axum, or `OrbitRuntime` types. Every registry string is shipped contract.
 - Features: `sqlite` gates `storage::sqlite`. Test helpers are always compiled so build and test dependency graphs stay identical. Gate optional production code behind the flag, don't `#[allow]` it.

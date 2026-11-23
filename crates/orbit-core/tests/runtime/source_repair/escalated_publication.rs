@@ -436,6 +436,8 @@ fn record_pr_auto_fix_attempt(f: &Fixture) {
                     to_status: None,
                     operation_id: None,
                     decision: None,
+                    surface: None,
+                    caller: None,
                 }],
                 ..Default::default()
             },

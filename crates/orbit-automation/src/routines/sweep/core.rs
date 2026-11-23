@@ -1,5 +1,6 @@
 use chrono::{DateTime, Local, SecondsFormat, Utc};
 use orbit_common::OrbitError;
+use orbit_common::storage::timestamp::parse_stored_timestamp;
 use orbit_store::contracts::RoutineStoreBackend;
 use orbit_types::workflow::automation::ConditionGuardMiss;
 use orbit_types::workflow::{MissedRunPolicy, OverlapPolicy};
@@ -15,7 +16,7 @@ use super::TICK_DEADLINE;
 use super::contract::{RoutineDispatch, RoutineSweepReport, SweepOptions};
 use super::fire::{FireRequest, fire, sync_unresolved_fires};
 use super::missed_slots::{SkipWindow, missed_skip_report, record_missed_slots};
-use super::report::{action, failure_report, parse_rfc3339, skipped};
+use super::report::{action, failure_report, skipped};
 use super::retry::{next_retry_attempt, retry_candidate, retryable_failure};
 
 /// The dispatch-agnostic core of one sweep pass: outcome-sync
@@ -256,7 +257,7 @@ fn sweep_routine(
     };
 
     let lower_bound_raw = cursor.last_slot.as_deref().unwrap_or(&cursor.baseline_at);
-    let lower_bound = parse_rfc3339(lower_bound_raw)?.with_timezone(&Local);
+    let lower_bound = parse_stored_timestamp(lower_bound_raw)?.with_timezone(&Local);
 
     let natural_slot_grace = natural_slot_grace_for_cadence(options.sweep_cadence_seconds)?;
     let decision = due_decision_with_grace(

@@ -1,9 +1,10 @@
 use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
+use orbit_common::storage::timestamp::parse_stored_timestamp;
 use orbit_store::contracts::{RoutineFireRecord, RoutineFireState, RoutineStoreBackend};
 
 use super::super::loader::LoadedRoutine;
-use super::report::{duration_from_minutes, parse_rfc3339};
+use super::report::duration_from_minutes;
 
 /// A failed fire that still has retry budget, ignoring backoff.
 ///
@@ -74,7 +75,7 @@ pub(super) fn retry_candidate(
     let Some(latest) = retryable_failure(store, routine)? else {
         return Ok(None);
     };
-    let failed_at = parse_rfc3339(&latest.updated_at)?;
+    let failed_at = parse_stored_timestamp(&latest.updated_at)?;
     if now_utc.signed_duration_since(failed_at)
         < duration_from_minutes(
             routine.definition.policy.retries.backoff_minutes,

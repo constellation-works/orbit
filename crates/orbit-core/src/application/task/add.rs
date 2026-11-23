@@ -345,6 +345,7 @@ impl OrbitRuntime {
 
         let (task, replayed) = self.stores().task_records().create_guarded(
             StoreTaskCreateParams {
+                write_provenance: None,
                 actor: create_label.clone(),
                 parent_id: params.parent_id.clone(),
                 title: params.title.clone(),

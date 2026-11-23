@@ -222,6 +222,8 @@ fn a_legacy_note_only_hold_still_dedupes_the_replay_of_its_run() {
             to_status: None,
             operation_id: None,
             decision: None,
+            surface: None,
+            caller: None,
         },
     );
     let mut input = apply_input(&workspace, &prepared);

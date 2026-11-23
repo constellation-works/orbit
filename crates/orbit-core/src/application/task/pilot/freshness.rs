@@ -182,6 +182,8 @@ impl OrbitRuntime {
             from_status: None,
             to_status: None,
             decision: None,
+            surface: None,
+            caller: None,
         }))
     }
 }
@@ -235,6 +237,8 @@ impl OrbitRuntime {
             from_status: None,
             to_status: None,
             decision: None,
+            surface: None,
+            caller: None,
         }))
     }
 }

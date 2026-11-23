@@ -12,6 +12,79 @@ pub struct TaskComment {
     pub operation_id: Option<String>,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum TaskWriteSurface {
+    Cli,
+    Mcp,
+    Web,
+}
+
+impl TaskWriteSurface {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Cli => "cli",
+            Self::Mcp => "mcp",
+            Self::Web => "web",
+        }
+    }
+}
+
+impl Display for TaskWriteSurface {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl FromStr for TaskWriteSurface {
+    type Err = String;
+
+    fn from_str(raw: &str) -> Result<Self, Self::Err> {
+        match raw.trim() {
+            "cli" => Ok(Self::Cli),
+            "mcp" => Ok(Self::Mcp),
+            "web" => Ok(Self::Web),
+            other => Err(format!(
+                "invalid task write surface `{other}` (expected cli, mcp or web)"
+            )),
+        }
+    }
+}
+
+/// Surface and optional caller identifier carried by an operator/human task
+/// mutation so persisted history events name how the write arrived.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TaskWriteProvenance {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub surface: Option<TaskWriteSurface>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub caller: Option<String>,
+}
+
+impl TaskWriteProvenance {
+    pub fn new(surface: Option<TaskWriteSurface>, caller: Option<String>) -> Self {
+        Self {
+            surface,
+            caller: caller
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(ToOwned::to_owned),
+        }
+    }
+}
+
+/// Whether `actor` names a human/operator writer rather than Orbit automation,
+/// a precedent/model decision actor, or an application credential.
+pub fn is_human_attributed_task_actor(actor: &str) -> bool {
+    let actor = actor.trim();
+    !actor.is_empty()
+        && !crate::identity::is_automation_actor(actor)
+        && actor != crate::task::PRECEDENT_ACTOR
+        && actor != "application"
+        && !actor.starts_with("application:")
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct TaskHistoryEntry {
     pub at: DateTime<Utc>,
@@ -30,6 +103,12 @@ pub struct TaskHistoryEntry {
     /// The decision this event records, for the automation that acts on it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub decision: Option<TaskDecision>,
+    /// Surface through which a human-attributed write arrived (`cli`, `mcp`, `web`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub surface: Option<TaskWriteSurface>,
+    /// Session or client caller identifier when the write surface has one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub caller: Option<String>,
 }
 
 impl TaskHistoryEntry {
@@ -43,6 +122,8 @@ impl TaskHistoryEntry {
             to_status: None,
             operation_id: None,
             decision: None,
+            surface: None,
+            caller: None,
         }
     }
 
@@ -72,6 +153,21 @@ impl TaskHistoryEntry {
     #[must_use]
     pub fn with_decision(mut self, decision: Option<TaskDecision>) -> Self {
         self.decision = decision;
+        self
+    }
+
+    #[must_use]
+    pub fn with_provenance(
+        mut self,
+        surface: Option<TaskWriteSurface>,
+        caller: Option<String>,
+    ) -> Self {
+        self.surface = surface;
+        self.caller = caller
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned);
         self
     }
 }

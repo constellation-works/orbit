@@ -18,6 +18,7 @@ use super::loader::LoadedRoutine;
 use super::sweep::RoutineDispatch;
 use chrono::{DateTime, Duration, Utc};
 use orbit_common::OrbitError;
+use orbit_common::storage::timestamp::parse_stored_timestamp;
 use orbit_store::contracts::{
     RoutineBreakerEvent, RoutineBreakerRecord, RoutineBreakerState, RoutineFireRecord,
     RoutineFireState, RoutineStoreBackend,
@@ -175,7 +176,7 @@ fn maybe_trip(
 ) -> Result<GateAttempt, OrbitError> {
     let floor = breaker
         .and_then(|breaker| breaker.floor_at.as_deref())
-        .map(parse_rfc3339)
+        .map(parse_stored_timestamp)
         .transpose()?;
     let fires = observed_fires(store, routine, dispatch)?;
     let failures: Vec<&ObservedFire> = fires
@@ -243,7 +244,7 @@ fn open_gate(
     now_utc: DateTime<Utc>,
 ) -> Result<GateAttempt, OrbitError> {
     if let Some(trial_started_at) = breaker.trial_started_at.as_deref() {
-        let trial_started_at = parse_rfc3339(trial_started_at)?;
+        let trial_started_at = parse_stored_timestamp(trial_started_at)?;
         let fires = observed_fires(store, routine, dispatch)?;
         let Some(trial) = select_trial_fire(&fires, trial_started_at) else {
             // Nothing has fired yet: the trial stays admitted, and a bypass
@@ -376,7 +377,7 @@ fn trial_reason(
         return Ok(Some("version"));
     }
     let due = match breaker.next_trial_at.as_deref() {
-        Some(at) => now_utc >= parse_rfc3339(at)?,
+        Some(at) => now_utc >= parse_stored_timestamp(at)?,
         None => true,
     };
     Ok(due.then_some("backoff"))
@@ -464,7 +465,7 @@ pub fn breaker_trial_status(
     if let Some(trial_started_at) = breaker
         .trial_started_at
         .as_deref()
-        .and_then(|raw| parse_rfc3339(raw).ok())
+        .and_then(|raw| parse_stored_timestamp(raw).ok())
     {
         let automation_runs = if event_driven {
             observed_fires_from_records(automation_fires)
@@ -525,7 +526,7 @@ fn observed_fires_from_records(records: &[RoutineFireRecord]) -> Vec<ObservedFir
         .iter()
         .take(OBSERVED_FIRE_LIMIT)
         .filter_map(|fire| {
-            let created_at = parse_rfc3339(&fire.created_at).ok()?;
+            let created_at = parse_stored_timestamp(&fire.created_at).ok()?;
             Some(ObservedFire {
                 created_at,
                 outcome: cron_fire_outcome(fire),
@@ -589,10 +590,4 @@ fn failure_class(
 /// a caller may supply.
 fn fire_clock_now() -> String {
     Utc::now().to_rfc3339()
-}
-
-fn parse_rfc3339(raw: &str) -> Result<DateTime<Utc>, OrbitError> {
-    DateTime::parse_from_rfc3339(raw)
-        .map(|value| value.with_timezone(&Utc))
-        .map_err(|error| OrbitError::Store(format!("invalid stored timestamp '{raw}': {error}")))
 }

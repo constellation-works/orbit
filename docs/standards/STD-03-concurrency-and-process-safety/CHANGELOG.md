@@ -4,6 +4,7 @@ Version history of [STD-03](STD-03.md). Adopting repos pin the `version:` in its
 frontmatter as `STD-03@<version>`; a version changes only when a rule is added,
 removed or changed in meaning.
 
+- **Editorial (2026-11-23, version unchanged):** Orbit split `docs/LESSONS.md` into one file per lesson (constellation-works/orbit#10854): the R17 and R21 Why entries and the R21 exemplar now cite `docs/lessons/L03-september-2026-test-fixture-fork-storm.md`.
 - **Editorial (2026-09-26, version unchanged):** split into a directory. `STD-03.md`
   keeps the rules, *Applies to* and *Deviations*; *Why*, *Machine checks*,
   *Exemplars* and this changelog moved to `why.md`, `checks.md`, `exemplars.md` and

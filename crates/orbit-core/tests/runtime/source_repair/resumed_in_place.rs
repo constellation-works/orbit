@@ -52,6 +52,8 @@ fn record_admitted_attempt(f: &Fixture, attempt: u32, head: &str) {
                     to_status: None,
                     operation_id: None,
                     decision: None,
+                    surface: None,
+                    caller: None,
                 }],
                 ..Default::default()
             },

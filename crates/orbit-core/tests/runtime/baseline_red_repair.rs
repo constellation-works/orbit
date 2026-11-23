@@ -603,6 +603,8 @@ fn holds_and_verdicts_written_as_notes_alone_still_hold_and_lift() {
                 to_status: None,
                 operation_id: None,
                 decision: None,
+                surface: None,
+                caller: None,
             }],
             ..Default::default()
         },

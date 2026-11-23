@@ -289,6 +289,8 @@ fn review_returns_refuse_discarded_candidates_and_newer_executions() {
                             to_status: None,
                             operation_id: None,
                             decision: None,
+                            surface: None,
+                            caller: None,
                         }],
                         ..Default::default()
                     },

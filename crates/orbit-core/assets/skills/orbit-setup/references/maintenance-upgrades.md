@@ -173,8 +173,9 @@ used from multiple hosts, update every host that can open it before any host
 opens or migrates it to version 9; do this as one coordinated rollout and keep
 old clients stopped. See [Upgrading a workspace together](multi-host.md#upgrading-a-workspace-together)
 for the host-by-host order. On each host, `orbit --version` confirms the
-installed binary, while `orbit update --check` only reports available releases
-and does not verify layout compatibility.
+installed binary; `orbit host list` reports live versions for registered hosts.
+`orbit update --check` only reports available releases and does not verify
+layout compatibility.
 
 `orbit update` run inside an
 initialized workspace immediately runs `migrate --confirm` followed by

@@ -57,7 +57,8 @@ The protocol has four scripts under `scripts/perf/`:
 ### Serial lane
 
 `build-pair.sh` and `paired.py` hold one host-wide `flock` lane for their whole run, so two
-perf tasks never build or sample at once. The lock is
+perf tasks never build or sample at once. `scripts/perf/perf_common.py` owns the lane, the disk gate and the empty-output check;
+`build-pair.sh` calls it (`lane-exec`, `disk-gate`, `require-absent-or-empty`) rather than repeating them. The lock is
 `$HOME/.orbit/cache/perf-lane/lane.lock` of the user's passwd home. It sits beside the
 build budget's locks, outside every store and state directory, and is writable from
 Orbit's Linux activity sandbox (`/var/tmp` is read-only there). `ORBIT_PERF_LANE_LOCK`

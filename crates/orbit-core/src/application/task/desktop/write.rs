@@ -323,6 +323,7 @@ impl OrbitRuntime {
                     comment,
                     status,
                     append_history,
+                    write_provenance: crate::application::task::current_task_write_provenance(),
                 },
             )?);
             Ok(())
@@ -445,6 +446,8 @@ impl OrbitRuntime {
             to_status: None,
             operation_id: None,
             decision: Some(TaskDecision::DesktopMutation(receipt)),
+            surface: None,
+            caller: None,
         };
         if let Err(error) = self.append_system_history(&task.id, vec![entry]) {
             tracing::warn!(

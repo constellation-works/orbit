@@ -1,4 +1,6 @@
-use orbit_types::task::{CrewSource, TaskComment, TaskHistoryEntry, TaskStatus};
+use orbit_types::task::{
+    CrewSource, TaskComment, TaskHistoryEntry, TaskStatus, TaskWriteProvenance,
+};
 
 /// Desktop-only allowlisted mutation, committed with a payload-bound request receipt.
 #[derive(Debug, Clone)]
@@ -15,6 +17,8 @@ pub struct DesktopTaskMutationParams {
     /// History committed with the receipt, before it: work the application
     /// must finish after the write even if its first attempt never runs.
     pub append_history: Vec<TaskHistoryEntry>,
+    /// Surface and caller provenance stamped onto human-attributed desktop events.
+    pub write_provenance: Option<TaskWriteProvenance>,
 }
 
 /// One coherent desktop task read under the ordinary shared bundle read lock.

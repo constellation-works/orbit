@@ -180,19 +180,8 @@ impl OrbitRuntime {
                 ReservationOutcome::Granted { .. } => return Ok(()),
                 ReservationOutcome::Denied { conflicts } => conflicts,
             };
-            let elapsed = started.elapsed();
-            if elapsed >= wait {
-                // Typed so finalization holds the run for a later admission
-                // instead of failing it; the run-stopped refusal below stays
-                // an ordinary execution failure.
-                return Err(OrbitError::FootprintUnavailable(format!(
-                    "footprint_unavailable: `{activity_name}` may edit the resumed published \
-                     delivery only once its context locks are free, and after {}s they are \
-                     still held: {}",
-                    elapsed.as_secs(),
-                    holders(&conflicts)
-                )));
-            }
+            // A stopped run keeps its permanent classification even when the
+            // budget is spent, so check it before the retryable hold below.
             if self
                 .get_job_run_backend(run_id)?
                 .is_none_or(|run| run.state != JobRunState::Running)
@@ -200,6 +189,19 @@ impl OrbitRuntime {
                 return Err(OrbitError::Execution(format!(
                     "footprint_unavailable: run stopped while `{activity_name}` waited for its \
                      context locks"
+                )));
+            }
+            let elapsed = started.elapsed();
+            if elapsed >= wait {
+                // Typed so finalization holds the run for a later admission
+                // instead of failing it; the run-stopped refusal above stays
+                // an ordinary execution failure.
+                return Err(OrbitError::FootprintUnavailable(format!(
+                    "footprint_unavailable: `{activity_name}` may edit the resumed published \
+                     delivery only once its context locks are free, and after {}s they are \
+                     still held: {}",
+                    elapsed.as_secs(),
+                    holders(&conflicts)
                 )));
             }
             std::thread::sleep(poll.min(wait - elapsed));

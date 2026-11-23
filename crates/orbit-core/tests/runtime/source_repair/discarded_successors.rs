@@ -283,6 +283,8 @@ pub(super) fn discard_across_successors_keeps_every_refusal() {
                                 to_status: None,
                                 operation_id: None,
                                 decision: None,
+                                surface: None,
+                                caller: None,
                             }],
                             ..Default::default()
                         },

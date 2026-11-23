@@ -2,12 +2,11 @@ use super::dispatch::AutoTaskDispatch;
 use super::faults::{SchedulerFault, fail_if_injected};
 use super::fire::guard_hold;
 use super::preconditions::{Precondition, preconditions};
-use super::report::{
-    AutoTaskFireReport, action, parse_rfc3339, pending_claim_report, skip_reason, skipped,
-};
+use super::report::{AutoTaskFireReport, action, pending_claim_report, skip_reason, skipped};
 use crate::auto_tasks::schedule::{AutoTaskDueDecision, decide_due};
 use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
+use orbit_common::storage::timestamp::parse_stored_timestamp;
 use orbit_store::compose::auto_task::CursorSession;
 use orbit_types::workflow::{
     AutoTaskCursor, AutoTaskDefinition, AutoTaskPendingClaim, DedupePolicy,
@@ -43,8 +42,12 @@ pub(super) fn fire_locked(
         return Ok(action(definition, "baselined"));
     };
 
-    let baseline = parse_rfc3339(&cursor.baseline_at)?;
-    let last_slot = cursor.last_slot.as_deref().map(parse_rfc3339).transpose()?;
+    let baseline = parse_stored_timestamp(&cursor.baseline_at)?;
+    let last_slot = cursor
+        .last_slot
+        .as_deref()
+        .map(parse_stored_timestamp)
+        .transpose()?;
 
     match decide_due(&definition.schedule, baseline, last_slot, now)? {
         AutoTaskDueDecision::NotDue => Ok(skipped(definition, "not_due")),
@@ -132,15 +135,12 @@ fn recover_pending(
         {
             Ok(()) => Ok(Some(pending_claim_report(definition, &pending))),
             Err(error) => Ok(Some(AutoTaskFireReport {
-                name: definition.name.clone(),
-                action: "fired",
                 reason: Some(format!(
                     "cursor not advanced; retry will reconcile from pending mint evidence or report unresolved: {error}"
                 )),
                 slot: Some(pending.slot),
                 task_id: Some(task_id),
-                blocking_task_id: None,
-                automation: None,
+                ..action(definition, "fired")
             })),
         };
     }
@@ -180,13 +180,11 @@ fn fire_slot(
             );
             session.save()?;
             return Ok(AutoTaskFireReport {
-                name: definition.name.clone(),
-                action: "skipped",
-                reason: Some(format!("mint failed; slot not consumed: {error}")),
                 slot: Some(slot),
-                task_id: None,
-                blocking_task_id: None,
-                automation: None,
+                ..skipped(
+                    definition,
+                    &format!("mint failed; slot not consumed: {error}"),
+                )
             });
         }
     };
@@ -206,13 +204,9 @@ fn fire_slot(
 
     match checkpoint_consumed(session, definition, &cursor, &slot, &task, now) {
         Ok(()) => Ok(AutoTaskFireReport {
-            name: definition.name.clone(),
-            action: "fired",
-            reason: None,
             slot: Some(slot),
             task_id: Some(task),
-            blocking_task_id: None,
-            automation: None,
+            ..action(definition, "fired")
         }),
         Err(error) => {
             session.state.definitions.insert(
@@ -230,16 +224,13 @@ fn fire_slot(
                 .err()
                 .map(|save_error| format!("; mint evidence also unpersisted: {save_error}"));
             Ok(AutoTaskFireReport {
-                name: definition.name.clone(),
-                action: "fired",
                 reason: Some(format!(
                     "cursor not advanced; retry will reconcile from pending mint evidence or report unresolved: {error}{}",
                     evidence.unwrap_or_default()
                 )),
                 slot: Some(slot),
                 task_id: Some(task),
-                blocking_task_id: None,
-                automation: None,
+                ..action(definition, "fired")
             })
         }
     }

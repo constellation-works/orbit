@@ -941,6 +941,7 @@ impl Coordinated {
         artifacts: Vec<TaskArtifact>,
     ) -> Result<(), OrbitError> {
         let params = TaskArtifactUpdateParams {
+            write_provenance: None,
             origin: None,
             actor: "codex".to_string(),
             owner_run_id: None,

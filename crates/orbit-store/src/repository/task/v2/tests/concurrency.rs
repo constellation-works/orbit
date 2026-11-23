@@ -95,5 +95,7 @@ fn transition_event(bundle: &TaskBundleV2) -> TaskEventRowV2 {
         to_status: Some(TaskStatus::InProgress),
         operation_id: None,
         decision: None,
+        surface: None,
+        caller: None,
     }
 }

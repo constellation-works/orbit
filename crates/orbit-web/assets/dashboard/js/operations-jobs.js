@@ -50,8 +50,18 @@ function failureStreakText(streak) {
   return `Failing: ${count} in a row since ${formatDayHeading(streak.since).replace(/^\w+, /, "")}${streak.truncated ? " or earlier" : ""}`;
 }
 
+// Agreement is claimed only for what was read: `same` covers every run,
+// `partial` only the newest `errors_inspected`; `different` and `unknown`
+// claim none.
+function failureAgreementText(streak) {
+  if (streak.error_agreement === "same") return `same error ×${streak.count}`;
+  if (streak.error_agreement === "partial") return `same error in latest ${streak.errors_inspected}`;
+  return null;
+}
+
 function failureStreakSummary(streak) {
-  return `${streak.job_id}: ${failureStreakText(streak)}${streak.same_error ? ` (same error ×${streak.count})` : ""}`;
+  const agreement = failureAgreementText(streak);
+  return `${streak.job_id}: ${failureStreakText(streak)}${agreement ? ` (${agreement})` : ""}`;
 }
 
 // The Jobs rail pill counts the failing jobs. It sits beside the pending/running
@@ -93,7 +103,7 @@ export async function peekJobFailures(read = null) {
 function jobFailureBadge(streak, workspaceId) {
   const badge = el("div", { class: "job-failure-notice", role: "status" }, [
     el("strong", { class: "job-failure-title", text: failureStreakText(streak), title: time(streak.since) }),
-    el("span", { class: "job-failure-kind", text: streak.same_error ? `same error ×${streak.count}` : "errors vary" }),
+    el("span", { class: "job-failure-kind", text: failureAgreementText(streak) || (streak.error_agreement === "unknown" ? "error unknown" : "errors vary") }),
     streak.latest_error ? el("span", { class: "job-failure-error mono", text: streak.latest_error, title: streak.latest_error }) : null,
     runLink(streak.latest_run_id, workspaceId, "Latest failed run"),
   ].filter(Boolean));

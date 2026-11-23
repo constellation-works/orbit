@@ -19,7 +19,13 @@ pub struct TaskArchiveArgs {
 
 impl Execute for TaskArchiveArgs {
     fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
-        runtime.archive_task_as_operator(&self.id, self.force)?;
+        orbit_core::application::task::with_task_write_provenance(
+            orbit_types::task::TaskWriteProvenance::new(
+                Some(orbit_types::task::TaskWriteSurface::Cli),
+                None,
+            ),
+            || runtime.archive_task_as_operator(&self.id, self.force),
+        )?;
         let task = runtime.get_task(&self.id)?;
         Ok(Payload::detail(
             task_to_json_for_runtime(runtime, &task)?,

@@ -8,7 +8,7 @@ tags: [architecture, orbit-config]
 
 ## What it owns
 
-Owner of `config.toml`: key registry, global-over-workspace layering, provenance, resolved views, comment-preserving atomic edits via `ConfigStore`.
+Owner of `config.toml`: key registry, global-over-workspace layering, provenance, resolved views, comment-preserving atomic edits via `ConfigStore`. Security keys replace rather than merge, and `[machine]` is global-only. Callers pass explicit roots, so the crate never discovers the cwd or `$HOME`.
 
 ## Main modules and types
 

@@ -332,6 +332,8 @@ impl orbit_engine::test_support::NullRuntimeHost for SummaryDeliveryHost {
                     to_status: None,
                     operation_id: None,
                     decision: None,
+                    surface: None,
+                    caller: None,
                 });
         }
         Ok(())

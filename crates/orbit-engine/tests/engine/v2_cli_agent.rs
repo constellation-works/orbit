@@ -680,7 +680,14 @@ fn cli_dispatch_hands_workers_only_a_verified_browser_kit() -> Result<(), Box<dy
     let shell = root.join("browsers/chromium_headless_shell-1248");
     fs::create_dir_all(&shell)?;
     fs::write(shell.join("INSTALLATION_COMPLETE"), "")?;
-    fs::write(shell.join("chrome-headless-shell"), "fixture")?;
+    // The installer leaves the shell executable; a worker launches it.
+    let executable = shell.join("chrome-headless-shell");
+    fs::write(&executable, "fixture")?;
+    let set_mode = |mode: u32| {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&executable, fs::Permissions::from_mode(mode))
+    };
+    set_mode(0o755)?;
     fs::create_dir_all(root.join("root/usr/lib/x86_64-linux-gnu"))?;
     fs::write(root.join("env.sh"), "export LD_LIBRARY_PATH=/kit/libs\n")?;
 
@@ -707,6 +714,20 @@ fn cli_dispatch_hands_workers_only_a_verified_browser_kit() -> Result<(), Box<dy
             layout.env_script().display()
         ),
         "a verified kit reaches workers through its locators alone"
+    );
+
+    // Losing the execute bits after the recorded verify withdraws the kit.
+    set_mode(0o644)?;
+    let non_executable = observe(home.path(), "browser-kit-non-executable")?;
+    assert_eq!(
+        non_executable, unverified,
+        "a shell workers cannot launch reaches no worker"
+    );
+    set_mode(0o755)?;
+    assert_eq!(
+        observe(home.path(), "browser-kit-restored")?,
+        verified,
+        "a healthy kit still reaches workers"
     );
     Ok(())
 }

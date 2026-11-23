@@ -105,6 +105,14 @@ pub struct ToolSessionContext {
     /// Orbit client that is documented to send it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mcp_client_name: Option<String>,
+    /// Surface that originated this call when forwarded across a hop (`cli`,
+    /// `mcp`, `web`). Attribution only; never enters authorization.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub write_surface: Option<crate::task::TaskWriteSurface>,
+    /// Caller identifier forwarded across a federated hop when one exists.
+    /// Attribution only; never enters authorization.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub write_caller: Option<String>,
 }
 
 impl ToolSessionContext {
@@ -137,6 +145,38 @@ impl ToolSessionContext {
             // a session, so it carries no attribution default.
             orchestrator: None,
             mcp_client_name: None,
+            write_surface: None,
+            write_caller: None,
+        }
+    }
+
+    /// Best-effort caller label for a tool session when one exists: an explicit
+    /// forwarded caller, else the MCP client name and/or session id, else the
+    /// remote SSH caller machine id.
+    pub fn resolved_session_caller(&self) -> Option<String> {
+        if let Some(caller) = self
+            .write_caller
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            return Some(caller.to_string());
+        }
+        let client = self
+            .mcp_client_name
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty() && *value != "orbit-federated-mux");
+        let session = self
+            .origin_session_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty());
+        match (client, session) {
+            (Some(client), Some(session)) => Some(format!("{client}:{session}")),
+            (None, Some(session)) => Some(session.to_string()),
+            (Some(client), None) => Some(client.to_string()),
+            (None, None) => self.remote_caller_machine_id().map(ToOwned::to_owned),
         }
     }
 

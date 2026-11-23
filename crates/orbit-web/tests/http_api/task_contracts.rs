@@ -920,6 +920,8 @@ fn delivery_attention_flags_failed_review_and_omits_healthy() {
                         to_status: None,
                         operation_id: None,
                         decision: None,
+                        surface: None,
+                        caller: None,
                     }
                 };
                 runtime

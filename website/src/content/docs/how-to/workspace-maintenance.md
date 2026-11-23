@@ -115,9 +115,9 @@ orbit migrate --confirm    # apply them
 ```text
 COMPONENT         CURRENT  SUPPORTED
 workspace layout  9        9
-store schema      86       86
+store schema      95       95
 
-workspace: /path/to/repo/.orbit (orbit 0.45.1)
+workspace: /path/to/repo/.orbit (orbit 0.54.0)
 
 Workspace is up to date.
 ```

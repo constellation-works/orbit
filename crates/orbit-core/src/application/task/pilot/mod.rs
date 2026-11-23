@@ -126,6 +126,8 @@ pub(crate) fn unresolved_pilot_entry(run_id: &str, at: DateTime<Utc>) -> TaskHis
         decision: Some(TaskDecision::PilotUnresolved {
             pilot_run_id: run_id.to_string(),
         }),
+        surface: None,
+        caller: None,
     }
 }
 

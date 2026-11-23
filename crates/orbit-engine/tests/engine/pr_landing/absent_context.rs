@@ -835,6 +835,8 @@ fn transient_prerequisite_read_resumes_only_before_any_mutation() {
                                     to_status: None,
                                     operation_id: None,
                                     decision: None,
+                                    surface: None,
+                                    caller: None,
                                 }],
                                 ..Default::default()
                             },

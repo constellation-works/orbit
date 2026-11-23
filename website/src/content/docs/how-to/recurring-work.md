@@ -66,7 +66,7 @@ ticks stop while `orbit clock status` can still report the clock as enabled.
 |---|---|---|
 | `worktree-gc` | Enabled | Removes worktrees left by settled tasks. Start here. |
 | `task-pilot` | Enabled | Pilots eligible new tasks. |
-| Experiment memory routine | Enabled | Files nothing unless a running experiment has a memory arm. |
+| `crew-memory-dream` | Enabled | Files nothing unless a running experiment has a memory arm. |
 | `store-gc` | Disabled | Daily audit and run-state retention. |
 | `ci-failure-sweep` | Disabled | Files failing CI runs as proposed repair tasks. |
 | `dependabot-alert-sweep` | Disabled | Files dependency alerts as tasks. |
@@ -281,7 +281,7 @@ never copied into the unit file.
 
      ```bash
      orbit config set execution.env.pass \
-       '["HOME", "PATH", "CODEX_HOME", "TMPDIR", "USER", "CLAUDE_CODE_OAUTH_TOKEN", "GITHUB_TOKEN"]'
+       '["HOME", "PATH", "CODEX_HOME", "TMPDIR", "USER", "__CF_USER_TEXT_ENCODING", "CLAUDE_CODE_OAUTH_TOKEN", "GITHUB_TOKEN"]'
      ```
 
      Once a workspace `config.toml` exists, its list is the one that counts

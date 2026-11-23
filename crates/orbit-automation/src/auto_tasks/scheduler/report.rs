@@ -1,6 +1,4 @@
 use crate::auto_tasks::loader::AutoTaskLoadError;
-use chrono::{DateTime, Utc};
-use orbit_common::OrbitError;
 use orbit_types::workflow::{AutoTaskDefinition, AutoTaskPendingClaim, AutoTaskSkipRecord};
 
 /// Per-definition outcome of one scheduler pass.
@@ -117,10 +115,4 @@ pub(super) fn action(definition: &AutoTaskDefinition, action: &'static str) -> A
         blocking_task_id: None,
         automation: None,
     }
-}
-
-pub(super) fn parse_rfc3339(raw: &str) -> Result<DateTime<Utc>, OrbitError> {
-    DateTime::parse_from_rfc3339(raw)
-        .map(|value| value.with_timezone(&Utc))
-        .map_err(|error| OrbitError::Store(format!("invalid stored timestamp '{raw}': {error}")))
 }

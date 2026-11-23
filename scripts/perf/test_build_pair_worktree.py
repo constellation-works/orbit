@@ -460,6 +460,7 @@ class BuildPairWorktreeTest(unittest.TestCase):
         script = self.repo / "scripts" / "perf" / "build-pair.sh"
         script.parent.mkdir(parents=True)
         shutil.copy2(BUILD_PAIR, script)
+        shutil.copy2(BUILD_PAIR.with_name("perf_common.py"), script.with_name("perf_common.py"))
         (self.repo / "tracked.txt").write_text("v2\n")
         _git(self.repo, "add", "--", "tracked.txt")
         _git(self.repo, "commit", "-m", "second")

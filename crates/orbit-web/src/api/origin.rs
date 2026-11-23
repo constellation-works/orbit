@@ -20,7 +20,7 @@ use url::Url;
 ///    on same-origin GET, so without this gate a rebound hostname can read
 ///    every `/api` GET (ORB-12506), `/healthz?detailed=true` (ORB-12531) and
 ///    the dashboard shell and assets (STD-05 §R16). [`require_localhost_host`]
-///    applies this gate alone to routes with no `Origin` policy of their own.
+///    applies this gate to those routes and validates `Origin` when supplied.
 /// 2. When Origin is present, or the method is unsafe, Origin must also
 ///    match that Host as a loopback `http` origin (ORB-11613 CSRF).
 /// 3. When the browser supplies `Sec-Fetch-Site`, it must say `same-origin`
@@ -64,13 +64,27 @@ pub(crate) async fn require_localhost_origin(request: Request<Body>, next: Next)
     next.run(request).await
 }
 
-/// Gate 1 alone (see [`require_localhost_origin`]): refuse a request whose
-/// `Host` is missing, repeated, unparsable or not an approved loopback
-/// authority. The dashboard shell and embedded assets use it, since they carry
-/// no `Origin` policy of their own and a rebound `Host` must not read them.
+/// Require an approved loopback `Host` and, when supplied, a single matching
+/// loopback HTTP `Origin`. Origin-free safe navigation remains allowed. The
+/// dashboard shell and embedded assets use this gate so a rebound Host or an
+/// untrusted Origin cannot read them.
 pub(crate) async fn require_localhost_host(request: Request<Body>, next: Next) -> Response {
-    if approved_host(request.headers()).is_none() {
+    let origins = request.headers().get_all(header::ORIGIN);
+    if origins.iter().count() > 1 {
         return forbidden_cross_origin();
+    }
+    let Some(host) = approved_host(request.headers()) else {
+        return forbidden_cross_origin();
+    };
+    if let Some(origin) = request.headers().get(header::ORIGIN) {
+        let allowed = origin
+            .to_str()
+            .ok()
+            .and_then(|origin| Url::parse(origin).ok())
+            .is_some_and(|origin| localhost_origin_matches_authority(&origin, &host));
+        if !allowed {
+            return forbidden_cross_origin();
+        }
     }
     next.run(request).await
 }

@@ -32,12 +32,13 @@ refuse() {
   exit 2
 }
 
+orig_args=("$@")
 base_rev=""
 candidate_rev=""
 candidate_worktree=""
 out=""
 keep=0
-lane_wait="${ORBIT_PERF_LANE_WAIT_SECONDS:-900}"
+lane_wait=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --base) base_rev="${2:?}"; shift 2 ;;
@@ -73,19 +74,10 @@ if [[ -n "$candidate_worktree" ]]; then
 fi
 
 # ── disk gate (RB-11) ────────────────────────────────────────────────────────
-disk_gate() {
-  local target="$1" parent pcent
-  parent="$(dirname "$target")"
-  while [[ ! -e "$parent" && "$parent" != "/" ]]; do parent="$(dirname "$parent")"; done
-  if [[ -n "${ORBIT_PERF_SIMULATE_DISK_PCENT:-}" ]]; then
-    pcent="$ORBIT_PERF_SIMULATE_DISK_PCENT"
-  else
-    pcent="$(df --output=pcent "$parent" | tail -n 1 | tr -dc '0-9')"
-  fi
-  if (( pcent >= 80 )); then
-    refuse "disk gate: $parent is at ${pcent}% (df --output=pcent), at or above 80%; created nothing for $target. Free space first (RB-11, ws_constellation runbooks)."
-  fi
-}
+# perf_common.py owns the host-safety rules (disk gate, serial lane, output
+# directory check); this script only calls it.
+perf_guard() { python3 -I "$here/perf_common.py" "$1" --entry build-pair.sh "${@:2}"; }
+disk_gate() { perf_guard disk-gate "$1"; }
 
 # Snapshot tracked and untracked files, excluding ignored ones, into a
 # temporary commit. Objects and the index live under a throwaway directory,
@@ -210,16 +202,14 @@ archive_into() {
 }
 
 # ── serial lane ──────────────────────────────────────────────────────────────
-passwd_home="$(getent passwd "$(id -u)" | cut -d: -f6)"
-lane_lock="${ORBIT_PERF_LANE_LOCK:-$passwd_home/.orbit/cache/perf-lane/lane.lock}"
-mkdir -p "$(dirname "$lane_lock")"
-exec 9<>"$lane_lock"
-if ! flock -w "$lane_wait" 9; then
-  holder="$(head -c 4096 "$lane_lock" 2>/dev/null || true)"
-  refuse "perf lane busy: ${holder:-<unknown holder>}"
+# Re-run this script under the lane held by perf_common.py (the child sees
+# ORBIT_PERF_LANE_HELD), which holds it for the whole run and releases it on exit.
+if [[ -z "${ORBIT_PERF_LANE_HELD:-}" ]]; then
+  lane_wait_args=()
+  [[ -z "$lane_wait" ]] || lane_wait_args=(--wait "$lane_wait")
+  exec python3 -I "$here/perf_common.py" lane-exec --entry build-pair.sh \
+    ${lane_wait_args[@]+"${lane_wait_args[@]}"} -- "$0" "${orig_args[@]}"
 fi
-printf '{"entry": "build-pair.sh", "host": "%s", "pid": %d, "run_id": "%s", "started_at": "%s", "task_id": "%s"}\n' \
-  "$(uname -n)" "$$" "${ORBIT_RUN_ID:-}" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "${ORBIT_TASK_ID:-}" >"$lane_lock"
 
 success=0
 work=""
@@ -228,7 +218,6 @@ snapshot_objects=""
 snapshot_alternates=""
 candidate_is_snapshot=0
 cleanup() {
-  : >"$lane_lock" 2>/dev/null || true
   if [[ -n "$snapshot_scratch" && -d "$snapshot_scratch" ]]; then
     if [[ -z "$work" || "$snapshot_scratch" != "$work"/* ]]; then
       rm -rf "$snapshot_scratch"
@@ -263,9 +252,7 @@ if [[ "$base_commit" == "$candidate_commit" ]]; then
 fi
 
 out="$(realpath -m "$out")"
-if [[ -e "$out" ]] && [[ -n "$(ls -A "$out" 2>/dev/null)" || ! -d "$out" ]]; then
-  refuse "$out already exists and is not empty"
-fi
+perf_guard require-absent-or-empty "$out"
 disk_gate "$out"
 mkdir -p "$out"
 work="$out/.work"

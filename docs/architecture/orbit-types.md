@@ -8,7 +8,7 @@ tags: [architecture, orbit-types]
 
 ## What it owns
 
-Shared serde contracts, pure constructors and narrow domain errors. No I/O.
+Shared serde contracts, pure constructors and narrow domain errors. It does no I/O of any kind. Its serde shapes are persisted contracts.
 
 ## Main modules and types
 

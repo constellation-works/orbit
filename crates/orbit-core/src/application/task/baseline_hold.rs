@@ -347,6 +347,8 @@ impl OrbitRuntime {
                             to_status: None,
                             operation_id: None,
                             decision: Some(TaskDecision::BaselineHoldVerdict(verdict.clone())),
+                            surface: None,
+                            caller: None,
                         }],
                         ..Default::default()
                     },

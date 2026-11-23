@@ -20,6 +20,8 @@ fn append_unscoped_history(owner: &Coordinated, task_id: &str) -> Result<(), Orb
                 to_status: None,
                 operation_id: None,
                 decision: None,
+                surface: None,
+                caller: None,
             }],
             ..Default::default()
         })
@@ -437,6 +439,8 @@ fn landing_completion_hold_is_claim_scoped_while_handed_off() {
         to_status: None,
         operation_id: None,
         decision: None,
+        surface: None,
+        caller: None,
     };
     delivery
         .owner

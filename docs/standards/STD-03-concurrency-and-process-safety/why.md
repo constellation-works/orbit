@@ -214,9 +214,10 @@ fixed it in ORB-12903.
 waiter tried about 100 process launches per second. The host had 382 leaked waiters, which
 implies about 38,200 launches per second. Load average reached 393 on 14 CPUs.
 
-An in-process wait with a deadline and a check on the child's exit status cannot multiply
-this way. `docs/LESSONS.md` §3 is the source of this rule. *Python:* a loop with a deadline
-that calls `time.sleep` and checks `proc.poll()`, not `subprocess.run(["sleep", ...])`.
+An in-process wait with a deadline and a check on the child's exit status cannot multiply this
+way. `docs/lessons/L03-september-2026-test-fixture-fork-storm.md` is the source of this rule.
+*Python:* a loop with a deadline that calls `time.sleep` and checks `proc.poll()`, not
+`subprocess.run(["sleep", ...])`.
 
 **R18.** On 09-06, the fixture had no guard that would terminate and reap its child during
 unwinding, so every failed test run leaked one more waiter. A guard that kills and waits on
@@ -249,9 +250,10 @@ in general.
 
 **R21.** On 09-06, the run sandbox outlived its finished task for about 113 minutes, and only
 cancelling the run collapsed the process tree. On 09-23, the runaway tree survived restarts of
-the service. `docs/LESSONS.md` §3 states the lesson directly: "fixture cleanup and runtime
-containment are separate safety layers." Either layer can fail by itself. Rules R17 to R20 make
-the fixture layer good, and this rule requires the second layer anyway.
+the service. `docs/lessons/L03-september-2026-test-fixture-fork-storm.md` states the lesson
+directly: "fixture cleanup and runtime containment are separate safety layers." Either layer can
+fail by itself. Rules R17 to R20 make the fixture layer good, and this rule requires the second
+layer anyway.
 
 **R22.** On 09-23, the dispatching service ran with `MemoryMax=infinity` and `TasksMax=32710`,
 so nothing stopped the growth before the kernel's global OOM killer froze the guest. On 09-06,

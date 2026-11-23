@@ -70,6 +70,16 @@ pub(super) fn provider_failure_diagnostic(provider: &str, stdout: &[u8]) -> Opti
         .last()
 }
 
+/// The provider-failure predicates both response-correction guards share: a
+/// correction must never relabel a provider-owned failure as a formatting issue.
+pub(super) const PROVIDER_FAILURE_PREDICATES: [fn(&str) -> bool; 5] = [
+    provider_authentication_failure,
+    provider_usage_limit,
+    provider_quota_exceeded,
+    provider_capacity_exhausted,
+    provider_content_refusal,
+];
+
 /// Claude's exact formatting-only terminal, never quoted assistant/tool content.
 /// Unlike diagnostic frame readers, this requires a complete JSON stream with
 /// the terminal as its last value and no earlier provider failure or result.
@@ -159,15 +169,9 @@ pub(super) fn claude_structured_output_exhaustion(provider: &str, stdout: &[u8])
         .chain(error_messages.iter().copied())
         .any(|message| {
             message.to_ascii_lowercase().contains("api error")
-                || [
-                    provider_authentication_failure as fn(&str) -> bool,
-                    provider_usage_limit,
-                    provider_quota_exceeded,
-                    provider_capacity_exhausted,
-                    provider_content_refusal,
-                ]
-                .into_iter()
-                .any(|matches| matches(message))
+                || PROVIDER_FAILURE_PREDICATES
+                    .into_iter()
+                    .any(|matches| matches(message))
         })
     {
         return None;

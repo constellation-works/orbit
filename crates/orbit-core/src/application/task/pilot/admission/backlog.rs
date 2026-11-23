@@ -891,6 +891,8 @@ impl OrbitRuntime {
                 verdict,
                 hold,
             }),
+            surface: None,
+            caller: None,
         }))
     }
 }

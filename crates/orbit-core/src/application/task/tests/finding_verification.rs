@@ -45,6 +45,8 @@ fn append_verdict(runtime: &crate::OrbitRuntime, task_id: &str, note: String) {
                     to_status: None,
                     operation_id: None,
                     decision: None,
+                    surface: None,
+                    caller: None,
                 }],
                 ..Default::default()
             },

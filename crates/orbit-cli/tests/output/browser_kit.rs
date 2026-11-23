@@ -56,7 +56,7 @@ fn write_kit(home: &Path, kit: &FixtureKit) -> PathBuf {
         let shell = browsers.join(format!("chromium_headless_shell-{REVISION}"));
         fs::create_dir_all(&shell).unwrap();
         fs::write(shell.join("INSTALLATION_COMPLETE"), "").unwrap();
-        fs::write(shell.join("chrome-headless-shell"), "fixture").unwrap();
+        write_headless_shell(&shell.join("chrome-headless-shell"));
     }
     fs::write(root.join("env.sh"), "# written by the operator\n").unwrap();
     if let Some(version) = kit.verified_version {
@@ -76,6 +76,22 @@ fn write_kit(home: &Path, kit: &FixtureKit) -> PathBuf {
     }
     root
 }
+
+/// A stand-in headless shell a worker could launch: a regular file with its
+/// execute bits set, as the installer leaves it.
+fn write_headless_shell(path: &Path) {
+    fs::write(path, "fixture").unwrap();
+    set_mode(path, 0o755);
+}
+
+#[cfg(unix)]
+fn set_mode(path: &Path, mode: u32) {
+    use std::os::unix::fs::PermissionsExt;
+    fs::set_permissions(path, fs::Permissions::from_mode(mode)).unwrap();
+}
+
+#[cfg(not(unix))]
+fn set_mode(_: &Path, _: u32) {}
 
 fn orbit(fixture: &WorkCheckout) -> assert_cmd::Command {
     let mut command = cargo_bin_cmd!("orbit");
@@ -146,6 +162,54 @@ fn missing_executable_invalidates_a_recorded_pass() {
             .any(|problem| problem["fix"] == "orbit config browser-kit install")
     );
     assert_eq!(doctor_row(&fixture)["status"], "warning");
+}
+
+/// A recorded pass cannot admit a shell that lost its execute bits: status,
+/// worker exports and doctor drop it, and restoring them restores the kit.
+#[cfg(unix)]
+#[test]
+fn a_non_executable_shell_invalidates_a_recorded_pass() {
+    let fixture = WorkCheckout::new();
+    fs::create_dir_all(&fixture.work).unwrap();
+    let root = write_kit(
+        &fixture.home,
+        &FixtureKit {
+            version: PLAYWRIGHT_VERSION,
+            browser_installed: true,
+            verified_version: Some(PLAYWRIGHT_VERSION),
+        },
+    );
+    let shell = root.join(format!(
+        "browsers/chromium_headless_shell-{REVISION}/chrome-headless-shell"
+    ));
+    let layout = KitLayout::for_home(&fixture.home);
+    let status = || {
+        let output = orbit(&fixture)
+            .args(["config", "browser-kit", "status", "--json"])
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{output:?}");
+        json_stdout(&output)
+    };
+    let healthy = orbit_core::bootstrap::browser_kit::KitInspection::inspect(&layout);
+    assert!(healthy.is_verified(), "an executable shell passes");
+    assert_eq!(healthy.worker_env(&layout).len(), WORKER_ENV_NAMES.len());
+    assert_eq!(status()["verified"], true);
+
+    set_mode(&shell, 0o644);
+    let inspection = orbit_core::bootstrap::browser_kit::KitInspection::inspect(&layout);
+    assert!(inspection.browser_installed);
+    assert_eq!(inspection.executable, None);
+    assert!(!inspection.is_verified());
+    assert!(inspection.worker_env(&layout).is_empty());
+    assert!(orbit_core::bootstrap::browser_kit::worker_env_for_home(&fixture.home).is_empty());
+    let report = status();
+    assert_eq!(report["verified"], false);
+    assert_eq!(report["worker_env"], json!([]));
+    assert_eq!(doctor_row(&fixture)["status"], "warning");
+
+    set_mode(&shell, 0o755);
+    assert_eq!(status()["verified"], true);
 }
 
 /// Each kit state reaches `status` and `doctor` with the command that fixes
@@ -564,7 +628,7 @@ mod library_recovery {
                 "chromium_headless_shell-{REVISION}/chrome-headless-shell-linux64"
             ));
             fs::create_dir_all(&shell).unwrap();
-            fs::write(shell.join("chrome-headless-shell"), "fixture").unwrap();
+            write_headless_shell(&shell.join("chrome-headless-shell"));
             if case == "missing-browser" {
                 fs::remove_file(shell.join("chrome-headless-shell")).unwrap();
                 fs::remove_file(layout.browsers().join(format!(
@@ -588,7 +652,8 @@ mod library_recovery {
 case "$2" in
   install) [ "$5" = --force ] || exit 93
       echo browser >> "$KIT_TEST_ROOT/calls"
-      : > "$PLAYWRIGHT_BROWSERS_PATH/chromium_headless_shell-1248/chrome-headless-shell" ;;
+      : > "$PLAYWRIGHT_BROWSERS_PATH/chromium_headless_shell-1248/chrome-headless-shell"
+      chmod 755 "$PLAYWRIGHT_BROWSERS_PATH/chromium_headless_shell-1248/chrome-headless-shell" ;;
   install-deps) printf 'Missing system dependencies (1):\n  libneeded\n' ;;
   -e) : > "$ORBIT_BROWSER_KIT_SCREENSHOT"
       printf '{"text":"kit ok","version":"fixture","pngjs":"7.0.0","pixels_ok":true}\n' ;;
@@ -754,7 +819,7 @@ echo 'libneeded.so => not found'"#,
                 "chromium_headless_shell-{REVISION}/chrome-headless-shell-linux64"
             ));
             fs::create_dir_all(&shell).unwrap();
-            fs::write(shell.join("chrome-headless-shell"), "fixture").unwrap();
+            write_headless_shell(&shell.join("chrome-headless-shell"));
             fs::create_dir_all(layout.debs()).unwrap();
             let stale = layout.debs().join("libneeded_1.9_amd64.deb");
             let stale_bytes = if case == "corrupt-stale" {

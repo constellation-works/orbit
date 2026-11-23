@@ -143,6 +143,8 @@ impl TaskV2Store {
             to_status: Some(params.status),
             operation_id: None,
             decision: params.creation_decision.clone(),
+            surface: None,
+            caller: None,
         }];
         // The initial grant is part of the bundle the create publishes, so a
         // task never exists without the creation intent its writer declared.
@@ -167,6 +169,8 @@ impl TaskV2Store {
                 to_status: None,
                 operation_id: None,
                 decision: None,
+                surface: None,
+                caller: None,
             });
         }
         // A creation grant is a grant change like any later one: history
@@ -189,7 +193,12 @@ impl TaskV2Store {
                 to_status: None,
                 operation_id: None,
                 decision: None,
+                surface: None,
+                caller: None,
             });
+        }
+        for event in &mut events {
+            event.stamp_human_provenance(params.write_provenance.as_ref());
         }
         let bundle = TaskBundleV2 {
             envelope: orbit_types::task::TaskEnvelopeV2 {

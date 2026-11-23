@@ -31,7 +31,20 @@ fn readiness_counts_live_agents_by_activity() {
     );
 
     let alive = u64::from(std::process::id());
-    let dead = 4_000_000_001_u64;
+    // A real process this fixture owns, waited on and so reaped: its valid PID
+    // names no live process, so the native liveness probe reports it exited.
+    let mut exited = std::process::Command::new("true")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .unwrap();
+    let dead = u64::from(exited.id());
+    assert!(exited.wait().unwrap().success());
+    assert!(
+        !orbit_common::process::identity::process_is_alive(exited.id()),
+        "the reaped child's PID must read as exited before it is recorded"
+    );
     // Running leaf: two pilots, one recovery, one reviewer, plus an
     // implementer and a finished reviewer that must not count.
     let running = start_run(&runtime, "task_pr_pipeline");

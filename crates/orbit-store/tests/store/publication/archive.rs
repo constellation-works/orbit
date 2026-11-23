@@ -41,6 +41,7 @@ fn import_refuses_an_archive_entry_that_is_a_symlink() {
         .upsert_task_artifacts(
             &id,
             TaskArtifactUpdateParams {
+                write_provenance: None,
                 origin: None,
                 actor: "codex".into(),
                 owner_run_id: None,
