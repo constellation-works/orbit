@@ -436,6 +436,21 @@ fn reviewer_outcome_sentence(
     reviewer_preservation: Option<&Value>,
 ) -> String {
     if let Some(push) = reviewer_push {
+        // A refused push is reported with where the commit was saved instead.
+        if let (Some("push_failed"), Some(_)) = (
+            push.get("decision").and_then(Value::as_str),
+            reviewer_preservation,
+        ) {
+            let refusal = push
+                .get("error")
+                .and_then(Value::as_str)
+                .unwrap_or("unknown refusal");
+            return format!(
+                "The reviewer's commit could not be pushed to the PR branch ({refusal}); the PR \
+                 branch is unchanged. {}",
+                reviewer_outcome_sentence(None, reviewer_preservation)
+            );
+        }
         return reviewer_push_sentence(Some(push));
     }
     let Some(preserved) = reviewer_preservation else {

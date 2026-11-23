@@ -687,8 +687,9 @@ fn an_accepted_reviewer_fix_on_a_pr_merged_outside_orbit_defers_to_the_push_step
 }
 
 /// The push is conditional on the head the review reviewed: a branch that moved
-/// since keeps its new head, the reviewer commit stays local, and the handoff
-/// still leaves the PR open in review.
+/// since keeps its new head, the reviewer commit is preserved on a durable ref
+/// instead, and the handoff reports both the refusal and that ref while still
+/// leaving the PR open in review.
 fn a_reviewer_commit_is_not_pushed_over_a_pr_branch_that_moved() {
     let stranded = stranded("incomplete");
     let other = stranded.fixture._root.path().join("other");
@@ -711,6 +712,12 @@ fn a_reviewer_commit_is_not_pushed_over_a_pr_branch_that_moved() {
     git(&other, &["commit", "-q", "-m", "moved on"]);
     git(&other, &["push", "-q", "origin", "candidate"]);
     let moved = stranded.remote("refs/heads/candidate");
+    let reviewer_commit = git(&stranded.fixture.repo, &["rev-parse", "HEAD"]);
+    let run_id = stranded.fixture.input["job_run_id"].as_str().unwrap();
+    let expected_ref = format!(
+        "refs/orbit/candidates/{}/{run_id}",
+        stranded.fixture.task_id
+    );
 
     let handoff = stranded.handoff();
 
@@ -726,8 +733,35 @@ fn a_reviewer_commit_is_not_pushed_over_a_pr_branch_that_moved() {
             .contains("push_lease_lost"),
         "{handoff}"
     );
+    assert_eq!(
+        handoff["reviewer_preservation"]["decision"], "preserved",
+        "{handoff}"
+    );
+    assert_eq!(
+        handoff["reviewer_preservation"]["commit_sha"], reviewer_commit,
+        "{handoff}"
+    );
+    assert_eq!(
+        handoff["reviewer_preservation"]["ref"], expected_ref,
+        "{handoff}"
+    );
     assert_eq!(stranded.remote("refs/heads/candidate"), moved);
+    assert_eq!(stranded.remote(&expected_ref), reviewer_commit);
     assert_eq!(status(&stranded.fixture), TaskStatus::Review);
+    let comments = stranded
+        .fixture
+        .runtime
+        .get_task_comments(&stranded.fixture.task_id)
+        .unwrap();
+    assert!(
+        comments.iter().any(|comment| {
+            comment.message.contains("push_lease_lost")
+                && comment.message.contains("PR branch is unchanged")
+                && comment.message.contains(&reviewer_commit)
+                && comment.message.contains(&expected_ref)
+        }),
+        "{comments:#?}"
+    );
 }
 
 /// Only an `incomplete` settlement pushes to the PR branch: a `reject` leaves
