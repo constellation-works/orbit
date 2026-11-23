@@ -76,11 +76,21 @@ argument. The `workspace` projection returns the owning registry identity
 `{id, name}` (or `null` when unregistered); `workspace_path` is not a projection field.
 
 For ordinary `orbit.task.show`, ordinary `orbit.task.add`, ordinary
-`orbit.task.update`, and `orbit.task.reject`, MCP accepts `fields` as an array
-of task-record field names, or `field` as a single-field alias; `fields` takes
-precedence when both are supplied. Only `orbit task show` takes `--fields` on
-the human CLI, as a repeated flag or a comma-separated string. The write
-projections on `add` and `update` are MCP-only, and `reject` is not a CLI verb.
+`orbit.task.update`, and `orbit.task.reject`, the tool input accepts `fields` as
+an array of task-record field names, or `field` as a single-field alias; `fields`
+takes precedence when both are supplied. Two CLI routes reach these tools, and
+they differ in what they can project:
+
+- The direct task verbs: `orbit task show`, `orbit task add` and `orbit task update`.
+  Only `orbit task show` takes `--fields`, as a repeated flag or a comma-separated
+  string. `orbit task add` and `orbit task update` take no projection flag, so
+  their output cannot be projected through the direct verb. `reject` is not a CLI verb.
+- The CLI tool runner, `orbit tool run <tool> --input '<json>'`, passes the JSON
+  to the tool as its input, so `fields` and `field` work there for the ordinary
+  task tools. Its own `--fields` flag keeps only the named top-level keys of the
+  output after the call; naming `comments` or `history` also asks the tool to
+  include them on a task write.
+
 The ordinary task-record projection catalogue is:
 
 ```text
@@ -144,9 +154,27 @@ Ordinary write responses (`orbit.task.add`, `orbit.task.update` without
 append-heavy `comments` and `history`; request those fields explicitly when
 needed. Ordinary write projections use the task-record field catalogue and the
 same shapes above: a `fields` array keys even one field by name, and the `field`
-alias returns its bare value. Request them over MCP; `orbit task add` and
-`orbit task update` take no `--fields` flag, so on the CLI read the result back
-with `orbit task show --fields`.
+alias returns its bare value.
+
+To get a projected ordinary write result in one invocation, run the write
+through `orbit tool run` and put the projection in its input. The write returns
+the keyed object, with no readback:
+
+```sh
+orbit tool run orbit.task.update --input '{"id":"<task-id>","plan":"<plan>","fields":["id","plan"]}'
+```
+
+Or send the write's input unchanged and add the runner's `--fields` filter. The
+filter returns the keyed object, and naming `comments` or `history` requests them
+from the tool in the same call:
+
+```sh
+orbit tool run orbit.task.update --input '{"id":"<task-id>","plan":"<plan>"}' --fields id,plan,comments
+```
+
+`orbit task add` and `orbit task update` take no `--fields` flag, so a direct
+write returns the unprojected record. After a direct write, read the fields back
+with `orbit task show --fields`; the tool runner route above needs no readback.
 
 Guarded writes (`request_id` on `orbit.task.add` or `orbit.task.update`) follow
 mode-specific projection rules:
