@@ -886,12 +886,105 @@ fn partially_reported_required_checks_refuse_requeue_until_every_check_passes() 
     assert_eq!(answer["status"], "backlog", "{answer}");
 }
 
+/// Ruleset requirements layer on top of classic branch protection, so a
+/// passing classic check cannot make a partially reported published head green.
+fn layered_classic_and_ruleset_checks_refuse_requeue_until_every_check_passes() {
+    let (mut f, _, _) = escalated_completion_fixture();
+    let graphql = f._root.path().join("graphql.json");
+    let rules = f._root.path().join("rules.json");
+    std::fs::write(
+        f._root.path().join("bin/gh"),
+        format!(
+            "#!/bin/sh\ncase \"$1 $2\" in\n'pr view') cat '{}' ;;\n'api graphql') cat '{}' ;;\n'api repos/'*) cat '{}' ;;\n'api user') echo orbit-bot ;;\n*) exit 99 ;;\nesac\n",
+            f.answer.display(),
+            graphql.display(),
+            rules.display(),
+        ),
+    )
+    .unwrap();
+    f.runtime = f
+        .runtime
+        .clone()
+        .with_task_pr_forge(Arc::new(GhTaskPrForge));
+    let node = |name: &str| {
+        json!({"__typename":"CheckRun", "name":name, "status":"COMPLETED",
+            "conclusion":"SUCCESS", "isRequired":true})
+    };
+    let graphql_with = |nodes: Vec<Value>| {
+        json!({"data":{"repository":{"pullRequest":{
+            "number":17, "state":"OPEN", "headRefName":f.branch, "headRefOid":f.head,
+            "baseRefName":"main", "isDraft":false,
+            "baseRef":{"branchProtectionRule":{"requiredStatusChecks":[{"context":"Build"}] }},
+            "author":{"login":"orbit-bot"}, "body":format!("Delivers {}.", f.task),
+            "mergeable":"MERGEABLE", "commits":{"nodes":[{"commit":{
+                "oid":f.head, "statusCheckRollup":{"contexts":{
+                    "pageInfo":{"hasNextPage":false}, "nodes":nodes
+                }}
+            }}]}
+        }}}})
+        .to_string()
+    };
+    std::fs::write(
+        &rules,
+        json!([{"type":"required_status_checks","parameters":{"required_status_checks":[
+            {"context":"Test"}]}}])
+        .to_string(),
+    )
+    .unwrap();
+
+    // The recorded head reports only classic Build; the layered ruleset Test
+    // remains unreported and blocks requeue without preserving the candidate.
+    std::fs::write(&graphql, graphql_with(vec![node("Build")])).unwrap();
+    let blockers = GhTaskPrForge
+        .pull_request_blockers(&f.repo, 17)
+        .unwrap()
+        .unwrap();
+    assert_eq!(blockers.passed_required_checks, vec!["Build"]);
+    assert_eq!(blockers.unreported_required_checks, vec!["Test"]);
+    let error = refused(&f, false, "layered partial");
+    assert!(error.contains("Test"), "{error}");
+    assert_eq!(
+        f.runtime.get_task(&f.task).unwrap().status,
+        TaskStatus::Blocked
+    );
+    assert!(
+        f.runtime
+            .get_task_history(&f.task)
+            .unwrap()
+            .iter()
+            .all(|entry| entry.event != "published_owner_requeued"),
+        "a refused layered requeue preserves nothing"
+    );
+
+    // The same head is eligible once both policy sources' checks pass.
+    std::fs::write(&graphql, graphql_with(vec![node("Build"), node("Test")])).unwrap();
+    let blockers = GhTaskPrForge
+        .pull_request_blockers(&f.repo, 17)
+        .unwrap()
+        .unwrap();
+    assert!(blockers.unreported_required_checks.is_empty());
+    let answer = requeue(&f, false).unwrap();
+    assert_eq!(answer["status"], "backlog", "{answer}");
+    assert_eq!(answer["resumes"]["pull_request"], "17", "{answer}");
+    assert_eq!(
+        f.runtime
+            .get_task_history(&f.task)
+            .unwrap()
+            .iter()
+            .filter(|entry| entry.event == "published_owner_requeued")
+            .count(),
+        1,
+        "the eligible requeue records candidate preservation"
+    );
+}
+
 crate::scenario_table!(
     escalated_publication_scenarios,
     an_escalated_publication_with_green_checks_is_requeued_onto_its_pull_request,
     escalated_publication_requeue_refuses_unreadable_required_flags,
     escalated_publication_requeue_keeps_its_neighbouring_refusals,
     partially_reported_required_checks_refuse_requeue_until_every_check_passes,
+    layered_classic_and_ruleset_checks_refuse_requeue_until_every_check_passes,
     escalated_publication_requeue_refuses_a_changed_specification_and_terminal_tasks,
     a_resume_whose_worktree_is_gone_is_refused_before_the_task_moves,
     cancelled_publication_with_green_checks_is_requeued_preserving_repair_budget,
