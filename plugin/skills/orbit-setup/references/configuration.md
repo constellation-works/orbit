@@ -415,7 +415,7 @@ Disabling takes effect at the next checkpoint and makes recorded watermarks
 and round state inert without deleting them. While on, if comments remain
 undelivered when steering rounds are exhausted or a round delivers none of
 them, delivery stops before commit in the `steering_unconsumed` hold. See the
-[mid-run steering operator procedure](../../orbit-orchestrate/SKILL.md#mid-run-steering)
+[mid-run steering operator procedure](../../orbit-orchestrate/references/mid-run-steering.md)
 for posting and verifying steering comments.
 
 ## Completion holds

@@ -27,7 +27,7 @@ fn parse_run_state(raw: &str) -> Result<JobRunState, String> {
 
 #[derive(Args)]
 #[command(
-    after_help = "ROLE says how a run was submitted: top-level directly, child by a parent run.\nJSON shapes, ROLE markers and how --incidents and --failures fold runs: installed orbit-orchestrate skill `references/run-debugging.md`.\nExamples:\n  orbit run history\n  orbit run history -j task_local_pipeline --limit 20\n  orbit run history --state failed,held --since 24h\n  orbit run history --state failed --incidents\n  orbit run history --state failed --failures\n  orbit run history --json\n  orbit run history --limit 200 --no-reconcile --json"
+    after_help = "ROLE says how a run was submitted: top-level directly, child by a parent run.\nJSON shapes, ROLE markers and how --incidents and --failures fold runs: installed orbit-orchestrate skill `references/run-debugging-history.md`.\nExamples:\n  orbit run history\n  orbit run history -j task_local_pipeline --limit 20\n  orbit run history --state failed,held --since 24h\n  orbit run history --state failed --incidents\n  orbit run history --state failed --failures\n  orbit run history --json\n  orbit run history --limit 200 --no-reconcile --json"
 )]
 pub struct RunHistoryArgs {
     /// Filter to one job ID

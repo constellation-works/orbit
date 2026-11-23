@@ -13,7 +13,7 @@ Carry a task from intent to verified implementation with explicit lifecycle
 tracking. MCP task tools do not take `model`; attribution is the session
 (`ORBIT_AGENT_*` or the `--orchestrator` crew). The operator close of a
 rescued blocked task is not attributed to an agent; see
-[Close a rescued blocked task](../../orbit-orchestrate/references/recovery.md#close-a-rescued-blocked-task).
+[Close a rescued blocked task](../../orbit-orchestrate/references/recovery-settle-rescued-task.md#close-a-rescued-blocked-task).
 
 No task ID yet? Use the authorized intent, clarify only missing requirements,
 then use

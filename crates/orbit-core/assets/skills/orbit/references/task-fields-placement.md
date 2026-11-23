@@ -62,4 +62,4 @@
   `github-pr:NUMBER` (this checkout's repository) or
   `github-pr:https://github.com/OWNER/REPO/pull/NUMBER`. Preserve existing
   relations and append it in the same update that archives/rejects the finding;
-  see [CI recovery](../../orbit-orchestrate/references/recovery.md).
+  see [CI recovery](../../orbit-orchestrate/references/recovery-ci-findings.md).

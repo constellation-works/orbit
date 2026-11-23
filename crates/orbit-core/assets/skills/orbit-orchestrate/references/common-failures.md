@@ -1,5 +1,14 @@
 # Common Job-Run Failures
 
+## Contents
+
+- [Stale Task Lock Reservation With No Owner Run](#stale-task-lock-reservation-with-no-owner-run)
+- [Stale Installed Job Or Workspace Catalog Drift](#stale-installed-job-or-workspace-catalog-drift)
+- [No Repo Diff For PR Creation](#no-repo-diff-for-pr-creation)
+- [Sandboxed Child Tool Cannot Write Required Orbit Store](#sandboxed-child-tool-cannot-write-required-orbit-store)
+- [Recovery Rebuilds The Wrong Store](#recovery-rebuilds-the-wrong-store)
+- [Transient SQLite Database Lock](#transient-sqlite-database-lock)
+
 Use this reference after the first failed or suspicious step is identified. Match symptoms conservatively, confirm with the listed checks, then apply the smallest remedy that preserves audit history.
 
 Keep this file portable. Do not add local task IDs, run IDs, reservation IDs, personal paths, or incident-specific names. Use placeholders such as `<run_id>`, `<task_id>`, `<reservation_id>`, and `<workspace_path>`.

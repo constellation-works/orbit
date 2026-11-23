@@ -518,7 +518,7 @@ presents the per-request single-use token minted for that request under the
 channel's key, core applies the answer as the registered human and records
 the channel and the token fingerprint as provenance. What a decision request
 is, and how held work raises one, is described in
-[run-debugging.md](../../orbit-orchestrate/references/run-debugging.md#decision-requests-on-held-work);
+[run-debugging-decisions.md](../../orbit-orchestrate/references/run-debugging-decisions.md#decision-requests-on-held-work);
 this section covers only the channel side: registering, listing, revoking
 and rotating a channel, and the plugin-only submit path.
 

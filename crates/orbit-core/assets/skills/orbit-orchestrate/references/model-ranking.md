@@ -1,5 +1,16 @@
 # Model ranking
 
+## Contents
+
+- [Not the agent scorecards](#not-the-agent-scorecards)
+- [Read the board](#read-the-board)
+- [What each row measures](#what-each-row-measures)
+- [Eligibility, sparse evidence and board qualification](#eligibility-sparse-evidence-and-board-qualification)
+- [Tie bands, uncertainty and cost](#tie-bands-uncertainty-and-cost)
+- [Verify before quoting JSON](#verify-before-quoting-json)
+- [Calibration is a separate operator write](#calibration-is-a-separate-operator-write)
+- [Using a board to select a crew](#using-a-board-to-select-a-crew)
+
 Use `orbit agents rank` when selecting or comparing crews and you need
 evidence about the implementer models behind them. The ranking is an
 observation about past work. It grants no authority to change crew
@@ -92,7 +103,9 @@ helps nor harms any model. A recorded measure that never varied in the
 calibration sample is `no_scale` and also leaves the denominator. Read
 `weights_measured` on each row before comparing scores across boards:
 two boards whose measured weights differ are not scoring the same
-evidence. Which measures are unmeasured can change as recording lands,
+evidence.
+
+Which measures are unmeasured can change as recording lands,
 so read the current board's `measures` list rather than assuming the
 set above is still the measured one.
 

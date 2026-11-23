@@ -24,7 +24,7 @@ use super::support::auto_drain_submission_payload;
     after_help = "Examples:\n  orbit run auto\n  orbit run auto --medium-complexity-crews grok,sol\n  orbit run auto --for 4h\n  orbit run auto --for 4h --concurrency 8\n  orbit run auto --for 4h --complete\n  orbit run auto --for 4h --auto-fix\n  orbit run auto --for 4h --approve-proposed\n  orbit run auto --for 2h --review before-landing\n  orbit run auto --stop\n  orbit run auto --pull hm_owner/ws_orbit --for 8h --concurrency 3\n  orbit run auto --pull hm_owner/ws_orbit --for 8h --allow-crew sol,luna\n\n\
                   Prints the run ID and returns; follow it with `orbit run show <RUN_ID>`.\n\
                   Run-wide flags cover every task the window admits, even ones filed later.\n\
-                  Details: the orbit-orchestrate skill, references/orchestration.md."
+                  Details: the orbit-orchestrate skill, references/orchestration-dispatch.md."
 )]
 pub struct AutoCommand {
     /// How long to keep admitting work, e.g. `30m`, `2h` (default: one pass).
