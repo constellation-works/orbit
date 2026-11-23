@@ -26,6 +26,7 @@ pub(in crate::executor::automation::vcs) fn commit_worktree_detached(
     reviewer_model: Option<&str>,
     message: &str,
 ) -> Result<Option<String>, OrbitError> {
+    super::clean_tree::remove_untracked_interpreter_byproducts(workspace_path)?;
     let author = reviewer_model
         .map(reviewer_author)
         .unwrap_or_else(GitAuthor::orbit);
@@ -40,6 +41,7 @@ pub(in crate::executor::automation::vcs) fn commit_claimed_partial(
     message: &str,
 ) -> Result<Option<String>, OrbitError> {
     super::git_ops::ensure_no_unmerged_changes(workspace_path)?;
+    super::clean_tree::remove_untracked_interpreter_byproducts(workspace_path)?;
     let mut paths = task_candidate_paths(workspace_path, NewPathPolicy::Claimed)?;
     // Ordinary worktree diffs ignore submodules to avoid executing a nested
     // repository's config. Inspect staged changes without worktree traversal

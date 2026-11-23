@@ -143,6 +143,7 @@ fn require_unchanged_base(workspace: &Path, base_sha: &str) -> Result<(), OrbitE
             format!("commit(s) beyond it: {}", listed(&commits))
         });
     }
+    crate::executor::automation::vcs::commit::remove_untracked_interpreter_byproducts(workspace)?;
     let pending = git_output(
         workspace,
         &["status", "--porcelain=v1", "--untracked-files=all"],

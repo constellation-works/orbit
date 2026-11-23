@@ -2047,6 +2047,28 @@ fn required_validation_refuses_a_failing_candidate_until_a_committed_repair_pass
     );
     assert_eq!(host.validation_log(TASK_ID, &archive), failed);
 }
+fn required_validation_deletes_python_byproducts_while_refusing_real_untracked_files(
+    sandbox: &Path,
+) {
+    let (fx, host) = fx_host(sandbox);
+    host.require_commands(&["echo suite-ok"]);
+    fs::create_dir_all(fx.repo.join("pkg/__pycache__")).unwrap();
+    fx.write_repo("pkg/__pycache__/mod.cpython-312.pyc", "pyc");
+    fx.write_repo("loose.pyc", "pyc");
+
+    let validated = validate_ok(&fx, &host);
+    assert_eq!(validated["decision"], "passed");
+    assert!(!fx.repo.join("pkg/__pycache__").exists());
+    assert!(!fx.repo.join("loose.pyc").exists());
+
+    fx.write_repo("stray.txt", "real untracked work\n");
+    let dirty = validate_err(&fx, &host);
+    assert!(
+        dirty.contains("staged, tracked, or untracked changes"),
+        "non-byproduct untracked file must keep today's refusal: {dirty}"
+    );
+    assert!(fx.repo.join("stray.txt").exists());
+}
 fn required_validation_retains_reported_evidence_after_scratch_lifetime(sandbox: &Path) {
     let fx = Fixture::new(sandbox);
     let script = sandbox.join("report-evidence.py");
@@ -7518,6 +7540,11 @@ fn validation_repairs_and_logs() {
                 (
                     "required_validation_refuses_a_failing_candidate_until_a_committed_repair_passes",
                     required_validation_refuses_a_failing_candidate_until_a_committed_repair_passes
+                        as fn(&Path),
+                ),
+                (
+                    "required_validation_deletes_python_byproducts_while_refusing_real_untracked_files",
+                    required_validation_deletes_python_byproducts_while_refusing_real_untracked_files
                         as fn(&Path),
                 ),
             ],
