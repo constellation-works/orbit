@@ -52,8 +52,13 @@ pub(in crate::adapter::tool_host) fn write(
                 "snapshot": snapshot,
             }))
         }
-        Err(error @ (OrbitError::InvalidInput(_) | OrbitError::InvalidInputDiagnostic { .. } | OrbitError::ClaimRefused { .. }
-            | OrbitError::CapabilityDenied(_))) => {
+        Err(
+            error @ (OrbitError::InvalidInput(_)
+            | OrbitError::InvalidInputDiagnostic { .. }
+            | OrbitError::UnknownWorkspaceSelector(_)
+            | OrbitError::ClaimRefused { .. }
+            | OrbitError::CapabilityDenied(_)),
+        ) => {
             // Core maps post-commit refresh failures to DesktopWriteAccepted. These
             // variants therefore prove validation refused before a mutation.
             Ok(serde_json::json!({"mutation_applied":false,

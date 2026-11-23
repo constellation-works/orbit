@@ -839,3 +839,33 @@ impl SourceRepairAuthorityRefusal {
         }
     }
 }
+
+/// Evidence behind [`crate::OrbitError::UnknownWorkspaceSelector`]: the
+/// selector that matched neither a registered logical workspace nor a local
+/// checkout, and — when a bound MCP session refused an explicit override — the
+/// bound workspace's name.
+///
+/// Boxed into the error enum so adding it stays well within
+/// [`crate::OrbitError`]'s 128-byte size budget.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct UnknownWorkspaceSelector {
+    pub selector: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bound_workspace: Option<String>,
+}
+
+impl UnknownWorkspaceSelector {
+    /// The human-readable diagnostic without the `invalid input: ` enum prefix.
+    pub fn message(&self) -> String {
+        let base = format!(
+            "unknown workspace selector '{}'; run `orbit workspace list` to see registered workspaces, then pass a registered workspace name, a logical workspace ID, or an absolute local checkout path",
+            self.selector
+        );
+        match &self.bound_workspace {
+            Some(bound_workspace) => format!(
+                "{base}; this session is bound to workspace '{bound_workspace}'; omit `workspace`"
+            ),
+            None => base,
+        }
+    }
+}

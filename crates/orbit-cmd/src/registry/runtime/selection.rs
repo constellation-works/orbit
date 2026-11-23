@@ -402,9 +402,7 @@ pub(super) fn normalize_path(path: &Path) -> PathBuf {
 }
 
 pub(super) fn unsupported_cli_workspace(selector: &str) -> OrbitError {
-    OrbitError::InvalidInput(format!(
-        "unknown workspace selector '{selector}'; run `orbit workspace list` to see registered workspaces, then pass a registered workspace name, a logical workspace ID, or an absolute local checkout path"
-    ))
+    OrbitError::unknown_workspace_selector(selector)
 }
 
 pub(super) fn inactive_cli_workspace(

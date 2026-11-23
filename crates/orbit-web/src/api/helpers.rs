@@ -270,6 +270,9 @@ pub(super) fn map_runtime_error(e: orbit_core::OrbitError) -> Response {
         }
         orbit_core::OrbitError::InvalidInput(msg)
         | orbit_core::OrbitError::ClaimRefused { message: msg, .. } => bad_request_shown(msg),
+        orbit_core::OrbitError::UnknownWorkspaceSelector(unknown) => {
+            bad_request_shown(unknown.message())
+        }
         orbit_core::OrbitError::InvalidInputDiagnostic { message, .. } => {
             bad_request_shown(message)
         }

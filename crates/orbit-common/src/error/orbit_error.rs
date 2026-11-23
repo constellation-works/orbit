@@ -6,8 +6,8 @@ use super::{
     DependencyNotDelivered, ForceOverridableRefusal, ForgePushHoldFailure, FrictionNotLocal,
     HostRegistryCode, NotFoundKind, NoticeRefusalCode, PrivateVcsFailure, RecoverableVcsConflict,
     RemoteToolCode, SourceRepairAuthorityRefusal, SourceRepairRunStateRefusal, SqliteContention,
-    StorageLayer, TaskPilotRefusalCode, UpgradeAdmissionRefusal, WorkflowEvidenceUnavailable,
-    WorkspaceClaimHeld,
+    StorageLayer, TaskPilotRefusalCode, UnknownWorkspaceSelector, UpgradeAdmissionRefusal,
+    WorkflowEvidenceUnavailable, WorkspaceClaimHeld,
 };
 
 #[derive(Debug, Error, Serialize)]
@@ -486,6 +486,13 @@ pub enum OrbitError {
     #[error("store error: {0}")]
     #[serde(untagged, serialize_with = "serialize_as_store")]
     StoreWritableOpenOwed(String),
+    /// A workspace selector matched neither a registered logical workspace nor
+    /// a local checkout path. Displays, reports and serializes identically to
+    /// [`Self::InvalidInput`]; callers branch on this variant alone, never on
+    /// diagnostic prose (STD-02 §R10).
+    #[error("invalid input: {}", .0.message())]
+    #[serde(untagged, serialize_with = "serialize_unknown_workspace_selector")]
+    UnknownWorkspaceSelector(Box<UnknownWorkspaceSelector>),
 }
 
 const _: () = assert!(
@@ -581,6 +588,13 @@ fn serialize_task_delivery_unavailable<S: serde::Serializer>(
         &format!("orbit task show {task_id}"),
     ))
     .serialize(serializer)
+}
+
+fn serialize_unknown_workspace_selector<S: serde::Serializer>(
+    unknown: &UnknownWorkspaceSelector,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    OrbitError::InvalidInput(unknown.message()).serialize(serializer)
 }
 
 fn serialize_footprint_unavailable<S: serde::Serializer>(

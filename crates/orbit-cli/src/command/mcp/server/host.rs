@@ -521,8 +521,7 @@ impl ServerMcpHost {
                 selector,
             )
             .map_err(|error| {
-                if let OrbitError::InvalidInput(message) = &error
-                    && message.starts_with("unknown workspace selector '")
+                if error.unknown_workspace_selector_details().is_some()
                     && explicit.is_some()
                     && let Some(bound) = Self::workspace_selector(None, context)
                     && let Ok(workspace) = RegisteredRuntimeFactory::resolve_workspace_selector(
@@ -530,10 +529,7 @@ impl ServerMcpHost {
                         bound,
                     )
                 {
-                    return OrbitError::InvalidInput(format!(
-                        "{message}; this session is bound to workspace '{}'; omit `workspace`",
-                        workspace.workspace.name
-                    ));
+                    return error.with_bound_workspace(workspace.workspace.name);
                 }
                 error
             });

@@ -174,9 +174,11 @@ where
     };
 
     let arguments_json = match &result {
-        Err(OrbitError::InvalidInput(_) | OrbitError::InvalidInputDiagnostic { .. }) => {
-            Some(refused_arguments_json(refused_input))
-        }
+        Err(
+            OrbitError::InvalidInput(_)
+            | OrbitError::InvalidInputDiagnostic { .. }
+            | OrbitError::UnknownWorkspaceSelector(_),
+        ) => Some(refused_arguments_json(refused_input)),
         _ => None,
     };
 

@@ -13,8 +13,8 @@ pub use kinds::{
     ForgePushHoldFailure, FrictionNotLocal, HostRegistryCode, NotFoundKind, NoticeRefusalCode,
     PrivateVcsFailure, PrivateVcsFailureClass, ProviderReadThrottle, RecoverableVcsConflict,
     RemoteToolCode, SourceRepairAuthorityRefusal, SourceRepairRunStateRefusal, SqliteContention,
-    StorageLayer, TaskPilotRefusalCode, UpgradeAdmissionRefusal, UpgradeAdmissionRefusalKind,
-    WorkflowEvidenceUnavailable, WorkspaceClaimHeld,
+    StorageLayer, TaskPilotRefusalCode, UnknownWorkspaceSelector, UpgradeAdmissionRefusal,
+    UpgradeAdmissionRefusalKind, WorkflowEvidenceUnavailable, WorkspaceClaimHeld,
 };
 pub use orbit_error::OrbitError;
 pub use reader::{SourceRepairReaderText, source_repair_reader_text};

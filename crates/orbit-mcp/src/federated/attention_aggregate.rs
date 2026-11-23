@@ -562,6 +562,7 @@ fn read_destination(
         }
         Err(
             error @ (OrbitError::InvalidInput(_)
+            | OrbitError::UnknownWorkspaceSelector(_)
             | OrbitError::RemoteTool {
                 code: RemoteToolCode::InvalidInput,
                 ..

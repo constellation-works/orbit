@@ -297,6 +297,7 @@ pub(crate) fn call_error_response(error: &OrbitError, action_key: Option<&str>) 
         } => REFUSED,
         OrbitError::InvalidInput(_)
         | OrbitError::InvalidInputDiagnostic { .. }
+        | OrbitError::UnknownWorkspaceSelector(_)
         | OrbitError::ClaimRefused { .. } => INVALID_INPUT,
         _ => CALL_FAILED,
     };
