@@ -340,8 +340,10 @@ impl<'a, H: RuntimeHost + ?Sized> LandingPoll<'a, H> {
                     ),
                 )?);
             }
-            // This caller does not opt into completion's reconciliation.
-            ReviewedMergeOutcome::Ambiguous { diagnostic } => {
+            // This caller does not opt into completion's reconciliation or
+            // its conflict read, so neither answer reaches it.
+            ReviewedMergeOutcome::Ambiguous { diagnostic }
+            | ReviewedMergeOutcome::Conflict { diagnostic } => {
                 return Err(OrbitError::Execution(diagnostic));
             }
         };

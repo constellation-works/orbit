@@ -84,6 +84,11 @@ pub(crate) const BASE_MODIFIED_REFUSAL: &str = "base_modified";
 /// A reviewed merge is already in flight; callers may read but never resend.
 pub(crate) const MERGE_IN_PROGRESS_REFUSAL: &str = "merge_in_progress";
 
+/// [F2026-11-440] The SHA-conditioned head no longer merges cleanly into the
+/// base. Reported only to a caller that opts in with `report_conflict`; it
+/// permits one status read, never a second mutation.
+pub(crate) const MERGE_CONFLICT_REFUSAL: &str = "merge_conflict";
+
 /// Synchronous merge requests a completion or a landing makes against a base
 /// that keeps moving, before it stops for the owner.
 pub(crate) const BASE_MODIFIED_MERGE_ATTEMPTS: u32 = 3;

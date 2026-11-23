@@ -69,6 +69,7 @@ mod infrastructure;
 #[path = "pr_landing/pull_request/transport.rs"]
 mod landing_transport;
 mod mentions;
+mod merge_conflict;
 mod merge_in_progress;
 mod review_watch;
 #[cfg(target_os = "linux")]
@@ -7063,6 +7064,20 @@ merge() {
             fi
             refuse 405 "Merge already in progress" ;;
         policy) refuse 405 "Merge commits are not allowed on this repository." ;;
+        # [F2026-11-440] The base advanced into a conflict after the mergeable read.
+        merge_conflict) refuse 405 "Pull Request has merge conflicts" ;;
+        merge_conflict_empty) echo 'gh: Pull Request has merge conflicts (HTTP 405)' >&2; exit 1 ;;
+        merge_conflict_numeric)
+            echo '{"message":"Pull Request has merge conflicts","status":405}'
+            echo 'gh: Pull Request has merge conflicts (HTTP 405)' >&2; exit 1 ;;
+        merge_conflict+head_moved)
+            advance "$(cat "$forge/pr-head")" "Unreviewed push"
+            refuse 405 "Pull Request has merge conflicts" ;;
+        merge_conflict+merged) land "$sha"; refuse 405 "Pull Request has merge conflicts" ;;
+        conflict_error)
+            cat "$forge/conflict-body"
+            cat "$forge/conflict-stderr" >&2
+            exit 1 ;;
         queue) refuse 405 "Changes must be made through the merge queue" ;;
         protection) refuse 405 "At least 1 approving review is required by reviewers with write access." ;;
         auth) refuse 403 "Resource not accessible by integration" ;;
@@ -7663,5 +7678,13 @@ fn merge_in_progress_contracts() {
     isolated("merge_in_progress_contracts", |sandbox| {
         merge_in_progress::merge_in_progress_completion_scenarios(sandbox);
         merge_in_progress::merge_in_progress_refusal_scenarios(sandbox);
+    });
+}
+
+#[test]
+fn merge_conflict_contracts() {
+    isolated("merge_conflict_contracts", |sandbox| {
+        merge_conflict::merge_conflict_recovery_scenarios(sandbox);
+        merge_conflict::merge_conflict_refusal_scenarios(sandbox);
     });
 }

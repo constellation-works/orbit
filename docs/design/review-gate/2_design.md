@@ -1717,6 +1717,18 @@ the task in review. `handoff_land` makes only one reconciliation read: it may
 complete if already merged, and otherwise fails without another merge request.
 Other HTTP 405 refusals still fail on the first request.
 
+The exact `gh: Pull Request has merge conflicts (HTTP 405)` diagnostic, with an
+empty or consistent JSON error body, means the base advanced into a conflict
+after completion read the PR as mergeable [ORB-27415]. `pr_complete` makes
+one status read within the original deadline. Only the same open PR, head
+branch, base branch and refused head, now reporting `DIRTY`, enters the
+ordinary conflict path, with its ownership, `review_gate_stale`, auto-fix
+admission and rebase rules; under auto-fix a read that also shows failed checks
+does not, since the polled conflict path settles those first. A changed head, a
+closed, merged or non-conflicting PR, or a failed read keeps the original
+merge failure. This path never sends another merge. `handoff_land` does not opt
+in, so the refusal still fails its landing.
+
 A narrowly classified synchronous server failure (HTTP 500, 502, 503 or 504)
 can mean that the merge landed but its response was lost. `pr_complete` makes
 one fresh authenticated status read within the original completion deadline.
@@ -2128,6 +2140,7 @@ candidate is the handed-off head. External pushes and rebases remain stale.
 - [ORB-18660] — an owner CodeQL run that reports results attaches them as `review-evidence-findings.json` and queues the held candidate for its implementer's repair instead of leaving the hold in place.
 - [ORB-21765] — `handoff_land` retries its synchronous merge on the same "Base branch was modified" (HTTP 405) refusal under the same three-request ceiling as completion, instead of failing the landing.
 - [ORB-22808] — removed selective before-landing review (§3.3), deprecating its four keys until 2026-12-08 and keeping its wire and persisted fields as ignored legacy fields.
+- [ORB-27415] — completion routes the exact merge-conflict (HTTP 405) refusal to its conflict path after one read confirms the same head conflicting, instead of failing the merge.
 - [ORB-14151] — supplied the workspace run whose engine-fixture failures the task never touched, cited for the `diagnostic` role's unrelated-failure case.
 - [ORB-14191] — supplied the replacement report that silently dropped a failed required CodeQL run, cited for `validation_incomplete`.
 - [ORB-14260] — supplied the claimed-worker case that replaced a `<workspace>` placeholder with the absolute path, cited for validation-record identity matching.
