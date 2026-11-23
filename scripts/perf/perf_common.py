@@ -1,5 +1,9 @@
 """Shared guards for the paired perf timing protocol (scripts/perf/).
 
+Also the command-line owner of these rules for shell entry points
+(`build-pair.sh`): `disk-gate`, `require-absent-or-empty` and `lane-exec`
+(see `main`), so a shell script never re-spells them.
+
 Holds the three host-safety rules every perf entry point applies:
 
 - the disk gate (refuse to create anything when the parent filesystem is at
@@ -14,12 +18,14 @@ See docs/runbooks/perf-timing-protocol.md.
 
 from __future__ import annotations
 
+import argparse
 import fcntl
 import hashlib
 import json
 import os
 import pwd
 import shutil
+import signal
 import socket
 import subprocess
 import sys
@@ -32,6 +38,10 @@ DISK_GATE_PERCENT = 80
 # reading `df`. Never set it for a real measurement.
 SIMULATE_DISK_ENV = "ORBIT_PERF_SIMULATE_DISK_PCENT"
 LANE_LOCK_ENV = "ORBIT_PERF_LANE_LOCK"
+LANE_WAIT_ENV = "ORBIT_PERF_LANE_WAIT_SECONDS"
+# Set by `lane-exec` in the child it runs, so a re-entered shell script knows
+# the lane is already held and does not take it again.
+LANE_HELD_ENV = "ORBIT_PERF_LANE_HELD"
 DEFAULT_LANE_WAIT_SECONDS = 900
 
 
@@ -303,3 +313,64 @@ def json_text(value) -> str:
 
 def write_json(path: Path, value) -> None:
     path.write_text(json_text(value))
+
+
+# ── command line (for shell entry points) ────────────────────────────────────
+
+
+def _run_in_lane(entry: str, wait_seconds: float, command: list[str]) -> int:
+    """Run `command` while this process holds the lane; forward termination signals."""
+    with Lane(entry, wait_seconds):
+        child = subprocess.Popen(command, env={**os.environ, LANE_HELD_ENV: "1"})
+        forwarded = (signal.SIGINT, signal.SIGTERM, signal.SIGHUP)
+        previous = {
+            number: signal.signal(number, lambda signum, _frame: child.send_signal(signum))
+            for number in forwarded
+        }
+        try:
+            status = child.wait()
+        finally:
+            for number, handler in previous.items():
+                signal.signal(number, handler)
+    return 128 - status if status < 0 else status
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description="Perf host guards for shell entry points.")
+    commands = parser.add_subparsers(dest="command", required=True)
+    for name, helptext in (
+        ("disk-gate", "refuse when the filesystem that will hold TARGET is at or above 80%%"),
+        ("require-absent-or-empty", "refuse a non-empty PATH; remove an empty directory"),
+    ):
+        sub = commands.add_parser(name, help=helptext)
+        sub.add_argument("--entry", required=True, help="script name, prefixed to a refusal")
+        sub.add_argument("path", type=Path)
+    lane = commands.add_parser("lane-exec", help="run COMMAND while holding the host-wide lane")
+    lane.add_argument("--entry", required=True)
+    lane.add_argument("--wait", type=float, help=f"seconds to wait (default ${LANE_WAIT_ENV} or {DEFAULT_LANE_WAIT_SECONDS})")
+    lane.add_argument("lane_command", nargs=argparse.REMAINDER, metavar="-- COMMAND")
+    args = parser.parse_args(argv)
+    try:
+        if args.command == "disk-gate":
+            disk_gate(args.path)
+        elif args.command == "require-absent-or-empty":
+            require_absent_or_empty(args.path)
+        else:
+            command = args.lane_command[1:] if args.lane_command[:1] == ["--"] else args.lane_command
+            if not command:
+                parser.error("lane-exec needs a command after --")
+            wait = args.wait
+            if wait is None:
+                try:
+                    wait = float(os.environ.get(LANE_WAIT_ENV) or DEFAULT_LANE_WAIT_SECONDS)
+                except ValueError:
+                    raise PerfRefusal(f"{LANE_WAIT_ENV} is not a number") from None
+            return _run_in_lane(args.entry, wait, command)
+    except PerfRefusal as refusal:
+        print(f"{args.entry}: {refusal}", file=sys.stderr)
+        return 2
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
