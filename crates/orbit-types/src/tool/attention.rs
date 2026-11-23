@@ -307,6 +307,10 @@ pub struct AttentionDegraded {
     pub code: String,
     /// Source error or capability explanation.
     pub message: String,
+    /// Stable subject identity within `(scope, kind, code)` when a source
+    /// degrades per workflow or item rather than for the whole workspace.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subject: Option<String>,
 }
 /// Delta cursor disposition; unusable tokens always restart the full list.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

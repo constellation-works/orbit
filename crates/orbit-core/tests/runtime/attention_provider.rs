@@ -1123,6 +1123,175 @@ fn ci_red_wait_wakes_when_degraded_workflow_membership_changes() {
     assert_eq!(outcome.status, AttentionWaitStatus::TimedOut);
 }
 
+/// A grant-backed `ci_red` wait keeps polling when consecutive provider
+/// failures differ only in diagnostic text, and surfaces the latest
+/// diagnostic on timeout.
+fn ci_red_wait_keeps_polling_when_provider_diagnostic_changes() {
+    use orbit_core::application::attention::AttentionWaitStatus;
+    let fixture = Fixture::new(true);
+    let minted = call_with(
+        &fixture.runtime,
+        json!({"wait_grant": true}),
+        ToolSessionContext {
+            effective_capabilities: [McpCapability::Agent].into(),
+            ..Default::default()
+        },
+    );
+    let token = minted["wait_grant"]["token"].as_str().unwrap().to_owned();
+    let cursor = minted["cursor"]["next"].as_str().unwrap().to_owned();
+    // Advance the remote head so the wait's first poll does not reuse the
+    // empty run list cached while minting the grant.
+    fixture.advance_remote_head();
+
+    let gh = fixture.repo.parent().unwrap().join("bin/gh");
+    let script = format!(
+        "#!/bin/sh\nstate='{state}'\nprintf '%s\\n' \"$*\" >> \"$state/calls\"\ncase \"$1 ${{2:-}}\" in\n  \"auth status\") exit 0 ;;\n  \"run list\")\n    n=1\n    if [ -f \"$state/served\" ]; then\n      n=$(($(wc -l < \"$state/served\") + 1))\n    fi\n    marker=\"req-$n\"\n    printf '%s\\n' \"$marker\" >> \"$state/served\"\n    echo \"HTTP 503 Service Unavailable (request=$marker)\" >&2\n    exit 1 ;;\n  *) echo \"fake gh: unsupported: $*\" >&2; exit 2 ;;\nesac\n",
+        state = fixture.state.display(),
+    );
+    std::fs::write(&gh, script).unwrap();
+
+    let outcome = fixture
+        .runtime
+        .attention_wait(
+            &token,
+            json!({"since": cursor, "kind": "ci_red"}),
+            "6s",
+            Some("5s"),
+        )
+        .unwrap();
+    assert_eq!(
+        outcome.status,
+        AttentionWaitStatus::TimedOut,
+        "diagnostic-only changes in repeated provider failures must keep polling: {:?}",
+        outcome.response
+    );
+    let served: Vec<String> = std::fs::read_to_string(fixture.state.join("served"))
+        .unwrap()
+        .lines()
+        .map(str::to_owned)
+        .collect();
+    assert!(
+        served.len() >= 2,
+        "wait must poll at least twice before timing out: {served:?}"
+    );
+    let response = outcome.response.unwrap();
+    assert!(
+        response["items"].as_array().unwrap().is_empty(),
+        "{response}"
+    );
+    let degraded = response["degraded"].as_array().unwrap();
+    assert_eq!(degraded.len(), 1, "{response}");
+    assert_eq!(degraded[0]["kind"], "ci_red", "{response}");
+    assert_eq!(degraded[0]["code"], "source_unavailable", "{response}");
+    assert!(
+        degraded[0].get("subject").is_none(),
+        "workspace-level provider failure must not carry a workflow subject: {response}"
+    );
+    let message = degraded[0]["message"].as_str().unwrap();
+    let first = &served[0];
+    let latest = served.last().unwrap();
+    assert_ne!(first, latest, "{served:?}");
+    assert!(
+        message.contains(latest) && !message.contains(first),
+        "timeout must keep the latest diagnostic ({latest}), got: {message}"
+    );
+}
+
+/// Two workflows sharing one display name use their stable workflow identity
+/// when swapping degraded membership, so the wait still wakes with
+/// `degraded_changed`.
+fn ci_red_wait_wakes_when_same_named_degraded_workflows_swap() {
+    use orbit_core::application::attention::AttentionWaitStatus;
+    let fixture = Fixture::new(true);
+    let minted = call_with(
+        &fixture.runtime,
+        json!({"wait_grant": true}),
+        ToolSessionContext {
+            effective_capabilities: [McpCapability::Agent].into(),
+            ..Default::default()
+        },
+    );
+    let token = minted["wait_grant"]["token"].as_str().unwrap().to_owned();
+    let cursor = minted["cursor"]["next"].as_str().unwrap().to_owned();
+
+    let first_head = fixture.advance_remote_head();
+    let second_head = {
+        let output = std::process::Command::new("git")
+            .args([
+                "commit-tree",
+                "HEAD^{tree}",
+                "-p",
+                &first_head,
+                "-m",
+                "second remote head",
+            ])
+            .current_dir(&fixture.repo)
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        String::from_utf8(output.stdout).unwrap().trim().to_string()
+    };
+    git(
+        &fixture.repo,
+        &["update-ref", "refs/remotes/origin/main", &first_head],
+    );
+
+    let now = chrono::Utc::now().to_rfc3339();
+    let listing = |head: &str, pending_workflow_id: u64| {
+        let mut pending = fixture.run(101, "", &now, head);
+        pending["workflowName"] = json!("CI");
+        pending["workflowDatabaseId"] = json!(pending_workflow_id);
+        pending["status"] = json!("queued");
+        let mut runs = vec![pending];
+        for id in 1..100 {
+            let mut other = fixture.run(id, "success", &now, head);
+            other["workflowName"] = json!("Other");
+            other["workflowDatabaseId"] = json!(3);
+            runs.push(other);
+        }
+        json!(runs)
+    };
+    fixture.set_runs(listing(&first_head, 1));
+    std::fs::write(
+        fixture.state.join("next-runs.json"),
+        serde_json::to_string(&listing(&second_head, 2)).unwrap(),
+    )
+    .unwrap();
+    std::fs::write(fixture.state.join("next-head"), &second_head).unwrap();
+
+    let gh = fixture.repo.parent().unwrap().join("bin/gh");
+    let script = format!(
+        "#!/bin/sh\nstate='{state}'\nprintf '%s\\n' \"$*\" >> \"$state/calls\"\ncase \"$1 ${{2:-}}\" in\n  \"auth status\") exit 0 ;;\n  \"run list\") cat \"$state/runs.json\"\n    if [ -f \"$state/next-runs.json\" ]; then\n      mv \"$state/next-runs.json\" \"$state/runs.json\"\n      git -C '{repo}' update-ref refs/remotes/origin/main \"$(cat \"$state/next-head\")\"\n    fi ;;\n  *) echo \"fake gh: unsupported: $*\" >&2; exit 2 ;;\nesac\n",
+        state = fixture.state.display(),
+        repo = fixture.repo.display()
+    );
+    std::fs::write(&gh, script).unwrap();
+
+    let outcome = fixture
+        .runtime
+        .attention_wait(
+            &token,
+            json!({"since": cursor, "kind": "ci_red"}),
+            "20s",
+            Some("5s"),
+        )
+        .unwrap();
+    assert_eq!(
+        outcome.status,
+        AttentionWaitStatus::DegradedChanged,
+        "swapping same-named degraded workflows must wake the wait: {:?}",
+        outcome.response
+    );
+    let response = outcome.response.unwrap();
+    assert!(
+        response["items"].as_array().unwrap().is_empty(),
+        "{response}"
+    );
+    let degraded = response["degraded"].as_array().unwrap();
+    assert_eq!(degraded.len(), 1, "{response}");
+    assert_eq!(degraded[0]["subject"], "id:2", "{response}");
+}
+
 crate::scenario_table!(
     attention_provider,
     replica_owner_only_candidate_reads_are_silent_and_make_no_provider_call,
@@ -1144,5 +1313,7 @@ crate::scenario_table!(
     ci_red_keeps_same_named_workflows_apart,
     ci_red_keeps_id_workflow_apart_from_name_spelling_its_key,
     ci_red_wait_wakes_when_degraded_workflow_membership_changes,
+    ci_red_wait_keeps_polling_when_provider_diagnostic_changes,
+    ci_red_wait_wakes_when_same_named_degraded_workflows_swap,
     friction_untriaged_lists_only_open,
 );
