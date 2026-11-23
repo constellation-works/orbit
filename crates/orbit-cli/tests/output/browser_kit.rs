@@ -196,7 +196,13 @@ fn a_non_executable_shell_invalidates_a_recorded_pass() {
     assert_eq!(healthy.worker_env(&layout).len(), WORKER_ENV_NAMES.len());
     assert_eq!(status()["verified"], true);
 
-    set_mode(&shell, 0o644);
+    // Root may execute a file with any execute bit, so use none for that case.
+    let denied_mode = if unsafe { libc::geteuid() } == 0 {
+        0o000
+    } else {
+        0o001
+    };
+    set_mode(&shell, denied_mode);
     let inspection = orbit_core::bootstrap::browser_kit::KitInspection::inspect(&layout);
     assert!(inspection.browser_installed);
     assert_eq!(inspection.executable, None);

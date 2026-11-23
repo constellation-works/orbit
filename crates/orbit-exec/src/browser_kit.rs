@@ -374,16 +374,22 @@ fn read_json(path: &Path) -> Option<serde_json::Value> {
     serde_json::from_slice(&std::fs::read(path).ok()?).ok()
 }
 
-/// A regular file a worker can launch: on Unix at least one execute bit is
-/// set, so a kit whose shell lost its permissions is no longer installed.
+/// A regular file accessible for execution by the worker’s effective credentials.
 fn is_executable_file(path: &Path) -> bool {
     let Ok(metadata) = std::fs::metadata(path) else {
         return false;
     };
     #[cfg(unix)]
     {
-        use std::os::unix::fs::PermissionsExt;
-        metadata.is_file() && metadata.permissions().mode() & 0o111 != 0
+        use std::os::unix::ffi::OsStrExt;
+        let Ok(path) = std::ffi::CString::new(path.as_os_str().as_bytes()) else {
+            return false;
+        };
+        // SAFETY: path is a valid NUL-terminated string, used only for this call.
+        metadata.is_file()
+            && unsafe {
+                libc::faccessat(libc::AT_FDCWD, path.as_ptr(), libc::X_OK, libc::AT_EACCESS)
+            } == 0
     }
     #[cfg(not(unix))]
     {
