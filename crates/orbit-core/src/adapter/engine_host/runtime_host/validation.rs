@@ -86,6 +86,8 @@ pub(super) fn record_flaky_validation(
                 decision: Some(orbit_types::task::TaskDecision::FlakyValidation(
                     record.clone(),
                 )),
+                surface: None,
+                caller: None,
             }],
             ..Default::default()
         },

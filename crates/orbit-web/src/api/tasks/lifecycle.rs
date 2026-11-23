@@ -2,13 +2,13 @@
 
 use super::DASHBOARD_ACTOR;
 use super::request::{ApproveBody, ArchiveBody, RejectBody, RequeueBody};
-use super::writes;
+use super::writes::{self, WebTaskMutationMeta, run_audited_web_task_mutation};
 use crate::api::helpers;
 use crate::api::routines::{authorization_denied, authorized_caller};
 use crate::api::{OptionalJson, bad_request, blocking, map_runtime_error, validate_id};
 use crate::state::{DashboardState, Ws};
 use axum::extract::{Path, State};
-use axum::http::StatusCode;
+use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Json, Response};
 use orbit_common::governance::authorization::{
     DASHBOARD_TASK_REQUEUE, DASHBOARD_TASK_SETTLE_MERGED,
@@ -17,6 +17,8 @@ use orbit_core::application::task::{ExternalMergeSettlementProfile, ScreenedTask
 use serde_json::json;
 
 pub(in crate::api) async fn approve_task_action(
+    State(state): State<DashboardState>,
+    headers: HeaderMap,
     Ws(runtime): Ws,
     Path(id): Path<String>,
     OptionalJson(body): OptionalJson<ApproveBody>,
@@ -26,13 +28,16 @@ pub(in crate::api) async fn approve_task_action(
         Err(message) => return bad_request(message),
     };
     let id = id.to_string();
-    writes::task_mutation_response(runtime, "task approval", move |runtime| {
+    let meta = WebTaskMutationMeta::new(&state, &headers, "approve", Some(id.clone()), json!({}));
+    writes::task_mutation_response(runtime, "task approval", meta, move |runtime| {
         runtime.approve_task_screened(&id, body.note, body.comment, None, None)
     })
     .await
 }
 
 pub(in crate::api) async fn reject_task_action(
+    State(state): State<DashboardState>,
+    headers: HeaderMap,
     Ws(runtime): Ws,
     Path(id): Path<String>,
     Json(body): Json<RejectBody>,
@@ -42,7 +47,8 @@ pub(in crate::api) async fn reject_task_action(
         Err(message) => return bad_request(message),
     };
     let id = id.to_string();
-    writes::task_mutation_response(runtime, "task rejection", move |runtime| {
+    let meta = WebTaskMutationMeta::new(&state, &headers, "reject", Some(id.clone()), json!({}));
+    writes::task_mutation_response(runtime, "task rejection", meta, move |runtime| {
         runtime
             .reject_task(&id, body.note, body.comment)
             .map(ScreenedTaskWrite::from)
@@ -75,6 +81,7 @@ pub(super) fn recovery_refusal(error: orbit_core::OrbitError, code: &'static str
 /// `POST /tasks/:id/requeue` — operator-gated requeue of a blocked task.
 pub(in crate::api) async fn requeue_task_action(
     State(state): State<DashboardState>,
+    headers: HeaderMap,
     Ws(runtime): Ws,
     Path(id): Path<String>,
     OptionalJson(body): OptionalJson<RequeueBody>,
@@ -98,8 +105,23 @@ pub(in crate::api) async fn requeue_task_action(
             .into_response();
     }
     let discard = body.discard_candidate;
+    let mut meta = WebTaskMutationMeta::new(
+        &state,
+        &headers,
+        "requeue",
+        Some(id.clone()),
+        json!({ "discard_candidate": discard }),
+    );
+    meta.role = Some(DASHBOARD_ACTOR.to_string());
     let result = helpers::blocking_join("task requeue", move || {
-        runtime.requeue_blocked_task_as(&id, &reason, discard, Some(DASHBOARD_ACTOR))
+        run_audited_web_task_mutation(
+            &runtime,
+            meta,
+            |_| None,
+            move |runtime| {
+                runtime.requeue_blocked_task_as(&id, &reason, discard, Some(DASHBOARD_ACTOR))
+            },
+        )
     })
     .await;
     match result {
@@ -112,6 +134,7 @@ pub(in crate::api) async fn requeue_task_action(
 /// `POST /tasks/:id/settle-merged` — operator-gated settle from a merged PR.
 pub(in crate::api) async fn settle_merged_task_action(
     State(state): State<DashboardState>,
+    headers: HeaderMap,
     Ws(runtime): Ws,
     Path(id): Path<String>,
 ) -> Response {
@@ -123,8 +146,21 @@ pub(in crate::api) async fn settle_merged_task_action(
         Ok(id) => id.to_string(),
         Err(message) => return bad_request(message),
     };
+    let mut meta = WebTaskMutationMeta::new(
+        &state,
+        &headers,
+        "settle_merged",
+        Some(id.clone()),
+        json!({}),
+    );
+    meta.role = Some(DASHBOARD_ACTOR.to_string());
     let result = helpers::blocking_join("task settle-merged", move || {
-        runtime.settle_externally_merged_task_as(&id, Some(DASHBOARD_ACTOR))
+        run_audited_web_task_mutation(
+            &runtime,
+            meta,
+            |_| None,
+            move |runtime| runtime.settle_externally_merged_task_as(&id, Some(DASHBOARD_ACTOR)),
+        )
     })
     .await;
     match result {
@@ -137,6 +173,8 @@ pub(in crate::api) async fn settle_merged_task_action(
 }
 
 pub(in crate::api) async fn archive_task_action(
+    State(state): State<DashboardState>,
+    headers: HeaderMap,
     Ws(runtime): Ws,
     Path(id): Path<String>,
     OptionalJson(body): OptionalJson<ArchiveBody>,
@@ -148,8 +186,20 @@ pub(in crate::api) async fn archive_task_action(
     let archived_id = id.to_string();
     let runtime_clone = runtime.clone();
     let force = body.force;
+    let meta = WebTaskMutationMeta::new(
+        &state,
+        &headers,
+        "archive",
+        Some(archived_id.clone()),
+        json!({ "force": force }),
+    );
     match blocking("task archival", move || {
-        runtime_clone.archive_task_as_operator(&archived_id, force)
+        run_audited_web_task_mutation(
+            &runtime_clone,
+            meta,
+            |_| None,
+            move |runtime| runtime.archive_task_as_operator(&archived_id, force),
+        )
     })
     .await
     {

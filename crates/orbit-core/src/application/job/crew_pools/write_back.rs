@@ -434,6 +434,8 @@ impl OrbitRuntime {
                                     ),
                                 ),
                             )),
+                            surface: None,
+                            caller: None,
                         }],
                         ..Default::default()
                     },

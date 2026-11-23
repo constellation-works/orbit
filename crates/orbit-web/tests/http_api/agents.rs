@@ -159,6 +159,8 @@ pub(super) fn append(
         to_status,
         operation_id: None,
         decision: None,
+        surface: None,
+        caller: None,
     };
     let mut file = fs::OpenOptions::new().append(true).open(path).unwrap();
     writeln!(file, "{}", serde_json::to_string(&row).unwrap()).unwrap();

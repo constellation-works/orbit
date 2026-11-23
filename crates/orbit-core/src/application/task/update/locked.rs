@@ -438,6 +438,8 @@ impl OrbitRuntime {
                 to_status: None,
                 operation_id: None,
                 decision: None,
+                surface: None,
+                caller: None,
             });
         }
         if let Some(edit) = self.pilot_requirement_edit_history(&task, &params, &effective_label)? {
@@ -483,6 +485,8 @@ impl OrbitRuntime {
                         fault_evidence: String::new(),
                         fault_judged_by: None,
                     }),
+                    surface: None,
+                    caller: None,
                 });
             }
             append_history.push(preserved);
@@ -534,6 +538,8 @@ impl OrbitRuntime {
                     CrewAssignmentState::new(task.crew.clone(), task.crew_source.clone()),
                     CrewAssignmentState::new(replacement.clone(), after_source),
                 ))),
+                surface: None,
+                caller: None,
             });
         }
         if let (Some((before, state)), Some(after)) =
@@ -551,6 +557,8 @@ impl OrbitRuntime {
                 to_status: None,
                 operation_id: None,
                 decision: None,
+                surface: None,
+                caller: None,
             });
         }
         if params.discard_candidate {
@@ -571,6 +579,8 @@ impl OrbitRuntime {
                 to_status: None,
                 operation_id: None,
                 decision: None,
+                surface: None,
+                caller: None,
             });
         }
         if let Some(replacement) = source_task_id_replacement {
@@ -590,6 +600,8 @@ impl OrbitRuntime {
                 to_status: None,
                 operation_id: None,
                 decision: None,
+                surface: None,
+                caller: None,
             });
         }
         // A forced transition is still a transition: naming it in history is

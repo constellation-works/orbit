@@ -3,12 +3,13 @@
 use super::DASHBOARD_ACTOR;
 use super::lifecycle::recovery_refusal;
 use super::request::{PilotAdmissionBody, PostDeployBody};
+use super::writes::{WebTaskMutationMeta, run_audited_web_task_mutation};
 use crate::api::helpers;
 use crate::api::routines::{authorization_denied, authorized_caller};
 use crate::api::{OptionalJson, bad_request, validate_id};
 use crate::state::{DashboardState, Ws};
 use axum::extract::{Path, State};
-use axum::http::StatusCode;
+use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Json, Response};
 use orbit_common::governance::authorization::{
     DASHBOARD_TASK_PILOT_ADMISSION, DASHBOARD_TASK_POST_DEPLOY,
@@ -34,6 +35,7 @@ fn evidence_required(code: &'static str, message: &'static str) -> Response {
 /// resolves exactly as the CLI comment does.
 pub(in crate::api) async fn pilot_admission_task_action(
     State(state): State<DashboardState>,
+    headers: HeaderMap,
     Ws(runtime): Ws,
     Path(id): Path<String>,
     OptionalJson(body): OptionalJson<PilotAdmissionBody>,
@@ -70,8 +72,23 @@ pub(in crate::api) async fn pilot_admission_task_action(
         }
     };
     let verdict = record.verdict_label();
+    let mut meta = WebTaskMutationMeta::new(
+        &state,
+        &headers,
+        "pilot_admission",
+        Some(id.clone()),
+        json!({ "verdict": verdict }),
+    );
+    meta.role = Some(DASHBOARD_ACTOR.to_string());
     let result = helpers::blocking_join("task pilot admission", move || {
-        runtime.record_pilot_admission_as_human(&id, &record, DASHBOARD_ACTOR.to_string())
+        run_audited_web_task_mutation(
+            &runtime,
+            meta,
+            |_| None,
+            move |runtime| {
+                runtime.record_pilot_admission_as_human(&id, &record, DASHBOARD_ACTOR.to_string())
+            },
+        )
     })
     .await;
     match result {
@@ -90,6 +107,7 @@ pub(in crate::api) async fn pilot_admission_task_action(
 /// normalizes the record and checks the owed criterion.
 async fn record_post_deploy_met(
     state: DashboardState,
+    headers: HeaderMap,
     runtime: Arc<OrbitRuntime>,
     id: String,
     criterion: Option<usize>,
@@ -122,8 +140,23 @@ async fn record_post_deploy_met(
         }
     };
     let criterion = record.criterion();
+    let mut meta = WebTaskMutationMeta::new(
+        &state,
+        &headers,
+        "post_deploy",
+        Some(id.clone()),
+        json!({ "criterion": criterion }),
+    );
+    meta.role = Some(DASHBOARD_ACTOR.to_string());
     let result = helpers::blocking_join("task post-deploy record", move || {
-        runtime.record_post_deploy_as_human(&id, &record, DASHBOARD_ACTOR.to_string())
+        run_audited_web_task_mutation(
+            &runtime,
+            meta,
+            |_| None,
+            move |runtime| {
+                runtime.record_post_deploy_as_human(&id, &record, DASHBOARD_ACTOR.to_string())
+            },
+        )
     })
     .await;
     match result {
@@ -143,6 +176,7 @@ async fn record_post_deploy_met(
 /// record with evidence, in the body.
 pub(in crate::api) async fn post_deploy_task_action(
     State(state): State<DashboardState>,
+    headers: HeaderMap,
     Ws(runtime): Ws,
     Path(id): Path<String>,
     OptionalJson(body): OptionalJson<PostDeployBody>,
@@ -153,6 +187,7 @@ pub(in crate::api) async fn post_deploy_task_action(
     };
     record_post_deploy_met(
         state,
+        headers,
         runtime,
         id,
         body.criterion,
@@ -165,6 +200,7 @@ pub(in crate::api) async fn post_deploy_task_action(
 /// the path.
 pub(in crate::api) async fn post_deploy_met_task_action(
     State(state): State<DashboardState>,
+    headers: HeaderMap,
     Ws(runtime): Ws,
     Path((id, criterion)): Path<(String, String)>,
     OptionalJson(body): OptionalJson<PostDeployBody>,
@@ -177,6 +213,7 @@ pub(in crate::api) async fn post_deploy_met_task_action(
     // before a malformed index is refused.
     record_post_deploy_met(
         state,
+        headers,
         runtime,
         id,
         criterion.parse().ok(),

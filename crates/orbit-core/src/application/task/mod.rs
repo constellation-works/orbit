@@ -49,6 +49,7 @@ mod lint;
 mod list_result;
 mod listing;
 pub(crate) mod metadata;
+mod mutation_audit;
 mod mutation_proposals;
 mod notice_port;
 mod os_readout;
@@ -154,6 +155,11 @@ pub use listing::{
     TaskListQuery, TaskPage, TaskRow,
 };
 pub(crate) use listing::{TaskEligibilityQuery, metadata_task};
+pub(crate) use mutation_audit::current_task_write_provenance;
+pub use mutation_audit::{
+    TASK_MUTATION_AUDIT_COMMAND, TaskMutationAudit, audit_status_for_task_mutation_error,
+    with_task_write_provenance,
+};
 pub(in crate::application) use notice_port::TaskNoticePort;
 pub use os_readout::TaskOsReadout;
 pub(crate) use params::TaskRecordUpdateParams;

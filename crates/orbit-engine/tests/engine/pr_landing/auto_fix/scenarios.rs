@@ -855,6 +855,8 @@ fn seed_auto_fix_history_decision(
             to_status: None,
             operation_id: None,
             decision,
+            surface: None,
+            caller: None,
         });
 }
 

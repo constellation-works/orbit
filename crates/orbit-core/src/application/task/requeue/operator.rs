@@ -74,6 +74,8 @@ impl OrbitRuntime {
                     fault_evidence: String::new(),
                     fault_judged_by: None,
                 }),
+                surface: None,
+                caller: None,
             });
         self.stores().task_records().update(
             &task.id,
@@ -286,6 +288,8 @@ impl OrbitRuntime {
                     to_status: None,
                     operation_id: None,
                     decision: None,
+                    surface: None,
+                    caller: None,
                 };
                 (
                     format!("requeued to implement fresh: {reason}"),

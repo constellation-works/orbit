@@ -1415,6 +1415,8 @@ pub(super) fn record_auto_fix_push(f: &Fixture, by: &str, from: &str, to: &str, 
                     to_status: None,
                     operation_id: None,
                     decision: None,
+                    surface: None,
+                    caller: None,
                 }],
                 ..Default::default()
             },

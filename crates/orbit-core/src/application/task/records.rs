@@ -106,7 +106,10 @@ impl TaskRecordService<'_> {
         }
     }
 
-    pub(crate) fn create(&self, params: TaskCreateParams) -> Result<Task, OrbitError> {
+    pub(crate) fn create(&self, mut params: TaskCreateParams) -> Result<Task, OrbitError> {
+        if params.write_provenance.is_none() {
+            params.write_provenance = super::current_task_write_provenance();
+        }
         let task = self.store.create_task(params)?;
         self.index_task(&task);
         Ok(task)
@@ -114,9 +117,12 @@ impl TaskRecordService<'_> {
 
     pub(crate) fn create_with_key(
         &self,
-        params: TaskCreateParams,
+        mut params: TaskCreateParams,
         key: Option<&str>,
     ) -> Result<(Task, bool), OrbitError> {
+        if params.write_provenance.is_none() {
+            params.write_provenance = super::current_task_write_provenance();
+        }
         let (task, replayed) = match key {
             Some(key) => self.store.create_task_idempotent(params, key)?,
             None => return self.create(params).map(|task| (task, false)),
@@ -127,10 +133,13 @@ impl TaskRecordService<'_> {
 
     pub(crate) fn create_guarded(
         &self,
-        params: TaskCreateParams,
+        mut params: TaskCreateParams,
         key: Option<&str>,
         digest: Option<&str>,
     ) -> Result<(Task, bool), OrbitError> {
+        if params.write_provenance.is_none() {
+            params.write_provenance = super::current_task_write_provenance();
+        }
         if let (Some(key), Some(digest)) = (key, digest) {
             let result = self.store.create_desktop_task(params, key, digest)?;
             self.index_task(&result.0);
@@ -241,6 +250,8 @@ impl TaskRecordService<'_> {
             )?;
         }
 
+        let write_provenance = super::current_task_write_provenance();
+
         // Let the artifact store finish its rejection checks before publishing
         // document or status/history edits. Keeping those checks in the store
         // also covers reserved evidence paths and malformed coverage payloads.
@@ -253,6 +264,7 @@ impl TaskRecordService<'_> {
                     writer: params.artifact_writer,
                     actor: params.actor.clone(),
                     upsert_artifacts: params.upsert_artifacts.clone(),
+                    write_provenance: write_provenance.clone(),
                 },
             )?;
         }
@@ -294,6 +306,7 @@ impl TaskRecordService<'_> {
                     orchestrator: params.orchestrator.clone(),
                     origin: params.origin,
                     context_creation: params.context_creation.clone(),
+                    write_provenance: write_provenance.clone(),
                 },
             )?);
         }
@@ -321,6 +334,7 @@ impl TaskRecordService<'_> {
                             .implemented_by
                             .clone()
                             .filter(|_| attribution_in_history),
+                        write_provenance,
                     },
                 )?,
             );

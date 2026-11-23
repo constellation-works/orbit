@@ -74,12 +74,20 @@ impl Execute for DecisionCommand {
                 } else {
                     label.to_string()
                 };
-                let request = runtime.answer_decision_request_as_human(
-                    &id,
-                    &answer,
-                    note,
-                    actor,
-                    Some("cli".to_string()),
+                let request = orbit_core::application::task::with_task_write_provenance(
+                    orbit_types::task::TaskWriteProvenance::new(
+                        Some(orbit_types::task::TaskWriteSurface::Cli),
+                        None,
+                    ),
+                    || {
+                        runtime.answer_decision_request_as_human(
+                            &id,
+                            &answer,
+                            note,
+                            actor,
+                            Some("cli".to_string()),
+                        )
+                    },
                 )?;
                 let value = serde_json::to_value(&request).map_err(|error| {
                     OrbitError::Execution(format!("serialize decision request: {error}"))
@@ -95,7 +103,13 @@ impl Execute for DecisionCommand {
             DecisionVerb::Reverse => {
                 let id = required(&input, "id")?;
                 let actor = operator_label(runtime);
-                let request = runtime.reverse_decision_answer(&id, &actor)?;
+                let request = orbit_core::application::task::with_task_write_provenance(
+                    orbit_types::task::TaskWriteProvenance::new(
+                        Some(orbit_types::task::TaskWriteSurface::Cli),
+                        None,
+                    ),
+                    || runtime.reverse_decision_answer(&id, &actor),
+                )?;
                 let value = serde_json::to_value(&request).map_err(|error| {
                     OrbitError::Execution(format!("serialize decision request: {error}"))
                 })?;

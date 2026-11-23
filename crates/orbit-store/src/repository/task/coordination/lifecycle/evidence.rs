@@ -168,6 +168,8 @@ impl TaskCommitBoundary {
                         to_status: None,
                         operation_id: None,
                         decision: entry.decision,
+                        surface: None,
+                        caller: None,
                     });
                 }
                 intent.evidence.comments.push(comment);

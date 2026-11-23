@@ -1100,11 +1100,26 @@ main.tasks-layout.task-page-mode > .task-detail-pane { grid-column: 1; grid-row:
 #task-create-intro { color: var(--fg-soft); }
 #task-create-feedback { overflow-wrap: anywhere; }
 
-/* Force-override confirmation for a guard refusal: a modal <dialog> in the
-   top layer, like task creation, so it moves no board layout. */
+/* Force-override and hold-status confirmations: a modal <dialog> in the top
+   layer, like task creation, so it moves no board layout. */
 .force-override-dialog { width: min(480px, calc(100vw - var(--space-32))); margin: auto; padding: 0; }
 .force-override-dialog p { margin: 0; color: var(--fg-soft); overflow-wrap: anywhere; }
 .force-override-actions .action { min-height: 36px; }
+.status-hold-note-field { display: grid; gap: var(--space-6); }
+.status-hold-note-label { color: var(--fg-dim); font: 500 var(--text-sm) var(--font-sans); }
+.status-hold-note-input {
+  width: 100%;
+  min-height: 36px;
+  box-sizing: border-box;
+  padding: 0 var(--space-10);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--bg-control);
+  color: var(--fg);
+  font: var(--text-md) var(--font-sans);
+}
+.status-hold-note-input::placeholder { color: var(--fg-mute); }
+.status-hold-note-input:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; border-color: var(--accent); }
 
 .task-active-triage { display: flex; flex-wrap: wrap; gap: var(--space-6); margin: var(--space-8) 0; }
 

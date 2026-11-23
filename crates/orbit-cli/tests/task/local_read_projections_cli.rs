@@ -130,6 +130,8 @@ fn task_show_formats_status_history_and_whole_second_timestamps_without_changing
         to_status: None,
         operation_id: None,
         decision: None,
+        surface: None,
+        caller: None,
     };
     runtime.apply_task_automation_update(&id, TaskAutomationUpdate {
         append_history: vec![entry("decision_requested", &note), entry("resident_action", r#"{"tool":"orbit.task.show","phase":"started","input_digest":"sha256:secret-digest","key":"secret-operation-id"}"#), entry("fixture_event", "ordinary note")],
@@ -941,6 +943,8 @@ fn task_show_text_names_retry_exhaustion_classification_and_attempts() {
                     to_status: None,
                     operation_id: None,
                     decision: None,
+                    surface: None,
+                    caller: None,
                 }],
                 ..Default::default()
             },

@@ -258,6 +258,7 @@ fn desktop_comment_refreshes_the_revision_seal_without_changing_intent() {
             .apply_desktop_task_mutation(
                 &id,
                 &DesktopTaskMutationParams {
+                    write_provenance: None,
                     actor: "operator".to_string(),
                     request_id: "review-comment".to_string(),
                     payload_digest: "a".repeat(64),
@@ -381,6 +382,8 @@ fn a_history_append_cannot_forge_a_grant() {
                 to_status: None,
                 operation_id: None,
                 decision: None,
+                surface: None,
+                caller: None,
             }],
             ..Default::default()
         },

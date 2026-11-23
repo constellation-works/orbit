@@ -400,6 +400,8 @@ impl OrbitRuntime {
                 to_status: None,
                 operation_id: None,
                 decision: None,
+                surface: None,
+                caller: None,
             }],
         )?;
         self.update_steering_watermark(run_id, |state| {

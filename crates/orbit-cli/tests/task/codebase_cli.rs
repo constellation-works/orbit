@@ -341,7 +341,7 @@ fn append_row(path: PathBuf, row: &impl serde::Serialize) {
 fn record_landing(root: &Path, id: &str, commit: &str) {
     let path = bundle(root, id).unwrap().join(TASK_EVENTS_FILE_NAME);
     let rows = fs::read_to_string(&path).unwrap().lines().count();
-    let row = TaskEventRowV2 { schema_version: TASK_ARTIFACT_SCHEMA_VERSION, event_id: format!("EV-{:04}", rows+1), at: chrono::Utc::now(), by: "system".into(), event_type: "landing_completed".into(), note: Some(json!({"delivery":"local_candidate","candidate":commit,"verified":"landing_ref_contains_candidate"}).to_string()), from_status: None, to_status: Some(TaskStatus::Done), operation_id: None, decision: None };
+    let row = TaskEventRowV2 { schema_version: TASK_ARTIFACT_SCHEMA_VERSION, event_id: format!("EV-{:04}", rows+1), at: chrono::Utc::now(), by: "system".into(), event_type: "landing_completed".into(), note: Some(json!({"delivery":"local_candidate","candidate":commit,"verified":"landing_ref_contains_candidate"}).to_string()), from_status: None, to_status: Some(TaskStatus::Done), operation_id: None, decision: None, surface: None, caller: None };
     append_row(path, &row);
 }
 

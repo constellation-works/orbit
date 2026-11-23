@@ -35,6 +35,8 @@ fn append(f: &Fixture, event: &str, value: Value) {
                     to_status: None,
                     operation_id: None,
                     decision: None,
+                    surface: None,
+                    caller: None,
                 }],
                 ..Default::default()
             },

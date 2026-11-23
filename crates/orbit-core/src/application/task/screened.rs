@@ -179,13 +179,39 @@ impl OrbitRuntime {
         agent: Option<String>,
         model: Option<String>,
     ) -> Result<ScreenedTaskWrite, OrbitError> {
+        self.update_task_screened_with_note(id, params, screen, authority, agent, model, None)
+    }
+
+    /// Update a task for an operator surface with an optional status-change note.
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "keeps status note explicit alongside the screened update authority and identity"
+    )]
+    pub fn update_task_screened_with_note(
+        &self,
+        id: &str,
+        params: TaskUpdateParams,
+        screen: &TaskWriteScreen,
+        authority: TaskUpdateAuthority,
+        agent: Option<String>,
+        model: Option<String>,
+        status_note: Option<String>,
+    ) -> Result<ScreenedTaskWrite, OrbitError> {
         self.write_screened_update(id, params, screen, false, |params| match authority {
-            TaskUpdateAuthority::Lifecycle => {
-                self.update_task_with_identity_applied(id, params, agent, model)
-            }
-            TaskUpdateAuthority::Forced => {
-                self.force_update_task_with_identity_applied(id, params, agent, model)
-            }
+            TaskUpdateAuthority::Lifecycle => self.update_task_with_identity_and_note_applied(
+                id,
+                params,
+                agent,
+                model,
+                status_note,
+            ),
+            TaskUpdateAuthority::Forced => self.force_update_task_with_identity_and_note_applied(
+                id,
+                params,
+                agent,
+                model,
+                status_note,
+            ),
         })
     }
 

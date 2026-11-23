@@ -769,6 +769,8 @@ fn seed_cycle_grant(runtime: &OrbitRuntime, mandate_id: &str, at: DateTime<Utc>,
             to_status: None,
             operation_id: None,
             decision: None,
+            surface: None,
+            caller: None,
         }],
     );
 }
@@ -792,6 +794,8 @@ fn seed_stop(runtime: &OrbitRuntime, mandate_id: &str, at: DateTime<Utc>) {
             to_status: None,
             operation_id: None,
             decision: None,
+            surface: None,
+            caller: None,
         }],
     );
 }
@@ -949,6 +953,8 @@ fn ended_mandate_bounds_active_days_by_its_end() {
                     to_status: Some(TaskStatus::Review),
                     operation_id: None,
                     decision: None,
+                    surface: None,
+                    caller: None,
                 }],
                 ..Default::default()
             },
@@ -1209,6 +1215,8 @@ fn seed_clock_stop(runtime: &OrbitRuntime, mandate_id: &str, at: DateTime<Utc>) 
             to_status: None,
             operation_id: None,
             decision: None,
+            surface: None,
+            caller: None,
         }],
     );
 }

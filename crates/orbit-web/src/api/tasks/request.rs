@@ -197,6 +197,11 @@ pub(in crate::api) struct UpdateTaskBody {
     pub(super) execution_summary: Option<String>,
     #[serde(default)]
     pub(super) comment: Option<String>,
+    /// Optional status-transition history note (for example a hold reason when
+    /// moving to `blocked`, `archived` or `rejected` from the dashboard status
+    /// control). Only valid alongside `status`.
+    #[serde(default)]
+    pub(super) note: Option<String>,
     #[serde(default)]
     pub(super) status: Option<TaskStatus>,
     /// Human override of the lifecycle table for this write's `status`, the

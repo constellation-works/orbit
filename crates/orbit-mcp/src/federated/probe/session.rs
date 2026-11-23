@@ -62,6 +62,16 @@ const STDERR_SETTLE_GRACE: Duration = Duration::from_millis(500);
 /// change rather than silently degrading.
 const PROTOCOL_VERSION: &str = "2025-06-18";
 
+/// Upstream client and write provenance carried in `_meta.orbit` on `initialize`.
+#[derive(Clone, Copy, Default)]
+pub(super) struct HandshakeProvenance<'a> {
+    pub(super) origin_session_id: Option<&'a str>,
+    pub(super) origin_client_name: Option<&'a str>,
+    pub(super) self_reported_actor: Option<&'a str>,
+    pub(super) write_surface: Option<orbit_types::task::TaskWriteSurface>,
+    pub(super) write_caller: Option<&'a str>,
+}
+
 /// How to name a request whose answer never arrived, once its bytes are on
 /// the wire.
 ///
@@ -277,22 +287,62 @@ impl DestinationSession {
         self.handshake_with_worker(None)
     }
 
+    #[cfg(test)]
     pub(super) fn handshake_with_worker(
         &mut self,
         binding: Option<&orbit_types::tool::WorkerInvocation>,
+    ) -> Result<(), OrbitError> {
+        self.handshake_with_provenance(binding, HandshakeProvenance::default())
+    }
+
+    pub(super) fn handshake_with_provenance(
+        &mut self,
+        binding: Option<&orbit_types::tool::WorkerInvocation>,
+        provenance: HandshakeProvenance<'_>,
     ) -> Result<(), OrbitError> {
         if let Some(binding) = binding {
             binding.validate()?;
         }
         self.worker_invocation = binding.cloned();
+        let mut orbit_meta = serde_json::Map::new();
+        orbit_meta.insert("worker_invocation".to_string(), json!(binding));
+        if let Some(session_id) = provenance
+            .origin_session_id
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            orbit_meta.insert("origin_session_id".to_string(), json!(session_id));
+        }
+        if let Some(actor) = provenance
+            .self_reported_actor
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            orbit_meta.insert("actor".to_string(), json!(actor));
+        }
+        if let Some(surface) = provenance.write_surface {
+            orbit_meta.insert("write_surface".to_string(), json!(surface));
+        }
+        if let Some(caller) = provenance
+            .write_caller
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            orbit_meta.insert("write_caller".to_string(), json!(caller));
+        }
+        let client_name = provenance
+            .origin_client_name
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .unwrap_or("orbit-federated-mux");
         let response = self.request_probe(
             "initialize",
             json!({
-                "_meta": {"orbit": {"worker_invocation": binding}},
+                "_meta": {"orbit": Value::Object(orbit_meta)},
                 "protocolVersion": PROTOCOL_VERSION,
                 "capabilities": {},
                 "clientInfo": {
-                    "name": "orbit-federated-mux",
+                    "name": client_name,
                     "version": env!("CARGO_PKG_VERSION"),
                 },
             }),

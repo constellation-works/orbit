@@ -6570,6 +6570,8 @@ impl orbit_engine::test_support::NullRuntimeHost for DeliveryHost {
                     to_status: None,
                     operation_id: None,
                     decision: Some(TaskDecision::FlakyValidation(record.clone())),
+                    surface: None,
+                    caller: None,
                 }],
                 ..Default::default()
             },

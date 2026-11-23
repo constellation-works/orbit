@@ -420,6 +420,8 @@ fn record_pilot_receipt(
         to_status: None,
         operation_id: Some(op_id),
         decision,
+        surface: None,
+        caller: None,
     };
     let mut file = fs::OpenOptions::new().append(true).open(path).unwrap();
     writeln!(file, "{}", serde_json::to_string(&event).unwrap()).unwrap();

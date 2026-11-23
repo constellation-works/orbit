@@ -81,6 +81,8 @@ fn requeue_reports_the_candidate_its_stopped_run_held() {
                     to_status: None,
                     operation_id: None,
                     decision: Some(TaskDecision::CandidateHeld(held)),
+                    surface: None,
+                    caller: None,
                 }],
                 ..Default::default()
             },

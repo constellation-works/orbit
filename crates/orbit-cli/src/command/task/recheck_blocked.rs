@@ -23,10 +23,18 @@ impl Execute for TaskRecheckBlockedArgs {
         let found = runtime.infra_blocked_tasks()?;
         let transient = runtime.transient_infra_blocked_tasks()?;
         let (requeued, transient_requeued) = if self.confirm {
-            (
-                runtime.requeue_cleared_infra_blocked_tasks()?,
-                runtime.requeue_cleared_transient_infra_blocks()?,
-            )
+            orbit_core::application::task::with_task_write_provenance(
+                orbit_types::task::TaskWriteProvenance::new(
+                    Some(orbit_types::task::TaskWriteSurface::Cli),
+                    None,
+                ),
+                || {
+                    Ok::<_, orbit_core::OrbitError>((
+                        runtime.requeue_cleared_infra_blocked_tasks()?,
+                        runtime.requeue_cleared_transient_infra_blocks()?,
+                    ))
+                },
+            )?
         } else {
             (Vec::new(), Vec::new())
         };

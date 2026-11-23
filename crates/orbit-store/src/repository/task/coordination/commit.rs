@@ -394,6 +394,8 @@ impl TaskCommitBoundary {
                 to_status: entry.to_status,
                 operation_id: None,
                 decision: entry.decision.clone(),
+                surface: None,
+                caller: None,
             });
             next_event += 1;
         }
@@ -413,6 +415,8 @@ impl TaskCommitBoundary {
                 to_status: transition.map(|(_, to)| to),
                 operation_id: None,
                 decision: params.status_decision.clone(),
+                surface: None,
+                caller: None,
             });
         }
         for event in &events {
@@ -479,6 +483,8 @@ impl TaskCommitBoundary {
             to_status: None,
             operation_id: None,
             decision: None,
+            surface: None,
+            caller: None,
         });
         Ok(())
     }

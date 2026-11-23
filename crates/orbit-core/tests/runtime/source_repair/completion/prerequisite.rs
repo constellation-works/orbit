@@ -247,6 +247,8 @@ pub(crate) fn prerequisite_read_after_mutation_provenance_never_resumes() {
                     to_status: None,
                     operation_id: None,
                     decision: None,
+                    surface: None,
+                    caller: None,
                 }],
                 ..Default::default()
             },

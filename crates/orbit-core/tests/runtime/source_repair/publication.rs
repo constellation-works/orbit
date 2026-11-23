@@ -1086,6 +1086,8 @@ fn publication_history_refuses_unreadable_reservations_without_note_fallback() {
                         to_status: None,
                         operation_id: None,
                         decision,
+                        surface: None,
+                        caller: None,
                     }],
                     ..Default::default()
                 },

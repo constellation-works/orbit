@@ -65,6 +65,8 @@ pub(crate) fn enabled_completion_refuses_repair_and_mutation_provenance() {
                         to_status: None,
                         operation_id: None,
                         decision: None,
+                        surface: None,
+                        caller: None,
                     }],
                     ..Default::default()
                 },

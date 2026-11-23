@@ -18,6 +18,8 @@ pub(super) fn preserved_entry(
         to_status: None,
         operation_id: None,
         decision: None,
+        surface: None,
+        caller: None,
     })
 }
 

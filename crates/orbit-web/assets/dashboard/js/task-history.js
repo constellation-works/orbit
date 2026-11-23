@@ -188,6 +188,13 @@ function describeHistoryEntry(entry, parsed, data) {
   }
 }
 
+function historyProvenanceText(entry) {
+  const surface = typeof entry.surface === "string" ? entry.surface.trim() : "";
+  const caller = typeof entry.caller === "string" ? entry.caller.trim() : "";
+  if (surface && caller) return `${surface} · ${caller}`;
+  return surface || caller || "";
+}
+
 // Consecutive entries of one event carrying an identical payload, recorded by
 // different actors within a few seconds, are one group.
 function groupHistoryEntries(entries) {
@@ -199,6 +206,8 @@ function groupHistoryEntries(entries) {
       && last.entry.event === item.entry.event
       && last.entry.from_status === item.entry.from_status
       && last.entry.to_status === item.entry.to_status
+      && last.entry.surface === item.entry.surface
+      && last.entry.caller === item.entry.caller
       && item.parsed.text !== ""
       && last.parsed.text === item.parsed.text
       && !group.items.some((member) => member.entry.by === item.entry.by)
@@ -220,11 +229,14 @@ function historyValueNode(value) {
 
 function buildHistoryDetails(group, data, id) {
   const first = group.items[0];
+  const entry = first.entry;
   const list = el("dl", { class: "history-kv" });
   const add = (key, valueNode) => {
     list.appendChild(el("dt", { text: key }));
     list.appendChild(el("dd", {}, [valueNode]));
   };
+  if (entry.surface) add("surface", historyValueNode(entry.surface));
+  if (entry.caller) add("caller", historyValueNode(entry.caller));
   if (data && !Array.isArray(data)) {
     for (const [key, value] of Object.entries(data)) add(key, historyValueNode(value));
   } else if (data) {
@@ -272,6 +284,14 @@ function buildHistoryRow(task, group, expandedKeys) {
 
   // A payload shows as a short summary; its fields wait in the details panel.
   const body = el("div", { class: "history-main" }, [sentence]);
+  const provenance = historyProvenanceText(entry);
+  if (provenance) {
+    body.appendChild(el("span", {
+      class: "badge mono history-provenance",
+      "data-tone": "muted",
+      text: provenance,
+    }));
+  }
   const note = described.note !== undefined ? described.note : (data ? "" : first.parsed.text);
   if (data && !described.summarized) {
     body.appendChild(el("span", { class: "history-summary", text: historyJsonSummary(data) }));
@@ -292,7 +312,7 @@ function buildHistoryRow(task, group, expandedKeys) {
   const content = el("div", { class: "history-content" }, [head]);
   row.appendChild(content);
 
-  const expandable = Boolean(data) || group.items.length > 1;
+  const expandable = Boolean(data) || Boolean(entry.caller) || group.items.length > 1;
   if (expandable) {
     const key = `${task.id}:${first.index}`;
     const id = `history-${task.id}-${first.index}`.replace(/[^\w-]/g, "-");

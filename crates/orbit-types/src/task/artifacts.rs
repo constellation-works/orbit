@@ -357,9 +357,39 @@ pub struct TaskEventRowV2 {
     pub operation_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub decision: Option<super::TaskDecision>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub surface: Option<super::TaskWriteSurface>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub caller: Option<String>,
 }
 
 impl TaskEventRowV2 {
+    /// Stamp `provenance` onto this event when `by` is human-attributed and the
+    /// event is not an automated drain promotion.
+    pub fn stamp_human_provenance(&mut self, provenance: Option<&super::TaskWriteProvenance>) {
+        let Some(provenance) = provenance else {
+            return;
+        };
+        if matches!(
+            self.decision,
+            Some(super::TaskDecision::DrainApproved { .. })
+        ) || !super::is_human_attributed_task_actor(&self.by)
+        {
+            return;
+        }
+        if self.surface.is_none() {
+            self.surface = provenance.surface;
+        }
+        if self.caller.is_none() {
+            self.caller = provenance
+                .caller
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(ToOwned::to_owned);
+        }
+    }
+
     pub fn validate(&self) -> Result<(), TaskError> {
         validate_schema_version(self.schema_version, "task event row")?;
         if self.event_id.trim().is_empty() {
@@ -375,6 +405,15 @@ impl TaskEventRowV2 {
         if self.event_type.trim().is_empty() {
             return Err(TaskError::Invalid(
                 "task event type must not be empty".to_string(),
+            ));
+        }
+        if self
+            .caller
+            .as_deref()
+            .is_some_and(|caller| caller.trim().is_empty())
+        {
+            return Err(TaskError::Invalid(
+                "task event caller must not be empty when present".to_string(),
             ));
         }
         Ok(())

@@ -230,6 +230,8 @@ fn handoff_ci_history_uses_the_claim_scoped_mutation() {
                 to_status: None,
                 operation_id: None,
                 decision: None,
+                surface: None,
+                caller: None,
             }],
             ..Default::default()
         },

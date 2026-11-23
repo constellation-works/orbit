@@ -162,6 +162,7 @@ pub(super) async fn list_claims(
 /// the digest-pinned validation evidence in its own transaction.
 pub(super) async fn approve_handoff_action(
     State(state): State<DashboardState>,
+    headers: axum::http::HeaderMap,
     Query(query): Query<OperationsQuery>,
     Ws(runtime): Ws,
     Path(handoff_id): Path<String>,
@@ -188,6 +189,7 @@ pub(super) async fn approve_handoff_action(
     let audited = handoff_id.clone();
     run_owner_action(
         state,
+        headers,
         query,
         runtime,
         OwnerMutation {
@@ -223,6 +225,7 @@ pub(super) struct RetryHandoffRequest {
 /// `POST /api/distributed/handoffs/:id/retry` — normal owner landing only.
 pub(super) async fn retry_handoff_action(
     State(state): State<DashboardState>,
+    headers: axum::http::HeaderMap,
     Query(query): Query<OperationsQuery>,
     Ws(runtime): Ws,
     Path(handoff_id): Path<String>,
@@ -258,6 +261,7 @@ pub(super) async fn retry_handoff_action(
     }
     run_owner_action(
         state,
+        headers,
         query,
         runtime,
         OwnerMutation {
@@ -288,6 +292,7 @@ fn retry_handoff_response(
 /// the work, and it is refused while an external merge intent is unresolved.
 pub(super) async fn revoke_handoff_action(
     State(state): State<DashboardState>,
+    headers: axum::http::HeaderMap,
     Query(query): Query<OperationsQuery>,
     Ws(runtime): Ws,
     Path(handoff_id): Path<String>,
@@ -319,6 +324,7 @@ pub(super) async fn revoke_handoff_action(
     let audited = handoff_id.clone();
     run_owner_action(
         state,
+        headers,
         query,
         runtime,
         OwnerMutation {
@@ -350,6 +356,7 @@ pub(super) async fn revoke_handoff_action(
 /// them.
 pub(super) async fn recover_claim_action(
     State(state): State<DashboardState>,
+    headers: axum::http::HeaderMap,
     Query(query): Query<OperationsQuery>,
     Ws(runtime): Ws,
     Path(claim_id): Path<String>,
@@ -384,6 +391,7 @@ pub(super) async fn recover_claim_action(
     let audited = claim_id.clone();
     run_owner_action(
         state,
+        headers,
         query,
         runtime,
         OwnerMutation {
@@ -421,6 +429,7 @@ struct OwnerMutation {
 /// and translate a refusal into the code the client acts on.
 async fn run_owner_action<F>(
     state: DashboardState,
+    headers: axum::http::HeaderMap,
     query: OperationsQuery,
     runtime: std::sync::Arc<OrbitRuntime>,
     mutation: OwnerMutation,
@@ -450,8 +459,18 @@ where
             return authorization_denied(denial);
         }
     };
+    let write_caller = super::forward::web_write_caller(&state, &headers);
     let acting = runtime.clone();
-    let outcome = helpers::blocking_join(audit_name, move || action(&acting)).await;
+    let outcome = helpers::blocking_join(audit_name, move || {
+        orbit_core::application::task::with_task_write_provenance(
+            orbit_types::task::TaskWriteProvenance::new(
+                Some(orbit_types::task::TaskWriteSurface::Web),
+                write_caller,
+            ),
+            || action(&acting),
+        )
+    })
+    .await;
     match outcome {
         Ok(Ok(value)) => {
             audit.succeeded(&caller, started).await;

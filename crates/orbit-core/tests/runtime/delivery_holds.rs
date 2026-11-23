@@ -302,6 +302,8 @@ fn completion_outcome(
                         to_status: None,
                         operation_id: None,
                         decision: None,
+                        surface: None,
+                        caller: None,
                     }],
                     ..Default::default()
                 },

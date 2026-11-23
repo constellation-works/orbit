@@ -634,16 +634,26 @@ fn comment_line(comment: &TaskComment) -> String {
 
 fn history_line(entry: &TaskHistoryEntry) -> String {
     let stamp = dimmed(&format!("[{}]", format_task_show_timestamp(entry.at)));
+    let provenance = match (entry.surface, entry.caller.as_deref()) {
+        (Some(surface), Some(caller)) => format!(" [{surface} · {caller}]"),
+        (Some(surface), None) => format!(" [{surface}]"),
+        (None, Some(caller)) => format!(" [{caller}]"),
+        (None, None) => String::new(),
+    };
     match &entry.note {
         Some(note) => {
             let summary = history_note_summary(note);
             format!(
-                "{stamp} {}: {} ({summary})",
+                "{stamp} {}{provenance}: {} ({summary})",
                 entry.by,
                 format_task_history_event(entry)
             )
         }
-        None => format!("{stamp} {}: {}", entry.by, format_task_history_event(entry)),
+        None => format!(
+            "{stamp} {}{provenance}: {}",
+            entry.by,
+            format_task_history_event(entry)
+        ),
     }
 }
 

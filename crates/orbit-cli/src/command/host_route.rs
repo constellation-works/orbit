@@ -763,8 +763,16 @@ fn deliver(
     {
         object.insert("workspace".into(), Value::String(selector));
     }
-    let answer =
-        orbit_mcp::McpHost::call_tool(&client, &call.name, input, ToolSessionContext::default());
+    let answer = orbit_mcp::McpHost::call_tool(
+        &client,
+        &call.name,
+        input,
+        ToolSessionContext {
+            write_surface: Some(orbit_types::task::TaskWriteSurface::Cli),
+            write_caller: Some(caller),
+            ..ToolSessionContext::default()
+        },
+    );
     Ok(Preflight::Remote(
         answer.and_then(|value| render(call.render, value, holder)),
     ))

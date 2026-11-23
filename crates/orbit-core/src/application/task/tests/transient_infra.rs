@@ -104,6 +104,8 @@ fn transient_infra_deferral_redacts_the_authentication_error() {
                         to_status: None,
                         operation_id: None,
                         decision: None,
+                        surface: None,
+                        caller: None,
                     },
                     TaskHistoryEntry {
                         at: Utc::now(),
@@ -121,6 +123,8 @@ fn transient_infra_deferral_redacts_the_authentication_error() {
                             fault_evidence: String::new(),
                             fault_judged_by: None,
                         }),
+                        surface: None,
+                        caller: None,
                     },
                 ],
                 expected_status: Some(vec![TaskStatus::Blocked]),

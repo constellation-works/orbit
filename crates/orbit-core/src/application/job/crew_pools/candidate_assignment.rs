@@ -129,6 +129,8 @@ impl OrbitRuntime {
                 before,
                 CrewAssignmentState::new(task.crew.clone(), task.crew_source.clone()),
             ))),
+            surface: None,
+            caller: None,
         }))
     }
 

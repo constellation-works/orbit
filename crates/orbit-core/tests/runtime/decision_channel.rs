@@ -513,6 +513,8 @@ impl Fixture {
             to_status: None,
             operation_id: None,
             decision: Some(TaskDecision::CandidateHeld(held)),
+            surface: None,
+            caller: None,
         };
         self.runtime
             .apply_task_automation_update(

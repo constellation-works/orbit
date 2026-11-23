@@ -120,6 +120,8 @@ impl OrbitRuntime {
                         to_status: None,
                         operation_id: Some(request.id.clone()),
                         decision: None,
+                        surface: None,
+                        caller: None,
                     };
                     let corpus_append =
                         self.task_corpus_append_for_decision(&request, &resolution)?;
