@@ -1882,3 +1882,101 @@ fn turns_to_edit_provider_summary_marks_zero_measured_provider_thin() {
         },
     );
 }
+
+/// Per day sums the lead buckets into the first trailing day, so deliveries
+/// that landed only in the lead still reach their series: an unassigned crew
+/// and a crew folded behind the window's busiest ones alike. The window's own
+/// totals and crew ranking stay as the window alone makes them.
+#[test]
+fn diff_stats_keeps_lead_only_crews_for_per_day() {
+    isolated(
+        "metrics_trends::diff_stats_keeps_lead_only_crews_for_per_day",
+        || {
+            use orbit_store::contracts::{
+                DiffClassCounts, LandedDiffSource, LandedDiffStats, LandedDiffStoreBackend as _,
+            };
+
+            let fixture = Fixture::new();
+            let store = fixture.runtime.sqlite_store().unwrap();
+            let path = format!("/api/diagnostics/diff_stats?{WS}&since=24h");
+            let empty = json_ok(fixture.server(false).get(&path));
+            let lead_n = |series: &Value| {
+                series["lead_points"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|cell| cell["n"].as_u64().unwrap())
+                    .sum::<u64>()
+            };
+            assert_eq!(empty["overall"]["total"]["n"], 0);
+            assert_eq!(lead_n(&empty["overall"]), 0, "an empty lead stays empty");
+            let width = empty["window"]["bucket_seconds"].as_i64().unwrap();
+            let lead_at = since(&empty["window"]) - Duration::seconds(width / 2);
+            let now = Utc::now();
+            let landed = |index: usize, crew: Option<&str>, at: DateTime<Utc>| {
+                let task_id = add_task(&fixture, TaskComplexity::Medium, TaskStatus::Done);
+                assert!(
+                    store
+                        .record_landed_diff_stats(&LandedDiffStats {
+                            workspace_id: "ws_http_fixture".into(),
+                            task_id,
+                            base_commit: format!("{:040x}", 2 * index),
+                            landed_commit: format!("{:040x}", 2 * index + 1),
+                            landed_at: at,
+                            recorded_at: at,
+                            job_run_id: None,
+                            source: LandedDiffSource::Landing,
+                            crew: crew.map(str::to_string),
+                            model: None,
+                            complexity: Some("medium".into()),
+                            task_type: None,
+                            code: DiffClassCounts {
+                                added: 10,
+                                deleted: 0,
+                                files: 1,
+                            },
+                            tests: DiffClassCounts::default(),
+                            other: DiffClassCounts::default(),
+                            reviewable: None,
+                        })
+                        .unwrap()
+                );
+            };
+            for index in 0..6 {
+                landed(index, Some(&format!("window-{index}")), now);
+            }
+            landed(6, None, lead_at);
+            landed(7, Some("lead-only"), lead_at);
+
+            // The trends memo keeps the first answer, so read on a fresh server.
+            let body = json_ok(fixture.server(false).get(&path));
+            assert_eq!(
+                body["overall"]["total"]["n"], 6,
+                "the window counts its own deliveries"
+            );
+            assert_eq!(lead_n(&body["overall"]), 2);
+            let crews = body["crews"].as_array().unwrap();
+            let row = |id: &str| crews.iter().find(|row| row["series_id"] == id).unwrap();
+            for index in 0..6 {
+                let named = row(&format!("crew:window-{index}"));
+                assert_eq!(named["total"]["n"], 1);
+                assert_eq!(lead_n(named), 0);
+            }
+            let unassigned = row("unassigned");
+            assert_eq!(unassigned["total"]["n"], 0);
+            assert_eq!(
+                lead_n(unassigned),
+                1,
+                "lead-only unassigned work keeps a series"
+            );
+            let folded = row("folded");
+            assert_eq!(folded["crews"], json!(["lead-only"]));
+            assert_eq!(folded["total"]["n"], 0);
+            assert_eq!(
+                lead_n(folded),
+                1,
+                "a lead-only crew folds behind the window's crews"
+            );
+        },
+    );
+}

@@ -82,9 +82,18 @@ function closeEditor(key, editor) {
 
 const CRON_FIELD = /^[0-9A-Za-z*,/\-?#LW]+$/;
 
+// The day-of-week field may lead with `+`, the AND modifier that makes a day
+// match need both day-of-month and day-of-week. The runtime parser accepts that
+// one leading plus and refuses any other, so a misplaced plus reaches the server
+// and its refusal names it.
+function cronFieldOk(part, index) {
+  const body = index === 4 && part.startsWith("+") ? part.slice(1) : part;
+  return CRON_FIELD.test(body.replaceAll("+", ""));
+}
+
 function cronProblem(cron) {
   const fields = String(cron || "").trim().split(/\s+/).filter(Boolean);
-  if (fields.length !== 5 || !fields.every((part) => CRON_FIELD.test(part))) {
+  if (fields.length !== 5 || !fields.every(cronFieldOk)) {
     return "Cron needs five fields: minute hour day-of-month month day-of-week.";
   }
   return "";

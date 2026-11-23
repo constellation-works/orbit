@@ -96,6 +96,18 @@ function trailingDay(values, lead, perDay) {
   return { sums, incomplete };
 }
 
+/// Whether Per day has something to draw from the lead alone: `lead` is the
+/// per-bucket count before the window, oldest first, and the first trailing
+/// day reaches back `perDay - 1` of those buckets. Every Per day trend asks
+/// this before showing an empty window, so a lead-only event still draws while
+/// an empty lead (or one older than a day) leaves the empty state.
+export function dayLeadHasData(mode, seconds, lead) {
+  if (mode !== "day" || !Array.isArray(lead) || !seconds) return false;
+  const perDay = seconds <= DAY_SECONDS && DAY_SECONDS % seconds === 0 ? DAY_SECONDS / seconds : 1;
+  if (perDay <= 1) return false;
+  return lead.slice(-(perDay - 1)).some((count) => Number(count) > 0);
+}
+
 /// A 1–2–5 axis covering `[min, max]` and zero, in about four steps. `floor`
 /// is the smallest top the axis may have (1 by default, so an empty chart
 /// still draws a scale).

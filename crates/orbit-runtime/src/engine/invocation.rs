@@ -100,10 +100,12 @@ impl TokenAccumulator {
                 .saturating_add(1);
             return;
         };
-        self.add_usage(&usage);
+        self.add_usage(&usage, !fact.task_ids.is_empty());
     }
 
-    fn add_usage(&mut self, usage: &TokenUsage) {
+    /// Count one covered invocation. `linked` says it names a task, so its
+    /// tokens also join the per-linked-task numerator.
+    fn add_usage(&mut self, usage: &TokenUsage, linked: bool) {
         self.summary.covered_invocation_count =
             self.summary.covered_invocation_count.saturating_add(1);
         self.summary.uncached_input_tokens = self
@@ -123,14 +125,20 @@ impl TokenAccumulator {
             .cache_create_1h_tokens
             .saturating_add(usage.cache_create_1h);
         self.summary.output_tokens = self.summary.output_tokens.saturating_add(usage.output);
-        self.summary.normalized_token_total = self
-            .summary
-            .normalized_token_total
-            .saturating_add(usage.input)
+        let total = usage
+            .input
             .saturating_add(usage.cache_read)
             .saturating_add(usage.cache_create)
             .saturating_add(usage.cache_create_1h)
             .saturating_add(usage.output);
+        self.summary.normalized_token_total =
+            self.summary.normalized_token_total.saturating_add(total);
+        if linked {
+            self.summary.linked_normalized_token_total = self
+                .summary
+                .linked_normalized_token_total
+                .saturating_add(total);
+        }
     }
 
     fn finish(&self) -> NormalizedTokenSummary {
@@ -176,7 +184,7 @@ impl BucketAccumulator {
                 model_tokens
                     .linked_task_ids
                     .extend(fact.task_ids.iter().cloned());
-                model_tokens.add_usage(&usage);
+                model_tokens.add_usage(&usage, !fact.task_ids.is_empty());
             }
         }
 

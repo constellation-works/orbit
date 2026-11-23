@@ -153,3 +153,49 @@ fn orchestrator_accounting_excludes_other_workspaces_and_keeps_local_missing_tas
     );
     assert_eq!(mixed.normalized_token_total / mixed.invocation_count, 140);
 }
+
+/// A fully covered workspace that mixes linked and taskless work keeps the
+/// taskless tokens in the total but out of the per-linked-task numerator.
+#[test]
+fn linked_token_total_excludes_taskless_invocations() {
+    if !isolated("invocation_metrics::linked_token_total_excludes_taskless_invocations") {
+        return;
+    }
+    let root = TempDir::new_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
+    let global = root.path().join("global");
+    let workspace = root.path().join("a").join(".orbit");
+    std::fs::create_dir_all(&global).unwrap();
+    std::fs::create_dir_all(&workspace).unwrap();
+    let git = crate::git_test_support::command()
+        .args(["init", "--quiet"])
+        .arg(workspace.parent().unwrap())
+        .output()
+        .expect("initialize disposable fixture checkout");
+    assert!(git.status.success(), "fixture git init: {git:?}");
+    let runtime = OrbitRuntime::from_roots(&global, &workspace).expect("open workspace runtime");
+    let task = runtime
+        .add_task(TaskAddParams {
+            title: "Accounting fixture".to_string(),
+            ..Default::default()
+        })
+        .expect("create task in fixture workspace")
+        .id;
+    record(&runtime, std::slice::from_ref(&task), 1);
+    record(&runtime, &[], 9);
+    let tokens = runtime
+        .orchestrator_invocation_metrics(None, None)
+        .unwrap()
+        .normalized_tokens;
+    assert_eq!(tokens.invocation_count, 2);
+    assert_eq!(tokens.covered_invocation_count, 2);
+    assert_eq!(tokens.covered_linked_task_count, 1);
+    assert_eq!(tokens.normalized_token_total, 1400);
+    assert_eq!(tokens.linked_normalized_token_total, 140);
+    assert_eq!(
+        tokens.normalized_token_total / tokens.covered_invocation_count,
+        700,
+        "per covered invocation still spans all managed work"
+    );
+    let json = serde_json::to_value(&tokens).unwrap();
+    assert_eq!(json["linked_normalized_token_total"], 140);
+}

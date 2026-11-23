@@ -174,7 +174,12 @@ function renderNormalizedTokenUsage(tokens, previous) {
   const coveredInvocations = asScoreboardNumber(usage.covered_invocation_count);
   const coveredTasks = asScoreboardNumber(usage.covered_linked_task_count);
   const perInvocation = coveredInvocations === 0 ? "—" : fmtScoreboardCount(Math.round(total / coveredInvocations));
-  const perTask = coveredTasks === 0 || coveredInvocations !== invocations ? "—" : fmtScoreboardCount(Math.round(total / coveredTasks));
+  // Per linked task divides only linked work's tokens: taskless invocations
+  // join the total but have no task to amortize over. An older host sends no
+  // linked numerator, so the ratio is withheld rather than mixed.
+  const linkedTotal = usage.linked_normalized_token_total;
+  const perTask = coveredTasks === 0 || coveredInvocations !== invocations || linkedTotal == null
+    ? "—" : fmtScoreboardCount(Math.round(asScoreboardNumber(linkedTotal) / coveredTasks));
   const bucketText = [
     `uncached input ${fmtScoreboardCount(usage.uncached_input_tokens)}`,
     `cache read ${fmtScoreboardCount(usage.cache_read_tokens)}`,
@@ -195,7 +200,7 @@ function renderNormalizedTokenUsage(tokens, previous) {
       tokenStat(perTask, "tokens / covered linked task"),
     ]),
     el("span", { class: "token-buckets", text: bucketText }),
-    el("span", { class: "token-coverage" }, [el("span", { text: `${fmtScoreboardCount(usage.covered_invocation_count)} of ${fmtScoreboardCount(invocations)} invocations normalized` }), infoHint(`${fmtScoreboardCount(usage.unknown_input_basis_or_model_count)} with unknown model or input basis are excluded, never guessed. Tokens per linked task is withheld when any invocation is uncovered.`)]),
+    el("span", { class: "token-coverage" }, [el("span", { text: `${fmtScoreboardCount(usage.covered_invocation_count)} of ${fmtScoreboardCount(invocations)} invocations normalized` }), infoHint(`${fmtScoreboardCount(usage.unknown_input_basis_or_model_count)} with unknown model or input basis are excluded, never guessed. Tokens per linked task counts only invocations linked to a task, so taskless work stays in the total but not in that ratio; it is withheld when any invocation is uncovered.`)]),
   ]);
 }
 
