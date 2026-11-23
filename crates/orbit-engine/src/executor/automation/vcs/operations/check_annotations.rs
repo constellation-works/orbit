@@ -13,11 +13,134 @@
 use std::path::Path;
 
 use orbit_common::OrbitError;
+use serde::{Deserialize, Deserializer, Serialize, de::DeserializeOwned};
 use serde_json::{Value, json};
 
 use super::DEFAULT_TIMEOUT_MS;
 use super::input::{number, required_string, same, text, valid_expected_remote_sha};
 use super::process::execute_with_transient_retry;
+
+// Invalid or absent fields retain the same conservative interpretation as JSON
+// lookups: they cannot prove a failure, but do not hide other annotations.
+fn optional_field<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
+where
+    D: Deserializer<'de>,
+    T: DeserializeOwned,
+{
+    Ok(serde_json::from_value(Value::deserialize(deserializer)?).ok())
+}
+
+fn optional_run<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<CiCheckAnnotationRun>, D::Error> {
+    let value = Value::deserialize(deserializer)?;
+    Ok(if value.is_object() {
+        serde_json::from_value(value).ok()
+    } else {
+        None
+    })
+}
+
+#[derive(Serialize, Deserialize, Default)]
+#[serde(bound(deserialize = "A: DeserializeOwned"))]
+pub(in super::super) struct CiCheckAnnotationsAnswer<A = CiCheckAnnotation> {
+    #[serde(default, deserialize_with = "optional_field")]
+    pub(in super::super) repository: Option<String>,
+    #[serde(default)]
+    pub(in super::super) repository_id: Value,
+    #[serde(default, deserialize_with = "optional_field")]
+    pub(in super::super) pr: Option<u64>,
+    #[serde(default, deserialize_with = "optional_field")]
+    pub(in super::super) head_sha: Option<String>,
+    #[serde(default)]
+    pub(in super::super) base_ref: Value,
+    #[serde(default, deserialize_with = "optional_run")]
+    pub(in super::super) check_run: Option<CiCheckAnnotationRun>,
+    #[serde(default, deserialize_with = "optional_field")]
+    pub(in super::super) annotations: Option<Vec<A>>,
+}
+
+#[derive(Serialize, Deserialize, Default)]
+pub(in super::super) struct CiCheckAnnotationRun {
+    #[serde(default, deserialize_with = "optional_field")]
+    pub(in super::super) id: Option<u64>,
+    #[serde(default, deserialize_with = "optional_field")]
+    pub(in super::super) name: Option<String>,
+    #[serde(default, deserialize_with = "optional_field")]
+    pub(in super::super) app_id: Option<u64>,
+    #[serde(default)]
+    pub(in super::super) app_slug: Value,
+    #[serde(default)]
+    pub(in super::super) status: Value,
+    #[serde(default, deserialize_with = "optional_field")]
+    pub(in super::super) conclusion: Option<CiCheckConclusion>,
+    #[serde(default)]
+    pub(in super::super) completed_at: Value,
+    #[serde(default)]
+    pub(in super::super) check_suite_id: Value,
+    #[serde(default)]
+    pub(in super::super) html_url: Value,
+    #[serde(default)]
+    pub(in super::super) title: Value,
+    #[serde(default, deserialize_with = "optional_field")]
+    pub(in super::super) annotations_count: Option<u64>,
+}
+
+#[derive(Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub(in super::super) enum CiCheckConclusion {
+    Failure,
+    #[serde(other)]
+    Other,
+}
+
+#[derive(Deserialize, Default)]
+#[serde(from = "Value")]
+pub(in super::super) struct CiCheckAnnotation(CiCheckAnnotationFields);
+
+impl From<Value> for CiCheckAnnotation {
+    fn from(value: Value) -> Self {
+        Self(if value.is_object() {
+            serde_json::from_value(value).unwrap_or_default()
+        } else {
+            CiCheckAnnotationFields::default()
+        })
+    }
+}
+
+impl std::ops::Deref for CiCheckAnnotation {
+    type Target = CiCheckAnnotationFields;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+#[derive(Deserialize, Default)]
+pub(in super::super) struct CiCheckAnnotationFields {
+    #[serde(default, deserialize_with = "optional_field")]
+    pub(in super::super) annotation_level: Option<CiAnnotationLevel>,
+    #[serde(default, deserialize_with = "optional_field")]
+    pub(in super::super) path: Option<String>,
+    #[serde(default, deserialize_with = "optional_field")]
+    pub(in super::super) blob_href: Option<String>,
+    #[serde(default, deserialize_with = "optional_field")]
+    pub(in super::super) start_line: Option<u64>,
+    #[serde(default, deserialize_with = "optional_field")]
+    pub(in super::super) end_line: Option<u64>,
+    #[serde(default, deserialize_with = "optional_field")]
+    pub(in super::super) message: Option<String>,
+    #[serde(default, deserialize_with = "optional_field")]
+    pub(in super::super) title: Option<String>,
+}
+
+#[derive(Deserialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub(in super::super) enum CiAnnotationLevel {
+    Failure,
+    #[serde(other)]
+    Other,
+}
 
 /// The provider's annotation page size.
 const PAGE: u64 = 100;
@@ -192,25 +315,28 @@ pub(super) fn ci_check_annotations(input: &Value) -> Result<Value, OrbitError> {
         return Err(refused("foreign or changed PR base"));
     }
 
-    Ok(json!({
-        "repository": repository,
-        "repository_id": repository_id,
-        "pr": pr_number,
-        "head_sha": head,
-        "base_ref": base_ref,
-        "check_run": {
-            "id": check_id,
-            "name": name,
-            "app_id": app_id,
-            "app_slug": run["app"]["slug"],
-            "status": run["status"],
-            "conclusion": run["conclusion"],
-            "completed_at": run["completed_at"],
-            "check_suite_id": run["check_suite"]["id"],
-            "html_url": run["html_url"],
-            "title": run["output"]["title"],
-            "annotations_count": count,
-        },
-        "annotations": annotations,
-    }))
+    serde_json::to_value(CiCheckAnnotationsAnswer {
+        repository: Some(repository),
+        repository_id: json!(repository_id),
+        pr: Some(pr_number),
+        head_sha: Some(head.to_string()),
+        base_ref: json!(base_ref),
+        check_run: Some(CiCheckAnnotationRun {
+            id: Some(check_id),
+            name: Some(name.to_string()),
+            app_id: Some(app_id),
+            app_slug: run["app"]["slug"].clone(),
+            status: run["status"].clone(),
+            conclusion: Some(CiCheckConclusion::Failure),
+            completed_at: run["completed_at"].clone(),
+            check_suite_id: run["check_suite"]["id"].clone(),
+            html_url: run["html_url"].clone(),
+            title: run["output"]["title"].clone(),
+            annotations_count: Some(count),
+        }),
+        annotations: Some(annotations),
+    })
+    .map_err(|error| {
+        OrbitError::Execution(format!("could not serialize check annotations: {error}"))
+    })
 }

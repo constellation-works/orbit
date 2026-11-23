@@ -103,52 +103,51 @@ pub(super) fn source_annotations<H: RuntimeHost + ?Sized>(
     let answer = host
         .run_private_vcs_operation(operations::CI_CHECK_ANNOTATIONS, input)
         .map_err(|error| format!("its annotations could not be read: {error}"))?;
-    let run = &answer["check_run"];
-    let repository = answer["repository"]
-        .as_str()
+    let decoded: operations::CiCheckAnnotationsAnswer =
+        serde_json::from_value(answer.clone()).unwrap_or_default();
+    let repository = decoded
+        .repository
+        .as_deref()
         .filter(|repository| !repository.is_empty() && !repository.contains(char::is_whitespace))
         .ok_or("the annotations answer named no repository")?;
-    if answer["head_sha"] != head
-        || answer["pr"]
-            .as_u64()
-            .map(|number| number.to_string())
-            .as_deref()
-            != Some(pr)
-        || run["id"] != check_run_id
-        || run["app_id"] != app_id
-        || run["name"] != name
-        || run["conclusion"] != "failure"
+    let run = decoded.check_run.unwrap_or_default();
+    if decoded.head_sha.as_deref() != Some(head)
+        || decoded.pr.map(|number| number.to_string()).as_deref() != Some(pr)
+        || run.id != Some(check_run_id)
+        || run.app_id != Some(app_id)
+        || run.name.as_deref() != Some(name)
+        || run.conclusion != Some(operations::CiCheckConclusion::Failure)
     {
         return Err(
             "the annotations answer is not bound to this pull request, head and check run"
                 .to_string(),
         );
     }
-    let annotations = answer["annotations"]
-        .as_array()
+    let annotations = decoded
+        .annotations
         .ok_or("the annotations answer carried no annotation list")?;
-    if run["annotations_count"].as_u64() != Some(annotations.len() as u64) {
+    if run.annotations_count != Some(annotations.len() as u64) {
         return Err("the annotations answer is incomplete".to_string());
     }
     let blob_prefix = format!("https://github.com/{repository}/blob/{head}/");
     let mut paths = BTreeSet::new();
     let mut listed = Vec::new();
-    for annotation in annotations
-        .iter()
-        .filter(|annotation| annotation["annotation_level"] == "failure")
-    {
-        let path = annotation["path"]
-            .as_str()
+    for annotation in annotations.iter().filter(|annotation| {
+        annotation.annotation_level == Some(operations::CiAnnotationLevel::Failure)
+    }) {
+        let path = annotation
+            .path
+            .as_deref()
             .filter(|path| source_path(path))
             .ok_or("a failure annotation names no repository source path")?;
-        if annotation["blob_href"].as_str() != Some(&format!("{blob_prefix}{path}")) {
+        if annotation.blob_href.as_deref() != Some(&format!("{blob_prefix}{path}")) {
             return Err(format!(
                 "the failure annotation on '{path}' does not link that file at head {head}"
             ));
         }
         let (Some(start), Some(end)) = (
-            annotation["start_line"].as_u64().filter(|line| *line > 0),
-            annotation["end_line"].as_u64(),
+            annotation.start_line.filter(|line| *line > 0),
+            annotation.end_line,
         ) else {
             return Err(format!(
                 "the failure annotation on '{path}' names no source line"
@@ -159,12 +158,13 @@ pub(super) fn source_annotations<H: RuntimeHost + ?Sized>(
                 "the failure annotation on '{path}' names no source line"
             ));
         }
-        let message = annotation["message"]
-            .as_str()
+        let message = annotation
+            .message
+            .as_deref()
             .map(|message| message.split_whitespace().collect::<Vec<_>>().join(" "))
             .filter(|message| !message.is_empty())
             .ok_or_else(|| format!("the failure annotation on '{path}' carries no message"))?;
-        let title = annotation["title"].as_str().unwrap_or_default().trim();
+        let title = annotation.title.as_deref().unwrap_or_default().trim();
         if let Some(evidence) = super::jobs::transient_evidence(&format!("{title}\n{message}")) {
             return Err(format!(
                 "the failure annotation on '{path}' shows `{evidence}`: the runner or the \
