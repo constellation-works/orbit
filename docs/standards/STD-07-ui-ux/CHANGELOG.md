@@ -58,3 +58,4 @@ removed or changed in meaning.
   owner's request to "build up our own philosophy" after the Astryx and Linear research
   (ORB-26273).
 - **v16 (2026-11-22):** adds R45 (a text colour follows the text's role: the strongest colour for titles, naming labels and scanned values, the step below it for prose; ids, code and links inside prose keep their own colour) (the owner's correction on a dashboard notice card, 2026-11-22).
+- **Editorial (2026-11-23, version unchanged):** the frontmatter drops `status`, which nothing read (ORB-27289).

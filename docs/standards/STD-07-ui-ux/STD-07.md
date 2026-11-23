@@ -2,7 +2,6 @@
 id: STD-07-ui-ux
 title: UI and UX — consistent spacing, shared edges, one type scale, minimal words, show each thing once, honest charts, stable layouts, visible state
 summary: Eight principles and the normative rules that serve them, for every operator-facing screen (dashboards, web apps, sites, panels): sibling spacing and shared edges, layouts that never shift, one type scale, contrast and one meaning per colour, minimal words with helper text behind an info icon, tooltips only where they add something, no redundant or inert elements, answer-first data with honest charts, visible live state, responsive use of width, and turning each owner correction into a rule; follow it in any project that renders a UI.
-status: draft
 tags: [standard, ui, ux, design]
 version: 16
 created: 2026-11-09

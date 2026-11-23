@@ -38,3 +38,4 @@ removed or changed in meaning.
   - Sources: ORB-13088 (candidate disposition), ORB-13117 (template-author feedback),
     ORB-13118 (skill-author feedback).
 - **v1 (2026-09-26):** initial publication, R1–R25.
+- **Editorial (2026-11-23, version unchanged):** the frontmatter drops `status`, which nothing read (ORB-27289).

@@ -16,3 +16,4 @@ with the gate its rule names, or say it is review-only.
 | R9 | review-only. |
 | R10 | review-only: trigger the failure and read it where operators see it. A candidate test that fails when an error's `Display` contains a serialized object (`{"`) or exceeds one line. |
 | R11 | review-only: a change that shortens a message must keep the full diagnostic in a field, and a change that drops a logged or audited field needs a stated reason. |
+| R12 | review-only: a reviewer who finds a defect in guidance a change touched or cited asks whether the change fixed it or filed a task or friction. |

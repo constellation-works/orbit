@@ -61,3 +61,4 @@ removed or changed in meaning.
     baseline), a stream grep guard and a manifest-only dependency-direction variant. The
     lint baseline block is unchanged.
 - **1** (2026-09-26). First publication: R1–R23.
+- **Editorial (2026-11-23, version unchanged):** the frontmatter drops `status`, which nothing read (ORB-27289).

@@ -16,3 +16,4 @@ removed or changed in meaning.
   *Exemplars* and this changelog moved to `why.md`, `checks.md`, `exemplars.md` and
   `CHANGELOG.md`. No rule changed.
 - v1 (2026-09-26): initial, sources ORB-13088.
+- **Editorial (2026-11-23, version unchanged):** the frontmatter drops `status`, which nothing read (ORB-27289).

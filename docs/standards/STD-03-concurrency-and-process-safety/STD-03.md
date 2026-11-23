@@ -2,7 +2,6 @@
 id: STD-03-concurrency-and-process-safety
 title: Concurrency and process safety — locks, channels, durable writes, state evolution, subprocess lifecycles, destructive operations, remote effects, test containment and resource bounds
 summary: Normative rules for async locking, bounded queues and waits, cleanup guards, atomic and locked durable writes, version skew and append-only migrations, subprocess supervision and process identity, pinned inputs and interference-scoped guards, ownership-proven destruction, outcome-unknown remote calls, test-fixture safety and resource ceilings; follow it in any project that runs concurrent code, spawns processes, talks to peers, or persists state.
-status: active
 tags: [standard, concurrency, subprocess, testing, durability, migrations, git, rust, python]
 version: 2
 created: 2026-09-26
