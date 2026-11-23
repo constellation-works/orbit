@@ -8,8 +8,8 @@
 
 - **orbit.search refuses unknown keys**: `orbit_search` now rejects undeclared input keys with a did-you-mean hint. ([ORB-26985])
   `orbit_search` undeclared keys removed → use declared parameters (`q` → `query`)
-- **TODO (ORB-27226, awaiting confirmation)**: A landing review's own fix commit is lost when the verdict is not accept; the repair binding gains `candidate_ref`, which older binaries reject. ([ORB-27226])
-- **TODO (ORB-26982, awaiting confirmation)**: `task.show` snapshot and guarded `task.update` accept `fields`/`field`; the `orbit_task_update` schema gains enum values. ([ORB-26982])
+- **Source repair binding gains `candidate_ref`**: A landing review's own fix commit is no longer lost when the verdict is not accept, and the `SourceRepairBinding` record now carries `candidate_ref`. ([ORB-27226])
+  Older binaries refuse a binding a newer one wrote → update every host together
 
 ### Highlights
 
