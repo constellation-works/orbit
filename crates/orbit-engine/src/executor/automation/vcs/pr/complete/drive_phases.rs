@@ -94,6 +94,9 @@ pub(super) struct PollDriver<'a, H: RuntimeHost + ?Sized> {
     pub(super) head_lag: HeadLag,
     pub(super) base_candidate: Option<HandoffCandidate>,
     pub(super) base_adopted: bool,
+    /// An exact audit trail and clean merge history already established the
+    /// candidate. A prior CI-emission reservation describes the old head.
+    pub(super) audited_refresh_adopted: bool,
     pub(super) reviewed_head_sha: Option<String>,
     pub(super) watch_only: bool,
     pub(super) unsettled_polls: u32,
@@ -310,6 +313,7 @@ impl<H: RuntimeHost + ?Sized> PollDriver<'_, H> {
         }
         let mut state = classify_pr_state(&status);
         let mut base_refresh_wait = false;
+        self.adopt_audited_refresh(&status);
         if let Some(auto_fix) = auto_fix {
             self.pin.ensure_candidate_identity(&status, pr_number)?;
             // [ORB-26860] A reserved, verified base-only refresh of the
@@ -333,7 +337,9 @@ impl<H: RuntimeHost + ?Sized> PollDriver<'_, H> {
                     &status,
                 )?;
             }
-            if let Some(candidate) = &self.base_candidate {
+            if !self.audited_refresh_adopted
+                && let Some(candidate) = &self.base_candidate
+            {
                 match super::super::super::base::refresh::recover(
                     host,
                     Path::new(workspace_path),

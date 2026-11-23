@@ -319,6 +319,7 @@ impl OrbitRuntime {
                 since,
                 tool_name: tool,
                 target_type,
+                target_id: None,
                 status,
                 role,
                 workspace_id: None,

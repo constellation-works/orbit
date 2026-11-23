@@ -32,10 +32,11 @@
 //! refusing the recovered head [ORB-14393].
 //!
 //! [ORB-11982] tightens what "merged" is allowed to mean. The same checkpoints
-//! also pin *which* pull request this run may deliver, so a base-modification
-//! race that repoints the PR, a head this run never published, or a merged
-//! state reported without a merge commit all refuse completion instead of
-//! reaching the transition. See [`super::delivery`].
+//! also pin *which* pull request this run may deliver. A repointed PR, an
+//! unauthorized head or a reported merge without a merge commit all refuse
+//! completion. An Orbit-audited refresh can advance the pin when the exact
+//! first-parent history proves the published head gained only clean base
+//! merges. See [`super::delivery`].
 //!
 //! [ORB-13890] A `DIRTY` PR whose head a before-PR review certified cannot be
 //! merged as rebased, unreviewed content. With `re_review_on_conflict` and the

@@ -386,6 +386,17 @@ pub trait NullRuntimeHost: Send + Sync {
             reason: "this host cannot refresh a delivery pull request".to_string(),
         })
     }
+    fn audited_delivery_refreshes(
+        &self,
+        _task_id: &str,
+        _pr_number: &str,
+        _head_branch: &str,
+        _base_branch: &str,
+        _published: &str,
+        _reported: &str,
+    ) -> Result<Vec<String>, OrbitError> {
+        Ok(Vec::new())
+    }
     fn admit_ci_rerun(
         &self,
         _task_ids: &[String],

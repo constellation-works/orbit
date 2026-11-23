@@ -2030,6 +2030,14 @@ landing through `verify_merged_base_refresh`: the merged head reaches the publis
 candidate through clean base merges, and the merge commit's tree is that head
 merged onto the landing tip.
 
+A held delivery can also resume after `orbit.workflow` refreshes its PR.
+The owner drain recognizes successful `pr_refresh` rows for the task, PR and
+branches when checking a held run's publication. Before moving the delivery pin,
+`pr_complete` verifies that every first-parent commit since the publication is a
+clean base merge and matches a link in the audit trail. It then checks and merges
+the refreshed SHA under the delivery's existing completion authority. An
+unrelated or unaudited head still fails the delivery identity check.
+
 **Bounds.**
 
 - Conflict-free only. A refresh that would conflict changes nothing and is

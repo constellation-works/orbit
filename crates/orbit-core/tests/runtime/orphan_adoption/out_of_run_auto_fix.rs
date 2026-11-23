@@ -9,8 +9,12 @@
 //! the pull request's auto-fix budget bounds the hand-backs.
 //!
 //! The pass runs as the drain's `adopt_orphaned_deliveries` step against the
-//! fake forge; a resumed leaf starts the fixture's substitute worker, so the
-//! completion step itself is not executed here.
+//! fake forge. A resumed leaf starts the fixture's substitute worker. The
+//! refresh regression also drives the resumed completion action against its
+//! published checkpoints.
+
+#[cfg(unix)]
+mod refreshed_head;
 
 use orbit_core::runtime::task_pr_forge::{ForgePullRequest, PullRequestBlockers};
 use orbit_types::workflow::{DeliveryRefusal, PR_AUTO_FIX_ADMITTED_EVENT};

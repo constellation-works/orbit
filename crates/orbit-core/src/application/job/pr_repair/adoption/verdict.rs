@@ -286,7 +286,7 @@ impl OrbitRuntime {
                 "the run was started with --complete; this drain was not".to_string(),
             );
         }
-        let (number, head, published_sha) = match self.read_run_state(&run.run_id) {
+        let (number, head, base, published_sha) = match self.read_run_state(&run.run_id) {
             Ok(Some(state)) => {
                 let opened = state.pipeline.get("pr_open").unwrap_or(&Value::Null);
                 match (
@@ -296,6 +296,7 @@ impl OrbitRuntime {
                     (Some(number), Some(head)) => (
                         number.to_string(),
                         head.to_string(),
+                        opened["base"].as_str().map(str::to_string),
                         Self::pipeline_published_sha(&state),
                     ),
                     _ => {
@@ -432,9 +433,9 @@ impl OrbitRuntime {
         // An auto-fix stop, unrepaired check-repair hold or absent-check hold
         // is reconsidered only on the held run's own published head: the
         // newest publication its completion rounds recorded, advanced through
-        // its lineage's auto-fix pushes. A replacement head on the same
-        // branch, red, conflicting or green, is not the held run's to repair
-        // or hand back.
+        // its lineage's auto-fix pushes. An audited refresh can be handed
+        // back to completion, which verifies its Git history before
+        // adopting it.
         let check_runs_absent_hold = held == Some(DeliveryRefusal::CheckRunsAbsent.error_code());
         let published_sha = if auto_fix_hold || unrepaired_repair_hold || check_runs_absent_hold {
             match self.resolve_held_published_sha(run, &history, &number, published_sha) {
@@ -452,10 +453,32 @@ impl OrbitRuntime {
         if (auto_fix_hold || unrepaired_repair_hold || check_runs_absent_hold)
             && published_sha.as_deref() != Some(blockers.head_sha.as_str())
         {
-            return skip(
-                "publication_identity_changed",
-                format!("#{number} no longer matches the held run's published head"),
-            );
+            let audit = match (base.as_deref(), published_sha.as_deref()) {
+                (Some(base), Some(published)) => self.audited_delivery_refreshes(
+                    task_id,
+                    &number,
+                    &head,
+                    base.strip_prefix("origin/").unwrap_or(base),
+                    published,
+                    &blockers.head_sha,
+                ),
+                _ => Ok(Vec::new()),
+            };
+            match audit {
+                Ok(heads) if !heads.is_empty() => {}
+                Ok(_) => {
+                    return skip(
+                        "publication_identity_changed",
+                        format!("#{number} no longer matches the held run's published head"),
+                    );
+                }
+                Err(error) => {
+                    return skip(
+                        "store_unreadable",
+                        format!("read the PR refresh audit: {error}"),
+                    );
+                }
+            }
         }
         // An auto-fix stop is reconsidered only after positive, complete check
         // evidence. Red, pending, unreported or absent checks must not trigger

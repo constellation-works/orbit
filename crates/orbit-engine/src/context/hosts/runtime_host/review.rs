@@ -114,6 +114,19 @@ macro_rules! review_methods {
             _request: &orbit_types::workflow::DeliveryRefreshRequest,
         ) -> Result<orbit_types::workflow::PullRequestRefreshOutcome, OrbitError>;
 
+        /// Read the successful refresh heads linking the reported head back
+        /// to the publication for this task and PR, newest first. An empty
+        /// vector provides no authority to move the delivery pin.
+        fn audited_delivery_refreshes(
+            &self,
+            task_id: &str,
+            pr_number: &str,
+            head_branch: &str,
+            base_branch: &str,
+            published: &str,
+            reported: &str,
+        ) -> Result<Vec<String>, OrbitError>;
+
         // ── Before-PR review coverage [ORB-11333] ───────────────────────────
 
         /// Record how a reviewed candidate actually landed after a managed

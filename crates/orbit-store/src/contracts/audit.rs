@@ -46,6 +46,7 @@ pub struct AuditEventFilter {
     pub since: Option<DateTime<Utc>>,
     pub tool_name: Option<String>,
     pub target_type: Option<String>,
+    pub target_id: Option<String>,
     pub status: Option<AuditEventStatus>,
     pub role: Option<String>,
     pub workspace_id: Option<String>,
