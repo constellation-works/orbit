@@ -203,6 +203,7 @@ mod task_pilot;
 mod task_pr_closure;
 mod task_selector_hints;
 mod task_update;
+mod task_workspace_projection;
 mod upgrade_pending_requeue;
 mod upgrade_resume;
 mod usage_pressure_draws;

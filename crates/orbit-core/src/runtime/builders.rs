@@ -133,6 +133,10 @@ impl OrbitRuntime {
         Self::from_kernel(self.kernel.with_composition_snapshot(snapshot))
     }
 
+    pub fn with_opened_registered_workspace(self, identity: Option<(String, String)>) -> Self {
+        Self::from_kernel(self.kernel.with_opened_registered_workspace(identity))
+    }
+
     pub fn admission_policy_snapshot(&self) -> Self {
         Self::from_kernel(self.kernel.admission_policy_snapshot())
     }

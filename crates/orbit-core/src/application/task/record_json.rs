@@ -300,19 +300,29 @@ pub(crate) fn task_show_field_json_with_row(
                 })
         }
         "workspace" => {
-            let path =
-                orbit_registry::workspace_registry::registry_path_for(&runtime.global_root());
-            let identity = orbit_registry::workspace_registry::load_registry_from_read_only(&path)
-                .ok()
-                .and_then(|load| {
-                    orbit_registry::workspace_registry::find_workspace_by_path(
-                        &load.registry,
-                        &runtime.paths().repo_root,
-                    )
-                    .map(
-                        |workspace| serde_json::json!({"id": workspace.id, "name": workspace.name}),
-                    )
-                });
+            // An open that loaded the registry carries its answer, a miss
+            // included; reloading here would race the binding.
+            let identity = match runtime.opened_registered_workspace() {
+                Some(opened) => {
+                    opened.map(|(id, name)| serde_json::json!({"id": id, "name": name}))
+                }
+                None => {
+                    let path = orbit_registry::workspace_registry::registry_path_for(
+                        &runtime.global_root(),
+                    );
+                    orbit_registry::workspace_registry::load_registry_from_read_only(&path)
+                        .ok()
+                        .and_then(|load| {
+                            orbit_registry::workspace_registry::find_workspace_by_path(
+                                &load.registry,
+                                &runtime.paths().repo_root,
+                            )
+                            .map(|workspace| {
+                                serde_json::json!({"id": workspace.id, "name": workspace.name})
+                            })
+                        })
+                }
+            };
             Ok(identity.unwrap_or(Value::Null))
         }
         "comments" => match row {
