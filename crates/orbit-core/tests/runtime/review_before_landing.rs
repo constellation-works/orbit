@@ -1006,6 +1006,66 @@ fn a_timed_out_before_landing_review_saves_uncommittable_diff_as_artifact_and_na
     );
 }
 
+fn failed_reviewer_commit_preservation_excludes_protected_changes_and_deletions() {
+    let (fixture, _bare, _) = setup_before_landing_remote();
+    std::fs::write(fixture.repo.join(".env"), "old_private_value\n").unwrap();
+    std::fs::write(fixture.repo.join(".env.deleted"), "deleted_private_value\n").unwrap();
+    git(&fixture.repo, &["add", "-f", ".env", ".env.deleted"]);
+    git(
+        &fixture.repo,
+        &["commit", "-q", "-m", "published protected files"],
+    );
+    let published_head = git(&fixture.repo, &["rev-parse", "HEAD"]);
+    std::fs::write(fixture.repo.join(".env"), "new_private_value\n").unwrap();
+    std::fs::remove_file(fixture.repo.join(".env.deleted")).unwrap();
+    std::fs::write(
+        fixture.repo.join("candidate.txt"),
+        "eligible repair\nsk-syntheticlandingcanary000000\n",
+    )
+    .unwrap();
+    git(&fixture.repo, &["add", "-u"]);
+    git(&fixture.repo, &["commit", "-q", "-m", "reviewer repair"]);
+    git(&fixture.repo, &["remote", "remove", "origin"]);
+
+    let run_id = fixture.input["job_run_id"].as_str().unwrap();
+    let artifact_path = format!("landing-review-fix-{run_id}.patch");
+    let handoff = failure_handoff_after(
+        &fixture,
+        "landing_review_gate_settle",
+        "review_gate_blocked: verdict reject",
+        &json!({
+            "sync_base": {"head": "candidate"}, "push": {"local_sha": published_head},
+        }),
+    );
+    assert_eq!(
+        handoff["reviewer_preservation"]["decision"], "preserve_failed",
+        "{handoff}"
+    );
+    assert_eq!(
+        handoff["reviewer_preservation"]["diff_artifact"], artifact_path,
+        "{handoff}"
+    );
+    let artifact = fixture
+        .runtime
+        .get_task_artifact(&fixture.task_id, &artifact_path)
+        .unwrap()
+        .unwrap();
+    let diff = String::from_utf8_lossy(&artifact.content);
+    assert!(
+        diff.contains("eligible repair") && diff.contains("[REDACTED_SECRET]"),
+        "{diff}"
+    );
+    for forbidden in [
+        ".env",
+        "old_private_value",
+        "new_private_value",
+        "deleted_private_value",
+        "sk-syntheticlandingcanary000000",
+    ] {
+        assert!(!diff.contains(forbidden), "leaked {forbidden}: {diff}");
+    }
+}
+
 // Related boundary scenarios share the isolated table fixture.
 crate::scenario_table!(
     an_owner_before_landing_review_keeps_the_durable_task_summary_scenarios,
@@ -1019,5 +1079,6 @@ crate::scenario_table!(
     an_accepted_reviewer_fix_on_a_pr_merged_outside_orbit_defers_to_the_push_step,
     a_rejected_before_landing_review_pushes_nothing,
     a_timed_out_before_landing_review_preserves_uncommitted_repairs_on_a_durable_ref,
-    a_timed_out_before_landing_review_saves_uncommittable_diff_as_artifact_and_names_refusal
+    a_timed_out_before_landing_review_saves_uncommittable_diff_as_artifact_and_names_refusal,
+    failed_reviewer_commit_preservation_excludes_protected_changes_and_deletions
 );
