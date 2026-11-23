@@ -29,11 +29,12 @@ and `status`.
 Task tools take `id`, including `orbit.task.show`, `orbit.task.update`,
 `orbit.task.artifact` action `put`, and `orbit.task.artifact` action `get`. Copy the identifier
 from workflow input `task_id`, `ORBIT_TASK_ID`, or the task snapshot's `id`
-into that argument; workflow and evidence keys named `task_id` are not
-task-tool argument names.
+into `id`, and write `id` in every call and example. The runtime also accepts
+`task_id` as an unadvertised alias of `id` on id-keyed task tools, but a call
+that sends both is refused.
 
-Unknown fields are rejected with suggestions,
-not accepted as aliases. GitHub run tools take `run` despite returning
+Unknown fields are rejected with suggestions, except declared wire aliases such
+as `task_id` for `id`. GitHub run tools take `run` despite returning
 `run_id`; task authoring takes `type` (feature, bug, refactor, or chore).
 Search statuses require the corpus prefix, such as `task:rejected` or
 `friction:resolved`, including when `kind` is supplied separately.
