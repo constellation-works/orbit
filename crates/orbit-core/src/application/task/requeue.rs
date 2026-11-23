@@ -971,7 +971,7 @@ impl OrbitRuntime {
             if !task.spec_digest_matches(&receipt.task_spec_digest) {
                 return Some(discard);
             }
-            if let Err(err) = self.failure_handoff_local_gate(task) {
+            if let Err(err) = self.check_failure_handoff_requeue(task) {
                 if err.source_repair_run_state_refusal().is_some()
                     && err.to_string().contains("orbit run cancel")
                     && let Some(cancel) = cancel_if_live(&receipt.run_id)
@@ -983,7 +983,7 @@ impl OrbitRuntime {
             return None;
         }
         if self.run_published_through_pipeline(task).ok() == Some(true) {
-            if let Err(err) = self.escalated_publication_local_gate(task) {
+            if let Err(err) = self.check_escalated_publication_requeue(task) {
                 if err.source_repair_run_state_refusal().is_some()
                     && err.to_string().contains("orbit run cancel")
                     && let Some(run_id) = task.job_run_id.as_deref()

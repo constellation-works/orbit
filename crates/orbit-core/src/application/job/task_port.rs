@@ -190,6 +190,14 @@ impl TaskJobPort for OrbitRuntime {
         self.unbound_publication_on_record(task)
     }
 
+    fn check_failure_handoff_requeue(&self, task: &Task) -> Result<(), OrbitError> {
+        self.failure_handoff_local_gate(task).map(|_| ())
+    }
+
+    fn check_escalated_publication_requeue(&self, task: &Task) -> Result<(), OrbitError> {
+        self.escalated_publication_local_gate(task).map(|_| ())
+    }
+
     fn candidate_validation_gates(&self) -> HostValidationGates {
         self.host_validation_gates()
     }
