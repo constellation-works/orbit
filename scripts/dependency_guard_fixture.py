@@ -104,9 +104,9 @@ WEB_FILES = (
     "runtime_memo.rs",
 )
 
-# The orbit-tools module-direction scan [ORB-26098]: `builtin` is the mandatory
-# root (the guard fails closed without it); crate-root modules are enumerated.
-TOOLS_DIRECTORIES = ("builtin",)
+# The orbit-tools guard enumerates consumers of builtin and checks mcp and
+# plugin for registry edges. All three roots are mandatory.
+TOOLS_DIRECTORIES = ("builtin", "mcp", "plugin")
 
 
 def _touch(path: Path) -> None:

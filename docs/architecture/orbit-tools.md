@@ -12,7 +12,26 @@ Tool registry and built-in fs/exec/Orbit tool definitions; plugin loading (`plug
 
 ## Main modules and types
 
-`registry` (`ToolRegistry` in `crates/orbit-tools/src/registry.rs`), `builtin`, `plugin`, `github_cli`, `mcp` (`builtin_mcp_rules`), `external`, `tool` (`Tool`, `ToolContext`). Shared mechanisms live in crate-root leaf modules so non-builtin surfaces need not depend on `crate::builtin`: `program_policy` (`enforce_program_allowlist`, called by `builtin/proc/spawn.rs`, `external` and the plugin backend) and `artifact_materialize` (`prepare_remote_payload` with its bounded/confinement helpers, called by `host::prepare_remote_task_artifact_put` and `builtin/orbit/task/operation.rs`; `prepare_remote_payload` runs the ordinary `source_path` check, `source_presence_error`, first; the separate preloaded-payload check is the `artifact_put` builtin's `preempt` in `builtin/orbit/task/artifact_put.rs`, which refuses `artifacts` payloads that carry `source_path` or come from neither the authenticated ssh-mcp spoke connector nor a worker invocation), `gh_request` (`gh_exec_request` and the GitHub throttle reader `read_throttle`, shared by `builtin/github` and `github_quota`), `github_run_log_cache` (`GITHUB_RUN_LOG_CACHE_DIR` and `remove_legacy_github_run_log_cache`, read by `builtin/github/log_cache.rs`, the plugin backend's read mask and the crate-root re-exports) and `task_guarded_selectors` (`GUARDED_SELECTOR_KEYS`, read by `builtin/orbit/task/guarded.rs` and `mcp/rules.rs`). `github_quota` is called by `builtin/github`, never the reverse. No crate-root module other than `registry` (through `register_builtins`), `lib.rs` and the documented `github_cli` re-exports names `crate::builtin`; `scripts/check-dependency-direction.sh` enforces it. See ``crates/orbit-tools/src/lib.rs``.
+`registry` is the crate's sole builder of builtin registries. It calls
+`builtin` to register tool definitions, which use `ToolRegistry` to register
+themselves. `registry` derives the canonical MCP definitions and caches one
+catalog of declared routes for `builtin_mcp_rules` and tool names for
+`PluginValidationPolicy::host_default`. The dependency guard prevents
+`mcp` and `plugin` from referencing `registry` or `ToolRegistry`.
+
+Shared mechanisms live in crate-root leaf modules:
+
+- `program_policy` provides `enforce_program_allowlist` for `builtin/proc/spawn.rs`, `external` and the plugin backend.
+- `artifact_materialize` owns `prepare_remote_task_artifact_put` and the bounded, confined `prepare_remote_payload` shared with `builtin/orbit/task/operation.rs`. That helper first checks `source_path` via `source_presence_error`. The artifact-put builtin's `preempt` in `builtin/orbit/task/artifact_put.rs` refuses preloaded `artifacts` that carry `source_path`. It accepts preloaded payloads only from an authenticated SSH MCP spoke connector or a worker invocation.
+- `gh_request` provides `gh_exec_request` and the throttle reader `read_throttle` for `builtin/github` and `github_quota`. The GitHub builtins call `github_quota`.
+- `github_run_log_cache` provides `GITHUB_RUN_LOG_CACHE_DIR` and `remove_legacy_github_run_log_cache` for the crate-root re-exports. The GitHub log cache and the plugin backend's read mask use the cache path.
+- `task_guarded_selectors` supplies `GUARDED_SELECTOR_KEYS` for the task guarded-write parser and the MCP workspace-echo rules.
+- `timeouts` defines the shared network timeouts used by the GitHub and process builtins, `external` and `plugin`.
+
+The dependency guard limits references to `builtin` to `registry`, the
+crate-root exports and the documented `github_cli` re-exports. The
+`host` module owns `OrbitToolHost` and `ReservationOwnerContext`.
+`tool` defines `Tool` and `context` defines `ToolContext`.
 
 ## Dependencies
 

@@ -2041,9 +2041,10 @@ done
 # publication and candidate_resume read the model from pr_answers and must not
 # path-name `pr` [ORB-25493]. The order is `pr_answers < candidate_resume < pr`.
 # Print every such path as `<file>:<line>:<text>` and exit nonzero when one
-# is found. A missing scan root fails closed.
+# is found. A missing scan root fails closed. An optional fourth argument
+# forbids a type name even in an unqualified use.
 module_paths_into() {
-  python3 - "$1" "$2" "$3" <<'PY'
+  python3 - "$1" "$2" "$3" "${4:-}" <<'PY'
 import pathlib
 import re
 import sys
@@ -2051,6 +2052,7 @@ import sys
 root = pathlib.Path(sys.argv[1])
 module = sys.argv[2]
 forbidden = set(sys.argv[3].split("|"))
+forbidden_identifier = sys.argv[4]
 target = root / module
 if not target.exists():
     print(f"dependency scan path missing: {target}", file=sys.stderr)
@@ -2144,7 +2146,10 @@ for path in paths:
         if any(segment in forbidden for segments in imported for segment in segments):
             report(start)
     for index, (name, start) in enumerate(tokens):
-        if segment_name(name) not in forbidden:
+        segment = segment_name(name)
+        if segment == forbidden_identifier:
+            report(start)
+        if segment not in forbidden:
             continue
         previous = tokens[index - 1][0] if index else ""
         following = tokens[index + 1][0] if index + 1 < len(tokens) else ""
@@ -2294,6 +2299,15 @@ for entry in "$tools_src"/*; do
       echo "orbit-tools ${module} must not name builtin; move the shared piece into a crate-root leaf"
       fail=1
     fi
+  fi
+done
+
+# The registry builds the builtin catalog and reads MCP rules and plugin
+# bindings. Neither lower module may reach back into the registry.
+for module in mcp plugin; do
+  if ! module_paths_into "$tools_src" "$module" registry ToolRegistry; then
+    echo "orbit-tools ${module} must not name registry or ToolRegistry"
+    fail=1
   fi
 done
 

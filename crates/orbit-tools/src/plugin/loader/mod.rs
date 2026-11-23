@@ -12,8 +12,8 @@ use orbit_common::OrbitError;
 pub use orbit_exec::physical_with_missing_tail;
 use orbit_types::plugin::{
     FIRST_PARTY_PUBLISHER, MANIFEST_FILE_NAME, PluginExecutionKind, PluginManifest,
-    PluginManifestError, PluginMcpScope, PluginTestFile, RESERVED_CLI_COMMANDS,
-    namespace_collides_with_tool, plugin_tool_name,
+    PluginManifestError, PluginMcpScope, PluginTestFile, namespace_collides_with_tool,
+    plugin_tool_name,
 };
 use orbit_types::tool::ToolParam;
 use serde_json::Value;
@@ -22,7 +22,6 @@ use std::collections::BTreeMap;
 
 use super::backend::{PluginBackendSpec, render_fs_roots};
 use super::schema::{CompiledSchema, params_from_input_schema};
-use crate::ToolRegistry;
 
 mod load;
 mod model;

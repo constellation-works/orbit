@@ -12,21 +12,6 @@ pub struct PluginValidationPolicy {
 }
 
 impl PluginValidationPolicy {
-    /// The policy for a host that has not verified the plugin's origin.
-    pub fn host_default() -> Self {
-        let mut registry = ToolRegistry::new();
-        registry.register_builtins();
-        Self {
-            first_party_verified: false,
-            builtin_tools: registry
-                .all_schemas()
-                .into_iter()
-                .map(|schema| schema.name)
-                .collect(),
-            reserved_cli_commands: RESERVED_CLI_COMMANDS,
-        }
-    }
-
     pub fn with_first_party_verified(mut self, verified: bool) -> Self {
         self.first_party_verified = verified;
         self

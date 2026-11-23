@@ -1869,6 +1869,25 @@ class RelativeImportTests(unittest.TestCase):
              "use crate::{r#builtins as adapters, r#builtin_probe::Probe};\n"),
         ], rejected=False, base=tools)
 
+    def test_tools_mcp_and_plugin_registry_paths_rejected(self):
+        tools = self.root / "crates/orbit-tools/src"
+        self.check_rows([
+            (f"{module}/nested/probe.rs", source + "\n")
+            for module in ("mcp", "plugin")
+            for source in (
+                "use crate::ToolRegistry;",
+                "use crate::registry as catalog;",
+                "use super::super::{r#ToolRegistry as Registry};",
+                "use crate::*; fn probe(_: &ToolRegistry) {}",
+                "fn probe() { super::super::registry::builtin_mcp_rules(\"example\"); }",
+            )
+        ], rejected=True, base=tools)
+        self.check_rows([
+            ("mcp/probe.rs",
+             '// use crate::registry;\nconst NOTE: &str = "crate::ToolRegistry";\n'),
+            ("plugin/tests/probe.rs", "use crate::ToolRegistry;\n"),
+        ], rejected=False, base=tools)
+
     def test_existing_direct_imports_rejected(self):
         # One batch per detector, as in the forecast shim rows above.
         self.check_rows([
