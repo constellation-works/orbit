@@ -201,3 +201,39 @@ fn failure_streaks_claim_agreement_only_for_inspected_runs() {
         },
     );
 }
+
+#[test]
+fn failed_steps_without_errors_do_not_establish_agreement() {
+    isolated(
+        "job_failure_streaks::failed_steps_without_errors_do_not_establish_agreement",
+        || {
+            use super::support::{run_step, save_record_step};
+            use orbit_core::JobTargetType;
+            let fixture = Fixture::new();
+            fixture.job("silent-steps");
+            for run in seed_runs(&fixture, "silent-steps", &[JobRunState::Failed; 5]) {
+                let mut step = run_step(JobTargetType::Activity, "review", JobRunState::Failed);
+                step.started_at = run.started_at;
+                step.finished_at = run.finished_at;
+                save_record_step(&fixture, &run, &step);
+            }
+            let server = fixture.server(false);
+            let page = json_ok(server.get("/api/jobs/failure-streaks?workspace=ws_http_fixture"));
+            let failing = &page["failing"][0];
+            let jobs = json_ok(server.get("/api/jobs?workspace=ws_http_fixture"));
+            let streak = &jobs
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|job| job["job_id"] == "silent-steps")
+                .unwrap()["failure_streak"];
+            for result in [failing, streak] {
+                assert_eq!(result["job_id"], "silent-steps");
+                assert_eq!(result["count"], 5);
+                assert_eq!(result["latest_error"], Value::Null);
+                assert_eq!(result["error_agreement"], "unknown");
+                assert_eq!(result["same_error"], false);
+            }
+        },
+    );
+}

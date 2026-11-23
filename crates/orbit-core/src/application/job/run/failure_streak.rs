@@ -212,8 +212,7 @@ impl OrbitRuntime {
         match (step, message) {
             (Some(step), Some(message)) => Some(format!("{step}: {message}")),
             (None, Some(message)) => Some(message.to_string()),
-            (Some(step), None) => Some(step.to_string()),
-            (None, None) => None,
+            (_, None) => None,
         }
     }
 }
