@@ -29,7 +29,7 @@
 //! hold section of `docs/design/automation-triggers/references/operations.md`).
 
 use super::{DeliveryHost, Evaluation, recovery};
-use crate::checkpoint::diagnostic;
+use crate::checkpoint::{diagnostic, next_generation};
 use crate::{AutomationError, DeferredReason};
 use chrono::{DateTime, Duration, Utc};
 use orbit_store::contracts::AutomationStoreBackend;
@@ -432,10 +432,7 @@ fn write(
 
     let mut next = state.clone();
     next.stall = stall;
-    next.generation = state
-        .generation
-        .checked_add(1)
-        .ok_or_else(|| AutomationError::Deferred(DeferredReason::GenerationExhausted))?;
+    next.generation = next_generation(state)?;
 
     if !store.automation_stall(state, &next)? {
         return Err(AutomationError::Deferred(

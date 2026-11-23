@@ -4,16 +4,22 @@ use crate::{AutomationError, DeferredReason};
 use orbit_store::contracts::AutomationStoreBackend;
 use orbit_types::workflow::automation::*;
 
+/// The generation a successor of `state` carries, or the deferral that stops
+/// a write once the counter is exhausted.
+pub(crate) fn next_generation(state: &AutomationState) -> Result<u64, AutomationError> {
+    state
+        .generation
+        .checked_add(1)
+        .ok_or_else(|| AutomationError::Deferred(DeferredReason::GenerationExhausted))
+}
+
 pub(crate) fn commit(
     store: &dyn AutomationStoreBackend,
     old: &AutomationState,
     mut next: AutomationState,
     receipt: Option<&AcceptedCoverage>,
 ) -> Result<AutomationState, AutomationError> {
-    next.generation = old
-        .generation
-        .checked_add(1)
-        .ok_or_else(|| AutomationError::Deferred(DeferredReason::GenerationExhausted))?;
+    next.generation = next_generation(old)?;
 
     if !store.automation_commit(old, &next, receipt)? {
         return Err(AutomationError::Deferred(
