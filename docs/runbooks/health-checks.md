@@ -390,10 +390,11 @@ Doctor names a remaining unmodified copy as a **stale managed workspace copy**.
 Check that the named catalog and manifest are writable, repair any reported
 path or manifest error, then run `orbit workspace sync`. Observation-only reads
 do not perform the automatic refresh. Modified managed files and user-authored
-files are preserved byte-for-byte; no missing workspace activity/job default is
-created. This refresh does not retire removed defaults or alter retirement
-preservation. A malformed legacy manifest warns during startup rather than
-preventing unrelated jobs from opening, and doctor reports that manifest.
+files remain untouched; modified copies of removed defaults move to the
+catalog's `.retired-managed/` area with the destination reported by sync. No
+missing workspace activity/job default is created. A malformed legacy manifest
+warns during startup rather than preventing unrelated jobs from opening, and
+doctor reports that manifest.
 
 ### Repair retired activity backends
 

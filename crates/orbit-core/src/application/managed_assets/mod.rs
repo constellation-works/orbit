@@ -47,8 +47,10 @@ pub(crate) enum ManagedAssetReconcileMode {
     /// are, so an operator's edits and user-authored files are never touched.
     CreateAbsent,
     /// Refresh only existing manifest-owned copies of still-shipped defaults.
-    /// Preserve absent files, untracked files, opt-outs and retired provenance.
-    /// Used for legacy workspace activity/job catalogs, which no longer seed.
+    /// Do not create absent shipped defaults; preserve untracked files and
+    /// opt-outs. Retire dropped managed files by provenance, preserving edits
+    /// outside the active catalog. Used for legacy workspace activity/job
+    /// catalogs, which no longer seed.
     RefreshExisting { check: bool },
     /// Report what `Apply` would do without writing anything.
     Check,

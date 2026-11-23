@@ -137,10 +137,7 @@ pub(crate) fn reconcile_managed_assets_left_out<'a>(
         _ => BTreeMap::new(),
     };
 
-    if let Some(previous) = previous
-        .as_ref()
-        .filter(|_| !mode.creates_only() && !mode.refreshes_existing())
-    {
+    if let Some(previous) = previous.as_ref().filter(|_| !mode.creates_only()) {
         for (name, managed_digest) in &previous.assets {
             if current_names.contains(name.as_str()) {
                 continue;
@@ -168,6 +165,7 @@ pub(crate) fn reconcile_managed_assets_left_out<'a>(
                 continue;
             }
             if resolved == ConfinedAssetPath::Missing {
+                next_assets.remove(name);
                 result.actions.push(ManagedAssetAction {
                     name: name.clone(),
                     path,
@@ -190,7 +188,7 @@ pub(crate) fn reconcile_managed_assets_left_out<'a>(
             })?;
             let is_left_out = left_out.contains(name.as_str());
             if sha256_hex(content.as_bytes()) == *managed_digest {
-                if mode == ManagedAssetReconcileMode::Apply {
+                if mode.writes() {
                     fs::remove_file(&path).map_err(|error| {
                         OrbitError::io_with_context(
                             &error,
@@ -216,7 +214,7 @@ pub(crate) fn reconcile_managed_assets_left_out<'a>(
                     });
                     continue;
                 }
-                let preserved = if mode == ManagedAssetReconcileMode::Apply {
+                let preserved = if mode.writes() {
                     preserve_modified_retired_asset(dir, asset_kind, layout, name, &path)?
                 } else {
                     retired_preservation_path(dir, asset_kind, layout, name)
@@ -230,7 +228,7 @@ pub(crate) fn reconcile_managed_assets_left_out<'a>(
                     } else {
                         format!("retired managed {asset_kind} `{name}`")
                     },
-                    if mode == ManagedAssetReconcileMode::Apply {
+                    if mode.writes() {
                         "removed"
                     } else {
                         "would remove"
@@ -245,6 +243,12 @@ pub(crate) fn reconcile_managed_assets_left_out<'a>(
                     detail: Some(warning),
                 });
             }
+            // RefreshExisting starts with every prior entry so it can leave
+            // untouched provenance alone. Once a retired file is absent or
+            // removed from the active catalog, its stale provenance must go
+            // with it. Unsafe paths and blocked preservation destinations
+            // continue above with their provenance intact for a later pass.
+            next_assets.remove(name);
             result.actions.push(ManagedAssetAction {
                 name: name.clone(),
                 path,

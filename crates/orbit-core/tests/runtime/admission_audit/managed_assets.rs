@@ -47,12 +47,13 @@ fn add_managed_manifest_entry(dir: &Path, name: &str, content: &str) {
 }
 
 /// Older workspace init versions materialized host defaults locally. Opening
-/// the workspace after an upgrade must refresh only copies Orbit still owns.
+/// the workspace after an upgrade refreshes current copies and retires dropped
+/// copies by their recorded provenance.
 #[test]
-fn runtime_open_refreshes_unmodified_workspace_catalog_copies() {
+fn runtime_open_refreshes_and_retires_legacy_workspace_catalog_copies() {
     if !crate::admission_audit::isolate(
         module_path!(),
-        "runtime_open_refreshes_unmodified_workspace_catalog_copies",
+        "runtime_open_refreshes_and_retires_legacy_workspace_catalog_copies",
     ) {
         return;
     }
@@ -101,17 +102,32 @@ fn runtime_open_refreshes_unmodified_workspace_catalog_copies() {
         };
         std::fs::write(catalog.join(format!("{collision_name}.yaml")), authored)
             .expect("untracked shipped-name collision");
-        // Retired entries and operator opt-outs must retain their provenance.
-        std::fs::write(catalog.join("removed_default.yaml"), &old).expect("retired copy");
+        // `agent_explore` reproduces the dropped ws_orbit-graph activity;
+        // jobs use the same refresh policy for their own retired copies.
+        let retired_name = if kind == "activity" {
+            "agent_explore"
+        } else {
+            "removed_default"
+        };
+        std::fs::write(catalog.join(format!("{retired_name}.yaml")), &old).expect("retired copy");
+        let mut managed_assets = serde_json::Map::new();
+        managed_assets.insert(name.to_string(), serde_json::json!(sha256(&old)));
+        managed_assets.insert(
+            edited_name.to_string(),
+            serde_json::json!(sha256(&edited_old)),
+        );
+        managed_assets.insert(retired_name.to_string(), serde_json::json!(sha256(&old)));
         std::fs::write(
             catalog.join(MANAGED_ASSET_MANIFEST_FILE),
             serde_json::to_vec(&serde_json::json!({
                 "schemaVersion": 1,
                 "assetKind": kind,
-                "assets": {name: sha256(&old), edited_name: sha256(&edited_old), "removed_default": sha256(&old)},
+                "assets": managed_assets,
                 "optedOut": ["removed_opt_out"]
-            })).expect("legacy manifest"),
-        ).expect("record older shipped digests");
+            }))
+            .expect("legacy manifest"),
+        )
+        .expect("record older shipped digests");
     }
 
     // The global stamp is already current: workspace convergence must not
@@ -165,9 +181,14 @@ fn runtime_open_refreshes_unmodified_workspace_catalog_copies() {
             b"# user-authored activity or job\n",
             "even a shipped-name collision remains operator-owned"
         );
-        assert_eq!(
-            std::fs::read(catalog.join("removed_default.yaml")).unwrap(),
-            old.as_bytes()
+        let retired_name = if directory == "activities" {
+            "agent_explore"
+        } else {
+            "removed_default"
+        };
+        assert!(
+            !catalog.join(format!("{retired_name}.yaml")).exists(),
+            "an unmodified tracked default dropped from the package is retired"
         );
         let manifest: Value = serde_json::from_slice(
             &std::fs::read(catalog.join(MANAGED_ASSET_MANIFEST_FILE)).unwrap(),
@@ -178,7 +199,10 @@ fn runtime_open_refreshes_unmodified_workspace_catalog_copies() {
             sha256(std::str::from_utf8(&shipped).unwrap())
         );
         assert_eq!(manifest["assets"][edited_name], sha256(&edited_old));
-        assert_eq!(manifest["assets"]["removed_default"], sha256(&old));
+        assert!(
+            manifest["assets"].get(retired_name).is_none(),
+            "retirement removes the stale manifest entry"
+        );
         assert!(
             manifest["assets"].get(collision_name).is_none(),
             "refresh must not adopt an untracked copy"
@@ -203,6 +227,25 @@ fn runtime_open_refreshes_unmodified_workspace_catalog_copies() {
     use orbit_core::{
         ManagedArtifactOutcome, ManagedArtifactScope, reconcile_workspace_managed_artifacts,
     };
+    let activity_catalog = workspace.join("resources/activities");
+    let retired_activity = format!(
+        "# earlier release\n{}",
+        std::fs::read_to_string(global.join("resources/activities/task_pilot.yaml"))
+            .expect("current activity body")
+    );
+    let modified_retired_activity = format!("# operator edit\n{retired_activity}");
+    std::fs::write(
+        activity_catalog.join("agent_explore.yaml"),
+        &retired_activity,
+    )
+    .expect("recreate dropped activity");
+    std::fs::write(
+        activity_catalog.join("verify_finding.yaml"),
+        &modified_retired_activity,
+    )
+    .expect("write modified dropped activity");
+    add_managed_manifest_entry(&activity_catalog, "agent_explore", &retired_activity);
+    add_managed_manifest_entry(&activity_catalog, "verify_finding", &retired_activity);
     let health = runtime
         .inspect_definition_artifacts()
         .expect("doctor diagnoses legacy copies");
@@ -234,15 +277,42 @@ fn runtime_open_refreshes_unmodified_workspace_catalog_copies() {
             "doctor and sync --check must not write"
         );
     }
+    assert!(
+        preview.actions.iter().any(|action| {
+            action.scope == ManagedArtifactScope::WorkspaceLocal
+                && action.kind == "activity"
+                && action.name == "agent_explore"
+                && action.outcome == ManagedArtifactOutcome::Retired
+        }),
+        "check mode reports retirement of the dropped package activity: {preview:?}"
+    );
+    assert!(
+        preview.actions.iter().any(|action| {
+            action.scope == ManagedArtifactScope::WorkspaceLocal
+                && action.kind == "activity"
+                && action.name == "verify_finding"
+                && action.outcome == ManagedArtifactOutcome::Preserved
+                && action.detail.as_deref().is_some_and(|detail| {
+                    detail.contains(".retired-managed/activities/verify_finding.yaml")
+                })
+        }),
+        "check mode reports the modified activity's preservation destination: {preview:?}"
+    );
+    assert!(
+        activity_catalog.join("agent_explore.yaml").is_file(),
+        "check mode leaves the unmodified retired copy in place"
+    );
+    assert!(
+        activity_catalog.join("verify_finding.yaml").is_file(),
+        "check mode leaves the modified retired copy in place"
+    );
     let preserved: Vec<_> = [
         "activities/agent_implement.yaml",
         "activities/operator.yaml",
         "activities/candidate_resume.yaml",
-        "activities/removed_default.yaml",
         "jobs/task_pr_pipeline.yaml",
         "jobs/operator.yaml",
         "jobs/task_local_pipeline.yaml",
-        "jobs/removed_default.yaml",
     ]
     .into_iter()
     .map(|relative| {
@@ -251,8 +321,44 @@ fn runtime_open_refreshes_unmodified_workspace_catalog_copies() {
         (path, bytes)
     })
     .collect();
-    reconcile_workspace_managed_artifacts(&global, &workspace, None, "main", false)
+    let applied = reconcile_workspace_managed_artifacts(&global, &workspace, None, "main", false)
         .expect("explicit sync refreshes copies");
+    let preserved_retired_activity =
+        workspace.join("resources/.retired-managed/activities/verify_finding.yaml");
+    assert!(!activity_catalog.join("agent_explore.yaml").exists());
+    assert!(!activity_catalog.join("verify_finding.yaml").exists());
+    assert_eq!(
+        std::fs::read_to_string(&preserved_retired_activity).unwrap(),
+        modified_retired_activity,
+        "the modified retired activity is moved outside the active catalog"
+    );
+    assert!(
+        applied.actions.iter().any(|action| {
+            action.scope == ManagedArtifactScope::WorkspaceLocal
+                && action.kind == "activity"
+                && action.name == "verify_finding"
+                && action.detail.as_deref().is_some_and(|detail| {
+                    detail.contains(".retired-managed/activities/verify_finding.yaml")
+                })
+        }),
+        "sync reports where it preserved the modified retired activity: {applied:?}"
+    );
+    let activity_manifest: Value = serde_json::from_slice(
+        &std::fs::read(activity_catalog.join(MANAGED_ASSET_MANIFEST_FILE)).unwrap(),
+    )
+    .unwrap();
+    assert!(activity_manifest["assets"].get("agent_explore").is_none());
+    assert!(activity_manifest["assets"].get("verify_finding").is_none());
+    let job_manifest: Value = serde_json::from_slice(
+        &std::fs::read(
+            workspace
+                .join("resources/jobs")
+                .join(MANAGED_ASSET_MANIFEST_FILE),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    assert!(job_manifest["assets"].get("removed_default").is_none());
     for (path, bytes) in preserved {
         assert_eq!(
             std::fs::read(&path).unwrap(),

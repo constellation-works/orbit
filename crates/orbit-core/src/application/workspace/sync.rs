@@ -161,8 +161,8 @@ pub fn seed_absent_workspace_managed_artifacts(
 }
 
 /// Older workspace initialization seeded activities and jobs locally. Refresh
-/// only their existing managed copies, without materializing a second catalog
-/// or changing retirement/preservation policy. Also used on every runtime open
+/// their existing managed copies and retire dropped copies by provenance,
+/// without materializing a second catalog. Also used on every runtime open
 /// independently of the host-global defaults stamp.
 pub(crate) fn reconcile_workspace_catalog_copies(
     global_root: &Path,
