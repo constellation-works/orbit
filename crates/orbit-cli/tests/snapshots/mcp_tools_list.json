@@ -281,7 +281,7 @@
           "description": "Workspace selector from orbit_workspace_list."
         }
       },
-      "additionalProperties": true,
+      "additionalProperties": false,
       "allOf": [
         {
           "anyOf": [
