@@ -720,18 +720,18 @@
         },
         "snapshot": {
           "type": "boolean",
-          "description": "Bounded versioned snapshot; requires `workspace`, accepts `fields`/`field`, ignores `limit` (noted), rejects `run_id`, `view`, offsets; snapshot grants no authority."
+          "description": "Bounded versioned snapshot; requires `workspace`, rejects `run_id`, `view`, offsets; snapshot grants no authority."
         },
         "fields": {
           "type": "array",
           "items": {
             "type": "string"
           },
-          "description": "Keyed response fields (task, `snapshot`, or `delivery` evidence). Rejects `view`, claimed pagination."
+          "description": "Keyed response fields (`delivery`, `snapshot` or task). Rejects `view`, claimed pagination."
         },
         "field": {
           "type": "string",
-          "description": "Single-field alias for `fields` (e.g. `\"artifacts\"`; task, `snapshot`, or `delivery`). Rejects `view`, claimed pagination."
+          "description": "Single-field alias for `fields` (e.g. `\"artifacts\"`). Rejects `view`, claimed pagination."
         },
         "run_id": {
           "type": "string",
@@ -747,7 +747,7 @@
         },
         "limit": {
           "type": "integer",
-          "description": "Claimed/bounded page size; ignored (noted) with `snapshot`; not with projections on claimed or bounded reads."
+          "description": "Claimed/bounded page size; ignored (noted) with `snapshot`; not with projections."
         },
         "comments_offset": {
           "type": "integer",
