@@ -5,7 +5,8 @@ use super::{
     ForceOverridableRefusal, ForgePushHoldFailure, FrictionNotLocal, HostRegistryCode,
     NotFoundKind, NoticeRefusalCode, OrbitError, PrivateVcsFailure, RemoteToolCode,
     SourceRepairAuthorityRefusal, SourceRepairRunStateRefusal, SqliteContention, StorageLayer,
-    TaskPilotRefusalCode, WorkflowEvidenceUnavailable, WorkspaceClaimHeld,
+    TaskPilotRefusalCode, UnknownWorkspaceSelector, WorkflowEvidenceUnavailable,
+    WorkspaceClaimHeld,
 };
 
 /// The JSON-RPC invalid-params code. An owner whose internal drain
@@ -69,6 +70,7 @@ impl OrbitError {
             }
             OrbitError::ForceOverridable(_) => "force_overridable",
             OrbitError::InvalidInput(_)
+            | OrbitError::UnknownWorkspaceSelector(_)
             | OrbitError::TaskDeliveryUnavailable(_)
             | OrbitError::InvalidInputDiagnostic { .. }
             | OrbitError::ClaimRefused { .. } => const { RemoteToolCode::InvalidInput.as_str() },
@@ -784,6 +786,37 @@ impl OrbitError {
             self,
             Self::ProcessTimeout { .. } | Self::ExecutionTimeout { .. }
         )
+    }
+
+    /// Construct a typed unknown-workspace-selector refusal without encoding
+    /// its classification only in prose.
+    pub fn unknown_workspace_selector(selector: impl Into<String>) -> Self {
+        Self::UnknownWorkspaceSelector(Box::new(UnknownWorkspaceSelector {
+            selector: selector.into(),
+            bound_workspace: None,
+        }))
+    }
+
+    /// Attach the bound session's workspace name to an unknown-workspace
+    /// refusal while preserving the typed [`Self::UnknownWorkspaceSelector`]
+    /// identity.
+    pub fn with_bound_workspace(mut self, bound_workspace: impl Into<String>) -> Self {
+        if let Self::UnknownWorkspaceSelector(unknown) = &mut self {
+            unknown.bound_workspace = Some(bound_workspace.into());
+        }
+        self
+    }
+
+    /// The structured unknown-workspace-selector evidence, if this is one.
+    ///
+    /// Answered from the variant alone, so an [`Self::InvalidInput`] quoting
+    /// `"unknown workspace selector '…'"` or reporting an ambiguous or inactive
+    /// workspace never matches.
+    pub fn unknown_workspace_selector_details(&self) -> Option<&UnknownWorkspaceSelector> {
+        match self {
+            Self::UnknownWorkspaceSelector(unknown) => Some(unknown),
+            _ => None,
+        }
     }
 }
 

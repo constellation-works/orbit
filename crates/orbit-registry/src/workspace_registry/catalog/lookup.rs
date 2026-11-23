@@ -74,9 +74,7 @@ fn resolve_logical_workspace_match<'a>(
 }
 
 pub(crate) fn unknown_workspace_selector(selector: &str) -> OrbitError {
-    OrbitError::InvalidInput(format!(
-        "unknown workspace selector '{selector}'; run `orbit workspace list` to see registered workspaces, then pass a registered workspace name, a logical workspace ID, or an absolute local checkout path"
-    ))
+    OrbitError::unknown_workspace_selector(selector)
 }
 
 pub(crate) fn ambiguous_workspace_selector(selector: &str) -> OrbitError {

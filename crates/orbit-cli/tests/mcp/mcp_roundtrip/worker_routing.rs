@@ -572,17 +572,56 @@ fn bound_session_unknown_workspace_explains_binding() {
         return;
     }
     let workspace = McpWorkspace::init_with_workspace_name("bound-example");
+    let alpha_dir = workspace.home.join("alpha");
+    let shadow_dir = workspace.home.join("shadow");
+    let deleted_dir = workspace.home.join("deleted-ws");
+    init_checkout(&workspace.home, &alpha_dir, "alpha");
+    init_checkout(&workspace.home, &shadow_dir, "ws_alpha");
+    init_checkout(&workspace.home, &deleted_dir, "deleted-ws");
+    std::fs::remove_dir_all(&deleted_dir).expect("remove deleted checkout");
+
     let mut client =
         workspace.serve_with_args_and_env(&[], &[("ORBIT_WORKSPACE", "bound-example")]);
-    let refused = client.call_tool_err(
-        "orbit_task_show",
-        json!({"id": "TST-1", "workspace": "unknown-example"}),
-    );
-    let message = refused["message"].as_str().expect("refusal message");
-    assert!(
-        message.contains("unknown workspace selector 'unknown-example'"),
-        "{message}"
-    );
-    assert!(message.contains("bound-example"), "{message}");
-    assert!(message.contains("omit `workspace`"), "{message}");
+    let missing_checkout = workspace.home.join("missing-checkout");
+    let missing_checkout = missing_checkout.to_string_lossy().into_owned();
+
+    for selector in ["unknown-example", missing_checkout.as_str()] {
+        let refused = client.assert_tool_error(
+            "orbit_task_show",
+            json!({"id": "TST-1", "workspace": selector}),
+            "invalid_input",
+        );
+        let message = refused["message"].as_str().expect("refusal message");
+        assert!(
+            message.contains(&format!("unknown workspace selector '{selector}'")),
+            "{message}"
+        );
+        assert!(message.contains("bound-example"), "{message}");
+        assert!(message.contains("omit `workspace`"), "{message}");
+    }
+
+    for (argument, expected_fragment) in [
+        (json!(123), "`workspace` must be a string"),
+        (json!("ws_alpha"), "ambiguous workspace selector 'ws_alpha'"),
+        (
+            json!("deleted-ws"),
+            "workspace 'deleted-ws' (ws_deleted-ws) is invalid on this machine",
+        ),
+    ] {
+        let refused = client.assert_tool_error(
+            "orbit_task_show",
+            json!({"id": "TST-1", "workspace": argument}),
+            "invalid_input",
+        );
+        let message = refused["message"].as_str().expect("refusal message");
+        assert!(message.contains(expected_fragment), "{message}");
+        assert!(
+            !message.contains("unknown workspace selector"),
+            "non-unknown refusal must not classify as unknown selector: {message}"
+        );
+        assert!(
+            !message.contains("omit `workspace`"),
+            "non-unknown refusal must not add bound-session omission guidance: {message}"
+        );
+    }
 }

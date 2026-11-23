@@ -371,3 +371,63 @@ fn store_writable_open_owed_is_typed_and_reads_as_store_error() {
         "StoreWritableOpenOwed must serialize identically to Store"
     );
 }
+
+#[test]
+fn unknown_workspace_selector_is_typed_and_reads_as_invalid_input() {
+    let selector = "unknown-example";
+    let legacy_msg = format!(
+        "unknown workspace selector '{selector}'; run `orbit workspace list` to see registered workspaces, then pass a registered workspace name, a logical workspace ID, or an absolute local checkout path"
+    );
+    let legacy = OrbitError::InvalidInput(legacy_msg.clone());
+    let typed = OrbitError::unknown_workspace_selector(selector);
+
+    let details = typed
+        .unknown_workspace_selector_details()
+        .expect("typed variant must expose structured selector details");
+    assert_eq!(details.selector, selector);
+    assert_eq!(details.bound_workspace, None);
+    assert_eq!(typed.wire_code(), legacy.wire_code());
+    assert_eq!(typed.wire_details(), legacy.wire_details());
+    assert_eq!(typed.to_string(), legacy.to_string());
+    assert_eq!(
+        serde_json::to_value(&typed).expect("serialize typed"),
+        serde_json::to_value(&legacy).expect("serialize legacy"),
+        "UnknownWorkspaceSelector must serialize identically to InvalidInput"
+    );
+
+    let bound = typed.with_bound_workspace("bound-example");
+    let bound_details = bound
+        .unknown_workspace_selector_details()
+        .expect("bound guidance must preserve UnknownWorkspaceSelector identity");
+    assert_eq!(bound_details.selector, selector);
+    assert_eq!(
+        bound_details.bound_workspace.as_deref(),
+        Some("bound-example")
+    );
+    let legacy_bound = OrbitError::InvalidInput(format!(
+        "{legacy_msg}; this session is bound to workspace 'bound-example'; omit `workspace`"
+    ));
+    assert_eq!(bound.wire_code(), legacy_bound.wire_code());
+    assert_eq!(bound.to_string(), legacy_bound.to_string());
+    assert_eq!(
+        serde_json::to_value(&bound).expect("serialize bound"),
+        serde_json::to_value(&legacy_bound).expect("serialize legacy bound")
+    );
+
+    for non_unknown in [
+        OrbitError::InvalidInput(legacy_msg),
+        OrbitError::InvalidInput(
+            "ambiguous workspace selector 'ws_alpha'; it matches more than one registered workspace"
+                .into(),
+        ),
+        OrbitError::InvalidInput(
+            "workspace 'deleted-ws' (ws_deleted-ws) is invalid on this machine".into(),
+        ),
+        OrbitError::InvalidInput("`workspace` must be a string".into()),
+    ] {
+        assert!(
+            non_unknown.unknown_workspace_selector_details().is_none(),
+            "quoted or distinct InvalidInput must not classify as UnknownWorkspaceSelector: {non_unknown}"
+        );
+    }
+}

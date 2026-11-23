@@ -151,6 +151,11 @@ fn redact_error_with(error: OrbitError, redact: fn(&str) -> String) -> OrbitErro
             message: redact(&message),
         },
         OrbitError::InvalidInput(m) => OrbitError::InvalidInput(redact(&m)),
+        OrbitError::UnknownWorkspaceSelector(mut unknown) => {
+            unknown.selector = redact(&unknown.selector);
+            unknown.bound_workspace = unknown.bound_workspace.map(|bound| redact(&bound));
+            OrbitError::UnknownWorkspaceSelector(unknown)
+        }
         OrbitError::DecisionRefused { code, message } => OrbitError::DecisionRefused {
             code,
             message: redact(&message),
