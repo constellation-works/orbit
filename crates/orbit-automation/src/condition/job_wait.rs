@@ -6,6 +6,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use cel::IdedExpr;
 use cel::common::ast::Expr;
 use chrono::{DateTime, Duration, Utc};
 use orbit_types::workflow::{JobV2, JobV2Step, JobV2StepBody};
@@ -264,18 +265,42 @@ fn check_job_expiry(
     Ok(CheckedJobExpiry { expression, bound })
 }
 
-/// The deadline of `now >= timestamp('<t>')` or
-/// `now >= job.started_at + duration('<d>')`; `None` for any other shape.
-fn outer_bound(expression: &CheckedExpression) -> Option<OuterBound> {
+/// The right-hand side of a receiver-free `now >= deadline` comparison.
+fn clock_deadline(expression: &CheckedExpression) -> Option<&IdedExpr> {
     let Expr::Call(call) = &expression.ast.expr else {
         return None;
     };
     let [now, deadline] = call.args.as_slice() else {
         return None;
     };
-    if call.target.is_some() || call.func_name != "_>=_" || path_of(now).as_deref() != Some("now") {
+    (call.target.is_none() && call.func_name == "_>=_" && path_of(now).as_deref() == Some("now"))
+        .then_some(deadline)
+}
+
+/// Resolve a literal duration, optionally requiring a receiver-free call.
+fn literal_duration(expression: &IdedExpr, reject_receiver: bool) -> Option<Duration> {
+    let Expr::Call(call) = &expression.expr else {
+        return None;
+    };
+    let [literal] = call.args.as_slice() else {
+        return None;
+    };
+    if (reject_receiver && call.target.is_some())
+        || call.func_name != "duration"
+        || string_literal(literal).is_none()
+    {
         return None;
     }
+    match cel::Value::resolve(expression, &cel::Context::default()).ok()? {
+        cel::Value::Duration(duration) => Some(duration),
+        _ => None,
+    }
+}
+
+/// The deadline of `now >= timestamp('<t>')` or
+/// `now >= job.started_at + duration('<d>')`; `None` for any other shape.
+fn outer_bound(expression: &CheckedExpression) -> Option<OuterBound> {
+    let deadline = clock_deadline(expression)?;
     let Expr::Call(deadline_call) = &deadline.expr else {
         return None;
     };
@@ -290,19 +315,7 @@ fn outer_bound(expression: &CheckedExpression) -> Option<OuterBound> {
             }
         }
         ("_+_", [start, duration]) if path_of(start).as_deref() == Some("job.started_at") => {
-            let Expr::Call(duration_call) = &duration.expr else {
-                return None;
-            };
-            let [literal] = duration_call.args.as_slice() else {
-                return None;
-            };
-            if duration_call.func_name != "duration" || string_literal(literal).is_none() {
-                return None;
-            }
-            match cel::Value::resolve(duration, &cel::Context::default()).ok()? {
-                cel::Value::Duration(duration) => Some(OuterBound::AfterStart(duration)),
-                _ => None,
-            }
+            literal_duration(duration, false).map(OuterBound::AfterStart)
         }
         _ => None,
     }
@@ -321,19 +334,7 @@ pub fn auto_task_step_deadline(
             OuterBound::AfterStart(duration) => job_started_at.checked_add_signed(duration),
         };
     }
-    let Expr::Call(comparison) = &expression.ast.expr else {
-        return None;
-    };
-    let [now, deadline] = comparison.args.as_slice() else {
-        return None;
-    };
-    if comparison.target.is_some()
-        || comparison.func_name != "_>=_"
-        || path_of(now).as_deref() != Some("now")
-    {
-        return None;
-    }
-    let Expr::Call(add) = &deadline.expr else {
+    let Expr::Call(add) = &clock_deadline(expression)?.expr else {
         return None;
     };
     let [start, duration] = add.args.as_slice() else {
@@ -345,19 +346,7 @@ pub fn auto_task_step_deadline(
     {
         return None;
     }
-    let Expr::Call(call) = &duration.expr else {
-        return None;
-    };
-    let [literal] = call.args.as_slice() else {
-        return None;
-    };
-    if call.target.is_some() || call.func_name != "duration" || string_literal(literal).is_none() {
-        return None;
-    }
-    match cel::Value::resolve(duration, &cel::Context::default()).ok()? {
-        cel::Value::Duration(duration) => wait_started_at.checked_add_signed(duration),
-        _ => None,
-    }
+    wait_started_at.checked_add_signed(literal_duration(duration, true)?)
 }
 
 /// One step's place in the job's structure.
