@@ -92,7 +92,7 @@ let route = { view: "hotspots", path: null };
 // signal, the path search, whether release files are grouped, the lock sort
 // (`wait` or `rate`), whether each Coupling list or every regressed task is
 // expanded, and which path was last copied or failed to copy.
-let view = { showAll: false, search: "", groupRelease: true, lockSort: "wait", allPairs: false, allLocks: false, allTasks: false, copied: null, copyFailed: null };
+let view = { showAll: false, search: "", groupRelease: true, lockSort: "wait", allPairs: false, allLocks: false, allTasks: false, allOthers: false, copied: null, copyFailed: null };
 let lastData = null;
 let lastPayloadKey = null;
 let refusedLayer = null;
@@ -123,7 +123,7 @@ function resetRelated() {
 onWorkspaceChange(() => {
   dropQueryData();
   resetRelated();
-  view = { ...view, search: "", showAll: false, allPairs: false, allLocks: false };
+  view = { ...view, search: "", showAll: false, allPairs: false, allLocks: false, allOthers: false };
   if ($("codebase-path-search")) $("codebase-path-search").value = "";
 });
 
@@ -294,7 +294,7 @@ function wireCodebaseControls(onChange) {
   const search = $("codebase-path-search");
   if (search) {
     search.addEventListener("input", () => {
-      view = { ...view, search: search.value };
+      view = { ...view, search: search.value, allOthers: false };
       paint();
     });
   }
@@ -630,11 +630,20 @@ function sectionRow(model, text, kind) {
   return row;
 }
 
+/// Match a path against the search query. `./` scopes to repository-root paths
+/// (files without `/`, plus the `./` group itself in directory/crate views).
+function pathMatchesQuery(path, query) {
+  if (!query) return true;
+  if (query === "./") return path === "./" || !path.includes("/");
+  if (query.startsWith("./")) return !path.includes("/") && path.toLowerCase().includes(query.slice(2));
+  return path.toLowerCase().includes(query);
+}
+
 /// The paths each section lists: under a search, every ranked match; else
 /// the flagged paths, then the top of each signal or, with Show all, the rest.
 function hotspotSections(model) {
   const query = view.search.trim().toLowerCase();
-  const matches = (path) => !query || path.toLowerCase().includes(query);
+  const matches = (path) => pathMatchesQuery(path, query);
   const multi = model.multi.filter(matches);
   const seen = new Set(multi);
   const singles = [];
@@ -651,13 +660,29 @@ function hotspotSections(model) {
 function hotspotTable(model) {
   const { data, signals, index } = model;
   const { query, multi, singles } = hotspotSections(model);
-  const others = query && Array.isArray(data.known_paths) ? data.known_paths
-    .filter((path) => !index.has(path) && path.toLowerCase().includes(query)).slice(0, OTHER_PATHS_SHOWN) : [];
-  const otherPaths = others.length ? el("div", { class: "codebase-others" }, [
+  const allOthers = query && Array.isArray(data.known_paths)
+    ? data.known_paths.filter((path) => !index.has(path) && pathMatchesQuery(path, query))
+    : [];
+  const others = view.allOthers ? allOthers : allOthers.slice(0, OTHER_PATHS_SHOWN);
+  const otherList = el("ul", { class: "codebase-other-paths", id: "codebase-other-paths", "aria-label": "Other matching paths" },
+    others.map((path) => el("li", {}, [fileLink(path)])));
+  const otherNodes = [
     el("p", { class: "codebase-eyebrow", text: "Not ranked · open to see what changes with it" }),
-    el("ul", { class: "codebase-other-paths", "aria-label": "Other matching paths" },
-      others.map((path) => el("li", {}, [fileLink(path)]))),
-  ]) : null;
+    otherList,
+  ];
+  if (allOthers.length > OTHER_PATHS_SHOWN) {
+    const toggle = actionButton(view.allOthers ? "Show fewer" : `Show all ${count(allOthers.length)}`, () => {
+      view = { ...view, allOthers: !view.allOthers };
+      paint();
+    }, "small");
+    toggle.setAttribute("aria-expanded", String(view.allOthers));
+    toggle.setAttribute("aria-controls", otherList.id);
+    otherNodes.push(el("div", { class: "codebase-list-disclosure" }, [
+      el("span", { class: "codebase-extra", text: `Showing ${count(others.length)} of ${count(allOthers.length)}` }),
+      toggle,
+    ]));
+  }
+  const otherPaths = others.length ? el("div", { class: "codebase-others" }, otherNodes) : null;
   const box = el("section", { class: "card card-flush codebase-hot", "aria-label": "Hotspots" });
   if (!signals.length) {
     box.appendChild(el("div", { class: "codebase-empty-state" }, [
@@ -665,7 +690,7 @@ function hotspotTable(model) {
       el("div", { class: "codebase-actions" }, [lowerSupportButton(data, `Show paths with ${LOWERED_SUPPORT}+ tasks`), data.window !== "all" ? actionButton("Use all time", () => updateQuery({ window: "all" })) : null]),
     ]));
     if (otherPaths) box.appendChild(otherPaths);
-    return keyed(box, "hotspots", { empty: true, min: data.min_support, window: data.window, others });
+    return keyed(box, "hotspots", { empty: true, min: data.min_support, window: data.window, others, allOthersCount: allOthers.length, showAllOthers: view.allOthers });
   }
   const head = el("tr", {}, [
     el("th", { class: "codebase-hot-path", text: ROLLUP_NOUNS[data.rollup] || "Path" }),
@@ -720,7 +745,7 @@ function hotspotTable(model) {
   }));
   return keyed(box, "hotspots", {
     signals, rollup: data.rollup, multi, singles, cells, total: index.size, showAll: view.showAll, query,
-    lengths: signals.map((key) => rowsOf(data, key).length), others,
+    lengths: signals.map((key) => rowsOf(data, key).length), others, allOthersCount: allOthers.length, showAllOthers: view.allOthers,
   });
 }
 
@@ -1089,8 +1114,8 @@ function fileRelated(path) {
   if (path.endsWith("/")) {
     body.appendChild(el("p", { class: "codebase-empty", text: "Choose a file to see what lands alongside it." }));
     body.appendChild(el("div", { class: "codebase-actions" }, [actionButton("Group by file", () => {
-      const search = path === "./" ? "" : path;
-      view = { ...view, search };
+      const search = path;
+      view = { ...view, search, allOthers: false };
       const input = $("codebase-path-search");
       if (input) input.value = search;
       updateQuery({ rollup: "file" }, { view: "hotspots", path: null });
