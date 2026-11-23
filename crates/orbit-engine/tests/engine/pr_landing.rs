@@ -720,7 +720,7 @@ fn pr_open_retries_http_499_pr_views_and_stops_at_the_existing_attempt_ceiling(s
 fn pr_lookup_retry_classification_preserves_refusals_and_nonmatching_tokens(sandbox: &Path) {
     let fx = Fixture::new(sandbox);
     let input = json!({"pr": "42", "workspace_path": path_str(&fx.repo)});
-    for message in "HTTP 400: Bad Request;HTTP 401: Unauthorized;HTTP 403: Forbidden;HTTP 404: Not Found;HTTP 409: Conflict;HTTP 410: Gone;HTTP 422: Unprocessable Entity;HTTP 429: Too Many Requests;bad credentials;permission denied;not accessible by integration;authentication required;SAML authorization required;rate limit exceeded;HTTP 418: I'm a teapot;HTTP 4990: Not a 499 status token;https://api.github.com/graphql?status=499".split(';') {
+    for message in "HTTP 400: Bad Request;HTTP 401: Unauthorized;HTTP 403: Forbidden;HTTP 404: Not Found;HTTP 409: Conflict;HTTP 410: Gone;HTTP 422: Unprocessable Entity;HTTP 429: Too Many Requests;bad credentials;permission denied;not accessible by integration;authentication required;SAML authorization required;rate limit exceeded;HTTP 418: I'm a teapot;HTTP 4990: Not a 499 status token;https://api.github.com/graphql?status=499;Head sha can't be blank".split(';') {
         fx.script_pr_views(&[message]);
         let error = run_private_vcs_operation("pr.status", &input)
             .unwrap_err();
