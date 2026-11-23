@@ -1,9 +1,12 @@
 //! The Automation › Residents view: set up and manage resident mandates.
 //!
-//! Reads report exactly what `orbit resident list|show` do, and writes go
-//! through the `orbit.resident.*` tools, so the view changes exactly what
-//! `orbit resident list|show|relay|control` do. The list read uses the
-//! batched core card read instead of per-row tool calls. Two writes go to
+//! The show read reports what `orbit resident show` does, except where the
+//! checkpoint comment time sits (see the paragraph after the routes below).
+//! Each list card carries that same show payload; `orbit resident list` rows
+//! do not.
+//! Writes go through the `orbit.resident.*` tools, so the view changes
+//! exactly what `orbit resident list|show|relay|control` do. The list read
+//! uses the batched core card read instead of per-row tool calls. Two writes go to
 //! core use cases instead. Creation needs a file for
 //! `orbit.task.artifact` action `put`; its use case judges the draft with the same
 //! rule every mandate read applies before it writes the tagged assignment
@@ -25,6 +28,15 @@
 //!   `unchanged_narrowing_refused`) audits as a failure naming which step
 //!   applied.
 //! * `POST /api/residents/<id>/control` and `/relay` — the manager channel.
+//!
+//! The checkpoint comment time has a different path on each surface. The
+//! core read and `orbit.resident.show` (and so `orbit resident show --json`)
+//! report it top-level as `latest_checkpoint_at`, null when the mandate has
+//! no checkpoint, and leave `latest_checkpoint` as the parsed record. Both
+//! GET reads move it into `latest_checkpoint.at`, the persisted time of the
+//! latest checkpoint comment (not the cycle id's minute), and drop the
+//! top-level field. With no checkpoint, `latest_checkpoint` is null and has
+//! no `at`.
 //!
 //! Every write needs the operator session ([`DASHBOARD_RESIDENT_WRITE`]) and
 //! leaves a `dashboard.operations` audit row beside the history entry core
