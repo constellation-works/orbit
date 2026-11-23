@@ -1213,9 +1213,9 @@ fn stdio_task_writes_refuse_unknown_retired_and_cli_only_fields() {
         (
             "orbit_task_add",
             &add,
-            "dependencies",
-            json!(["x"]),
-            "unknown field 'dependencies'",
+            "parent_id",
+            json!("x"),
+            "unknown field 'parent_id'",
         ),
         (
             "orbit_task_add",

@@ -339,6 +339,13 @@
           },
           "description": "Acceptance criteria."
         },
+        "dependencies": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Dependency task IDs."
+        },
         "tags": {
           "type": "array",
           "items": {

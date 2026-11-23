@@ -40,8 +40,10 @@ Contents:
      returns the bare ID and cannot carry the optional `warnings` metadata (see
      Warnings in [`task-authoring-new-files.md`](task-authoring-new-files.md)); omit `fields` when warnings matter. Never put `warnings`
      in `fields`: it is not a task field, and the add is refused before it is stored.
-6. Wire `dependencies` (and any `child_of` relation) with `orbit.task.update`
-   on the returned ID; creation refuses `dependencies`.
+6. Pass blocking edges as `dependencies` in the same `orbit.task.add` write; it
+   validates them as `orbit.task.update` does. Guarded creation (`request_id`)
+   does not accept `dependencies`: wire them with `orbit.task.update` on the
+   returned ID, as for a `child_of` relation.
 
 ```bash
 orbit tool run orbit.task.add --input '{

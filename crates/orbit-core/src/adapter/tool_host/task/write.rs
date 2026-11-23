@@ -40,7 +40,6 @@ use super::super::input::{
 /// The CLI-only options `orbit task add` sends.
 const ADD_CLI_OPTIONS: &[&str] = &[
     "parent_id",
-    "dependencies",
     "plan",
     "external_refs",
     "status",
@@ -136,7 +135,7 @@ pub(super) fn add(
             description,
             acceptance_criteria: optional_string_list_alias(input, &["acceptance_criteria"])?
                 .unwrap_or_default(),
-            dependencies: optional_csv_or_string_list_alias(options, &["dependencies"])?
+            dependencies: optional_csv_or_string_list_alias(input, &["dependencies"])?
                 .unwrap_or_default(),
             relations: parse_relations(input)?.unwrap_or_default(),
             tags: optional_csv_or_string_list_alias(input, &["tags"])?.unwrap_or_default(),

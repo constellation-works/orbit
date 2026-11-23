@@ -8,7 +8,7 @@
 //!   `verdict`, `complete`), typed `relations` and response projections. The
 //!   JSON Schema conditionals guarded writes need live in `orbit-tools`'
 //!   schema-extension table.
-//! - CLI-only flags with no tool field: `add`'s `--parent`, `--dependencies`,
+//! - CLI-only flags with no tool field: `add`'s `--parent`,
 //!   `--plan`, `--ref` and `--status`, and `update`'s `--approve`, `--force`,
 //!   `--discard-candidate` and `--artifact`. The CLI surface table carries
 //!   them in [`TASK_CLI_OPTIONS_PARAM`], which only a process-local caller
@@ -149,7 +149,6 @@ const ADD_RETIRED_FIELDS: &[RetiredField] = &[
     RetiredField::unknown_field("external_refs", "set it with orbit.task.update"),
     RetiredField::unknown_field("context", "use `context_files`"),
     RetiredField::unknown_field("comment", "set it with orbit.task.update"),
-    RetiredField::unknown_field("dependencies", "set it with orbit.task.update"),
 ];
 
 pub(super) const ADD: TaskOperation = TaskOperation {
@@ -229,6 +228,13 @@ pub(super) const ADD: TaskOperation = TaskOperation {
                 CliArgKind::flag("acceptance-criteria"),
                 "Acceptance criteria. Repeat the flag for multiple criteria",
             )),
+            both(
+                "dependencies",
+                ParamType::StringList,
+                "Dependency task IDs.",
+                flag_with_delimiter("dependencies", &["dependency"], None),
+                "Dependency task IDs. Repeat or comma-separate for multiple dependencies",
+            ),
             both(
                 "tags",
                 ParamType::StringList,
@@ -350,12 +356,6 @@ pub(super) const ADD: TaskOperation = TaskOperation {
                 ParamType::String,
                 CliArgKind::flag("parent"),
                 "Parent task ID for hierarchical decomposition",
-            ),
-            cli_only(
-                "dependencies",
-                ParamType::StringList,
-                flag_with_delimiter("dependencies", &["dependency"], None),
-                "Dependency task IDs. Repeat or comma-separate for multiple dependencies",
             ),
             defaulted(
                 cli_only(

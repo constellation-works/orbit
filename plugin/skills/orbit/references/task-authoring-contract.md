@@ -23,8 +23,8 @@ pickup. Do not confuse a task description with a design document or a transcript
   another task. Missing ordinary methods, types, adapters and tests needed for
   that result are implementation work, not an external dependency.
 - **Prerequisites:** name actual task IDs and the capability each supplies. Record
-  blocking edges in `dependencies` through `orbit.task.update` right after
-  creation (`orbit.task.add` refuses that field), not only in prose. Do not require an upstream
+  blocking edges in `dependencies` on `orbit.task.add` (or `orbit.task.update`
+  after guarded creation), not only in prose. Do not require an upstream
   slice to demonstrate behavior that needs its downstream consumer: use the
   agreed interface and isolated fixtures, and assign end-to-end proof to integration.
 - **Decisions and constraints:** separate settled product choices from choices the

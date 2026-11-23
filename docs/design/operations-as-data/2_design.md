@@ -773,7 +773,7 @@ MCP snapshot, including the guarded-creation conditionals, is unchanged.
 
 The operator command keeps options that MCP never had. The CLI `prepare`
 table moves them into one `cli_options` object: `add`'s `--parent`,
-`--dependencies`, `--plan`, `--ref`, `--status` and `--source-task`, and
+`--plan`, `--ref`, `--status` and `--source-task`, and
 `update`'s `--approve`, `--force`, `--discard-candidate` and `--artifact`. The
 tool registry admits `cli_options` only from a caller without an MCP session,
 so an MCP call that sends it gets the same `unknown field 'cli_options'` as
