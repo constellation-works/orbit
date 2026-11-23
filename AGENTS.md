@@ -28,9 +28,9 @@ Orbit is a local-first runtime for coding agents, built as a Rust workspace. `CL
 
 ## Gates
 
-- There is no required local full-suite gate for a diff. The required PR checks cover formatting, lint, goldens and the full suite; a red check is repaired through the PR. Don't run `make ci`, `ci-fast`, `ci-lint`, `goldens` or `ci-test-affected` as blanket pre-handoff gates. Run what the change needs, and `make goldens` when a golden surface changes (`UPDATE=1` regenerates; review the diff).
+- There is no required local full-suite gate for a diff. The required PR checks (Check / Clippy / Test and Test shards 1–3) cover formatting, lint, goldens and the full suite; a red check is repaired through the PR. Don't run `make ci`, `ci-fast`, `ci-lint`, `goldens` or `ci-test-affected` as blanket pre-handoff gates. Run what the change needs: tests of the changed behavior and `make goldens` when CLI help, MCP text or another golden surface changes (`UPDATE=1` regenerates; review the diff). A managed delivery's final validation runs `task.final_validation_commands`. See [DEVELOPMENT.md](docs/DEVELOPMENT.md#validation-and-ci).
 - Anchor focused `cargo test -p <crate> …` commands with `-p orbit-cli` so they resolve one workspace feature set and reuse the cached build.
-- Pre-handoff checks for a diff, because final validation's `make ci-fast` fails on them (ORB-16683): `make ci-guards`, `cargo fmt --all -- --check` (test files too) and, for each changed crate, the Clippy passes and `cargo doc`. Commands, the `docs/INDEX.md` rule and the light-delivery tags: [Validation and CI](docs/DEVELOPMENT.md#validation-and-ci).
+- Pre-handoff checks for a diff, the `docs/INDEX.md` rule and `no-diff-expected`: [gate rules, Gates](docs/agents/gate-rules.md#gates). Light-delivery tags: [CONFIG.md](docs/CONFIG.md#light-delivery-skip-review-and-skip-validation).
 - Cargo gates sharing a target directory run sequentially; overlapping ones need separate `CARGO_TARGET_DIR`s, or a rebuilt `target/debug/orbit` breaks generation-bound fixtures (F2026-10-118).
 
 ## Code
@@ -40,22 +40,18 @@ Orbit is a local-first runtime for coding agents, built as a Rust workspace. `CL
 - Default to `pub(crate)`, `.workspace = true` deps, bounded channels and typed `thiserror` variants.
 - Prefer the fewest moving parts: delete dead code and stale docs together; keep compatibility only for an external contract or persisted format.
 - Past ~800 lines, check whether a file holds more than one responsibility and split along those; don't scatter closely related code.
-- Names must be greppable: an item used outside its module gets a name that says what it does and is near-unique in the repo, and never encodes its file path. Examples, the skill-doc sync command and user-facing text limits: [code rules](docs/agents/code-rules.md).
+- Greppable names and the skill-doc sync command: [code rules](docs/agents/code-rules.md).
 - Never expose internal task/friction IDs in user-facing output, CLI help (Clap renders `///`) or MCP text.
-- User-facing CLI help and errors, MCP descriptions and UI text must stand alone: no Orbit source-tree paths or repo docs, only verified published docs or installed resources.
+- User-facing CLI help and errors, MCP descriptions and UI text must stand alone: no Orbit source-tree paths or repo docs, only verified published docs or installed resources. Contributor docs may cite source paths; user-workspace paths like `.orbit/tmp/` are fine.
 
 ## Tests
 
 - Never add UI tests: no browser, Playwright or DOM-stub tests of the dashboard, web pages, docs site or desktop UI, not even for a bug fix. Check UI changes through manual QA and screenshots.
-- Add tests only for an observed, reproduced defect: a focused regression check at a public CLI/API boundary that fails before the fix and passes after. No private-function tests and no speculative coverage for features, refactors or chores.
-- No text-matching tests (`include_str!` + `contains()` over source, assets or UI copy) except a narrow structural safety guard; don't pin config or prompt policy.
-- Admitted unit tests live in a sibling `tests/` dir mirroring source filenames ([`test_layout.md`](docs/design-patterns/test_layout.md)); crate-root `tests/` is integration only.
-- The full test, manual QA and screenshot rules: [test and QA rules](docs/agents/test-and-qa-rules.md). UI work goes through [STD-07](docs/standards/STD-07-ui-ux/STD-07.md) first; cite a violation as `STD-07 §Rn`.
+- Test admission, text matching, test layout and the CI budget: [test and QA rules, Tests](docs/agents/test-and-qa-rules.md#tests). Manual QA, screenshots and STD-07 UI review: [QA](docs/agents/test-and-qa-rules.md#qa).
 
 ## Local Rust CodeQL
 
-- Run it locally only when the task repairs a CodeQL finding, is tagged `security` or `security-review`, or edits `.github/codeql/**` or `scripts/codeql-rust-local.sh`. Then follow the [local CodeQL runbook](docs/runbooks/codeql-local.md).
-- Run it once per delivery against the final candidate, in the foreground, with a timeout of at least 45 minutes. Only Linux extracts every module; elsewhere the script exits 3 and the check is owed by a Linux run recorded as `codeql` external evidence.
+When it is owed and how to run it: [gate rules, Local Rust CodeQL](docs/agents/gate-rules.md#local-rust-codeql).
 
 <!-- constellation-standards:begin -->
 <!-- Managed by the constellation's operations/scripts/sync-standards.sh; edits inside this block are overwritten. -->
