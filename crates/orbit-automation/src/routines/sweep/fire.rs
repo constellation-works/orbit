@@ -1,5 +1,6 @@
 use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
+use orbit_common::storage::timestamp::parse_stored_timestamp;
 use orbit_store::contracts::{RoutineFireIntentParams, RoutineFireState, RoutineStoreBackend};
 use orbit_types::workflow::JobRunState;
 use orbit_types::workflow::OverlapPolicy;
@@ -12,7 +13,7 @@ use orbit_types::workflow::automation::ConditionGuardMiss;
 use super::super::loader::LoadedRoutine;
 use super::contract::{RoutineDispatch, RoutineSweepReport, RunOwnerLiveness, SweepOptions};
 use super::core::BREAKER_BYPASS_FIRE_REASON;
-use super::report::{action, duration_from_minutes, parse_rfc3339, skipped};
+use super::report::{action, duration_from_minutes, skipped};
 
 pub(super) struct FireRequest<'a> {
     pub(super) slot: &'a str,
@@ -186,7 +187,7 @@ pub(super) fn sync_unresolved_fires(
                 continue;
             }
         };
-        let created_at = match parse_rfc3339(&fire.created_at) {
+        let created_at = match parse_stored_timestamp(&fire.created_at) {
             Ok(value) => value,
             Err(_) => continue,
         };

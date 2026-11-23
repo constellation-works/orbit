@@ -2,12 +2,11 @@ use super::dispatch::AutoTaskDispatch;
 use super::faults::{SchedulerFault, fail_if_injected};
 use super::fire::guard_hold;
 use super::preconditions::{Precondition, preconditions};
-use super::report::{
-    AutoTaskFireReport, action, parse_rfc3339, pending_claim_report, skip_reason, skipped,
-};
+use super::report::{AutoTaskFireReport, action, pending_claim_report, skip_reason, skipped};
 use crate::auto_tasks::schedule::{AutoTaskDueDecision, decide_due};
 use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
+use orbit_common::storage::timestamp::parse_stored_timestamp;
 use orbit_store::compose::auto_task::CursorSession;
 use orbit_types::workflow::{
     AutoTaskCursor, AutoTaskDefinition, AutoTaskPendingClaim, DedupePolicy,
@@ -43,8 +42,12 @@ pub(super) fn fire_locked(
         return Ok(action(definition, "baselined"));
     };
 
-    let baseline = parse_rfc3339(&cursor.baseline_at)?;
-    let last_slot = cursor.last_slot.as_deref().map(parse_rfc3339).transpose()?;
+    let baseline = parse_stored_timestamp(&cursor.baseline_at)?;
+    let last_slot = cursor
+        .last_slot
+        .as_deref()
+        .map(parse_stored_timestamp)
+        .transpose()?;
 
     match decide_due(&definition.schedule, baseline, last_slot, now)? {
         AutoTaskDueDecision::NotDue => Ok(skipped(definition, "not_due")),

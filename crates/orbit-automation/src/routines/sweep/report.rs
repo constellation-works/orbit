@@ -1,4 +1,4 @@
-use chrono::{DateTime, Duration, Utc};
+use chrono::Duration;
 use orbit_common::OrbitError;
 
 use super::super::loader::LoadedRoutine;
@@ -51,10 +51,4 @@ pub(super) fn action(routine: &LoadedRoutine, action: &'static str) -> RoutineSw
         run_id: None,
         batch: Vec::new(),
     }
-}
-
-pub(super) fn parse_rfc3339(raw: &str) -> Result<DateTime<Utc>, OrbitError> {
-    DateTime::parse_from_rfc3339(raw)
-        .map(|value| value.with_timezone(&Utc))
-        .map_err(|error| OrbitError::Store(format!("invalid stored timestamp '{raw}': {error}")))
 }
