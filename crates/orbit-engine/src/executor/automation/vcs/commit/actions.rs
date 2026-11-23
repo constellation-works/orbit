@@ -25,6 +25,7 @@ use super::checkpoint::{
     PinnedHead, head_descends_from_pin, head_matches_final_recovery, head_matches_settled_review,
     validate_pinned_head, verify_clean_tree,
 };
+use super::clean_tree::remove_untracked_interpreter_byproducts;
 use super::diagnostics::{changed_head_error, empty_stage_error};
 use super::finding_invalid;
 use super::git_ops::{
@@ -104,6 +105,7 @@ pub(super) fn commit_task_artifact_changes<H: RuntimeHost + ?Sized>(
     // Multi-task scopes run only in local pipelines. Each path is committed
     // with exactly one task: the one whose agent changed it when selectors
     // alone are ambiguous, widening that task's selectors when none cover it.
+    remove_untracked_interpreter_byproducts(&workspace_path)?;
     let candidate_paths = task_candidate_paths(&workspace_path, NewPathPolicy::Owner)?;
     let mut assigned = attribute_candidate_paths(
         host,
@@ -165,6 +167,7 @@ pub(super) fn commit_finalize_artifact_changes<H: RuntimeHost + ?Sized>(
     ensure_named_branch(&workspace_path)?;
     ensure_no_unmerged_changes(&workspace_path)?;
 
+    remove_untracked_interpreter_byproducts(&workspace_path)?;
     let changed_files = task_candidate_paths(&workspace_path, NewPathPolicy::Owner)?;
     if changed_files.is_empty() {
         return Ok(json!({}));
@@ -252,12 +255,14 @@ pub(super) fn commit_batch_changes<H: RuntimeHost + ?Sized>(
         // nothing is derived or written here: the owner's summary is the one
         // its handoff acceptance records.
         reject_failed_attempt(host, input, task)?;
+        remove_untracked_interpreter_byproducts(&workspace_path)?;
         task.clone()
     } else {
         // ORB-10603 / ORB-15584: the summary the gate reads is durable state,
         // and the implementing agent often leaves it empty. Persist the
         // account it returned instead, else derive one read-only from the
         // change about to be delivered or the accepted coverage evidence.
+        remove_untracked_interpreter_byproducts(&workspace_path)?;
         let task =
             ensure_durable_execution_summary(host, task.clone(), &workspace_path, batch_id, input)?;
 
@@ -544,6 +549,7 @@ pub(in crate::executor::automation::vcs) fn commit_failure_candidate<H: RuntimeH
     ensure_named_branch(workspace_path)?;
     ensure_no_unmerged_changes(workspace_path)?;
     // Only `pr_failure_handoff` reaches this, and no claimed pipeline runs it.
+    remove_untracked_interpreter_byproducts(workspace_path)?;
     let candidate_paths = task_candidate_paths(workspace_path, NewPathPolicy::Owner)?;
     stage_paths(
         workspace_path,

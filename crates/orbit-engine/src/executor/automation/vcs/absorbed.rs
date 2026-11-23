@@ -297,6 +297,12 @@ pub(crate) fn verify_absorbed_candidate<H: RuntimeHost + ?Sized>(
             format!("'{branch}' is at {head}, not the base {landed} its pinned rebase landed on"),
         ));
     }
+    if let Err(error) = super::commit::remove_untracked_interpreter_byproducts(workspace) {
+        return Err(AbsorbedRefusal::new(
+            Reason::DirtyWorktree,
+            error.to_string(),
+        ));
+    }
     if !git_output_raw(
         workspace,
         &["status", "--porcelain", "--untracked-files=all"],

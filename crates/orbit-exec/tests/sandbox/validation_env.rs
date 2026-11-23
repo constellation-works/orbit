@@ -722,3 +722,74 @@ fn tool_locations_distinguish_shadowed_executables_from_aliases() {
     assert!(passed, "{output}");
     assert_eq!(output.trim(), "first");
 }
+
+/// Validation and agent environments default `PYTHONDONTWRITEBYTECODE=1` so
+/// Python validation commands in delivery worktrees do not leave `.pyc` /
+/// `__pycache__/` byproducts behind [ORB-27225].
+#[test]
+fn python_validation_commands_do_not_write_bytecode() {
+    let host = Host::new();
+    let login = host.fake_login_shell("fake-login-sh", "");
+    let resolved = ValidationEnvironment::resolve(
+        host.launcher_env(),
+        &ValidationEnvPolicy::default(),
+        &shell(&login),
+    );
+    assert_eq!(var(&resolved, "PYTHONDONTWRITEBYTECODE"), Some("1"));
+
+    let launcher = ValidationEnvironment::launcher(host.launcher_env());
+    assert_eq!(var(&launcher, "PYTHONDONTWRITEBYTECODE"), Some("1"));
+
+    let agent_env = ValidationEnvPolicy::default().agent_environment(host.launcher_env());
+    assert!(
+        agent_env
+            .iter()
+            .any(|(key, value)| key == "PYTHONDONTWRITEBYTECODE" && value == "1"),
+        "agent_environment must default PYTHONDONTWRITEBYTECODE=1: {agent_env:?}"
+    );
+
+    let explicit = ValidationEnvironment::launcher(vec![
+        ("PATH".to_string(), MINIMAL_PATH.to_string()),
+        ("PYTHONDONTWRITEBYTECODE".to_string(), "custom".to_string()),
+    ]);
+    assert_eq!(var(&explicit, "PYTHONDONTWRITEBYTECODE"), Some("custom"));
+
+    if orbit_exec::program_on_path("python3", &std::env::var("PATH").unwrap_or_default()) {
+        let script_dir = host.home.join("py-worktree");
+        fs::create_dir_all(&script_dir).unwrap();
+        fs::write(script_dir.join("helper_mod.py"), "VALUE = 'py-ok'\n").unwrap();
+        fs::write(
+            script_dir.join("run_check.py"),
+            "import helper_mod\nprint(helper_mod.VALUE)\n",
+        )
+        .unwrap();
+        let mut live_env = resolved.clone();
+        live_env.env.retain(|(key, _)| key != "PATH");
+        live_env
+            .env
+            .push(("PATH".to_string(), std::env::var("PATH").unwrap()));
+        let outcome = run_process(
+            &ExecRequest {
+                program: "/bin/sh".to_string(),
+                args: vec!["-c".to_string(), "python3 run_check.py".to_string()],
+                current_dir: Some(script_dir.to_string_lossy().into_owned()),
+                timeout_ms: Some(10_000),
+                stdin_mode: StdinMode::Null,
+                environment_mode: EnvironmentMode::ClearAndSet(live_env.env),
+                debug: false,
+            },
+            &NoSandbox,
+        )
+        .unwrap();
+        assert!(
+            outcome.success,
+            "python3 validation command failed: {}{}",
+            outcome.stdout, outcome.stderr
+        );
+        assert_eq!(outcome.stdout.trim(), "py-ok");
+        assert!(
+            !script_dir.join("__pycache__").exists(),
+            "Python validation must not create __pycache__/"
+        );
+    }
+}

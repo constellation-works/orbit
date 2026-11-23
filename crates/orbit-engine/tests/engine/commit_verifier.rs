@@ -1442,7 +1442,208 @@ fn commit_verifier_derives_already_landed_requirements_from_the_workspace() {
     assert_eq!(git_head(temp.path()), head);
 }
 
+/// ORB-27225: untracked `__pycache__/` and `*.pyc` files are removed directly
+/// (never via Trash, even when Trash is read-only), while tracked changes
+/// (including tracked `.pyc` edits) and non-byproduct untracked files behave
+/// as before.
+fn untracked_python_byproducts_are_deleted_with_readonly_trash_while_real_untracked_files_block() {
+    #[cfg(unix)]
+    let _trash_guard = {
+        use std::os::unix::fs::PermissionsExt;
+        let fake_home = tempdir().expect("create fake home");
+        let trash = fake_home.path().join(".local/share/Trash");
+        fs::create_dir_all(&trash).expect("create trash dir");
+        fs::set_permissions(&trash, fs::Permissions::from_mode(0o555))
+            .expect("make trash read-only");
+        let home_str = fake_home.path().to_string_lossy().into_owned();
+        let data_str = fake_home
+            .path()
+            .join(".local/share")
+            .to_string_lossy()
+            .into_owned();
+        let env_guard = orbit_common::test_env::scoped([
+            ("HOME", Some(home_str.as_str())),
+            ("XDG_DATA_HOME", Some(data_str.as_str())),
+        ]);
+        (fake_home, env_guard)
+    };
+
+    // 1. Clean-tree `no-diff-expected` delivery with only untracked __pycache__/*.pyc and *.pyc.
+    let tagged_temp = temp_repo();
+    let tagged_repo = tagged_temp.path();
+    let tagged_head = git_head(tagged_repo);
+    fs::create_dir_all(tagged_repo.join("pkg/__pycache__")).unwrap();
+    fs::write(
+        tagged_repo.join("pkg/__pycache__/mod.cpython-312.pyc"),
+        b"pyc",
+    )
+    .unwrap();
+    fs::write(tagged_repo.join("loose.pyc"), b"pyc").unwrap();
+    let mut tagged_task = fixture_task();
+    tagged_task.tags = vec!["no-diff-expected".to_string()];
+    let tagged_host = VerifierHost::new(tagged_repo, tagged_task);
+    let skipped = action(&tagged_host, &commit_input(tagged_repo, &tagged_head))
+        .expect("untracked .pyc/__pycache__ must not block no-diff-expected delivery");
+    assert_eq!(skipped["decision"], "skipped_no_diff_expected");
+    assert!(!tagged_repo.join("pkg/__pycache__").exists());
+    assert!(!tagged_repo.join("loose.pyc").exists());
+    assert!(
+        git_output(
+            tagged_repo,
+            &["status", "--porcelain", "--untracked-files=all"]
+        )
+        .is_empty()
+    );
+
+    // 2. Clean-tree `no-diff.json` delivery: untracked .pyc/__pycache__ deleted; real untracked blocks.
+    let (nodiff_temp, nodiff_host, nodiff_head) = verifier_fixture(fixture_task());
+    let nodiff_repo = nodiff_temp.path();
+    let nodiff_report =
+        evidence_fixture::verifier_no_diff_report(&nodiff_head, "make test", "No change needed.");
+    nodiff_host.set_artifacts(
+        TASK_ID,
+        evidence_artifacts("no-diff.json", nodiff_report, &nodiff_head, "make test"),
+    );
+    fs::create_dir_all(nodiff_repo.join("pkg/__pycache__")).unwrap();
+    fs::write(
+        nodiff_repo.join("pkg/__pycache__/mod.cpython-312.pyc"),
+        b"pyc",
+    )
+    .unwrap();
+    fs::write(nodiff_repo.join("loose.pyc"), b"pyc").unwrap();
+    let nodiff_ok = action(&nodiff_host, &commit_input(nodiff_repo, &nodiff_head))
+        .expect("untracked .pyc/__pycache__ must not block verified no-diff delivery");
+    assert_eq!(nodiff_ok["decision"], "verified_no_diff");
+    assert!(!nodiff_repo.join("pkg/__pycache__").exists());
+    assert!(!nodiff_repo.join("loose.pyc").exists());
+
+    // `pr_promote` rechecks `clean_tree::Verifier::verify`: untracked .pyc passes, real untracked fails.
+    fs::create_dir_all(nodiff_repo.join("pkg/__pycache__")).unwrap();
+    fs::write(
+        nodiff_repo.join("pkg/__pycache__/mod.cpython-312.pyc"),
+        b"pyc",
+    )
+    .unwrap();
+    let promote_input = json!({
+        "job_run_id": RUN_ID,
+        "workspace_path": nodiff_repo.to_string_lossy(),
+        "completed_task_ids": [TASK_ID],
+        "no_diff_expected": true,
+        "already_landed_checkpoint": nodiff_ok,
+    });
+    let promoted = execute_deterministic_action(
+        &nodiff_host,
+        "pr_promote",
+        &json!({}),
+        &promote_input,
+        false,
+        &HashMap::new(),
+        None,
+    )
+    .expect("pr_promote clean-tree recheck must delete untracked .pyc and succeed");
+    assert_eq!(promoted["decision"], "performed");
+    assert!(!nodiff_repo.join("pkg/__pycache__").exists());
+
+    fs::write(nodiff_repo.join("stray.txt"), "not a byproduct\n").unwrap();
+    let promote_dirty_err = execute_deterministic_action(
+        &nodiff_host,
+        "pr_promote",
+        &json!({}),
+        &promote_input,
+        false,
+        &HashMap::new(),
+        None,
+    )
+    .expect_err("pr_promote clean-tree recheck must still refuse real untracked files")
+    .to_string();
+    assert!(
+        promote_dirty_err.contains("no_diff_unverified: worktree is not clean"),
+        "expected today's clean_tree refusal, got: {promote_dirty_err}"
+    );
+    // A real untracked file is still not ignored by claimed no-diff-expected:
+    let nodiff_clean_err = {
+        let mut clean_task = fixture_task();
+        clean_task.tags = vec!["no-diff-expected".to_string()];
+        let claimed_host = {
+            let mut h = VerifierHost::new(nodiff_repo, clean_task);
+            h.worker = Some(orbit_types::tool::WorkerInvocation {
+                owner_machine_id: "owner".into(),
+                owner_workspace_id: "ws_owner".into(),
+                owner_destination: "owner/ws_owner".into(),
+                task_id: TASK_ID.into(),
+                claim_id: "claim-byproduct-check".into(),
+                execution: orbit_types::task::ExecutionLocation {
+                    machine_id: "follower".into(),
+                    machine_name: None,
+                },
+                bound_run_id: RUN_ID.into(),
+            });
+            h
+        };
+        action(&claimed_host, &commit_input(nodiff_repo, &nodiff_head))
+            .expect_err("non-byproduct untracked file must still refuse claimed no-diff-expected")
+            .to_string()
+    };
+    assert!(
+        nodiff_clean_err.contains("no_diff_expected_changed"),
+        "expected today's no_diff_expected_changed refusal, got: {nodiff_clean_err}"
+    );
+    assert!(nodiff_repo.join("stray.txt").exists());
+    fs::remove_file(nodiff_repo.join("stray.txt")).unwrap();
+
+    // 3. Tracked edit + untracked .pyc/__pycache__ (and empty summary): commits only tracked edit.
+    let diff_temp = temp_repo();
+    let diff_repo = diff_temp.path();
+    let diff_head = git_head(diff_repo);
+    fs::write(diff_repo.join("README.md"), "updated\n").unwrap();
+    fs::create_dir_all(diff_repo.join("sub/__pycache__")).unwrap();
+    fs::write(diff_repo.join("sub/__pycache__/a.cpython-312.pyc"), b"pyc").unwrap();
+    fs::write(diff_repo.join("b.pyc"), b"pyc").unwrap();
+    let mut diff_task = fixture_task();
+    diff_task.execution_summary.clear();
+    let diff_host = VerifierHost::new(diff_repo, diff_task);
+    let committed = action(&diff_host, &commit_input(diff_repo, &diff_head))
+        .expect("real diff with untracked .pyc/__pycache__ must commit cleanly");
+    assert_eq!(committed["decision"], "performed");
+    assert_eq!(committed["committed"], true);
+    assert_eq!(
+        git_output(diff_repo, &["show", "--format=", "--name-only", "HEAD"]),
+        "README.md"
+    );
+    assert!(!diff_repo.join("sub/__pycache__").exists());
+    assert!(!diff_repo.join("b.pyc").exists());
+    assert!(
+        git_output(
+            diff_repo,
+            &["status", "--porcelain", "--untracked-files=all"]
+        )
+        .is_empty()
+    );
+
+    // 4. Tracked `.pyc` edit is NOT deleted and still commits as tracked work.
+    fs::write(diff_repo.join("tracked.pyc"), b"v1").unwrap();
+    git_output(diff_repo, &["add", "tracked.pyc"]);
+    git_output(diff_repo, &["commit", "-m", "add tracked fixture [T1]"]);
+    let tracked_head = git_head(diff_repo);
+    fs::write(diff_repo.join("tracked.pyc"), b"v2").unwrap();
+    fs::write(diff_repo.join("untracked.pyc"), b"tmp").unwrap();
+    let mut tracked_task = fixture_task();
+    tracked_task
+        .context_files
+        .push("file:tracked.pyc".to_string());
+    let tracked_host = VerifierHost::new(diff_repo, tracked_task);
+    let tracked_committed = action(&tracked_host, &commit_input(diff_repo, &tracked_head))
+        .expect("tracked .pyc modification must still deliver");
+    assert_eq!(tracked_committed["decision"], "performed");
+    assert_eq!(
+        git_output(diff_repo, &["show", "--format=", "--name-only", "HEAD"]),
+        "tracked.pyc"
+    );
+    assert!(!diff_repo.join("untracked.pyc").exists());
+}
+
 commit_contracts!(commit_evidence_contracts_4:
     owner_delivery_refuses_nested_repos_and_never_runs_their_filters,
     commit_verifier_derives_already_landed_requirements_from_the_workspace,
+    untracked_python_byproducts_are_deleted_with_readonly_trash_while_real_untracked_files_block,
 );

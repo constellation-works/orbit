@@ -483,6 +483,9 @@ pub(in crate::executor::automation::vcs) fn require_clean_checkout(
              validation"
         )));
     }
+    crate::executor::automation::vcs::commit::remove_untracked_interpreter_byproducts(
+        workspace_path,
+    )?;
     if !git_output_raw(
         workspace_path,
         &["status", "--porcelain=v1", "--untracked-files=all", "-z"],

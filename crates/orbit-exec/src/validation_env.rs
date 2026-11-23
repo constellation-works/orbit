@@ -69,6 +69,10 @@ pub const LOGIN_SHELL_CACHE_TTL: Duration = Duration::from_secs(120);
 /// Precedes the printed records, so profile output before it is ignored.
 const LOGIN_ENV_MARKER: &str = "__ORBIT_VALIDATION_LOGIN_ENV__";
 
+/// Disables Python `.pyc` / `__pycache__/` writes in validation and agent
+/// subprocesses so repository scripts do not dirty delivery worktrees.
+const PYTHON_NO_BYTECODE_ENV: &str = "PYTHONDONTWRITEBYTECODE";
+
 /// Where the validation PATH came from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ValidationEnvSource {
@@ -204,6 +208,7 @@ impl ValidationEnvPolicy {
     /// (macOS `path_helper`). A PATH that already starts with the
     /// entries (a nested Orbit process inside an agent) is kept as is.
     pub fn agent_environment(&self, mut env: Vec<(String, String)>) -> Vec<(String, String)> {
+        ensure_python_no_bytecode_vec(&mut env);
         let configured = self.expanded_path(lookup(&env, "HOME")).join(":");
         if configured.is_empty() {
             return env;
@@ -468,7 +473,8 @@ pub struct ValidationEnvironment {
 
 impl ValidationEnvironment {
     /// `base` as is: what a host without a resolver runs commands with.
-    pub fn launcher(base: Vec<(String, String)>) -> Self {
+    pub fn launcher(mut base: Vec<(String, String)>) -> Self {
+        ensure_python_no_bytecode_vec(&mut base);
         Self {
             env: base,
             source: ValidationEnvSource::LauncherFallback,
@@ -545,6 +551,9 @@ impl ValidationEnvironment {
             };
             env.insert("PATH".to_string(), path);
             source = ValidationEnvSource::Config;
+        }
+        if env.get(PYTHON_NO_BYTECODE_ENV).is_none_or(String::is_empty) {
+            env.insert(PYTHON_NO_BYTECODE_ENV.to_string(), "1".to_string());
         }
         Self {
             env: env.into_iter().collect(),
@@ -781,6 +790,13 @@ fn lookup<'a>(env: &'a [(String, String)], name: &str) -> Option<&'a str> {
         .find(|(key, _)| key == name)
         .map(|(_, value)| value.as_str())
         .filter(|value| !value.is_empty())
+}
+
+fn ensure_python_no_bytecode_vec(env: &mut Vec<(String, String)>) {
+    if lookup(env, PYTHON_NO_BYTECODE_ENV).is_none() {
+        env.retain(|(key, _)| key != PYTHON_NO_BYTECODE_ENV);
+        env.push((PYTHON_NO_BYTECODE_ENV.to_string(), "1".to_string()));
+    }
 }
 
 /// `text`'s non-blank lines, trimmed and joined with `; `.

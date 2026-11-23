@@ -50,6 +50,7 @@ pub(crate) fn require_implementer_no_diff_artifacts<H: RuntimeHost + ?Sized>(
     };
     let workspace = std::path::Path::new(required("workspace_path")?);
     let base = required("base_sha")?;
+    super::clean_tree::remove_untracked_interpreter_byproducts(workspace)?;
     if git_output(workspace, &["rev-parse", "HEAD"])? != base
         || !task_candidate_paths(workspace, NewPathPolicy::Claimed)?.is_empty()
     {
