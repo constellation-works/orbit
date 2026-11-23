@@ -42,10 +42,13 @@ proof that a particular task or run succeeded.
 
 Global search sits in the top bar of the dashboard served by `orbit web serve`,
 on every destination; press `/` or choose the search field. It finds tasks
-across all statuses. For substring matches its scope follows the Workspace
-picker: with **All workspaces** it searches across workspaces, and with one
-workspace selected it searches only that workspace. Typing part of a task ID or
-title lists compact matches.
+across all statuses. Substring search always spans every active workspace owned
+by the selected host, regardless of the Workspace picker selection. Within each
+match group, results from the selected workspace rank first. Rows from other
+workspaces show a workspace label; under **All workspaces**, every row shows
+its workspace label. If some workspaces cannot be read, search reports them on
+a separate `N workspaces unavailable` line. Typing part of a task ID or title
+lists compact matches.
 
 Entering an exact task ID or run ID with Enter
 opens the full task page or run page; that lookup also resolves across the
