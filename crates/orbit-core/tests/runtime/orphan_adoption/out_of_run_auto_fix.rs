@@ -1226,6 +1226,153 @@ fn a_skipped_head_lists_the_attempts_spent_and_remaining() {
     );
 }
 
+/// Record one source repair reservation of pull request `pr` on `head`, as the
+/// source repair admission writes it. It spends the pull request's shared budget.
+fn record_source_repair_reservation(fx: &Fixture, task: &str, pr: &str, head: &str, attempt: u32) {
+    let note = json!({
+        "request_key": format!("source-repair-{pr}-{head}"),
+        "binding": {
+            "schema_version": 1,
+            "workspace_id": "workspace",
+            "task_id": task,
+            "source_run_id": "jrun-source",
+            "machine_id": "machine",
+            "source_digest": "source-digest",
+            "task_digest": "task-digest",
+            "repository": "owner/repo",
+            "remote_url": "https://example.test/owner/repo.git",
+            "branch": format!("orbit/{task}-0123abcd"),
+            "pull_request": pr,
+            "pull_request_url": format!("https://example.test/owner/repo/pull/{pr}"),
+            "head_sha": head,
+            "base_sha": "base-sha",
+            "base_branch": "main",
+        },
+        "diagnosis": "fix the failed check",
+        "authorized_by": "operator",
+        "authorizer_provenance": "operator",
+        "authorized_at": Utc::now(),
+        "attempt": attempt,
+        "review": {
+            "contract_version": orbit_types::workflow::REVIEW_CONTRACT_VERSION,
+            "policy_version": 1,
+            "timing": "none",
+            "timing_source": "global",
+            "crew_source": "global",
+            "budget": {"minutes": 30},
+            "captured_at": Utc::now(),
+        },
+    });
+    fx.runtime
+        .apply_task_automation_update(
+            task,
+            TaskAutomationUpdate {
+                append_history: vec![orbit_types::task::TaskHistoryEntry {
+                    at: Utc::now(),
+                    by: "system".into(),
+                    event: orbit_types::workflow::SOURCE_REPAIR_RESERVED.into(),
+                    note: Some(note.to_string()),
+                    from_status: None,
+                    to_status: None,
+                    operation_id: None,
+                    decision: None,
+                }],
+                ..Default::default()
+            },
+        )
+        .unwrap();
+}
+
+/// The `detail` of `task`'s skip in `pass`, or an empty string.
+fn skip_detail(pass: &Value, task: &str) -> String {
+    pass["auto_fix"]["skipped"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .find(|entry| entry["task_id"] == task)
+        .and_then(|entry| entry["detail"].as_str())
+        .unwrap_or_default()
+        .to_string()
+}
+
+/// A source repair spends the pull request's shared budget, so the skip note
+/// counts it together with the watcher's admitted attempts.
+fn a_source_repair_and_a_watcher_attempt_share_the_pull_requests_budget() {
+    let fx = fixture();
+    let leaf = fx.stopped_leaf(151, "review", Shelf::OptedOut);
+    fx.blocked(&leaf, "jjj1", "orbit-bot", false, &["Check"]);
+    record_source_repair_reservation(&fx, &leaf.task, "151", "jjj0", 1);
+    record_attempts(&fx, &leaf.task, "151", "jjj1", "jrun-earlier", 1);
+    let drain = fx.drain();
+
+    let pass = fx.pass(&drain, "review", true);
+    assert!(
+        skip_detail(&pass, &leaf.task).contains("repair attempts: 2 of 3 spent, 1 remaining"),
+        "one source repair and one watcher attempt spent two of three: {pass}"
+    );
+    let readiness = fx
+        .runtime
+        .workspace_auto_readiness(&[], None, 10, &[])
+        .unwrap();
+    let entry = readiness["out_of_run_auto_fix"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| entry["pr_number"] == "151")
+        .unwrap_or_else(|| panic!("{readiness}"));
+    assert!(
+        entry["detail"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("repair attempts: 2 of 3 spent, 1 remaining"),
+        "readiness names the same shared count: {readiness}"
+    );
+
+    // A second source repair makes the third spend, so the budget is spent.
+    record_source_repair_reservation(&fx, &leaf.task, "151", "jjj2", 2);
+    let pass = fx.pass(&drain, "review", true);
+    assert!(
+        skip_detail(&pass, &leaf.task)
+            .contains("repair budget spent: 3 of 3 attempts used, none remain"),
+        "the combined total reached three: {pass}"
+    );
+}
+
+/// Source repairs alone can spend the whole budget: three reserved repairs and
+/// no watcher attempt are three spent, not zero of zero, in both the refusal
+/// and its skip note.
+fn source_repairs_alone_spend_the_shared_budget_in_the_refusal() {
+    let fx = fixture();
+    let spent = fx.stopped_leaf(152, "review", Shelf::Escalated);
+    fx.blocked(&spent, "kkk9", "orbit-bot", false, &["Check"]);
+    for attempt in 1..=3 {
+        record_source_repair_reservation(
+            &fx,
+            &spent.task,
+            "152",
+            &format!("kkk{attempt}"),
+            attempt,
+        );
+    }
+    let drain = fx.drain();
+
+    let pass = fx.pass(&drain, "review", true);
+    assert_eq!(
+        repair_skip(&pass, &spent.task).as_deref(),
+        Some("budget_exhausted"),
+        "{pass}"
+    );
+    let detail = skip_detail(&pass, &spent.task);
+    assert!(
+        detail.contains("#152 spent its 3 auto-fix repairs"),
+        "{pass}"
+    );
+    assert!(
+        detail.contains("repair budget spent: 3 of 3 attempts used, none remain"),
+        "{pass}"
+    );
+}
+
 fn a_stuck_pull_request_is_repaired_however_many_deliveries_ran_since() {
     let fx = fixture();
     let leaf = fx.stopped_leaf(110, "review", Shelf::Escalated);
@@ -1444,6 +1591,8 @@ crate::scenario_table!(
     the_pull_requests_auto_fix_budget_bounds_out_of_run_repairs,
     a_repair_that_published_nothing_leaves_the_heads_unspent_attempts_usable,
     a_skipped_head_lists_the_attempts_spent_and_remaining,
+    a_source_repair_and_a_watcher_attempt_share_the_pull_requests_budget,
+    source_repairs_alone_spend_the_shared_budget_in_the_refusal,
     a_stuck_pull_request_is_repaired_however_many_deliveries_ran_since,
     a_newer_finished_delivery_of_the_task_keeps_its_older_stopped_leaf_from_resuming,
 );

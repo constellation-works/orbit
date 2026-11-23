@@ -145,9 +145,29 @@ impl OrbitRuntime {
     }
 }
 
-/// The repairs `pr_number` may receive in all: [`PR_AUTO_FIX_BUDGET`], less
-/// the source repairs reserved for it, which spend the same budget.
+/// The repairs `pr_number` may receive from the watcher: [`PR_AUTO_FIX_BUDGET`],
+/// less the source repairs reserved for it, which spend the same budget.
 pub(crate) fn pr_auto_fix_budget(
+    history: &[TaskHistoryEntry],
+    pr_number: &str,
+) -> Result<u32, OrbitError> {
+    Ok(PR_AUTO_FIX_BUDGET.saturating_sub(source_repairs_reserved(history, pr_number)?))
+}
+
+/// The repairs `pr_number` has spent in all, against [`PR_AUTO_FIX_BUDGET`]:
+/// its admitted watcher attempts plus the source repairs reserved for it.
+pub(crate) fn pr_auto_fix_spent(
+    history: &[TaskHistoryEntry],
+    pr_number: &str,
+) -> Result<u32, OrbitError> {
+    let admitted =
+        u32::try_from(pr_auto_fix_attempts(history, pr_number).len()).unwrap_or(u32::MAX);
+    Ok(admitted.saturating_add(source_repairs_reserved(history, pr_number)?))
+}
+
+/// The source repairs reserved for `pr_number`. An unreadable ledger is an
+/// error, never a refund of its budget.
+fn source_repairs_reserved(
     history: &[TaskHistoryEntry],
     pr_number: &str,
 ) -> Result<u32, OrbitError> {
@@ -156,7 +176,7 @@ pub(crate) fn pr_auto_fix_budget(
         .iter()
         .filter(|record| record.binding.pull_request == pr_number)
         .count();
-    Ok(PR_AUTO_FIX_BUDGET.saturating_sub(u32::try_from(reserved).unwrap_or(u32::MAX)))
+    Ok(u32::try_from(reserved).unwrap_or(u32::MAX))
 }
 
 impl OrbitRuntime {

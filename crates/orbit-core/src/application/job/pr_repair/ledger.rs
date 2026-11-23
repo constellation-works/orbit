@@ -3,12 +3,12 @@ use orbit_common::OrbitError;
 use orbit_engine::{RuntimeHost, TaskAutomationUpdate};
 use orbit_types::task::TaskHistoryEntry;
 use orbit_types::workflow::{
-    PrAutoFixBlocker, PrAutoFixClaim, PrAutoFixDecision, decide_pr_auto_fix_settled,
-    pr_auto_fix_attempts,
+    PR_AUTO_FIX_BUDGET, PrAutoFixBlocker, PrAutoFixClaim, PrAutoFixDecision,
+    decide_pr_auto_fix_settled, pr_auto_fix_attempts,
 };
 use serde::{Deserialize, Serialize};
 
-use super::admission::pr_auto_fix_budget;
+use super::admission::{pr_auto_fix_budget, pr_auto_fix_spent};
 use super::adoption::Verdict;
 use crate::OrbitRuntime;
 use crate::application::task::SYSTEM_ACTOR_LABEL;
@@ -51,10 +51,11 @@ pub(super) fn out_of_run_starts(
 }
 
 /// The repair attempts `pr_number` has spent and has left, for a skip's
-/// detail; `None` when the ledger cannot be read.
+/// detail; `None` when the ledger cannot be read. Spent counts the watcher's
+/// admitted attempts and the source repairs reserved against the same budget.
 pub(super) fn budget_note(history: &[TaskHistoryEntry], pr_number: &str) -> Option<String> {
-    let budget = pr_auto_fix_budget(history, pr_number).ok()?;
-    let spent = u32::try_from(pr_auto_fix_attempts(history, pr_number).len()).unwrap_or(u32::MAX);
+    let budget = PR_AUTO_FIX_BUDGET;
+    let spent = pr_auto_fix_spent(history, pr_number).ok()?;
     Some(if spent >= budget {
         format!("repair budget spent: {spent} of {budget} attempts used, none remain")
     } else {
@@ -101,13 +102,12 @@ pub(super) fn ledger_admits(
                 ),
             ));
         }
-        PrAutoFixDecision::Exhausted(attempts) => {
+        PrAutoFixDecision::Exhausted(_) => {
+            let spent = pr_auto_fix_spent(history, pr_number)
+                .map_err(|error| Verdict::Skip("store_unreadable", error.to_string()))?;
             return Err(Verdict::Skip(
                 "budget_exhausted",
-                format!(
-                    "#{pr_number} spent its {} auto-fix repairs, so no attempt remains",
-                    attempts.len()
-                ),
+                format!("#{pr_number} spent its {spent} auto-fix repairs, so no attempt remains"),
             ));
         }
     }
