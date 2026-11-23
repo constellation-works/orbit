@@ -2369,9 +2369,11 @@ existing recovery activities, final validation and push do the repair:
   point conclusively failed the same job, no failed required check also fails
   on the base the same way, no failed log cites a path the candidate changed,
   and the base tip is not already in the head. The fork point's result is the
-  newest success or failure of that job on its first-parent history; a commit
-  whose job was skipped is read past. A missing, pending, ambiguous or
-  unreadable result holds the refresh. The run reserves the pull request's base
+  newest success or failure of that job on its first-parent history, searching
+  at most eight commits including the fork point and reading past commits whose
+  job was skipped. If the search finds no decisive result within those eight
+  commits, or the result is pending, ambiguous or unreadable, the refresh is
+  held. The run reserves the pull request's base
   update before the write, recording `pr_base_update_reserved` with
   `evidence.cause: "base_inherited_refresh"` (the rerun failure, fork point,
   landed base and per-check evidence) and `pr_refresh` rows. The write merges
