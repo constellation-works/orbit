@@ -35,6 +35,7 @@ cycle reread.
 - **R5 (compact default).** Orbit's task tools return full records unless asked for
   `fields`, and agents habitually read whole tasks to check one field. A projection that is
   opt-in for less is the wrong way round.
+- **R12.** The owner, in a typed scribe line (scribe standard-1, session 5eee6743): 'when you come across stale, incomplete, unclear, and suboptimal instructions, wordings, or delivery in skills, agent files, and docs, when appropriate, resolve it upon the encounter; when inappropriate, file a fix task or friction. Never let it slide.' Guidance that agents reread (STD-08 R3, R4) decays when each reader routes around a defect and leaves it for the next; the reader who hits it is the one who knows it is wrong. Fix-or-file keeps the cost with the finder while the context is fresh, and the file-or-friction branch keeps agents from editing what they have no authority over (the canon goes through standards.gap, RB-22).
 
 ## Records agents write
 

@@ -2,7 +2,6 @@
 id: STD-01-cli-surface
 title: CLI surface — command grammar, inputs and effects, output modes, errors, help, and golden-tested public surfaces
 summary: Normative rules for any constellation CLI's user-facing surface — noun-verb grammar, honoring every input or rejecting it, read-only commands that never write, human vs `--json` output, stdout/stderr split, tables, color/TTY, errors and exit codes, help, goldens, deprecation, no internal IDs; adopt at a pinned version in every new CLI.
-status: active
 tags: [standard, cli, output, ux, help, errors, deprecation]
 version: 2
 created: 2026-09-26

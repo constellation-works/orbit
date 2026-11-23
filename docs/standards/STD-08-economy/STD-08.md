@@ -2,11 +2,10 @@
 id: STD-08-economy
 title: Economy — bounded agent context, delta-only records, one channel per ask, bookkeeping off the page, one-line errors, complete stored records, size stated at design time
 summary: Normative rules for designing anything an agent or operator reads repeatedly (prompts, briefs, tool results, task comments, checkpoints, errors, logs, reports) with an economical mindset — a fixed size that does not grow with history, each fact once and referenced by id, delta-only records, machine bookkeeping kept out of the readable body, asks in their own channel, outcome first, one-line errors with the diagnostic behind a detail view and repeats collapsed, and the steady-state and repeated size stated before it ships — while errors, logs and audit records stay complete and structured when stored; follow it in any project where agents produce or consume text.
-status: draft
 tags: [standard, agents, tokens, design]
-version: 2
+version: 3
 created: 2026-11-15
-updated: 2026-11-15
+updated: 2026-11-23
 last_validated: 2026-11-15
 related: [STD-01-cli-surface, STD-07-ui-ux]
 ---
@@ -54,6 +53,7 @@ enforces it, [`exemplars.md`](exemplars.md) worked examples in Orbit, and
   earlier part of the same context already says.
 - **R5.** A read tool MUST return a compact default and offer a projection (fields, ids, a
   limit) for more. Full records are opt-in.
+- **R12.** An agent that finds stale, incomplete, unclear or suboptimal wording or delivery in guidance it reads (a skill, an agent instruction file such as AGENTS.md, a domain doc, a runbook or a design doc) MUST NOT leave it as it found it. Where the fix is certain, small and within its task and authority, it MUST make the fix in the same change. Otherwise (the fix needs a decision, belongs to another owner, or its authority does not reach the file) it MUST file a fix task or a friction naming the file and the defect before its session ends. Working around the defect without either is not allowed.
 
 ### Records agents write
 
