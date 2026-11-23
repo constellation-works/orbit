@@ -1377,3 +1377,49 @@ fn cancel_and_replay_body(fixture: &Fixture) {
         "the selected workspace must not receive the replay: {replay}"
     );
 }
+
+// A run served from a registered workspace other than the requested one names
+// the workspace that holds it, so global search selects the true owner
+// instead of the workspace it happened to probe.
+scenario_test!(
+    run_detail_names_the_registered_workspace_holding_the_run,
+    run_detail_workspace_id_body
+);
+
+fn run_detail_workspace_id_body(fixture: &Fixture) {
+    let second = add_workspace(fixture, "ws_second", "second");
+    fixture.job("owner_fixture");
+    let run = make_job_run(
+        "jrun-owner-c1",
+        "owner_fixture",
+        JobRunState::Success,
+        Utc::now(),
+        None,
+    );
+    second
+        .sqlite_store()
+        .unwrap()
+        .upsert_job_run_for_workspace(&second.workspace_id().unwrap(), &run, None)
+        .unwrap();
+    let local = fixture.seed_run("jrun-local-c1", "owner_fixture", JobRunState::Success);
+    let server = fixture.server(false);
+    let selected = ws_id(fixture);
+    // Requested workspace does not hold the run: the holder is named.
+    let found = get(
+        &server,
+        &format!("/api/runs/jrun-owner-c1?workspace={selected}"),
+    );
+    assert_eq!(found["workspace_id"], "ws_second", "{found}");
+    assert_eq!(found["run"]["run_id"], "jrun-owner-c1", "{found}");
+    // No workspace requested: the default workspace is not the holder either.
+    let bare = get(&server, "/api/runs/jrun-owner-c1");
+    assert_eq!(bare["workspace_id"], "ws_second", "{bare}");
+    // Requesting the holder, and a run held by the requested workspace.
+    let direct = get(&server, "/api/runs/jrun-owner-c1?workspace=ws_second");
+    assert_eq!(direct["workspace_id"], "ws_second", "{direct}");
+    let own = get(
+        &server,
+        &format!("/api/runs/{}?workspace={selected}", local.run_id),
+    );
+    assert_eq!(own["workspace_id"], selected.as_str(), "{own}");
+}

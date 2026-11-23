@@ -204,7 +204,9 @@ export function initGlobalSearch({ workspaces, workspaceChanged }) {
       try {
         const body = await searchJson(path(workspace), request);
         answered += 1;
-        return { body, workspace };
+        // The server may answer a run from the workspace that holds it rather
+        // than the one probed, and names that holder; trust it over the probe.
+        return { body, workspace: kind === 'run' && body.workspace_id ? body.workspace_id : workspace };
       } catch (error) {
         if (error.status === 404 && !/unknown workspace/i.test(error.message)) { answered += 1; return null; }
         failure ??= error;
