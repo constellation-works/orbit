@@ -21,7 +21,8 @@ use std::time::{Duration, Instant};
 
 use chrono::Utc;
 use orbit_common::governance::attention::{
-    ATTENTION_AGGREGATOR_CLIENT, attention_candidate_read_refusal, cursor,
+    ATTENTION_AGGREGATOR_CLIENT, attention_candidate_read_refusal, attention_wait_grant_refusal,
+    cursor,
     filter::{AttentionFilter, attention_strings},
     page::{AttentionPageCursor, AttentionPageInput, attention_public_page},
 };
@@ -124,6 +125,12 @@ impl FederatedMcpHost {
         if session_routes_one_host {
             return None;
         }
+        // A grant is minted by one host's own session. A fan-out hop would carry
+        // it to every destination, where it is refused, and that refusal would
+        // mark healthy hosts unreachable [ORB-27452].
+        if input.get("wait_grant").and_then(Value::as_bool) == Some(true) {
+            return Some(Err(attention_wait_grant_refusal()));
+        }
         Some(self.fan_out_attention(input, session_context))
     }
 
@@ -139,7 +146,7 @@ impl FederatedMcpHost {
         let selectors = attention_strings(input, "workspace");
         let mut hop = input.clone();
         if let Some(object) = hop.as_object_mut() {
-            for key in ["since", "limit", "host", "workspace", "all"] {
+            for key in ["since", "limit", "host", "workspace", "all", "wait_grant"] {
                 object.remove(key);
             }
             object.insert("candidate_read".into(), Value::Bool(true));
