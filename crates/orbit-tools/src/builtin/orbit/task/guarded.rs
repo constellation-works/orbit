@@ -305,7 +305,10 @@ pub(super) fn write(
         operation.insert("kind".into(), json!(kind));
     };
     let projection = if !create && mode == "review" {
-        super::operation::response_projection(&input)?
+        super::operation::response_projection(
+            &input,
+            super::operation::GUARDED_REVIEW_RESPONSE_FIELDS,
+        )?
     } else {
         None
     };
