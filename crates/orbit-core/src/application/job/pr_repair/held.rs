@@ -6,7 +6,10 @@
 //! dashboard's Fix PR) hands the task back to the leaf's completion step, the
 //! same resume a failed, timed-out or interrupted leaf gets. Every other hold
 //! keeps its own documented next step, except an auto-fix stop whose
-//! published head subsequently reports green required checks.
+//! published head subsequently reports green required checks, and an admitted
+//! check repair whose `step_failure_recovery` failed without publishing
+//! ([`unrepaired_check_repair`]), which leaves the pull request's unspent
+//! auto-fix budget usable on a later attempt.
 //!
 //! The hand-backs of one held lineage are bounded without the pull request's
 //! repair ledger, which they never spend:
@@ -144,4 +147,31 @@ pub(crate) fn auto_fix_stopped(run: &JobRun) -> bool {
             .last()
             .and_then(|step| step.error_message.as_deref())
             .is_some_and(|message| message.contains(AUTO_FIX_STOP_DIAGNOSTIC))
+}
+
+/// A run held because an admitted check repair's `step_failure_recovery` ran
+/// and did not repair or publish a new head (`hold_unrepaired_check_repair`).
+///
+/// Its typed refusal is [`DeliveryRefusal::RepairDispatched`] with the
+/// `pr_auto_fix_check_repair:` handoff diagnostic in `error_message` and
+/// neither an `auto_fix_stopped:` prefix nor a `; original error before
+/// recovery:` wrapper (which marks a post-recovery `pr_complete` hold such as
+/// a spent or failed no-edit rerun). The pull request's unspent auto-fix
+/// budget remains usable on a later run.
+pub(crate) fn unrepaired_check_repair(run: &JobRun) -> bool {
+    if held_refusal(run) != Some(DeliveryRefusal::RepairDispatched) {
+        return false;
+    }
+    run.steps
+        .last()
+        .and_then(|step| step.error_message.as_deref())
+        .is_some_and(|message| {
+            !message.contains(AUTO_FIX_STOP_DIAGNOSTIC)
+                && orbit_types::workflow::is_pr_auto_fix_check_repair(message)
+                && message
+                    .split_once(orbit_types::workflow::PR_AUTO_FIX_CHECK_REPAIR_MARKER)
+                    .is_some_and(|(prefix, _)| {
+                        !prefix.contains("; original error before recovery:")
+                    })
+        })
 }

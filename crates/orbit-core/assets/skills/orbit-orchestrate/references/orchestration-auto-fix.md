@@ -116,7 +116,12 @@ It cannot be combined with `--pull` or `--stop`.
 
   - A task a
     `completion.hold` rule keeps in review is skipped as `completion_held`.
-    Other holds keep their own next step (see the
+    An admitted check repair whose `step_failure_recovery` failed without
+    publishing (`delivery_repair_dispatched` with `pr_auto_fix_check_repair:`)
+    is likewise observed without held-leaf backoff and retried through the
+    repair ledger while budget remains (or handed back once checks turn green
+    on the published head, or reported with its remaining budget when held or
+    exhausted). Other holds keep their own next step (see the
     [delivery-refusal table](run-debugging-delivery-holds.md#codes-and-next-steps)
     in run debugging), and the source leaf still counts as `held`.
 - The dashboard's **Fix PR** action on a `review` task starts the same

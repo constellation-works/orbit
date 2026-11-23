@@ -72,8 +72,12 @@
 //! which the pass reports the task under its hold code. An `auto_fix_stopped`
 //! hold is handed back without backoff only when the published head matches
 //! and has positive, complete green required-check evidence; the ceiling
-//! still applies and completion performs the normal landing checks. Other holds keep
-//! their own documented next step.
+//! still applies and completion performs the normal landing checks. A leaf
+//! held as `delivery_repair_dispatched` with `pr_auto_fix_check_repair:` when
+//! `step_failure_recovery` ran without repairing or publishing is handed back
+//! through the ledger while a blocker and budget remain (without held-leaf
+//! backoff), or without backoff once the published head reports complete green
+//! checks. Other holds keep their own documented next step.
 //!
 //! The dashboard's Fix PR action starts the same repair for one task through
 //! [`crate::OrbitRuntime::start_task_pr_auto_fix`] (`task_auto_fix`): the same

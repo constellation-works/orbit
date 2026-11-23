@@ -2150,6 +2150,16 @@ Completion still checks the current review, required checks and branch protectio
 a changed head is refused. The hand-back ceiling applies; this green-check hand-back does not wait for the
 held-leaf backoff.
 
+A held leaf with typed code `delivery_repair_dispatched` whose `step_failure_recovery`
+failed or admitted no retry before publishing (carrying `pr_auto_fix_check_repair:`
+without `auto_fix_stopped:` or a post-recovery `pr_complete` wrapper) is likewise
+observed by an `--auto-fix` drain pass (and **Fix PR**) without waiting for the
+held-leaf backoff: while a blocker remains it retries through the per-PR ledger
+for its remaining attempts (or skips under `budget_exhausted`, `operator_hold`,
+`opted_out`, or `completion_held` with its spent/remaining attempt count in
+readiness), and if all required checks turn green on the same published head it
+hands back to completion as `checks_green_after_hold`.
+
 A task in `review` whose newest leaf ended `held` with its pull
 request open is handed back the same way when the hold is one a fresh forge
 read can clear: `delivery_check_evidence_inconclusive`,
@@ -2170,7 +2180,7 @@ resumed run's `out_of_run_auto_fix` input carry `hold_code` with a null
 it held, doubled for each earlier hand-back of that pull request for that code,
 and at most 3 times per pull request, head and code. Other holds, such as
 `delivery_head_changed` or `delivery_repair_dispatched` without an
-`auto_fix_stopped:` diagnostic, `delivery_pr_draft`,
+`auto_fix_stopped:` or unrepaired `pr_auto_fix_check_repair:` diagnostic, `delivery_pr_draft`,
 `delivery_landing_repair_requeue` or `base_chase_exhausted`, keep their own next
 step; the pass does not list them.
 
