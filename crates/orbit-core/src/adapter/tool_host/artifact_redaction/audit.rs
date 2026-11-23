@@ -87,6 +87,7 @@ fn artifact_target<'a>(
             | TaskVerb::ReviewReset
             | TaskVerb::Repilot
             | TaskVerb::Requeue
+            | TaskVerb::ResumeDelivery
             | TaskVerb::BlockTriage
             | TaskVerb::ReconcileReview
             | TaskVerb::RetryHandoff

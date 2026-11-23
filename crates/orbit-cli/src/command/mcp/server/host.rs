@@ -15,6 +15,7 @@ use orbit_core::adapter::command::{
     execute_global_in_process_tool_dispatch_with_audit_writer, execute_global_plugin_tool,
 };
 use orbit_core::runtime::HostLifetime;
+use orbit_core::runtime::authorization::route_resident_delivery_recovery_to_broker;
 use orbit_mcp::federated;
 use orbit_mcp::{McpHost, McpSessionAuthority};
 use orbit_types::tool::{
@@ -701,13 +702,26 @@ impl ServerMcpHost {
         {
             object.insert("all".into(), Value::Bool(true));
         }
-        let (runtime, selected) =
-            match self.resolve_workspace_runtime(name, &input, &context, definition) {
-                Ok(resolved) => resolved,
-                Err(error) => {
-                    return self.audit_global_failure(name, input, context, error);
-                }
-            };
+        // An authenticated resident broker resolves the recovery target.
+        // Resolve only this session's binding before handing it the selector.
+        let broker_home = Self::workspace_selector(None, &context)
+            .filter(|_| {
+                context.application.is_none()
+                    && context.worker_invocation.is_none()
+                    && route_resident_delivery_recovery_to_broker(&operation)
+            })
+            .map(|home| serde_json::json!({"workspace": home}));
+        let (runtime, selected) = match self.resolve_workspace_runtime(
+            name,
+            broker_home.as_ref().unwrap_or(&input),
+            &context,
+            definition,
+        ) {
+            Ok(resolved) => resolved,
+            Err(error) => {
+                return self.audit_global_failure(name, input, context, error);
+            }
+        };
         let repo_root = selected.checkout.repo_root.to_string_lossy().into_owned();
 
         context.workspace_id = Some(selected.workspace.id.clone());
@@ -715,7 +729,8 @@ impl ServerMcpHost {
         context.process_machine_id = Some(self.process_machine_id.clone());
         context.process_machine_name = Some(self.process_machine_name.clone());
 
-        if let Some(object) = input.as_object_mut()
+        if broker_home.is_none()
+            && let Some(object) = input.as_object_mut()
             && object.contains_key("workspace")
         {
             object.insert("workspace".to_string(), Value::String(repo_root));

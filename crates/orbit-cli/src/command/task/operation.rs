@@ -193,6 +193,7 @@ fn prepare(
         | TaskVerb::Eligible
         | TaskVerb::Lint
         | TaskVerb::BlockTriage
+        | TaskVerb::ResumeDelivery
         | TaskVerb::Reject
         | TaskVerb::Delete => Ok(ListView::default()),
     }
@@ -416,6 +417,7 @@ fn render(
         | TaskVerb::RecoverClaim
         | TaskVerb::RevokeHandoff
         | TaskVerb::BlockTriage
+        | TaskVerb::ResumeDelivery
         | TaskVerb::Reject
         | TaskVerb::Delete => Ok(Payload::document(value).into()),
     }

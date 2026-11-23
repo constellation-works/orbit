@@ -87,7 +87,7 @@ fn task_update_class(input: &Value) -> ResidentCallClass {
 /// What a resident cycle's grant must hold for this call.
 pub(super) fn resident_guard_class(action: OrbitBuiltinAction, input: &Value) -> ResidentCallClass {
     use ResidentCallClass::{Gated, Open, Read, Refused};
-    use ResidentRight::{Dispatch, Merge, Promote, Refresh};
+    use ResidentRight::{Dispatch, Merge, Promote, Recover, Refresh};
     match action {
         OrbitBuiltinAction::PipelineInvoke => Gated(Dispatch),
         OrbitBuiltinAction::PipelineWait
@@ -119,6 +119,7 @@ pub(super) fn resident_guard_class(action: OrbitBuiltinAction, input: &Value) ->
             TaskVerb::Update => task_update_class(input),
             TaskVerb::ArtifactPut => Open,
             TaskVerb::Requeue | TaskVerb::Repilot => Gated(Dispatch),
+            TaskVerb::ResumeDelivery => Gated(Recover),
             TaskVerb::RetryHandoff | TaskVerb::ReconcileReview => Gated(Merge),
             TaskVerb::LocksReserve
             | TaskVerb::LocksRelease

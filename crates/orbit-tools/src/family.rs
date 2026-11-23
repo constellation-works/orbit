@@ -28,7 +28,7 @@ const WORKSPACE_PARAM: &str = "workspace";
 fn family_description(family: &ToolFamily) -> &'static str {
     match family.name {
         "orbit.task.recover" => {
-            "Operator recovery for stuck claims, blocked tasks, handoffs and reviews."
+            "Recovery for stuck claims, blocked deliveries, handoffs and reviews."
         }
         "orbit.run" => "List, show, observe or resume workflow runs.",
         "orbit.workflow" => {

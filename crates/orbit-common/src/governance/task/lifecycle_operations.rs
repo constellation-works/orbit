@@ -288,6 +288,36 @@ pub(super) const REQUEUE: TaskOperation = TaskOperation {
     id_route: McpIdRouteDeclaration::Task,
 };
 
+/// Start recovery of a stopped resident-covered delivery.
+pub(super) const RESUME_DELIVERY: TaskOperation = TaskOperation {
+    verb: TaskVerb::ResumeDelivery,
+    cli_path: &[],
+    tool_name: "orbit.task.resume_delivery",
+    tool_description: "Start a review-only recovery leaf for a blocked task's preserved delivery through an authenticated cycle with the recover right. Provide the stopped failed or held run ID and remaining source work. It continues on the current base with fresh validation and review. Limit: one attempt per cycle, one per task per 24 hours. Landing requires separate merge authority.",
+    cli_about: "",
+    cli_help: CliHelp::NONE,
+    effect: Effect::Write,
+    params: &[&[
+        WORKSPACE_PARAM,
+        required(mcp_only("id", ParamType::String, "task ID")),
+        required(mcp_only(
+            "run_id",
+            ParamType::String,
+            "Stopped recovery run",
+        )),
+        required(free_text(mcp_only(
+            "diagnosis",
+            ParamType::String,
+            "Cause and remaining work",
+        ))),
+    ]],
+    at_least_one_of: &[],
+    retired_fields: &[],
+    unknown_fields: UnknownFields::Refuse,
+    mcp_scope: Some(McpToolScope::WorkspaceRequired),
+    id_route: McpIdRouteDeclaration::Task,
+};
+
 /// Explicit operator request for one task-pilot assessment.
 pub(super) const REPILOT: TaskOperation = TaskOperation {
     verb: TaskVerb::Repilot,

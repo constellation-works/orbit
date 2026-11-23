@@ -144,6 +144,7 @@ flag.
 | `merge` | Land a reviewed pull request. |
 | `plugin_upgrade` | Install or upgrade a workspace plugin. |
 | `refresh` | Merge the base branch tip into a held or review delivery pull request head (conflict-free) and re-run its required checks. |
+| `recover` | Start a recovery leaf for a blocked task’s preserved delivery. |
 
 The effective authority is what the resident can act on now: the granted
 rights, in the granted workspaces that the mandate also lists. It is empty for
@@ -159,6 +160,18 @@ treats a head already at the base tip as a no-op, and lands nothing (landing
 stays `merge`). A refreshed head keeps its prior review when every commit after
 the reviewed head is a conflict-free refresh merge of the base branch, while
 `land` still requires the required checks to pass on the refreshed head.
+
+Use `orbit.task.recover` with action `resume_delivery`, the task ID, the failed
+or held run ID, and a diagnosis. Orbit verifies the preserved PR and starts a
+leaf in the covered workspace. The leaf continues the candidate on the
+current base and runs fresh validation and review. Use `land` with the
+`merge` right to land once the head's required checks pass.
+
+A cycle can attempt recovery once. A task can reserve one resident recovery
+in 24 hours, with up to 120 minutes for the leaf's agent activities. An open
+final-recovery decision allows the leaf only when every option is explicitly
+routine or reversible and there is no separate human action. Decision
+answers and irreversible options stay with the operator.
 
 Updating friction records (`orbit.friction` action `update`) in covered
 workspaces requires no granted right — observe-only cycles may record landing

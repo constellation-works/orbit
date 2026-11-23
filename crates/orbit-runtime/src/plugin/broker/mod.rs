@@ -88,6 +88,10 @@ pub const BROKERED_RESIDENT_REPILOT_TOOL: &str = crate::authorization::TASK_REPI
 /// the held task's preserved candidate and its run state can be written.
 pub const BROKERED_RESIDENT_REQUEUE_TOOL: &str = crate::authorization::TASK_REQUEUE_OPERATION_ID;
 
+/// The built-in a resident cycle starts a recovery leaf through.
+pub const BROKERED_RESIDENT_RESUME_DELIVERY_TOOL: &str =
+    crate::authorization::TASK_RESUME_DELIVERY_OPERATION_ID;
+
 /// Whether `tool` is a built-in the broker runs for a resident cycle's run,
 /// whatever its input.
 pub fn is_brokered_resident_tool(tool: &str) -> bool {
@@ -97,6 +101,7 @@ pub fn is_brokered_resident_tool(tool: &str) -> bool {
         || tool == BROKERED_RESIDENT_REFRESH_TOOL
         || tool == BROKERED_RESIDENT_REPILOT_TOOL
         || tool == BROKERED_RESIDENT_REQUEUE_TOOL
+        || tool == BROKERED_RESIDENT_RESUME_DELIVERY_TOOL
 }
 
 /// Whether this call is a resident cycle's move of a task to `done`.

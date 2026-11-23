@@ -25,19 +25,22 @@ pub enum ResidentRight {
     PluginUpgrade,
     /// Bring a held or review delivery pull request up to its base branch and re-run checks.
     Refresh,
+    /// Start a bounded recovery of a stopped delivery's preserved candidate.
+    Recover,
 }
 
 impl ResidentRight {
     /// Every right, in contract order.
-    pub const ALL: [Self; 5] = [
+    pub const ALL: [Self; 6] = [
         Self::Dispatch,
         Self::Promote,
         Self::Merge,
         Self::PluginUpgrade,
         Self::Refresh,
+        Self::Recover,
     ];
     /// The right names, for refusal messages.
-    pub const NAMES: &'static str = "dispatch, promote, merge, plugin_upgrade or refresh";
+    pub const NAMES: &'static str = "dispatch, promote, merge, plugin_upgrade, refresh or recover";
 
     /// Stable right name.
     pub fn as_str(self) -> &'static str {
@@ -47,6 +50,7 @@ impl ResidentRight {
             Self::Merge => "merge",
             Self::PluginUpgrade => "plugin_upgrade",
             Self::Refresh => "refresh",
+            Self::Recover => "recover",
         }
     }
 

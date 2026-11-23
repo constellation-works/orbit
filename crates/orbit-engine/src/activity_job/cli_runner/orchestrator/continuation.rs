@@ -74,13 +74,30 @@ pub(crate) fn run_cli_backend_for_step(
 ) -> Result<DispatchOutcome, DispatchError> {
     // Resolve workspace policy once. Per-invocation dispatch must keep the
     // reduced spec a continuation/correction supplies instead of refilling it.
-    let resolved_spec = wall_clock_bound
-        .or_else(|| host.activity_wall_clock_timeout_seconds(activity_name))
-        .map(|seconds| {
-            let mut resolved = spec.clone();
-            resolved.wall_clock_timeout_seconds = seconds;
-            resolved
-        });
+    let mut wall_clock_bound =
+        wall_clock_bound.or_else(|| host.activity_wall_clock_timeout_seconds(activity_name));
+    if let Some(deadline) = host
+        .source_repair_admission(run_id)
+        .map_err(|error| DispatchError::JobExecution(error.to_string()))?
+        .and_then(|admission| admission.resident_repair_deadline())
+    {
+        let remaining = (deadline - chrono::Utc::now()).num_seconds();
+        if remaining < 1 {
+            return Err(DispatchError::JobExecution(
+                "resident recovery has exhausted its agent slot minutes".into(),
+            ));
+        }
+        wall_clock_bound = Some(
+            wall_clock_bound
+                .unwrap_or(spec.wall_clock_timeout_seconds)
+                .min(remaining as u64),
+        );
+    }
+    let resolved_spec = wall_clock_bound.map(|seconds| {
+        let mut resolved = spec.clone();
+        resolved.wall_clock_timeout_seconds = seconds;
+        resolved
+    });
     let spec = resolved_spec.as_ref().unwrap_or(spec);
     let started = Instant::now();
     let invoke = |spec: &AgentLoopSpec, input: &Value| {
