@@ -19,8 +19,13 @@ run the command or open the workspace in the [dashboard](/how-to/dashboard/).
 The kinds are `pilot_warning`, `pilot_hold`, `blocked`, `decision_open`,
 `review_waiting`, `run_failed`, `run_stuck`, `claim_stale`, `ci_red`,
 `friction_untriaged`, `notice_open`, `resident_stalled`, `routine_tripped`
-(a routine whose circuit breaker is open after repeated failures) and
-`host_unhealthy`. An open decision may be folded into its hold, block or review.
+(a routine whose circuit breaker is open after repeated failures),
+`host_unhealthy`, `drain_paused` (with the
+[standing-drain keeper](/reference/config/#settable-keys) enabled, the
+workspace's drain intent has been paused for over 12 hours while work waits)
+and `drain_breaker_open` (with the keeper enabled, its crash breaker is open,
+so it submits no drain until a person starts one). An open decision may be
+folded into its hold, block or review.
 
 :::caution
 An empty list does not prove that nothing waits. Check `degraded` in the JSON
