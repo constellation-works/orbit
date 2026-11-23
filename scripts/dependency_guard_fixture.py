@@ -91,8 +91,8 @@ SCAN_FILES = (
 )
 
 CONFIG_FILES = (
-    "aliases.rs", "seeding.rs", "config_document.rs", "plugin_enablement.rs",
-    "unknown.rs", "config_io.rs", "crew_defaults.rs", "resolved/compatibility.rs",
+    "aliases.rs", "seeding.rs", "document/paths.rs", "plugin_enablement.rs",
+    "unknown.rs", "document/io.rs", "crew_defaults.rs", "resolved/compatibility.rs",
 )
 CONFIG_DIRECTORIES = ("crew", "operation", "provider_limit", "layering", "registry")
 
