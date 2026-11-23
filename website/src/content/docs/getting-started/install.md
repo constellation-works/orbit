@@ -252,8 +252,9 @@ verified kit.
 ### Repair a failed or stale verification
 
 `verify` records the Playwright version and Chromium revision that passed. The
-pass remains current while those versions still match and the Playwright module,
-Chromium executable, and `env.sh` are present; `status` reports Linux library
+pass remains current while those versions still match, the Playwright module
+and `env.sh` are present, and the Chromium executable is present and, on
+Linux and macOS, still has its execute permission; `status` reports Linux library
 problems separately. If a newer Orbit release pins different package versions,
 `status` reports the mismatch, but it does not by itself revoke the previous
 pass, so workers continue receiving its variables until `install` updates the

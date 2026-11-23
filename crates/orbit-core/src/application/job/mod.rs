@@ -104,12 +104,12 @@ pub use run::{
     JobRunListParams, JobRunListStates, JobRunOrder, JobRunProjectionEvidence,
     JobRunProjectionProfile, RecordedJobRun, RemainingDrainChild, RunDisplayStep, RunDisplaySteps,
     RunFailureCause, RunFailureContext, RunFailureContextProfile, RunFailureContextWarning,
-    RunFailureEvidence, RunFailureRead, RunIncident, RunStepSource, UnstoppedChild, UnstoppedLeaf,
-    add_bounded_display_steps_to_json, bound_bounded_agent_invocation_answer,
-    display_steps_with_agent_execution_to_json, fold_run_incidents, job_run_task_ids,
-    job_run_to_json, job_run_to_json_with_activity_provenance, project_job_run, run_display_steps,
-    run_error_step, run_execution_progress_to_json, run_upgrade_paused,
-    trim_full_show_agent_invocation_answer,
+    RunFailureEvidence, RunFailureRead, RunIncident, RunStepSource, StreakErrorAgreement,
+    UnstoppedChild, UnstoppedLeaf, add_bounded_display_steps_to_json,
+    bound_bounded_agent_invocation_answer, display_steps_with_agent_execution_to_json,
+    fold_run_incidents, job_run_task_ids, job_run_to_json,
+    job_run_to_json_with_activity_provenance, project_job_run, run_display_steps, run_error_step,
+    run_execution_progress_to_json, run_upgrade_paused, trim_full_show_agent_invocation_answer,
 };
 pub(crate) use run::{DrainAdmissionWindow, drain_intent_json};
 pub(crate) use run::{

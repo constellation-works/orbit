@@ -45,7 +45,7 @@ pub(crate) fn write_kit(home: &Path, verified: bool) {
     let shell = root.join(format!("browsers/chromium_headless_shell-{REVISION}"));
     std::fs::create_dir_all(&shell).unwrap();
     std::fs::write(shell.join("INSTALLATION_COMPLETE"), "").unwrap();
-    std::fs::write(shell.join("chrome-headless-shell"), "fixture").unwrap();
+    write_headless_shell(&shell.join("chrome-headless-shell"));
     std::fs::write(root.join("env.sh"), "# fixture\n").unwrap();
     if verified {
         std::fs::write(
@@ -62,6 +62,22 @@ pub(crate) fn write_kit(home: &Path, verified: bool) {
         .unwrap();
     }
 }
+
+/// A stand-in headless shell as the installer leaves it: a regular file a
+/// worker can launch.
+fn write_headless_shell(path: &Path) {
+    std::fs::write(path, "fixture").unwrap();
+    set_mode(path, 0o755);
+}
+
+#[cfg(unix)]
+fn set_mode(path: &Path, mode: u32) {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode)).unwrap();
+}
+
+#[cfg(not(unix))]
+fn set_mode(_: &Path, _: u32) {}
 
 /// A workspace runtime admitting tasks as a host running `os` would, reading
 /// its browser kit from `<root>/kit-home`, which starts empty.
@@ -273,7 +289,32 @@ fn a_host_without_a_verified_kit_withholds_ui_tasks_until_its_kit_is_verified() 
         exclusion(&backlog(&linux), &ui.id).map(|(reason, _)| reason),
         Some("browser_kit_missing".to_string())
     );
-    std::fs::write(executable, "fixture").unwrap();
+    write_headless_shell(&executable);
+    assert_eq!(
+        orbit_core::bootstrap::browser_kit::worker_env_for_home(&kit_home).len(),
+        orbit_core::bootstrap::browser_kit::WORKER_ENV_NAMES.len(),
+        "a verified, executable kit is exported to workers"
+    );
+
+    // A shell that lost its execute bits after the recorded verify is no
+    // longer a kit workers can launch: routing and worker exports drop it.
+    #[cfg(unix)]
+    {
+        set_mode(&executable, 0o644);
+        assert_eq!(
+            exclusion(&backlog(&linux), &ui.id).map(|(reason, _)| reason),
+            Some("browser_kit_missing".to_string())
+        );
+        assert!(
+            matches!(ship(&linux, &ui.id), OrbitError::PolicyDenied(_)),
+            "a non-executable kit refuses the ui task's ship"
+        );
+        assert!(
+            orbit_core::bootstrap::browser_kit::worker_env_for_home(&kit_home).is_empty(),
+            "a non-executable kit exports nothing to workers"
+        );
+        set_mode(&executable, 0o755);
+    }
     let next = backlog(&linux);
     assert_eq!(admitted(&next), vec![ui.id.clone(), topical.id], "{next}");
     assert!(linux.browser_kit_backlog_waits().unwrap().is_empty());

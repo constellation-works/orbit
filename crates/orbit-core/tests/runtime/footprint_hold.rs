@@ -237,3 +237,97 @@ fn stopped_run_waiting_for_its_footprint_is_not_held() {
         "cancellation is never classified as a hold"
     );
 }
+
+/// An exhausted budget does not hide a stop: with `footprint_wait_seconds: 0`
+/// a stopped run still keeps its permanent refusal, while the same wait on a
+/// running run ends in the typed hold. Neither refusal takes the footprint
+/// from its holder, and once the holder releases it the running run takes it.
+#[test]
+fn an_exhausted_footprint_wait_keeps_a_stopped_run_permanent() {
+    if !super::dispatch_admission::isolated(
+        "footprint_hold::an_exhausted_footprint_wait_keeps_a_stopped_run_permanent",
+    ) {
+        return;
+    }
+    let fx = fixture(
+        "[workflow]\ndefault_crew = \"fixture\"\n\n\
+         [crews.fixture]\nprovider = \"codex\"\nmodel = \"fixture-model\"\n",
+    );
+    let task = fx.task("fixture");
+    let holder = fx.task("fixture");
+    fx.runtime
+        .apply_task_automation_update(
+            &holder,
+            TaskAutomationUpdate {
+                status: Some(TaskStatus::Review),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    let insert = || {
+        fx.runtime
+            .insert_job_run(
+                "task_pr_pipeline",
+                1,
+                Utc::now(),
+                Some(json!({
+                    "task_ids": [task],
+                    "footprint_deferred": true,
+                    "footprint_wait_seconds": 0,
+                })),
+                None,
+            )
+            .unwrap()
+            .run_id
+    };
+
+    let stopped = insert();
+    let error =
+        RuntimeHost::acquire_deferred_footprint(&fx.runtime, &stopped, "agent_review_repair")
+            .unwrap_err();
+    assert!(
+        matches!(error, DispatchError::CliInvocationPermanent(_)),
+        "a stopped run with a spent budget keeps the permanent failure, got: {error}"
+    );
+    assert!(
+        error.to_string().contains("run stopped"),
+        "the refusal names the stop: {error}"
+    );
+    assert_eq!(
+        HeldFailure::of_local(Some(error.failure_code()), Some(&error.to_string())),
+        None,
+        "cancellation is never classified as a hold"
+    );
+
+    let running = insert();
+    fx.runtime
+        .mark_job_run_running(&running, Utc::now(), std::process::id())
+        .unwrap();
+    let error =
+        RuntimeHost::acquire_deferred_footprint(&fx.runtime, &running, "agent_review_repair")
+            .unwrap_err();
+    assert!(
+        matches!(error, DispatchError::FootprintUnavailable(_)),
+        "a running run with a spent budget is held, got: {error}"
+    );
+    assert!(
+        error.to_string().contains(&holder),
+        "the holder still owns the footprint the stopped run was refused: {error}"
+    );
+    assert_eq!(
+        HeldFailure::of_local(Some(error.failure_code()), Some(&error.to_string())),
+        Some(HeldFailure::FootprintUnavailable),
+    );
+
+    fx.runtime
+        .apply_task_automation_update(
+            &holder,
+            TaskAutomationUpdate {
+                status: Some(TaskStatus::Done),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    RuntimeHost::acquire_deferred_footprint(&fx.runtime, &running, "agent_review_repair")
+        .expect("the running run takes the footprint once the holder releases it");
+}

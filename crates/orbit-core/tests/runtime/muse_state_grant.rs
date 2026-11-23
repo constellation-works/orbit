@@ -27,9 +27,10 @@ fn only_the_muse_lane_may_write_muse_state_roots() {
         command
             .args(["--exact", TEST, "--nocapture", "--test-threads=1"])
             .env(CHILD, "1")
-            .env("HOME", home.path())
-            .env_remove("XDG_CONFIG_HOME")
-            .env_remove("XDG_DATA_HOME");
+            .env("HOME", home.path());
+        // Provider roots resolve inside the disposable home; the XDG cases
+        // below set their overrides deliberately.
+        crate::provider_roots::remove_from(&mut command);
         let output =
             orbit_common::process::run_bounded(&mut command, std::time::Duration::from_secs(120))
                 .expect("isolated fixture");
@@ -55,6 +56,16 @@ fn only_the_muse_lane_may_write_muse_state_roots() {
     std::fs::create_dir_all(&worktree).expect("managed fixture checkout");
 
     let default_roots = [home.join(".config/muse"), home.join(".local/share/muse")];
+    // With no inherited override every other provider root resolves, and is
+    // created, inside the disposable home.
+    let shared = resolved_modify(&runtime, "codex", &worktree);
+    for root in [home.join(".codex"), home.join(".claude")] {
+        assert!(
+            shared.contains(&root.display().to_string()),
+            "provider roots stay in the fixture home {}: {shared:?}",
+            root.display()
+        );
+    }
     for provider in ["claude", "codex", "grok", "copilot"] {
         let modify = resolved_modify(&runtime, provider, &worktree);
         for root in &default_roots {

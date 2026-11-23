@@ -18,6 +18,9 @@ fn git_protection_tolerates_object_store_leftovers_and_refuses_outside_aliases()
     ) {
         return;
     }
+    // Sandbox preparation resolves provider roots from `HOME` only, so it
+    // creates them inside the disposable home, never in a caller's override.
+    let _provider_roots = crate::provider_roots::unset_inherited();
 
     let sandbox = if cfg!(target_os = "linux") {
         ExecutorSandboxKind::LinuxBwrap
