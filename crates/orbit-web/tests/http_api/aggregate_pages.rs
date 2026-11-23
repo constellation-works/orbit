@@ -1058,3 +1058,52 @@ fn write_seeded_run(runtime: &OrbitRuntime, run: &JobRun) {
         .upsert_job_run_for_workspace(&workspace_id, run, None)
         .expect("insert job run");
 }
+
+#[test]
+fn task_search_spans_every_workspace_and_ranks_the_preferred_one_first() {
+    isolated(
+        "aggregate_pages::task_search_spans_every_workspace_and_ranks_the_preferred_one_first",
+        || {
+            let tmp = tempfile::tempdir().unwrap();
+            let global = tmp.path().join("global");
+            std::fs::create_dir_all(&global).unwrap();
+            let names = ["search0", "search1"];
+            let roots = names
+                .iter()
+                .map(|name| seed_workspace(&global, tmp.path(), name))
+                .collect::<Vec<_>>();
+            let bindings = names
+                .iter()
+                .zip(&roots)
+                .map(|(name, (_, repo))| (*name, repo.as_path()))
+                .collect::<Vec<_>>();
+            write_registry(&global, &bindings);
+            let server = spawn_server(
+                tmp.path(),
+                false,
+                false,
+                false,
+                &tmp.path().join("process.log"),
+                None,
+                &[],
+            );
+            for preferred in names {
+                let response =
+                    json_ok(server.get(&format!("/api/tasks/search?q=search&prefer={preferred}")));
+                assert_eq!(response["total"], names.len(), "{response}");
+                assert_eq!(response["unavailable"], serde_json::json!([]));
+                let owners = response["items"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|item| item["workspace_id"].as_str().unwrap().to_string())
+                    .collect::<Vec<_>>();
+                assert_eq!(owners.len(), names.len(), "{response}");
+                assert_eq!(
+                    owners[0], preferred,
+                    "the preferred workspace ranks first whatever its update time: {response}"
+                );
+            }
+        },
+    );
+}
