@@ -102,10 +102,11 @@ pub(in crate::executor::automation::vcs::pr) fn admit<H: RuntimeHost + ?Sized>(
         }
         PrAutoFixDecision::Duplicate(previous) => {
             let remedy = if blocker == PrAutoFixBlocker::FailedChecks {
-                ". If a repair is running, let it finish. If none ran because the job lacked \
-                 step_failure_recovery, configure recovery for future heads, repair and publish \
-                 a new head, then start a new delivery attempt; adding recovery alone cannot \
-                 re-admit this head. Further repairs require remaining per-PR budget"
+                ". If that run is still running, let it finish; once it ends (including held \
+                 without step_failure_recovery), starting a new authorized delivery run on the \
+                 same head with step_failure_recovery configured admits another repair attempt \
+                 while per-PR budget remains, or repair and publish a new head and start a new \
+                 delivery attempt. Exhausting the per-PR budget fails the run"
             } else {
                 ""
             };

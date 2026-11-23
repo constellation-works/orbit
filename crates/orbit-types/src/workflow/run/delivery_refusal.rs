@@ -150,7 +150,7 @@ impl DeliveryRefusal {
                 "Re-establish the pinned identity and confirm the merge evidence, then start a new delivery attempt.".into()
             }
             Self::RepairDispatched => {
-                "If a repair is running, let it finish. If none ran because the job lacked step_failure_recovery, configure recovery for future heads; if it ran and failed, inspect the recovery attempt. Then repair and publish a new head and start a new delivery attempt.".into()
+                "If a repair is running, let it finish. Once the prior run ends (including held without step_failure_recovery or after a failed recovery attempt), inspect any recovery attempt, configure step_failure_recovery if missing, and start a new authorized delivery run on the same head while per-PR budget remains, or repair and publish a new head and start a new delivery attempt.".into()
             }
             Self::PullRequestDraft => {
                 "Mark the pull request ready for review, then start a new delivery attempt.".into()
@@ -186,7 +186,7 @@ impl DeliveryRefusal {
                 "Wait for the origin to recover; a later normal admission retries the work. A task already in progress follows ordinary run failure handling instead.".into()
             }
             Self::CheckRepairActivityAbsent => {
-                "Adding step_failure_recovery and retrying the same head holds again as delivery_repair_dispatched; it does not run the repair. Configure recovery for future heads, repair and publish a new head, then start a new delivery attempt. A new head can receive another repair only while the per-PR budget remains; exhausting it still fails the run.".into()
+                "Configure step_failure_recovery and start a new authorized delivery run on the same head to admit another repair attempt while per-PR budget remains (this held run is terminal), or repair and publish a new head, then start a new delivery attempt. Exhausting the per-PR budget fails the run.".into()
             }
             Self::CheckRunsAbsent => {
                 "An auto-fix pass hands this task back to completion once the head reports a required check run. If none appear, confirm the forge runs workflows for this repository, then start the required checks on that head by hand or push a new head.".into()

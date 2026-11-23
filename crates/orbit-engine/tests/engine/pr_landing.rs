@@ -41,9 +41,9 @@ use orbit_types::workflow::{
     ProviderFailureClass, REVIEW_MANIFEST_ARTIFACT, REVIEW_REPORT_ARTIFACT, ReviewBudget,
     ReviewConsumption, ReviewGateAdmissionOutput, ReviewGateAdmitted, ReviewGateDecision,
     ReviewGateRefusal, ReviewGateReviewer, ReviewTiming, ReviewVerdict, SEATBELT_APPLY_PROBE,
-    decide_pr_auto_fix, decide_pr_base_update, decide_pr_infrastructure, is_baseline_red_failure,
-    is_task_blocked_by_agent, is_validation_environment_failure, pr_auto_fix_attempts,
-    provider_failure_text, task_blocked_by_agent_message,
+    decide_pr_auto_fix_settled, decide_pr_base_update, decide_pr_infrastructure,
+    is_baseline_red_failure, is_task_blocked_by_agent, is_validation_environment_failure,
+    pr_auto_fix_attempts, provider_failure_text, task_blocked_by_agent_message,
 };
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -5984,6 +5984,18 @@ impl DeliveryHost {
                 .cloned(),
         }
     }
+    fn record_run_state(&self, run_id: &str, state: orbit_types::workflow::JobRunState) {
+        let run: JobRun = serde_json::from_value(json!({
+            "run_id": run_id,
+            "job_id": "task_pr_pipeline",
+            "attempt": 1,
+            "state": state,
+            "scheduled_at": Utc::now(),
+            "created_at": Utc::now(),
+        }))
+        .unwrap();
+        locked(&self.runs).insert(run_id.to_string(), run);
+    }
     fn seed_reserved(&self, event: &str, note: &impl serde::Serialize, file: &str) {
         auto_fix::seed_auto_fix_history(self, event, note);
         fs::write(self.repo.parent().unwrap().join(file), "reserved").unwrap();
@@ -6004,7 +6016,13 @@ impl orbit_engine::test_support::NullRuntimeHost for DeliveryHost {
     }
     fn admit_pr_auto_fix(&self, request: &PrAutoFixRequest) -> Res<PrAutoFixAdmission> {
         let attempts = pr_auto_fix_attempts(&self.history(TASK_ID), &request.pr_number);
-        let decision = decide_pr_auto_fix(
+        let ended = |attempt: &PrAutoFixAttempt| {
+            matches!(
+                RuntimeHost::get_job_run(self, &attempt.run_id),
+                Ok(Some(run)) if run.state.is_terminal()
+            )
+        };
+        let decision = decide_pr_auto_fix_settled(
             &attempts,
             &PrAutoFixClaim {
                 pr_number: &request.pr_number,
@@ -6015,6 +6033,7 @@ impl orbit_engine::test_support::NullRuntimeHost for DeliveryHost {
             PR_AUTO_FIX_BUDGET,
             "fixture",
             "fixture",
+            &ended,
         );
         if let PrAutoFixDecision::Admit(attempt) = &decision {
             auto_fix::seed_auto_fix_history(self, PR_AUTO_FIX_ADMITTED_EVENT, attempt);
