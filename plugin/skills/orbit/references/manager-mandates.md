@@ -86,7 +86,7 @@ records beside the effective authority.
 
 ## Cadence: floor and heartbeat
 
-The **heartbeat** is the longest a resident goes without a check. An unchanged heartbeat-only check writes an `unchanged` checkpoint without a model cycle; changed wake items, open requests, deadlines and other wake reasons still run a cycle. The
+The **heartbeat** is the longest a resident goes without a check. An unchanged heartbeat-only check writes an `unchanged` checkpoint without a model cycle; changed wake items, open requests, deadlines, a mandate reopened after a handoff and other wake reasons still run a cycle. The
 **floor** is the shortest gap between two cycles, however much changes; it
 bounds cost when the resident has something to react to. Between them, each
 checkpoint's `next_wake.not_before` picks the next cycle time when nothing

@@ -184,13 +184,13 @@ impl OrbitRuntime {
         if may_skip {
             let comments = self.get_task_comments(&task_id)?;
             let previous = checkpoints(&task_id, &comments);
-            may_skip = previous
-                .last()
-                .is_some_and(|checkpoint| checkpoint.outcome != "incomplete")
-                && !self
-                    .resident_open_requests(&task_id, &mandate, previous.last(), &comments)?
-                    .iter()
-                    .any(|request| request["state"] == "open");
+            may_skip = previous.last().is_some_and(|checkpoint| {
+                // A handoff ended the mandate; reopening it must cycle.
+                checkpoint.outcome != "incomplete" && checkpoint.outcome != "handoff"
+            }) && !self
+                .resident_open_requests(&task_id, &mandate, previous.last(), &comments)?
+                .iter()
+                .any(|request| request["state"] == "open");
             // Older acted-on tasks can remain in the baseline after the last
             // checkpoint stops naming them. Their open decisions matter too.
             for id in due

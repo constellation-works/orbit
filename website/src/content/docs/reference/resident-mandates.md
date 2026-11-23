@@ -100,7 +100,7 @@ Each checkpoint plans the next check in `next_wake.not_before`, clamped between
 the cadence floor and heartbeat after the last cycle started. A cycle that
 ended `incomplete` waits for the heartbeat. An unchanged heartbeat-only check
 writes an `unchanged` checkpoint without starting a model cycle. Changed wake
-items, open requests, deadlines and other wake reasons still run a cycle.
+items, open requests, deadlines, a mandate reopened after a handoff and other wake reasons still run a cycle.
 
 ## Inspect a mandate
 
