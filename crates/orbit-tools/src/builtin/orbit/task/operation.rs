@@ -22,11 +22,43 @@ use orbit_common::protocol::tool_input::{
 };
 use serde_json::Value;
 
-use super::super::domain_control::{bounded, bounded_read};
+use super::super::domain_control::{bounded, bounded_read, mode_field_error};
 use super::super::operation::GuardedModes;
 use super::super::{apply_session_orchestrator_default, resolve_workspace_argument};
 use super::guarded;
 use crate::{OrbitBuiltinAction, ToolContext};
+
+const SNAPSHOT_KEYS: &[&str] = &[
+    "workspace",
+    "id",
+    TASK_ID_WIRE_ALIAS,
+    "snapshot",
+    "model",
+    "fields",
+    "field",
+    "limit",
+];
+const BOUNDED_SHOW_KEYS: &[&str] = &[
+    "workspace",
+    "view",
+    "id",
+    TASK_ID_WIRE_ALIAS,
+    "limit",
+    "comments_offset",
+    "history_offset",
+    "artifacts_offset",
+    "model",
+];
+const BOUNDED_LIST_KEYS: &[&str] = &[
+    "workspace",
+    "view",
+    "offset",
+    "limit",
+    "search",
+    "status",
+    "priority",
+    "model",
+];
 
 impl GuardedModes for TaskVerb {
     fn preempt(self, ctx: &ToolContext, input: &Value) -> Option<Result<Value, OrbitError>> {
@@ -48,55 +80,20 @@ impl GuardedModes for TaskVerb {
         if matches!(self, TaskVerb::Show)
             && input.get("snapshot") == Some(&Value::Bool(true))
             && input.get("view").is_none()
-            && let Err(error) = reject_unknown_tool_fields(
-                input,
-                &[
-                    "workspace",
-                    "id",
-                    TASK_ID_WIRE_ALIAS,
-                    "snapshot",
-                    "model",
-                    "fields",
-                    "field",
-                    "limit",
-                ],
-            )
+            && let Err(error) = reject_unknown_tool_fields(input, SNAPSHOT_KEYS)
         {
-            return Some(Err(OrbitError::InvalidInput(format!(
-                "{error}; not accepted with snapshot: true; drop it"
-            ))));
+            return Some(Err(mode_field_error(error, "snapshot: true")));
         }
         if matches!(self, TaskVerb::Show | TaskVerb::List)
             && input.get("view").and_then(Value::as_str) == Some("bounded")
         {
-            let keys: &[&str] = if matches!(self, TaskVerb::Show) {
-                &[
-                    "workspace",
-                    "view",
-                    "id",
-                    TASK_ID_WIRE_ALIAS,
-                    "limit",
-                    "comments_offset",
-                    "history_offset",
-                    "artifacts_offset",
-                    "model",
-                ]
+            let keys = if matches!(self, TaskVerb::Show) {
+                BOUNDED_SHOW_KEYS
             } else {
-                &[
-                    "workspace",
-                    "view",
-                    "offset",
-                    "limit",
-                    "search",
-                    "status",
-                    "priority",
-                    "model",
-                ]
+                BOUNDED_LIST_KEYS
             };
             if let Err(error) = reject_unknown_tool_fields(input, keys) {
-                return Some(Err(OrbitError::InvalidInput(format!(
-                    "{error}; not accepted with view: bounded; drop it"
-                ))));
+                return Some(Err(mode_field_error(error, "view: bounded")));
             }
         }
         match self {
@@ -230,16 +227,7 @@ impl GuardedModes for TaskVerb {
                     ctx,
                     input.clone(),
                     "task",
-                    &[
-                        "workspace",
-                        "view",
-                        "id",
-                        "limit",
-                        "comments_offset",
-                        "history_offset",
-                        "artifacts_offset",
-                        "model",
-                    ],
+                    BOUNDED_SHOW_KEYS,
                     "omit `view` to use the default full task record",
                 )),
                 Ok(false) => (input.get("snapshot") == Some(&Value::Bool(true)))
@@ -252,16 +240,7 @@ impl GuardedModes for TaskVerb {
                     ctx,
                     input.clone(),
                     "tasks",
-                    &[
-                        "workspace",
-                        "view",
-                        "offset",
-                        "limit",
-                        "search",
-                        "status",
-                        "priority",
-                        "model",
-                    ],
+                    BOUNDED_LIST_KEYS,
                     "omit `view` to use the default task listing",
                 )),
                 Err(error) => Some(Err(error)),
@@ -399,23 +378,8 @@ fn implementation_activity_sets_blocked(ctx: &ToolContext, input: &Value) -> boo
 /// The bounded versioned snapshot: one task, an opaque revision and the
 /// actions available, for an explicit workspace.
 fn snapshot(ctx: &ToolContext, mut input: Value) -> Result<Value, OrbitError> {
-    reject_unknown_tool_fields(
-        &input,
-        &[
-            "workspace",
-            "id",
-            "snapshot",
-            "model",
-            "fields",
-            "field",
-            "limit",
-        ],
-    )
-    .map_err(|error| {
-        OrbitError::InvalidInput(format!(
-            "{error}; not accepted with snapshot: true; drop it"
-        ))
-    })?;
+    reject_unknown_tool_fields(&input, SNAPSHOT_KEYS)
+        .map_err(|error| mode_field_error(error, "snapshot: true"))?;
     required_string(&input, &["workspace"], "workspace")?;
     let projection = response_projection(&input, SNAPSHOT_RESPONSE_FIELDS)?;
     let ignored_limit = input.get("limit").is_some();

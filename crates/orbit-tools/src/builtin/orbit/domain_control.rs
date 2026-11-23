@@ -89,6 +89,14 @@ impl Tool for RoutineControlTool {
     }
 }
 
+pub(super) fn mode_field_error(error: OrbitError, mode: &str) -> OrbitError {
+    let suggestions = error.did_you_mean().unwrap_or_default().to_vec();
+    OrbitError::invalid_input_with_suggestions(
+        format!("{error}; not accepted with {mode}; drop it"),
+        suggestions,
+    )
+}
+
 /// Translate the bounded domain view to the existing shared projection implementation.
 pub(super) fn bounded_read(
     ctx: &ToolContext,
@@ -103,9 +111,8 @@ pub(super) fn bounded_read(
         )));
     }
     required_string(&input, &["workspace"], "workspace")?;
-    reject_unknown_tool_fields(&input, allowed).map_err(|error| {
-        OrbitError::InvalidInput(format!("{error}; not accepted with view: bounded; drop it"))
-    })?;
+    reject_unknown_tool_fields(&input, allowed)
+        .map_err(|error| mode_field_error(error, "view: bounded"))?;
     if let Some(object) = input.as_object_mut() {
         object.remove("view");
     }
