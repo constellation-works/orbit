@@ -97,3 +97,21 @@ pub(super) fn provider_cli_config(
 ) -> std::collections::HashMap<String, String> {
     orbit_engine::RuntimeHost::agent_provider_config(runtime)
 }
+
+pub(super) fn begin_agent_execution(
+    runtime: &OrbitRuntime,
+    run_id: &str,
+    activity_id: &str,
+    provider: &str,
+    model: Option<&str>,
+    identity: &orbit_types::telemetry::AgentExecutionIdentity,
+) -> Result<Option<i64>, orbit_common::OrbitError> {
+    Ok(Some(runtime.sqlite_store()?.begin_agent_execution(
+        runtime.stores().jobs().workspace_id(),
+        run_id,
+        activity_id,
+        provider,
+        model,
+        identity,
+    )?))
+}

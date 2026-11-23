@@ -1,6 +1,9 @@
 //! Adapter hooks through which the engine's step and final recovery reach the runtime.
 
+use std::collections::BTreeMap;
+
 use orbit_common::OrbitError;
+use serde_json::Value;
 
 use crate::OrbitRuntime;
 
@@ -50,7 +53,7 @@ pub(super) fn validate_step_recovery_mutation(
     )
 }
 
-pub(super) use super::checkpoints::StepCheckpoint;
+use super::checkpoints::StepCheckpoint;
 
 pub(super) fn checkpoint_step(
     runtime: &OrbitRuntime,
@@ -60,6 +63,53 @@ pub(super) fn checkpoint_step(
     // The step is durable, so this is a safe point to yield to an upgrade.
     runtime.yield_run_at_step_boundary(checkpoint.run_id);
     Ok(())
+}
+
+/// Checkpoint a completed step with its output and the compound and script
+/// output sets behind it, as the engine hands them over.
+pub(super) fn checkpoint_step_outputs(
+    runtime: &OrbitRuntime,
+    run_id: &str,
+    step_index: u32,
+    step_id: &str,
+    output: &Value,
+    compound_outputs: &BTreeMap<String, Value>,
+    script_outputs: &BTreeMap<String, orbit_types::workflow::activity_job::ScriptOutputSet>,
+) -> Result<(), orbit_engine::DispatchError> {
+    checkpoint_step(
+        runtime,
+        &StepCheckpoint {
+            run_id,
+            step_index,
+            step_id,
+            output,
+            compound_outputs,
+            script_outputs,
+            skipped: false,
+        },
+    )
+}
+
+/// Checkpoint a step whose `when:` was false: a null output and the skipped
+/// marker, with no compound or script output sets.
+pub(super) fn checkpoint_skipped_step(
+    runtime: &OrbitRuntime,
+    run_id: &str,
+    step_index: u32,
+    step_id: &str,
+) -> Result<(), orbit_engine::DispatchError> {
+    checkpoint_step(
+        runtime,
+        &StepCheckpoint {
+            run_id,
+            step_index,
+            step_id,
+            output: &Value::Null,
+            compound_outputs: &BTreeMap::new(),
+            script_outputs: &BTreeMap::new(),
+            skipped: true,
+        },
+    )
 }
 
 pub(super) fn acquire_deferred_footprint(

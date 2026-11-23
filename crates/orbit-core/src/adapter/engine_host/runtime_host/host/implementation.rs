@@ -47,6 +47,7 @@ use super::super::{
     activity_tools, agent, auto_task, checkpoints, claims, crew, executors, host_metadata,
     invocation, recovery, task_automation, validation,
 };
+use super::private_vcs;
 
 impl RuntimeHost for OrbitRuntime {
     fn start_plugin_broker(
@@ -685,11 +686,7 @@ impl RuntimeHost for OrbitRuntime {
         operation: &str,
         input: Value,
     ) -> Result<Value, OrbitError> {
-        // [ORB-26389] Every merge the engine requests leaves an audit row.
-        if operation == orbit_engine::PRIVATE_VCS_PR_MERGE {
-            return crate::application::task::audited_private_vcs_merge(self, &input);
-        }
-        orbit_engine::run_private_vcs_operation(operation, &input)
+        private_vcs::run_private_vcs_operation(self, operation, input)
     }
 
     fn actor_model_identity(&self) -> Option<String> {
@@ -871,17 +868,14 @@ impl RuntimeHost for OrbitRuntime {
         compound_outputs: &BTreeMap<String, Value>,
         script_outputs: &BTreeMap<String, orbit_types::workflow::activity_job::ScriptOutputSet>,
     ) -> Result<(), DispatchError> {
-        recovery::checkpoint_step(
+        recovery::checkpoint_step_outputs(
             self,
-            &recovery::StepCheckpoint {
-                run_id,
-                step_index,
-                step_id,
-                output,
-                compound_outputs,
-                script_outputs,
-                skipped: false,
-            },
+            run_id,
+            step_index,
+            step_id,
+            output,
+            compound_outputs,
+            script_outputs,
         )
     }
 
@@ -891,18 +885,7 @@ impl RuntimeHost for OrbitRuntime {
         step_index: u32,
         step_id: &str,
     ) -> Result<(), DispatchError> {
-        recovery::checkpoint_step(
-            self,
-            &recovery::StepCheckpoint {
-                run_id,
-                step_index,
-                step_id,
-                output: &Value::Null,
-                compound_outputs: &BTreeMap::new(),
-                script_outputs: &BTreeMap::new(),
-                skipped: true,
-            },
-        )
+        recovery::checkpoint_skipped_step(self, run_id, step_index, step_id)
     }
 
     fn observe_auto_task_step(
@@ -1171,14 +1154,7 @@ impl RuntimeHost for OrbitRuntime {
         model: Option<&str>,
         identity: &orbit_types::telemetry::AgentExecutionIdentity,
     ) -> Result<Option<i64>, OrbitError> {
-        Ok(Some(self.sqlite_store()?.begin_agent_execution(
-            self.stores().jobs().workspace_id(),
-            run_id,
-            activity_id,
-            provider,
-            model,
-            identity,
-        )?))
+        invocation::begin_agent_execution(self, run_id, activity_id, provider, model, identity)
     }
 
     fn persist_invocation_trace(
