@@ -347,7 +347,11 @@ impl OrbitRuntime {
     ///
     /// Runs against the resolved `JobV2` definition (`Snapshot` for direct YAML
     /// paths, `load_v2_job_asset_by_name` for catalog jobs) before admission
-    /// persists any run or reclaims worktrees.
+    /// persists any run or reclaims worktrees. A step whose `when` guard is
+    /// not known true at admission is ignored: a false guard skips it, and a
+    /// guard that needs runtime `steps`, `item` or `iteration` state is left
+    /// to execution, which still refuses invalid string `task_ids` if that
+    /// guard becomes true.
     pub(crate) fn validate_pilot_string_task_ids_input(
         &self,
         job_name: &str,
@@ -381,16 +385,11 @@ impl OrbitRuntime {
         catalog: &mut Option<V2ActivityCatalog>,
     ) -> Result<Option<(String, String)>, OrbitError> {
         for step in steps {
-            if let Some(when_expr) = step.when.as_deref()
-                && matches!(
-                    evaluate_job_step_when_at_admission(
-                        spec.default_input.as_ref(),
-                        input,
-                        when_expr,
-                    ),
-                    Ok(false)
-                )
-            {
+            if pilot_step_when_inactive_at_admission(
+                spec.default_input.as_ref(),
+                input,
+                step.when.as_deref(),
+            ) {
                 continue;
             }
             match &step.body {
@@ -494,6 +493,25 @@ impl OrbitRuntime {
         }
         Ok(None)
     }
+}
+
+/// Whether admission must ignore this step when looking for a pilot forward.
+///
+/// A missing guard stays active. Anything other than `Ok(true)` does not:
+/// a false guard will not run, and an error cannot be told apart from a
+/// runtime-only `steps`, `item` or `iteration` reference at admission.
+fn pilot_step_when_inactive_at_admission(
+    job_default_input: Option<&Value>,
+    caller_input: &Value,
+    when_expr: Option<&str>,
+) -> bool {
+    let Some(when_expr) = when_expr else {
+        return false;
+    };
+    !matches!(
+        evaluate_job_step_when_at_admission(job_default_input, caller_input, when_expr),
+        Ok(true)
+    )
 }
 
 /// Non-JSON plain-string probe used beside the caller's actual string `task_ids`

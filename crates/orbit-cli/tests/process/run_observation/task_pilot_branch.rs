@@ -1314,3 +1314,222 @@ fn generic_job_run_validates_pilot_input_against_resolved_job_and_step() {
         );
     }
 }
+
+/// A runtime `when` that is false once step, item, or iteration state exists
+/// must not refuse string `task_ids` at admission. The unguarded probe still
+/// runs, and the skipped pilot step records nothing.
+#[test]
+fn runtime_when_guard_lets_string_task_ids_reach_an_unguarded_probe() {
+    if !isolated_run_observation(
+        "run_observation::task_pilot_branch::runtime_when_guard_lets_string_task_ids_reach_an_unguarded_probe",
+    ) {
+        return;
+    }
+    let fixture = Fixture::terminal();
+    git_repo::SeededRepo::new(&fixture.work).build();
+    let origin = fixture.home.join("origin.git");
+    git_repo::run(
+        &fixture.work,
+        &["clone", "--bare", ".", origin.to_str().unwrap()],
+    );
+    git_repo::run(
+        &fixture.work,
+        &["remote", "add", "origin", origin.to_str().unwrap()],
+    );
+    let runtime = fixture.registered_runtime();
+
+    let activities_dir = fixture.work.join(".orbit/resources/activities");
+    fs::create_dir_all(&activities_dir).unwrap();
+    fs::write(
+        activities_dir.join("custom_prepare.yaml"),
+        json!({
+            "schemaVersion": 2,
+            "kind": "Activity",
+            "metadata": {"name": "custom_prepare"},
+            "spec": {
+                "type": "deterministic",
+                "description": "Custom-named prepare_task_pilot activity alias",
+                "action": "prepare_task_pilot",
+                "config": {}
+            }
+        })
+        .to_string(),
+    )
+    .unwrap();
+
+    let decide = json!({
+        "id": "decide",
+        "default_input": {"seconds": 0},
+        "spec": {"type": "deterministic", "action": "sleep", "config": {}}
+    });
+    let probe = json!({
+        "id": "probe",
+        "default_input": {"seconds": 0, "note": "{{ input.task_ids }}"},
+        "spec": {"type": "deterministic", "action": "sleep", "config": {}}
+    });
+    let prepare = |when: &str| {
+        json!({
+            "id": "prepare",
+            "when": when,
+            "target": "activity:custom_prepare",
+            "default_input": "{{ input }}"
+        })
+    };
+    let write = |name: &str, steps: Value| {
+        fixture.write_job(
+            &format!("{name}.yaml"),
+            &json!({
+                "schemaVersion": 2,
+                "kind": "Job",
+                "metadata": {"name": name},
+                "spec": {
+                    "state": "enabled",
+                    "kind": "workflow",
+                    "steps": steps
+                }
+            })
+            .to_string(),
+        );
+    };
+
+    write(
+        "custom_pilot_runtime_prior_step",
+        json!([
+            decide.clone(),
+            prepare("{{ steps.decide.output.slept_seconds }} == 1"),
+            probe.clone()
+        ]),
+    );
+    write(
+        "custom_pilot_runtime_mixed",
+        json!([
+            decide.clone(),
+            prepare("{{ steps.decide.output.slept_seconds }} == 0 && {{ input.mode }} == pilot"),
+            probe.clone()
+        ]),
+    );
+    write(
+        "custom_pilot_runtime_fan_out",
+        json!([
+            {
+                "id": "scatter",
+                "fan_out": {
+                    "items": "[\"probe\"]",
+                    "max_workers": 1,
+                    "worker": prepare("{{ item }} == pilot")
+                },
+                "fan_in": {"join": {"mode": "all"}}
+            },
+            probe.clone()
+        ]),
+    );
+    write(
+        "custom_pilot_runtime_loop",
+        json!([
+            {
+                "id": "spin",
+                "loop": {
+                    "max_iterations": 1,
+                    "steps": [prepare("{{ iteration }} == 1")]
+                }
+            },
+            probe.clone()
+        ]),
+    );
+    write(
+        "custom_pilot_runtime_enclosing",
+        json!([
+            decide,
+            {
+                "id": "guarded_prepare",
+                "when": "{{ steps.decide.output.slept_seconds }} == 1",
+                "parallel": {
+                    "join": {"mode": "all"},
+                    "branches": [{
+                        "id": "prepare",
+                        "target": "activity:custom_prepare",
+                        "default_input": "{{ input }}"
+                    }]
+                }
+            },
+            probe
+        ]),
+    );
+
+    let cli = |args: &[&str]| {
+        let output = fixture
+            .orbit()
+            .env("PATH", std::env::var_os("PATH").unwrap())
+            .args(args)
+            .timeout(Duration::from_secs(120))
+            .output()
+            .unwrap();
+        if let Ok(result) = serde_json::from_slice::<Value>(&output.stdout)
+            && let Some(id) = result["run_id"].as_str()
+        {
+            let run = runtime.show_job_run(id).unwrap();
+            test_env::wait_until("disposable pilot worker exit", || {
+                run.pid.is_none_or(|pid| {
+                    probe_process_liveness(pid, run.pid_start_time.as_deref())
+                        == ProcessLiveness::Exited
+                })
+            });
+        }
+        output
+    };
+
+    let cases: &[(&str, &[&str])] = &[
+        ("custom_pilot_runtime_prior_step", &[]),
+        ("custom_pilot_runtime_mixed", &["mode=probe"]),
+        ("custom_pilot_runtime_fan_out", &[]),
+        ("custom_pilot_runtime_loop", &[]),
+        ("custom_pilot_runtime_enclosing", &[]),
+    ];
+    for (target, extras) in cases {
+        for subcommand in [["run", "job"], ["job", "run"]] {
+            let mut args = vec![subcommand[0], subcommand[1], target];
+            for extra in *extras {
+                args.push("--input");
+                args.push(extra);
+            }
+            args.extend([
+                "--input",
+                "task_ids=plain-string-value",
+                "--wait",
+                "--timeout-seconds",
+                "60",
+                "--json",
+            ]);
+            let output = cli(&args);
+            assert!(
+                output.status.success(),
+                "{subcommand:?} {target} with a runtime-false pilot guard must run probe: {output:?}"
+            );
+            let doc: Value = serde_json::from_slice(&output.stdout).unwrap();
+            let run_id = doc["run_id"].as_str().unwrap();
+            let run = runtime.show_job_run(run_id).unwrap();
+            assert_eq!(
+                run.state,
+                orbit_types::workflow::JobRunState::Success,
+                "{subcommand:?} {target} must finish after skipping prepare: {run:?}"
+            );
+            assert_eq!(
+                run.input.as_ref().unwrap()["task_ids"],
+                json!("plain-string-value")
+            );
+            let state = runtime.read_run_state(run_id).unwrap().unwrap();
+            assert!(
+                state.pipeline.get("prepare").is_none(),
+                "{subcommand:?} {target} must record no preparation output: {state:?}"
+            );
+            assert!(
+                state.pipeline.get("guarded_prepare").is_none(),
+                "{subcommand:?} {target} must record no skipped block output: {state:?}"
+            );
+            assert!(
+                state.pipeline["probe"]["slept_seconds"].is_number(),
+                "{subcommand:?} {target} probe step must run: {state:?}"
+            );
+        }
+    }
+}
