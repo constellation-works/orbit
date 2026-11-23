@@ -8,12 +8,16 @@ use super::{PassReads, RepairAuthority, RepairObservation, Verdict};
 use crate::OrbitRuntime;
 use crate::application::job::resume::shelving_run_id;
 use crate::application::job::{RunOwnerLiveness, run_owner_liveness};
+use crate::application::task::SYSTEM_ACTOR_LABEL;
 use chrono::Utc;
 use orbit_common::OrbitError;
-use orbit_types::task::{NO_AUTO_APPROVE_TAG, TaskStatus, names_task_delivery_pull_request};
+use orbit_types::task::{
+    NO_AUTO_APPROVE_TAG, TaskHistoryEntry, TaskStatus, names_task_delivery_pull_request,
+};
 use orbit_types::workflow::{
     COMPLETION_HOLD_KEY, DEFAULT_BRANCH_PREFIX, DeliveryRefusal, JobRun, JobRunState,
-    PipelineState, PrAutoFixBlocker, current_completion_hold,
+    PR_AUTO_FIX_PUSHED_EVENT, PipelineState, PrAutoFixBlocker, current_completion_hold,
+    pr_auto_fix_pushes,
 };
 use serde_json::{Value, json};
 use std::time::Instant;
@@ -285,14 +289,7 @@ impl OrbitRuntime {
                     (Some(number), Some(head)) => (
                         number.to_string(),
                         head.to_string(),
-                        state
-                            .pipeline
-                            .get("landing_push")
-                            .filter(|push| !push.is_null())
-                            .or_else(|| state.pipeline.get("push"))
-                            .and_then(|push| push.get("local_sha"))
-                            .and_then(Value::as_str)
-                            .map(str::to_string),
+                        Self::pipeline_published_sha(&state),
                     ),
                     _ => {
                         if Self::run_published_failure_handoff_pr(&state, task_id, &pr_number) {
@@ -425,9 +422,27 @@ impl OrbitRuntime {
         // A blocker is repaired through the ledger, whether the leaf stopped
         // or held. A held leaf with none is handed back for completion to
         // read the forge again, within its own ceiling.
+        // An auto-fix stop or absent-check hold is reconsidered only on the
+        // held run's own published head.
+        let check_runs_absent_hold = held == Some(DeliveryRefusal::CheckRunsAbsent.error_code());
+        let published_sha = if auto_fix_hold || unrepaired_repair_hold || check_runs_absent_hold {
+            match self.resolve_held_published_sha(run, &history, &number, published_sha) {
+                Ok(sha) => sha,
+                Err(error) => {
+                    return skip(
+                        "store_unreadable",
+                        format!("read the run's lineage: {error}"),
+                    );
+                }
+            }
+        } else {
+            published_sha
+        };
         // An auto-fix stop is reconsidered only after positive, complete check
         // evidence. Red, pending or absent checks must not trigger another repair.
-        if auto_fix_hold && published_sha.as_deref() != Some(blockers.head_sha.as_str()) {
+        if (auto_fix_hold || check_runs_absent_hold)
+            && published_sha.as_deref() != Some(blockers.head_sha.as_str())
+        {
             return skip(
                 "publication_identity_changed",
                 format!("#{number} no longer matches the held run's published head"),
@@ -543,6 +558,53 @@ impl OrbitRuntime {
             hold,
             marker,
         }))
+    }
+
+    /// The latest non-null publication SHA recorded in `state.pipeline`.
+    fn pipeline_published_sha(state: &PipelineState) -> Option<String> {
+        ["re_push_2", "re_push", "landing_push", "push"]
+            .into_iter()
+            .find_map(|step| {
+                state
+                    .pipeline
+                    .get(step)
+                    .filter(|push| !push.is_null())
+                    .and_then(|push| push.get("local_sha"))
+                    .and_then(Value::as_str)
+            })
+            .map(str::to_string)
+    }
+
+    /// Advance `published_sha` through contiguous `pr_auto_fix_pushed` records
+    /// written by `system` within `run`'s retry ancestry.
+    fn resolve_held_published_sha(
+        &self,
+        run: &JobRun,
+        history: &[TaskHistoryEntry],
+        pr_number: &str,
+        published_sha: Option<String>,
+    ) -> Result<Option<String>, OrbitError> {
+        let Some(mut sha) = published_sha else {
+            return Ok(None);
+        };
+        if !history
+            .iter()
+            .any(|entry| entry.event == PR_AUTO_FIX_PUSHED_EVENT)
+        {
+            return Ok(Some(sha));
+        }
+        let (ancestors, _) = self.resume_lineage_run_ids(run)?;
+        let system_history: Vec<_> = history
+            .iter()
+            .filter(|entry| entry.by == SYSTEM_ACTOR_LABEL)
+            .cloned()
+            .collect();
+        for push in pr_auto_fix_pushes(&system_history, pr_number) {
+            if ancestors.contains(&push.run_id) && push.from_head_sha == sha {
+                sha = push.to_head_sha;
+            }
+        }
+        Ok(Some(sha))
     }
 
     /// Whether `state` carries the failure handoff that published `pr_number`
