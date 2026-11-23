@@ -482,7 +482,7 @@ check(artifact_json A, v): v == json_pointer(artifact(ctx.bound_task, A.path), A
 
 The evaluator reads state through `ApplicationPort`: `get_task` and, from slice 2,
 `task_artifact_sha256`. The kernel never reaches into `orbit-core`
-directly (`crates/orbit-runtime/CLAUDE.md`). Predicate reads and the write are not one
+directly (`crates/orbit-runtime/AGENTS.md`). Predicate reads and the write are not one
 transaction. Lifecycle preconditions on the write (the atomic start, `transition.from`
 rechecked by the update itself) close the race for status. The digest recheck closes
 it for payloads.

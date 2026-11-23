@@ -1997,7 +1997,7 @@ The [orbit-config audit delivery](../dev/reviews/unit-test-audit-orbit-config-de
 
 - A golden's fixture input is real or realistic, checked in, and small.
 - `make goldens UPDATE=1` regenerates goldens. The PR explains every golden diff. Re-blessing a diff without explaining it is a review blocker, and so is blessing a diff to get CI green.
-- A golden asserts a contract. Do not golden prose that is expected to change, such as prompts or UI copy (see the text-matching rule in `CLAUDE.md`).
+- A golden asserts a contract. Do not golden prose that is expected to change, such as prompts or UI copy (see the text-matching rule in `AGENTS.md`).
 
 ## Integration-test cost
 

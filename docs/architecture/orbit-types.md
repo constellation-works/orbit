@@ -26,3 +26,7 @@ Enforced by `scripts/check-dependency-direction.sh`; table in `ARCHITECTURE.md`.
 Start reading at `crates/orbit-types/src/lib.rs`; start at `crates/orbit-types/src/task/model/task.rs` (`Task`).
 
 Design intent: [docs/design/orbit-core/](../../docs/design/orbit-core/) — this page describes the code as it is; the design folder holds intent.
+
+## Domain modules
+
+The domain modules are `desktop`, `identity`, `plugin`, `policy`, `record`, `resource`, `task`, `telemetry`, `timestamp`, `tool`, `workflow` and `workspace`. `desktop` = guarded desktop task contracts; `plugin` = plugin manifests, pins, and namespace rules; `record` = durable authored artifacts; `telemetry` = measurement of runs. `timestamp` owns the shared legacy UTC wire format for policy and executor records.

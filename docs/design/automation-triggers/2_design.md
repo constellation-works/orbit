@@ -850,7 +850,7 @@ was removed; it is not an unfinished prerequisite of the shipped triggers.
 Implement tests at the shared domain/store boundaries using existing sibling
 test layouts and fake clocks/providers; add no generic harness. Include end-to-end
 fixtures exercising actual job/task creation and crash recovery, not only due math.
-Follow the current [workspace gate guidance](../../../CLAUDE.md#gates) for
+Follow the current [workspace gate guidance](../../../AGENTS.md#gates) for
 delivery validation: run focused behavior checks for the changed contract,
 Clippy for changed crates, and `make goldens` when CLI help, MCP text, or
 another golden surface changes. Whole-workspace commands are not blanket local

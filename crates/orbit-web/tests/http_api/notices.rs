@@ -281,7 +281,7 @@ fn post_notice_refusals_carry_the_core_invalid_field_code() {
     );
 }
 
-/// Release-QA exception (ORB-25724, AGENTS.md "Tests and QA"): the operator's
+/// Release-QA exception (ORB-25724, docs/agents/test-and-qa-rules.md): the operator's
 /// successful HTTP close of a notice this test created, and an ordinary
 /// caller's refusal of the same route. Operator authority comes only from the
 /// fixture's governed operator server; no role override or live state is used.

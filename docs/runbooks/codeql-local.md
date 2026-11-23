@@ -13,7 +13,7 @@ requests). A docs-only push whose parent already has a successful completed
 run of that workflow skips the analysis jobs; a non-docs path, a parent
 without that proof, `workflow_dispatch` and the daily schedule still run every
 analysis job. Use this
-procedure before handoff only when the agent guide (`CLAUDE.md`, "Local Rust
+procedure before handoff only when the agent guide (`AGENTS.md`, "Local Rust
 CodeQL") requires it: a code-scanning or CodeQL repair, a task tagged
 `security` or `security-review`, or a change to `.github/codeql/**` or
 `scripts/codeql-rust-local.sh`. For a code-scanning repair, check the

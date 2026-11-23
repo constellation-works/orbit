@@ -3453,8 +3453,8 @@ mod fixtures {
                      "orbit-mcp", "orbit-runtime", "orbit-store", "orbit-types"):
             directory = crates / name
             directory.mkdir(parents=True)
-            (directory / "CLAUDE.md").write_text("Guide\n")
-            (directory / "AGENTS.md").symlink_to("CLAUDE.md")
+            (directory / "AGENTS.md").write_text("Guide\n")
+            (directory / "CLAUDE.md").write_text("@AGENTS.md\n")
         bin_dir = self.root / "bin"
         bin_dir.mkdir()
         for tool in ("dirname", "find", "sort", "readlink"):
