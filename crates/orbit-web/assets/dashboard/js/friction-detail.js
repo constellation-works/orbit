@@ -25,8 +25,8 @@ export function paintFrictionDetail(detail, friction, ctx) {
   // record, as the task detail does. Skipping the whole paint leaves the
   // status pill and the Resolve footer (stuck on "wait") showing the
   // friction from before the write, and cancelling the editor does not
-  // paint again. The accordion twin is a fresh section with no friction
-  // id, so it never takes this path.
+  // paint again. Both the wide detail pane and a mounted accordion section
+  // take this path.
   const draftCell = frictionTagsDraftCell(detail, friction.id);
   if (draftCell && repaintFrictionAroundTagsDraft(detail, friction, ctx)) return;
 
