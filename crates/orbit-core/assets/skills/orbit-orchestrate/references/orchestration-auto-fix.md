@@ -64,7 +64,7 @@ It cannot be combined with `--pull` or `--stop`.
   resumed run never admits an attempt is not repeated for that head and
   blocker; blocker hand-backs are also capped at three per PR. When the attempt
   budget is spent, the leaf stops with `auto_fix_budget_exhausted` and lists
-  the attempts.
+  the watcher attempts and counts the source-repair reservations that share the budget.
 - Closed or merged PRs and superseded heads get no repair.
 - A blocked Orbit PR whose task no run is delivering any more is repaired out
   of run. Each `--auto-fix` drain pass hands it back to the task's newest

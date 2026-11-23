@@ -6015,7 +6015,13 @@ impl orbit_engine::test_support::NullRuntimeHost for DeliveryHost {
         Ok(locked(&self.runs).get(run_id).cloned())
     }
     fn admit_pr_auto_fix(&self, request: &PrAutoFixRequest) -> Res<PrAutoFixAdmission> {
-        let attempts = pr_auto_fix_attempts(&self.history(TASK_ID), &request.pr_number);
+        let history = self.history(TASK_ID);
+        let attempts = pr_auto_fix_attempts(&history, &request.pr_number);
+        let source_repairs = orbit_types::workflow::source_repair_reservations(&history)
+            .unwrap()
+            .iter()
+            .filter(|record| record.binding.pull_request == request.pr_number)
+            .count() as u32;
         let ended = |attempt: &PrAutoFixAttempt| {
             matches!(
                 RuntimeHost::get_job_run(self, &attempt.run_id),
@@ -6030,7 +6036,7 @@ impl orbit_engine::test_support::NullRuntimeHost for DeliveryHost {
                 blocker: request.blocker,
                 run_id: &request.run_id,
             },
-            PR_AUTO_FIX_BUDGET,
+            PR_AUTO_FIX_BUDGET.saturating_sub(source_repairs),
             "fixture",
             "fixture",
             &ended,
@@ -6038,7 +6044,10 @@ impl orbit_engine::test_support::NullRuntimeHost for DeliveryHost {
         if let PrAutoFixDecision::Admit(attempt) = &decision {
             auto_fix::seed_auto_fix_history(self, PR_AUTO_FIX_ADMITTED_EVENT, attempt);
         }
-        Ok(PrAutoFixAdmission::Decided(decision))
+        Ok(PrAutoFixAdmission::Decided {
+            decision,
+            source_repairs,
+        })
     }
     fn admit_pr_base_update(
         &self,

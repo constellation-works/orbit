@@ -235,7 +235,7 @@ fn run_undeclared_recovery_repair_job(host: &DeliveryHost, input: Value) -> JobR
 fn admitted_check_repair_handoff_routes_holds_or_fails_with_the_budget() {
     auto_fix_table(
         "auto_fix::admitted_check_repair_handoff_routes_holds_or_fails_with_the_budget",
-        "routed recovery_failed held exhausted",
+        "routed recovery_failed held exhausted mixed_exhausted source_exhausted",
         |case, row| {
             let (fx, host) = docs_only_pr(row);
             let mode = if case == "recovery_failed" {
@@ -252,6 +252,34 @@ fn admitted_check_repair_handoff_routes_holds_or_fails_with_the_budget() {
             fx.script_checks(&["source_contract"]);
             if case == "exhausted" {
                 seed_spent(&host, 1, PrAutoFixBlocker::FailedChecks, RUN_ID);
+            } else if matches!(case, "mixed_exhausted" | "source_exhausted") {
+                let reservations = if case == "mixed_exhausted" { 1 } else { 3 };
+                for n in 1..=reservations {
+                    seed_auto_fix_history(
+                        &host,
+                        orbit_types::workflow::SOURCE_REPAIR_RESERVED,
+                        &json!({
+                            "request_key": format!("source-{n}"),
+                            "binding": {
+                                "schema_version": 1, "workspace_id": "workspace", "task_id": TASK_ID,
+                                "source_run_id": "source-run", "machine_id": "machine",
+                                "source_digest": "digest", "task_digest": "digest", "repository": "owner/repo",
+                                "remote_url": "https://example.test/repo.git", "branch": "branch",
+                                "pull_request": PR_NUMBER, "pull_request_url": "https://example.test/pr",
+                                "head_sha": "source-head", "base_sha": "base", "base_branch": "main"
+                            },
+                            "diagnosis": "repair", "authorized_by": "operator", "authorizer_provenance": "operator",
+                            "authorized_at": Utc::now(), "attempt": n,
+                            "review": {"contract_version": orbit_types::workflow::REVIEW_CONTRACT_VERSION,
+                                "policy_version": 1, "timing": "none", "timing_source": "global",
+                                "crew_source": "global", "budget": {"minutes": 30}, "captured_at": Utc::now()}
+                        }),
+                    );
+                }
+                if case == "mixed_exhausted" {
+                    seed_attempt(&host, "spent-1", PrAutoFixBlocker::FailedChecks, 1, RUN_ID);
+                    seed_attempt(&host, "spent-2", PrAutoFixBlocker::FailedChecks, 2, RUN_ID);
+                }
             }
             let input = auto_fix_input(&fx);
             let outcome = if matches!(case, "routed" | "recovery_failed") {
@@ -439,7 +467,7 @@ fn admitted_check_repair_handoff_routes_holds_or_fails_with_the_budget() {
                         case,
                     );
                 }
-                "exhausted" => {
+                "exhausted" | "mixed_exhausted" | "source_exhausted" => {
                     let error = match outcome {
                         Ok(result) => {
                             assert!(!result.success, "{result:?}");
@@ -461,7 +489,20 @@ fn admitted_check_repair_handoff_routes_holds_or_fails_with_the_budget() {
                         !scripted_ran(&host, "test_ci_repair"),
                         "an exhausted budget does not enter check repair"
                     );
-                    assert_eq!(repair_attempts(&host).len(), 3, "{case}");
+                    let (reservations, watcher_count) = match case {
+                        "mixed_exhausted" => (1, 2),
+                        "source_exhausted" => (3, 0),
+                        _ => (0, 3),
+                    };
+                    assert!(error.contains("3 repairs are spent"), "{case}: {error}");
+                    assert!(
+                        error.contains(&format!("{reservations} source-repair reservations")),
+                        "{case}: {error}"
+                    );
+                    for n in 1..=watcher_count {
+                        assert!(error.contains(&format!("spent-{n}")), "{case}: {error}");
+                    }
+                    assert_eq!(repair_attempts(&host).len(), watcher_count, "{case}");
                     assert_no_merge_or_landing(&fx, &host, TaskStatus::Review, case);
                 }
                 other => panic!("unknown case {other}"),
