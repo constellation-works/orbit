@@ -32,7 +32,7 @@ pub use env::{
 };
 pub use error::{
     credential_safe_location, redact_all_and_home, redact_all_and_home_error, redact_all_error,
-    redact_all_json, redact_home_dir,
+    redact_all_json, redact_all_json_with_keys, redact_home_dir,
 };
 pub use pattern::{
     PatternRedactor, argv_redactor, is_high_confidence_single_token_credential, redact_all,

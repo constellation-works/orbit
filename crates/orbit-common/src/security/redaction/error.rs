@@ -475,28 +475,59 @@ fn redact_recoverable_vcs_conflict(
 }
 
 pub(super) fn redact_json_with(value: Value, redact: fn(&str) -> String) -> Value {
+    redact_json_walk(value, redact, false)
+}
+
+/// [`redact_all_json`] that also redacts object member names.
+///
+/// Property names are caller-controlled text, so a recognizable credential
+/// used as a name survives [`redact_all_json`], which keeps keys verbatim so
+/// stored documents stay readable. Use this for a record that keeps
+/// untrusted objects whole. Names that redact to the same text are kept apart
+/// with a numeric suffix so no member's value is dropped.
+pub fn redact_all_json_with_keys(value: Value) -> Value {
+    redact_json_walk(value, redact_all, true)
+}
+
+fn redact_json_walk(value: Value, redact: fn(&str) -> String, redact_keys: bool) -> Value {
     match value {
         Value::String(raw) => Value::String(redact(&raw)),
         Value::Array(items) => Value::Array(
             items
                 .into_iter()
-                .map(|item| redact_json_with(item, redact))
+                .map(|item| redact_json_walk(item, redact, redact_keys))
                 .collect(),
         ),
-        Value::Object(map) => Value::Object(
-            map.into_iter()
-                .map(|(key, value)| {
-                    let redacted = if is_credential_json_key(&key) {
-                        redact_credential_json_value(value, redact)
-                    } else {
-                        redact_json_with(value, redact)
-                    };
-                    (key, redacted)
-                })
-                .collect(),
-        ),
+        Value::Object(map) => {
+            let mut out = serde_json::Map::with_capacity(map.len());
+            for (key, value) in map {
+                let redacted = if is_credential_json_key(&key) {
+                    redact_credential_json_value(value, redact, redact_keys)
+                } else {
+                    redact_json_walk(value, redact, redact_keys)
+                };
+                let name = if redact_keys {
+                    unique_member_name(&out, redact(&key))
+                } else {
+                    key
+                };
+                out.insert(name, redacted);
+            }
+            Value::Object(out)
+        }
         other => other,
     }
+}
+
+/// `name`, or `name` with a `#n` suffix when `taken` already holds it.
+fn unique_member_name(taken: &serde_json::Map<String, Value>, name: String) -> String {
+    if !taken.contains_key(&name) {
+        return name;
+    }
+    (2..)
+        .map(|n| format!("{name}#{n}"))
+        .find(|candidate| !taken.contains_key(candidate))
+        .unwrap_or(name)
 }
 
 /// Mask the string value of a credential-labelled key.
@@ -509,7 +540,11 @@ pub(super) fn redact_json_with(value: Value, redact: fn(&str) -> String) -> Valu
 /// `value` and `version`) is redacted field by field as usual rather than
 /// masked whole. Empty strings carry no secret and stay empty; non-string
 /// scalars keep their type.
-fn redact_credential_json_value(value: Value, redact: fn(&str) -> String) -> Value {
+fn redact_credential_json_value(
+    value: Value,
+    redact: fn(&str) -> String,
+    redact_keys: bool,
+) -> Value {
     match value {
         Value::String(raw) => {
             if raw.is_empty() {
@@ -521,10 +556,10 @@ fn redact_credential_json_value(value: Value, redact: fn(&str) -> String) -> Val
         Value::Array(items) => Value::Array(
             items
                 .into_iter()
-                .map(|item| redact_credential_json_value(item, redact))
+                .map(|item| redact_credential_json_value(item, redact, redact_keys))
                 .collect(),
         ),
-        object @ Value::Object(_) => redact_json_with(object, redact),
+        object @ Value::Object(_) => redact_json_walk(object, redact, redact_keys),
         other => other,
     }
 }

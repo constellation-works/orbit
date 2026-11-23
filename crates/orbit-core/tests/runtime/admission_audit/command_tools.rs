@@ -505,6 +505,62 @@ fn oversized_key_name_alone_is_summarized_within_the_storage_limit() {
     );
 }
 
+fn credential_shaped_property_name_is_redacted_on_a_refusal_row() {
+    let _env = unmanaged_tool_env_guard();
+    let (_root, runtime, repo_root) = test_runtime();
+    let secret = "sk-abcdefghijklmnopqrstuvwxyz012345";
+    let mut input = json!({
+        "argv": ["echo", "ok"],
+        "working_directory": repo_root.display().to_string(),
+        "timeout_ms": 0,
+        "model": "claude",
+    });
+    input
+        .as_object_mut()
+        .expect("refusal input is a JSON object")
+        .insert(secret.to_string(), json!(true));
+
+    audited_exec_refusal(&runtime, input);
+
+    let raw = refused_exec_audit_arguments(&runtime);
+    assert!(
+        !raw.contains(secret),
+        "a credential used as a property name must not be persisted: {raw}"
+    );
+    let payload: Value = serde_json::from_str(&raw).expect("refusal arguments are JSON");
+    assert_eq!(
+        payload.as_object().map(|object| object.len()),
+        Some(5),
+        "the redacted member must still be recorded: {payload}"
+    );
+}
+
+fn credential_shaped_property_name_is_redacted_in_the_key_list_fallback() {
+    let _env = unmanaged_tool_env_guard();
+    let (_root, runtime, repo_root) = test_runtime();
+    let secret = "sk-abcdefghijklmnopqrstuvwxyz012345";
+    let mut input = json!({
+        "argv": ["echo", "x".repeat(8192)],
+        "working_directory": repo_root.display().to_string(),
+        "timeout_ms": 0,
+        "model": "claude",
+    });
+    input
+        .as_object_mut()
+        .expect("refusal input is a JSON object")
+        .insert(secret.to_string(), json!(true));
+
+    audited_exec_refusal(&runtime, input);
+
+    let raw = refused_exec_audit_arguments(&runtime);
+    assert!(
+        !raw.contains(secret),
+        "a credential used as a property name must not reach the key list: {raw}"
+    );
+    let keys: Vec<String> = serde_json::from_str(&raw).expect("key names are a JSON array");
+    assert_eq!(keys.len(), 5, "every member keeps one entry: {raw}");
+}
+
 #[cfg(unix)]
 fn oversized_argv_reports_actionable_size_limit() {
     // [ORB-20181] E2BIG at spawn must explain the OS size limit without echoing values.
@@ -696,7 +752,9 @@ crate::scenario_table!(
     zero_timeout_is_refused_before_the_command_runs,
     invalid_input_refusal_records_redacted_arguments,
     oversized_refusal_arguments_are_stored_as_top_level_key_names,
-    oversized_key_name_alone_is_summarized_within_the_storage_limit
+    oversized_key_name_alone_is_summarized_within_the_storage_limit,
+    credential_shaped_property_name_is_redacted_on_a_refusal_row,
+    credential_shaped_property_name_is_redacted_in_the_key_list_fallback
 );
 
 crate::scenario_table!(

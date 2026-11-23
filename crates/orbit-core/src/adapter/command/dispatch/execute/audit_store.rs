@@ -3,7 +3,7 @@
 
 use std::time::Instant;
 
-use orbit_common::security::redaction::redact_all_json;
+use orbit_common::security::redaction::redact_all_json_with_keys;
 use orbit_common::{NotFoundKind, OrbitError};
 use orbit_store::contracts::{AuditEventInsertParams, AuditInvocationFields};
 use orbit_tools::ToolExecutionKind;
@@ -311,10 +311,11 @@ where
 const REFUSED_ARGUMENTS_MAX_BYTES: usize = 4096;
 
 /// The `arguments_json` of an invalid-input refusal: the refused call's
-/// arguments after secret redaction, or just their top-level key names, as a
+/// arguments after secret redaction (property names included, since the
+/// caller chooses them), or just their top-level key names, as a
 /// JSON array, when the redacted JSON exceeds [`REFUSED_ARGUMENTS_MAX_BYTES`].
 fn refused_arguments_json(arguments: Value) -> String {
-    let redacted = redact_all_json(arguments);
+    let redacted = redact_all_json_with_keys(arguments);
     let serialized = redacted.to_string();
     if serialized.len() <= REFUSED_ARGUMENTS_MAX_BYTES {
         return serialized;
