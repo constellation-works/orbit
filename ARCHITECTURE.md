@@ -1,12 +1,18 @@
 ---
 type: context
-summary: "Layered crate graph, dependency rules, per-crate roles, store internals and scoping"
-last_validated: 2026-11-18
+summary: "Layered crate graph, dependency rules, stability tiers and scoping; per-crate detail lives in docs/architecture/"
+last_validated: 2026-11-23
 ---
 
 # Architecture
 
-Orbit is a Rust workspace of layered crates. **Lower layers never depend on higher ones.** [`scripts/check-dependency-direction.sh`](scripts/check-dependency-direction.sh) enforces every crate edge, so a new edge means updating that script and the table below in the same PR.
+This page holds the layering rules and the crate edge table. What each crate owns, its modules
+and entry points live in [`docs/architecture/`](docs/architecture/README.md), one page per
+crate; design intent lives in `docs/design/`. Add crate detail there, not here.
+
+Orbit is a Rust workspace of layered crates. **Lower layers never depend on higher ones.**
+[`scripts/check-dependency-direction.sh`](scripts/check-dependency-direction.sh) enforces every
+crate edge, so a new edge means updating that script and the table below in the same PR.
 
 ```text
 Surfaces      orbit-cli (command/mcp) · orbit-web
@@ -20,293 +26,63 @@ Kernel        orbit-exec · orbit-policy · orbit-auth
 Foundation    orbit-common · orbit-types
 ```
 
-Domain crates own their data and transport. Application layers compose them. Kernel crates expose reusable mechanisms and never depend back on a feature.
-
-Decision assistance was removed in [ORB-22808]. Its additive v72 ledger tables stay in
-the frozen migration ledger and are no longer read or written.
-
-The store's run-resource minute history feeds profile-cache freshness with a
-probe over every sampled run: the newest `finished_at` and the count of finished
-runs that have any minute row. A run's minute indexes count from the start of
-sampling, but its first recorded minute need not be minute zero: a failed first
-read or a lost minute-zero insert leaves no such row, and the run still counts
-once it finishes. The probe joins `job_runs` only for sampled runs, so its cost
-follows retained minute rows, not job history. The migration (v69) is
-read-compatible: older binaries can read the database but stay read-only.
-Because that scan grows with retained minutes, `delivery_runs_stamp` (v75,
-additive) is a one-row counter that triggers bump on every write that can move
-the probe: a run's first or last minute row, and an insert, delete, re-key or
-`finished_at` change of a sampled run's `job_runs` row. A cache pass probes
-only when the counter moved since its cached answer. The triggers fire on
-older binaries' writes too. A rebuild then re-reads minute rows only for runs
-whose shape moved: the minute-row count and last minute index from the
-primary key, and the `job_runs` row, against the shapes of the cache's last
-load.
-
-The workspace agent corpus keeps its versioned row and append contracts in
-`orbit-types`, its mapping in `orbit-config`, and pinned reads and deterministic
-append production in core. Append proposals reuse task history as a durable
-sidecar outbox, in the same update as the human answer or recovery decision.
-A deterministic script materializes reviewed repository batches; injection
-never reads unreviewed outbox data. No new store or internal crate edge is
-introduced. See the [corpus design](docs/design/workspace-agent-corpus/1_scope.md).
-
-Full run detail shares its six pull-drain sections through
-`application::job::pull_drain_detail::read_run_pull_drain_evidence`, beside
-`project_job_run`. The read uses `JobDrainPort` for distributed evidence;
-claim, settlement and crew-window DTOs live in application contracts, with
-their previous distributed exports retained. Core decides empty fallbacks
-and returns diagnostic reasons for each surface to log. Recorded-only
-HTTP detail uses the same operation without live reads and retains only its
-checkpoint breaker. CLI, HTTP and full MCP detail retain their other named
-projection profiles.
+Domain crates own their data and transport. Application layers compose them. Kernel crates
+expose reusable mechanisms and never depend back on a feature. `orbit-types` does no I/O;
+its serde shapes are persisted contracts.
 
 ## Crates
 
 | Crate | Tier | Depends on (internal) |
 |---|---|---|
-| `orbit-types` | stable | — |
-| `orbit-common` | stable | types |
-| `orbit-config` | internal | common, types |
-| `orbit-policy` | internal | common, types |
-| `orbit-exec` | internal | common, types |
-| `orbit-auth` | internal | common, types |
-| `orbit-search` | internal | common, types |
-| `orbit-store` | stable | common, types |
-| `orbit-registry` | internal | common, config, types |
-| `orbit-tools` | internal | common, exec, policy, types (dev: tools) |
-| `orbit-agent` | internal | common, types |
-| `orbit-clock` | internal | common |
-| `orbit-automation` | internal | clock, common, store, types |
-| `orbit-engine` | internal | agent, common, exec, store, tools, types (dev: engine) |
-| `orbit-runtime` | internal | common, config, engine, exec, policy, search, store, tools, types (dev: runtime) |
-| `orbit-mcp` | internal | common, registry, tools, types (dev: mcp) |
-| `orbit-core` | internal | automation, clock, common, config, engine, exec, registry, runtime, search, store, tools, types (dev: core, policy) |
-| `orbit-cmd` | internal | common, config, core, mcp, registry, store, tools, types |
-| `orbit-web` | internal | auth, cmd, common, config, core, registry, types (dev: engine, store, web) |
-| `orbit-cli` | internal | cmd, common, config, core, mcp, registry, types, web (dev: engine, exec, tools) |
+| [`orbit-types`](docs/architecture/orbit-types.md) | stable | — |
+| [`orbit-common`](docs/architecture/orbit-common.md) | stable | types |
+| [`orbit-config`](docs/architecture/orbit-config.md) | internal | common, types |
+| [`orbit-policy`](docs/architecture/orbit-policy.md) | internal | common, types |
+| [`orbit-exec`](docs/architecture/orbit-exec.md) | internal | common, types |
+| [`orbit-auth`](docs/architecture/orbit-auth.md) | internal | common, types |
+| [`orbit-search`](docs/architecture/orbit-search.md) | internal | common, types |
+| [`orbit-store`](docs/architecture/orbit-store.md) | stable | common, types |
+| [`orbit-registry`](docs/architecture/orbit-registry.md) | internal | common, config, types |
+| [`orbit-tools`](docs/architecture/orbit-tools.md) | internal | common, exec, policy, types (dev: tools) |
+| [`orbit-agent`](docs/architecture/orbit-agent.md) | internal | common, types |
+| [`orbit-clock`](docs/architecture/orbit-clock.md) | internal | common |
+| [`orbit-automation`](docs/architecture/orbit-automation.md) | internal | clock, common, store, types |
+| [`orbit-engine`](docs/architecture/orbit-engine.md) | internal | agent, common, exec, store, tools, types (dev: engine) |
+| [`orbit-runtime`](docs/architecture/orbit-runtime.md) | internal | common, config, engine, exec, policy, search, store, tools, types (dev: runtime) |
+| [`orbit-mcp`](docs/architecture/orbit-mcp.md) | internal | common, registry, tools, types (dev: mcp) |
+| [`orbit-core`](docs/architecture/orbit-core.md) | internal | automation, clock, common, config, engine, exec, registry, runtime, search, store, tools, types (dev: core, policy) |
+| [`orbit-cmd`](docs/architecture/orbit-cmd.md) | internal | common, config, core, mcp, registry, store, tools, types |
+| [`orbit-web`](docs/architecture/orbit-web.md) | internal | auth, cmd, common, config, core, registry, types (dev: engine, store, web) |
+| [`orbit-cli`](docs/architecture/orbit-cli.md) | internal | cmd, common, config, core, mcp, registry, types, web (dev: engine, exec, tools) |
 
-`PipelineState` exposes drain controls, pull admission checkpoints and forge
-hold records through `pull_drain: PullDrainState`. The general cancellation
-policy remains on the run. Serde flattens the group for reading; an explicit
-serializer retains the historical top-level names, field order and omission
-rules when writing `state.json`. Changes to this persisted contract must update
-both the serializer and the compatibility fixtures in the types integration
-suite.
+`desktop/` is the Tauri shell, a separate Cargo workspace outside this graph that depends on
+no workspace crate.
 
-`PipelineState::successful_checkpoint` owns the pure success, indexed-output
-and named-entry consistency check used by member settlement, delivery
-observation and source-repair authentication. Callers retain resolved action
-admission, index conversion, missing-entry policy and diagnostic projection.
-The borrowed `SuccessfulCheckpoint` result has no persisted representation;
-inherited-checkpoint pointer and parent authentication remain in core.
+Edge rules the guard enforces beyond the table:
 
-Core uses `git2` (vendored libgit2, network features disabled) to read local
-refs, config and trees in process: routine status's branch inspection, and the
-instruction and selector-object reads behind the preparation fingerprint. A
-repository libgit2 cannot open, such as a partial clone or reftable refs, keeps
-the bounded Git commands. Fetches, pins and other source evaluation continue to
-use bounded Git commands and the shared fetch lock. A request-scoped source
-cache shares inspection facts across routines without retaining stale refs
-across polls. Web's host-wide routine memo uses the existing runtime-memo
-single-flight mechanism with a separate host namespace and file/database input
-stamps.
+- **Self dev-edges** (`dev: <self>`) only switch on the crate's own `test-support` feature for
+  its tests. Test seams (scoped clocks, null hosts, substitute workers, fixture `gh`) exist only
+  behind `test-support` and are absent from shipped builds.
+- **Core → Policy is dev-only.** Shipped code reaches policy through `orbit-runtime` and
+  `orbit-tools`; a normal, build or target-normal `orbit-core` → `orbit-policy` edge fails the
+  guard.
+- **CLI has no `orbit-auth` edge**, normal or dev; credential code reaches the binary only
+  through `orbit-web`.
+- **Other dev-edges** (Web → Engine/Store, CLI → Engine/Exec/Tools) exist for isolated HTTP
+  fixtures and the sandbox broker integration test.
+- Dependencies declared in `[workspace.dependencies]` are inherited in member manifests with
+  `workspace = true`.
 
-Automation parses and evaluates condition-trigger predicates with the `cel`
-crate (cel-rust, no regex or encoder features). That crate ships no type
-checker, so `orbit-automation::condition` checks the parsed AST against the
-declared task and workspace schema itself. There is no new internal crate edge.
-
-Core exposes Exec's shared Bubblewrap capability probe to CLI onboarding and
-diagnostics. The CLI's dev-only edges to Engine, Exec and Tools support the real
-sandbox broker integration test, which pairs the host runtime with the built
-CLI and MCP transport.
-
-The dashboard's dev-only Store edge seeds workspace claims directly in isolated
-HTTP fixtures, so replay admission can be exercised without routing fixture
-setup through an agent tool surface.
-
-The dashboard's dev-only Engine edge exercises the runner's reservation action
-in isolated HTTP fixtures, so workspace analytics cover production lock-denial
-audit writes as well as seeded history.
-
-`orbit-clock` owns the host's sweep clock: `clock.toml` settings and the tick
-budget, launchd/systemd unit templates and install, pause and resume, cadence,
-unit convergence and inspection, and clock health. It names only
-`orbit-common`, so it compiles beside the `orbit-store` → `orbit-engine` →
-`orbit-runtime` chain instead of inside the serial `orbit-core` library
-[ORB-22688]. Core re-exports it unchanged as `application::routines::clock`
-(and its settings through `application::contracts`), so the CLI, dashboard and
-`orbit-cmd` keep their paths; the sweep pass the clock wakes stays in Core.
-Automation's edge re-exports the tick budget (`TICK_DEADLINE`) the clock's
-health judges an overdue tick against, so the constant has one definition.
-
-Core's dev-only edge to itself enables its `test-support` feature for its own
-integration tests, which substitute the detached pipeline worker and execute
-submitted runs in-process.
-That feature also enables Engine's `test-support` feature for scoped CLI
-supervision clocks. Landing fixtures freeze Core's source budget clock; auth
-fixtures expire Engine's deadline only after a real child signals readiness.
-Both clocks are thread-local, restored on unwind, and absent from shipped builds.
-It also enables Store's `test-support` feature, whose thread-local task-commit
-lock deadline lets a drain admission fixture wait out a held lock in seconds;
-it is restored the same way and is equally absent from shipped builds.
-It also enables Runtime's `test-support` feature, which exposes the kernel's
-test-only seams (the transition read hook, the Git scan hook and the
-ancestry peer anchor) to Core's unit tests.
-
-Core also holds a dev-only edge to `orbit-policy` for the integration tests
-that drive `PolicyEngine` directly; shipped code reaches policy through
-`orbit-runtime` (and `orbit-tools`), never directly. The
-dependency-direction guard enforces this edge: a normal, build, or
-target-normal `orbit-core` → `orbit-policy` edge fails the guard. This says
-nothing about the kernel's own production `orbit-runtime` → `orbit-policy`
-edge, which stays legal.
-
-Runtime's dev-only edge to itself enables its `test-support` feature for its
-own unit tests, which also enable Engine's `test-support` feature for its
-null runtime host.
-
-Engine's dev-only edge to itself enables its `test-support` feature for its own
-unit and integration tests. The feature exports `test_support::NullRuntimeHost`,
-the base every `RuntimeHost` test double in Engine and Core builds on, so the
-`RuntimeHost` trait itself carries no defaults and shipped builds have no null
-host. The test base forwards every capability, including overrides, through its
-blanket implementation.
-
-Tools' dev-only edge to itself enables its `test-support` feature for its own
-integration tests. The feature exports the GitHub quota guard's thread-local
-scoped override (`github_quota::with_scoped_guard`) and the substitute `gh`
-(`FixtureGh`); Engine, Runtime and Core enable it through their own
-`test-support` features to show that a refused read at their execution points
-runs nothing. Shipped builds have neither.
-
-The `orbit-core` → `orbit-exec` edge is a production edge: Core's script steps,
-CodeQL fulfilment, plugin conformance, browser kit reads and Linux host probe use
-Exec, and its sandbox regression tests also enable Exec's `test-support` feature.
-The dependency-direction guard also checks that dependencies defined in `[workspace.dependencies]` are inherited
-in member manifests with `workspace = true`.
-
-### Foundation and kernel
-
-- **orbit-types** holds shared serde contracts, pure constructors, and narrow domain errors, organized as domain modules (`identity`, `workspace`, `task`, `workflow`, …). It does no I/O of any kind. Its serde shapes are persisted contracts. `orbit-types::timestamp` owns the persisted UTC representation shared by policy and executor records. It uses `time` for UTC normalization and calendar operations and preserves legacy spellings, leap seconds, and the existing date range. Policy exposes its own timestamp wrapper with policy-domain errors. It also owns shared job ids that several crates decide on, including the shipped delivery-leaf ids (`task_pr_pipeline`, `task_local_pipeline`, `task_claimed_pr_pipeline`, `task_claimed_local_pipeline`) and their membership predicates in `workflow/job.rs`; `orbit-store`, `orbit-runtime`, `orbit-engine` and `orbit-core` name those constants rather than spelling the ids.
-  The review contract also owns the canonical `review-*` artifact namespace
-  classifier shared by Core's task update path, claimed-worker broker and
-  external-evidence guards, and the live-report validator used by tools and Core.
-- **orbit-common** holds `OrbitError` and the shared mechanisms: filesystem and path helpers (including `fs::physical`, the one home of the resolvers for a path whose tail may not exist yet, each with its own `..`, dangling-link and error contract), process support, storage, UTF-8-safe text bounds, protocol and YAML codecs, observability, and security. Security covers the release signing keys and verification used by `orbit update`, redaction, and `security::child_env`, the single allowlist builder for agent-subprocess environments. Operation registries live here so every surface can read them. The matching handlers live in `orbit-core`. Spawned process-group ownership and bounded kill-on-drop cleanup live in `process::OwnedChild`; supervisors borrow its child for pipe setup and waiting. Child supervision lives in `process::supervisor`: one wait loop with output sinks, stdin delivery, deadline termination, cancellation, SIGINT/SIGTERM fan-out to live child groups, a bounded post-exit drain, an opt-in stopped-descendant watch and a periodic caller policy hook. Identity-bound cancellation signalling lives in `process::signal`; `orbit-core` retains its process handles across TERM/KILL and coordinates conservative group snapshots.
-- **orbit-policy** resolves `FsProfile` and evaluates `denyRead` and `denyModify` rules.
-- **orbit-auth** owns Orbit's credential code so one crate carries the security review: the lease listener's bearer lease tokens (`orbl_` format, generation, SHA-256 hashing and constant-time comparison), principals, classes, verbs, scopes and the allow-or-deny decision, the listener's client-address rule and failed-authentication limiter, the listener user's own token store (`lease-tokens.db`, a separate SQLite file with its own schema and forward-only migrations, opened through `orbit-common`'s SQLite support, never a table in Orbit's main store) and the execution-environment check every listener-user command runs first. It has no HTTP framework, runtime handle or Orbit store. Its only surface consumer is `orbit-web`: `orbit-web`'s lease intake socket carries its token scope types, and `orbit-web`'s lease listener wraps its token verification, client-address rule and failed-authentication limiter as HTTP middleware. `orbit-cli` assembles `orbit-web` but never names `orbit-auth` directly. Path leases are not configurable [ORB-22808], so no command mints tokens or starts the listener.
-- **orbit-exec** owns sandboxes and the runner entry points for commands run under an `FsProfile`. Its runners supervise children through `orbit_common::process::supervisor`, applying exec's capture, termination and drain policy. Plugin build phases share a capped log across both stream sinks and use the periodic hook for their build-directory cap. Its `browser_kit` module holds the host's headless browser kit layout and the verified-kit check: the engine's CLI runner reads it to hand agents the kit's locator variables, and Core's `bootstrap::browser_kit` re-exports it for `orbit config browser-kit`, onboarding and doctor.
-
-### Domain
-
-- **orbit-config** owns `config.toml`. That covers the key registry, global-over-workspace layering (security keys replace rather than merge, and `[machine]` is global-only), provenance for `orbit config show`, resolved views, and comment-preserving atomic edits through `ConfigStore`, which every writer runs from open to save under one per-file write lock so concurrent edits cannot erase each other. Callers pass explicit roots, so the crate never discovers the cwd or `$HOME`. Pure TOML path access, including the typed read of one dotted path, lives in the private `document::paths` leaf; aliases, seeding, operation policy, the key registry and layered loading use it, so aliases and operation policy never depend on layered loading, which orchestrates their admission. The key registry sits above the domain admission modules (`aliases`, `attention`, `crew`, `operation`, `provider_limit`, `seeding`) whose admitters and choices its key table calls: the projections of the admitted `ConfigSnapshot` into their typed settings live beside the snapshot in `registry/settings/projections.rs`, and none of those modules names the registry or its crate-root re-exports. No-follow file reads and path admission live in the private `document::io` leaf, below layered loading, plugin enablement, seeding, compatibility and unknown-key diagnostics, none of which depend on the store; `ConfigStore` builds its locking, staged validation and atomic save on the same reader. That leaf stays free of TOML. The shared parse of an admitted file into one document lives in the private `document::parse` leaf, which calls `document::io` and admits no policy. The built-in crew registry lives in the private `crew_defaults` leaf (std, `orbit-common` and `orbit-types` only), below snapshot admission, resolved config, layering provenance and seeding, so the key registry admits the default crews without naming resolved config; `scripts/check-dependency-direction.sh` enforces both registry directions and the leaves' isolation. It does not depend on `orbit-engine`; Core translates PR settings at composition time.
-- **orbit-search** runs lexical retrieval. It owns the SQLite chunk and FTS5 schema, chunking, task-field extraction, and BM25 ranking. Core projects task records into it. The index file keeps its `semantic.db` name so persisted paths stay compatible.
-- **orbit-registry** owns this machine's `[machine]` identity, the workspace catalog, checkout bindings, task-publication bindings, and the operator's registered remote hosts (`hosts.toml`), each persisted atomically. It has no shared database and no runtime execution.
-- **orbit-store** handles persistence. See [orbit-store internals](#orbit-store-internals) below.
-- **orbit-tools** holds the tool registry and the built-in fs, exec, and Orbit tool definitions. Shared mechanisms that non-builtin surfaces also need live in crate-root leaf modules beside `tool`/`context`/`host`, not inside builtin leaves: `program_policy` holds the activity program allowlist gate used by `proc.spawn`, external tools and plugin-declared programs, `artifact_materialize` holds local task-artifact materialization used by the host surface (`prepare_remote_task_artifact_put`) and the `orbit.task.artifact` action `put` builtin, `gh_request` holds the `gh` request builder and GitHub throttle reader shared by the builtin GitHub tools and the `github_quota` guard, `github_run_log_cache` holds the run-log cache directory and legacy-cache removal read by the cache, the plugin read mask and the crate root, and `task_guarded_selectors` holds the guarded-write selector keys read by the task tools and `mcp` rules. `github_quota` calls none of the builtin GitHub tools; they call down into it. Apart from `registry` (through `register_builtins`), `lib.rs` and the documented `github_cli` re-exports of builtin GitHub builders, no other crate-root surface names `builtin`; in particular `host`, `external`, `plugin/`, `mcp` and `github_quota` do not, which `scripts/check-dependency-direction.sh` enforces. It resolves a plugin source to its plugin root (the source's `.orbit-plugin/` directory, the only tree installed) and loads and runs `plugin.yaml` v2 plugins through an `exec` backend (one confined process per call) or an `mcp` backend (a stdio server per caller context). Both backends run under the operator's granted sandbox profile. Plugin lifecycle (install, enable, grants, `.orbit/plugins.yaml`) belongs to Core. This crate is also the only owner of the `gh` CLI contract.
-- **orbit-agent** provides one `AgentRuntime` per provider CLI (claude, codex, copilot, gemini, antigravity, grok, muse, and others). It retains the audit types and redacted blob sinks that the engine persists, including historical event variants. Named-zone usage-limit resets use `tz-rs` with the bundled IANA data in `tzdb_data` and return UTC instants through the existing Chrono contract.
-- **orbit-engine** executes activities and jobs: template rendering, retries, subprocess and tool-aware automation, and the CLI agent runner. The `RuntimeHost` port owns its dispatch contract types and `DECLARED_FAILURE_EVIDENCE_KEY` in the leaf `context::dispatch_contract`; the dispatcher re-exports the public contract types for compatibility, and the dependency guard keeps `context` from naming `activity_job`, the contract leaf from naming any `crate::` module, and `activity_job` children from reading `DECLARED_FAILURE_EVIDENCE_KEY` from the `activity_job` root. Sandboxed child spawning lives in the crate-root leaf `sandbox_spawn` (which names only `crate::context`), below both `executor/automation` and `activity_job`; `activity_job::cli_runner::spawn` stays as a narrow compatibility re-export shim for `cli_runner` internals whose retirement is a follow-up. `executor/automation` sits below `activity_job` and names neither `activity_job` nor its crate-root re-exports (leaving no production cycle among orbit-engine's top-level units; the test-support `NullRuntimeHost` forwarding edge in `context/hosts/null_host/defaults/host.rs` stays), enforced by `scripts/check-dependency-direction.sh`. It references `orbit-agent` directly, so Core stays free of agent types. It also owns candidate identity, reviewer repair commits, and the reviewed-head rechecks in `pr_open` and `pr_complete`. Host-side CI evidence collection lives here too, with the normalized CI error signature (`ci_log_signature`) that its reproduction check and Core's CI failure filing share. Within the engine's VCS automation, the lower `vcs::conventions` module owns the shared task projections (`render_acceptance_criteria`, `meaningful_execution_summary`, `task_url`); PR body rendering, commit summary admission and handoff admission consume them from conventions, never the reverse, and `scripts/check-dependency-direction.sh` guards that direction. The narrow `pr` re-export of the projections is a compatibility shim whose retirement, once callers migrate to the conventions paths, is a follow-up. Shared hosted-check evidence, classification, rerun planning and recovery live in `vcs::checks`. Provider PR answers, the merge-state classifier, the delivery pin, bounded diagnostics and the source-repair identity comparison live in `vcs::pr_answers`, below checks and candidate resume and above the private operations that produce the answers. The in-crate order is `operations < pr_answers < checks < pr < landing`, `pr_answers < base, push, claim`, and `pr_answers < candidate_resume < pr`: checks, base refresh, push, claim publication and candidate resume read the model from `pr_answers` and do not name `pr`, while `pr` keeps the operations and re-exports the old paths as a compatibility shim whose retirement is a follow-up. The dependency guard rejects a `pr_answers` path to pr, checks, landing, base, push or claim, a checks, base, push, claim-publication or candidate-resume path to `pr`, checks-to-landing paths, and PR/base/claim use of the former landing checks path.
-- **orbit-automation** is the scheduling domain for routines and auto-tasks. It covers definition validation, due evaluation, overlap and retry, coverage acceptance, and state-triggered consumers. Its `review` module owns the before-PR coverage rules. It never depends on Core or Engine and has no loop or store of its own. Store owns cursors, claims, and receipts.
-
-### Application and surfaces
-
-- **orbit-runtime** is the runtime kernel: `RuntimeKernel` and its stores, engine handles, event bus, audit, claims, reservations, plugin host, workspace binding, host probes and process/tool execution mechanisms, plus the actor context, root paths and cost types. It is built from a config value that composition has already resolved, and it never depends on `orbit-core`. Where a kernel mechanism finishes through a use case (task reads, automation updates, audit records, run reconciliation, crew redraws), it calls `ApplicationPort`, which Core composition implements and passes in when it builds the kernel.
-- **orbit-core** composes the runtime. Its internal graph is `runtime ← application ← adapter`, with `composition` as the only module that joins config, bootstrap, runtime, and adapters. `bootstrap` depends on `application`, because it seeds through application-owned definitions, and never the reverse. Application and the adapter don't name `bootstrap` or `composition`; request-time task bundle export, import, reindex and publication live in `application::task_bundle`, which the adapter calls directly [ORB-24534]. The guard refuses application or adapter paths to `bootstrap` or `composition`, and any call from application or the adapter to an inherent method an `impl OrbitRuntime` block in `composition/` or under `bootstrap/` defines [ORB-22005]. Its `runtime` module re-exports `orbit-runtime` and defines `OrbitRuntime`, which owns a `RuntimeKernel` and dereferences to it. Both layers define inherent methods on `OrbitRuntime`. Runtime names no higher layer and calls no application or adapter inherent methods; the dependency-direction guard enforces both restrictions. Its application modules are ordered `contracts < task < job < automation < review < distributed < pull_drain < admission < workspace_auto < backlog_forecast < sweep_filing`; a lower module reaches a higher one only through a port trait the lower module owns and the higher one implements, and `scripts/check-dependency-direction.sh` refuses a path into a higher module or a call to any inherent method a higher module defines (names derived, not listed). `backlog_forecast` reads downward from `task`, `job`, `admission` and `workspace_auto`, and has one authorized edge outside the order: `runtime.task_riskiness_model()` in `assembly.rs`, whose model answers `forecast_regression_prior`. The guard refuses any other path or inherent call into `codebase` and any reference from `codebase` back to the forecast. `task` names no forecast path: `BacklogForecastHistory` is exported at the crate root and the budget override in `test_support`, both directly from `backlog_forecast` [ORB-24548]. Within `job`, `run` sits below `pipeline`: `run` (a run record's lifecycle: queries, cancellation, reconciliation and drain controls) owns the job-run audit writer (`run/audit_record.rs`, behind `record_pipeline_audit` and `record_pipeline_diagnostic_step`), the persisted worker-exit evidence and its readers with the read side of the worker scope (`run/worker_exit/`, `run/worker_scope.rs`), and the run-definition reads (`run/definition.rs`), while `pipeline` (submission, admission, worker execution) imports them and keeps live exit observation and writing, scope creation, placement and teardown, and the snapshot writer. The guard refuses a path, grouped tree or `super::` chain from production code under `job/run` into `job::pipeline`, and any call to an inherent method an `impl OrbitRuntime` block under `job/pipeline` defines [ORB-24781]; `job::pipeline::run_definition_snapshot_path` stays as a test-only re-export shim, whose retirement is a follow-up. `routines` (the sweep clock) sits outside the chain but above `automation` and `auto_tasks`: it calls automation's evaluation and the auto-task scheduler, and reaches `review`, `pull_drain` and `backlog_forecast`. The clock settings and `ScheduleDisplayState` those two read are named through `contracts` (the settings are owned by the `orbit-clock` crate and re-exported there [ORB-22688]; `schedule_display` is a `contracts` module), and `routines` re-exports them as a compatibility shim whose retirement is a follow-up. The guard refuses a path, grouped tree or `super::` chain from `automation`, `auto_tasks` or `resident` into `routines`, any call to an inherent method an `impl OrbitRuntime` block under `routines/` defines, and any `contracts` reference to `routines` or `auto_tasks` [ORB-22623]. Resident reads the disabled cycle routine name through its own `resident::ResidentRoutineStatusPort`, implemented on `OrbitRuntime` in `routines/resident_port.rs`. The existing `resident_cycle_routine_disabled` delegates to that port, preserving selected-checkout discovery, canonical source matching, the versioned `enabled` switch and silent lookup failures; resident names no routines types or paths, cutting `routines -> automation -> resident -> routines` [ORB-22956]. `auto_tasks` sits outside the chain but above `automation`: its scheduler evaluates delivery and conditions and renders condition placeholders through automation, its listing projection reads automation inspection, and its enable path uses automation's preview. Automation reads the auto-task catalog, validated definitions, discovery paths, accepted-result history, open-instance dedupe and template/mint parameters only through `automation::AutomationAutoTaskPort`, which `auto_tasks` implements on `OrbitRuntime` in `auto_tasks/scheduler.rs` by forwarding to its existing policy and discovery functions; the port carries `AutoTaskDefinition`, never `ListedAutoTask`. The guard refuses a path, grouped tree or `super::` chain from `automation` into `auto_tasks`, and any call to an inherent method an `impl OrbitRuntime` block under `auto_tasks/` defines; the downward edges stay legal [ORB-23334]. `experiment` also sits outside the chain, above `distributed`: its readout reads the claim receipt `distributed` owns, so distributed admission captures a claimed task's experiments through `distributed::DistributedExperimentPort` (`capture_pull_experiments`), which `experiment` implements on `OrbitRuntime` in `experiment/distributed_port.rs`. The guard refuses a path, grouped tree or `super::` chain from `distributed` into `experiment`, and any call to an inherent method an `impl OrbitRuntime` block under `experiment/` defines; the receipt read stays legal [ORB-22416]. `experiment` is also above `task` and `job`, whose tasks, crew source and claimed leaf it reads back: task show's assignment readout and the provider-limit gate's experiment-pool check go through `task::TaskExperimentPort`, and job's crew admission, fresh claim routing, claimed-leaf crew installation and claimed-leaf capture validation go through `job::JobExperimentPort`; `experiment` implements both on `OrbitRuntime` in `experiment/task_port.rs` and `experiment/job_port.rs`, the pool job draws from is the lower-owned `contracts::ExperimentCrewPool`, and the guard's `task` and `job` upper-module lists include `experiment` [ORB-23015]. `landing` sits above `distributed`: it consumes the authorized handoff outbox and calls down into `task`, `job` and `distributed`. The pure accepted-handoff-to-claim read `landing_claim` lives in `task::handoff_claim`; review dispatches after acceptance and approval through its own `review::ReviewLandingDispatchPort`, implemented in `landing/review_port.rs`. The guard refuses paths, grouped trees, `super::` chains and calls to landing-owned inherent methods from `task`, `job`, `review` and `distributed` [ORB-22708]. `codebase` sits outside the chain but above `task`: task owns the pure block classification (`task::classify_block`, `BlockCause`, `Anchor`), reaches the done-landing diff stats through `task::TaskCodebasePort`, which `codebase` implements on `OrbitRuntime`, and the guard's `task` upper-module list includes `codebase`; `codebase` keeps the settlement read that needs `distributed` and re-exports the moved names as a compatibility shim [ORB-22625]. `resident` sits outside the chain but above `task`: it drives task writes, so task applies a `resident_authority` decision answer, admits a resident comment under the task lock and refuses a resident record needing redaction only through `task::TaskResidentPort`, which `resident` implements on `OrbitRuntime` in `resident/task_port.rs`, and the guard's `task` upper-module list includes `resident` [ORB-22955]. `notice` sits outside the chain but above `task`: it reads tasks for poster authority and linked-task status, so a transition into done closes linked notices only through `task::TaskNoticePort`, which `notice` implements on `OrbitRuntime` in `notice/close.rs` by delegating to `materialize_notice_closures_for_done_task`. Best-effort failure logging, the closure tick, dedupe keys, revision checks and owner fencing stay in notice. The guard's `task` upper-module list includes `notice` [ORB-23017]. `evolution` sits outside the chain but above `task`: it reads tasks for cost validation and proposal state, and replays task comments for recovery. Task writes project checkpoint costs only through `task::TaskEvolutionPort::project_task_checkpoint_costs`, implemented on `OrbitRuntime` in `evolution/operations.rs` by forwarding to `ingest_checkpoint_costs`. The call stays immediately after the durable task mutation under the task lock, preserving post-commit error propagation. Source-key deduplication, proposal refresh, coordination authority checks, persisted occurrences and the public `reconcile_evolution_checkpoint` replay path stay unchanged. The guard's `task` upper-module list includes `evolution`, refusing paths, grouped trees, `super::` chains and calls to evolution-owned inherent methods [ORB-23018]. `agent_corpus` sits outside the chain but above `task`: it reads decision rules, task history and tasks back, and reads blobs through `task::base_revision` instead of the `tag_instructions` shim, so task's decision-answer append, precedent digest and final-recovery appends go only through `task::TaskCorpusPort`, which `agent_corpus` implements on `OrbitRuntime` in `agent_corpus.rs` by forwarding to its inherent methods. The guard's `task` upper-module list includes `agent_corpus`, refusing paths, grouped trees, `super::` chains and calls to corpus-owned inherent methods [ORB-23421]. `tag_instructions` sits outside the chain but above `task`: task reads commit-pinned files (`run_base_revision`, `workspace_base_revision`, `read_blob_at`, `list_blob_paths_at`, `commit_at`) from its own `task::base_revision`, and the guard's `task` upper-module list includes `tag_instructions`, whose free-function re-exports of those readers are a compatibility shim for its other importers. `experiment` also sits above `tag_instructions`: its overlays read `LazyRevision`, `TagInstructionFailure` and `read_blob_at` and call `claim_base_revision`, so tag instructions reach live overlays only through `tag_instructions::TagInstructionExperimentPort` (`tag_instruction_experiment_overlays`), which `experiment` implements on `OrbitRuntime` in `experiment/tag_instruction_port.rs` by forwarding to `experiment_overlays_for_activity`. The guard refuses a path, grouped tree or `super::` chain from the single-file `tag_instructions` module into `experiment`, and any call to an inherent method an `impl OrbitRuntime` block under `experiment/` defines; the helper reads stay legal [ORB-23019]. Executor `host_os` limits live in `task` (`task::executor_host_os`); the task's host-OS wait over the draw's candidates is job's (`job::crew_pools::host_os_wait`), and task reads it through `TaskJobPort` [ORB-22289]. The adapter sits above the whole application layer, so application reaches it only through ports the application layer owns and the adapter implements on `OrbitRuntime`: `contracts::ToolInvocationPort` for tool execution, which still runs the adapter's tool chokepoint, and `pull_drain::drain::PullTransportPort` for the pull drain's owner peer and leaf launcher. The guard refuses a `crate::adapter` path from application, and any call from application to an inherent method an `impl OrbitRuntime` block under `adapter/` defines [ORB-22004]. Core never depends on `orbit-agent`, `orbit-cmd`, or transport crates. Store retention reads the workspace registry read-only, through `orbit-registry`, to tell a live partition from an id no checkout still owns. Notable application modules:
-  - `codebase/diff_stats.rs` owns landed task line aggregation over landed diff rows. Both agent facts and experiment readout use that inherent method; experiment also reads agent facts. The dependency guard rejects agents paths, grouped imports, `super::` chains and inherent calls into experiment. This cuts the direct agents/experiment cycle; the separate crew_memory cycle remains.
-  - `review` runs the before-PR review gate (admit, settle, certificates, landing verification). Selective-review retirement removed its risk-model freeze and the `TaskRiskinessModel::diff_model_identity` operation; admission keeps the legacy `selective_before_landing` field empty. Reviewer effort selection reads reviewable lines and changed files through the review-owned `ReviewCandidateSizePort`, implemented by `codebase/diff_stats.rs` using the existing `candidate_review_size` calculation. Review has no dependency on `codebase` and owns no risk-model identity port. `scripts/check-dependency-direction.sh` rejects production review-to-codebase paths, grouped imports, `super::` chains and calls indexed from codebase-owned inherent `OrbitRuntime` methods. The separate forecast exception remains exactly `runtime.task_riskiness_model()` in `backlog_forecast/assembly.rs`.
-  - `statistics` is a leaf that imports no other application module: the seeded `SplitMix64` generator, `wilson_95`, `median` and the linearly interpolated `percentile`. The agent scorecards and rank, the experiment readout, the backlog forecast and resident metrics share it; each keeps its own seeds. Check it before writing another analytics helper.
-  - `landing` is the owner-side landing consumer above `distributed`, dispatched from the coordination outbox through the review-owned landing dispatch port when handoff authority is recorded.
-  - `config` projects `orbit-config` as structured data for the dashboard. Writes go through the same `ConfigStore`.
-  - `task/desktop` separates bounded snapshot projections, authorization and completion checks, idempotent writes, review evidence and PR-head observation. Shared input validation lives in `validation`; its sibling `tests` directory preserves isolated mutable fixtures.
-  - `sweep_filing` files CI failures and Dependabot, code scanning and secret scanning alerts as tasks, and admits piloted CI repairs to the backlog. `task/pilot` prepares and applies task-pilot assessments, including promotion from `proposed` to `backlog`. `admission` decides which backlog tasks automatic dispatch may admit and when (backlog exclusion, gap fit, leaf occupancy, CPU-light budget, claim holders, surface reservation, unknown footprint), `workspace_auto` runs the workspace auto-drain's classify, approval, window and readiness steps on it, `pull_drain` runs a follower's pull drain: refill, settlement, the failure breaker and leaf reconciliation, `task/blocked_recovery/steps` prepares and applies blocked-task recovery runs, `automation/members` refuses a pilot or escalation-triage step whose state claim belongs to another run, and `job/pipeline_actions` validates bundles, resolves the delivery Job, checks a bundle's footprint for conflicts and reserves it once its dependencies allow, re-checks gate admission, defers starved gates and guards pipeline results. The adapter's `engine_host/actions` dispatches the engine's deterministic actions to all of them; its `pipeline_actions` module dispatches and waits on child Jobs, and its `pull` module implements `PullTransportPort`, which supplies the routed owner peer and leaf launcher the pull drain runs over [ORB-22004].
-  - `search` keeps its public contracts and exports at the module root. `runtime` coordinates workspace queries, `candidates` owns filtered task retrieval and BM25 paging, `friction` builds friction results, and `merge` combines branches. Conversion, filters and federation keep their existing modules. Pure selector matching lives in `task/selector_match.rs`, exported as `task::task_selectors_contain_path`; task listing and pilot no-diff scope checks use that task-owned helper. Search depends down on task for candidates and selector matching, and retains `search::task_selectors_contain_path` as an explicit compatibility re-export whose retirement after consumers migrate is a follow-up. The guard's task upper-module list includes `search`, refusing paths, grouped trees, `super::` chains and calls to search-owned inherent `OrbitRuntime` methods [ORB-23016].
-  - `notice` stores fleet notices. It reads tasks for poster authority and linked-task status, so a transition into done closes linked notices through `task::TaskNoticePort`, implemented in `notice/close.rs` by delegating to `materialize_notice_closures_for_done_task`. The closure tick still repairs a missed write. The guard refuses task paths, grouped trees, `super::` chains and calls to notice-owned inherent `OrbitRuntime` methods [ORB-23017].
-- **orbit-cmd** composes the application for the CLI and web. It joins Core to Registry and holds command groups, runtime assembly, routines, and managed-worker transports. Its `hosts` group backs `orbit host` and the doctor `hosts` row, joining the Registry's host file to the MCP crate's federated identity probe. Its `doctor` group holds the read-only `orbit doctor` report that both the CLI and the dashboard's Health › Doctor panel run, and `mcp_clients` holds the MCP client config-path table that `orbit mcp init` writes and the doctor `mcp-registration` row reads. `workspace_removal` owns workspace deregistration and teardown, joining the workspace catalog to task-store ownership and checkout-local cleanup under one registry lock. `update` is the one group that composes outward: it handles release download, integrity checks, binary replacement, and post-install convergence. `log_format` owns the process-log filters, scan window bounds, path resolution and plain-text source/code columns that `orbit log` and the dashboard's log view share, so both judge and label records the same way. CLI flag parsing and dashboard query parsing stay in their respective surfaces. `browser_kit` installs, verifies and removes the headless browser kit behind `orbit config browser-kit` and the `workspace init` offer, and the doctor's `browser-kit` rows report it.
-- **orbit-mcp** implements the MCP transport over `rmcp`: stdio and TCP transports, tool discovery, per-call traces, the SSH stdio proxy, and the federated mux, which routes host-qualified `hm_*/ws_*` selectors to the registered hosts and fails closed. Core owns validation and auditing. Its adapter consumes `McpToolDefinition.rules` rather than matching builtin names: `orbit-tools/src/mcp/rules.rs` owns selector/echo conditions, ID-routing classifications, presentation readers and input-schema decorations. Adapter-owned presentation entrypoints are declared in `orbit-mcp/src/presentation_definition.rs`. These internal rules are separate from client annotations and are not emitted in `tools/list`; custom and plugin definitions default to ordinary transport behavior. Name-based CLI routing uses the same builtin routing metadata, including CLI-only task operations. Its dev-only self dependency enables `test-support` for per-probe fixture line caps; shipped builds retain the fixed production caps.
-- **orbit-web** serves the HTTP API and embedded dashboard, plus `web connect` over an SSH tunnel and `/api/on/<host>`, which forwards to a registered host's own dashboard over an on-demand SSH tunnel. It holds the lease intake socket (`lease_intake`), a Unix socket that accepts lease operations only from the lease listener's OS user, and the client that listener calls it with; with path leases not configurable [ORB-22808] it serves no socket. Within the crate, `api` and `serve` sit above `state`, `projections`, `lease` and the leaves `run_failure`, `shutdown`, `runtime_memo`, `connect`, `assets`, `why_stuck`, `health` and `host_tunnels`. `state` owns `host_error_code` and the default workspace selection helpers; `runtime_memo` owns `RoutineMemoKey`; `connect` owns `DEFAULT_DASHBOARD_PORT` and `open_browser`; `shutdown` owns the signal future; `run_failure` owns the run-detail failure lines; `assets` owns `DASHBOARD_CSS`. [`scripts/check-dependency-direction.sh`](scripts/check-dependency-direction.sh) rejects an `api` or `serve` path from those lower modules and leaves, and a `serve` path from `lease`. `lease` still calls `api::leases` and `api::lease_notices`. Re-exports at `api::routines::RoutineMemoKey`, `api::host::host_error_code`, `api::runs::failure::attach_run_failure_context`, `serve::DEFAULT_DASHBOARD_PORT`, `serve::open_browser` and `serve::shutdown_signal` are compatibility shims whose retirement, once callers use the owning modules, is a follow-up. The old `api::host_error_code`, `api::failure_root_line`, `serve::default_workspace_selection` and crate-root `DEFAULT_DASHBOARD_PORT` / `open_browser` paths were dropped: nothing still named them, and an unused `pub(crate) use` does not compile. The workspace helpers stay in `state::registry` and are not re-exported.
-- **orbit-cli** is the clap entry point and client configuration. It assembles MCP, Registry, Web, and Core. The accepting machine always resolves its own state and dispatches through Core. It holds no direct `orbit-auth` edge, in normal or dev form: credential code reaches the assembled binary only through `orbit-web`, whose lease listener wraps `orbit-auth`'s token verification, client-address rule and failed-authentication limiter as HTTP middleware. A direct CLI → auth dependency is a new crate edge, refused by [`scripts/check-dependency-direction.sh`](scripts/check-dependency-direction.sh) until that script and the crate table above change in the same PR.
-- **`desktop/`** is the Tauri desktop shell, a separate Cargo workspace outside the crate graph. It depends on no workspace crate: it runs the installed `orbit web serve` as a child process, shows the dashboard from its loopback address and reads that server's `/api` routes for its tray and notifications. Its update check reads GitHub releases over HTTPS and verifies them against a copy of `orbit-common::security::release`'s trust set, which `scripts/check-installer-pubkey.sh` keeps identical. See [`desktop/README.md`](desktop/README.md).
-
-## orbit-store internals
-
-```mermaid
-flowchart BT
-  File["driver/file"] --> Contracts["contracts"]
-  File --> Fs["fs primitives"]
-  Sqlite["driver/sqlite"] --> Contracts
-  Sqlite --> Fs
-  Repository["repository"] --> File
-  Repository --> Sqlite
-  Repository --> Contracts
-  Repository --> Fs
-  Workflow["workflow"] --> File
-  Workflow --> Sqlite
-  Workflow --> Repository
-  Compose["compose"] --> File
-  Compose --> Sqlite
-  Compose --> Repository
-  Compose --> Workflow
-```
-
-- **`contracts`** holds every consumer-visible trait and DTO, plus pure snapshot
-  selection. `TaskListFilter::sort_snapshot` and `select_ordered_snapshot` own
-  metadata predicates, listing order, cursor counts and page limits for loaded
-  envelopes. Ordered borrowed snapshots clone only the selected page; the
-  repository's owned fallback moves its matches and sorts before truncation.
-  These operations do no I/O or bundle-integrity validation. Application code
-  uses only these contracts.
-  The distributed pull preflight fingerprints a JSON schema derived with
-  Schemars from the actual admission request and nested Types contracts. The
-  tool adapter also derives its accepted request fields from that schema.
-- **`driver/file`** and **`driver/sqlite`** are private, implement one technology each, and never import each other. Shared atomic-write, lock, path-safety, and YAML code lives in `fs`.
-- **`repository`** enforces invariants that span drivers. A task write, for example, is a canonical bundle plus registry rows. Task and reservation changes commit through one boundary ([pattern](docs/design-patterns/task_commit_boundary.md)).
-- **`workflow`** holds the explicit import, export, reindex, repair, publication, and layout-upgrade operations. Nothing imports implicitly on open.
-- **`compose`** builds the concrete stores. Construction and migrations stay in composition, bootstrap, and maintenance code.
-
-The operator-only `maintenance::migration` surface also exposes the shared
-SQLite ledger engine for databases owned by other crates. Core's protected
-recovery authority supplies its own frozen registry; the engine records its
-migration and compatibility metadata in that same database and serializes
-adoption with the store and task registry's transaction rules.
-
-The dependency-direction script enforces these arrows too.
-
-Job catalog listings fetch the latest run for all selected jobs through the
-store's batched `latest_job_runs` contract. The SQLite backend probes the
-per-job creation index in bounded groups and hydrates steps in batches, so a
-catalog refresh does not issue separate run and step queries for each job or
-decode older run history. Empty catalogs require no run-store reads.
-
-Bounded multi-state recency pages select at most the requested limit from
-each distinct state through the workspace/state recency index, then merge
-those candidates by recency and run ID before applying the final limit.
-Active and failed page selection does not scan unrelated success history.
-Per-job bounded recency pages that name the success state, as failure streaks
-do, seek the per-job creation index and sort only that job's run IDs and
-recency values, then hydrate the bounded page. Old inputs stay outside the
-sort. Forcing the workspace/state recency index there would walk unrelated
-jobs once per state and catalogue entry, including jobs with no matching runs.
-Other per-job pages keep their existing selection, so a failed-only or
-cancelled-only page does not walk that job's success history. Live-only pages
-continue to seek the sparse state index.
-Other filters apply inside each selection; counts retain the complete
-matching set. Workspace HTTP lists reconcile stale runs once per request,
-while aggregate lists read the stored rows observationally.
-
-Task delivery observations without a named run prefilter candidate runs in
-SQLite by exact membership in the submitted `input.task_ids` array or equality
-with a text top-level `input.task_id`. The runtime then re-checks the
-`input.task_ids` array before accepting a candidate and skips jobs that do not
-hold task delivery. Candidates remain ordered by creation time, newest first.
-This avoids decoding unrelated workspace history without imposing a history
-cap that could hide an older delivery. The JSON predicate still scans workspace
-rows; candidate input hydration scales with the task's matching run history,
-while SQL filtering scales with workspace history.
+Inside `orbit-store`, `driver/file` and `driver/sqlite` are private, implement one technology
+each and never import each other; `repository` enforces cross-driver invariants, `workflow`
+holds explicit import/export/repair operations, and `compose` builds the stores. The same
+guard enforces these arrows; see [orbit-store](docs/architecture/orbit-store.md).
 
 ## Stability tiers
 
-Each crate declares `stability` under `[package.metadata.orbit]` in its `Cargo.toml`. [`scripts/check-stability.sh`](scripts/check-stability.sh) fails if the marker is missing or invalid. There is no automated API diff; the tier signals refactor scope to reviewers.
+Each crate declares `stability` under `[package.metadata.orbit]` in its `Cargo.toml`.
+[`scripts/check-stability.sh`](scripts/check-stability.sh) fails if the marker is missing or
+invalid. There is no automated API diff; the tier signals refactor scope to reviewers.
 
 - **stable**: breaking changes need owner sign-off.
 - **experimental**: free to refactor, and downstream depends at its own risk.
@@ -314,15 +90,9 @@ Each crate declares `stability` under `[package.metadata.orbit]` in its `Cargo.t
 
 ## Scoping rules
 
-Orbit has two roots: global `~/.orbit/` and the workspace `.orbit/`.
-
-Registered repositories may share one explicit data root. In that mode the
-selected logical workspace binding scopes runtime identity, tasks, job runs,
-friction, default v2 audit/recovery reads, reservations and workspace claims;
-the root's single compatibility `config.yaml` cannot identify every repository.
-Ordinary checkout roots keep their persisted partition identity, which can
-differ from the logical catalog ID. Opening a root without a selected binding
-retains the compatibility config identity.
+Orbit has two roots: global `~/.orbit/` and the workspace `.orbit/`. When registered
+repositories share one data root, the selected workspace binding scopes runtime identity and
+every workspace-only artifact below.
 
 | Artifact | Strategy | Notes |
 |---|---|---|
@@ -333,28 +103,10 @@ retains the compatibility config identity.
 | Command audit | Global only | One authoritative SQLite trail |
 | Global defaults stamp | Global only | Lets a warm open skip re-hashing managed catalogs |
 
-A runtime that joins a foreign executable generation retains read-only state
-handles and skips operational repairs. Tool dispatch appends its command audit
-through a separate connection to the existing global database, without creating
-or migrating it. This append requires the exact supported store schema; an
-unwritable or incompatible database still leaves read-only tool results available
-with an audit warning. Ordinary writable runtimes reuse their audit handle.
-
-## Automation persistence
-
-- Automation state (consumer checkpoints, delivery-owner intents, accepted coverage, and recovery records) lives in host SQLite store tables that the store ledger creates (v49 absorbed the automation feature ledger). Every checkpoint and receipt change is generation-fenced. Recovery never moves a cursor, drops an obligation, or mints a receipt.
-- Task action keys live with task allocation in the registry, and job keys commit with job admission.
-- Task artifacts reserve `automation-evidence-authority.json` for transport-supplied run origin plus a digest. Neither a model nor caller JSON can create that authority. Source ranges are retained under `refs/orbit/automation/...` until explicit cleanup.
-
 ## Product identity
 
-Orbit is the only supported application profile. A `.orbit-product` marker, checked in [`application::workspace::product_profile`](crates/orbit-core/src/application/workspace/product_profile.rs), stops another product from initializing or reconciling an Orbit root. Unmarked legacy roots still open. The marker guards against accident, not attack.
-
-Before a second public profile can exist, it must be fixed before state opens and carried through every entry point, not just filtered in tool discovery. That means these entry points:
-- tool execution and command dispatch
-- engine and Core dispatchers
-- job submission and web run handlers
-- the MCP and federated servers
-- detached workers
-- agent callbacks
-- clock installation
+Orbit is the only supported application profile. A `.orbit-product` marker, checked in
+[`application::workspace::product_profile`](crates/orbit-core/src/application/workspace/product_profile.rs),
+stops another product from initializing or reconciling an Orbit root. A second profile would
+have to be fixed before state opens and carried through every entry point, not filtered in
+tool discovery.
