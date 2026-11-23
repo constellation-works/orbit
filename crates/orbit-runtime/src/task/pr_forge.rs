@@ -104,37 +104,9 @@ pub struct CheckRerunOutcome {
     pub uncertain: Option<(u64, String, String)>,
 }
 
-/// How a request to refresh a pull request's head with its base branch ended.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum PullRequestRefreshOutcome {
-    /// The forge merged the base branch into the pull request head as one
-    /// conflict-free merge commit, starting required checks on the new head.
-    Updated {
-        /// The new pull request head commit after the merge.
-        head_sha: String,
-    },
-    /// The pull request head already contains the base branch tip; nothing
-    /// changed.
-    AlreadyUpToDate {
-        /// The unchanged pull request head commit.
-        head_sha: String,
-    },
-    /// Merging the base branch into the pull request head would conflict on
-    /// these paths; nothing changed.
-    Conflicting {
-        /// Conflicting file paths, sorted and deduplicated.
-        conflicting_paths: Vec<String>,
-        /// Diagnostic detail.
-        reason: String,
-    },
-    /// The forge or policy refused the refresh (moved head, unrelated history,
-    /// branch protection forbidding merge commits, or caller not permitted);
-    /// nothing changed.
-    Refused {
-        /// The refusal reason.
-        reason: String,
-    },
-}
+/// How a request to refresh a pull request's head with its base branch ended;
+/// shared with the delivery pipeline's base-inherited refresh [ORB-26860].
+pub use orbit_types::workflow::PullRequestRefreshOutcome;
 
 /// How a request to merge a pull request ended when the forge answered it.
 #[derive(Debug, Clone, PartialEq, Eq)]

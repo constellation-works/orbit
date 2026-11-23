@@ -6014,6 +6014,12 @@ impl orbit_engine::test_support::NullRuntimeHost for DeliveryHost {
         }
         Ok(decision)
     }
+    fn refresh_delivery_pull_request(
+        &self,
+        request: &orbit_types::workflow::DeliveryRefreshRequest,
+    ) -> Res<orbit_types::workflow::PullRequestRefreshOutcome> {
+        auto_fix::refresh_pull_request(self, request)
+    }
     fn admit_ci_rerun(
         &self,
         _tasks: &[String],

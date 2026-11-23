@@ -6,6 +6,7 @@ mod base_update;
 mod ci_failure;
 mod ci_rerun;
 mod completion;
+mod delivery_refresh;
 mod failure_handoff;
 mod infrastructure;
 
@@ -27,6 +28,9 @@ pub use base_update::{
     pr_base_update_reservations,
 };
 pub use completion::{PR_COMPLETION_MUTATION_STARTED_EVENT, pr_completion_has_mutation_provenance};
+pub use delivery_refresh::{
+    DeliveryRefreshRequest, PR_BASE_INHERITED_REFRESH_CAUSE, PullRequestRefreshOutcome,
+};
 pub use failure_handoff::{
     FailureHandoffHistoryNote, FailureHandoffStep, RecordedCandidateConflict,
 };

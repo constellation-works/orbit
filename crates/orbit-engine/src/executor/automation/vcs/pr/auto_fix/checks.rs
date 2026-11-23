@@ -177,11 +177,10 @@ pub(in crate::executor::automation::vcs::pr) fn recover_ci_rerun<H: RuntimeHost 
                     reason,
                 });
             }
+            // [ORB-26860] The completion decides whether this failure is
+            // base-inherited and refreshes the head once, or holds.
             super::super::super::checks::CiRerunStep::NoEditRerunFailed(reason) => {
-                return Ok(CiRerunRecovery::Held {
-                    refusal: DeliveryRefusal::RepairDispatched,
-                    reason,
-                });
+                return Ok(CiRerunRecovery::NoEditRerunFailed(reason));
             }
             super::super::super::checks::CiRerunStep::NotEligible => {}
         }
@@ -245,6 +244,11 @@ pub(in crate::executor::automation::vcs::pr) enum CiRerunRecovery {
         refusal: DeliveryRefusal,
         reason: String,
     },
+    /// [ORB-26860] The no-edit repair's one rerun on the unchanged head
+    /// failed again, for the named reason. The caller holds as
+    /// `RepairDispatched` unless the failure is base-inherited and the head's
+    /// one base refresh runs.
+    NoEditRerunFailed(String),
 }
 
 /// Whether a repair of `head` on a task this run watches ended with no
@@ -448,7 +452,7 @@ type RequiredFailures = (Vec<(Option<String>, String)>, RequiredChecks);
 /// would otherwise read as the blocker. Nothing required failing, or an
 /// answer that cannot show it, is a stop. The head-bound read is returned
 /// with the failures, for the identities of the required checks.
-fn required_failures<H: RuntimeHost + ?Sized>(
+pub(super) fn required_failures<H: RuntimeHost + ?Sized>(
     host: &H,
     workspace_path: &str,
     pr_number: &str,

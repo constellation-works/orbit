@@ -367,6 +367,14 @@ pub trait NullRuntimeHost: Send + Sync {
             orbit_types::workflow::PrBaseUpdateRefusal::LedgerAbsent,
         ))
     }
+    fn refresh_delivery_pull_request(
+        &self,
+        _request: &orbit_types::workflow::DeliveryRefreshRequest,
+    ) -> Result<orbit_types::workflow::PullRequestRefreshOutcome, OrbitError> {
+        Ok(orbit_types::workflow::PullRequestRefreshOutcome::Refused {
+            reason: "this host cannot refresh a delivery pull request".to_string(),
+        })
+    }
     fn admit_ci_rerun(
         &self,
         _task_ids: &[String],

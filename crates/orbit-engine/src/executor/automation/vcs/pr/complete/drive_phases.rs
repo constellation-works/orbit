@@ -31,6 +31,7 @@ use super::absent_check_runs::{AbsentCheckRunPoll, AbsentCheckRuns};
 use super::ci_rerun_hold::{CiRerunHold, CiRerunHoldStep, CiRerunRecoveryOutcome};
 use super::conflict::is_blocked_merge_state;
 use super::drive::Delivery;
+use super::inherited_refresh::RerunFailureStep;
 use super::mutation::{checked_required_check_observation_failure, observation_failure};
 use super::reviewed::{ensure_pr_head_is_reviewed, merge_wait_timeout};
 
@@ -104,6 +105,8 @@ pub(super) struct PollDriver<'a, H: RuntimeHost + ?Sized> {
     pub(super) requested_landed_commit: Option<String>,
     pub(super) conflict_refresh_attempted: bool,
     pub(super) landed_refresh_attempted: bool,
+    /// [ORB-26860] This completion refreshed a base-inherited failure's head.
+    pub(super) inherited_refresh_attempted: bool,
     pub(super) merge_capabilities: Option<PermittedMerge>,
     pub(super) base_modified_refusals: u32,
     pub(super) base_race: Option<String>,
@@ -273,7 +276,8 @@ impl<H: RuntimeHost + ?Sized> PollDriver<'_, H> {
         let mutated = self.merge_requested
             || self.auto_merge_requested
             || self.conflict_refresh_attempted
-            || self.landed_refresh_attempted;
+            || self.landed_refresh_attempted
+            || self.inherited_refresh_attempted;
         self.mutated = mutated;
         let observed = |error| observation_failure(host, input, mutated, observation_budget, error);
         let status = if max_wait_seconds == 0 {
@@ -308,6 +312,9 @@ impl<H: RuntimeHost + ?Sized> PollDriver<'_, H> {
         let mut base_refresh_wait = false;
         if let Some(auto_fix) = auto_fix {
             self.pin.ensure_candidate_identity(&status, pr_number)?;
+            // [ORB-26860] A reserved, verified base-only refresh of the
+            // candidate becomes the candidate before any head check.
+            self.adopt_inherited_refresh(auto_fix, &status);
             // Honor a durable wait before any head/base log diagnosis, including
             // conflict and resumed paths. The freshly read head was pinned above.
             if has_failures
@@ -537,6 +544,20 @@ impl<H: RuntimeHost + ?Sized> PollDriver<'_, H> {
                     completion_deadline_ms,
                     &mut *self.diagnostic,
                 );
+                // [ORB-26860] The no-edit rerun failed again: refresh a
+                // base-inherited failure's head once, or hold.
+                let retry = match retry {
+                    Ok(CiRerunRecovery::NoEditRerunFailed(reason)) => {
+                        match self.refresh_after_failed_rerun(auto_fix, status, &reason)? {
+                            RerunFailureStep::Repoll => return Ok(RecoveryFlow::ContinuePoll),
+                            RerunFailureStep::Hold(reason) => Ok(CiRerunRecovery::Held {
+                                refusal: DeliveryRefusal::RepairDispatched,
+                                reason,
+                            }),
+                        }
+                    }
+                    other => other,
+                };
                 let waited_seconds = self.waited_seconds;
                 let last_poll = waited_seconds.saturating_add(self.poll_interval_seconds)
                     >= self.max_wait_seconds;
@@ -556,6 +577,12 @@ impl<H: RuntimeHost + ?Sized> PollDriver<'_, H> {
                         refusal: *refusal,
                         reason: reason.as_str(),
                     },
+                    Ok(CiRerunRecovery::NoEditRerunFailed(reason)) => {
+                        CiRerunRecoveryOutcome::Held {
+                            refusal: DeliveryRefusal::RepairDispatched,
+                            reason: reason.as_str(),
+                        }
+                    }
                     Err(error) => {
                         let deferred = self
                             .diagnostic

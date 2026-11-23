@@ -1935,6 +1935,105 @@ result, which settles the step only after the same revalidation ([ORB-22649]). [
 [ORB-20166] (disabled example) ships the disabled, nonseeded release-readiness job/routine composition examples, installed only after owner prerequisites. No live
 readiness configuration, provider work or release is authorized by these primitives.
 
+### 8.15 Base-inherited delivery refresh
+
+[ORB-26860] An `--auto-fix` delivery whose required check fails on a test or
+advisory the base branch has since fixed refreshes its own pull request to the
+base tip, reruns the required checks on the new head and lands, with no operator
+and no new implementation. `pull_request` CI tests the PR head, so no rerun of
+the old head can pass; before this, such a delivery held as
+`delivery_repair_dispatched` until an operator updated the branch by hand
+(PRs #10592 and #10601 on 2026-11-22). The rule is recorded in
+[Held deliveries refresh to the base tip when the failure is base-inherited](./4_decisions.md#held-deliveries-refresh-to-the-base-tip-when-the-failure-is-base-inherited).
+
+**Order.** The refresh is the step after [ORB-26854]'s single no-edit rerun, never
+instead of it: it runs only in `complete_pr`'s check recovery, when the admitted
+check repair made no edit, its one rerun on the unchanged head was sent, and a
+later authenticated attempt of that rerun failed again
+(`CiRerunStep::NoEditRerunFailed`). Every earlier outcome (rerun not yet sent,
+still observing, budget spent with no rerun result, a red rerun outside the
+no-edit route) keeps its existing behavior.
+
+**Trigger: what counts as base-inherited.** All of these must hold on the failed
+head, or the run holds exactly as before with the reason extended by why no
+refresh ran:
+
+- Every required failure is red-then-fixed on the base branch since the PR's base:
+  `base_tip_check_evidence` reads, along the base branch's first-parent history
+  from its current tip, the newest commit whose same job ran to a result, and
+  classes the set as `base_refresh`. That means each failed job passed on that
+  newer base commit while the head's fork point did not pass it, no required
+  sibling fails on the base the same way (`known_red_base`), and the base tip is
+  not already in the head.
+- No failure is the candidate's: no failed required job's log cites a path the
+  candidate changed against its fork point (`cites_changed_candidate`, the same
+  attribution check landing recovery uses). An unreadable log or a stopped job
+  with no log is not proof, and holds.
+- An advisory fixed by a base lockfile change is the same case at check level:
+  the dependency check (for example `cargo-deny`) fails at the fork point and
+  passes on the base commit that changed the lockfile. A candidate that itself
+  changed the cited lockfile fails the citation check and holds.
+
+**Evidence recorded.** Before the write, the run reserves the PR's one provider
+base update in the shared `pr_base_update_reserved` ledger on the owning task
+(`PrBaseUpdateReservation`, `evidence.cause = "base_inherited_refresh"`), with the
+rerun's failure reason, the fork point and the per-check base evidence (failed
+job, passing base job and base commit). The refresh operation itself records its
+`pr_refresh` audit rows (`requested`, then `updated`, `already_up_to_date`,
+`refused` or `failed`), naming the run as actor.
+
+**Reuse: one implementation.** The engine asks the host through
+`RuntimeHost::refresh_delivery_pull_request`. Core answers it with the same
+operation [ORB-26834] built for `orbit.workflow` action `refresh`
+(`OrbitRuntime::refresh_open_delivery_head` behind
+`OrbitRuntime::refresh_task_pull_request`): a read-only `git merge-tree`
+conflict inspection, then GitHub's `update-branch` with the exact expected head,
+which merges the base tip into the head as one merge commit. Only the authority
+gate differs: the resident tool refuses a PR owned by a live run, while the
+pipeline call is accepted only from the live run that owns the task, on the
+owning host, for the open delivery PR whose head, head branch and base branch
+still match its pin.
+
+**Candidate identity.** The refreshed head carries only base commits: it is a
+first-parent chain of conflict-free two-parent merges onto the candidate, each
+merging a commit the base branch contains, with a tree equal to the clean merge
+of its parents. On every poll, before any delivery-identity check, the run adopts
+a moved head only when its PR has a `base_inherited_refresh` reservation for the
+pinned candidate and `verify_refreshed_head_from_base` accepts the move. It then
+pins the refreshed head as the candidate (`DeliveryPin::adopt_refreshed_candidate`,
+the previous head kept as provenance) and treats the reviewed-head check as
+satisfied, the same way it treats an adopted provider base update. So `complete_pr`
+conditions the merge on the refreshed head and records delivery evidence for it,
+with no `delivery_evidence_stale`. A head that moved any other way is not adopted
+and still refuses. The review recorded for the pre-refresh head still covers it,
+per [ORB-26834]'s decision that base-only merge commits need no re-review, so no
+`reconcile_review` is owed. After a merge, `orbit task settle-merged` accepts the
+landing through `verify_merged_base_refresh`: the merged head reaches the published
+candidate through clean base merges, and the merge commit's tree is that head
+merged onto the landing tip.
+
+**Bounds.**
+
+- Conflict-free only. A refresh that would conflict changes nothing and is
+  refused with the conflicting paths. The delivery then holds as
+  `delivery_repair_dispatched`, and the hold reason names the rerun, the refused
+  refresh and those paths. Unrelated history, a moved head and a forge refusal
+  hold the same way.
+- At most one refresh per head. The reservation shares the cumulative per-PR
+  provider base-update budget, so a head is never refreshed twice. A refreshed
+  head that fails again takes the ordinary repair path and never a second
+  refresh. A reservation that exists without a moved head (for example, a lost
+  reply) is observed, not sent again, and holds.
+- It never edits candidate code: the only new content is the base branch's
+  commits, merged by the forge. It never rebases, rewrites or force-pushes.
+- It never skips, retries in a loop or weakens a check: the forge reruns the
+  required checks on the new head, and `complete_pr` merges only when branch
+  protection reports them passing. Branch protection is unchanged.
+
+The claimed handoff landing keeps its own inherited-failure update, and the
+review-time CI watch keeps holding on a failed no-edit rerun. Neither calls this
+refresh.
+
 ## 9. Filesystem Policy and `fsProfile`
 
 Both `ActivityV2` and `TargetStep` can attach an `fsProfile`. orbit-core uses `tool_context_for_activity(...)` to build the policy-aware `ToolContext`, and `V2AuditWriter` can attach filesystem audit logging so read/write denials appear in the envelope.
@@ -2118,6 +2217,7 @@ Read-only history does not need the same dependencies as live execution: retired
 - **[ORB-14152]** — Gate step recovery's single post-recovery attempt on a host-allocated, nonce-bound decision file the recovery activity writes, verified without following links; the final response's `recovered` field stays diagnostic.
 - **[ORB-14268]** — An absent step-recovery decision admits the post-recovery attempt only on an engine-observed worktree, base or validation-environment change (or the narrow check-repair exception of [ORB-26854]), and an `external_blocker` decision fails the step as a typed agent blocker that final recovery skips.
 - **[ORB-26854]** — Let a clean, admitted `--auto-fix` check repair that made no edit and wrote no scope record rerun its failed checks once on the unchanged head: its no-edit rerun is recorded in the per-PR ledger, which admits the post-recovery attempt for an absent or verified `not_recovered` decision.
+- **[ORB-26860]** — After that no-edit rerun fails again, refresh a delivery whose failure is base-inherited to its base tip through [ORB-26834]'s refresh operation, at most once per head and only conflict-free, adopting the verified base-only head as the candidate ([§8.15](#815-base-inherited-delivery-refresh)).
 - **[ORB-26905]** — Report that admitted no-edit rerun in `step.recovery_attempted` as `retry_admitted = true` beside the recorded decision status, verdict and detail, suppressing the no-retry warning, and as `retry_admitted = false` when the ledger write refuses.
 - **[ORB-14822]** — Commit a step recovery's working-tree repair on the host before the post-recovery attempt of a step after `commit`, refusing protected, non-regular, no-diff-route and post-review repairs with a typed `recovery_commit_refused` reason; recovery agents stay read-only on Git metadata.
 - **[ORB-15584]** — persist the execution summary an implementer returned but did not write, attributed to the run's crew, before deriving one.

@@ -149,6 +149,7 @@ fn drive_pr_to_merged_observed<H: RuntimeHost + ?Sized>(
     let requested_landed_commit: Option<String> = None;
     let conflict_refresh_attempted = false;
     let landed_refresh_attempted = false;
+    let inherited_refresh_attempted = false;
     let merge_capabilities: Option<PermittedMerge> = None;
     let base_modified_refusals = 0_u32;
     // The latest base-modification refusal, kept for the error that ends the
@@ -225,6 +226,7 @@ fn drive_pr_to_merged_observed<H: RuntimeHost + ?Sized>(
         requested_landed_commit,
         conflict_refresh_attempted,
         landed_refresh_attempted,
+        inherited_refresh_attempted,
         merge_capabilities,
         base_modified_refusals,
         base_race,

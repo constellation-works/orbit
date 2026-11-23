@@ -18,6 +18,7 @@ use crate::runtime::audit::system::{
     AuditRunAttribution, SystemAuditEvent, record_system_audit_event,
 };
 use crate::runtime::task_pr_forge::PullRequestRefreshOutcome;
+use orbit_types::workflow::DeliveryRefreshRequest;
 
 use super::land::{OpenDelivery, TASK_LANDING_REFUSED, ensure_delivery_target_branch};
 
@@ -29,6 +30,9 @@ const PR_REFRESH_AUDIT_COMMAND: &str = "pr_refresh";
 
 /// The audit step a refresh requested through `orbit.workflow.refresh` names.
 const REFRESH_TOOL_STEP: &str = "workflow.refresh";
+
+/// The audit step the delivery pipeline's base-inherited refresh names.
+const PIPELINE_REFRESH_STEP: &str = "pipeline.base_inherited_refresh";
 
 /// Outcome of refreshing a task's open delivery pull request.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -150,69 +154,14 @@ impl OrbitRuntime {
 
         let previous_head = blockers.head_sha.clone();
         let head_branch = blockers.pull.head_branch.clone();
-        let pull_request = number.to_string();
-        let request_detail = json!({
-            "step": REFRESH_TOOL_STEP,
-            "task_id": id,
-            "actor": actor,
-            "pull_request": number,
-            "head_branch": head_branch,
-            "base_branch": expected_base,
-            "head_sha": previous_head,
-        });
-        record_refresh_audit(
-            self,
+        let outcome = self.refresh_open_delivery_head(
             id,
-            &pull_request,
-            "requested",
-            AuditEventStatus::Success,
-            request_detail.clone(),
-        )?;
-
-        let outcome = forge.update_pull_request_branch(
-            &repo_root,
             number,
             &head_branch,
             &expected_base,
             &previous_head,
-        );
-        let (phase, audit_status, extra) = match &outcome {
-            Ok(PullRequestRefreshOutcome::Updated { head_sha }) => (
-                "updated",
-                AuditEventStatus::Success,
-                json!({"new_head_sha": head_sha}),
-            ),
-            Ok(PullRequestRefreshOutcome::AlreadyUpToDate { head_sha }) => (
-                "already_up_to_date",
-                AuditEventStatus::Success,
-                json!({"new_head_sha": head_sha}),
-            ),
-            Ok(PullRequestRefreshOutcome::Conflicting {
-                conflicting_paths,
-                reason,
-            }) => (
-                "refused",
-                AuditEventStatus::Denied,
-                json!({"reason": reason, "conflicting_paths": conflicting_paths}),
-            ),
-            Ok(PullRequestRefreshOutcome::Refused { reason }) => (
-                "refused",
-                AuditEventStatus::Denied,
-                json!({"reason": reason}),
-            ),
-            Err(error) => (
-                "failed",
-                AuditEventStatus::Failure,
-                json!({"error": error.to_string()}),
-            ),
-        };
-        record_refresh_outcome(
-            self,
-            id,
-            &pull_request,
-            phase,
-            audit_status,
-            merged_fields(request_detail, extra),
+            actor,
+            REFRESH_TOOL_STEP,
         );
 
         match outcome? {
@@ -255,6 +204,159 @@ impl OrbitRuntime {
                 format_args!("the forge refused to refresh pull request #{number}: {reason}"),
             )),
         }
+    }
+
+    /// [ORB-26860] Refresh the open delivery pull request a live delivery run
+    /// holds for its own tasks, after its check failure proved base-inherited.
+    ///
+    /// The pipeline's authority gate: only on the owning host, for a
+    /// non-terminal task, and only while the pull request is open with the
+    /// exact head, head branch and base branch the run pinned. Every refusal
+    /// is a [`PullRequestRefreshOutcome::Refused`] and changes nothing; the
+    /// write itself is [`Self::refresh_open_delivery_head`], the operation
+    /// behind `orbit.workflow` action `refresh`.
+    pub(crate) fn refresh_run_delivery_pull_request(
+        &self,
+        request: &DeliveryRefreshRequest,
+    ) -> Result<PullRequestRefreshOutcome, OrbitError> {
+        let refused = |reason: String| Ok(PullRequestRefreshOutcome::Refused { reason });
+        if self.worker_invocation().is_some() {
+            return refused(
+                "a claimed worker cannot refresh a delivery pull request; the owning host does"
+                    .to_string(),
+            );
+        }
+        let Some(primary) = request.task_ids.iter().min() else {
+            return refused("the request names no task".to_string());
+        };
+        let task = self.get_task(primary)?;
+        if task.status.is_terminal() {
+            return refused(format!("task '{primary}' is '{}'", task.status));
+        }
+        let number = request.pr_number;
+        let repo_root = self.context.paths().repo_root.clone();
+        let forge = self.task_pr_forge();
+        let Some(blockers) = forge.pull_request_required_checks(&repo_root, number)? else {
+            return refused(format!("pull request #{number} is not open"));
+        };
+        if blockers.head_sha != request.expected_head_sha {
+            return refused(format!(
+                "pull request #{number} head {} is not the run's head {}",
+                blockers.head_sha, request.expected_head_sha
+            ));
+        }
+        if blockers.pull.head_branch != request.head_branch {
+            return refused(format!(
+                "pull request #{number} head branch {} is not the run's branch {}",
+                blockers.pull.head_branch, request.head_branch
+            ));
+        }
+        let observed_base = forge
+            .lease_pull_request(&repo_root, &format!("#{number}"))?
+            .map(|bound| bound.base_branch);
+        if let Err(reason) =
+            ensure_delivery_target_branch(number, observed_base.as_deref(), &request.base_branch)
+        {
+            return refused(reason);
+        }
+        self.refresh_open_delivery_head(
+            primary,
+            number,
+            &request.head_branch,
+            &request.base_branch,
+            &request.expected_head_sha,
+            Some(&request.run_id),
+            PIPELINE_REFRESH_STEP,
+        )
+    }
+
+    /// The one refresh operation behind `orbit.workflow` action `refresh`
+    /// and the delivery pipeline's base-inherited refresh [ORB-26860]: merge
+    /// the tip of `base_branch` into pull request `number`'s head
+    /// (`previous_head` on `head_branch`) as one conflict-free merge commit,
+    /// recording `pr_refresh` audit rows before and after. Callers own the
+    /// authority gate.
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "the refresh names the pull request's exact identity and its audit attribution"
+    )]
+    pub(crate) fn refresh_open_delivery_head(
+        &self,
+        id: &str,
+        number: u64,
+        head_branch: &str,
+        base_branch: &str,
+        previous_head: &str,
+        actor: Option<&str>,
+        step: &str,
+    ) -> Result<PullRequestRefreshOutcome, OrbitError> {
+        let repo_root = self.context.paths().repo_root.clone();
+        let forge = self.task_pr_forge();
+        let pull_request = number.to_string();
+        let request_detail = json!({
+            "step": step,
+            "task_id": id,
+            "actor": actor,
+            "pull_request": number,
+            "head_branch": head_branch,
+            "base_branch": base_branch,
+            "head_sha": previous_head,
+        });
+        record_refresh_audit(
+            self,
+            id,
+            &pull_request,
+            "requested",
+            AuditEventStatus::Success,
+            request_detail.clone(),
+        )?;
+
+        let outcome = forge.update_pull_request_branch(
+            &repo_root,
+            number,
+            head_branch,
+            base_branch,
+            previous_head,
+        );
+        let (phase, audit_status, extra) = match &outcome {
+            Ok(PullRequestRefreshOutcome::Updated { head_sha }) => (
+                "updated",
+                AuditEventStatus::Success,
+                json!({"new_head_sha": head_sha}),
+            ),
+            Ok(PullRequestRefreshOutcome::AlreadyUpToDate { head_sha }) => (
+                "already_up_to_date",
+                AuditEventStatus::Success,
+                json!({"new_head_sha": head_sha}),
+            ),
+            Ok(PullRequestRefreshOutcome::Conflicting {
+                conflicting_paths,
+                reason,
+            }) => (
+                "refused",
+                AuditEventStatus::Denied,
+                json!({"reason": reason, "conflicting_paths": conflicting_paths}),
+            ),
+            Ok(PullRequestRefreshOutcome::Refused { reason }) => (
+                "refused",
+                AuditEventStatus::Denied,
+                json!({"reason": reason}),
+            ),
+            Err(error) => (
+                "failed",
+                AuditEventStatus::Failure,
+                json!({"error": error.to_string()}),
+            ),
+        };
+        record_refresh_outcome(
+            self,
+            id,
+            &pull_request,
+            phase,
+            audit_status,
+            merged_fields(request_detail, extra),
+        );
+        outcome
     }
 }
 
