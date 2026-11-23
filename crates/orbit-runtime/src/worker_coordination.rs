@@ -276,7 +276,7 @@ impl RuntimeKernel {
         // not hold there is outside the claim's scope rather than missing.
         let other_task = (!session.worker_host_call
             && matches!(name, "orbit.task.show" | "orbit.task.artifact.get"))
-        .then(|| input.get("id").and_then(Value::as_str).map(str::to_owned))
+        .then(|| orbit_common::governance::task::task_id_alias_str(&input).map(str::to_owned))
         .flatten()
         .filter(|id| *id != bound.task_id);
         let owner = self

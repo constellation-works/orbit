@@ -140,6 +140,14 @@ fn a_claimed_implementer_reads_every_finding_on_the_candidate_it_resumes() {
     assert_eq!(later.code_flow, reported.results[1].code_flow);
 
     assert_eq!(fixture.owner.reads(), vec![FINDINGS.to_string()]);
+    let read_by_task_id = fixture
+        .forwarded(
+            &broker,
+            GET,
+            json!({"task_id": TASK, "path": FINDINGS, "model": "codex"}),
+        )
+        .expect("the resuming implementer reads them via task_id");
+    assert_eq!(read_by_task_id, read);
     for (_, input, session) in fixture.owner.calls.lock().unwrap().iter() {
         assert_eq!(input["id"], TASK, "{input}");
         assert_eq!(session.worker_invocation.as_ref(), Some(&fixture.binding));
@@ -216,6 +224,20 @@ fn the_findings_read_is_bound_to_the_kept_candidate_and_opens_nothing_else() {
         fixture.forwarded(&broker, GET, json!({"id": "TSO-2", "path": FINDINGS})),
         "a task other than the claimed task",
         "another task's findings",
+    );
+    refused_with(
+        fixture.forwarded(&broker, GET, json!({"task_id": "TSO-2", "path": FINDINGS})),
+        "a task other than the claimed task",
+        "another task's findings via task_id",
+    );
+    refused_with(
+        fixture.forwarded(
+            &broker,
+            GET,
+            json!({"id": TASK, "task_id": TASK, "path": FINDINGS}),
+        ),
+        "alias of `id`",
+        "conflicting findings read",
     );
     let recovery = fixture.serve(FINAL_RECOVERY_ACTIVITY);
     refused_with(

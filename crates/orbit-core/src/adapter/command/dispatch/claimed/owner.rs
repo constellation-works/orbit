@@ -59,6 +59,9 @@ use std::path::Path;
 
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
+use orbit_common::governance::task::{
+    TASK_ID_WIRE_ALIAS, normalize_task_id_alias, task_id_alias_conflict_error,
+};
 use orbit_common::{OrbitError, RemoteToolCode};
 use orbit_types::task::{MAX_TASK_ARTIFACT_CONTENT_BYTES, media_type_for_artifact_path};
 use orbit_types::tool::{
@@ -461,41 +464,41 @@ fn accept_fields(object: &Map<String, Value>, allowed: &[&str]) -> Result<(), Or
 }
 
 /// [`accept_fields`] for a request whose `id` names a task, which every
-/// claimed task read and artifact call does. A `task_id` alias is refused
-/// with the recovery that passes the task as `id`.
+/// claimed task read and artifact call does. Accepts the unadvertised
+/// `task_id` wire alias when `id` is absent and refuses when both are set.
 pub(super) fn accept_task_fields(
     object: &Map<String, Value>,
     allowed: &[&str],
 ) -> Result<(), OrbitError> {
+    if allowed.contains(&"id")
+        && object.contains_key("id")
+        && object.contains_key(TASK_ID_WIRE_ALIAS)
+    {
+        return Err(task_id_alias_conflict_error());
+    }
     refuse_unaccepted_field(object, allowed, true)
 }
 
 fn refuse_unaccepted_field(
     object: &Map<String, Value>,
     allowed: &[&str],
-    id_names_task: bool,
+    allow_task_id_alias: bool,
 ) -> Result<(), OrbitError> {
-    let Some(field) = object.keys().find(|key| !allowed.contains(&key.as_str())) else {
+    let accepts_task_id = allow_task_id_alias && allowed.contains(&"id");
+    let Some(field) = object.keys().find(|key| {
+        let key = key.as_str();
+        !allowed.contains(&key) && !(accepts_task_id && key == TASK_ID_WIRE_ALIAS)
+    }) else {
         return Ok(());
     };
-    // `task_id` is the alias agents reach for. It is recoverable only where
-    // `id` names the task and the request has no `id` of its own yet.
-    let recovery = if id_names_task
-        && field == "task_id"
-        && allowed.contains(&"id")
-        && !object.contains_key("id")
-    {
-        "pass the task as `id`".to_owned()
-    } else {
-        let accepted = allowed
-            .iter()
-            .map(|name| format!("`{name}`"))
-            .collect::<Vec<_>>()
-            .join(", ");
-        format!("accepted fields are {accepted}")
-    };
+    let accepted = allowed
+        .iter()
+        .map(|name| format!("`{name}`"))
+        .collect::<Vec<_>>()
+        .join(", ");
     Err(OrbitError::InvalidInput(format!(
-        "a claimed worker's brokered request does not accept `{field}`; {recovery}"
+        "a claimed worker's brokered request does not accept `{field}`; accepted fields are \
+         {accepted}"
     )))
 }
 
@@ -573,16 +576,33 @@ fn check_task_show(object: &Map<String, Value>) -> Result<bool, OrbitError> {
     Ok(true)
 }
 
-/// Whether a request names the claimed task.
-fn names_claimed_task(object: &Map<String, Value>, binding: &WorkerInvocation) -> bool {
-    object.get("id").and_then(Value::as_str) == Some(binding.task_id.as_str())
+/// Task ID from `id` or its unadvertised `task_id` alias when only one is set.
+fn object_task_id(object: &Map<String, Value>) -> Option<&str> {
+    if object.contains_key("id") && object.contains_key(TASK_ID_WIRE_ALIAS) {
+        return None;
+    }
+    object
+        .get("id")
+        .or_else(|| object.get(TASK_ID_WIRE_ALIAS))
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|id| !id.is_empty())
 }
 
-/// Refuse a request whose `id` is not the claimed task.
+/// Whether a request names the claimed task.
+fn names_claimed_task(object: &Map<String, Value>, binding: &WorkerInvocation) -> bool {
+    object_task_id(object) == Some(binding.task_id.as_str())
+}
+
+/// Refuse a request whose `id` (or `task_id` alias) conflicts or is not the
+/// claimed task.
 pub(super) fn require_claimed_task(
     object: &Map<String, Value>,
     binding: &WorkerInvocation,
 ) -> Result<(), OrbitError> {
+    if object.contains_key("id") && object.contains_key(TASK_ID_WIRE_ALIAS) {
+        return Err(task_id_alias_conflict_error());
+    }
     if !names_claimed_task(object, binding) {
         return Err(denied(
             "the request names a task other than the claimed task",
@@ -705,6 +725,9 @@ pub(in crate::adapter::command::dispatch) fn execute_brokered(
                 return super::recovery::delivery(runtime, run, binding, object, session);
             }
             let mut input = input.clone();
+            if let Some(object) = input.as_object_mut() {
+                normalize_task_id_alias(object)?;
+            }
             if paged {
                 // Ordinary owner reads ignore pagination. Select its existing
                 // bounded view, which validates page sizes and offsets. The
@@ -715,6 +738,9 @@ pub(in crate::adapter::command::dispatch) fn execute_brokered(
         }
         GET => {
             let mut input = input.clone();
+            if let Some(object) = input.as_object_mut() {
+                normalize_task_id_alias(object)?;
+            }
             input["path"] = Value::String(path);
             input
         }

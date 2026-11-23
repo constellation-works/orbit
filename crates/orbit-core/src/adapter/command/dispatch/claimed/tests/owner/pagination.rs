@@ -161,38 +161,62 @@ fn claimed_task_detail_pages_preserve_broker_scope_and_owner_validation() {
             assert!(error.contains(accepted), "accepted {accepted}: {error}");
         }
     }
-    // A `task_id` alias is refused, and the refusal names the field a task
-    // read accepts instead [ORB-25666]. With `id` already present the hint is
-    // not given; the refusal lists the accepted fields instead.
-    let error = call(json!({"task_id": id})).unwrap_err();
-    assert!(
-        error.contains("does not accept `task_id`") && error.contains("pass the task as `id`"),
-        "{error}"
-    );
-    let error = call(json!({"id": id, "task_id": id})).unwrap_err();
-    assert!(
-        error.contains("does not accept `task_id`") && error.contains("accepted fields"),
-        "{error}"
-    );
-    assert!(!error.contains("pass the task as `id`"), "{error}");
-    let error = call(json!({"id": id, "snapshot": true})).unwrap_err();
-    assert!(
-        error.contains("does not accept `snapshot`") && error.contains("accepted fields"),
-        "{error}"
-    );
-    let error = raw_call(
-        &fixture,
-        broker.socket_path(),
-        GET,
-        json!({"task_id": id, "path": "page-0.txt"}),
-    )
-    .unwrap_err();
-    assert!(error.contains("pass the task as `id`"), "{error}");
+    // Conflicting `id` and `task_id` spellings are refused, naming both, and
+    // unknown fields still list the accepted canonical fields without
+    // advertising `task_id`.
+    for (tool, input) in [
+        (SHOW, json!({"id": id, "task_id": id})),
+        (SHOW, json!({"id": id, "task_id": "TSX-2"})),
+        (GET, json!({"id": id, "task_id": id, "path": "page-0.txt"})),
+    ] {
+        let error = raw_call(&fixture, broker.socket_path(), tool, input).unwrap_err();
+        assert!(
+            error.contains("`task_id` is an alias of `id`") && error.contains("not both"),
+            "{tool}: {error}"
+        );
+    }
+    for input in [
+        json!({"id": id, "snapshot": true}),
+        json!({"task_id": id, "snapshot": true}),
+    ] {
+        let error = call(input.clone()).unwrap_err();
+        assert!(
+            error.contains("does not accept `snapshot`") && error.contains("accepted fields"),
+            "{input}: {error}"
+        );
+    }
     assert_eq!(
         owner.calls.load(Ordering::SeqCst),
         before,
         "scope refusals never reach the owner"
     );
+
+    // `task_id` is accepted as an unadvertised alias on task show and artifact
+    // reads, returning the same result as `id`.
+    let unstamped = |mut value: Value| {
+        if let Some(object) = value.as_object_mut() {
+            object.remove("observed_at");
+        }
+        value
+    };
+    let page_by_id = call(json!({"id": id, "limit": 1, "comments_offset": 1})).unwrap();
+    let page_by_task_id = call(json!({"task_id": id, "limit": 1, "comments_offset": 1})).unwrap();
+    assert_eq!(unstamped(page_by_task_id), unstamped(page_by_id));
+    let get_by_id = raw_call(
+        &fixture,
+        broker.socket_path(),
+        GET,
+        json!({"id": id, "path": "page-0.txt"}),
+    )
+    .unwrap();
+    let get_by_task_id = raw_call(
+        &fixture,
+        broker.socket_path(),
+        GET,
+        json!({"task_id": id, "path": "page-0.txt"}),
+    )
+    .unwrap();
+    assert_eq!(get_by_task_id, get_by_id);
 
     for field in [
         "limit",
