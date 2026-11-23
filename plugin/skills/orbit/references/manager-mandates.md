@@ -126,10 +126,14 @@ Use `orbit.resident.grant` with `task_id`, and one side only per call:
     `grant` through the decision channel. An open request for the same addition
     is returned, not duplicated. Report the outcome (`granted`, `requested` or
     `narrowed`) to the human; never report a request as a grant.
-- Narrow: `remove`, `drop_workspaces`, or a shorter `deadline`. Narrowing
-  applies at once for any caller that can write the assignment, is recorded
-  with that caller, and takes effect at the next cycle boundary. A call may
-  not widen and narrow at once; narrow first, then ask to widen.
+- Narrow: `remove`, `drop_workspaces`, or a shorter `deadline`. Any caller
+  that can write the assignment may narrow, and the change is recorded with
+  that caller. Removing a right, dropping a workspace, pausing or stopping
+  reaches a live cycle at its next cycle boundary. A shorter deadline does
+  not wait: the cycle's next right-gated write checks the current deadline,
+  so a passed one refuses it while the checkpoint stays available for
+  handoff. A call may not widen and narrow at once; narrow first, then ask
+  to widen.
 
 Never paraphrase, summarise or embellish a grant quote. If the human's words
 are ambiguous, ask them rather than guessing: a misread relay costs one
