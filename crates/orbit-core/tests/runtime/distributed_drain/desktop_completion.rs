@@ -557,7 +557,8 @@ impl Delivery {
         // fixture records each substitute's (run, pid) handshake; the guard
         // in `Self` releases and reaps it before the fixture root is removed.
         let started = pair._root.path().join("started-{run_id}");
-        let workers = crate::worker_fixture::install_owned_workers(&started, repo.clone());
+        let mut workers = crate::worker_fixture::install_owned_workers(&started, repo.clone());
+        workers.retain_workspace(pair._root.clone());
 
         Self {
             _workers: workers,

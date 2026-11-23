@@ -151,6 +151,7 @@ fn an_explicit_pilot_during_an_approve_proposed_drain_calls_the_provider_once() 
     let workers = workspace._root.path().join("release-workers");
     let mut owned_workers =
         crate::worker_fixture::install_owned_workers(&workers, workspace.repo.clone());
+    owned_workers.retain_workspace(workspace._root.clone());
     let calls = workspace._root.path().join("provider-calls");
     let release = workspace._root.path().join("provider-release");
     install_provider(&workspace, &calls, &release);

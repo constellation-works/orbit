@@ -13,12 +13,14 @@ use orbit_core::{DrainAdmissionsStopRequest, OrbitRuntime, Task, TaskComplexity,
 use orbit_engine::{RuntimeHost, TaskAutomationUpdate};
 use orbit_types::workflow::{JobRun, JobRunState};
 use serde_json::{Value, json};
+use std::sync::Arc;
 use tempfile::TempDir;
 
 const LEAF_JOB: &str = "task_auto_pipeline";
 
 struct LocalDrainFixture {
-    _root: TempDir,
+    // Shared with the worker guard, which keeps it if a worker outlives teardown.
+    _root: Arc<TempDir>,
     repo: PathBuf,
     workspace: PathBuf,
     runtime: OrbitRuntime,
@@ -67,7 +69,7 @@ impl LocalDrainFixture {
             .with_host_resource_probe(crate::dispatch_admission::PressureProbe::calm())
             .with_automation_machine_identity(Some("fixture-machine".into()));
         Self {
-            _root: root,
+            _root: Arc::new(root),
             repo,
             workspace,
             runtime,
@@ -191,6 +193,7 @@ fn running_local_auto_drain_refreshes_config_tiers_and_keeps_run_overrides() {
     let release = Path::new(fixture._root.path()).join("release-workers");
     let mut owned_workers =
         crate::worker_fixture::install_owned_workers(&release, fixture.repo.clone());
+    owned_workers.retain_workspace(fixture._root.clone());
 
     let task_a = fixture.backlog_task("pool-initial", TaskComplexity::Medium);
 
