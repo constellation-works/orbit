@@ -1522,9 +1522,115 @@ fn verified_no_diff_promotion_refuses_untracked_bytecode() {
     assert_eq!(git_head(repo), head);
 }
 
+#[cfg(unix)]
+fn commit_and_no_diff_preserve_non_utf8_and_replacement_colliding_paths() {
+    use std::ffi::OsStr;
+    use std::os::unix::ffi::OsStrExt;
+
+    let temp = temp_repo();
+    let repo = temp.path();
+    let cache_dir = repo.join("pkg/__pycache__");
+    fs::create_dir_all(&cache_dir).unwrap();
+    let tracked_rel = "pkg/__pycache__/mod-\u{FFFD}.pyc";
+    let tracked_bytes = b"tracked replacement fixture\n";
+    fs::write(repo.join(tracked_rel), tracked_bytes).unwrap();
+    git_output(repo, &["add", tracked_rel]);
+    git_output(repo, &["commit", "-m", "track replacement-char fixture"]);
+    let base_head = git_head(repo);
+
+    let non_utf8_cached = cache_dir.join(OsStr::from_bytes(b"mod-\xff.pyc"));
+    let non_utf8_cached_bytes = b"\0non-utf8 cached bytecode\xff";
+    let non_utf8_loose = repo.join(OsStr::from_bytes(b"loose-\xff.pyc"));
+    let non_utf8_loose_bytes = b"\0non-utf8 loose bytecode\xff";
+    fs::write(&non_utf8_cached, non_utf8_cached_bytes).unwrap();
+    fs::write(&non_utf8_loose, non_utf8_loose_bytes).unwrap();
+    fs::write(repo.join("README.md"), "deliver real edit\n").unwrap();
+
+    let host = VerifierHost::new(repo, fixture_task());
+    let committed = action(&host, &commit_input(repo, &base_head))
+        .expect("delivery commit must succeed without deleting colliding or non-UTF-8 files");
+    assert_eq!(committed["decision"], "performed");
+    assert_eq!(committed["committed"], true);
+    let delivered_head = git_head(repo);
+    assert_ne!(delivered_head, base_head);
+    assert_eq!(
+        git_output(repo, &["show", "HEAD:README.md"]),
+        "deliver real edit"
+    );
+    assert_eq!(
+        git_output(repo, &["rev-parse", &format!("HEAD:{tracked_rel}")]),
+        git_output(repo, &["hash-object", "--no-filters", tracked_rel])
+    );
+    assert_eq!(fs::read(repo.join(tracked_rel)).unwrap(), tracked_bytes);
+    assert_eq!(fs::read(&non_utf8_cached).unwrap(), non_utf8_cached_bytes);
+    assert_eq!(fs::read(&non_utf8_loose).unwrap(), non_utf8_loose_bytes);
+
+    // Clean-tree promotion recheck (`verify_clean_checkout`) must likewise
+    // fail closed on the dirty tree and preserve every entry byte-for-byte.
+    fs::remove_file(&non_utf8_cached).unwrap();
+    fs::remove_file(&non_utf8_loose).unwrap();
+    let report = evidence_fixture::verifier_no_diff_report(
+        &delivered_head,
+        "make test",
+        "No change needed.",
+    );
+    host.set_artifacts(
+        TASK_ID,
+        evidence_artifacts("no-diff.json", report, &delivered_head, "make test"),
+    );
+    let checkpoint =
+        action(&host, &commit_input(repo, &delivered_head)).expect("verify clean checkout");
+    assert_eq!(checkpoint["decision"], "verified_no_diff");
+
+    let outside = tempdir().expect("create outside tempdir");
+    let outside_file = outside.path().join("outside.pyc");
+    fs::write(&outside_file, b"outside secret\n").unwrap();
+    let symlink_pyc = cache_dir.join("escape.pyc");
+    std::os::unix::fs::symlink(&outside_file, &symlink_pyc).unwrap();
+    fs::write(&non_utf8_cached, non_utf8_cached_bytes).unwrap();
+    fs::write(&non_utf8_loose, non_utf8_loose_bytes).unwrap();
+
+    let promote_input = json!({
+        "job_run_id": RUN_ID,
+        "workspace_path": repo,
+        "completed_task_ids": [TASK_ID],
+        "no_diff_expected": true,
+        "already_landed_checkpoint": checkpoint,
+    });
+    let error = execute_deterministic_action(
+        &host,
+        "pr_promote",
+        &json!({}),
+        &promote_input,
+        false,
+        &HashMap::new(),
+        None,
+    )
+    .expect_err("promotion must refuse dirty checkout with non-UTF-8 and symlink entries");
+    assert!(
+        error
+            .to_string()
+            .contains("no_diff_unverified: worktree is not clean"),
+        "unexpected refusal: {error}"
+    );
+    assert_eq!(fs::read(repo.join(tracked_rel)).unwrap(), tracked_bytes);
+    assert_eq!(fs::read(&non_utf8_cached).unwrap(), non_utf8_cached_bytes);
+    assert_eq!(fs::read(&non_utf8_loose).unwrap(), non_utf8_loose_bytes);
+    assert!(
+        fs::symlink_metadata(&symlink_pyc)
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
+    assert_eq!(fs::read(&outside_file).unwrap(), b"outside secret\n");
+    assert_eq!(git_head(repo), delivered_head);
+}
+
 commit_contracts!(commit_evidence_contracts_4:
     owner_delivery_refuses_nested_repos_and_never_runs_their_filters,
     commit_verifier_derives_already_landed_requirements_from_the_workspace,
     commit_delivers_untracked_files_with_cache_shaped_paths,
     verified_no_diff_promotion_refuses_untracked_bytecode,
+    #[cfg(unix)]
+    commit_and_no_diff_preserve_non_utf8_and_replacement_colliding_paths,
 );
