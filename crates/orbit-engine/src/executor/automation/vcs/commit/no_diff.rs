@@ -14,7 +14,7 @@ use serde_json::{Value, json};
 
 use crate::context::RuntimeHost;
 
-use super::already_landed::{log_matches, run_in_lineage};
+use super::already::landed::{log_matches, run_in_lineage};
 use super::checkpoint::pinned_object_id;
 use super::clean_tree::{Specification, Verifier};
 

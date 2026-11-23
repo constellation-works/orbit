@@ -10,8 +10,8 @@ use crate::context::RuntimeHost;
 
 use super::super::super::input::input_string_field;
 use super::super::git::git_output;
-use super::already_landed::{self, AlreadyLanded};
-use super::already_resolved;
+use super::already::landed::{self as already_landed, AlreadyLanded};
+use super::already::resolved as already_resolved;
 use super::clean_tree::Verifier;
 use super::no_diff::{self, NoDiff};
 use super::tagged_no_diff;

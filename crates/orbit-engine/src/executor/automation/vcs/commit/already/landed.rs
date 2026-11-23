@@ -19,19 +19,21 @@ use serde_json::{Value, json};
 
 use crate::context::RuntimeHost;
 
-use super::super::delivery_marker::delivery_markers;
-use super::super::git::{git_output, git_output_paths, git_success};
-use super::super::retry_lineage::{LineageStep, LineageStop, RETRY_LINEAGE_MAX_HOPS, RetryLineage};
-use super::checkpoint::pinned_object_id;
-use super::clean_tree::{Specification, Verifier};
-use super::no_diff;
+use super::super::super::delivery_marker::delivery_markers;
+use super::super::super::git::{git_output, git_output_paths, git_success};
+use super::super::super::retry_lineage::{
+    LineageStep, LineageStop, RETRY_LINEAGE_MAX_HOPS, RetryLineage,
+};
+use super::super::checkpoint::pinned_object_id;
+use super::super::clean_tree::{Specification, Verifier};
+use super::super::no_diff;
 
-pub(super) const ARTIFACT: &str = "already-landed.json";
+pub(in crate::executor::automation::vcs::commit) const ARTIFACT: &str = "already-landed.json";
 
 /// Checkpoint decision for a verified covering delivery.
-pub(super) const DECISION: &str = "verified_already_landed";
+pub(in crate::executor::automation::vcs::commit) const DECISION: &str = "verified_already_landed";
 
-pub(super) struct AlreadyLanded;
+pub(in crate::executor::automation::vcs::commit) struct AlreadyLanded;
 
 impl Verifier for AlreadyLanded {
     const SPEC: Specification = Specification {
@@ -352,7 +354,7 @@ fn verify_covering_scope(
 
 /// Whether `evidence_run` is the current run or a run in its recorded retry
 /// lineage. Shared with the no-diff verifier.
-pub(super) fn run_in_lineage<H: RuntimeHost + ?Sized>(
+pub(in crate::executor::automation::vcs::commit) fn run_in_lineage<H: RuntimeHost + ?Sized>(
     host: &H,
     run_id: &str,
     evidence_run: &str,
@@ -510,7 +512,7 @@ fn missing_required_commands(missing: &[&str]) -> String {
 
 /// A captured validation log names the exact run, tested HEAD and command,
 /// with a zero exit code and captured (possibly empty) output.
-pub(super) fn log_matches(
+pub(in crate::executor::automation::vcs::commit) fn log_matches(
     provenance: &Value,
     run_id: &str,
     tested_head: &str,

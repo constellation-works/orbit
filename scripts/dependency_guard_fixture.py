@@ -81,7 +81,7 @@ SCAN_FILES = (
     f"{VCS}/handoff.rs",
     f"{VCS}/commit/actions.rs",
     f"{VCS}/commit/summary.rs",
-    f"{VCS}/commit/already_resolved.rs",
+    f"{VCS}/commit/already/resolved.rs",
     f"{VCS}/push.rs",
     f"{VCS}/claim/published.rs",
     "crates/orbit-engine/src/context/dispatch_contract.rs",

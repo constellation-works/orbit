@@ -2011,7 +2011,7 @@ if dependency_matches -n '\bpr\b' "$vcs_src/conventions.rs"; then
   fail=1
 fi
 projection_names='meaningful_execution_summary|render_acceptance_criteria|task_url|is_placeholder_execution_summary'
-for consumer in handoff.rs commit/actions.rs commit/summary.rs commit/already_resolved.rs; do
+for consumer in handoff.rs commit/actions.rs commit/summary.rs commit/already/resolved.rs; do
   if dependency_matches -n "\b(pr|body)::(${projection_names})\b|\bpr::\*|\bpr::body::\b" "$vcs_src/$consumer" ||
     dependency_matches -n -U "\bpr::\{[^}]*\b(${projection_names})\b" "$vcs_src/$consumer" ||
     dependency_matches -n -U "\bpr::body::\{[^}]*\b(${projection_names})\b" "$vcs_src/$consumer"; then

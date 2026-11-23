@@ -1,6 +1,5 @@
 mod actions;
-mod already_landed;
-mod already_resolved;
+mod already;
 mod author;
 mod checkpoint;
 mod clean_tree;
