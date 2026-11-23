@@ -36,15 +36,23 @@ further toolsets the operator profile does not include:
 This launch keeps those operator panel functions available:
 
 ```bash
-orbit mcp serve --operator --toolset ui,automation,pipelines
+orbit mcp serve --operator \
+  --toolset ui,automation,pipelines
 ```
 
 `orbit mcp serve --operator --toolset ui` still opens the panel. Tasks, Runs,
 Auto-drain and Routines work. Auto-tasks and Run job stay unavailable: the
-panel names the toolset to add and does not send the write. Add the missing
-toolset and reopen the panel. For every server on the host, put the same names
-in `machine.mcp.toolsets`. Restart the MCP server or client session to load
-the updated tool list.
+panel names the toolset to add and does not send the write. For an operator
+launch that currently uses only `--toolset ui`, use the list shown above and
+reopen the panel.
+
+`machine.mcp.toolsets` is the host-wide default for `orbit mcp serve` launches
+that do not pass `--toolset`. An explicit flag supplies that launch's toolsets
+instead of the host list; the operator role still applies. Changing the host
+setting will not add `automation` or `pipelines` to `--toolset ui`. A managed
+run uses the toolsets Orbit stamped for that run. See the [toolset precedence
+rules in MCP Integration](/how-to/mcp-integration/#choose-toolsets). Restart
+the MCP server or client session to load the updated tool list.
 
 A client that renders the panel reads the resource
 `ui://orbit/control-center/v1/index.html` (MIME type
