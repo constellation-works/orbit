@@ -125,29 +125,38 @@ impl OrbitRuntime {
             ) && task.github_pr_number().is_some()
         }) {
             match self.newest_own_delivery_leaf(&task.id) {
-                Ok(Some(run)) => leaves.push((task.id.clone(), run)),
+                Ok(Some(run)) => leaves.push((
+                    task.id.clone(),
+                    task.github_pr_number().map(str::to_string),
+                    run,
+                )),
                 Ok(None) => {}
-                Err(error) => skipped.push(json!({
-                    "task_id": task.id,
-                    "source_run_id": Value::Null,
-                    "pr_number": task.github_pr_number(),
-                    "blocker": Value::Null,
-                    "hold_code": Value::Null,
-                    "reason": "store_unreadable",
-                    "detail": format!("read the task's delivery leaves: {error}"),
-                })),
+                Err(error) => {
+                    let observation = RepairObservation {
+                        pr_number: task.github_pr_number().map(str::to_string),
+                        ..RepairObservation::default()
+                    };
+                    self.push_repair_skip(
+                        &mut skipped,
+                        &task.id,
+                        None,
+                        &observation,
+                        "store_unreadable",
+                        &format!("read the task's delivery leaves: {error}"),
+                    );
+                }
             }
         }
         drop(leaf_span);
         // Newest first, so a pass short of slots serves the freshest leaves.
-        leaves.sort_by(|(left_task, left), (right_task, right)| {
+        leaves.sort_by(|(left_task, _, left), (right_task, _, right)| {
             right
                 .recency_at()
                 .cmp(&left.recency_at())
                 .then_with(|| left.run_id.cmp(&right.run_id))
                 .then_with(|| left_task.cmp(right_task))
         });
-        for (task_id, run) in leaves {
+        for (task_id, known_pr, run) in leaves {
             let task_id = task_id.as_str();
             let hold = if throttled {
                 Some((
@@ -162,7 +171,10 @@ impl OrbitRuntime {
             } else {
                 None
             };
-            let mut observation = RepairObservation::default();
+            let mut observation = RepairObservation {
+                pr_number: known_pr,
+                ..RepairObservation::default()
+            };
             let verdict = match self.repair_verdict(
                 &run,
                 task_id,
@@ -180,30 +192,46 @@ impl OrbitRuntime {
             match verdict {
                 Verdict::Ignore(..) | Verdict::Repair(_) => {}
                 Verdict::Started(entry) => started.push(entry),
-                Verdict::Skip(reason, detail) => {
-                    let detail =
-                        self.skip_detail_with_budget(task_id, &observation, reason, &detail);
-                    tracing::debug!(
-                        target: "orbit.core.drain",
-                        run_id = %run.run_id,
-                        task_id = %task_id,
-                        reason,
-                        detail = %detail,
-                        "drain left a task's pull request to its own delivery",
-                    );
-                    skipped.push(json!({
-                        "task_id": task_id,
-                        "source_run_id": run.run_id,
-                        "pr_number": observation.pr_number,
-                        "blocker": observation.blocker,
-                        "hold_code": observation.hold_code,
-                        "reason": reason,
-                        "detail": detail,
-                    }));
-                }
+                Verdict::Skip(reason, detail) => self.push_repair_skip(
+                    &mut skipped,
+                    task_id,
+                    Some(&run.run_id),
+                    &observation,
+                    reason,
+                    &detail,
+                ),
             }
         }
         json!({ "started": started, "skipped": skipped })
+    }
+
+    fn push_repair_skip(
+        &self,
+        skipped: &mut Vec<Value>,
+        task_id: &str,
+        source_run_id: Option<&str>,
+        observation: &RepairObservation,
+        reason: &str,
+        detail: &str,
+    ) {
+        let detail = self.skip_detail_with_budget(task_id, observation, reason, detail);
+        tracing::debug!(
+            target: "orbit.core.drain",
+            run_id = source_run_id,
+            task_id = %task_id,
+            reason,
+            detail = %detail,
+            "drain left a task's pull request to its own delivery",
+        );
+        skipped.push(json!({
+            "task_id": task_id,
+            "source_run_id": source_run_id,
+            "pr_number": observation.pr_number,
+            "blocker": observation.blocker,
+            "hold_code": observation.hold_code,
+            "reason": reason,
+            "detail": detail,
+        }));
     }
 
     /// The newest `task_pr_pipeline` run that carries only `task_id`, whatever

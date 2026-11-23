@@ -24,8 +24,9 @@ use std::time::Instant;
 
 impl OrbitRuntime {
     /// `detail` of a refusal, followed by the attempts `observation`'s pull
-    /// request has spent and has left. A pull request with nothing to repair
-    /// (`no_blocker`, `checked_recently`) is reported as it is.
+    /// request has spent and has left, or why ledger evidence is unavailable
+    /// when the task ledger cannot be read. A pull request with nothing to
+    /// repair (`no_blocker`, `checked_recently`) is reported as it is.
     pub(in crate::application::job::pr_repair) fn skip_detail_with_budget(
         &self,
         task_id: &str,
@@ -36,11 +37,12 @@ impl OrbitRuntime {
         if matches!(reason, "no_blocker" | "checked_recently") {
             return detail.to_string();
         }
-        observation
-            .pr_number
-            .as_deref()
-            .and_then(|number| budget_note(&self.get_task_history(task_id).ok()?, number))
-            .map_or_else(|| detail.to_string(), |note| format!("{detail}; {note}"))
+        let Some(number) = observation.pr_number.as_deref() else {
+            return detail.to_string();
+        };
+        let history = self.get_task_history(task_id);
+        let note = budget_note(history.as_deref(), number);
+        format!("{detail}; {note}")
     }
 
     /// Whether the pull request of `task_id`'s newest leaf `run` is repaired,
@@ -95,6 +97,11 @@ impl OrbitRuntime {
                 }
                 Ok(None) => None,
                 Err(error) => {
+                    if observation.pr_number.is_none()
+                        && let Ok(task) = self.get_task(task_id)
+                    {
+                        observation.pr_number = task.github_pr_number().map(str::to_string);
+                    }
                     return skip("store_unreadable", format!("read the run's steps: {error}"));
                 }
             };

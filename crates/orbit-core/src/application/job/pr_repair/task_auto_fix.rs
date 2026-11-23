@@ -191,7 +191,7 @@ impl OrbitRuntime {
             );
         }
         // An unknown task is a lookup error, not a refusal.
-        self.get_task(task_id)?;
+        let task = self.get_task(task_id)?;
         let Some(run) = self.newest_own_delivery_leaf(task_id)? else {
             return refuse(
                 "no_delivery_leaf",
@@ -210,25 +210,28 @@ impl OrbitRuntime {
                 Verdict::Repair(repair) => self.plan_repair(&run, *repair, &mut reads),
                 verdict => verdict,
             };
+        let refuse_skip = |observation: &mut RepairObservation, reason, detail: String| {
+            if observation.pr_number.is_none() {
+                observation.pr_number = task.github_pr_number().map(str::to_string);
+            }
+            refuse(
+                reason,
+                self.skip_detail_with_budget(task_id, observation, reason, &detail),
+            )
+        };
         match verdict {
             Verdict::Repair(repair) if mode == Mode::Check => Ok(repair.summary(&run)),
             Verdict::Repair(repair) => match self.start_repair(&run, &authority, *repair) {
                 Verdict::Started(started) => Ok(started),
                 Verdict::Ignore(reason, detail) => refuse(reason, detail),
-                Verdict::Skip(reason, detail) => refuse(
-                    reason,
-                    self.skip_detail_with_budget(task_id, observation, reason, &detail),
-                ),
+                Verdict::Skip(reason, detail) => refuse_skip(observation, reason, detail),
                 Verdict::Repair(_) => refuse(
                     "resume_failed",
                     "the repair was decided but not started".to_string(),
                 ),
             },
             Verdict::Ignore(reason, detail) => refuse(reason, detail),
-            Verdict::Skip(reason, detail) => refuse(
-                reason,
-                self.skip_detail_with_budget(task_id, observation, reason, &detail),
-            ),
+            Verdict::Skip(reason, detail) => refuse_skip(observation, reason, detail),
             Verdict::Started(started) => Ok(started),
         }
     }
