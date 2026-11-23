@@ -1,7 +1,7 @@
 ---
 type: design
 summary: "Spec: Orbit Web host forward — another registered host's dashboard API through this one"
-last_validated: 2026-11-14
+last_validated: 2026-11-23
 tags: [remote-access, host-registry]
 ---
 
@@ -36,7 +36,12 @@ Each step runs before the next, and every refusal happens before any SSH process
 
 - The method, the still-encoded path, the query string (verbatim) and the body are passed through.
 - Request headers sent: `Accept`, `Accept-Encoding`, `Content-Type`, `Last-Event-ID`. `Host` and `Origin` are set to the remote's own loopback authority (`localhost:<remote-port>`), so the remote's origin guard admits the request as same-origin. Cookies and other headers are not sent.
-- Response headers returned: `Content-Type`, `Content-Encoding`, `Vary`, `Content-Disposition`, `Content-Security-Policy`, `Cache-Control`, and `x-audit-next-before`, the continuation cursor of the audit listing (present only when the remote sends it, including on a short page from a capped scan). An artifact therefore keeps its sandbox CSP and attachment disposition. Hop-by-hop headers are dropped, and the serving dashboard's own security and `nosniff` headers still apply.
+- Response headers returned from the remote: `Content-Encoding`, `Vary`, `Cache-Control`, and `x-audit-next-before`, the continuation cursor of the audit listing (present only when the remote sends it, including on a short page from a capped scan). Hop-by-hop headers are dropped.
+- Local response policy. The remote's identity check authenticates the destination, not its bytes, so the serving dashboard decides on its own what a forwarded response may do in a browser, whatever the remote sent or omitted:
+  - `Content-Security-Policy: sandbox; default-src 'none'` and `X-Content-Type-Options: nosniff` are always set. The remote's CSP is never forwarded.
+  - A response whose `Content-Type` is inline-safe keeps the remote's `Content-Type` and `Content-Disposition`. Inline-safe is `text/event-stream` and the shared artifact allowlist the local artifact route uses (JSON, TOML, YAML, CSV, plain text, and PNG, JPEG, GIF and WebP images), compared case-insensitively without parameters.
+  - Any other response, including HTML, SVG, XML, an unknown type and a missing `Content-Type`, is delivered as `Content-Type: application/octet-stream` with `Content-Disposition: attachment`. The bytes pass unchanged; the browser downloads them instead of rendering them on the dashboard's origin.
+  - An artifact from a remote therefore downloads under the same sandbox policy as a local one, and JSON, event streams and safe artifacts work as before.
 - The remote status and decoded payload are preserved. Already-encoded bodies pass through unchanged; identity JSON may be gzip-encoded on the browser leg. Bodies are streamed, never buffered.
 - One loopback HTTP/1.1 connection per request, to the tunnel's local port.
 
