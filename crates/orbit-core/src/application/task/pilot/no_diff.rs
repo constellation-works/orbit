@@ -537,8 +537,25 @@ fn named_commits(
                 ));
             }
         };
-        if observation.landing.status != LandingObservationStatus::Merged {
-            continue;
+        match observation.landing.status {
+            LandingObservationStatus::Merged => {}
+            // Unreadable landing evidence (a malformed checkpoint, say) could
+            // hide the culprit's commit, so it refuses the proof like an
+            // unreadable delivery does.
+            LandingObservationStatus::Unavailable => {
+                let reason = observation
+                    .landing
+                    .reason
+                    .map_or_else(|| "unreadable".to_string(), |gap| format!("{gap:?}"));
+                return Err(format!(
+                    "the landing of regression culprit {} is unavailable ({reason}), so its identity is unavailable",
+                    relation.target
+                ));
+            }
+            LandingObservationStatus::NotRequested
+            | LandingObservationStatus::NotApplicable
+            | LandingObservationStatus::Pending
+            | LandingObservationStatus::NotReached => continue,
         }
         let Some(sha) = observation.landing.landed_commit else {
             return Err(format!(
