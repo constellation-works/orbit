@@ -589,7 +589,7 @@ const SHOW: TaskOperation = TaskOperation {
             mcp_only(
                 "limit",
                 ParamType::Integer,
-                "Claimed/bounded page size; ignored (noted) with `snapshot`; not with projections.",
+                "Claimed/bounded page size; no projections, except `snapshot` (ignores it, noted).",
             ),
             mcp_only(
                 "comments_offset",

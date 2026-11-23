@@ -747,7 +747,7 @@
         },
         "limit": {
           "type": "integer",
-          "description": "Claimed/bounded page size; ignored (noted) with `snapshot`; not with projections."
+          "description": "Claimed/bounded page size; no projections, except `snapshot` (ignores it, noted)."
         },
         "comments_offset": {
           "type": "integer",
