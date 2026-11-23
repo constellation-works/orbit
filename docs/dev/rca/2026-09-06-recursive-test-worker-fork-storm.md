@@ -220,7 +220,7 @@ system recovered without rebooting, and memory remained healthy.
 | Record | State at RCA | Purpose |
 | --- | --- | --- |
 | F2026-09-042 | Open friction | Preserve the operational incident and unsafe polling-shell evidence. |
-| ORB-11414 | Done | Record the durable test-fixture and containment lesson in `docs/LESSONS.md`. |
+| ORB-11414 | Done | Record the durable test-fixture and containment lesson in `docs/lessons/L03-september-2026-test-fixture-fork-storm.md`. |
 | ORB-11415 | Proposed | Make sustained CPU or memory saturation visible to Orbit orchestrators without prescribing a solution yet. |
 | ORB-11416 | Review | Author and validate this RCA. |
 
