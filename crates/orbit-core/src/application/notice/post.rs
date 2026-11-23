@@ -881,9 +881,16 @@ fn decide_post(
             ));
         }
         if poster.class == AuthorClass::Agent {
+            let status_key = poster.resident_status_key();
             let task_open = open
                 .iter()
-                .filter(|row| row.author_task_id.is_some() && row.author_task_id == poster.task_id)
+                .filter(|row| {
+                    row.author_task_id.is_some()
+                        && row.author_task_id == poster.task_id
+                        && !status_key
+                            .as_deref()
+                            .is_some_and(|key| row.dedupe_key == key)
+                })
                 .count();
             let (name, cap) = match poster.resident {
                 Some(_) => ("max_open_per_resident", limits::MAX_OPEN_PER_RESIDENT),

@@ -59,8 +59,8 @@ pub const AGENT_POSTS_PER_TASK_PER_DAY: u32 = 5;
 /// The former `notice.orchestrator_posts_per_hour` default, fixed when the key was removed
 /// [ORB-22808].
 pub(crate) const ORCHESTRATOR_POSTS_PER_HOUR: u32 = 30;
-/// The most notices one resident mandate may hold open: its status line
-/// plus one warn per blocker.
+/// The most open notices one resident mandate may hold, excluding its status
+/// line.
 pub(crate) const MAX_OPEN_PER_RESIDENT: u32 = 10;
 /// The most posts one resident mandate may make in an hour, the status line
 /// and warn re-posts of every cycle included. It matches the orchestrator

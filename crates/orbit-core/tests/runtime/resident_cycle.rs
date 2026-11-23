@@ -637,6 +637,106 @@ fn routine() -> RoutineDefinition {
     .unwrap()
 }
 
+#[test]
+fn resident_status_line_does_not_consume_the_open_warning_cap() {
+    let fx = isolated_fixture!(resident_status_line_does_not_consume_the_open_warning_cap);
+    let (watched, mandate) = fx.watched_mandate("Resident warning cap");
+    fx.grant(&mandate, &["dispatch"]);
+    let run = fx.cycle_run(&mandate, "resident-notice-open-cap");
+    let now = Utc::now();
+    let brief = fx.begin_cycle(&run, now);
+    assert_eq!(brief["cycle_count"], 1, "{brief}");
+
+    let warning_prefix = orbit_types::record::resident_notice_key_prefix(&mandate);
+    let (warnings, status_line, tenth_warning, over_cap_warning) =
+        orbit_core::test_support::with_notice_post_time(now, || {
+            fx.as_cycle_agent(&run, || {
+                let warnings = (0..9)
+                    .map(|index| {
+                        fx.agent_call(
+                            "orbit.notice.post",
+                            json!({
+                                "kind": "warn",
+                                "title": format!("Blocker {index}"),
+                                "dedupe_key": format!("{warning_prefix}blocker-{index}"),
+                                "linked_task": watched,
+                            }),
+                        )
+                        .unwrap()
+                    })
+                    .collect::<Vec<_>>();
+                let status_line = fx
+                    .agent_call(
+                        "orbit.notice.post",
+                        json!({
+                            "kind": "info",
+                            "title": "Watching work",
+                            "dedupe_key": orbit_types::record::resident_status_notice_key(&mandate),
+                        }),
+                    )
+                    .unwrap();
+                let tenth_warning = fx
+                    .agent_call(
+                        "orbit.notice.post",
+                        json!({
+                            "kind": "warn",
+                            "title": "Blocker 9",
+                            "dedupe_key": format!("{warning_prefix}blocker-9"),
+                            "linked_task": watched,
+                        }),
+                    )
+                    .unwrap();
+                let over_cap_warning = fx.agent_call(
+                    "orbit.notice.post",
+                    json!({
+                        "kind": "warn",
+                        "title": "Blocker 10",
+                        "dedupe_key": format!("{warning_prefix}blocker-10"),
+                        "linked_task": watched,
+                    }),
+                );
+                (warnings, status_line, tenth_warning, over_cap_warning)
+            })
+        });
+
+    assert_eq!(warnings.len(), 9);
+    assert!(warnings.iter().all(|post| post["outcome"] == "created"));
+    assert_eq!(status_line["outcome"], "created");
+    assert_eq!(status_line["notice"]["kind"], "info");
+    assert_eq!(tenth_warning["outcome"], "created");
+    let error = over_cap_warning.expect_err("the eleventh blocker warning must be refused");
+    assert!(
+        error.starts_with("notice_limit_exceeded"),
+        "expected the resident open-notice limit, got: {error}"
+    );
+
+    for post in warnings.iter().chain([&status_line, &tenth_warning]) {
+        let id = post["notice"]["id"].as_str().unwrap();
+        let shown = call(
+            &fx.runtime,
+            "orbit.notice.show",
+            json!({"id": id}),
+            McpCapability::Operator,
+        )
+        .unwrap();
+        assert_eq!(shown["notice"]["status"], "open", "{shown}");
+        assert_eq!(shown["notice"]["title"], post["notice"]["title"]);
+        assert_eq!(shown["notice"]["reports"]["count"], 1);
+        assert_eq!(shown["notice"]["author"]["task_id"], mandate);
+    }
+    assert_eq!(
+        fx.runtime.get_task(&watched).unwrap().status,
+        TaskStatus::Proposed
+    );
+    assert_eq!(
+        fx.runtime.get_task(&mandate).unwrap().status,
+        TaskStatus::InProgress
+    );
+
+    fx.checkpoint(&brief, &run);
+    fx.finish_cycle(&run);
+}
+
 /// [ORB-24301] A cycle launches in a managed worktree of the workspace
 /// HEAD under `.orbit/state/worktrees/`, so linux-bwrap can enforce the
 /// `**/.env` deny with its post-run guard instead of refusing the launch;
