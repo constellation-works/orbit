@@ -49,10 +49,11 @@ template:
     `severity` is how much the defect matters, on the one scale findings and
     regression links share; a new link without it is refused. Rate the worst
     real impact the evidence shows, not the size of the fix, and take the lower
-    level when torn. Choose `unclassified` rather than guess. The scale and the
-    `nature` and `escape` values are the Severity rubric and `regression_from`
-    fields in the installed `orbit` skill's `references/task-fields.md`; use only
-    those values.
+    level when torn. Choose `unclassified` rather than guess. The scale is the
+    Severity rubric in the installed `orbit` skill's
+    `references/task-fields-review.md`, and the `nature` and `escape` values are
+    the `regression_from` fields in `references/task-fields-relations.md`; use
+    only those values.
   acceptance_criteria:
   - Applicable application code, dependencies, secret handling, and configuration were reviewed with evidence from the current workspace.
   - Existing open tasks were searched and duplicate findings were not filed.

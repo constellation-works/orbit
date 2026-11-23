@@ -224,7 +224,7 @@ stripped. Names are checked like a task's grant: exact canonical names of
 agent-facing, enabled tools, never an operator-only tool. A minted task
 with a grant runs only on the owner host. What a grant lets the task's
 `agent_implement` run do is in the installed Orbit skill
-`references/task-fields.md`.
+`references/task-fields-tools.md`.
 
 The definition file is per-user checkout state. Orbit checks authority on
 the `add` and `update` calls, not on a hand edit of the YAML, so treat that
