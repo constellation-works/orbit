@@ -395,6 +395,10 @@ pub(in crate::executor::automation::vcs) enum ReviewedMergeOutcome {
     BaseModified { diagnostic: String },
     /// GitHub reports a merge already in flight. Only status reads are allowed.
     InProgress { diagnostic: String },
+    /// The SHA-conditioned head conflicts with the base. Never authorizes
+    /// another mutation: an opted-in completion caller may read the pull
+    /// request once to confirm the conflict before conflict recovery.
+    Conflict { diagnostic: String },
     /// A narrowly classified synchronous server failure: never authorizes
     /// another mutation, only a fresh read by an opted-in completion caller.
     Ambiguous { diagnostic: String },
@@ -424,6 +428,11 @@ impl ReviewedMergeOutcome {
             }
             Some(operations::MERGE_IN_PROGRESS_REFUSAL) => {
                 return Self::InProgress {
+                    diagnostic: diagnostic(),
+                };
+            }
+            Some(operations::MERGE_CONFLICT_REFUSAL) => {
+                return Self::Conflict {
                     diagnostic: diagnostic(),
                 };
             }

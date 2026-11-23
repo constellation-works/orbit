@@ -566,6 +566,15 @@ impl<H: RuntimeHost + ?Sized> PollDriver<'_, H> {
                 ReviewedMergeOutcome::Ambiguous { diagnostic } => {
                     return self.reconcile_ambiguous_merge(&status, &diagnostic);
                 }
+                ReviewedMergeOutcome::Conflict { diagnostic } => {
+                    let refused_head = condition.map(ToOwned::to_owned);
+                    return self.recover_merge_conflict(
+                        status,
+                        refused_head.as_deref(),
+                        capabilities.strategy.as_str(),
+                        &diagnostic,
+                    );
+                }
                 ReviewedMergeOutcome::Accepted { landed_commit } => {
                     self.requested_landed_commit = landed_commit;
                     self.merge_requested = true;
@@ -602,6 +611,73 @@ impl<H: RuntimeHost + ?Sized> PollDriver<'_, H> {
             }
         }
         Ok(DispatchFlow::WaitPoll(None))
+    }
+
+    /// [F2026-11-440] The SHA-conditioned merge was refused because the head
+    /// conflicts with a base that advanced after the mergeable read. One
+    /// read within the completion deadline must show the same open pull
+    /// request and head, now reporting a conflict, before the ordinary
+    /// conflict path decides ownership, review staleness, auto-fix admission
+    /// and rebase. Any other answer keeps the merge failure, and this path
+    /// never asks for another merge.
+    fn recover_merge_conflict(
+        &mut self,
+        previous: PullRequestStatus,
+        refused_head: Option<&str>,
+        strategy: &str,
+        diagnostic: &str,
+    ) -> Result<DispatchFlow, OrbitError> {
+        let pr_number = self.pr_number;
+        let refused = |observed: String| {
+            OrbitError::Execution(format!(
+                "pr_complete: could not request {strategy} merge on pull request #{pr_number}: \
+                 {diagnostic}; the follow-up read {observed}, so conflict recovery does not \
+                 run; the task stays in review"
+            ))
+        };
+        let fresh = read_pr_status_before(
+            self.host,
+            Path::new(self.workspace_path),
+            pr_number,
+            self.completion_deadline_ms,
+        )
+        .map_err(|error| refused(format!("failed ({error})")))?;
+        if fresh.number_selector != previous.number_selector
+            || fresh.url != previous.url
+            || fresh.head_branch != previous.head_branch
+            || fresh.base_branch != previous.base_branch
+        {
+            return Err(refused(
+                "named a different pull request, head branch or base branch".into(),
+            ));
+        }
+        let head = fresh.head_sha.as_deref();
+        if head.is_none() || head != previous.head_sha.as_deref() || head != refused_head {
+            return Err(refused(format!(
+                "reported head {} rather than the refused head {}",
+                head.unwrap_or("<none>"),
+                refused_head.unwrap_or("<none>")
+            )));
+        }
+        if fresh.state.as_deref() != Some("OPEN")
+            || !matches!(classify_pr_state(&fresh), PrMergeState::Conflict)
+        {
+            return Err(refused(format!(
+                "reported state {} with merge state {} rather than an open conflict",
+                fresh.state.as_deref().unwrap_or("<none>"),
+                fresh.merge_state_status.as_deref().unwrap_or("<none>")
+            )));
+        }
+        // The polled conflict path settles an inherited or no-edit-rerun
+        // failure before admitting an auto-fix rebase; one read cannot.
+        if self.auto_fix.is_some() && !super::super::super::checks::failed_checks(&fresh).is_empty()
+        {
+            return Err(refused(
+                "also reported failed checks the conflict repair cannot settle from one read"
+                    .into(),
+            ));
+        }
+        self.dispatch_conflict(fresh)
     }
 
     fn dispatch_pending(&mut self, status: PullRequestStatus) -> Result<DispatchFlow, OrbitError> {
