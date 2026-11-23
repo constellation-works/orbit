@@ -168,7 +168,7 @@ fn escalated_publication_requeue_refuses_unreadable_required_flags() {
     std::fs::write(
         f._root.path().join("bin/gh"),
         format!(
-            "#!/bin/sh\ncase \"$1 $2 $3\" in\n'pr view 17') cat '{}' ;;\n'api graphql '*) cat '{}' ;;\n'api user '*) echo orbit-bot ;;\n*) exit 99 ;;\nesac\n",
+            "#!/bin/sh\ncase \"$1 $2 $3\" in\n'pr view 17') cat '{}' ;;\n'api graphql '*) cat '{}' ;;\n'api user '*) echo orbit-bot ;;\n'api repos/'*) echo '[]' ;;\n*) exit 99 ;;\nesac\n",
             f.answer.display(),
             rollup.display()
         ),
@@ -180,6 +180,7 @@ fn escalated_publication_requeue_refuses_unreadable_required_flags() {
         .with_task_pr_forge(Arc::new(GhTaskPrForge));
     let answer = json!({"data":{"repository":{"pullRequest":{
         "number":17, "state":"OPEN", "headRefName":f.branch, "headRefOid":f.head,
+        "baseRefName":"main", "baseRef":{"branchProtectionRule":null},
         "author":{"login":"orbit-bot"}, "body":format!("Delivers {}.", f.task),
         "mergeable":"MERGEABLE", "commits":{"nodes":[{"commit":{
             "oid":f.head, "statusCheckRollup":{"contexts":{
@@ -924,6 +925,18 @@ fn layered_classic_and_ruleset_checks_refuse_requeue_until_every_check_passes() 
         }}}})
         .to_string()
     };
+    // A failed ruleset read must not let the passing classic check stand
+    // for the complete policy. The missing rules file makes the gh stub fail.
+    std::fs::write(&graphql, graphql_with(vec![node("Build")])).unwrap();
+    let blockers = GhTaskPrForge
+        .pull_request_blockers(&f.repo, 17)
+        .unwrap()
+        .unwrap();
+    assert_eq!(blockers.passed_required_checks, vec!["Build"]);
+    assert_eq!(blockers.requires_status_checks, None);
+    let error = refused(&f, false, "unreadable ruleset");
+    assert!(error.contains("policy is unreadable"), "{error}");
+
     std::fs::write(
         &rules,
         json!([{"type":"required_status_checks","parameters":{"required_status_checks":[

@@ -2149,8 +2149,9 @@ For the full persisted pass, including every skip and any `pass_error`, run
 **Held leaves.** A held leaf with typed code `delivery_head_changed` or
 `delivery_repair_dispatched` and an `auto_fix_stopped:` diagnostic in its
 message is handed back once the same published head has no conflict, no pending,
-unreported or failed required checks (every check the base branch configures
-has reported on that head), and either at least one passed required check or a
+unreported or failed required checks, readable classic and ruleset policy, and
+every configured check reported on that head. It must have either at least one
+passed required check or a
 forge-confirmed zero-required-check base branch (neither classic branch
 protection nor rulesets require status checks; missing or unreadable policy
 stays skipped under `auto_fix_stopped`). Readiness
@@ -2167,8 +2168,9 @@ held-leaf backoff: while a blocker remains it retries through the per-PR ledger
 for its remaining attempts (or skips under `budget_exhausted`, `operator_hold`,
 `opted_out`, or `completion_held` with its spent/remaining attempt count in
 readiness), and once every required check the base branch configures reports
-green on the same published head (a required check still unreported keeps it
-waiting) it hands back to completion as `checks_green_after_hold`.
+green on the same published head with readable classic and ruleset policy (an
+unreadable policy or a required check still unreported keeps it waiting), it
+hands back to completion as `checks_green_after_hold`.
 
 A task in `review` whose newest leaf ended `held` with its pull
 request open is handed back the same way when the hold is one a fresh forge
