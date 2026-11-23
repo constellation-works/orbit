@@ -596,6 +596,24 @@ impl OrbitRuntime {
             }
         }
         self.ensure_named_workspaces_in_scope(&allowed, input)?;
+        // A grant is frozen at admission, but the deadline remains effective
+        // during a live cycle, including when it is subsequently shortened.
+        if matches!(
+            class,
+            ResidentCallClass::Gated(_) | ResidentCallClass::CompleteTask
+        ) {
+            let mandate = super::resident_mandate_from_artifact(self, &task_id)?
+                .map_err(OrbitError::InvalidInput)?;
+            if mandate
+                .deadline
+                .is_some_and(|deadline| deadline <= Utc::now())
+            {
+                return Err(refused(
+                    "resident_right_refused",
+                    format!("`{tool}` is unavailable after the mandate deadline"),
+                ));
+            }
+        }
         match class {
             ResidentCallClass::Read | ResidentCallClass::Open => {}
             ResidentCallClass::Handoff => {
