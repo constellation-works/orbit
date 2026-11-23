@@ -1,4 +1,4 @@
-//! A mandate's deadline ends it without any resident cycle: the sweep
+//! A mandate's deadline ends it without a live resident cycle: the sweep
 //! clock's owner-side expiry writes the deadline stop and hands the
 //! assignment to review even while the cycle routine is disabled, and a
 //! disabled cycle routine surfaces the still-active mandate in attention
@@ -69,9 +69,9 @@ fn shown(fx: &Fixture, mandate: &str) -> Value {
 }
 
 #[test]
-fn a_passed_deadline_ends_the_mandate_without_any_cycle_when_the_routine_is_disabled() {
+fn a_passed_deadline_hands_off_without_a_live_cycle_when_the_routine_is_disabled() {
     if !super::super::dispatch_admission::isolated(
-        "resident_cycle::deadline_expiry::a_passed_deadline_ends_the_mandate_without_any_cycle_when_the_routine_is_disabled",
+        "resident_cycle::deadline_expiry::a_passed_deadline_hands_off_without_a_live_cycle_when_the_routine_is_disabled",
     ) {
         return;
     }
@@ -79,8 +79,16 @@ fn a_passed_deadline_ends_the_mandate_without_any_cycle_when_the_routine_is_disa
     install_disabled_cycle_routine(&fx);
     let watched = fx.task("Watched work");
     let now = Utc::now();
-    let mandate = mandate_with_deadline(&fx, &watched, Some(now - Duration::days(2)));
-    let ahead = mandate_with_deadline(&fx, &watched, Some(now + Duration::days(2)));
+    let mandate = mandate_with_deadline(&fx, &watched, Some(now + Duration::days(1)));
+    let run = fx.cycle_run(&mandate, "record-before-expiry");
+    let brief = fx.begin_cycle(&run, now);
+    fx.write_checkpoint(
+        &brief,
+        &run,
+        json!({"notes": "Workload: two slices remain. Blocker: awaiting approval.", "requests": [{"id": "approval", "decision_request": "decision-1", "task": watched, "blocking": true}]}),
+    );
+    fx.finish_cycle(&run);
+    let ahead = mandate_with_deadline(&fx, &watched, Some(now + Duration::days(3)));
 
     let before = shown(&fx, &mandate);
     assert_eq!(before["state"], "active", "{before}");
@@ -93,7 +101,7 @@ fn a_passed_deadline_ends_the_mandate_without_any_cycle_when_the_routine_is_disa
     // The sweep clock's tick on the owner: no resident cycle runs.
     let expired = fx
         .runtime
-        .expire_resident_mandates_past_deadline(now)
+        .expire_resident_mandates_past_deadline(now + Duration::days(2))
         .unwrap();
     assert_eq!(expired, vec![mandate.clone()]);
 
@@ -108,6 +116,13 @@ fn a_passed_deadline_ends_the_mandate_without_any_cycle_when_the_routine_is_disa
     assert_eq!(
         fx.runtime.get_task(&mandate).unwrap().status,
         TaskStatus::Review
+    );
+    let summary = fx.runtime.get_task(&mandate).unwrap().execution_summary;
+    assert!(summary.contains("Workload: two slices remain"), "{summary}");
+    assert!(summary.contains("Blocker: awaiting approval"), "{summary}");
+    assert!(
+        summary.contains("approval (task") && summary.contains("decision-1"),
+        "{summary}"
     );
     let history = fx.runtime.get_task_history(&mandate).unwrap();
     assert!(
@@ -178,4 +193,48 @@ fn a_disabled_cycle_routine_surfaces_in_attention_with_an_enable_or_stop_next_ac
         }),
         "stopping the mandate is offered as a next action: {item}"
     );
+}
+
+#[test]
+fn deadline_removes_live_cycle_delivery_rights() {
+    if !super::super::dispatch_admission::isolated(
+        "resident_cycle::deadline_expiry::deadline_removes_live_cycle_delivery_rights",
+    ) {
+        return;
+    }
+    let fx = fixture();
+    let watched = fx.task("Watched work");
+    let mandate = mandate_with_deadline(&fx, &watched, Some(Utc::now() + Duration::days(1)));
+    fx.grant(
+        &mandate,
+        &[
+            "dispatch",
+            "promote",
+            "merge",
+            "plugin_upgrade",
+            "refresh",
+            "recover",
+        ],
+    );
+    let run = fx.cycle_run(&mandate, "deadline-live");
+    let brief = fx.begin_cycle(&run, Utc::now());
+    assert_eq!(brief["authority"]["rights"].as_array().unwrap().len(), 6);
+    fx.operator_call(
+        "orbit.resident.grant",
+        json!({"task_id": mandate, "deadline": (Utc::now() - Duration::seconds(1)).to_rfc3339()}),
+    );
+    let error = fx
+        .as_cycle_agent(&run, || {
+            fx.agent_call(
+                "orbit.task.update",
+                json!({"id": watched, "status": "backlog"}),
+            )
+        })
+        .unwrap_err();
+    assert!(
+        error.contains("resident_right_refused") && error.contains("deadline"),
+        "{error}"
+    );
+    fx.checkpoint(&brief, &run);
+    fx.finish_cycle(&run);
 }

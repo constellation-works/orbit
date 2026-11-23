@@ -19,6 +19,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use super::cycle::live_cycle_from_history;
+use super::due::checkpoints;
 use super::{ResidentMandateState, resident_mandate_ended, resident_mandate_from_artifact};
 use crate::OrbitRuntime;
 use crate::application::task::{TaskRecordUpdateParams, TaskRecords, TaskUpdateParams};
@@ -587,8 +588,47 @@ impl OrbitRuntime {
             )?;
             self.set_resident_live_cycle(task_id, Some(&live.cycle), None)?;
         }
+        let comments = self.get_task_comments(task_id)?;
+        let recorded = checkpoints(task_id, &comments);
+        // An incomplete synthetic checkpoint carries no observations. Keep the
+        // last checkpoint that actually recorded state, if one exists.
+        let last = recorded.iter().rev().find(|checkpoint| {
+            checkpoint.outcome != "incomplete"
+                || !checkpoint.notes.trim().is_empty()
+                || !checkpoint.requests.is_empty()
+        });
+        let state = match last {
+            Some(checkpoint) => {
+                let blockers = checkpoint
+                    .requests
+                    .iter()
+                    .filter(|request| request.blocking)
+                    .map(|request| {
+                        format!(
+                            "- {} (task {}, decision {})",
+                            request.id, request.task, request.decision_request
+                        )
+                    })
+                    .collect::<Vec<_>>();
+                format!(
+                    "Last recorded workload (cycle {}): {}\nBlockers recorded in that checkpoint: {}",
+                    checkpoint.cycle,
+                    if checkpoint.notes.trim().is_empty() {
+                        "No workload notes recorded."
+                    } else {
+                        checkpoint.notes.trim()
+                    },
+                    if blockers.is_empty() {
+                        "None recorded.".to_string()
+                    } else {
+                        format!("\n{}", blockers.join("\n"))
+                    }
+                )
+            }
+            None => "No workload or blocker state was recorded in a checkpoint.".to_string(),
+        };
         let summary = format!(
-            "Resident stopped by {} at {}: {}\n\nNo further cycle runs. The latest checkpoint on this task is the resident's last state.",
+            "Resident stopped by {} at {}: {}\n\nNo further cycle runs. {state}",
             entry.by,
             at.to_rfc3339(),
             entry.reason

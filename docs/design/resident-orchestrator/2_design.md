@@ -236,13 +236,13 @@ with `outcome: ended` and the reason:
   is checkable (all watched tasks `done`, for example). The resident writes an execution summary
   and a `handoff` checkpoint; `resident_finalize` moves the assignment to `review` and the human
   closes it.
-- **deadline passed**. The resident stops dispatching and writes the same handoff.
+- **deadline passed**. The owner sweep stops the mandate and hands the assignment to review. When no cycle is live, the summary carries the last recorded checkpoint notes and blocking requests, or says no state was recorded. A live cycle may checkpoint and finalize, but cannot exercise delivery rights after the deadline.
 - **human stop** (`orbit resident control stop`, through the manager or directly). The stop then
   hands the assignment to `review`.
 - **takeover**. The human or an interactive session takes the mandate; firing stops until `release`
   ([§6](#6-the-manager--resident-channel)).
 
-Pause and stop prevent a new cycle from starting. A live cycle keeps its frozen grant, completes,
+Pause and stop prevent a new cycle from starting. A live cycle keeps its frozen grant subject to the current deadline, completes,
 checkpoints (or receives a synthesized checkpoint from `resident_finalize`), and exits at the next
 cycle boundary, within at most one agent budget.
 
