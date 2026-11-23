@@ -965,7 +965,8 @@ function evidenceTable(events, ctx) {
 
 // The forensic record: the grouping signature and propagation chain, plus a
 // five-row-per-incident audit evidence preview. When events_omitted is
-// positive, the panel shows that count and offers an Open all events action.
+// positive, the panel shows that count and offers an Open all events action;
+// otherwise it still offers the scoped Events drilldown to the raw records.
 function evidenceNode(group, ctx) {
   const details = el("details", { class: "incident-disclosure incident-evidence-details" });
   details.open = evidenceOpen;
@@ -978,6 +979,13 @@ function evidenceNode(group, ctx) {
       `This list shows an evidence preview; ${eventCountLabel(omitted)} omitted. `,
       auditButton(group, `Open all ${eventCountLabel(group.events)}`, "incident-link-button"),
       " to read the complete records.",
+    ]));
+  } else {
+    // Every row fits, but the raw record lives in Events: keep the scoped
+    // drilldown inside the disclosure.
+    details.appendChild(el("p", { class: "incident-message-note incident-evidence-note" }, [
+      auditButton(group, `Open ${eventCountLabel(group.events)} in Events`, "incident-link-button"),
+      " to expand each raw audit record.",
     ]));
   }
   const signatures = [...new Set(group.incidents.map(incident => incident.signature).filter(Boolean))];
