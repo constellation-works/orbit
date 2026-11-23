@@ -5,6 +5,10 @@ use super::*;
 const PARALLEL_BUNDLE_STAMP_MIN_TASKS: usize = 256;
 const MAX_BUNDLE_STAMP_THREADS: usize = 16;
 
+/// Bounds for fanning out settled event-log reads outside a commit section.
+const PARALLEL_HISTORY_READ_MIN_TASKS: usize = 64;
+const MAX_HISTORY_READ_THREADS: usize = 4;
+
 impl TaskV2Store {
     pub(crate) fn task_decision_snapshots(
         &self,
@@ -64,6 +68,78 @@ impl TaskV2Store {
         }
     }
 
+    /// Batched [`Self::read_task_history`]: checks partition settledness once
+    /// for the batch instead of once per task, then reads settled event logs
+    /// under each bundle's shared lock (which still refuses an interrupted
+    /// commit on that bundle). Reads requiring coordination use the ordinary
+    /// per-task path on the calling thread, preserving its recovery and errors.
+    pub(crate) fn read_task_histories(
+        &self,
+        ids: &[String],
+    ) -> Vec<crate::contracts::TaskHistoryReadOutcome> {
+        if ids.is_empty() {
+            return Vec::new();
+        }
+        let Some(boundary) = &self.coordination else {
+            return ids.iter().map(|id| self.read_task_history(id)).collect();
+        };
+        if !matches!(boundary.has_nothing_to_recover(), Ok(true)) {
+            return ids.iter().map(|id| self.read_task_history(id)).collect();
+        }
+        let threads = std::thread::available_parallelism()
+            .map_or(1, |parallelism| parallelism.get())
+            .min(MAX_HISTORY_READ_THREADS);
+        let slots = if !boundary.is_active_on_current_thread()
+            && ids.len() >= PARALLEL_HISTORY_READ_MIN_TASKS
+            && threads >= 2
+        {
+            std::thread::scope(|scope| {
+                let chunks = ids
+                    .chunks(ids.len().div_ceil(threads))
+                    .map(|chunk| {
+                        let handle = std::thread::Builder::new()
+                            .spawn_scoped(scope, move || self.read_settled_events_slice(chunk))
+                            .ok();
+                        (chunk, handle)
+                    })
+                    .collect::<Vec<_>>();
+                chunks
+                    .into_iter()
+                    .flat_map(|(chunk, handle)| match handle {
+                        Some(handle) => handle
+                            .join()
+                            .unwrap_or_else(|_| self.read_settled_events_slice(chunk)),
+                        None => self.read_settled_events_slice(chunk),
+                    })
+                    .collect::<Vec<_>>()
+            })
+        } else {
+            self.read_settled_events_slice(ids)
+        };
+
+        ids.iter()
+            .zip(slots)
+            .map(|(id, result)| result.unwrap_or_else(|| self.read_task_history(id)))
+            .collect()
+    }
+
+    fn read_settled_events_slice(
+        &self,
+        ids: &[String],
+    ) -> Vec<Option<crate::contracts::TaskHistoryReadOutcome>> {
+        ids.iter()
+            .map(|id| {
+                if let Err(err) = orbit_types::task::validate_orb_task_id(id) {
+                    return Some(Err(err.into()));
+                }
+                let _span = history_read_span(id);
+                self.read_settled_sidecar(id, TaskBundleStoreV2::read_events_if_settled)
+                    .map(|rows| rows.map(|rows| rows.map(task_history_from_events)))
+                    .transpose()
+            })
+            .collect()
+    }
+
     /// One sidecar read without entering the boundary: `Some` with the rows,
     /// or `Some(None)` for a missing task, when the partition and the bundle
     /// are settled; `None` when the caller must settle them first. A legacy
@@ -79,6 +155,14 @@ impl TaskV2Store {
         if !boundary.has_nothing_to_recover()? {
             return Ok(None);
         }
+        self.read_settled_sidecar(id, read)
+    }
+
+    fn read_settled_sidecar<T>(
+        &self,
+        id: &str,
+        read: SettledSidecarRead<T>,
+    ) -> Result<Option<Option<Vec<T>>>, OrbitError> {
         match read(&self.bundle_store, id) {
             Ok(Some(rows)) => Ok(Some(Some(rows))),
             Ok(None) => Ok(None),

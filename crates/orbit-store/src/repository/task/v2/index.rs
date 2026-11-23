@@ -9,7 +9,7 @@ use crate::contracts::{
     EnvelopeStampRecord, TaskCompletionByComplexity, TaskDefectFiling, TaskTerminalTransition,
 };
 use crate::driver::file::task_bundle::bundle_lock_target;
-use crate::driver::sqlite::task_registry::TaskIndexProofRow;
+use crate::driver::sqlite::task_registry::{TaskIndexProofRow, TaskIndexSnapshot};
 use orbit_common::StorageLayer;
 use orbit_common::fs::io::{FileLockProbe, hold_step, probe_file_lock};
 
@@ -38,6 +38,8 @@ const IN_FLIGHT_WRITER_WAIT: Duration = Duration::from_secs(60);
 
 /// What an accepted freshness scan leaves the selection to handle.
 pub(super) struct IndexUsable {
+    /// The registry snapshot the freshness scan just validated.
+    pub(super) snapshot: Arc<TaskIndexSnapshot>,
     /// Registered tasks whose bundle a concurrent writer holds; a selection
     /// leaves them out.
     pub(super) unsettled: Vec<String>,
@@ -49,11 +51,15 @@ pub(super) struct IndexUsable {
 /// What one freshness scan found.
 enum IndexFreshness {
     /// The index serves; these registered tasks' bundles are in flight.
-    Usable(Vec<String>),
+    Usable {
+        snapshot: Arc<TaskIndexSnapshot>,
+        unsettled: Vec<String>,
+    },
     /// Only from a scan that tolerates stale rows: the index serves except
     /// for the `stale` tasks, whose index row disagrees with an envelope no
     /// writer holds. The caller reads those tasks from their bundles.
     UsableExceptStale {
+        snapshot: Arc<TaskIndexSnapshot>,
         unsettled: Vec<String>,
         stale: Vec<String>,
     },
@@ -251,6 +257,10 @@ impl TaskV2Store {
         self.validate_index_with_proofs(true)
     }
 
+    pub(super) fn validate_index_with_snapshot(&self) -> Result<Option<IndexUsable>, OrbitError> {
+        self.validate_index_scan(true, false)
+    }
+
     pub(super) fn validate_index_with_proofs(
         &self,
         persist_proofs: bool,
@@ -291,7 +301,10 @@ impl TaskV2Store {
             let mut awaited = None;
             for _ in 0..INDEX_FRESHNESS_ATTEMPTS {
                 match self.validate_index_once(persist_proofs, tolerate_stale)? {
-                    IndexFreshness::Usable(unsettled) => {
+                    IndexFreshness::Usable {
+                        snapshot,
+                        unsettled,
+                    } => {
                         orbit_common::tracing::debug!(
                             target: "orbit.store.task_query",
                             workspace_id = %self.workspace_id,
@@ -299,11 +312,16 @@ impl TaskV2Store {
                             "task index freshness accepted",
                         );
                         return Ok(Some(IndexUsable {
+                            snapshot,
                             unsettled,
                             stale: Vec::new(),
                         }));
                     }
-                    IndexFreshness::UsableExceptStale { unsettled, stale } => {
+                    IndexFreshness::UsableExceptStale {
+                        snapshot,
+                        unsettled,
+                        stale,
+                    } => {
                         orbit_common::tracing::debug!(
                             target: "orbit.store.task_query",
                             workspace_id = %self.workspace_id,
@@ -311,7 +329,11 @@ impl TaskV2Store {
                             stale_rows = stale.len(),
                             "task index freshness accepted apart from stale rows",
                         );
-                        return Ok(Some(IndexUsable { unsettled, stale }));
+                        return Ok(Some(IndexUsable {
+                            snapshot,
+                            unsettled,
+                            stale,
+                        }));
                     }
                     IndexFreshness::Incomplete => {}
                     IndexFreshness::Mismatch(task_id) => {
@@ -462,9 +484,16 @@ impl TaskV2Store {
             }
         }
         if stale.is_empty() {
-            Ok(IndexFreshness::Usable(unsettled))
+            Ok(IndexFreshness::Usable {
+                snapshot,
+                unsettled,
+            })
         } else {
-            Ok(IndexFreshness::UsableExceptStale { unsettled, stale })
+            Ok(IndexFreshness::UsableExceptStale {
+                snapshot,
+                unsettled,
+                stale,
+            })
         }
     }
 

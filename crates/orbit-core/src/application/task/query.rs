@@ -15,6 +15,8 @@ use super::listing::{
 use crate::OrbitRuntime;
 use crate::application::task::TaskJobPort;
 
+pub(crate) type TaskHistoryResult = Result<Vec<TaskHistoryEntry>, OrbitError>;
+
 impl OrbitRuntime {
     pub fn get_task(&self, id: &str) -> Result<Task, OrbitError> {
         if self.worker_invocation().is_some() {
@@ -203,6 +205,24 @@ impl OrbitRuntime {
             .ok_or_else(|| OrbitError::not_found(NotFoundKind::Task, id.to_string()))
     }
 
+    /// Read the history of each listed task in request order, checking
+    /// partition settledness once per batch rather than per task. A worker
+    /// still reads each history through its owner.
+    pub(crate) fn get_task_histories(&self, ids: &[String]) -> Vec<TaskHistoryResult> {
+        if self.worker_invocation().is_some() {
+            return ids.iter().map(|id| self.get_task_history(id)).collect();
+        }
+        let rows = self.stores().task_history().get_task_histories(ids);
+        ids.iter()
+            .zip(rows)
+            .map(|(id, row)| match row {
+                Ok(Some(history)) => Ok(history),
+                Ok(None) => Err(OrbitError::not_found(NotFoundKind::Task, id.clone())),
+                Err(error) => Err(error),
+            })
+            .collect()
+    }
+
     /// Evidence that each listed task's history and comments are unchanged
     /// since an earlier stamp, taken without reading them and in one pass;
     /// a task is absent when nothing can vouch for its logs. A worker reads
@@ -325,6 +345,36 @@ impl OrbitRuntime {
             .collect())
     }
 
+    /// Creation time and status for settled tasks whose current status
+    /// is in `statuses` or whose `updated_at` is at or after `updated_since`,
+    /// projected from the validated index without parsing every envelope on
+    /// disk.
+    pub(crate) fn task_lifecycle_stamps_matching(
+        &self,
+        statuses: &[TaskStatus],
+        updated_since: chrono::DateTime<chrono::Utc>,
+    ) -> Result<Vec<orbit_store::contracts::TaskLifecycleStamp>, OrbitError> {
+        if self.worker_invocation().is_some() {
+            return Ok(self
+                .list_task_metadata()?
+                .into_iter()
+                .filter(|task| statuses.contains(&task.status) || task.updated_at >= updated_since)
+                .map(|task| orbit_store::contracts::TaskLifecycleStamp {
+                    id: task.id,
+                    status: task.status,
+                    created_at: task.created_at,
+                })
+                .collect());
+        }
+
+        if !self.coordination_task_reads_visible() {
+            return Ok(Vec::new());
+        }
+        self.stores()
+            .tasks()
+            .task_lifecycle_stamps_matching(statuses, updated_since)
+    }
+
     /// Each backlog task whose effective OS requirement this host does not
     /// satisfy, with the wait: `ORB-12 waits for a macos host (os:macos)`.
     ///
@@ -373,14 +423,30 @@ impl OrbitRuntime {
         if self.browser_kit_verified() {
             return Ok(Vec::new());
         }
-        let candidates = self
-            .list_task_metadata()?
-            .into_iter()
-            .filter(|task| {
-                task.status == orbit_types::task::TaskStatus::Backlog
-                    && orbit_types::task::requires_browser_kit(&task.tags)
-            })
-            .collect::<Vec<_>>();
+        let candidates = if self.worker_invocation().is_some() {
+            self.list_task_metadata()?
+                .into_iter()
+                .filter(|task| {
+                    task.status == TaskStatus::Backlog
+                        && orbit_types::task::requires_browser_kit(&task.tags)
+                })
+                .collect::<Vec<_>>()
+        } else if !self.coordination_task_reads_visible() {
+            Vec::new()
+        } else {
+            let filter = TaskListFilter {
+                statuses: Some(vec![TaskStatus::Backlog]),
+                any_tags: vec![orbit_types::task::UI_TAG.to_string()],
+                ..TaskListFilter::default()
+            };
+            list_task_metadata_matching(self.stores().tasks(), &filter)?
+                .into_iter()
+                .filter(|task| {
+                    task.status == TaskStatus::Backlog
+                        && orbit_types::task::requires_browser_kit(&task.tags)
+                })
+                .collect::<Vec<_>>()
+        };
         if candidates.is_empty() {
             return Ok(Vec::new());
         }

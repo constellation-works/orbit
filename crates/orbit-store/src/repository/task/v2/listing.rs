@@ -3,8 +3,8 @@ use std::collections::BTreeSet;
 use super::index::IndexUsable;
 use super::*;
 use crate::contracts::{
-    TaskCandidateKey, TaskCandidateKeys, TaskCandidates, TaskListFilter, TaskListHydration,
-    TaskPage, TaskResidualFilter, TaskRow,
+    TaskCandidateKey, TaskCandidateKeys, TaskCandidates, TaskLifecycleStamp, TaskListFilter,
+    TaskListHydration, TaskPage, TaskResidualFilter, TaskRow,
 };
 use orbit_types::task::satisfy_completed_archived_dependencies;
 
@@ -29,6 +29,68 @@ impl TaskV2Store {
             .map(|bundle| bundle.envelope)
             .collect::<Vec<_>>();
         Ok(select_candidates(envelopes, &filter, limit))
+    }
+
+    /// Settled tasks whose status is in `statuses` or whose `updated_at` is at
+    /// or after `updated_since`, projected directly from the validated index
+    /// snapshot without hydrating every envelope on disk. Falls back to the
+    /// strict bundle scan when the index is missing or stale.
+    pub(crate) fn task_lifecycle_stamps_matching(
+        &self,
+        statuses: &[TaskStatus],
+        updated_since: chrono::DateTime<Utc>,
+    ) -> Result<Vec<TaskLifecycleStamp>, OrbitError> {
+        self.ensure_recovered()?;
+        if let Some(usable) = self.validate_index_with_snapshot()?
+            && let Some(rows) = &usable.snapshot.rows
+        {
+            let unsettled_set: BTreeSet<&str> =
+                usable.unsettled.iter().map(String::as_str).collect();
+            let mut stamps = Vec::new();
+            for row in rows {
+                if !unsettled_set.is_empty() && unsettled_set.contains(row.task_id.as_str()) {
+                    continue;
+                }
+                let status = row.indexed.status.parse::<TaskStatus>().map_err(|error| {
+                    OrbitError::Store(format!(
+                        "invalid indexed status '{}' for task '{}': {error}",
+                        row.indexed.status, row.task_id
+                    ))
+                })?;
+                let updated_at = chrono::DateTime::parse_from_rfc3339(&row.indexed.updated_at)
+                    .map_err(|error| {
+                        OrbitError::Store(format!(
+                            "invalid indexed updated_at '{}' for task '{}': {error}",
+                            row.indexed.updated_at, row.task_id
+                        ))
+                    })?
+                    .with_timezone(&Utc);
+                if !statuses.contains(&status) && updated_at < updated_since {
+                    continue;
+                }
+                let created_at = chrono::DateTime::parse_from_rfc3339(&row.indexed.created_at)
+                    .map_err(|error| {
+                        OrbitError::Store(format!(
+                            "invalid indexed created_at '{}' for task '{}': {error}",
+                            row.indexed.created_at, row.task_id
+                        ))
+                    })?
+                    .with_timezone(&Utc);
+                stamps.push(TaskLifecycleStamp {
+                    id: row.task_id.clone(),
+                    status,
+                    created_at,
+                });
+            }
+            return Ok(stamps);
+        }
+        Ok(self
+            .scan_and_repair_index("missing or stale index")?
+            .into_iter()
+            .filter_map(|bundle| {
+                TaskLifecycleStamp::from_matching_envelope(bundle.envelope, statuses, updated_since)
+            })
+            .collect())
     }
 
     /// Informational read: never enter coordination, settle pending writes,

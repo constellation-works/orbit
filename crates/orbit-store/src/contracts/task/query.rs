@@ -319,6 +319,30 @@ pub struct TaskChangeStamp {
     pub updated_at: chrono::DateTime<chrono::Utc>,
 }
 
+/// One task's creation time and current status.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TaskLifecycleStamp {
+    pub id: String,
+    pub status: TaskStatus,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+}
+
+impl TaskLifecycleStamp {
+    pub(crate) fn from_matching_envelope(
+        envelope: TaskEnvelopeV2,
+        statuses: &[TaskStatus],
+        updated_since: chrono::DateTime<chrono::Utc>,
+    ) -> Option<Self> {
+        (statuses.contains(&envelope.status) || envelope.updated_at >= updated_since).then_some(
+            Self {
+                id: envelope.id,
+                status: envelope.status,
+                created_at: envelope.created_at,
+            },
+        )
+    }
+}
+
 /// One fully validated bundle, retaining sidecars from that same read.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TaskRow {
