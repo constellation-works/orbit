@@ -1567,6 +1567,133 @@ fn an_unrepaired_check_repair_hold_retries_in_budget_reports_exhausted_and_honor
     assert_eq!(fx.retries(&cleared.run).len(), 1, "{green}");
 }
 
+/// An unrepaired check-repair hold is judged on the head its newest
+/// completion round published. After re-review republished the pull request
+/// through `re_push`, green checks on that head hand completion back through
+/// both Fix PR and the drain. A red or conflicting replacement head on the
+/// same branch is an identity mismatch: nothing resumes and no repair
+/// attempt is recorded.
+fn an_unrepaired_check_repair_hold_is_judged_on_its_newest_publication() {
+    use orbit_core::application::job::TaskAutoFixError;
+    let fx = fixture_with(&rereviewed_leaf_job());
+    let rereviewed = |number: u64| {
+        let leaf = fx.delivered_leaf(
+            number,
+            "done",
+            Shelf::Review,
+            LeafEnd::HeldUnrepairedCheckRepair,
+        );
+        checkpoint_rounds(
+            &fx,
+            &leaf,
+            &[
+                ("complete_pr", rebased_round()),
+                (
+                    "re_push",
+                    republished(&leaf, "reviewed-head", "published-head"),
+                ),
+            ],
+        );
+        record_attempts(
+            &fx,
+            &leaf.task,
+            &number.to_string(),
+            "reviewed-head",
+            &leaf.run,
+            1,
+        );
+        leaf
+    };
+    let admissions = |task: &str| {
+        fx.runtime
+            .get_task_history(task)
+            .unwrap()
+            .iter()
+            .filter(|entry| entry.event == PR_AUTO_FIX_ADMITTED_EVENT)
+            .count()
+    };
+
+    // Fix PR hands back a green re-review publication.
+    let fix_pr = rereviewed(160);
+    fx.report_required_checks(&fix_pr, "reviewed-head", "orbit-bot", &["Check"], &[]);
+    let readiness = fx
+        .runtime
+        .task_pr_auto_fix_readiness(&fix_pr.task, true)
+        .unwrap();
+    assert_eq!(readiness["available"], true, "{readiness}");
+    fx.runtime
+        .start_task_pr_auto_fix(&fix_pr.task, true, Some("dashboard"))
+        .unwrap();
+    assert_eq!(fx.retries(&fix_pr.run).len(), 1);
+
+    // The drain hands back a green re-review publication.
+    let drained = rereviewed(161);
+    fx.report_required_checks(&drained, "reviewed-head", "orbit-bot", &["Check"], &[]);
+
+    // Red and conflicting replacements of the published head, on the
+    // first-round and on the re-reviewed publication alike.
+    let red = fx.delivered_leaf(
+        162,
+        "done",
+        Shelf::Review,
+        LeafEnd::HeldUnrepairedCheckRepair,
+    );
+    fx.blocked(&red, "replacement-head", "orbit-bot", false, &["Check"]);
+    record_attempts(&fx, &red.task, "162", "published-head", &red.run, 1);
+    let conflicting = rereviewed(163);
+    fx.blocked(&conflicting, "replacement-head", "orbit-bot", true, &[]);
+    // The first-round head is no longer the re-reviewed run's publication.
+    let superseded = rereviewed(164);
+    fx.blocked(
+        &superseded,
+        "published-head",
+        "orbit-bot",
+        false,
+        &["Check"],
+    );
+
+    let drain = fx.drain();
+    let pass = fx.pass(&drain, "done", true);
+    let handed = started(&pass, &drained.task).unwrap_or_else(|| panic!("{pass}"));
+    assert_eq!(handed["reason"], "checks_green_after_hold", "{pass}");
+    assert_eq!(handed["head_sha"], "reviewed-head", "{pass}");
+    assert_eq!(fx.retries(&drained.run).len(), 1, "{pass}");
+    for (leaf, recorded) in [(&red, 1), (&conflicting, 1), (&superseded, 1)] {
+        assert_eq!(
+            repair_skip(&pass, &leaf.task).as_deref(),
+            Some("publication_identity_changed"),
+            "{pass}"
+        );
+        assert!(started(&pass, &leaf.task).is_none(), "{pass}");
+        assert!(fx.retries(&leaf.run).is_empty(), "{pass}");
+        assert_eq!(
+            admissions(&leaf.task),
+            recorded,
+            "no repair start is recorded"
+        );
+        let readiness = fx
+            .runtime
+            .task_pr_auto_fix_readiness(&leaf.task, true)
+            .unwrap();
+        assert_eq!(readiness["available"], false, "{readiness}");
+        assert_eq!(
+            readiness["reason"], "publication_identity_changed",
+            "{readiness}"
+        );
+        match fx
+            .runtime
+            .start_task_pr_auto_fix(&leaf.task, true, Some("dashboard"))
+        {
+            Err(TaskAutoFixError::Refused(refusal)) => {
+                assert_eq!(refusal.reason(), "publication_identity_changed");
+            }
+            other => panic!("{}: expected a refusal, got {other:?}", leaf.task),
+        }
+        assert!(fx.retries(&leaf.run).is_empty());
+        assert_eq!(admissions(&leaf.task), recorded);
+    }
+}
+
 /// Record one source repair reservation of pull request `pr` on `head`, as the
 /// source repair admission writes it. It spends the pull request's shared budget.
 fn record_source_repair_reservation(fx: &Fixture, task: &str, pr: &str, head: &str, attempt: u32) {
@@ -1933,6 +2060,7 @@ crate::scenario_table!(
     a_repair_that_published_nothing_leaves_the_heads_unspent_attempts_usable,
     a_skipped_head_lists_the_attempts_spent_and_remaining,
     an_unrepaired_check_repair_hold_retries_in_budget_reports_exhausted_and_honors_holds,
+    an_unrepaired_check_repair_hold_is_judged_on_its_newest_publication,
     a_source_repair_and_a_watcher_attempt_share_the_pull_requests_budget,
     source_repairs_alone_spend_the_shared_budget_in_the_refusal,
     a_stuck_pull_request_is_repaired_however_many_deliveries_ran_since,

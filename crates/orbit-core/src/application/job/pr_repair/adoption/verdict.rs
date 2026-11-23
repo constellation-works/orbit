@@ -422,8 +422,12 @@ impl OrbitRuntime {
         // A blocker is repaired through the ledger, whether the leaf stopped
         // or held. A held leaf with none is handed back for completion to
         // read the forge again, within its own ceiling.
-        // An auto-fix stop or absent-check hold is reconsidered only on the
-        // held run's own published head.
+        // An auto-fix stop, unrepaired check-repair hold or absent-check hold
+        // is reconsidered only on the held run's own published head: the
+        // newest publication its completion rounds recorded, advanced through
+        // its lineage's auto-fix pushes. A replacement head on the same
+        // branch, red, conflicting or green, is not the held run's to repair
+        // or hand back.
         let check_runs_absent_hold = held == Some(DeliveryRefusal::CheckRunsAbsent.error_code());
         let published_sha = if auto_fix_hold || unrepaired_repair_hold || check_runs_absent_hold {
             match self.resolve_held_published_sha(run, &history, &number, published_sha) {
@@ -438,9 +442,7 @@ impl OrbitRuntime {
         } else {
             published_sha
         };
-        // An auto-fix stop is reconsidered only after positive, complete check
-        // evidence. Red, pending or absent checks must not trigger another repair.
-        if (auto_fix_hold || check_runs_absent_hold)
+        if (auto_fix_hold || unrepaired_repair_hold || check_runs_absent_hold)
             && published_sha.as_deref() != Some(blockers.head_sha.as_str())
         {
             return skip(
@@ -448,6 +450,8 @@ impl OrbitRuntime {
                 format!("#{number} no longer matches the held run's published head"),
             );
         }
+        // An auto-fix stop is reconsidered only after positive, complete check
+        // evidence. Red, pending or absent checks must not trigger another repair.
         if auto_fix_hold
             && (blockers.conflicting
                 || !blockers.failed_required_checks.is_empty()
@@ -463,22 +467,16 @@ impl OrbitRuntime {
         // An unrepaired check repair retries through the ledger while a blocker
         // and budget remain; if no blocker remains, it hands back only once
         // the published head reports complete green checks.
-        if unrepaired_repair_hold && blocker.is_none() {
-            if published_sha.as_deref() != Some(blockers.head_sha.as_str()) {
-                return skip(
-                    "publication_identity_changed",
-                    format!("#{number} no longer matches the held run's published head"),
-                );
-            }
-            if !blockers.pending_required_checks.is_empty()
+        if unrepaired_repair_hold
+            && blocker.is_none()
+            && (!blockers.pending_required_checks.is_empty()
                 || (blockers.passed_required_checks.is_empty()
-                    && blockers.requires_status_checks != Some(false))
-            {
-                return skip(
-                    DeliveryRefusal::RepairDispatched.error_code(),
-                    format!("#{number} does not yet have all required checks green"),
-                );
-            }
+                    && blockers.requires_status_checks != Some(false)))
+        {
+            return skip(
+                DeliveryRefusal::RepairDispatched.error_code(),
+                format!("#{number} does not yet have all required checks green"),
+            );
         }
         let hold = match (blocker, held) {
             (Some(blocker), _) => {

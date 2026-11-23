@@ -2130,7 +2130,9 @@ For the full persisted pass, including every skip and any `pass_error`, run
 - `store_unreadable`, `forge_unreadable`, `resume_unplannable`, `resume_failed`
   and `task_moved`: a later pass tries again.
 - `publication_identity_changed`: the pull request no longer matches the head
-  the held run published;
+  the held run published in its newest completion round, including a re-review
+  republication. A replacement head on the same branch is neither repaired nor
+  handed back, whether its checks are red, green or it conflicts;
 - `completion_held`: a `completion.hold` rule keeps the held task in review
   for a person;
 - a delivery hold code, such as `delivery_check_evidence_inconclusive`: a held
