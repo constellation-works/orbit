@@ -150,7 +150,7 @@ impl DeliveryRefusal {
                 "Re-establish the pinned identity and confirm the merge evidence, then start a new delivery attempt.".into()
             }
             Self::RepairDispatched => {
-                "If a repair is running, let it finish. Once the prior run ends (including held without step_failure_recovery or after a failed recovery attempt), inspect any recovery attempt, configure step_failure_recovery if missing, and start a new authorized delivery run on the same head while per-PR budget remains, or repair and publish a new head and start a new delivery attempt.".into()
+                "If a repair is running, let it finish. Once the prior run ends, inspect the hold reason and any recovery attempt. If the no-edit repair's unchanged-head rerun is spent and checks still fail, repair and publish a new head before starting a new delivery attempt. If check recovery was absent or unsuccessful and the no-edit rerun is not spent, configure step_failure_recovery if missing; a new authorized delivery run can use remaining per-PR repair budget on the same head, or you can repair and publish a new head.".into()
             }
             Self::PullRequestDraft => {
                 "Mark the pull request ready for review, then start a new delivery attempt.".into()

@@ -273,6 +273,7 @@ fn delivery_hold_attention_next_is_workspace_qualified_with_tool() {
             "job resume",
         ),
         ("delivery_pr_draft", "show", "run show"),
+        ("delivery_repair_dispatched", "show", "run show"),
     ] {
         let root = tempfile::tempdir_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
         let global = root.path().join("home/.orbit");
@@ -339,6 +340,31 @@ fn delivery_hold_attention_next_is_workspace_qualified_with_tool() {
         );
         assert_eq!(item["detail"]["code"], code, "{code}: {response}");
         assert_eq!(item["detail"]["run_id"], run.run_id, "{code}: {response}");
+        if code == "delivery_repair_dispatched" {
+            let summary = item["next"]["summary"].as_str().unwrap();
+            // A spent no-edit rerun holds again on the same head even with repair budget.
+            assert!(
+                summary.contains("inspect the hold reason"),
+                "ORB-27293: {response}"
+            );
+            assert!(
+                summary.contains("unchanged-head rerun is spent"),
+                "ORB-27293: {response}"
+            );
+            assert!(
+                summary.contains("repair and publish a new head"),
+                "ORB-27293: {response}"
+            );
+            assert!(
+                summary.contains("no-edit rerun is not spent"),
+                "ORB-27293: {response}"
+            );
+            assert!(
+                summary.contains("remaining per-PR repair budget on the same head"),
+                "ORB-27293: {response}"
+            );
+        }
+
         assert_eq!(
             item["next"]["command"],
             format!(
