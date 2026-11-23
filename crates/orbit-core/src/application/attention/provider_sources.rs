@@ -422,9 +422,14 @@ pub(super) fn read_ci_attention(
         }
         let run_id = value_string(&run["run_id"]);
         // `since` is the failing run's `updated_at`, the nearest
-        // completion-time proxy the provider projection supplies.
-        let Some(since) = parse_time(&run["updated_at"]).or_else(|| parse_time(&run["created_at"]))
-        else {
+        // completion-time proxy the provider projection supplies. When that
+        // is unusable it falls back to `created_at`, and `since_source`
+        // reports the field actually used.
+        let (since, since_source) = if let Some(time) = parse_time(&run["updated_at"]) {
+            (time, "updated_at")
+        } else if let Some(time) = parse_time(&run["created_at"]) {
+            (time, "created_at")
+        } else {
             continue;
         };
         let age = (now - since).num_seconds().max(0) as u64;
@@ -509,7 +514,7 @@ pub(super) fn read_ci_attention(
                 "reported_head_sha": value_string(&run["reported_head_sha"]),
                 "base_head_sha": head_sha,
                 "url": run["url"],
-                "since_source": "updated_at",
+                "since_source": since_source,
                 "since_is_proxy": true,
             }),
             next,

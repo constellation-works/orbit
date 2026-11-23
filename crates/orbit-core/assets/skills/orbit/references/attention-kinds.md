@@ -34,7 +34,7 @@ A workflow whose runs on the current head are all still pending is decided by it
 
 If the listing is full and has no usable completion for a current-head pending workflow, Orbit reports a workflow-specific degraded entry with code `source_unavailable` because relevant history may extend beyond the listing.
 
-A workflow with no run on the current head is not decided: an older head's result alone is not current, and pending or unknown observations are never green. The deciding run of a workflow that failed or timed out is high severity and critical after both age thresholds. Its `since` is that run's `updated_at`, labelled in `detail` (`since_source: updated_at`, `since_is_proxy: true`) as an onset-time proxy, not an exact completion timestamp.
+A workflow with no run on the current head is not decided: an older head's result alone is not current, and pending or unknown observations are never green. The deciding run of a workflow that failed or timed out is high severity and critical after both age thresholds. Its `since` is that run's `updated_at`, or its `created_at` when the provider supplies no usable update time. `detail.since_source` names the field used (`updated_at` or `created_at`), and `detail.since_is_proxy: true` labels it an onset-time proxy, not an exact completion timestamp.
 
 When a CI-sweep repair task already exists for the failing run, `refs.task_id` names it and `next` shows that task; otherwise `next` is `github.run.view`. While a task commit is pending, the repair-task lookup is skipped rather than settling the pending commit: the red item still reports the failing run with `github.run.view`, and a `source_unavailable` degraded entry for `ci_red` names the pending commit as the reason the association is unavailable.
 
