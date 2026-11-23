@@ -28,7 +28,12 @@ export function paintFrictionDetail(detail, friction, ctx) {
   // paint again. Both the wide detail pane and a mounted accordion section
   // take this path.
   const draftCell = frictionTagsDraftCell(detail, friction.id);
-  if (draftCell && repaintFrictionAroundTagsDraft(detail, friction, ctx)) return;
+  if (draftCell) {
+    // Keep the open editor DOM mounted so the draft survives, while updating
+    // the saved record it displays on Cancel/Escape and seeds on reopen.
+    draftCell.updateRecord?.(friction, ctx);
+    if (repaintFrictionAroundTagsDraft(detail, friction, ctx)) return;
+  }
 
   detail.dataset.frictionId = friction.id;
   detail.classList.add("friction-pane");
@@ -111,24 +116,33 @@ function repaintFrictionAroundTagsDraft(detail, friction, ctx) {
 
 function buildFrictionTagsEditor(friction, ctx) {
   const visit = captureWorkspaceVisit();
-  const known = Array.isArray(ctx.knownTags) ? ctx.knownTags : [];
+  let currentFriction = friction;
+  let currentCtx = ctx;
+  const knownHint = () => {
+    const known = Array.isArray(currentCtx.knownTags) ? currentCtx.knownTags : [];
+    return known.length ? `Known tags: ${known.join(", ")}` : "";
+  };
   const wrap = el("div", { class: "field-editor-cell" });
   wrap.dataset.field = "tags";
+  wrap.updateRecord = (nextFriction, nextCtx) => {
+    currentFriction = nextFriction;
+    currentCtx = nextCtx;
+  };
   wrap.appendChild(buildInlineFieldEditor({
     label: "tags",
-    value: TAGS_SPEC.toText(friction),
-    renderView: () => TAGS_SPEC.renderView(friction),
+    value: () => TAGS_SPEC.toText(currentFriction),
+    renderView: () => TAGS_SPEC.renderView(currentFriction),
     multiline: false,
     placeholder: TAGS_SPEC.placeholder,
-    hint: known.length ? `Known tags: ${known.join(", ")}` : "",
+    hint: knownHint,
     editTitle: `Edit tags for ${friction.id}`,
     save: (text) => {
       const payload = TAGS_SPEC.toPayload(text);
       if (payload.tags.length === 0) return Promise.reject(new Error("A friction needs at least one tag."));
-      return patchJson(frictionPath(visit, friction), payload);
+      return patchJson(frictionPath(visit, currentFriction), payload);
     },
     onSaved: (updated) => {
-      if (visit.isCurrent()) ctx.onChanged(updated?.id || friction.id);
+      if (visit.isCurrent()) currentCtx.onChanged(updated?.id || currentFriction.id);
     },
   }));
   return wrap;
