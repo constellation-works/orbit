@@ -6,21 +6,31 @@
 //! answer.
 
 use std::collections::BTreeMap;
+use std::fmt::Debug;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Barrier};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::sync::{Arc, Barrier, mpsc};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use orbit_exec::{EnvironmentMode, ExecRequest, StdinMode};
+use orbit_common::fs::io::{FileLockOptions, hold_exclusive_file_lock_options};
+use orbit_common::{OrbitError, ProviderReadThrottle};
+use orbit_exec::{EnvironmentMode, ExecRequest, ExecutionResult, StdinMode};
+use orbit_tools::github_cli::{LogReadBounds, RunLogRequests, read_run_log_guarded};
 use orbit_tools::github_quota::{
-    self, GithubCaller, GithubQuotaPolicy, GithubQuotaStore, ObservedQuota, QuotaRefusalReason,
-    RESOURCE_CORE, RESOURCE_GRAPHQL, RateLimitAnswer,
+    self, GithubCaller,
+    GithubCaller::{Agent, Background, Delivery},
+    GithubQuotaPolicy, GithubQuotaStatus, GithubQuotaStore, GithubResourceStatus, ObservedQuota,
+    QuotaRefusal, QuotaRefusalReason, RESOURCE_CORE, RESOURCE_GRAPHQL, RateLimitAnswer,
 };
 use orbit_tools::{ToolContext, ToolRegistry};
 use serde_json::json;
 use tempfile::TempDir;
 
 const ACCOUNT: &str = "github.com-test";
+const AMBIGUOUS_RELEASE_PAYLOADS: [&[u8]; 2] = [
+    b"{\"generation\":",
+    br#"{"generation":7,"previous_claim":null}"#,
+];
 
 fn now() -> u64 {
     SystemTime::now()
@@ -31,23 +41,33 @@ fn now() -> u64 {
 
 fn known(core_remaining: u64, reset: u64) -> RateLimitAnswer {
     let mut observed = BTreeMap::new();
-    observed.insert(
-        RESOURCE_CORE.to_string(),
-        ObservedQuota {
-            limit: 5000,
-            remaining: core_remaining,
-            reset_epoch_seconds: reset,
-        },
-    );
-    observed.insert(
-        RESOURCE_GRAPHQL.to_string(),
-        ObservedQuota {
-            limit: 5000,
-            remaining: 4000,
-            reset_epoch_seconds: reset,
-        },
-    );
+    for (resource, remaining) in [(RESOURCE_CORE, core_remaining), (RESOURCE_GRAPHQL, 4000)] {
+        observed.insert(
+            resource.to_string(),
+            ObservedQuota {
+                limit: 5000,
+                remaining,
+                reset_epoch_seconds: reset,
+            },
+        );
+    }
     RateLimitAnswer::Known(observed)
+}
+
+fn unknown_not_due() -> RateLimitAnswer {
+    RateLimitAnswer::Unknown("not due".into())
+}
+
+fn recv_ready(rx: &mpsc::Receiver<()>, what: &str) {
+    rx.recv_timeout(Duration::from_secs(10)).expect(what);
+}
+
+fn store(dir: &Path) -> GithubQuotaStore {
+    GithubQuotaStore::new(dir.to_path_buf())
+}
+
+fn hold_lock(path: &Path, label: &str) -> orbit_common::fs::io::HeldFileLock {
+    hold_exclusive_file_lock_options(path, label, FileLockOptions::default()).unwrap()
 }
 
 /// A fake `gh` that logs every call and answers the rate-limit endpoint from
@@ -76,29 +96,13 @@ impl FakeGh {
                  *) cat \"$dir/rate_limit\"; exit 0 ;;\n\
                esac\n\
              fi\n\
-             if [ \"$(cat \"$dir/answer\")\" = empty ]; then exit 0; fi\n\
-             if [ \"$(cat \"$dir/answer\")\" = throttle ]; then\n\
-               echo 'gh: API rate limit exceeded for user ID 42. (HTTP 403)' >&2\n\
-               exit 1\n\
-             fi\n\
-             if [ \"$(cat \"$dir/answer\")\" = slow-throttle ]; then\n\
-               sleep 1\n\
-               printf 'throttled\\n' >> \"$dir/throttled\"\n\
-               echo 'gh: API rate limit exceeded for user ID 42. (HTTP 403)' >&2\n\
-               exit 1\n\
-             fi\n\
-             if [ \"$(cat \"$dir/answer\")\" = empty-then-slow-throttle ]; then\n\
-               case \"$*\" in *--log*) exit 0 ;; esac\n\
-               sleep 1\n\
-               printf 'throttled\\n' >> \"$dir/throttled\"\n\
-               echo 'gh: API rate limit exceeded for user ID 42. (HTTP 403)' >&2\n\
-               exit 1\n\
-             fi\n\
-             if [ \"$(cat \"$dir/answer\")\" = empty-then-throttle ]; then\n\
-               case \"$*\" in *--log*) exit 0 ;; esac\n\
-               echo 'gh: API rate limit exceeded for user ID 42. (HTTP 403)' >&2\n\
-               exit 1\n\
-             fi\n\
+             case \"$(cat \"$dir/answer\")\" in\n\
+               empty) exit 0 ;;\n\
+               throttle) echo 'gh: API rate limit exceeded for user ID 42. (HTTP 403)' >&2; exit 1 ;;\n\
+               slow-throttle) sleep 1; printf 'throttled\\n' >> \"$dir/throttled\"; echo 'gh: API rate limit exceeded for user ID 42. (HTTP 403)' >&2; exit 1 ;;\n\
+               empty-then-slow-throttle) case \"$*\" in *--log*) exit 0 ;; esac; sleep 1; printf 'throttled\\n' >> \"$dir/throttled\"; echo 'gh: API rate limit exceeded for user ID 42. (HTTP 403)' >&2; exit 1 ;;\n\
+               empty-then-throttle) case \"$*\" in *--log*) exit 0 ;; esac; echo 'gh: API rate limit exceeded for user ID 42. (HTTP 403)' >&2; exit 1 ;;\n\
+             esac\n\
              echo '{{}}'\n",
             dir.path().display()
         );
@@ -108,8 +112,7 @@ impl FakeGh {
             use std::os::unix::fs::PermissionsExt;
             std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o700)).unwrap();
         }
-        // Another thread forking while the script was open for writing makes
-        // exec fail with ETXTBSY until that child execs; wait it out.
+        // Another thread forking while open for writing can hit ETXTBSY; wait it out.
         let mut attempts = 0;
         while std::process::Command::new(&program)
             .arg("--warm-up")
@@ -138,6 +141,15 @@ impl FakeGh {
         }
     }
 
+    fn view_req(&self, timeout_ms: Option<u64>) -> (ExecRequest, String) {
+        let mut req = self.request(&["run", "view", "123"]);
+        if let Some(ms) = timeout_ms {
+            req.timeout_ms = Some(ms);
+        }
+        let account = github_quota::request_account_key(&req);
+        (req, account)
+    }
+
     fn calls(&self) -> Vec<String> {
         std::fs::read_to_string(self.dir.path().join("calls"))
             .unwrap_or_default()
@@ -147,27 +159,218 @@ impl FakeGh {
     }
 }
 
-fn store(dir: &Path) -> GithubQuotaStore {
-    GithubQuotaStore::new(dir.to_path_buf())
+/// Isolated temporary quota store and policy for one scenario.
+struct QuotaFixture {
+    records: TempDir,
+    policy: GithubQuotaPolicy,
 }
 
-fn refused_throttle(error: &orbit_common::OrbitError) -> orbit_common::ProviderReadThrottle {
+impl QuotaFixture {
+    fn new() -> Self {
+        Self {
+            records: TempDir::new().unwrap(),
+            policy: GithubQuotaPolicy::default(),
+        }
+    }
+    fn path(&self) -> &Path {
+        self.records.path()
+    }
+    fn store(&self) -> GithubQuotaStore {
+        store(self.path())
+    }
+    fn record_path(&self, acct: &str) -> PathBuf {
+        self.path().join(format!("{acct}.json"))
+    }
+    fn marker(&self, acct: &str, generation: u64) -> PathBuf {
+        self.path()
+            .join(format!(".{acct}.clipped.{generation}.json"))
+    }
+    fn seed(&self, acct: &str, at: u64, remaining: u64, reset: u64) {
+        self.store()
+            .refresh_if_due(&self.policy, acct, at, &|| known(remaining, reset));
+    }
+    fn record_hold(&self, acct: &str, at: u64, reset: u64) {
+        let throttle = ProviderReadThrottle {
+            retry_after_seconds: None,
+            reset_epoch_seconds: Some(reset),
+            resource: Some(RESOURCE_CORE.to_string()),
+            principal: None,
+            request_id: None,
+        };
+        self.store()
+            .record_throttle(&self.policy, acct, RESOURCE_CORE, &throttle, at);
+    }
+    fn status(&self, acct: &str, at: u64) -> GithubQuotaStatus {
+        self.store().status(&self.policy, acct, at)
+    }
+    fn core(&self, acct: &str, at: u64) -> GithubResourceStatus {
+        self.status(acct, at)
+            .resources
+            .into_iter()
+            .find(|r| r.resource == RESOURCE_CORE)
+            .expect("core")
+    }
+    fn admit(
+        &self,
+        acct: &str,
+        c: GithubCaller,
+        at: u64,
+        probe: &dyn Fn() -> RateLimitAnswer,
+    ) -> Result<(), QuotaRefusal> {
+        self.store()
+            .admit(&self.policy, acct, c, RESOURCE_CORE, at, probe)
+    }
+    fn scoped<T>(&self, body: impl FnOnce() -> T) -> T {
+        github_quota::with_scoped_guard(self.store(), self.policy, body)
+    }
+    fn run_gh(&self, c: GithubCaller, req: &ExecRequest) -> Result<ExecutionResult, OrbitError> {
+        self.scoped(|| github_quota::run_gh_request(c, req))
+    }
+    fn admit_gh(&self, c: GithubCaller, req: &ExecRequest) -> Result<(), OrbitError> {
+        self.scoped(|| github_quota::admit_gh_request(c, req))
+    }
+    fn admit_gh_budget(
+        &self,
+        c: GithubCaller,
+        req: &ExecRequest,
+    ) -> Result<ExecRequest, OrbitError> {
+        self.scoped(|| github_quota::admit_gh_request_within_budget(c, req))
+    }
+    fn spawn_refresh(
+        &self,
+        at: u64,
+        remaining: u64,
+        reset: u64,
+    ) -> (Arc<Barrier>, std::thread::JoinHandle<()>) {
+        let (started, finish) = (Arc::new(Barrier::new(2)), Arc::new(Barrier::new(2)));
+        let (dir, policy) = (self.path().to_path_buf(), self.policy);
+        let (sw, fw) = (Arc::clone(&started), Arc::clone(&finish));
+        let worker = std::thread::spawn(move || {
+            store(&dir).refresh_if_due(&policy, ACCOUNT, at, &|| {
+                sw.wait();
+                fw.wait();
+                known(remaining, reset)
+            });
+        });
+        started.wait();
+        (finish, worker)
+    }
+}
+
+fn finish_refresh((finish, worker): (Arc<Barrier>, std::thread::JoinHandle<()>)) {
+    finish.wait();
+    worker.join().unwrap();
+}
+
+/// Exclusive account-lock holder on a background thread, released explicitly or on drop.
+struct ContendedRecordLock {
+    release_tx: Option<mpsc::Sender<()>>,
+    holder: Option<std::thread::JoinHandle<()>>,
+}
+
+impl ContendedRecordLock {
+    fn spawn(
+        path: PathBuf,
+        wait_before: Option<mpsc::Receiver<()>>,
+        fixed: Option<Duration>,
+    ) -> (Self, mpsc::Receiver<()>) {
+        let (held_tx, held_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel::<()>();
+        let eager = wait_before.is_none();
+        let holder = std::thread::spawn(move || {
+            if let Some(rx) = wait_before {
+                recv_ready(&rx, "target child was never admitted");
+            }
+            let _l = hold_exclusive_file_lock_options(
+                &path,
+                "contending quota holder",
+                FileLockOptions::default(),
+            )
+            .unwrap();
+            held_tx.send(()).unwrap();
+            if let Some(d) = fixed {
+                std::thread::sleep(d);
+            } else {
+                let _ = release_rx.recv_timeout(Duration::from_secs(60));
+            }
+        });
+        if eager {
+            recv_ready(&held_rx, "the holder never took the account lock");
+        }
+        (
+            Self {
+                release_tx: Some(release_tx),
+                holder: Some(holder),
+            },
+            held_rx,
+        )
+    }
+    fn hold(path: PathBuf) -> Self {
+        Self::spawn(path, None, None).0
+    }
+    fn stop(&mut self) -> std::thread::Result<()> {
+        if let Some(tx) = self.release_tx.take() {
+            let _ = tx.send(());
+        }
+        self.holder
+            .take()
+            .map_or(Ok(()), std::thread::JoinHandle::join)
+    }
+    fn release(mut self) {
+        self.stop().unwrap();
+    }
+}
+
+impl Drop for ContendedRecordLock {
+    fn drop(&mut self) {
+        let _ = self.stop();
+    }
+}
+
+fn held_gh(timeout_ms: u64, now: u64, reset: u64) -> (QuotaFixture, FakeGh, ExecRequest, String) {
+    let (f, gh) = (QuotaFixture::new(), FakeGh::new("{}", "ok"));
+    let (req, acct) = gh.view_req(Some(timeout_ms));
+    f.seed(&acct, now, 4000, reset);
+    f.record_hold(&acct, now, reset);
+    (f, gh, req, acct)
+}
+
+fn refused_throttle(error: &OrbitError) -> ProviderReadThrottle {
     error
         .private_vcs_failure()
-        .and_then(|failure| failure.read_throttle.clone())
-        .unwrap_or_else(|| panic!("expected a typed throttle, got {error}"))
+        .and_then(|f| f.read_throttle.clone())
+        .unwrap_or_else(|| panic!("expected throttle: {error}"))
 }
 
-fn run_with_simulated_clipped_probe<T>(
-    expected_timeout_ms: u64,
-    body: impl FnOnce() -> T,
-) -> (usize, T) {
+fn assert_core_throttle(error: &OrbitError, ctx: &str) {
+    assert_eq!(
+        refused_throttle(error).resource.as_deref(),
+        Some(RESOURCE_CORE),
+        "{ctx}"
+    );
+}
+
+fn assert_timeout<T: Debug>(res: Result<T, OrbitError>, expected_ms: Option<u64>, ctx: &str) {
+    let ok = match (&res, expected_ms) {
+        (Err(OrbitError::ProcessTimeout { timeout_ms, .. }), Some(ms)) => *timeout_ms == ms,
+        (Err(OrbitError::ProcessTimeout { .. }), None) => true,
+        _ => false,
+    };
+    assert!(ok, "{ctx}: {res:?}");
+}
+
+fn assert_timed_out_no_gh(result: &ExecutionResult, gh: &FakeGh, ctx: &str) {
+    assert!(result.timed_out && !result.success, "{ctx}: {result:?}");
+    assert!(gh.calls().is_empty(), "{ctx}: {:?}", gh.calls());
+}
+
+fn run_with_simulated_clipped_probe<T>(expected_ms: u64, body: impl FnOnce() -> T) -> (usize, T) {
     let probes = std::rc::Rc::new(std::cell::Cell::new(0_usize));
     let observed = std::rc::Rc::clone(&probes);
     let output = github_quota::with_simulated_clipped_probe(
         move |probe| {
             assert_eq!(probe.args, ["api", "rate_limit"]);
-            assert_eq!(probe.timeout_ms, Some(expected_timeout_ms));
+            assert_eq!(probe.timeout_ms, Some(expected_ms));
             observed.set(observed.get() + 1);
         },
         body,
@@ -181,37 +384,33 @@ fn run_with_simulated_clipped_probe<T>(
 /// the same state runs.
 #[test]
 fn agent_run_reads_are_refused_at_the_agent_reserve_while_delivery_runs() {
-    let records = TempDir::new().unwrap();
-    let policy = GithubQuotaPolicy::default();
-    let now = now();
-    let reset = now + 1800;
-    let account = github_quota::inherited_account_key();
+    let f = QuotaFixture::new();
+    let (now, reset) = (now(), now() + 1800);
+    let acct = github_quota::inherited_account_key();
     // 1,000 of 5,000 left is exactly the 20% agent reserve.
-    store(records.path()).refresh_if_due(&policy, &account, now, &|| known(1000, reset));
+    f.seed(&acct, now, 1000, reset);
 
     let mut registry = ToolRegistry::new();
     registry.register_builtins();
-    let refusals = github_quota::with_scoped_guard(store(records.path()), policy, || {
+    let refusals = f.scoped(|| {
         [
             ("github.run.view", json!({"run": "123"})),
             ("github.run.list", json!({})),
             ("github.run.logs", json!({"run": "123"})),
         ]
         .map(|(tool, input)| {
-            let error = registry
+            let err = registry
                 .execute(tool, &ToolContext::default(), input)
                 .expect_err(tool);
-            (tool, refused_throttle(&error), error.to_string())
+            (tool, refused_throttle(&err), err.to_string())
         })
     });
-    for (tool, throttle, message) in refusals {
+    for (tool, throttle, msg) in refusals {
         assert_eq!(throttle.resource.as_deref(), Some(RESOURCE_CORE), "{tool}");
         assert_eq!(throttle.reset_epoch_seconds, Some(reset), "{tool}");
-        assert!(message.contains("do not retry before"), "{tool}: {message}");
+        assert!(msg.contains("do not retry before"), "{tool}: {msg}");
     }
-    let status = store(records.path()).status(&policy, &account, now);
-    let core = &status.resources[0];
-    assert_eq!(core.resource, RESOURCE_CORE);
+    let core = f.core(&acct, now);
     assert!(core.refused.agent >= 3, "{core:?}");
     assert_eq!(
         core.calls.agent, 0,
@@ -220,14 +419,9 @@ fn agent_run_reads_are_refused_at_the_agent_reserve_while_delivery_runs() {
     assert!(core.agent_reads_refused && !core.background_reads_refused);
 
     let gh = FakeGh::new("{}", "ok");
-    let delivery = gh.request(&["run", "view", "123"]);
-    let delivery_account = github_quota::request_account_key(&delivery);
-    store(records.path()).refresh_if_due(&policy, &delivery_account, now, &|| known(1000, reset));
-    let result = github_quota::with_scoped_guard(store(records.path()), policy, || {
-        github_quota::run_gh_request(GithubCaller::Delivery, &delivery)
-    })
-    .unwrap();
-    assert!(result.success);
+    let (delivery, delivery_acct) = gh.view_req(None);
+    f.seed(&delivery_acct, now, 1000, reset);
+    assert!(f.run_gh(Delivery, &delivery).unwrap().success);
     assert_eq!(gh.calls(), vec!["run view 123".to_string()]);
 }
 
@@ -236,62 +430,36 @@ fn agent_run_reads_are_refused_at_the_agent_reserve_while_delivery_runs() {
 /// and leaves `graphql` alone.
 #[test]
 fn primary_rate_limit_answer_holds_core_reads_host_wide_but_not_graphql() {
-    let records = TempDir::new().unwrap();
-    let policy = GithubQuotaPolicy::default();
-    let gh = FakeGh::new("{}", "throttle");
-    let request = gh.request(&["run", "view", "123"]);
-    let account = github_quota::request_account_key(&request);
-    let now = now();
-    let reset = now + 1800;
-    store(records.path()).refresh_if_due(&policy, &account, now, &|| known(4000, reset));
-
-    let result = github_quota::with_scoped_guard(store(records.path()), policy, || {
-        github_quota::run_gh_request(GithubCaller::Delivery, &request)
-    })
-    .unwrap();
-    assert!(!result.success);
+    let (f, gh) = (QuotaFixture::new(), FakeGh::new("{}", "throttle"));
+    let (req, acct) = gh.view_req(None);
+    let (now, reset) = (now(), now() + 1800);
+    f.seed(&acct, now, 4000, reset);
+    assert!(!f.run_gh(Delivery, &req).unwrap().success);
 
     // Another process: its own handle on the same host directory.
     let other = std::thread::spawn({
-        let dir = records.path().to_path_buf();
-        let account = account.clone();
+        let (dir, policy, acct) = (f.path().to_path_buf(), f.policy, acct);
         move || {
-            let other = store(&dir);
-            let unknown = || RateLimitAnswer::Unknown("not consulted".into());
+            let s = store(&dir);
+            let admit = |c, res, at| s.admit(&policy, &acct, c, res, at, &unknown_not_due);
             (
-                other.admit(
-                    &policy,
-                    &account,
-                    GithubCaller::Delivery,
-                    RESOURCE_CORE,
-                    now + 1,
-                    &unknown,
-                ),
-                other.admit(
-                    &policy,
-                    &account,
-                    GithubCaller::Agent,
-                    RESOURCE_GRAPHQL,
-                    now + 1,
-                    &unknown,
-                ),
-                other.admit(
-                    &policy,
-                    &account,
-                    GithubCaller::Delivery,
-                    RESOURCE_CORE,
-                    reset,
-                    &unknown,
-                ),
+                admit(Delivery, RESOURCE_CORE, now + 1),
+                admit(Agent, RESOURCE_GRAPHQL, now + 1),
+                admit(Delivery, RESOURCE_CORE, reset),
             )
         }
     })
     .join()
     .unwrap();
     let held = other.0.expect_err("core must be held");
-    assert_eq!(held.reason, QuotaRefusalReason::Exhausted);
-    assert_eq!(held.resource, RESOURCE_CORE);
-    assert_eq!(held.resume_epoch_seconds, reset);
+    assert_eq!(
+        (
+            held.reason,
+            held.resource.as_str(),
+            held.resume_epoch_seconds
+        ),
+        (QuotaRefusalReason::Exhausted, RESOURCE_CORE, reset)
+    );
     assert!(other.1.is_ok(), "graphql is a separate bucket");
     assert!(other.2.is_ok(), "the hold ends at the reset");
     assert_eq!(gh.calls(), vec!["run view 123".to_string()]);
@@ -301,39 +469,26 @@ fn primary_rate_limit_answer_holds_core_reads_host_wide_but_not_graphql() {
 /// most once per interval.
 #[test]
 fn concurrent_readers_refresh_at_most_once_per_interval() {
-    let records = TempDir::new().unwrap();
-    let policy = GithubQuotaPolicy::default();
-    let refreshes = Arc::new(AtomicUsize::new(0));
-    let start = now();
+    let (f, refreshes, start) = (QuotaFixture::new(), Arc::new(AtomicUsize::new(0)), now());
     let race = |at: u64| {
         let barrier = Arc::new(Barrier::new(12));
-        let workers = (0..12)
+        let workers: Vec<_> = (0..12)
             .map(|_| {
-                let dir = records.path().to_path_buf();
-                let refreshes = Arc::clone(&refreshes);
-                let barrier = Arc::clone(&barrier);
+                let (dir, policy) = (f.path().to_path_buf(), f.policy);
+                let (refreshes, barrier) = (Arc::clone(&refreshes), Arc::clone(&barrier));
                 std::thread::spawn(move || {
                     barrier.wait();
                     store(&dir)
-                        .admit(
-                            &policy,
-                            ACCOUNT,
-                            GithubCaller::Background,
-                            RESOURCE_CORE,
-                            at,
-                            &|| {
-                                refreshes.fetch_add(1, Ordering::SeqCst);
-                                std::thread::sleep(Duration::from_millis(30));
-                                known(4000, start + 3600)
-                            },
-                        )
+                        .admit(&policy, ACCOUNT, Background, RESOURCE_CORE, at, &|| {
+                            refreshes.fetch_add(1, Ordering::SeqCst);
+                            std::thread::sleep(Duration::from_millis(30));
+                            known(4000, start + 3600)
+                        })
                         .unwrap();
                 })
             })
-            .collect::<Vec<_>>();
-        workers
-            .into_iter()
-            .for_each(|worker| worker.join().unwrap());
+            .collect();
+        workers.into_iter().for_each(|w| w.join().unwrap());
     };
     race(start);
     assert_eq!(refreshes.load(Ordering::SeqCst), 1);
@@ -351,25 +506,22 @@ fn concurrent_readers_refresh_at_most_once_per_interval() {
 /// cannot move the claim backward and start a second read inside the interval.
 #[test]
 fn out_of_order_samples_never_move_the_refresh_claim_backward() {
-    let records = TempDir::new().unwrap();
-    let policy = GithubQuotaPolicy::default();
-    let refreshes = AtomicUsize::new(0);
-    let start = now();
+    let (f, refreshes, start) = (QuotaFixture::new(), AtomicUsize::new(0), now());
     let refresh = || {
         refreshes.fetch_add(1, Ordering::SeqCst);
         known(4000, start + 3600)
     };
-    let store = store(records.path());
-    store.refresh_if_due(&policy, ACCOUNT, start + 1, &refresh);
-    store.refresh_if_due(&policy, ACCOUNT, start, &refresh);
+    let s = f.store();
+    s.refresh_if_due(&f.policy, ACCOUNT, start + 1, &refresh);
+    s.refresh_if_due(&f.policy, ACCOUNT, start, &refresh);
     assert_eq!(refreshes.load(Ordering::SeqCst), 1, "older sample waits");
-    store.refresh_if_due(&policy, ACCOUNT, start + 60, &refresh);
+    s.refresh_if_due(&f.policy, ACCOUNT, start + 60, &refresh);
     assert_eq!(
         refreshes.load(Ordering::SeqCst),
         1,
         "the claim stayed at start + 1"
     );
-    store.refresh_if_due(&policy, ACCOUNT, start + 61, &refresh);
+    s.refresh_if_due(&f.policy, ACCOUNT, start + 61, &refresh);
     assert_eq!(refreshes.load(Ordering::SeqCst), 2, "interval elapsed");
 }
 
@@ -377,104 +529,107 @@ fn out_of_order_samples_never_move_the_refresh_claim_backward() {
 /// every call by caller class.
 #[test]
 fn concurrent_writers_leave_a_whole_record_counting_every_class() {
-    let records = TempDir::new().unwrap();
-    let policy = GithubQuotaPolicy::default();
-    let now = now();
-    store(records.path()).refresh_if_due(&policy, ACCOUNT, now, &|| known(4000, now + 3600));
-    let classes = [
-        GithubCaller::Delivery,
-        GithubCaller::Background,
-        GithubCaller::Agent,
-    ];
-    let workers = (0..9)
-        .map(|index| {
-            let dir: PathBuf = records.path().to_path_buf();
-            let caller = classes[index % 3];
+    let (f, now) = (QuotaFixture::new(), now());
+    f.seed(ACCOUNT, now, 4000, now + 3600);
+    let classes = [Delivery, Background, Agent];
+    let workers: Vec<_> = (0..9)
+        .map(|i| {
+            let (dir, policy, caller) = (f.path().to_path_buf(), f.policy, classes[i % 3]);
             std::thread::spawn(move || {
                 for _ in 0..30 {
                     store(&dir)
-                        .admit(&policy, ACCOUNT, caller, RESOURCE_CORE, now, &|| {
-                            RateLimitAnswer::Unknown("not due".into())
-                        })
+                        .admit(
+                            &policy,
+                            ACCOUNT,
+                            caller,
+                            RESOURCE_CORE,
+                            now,
+                            &unknown_not_due,
+                        )
                         .unwrap();
                 }
             })
         })
-        .collect::<Vec<_>>();
-    workers
-        .into_iter()
-        .for_each(|worker| worker.join().unwrap());
+        .collect();
+    workers.into_iter().for_each(|w| w.join().unwrap());
 
-    let text = std::fs::read_to_string(records.path().join(format!("{ACCOUNT}.json"))).unwrap();
+    let text = std::fs::read_to_string(f.record_path(ACCOUNT)).unwrap();
     serde_json::from_str::<serde_json::Value>(&text).expect("a whole record");
-    let core = store(records.path())
-        .status(&policy, ACCOUNT, now)
-        .resources[0]
-        .clone();
+    let core = f.core(ACCOUNT, now);
     assert_eq!(
-        (core.calls.delivery, core.calls.background, core.calls.agent),
-        (90, 90, 90)
+        (
+            core.calls.delivery,
+            core.calls.background,
+            core.calls.agent,
+            core.remaining
+        ),
+        (90, 90, 90, Some(4000 - 270))
     );
-    assert_eq!(core.remaining, Some(4000 - 270));
 }
 
 /// Criterion 4: a reserve of 0 disables that class's refusal.
 #[test]
 fn zero_reserve_disables_the_class_refusal() {
-    let records = TempDir::new().unwrap();
-    let now = now();
     let off = GithubQuotaPolicy {
         agent_reserve_percent: 0,
         background_reserve_percent: 0,
         ..GithubQuotaPolicy::default()
     };
-    store(records.path()).refresh_if_due(&off, ACCOUNT, now, &|| known(5, now + 600));
-    let unknown = || RateLimitAnswer::Unknown("not due".into());
+    let (f, now) = (
+        QuotaFixture {
+            records: TempDir::new().unwrap(),
+            policy: off,
+        },
+        now(),
+    );
+    f.seed(ACCOUNT, now, 5, now + 600);
     let admit = |policy: &GithubQuotaPolicy, caller| {
-        store(records.path()).admit(policy, ACCOUNT, caller, RESOURCE_CORE, now, &unknown)
+        f.store().admit(
+            policy,
+            ACCOUNT,
+            caller,
+            RESOURCE_CORE,
+            now,
+            &unknown_not_due,
+        )
     };
-    assert!(admit(&off, GithubCaller::Agent).is_ok());
-    assert!(admit(&off, GithubCaller::Background).is_ok());
+    assert!(admit(&off, Agent).is_ok());
+    assert!(admit(&off, Background).is_ok());
     let defaults = GithubQuotaPolicy::default();
     assert_eq!(
-        admit(&defaults, GithubCaller::Agent).unwrap_err().reason,
+        admit(&defaults, Agent).unwrap_err().reason,
         QuotaRefusalReason::Reserve
     );
-    assert!(admit(&defaults, GithubCaller::Background).is_err());
-    assert!(admit(&defaults, GithubCaller::Delivery).is_ok());
+    assert!(admit(&defaults, Background).is_err());
+    assert!(admit(&defaults, Delivery).is_ok());
 }
 
 /// Criterion 5: a refused, unauthenticated or unreadable rate-limit answer
 /// leaves reads allowed and reports the quota unknown, never zero.
 #[test]
 fn unusable_rate_limit_answers_report_unknown_and_admit_reads() {
-    let unauthenticated = json!({"resources": {
+    let unauth = json!({"resources": {
         "core": {"limit": 60, "remaining": 0, "reset": now() + 600},
         "graphql": {"limit": 0, "remaining": 0, "reset": now() + 600},
     }})
     .to_string();
-    for answer in ["refuse", unauthenticated.as_str(), "not json"] {
-        let records = TempDir::new().unwrap();
-        let policy = GithubQuotaPolicy::default();
-        let gh = FakeGh::new(answer, "ok");
-        let request = gh.request(&["run", "view", "123"]);
-        let result = github_quota::with_scoped_guard(store(records.path()), policy, || {
-            github_quota::run_gh_request(GithubCaller::Agent, &request)
-        })
-        .unwrap();
-        assert!(result.success, "{answer}");
+    for answer in ["refuse", unauth.as_str(), "not json"] {
+        let (f, gh) = (QuotaFixture::new(), FakeGh::new(answer, "ok"));
+        let (req, acct) = gh.view_req(None);
+        assert!(f.run_gh(Agent, &req).unwrap().success, "{answer}");
         assert_eq!(
             gh.calls(),
             vec!["api rate_limit", "run view 123"],
             "{answer}"
         );
-        let account = github_quota::request_account_key(&request);
-        let status = store(records.path()).status(&policy, &account, now());
+        let status = f.status(&acct, now());
         assert!(status.refresh_error.is_some(), "{answer}");
-        for resource in &status.resources {
-            assert_eq!(resource.state, "unknown", "{answer}");
-            assert_eq!(resource.remaining, None, "{answer}");
-            assert!(!resource.agent_reads_refused, "{answer}");
+        for r in &status.resources {
+            assert_eq!(
+                (r.state, r.remaining, r.agent_reads_refused),
+                ("unknown", None, false),
+                "{answer}"
+            );
         }
     }
 }
@@ -486,69 +641,44 @@ fn unusable_rate_limit_answers_report_unknown_and_admit_reads() {
 #[test]
 fn in_flight_refresh_preserves_overlapping_delivery_debits_for_reserve() {
     for seeded in [true, false] {
-        let records = TempDir::new().unwrap();
-        let policy = GithubQuotaPolicy::default();
-        let start = now();
-        let reset = start + 1800;
+        let (f, start, reset) = (QuotaFixture::new(), now(), now() + 1800);
         let refresh_at = if seeded {
-            store(records.path()).refresh_if_due(&policy, ACCOUNT, start, &|| known(1001, reset));
-            start + policy.refresh_interval.as_secs()
+            f.seed(ACCOUNT, start, 1001, reset);
+            start + f.policy.refresh_interval.as_secs()
         } else {
             start
         };
 
-        let probe_started = Arc::new(Barrier::new(2));
-        let probe_finish = Arc::new(Barrier::new(2));
-        let refresher = std::thread::spawn({
-            let dir = records.path().to_path_buf();
-            let probe_started = Arc::clone(&probe_started);
-            let probe_finish = Arc::clone(&probe_finish);
-            move || {
-                store(&dir).refresh_if_due(&policy, ACCOUNT, refresh_at, &|| {
-                    probe_started.wait();
-                    probe_finish.wait();
-                    known(1001, reset)
-                });
-            }
+        let in_flight = f.spawn_refresh(refresh_at, 1001, reset);
+        let delivery = f.admit(ACCOUNT, Delivery, refresh_at, &|| {
+            unreachable!("refresh claim is already held")
         });
-
-        probe_started.wait();
-        let delivery = store(records.path()).admit(
-            &policy,
-            ACCOUNT,
-            GithubCaller::Delivery,
-            RESOURCE_CORE,
-            refresh_at,
-            &|| unreachable!("refresh claim is already held"),
-        );
-        probe_finish.wait();
-        refresher.join().unwrap();
+        finish_refresh(in_flight);
         delivery.expect("delivery read must be admitted while near-reserve");
 
-        let core = store(records.path())
-            .status(&policy, ACCOUNT, refresh_at)
-            .resources
-            .into_iter()
-            .find(|resource| resource.resource == RESOURCE_CORE)
-            .unwrap();
-        assert_eq!(core.remaining, Some(1000), "seeded={seeded}");
-        assert_eq!(core.calls.delivery, 1, "seeded={seeded}");
-        assert!(core.agent_reads_refused, "seeded={seeded}");
+        let core = f.core(ACCOUNT, refresh_at);
+        assert_eq!(
+            (
+                core.remaining,
+                core.calls.delivery,
+                core.agent_reads_refused
+            ),
+            (Some(1000), 1, true),
+            "seeded={seeded}"
+        );
 
-        let refusal = store(records.path())
-            .admit(
-                &policy,
-                ACCOUNT,
-                GithubCaller::Agent,
-                RESOURCE_CORE,
-                refresh_at,
-                &|| RateLimitAnswer::Unknown("not due".into()),
-            )
-            .expect_err("agent read must be refused at the 20% reserve");
-        assert_eq!(refusal.reason, QuotaRefusalReason::Reserve);
-        assert_eq!(refusal.remaining, Some(1000));
-        assert_eq!(refusal.limit, Some(5000));
-        assert_eq!(refusal.reserve, 1000);
+        let refusal = f
+            .admit(ACCOUNT, Agent, refresh_at, &unknown_not_due)
+            .expect_err("refused at reserve");
+        assert_eq!(
+            (
+                refusal.reason,
+                refusal.remaining,
+                refusal.limit,
+                refusal.reserve
+            ),
+            (QuotaRefusalReason::Reserve, Some(1000), Some(5000), 1000)
+        );
     }
 }
 
@@ -557,108 +687,77 @@ fn in_flight_refresh_preserves_overlapping_delivery_debits_for_reserve() {
 /// budget must return timed-out without spawning the original `gh` request.
 #[test]
 fn slow_rate_limit_probe_bounds_to_request_timeout_and_skips_expired_request() {
-    let records = TempDir::new().unwrap();
-    let policy = GithubQuotaPolicy::default();
-    let gh = FakeGh::new("hang", "ok");
-
-    let mut request = gh.request(&["run", "view", "123"]);
-    request.timeout_ms = Some(60);
-    let started = std::time::Instant::now();
-    let (probes, result) = run_with_simulated_clipped_probe(60, || {
-        github_quota::with_scoped_guard(store(records.path()), policy, || {
-            github_quota::run_gh_request(GithubCaller::Delivery, &request)
-        })
-    });
-    let result = result.unwrap();
+    let (f, gh) = (QuotaFixture::new(), FakeGh::new("hang", "ok"));
+    let (req, _) = gh.view_req(Some(60));
+    let started = Instant::now();
+    let (probes, res) = run_with_simulated_clipped_probe(60, || f.run_gh(Delivery, &req));
     assert!(
         started.elapsed() < Duration::from_secs(2),
-        "probe must respect the 60 ms request timeout instead of waiting 15 s, took {:?}",
+        "probe exceeded 60 ms: {:?}",
         started.elapsed()
     );
-    assert_eq!(probes, 1, "the clipped rate-limit probe must be attempted");
-    assert!(result.timed_out);
-    assert!(!result.success);
-    assert!(
-        gh.calls().is_empty(),
-        "an expired budget after admission must not spawn the original request: {:?}",
-        gh.calls()
-    );
+    assert_eq!(probes, 1, "clipped rate-limit probe must be attempted");
+    assert_timed_out_no_gh(&res.unwrap(), &gh, "expired budget after clipped probe");
 
-    // Zero budget must not spawn even the probe.
     let gh_zero = FakeGh::new("hang", "ok");
-    let mut zero_request = gh_zero.request(&["run", "view", "456"]);
-    zero_request.timeout_ms = Some(0);
-    let zero_result = github_quota::with_scoped_guard(store(records.path()), policy, || {
-        github_quota::run_gh_request(GithubCaller::Delivery, &zero_request)
-    })
-    .unwrap();
-    assert!(zero_result.timed_out);
-    assert!(!zero_result.success);
-    assert!(gh_zero.calls().is_empty());
+    let mut zero = gh_zero.request(&["run", "view", "456"]);
+    zero.timeout_ms = Some(0);
+    assert_timed_out_no_gh(&f.run_gh(Delivery, &zero).unwrap(), &gh_zero, "zero budget");
 }
 
-/// Regression [ORB-26104]: a read whose budget a slow probe spent before the
-/// child could start is not charged. A known record keeps its remaining count
-/// and protected-call counts, while a request that does run still counts once.
+/// Regressions [ORB-26104] and [ORB-26122]: a read (`run_gh_request` or
+/// `admit_gh_request`) whose budget a slow probe spent before the child could
+/// start is not charged to a known record, while a runnable read still counts
+/// once.
 #[test]
-fn request_timed_out_before_spawn_is_not_charged_to_a_known_record() {
-    let records = TempDir::new().unwrap();
-    let policy = GithubQuotaPolicy::default();
-    let gh = FakeGh::new("hang", "ok");
-    let mut request = gh.request(&["run", "view", "123"]);
-    request.timeout_ms = Some(60);
-    let account = github_quota::request_account_key(&request);
-    let seeded_at = now() - 10_000;
-    store(records.path()).refresh_if_due(&policy, &account, seeded_at, &|| {
-        known(4000, seeded_at + 20_000)
-    });
-    let core = |status: github_quota::GithubQuotaStatus| status.resources[0].clone();
-    let before = core(store(records.path()).status(&policy, &account, now()));
-    assert_eq!(before.remaining, Some(4000));
-
-    let (probes, result) = run_with_simulated_clipped_probe(60, || {
-        github_quota::with_scoped_guard(store(records.path()), policy, || {
-            github_quota::run_gh_request(GithubCaller::Delivery, &request)
-        })
-    });
-    let result = result.unwrap();
-    assert!(result.timed_out, "{result:?}");
-    assert_eq!(probes, 1);
-    assert!(
-        gh.calls().is_empty(),
-        "the expired request must not spawn gh: {:?}",
-        gh.calls()
-    );
-    let after = core(store(records.path()).status(&policy, &account, now()));
-    assert_eq!(
-        after.remaining,
-        Some(4000),
-        "a request that never ran is free"
-    );
-    assert_eq!(
+fn expired_admission_before_spawn_is_not_charged_to_a_known_record() {
+    let cases = [
         (
-            after.calls.delivery,
-            after.calls.background,
-            after.calls.agent
+            "request_timed_out_before_spawn_is_not_charged_to_a_known_record",
+            true,
         ),
-        (0, 0, 0)
-    );
+        (
+            "admission_past_the_budget_is_not_charged_to_a_known_record",
+            false,
+        ),
+    ];
+    for (case, via_run) in cases {
+        let call = |f: &QuotaFixture, req: &ExecRequest| {
+            if via_run {
+                f.run_gh(Delivery, req).map(|r| r.timed_out)
+            } else {
+                f.admit_gh(Delivery, req).map(|()| false)
+            }
+        };
+        let (f, gh) = (QuotaFixture::new(), FakeGh::new("hang", "ok"));
+        let (req, acct) = gh.view_req(Some(60));
+        let seeded_at = now() - 10_000;
+        f.seed(&acct, seeded_at, 4000, seeded_at + 20_000);
+        assert_eq!(f.core(&acct, now()).remaining, Some(4000), "{case}");
 
-    // A request with budget to run counts once.
-    let ran = FakeGh::new("{}", "ok");
-    let mut runnable = ran.request(&["run", "view", "123"]);
-    runnable.timeout_ms = Some(5_000);
-    let runnable_account = github_quota::request_account_key(&runnable);
-    store(records.path()).refresh_if_due(&policy, &runnable_account, now(), &|| {
-        known(4000, now() + 1800)
-    });
-    github_quota::with_scoped_guard(store(records.path()), policy, || {
-        github_quota::run_gh_request(GithubCaller::Delivery, &runnable)
-    })
-    .unwrap();
-    let counted = core(store(records.path()).status(&policy, &runnable_account, now()));
-    assert_eq!(counted.calls.delivery, 1);
-    assert_eq!(counted.remaining, Some(3999));
+        let (probes, res) = run_with_simulated_clipped_probe(60, || call(&f, &req));
+        assert_eq!(res.unwrap(), via_run, "{case}");
+        assert_eq!(probes, 1, "{case}");
+        assert!(gh.calls().is_empty(), "{case}: {:?}", gh.calls());
+        let after = f.core(&acct, now());
+        let c = &after.calls;
+        assert_eq!(
+            (after.remaining, c.delivery, c.background, c.agent),
+            (Some(4000), 0, 0, 0),
+            "{case}"
+        );
+
+        let (runnable_f, ran) = (QuotaFixture::new(), FakeGh::new("{}", "ok"));
+        let (runnable, runnable_acct) = ran.view_req(Some(5_000));
+        runnable_f.seed(&runnable_acct, now(), 4000, now() + 1800);
+        call(&runnable_f, &runnable).unwrap();
+        let counted = runnable_f.core(&runnable_acct, now());
+        assert_eq!(
+            (counted.calls.delivery, counted.remaining),
+            (1, Some(3999)),
+            "{case}"
+        );
+    }
 }
 
 /// Regression [ORB-26133]: a healthy known record whose read's deadline passes
@@ -667,115 +766,25 @@ fn request_timed_out_before_spawn_is_not_charged_to_a_known_record() {
 /// same healthy read with budget left charges exactly once.
 #[test]
 fn deadline_crossed_during_refusal_evaluation_is_not_charged_to_a_healthy_record() {
-    let policy = GithubQuotaPolicy::default();
-    let core = |records: &Path, account: &str| {
-        store(records)
-            .status(&policy, account, now())
-            .resources
-            .iter()
-            .find(|resource| resource.resource == RESOURCE_CORE)
-            .expect("the core resource is reported")
-            .clone()
-    };
-
-    // A healthy read with budget left charges once.
-    let ran_records = TempDir::new().unwrap();
-    let ran_gh = FakeGh::new("{}", "ok");
-    let mut ran = ran_gh.request(&["run", "view", "123"]);
-    ran.timeout_ms = Some(60_000);
-    let ran_account = github_quota::request_account_key(&ran);
-    store(ran_records.path())
-        .refresh_if_due(&policy, &ran_account, now(), &|| known(4000, now() + 1800));
-    github_quota::with_scoped_guard(store(ran_records.path()), policy, || {
-        github_quota::run_gh_request(GithubCaller::Delivery, &ran)
-    })
-    .unwrap();
-    let counted = core(ran_records.path(), &ran_account);
-    assert_eq!(counted.calls.delivery, 1);
-    assert_eq!(counted.remaining, Some(3999));
+    let (ran_f, ran_gh) = (QuotaFixture::new(), FakeGh::new("{}", "ok"));
+    let (ran, ran_acct) = ran_gh.view_req(Some(60_000));
+    ran_f.seed(&ran_acct, now(), 4000, now() + 1800);
+    ran_f.run_gh(Delivery, &ran).unwrap();
+    let counted = ran_f.core(&ran_acct, now());
+    assert_eq!((counted.calls.delivery, counted.remaining), (1, Some(3999)));
 
     // Armed last: the skewed clock stays on this thread afterwards.
-    let expired_records = TempDir::new().unwrap();
-    let expired_gh = FakeGh::new("{}", "ok");
-    let mut expired = expired_gh.request(&["run", "view", "123"]);
-    expired.timeout_ms = Some(60_000);
-    let account = github_quota::request_account_key(&expired);
-    store(expired_records.path())
-        .refresh_if_due(&policy, &account, now(), &|| known(4000, now() + 1800));
+    let (exp_f, exp_gh) = (QuotaFixture::new(), FakeGh::new("{}", "ok"));
+    let (expired, acct) = exp_gh.view_req(Some(60_000));
+    exp_f.seed(&acct, now(), 4000, now() + 1800);
     github_quota::advance_deadline_clock_at_next_refusal(Duration::from_secs(120));
-    let result = github_quota::with_scoped_guard(store(expired_records.path()), policy, || {
-        github_quota::run_gh_request(GithubCaller::Delivery, &expired)
-    })
-    .unwrap();
-    assert!(result.timed_out && !result.success, "{result:?}");
-    assert!(expired_gh.calls().is_empty(), "{:?}", expired_gh.calls());
-    let after = core(expired_records.path(), &account);
-    assert_eq!(
-        after.remaining,
-        Some(4000),
-        "a request that never ran is free"
+    assert_timed_out_no_gh(
+        &exp_f.run_gh(Delivery, &expired).unwrap(),
+        &exp_gh,
+        "crossed during refusal evaluation",
     );
-    assert_eq!(after.calls.delivery, 0);
-}
-
-/// Regression [ORB-26122]: `admit_gh_request` (delivery completion reads and
-/// auto-task source reads) admitted after its budget ran out must not charge a
-/// known record. Both callers then return their typed budget error without
-/// spawning `gh`, so a charge here drains the quota for a request that never
-/// ran. A read admitted with budget left still counts once.
-#[test]
-fn admission_past_the_budget_is_not_charged_to_a_known_record() {
-    let policy = GithubQuotaPolicy::default();
-
-    let records = TempDir::new().unwrap();
-    let gh = FakeGh::new("hang", "ok");
-    let mut request = gh.request(&["run", "view", "123"]);
-    request.timeout_ms = Some(60);
-    let account = github_quota::request_account_key(&request);
-    let seeded_at = now() - 10_000;
-    store(records.path()).refresh_if_due(&policy, &account, seeded_at, &|| {
-        known(4000, seeded_at + 20_000)
-    });
-    let core = |status: github_quota::GithubQuotaStatus| status.resources[0].clone();
-
-    // The unresponsive probe spends the whole 60 ms budget, so admission
-    // returns with none left. Only the simulated probe ran; nothing is charged.
-    let (probes, admitted) = run_with_simulated_clipped_probe(60, || {
-        github_quota::with_scoped_guard(store(records.path()), policy, || {
-            github_quota::admit_gh_request(GithubCaller::Delivery, &request)
-        })
-    });
-    admitted.unwrap();
-    assert_eq!(probes, 1);
-    assert!(gh.calls().is_empty(), "{:?}", gh.calls());
-    let after = core(store(records.path()).status(&policy, &account, now()));
-    assert_eq!(after.remaining, Some(4000), "{after:?}");
-    assert_eq!(
-        (
-            after.calls.delivery,
-            after.calls.background,
-            after.calls.agent
-        ),
-        (0, 0, 0),
-        "{after:?}"
-    );
-
-    // A read admitted with budget left counts once.
-    let ran = FakeGh::new("{}", "ok");
-    let mut runnable = ran.request(&["run", "view", "123"]);
-    runnable.timeout_ms = Some(5_000);
-    let records = TempDir::new().unwrap();
-    let runnable_account = github_quota::request_account_key(&runnable);
-    store(records.path()).refresh_if_due(&policy, &runnable_account, now(), &|| {
-        known(4000, now() + 1800)
-    });
-    github_quota::with_scoped_guard(store(records.path()), policy, || {
-        github_quota::admit_gh_request(GithubCaller::Delivery, &runnable)
-    })
-    .unwrap();
-    let counted = core(store(records.path()).status(&policy, &runnable_account, now()));
-    assert_eq!(counted.calls.delivery, 1);
-    assert_eq!(counted.remaining, Some(3999));
+    let after = exp_f.core(&acct, now());
+    assert_eq!((after.remaining, after.calls.delivery), (Some(4000), 0));
 }
 
 /// Regression [ORB-26103]: a caller that spawns the child itself through
@@ -785,67 +794,39 @@ fn admission_past_the_budget_is_not_charged_to_a_known_record() {
 /// 60 ms budget leaves nothing, and the unguarded zero budget never starts.
 #[test]
 fn admission_returns_only_the_budget_left_and_never_a_request_past_it() {
-    let policy = GithubQuotaPolicy::default();
-
-    let records = TempDir::new().unwrap();
-    let gh = FakeGh::new("{}", "ok");
-    let mut request = gh.request(&["run", "view", "123"]);
-    request.timeout_ms = Some(5_000);
-    let account = github_quota::request_account_key(&request);
-    let record_path = records.path().join(format!("{account}.json"));
-    let (held_tx, held_rx) = std::sync::mpsc::channel();
-    let holder = std::thread::spawn(move || {
-        let _lock = orbit_common::fs::io::hold_exclusive_file_lock_options(
-            &record_path,
-            "contending quota holder",
-            orbit_common::fs::io::FileLockOptions::default(),
-        )
-        .unwrap();
-        held_tx.send(()).unwrap();
-        std::thread::sleep(Duration::from_millis(300));
-    });
-    held_rx
-        .recv_timeout(Duration::from_secs(10))
-        .expect("the holder never took the account lock");
-    let admitted = github_quota::with_scoped_guard(store(records.path()), policy, || {
-        github_quota::admit_gh_request_within_budget(GithubCaller::Delivery, &request)
-    })
-    .expect("a contended lock that frees inside the budget admits the request");
+    let (f, gh) = (QuotaFixture::new(), FakeGh::new("{}", "ok"));
+    let (req, acct) = gh.view_req(Some(5_000));
+    let holder =
+        ContendedRecordLock::spawn(f.record_path(&acct), None, Some(Duration::from_millis(300)))
+            .0
+            .holder
+            .take()
+            .unwrap();
+    let admitted = f
+        .admit_gh_budget(Delivery, &req)
+        .expect("lock frees inside budget");
     holder.join().unwrap();
-    let left = admitted.timeout_ms.expect("a finite budget stays finite");
+    let left = admitted.timeout_ms.expect("finite budget stays finite");
     assert!(
         (1..=4_800).contains(&left),
-        "the 300 ms of lock contention must come off the 5 s budget, left {left} ms"
+        "300 ms contention must come off 5 s budget, left {left} ms"
     );
 
-    let records = TempDir::new().unwrap();
-    let gh = FakeGh::new("hang", "ok");
-    let mut slow = gh.request(&["run", "view", "123"]);
-    slow.timeout_ms = Some(60);
-    let (probes, admitted) = run_with_simulated_clipped_probe(60, || {
-        github_quota::with_scoped_guard(store(records.path()), policy, || {
-            github_quota::admit_gh_request_within_budget(GithubCaller::Delivery, &slow)
-        })
-    });
-    let error = admitted.expect_err("a budget spent by the probe leaves no request to start");
-    assert!(
-        matches!(
-            error,
-            orbit_common::OrbitError::ProcessTimeout { timeout_ms: 60, .. }
-        ),
-        "{error:?}"
-    );
+    let (slow_f, gh) = (QuotaFixture::new(), FakeGh::new("hang", "ok"));
+    let (slow, _) = gh.view_req(Some(60));
+    let (probes, admitted) =
+        run_with_simulated_clipped_probe(60, || slow_f.admit_gh_budget(Delivery, &slow));
+    assert_timeout(admitted, Some(60), "budget spent by probe");
     assert_eq!(probes, 1);
     assert!(gh.calls().is_empty(), "{:?}", gh.calls());
 
     let mut zero = gh.request(&["run", "view", "456"]);
     zero.timeout_ms = Some(0);
     let _ = std::fs::remove_file(gh.dir.path().join("calls"));
-    let error = github_quota::admit_gh_request_within_budget(GithubCaller::Delivery, &zero)
-        .expect_err("a zero budget never starts");
-    assert!(
-        matches!(error, orbit_common::OrbitError::ProcessTimeout { .. }),
-        "{error:?}"
+    assert_timeout(
+        github_quota::admit_gh_request_within_budget(Delivery, &zero),
+        None,
+        "zero budget",
     );
     assert!(gh.calls().is_empty());
 }
@@ -857,52 +838,18 @@ fn admission_returns_only_the_budget_left_and_never_a_request_past_it() {
 /// probe nor the protected call reaches `gh`.
 #[test]
 fn contended_record_lock_is_bounded_by_the_request_deadline() {
-    let records = TempDir::new().unwrap();
-    let policy = GithubQuotaPolicy::default();
-    let gh = FakeGh::new("{}", "ok");
-    let mut request = gh.request(&["run", "view", "123"]);
-    request.timeout_ms = Some(40);
-    let account = github_quota::request_account_key(&request);
-    let record_path = records.path().join(format!("{account}.json"));
-
-    // The holder reports the lock taken, then keeps it until released.
-    let (held_tx, held_rx) = std::sync::mpsc::channel();
-    let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
-    let holder = std::thread::spawn(move || {
-        let _lock = orbit_common::fs::io::hold_exclusive_file_lock_options(
-            &record_path,
-            "contending quota holder",
-            orbit_common::fs::io::FileLockOptions::default(),
-        )
-        .unwrap();
-        held_tx.send(()).unwrap();
-        // Bounded so a failed assertion cannot strand the holder.
-        let _ = release_rx.recv_timeout(Duration::from_secs(60));
-    });
-    held_rx
-        .recv_timeout(Duration::from_secs(10))
-        .expect("the holder never took the account lock");
-
-    let started = std::time::Instant::now();
-    let result = github_quota::with_scoped_guard(store(records.path()), policy, || {
-        github_quota::run_gh_request(GithubCaller::Delivery, &request)
-    });
+    let (f, gh) = (QuotaFixture::new(), FakeGh::new("{}", "ok"));
+    let (req, acct) = gh.view_req(Some(40));
+    let lock = ContendedRecordLock::hold(f.record_path(&acct));
+    let started = Instant::now();
+    let res = f.run_gh(Delivery, &req);
     let elapsed = started.elapsed();
-    release_tx.send(()).unwrap();
-    holder.join().unwrap();
-
-    let result = result.unwrap();
+    lock.release();
     assert!(
         elapsed < Duration::from_secs(5),
-        "lock waits must stop at the 40 ms request deadline, took {elapsed:?}"
+        "lock wait must stop at 40 ms, took {elapsed:?}"
     );
-    assert!(result.timed_out, "{result:?}");
-    assert!(!result.success);
-    assert!(
-        gh.calls().is_empty(),
-        "neither the probe nor the protected call may run: {:?}",
-        gh.calls()
-    );
+    assert_timed_out_no_gh(&res.unwrap(), &gh, "contended record lock");
 }
 
 /// Regression [ORB-26105]: a finite request whose admission spends its budget
@@ -913,87 +860,27 @@ fn contended_record_lock_is_bounded_by_the_request_deadline() {
 /// child-spawning admission with the same spent budget returns its timeout.
 #[test]
 fn expired_admission_over_a_readable_hold_returns_the_timeout() {
-    let policy = GithubQuotaPolicy::default();
-    let records = TempDir::new().unwrap();
-    let gh = FakeGh::new("{}", "ok");
     let now = now();
-    let reset = now + 1800;
-    let account = github_quota::request_account_key(&gh.request(&["run", "view", "123"]));
-    // A fresh core answer keeps the refresh interval claimed, so no probe is
-    // due; the primary hold then leaves a readable record with a live hold.
-    store(records.path()).refresh_if_due(&policy, &account, now, &|| known(4000, reset));
-    store(records.path()).record_throttle(
-        &policy,
-        &account,
-        RESOURCE_CORE,
-        &orbit_common::ProviderReadThrottle {
-            retry_after_seconds: None,
-            reset_epoch_seconds: Some(reset),
-            resource: Some(RESOURCE_CORE.to_string()),
-            principal: None,
-            request_id: None,
-        },
-        now,
-    );
-
-    // Budget left: the refusal stays the typed throttle, and nothing spawns.
-    let mut within = gh.request(&["run", "view", "123"]);
-    within.timeout_ms = Some(5_000);
-    let refused = github_quota::with_scoped_guard(store(records.path()), policy, || {
-        github_quota::run_gh_request(GithubCaller::Delivery, &within)
-    })
-    .expect_err("a live core hold refuses a read admitted within its budget");
-    assert_eq!(
-        refused_throttle(&refused).resource.as_deref(),
-        Some(RESOURCE_CORE)
-    );
+    let (f, gh, within, acct) = held_gh(5_000, now, now + 1800);
+    assert_core_throttle(&f.run_gh(Delivery, &within).unwrap_err(), "within budget");
     assert!(gh.calls().is_empty(), "{:?}", gh.calls());
 
-    // Budget spent waiting on a peer-held record lock: the record is still
-    // readable and holds the core read, yet both child-spawning entry points
-    // return their timeout, and neither reaches `gh`.
-    let record_path = records.path().join(format!("{account}.json"));
-    let (held_tx, held_rx) = std::sync::mpsc::channel();
-    let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
-    let holder = std::thread::spawn(move || {
-        let _lock = orbit_common::fs::io::hold_exclusive_file_lock_options(
-            &record_path,
-            "contending quota holder",
-            orbit_common::fs::io::FileLockOptions::default(),
-        )
-        .unwrap();
-        held_tx.send(()).unwrap();
-        // Bounded so a failed assertion cannot strand the holder.
-        let _ = release_rx.recv_timeout(Duration::from_secs(60));
-    });
-    held_rx
-        .recv_timeout(Duration::from_secs(10))
-        .expect("the holder never took the account lock");
-
-    let mut expired = gh.request(&["run", "view", "456"]);
-    expired.timeout_ms = Some(40);
-    let mut expired_spawn = gh.request(&["run", "view", "789"]);
-    expired_spawn.timeout_ms = Some(40);
-    let (run, admitted) = github_quota::with_scoped_guard(store(records.path()), policy, || {
+    // Budget spent on a peer-held record lock: readable hold stays, yet both entry points time out.
+    let lock = ContendedRecordLock::hold(f.record_path(&acct));
+    let (mut expired, mut expired_spawn) = (
+        gh.request(&["run", "view", "456"]),
+        gh.request(&["run", "view", "789"]),
+    );
+    (expired.timeout_ms, expired_spawn.timeout_ms) = (Some(40), Some(40));
+    let (run, admitted) = f.scoped(|| {
         (
-            github_quota::run_gh_request(GithubCaller::Delivery, &expired),
-            github_quota::admit_gh_request_within_budget(GithubCaller::Delivery, &expired_spawn),
+            github_quota::run_gh_request(Delivery, &expired),
+            github_quota::admit_gh_request_within_budget(Delivery, &expired_spawn),
         )
     });
-    release_tx.send(()).unwrap();
-    holder.join().unwrap();
-
-    let run = run.expect("an expired budget returns the timeout outcome, not the hold's throttle");
-    assert!(run.timed_out, "{run:?}");
-    assert!(!run.success, "{run:?}");
-    assert!(
-        matches!(
-            admitted,
-            Err(orbit_common::OrbitError::ProcessTimeout { timeout_ms: 40, .. })
-        ),
-        "an expired budget returns the process timeout, not the hold's throttle: {admitted:?}"
-    );
-    assert!(gh.calls().is_empty(), "{:?}", gh.calls());
+    lock.release();
+    assert_timed_out_no_gh(&run.expect("timeout"), &gh, "expired run_gh");
+    assert_timeout(admitted, Some(40), "admit_gh_within_budget over hold");
 }
 
 /// Regression [ORB-26129]: a finite read whose budget runs out while it probes
@@ -1003,248 +890,89 @@ fn expired_admission_over_a_readable_hold_returns_the_timeout() {
 /// counts that refusal once.
 #[test]
 fn expired_refusal_over_a_writable_hold_leaves_the_refusal_count() {
-    let policy = GithubQuotaPolicy::default();
-    let now = now();
-    let reset = now + 1800;
-    let hold = orbit_common::ProviderReadThrottle {
-        retry_after_seconds: None,
-        reset_epoch_seconds: Some(reset),
-        resource: Some(RESOURCE_CORE.to_string()),
-        principal: None,
-        request_id: None,
-    };
-    let refused_by_delivery = |records: &Path, account: &str| {
-        store(records)
-            .status(&policy, account, now)
-            .resources
-            .iter()
-            .find(|resource| resource.resource == RESOURCE_CORE)
-            .expect("the core resource is reported")
-            .refused
-            .delivery
-    };
-
-    // Budget left: the live hold refuses the read with the typed throttle,
-    // counts that refusal once for its caller class, and nothing spawns.
-    let within_records = TempDir::new().unwrap();
-    let within_gh = FakeGh::new("{}", "ok");
-    let mut within = within_gh.request(&["run", "view", "123"]);
-    within.timeout_ms = Some(5_000);
-    let within_account = github_quota::request_account_key(&within);
-    store(within_records.path())
-        .refresh_if_due(&policy, &within_account, now, &|| known(4000, reset));
-    store(within_records.path()).record_throttle(
-        &policy,
-        &within_account,
-        RESOURCE_CORE,
-        &hold,
-        now,
-    );
-    let refused = github_quota::with_scoped_guard(store(within_records.path()), policy, || {
-        github_quota::run_gh_request(GithubCaller::Delivery, &within)
-    })
-    .expect_err("a live core hold refuses a read admitted within its budget");
-    assert_eq!(
-        refused_throttle(&refused).resource.as_deref(),
-        Some(RESOURCE_CORE)
-    );
+    let (now, reset) = (now(), now() + 1800);
+    let (within_f, within_gh, within, within_acct) = held_gh(5_000, now, reset);
+    assert_core_throttle(&within_f.run_gh(Delivery, &within).unwrap_err(), "within");
     assert!(within_gh.calls().is_empty(), "{:?}", within_gh.calls());
-    assert_eq!(
-        refused_by_delivery(within_records.path(), &within_account),
-        1
-    );
+    assert_eq!(within_f.core(&within_acct, now).refused.delivery, 1);
 
-    // Budget spent probing a due refresh: the clipped probe keeps the hold,
-    // the writable record refuses the read, and the caller gets its timeout
-    // with the refusal left uncounted.
-    let expired_records = TempDir::new().unwrap();
-    let expired_gh = FakeGh::new("hang", "ok");
-    let mut expired = expired_gh.request(&["run", "view", "456"]);
+    // Last claimed ten minutes ago, so the refresh is due and its probe runs inside 60 ms.
+    let (exp_f, exp_gh) = (QuotaFixture::new(), FakeGh::new("hang", "ok"));
+    let mut expired = exp_gh.request(&["run", "view", "456"]);
     expired.timeout_ms = Some(60);
-    let expired_account = github_quota::request_account_key(&expired);
-    // Last claimed ten minutes ago, so the refresh is due and its probe runs
-    // inside the 60 ms budget.
-    store(expired_records.path())
-        .refresh_if_due(&policy, &expired_account, now - 600, &|| known(4000, reset));
-    store(expired_records.path()).record_throttle(
-        &policy,
-        &expired_account,
-        RESOURCE_CORE,
-        &hold,
-        now,
-    );
-    let (probes, run) = run_with_simulated_clipped_probe(60, || {
-        github_quota::with_scoped_guard(store(expired_records.path()), policy, || {
-            github_quota::run_gh_request(GithubCaller::Delivery, &expired)
-        })
-    });
-    let run = run.expect("an expired budget returns the timeout outcome, not the hold's throttle");
-    assert!(run.timed_out && !run.success, "{run:?}");
+    let exp_acct = github_quota::request_account_key(&expired);
+    exp_f.seed(&exp_acct, now - 600, 4000, reset);
+    exp_f.record_hold(&exp_acct, now, reset);
+    let (probes, run) = run_with_simulated_clipped_probe(60, || exp_f.run_gh(Delivery, &expired));
+    assert_timed_out_no_gh(&run.expect("timeout"), &exp_gh, "writable hold");
     assert_eq!(probes, 1);
-    assert!(expired_gh.calls().is_empty(), "{:?}", expired_gh.calls());
-    assert_eq!(
-        refused_by_delivery(expired_records.path(), &expired_account),
-        0,
-        "a refusal the caller receives as a timeout must not be counted"
-    );
+    assert_eq!(exp_f.core(&exp_acct, now).refused.delivery, 0, "uncounted");
 }
 
-/// Regression [ORB-26134]: a finite read whose budget runs out after the quota
-/// decision a writable live core hold produced, and before the wrapper delivers
-/// it, returns its timeout, spawns no protected call and leaves the core
-/// refusal count unchanged. The same hold surfaced as a typed throttle within
-/// the budget counts the refusal exactly once.
+/// Regressions [ORB-26134] and [ORB-26140]: a refusal decided while budget
+/// remains is counted once and returned as the typed throttle; once the budget
+/// expires after the decision, it is left uncounted and surfaces as the typed
+/// timeout without spawning `gh`.
 #[test]
-fn refusal_decided_before_the_budget_ran_out_is_not_counted_when_it_becomes_a_timeout() {
-    let policy = GithubQuotaPolicy::default();
-    let now = now();
-    let reset = now + 1800;
-    let hold = orbit_common::ProviderReadThrottle {
-        retry_after_seconds: None,
-        reset_epoch_seconds: Some(reset),
-        resource: Some(RESOURCE_CORE.to_string()),
-        principal: None,
-        request_id: None,
-    };
-    let seeded = |records: &Path, gh: &FakeGh| {
-        let mut request = gh.request(&["run", "view", "123"]);
-        request.timeout_ms = Some(60_000);
-        let account = github_quota::request_account_key(&request);
-        store(records).refresh_if_due(&policy, &account, now, &|| known(4000, reset));
-        store(records).record_throttle(&policy, &account, RESOURCE_CORE, &hold, now);
-        (request, account)
-    };
-    let refused_by_delivery = |records: &Path, account: &str| {
-        store(records)
-            .status(&policy, account, now)
-            .resources
-            .iter()
-            .find(|resource| resource.resource == RESOURCE_CORE)
-            .expect("the core resource is reported")
-            .refused
-            .delivery
-    };
+fn refusal_decided_when_budget_expires_is_not_counted_and_returns_timeout() {
+    #[derive(Clone, Copy)]
+    enum Entry {
+        RunGh,
+        AdmitWithinBudget,
+        Admit,
+    }
 
-    // Budget left: the typed throttle is returned and counted once.
-    let within_records = TempDir::new().unwrap();
-    let within_gh = FakeGh::new("{}", "ok");
-    let (within, within_account) = seeded(within_records.path(), &within_gh);
-    let refused = github_quota::with_scoped_guard(store(within_records.path()), policy, || {
-        github_quota::admit_gh_request_within_budget(GithubCaller::Delivery, &within)
-    })
-    .expect_err("a live core hold refuses a read admitted within its budget");
-    assert_eq!(
-        refused_throttle(&refused).resource.as_deref(),
-        Some(RESOURCE_CORE)
-    );
-    assert_eq!(
-        refused_by_delivery(within_records.path(), &within_account),
-        1
-    );
-
-    // The deadline crosses after the hold's refusal is decided: both
-    // child-spawning entry points return their timeout and count nothing.
-    // Armed last: the skewed clock stays on this thread afterwards.
-    let run_records = TempDir::new().unwrap();
-    let run_gh = FakeGh::new("{}", "ok");
-    let (run_request, run_account) = seeded(run_records.path(), &run_gh);
-    github_quota::advance_deadline_clock_after_next_refusal_decision(Duration::from_secs(120));
-    let run = github_quota::with_scoped_guard(store(run_records.path()), policy, || {
-        github_quota::run_gh_request(GithubCaller::Delivery, &run_request)
-    })
-    .expect("a budget spent after the decision returns the timeout, not the hold's throttle");
-    assert!(run.timed_out && !run.success, "{run:?}");
-    assert!(run_gh.calls().is_empty(), "{:?}", run_gh.calls());
-    assert_eq!(refused_by_delivery(run_records.path(), &run_account), 0);
-
-    let spawn_records = TempDir::new().unwrap();
-    let spawn_gh = FakeGh::new("{}", "ok");
-    let (spawn_request, spawn_account) = seeded(spawn_records.path(), &spawn_gh);
-    github_quota::advance_deadline_clock_after_next_refusal_decision(Duration::from_secs(120));
-    let admitted = github_quota::with_scoped_guard(store(spawn_records.path()), policy, || {
-        github_quota::admit_gh_request_within_budget(GithubCaller::Delivery, &spawn_request)
-    });
-    assert!(
-        matches!(
-            admitted,
-            Err(orbit_common::OrbitError::ProcessTimeout { .. })
+    let (now, reset) = (now(), now() + 1800);
+    let cases = [
+        (
+            "refusal_decided_before_the_budget_ran_out_is_not_counted_when_it_becomes_a_timeout/run_gh_request",
+            Delivery,
+            Entry::RunGh,
         ),
-        "{admitted:?}"
-    );
-    assert!(spawn_gh.calls().is_empty(), "{:?}", spawn_gh.calls());
-    assert_eq!(refused_by_delivery(spawn_records.path(), &spawn_account), 0);
-}
-
-/// Regression [ORB-26140]: `admit_gh_request` returns the outcome the host
-/// record agrees with. A refusal decided with budget left is counted and
-/// returned as the typed throttle; one decided once the budget is spent is
-/// not counted and comes back as the typed timeout, never an uncounted throttle.
-#[test]
-fn admit_gh_request_outcome_agrees_with_whether_the_refusal_was_counted() {
-    let policy = GithubQuotaPolicy::default();
-    let now = now();
-    let reset = now + 1800;
-    let hold = orbit_common::ProviderReadThrottle {
-        retry_after_seconds: None,
-        reset_epoch_seconds: Some(reset),
-        resource: Some(RESOURCE_CORE.to_string()),
-        principal: None,
-        request_id: None,
-    };
-    let seeded = |records: &Path, gh: &FakeGh| {
-        let mut request = gh.request(&["run", "view", "123"]);
-        request.timeout_ms = Some(60_000);
-        let account = github_quota::request_account_key(&request);
-        store(records).refresh_if_due(&policy, &account, now, &|| known(4000, reset));
-        store(records).record_throttle(&policy, &account, RESOURCE_CORE, &hold, now);
-        (request, account)
-    };
-    let refused_by_background = |records: &Path, account: &str| {
-        store(records)
-            .status(&policy, account, now)
-            .resources
-            .iter()
-            .find(|resource| resource.resource == RESOURCE_CORE)
-            .expect("the core resource is reported")
-            .refused
-            .background
-    };
-
-    let within_records = TempDir::new().unwrap();
-    let within_gh = FakeGh::new("{}", "ok");
-    let (within, within_account) = seeded(within_records.path(), &within_gh);
-    let refused = github_quota::with_scoped_guard(store(within_records.path()), policy, || {
-        github_quota::admit_gh_request(GithubCaller::Background, &within)
-    })
-    .expect_err("a live core hold refuses a read admitted within its budget");
-    assert_eq!(
-        refused_throttle(&refused).resource.as_deref(),
-        Some(RESOURCE_CORE)
-    );
-    assert_eq!(
-        refused_by_background(within_records.path(), &within_account),
-        1
-    );
-
-    // Armed last: the skewed clock stays on this thread afterwards.
-    let spent_records = TempDir::new().unwrap();
-    let spent_gh = FakeGh::new("{}", "ok");
-    let (spent, spent_account) = seeded(spent_records.path(), &spent_gh);
-    github_quota::advance_deadline_clock_after_next_refusal_decision(Duration::from_secs(120));
-    let admitted = github_quota::with_scoped_guard(store(spent_records.path()), policy, || {
-        github_quota::admit_gh_request(GithubCaller::Background, &spent)
-    });
-    assert!(
-        matches!(
-            admitted,
-            Err(orbit_common::OrbitError::ProcessTimeout { .. })
+        (
+            "refusal_decided_before_the_budget_ran_out_is_not_counted_when_it_becomes_a_timeout/admit_gh_request_within_budget",
+            Delivery,
+            Entry::AdmitWithinBudget,
         ),
-        "{admitted:?}"
-    );
-    assert_eq!(
-        refused_by_background(spent_records.path(), &spent_account),
-        0
-    );
+        (
+            "admit_gh_request_outcome_agrees_with_whether_the_refusal_was_counted",
+            Background,
+            Entry::Admit,
+        ),
+    ];
+
+    // Budget left first (unskewed), then armed last with post-decision clock skew.
+    for arm_skew in [false, true] {
+        for (case, caller, entry) in cases {
+            let (f, gh, req, acct) = held_gh(60_000, now, reset);
+            if arm_skew {
+                github_quota::advance_deadline_clock_after_next_refusal_decision(
+                    Duration::from_secs(120),
+                );
+            }
+            let res = match entry {
+                Entry::RunGh => f.run_gh(caller, &req).map(Some),
+                Entry::AdmitWithinBudget => f.admit_gh_budget(caller, &req).map(|_| None),
+                Entry::Admit => f.admit_gh(caller, &req).map(|()| None),
+            };
+            match (arm_skew, res) {
+                (false, Err(err)) => assert_core_throttle(&err, case),
+                (false, Ok(_)) => panic!("{case}: live hold must refuse within budget"),
+                (true, Ok(Some(run))) => assert_timed_out_no_gh(&run, &gh, case),
+                (true, other) => {
+                    assert_timeout(other, None, case);
+                    assert!(gh.calls().is_empty(), "{case}: {:?}", gh.calls());
+                }
+            }
+            let r = f.core(&acct, now).refused;
+            let got = match caller {
+                Delivery => r.delivery,
+                Background => r.background,
+                Agent => r.agent,
+            };
+            assert_eq!(got, u64::from(!arm_skew), "{case}");
+        }
+    }
 }
 
 /// Regression [ORB-26101]: the accounting a caller runs after its own child
@@ -1254,17 +982,11 @@ fn admit_gh_request_outcome_agrees_with_whether_the_refusal_was_counted() {
 /// record available the same near-expiry answer still records the hold.
 #[test]
 fn post_child_throttle_accounting_waits_only_for_the_remaining_budget() {
-    let records = TempDir::new().unwrap();
-    let policy = GithubQuotaPolicy::default();
-    let gh = FakeGh::new("{}", "ok");
-    let mut request = gh.request(&["run", "view", "123"]);
-    request.timeout_ms = Some(5_050);
-    let account = github_quota::request_account_key(&request);
-    let record_path = records.path().join(format!("{account}.json"));
-    let now = now();
-    let reset = now + 1800;
-    store(records.path()).refresh_if_due(&policy, &account, now, &|| known(4000, reset));
-    let throttled = orbit_exec::ExecutionResult {
+    let (f, gh) = (QuotaFixture::new(), FakeGh::new("{}", "ok"));
+    let (req, acct) = gh.view_req(Some(5_050));
+    let (now, reset) = (now(), now() + 1800);
+    f.seed(&acct, now, 4000, reset);
+    let throttled = ExecutionResult {
         success: false,
         timed_out: false,
         stdout: String::new(),
@@ -1273,61 +995,32 @@ fn post_child_throttle_accounting_waits_only_for_the_remaining_budget() {
         duration_ms: 5_000,
         output: None,
     };
-    let held_deadline = || {
-        // The request started 5 s ago: 50 ms of its budget remain.
-        let started = std::time::Instant::now()
-            .checked_sub(Duration::from_secs(5))
-            .expect("monotonic clock far enough from its origin");
-        github_quota::gh_request_deadline(&request, started)
-    };
+    // The request started 5 s ago: 50 ms of its budget remain.
+    let started_5s_ago = Instant::now()
+        .checked_sub(Duration::from_secs(5))
+        .expect("clock far from origin");
+    let deadline = github_quota::gh_request_deadline(&req, started_5s_ago);
 
-    let (held_tx, held_rx) = std::sync::mpsc::channel();
-    let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
-    let holder = std::thread::spawn(move || {
-        let _lock = orbit_common::fs::io::hold_exclusive_file_lock_options(
-            &record_path,
-            "contending quota holder",
-            orbit_common::fs::io::FileLockOptions::default(),
-        )
-        .unwrap();
-        held_tx.send(()).unwrap();
-        // Bounded so a failed assertion cannot strand the holder.
-        let _ = release_rx.recv_timeout(Duration::from_secs(60));
-    });
-    held_rx
-        .recv_timeout(Duration::from_secs(10))
-        .expect("the holder never took the account lock");
-
-    let deadline = held_deadline();
-    let started = std::time::Instant::now();
-    github_quota::with_scoped_guard(store(records.path()), policy, || {
-        github_quota::observe_gh_result_by_deadline(&request, &throttled, deadline);
-    });
+    let lock = ContendedRecordLock::hold(f.record_path(&acct));
+    let started = Instant::now();
+    f.scoped(|| github_quota::observe_gh_result_by_deadline(&req, &throttled, deadline));
     let elapsed = started.elapsed();
-    release_tx.send(()).unwrap();
-    holder.join().unwrap();
+    lock.release();
     assert!(
         elapsed < Duration::from_secs(2),
-        "the record wait must stop at the original deadline, took {elapsed:?}"
+        "wait must stop at original deadline, took {elapsed:?}"
     );
 
     // An available record takes the hold even with the budget nearly spent.
-    let deadline = std::time::Instant::now() + Duration::from_millis(500);
-    github_quota::with_scoped_guard(store(records.path()), policy, || {
-        github_quota::observe_gh_result_by_deadline(&request, &throttled, Some(deadline));
-    });
-    let held = store(records.path())
-        .admit(
-            &policy,
-            &account,
-            GithubCaller::Delivery,
-            RESOURCE_CORE,
-            now + 1,
-            &|| RateLimitAnswer::Unknown("not consulted".into()),
-        )
-        .expect_err("the throttle must hold core reads");
-    assert_eq!(held.reason, QuotaRefusalReason::Exhausted);
-    assert_eq!(held.resume_epoch_seconds, reset);
+    let near = Instant::now() + Duration::from_millis(500);
+    f.scoped(|| github_quota::observe_gh_result_by_deadline(&req, &throttled, Some(near)));
+    let held = f
+        .admit(&acct, Delivery, now + 1, &unknown_not_due)
+        .expect_err("must hold core");
+    assert_eq!(
+        (held.reason, held.resume_epoch_seconds),
+        (QuotaRefusalReason::Exhausted, reset)
+    );
 }
 
 /// Regression [ORB-25964]: a probe cut short by one caller's remaining deadline
@@ -1336,60 +1029,38 @@ fn post_child_throttle_accounting_waits_only_for_the_remaining_budget() {
 /// still meets the agent reserve and the interval stays open for a real read.
 #[test]
 fn deadline_clipped_probe_leaves_known_quota_and_reserve_refusal_in_place() {
-    let records = TempDir::new().unwrap();
-    let policy = GithubQuotaPolicy::default();
-    let gh = FakeGh::new("hang", "ok");
-    let request = gh.request(&["run", "view", "123"]);
-    let account = github_quota::request_account_key(&request);
-    let now = now();
-    let reset = now + 1800;
-    // 1,000 of 5,000 left is exactly the 20% agent reserve, observed long
-    // enough ago that the next admission finds the refresh due.
-    store(records.path()).refresh_if_due(&policy, &account, now - 120, &|| known(1000, reset));
+    let (f, gh, now) = (QuotaFixture::new(), FakeGh::new("hang", "ok"), now());
+    let (req, acct) = gh.view_req(None);
+    // 1,000 of 5,000 left is exactly the 20% agent reserve, due for refresh.
+    f.seed(&acct, now - 120, 1000, now + 1800);
 
-    let mut short = request.clone();
+    let mut short = req.clone();
     short.timeout_ms = Some(60);
-    // The probe ends as a timed-out process result, which the production
-    // classification must map to `Clipped`; a mapping to `Unknown` replaces
-    // the known record that the checks below read.
-    let (probes, result) = run_with_simulated_clipped_probe(60, || {
-        github_quota::with_scoped_guard(store(records.path()), policy, || {
-            github_quota::run_gh_request(GithubCaller::Delivery, &short)
-        })
-    });
-    let result = result.unwrap();
-    assert!(result.timed_out);
+    let (probes, res) = run_with_simulated_clipped_probe(60, || f.run_gh(Delivery, &short));
+    assert!(res.unwrap().timed_out);
     assert_eq!(probes, 1, "first clipped probe must be attempted");
     assert!(gh.calls().is_empty(), "{:?}", gh.calls());
 
-    let status = store(records.path()).status(&policy, &account, now);
+    let status = f.status(&acct, now);
     let core = &status.resources[0];
     assert_eq!(
-        core.state, "known",
-        "a clipped probe must keep the record: {status:?}"
+        (
+            core.state,
+            status.refresh_error.as_deref(),
+            core.agent_reads_refused
+        ),
+        ("known", None, true),
+        "{status:?}"
     );
-    assert_eq!(status.refresh_error, None, "{status:?}");
-    assert!(core.agent_reads_refused, "{core:?}");
 
-    // The interval was not claimed: the second caller reads the endpoint
-    // itself (clipped again here) and still meets the reserve.
-    let mut agent = request.clone();
+    // The interval was not claimed: the second caller reads the endpoint itself and hits reserve.
+    let mut agent = req;
     agent.timeout_ms = Some(200);
-    let (probes, admitted) = run_with_simulated_clipped_probe(200, || {
-        github_quota::with_scoped_guard(store(records.path()), policy, || {
-            github_quota::admit_gh_request(GithubCaller::Agent, &agent)
-        })
-    });
-    let error = admitted.expect_err("the agent reserve still applies after a clipped probe");
-    // The clipped probe spent the whole budget, so the reserve's refusal is
-    // decided once the request's budget is gone: the typed timeout, uncounted.
-    assert!(
-        matches!(error, orbit_common::OrbitError::ProcessTimeout { .. }),
-        "{error:?}"
-    );
+    let (probes, admitted) = run_with_simulated_clipped_probe(200, || f.admit_gh(Agent, &agent));
+    assert_timeout(admitted, None, "agent reserve after clipped probe");
     assert_eq!(
         probes, 1,
-        "a clipped probe must leave the interval due for the next caller"
+        "clipped probe must leave interval due for next caller"
     );
     assert!(gh.calls().is_empty(), "{:?}", gh.calls());
 }
@@ -1408,56 +1079,34 @@ fn deadline_clipped_probe_leaves_known_quota_and_reserve_refusal_in_place() {
 #[test]
 fn clipped_probe_does_not_leak_its_deadline_into_a_later_short_read() {
     const LONG_MS: u64 = 5_000;
-    let records = TempDir::new().unwrap();
-    let policy = GithubQuotaPolicy::default();
-    let gh = FakeGh::new("hang", "ok");
-    let mut long = gh.request(&["run", "view", "123"]);
-    // Far above the 60 ms reads, so a clock left at this probe's deadline
-    // lies well past the real-clock deadline of the shared read.
-    long.timeout_ms = Some(LONG_MS);
-    let account = github_quota::request_account_key(&long);
-    let now = now();
-    // Observed long enough ago that every read below finds the refresh due.
-    store(records.path()).refresh_if_due(&policy, &account, now - 120, &|| known(4000, now + 1800));
+    let (f, gh, now) = (QuotaFixture::new(), FakeGh::new("hang", "ok"), now());
+    let ((long, acct), (short, _)) = (gh.view_req(Some(LONG_MS)), gh.view_req(Some(60)));
+    f.seed(&acct, now - 120, 4000, now + 1800);
 
-    let mut short = gh.request(&["run", "view", "123"]);
-    short.timeout_ms = Some(60);
     let enclosing = std::rc::Rc::new(std::cell::Cell::new(0_usize));
     let counted = std::rc::Rc::clone(&enclosing);
     github_quota::with_simulated_clipped_probe(
         move |_| counted.set(counted.get() + 1),
         || {
-            let (probes, result) = run_with_simulated_clipped_probe(LONG_MS, || {
-                github_quota::with_scoped_guard(store(records.path()), policy, || {
-                    github_quota::run_gh_request(GithubCaller::Delivery, &long)
-                })
-            });
-            let result = result.unwrap();
-            assert!(result.timed_out, "{result:?}");
+            let (probes, res) =
+                run_with_simulated_clipped_probe(LONG_MS, || f.run_gh(Delivery, &long));
+            assert!(res.unwrap().timed_out);
             assert_eq!(probes, 1);
 
-            // The long probe's scope has returned, so the enclosing clock must
-            // be back in force. Only then does this shared read's real-clock
-            // deadline, 60 ms away, leave its probe room to run.
-            let reset = github_quota::with_scoped_guard(store(records.path()), policy, || {
-                github_quota::shared_exhausted_reset(&short, &[RESOURCE_CORE])
-            });
+            // The long probe's scope returned, so the enclosing real-clock deadline must run `short`'s probe.
+            let reset = f.scoped(|| github_quota::shared_exhausted_reset(&short, &[RESOURCE_CORE]));
             assert_eq!(reset, github_quota::SharedReset::Guarded(None), "{reset:?}");
             assert_eq!(
                 enclosing.get(),
                 1,
-                "a clipped probe must restore the enclosing clock: a 60 ms shared read after it must still run its rate-limit probe"
+                "clipped probe must restore enclosing clock for shared read"
             );
 
-            let result = github_quota::with_scoped_guard(store(records.path()), policy, || {
-                github_quota::run_gh_request(GithubCaller::Delivery, &short)
-            })
-            .unwrap();
-            assert!(result.timed_out, "{result:?}");
+            assert!(f.run_gh(Delivery, &short).unwrap().timed_out);
             assert_eq!(
                 enclosing.get(),
                 2,
-                "a 60 ms read after a clipped probe must still run its rate-limit probe"
+                "60 ms read after clipped probe must still run its probe"
             );
         },
     );
@@ -1472,78 +1121,49 @@ fn clipped_probe_does_not_leak_its_deadline_into_a_later_short_read() {
 /// quota to spare stays the ordinary untyped answer.
 #[test]
 fn refused_log_fallback_is_a_typed_throttle_for_unscoped_and_scoped_reads() {
-    let policy = GithubQuotaPolicy::default();
-    let reset = now() + 1800;
-    let gh = FakeGh::new("{}", "empty");
-    let probe = gh.request(&["run", "view", "123"]);
-    let account = github_quota::request_account_key(&probe);
+    let (reset, gh) = (now() + 1800, FakeGh::new("{}", "empty"));
+    let (probe, acct) = gh.view_req(None);
 
     let read = |remaining: u64, input: serde_json::Value| {
-        let records = TempDir::new().unwrap();
-        store(records.path()).refresh_if_due(&policy, &account, now(), &|| known(remaining, reset));
-        let mut requests = orbit_tools::github_cli::RunLogRequests::from_input(&input).unwrap();
-        for request in [&mut requests.run_log, &mut requests.run_view] {
-            request.program = probe.program.clone();
-            request.environment_mode = probe.environment_mode.clone();
+        let f = QuotaFixture::new();
+        f.seed(&acct, now(), remaining, reset);
+        let mut requests = RunLogRequests::from_input(&input).unwrap();
+        for req in [&mut requests.run_log, &mut requests.run_view] {
+            (req.program, req.environment_mode) =
+                (probe.program.clone(), probe.environment_mode.clone());
         }
         let _ = std::fs::remove_file(gh.dir.path().join("calls"));
-        let result = github_quota::with_scoped_guard(store(records.path()), policy, || {
-            orbit_tools::github_cli::read_run_log_guarded(
-                &requests,
-                orbit_tools::github_cli::LogReadBounds::new(4096),
-                None,
-                &|request| {
-                    github_quota::admit_gh_request(GithubCaller::Agent, request)?;
-                    Ok(request.clone())
-                },
-            )
+        let res = f.scoped(|| {
+            read_run_log_guarded(&requests, LogReadBounds::new(4096), None, &|req| {
+                github_quota::admit_gh_request(Agent, req)?;
+                Ok(req.clone())
+            })
         });
-        (result, gh.calls())
+        (res, gh.calls())
     };
 
     // 1,001 of 5,000 left: one call above the 1,000 reserve.
     let (unscoped, calls) = read(1001, json!({"run": "123", "repo": "acme/orbit"}));
     let throttle = unscoped
-        .expect("an unscoped read still returns its read")
+        .expect("unscoped")
         .throttle_refusal()
-        .expect("the refused fallback is a typed throttle");
-    assert_eq!(
-        refused_throttle(&throttle).resource.as_deref(),
-        Some(RESOURCE_CORE)
-    );
+        .expect("typed");
+    assert_core_throttle(&throttle, "unscoped fallback");
     assert_eq!(refused_throttle(&throttle).reset_epoch_seconds, Some(reset));
-    assert_eq!(
-        calls.len(),
-        1,
-        "the refused fallback must not run: {calls:?}"
-    );
+    assert_eq!(calls.len(), 1, "refused fallback must not run: {calls:?}");
 
-    let (scoped, calls) = read(
-        1001,
-        json!({"run": "123", "repo": "acme/orbit", "step": "Build"}),
-    );
-    let error = scoped
-        .err()
-        .expect("a scoped read has no selection to return");
-    assert_eq!(
-        refused_throttle(&error).resource.as_deref(),
-        Some(RESOURCE_CORE)
-    );
-    assert!(error.to_string().contains("do not retry before"), "{error}");
-    assert_eq!(
-        calls.len(),
-        1,
-        "the refused fallback must not run: {calls:?}"
-    );
+    let scoped_in = json!({"run": "123", "repo": "acme/orbit", "step": "Build"});
+    let (scoped, calls) = read(1001, scoped_in.clone());
+    let err = scoped.err().expect("scoped read has no selection");
+    assert_core_throttle(&err, "scoped fallback");
+    assert!(err.to_string().contains("do not retry before"), "{err}");
+    assert_eq!(calls.len(), 1, "refused fallback must not run: {calls:?}");
 
     // With quota to spare the fallback runs and its ordinary failure is kept.
-    let (scoped, calls) = read(
-        4000,
-        json!({"run": "123", "repo": "acme/orbit", "step": "Build"}),
-    );
-    let error = scoped.err().expect("the selection is unavailable");
-    assert!(error.private_vcs_failure().is_none(), "{error}");
-    assert!(error.to_string().contains("log step not found"), "{error}");
+    let (scoped, calls) = read(4000, scoped_in);
+    let err = scoped.err().expect("selection is unavailable");
+    assert!(err.private_vcs_failure().is_none(), "{err}");
+    assert!(err.to_string().contains("log step not found"), "{err}");
     assert_eq!(calls.len(), 2, "{calls:?}");
 }
 
@@ -1553,206 +1173,122 @@ fn refused_log_fallback_is_a_typed_throttle_for_unscoped_and_scoped_reads() {
 /// genuinely missing account file still initializes and counts normally.
 #[test]
 fn partially_malformed_record_survives_admit_and_reports_unknown_in_status() {
-    let records = TempDir::new().unwrap();
-    let policy = GithubQuotaPolicy::default();
-    let now = now();
-    let malformed_bytes =
+    let (f, now) = (QuotaFixture::new(), now());
+    let malformed: &[u8] =
         br#"{"resources":{"core":{"calls":{"delivery":42,"agent":7},"remaining":"corrupt"}}}"#;
-    let record_path = records.path().join(format!("{ACCOUNT}.json"));
-    std::fs::write(&record_path, malformed_bytes).unwrap();
+    let binary: &[u8] = b"{\"calls\":42}\xff\xfe";
 
-    let refreshes = AtomicUsize::new(0);
-    store(records.path())
-        .admit(
-            &policy,
-            ACCOUNT,
-            GithubCaller::Agent,
-            RESOURCE_CORE,
-            now,
-            &|| {
-                refreshes.fetch_add(1, Ordering::SeqCst);
-                known(4000, now + 1800)
-            },
-        )
-        .expect("admission must stay fail-open on a malformed record");
-    assert_eq!(
-        refreshes.load(Ordering::SeqCst),
-        0,
-        "refresh probe must not run over an unreadable record"
-    );
-    assert_eq!(
-        std::fs::read(&record_path).unwrap(),
-        malformed_bytes,
-        "partially malformed record bytes must stay identical after admit"
-    );
+    for (acct, bytes, terms) in [
+        (ACCOUNT, malformed, &["unreadable", "malformed"][..]),
+        ("github.com-binary", binary, &["unreadable"][..]),
+    ] {
+        let path = f.record_path(acct);
+        std::fs::write(&path, bytes).unwrap();
+        let refreshes = AtomicUsize::new(0);
+        f.admit(acct, Agent, now, &|| {
+            refreshes.fetch_add(1, Ordering::SeqCst);
+            known(4000, now + 1800)
+        })
+        .expect("admission stays fail-open");
+        assert_eq!(refreshes.load(Ordering::SeqCst), 0, "{acct}: no probe");
+        assert_eq!(std::fs::read(&path).unwrap(), bytes, "{acct}: unchanged");
 
-    let status = store(records.path()).status(&policy, ACCOUNT, now);
-    let error = status
-        .refresh_error
-        .as_deref()
-        .expect("status must surface the record read/parse failure");
-    assert!(
-        error.contains("unreadable") && error.contains("malformed"),
-        "unexpected refresh_error: {error}"
-    );
-    for resource in &status.resources {
-        assert_eq!(resource.state, "unknown");
-        assert_eq!(resource.remaining, None);
-        assert!(!resource.agent_reads_refused);
+        let status = f.status(acct, now);
+        let err = status.refresh_error.as_deref().expect("refresh_error");
+        for term in terms {
+            assert!(err.contains(term), "{acct}: {err}");
+        }
+        for r in &status.resources {
+            assert_eq!(
+                (r.state, r.remaining, r.agent_reads_refused),
+                ("unknown", None, false)
+            );
+        }
     }
 
-    // Non-UTF-8 bytes also fail the read path before JSON parsing and stay intact.
-    let binary_account = "github.com-binary";
-    let binary_bytes = b"{\"calls\":42}\xff\xfe";
-    let binary_path = records.path().join(format!("{binary_account}.json"));
-    std::fs::write(&binary_path, binary_bytes).unwrap();
-    store(records.path())
-        .admit(
-            &policy,
-            binary_account,
-            GithubCaller::Agent,
-            RESOURCE_CORE,
-            now,
-            &|| known(4000, now + 1800),
-        )
-        .expect("admission must stay fail-open on an unreadable record");
-    assert_eq!(std::fs::read(&binary_path).unwrap(), binary_bytes);
-    let binary_status = store(records.path()).status(&policy, binary_account, now);
-    assert!(
-        binary_status
-            .refresh_error
-            .as_deref()
-            .is_some_and(|err| err.contains("unreadable")),
-        "{binary_status:?}"
-    );
-    assert!(
-        binary_status
-            .resources
-            .iter()
-            .all(|resource| resource.state == "unknown")
-    );
-
-    // A genuinely missing account file still initializes and counts calls.
-    let missing_account = "github.com-missing";
-    let before = store(records.path()).status(&policy, missing_account, now);
-    assert_eq!(before.refresh_error, None);
-    store(records.path())
-        .admit(
-            &policy,
-            missing_account,
-            GithubCaller::Agent,
-            RESOURCE_CORE,
-            now,
-            &|| known(4000, now + 1800),
-        )
+    let missing = "github.com-missing";
+    assert_eq!(f.status(missing, now).refresh_error, None);
+    f.admit(missing, Agent, now, &|| known(4000, now + 1800))
         .unwrap();
-    let after = store(records.path()).status(&policy, missing_account, now);
-    assert_eq!(after.refresh_error, None);
-    let core = after
-        .resources
-        .iter()
-        .find(|resource| resource.resource == RESOURCE_CORE)
-        .unwrap();
-    assert_eq!(core.state, "known");
-    assert_eq!(core.calls.agent, 1);
-    assert_eq!(core.remaining, Some(3999));
+    assert_eq!(f.status(missing, now).refresh_error, None);
+    let c = f.core(missing, now);
+    assert_eq!(
+        (c.state, c.calls.agent, c.remaining),
+        ("known", 1, Some(3999))
+    );
 }
 
-fn run_contended_clipped_probe(dir: &Path, policy: GithubQuotaPolicy, account: &str, now: u64) {
-    let record_path = dir.join(format!("{account}.json"));
-    let (probe_started_tx, probe_started_rx) = std::sync::mpsc::channel();
-    let (lock_held_tx, lock_held_rx) = std::sync::mpsc::channel();
-    let dir_buf = dir.to_path_buf();
-    let account_owned = account.to_string();
-    let started = std::time::Instant::now();
+fn run_contended_clipped_probe(dir: &Path, policy: GithubQuotaPolicy, acct: &str, now: u64) {
+    let record_path = dir.join(format!("{acct}.json"));
+    let ((probe_started_tx, probe_started_rx), (lock_held_tx, lock_held_rx)) =
+        (mpsc::channel(), mpsc::channel());
+    let (dir_buf, acct_owned, started) = (dir.to_path_buf(), acct.to_string(), Instant::now());
     let refresher = std::thread::spawn(move || {
-        let deadline = std::time::Instant::now() + Duration::from_millis(80);
+        let deadline = Instant::now() + Duration::from_millis(80);
         store(&dir_buf).bounded_by(Some(deadline)).refresh_if_due(
             &policy,
-            &account_owned,
+            &acct_owned,
             now,
             &|| {
                 probe_started_tx.send(()).unwrap();
-                lock_held_rx
-                    .recv_timeout(Duration::from_secs(10))
-                    .expect("holder never acquired lock");
+                recv_ready(&lock_held_rx, "holder never acquired lock");
                 std::thread::sleep(Duration::from_millis(100));
                 RateLimitAnswer::Clipped("rate-limit read cut short".into())
             },
         );
     });
 
-    probe_started_rx
-        .recv_timeout(Duration::from_secs(10))
-        .expect("probe never started");
-    let lock = orbit_common::fs::io::hold_exclusive_file_lock_options(
-        &record_path,
-        "contending finalization lock",
-        orbit_common::fs::io::FileLockOptions::default(),
-    )
-    .unwrap();
+    recv_ready(&probe_started_rx, "probe never started");
+    let lock = hold_lock(&record_path, "contending finalization lock");
     lock_held_tx.send(()).unwrap();
-
-    // The clipped refresher must finish within its deadline while the lock is
-    // still held.
     refresher.join().unwrap();
-    let elapsed = started.elapsed();
     assert!(
-        elapsed < Duration::from_secs(2),
-        "clipped refresh must stay deadline-bounded under finalization contention, took {elapsed:?}"
+        started.elapsed() < Duration::from_secs(2),
+        "exceeded deadline"
     );
     drop(lock);
 }
 
-fn assert_contended_clipped_recovery(
-    dir: &Path,
-    policy: GithubQuotaPolicy,
-    account: &str,
-    now: u64,
-    reset: u64,
-) {
-    store(dir).refresh_if_due(&policy, account, now - 120, &|| known(1000, reset));
-    run_contended_clipped_probe(dir, policy, account, now);
+fn assert_contended_clipped_recovery(f: &QuotaFixture, acct: &str, now: u64, reset: u64) {
+    f.seed(acct, now - 120, 1000, reset);
+    run_contended_clipped_probe(f.path(), f.policy, acct, now);
 
-    let before = store(dir).status(&policy, account, now);
-    let core_before = before
+    let before = f.status(acct, now);
+    let c = before
         .resources
         .iter()
-        .find(|resource| resource.resource == RESOURCE_CORE)
+        .find(|r| r.resource == RESOURCE_CORE)
         .unwrap();
-    assert_eq!(core_before.state, "known");
-    assert_eq!(core_before.remaining, Some(1000));
-    assert_eq!(before.refresh_error, None);
-    assert!(core_before.agent_reads_refused);
+    let got = (
+        c.state,
+        c.remaining,
+        before.refresh_error.as_deref(),
+        c.agent_reads_refused,
+    );
+    assert_eq!(got, ("known", Some(1000), None, true));
 
-    // Immediately after the lock is released (at the same `now`), the next
-    // caller can refresh without waiting out the interval.
+    // Immediately after lock release (at the same `now`), the next caller refreshes.
     let refreshes = AtomicUsize::new(0);
-    store(dir)
-        .admit(
-            &policy,
-            account,
-            GithubCaller::Agent,
-            RESOURCE_CORE,
-            now,
-            &|| {
-                refreshes.fetch_add(1, Ordering::SeqCst);
-                known(3500, reset)
-            },
-        )
-        .expect("fresh observation above reserve must admit agent read");
+    f.admit(acct, Agent, now, &|| {
+        refreshes.fetch_add(1, Ordering::SeqCst);
+        known(3500, reset)
+    })
+    .expect("fresh observation above reserve must admit agent read");
     assert_eq!(
         refreshes.load(Ordering::SeqCst),
         1,
-        "subsequent caller must refresh immediately after contended clipped finalization"
+        "must refresh immediately"
     );
-    let after = store(dir).status(&policy, account, now);
-    let core_after = after
-        .resources
-        .iter()
-        .find(|resource| resource.resource == RESOURCE_CORE)
-        .unwrap();
-    assert_eq!(core_after.remaining, Some(3499));
+    assert_eq!(f.core(acct, now).remaining, Some(3499));
+}
+
+fn seed_contended_clipped_marker(bytes: &[u8], now: u64, reset: u64) -> (QuotaFixture, PathBuf) {
+    let f = QuotaFixture::new();
+    f.seed(ACCOUNT, now - 120, 3500, reset);
+    run_contended_clipped_probe(f.path(), f.policy, ACCOUNT, now);
+    let marker = f.marker(ACCOUNT, 2);
+    std::fs::write(&marker, bytes).unwrap();
+    (f, marker)
 }
 
 /// Regression [ORB-26102]: when a caller's probe is clipped while a peer holds
@@ -1761,156 +1297,49 @@ fn assert_contended_clipped_recovery(
 /// caller refresh immediately once the lock is released.
 #[test]
 fn clipped_probe_with_contended_finalization_lock_releases_claim_and_preserves_record() {
-    let records = TempDir::new().unwrap();
-    let policy = GithubQuotaPolicy::default();
-    let now = now();
-    let reset = now + 1800;
-    assert_contended_clipped_recovery(records.path(), policy, ACCOUNT, now, reset);
+    let (f, now) = (QuotaFixture::new(), now());
+    assert_contended_clipped_recovery(&f, ACCOUNT, now, now + 1800);
 }
 
-/// Regression [ORB-26115]: a malformed candidate at the active generation's
-/// clipped-release path is diagnostic evidence, not proof of ownership. A
-/// healthy account still admits and counts its read while the marker bytes are
-/// preserved for diagnosis.
+/// Regressions [ORB-26115] and [ORB-26135]: malformed, missing-`previous_claim`,
+/// and positional clipped-release markers at the active generation are
+/// diagnostic evidence only. None releases the fresh active claim: bytes stay
+/// on disk, the healthy account admits and counts its read, and no same-instant
+/// refresh probes.
 #[test]
-fn malformed_clipped_release_is_preserved_while_healthy_admission_proceeds() {
-    let records = TempDir::new().unwrap();
-    let policy = GithubQuotaPolicy::default();
-    let now = now();
-    let reset = now + 1800;
-    store(records.path()).refresh_if_due(&policy, ACCOUNT, now - 120, &|| known(3500, reset));
-    run_contended_clipped_probe(records.path(), policy, ACCOUNT, now);
-
-    let marker = records.path().join(format!(".{ACCOUNT}.clipped.2.json"));
-    let malformed_bytes = b"{\"generation\":";
-    std::fs::write(&marker, malformed_bytes).unwrap();
-
-    store(records.path())
-        .admit(
-            &policy,
-            ACCOUNT,
-            GithubCaller::Agent,
-            RESOURCE_CORE,
-            now,
-            &|| unreachable!("active clipped refresh must not probe again"),
-        )
-        .expect("healthy account should admit the read despite malformed marker");
-
-    assert_eq!(
-        std::fs::read(&marker).unwrap(),
-        malformed_bytes,
-        "malformed release marker bytes must remain available for diagnosis"
-    );
-    let status = store(records.path()).status(&policy, ACCOUNT, now);
-    let core = status
-        .resources
-        .iter()
-        .find(|resource| resource.resource == RESOURCE_CORE)
-        .unwrap();
-    assert_eq!(core.remaining, Some(3499));
-    assert_eq!(core.calls.agent, 1);
-}
-
-/// Regression [ORB-26135]: a same-generation clipped release marker that omits
-/// `previous_claim` is ambiguous, not an explicit `null`. It must not release
-/// the fresh active claim: the bytes stay on disk for diagnosis, the healthy
-/// account still admits the read, and no same-instant refresh probes.
-#[test]
-fn clipped_release_missing_previous_claim_keeps_fresh_claim_and_marker() {
-    let records = TempDir::new().unwrap();
-    let policy = GithubQuotaPolicy::default();
-    let now = now();
-    let reset = now + 1800;
-    store(records.path()).refresh_if_due(&policy, ACCOUNT, now - 120, &|| known(3500, reset));
-    run_contended_clipped_probe(records.path(), policy, ACCOUNT, now);
-
-    let marker = records.path().join(format!(".{ACCOUNT}.clipped.2.json"));
-    let ambiguous_bytes = b"{\"generation\":2}";
-    std::fs::write(&marker, ambiguous_bytes).unwrap();
-
-    let probes = AtomicUsize::new(0);
-    store(records.path())
-        .admit(
-            &policy,
-            ACCOUNT,
-            GithubCaller::Agent,
-            RESOURCE_CORE,
-            now,
-            &|| {
-                probes.fetch_add(1, Ordering::SeqCst);
-                known(3500, reset)
-            },
-        )
-        .expect("healthy account should admit the read despite an ambiguous marker");
-
-    assert_eq!(
-        probes.load(Ordering::SeqCst),
-        0,
-        "a fresh active claim must keep its refresh interval"
-    );
-    assert_eq!(
-        std::fs::read(&marker).unwrap(),
-        ambiguous_bytes,
-        "a marker without previous_claim must stay on disk for diagnosis"
-    );
-    let status = store(records.path()).status(&policy, ACCOUNT, now);
-    let core = status
-        .resources
-        .iter()
-        .find(|resource| resource.resource == RESOURCE_CORE)
-        .unwrap();
-    assert_eq!(core.remaining, Some(3499));
-    assert_eq!(core.calls.agent, 1);
-}
-
-/// A positional clipped-release marker has no named-field provenance. It is
-/// malformed diagnostic evidence and must not release a fresh refresh claim.
-#[test]
-fn positional_clipped_release_keeps_fresh_claim_and_marker() {
-    let records = TempDir::new().unwrap();
-    let policy = GithubQuotaPolicy::default();
-    let now = now();
-    let reset = now + 1800;
-    store(records.path()).refresh_if_due(&policy, ACCOUNT, now - 120, &|| known(3500, reset));
-    run_contended_clipped_probe(records.path(), policy, ACCOUNT, now);
-
-    let marker = records.path().join(format!(".{ACCOUNT}.clipped.2.json"));
-    let positional_bytes = b"[2,null]";
-    std::fs::write(&marker, positional_bytes).unwrap();
-
-    let probes = AtomicUsize::new(0);
-    store(records.path())
-        .admit(
-            &policy,
-            ACCOUNT,
-            GithubCaller::Agent,
-            RESOURCE_CORE,
-            now,
-            &|| {
-                probes.fetch_add(1, Ordering::SeqCst);
-                known(3500, reset)
-            },
-        )
-        .expect("healthy quota observation should still admit the read");
-
-    assert_eq!(
-        probes.load(Ordering::SeqCst),
-        0,
-        "a positional marker must not release the fresh refresh claim"
-    );
-    assert_eq!(
-        std::fs::read(&marker).unwrap(),
-        positional_bytes,
-        "positional marker bytes must remain available for diagnosis"
-    );
-    let status = store(records.path()).status(&policy, ACCOUNT, now);
-    let core = status
-        .resources
-        .iter()
-        .find(|resource| resource.resource == RESOURCE_CORE)
-        .unwrap();
-    assert_eq!(core.remaining, Some(3499));
-    assert_eq!(core.calls.agent, 1);
+fn preserved_clipped_release_markers_keep_fresh_claim_and_healthy_admission() {
+    let cases: [(&str, &[u8]); 3] = [
+        (
+            "malformed_clipped_release_is_preserved_while_healthy_admission_proceeds",
+            b"{\"generation\":",
+        ),
+        (
+            "clipped_release_missing_previous_claim_keeps_fresh_claim_and_marker",
+            b"{\"generation\":2}",
+        ),
+        (
+            "positional_clipped_release_keeps_fresh_claim_and_marker",
+            b"[2,null]",
+        ),
+    ];
+    for (case, marker_bytes) in cases {
+        let (now, reset) = (now(), now() + 1800);
+        let (f, marker) = seed_contended_clipped_marker(marker_bytes, now, reset);
+        let probes = AtomicUsize::new(0);
+        f.admit(ACCOUNT, Agent, now, &|| {
+            probes.fetch_add(1, Ordering::SeqCst);
+            known(3500, reset)
+        })
+        .unwrap_or_else(|err| panic!("{case}: healthy account should admit: {err:?}"));
+        assert_eq!(probes.load(Ordering::SeqCst), 0, "{case}: keep claim");
+        assert_eq!(std::fs::read(&marker).unwrap(), marker_bytes, "{case}");
+        let core = f.core(ACCOUNT, now);
+        assert_eq!(
+            (core.remaining, core.calls.agent),
+            (Some(3499), 1),
+            "{case}"
+        );
+    }
 }
 
 /// Regression [ORB-26137]: ambiguous clipped-release bytes at the active
@@ -1920,62 +1349,24 @@ fn positional_clipped_release_keeps_fresh_claim_and_marker() {
 /// and refresh proceed normally.
 #[test]
 fn ambiguous_clipped_release_survives_claim_advance_and_later_updates() {
-    let ambiguous: [&[u8]; 2] = [
-        b"{\"generation\":",
-        br#"{"generation":7,"previous_claim":null}"#,
-    ];
-    for ambiguous_bytes in ambiguous {
-        let records = TempDir::new().unwrap();
-        let policy = GithubQuotaPolicy::default();
-        let now = now();
-        let reset = now + 1800;
-        store(records.path()).refresh_if_due(&policy, ACCOUNT, now - 120, &|| known(3500, reset));
-        run_contended_clipped_probe(records.path(), policy, ACCOUNT, now);
+    for bytes in AMBIGUOUS_RELEASE_PAYLOADS {
+        let (now, reset) = (now(), now() + 1800);
+        let (f, marker) = seed_contended_clipped_marker(bytes, now, reset);
 
-        let marker = records.path().join(format!(".{ACCOUNT}.clipped.2.json"));
-        std::fs::write(&marker, ambiguous_bytes).unwrap();
-
-        // One refresh interval later the claim is due and advances to generation 3.
-        let later = now + policy.refresh_interval.as_secs();
+        let later = now + f.policy.refresh_interval.as_secs();
         let probes = AtomicUsize::new(0);
-        store(records.path()).refresh_if_due(&policy, ACCOUNT, later, &|| {
+        f.store().refresh_if_due(&f.policy, ACCOUNT, later, &|| {
             probes.fetch_add(1, Ordering::SeqCst);
             known(3400, reset)
         });
-        assert_eq!(
-            probes.load(Ordering::SeqCst),
-            1,
-            "the due claim must refresh once"
-        );
-        assert_eq!(
-            std::fs::read(&marker).unwrap(),
-            ambiguous_bytes,
-            "ambiguous release bytes must survive the claim advancing to the next generation"
-        );
+        assert_eq!(probes.load(Ordering::SeqCst), 1, "due claim refreshes");
+        assert_eq!(std::fs::read(&marker).unwrap(), bytes, "survives advance");
 
-        store(records.path())
-            .admit(
-                &policy,
-                ACCOUNT,
-                GithubCaller::Agent,
-                RESOURCE_CORE,
-                later,
-                &|| unreachable!("the generation-3 claim is fresh"),
-            )
-            .expect("fresh observation above reserve must admit agent read");
-        assert_eq!(
-            std::fs::read(&marker).unwrap(),
-            ambiguous_bytes,
-            "ambiguous release bytes must survive a later ordinary update"
-        );
-        let status = store(records.path()).status(&policy, ACCOUNT, later);
-        let core = status
-            .resources
-            .iter()
-            .find(|resource| resource.resource == RESOURCE_CORE)
-            .unwrap();
-        assert_eq!(core.remaining, Some(3399));
-        assert_eq!(core.calls.agent, 1);
+        f.admit(ACCOUNT, Agent, later, &|| unreachable!("gen-3 fresh"))
+            .expect("admit");
+        assert_eq!(std::fs::read(&marker).unwrap(), bytes, "survives update");
+        let core = f.core(ACCOUNT, later);
+        assert_eq!((core.remaining, core.calls.agent), (Some(3399), 1));
     }
 }
 
@@ -1985,38 +1376,16 @@ fn ambiguous_clipped_release_survives_claim_advance_and_later_updates() {
 /// ambiguous bytes at that path in place.
 #[test]
 fn ambiguous_previous_generation_marker_survives_ordinary_update() {
-    let ambiguous: [&[u8]; 2] = [
-        b"{\"generation\":",
-        br#"{"generation":7,"previous_claim":null}"#,
-    ];
-    for ambiguous_bytes in ambiguous {
-        let records = TempDir::new().unwrap();
-        let policy = GithubQuotaPolicy::default();
-        let now = now();
-        let reset = now + 1800;
-        // Three completed refreshes, one interval apart, leave the record at generation 3.
+    for bytes in AMBIGUOUS_RELEASE_PAYLOADS {
+        let (f, now, reset) = (QuotaFixture::new(), now(), now() + 1800);
         for at in [now - 120, now - 60, now] {
-            store(records.path()).refresh_if_due(&policy, ACCOUNT, at, &|| known(3500, reset));
+            f.seed(ACCOUNT, at, 3500, reset);
         }
-
-        let marker = records.path().join(format!(".{ACCOUNT}.clipped.2.json"));
-        std::fs::write(&marker, ambiguous_bytes).unwrap();
-
-        store(records.path())
-            .admit(
-                &policy,
-                ACCOUNT,
-                GithubCaller::Agent,
-                RESOURCE_CORE,
-                now,
-                &|| unreachable!("the generation-3 observation is fresh"),
-            )
-            .expect("fresh observation above reserve must admit agent read");
-        assert_eq!(
-            std::fs::read(&marker).unwrap(),
-            ambiguous_bytes,
-            "ambiguous previous-generation release bytes must survive an ordinary update"
-        );
+        let marker = f.marker(ACCOUNT, 2);
+        std::fs::write(&marker, bytes).unwrap();
+        f.admit(ACCOUNT, Agent, now, &|| unreachable!("gen-3 fresh"))
+            .expect("admit");
+        assert_eq!(std::fs::read(&marker).unwrap(), bytes, "prev-gen survives");
     }
 }
 
@@ -2036,95 +1405,41 @@ fn clipped_probe_recovers_without_directory_listing_and_ignores_unrelated_entrie
         }
     }
 
-    let records = TempDir::new().unwrap();
-    let policy = GithubQuotaPolicy::default();
-    let now = now();
-    let reset = now + 1800;
-
+    let (f, now, reset) = (QuotaFixture::new(), now(), now() + 1800);
     for index in 0..8 {
-        std::fs::write(records.path().join(format!("unrelated-{index}.json")), "{}").unwrap();
+        std::fs::write(f.path().join(format!("unrelated-{index}.json")), "{}").unwrap();
     }
+    let _restore = RestorePermissions(f.path());
+    std::fs::set_permissions(f.path(), std::fs::Permissions::from_mode(0o300)).unwrap();
+    assert!(std::fs::read_dir(f.path()).is_err(), "requires 0o300 dir");
 
-    let _restore = RestorePermissions(records.path());
-    std::fs::set_permissions(records.path(), std::fs::Permissions::from_mode(0o300)).unwrap();
-    assert!(
-        std::fs::read_dir(records.path()).is_err(),
-        "test fixture requires a directory that denies listing"
-    );
+    assert_contended_clipped_recovery(&f, ACCOUNT, now, reset);
+    assert!(!f.marker(ACCOUNT, 2).exists(), "reconciled marker removed");
 
-    assert_contended_clipped_recovery(records.path(), policy, ACCOUNT, now, reset);
-
-    // Generation 2's marker must have been unlinked after reconciliation.
-    assert!(
-        !records
-            .path()
-            .join(format!(".{ACCOUNT}.clipped.2.json"))
-            .exists(),
-        "reconciled clipped marker should be removed"
-    );
-
-    // A stale generation-3 marker written while generation 4 is in flight must
-    // leave generation 4's interval and overlapping debits intact.
+    // Stale gen-3 marker written while gen 4 is in flight leaves gen 4 and debits intact.
     let t1 = now + 60;
-    let started = Arc::new(Barrier::new(2));
-    let finish = Arc::new(Barrier::new(2));
-    let dir_worker = records.path().to_path_buf();
-    let started_worker = Arc::clone(&started);
-    let finish_worker = Arc::clone(&finish);
-    let refresher = std::thread::spawn(move || {
-        store(&dir_worker).refresh_if_due(&policy, ACCOUNT, t1, &|| {
-            started_worker.wait();
-            finish_worker.wait();
-            known(3500, reset + 1800)
-        });
-    });
-    started.wait();
+    let in_flight = f.spawn_refresh(t1, 3500, reset + 1800);
+    let stale = f.marker(ACCOUNT, 3);
+    std::fs::write(&stale, r#"{"generation":3,"previous_claim":null}"#).unwrap();
 
-    let stale_marker = records.path().join(format!(".{ACCOUNT}.clipped.3.json"));
-    std::fs::write(&stale_marker, r#"{"generation":3,"previous_claim":null}"#).unwrap();
-
-    // Delivery admission during gen 4 records an in-flight debit and must not
-    // be clobbered by the stale generation-3 marker, and the update unlinks
-    // that superseded marker without listing the directory.
-    store(records.path())
-        .admit(
-            &policy,
-            ACCOUNT,
-            GithubCaller::Delivery,
-            RESOURCE_CORE,
-            t1,
-            &|| unreachable!("newer generation refresh is already in flight"),
-        )
+    f.admit(ACCOUNT, Delivery, t1, &|| unreachable!("gen 4 in flight"))
         .unwrap();
     assert!(
-        !stale_marker.exists(),
-        "next quota record update must remove superseded clipped marker without listing"
+        !stale.exists(),
+        "must remove superseded marker without listing"
     );
-    finish.wait();
-    refresher.join().unwrap();
+    finish_refresh(in_flight);
 
-    // A stale generation-3 marker staged after generation 4 already completed
-    // must also be removed on the next quota record update.
-    std::fs::write(&stale_marker, r#"{"generation":3,"previous_claim":null}"#).unwrap();
-
+    // Stale gen-3 marker staged after gen 4 completed must also be removed.
+    std::fs::write(&stale, r#"{"generation":3,"previous_claim":null}"#).unwrap();
     let refreshes = AtomicUsize::new(0);
-    store(records.path()).refresh_if_due(&policy, ACCOUNT, t1, &|| {
+    f.store().refresh_if_due(&f.policy, ACCOUNT, t1, &|| {
         refreshes.fetch_add(1, Ordering::SeqCst);
         known(999, reset + 1800)
     });
     assert_eq!(refreshes.load(Ordering::SeqCst), 0);
-    assert!(
-        !stale_marker.exists(),
-        "next quota record update after completion must remove stale clipped marker without listing"
-    );
-
-    let status = store(records.path()).status(&policy, ACCOUNT, t1);
-    let core = status
-        .resources
-        .iter()
-        .find(|resource| resource.resource == RESOURCE_CORE)
-        .unwrap();
-    assert_eq!(core.remaining, Some(3499));
+    assert!(!stale.exists(), "must remove stale marker without listing");
+    assert_eq!(f.core(ACCOUNT, t1).remaining, Some(3499));
 }
 
 /// Regression [ORB-26102]: a delayed clipped-claim release from an older
@@ -2132,119 +1447,64 @@ fn clipped_probe_recovers_without_directory_listing_and_ignores_unrelated_entrie
 /// newer refresh generation.
 #[test]
 fn stale_clipped_release_does_not_clobber_newer_refresh_generation() {
-    for complete_newer_before_release in [true, false] {
-        let records = TempDir::new().unwrap();
-        let policy = GithubQuotaPolicy::default();
-        let start = now();
-        let t1 = start + 60;
-        let t2 = t1 + 60;
-        let reset = t2 + 1800;
-        let record_path = records.path().join(format!("{ACCOUNT}.json"));
-        store(records.path()).refresh_if_due(&policy, ACCOUNT, start, &|| known(1000, reset));
+    for complete_newer in [true, false] {
+        let (f, start) = (QuotaFixture::new(), now());
+        let (t1, t2, reset) = (start + 60, start + 120, start + 1920);
+        f.seed(ACCOUNT, start, 1000, reset);
 
-        let (a_started_tx, a_started_rx) = std::sync::mpsc::channel();
-        let (a_proceed_tx, a_proceed_rx) = std::sync::mpsc::channel();
-        let dir_a = records.path().to_path_buf();
+        let ((a_started_tx, a_started_rx), (a_proceed_tx, a_proceed_rx)) =
+            (mpsc::channel(), mpsc::channel());
+        let (dir_a, policy) = (f.path().to_path_buf(), f.policy);
         let caller_a = std::thread::spawn(move || {
-            let deadline = std::time::Instant::now() + Duration::from_millis(80);
+            let deadline = Instant::now() + Duration::from_millis(80);
             store(&dir_a)
                 .bounded_by(Some(deadline))
                 .refresh_if_due(&policy, ACCOUNT, t1, &|| {
                     a_started_tx.send(()).unwrap();
-                    a_proceed_rx
-                        .recv_timeout(Duration::from_secs(10))
-                        .expect("caller A never signaled to finish");
+                    recv_ready(&a_proceed_rx, "caller A never signaled");
                     std::thread::sleep(Duration::from_millis(100));
                     RateLimitAnswer::Clipped("stale clipped probe".into())
                 });
         });
 
-        a_started_rx
-            .recv_timeout(Duration::from_secs(10))
-            .expect("caller A never claimed generation");
-
-        let mut caller_b = None;
-        let b_finish = Arc::new(Barrier::new(2));
-        if complete_newer_before_release {
-            store(records.path()).refresh_if_due(&policy, ACCOUNT, t2, &|| known(3500, reset));
+        recv_ready(&a_started_rx, "caller A never claimed generation");
+        let caller_b = if complete_newer {
+            f.seed(ACCOUNT, t2, 3500, reset);
+            None
         } else {
-            let b_started = Arc::new(Barrier::new(2));
-            let dir_b = records.path().to_path_buf();
-            let b_started_worker = Arc::clone(&b_started);
-            let b_finish_worker = Arc::clone(&b_finish);
-            caller_b = Some(std::thread::spawn(move || {
-                store(&dir_b).refresh_if_due(&policy, ACCOUNT, t2, &|| {
-                    b_started_worker.wait();
-                    b_finish_worker.wait();
-                    known(3500, reset)
-                });
-            }));
-            b_started.wait();
-        }
+            Some(f.spawn_refresh(t2, 3500, reset))
+        };
 
-        // Hold the record lock so caller A must stage its clipped release
-        // instead of acquiring the completion lock.
-        let lock = orbit_common::fs::io::hold_exclusive_file_lock_options(
-            &record_path,
-            "contending lock for stale clipped release",
-            orbit_common::fs::io::FileLockOptions::default(),
-        )
-        .unwrap();
+        let lock = hold_lock(&f.record_path(ACCOUNT), "contending lock");
         a_proceed_tx.send(()).unwrap();
         caller_a.join().unwrap();
         drop(lock);
 
-        if let Some(worker) = caller_b {
-            // While generation 3 is still in flight, reconciling the stale
-            // generation 2 release must leave `refresh_in_flight` and
-            // `in_flight_debits` intact.
-            store(records.path())
-                .admit(
-                    &policy,
-                    ACCOUNT,
-                    GithubCaller::Delivery,
-                    RESOURCE_CORE,
-                    t2,
-                    &|| unreachable!("newer generation refresh is already in flight"),
-                )
+        if let Some(in_flight) = caller_b {
+            f.admit(ACCOUNT, Delivery, t2, &|| unreachable!("gen 3 in flight"))
                 .unwrap();
-            b_finish.wait();
-            worker.join().unwrap();
+            finish_refresh(in_flight);
         }
 
         let refreshes = AtomicUsize::new(0);
-        store(records.path()).refresh_if_due(&policy, ACCOUNT, t2, &|| {
+        f.store().refresh_if_due(&f.policy, ACCOUNT, t2, &|| {
             refreshes.fetch_add(1, Ordering::SeqCst);
             known(999, reset)
         });
+        let expected = if complete_newer { 3500 } else { 3499 };
         assert_eq!(
             refreshes.load(Ordering::SeqCst),
             0,
-            "stale clipped release must not reopen newer generation's interval (completed_before={complete_newer_before_release})"
+            "reopened ({complete_newer})"
         );
-
-        let status = store(records.path()).status(&policy, ACCOUNT, t2);
-        let core = status
-            .resources
-            .iter()
-            .find(|resource| resource.resource == RESOURCE_CORE)
-            .unwrap();
-        let expected_remaining = if complete_newer_before_release {
-            3500
-        } else {
-            3499
-        };
         assert_eq!(
-            core.remaining,
-            Some(expected_remaining),
-            "completed_before={complete_newer_before_release}"
+            f.core(ACCOUNT, t2).remaining,
+            Some(expected),
+            "{complete_newer}"
         );
         assert!(
-            !records
-                .path()
-                .join(format!(".{ACCOUNT}.clipped.2.json"))
-                .exists(),
-            "stale clipped release marker must not remain on disk (completed_before={complete_newer_before_release})"
+            !f.marker(ACCOUNT, 2).exists(),
+            "stale marker ({complete_newer})"
         );
     }
 }
@@ -2264,190 +1524,107 @@ fn run_log_readers_bound_post_child_throttle_recording_by_remaining_deadline() {
         Fallback,
     }
 
-    let build_requests = |reader: Reader, probe: &ExecRequest, cache_dir: &Path| {
-        let input = match reader {
-            Reader::Metadata => json!({"run": "123", "job": "9", "repo": "acme/orbit"}),
-            Reader::Stream | Reader::Fallback => json!({"run": "123", "repo": "acme/orbit"}),
-        };
-        let mut requests = orbit_tools::github_cli::RunLogRequests::from_input(&input).unwrap();
-        if reader == Reader::Metadata {
-            requests = requests.with_test_log_cache(cache_dir);
-        }
-        for request in [&mut requests.run_log, &mut requests.run_view] {
-            request.program = probe.program.clone();
-            request.environment_mode = probe.environment_mode.clone();
-            request.timeout_ms = Some(1_600);
-        }
-        requests
-    };
+    for contended in [true, false] {
+        for reader in [Reader::Stream, Reader::Metadata, Reader::Fallback] {
+            let (now, reset) = (now(), now() + 1800);
+            let answer = match (contended, reader) {
+                (true, Reader::Fallback) => "empty-then-slow-throttle",
+                (true, _) => "slow-throttle",
+                (false, Reader::Fallback) => "empty-then-throttle",
+                (false, _) => "throttle",
+            };
+            let (f, cache_dir) = (QuotaFixture::new(), TempDir::new().unwrap());
+            let gh = FakeGh::new("{}", answer);
+            let (probe, acct) = gh.view_req(None);
+            f.seed(&acct, now, 4000, reset);
+            let input = if reader == Reader::Metadata {
+                json!({"run": "123", "job": "9", "repo": "acme/orbit"})
+            } else {
+                json!({"run": "123", "repo": "acme/orbit"})
+            };
+            let mut requests = RunLogRequests::from_input(&input).unwrap();
+            if reader == Reader::Metadata {
+                requests = requests.with_test_log_cache(cache_dir.path());
+            }
+            for req in [&mut requests.run_log, &mut requests.run_view] {
+                req.program = probe.program.clone();
+                req.environment_mode = probe.environment_mode.clone();
+                req.timeout_ms = Some(1_600);
+            }
 
-    let policy = GithubQuotaPolicy::default();
+            let target_call = usize::from(reader == Reader::Fallback);
+            let (call_index, target_started) = (AtomicUsize::new(0), std::sync::Mutex::new(None));
+            let (admitted_tx, admitted_rx) = mpsc::channel();
+            let lock_state = contended
+                .then(|| ContendedRecordLock::spawn(f.record_path(&acct), Some(admitted_rx), None));
 
-    for reader in [Reader::Stream, Reader::Metadata, Reader::Fallback] {
-        let records = TempDir::new().unwrap();
-        let cache_dir = TempDir::new().unwrap();
-        let answer = match reader {
-            Reader::Fallback => "empty-then-slow-throttle",
-            Reader::Stream | Reader::Metadata => "slow-throttle",
-        };
-        let gh = FakeGh::new("{}", answer);
-        let probe = gh.request(&["run", "view", "123"]);
-        let account = github_quota::request_account_key(&probe);
-        let record_path = records.path().join(format!("{account}.json"));
-        let now = now();
-        let reset = now + 1800;
-        store(records.path()).refresh_if_due(&policy, &account, now, &|| known(4000, reset));
-        let requests = build_requests(reader, &probe, cache_dir.path());
-
-        let (admitted_tx, admitted_rx) = std::sync::mpsc::channel();
-        let (lock_held_tx, lock_held_rx) = std::sync::mpsc::channel();
-        let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
-        let holder = std::thread::spawn(move || {
-            admitted_rx
-                .recv_timeout(Duration::from_secs(10))
-                .expect("target child was never admitted");
-            let _lock = orbit_common::fs::io::hold_exclusive_file_lock_options(
-                &record_path,
-                "contending quota holder",
-                orbit_common::fs::io::FileLockOptions::default(),
-            )
-            .unwrap();
-            lock_held_tx.send(()).unwrap();
-            let _ = release_rx.recv_timeout(Duration::from_secs(60));
-        });
-
-        let target_call = usize::from(reader == Reader::Fallback);
-        let call_index = AtomicUsize::new(0);
-        let target_started = std::sync::Mutex::new(None);
-        let result = github_quota::with_scoped_guard(store(records.path()), policy, || {
-            orbit_tools::github_cli::read_run_log_guarded(
-                &requests,
-                orbit_tools::github_cli::LogReadBounds::new(4096),
-                None,
-                &|request| {
+            let res = f.scoped(|| {
+                read_run_log_guarded(&requests, LogReadBounds::new(4096), None, &|req| {
                     let index = call_index.fetch_add(1, Ordering::SeqCst);
-                    if reader == Reader::Metadata && index > target_call {
-                        return Err(orbit_common::OrbitError::Execution(
-                            "stop after metadata read".to_string(),
-                        ));
+                    if contended && reader == Reader::Metadata && index > target_call {
+                        return Err(OrbitError::Execution("stop after metadata read".into()));
                     }
-                    let admitted = github_quota::admit_gh_request_within_budget(
-                        GithubCaller::Delivery,
-                        request,
-                    )?;
-                    if index == target_call {
+                    let admitted = github_quota::admit_gh_request_within_budget(Delivery, req)?;
+                    if let Some((_, ref lock_held_rx)) = lock_state
+                        && index == target_call
+                    {
                         admitted_tx.send(()).unwrap();
-                        lock_held_rx
-                            .recv_timeout(Duration::from_secs(10))
-                            .expect("holder never acquired record lock");
-                        *target_started.lock().unwrap() = Some(std::time::Instant::now());
+                        recv_ready(lock_held_rx, "holder never acquired lock");
+                        *target_started.lock().unwrap() = Some(Instant::now());
                     }
                     Ok(admitted)
-                },
-            )
-        });
-        let elapsed = target_started
-            .lock()
-            .unwrap()
-            .expect("target child never ran")
-            .elapsed();
-        release_tx.send(()).unwrap();
-        holder.join().unwrap();
+                })
+            });
 
-        assert!(
-            gh.dir.path().join("throttled").exists(),
-            "{reader:?}: child must finish sleeping and emit primary throttle rather than timing out"
-        );
-        assert!(
-            elapsed < Duration::from_millis(2_200),
-            "{reader:?}: post-child lock wait must stop at remaining deadline (~1.6 s), took {elapsed:?}"
-        );
-        match reader {
-            Reader::Stream => {
-                let error = result.err().expect("throttled stream must fail");
-                assert!(refused_throttle(&error).principal.is_some(), "{error}");
+            let elapsed = target_started.lock().unwrap().map(|t| t.elapsed());
+            if let Some((lock, _)) = lock_state {
+                lock.release();
             }
-            Reader::Metadata => {
-                let error = result.err().expect("metadata stop marker must fail");
+
+            if contended {
                 assert!(
-                    error.to_string().contains("stop after metadata read"),
-                    "{error}"
+                    gh.dir.path().join("throttled").exists(),
+                    "{reader:?}: not throttled"
                 );
-            }
-            Reader::Fallback => {
-                let read = result.expect("unscoped fallback returns RunLogRead");
-                let throttle = read.throttle_refusal().expect("typed fallback throttle");
                 assert!(
-                    refused_throttle(&throttle).principal.is_some(),
-                    "{throttle}"
+                    elapsed.expect("ran") < Duration::from_millis(2_200),
+                    "{reader:?}: {elapsed:?}"
                 );
-            }
-        }
-    }
-
-    // With the lock available, every reader records the primary throttle hold.
-    for reader in [Reader::Stream, Reader::Metadata, Reader::Fallback] {
-        let records = TempDir::new().unwrap();
-        let cache_dir = TempDir::new().unwrap();
-        let answer = match reader {
-            Reader::Fallback => "empty-then-throttle",
-            Reader::Stream | Reader::Metadata => "throttle",
-        };
-        let gh = FakeGh::new("{}", answer);
-        let probe = gh.request(&["run", "view", "123"]);
-        let account = github_quota::request_account_key(&probe);
-        let now = now();
-        let reset = now + 1800;
-        store(records.path()).refresh_if_due(&policy, &account, now, &|| known(4000, reset));
-        let requests = build_requests(reader, &probe, cache_dir.path());
-
-        let result = github_quota::with_scoped_guard(store(records.path()), policy, || {
-            orbit_tools::github_cli::read_run_log_guarded(
-                &requests,
-                orbit_tools::github_cli::LogReadBounds::new(4096),
-                None,
-                &|request| {
-                    github_quota::admit_gh_request_within_budget(GithubCaller::Delivery, request)
-                },
-            )
-        });
-        match reader {
-            Reader::Stream => {
-                let error = result.err().expect("throttled stream must fail");
-                assert!(refused_throttle(&error).principal.is_some(), "{error}");
-            }
-            Reader::Metadata => {
-                let error = result.err().expect("throttled metadata must hold read");
+            } else {
+                if reader == Reader::Metadata {
+                    let expected =
+                        vec!["api --method GET repos/acme/orbit/actions/jobs/9".to_string()];
+                    assert_eq!(gh.calls(), expected, "metadata throttle must hold fallback");
+                }
+                let held = f
+                    .admit(&acct, Delivery, now + 1, &unknown_not_due)
+                    .expect_err("held");
                 assert_eq!(
-                    refused_throttle(&error).resource.as_deref(),
-                    Some(RESOURCE_CORE),
-                    "{error}"
+                    (held.reason, held.resume_epoch_seconds),
+                    (QuotaRefusalReason::Exhausted, reset),
+                    "{reader:?}"
                 );
             }
-            Reader::Fallback => {
-                let read = result.expect("unscoped fallback returns RunLogRead");
-                assert!(read.throttle_refusal().is_some(), "{reader:?}");
+            match (reader, res) {
+                (Reader::Stream, Err(err)) => {
+                    assert!(refused_throttle(&err).principal.is_some(), "{err}")
+                }
+                (Reader::Metadata, Err(err)) if contended => assert!(
+                    err.to_string().contains("stop after metadata read"),
+                    "{err}"
+                ),
+                (Reader::Metadata, Err(err)) => {
+                    assert_core_throttle(&err, "throttled metadata hold")
+                }
+                (Reader::Fallback, Ok(read)) => {
+                    let t = read.throttle_refusal().expect("typed throttle");
+                    if contended {
+                        assert!(refused_throttle(&t).principal.is_some(), "{t}");
+                    }
+                }
+                (r, Err(err)) => panic!("unexpected error for {r:?}: {err}"),
+                (r, Ok(_)) => panic!("unexpected ok for {r:?}"),
             }
         }
-        if reader == Reader::Metadata {
-            assert_eq!(
-                gh.calls(),
-                vec!["api --method GET repos/acme/orbit/actions/jobs/9".to_string()],
-                "recorded metadata throttle must hold the fallback stream locally"
-            );
-        }
-
-        let held = store(records.path())
-            .admit(
-                &policy,
-                &account,
-                GithubCaller::Delivery,
-                RESOURCE_CORE,
-                now + 1,
-                &|| RateLimitAnswer::Unknown("not consulted".into()),
-            )
-            .expect_err("recorded primary throttle must hold core reads");
-        assert_eq!(held.reason, QuotaRefusalReason::Exhausted, "{reader:?}");
-        assert_eq!(held.resume_epoch_seconds, reset, "{reader:?}");
     }
 }
