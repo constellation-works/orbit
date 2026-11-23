@@ -316,7 +316,6 @@ pub(in crate::executor::automation::vcs) fn ensure_clean_checkout(
     path: &Path,
     label: &str,
 ) -> Result<(), OrbitError> {
-    super::super::commit::remove_untracked_interpreter_byproducts(path)?;
     let status = git_output_raw(path, &["status", "--porcelain", "--untracked-files=all"])?;
     ensure_clean_status(path, label, &status)
 }

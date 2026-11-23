@@ -314,6 +314,57 @@ fn a_local_candidate_landing_names_its_task_before_the_branch_moves() {
     assert_eq!(host.last_step(), Some(HandoffLandingStep::Complete));
 }
 
+fn owner_local_landing_refuses_and_preserves_cache_shaped_work() {
+    let sandbox = tempdir().unwrap();
+    let host = owner_checkout(sandbox.path());
+    let base = git(&host.repo, &["rev-parse", "main"]);
+    std::fs::create_dir_all(host.repo.join("pkg/__pycache__")).unwrap();
+    let files = [
+        ("pkg/__pycache__/notes.txt", b"owner notes\r\n".as_slice()),
+        (
+            "pkg/__pycache__/mod.cpython-312.pyc",
+            b"\0owner bytecode\xff",
+        ),
+        ("fixture.pyc", b"\0standalone bytecode\xff"),
+    ];
+    for (path, bytes) in files {
+        std::fs::write(host.repo.join(path), bytes).unwrap();
+    }
+    let status = git(
+        &host.repo,
+        &["status", "--porcelain", "--untracked-files=all"],
+    );
+
+    let result = land(&host);
+
+    for (path, bytes) in files {
+        assert_eq!(
+            std::fs::read(host.repo.join(path))
+                .unwrap_or_else(|error| panic!("read {path} after landing: {error}")),
+            bytes,
+            "{path}"
+        );
+    }
+    let error = result.expect_err("cache-shaped files make the owner checkout dirty");
+    let message = error.to_string();
+    assert!(message.contains("owner landing checkout") && message.contains("must be clean before"));
+    for (path, _) in files {
+        assert!(
+            message.contains(path),
+            "missing {path} in refusal: {message}"
+        );
+    }
+    assert_eq!(git(&host.repo, &["rev-parse", "main"]), base);
+    assert_eq!(
+        git(
+            &host.repo,
+            &["status", "--porcelain", "--untracked-files=all"]
+        ),
+        status
+    );
+    assert!(host.intents.lock().unwrap().is_empty());
+}
+
 fn a_candidate_that_cannot_fast_forward_records_no_landing_intent() {
     let sandbox = tempdir().unwrap();
     let host = owner_checkout(sandbox.path());
@@ -4076,6 +4127,10 @@ fn handoff_landing_contracts_1() {
             (
                 "a_local_candidate_landing_names_its_task_before_the_branch_moves",
                 a_local_candidate_landing_names_its_task_before_the_branch_moves,
+            ),
+            (
+                "owner_local_landing_refuses_and_preserves_cache_shaped_work",
+                owner_local_landing_refuses_and_preserves_cache_shaped_work,
             ),
             (
                 "a_candidate_that_cannot_fast_forward_records_no_landing_intent",

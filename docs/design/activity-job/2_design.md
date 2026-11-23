@@ -1367,6 +1367,15 @@ activity that observed them:
   not, and `candidate_validate` over a reviewer commit attributes the rest;
 - `git_commit` widens anything still uncovered, as a fallback.
 
+Cache-shaped paths such as `__pycache__/` entries and `*.pyc` fixtures
+follow the same Git rules as other files. Clean-tree checks report visible
+untracked files, including in the owner's checkout before a local landing.
+Required validation commands and provider invocations default automatic Python
+cache writes to their own private temporary scratch when bytecode is enabled.
+Orbit removes that scratch at the end of the invocation without using Trash.
+Explicit cache prefixes and files written directly into the checkout retain
+ordinary Git treatment.
+
 A per-task bundle assigns each path to exactly one task instead of refusing an
 ambiguous path: the task whose agent's widening history names it, else the
 task with the exact `file:` selector, else the first owner; a path no selector

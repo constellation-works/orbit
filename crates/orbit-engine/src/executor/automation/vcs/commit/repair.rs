@@ -16,7 +16,6 @@ pub(in crate::executor::automation::vcs) fn stage_everything(
 ) -> Result<(), OrbitError> {
     ensure_named_branch(workspace_path)?;
     ensure_no_unmerged_changes(workspace_path)?;
-    super::clean_tree::remove_untracked_interpreter_byproducts(workspace_path)?;
     git_success(workspace_path, &["add", "--all", "--", "."])
 }
 

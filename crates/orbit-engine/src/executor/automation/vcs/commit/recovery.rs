@@ -139,8 +139,6 @@ pub(crate) fn commit_recovery_repair(
             request.workspace_path.display()
         ))
     })?;
-    super::clean_tree::remove_untracked_interpreter_byproducts(&workspace_path)
-        .map_err(uncommittable)?;
     let paths = task_candidate_paths(&workspace_path, NewPathPolicy::Recovery)
         .map_err(uncommittable)?
         .into_iter()

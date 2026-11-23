@@ -77,7 +77,7 @@ use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-use crate::context::RuntimeHost;
+use crate::context::{RuntimeHost, default_python_cache_prefix};
 
 use super::super::base::claim::{failure_identities, normalize_output};
 use super::super::baseline::diagnostic;
@@ -494,6 +494,9 @@ pub(in crate::executor::automation::vcs) fn run_required_command<H: RuntimeHost 
         })
         .cloned()
         .collect::<Vec<_>>();
+    // Imports can still write bytecode if the command enables it. Confine the
+    // default cache to this command's existing private temporary directory.
+    default_python_cache_prefix(&mut env, &summary_dir.path().join("python-cache"));
     env.push((
         VALIDATION_SUMMARY_ENV.to_string(),
         summary_path.to_string_lossy().into_owned(),

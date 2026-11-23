@@ -15,7 +15,7 @@ mod env;
 mod hosts;
 mod outcome;
 
-pub(crate) use env::{ProvenanceEnv, provenance_env};
+pub(crate) use env::{ProvenanceEnv, default_python_cache_prefix, provenance_env};
 #[cfg(feature = "test-support")]
 pub use hosts::NullRuntimeHost;
 pub use hosts::{

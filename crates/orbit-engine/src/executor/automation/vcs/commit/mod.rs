@@ -20,7 +20,6 @@ mod squash;
 mod summary;
 mod tagged_no_diff;
 
-pub(super) use clean_tree::remove_untracked_interpreter_byproducts;
 pub(crate) use implementer::require_implementer_no_diff_artifacts;
 pub(super) use scope::attribute_candidate_paths;
 pub use scope::validate_claim_new_paths;

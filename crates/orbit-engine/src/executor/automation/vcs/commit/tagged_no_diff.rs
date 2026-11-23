@@ -69,7 +69,6 @@ pub(super) fn verify_handoff(
     {
         return Err(refused("HEAD is not the checkpoint's pinned base"));
     }
-    super::clean_tree::remove_untracked_interpreter_byproducts(workspace)?;
     if !git_output(
         workspace,
         &["status", "--porcelain", "--untracked-files=all"],
