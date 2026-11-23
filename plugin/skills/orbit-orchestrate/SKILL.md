@@ -66,7 +66,7 @@ is for the operator supervising work.
 | Pick a crew, take over a task or record who orchestrated it | [`references/loop-crew.md`](references/loop-crew.md) |
 | Establish authority and inspect workspace readiness | [`references/loop-inspect.md`](references/loop-inspect.md) |
 | Pilot, promote and dispatch ready work | [`references/loop-promote.md`](references/loop-promote.md) |
-| Reconcile an open PR that predates the drain | [`references/loop-stalled-prs.md`](references/loop-stalled-prs.md) |
+| Reconcile an open PR that predates the drain, or refresh a held or review PR to its base tip (`orbit.workflow` action `refresh`) | [`references/loop-stalled-prs.md`](references/loop-stalled-prs.md) |
 | Correct course while a task is running, verify steering delivery or configure its bounds | [`references/mid-run-steering.md`](references/mid-run-steering.md) |
 | Compare implementer models when selecting a crew | [`references/model-ranking.md`](references/model-ranking.md) |
 | Choose a recent-run count for analytics | [`references/orchestration-analytics-windows.md`](references/orchestration-analytics-windows.md) |

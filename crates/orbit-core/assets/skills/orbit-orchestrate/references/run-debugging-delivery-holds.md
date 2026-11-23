@@ -31,6 +31,11 @@ Resolve the named refusal before starting a new delivery attempt. Apart from
 (after an operator review reset), these holds do not enable a generic
 `orbit job resume`.
 
+When a held or review pull request's red checks are inherited from a base-branch
+failure that the base has since fixed, an operator can refresh its head onto
+the base tip instead of repairing the candidate. See
+[refresh a held or review pull request](loop-stalled-prs.md#refresh-a-held-or-review-pull-request).
+
 Under an `--auto-fix` drain, a `review` task held on one of
 the codes marked *auto-fix pass* below is handed back to its completion step
 by a later drain pass (or the dashboard's **Fix PR**), at most 3 times per pull
