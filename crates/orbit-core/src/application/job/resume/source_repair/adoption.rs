@@ -89,6 +89,11 @@ impl OrbitRuntime {
         if run_evidence_digest(&predecessor, &prior_state, &definition)? != binding.source_digest {
             return Err(refuse("immutable prior repair source changed"));
         }
+        let expected_failed_step_id = if admission.resident_repair_deadline().is_some() {
+            "resident_source_repair"
+        } else {
+            "operator_source_repair"
+        };
         if field(adopted, "phase")? != "candidate_resume"
             || field(adopted, "outcome")? != "resumed_repaired"
             || adopted.get("implement").and_then(Value::as_bool) != Some(true)
@@ -103,7 +108,7 @@ impl OrbitRuntime {
             || field(adopted, "reused_head_sha")? != binding.head_sha
             || field(adopted, "prior_pull_request")? != binding.pull_request
             || field(adopted, "prior_pull_request_head")? != binding.branch
-            || adopted["repair"]["failed_step_id"] != "operator_source_repair"
+            || adopted["repair"]["failed_step_id"] != expected_failed_step_id
         {
             return Err(refuse(
                 "successful branch adoption disagrees with prior repair admission",
