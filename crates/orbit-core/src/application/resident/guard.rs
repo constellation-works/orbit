@@ -91,8 +91,8 @@ impl ResidentActionTicket {
 std::thread_local! {
     /// The key of the most recent ledgered write on this thread that
     /// failed or was refused. The broker dispatch on the same thread
-    /// takes it to fill the envelope `action_key` (ORB-25284); other
-    /// callers leave it, and the next broker call clears it first.
+    /// takes it to fill the envelope `action_key` (ORB-25284). The CLI
+    /// also takes it for JSON errors; each dispatch clears stale keys first.
     static FAILED_RESIDENT_ACTION_KEY: std::cell::RefCell<Option<String>> =
         const { std::cell::RefCell::new(None) };
 }
@@ -103,7 +103,7 @@ pub(crate) fn clear_failed_resident_action_key() {
 }
 
 /// Take the ledger key a ledgered write on this thread failed with.
-pub(crate) fn take_failed_resident_action_key() -> Option<String> {
+pub fn take_failed_resident_action_key() -> Option<String> {
     FAILED_RESIDENT_ACTION_KEY.with(|slot| slot.borrow_mut().take())
 }
 
