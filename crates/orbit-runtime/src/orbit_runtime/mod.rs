@@ -96,6 +96,11 @@ pub struct RuntimeKernel {
     /// this runtime. Opaque here: the kernel does not inspect it and does not
     /// load config to refill it. Composition downcasts its own snapshot.
     composition_snapshot: Option<Arc<dyn Any + Send + Sync>>,
+    /// Registry identity `(id, name)` of this runtime's checkout, resolved
+    /// from the `workspaces.json` the registry-owning layer loaded for this
+    /// open. The outer `None` means the open carried no registry; the inner
+    /// `None` is a recorded miss (an unregistered checkout).
+    opened_registered_workspace: Option<Option<(String, String)>>,
     /// Host lifecycle signals unattended admission consults before starting
     /// new work [ORB-12968]. The platform probe by default; tests inject one.
     host_signals: Arc<dyn HostSignalProbe>,

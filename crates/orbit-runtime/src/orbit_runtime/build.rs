@@ -159,6 +159,7 @@ impl RuntimeKernel {
             ci_failure_time: None,
             workspace_catalog: None,
             composition_snapshot: None,
+            opened_registered_workspace: None,
             host_signals: default_host_signal_probe(),
             task_pr_forge: default_task_pr_forge(),
             event_log: event_bus::EventLog::default(),
@@ -241,6 +242,7 @@ impl RuntimeKernel {
             ci_failure_time: None,
             workspace_catalog: None,
             composition_snapshot: None,
+            opened_registered_workspace: None,
             // An in-memory runtime is not bound to a host lifecycle.
             host_signals: Arc::new(FixedHostSignals::none()),
             // Nor is it bound to a repository whose PRs it could close.
