@@ -1,6 +1,8 @@
 //! Task-update requests.
 
-use orbit_types::task::{ExternalRef, TaskComment, TaskDecision, TaskHistoryEntry, TaskStatus};
+use orbit_types::task::{
+    ExternalRef, TaskArtifact, TaskComment, TaskDecision, TaskHistoryEntry, TaskStatus,
+};
 
 #[derive(Debug, Clone, Default)]
 pub struct TaskAutomationUpdate {
@@ -27,6 +29,8 @@ pub struct TaskAutomationUpdate {
     pub append_comments: Vec<TaskComment>,
     /// History entries recorded with the update, beside its status event.
     pub append_history: Vec<TaskHistoryEntry>,
+    /// Task artifacts attached alongside the automation update.
+    pub upsert_artifacts: Vec<TaskArtifact>,
     pub agent: Option<String>,
     pub model: Option<String>,
     pub job_run_id: Option<String>,

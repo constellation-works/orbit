@@ -99,6 +99,16 @@ impl orbit_engine::test_support::NullRuntimeHost for RepairPipeline<'_> {
         self.fixture.runtime.get_task(task)
     }
 
+    fn apply_task_automation_update(
+        &self,
+        task_id: &str,
+        update: orbit_engine::TaskAutomationUpdate,
+    ) -> Result<(), OrbitError> {
+        self.fixture
+            .runtime
+            .apply_task_automation_update(task_id, update)
+    }
+
     fn read_run_state(&self, run: &str) -> Result<Option<PipelineState>, OrbitError> {
         self.fixture.runtime.read_run_state(run)
     }
@@ -177,7 +187,12 @@ impl orbit_engine::test_support::NullRuntimeHost for RepairPipeline<'_> {
             "decide" => {
                 *self.decisions.lock().unwrap() += 1;
                 if self.repair != "committed" {
-                    assert_eq!(input["failed_step_id"], "validate");
+                    let expected_failed_step = if self.repair == "landing-review" {
+                        "landing_review"
+                    } else {
+                        "validate"
+                    };
+                    assert_eq!(input["failed_step_id"], expected_failed_step);
                     self.validation_heads.lock().unwrap().push((
                         git(self.fixture, &["rev-parse", "HEAD"]),
                         git(self.fixture, &["status", "--porcelain"]),
@@ -219,11 +234,14 @@ impl orbit_engine::test_support::NullRuntimeHost for RepairPipeline<'_> {
                 )
             }
             _ => {
-                let result = self
+                let mut result = self
                     .fixture
                     .runtime
                     .run_deterministic(action, config, input, context)?;
                 if action == "review_gate_admit" {
+                    if self.repair == "landing-review" {
+                        result["timing"] = json!("before-landing");
+                    }
                     self.admissions.lock().unwrap().push(result.clone());
                 }
                 Ok(result)
@@ -242,7 +260,7 @@ impl orbit_engine::test_support::NullRuntimeHost for RepairPipeline<'_> {
     ) -> Result<(), DispatchError> {
         if step_id == "commit" {
             self.commits.lock().unwrap().push(output.clone());
-        } else if step_id == "validate" {
+        } else if matches!(step_id, "validate" | "landing_review") {
             self.validations.lock().unwrap().push(output.clone());
             self.validation_heads.lock().unwrap().push((
                 output["tested_head"].as_str().unwrap().into(),
@@ -327,6 +345,25 @@ fn job(fixture: &Fixture, repair: &str) -> JobV2 {
         };
         spec.action = "pin_review".into();
         job.steps.insert(2, pin);
+    }
+    if repair == "landing-review" {
+        let admission = job
+            .steps
+            .iter()
+            .position(|step| step.id == "review_gate_admit")
+            .expect("the landing-review scenario has a review admission step");
+        let validation = job
+            .steps
+            .iter()
+            .position(|step| step.id == "validate")
+            .expect("the landing-review scenario has a validation step");
+        job.steps.swap(admission, validation);
+        let validation = job
+            .steps
+            .iter_mut()
+            .find(|step| step.id == "validate")
+            .expect("the landing-review scenario has its validation step");
+        validation.id = "landing_review".into();
     }
     job.final_recovery_activity = Some("decide".into());
     job.resolved_final_recovery_activity = Some(
@@ -559,6 +596,31 @@ fn final_recovery_repair_commit_gets_a_fresh_before_pr_review() {
     );
 }
 
+fn final_recovery_commits_a_landing_review_repair_with_unsettled_admission() {
+    let fixture = fixture_with_command("test \"$(cat candidate.txt)\" != after");
+    let (host, outcome) = run_pipeline(&fixture, "landing-review");
+    let outcome = outcome.unwrap();
+    assert!(outcome.success, "{outcome:?}");
+    assert_eq!(*host.decisions.lock().unwrap(), 1);
+    assert_eq!(
+        std::fs::read_to_string(fixture.repo.join("candidate.txt")).unwrap(),
+        "repaired\n"
+    );
+
+    let run = fixture.input["job_run_id"].as_str().unwrap();
+    let state = fixture.runtime.read_run_state(run).unwrap().unwrap();
+    let checkpoint = state.final_recovery.unwrap();
+    let repair = checkpoint
+        .repair_commit
+        .expect("the unsettled before-landing admission must not refuse recovery commit");
+    assert_ne!(repair.head_sha, repair.head_sha_before);
+    assert_eq!(repair.workspace_path, fixture.repo.canonicalize().unwrap());
+    assert!(matches!(
+        checkpoint.decision,
+        Some(FinalRecoveryDecision::Resume { ref step_id, .. }) if step_id == "commit"
+    ));
+}
+
 fn final_recovery_persists_repair_evidence_without_task_write_tools() {
     let fixture = fixture_with_command("test \"$(cat candidate.txt)\" != after");
     let (_, outcome) = run_pipeline(&fixture, "evidence");
@@ -683,6 +745,24 @@ fn final_recovery_does_not_authorize_an_unrecorded_head_change() {
             matches!(checkpoint.decision, Some(FinalRecoveryDecision::Escalate { ref diagnosis, .. }) if diagnosis.contains(&format!("recovery_commit_refused:{reason}:"))),
             "{case}: durable refusal: {checkpoint:?}"
         );
+        if matches!(case, "protected" | "reviewed" | "settled-review") {
+            let expected_artifact = format!("recovery-uncommitted-{run}.patch");
+            assert!(
+                matches!(
+                    checkpoint.decision,
+                    Some(FinalRecoveryDecision::Escalate { ref diagnosis, .. })
+                    if diagnosis.contains(&expected_artifact)
+                ),
+                "{case}: diagnosis should name saved diff artifact: {checkpoint:?}"
+            );
+            let artifact = fixture
+                .runtime
+                .get_task_artifact(&fixture.task_id, &expected_artifact)
+                .unwrap()
+                .expect("refused final recovery saves uncommitted diff artifact");
+            let text = String::from_utf8_lossy(&artifact.content);
+            assert!(text.contains("repaired"), "{case}: {text}");
+        }
     }
 }
 
@@ -918,6 +998,7 @@ fn resumed_final_recovery_repair_keeps_the_original_checkpoint_owner() {
 crate::scenario_table!(
     final_recovery_repair_commit_gets_a_fresh_before_pr_review_scenarios,
     final_recovery_repair_commit_gets_a_fresh_before_pr_review,
+    final_recovery_commits_a_landing_review_repair_with_unsettled_admission,
     final_recovery_does_not_authorize_an_unrecorded_head_change,
     final_recovery_persists_repair_evidence_without_task_write_tools,
     resumed_final_recovery_repair_keeps_the_original_checkpoint_owner

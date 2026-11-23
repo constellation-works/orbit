@@ -14,6 +14,8 @@ pub(crate) struct NativePublicationProof {
     pub(super) adopted: Option<SourceRepairBinding>,
     /// The unpublished tip the source's certified chases carried `head` to.
     pub(super) certified_tip: Option<super::certified_rebase::CertifiedRebaseTip>,
+    /// The preserved landing-review fix commit carried to a durable ref.
+    pub(super) preserved_review_tip: Option<super::publication::PreservedReviewTip>,
 }
 
 impl From<NativePublicationProof> for NativePublicationIdentity {
@@ -377,6 +379,13 @@ impl OrbitRuntime {
         // branch past `head` without publishing it. Binding still checks the
         // remote and the pull request against `head` exactly.
         let certified_tip = self.certified_rebase_tip(source_id, state, head)?;
+        let preserved_review_tip = publication::preserved_landing_review_head(
+            job,
+            state,
+            (source_id, task),
+            head,
+            &self.paths().repo_root,
+        )?;
         Ok(NativePublicationProof {
             branch: branch.into(),
             head: head.into(),
@@ -388,6 +397,7 @@ impl OrbitRuntime {
                 .transpose()?,
             adopted,
             certified_tip,
+            preserved_review_tip,
         })
     }
 }

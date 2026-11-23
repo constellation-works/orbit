@@ -2,9 +2,9 @@ use std::path::Path;
 
 use chrono::Utc;
 use orbit_common::OrbitError;
-use orbit_types::task::{TaskComment, TaskStatus};
+use orbit_types::task::{TaskArtifact, TaskComment, TaskStatus};
 use orbit_types::workflow::{
-    FailureHandoffDecision, REVIEW_PR_MERGED_OUTSIDE_ORBIT, ReviewGateAdmissionOutput,
+    CommitType, FailureHandoffDecision, REVIEW_PR_MERGED_OUTSIDE_ORBIT, ReviewGateAdmissionOutput,
 };
 use serde_json::{Value, json};
 
@@ -13,9 +13,13 @@ use crate::executor::automation::input::{
     canonicalize_existing_dir, input_string_field, required_input_string,
 };
 
+use super::super::claim::carry_to_durable_ref;
+use super::super::commit::{capture_uncommitted_diff, partial_repair_message};
 use super::super::freshness::{commit_sha, rebase_belongs_to_attempt, rebase_provenance_summary};
+use super::super::git::{git_output, git_output_raw};
 use super::super::push::push_batch_changes_inner;
 use super::super::resume::ensure_retry_descends_from;
+use super::super::review_gate::{commit_reviewer_repairs, uncommitted_paths};
 use super::conflict::{pipeline_checkpoint_string, pipeline_step};
 use super::preserve::recorded_spec_digest;
 use super::{FOREIGN_REBASE_EVENT, LANDING_REVIEW_STEPS, REVIEW_ADMISSION_STEPS};
@@ -134,6 +138,208 @@ fn push_landing_reviewer_commit<H: RuntimeHost + ?Sized>(
     Ok(pushed)
 }
 
+/// Preserve a non-accept before-landing review's fix commit or mid-repair
+/// work onto `refs/orbit/candidates/<task>/<run>` (never pushing rejected or
+/// unvalidated commits to the PR head branch), or save an uncommitted diff as
+/// a task artifact when a commit/push fails.
+pub(super) fn preserve_landing_reviewer_repair<H: RuntimeHost + ?Sized>(
+    host: &H,
+    task: &orbit_types::task::Task,
+    run_id: &str,
+    input: &Value,
+    failed_step_id: &str,
+    error_message: &str,
+) -> Option<(Value, Option<TaskArtifact>)> {
+    if !LANDING_REVIEW_STEPS.contains(&failed_step_id)
+        || error_message.contains(REVIEW_PR_MERGED_OUTSIDE_ORBIT)
+    {
+        return None;
+    }
+    Some(preserve_landing_reviewer_repair_inner(
+        host,
+        task,
+        run_id,
+        input,
+        failed_step_id,
+    ))
+}
+
+fn preserve_landing_reviewer_repair_inner<H: RuntimeHost + ?Sized>(
+    host: &H,
+    task: &orbit_types::task::Task,
+    run_id: &str,
+    input: &Value,
+    failed_step_id: &str,
+) -> (Value, Option<TaskArtifact>) {
+    let worktree = match pipeline_step(input, "worktree")
+        .and_then(|step| required_input_string(step, "workspace_path"))
+        .and_then(|raw| canonicalize_existing_dir(raw, "pipeline.worktree.workspace_path"))
+    {
+        Ok(path) => path,
+        Err(error) => {
+            return (
+                json!({"decision": "unavailable", "error": error.to_string()}),
+                None,
+            );
+        }
+    };
+    let branch = pipeline_checkpoint_string(input, "sync_base", "head").or_else(|| {
+        git_output(&worktree, &["branch", "--show-current"])
+            .ok()
+            .filter(|name| !name.is_empty())
+    });
+    let admission = pipeline_step(input, "landing_review_gate_admit")
+        .ok()
+        .and_then(|output| ReviewGateAdmissionOutput::from_value(output).ok());
+    let admitted = admission
+        .as_ref()
+        .and_then(ReviewGateAdmissionOutput::admitted);
+    let Some(published) = pipeline_checkpoint_string(input, "push", "local_sha")
+        .or_else(|| admitted.map(|entry| entry.head_sha.clone()))
+        .filter(|sha| !sha.is_empty())
+    else {
+        return (
+            json!({
+                "decision": "unavailable",
+                "error": "pr_failure_handoff: the run recorded no `push.local_sha`",
+            }),
+            None,
+        );
+    };
+
+    let mut committed_by_handoff = false;
+    if failed_step_id == "landing_review"
+        && let Ok(uncommitted) = uncommitted_paths(&worktree)
+        && !uncommitted.is_empty()
+    {
+        let reviewer_model = admitted
+            .map(|entry| entry.reviewer.model.trim())
+            .filter(|model| !model.is_empty())
+            .unwrap_or("orbit");
+        let attempt_id = admitted
+            .map(|entry| entry.attempt_id.trim())
+            .filter(|id| !id.is_empty());
+        let commit_type = CommitType::for_bundle(std::iter::once(task.task_type));
+        let message =
+            partial_repair_message(commit_type, &task.id, run_id, "landing_review", attempt_id);
+        match commit_reviewer_repairs(&worktree, reviewer_model, &message) {
+            Ok(Some(_)) => committed_by_handoff = true,
+            Ok(None) => {}
+            Err(commit_error) => match capture_uncommitted_diff(&worktree) {
+                Ok(Some(diff)) => {
+                    let artifact_path = format!("landing-review-uncommitted-{run_id}.patch");
+                    return (
+                        json!({
+                            "decision": "commit_refused",
+                            "published_head_sha": published,
+                            "error": commit_error.to_string(),
+                            "diff_artifact": artifact_path,
+                        }),
+                        Some(TaskArtifact::from_text(artifact_path, diff)),
+                    );
+                }
+                Ok(None) => {
+                    return (
+                        json!({
+                            "decision": "commit_refused",
+                            "published_head_sha": published,
+                            "error": commit_error.to_string(),
+                        }),
+                        None,
+                    );
+                }
+                Err(diff_error) => {
+                    return (
+                        json!({
+                            "decision": "commit_refused",
+                            "published_head_sha": published,
+                            "error": commit_error.to_string(),
+                            "diff_error": diff_error.to_string(),
+                        }),
+                        None,
+                    );
+                }
+            },
+        }
+    }
+
+    let head_sha = match branch.as_deref() {
+        Some(branch_name) => commit_sha(&worktree, branch_name)
+            .or_else(|_| git_output(&worktree, &["rev-parse", "--verify", "HEAD^{commit}"])),
+        None => git_output(&worktree, &["rev-parse", "--verify", "HEAD^{commit}"]),
+    };
+    let head_sha = match head_sha {
+        Ok(sha) => sha,
+        Err(error) => {
+            return (
+                json!({
+                    "decision": "unavailable",
+                    "published_head_sha": published,
+                    "error": error.to_string(),
+                }),
+                None,
+            );
+        }
+    };
+    if head_sha == published {
+        return (
+            json!({
+                "decision": "no_reviewer_commit",
+                "published_head_sha": published,
+            }),
+            None,
+        );
+    }
+
+    match carry_to_durable_ref(
+        host,
+        &worktree,
+        branch.as_deref().unwrap_or(""),
+        &head_sha,
+        &task.id,
+        run_id,
+    ) {
+        Ok(durable_ref) => (
+            json!({
+                "decision": "preserved",
+                "commit_sha": head_sha,
+                "published_head_sha": published,
+                "ref": durable_ref,
+                "committed_by_handoff": committed_by_handoff,
+            }),
+            None,
+        ),
+        Err(error) => {
+            let patch = git_output_raw(&worktree, &["diff", &published, &head_sha])
+                .ok()
+                .filter(|diff| !diff.trim().is_empty());
+            if let Some(diff) = patch {
+                let artifact_path = format!("landing-review-fix-{run_id}.patch");
+                (
+                    json!({
+                        "decision": "preserve_failed",
+                        "commit_sha": head_sha,
+                        "published_head_sha": published,
+                        "error": error,
+                        "diff_artifact": artifact_path,
+                    }),
+                    Some(TaskArtifact::from_text(artifact_path, diff)),
+                )
+            } else {
+                (
+                    json!({
+                        "decision": "preserve_failed",
+                        "commit_sha": head_sha,
+                        "published_head_sha": published,
+                        "error": error,
+                    }),
+                    None,
+                )
+            }
+        }
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(super) fn preserve_completion_failure<H: RuntimeHost + ?Sized>(
     host: &H,
@@ -144,6 +350,8 @@ pub(super) fn preserve_completion_failure<H: RuntimeHost + ?Sized>(
     error_message: &str,
     pr_number: &str,
     reviewer_push: Option<&Value>,
+    reviewer_preservation: Option<&Value>,
+    preservation_artifact: Option<TaskArtifact>,
 ) -> Result<Value, OrbitError> {
     let pr_url = task
         .external_refs
@@ -175,7 +383,7 @@ pub(super) fn preserve_completion_failure<H: RuntimeHost + ?Sized>(
              decides what lands next.\n\n- Run: `{run_id}`\n- Failed step: `{failed_step_id}`\n- Error code: \
              `{error_code}`\n\nFailure:\n```text\n{error_message}\n```",
             task.status,
-            reviewer_push_sentence(reviewer_push),
+            reviewer_outcome_sentence(reviewer_push, reviewer_preservation),
         ),
         None => format!(
             "PR completion failed after publication; preserved PR #{pr_number} and task status \
@@ -194,6 +402,7 @@ pub(super) fn preserve_completion_failure<H: RuntimeHost + ?Sized>(
                 message: note,
                 operation_id: None,
             }],
+            upsert_artifacts: preservation_artifact.into_iter().collect(),
             ..TaskAutomationUpdate::default()
         },
     )?;
@@ -207,6 +416,7 @@ pub(super) fn preserve_completion_failure<H: RuntimeHost + ?Sized>(
         },
         "reason": landing_review,
         "reviewer_push": reviewer_push,
+        "reviewer_preservation": reviewer_preservation,
         // An operator requeue of the task this run's final recovery blocked
         // resumes the kept PR only for the run and specification named here.
         "task_id": task.id,
@@ -218,6 +428,83 @@ pub(super) fn preserve_completion_failure<H: RuntimeHost + ?Sized>(
         "candidate_preserved": true,
         "task_status": task.status.to_string(),
     }))
+}
+
+/// What the comment says became of the reviewer's commit or uncommitted repairs.
+fn reviewer_outcome_sentence(
+    reviewer_push: Option<&Value>,
+    reviewer_preservation: Option<&Value>,
+) -> String {
+    if let Some(push) = reviewer_push {
+        return reviewer_push_sentence(Some(push));
+    }
+    let Some(preserved) = reviewer_preservation else {
+        return "Only a fix the review settled was pushed.".to_string();
+    };
+    let decision = preserved
+        .get("decision")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let field = |key: &str| preserved.get(key).and_then(Value::as_str);
+    match decision {
+        "preserved" => {
+            let commit_sha = field("commit_sha").unwrap_or("unknown");
+            let published_head = field("published_head_sha").unwrap_or("unknown");
+            let durable_ref = field("ref").unwrap_or("unknown");
+            if preserved
+                .get("committed_by_handoff")
+                .and_then(Value::as_bool)
+                == Some(true)
+            {
+                format!(
+                    "Orbit committed the stopped reviewer's edits at `{commit_sha}` and \
+                     preserved the commit on `{durable_ref}` (on top of published head \
+                     `{published_head}`); it was not pushed to the PR branch."
+                )
+            } else {
+                format!(
+                    "The reviewer's fix commit `{commit_sha}` was preserved on `{durable_ref}` \
+                     (on top of published head `{published_head}`); it was not pushed to the PR \
+                     branch."
+                )
+            }
+        }
+        "commit_refused" => {
+            let error = field("error").unwrap_or("unknown refusal");
+            match field("diff_artifact") {
+                Some(artifact) => format!(
+                    "The reviewer's uncommitted repair could not be committed ({error}); the \
+                     uncommitted diff was saved to task artifact `{artifact}`."
+                ),
+                None => format!(
+                    "The reviewer's uncommitted repair could not be committed ({error}) and stays \
+                     in the run's worktree."
+                ),
+            }
+        }
+        "preserve_failed" => {
+            let commit_sha = field("commit_sha").unwrap_or("unknown");
+            let published_head = field("published_head_sha").unwrap_or("unknown");
+            let error = field("error").unwrap_or("unknown error");
+            match field("diff_artifact") {
+                Some(artifact) => format!(
+                    "The reviewer's fix commit `{commit_sha}` could not be pushed to a durable \
+                     ref ({error}); its diff against `{published_head}` was saved to task artifact \
+                     `{artifact}`."
+                ),
+                None => format!(
+                    "The reviewer's fix commit `{commit_sha}` could not be pushed to a durable \
+                     ref ({error}) and stays in the run's worktree."
+                ),
+            }
+        }
+        "no_reviewer_commit" => "The review recorded no commit to preserve.".to_string(),
+        "unavailable" => format!(
+            "Reviewer repairs could not be inspected ({}).",
+            field("error").unwrap_or("unknown error")
+        ),
+        _ => "Only a fix the review settled was pushed.".to_string(),
+    }
 }
 
 /// What the comment says became of the reviewer commit an incomplete

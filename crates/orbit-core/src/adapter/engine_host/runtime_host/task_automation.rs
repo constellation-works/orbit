@@ -164,6 +164,7 @@ fn apply_task_automation_update_under_lock(
                     context_files: update.context_files.clone(),
                     status: update.status,
                     job_run_id: update.job_run_id.clone().map(Some),
+                    upsert_artifacts: update.upsert_artifacts.clone(),
                     ..Default::default()
                 })
             },

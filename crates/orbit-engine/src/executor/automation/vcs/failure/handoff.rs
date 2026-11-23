@@ -27,7 +27,8 @@ use super::conflict::{
 };
 use super::ownership::{
     ensure_failure_handoff_ownership, prepared_attempt_owns_rebase, preserve_completion_failure,
-    push_incomplete_landing_reviewer_commit, refuse_foreign_rebase, release_review_attempts,
+    preserve_landing_reviewer_repair, push_incomplete_landing_reviewer_commit,
+    refuse_foreign_rebase, release_review_attempts,
 };
 use super::preserve::{
     hold_baseline_red_candidate, hold_child_timeout_candidate, hold_provider_failure_candidate,
@@ -196,9 +197,25 @@ pub(in crate::executor::automation) fn pr_failure_handoff<H: RuntimeHost + Sync 
         && let Some(pr_number) = task.github_pr_number().map(ToOwned::to_owned)
     {
         // [ORB-15329] An incomplete before-landing review's reviewer commit
-        // is pushed to the PR before the PR is left unmerged.
+        // is pushed to the PR before the PR is left unmerged. Non-accept
+        // landing review failures preserve fixes on a durable candidate ref
+        // (never the PR head branch) or save uncommitted diffs as artifacts.
         let reviewer_push =
             push_incomplete_landing_reviewer_commit(host, input, failed_step_id, error_message);
+        let (reviewer_preservation, preservation_artifact) = if reviewer_push.is_none() {
+            preserve_landing_reviewer_repair(
+                host,
+                &task,
+                run_id,
+                input,
+                failed_step_id,
+                error_message,
+            )
+            .map(|(value, artifact)| (Some(value), artifact))
+            .unwrap_or((None, None))
+        } else {
+            (None, None)
+        };
         return preserve_completion_failure(
             host,
             &task,
@@ -208,6 +225,8 @@ pub(in crate::executor::automation) fn pr_failure_handoff<H: RuntimeHost + Sync 
             error_message,
             &pr_number,
             reviewer_push.as_ref(),
+            reviewer_preservation.as_ref(),
+            preservation_artifact,
         );
     }
 

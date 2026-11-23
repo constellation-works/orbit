@@ -295,6 +295,7 @@ impl OrbitRuntime {
                 number: &proof.number,
                 allow_missing_branch: false,
                 certified_tip: proof.certified_tip.as_ref(),
+                preserved_review_tip: proof.preserved_review_tip.as_ref(),
             },
         )?;
         if proof

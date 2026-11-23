@@ -34,8 +34,10 @@ pub(super) use checkpoint::{
 pub(super) use detached::{commit_claimed_partial, commit_worktree_detached};
 pub use message::reviewer_repair_message;
 pub(super) use message::{is_partial_repair_message, partial_repair_message};
+pub(super) use recovery::capture_uncommitted_diff;
 pub(crate) use recovery::{
     RecoveryCommit, RecoveryCommitRefusal, RecoveryCommitRequest, commit_recovery_repair,
+    persist_uncommitted_diff_artifact,
 };
 pub(super) use repair::{
     commit_reviewer_repairs_in, reviewer_repair_identities, stage_everything, staged_paths,
