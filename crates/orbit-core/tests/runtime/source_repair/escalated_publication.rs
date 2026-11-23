@@ -593,6 +593,116 @@ fn succeeded_review_publication_is_requeued_preserving_repair_budget() {
     assert_eq!(answer["resumes"]["source"], "pipeline", "{answer}");
 }
 
+/// A stopped successful owner delivery in `review` has no failure-handoff
+/// receipt, so only its persisted history shows a specification change. A
+/// backlog move that carries the change in the same public update must be
+/// refused, with neither the move nor the edit applied and no preservation
+/// record written, while an unchanged specification still resumes the PR and
+/// an explicit discard still allows a fresh implementation.
+fn combined_specification_edit_and_backlog_move_refuses_a_no_receipt_publication() {
+    let succeeded_review = || {
+        let (mut f, _, _) = escalated_completion_fixture();
+        let mut state = f.runtime.read_run_state(&f.source.run_id).unwrap().unwrap();
+        state.failure_activity_checkpoint = None;
+        f.runtime.write_run_state(&f.source.run_id, &state).unwrap();
+        f.source.state = JobRunState::Success;
+        published_owner::save_run(&f, &f.source);
+        green_forge(&mut f);
+        f.runtime
+            .apply_task_automation_update(
+                &f.task,
+                TaskAutomationUpdate {
+                    status: Some(TaskStatus::Review),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        f
+    };
+    let preserved = |f: &Fixture| {
+        f.runtime
+            .get_task_history(&f.task)
+            .unwrap()
+            .iter()
+            .filter(|entry| entry.event == "published_owner_requeued")
+            .count()
+    };
+
+    for edit in [
+        json!({"description": "A different specification"}),
+        json!({"acceptance_criteria": ["A different criterion"]}),
+    ] {
+        let f = succeeded_review();
+        let before = serde_json::to_value(f.runtime.get_task(&f.task).unwrap()).unwrap();
+        let history = serde_json::to_value(f.runtime.get_task_history(&f.task).unwrap()).unwrap();
+        let mut input = json!({
+            "id": f.task, "workspace": f.repo, "status": "backlog", "model": "claude"
+        });
+        input
+            .as_object_mut()
+            .unwrap()
+            .extend(edit.as_object().unwrap().clone());
+        let error = f
+            .runtime
+            .run_tool("orbit.task.update", input)
+            .expect_err("combined edit and backlog move was accepted")
+            .to_string();
+        assert!(error.contains("specification changed"), "{edit}: {error}");
+        assert!(error.contains("--discard-candidate"), "{edit}: {error}");
+        assert_eq!(
+            serde_json::to_value(f.runtime.get_task(&f.task).unwrap()).unwrap(),
+            before,
+            "{edit}: the refused update changed the task"
+        );
+        assert_eq!(
+            serde_json::to_value(f.runtime.get_task_history(&f.task).unwrap()).unwrap(),
+            history,
+            "{edit}: the refused update wrote history"
+        );
+        assert_eq!(preserved(&f), 0, "{edit}: preservation record written");
+        assert_eq!(
+            f.runtime.get_task(&f.task).unwrap().status,
+            TaskStatus::Review
+        );
+
+        // An explicit discard still starts fresh work with the new text.
+        f.runtime
+            .update_task_as_human(
+                &f.task,
+                orbit_core::application::task::TaskUpdateParams {
+                    status: Some(TaskStatus::Backlog),
+                    discard_candidate: true,
+                    description: Some("A different specification".into()),
+                    ..Default::default()
+                },
+                "human".into(),
+            )
+            .unwrap();
+        assert_eq!(
+            f.runtime.get_task(&f.task).unwrap().status,
+            TaskStatus::Backlog
+        );
+        assert_eq!(preserved(&f), 0, "{edit}: a discard preserves nothing");
+    }
+
+    // An unchanged specification still resumes the green publication, also
+    // when the update restates the stored text.
+    let f = succeeded_review();
+    let stored = f.runtime.get_task(&f.task).unwrap();
+    f.runtime
+        .run_tool(
+            "orbit.task.update",
+            json!({
+                "id": f.task, "workspace": f.repo, "status": "backlog", "model": "claude",
+                "description": stored.description,
+                "acceptance_criteria": stored.acceptance_criteria,
+            }),
+        )
+        .unwrap();
+    assert_eq!(preserved(&f), 1);
+    assert_next_run_resumes_the_published_candidate(&f);
+}
+
 /// Repositories with neither classic required checks nor required ruleset
 /// checks distinguish themselves from repositories that require checks missing
 /// from the head's rollup.
@@ -687,5 +797,6 @@ crate::scenario_table!(
     cancelled_publication_with_green_checks_is_requeued_preserving_repair_budget,
     live_run_refusal_and_next_step_name_cancel,
     succeeded_review_publication_is_requeued_preserving_repair_budget,
+    combined_specification_edit_and_backlog_move_refuses_a_no_receipt_publication,
     repository_with_no_required_checks_allows_requeue_and_distinguishes_absent_checks
 );
