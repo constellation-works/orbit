@@ -6,7 +6,7 @@
 
 use std::collections::BTreeMap;
 
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
 use orbit_common::security::token;
 use orbit_store::contracts::{
@@ -20,6 +20,7 @@ use super::definition::{
     experiment_metric_is_step_local, experiment_metric_names, parse_arms, parse_guardrails,
     parse_population, require_lines_changed_guardrail, validate_handle, validate_metric,
 };
+use super::experiment_horizon_at;
 use super::view::ExperimentView;
 use crate::OrbitRuntime;
 
@@ -145,6 +146,7 @@ impl OrbitRuntime {
         validate_experiment_name(name)?;
         let source = self.experiment_record(id_or_name)?;
         let now = Utc::now();
+        validate_max_days(source.experiment.max_days, now)?;
         let experiment = ExperimentRow {
             id: String::new(),
             name: name.to_string(),
@@ -444,6 +446,9 @@ impl OrbitRuntime {
         let current = &record.experiment;
         experiment.revision = current.revision + 1;
         experiment.updated_at = Utc::now();
+        if kind == "started" {
+            validate_max_days(experiment.max_days, experiment.updated_at)?;
+        }
         let event = event_row(&experiment, Some(&current.status), kind, detail, &by);
         let write = ExperimentWrite {
             experiment,
@@ -555,7 +560,9 @@ fn apply_definition(
         experiment.min_sample_per_arm = Some(positive("min_sample", min_sample)?);
     }
     if let Some(max_days) = input.max_days {
-        experiment.max_days = Some(positive("max_days", max_days)?);
+        let days = Some(positive("max_days", max_days)?);
+        validate_max_days(days, Utc::now())?;
+        experiment.max_days = days;
     }
     if let Some(mode) = input.mode {
         if !matches!(mode.as_str(), "shadow" | "live") {
@@ -577,6 +584,16 @@ fn positive(field: &str, value: usize) -> Result<u32, OrbitError> {
         .ok()
         .filter(|value| *value > 0)
         .ok_or_else(|| OrbitError::InvalidInput(format!("`{field}` must be a positive integer")))
+}
+
+fn validate_max_days(days: Option<u32>, start: DateTime<Utc>) -> Result<(), OrbitError> {
+    if days.is_some_and(|days| experiment_horizon_at(start, days).is_none()) {
+        return Err(OrbitError::InvalidInput(
+            "`max_days` must place the horizon within the supported calendar. Enter fewer days."
+                .into(),
+        ));
+    }
+    Ok(())
 }
 
 fn arm_row(position: usize, arm: ArmDefinition) -> ExperimentArmRow {

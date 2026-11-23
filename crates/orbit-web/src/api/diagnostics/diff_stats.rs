@@ -29,7 +29,8 @@ use crate::state::{DashboardState, Ws};
 const COMPLEXITIES: [&str; 5] = ["low", "medium", "hard", "xhard", UNSET_BUCKET];
 /// A point summarizing fewer deliveries than this is marked thin.
 const MIN_DELIVERIES: usize = 3;
-/// Crews drawn as their own series; the rest fold into `other`.
+/// Individual series, including a slot for unassigned work when present.
+/// Remaining named crews share a folded series.
 const MAX_CREWS: usize = 7;
 /// The per-delivery measures every cell summarizes. `net` is code and tests
 /// added minus deleted; other lines (docs, config, assets) stay out of it.
@@ -42,8 +43,6 @@ const MEASURES: [&str; 7] = [
     "other_deleted",
     "net",
 ];
-/// The series key of a delivery whose crew was not recorded.
-const UNKNOWN_CREW: &str = "unknown";
 
 #[derive(Deserialize, Default)]
 pub(in crate::api) struct DiffStatsQuery {
@@ -204,8 +203,9 @@ impl Series {
         self.lead_points[index].rows.push(row);
     }
 
-    fn to_json(&self, key: &str, crews: &[String]) -> Value {
+    fn to_json(&self, series_id: &str, key: &str, crews: &[&str]) -> Value {
         json!({
+            "series_id": series_id,
             "key": key,
             "crews": crews,
             "points": self.points.iter().map(Cell::to_json).collect::<Vec<_>>(),
@@ -238,23 +238,26 @@ fn diff_stats_trend(
     }
 
     // The busiest crews get their own series; ties break by name.
-    let mut crew_counts: BTreeMap<&str, u64> = BTreeMap::new();
+    let mut crew_counts: BTreeMap<Option<&str>, u64> = BTreeMap::new();
     for (_, row) in &in_window {
-        *crew_counts
-            .entry(row.crew.as_deref().unwrap_or(UNKNOWN_CREW))
-            .or_default() += 1;
+        *crew_counts.entry(row.crew.as_deref()).or_default() += 1;
     }
-    let mut ranked: Vec<(&str, u64)> = crew_counts.iter().map(|(k, v)| (*k, *v)).collect();
+    let has_unassigned = crew_counts.remove(&None).is_some();
+    let mut ranked: Vec<_> = crew_counts
+        .into_iter()
+        .filter_map(|(crew, count)| crew.map(|name| (name, count)))
+        .collect();
     ranked.sort_by(|(left, left_n), (right, right_n)| right_n.cmp(left_n).then(left.cmp(right)));
+    let drawn_count = MAX_CREWS - usize::from(has_unassigned);
     let drawn: Vec<&str> = ranked
         .iter()
-        .take(MAX_CREWS)
+        .take(drawn_count)
         .map(|(crew, _)| *crew)
         .collect();
-    let folded: Vec<String> = ranked
+    let folded: Vec<&str> = ranked
         .iter()
-        .skip(MAX_CREWS)
-        .map(|(crew, _)| (*crew).to_string())
+        .skip(drawn_count)
+        .map(|(crew, _)| *crew)
         .collect();
 
     let mut overall = Series::new(bucket_count, lead_count);
@@ -263,14 +266,15 @@ fn diff_stats_trend(
         .map(|crew| (*crew, Series::new(bucket_count, lead_count)))
         .collect();
     let mut other = Series::new(bucket_count, lead_count);
+    let mut unassigned = Series::new(bucket_count, lead_count);
     for (index, row) in &in_window {
         let values = measures(row);
         overall.record(*index, values);
-        let crew = row.crew.as_deref().unwrap_or(UNKNOWN_CREW);
-        by_crew
-            .get_mut(crew)
-            .unwrap_or(&mut other)
-            .record(*index, values);
+        let series = match row.crew.as_deref() {
+            Some(crew) => by_crew.get_mut(crew).unwrap_or(&mut other),
+            None => &mut unassigned,
+        };
+        series.record(*index, values);
     }
     for row in &rows {
         let Some(index) = window.lead_bucket_of(row.landed_at) else {
@@ -283,11 +287,16 @@ fn diff_stats_trend(
         }
         let values = measures(row);
         overall.record_lead(index, values);
-        let crew = row.crew.as_deref().unwrap_or(UNKNOWN_CREW);
-        if let Some(series) = by_crew.get_mut(crew) {
-            series.record_lead(index, values);
-        } else if folded.iter().any(|name| name == crew) {
-            other.record_lead(index, values);
+        match row.crew.as_deref() {
+            Some(crew) => {
+                if let Some(series) = by_crew.get_mut(crew) {
+                    series.record_lead(index, values);
+                } else if folded.contains(&crew) {
+                    other.record_lead(index, values);
+                }
+            }
+            None if has_unassigned => unassigned.record_lead(index, values),
+            None => {}
         }
     }
     let mut crews: Vec<Value> = drawn
@@ -295,11 +304,14 @@ fn diff_stats_trend(
         .filter_map(|crew| {
             by_crew
                 .get(crew)
-                .map(|series| series.to_json(crew, &[(*crew).to_string()]))
+                .map(|series| series.to_json(&format!("crew:{crew}"), crew, &[*crew]))
         })
         .collect();
+    if has_unassigned {
+        crews.push(unassigned.to_json("unassigned", "unknown", &[]));
+    }
     if !folded.is_empty() {
-        crews.push(other.to_json("other", &folded));
+        crews.push(other.to_json("folded", "other", &folded));
     }
 
     let mut available: Vec<(&str, u64)> = complexity_counts.into_iter().collect();
@@ -313,7 +325,7 @@ fn diff_stats_trend(
         "bucket_starts": (0..bucket_count)
             .map(|index| window.bucket_start(index).to_rfc3339())
             .collect::<Vec<_>>(),
-        "overall": overall.to_json("all", &[]),
+        "overall": overall.to_json("all", "all", &[]),
         "crews": crews,
         "available_complexities": available
             .into_iter()

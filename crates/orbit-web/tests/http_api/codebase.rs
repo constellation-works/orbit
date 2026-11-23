@@ -1572,7 +1572,7 @@ name = "dashboard"
 prefixes = ["crates/orbit-web/"]
 
 [[workflow.regression_layers]]
-name = "store_migration"
+name = "storage_backend"
 prefixes = ["crates/orbit-store/"]
 "#,
         );
@@ -1686,7 +1686,7 @@ prefixes = ["crates/orbit-store/"]
             ))
             .finish();
         let guard = tracing::subscriber::set_default(subscriber);
-        for layer in [None, Some("store_migration")] {
+        for layer in [None, Some("storage_backend")] {
             let mut query = json!({ "path": area, "window": "30d", "min_support": 1 });
             if let Some(layer) = layer {
                 query["layer"] = json!(layer);
@@ -1747,7 +1747,7 @@ prefixes = ["crates/orbit-store/"]
                 .iter()
                 .find(|link| link["task_id"] == reviewed)
                 .unwrap();
-            assert_eq!(fix["layer"], "store_migration");
+            assert_eq!(fix["layer"], "storage_backend");
             assert_eq!(fix["layer_source"], "landed");
             // Only the sited task counts against the path; the operator's
             // unsited link is kept by the filter but attributed nowhere.
@@ -1791,7 +1791,7 @@ prefixes = ["crates/orbit-store/"]
         );
         assert_eq!(
             breakdown(section, "layer"),
-            counts(&[("docs_skills", 1), ("dashboard", 1), ("store_migration", 1)]),
+            counts(&[("docs_skills", 1), ("dashboard", 1), ("storage_backend", 1)]),
             "landed paths beat the footprint; tests and docs only support a fix"
         );
         assert_eq!(
@@ -1832,7 +1832,7 @@ prefixes = ["crates/orbit-store/"]
         );
         assert_eq!(
             section["cross_tabs"]["escape_layer"]["columns"],
-            json!(["docs_skills", "dashboard", "store_migration"])
+            json!(["docs_skills", "dashboard", "storage_backend"])
         );
         assert_eq!(
             slice_rows(section, "crew"),
@@ -1885,8 +1885,24 @@ prefixes = ["crates/orbit-store/"]
         assert_eq!(standing["sites"], json!([]), "{detail}");
         assert_eq!(standing["unsited"], json!({ "tasks": 1, "links": 1 }));
 
-        let bad = codebase_get(&server, "analytics", "layer=frontend");
-        assert_eq!(bad.status(), 400, "an unknown layer is refused");
+        for layer in ["storage_backend", "other", "unknown"] {
+            let query = format!("window=30d&min_support=1&layer={layer}");
+            let analytics = json_ok(codebase_get(&server, "analytics", &query));
+            let detail = json_ok(codebase_get(
+                &server,
+                "show",
+                &format!("{query}&path={area}"),
+            ));
+            assert_eq!(analytics["regression_filter"]["layer"], layer);
+            assert_eq!(detail["regression_filter"]["layer"], layer);
+            let expected = u64::from(layer == "storage_backend");
+            assert_eq!(analytics["regressions"]["matching_links"], expected);
+            assert_eq!(detail["rankings"]["regressions"]["numerator"], expected);
+        }
+        for endpoint in ["analytics", "show"] {
+            let bad = codebase_get(&server, endpoint, &format!("path={area}&layer=frontend"));
+            assert_eq!(bad.status(), 400, "an unknown layer is refused");
+        }
         let bad = fixture.runtime.run_tool(
             "orbit.codebase",
             json!({"action": "analytics", "escape": "missed" }),

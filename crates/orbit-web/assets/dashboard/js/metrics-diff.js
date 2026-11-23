@@ -91,19 +91,37 @@ export function diffTools({ segGroup, windowKey, rerender, onChange, countView }
   ];
 }
 
+// Earlier hosts only send the bucket name in `key`.
+function crewSeriesId(crew) {
+  return crew.series_id ?? (crew.key === "other" ? "folded" : crew.key === "unknown" ? "unassigned" : `crew:${crew.key}`);
+}
+
+export function diffCrewLabel(crew) {
+  switch (crewSeriesId(crew)) {
+    case "folded": return "Other crews";
+    case "unassigned": return crew.series_id ? "Unassigned" : "Unknown crew";
+    default: return crew.key;
+  }
+}
+
 /// The series one grouping draws: `{ key, swatch, label, dashed, measure, data }`.
 function seriesOf(payload) {
   if (diffView.group === "lines") {
     return KINDS.map((kind) => ({ key: kind.key, swatch: kind.key, label: kind.label, dashed: kind.dashed, measure: kind.key, data: payload.overall }));
   }
-  return (payload.crews || []).map((crew, index) => ({
-    key: crew.key === "other" ? "other-crews" : `crew-${crew.key}`,
-    swatch: crew.key === "other" ? "crew-other" : `c${index + 1}`,
-    label: crew.key === "other" ? `Other crews (${crew.crews.length})` : crew.key,
-    dashed: false,
-    measure: diffView.measure,
-    data: crew,
-  }));
+  return (payload.crews || []).map((crew, index) => {
+    const key = crewSeriesId(crew);
+    const folded = key === "folded";
+    const label = diffCrewLabel(crew);
+    return {
+      key,
+      swatch: folded ? "crew-other" : `c${index + 1}`,
+      label: folded ? `${label} (${crew.crews.length})` : label,
+      dashed: false,
+      measure: diffView.measure,
+      data: crew,
+    };
+  });
 }
 
 /// The value a statistic reads from one cell for `measure`.

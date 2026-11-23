@@ -793,13 +793,17 @@ function ensureLayout(body) {
   return layout;
 }
 
+function clearIncidentSearch() {
+  searchQuery = "";
+  if (layout) layout.search.value = "";
+}
+
 function emptyNode(text, { clear = false, status = false } = {}) {
   const children = [el("span", { text })];
   if (clear) {
     const button = el("button", { class: "incident-link-button", type: "button", text: "Clear filters" });
     button.addEventListener("click", () => {
-      searchQuery = "";
-      if (layout) layout.search.value = "";
+      clearIncidentSearch();
       rerender();
     });
     children.push(button);
@@ -1021,7 +1025,10 @@ function relatedItems(section, related, noun) {
       el("span", { class: "mono", text: `${other.sample.surface || "unknown surface"} · ${actorLabel(other.incidents)}` }),
       el("span", { class: "incident-related-meta", text: `${countLabel(other)} · ${formatAge(other.last)}` }),
     ]);
-    button.addEventListener("click", () => selectGroup(other.key));
+    button.addEventListener("click", () => {
+      if (!matchesSearch(other, searchQuery.trim().toLowerCase())) clearIncidentSearch();
+      selectGroup(other.key);
+    });
     section.appendChild(button);
   }
   if (related.length > RELATED_MAX) {
