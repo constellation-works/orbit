@@ -691,7 +691,11 @@ function renderFrictions(payload) {
     return;
   }
 
-  const frag = document.createDocumentFragment();
+  const existing = new Map();
+  for (const node of body.children) {
+    if (node.dataset && node.dataset.key) existing.set(node.dataset.key, node);
+  }
+  const nodes = [];
 
   for (const friction of visible) {
     const title = friction.title || friction.id;
@@ -745,19 +749,26 @@ function renderFrictions(payload) {
     makeRowDisclosure(row, openButton, accordion
       ? { expanded, controls: detailId, onToggle: toggle }
       : { controls: "friction-detail", current: expanded, onToggle: toggle });
-    frag.appendChild(row);
+    nodes.push(row);
     if (accordion && expanded) {
-      const inlineDetail = el("section", { class: "friction-accordion-detail" });
+      const detailKey = `friction-detail-${friction.id}`;
+      const detailHash = JSON.stringify({ friction, tags: lastFrictionPayload.tags, clock: getClockZone() });
+      const existingDetail = existing.get(detailKey);
+      const inlineDetail = existingDetail || el("section", { class: "friction-accordion-detail" });
       inlineDetail.id = detailId;
-      inlineDetail.dataset.key = `friction-detail-${friction.id}`;
-      inlineDetail.dataset.hash = JSON.stringify({ friction, tags: lastFrictionPayload.tags });
+      inlineDetail.dataset.key = detailKey;
       inlineDetail.setAttribute("aria-label", `Details for ${friction.id}`);
-      renderFrictionDetail(friction, inlineDetail);
-      frag.appendChild(inlineDetail);
+      // Reuse the mounted accordion section so an open tags draft stays
+      // mounted and `paintFrictionDetail` repaints around it when the record changes.
+      if (!existingDetail || existingDetail.dataset.hash !== detailHash) {
+        inlineDetail.dataset.hash = detailHash;
+        renderFrictionDetail(friction, inlineDetail);
+      }
+      nodes.push(inlineDetail);
     }
   }
 
-  syncNodes(body, Array.from(frag.children));
+  syncNodes(body, nodes);
   const selected = visible.find((item) => item.id === activeFrictionId) || null;
   renderFrictionDetail(accordion ? null : selected);
 }
