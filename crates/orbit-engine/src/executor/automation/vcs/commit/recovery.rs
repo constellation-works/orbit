@@ -236,13 +236,12 @@ pub(in crate::executor::automation::vcs) fn capture_uncommitted_diff(
     })?;
     let index_path = dir.path().join("index");
     let index_str = index_path.to_string_lossy().into_owned();
-    let mut env_storage = vec![("GIT_INDEX_FILE", index_str)];
-    if let Some((temp_objects, alternate_objects)) =
-        isolated_temp_object_store(workspace_path, dir.path())?
-    {
-        env_storage.push(("GIT_OBJECT_DIRECTORY", temp_objects));
-        env_storage.push(("GIT_ALTERNATE_OBJECT_DIRECTORIES", alternate_objects));
-    }
+    let (temp_objects, alternate_objects) = isolated_temp_object_store(workspace_path, dir.path())?;
+    let env_storage = [
+        ("GIT_INDEX_FILE", index_str),
+        ("GIT_OBJECT_DIRECTORY", temp_objects),
+        ("GIT_ALTERNATE_OBJECT_DIRECTORIES", alternate_objects),
+    ];
     let env = env_storage
         .iter()
         .map(|(key, value)| (*key, value.as_str()))
@@ -302,10 +301,11 @@ pub(in crate::executor::automation::vcs) fn capture_uncommitted_diff(
 
 /// Point temporary index object writes at a scratch directory backed by the
 /// repository's object store so captured diffs never add blobs to `.git/objects`.
+/// Fails when the store cannot be isolated; the caller captures nothing then.
 fn isolated_temp_object_store(
     workspace_path: &Path,
     temp_root: &Path,
-) -> Result<Option<(String, String)>, orbit_common::OrbitError> {
+) -> Result<(String, String), orbit_common::OrbitError> {
     let raw_objects = git_output(workspace_path, &["rev-parse", "--git-path", "objects"])?;
     let objects_path = Path::new(&raw_objects);
     let abs_objects = if objects_path.is_absolute() {
@@ -313,22 +313,32 @@ fn isolated_temp_object_store(
     } else {
         workspace_path.join(objects_path)
     };
-    let Ok(canonical_objects) = abs_objects.canonicalize() else {
-        return Ok(None);
-    };
-    let Ok(alternate) = std::env::join_paths([&canonical_objects]) else {
-        return Ok(None);
-    };
+    // Isolation is mandatory: without it `git add` writes the original bytes of
+    // every ordinary file into the shared object store before redaction runs
+    // [STD-05 §R13]. Refuse before anything is staged.
+    let canonical_objects = abs_objects.canonicalize().map_err(|error| {
+        orbit_common::OrbitError::Io(format!(
+            "cannot isolate scratch diff objects: object directory '{}' is not readable: {error}",
+            abs_objects.display()
+        ))
+    })?;
+    let alternate = std::env::join_paths([&canonical_objects]).map_err(|error| {
+        orbit_common::OrbitError::Io(format!(
+            "cannot isolate scratch diff objects: object directory '{}' cannot be listed as an \
+             alternate: {error}",
+            canonical_objects.display()
+        ))
+    })?;
     let temp_objects = temp_root.join("objects");
     orbit_common::fs::io::create_private_dir_all(&temp_objects).map_err(|error| {
         orbit_common::OrbitError::Io(format!(
             "failed to create scratch diff objects dir: {error}"
         ))
     })?;
-    Ok(Some((
+    Ok((
         temp_objects.to_string_lossy().into_owned(),
         alternate.to_string_lossy().into_owned(),
-    )))
+    ))
 }
 
 /// Filter `safe_paths` to paths that exist in the worktree or (for deletions)
