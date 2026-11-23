@@ -90,11 +90,15 @@ function buildLifecycleStrip(status) {
 // The detail API derives the run's delivery stage from durable run and step
 // state. It uses the same presentation as lifecycle and delivery progress.
 const RUN_ENDED_STATES = ["failed", "cancelled", "timeout", "interrupted"];
+// A held run stopped without failing: it waits for an operator or a gate, so
+// it neither counts elapsed time nor reads as in progress or failed.
+const RUN_HELD_STATE = "held";
 
 export function buildStageStrip(task) {
   const info = task.job_run_stage;
   if (!info || !["in-progress", "review"].includes(task.status)) return null;
   const ended = RUN_ENDED_STATES.includes(info.run_state);
+  const held = info.run_state === RUN_HELD_STATE;
   const awaiting = info.run_state === "success" && task.status === "review";
   let stages = Array.isArray(info.stages) ? info.stages.map((stage) => ({ ...stage })) : [];
   if (awaiting) {
@@ -113,7 +117,7 @@ export function buildStageStrip(task) {
   const steps = stages.map((stage) => {
     let text = stage.label;
     if (stage.state === "current" && !awaiting) {
-      if (ended) {
+      if (ended || held) {
         const stateLabel = info.run_state.charAt(0).toUpperCase() + info.run_state.slice(1);
         text = `${stateLabel} at ${stage.label}`;
       } else if (info.started_at) {
@@ -123,11 +127,11 @@ export function buildStageStrip(task) {
     }
     const current = stage.state === "current";
     const state = stage.state === "past" ? "done" : !current ? "pending"
-      : awaiting ? "awaiting" : ended ? (info.run_state === "cancelled" ? "cancelled" : "failed") : "active";
+      : awaiting ? "awaiting" : held ? "held" : ended ? (info.run_state === "cancelled" ? "cancelled" : "failed") : "active";
     return {
       label: text, state, current,
       hint: current ? tooltip : null,
-      href: current && ended && task.job_run_id && task.job_run_navigable !== false
+      href: current && (ended || held) && task.job_run_id && task.job_run_navigable !== false
         ? taskRunHref(task, String(task.job_run_id)) : null,
     };
   });

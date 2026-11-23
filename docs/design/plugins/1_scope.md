@@ -501,6 +501,10 @@ CLI group. It grants no operator authority, filesystem access or callback permis
 Activity allowlists and deny policies remain separate restrictions; `required_tools` or
 allowlist membership alone never grants a capability. `ORBIT_OPERATOR` and `--operator`
 keep their existing behavior. Calls retain the ordinary audit trail and caller identity.
+Task filing rejects a `required_tools` entry for a mutating plugin tool that is not
+declared `agent_callable`, since the implementing agent cannot acquire operator or
+runner capability. Missing `agent_tools` consent leaves the plugin inactive and its
+tools unavailable for filing until the operator grants consent.
 
 `orbit plugin enable` and `add --enable` show the agent-callable mutating tool names and
 whether `agent_tools` was granted. `list` names those tools, and `show` reports each declaration

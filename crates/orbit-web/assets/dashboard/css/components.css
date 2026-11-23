@@ -924,8 +924,9 @@ a.progress-strip-hint:hover .progress-strip-label { text-decoration: underline; 
 .progress-strip-step[data-state="failed"] { --strip-tone: var(--state-failed); }
 .progress-strip-step[data-state="cancelled"] { --strip-tone: var(--state-cancelled); }
 .progress-strip-step[data-state="awaiting"] { --strip-tone: var(--warn-fg); }
-.progress-strip-step:is([data-state="failed"], [data-state="cancelled"], [data-state="awaiting"]) .progress-strip-bar { background: var(--strip-tone); }
-.progress-strip-step:is([data-state="failed"], [data-state="cancelled"], [data-state="awaiting"]) .progress-strip-hint { color: var(--strip-tone); }
+.progress-strip-step[data-state="held"] { --strip-tone: var(--state-held); }
+.progress-strip-step:is([data-state="failed"], [data-state="cancelled"], [data-state="awaiting"], [data-state="held"]) .progress-strip-bar { background: var(--strip-tone); }
+.progress-strip-step:is([data-state="failed"], [data-state="cancelled"], [data-state="awaiting"], [data-state="held"]) .progress-strip-hint { color: var(--strip-tone); }
 
 /* Shared search stays in the top bar; only task creation follows the route. */
 .topbar-task-actions { display: flex; flex: 0 1 auto; align-items: center; gap: var(--space-8); min-width: 0; }

@@ -486,6 +486,11 @@ function idsCell(ids, applies) {
   return el("td", { class: `num${list.length ? " bad" : ""}`, text: String(list.length), title: list.length ? list.join(", ") : null });
 }
 
+function pullCountCell(count, applies) {
+  if (!applies) return el("td", { class: "num rf-na", text: "—" });
+  return el("td", { class: "num", text: String(Number(count ?? 0)) });
+}
+
 function decisionRow(drain, showWorkspace, showPull) {
   const shadow = Number(drain.shadow_passes) > 0;
   const enforce = Number(drain.enforce_passes) > 0;
@@ -502,7 +507,11 @@ function decisionRow(drain, showWorkspace, showPull) {
   if (showPull) {
     cells.push(
       el("td", { class: "num", text: `${drain.pull_sent ?? 0} / ${drain.pull_requests ?? 0}` }),
-      el("td", { class: "num", text: String(Number(drain.pull_held ?? 0) + Number(drain.pull_would_hold ?? 0)) }),
+      // Enforce passes hold for real; shadow passes only record what enforce
+      // would have held while the pull was still sent. Kept apart, as in the
+      // report's pull_held and pull_would_hold fields.
+      pullCountCell(drain.pull_held, enforce),
+      pullCountCell(drain.pull_would_hold, shadow),
     );
   }
   return el("tr", {}, cells);
@@ -519,10 +528,10 @@ function decisionsPanel(accuracy) {
   const showWorkspace = new Set(drains.map((drain) => drain.workspace_id)).size > 1;
   const showPull = drains.some((drain) => Number(drain.pull_requests ?? 0) > 0);
   const head = [["Drain run"], ...(showWorkspace ? [["Workspace"]] : []), ["Mode"], ["Passes", true], ["Admitted", true], ["Held", true], ["Would hold", true], ["Would add", true],
-    ...(showPull ? [["Pull sent", true], ["Pull held", true]] : [])];
+    ...(showPull ? [["Pull sent", true], ["Pull held", true], ["Pull would hold", true]] : [])];
   return [
     el("p", { class: "fc-meta", text: `${drains.length} drain${drains.length === 1 ? "" : "s"} with forecast passes, newest first` }),
     forecastTable("Admission decisions per drain", head, drains.map((drain) => decisionRow(drain, showWorkspace, showPull))),
-    el("p", { class: "fc-line rf-foot", text: "Enforce passes hold a task whose forecast crosses an admit threshold (Held). Shadow passes admit as before and record what enforce would have held or added. Hover a count for its task ids; a run opens its recorded admission pass." }),
+    el("p", { class: "fc-line rf-foot", text: "Enforce passes hold a task whose forecast crosses an admit threshold (Held). Shadow passes admit as before and record what enforce would have held or added. A shadow pull is still sent; Pull would hold counts the ones enforce would have held, and Pull held counts only enforce holds. Hover a count for its task ids; a run opens its recorded admission pass." }),
   ];
 }

@@ -135,6 +135,9 @@ pub(super) fn job_v2_step_to_json(step: &JobV2Step) -> Value {
                 "break_when": loop_.break_when,
                 "steps": loop_.steps.iter().map(job_v2_step_to_json).collect::<Vec<_>>(),
             });
+            if loop_.fail_when_exhausted {
+                value["body"]["fail_when_exhausted"] = json!(true);
+            }
         }
     }
     value

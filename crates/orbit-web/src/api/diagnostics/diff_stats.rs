@@ -237,17 +237,45 @@ fn diff_stats_trend(
         }
     }
 
-    // The busiest crews get their own series; ties break by name.
-    let mut crew_counts: BTreeMap<Option<&str>, u64> = BTreeMap::new();
+    // Deliveries in the lead buckets before the window, under the same
+    // complexity filter: Per day sums them into the first trailing day.
+    let lead_rows: Vec<(usize, _)> = rows
+        .iter()
+        .filter_map(|row| {
+            window
+                .lead_bucket_of(row.landed_at)
+                .map(|index| (index, row))
+        })
+        .filter(|(_, row)| {
+            complexities.is_none_or(|selected| {
+                selected.contains(complexity_bucket(row.complexity.as_deref()))
+            })
+        })
+        .collect();
+
+    // The busiest crews in the window get their own series; ties break by
+    // name. A crew seen only in the lead ranks after every crew in the window,
+    // so the window's ranking stands and lead-only work still has a series.
+    let mut crew_counts: BTreeMap<Option<&str>, (u64, u64)> = BTreeMap::new();
     for (_, row) in &in_window {
-        *crew_counts.entry(row.crew.as_deref()).or_default() += 1;
+        crew_counts.entry(row.crew.as_deref()).or_default().0 += 1;
+    }
+    for (_, row) in &lead_rows {
+        crew_counts.entry(row.crew.as_deref()).or_default().1 += 1;
     }
     let has_unassigned = crew_counts.remove(&None).is_some();
     let mut ranked: Vec<_> = crew_counts
         .into_iter()
-        .filter_map(|(crew, count)| crew.map(|name| (name, count)))
+        .filter_map(|(crew, counts)| crew.map(|name| (name, counts)))
         .collect();
-    ranked.sort_by(|(left, left_n), (right, right_n)| right_n.cmp(left_n).then(left.cmp(right)));
+    ranked.sort_by(
+        |(left, (left_n, left_lead)), (right, (right_n, right_lead))| {
+            right_n
+                .cmp(left_n)
+                .then(right_lead.cmp(left_lead))
+                .then(left.cmp(right))
+        },
+    );
     let drawn_count = MAX_CREWS - usize::from(has_unassigned);
     let drawn: Vec<&str> = ranked
         .iter()
@@ -276,28 +304,14 @@ fn diff_stats_trend(
         };
         series.record(*index, values);
     }
-    for row in &rows {
-        let Some(index) = window.lead_bucket_of(row.landed_at) else {
-            continue;
-        };
-        if complexities.is_some_and(|selected| {
-            !selected.contains(complexity_bucket(row.complexity.as_deref()))
-        }) {
-            continue;
-        }
+    for (index, row) in &lead_rows {
         let values = measures(row);
-        overall.record_lead(index, values);
-        match row.crew.as_deref() {
-            Some(crew) => {
-                if let Some(series) = by_crew.get_mut(crew) {
-                    series.record_lead(index, values);
-                } else if folded.contains(&crew) {
-                    other.record_lead(index, values);
-                }
-            }
-            None if has_unassigned => unassigned.record_lead(index, values),
-            None => {}
-        }
+        overall.record_lead(*index, values);
+        let series = match row.crew.as_deref() {
+            Some(crew) => by_crew.get_mut(crew).unwrap_or(&mut other),
+            None => &mut unassigned,
+        };
+        series.record_lead(*index, values);
     }
     let mut crews: Vec<Value> = drawn
         .iter()

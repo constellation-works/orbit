@@ -24,8 +24,9 @@ use std::time::Instant;
 
 impl OrbitRuntime {
     /// `detail` of a refusal, followed by the attempts `observation`'s pull
-    /// request has spent and has left. A pull request with nothing to repair
-    /// (`no_blocker`, `checked_recently`) is reported as it is.
+    /// request has spent and has left, or why ledger evidence is unavailable
+    /// when the task ledger cannot be read. A pull request with nothing to
+    /// repair (`no_blocker`, `checked_recently`) is reported as it is.
     pub(in crate::application::job::pr_repair) fn skip_detail_with_budget(
         &self,
         task_id: &str,
@@ -36,11 +37,12 @@ impl OrbitRuntime {
         if matches!(reason, "no_blocker" | "checked_recently") {
             return detail.to_string();
         }
-        observation
-            .pr_number
-            .as_deref()
-            .and_then(|number| budget_note(&self.get_task_history(task_id).ok()?, number))
-            .map_or_else(|| detail.to_string(), |note| format!("{detail}; {note}"))
+        let Some(number) = observation.pr_number.as_deref() else {
+            return detail.to_string();
+        };
+        let history = self.get_task_history(task_id);
+        let note = budget_note(history.as_deref(), number);
+        format!("{detail}; {note}")
     }
 
     /// Whether the pull request of `task_id`'s newest leaf `run` is repaired,
@@ -95,6 +97,11 @@ impl OrbitRuntime {
                 }
                 Ok(None) => None,
                 Err(error) => {
+                    if observation.pr_number.is_none()
+                        && let Ok(task) = self.get_task(task_id)
+                    {
+                        observation.pr_number = task.github_pr_number().map(str::to_string);
+                    }
                     return skip("store_unreadable", format!("read the run's steps: {error}"));
                 }
             };
@@ -451,11 +458,15 @@ impl OrbitRuntime {
             );
         }
         // An auto-fix stop is reconsidered only after positive, complete check
-        // evidence. Red, pending or absent checks must not trigger another repair.
+        // evidence. Red, pending, unreported or absent checks must not trigger
+        // another repair: a configured required check that has not reported
+        // on the head is not green, even when its siblings passed.
         if auto_fix_hold
-            && (blockers.conflicting
+            && (blockers.requires_status_checks.is_none()
+                || blockers.conflicting
                 || !blockers.failed_required_checks.is_empty()
                 || !blockers.pending_required_checks.is_empty()
+                || !blockers.unreported_required_checks.is_empty()
                 || (blockers.passed_required_checks.is_empty()
                     && blockers.requires_status_checks != Some(false)))
         {
@@ -466,10 +477,12 @@ impl OrbitRuntime {
         }
         // An unrepaired check repair retries through the ledger while a blocker
         // and budget remain; if no blocker remains, it hands back only once
-        // the published head reports complete green checks.
+        // the published head reports every configured required check green.
         if unrepaired_repair_hold
             && blocker.is_none()
-            && (!blockers.pending_required_checks.is_empty()
+            && (blockers.requires_status_checks.is_none()
+                || !blockers.pending_required_checks.is_empty()
+                || !blockers.unreported_required_checks.is_empty()
                 || (blockers.passed_required_checks.is_empty()
                     && blockers.requires_status_checks != Some(false)))
         {

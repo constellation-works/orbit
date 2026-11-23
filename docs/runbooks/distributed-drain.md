@@ -780,7 +780,7 @@ ORBIT_OPERATOR=1 orbit tool run orbit.drain.receipt.lookup --input '{
 
 Idle receipts compact to permanent tombstones in v1. Unsettled claims keep
 full receipts. Do not delete request rows by age. At the shipped 60-second
-idle poll (`idle_sleep_seconds`), one drain leaves 1,440 request identities per
+idle sleep (`idle_sleep_seconds`), one drain leaves 1,440 request identities per
 day even after compaction. Stop a refill pass after the first idle response; the
 next poll uses a **new** request ID. The follower's own copy is bounded: when it
 allocates a new request it prunes its idle and refused rows to the newest
@@ -1400,9 +1400,18 @@ reported as accepted on a drain that is ending. A shorter window is a no-op
 and a drain started without `--for`, which makes its single pass only. Each
 request is audited on the run (`pipeline.run.window_extend.completed`, with
 `previous_deadline` and `deadline`), and `orbit run show` prints the
-`Window: extended to …` line. The job's loop ceiling (6000 iterations, each
-idle one waiting at least `poll_sleep_seconds`) still bounds a drain extended
-over days; past it the drain ends and a new one carries its admissions. The drain's `--concurrency`, as last
+`Window: extended to …` line. The job's 6000-iteration ceiling bounds a drain
+extended over days, but it does not guarantee a fixed wall time. On a continuing
+pass with no admissions, the drain uses `poll_sleep_seconds` when leaves are
+unsettled, capacity is full, or the pass is throttled or incomplete; otherwise
+it uses `idle_sleep_seconds`. The settings are independent (shipped defaults: 30 seconds
+polling and 60 seconds idle). If all 6000 passes wait, those defaults account
+for roughly 50–100 hours of configured sleep, depending on which setting each
+pass selects, plus pass processing time. Passes that admit work need not sleep,
+and shorter configured waits can exhaust the ceiling before a 24-hour window
+and its settling tail end. At that ceiling the run fails with `loop_exhausted`
+(naming the `drain` step, its iteration count and the ceiling) and a new one
+carries its admissions. The drain's `--concurrency`, as last
 retuned, is the only ceiling on its leaves: the claimed leaf jobs declare no
 active-run limit of their own. On the follower, `orbit run readiness` with no
 `--concurrency` and no local drain reports that ceiling. Text prints

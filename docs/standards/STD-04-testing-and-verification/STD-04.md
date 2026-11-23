@@ -2,7 +2,6 @@
 id: STD-04-testing-and-verification
 title: Testing and verification — test design, hermetic tests, honest gates, docs as contracts, and evidence-based verification conduct
 summary: Normative rules for how a change is tested and verified — boundary-first tests with unit tests only by admission, regression tests that drive the real entry point and fail before the fix, no weakened guards, behaviour-only and hermetic tests, visible skips, root-caused flakes, gates that cannot pass vacuously, regenerated artifacts, docs claims and examples as contracts, and the evidence whoever makes the change (human or agent) must produce before calling it done; follow it in any project with tests, CI or docs.
-status: active
 tags: [standard, testing, verification, ci, docs, agents]
 version: 2
 created: 2026-09-26

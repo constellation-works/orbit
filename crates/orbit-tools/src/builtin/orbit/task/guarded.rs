@@ -305,19 +305,24 @@ pub(super) fn write(
         operation.insert("kind".into(), json!(kind));
     };
     let projection = if !create && mode == "review" {
-        super::operation::response_projection(&input)?
+        super::operation::response_projection(
+            &input,
+            super::operation::GUARDED_REVIEW_RESPONSE_FIELDS,
+        )?
     } else {
         None
     };
     let mut keys = vec!["workspace", "request_id", "model"];
+    let mut accepted = allowed.to_vec();
     if !create && mode == "review" {
         keys.extend(["fields", "field"]);
+        accepted.extend(["fields", "field"]);
     }
     if !create {
         keys.extend(["id", "expected_revision"]);
     }
     keys.extend(allowed);
-    reject_guarded_unknown_fields(&input, &keys, create, mode, allowed)?;
+    reject_guarded_unknown_fields(&input, &keys, create, mode, &accepted)?;
     let values = allowed
         .iter()
         .filter_map(|key| input.get(*key).map(|value| ((*key).into(), value.clone())))

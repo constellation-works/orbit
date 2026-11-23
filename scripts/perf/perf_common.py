@@ -105,12 +105,45 @@ def _resolve(path: Path) -> Path:
     return Path(os.path.realpath(path))
 
 
+def _registry_orbit_dirs(registry: Path) -> list[str]:
+    """The `orbit_dir` of every checkout the registry names, or refuse.
+
+    Only a missing registry names no checkouts. A registry that exists but cannot
+    be read or parsed, or is not an object whose `checkouts` is a list of objects
+    each naming an `orbit_dir`, refuses: guarding without it would let a live
+    workspace's `.orbit` through the check.
+    """
+    try:
+        raw = registry.read_bytes()
+    except FileNotFoundError:
+        return []
+    except OSError as error:
+        raise PerfRefusal(f"cannot read {registry}: {error.strerror or error}") from error
+    try:
+        data = json.loads(raw)
+    except ValueError as error:
+        raise PerfRefusal(f"{registry} is not valid JSON: {error}") from error
+    if not isinstance(data, dict):
+        raise PerfRefusal(f"{registry} is not a registry object")
+    checkouts = data.get("checkouts", [])
+    if not isinstance(checkouts, list):
+        raise PerfRefusal(f"{registry}: checkouts is not a list")
+    orbit_dirs = []
+    for index, checkout in enumerate(checkouts):
+        orbit_dir = checkout.get("orbit_dir") if isinstance(checkout, dict) else None
+        if not isinstance(orbit_dir, str) or not orbit_dir:
+            raise PerfRefusal(f"{registry}: checkouts[{index}] has no orbit_dir string")
+        orbit_dirs.append(orbit_dir)
+    return orbit_dirs
+
+
 def protected_roots() -> list[Path]:
     """Directories a perf run must never restore into or remove.
 
     The live global root (`~/.orbit` of the passwd home, plus `$HOME/.orbit`
     and `ORBIT_ROOT` when set) and every checkout `.orbit` directory the live
     registry names. The deployed `orbit-web.service` serves exactly these.
+    A registry that exists but cannot be read or parsed raises `PerfRefusal`.
     """
     roots = {_resolve(real_home() / ".orbit")}
     env_home = os.environ.get("HOME")
@@ -120,14 +153,8 @@ def protected_roots() -> list[Path]:
     if env_root:
         roots.add(_resolve(Path(os.path.expanduser(env_root))))
     registry = real_home() / ".orbit" / "workspaces.json"
-    try:
-        data = json.loads(registry.read_text())
-    except (OSError, ValueError):
-        data = {}
-    for checkout in data.get("checkouts", []) or []:
-        orbit_dir = checkout.get("orbit_dir")
-        if orbit_dir:
-            roots.add(_resolve(Path(orbit_dir)))
+    for orbit_dir in _registry_orbit_dirs(registry):
+        roots.add(_resolve(Path(orbit_dir)))
     return sorted(roots)
 
 

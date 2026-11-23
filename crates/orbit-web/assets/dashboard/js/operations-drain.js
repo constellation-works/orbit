@@ -679,6 +679,8 @@ function retargetDrainLinks(body, scope) {
   const workspaceId = scope?.workspace?.id;
   if (!hostName || !workspaceId) return;
   for (const anchor of body.querySelectorAll("a[href]")) {
+    // The backlog forecast line keeps its own (rail) scope; see placeBacklogForecast.
+    if (anchor.dataset.drainScope === "rail") continue;
     const url = new URL(anchor.href, window.location.href);
     if (url.origin !== window.location.origin) continue;
     url.searchParams.set("host", hostName);
@@ -702,6 +704,9 @@ function renderAutoDrain(payload, generation = drainScopeGeneration) {
   // control that had it.
   const focusKey = document.activeElement?.dataset?.drainFocus;
   body.textContent = "";
+  // A card scoped to another host tells the rail-scoped backlog line so.
+  if (scope?.hostName && !isAggregateView()) body.dataset.drainFollower = scope.hostName;
+  else delete body.dataset.drainFollower;
   renderAutoDrainHead(payload);
   const reasons = autoDrainReasons(payload, scope?.refusal);
   const holds = [

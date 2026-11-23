@@ -429,6 +429,7 @@ fn compound_replay_job() -> JobV2 {
                 timeout_seconds: None,
                 interval_seconds: None,
                 break_when: None,
+                fail_when_exhausted: false,
                 steps: vec![target_step("tick", "counter")],
             },
         },

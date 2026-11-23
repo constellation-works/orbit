@@ -184,6 +184,10 @@ pub const OWNER_ROUTE_UNAVAILABLE_MARKER: &str = "[owner_route_unavailable]";
 /// operator; another agent cannot record that approval. [ORB-23956]
 pub const OWNER_SIGNOFF_REQUIRED_ERROR_CODE: &str = "owner_signoff_required";
 
+/// Failure code a job loop declared `fail_when_exhausted` carries when it ran
+/// out of iterations while its `break_when` never held.
+pub const LOOP_EXHAUSTED_ERROR_CODE: &str = "loop_exhausted";
+
 /// `error.code=` fragment the step diagnostic writes for
 /// [`OWNER_SIGNOFF_REQUIRED_ERROR_CODE`], including the semicolon that
 /// closes the code. A handoff that sees only the step message matches this.

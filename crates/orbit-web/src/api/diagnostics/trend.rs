@@ -541,7 +541,9 @@ impl<C: CohortCell> CohortSeriesMap<C> {
         series
             .into_iter()
             .filter(|((complexity, _), series)| {
-                STANDING_SERIES.contains(&complexity.as_str()) || !series.total.is_empty()
+                STANDING_SERIES.contains(&complexity.as_str())
+                    || !series.total.is_empty()
+                    || (include_lead && series.lead_points.iter().any(|cell| !cell.is_empty()))
             })
             .map(|((complexity, cohort), series)| {
                 let points: Vec<Value> = series.points.iter().map(CohortCell::to_json).collect();
@@ -638,11 +640,12 @@ impl CohortWindowData {
                 .collect::<Vec<_>>()
         };
         let in_window = select_tasks(&|at| window.bucket_of(at));
-        // A window with no tasks draws nothing, so its lead is never read.
-        let lead_rows = if !day_lead || in_window.is_empty() {
-            Vec::new()
-        } else {
+        // Per day sums the lead into the first trailing day, so a window with
+        // no tasks of its own still draws the lead's.
+        let lead_rows = if day_lead {
             select_tasks(&|at| window.lead_bucket_of(at))
+        } else {
+            Vec::new()
         };
         Ok(Self {
             window,

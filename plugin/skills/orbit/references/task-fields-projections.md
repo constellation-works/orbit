@@ -75,10 +75,13 @@ are not filters. Optional `workspace` is an explicit fail-closed filter
 argument. The `workspace` projection returns the owning registry identity
 `{id, name}` (or `null` when unregistered); `workspace_path` is not a projection field.
 
-For `orbit.task.show`, `orbit.task.add` and `orbit.task.update`, MCP accepts
-`fields` as an array of field names, or `field` as a single-field alias.
-The CLI also accepts a repeated flag or a comma-separated string.
-`fields` takes precedence when both are supplied. The projection catalogue is:
+For ordinary `orbit.task.show`, ordinary `orbit.task.add`, ordinary
+`orbit.task.update`, and `orbit.task.reject`, MCP accepts `fields` as an array
+of task-record field names, or `field` as a single-field alias; `fields` takes
+precedence when both are supplied. Only `orbit task show` takes `--fields` on
+the human CLI, as a repeated flag or a comma-separated string. The write
+projections on `add` and `update` are MCP-only, and `reject` is not a CLI verb.
+The ordinary task-record projection catalogue is:
 
 ```text
 id, workspace, parent_id, title, description, acceptance_criteria,
@@ -136,10 +139,33 @@ field returns its bare JSON value (`--fields status` returns `"proposed"`,
 above) and several fields return an object keyed by field name, whether the
 task was read locally or from another host.
 
-Write responses without a projection omit the append-heavy `comments` and
-`history`; request those fields explicitly when needed. Write projections
-use the same field catalogue and the same shapes above: a `fields` array
-keys even one field by name, and the `field` alias returns its bare value.
+Ordinary write responses (`orbit.task.add`, `orbit.task.update` without
+`request_id`, and `orbit.task.reject`) without a projection omit the
+append-heavy `comments` and `history`; request those fields explicitly when
+needed. Ordinary write projections use the task-record field catalogue and the
+same shapes above: a `fields` array keys even one field by name, and the `field`
+alias returns its bare value. Request them over MCP; `orbit task add` and
+`orbit task update` take no `--fields` flag, so on the CLI read the result back
+with `orbit task show --fields`.
+
+Guarded writes (`request_id` on `orbit.task.add` or `orbit.task.update`) follow
+mode-specific projection rules:
+
+- Guarded creation, guarded edit, and guarded comment reject `fields` and `field`.
+- Guarded review (`orbit.task.update` with `request_id`, `expected_revision`,
+  `verdict`, and optional `complete`) accepts `fields` or `field` over the
+  guarded review response catalogue:
+
+```text
+snapshot, replayed, conflict, mutation_applied, refusal, accepted, task_id,
+refresh_error, workspace
+```
+
+- Guarded review projections use the same `fields` (keyed object) and `field`
+  (bare value) shapes on applied or replayed results. A revision conflict
+  (`conflict`), pre-mutation refusal (`mutation_applied: false`), or accepted
+  write whose refresh failed (`accepted: true`) returns the complete outcome
+  receipt regardless of `fields` or `field`.
 
 A write response may also carry optional `warnings` metadata. It is not a task
 field: `warnings` is absent when empty, is attached to every object response
@@ -186,6 +212,29 @@ A paginated claimed read of `orbit.task.show` (any of `limit`,
 `model`, `limit` and the three offsets, and cannot be combined with `fields`,
 `field` or `run_id`. Drop the projection to page the full task, or drop
 pagination for a projection.
+
+For `orbit.task.show` with `snapshot: true`, `workspace` is required and
+`run_id`, `view`, `comments_offset`, `history_offset`, and `artifacts_offset`
+are rejected. `snapshot: true` accepts `fields` or `field` over the snapshot
+response catalogue rather than the task-record catalogue:
+
+```text
+schema_version, observed_at, revision, task, actions, comments, history,
+artifacts, comments_total, history_total, artifacts_total, reviewed_head,
+reviewed_head_reason, truncated_fields, content_truncated, review,
+review_reason, workspace
+```
+
+- `fields` returns an object keyed by the selected snapshot field(s), and
+  `field` returns that single field's bare value (carried as `{"value": ...}`
+  or `{"items": [...]}` on the MCP wire for non-objects).
+- Supplying `limit` with `snapshot: true` is accepted and ignored, adding
+  `"note": "limit was ignored for snapshot: true"` (wrapping a non-object
+  `field` projection as `{"value": ..., "note": ...}`).
+
+For `orbit.task.show` with `view: "bounded"`, `workspace` is required and
+`limit`, `comments_offset`, `history_offset`, and `artifacts_offset` are
+accepted; `fields`, `field`, `run_id`, and `snapshot` are rejected.
 
 ## Task lifecycle and listing
 

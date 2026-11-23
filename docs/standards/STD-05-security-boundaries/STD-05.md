@@ -2,7 +2,6 @@
 id: STD-05-security-boundaries
 title: Security boundaries — authority, filesystem containment, child environments, redaction, local network surfaces, supply chain and consent
 summary: Normative trust-boundary rules for constellation CLIs and small local services — authority from host-owned state, symlink-safe path containment, private local state, allowlisted child environments, value-based redaction at the durability boundary, loopback surfaces that check Host and Origin, no phoning home, digest-bound consent, pinned and verified supply chain, CSPRNG tokens; follow it in any tool that runs untrusted children, persists state, or listens on a socket.
-status: active
 tags: [standard, security, sandbox, secrets, redaction, supply-chain, network]
 version: 1
 created: 2026-09-26

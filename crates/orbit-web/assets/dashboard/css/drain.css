@@ -380,4 +380,4 @@
 .drain-approval-summary a { color: var(--warn-fg); text-decoration: underline; }
 
 .drain-backlog-forecast-gap { order: 2; flex: 1 1 100%; color: var(--warn-fg); overflow-wrap: anywhere; }
-.drain-backlog-forecast-scope { order: 2; flex: 1 1 100%; overflow-wrap: anywhere; }
+.drain-backlog-forecast-scope, .drain-backlog-forecast-owner { order: 2; flex: 1 1 100%; overflow-wrap: anywhere; }

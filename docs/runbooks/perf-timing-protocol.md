@@ -43,10 +43,12 @@ The protocol has four scripts under `scripts/perf/`:
   shell profiles, `clock.env`, `*.env`, token, secret, credential and key files, and
   `plugin-secrets/`, `ssh/` and `.gnupg/` trees are skipped wherever they sit, and a copied
   `.git/config` loses any userinfo in its remote URLs. The manifest counts what was skipped.
-- **Protected roots.** `restore` and `clean` refuse a target that is, resolves (through
+- **Protected roots.** `restore`, `prepare` and `clean` refuse a target that is, resolves (through
   symlinks) under, or contains the live global root (`~/.orbit`) or any checkout `.orbit/`
   the live registry names. A run worktree's own scratch, `.orbit/state/worktrees/<run>/.orbit/tmp/`,
-  is allowed. `clean` also refuses a directory that `restore` did not create.
+  is allowed. `clean` also refuses a directory that `restore` did not create. A registry that
+  exists but is unreadable, malformed, or not a registry object refuses the run; it never reads
+  as naming no checkouts. Only a missing `~/.orbit/workspaces.json` names none.
 - **No network.** CLI-mode samples run under `unshare --map-current-user --net` when the
   host allows unprivileged namespaces, and `paired-summary.json` records whether it did.
   HTTP-mode servers stay on host loopback so the harness can reach them. Nothing in the
@@ -679,6 +681,7 @@ Tasks land in `proposed`. Do not approve them.
 | Exit 2 message | Cause | Fix |
 |---|---|---|
 | `refusing to restore into … live Orbit root …` | Target is, resolves under or contains `~/.orbit` or a registered `.orbit/` | Restore under the run's scratch dir |
+| `cannot read … workspaces.json: …`, `… workspaces.json is not valid JSON …`, `… workspaces.json is not a registry object`, or `… workspaces.json: checkouts …` (restore, prepare, clean) | `~/.orbit/workspaces.json` exists but cannot be read or parsed, or its `checkouts` is not a list of objects each naming an `orbit_dir` | Repair the live registry so it reads as a valid registry (see [state-and-backup](state-and-backup.md)). Do not delete it to get past the refusal: a missing file names no checkouts, so no `.orbit/` is protected |
 | `… failed digest verification, refusing to restore: …` | A snapshot file was changed, removed or added after the snapshot | Take a fresh snapshot |
 | `workspace … has no initialized identity: …` (snapshot) | The registered checkout's `.orbit/config.yaml` is missing or names no `workspace_id` | Initialize that checkout with `orbit workspace init --force`, then snapshot again |
 | `snapshot … records no workspace identity …` (restore) | The snapshot was taken from an identity-less source | Take a fresh snapshot of an initialized workspace |

@@ -146,7 +146,7 @@ operation:
 |---|---|
 | `orbit.run` | `list`, `show`, `observe`, `resume` |
 | `orbit.workflow` | `ship`, `land`, `auto`, `refresh` (`auto`'s sub-command goes in `mode`) |
-| `orbit.task.recover` | `requeue`, `review_reset`, `retry_handoff`, `revoke_handoff`, `recover_claim`, `repilot`, `reconcile_review` (its sub-command goes in `mode`) |
+| `orbit.task.recover` | `requeue`, `resume_delivery`, `review_reset`, `retry_handoff`, `revoke_handoff`, `recover_claim`, `repilot`, `reconcile_review` (its sub-command goes in `mode`) |
 | `orbit.task.artifact` | `get`, `put` |
 | `orbit.friction` | `add`, `update` |
 | `orbit.decision` | `list`, `show`, `raise` |
@@ -430,8 +430,8 @@ The first call may already have created a run.
 |---|---|
 | `orbit_task_list` | `{ tasks, total, truncated }` with compact rows: `id`, `title`, `status`, `priority`, `type`, `dependencies`, `resolved_dependencies`, `implemented_by`, `not_before`, `created_at`, `updated_at`, `workspace`. Pass `fields` to choose fields, including long text such as `description` or `plan`. |
 | `orbit_task_eligible` | `{ tasks, total, truncated }`: the `backlog` and `proposed` tasks whose files overlap no running or in-review task. Rows hold `id`, `title`, `type`, `status`, `priority`, and `complexity`; there is no `fields` option. With `explain: true`, `conflicting` lists each held-back task, the overlapping file, and the task holding it. |
-| `orbit_task_show` | The full record, or the fields named in `fields`. It includes `not_before`, `started_at` (the first entry into `in-progress`), and `scheduled_hold` (whether a backlog task is still held by a future schedule). |
-| `orbit_task_add`, `orbit_task_update` | The task without `comments` and `history`, unless you name them in `fields`. |
+| `orbit_task_show` | Ordinary mode returns the full task record (including `not_before`, `started_at`, and `scheduled_hold`), the task-record fields named in `fields`/`field`, or delivery evidence with `field: "delivery"` (plus optional `run_id`). With `snapshot: true`, returns a bounded versioned snapshot (`schema_version`, `observed_at`, `revision`, `task`, `actions`, `comments`, `history`, `artifacts`, `comments_total`, `history_total`, `artifacts_total`, `reviewed_head`, `reviewed_head_reason`, `truncated_fields`, `content_truncated`, `review`, `review_reason`, `workspace`) or `fields`/`field` projections over those snapshot fields; a supplied `limit` is ignored and adds `note`. With `view: "bounded"`, returns a paginated bounded snapshot and rejects projections (`fields`, `field`, `run_id`) and `snapshot`. Claimed pagination (`limit` or offsets without `snapshot`/`view`) also rejects projections. |
+| `orbit_task_add`, `orbit_task_update` | Ordinary writes return the task without `comments` and `history`, unless named in `fields`/`field` (or projected task fields). Guarded creation, edit, and comment (`request_id`) reject `fields`/`field`; guarded review (`orbit_task_update` with `request_id`, `expected_revision`, `verdict`, and optional `complete`) accepts `fields`/`field` over `snapshot`, `replayed`, `conflict`, `mutation_applied`, `refusal`, `accepted`, `task_id`, `refresh_error`, `workspace` (conflicts, pre-mutation refusals, and refresh-failed accepted writes always return the complete outcome receipt). |
 
 Schedule filters on `orbit_task_list`:
 

@@ -51,7 +51,8 @@
 //! [`pass_types::CLEAN_RECHECK`]. A forge read failure defers the pass's remaining reads;
 //! GitHub's `UNKNOWN` mergeability answer skips only that pull request.
 //! Nothing here ends the drain: each refusal is reported in the step output,
-//! with the repair attempts the pull request has spent and has left, and a
+//! with the repair attempts the pull request has spent and has left (or why
+//! ledger evidence is unavailable when the task ledger cannot be read), and a
 //! later pass reconsiders it.
 //!
 //! A leaf that ended `held` on a delivery refusal a fresh forge read can

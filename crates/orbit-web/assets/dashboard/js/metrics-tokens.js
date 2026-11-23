@@ -11,7 +11,7 @@
 // drawing and tooltips stay in metrics.js, which passes its helpers in.
 
 import { el, onWorkspaceChange } from './common.js';
-import { OUTCOMES, TERMINAL_TIME_NOTE, axisScale, fmtCompactTotal, option, runningModel, seriesKey, seriesLabel, tagPicker, tasks, trendSource, undatedNote } from './metrics-running.js';
+import { OUTCOMES, TERMINAL_TIME_NOTE, axisScale, dayLeadHasData, fmtCompactTotal, option, runningModel, seriesKey, seriesLabel, tagPicker, tasks, trendSource, undatedNote } from './metrics-running.js';
 
 const SCOPES = [["all", "All invocations"], ["implement", "Implement only"]];
 
@@ -200,7 +200,9 @@ export function tokenSpendModel(payload, { windowKey, shown, countView, bucketTi
     })),
   ];
 
-  if (!total.n) {
+  const leadTasks = Array.from({ length: Math.max(0, ...series.map((entry) => (entry.lead_points || []).length)) },
+    (_, i) => series.reduce((count, entry) => count + ((entry.lead_points || [])[i]?.n || 0), 0));
+  if (!total.n && !dayLeadHasData(countView, payload.window.bucket_seconds, leadTasks)) {
     const left = excluded(total);
     return {
       blurb,

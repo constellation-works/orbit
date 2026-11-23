@@ -16,3 +16,4 @@ removed or changed in meaning.
 - **v1** (2026-09-26): first publication. R1 to R25 from tacit-extraction candidates T14,
   S1 to S7 and P5 (ORB-13088 disposition), plus R15 and R20 from Orbit's positioning
   non-negotiables. ORB-13129.
+- **Editorial (2026-11-23, version unchanged):** the frontmatter drops `status`, which nothing read (ORB-27289).

@@ -778,7 +778,8 @@ credential or permission refusal, also holds as
 `delivery_check_evidence_inconclusive` before or after mutation; it admits
 neither a repair agent nor a merge. Permanent forge-read refusals at other
 boundaries still fail. `gh`'s
-`error connecting to api.github.com` counts as a transport failure.
+`error connecting to api.github.com` and `dial tcp …: connect: network is
+unreachable` count as transport failures.
 
 Changed task meaning, policy, candidate, review repairs, publication,
 a live foreign owner, lease or a dirty checkout refuses reuse of the in-worker
@@ -2122,8 +2123,9 @@ For the full persisted pass, including every skip and any `pass_error`, run
   mergeability; other candidates in the pass are still checked;
 - `already_repaired`, `already_started` or `budget_exhausted`: the ledger refused.
   Every refusal of a pull request that may need a repair ends with its repair
-  attempts spent and remaining, or says the budget is spent. A repair that
-  published no new head leaves its head repairable while attempts remain;
+  attempts spent and remaining, says the budget is spent, or states that
+  repair attempts are unavailable when the task ledger cannot be read. A repair
+  that published no new head leaves its head repairable while attempts remain;
 - `live_run` or `claimed_execution`: another run or machine owns the delivery;
 - `not_resumable`: checkpoint resume refused the run, for example one that
   stopped before its completion step;
@@ -2146,8 +2148,10 @@ For the full persisted pass, including every skip and any `pass_error`, run
 
 **Held leaves.** A held leaf with typed code `delivery_head_changed` or
 `delivery_repair_dispatched` and an `auto_fix_stopped:` diagnostic in its
-message is handed back once the same published head has no conflict, no pending
-or failed required checks, and either at least one passed required check or a
+message is handed back once the same published head has no conflict, no pending,
+unreported or failed required checks, readable classic and ruleset policy, and
+every configured check reported on that head. It must have either at least one
+passed required check or a
 forge-confirmed zero-required-check base branch (neither classic branch
 protection nor rulesets require status checks; missing or unreadable policy
 stays skipped under `auto_fix_stopped`). Readiness
@@ -2163,7 +2167,9 @@ observed by an `--auto-fix` drain pass (and **Fix PR**) without waiting for the
 held-leaf backoff: while a blocker remains it retries through the per-PR ledger
 for its remaining attempts (or skips under `budget_exhausted`, `operator_hold`,
 `opted_out`, or `completion_held` with its spent/remaining attempt count in
-readiness), and if all required checks turn green on the same published head it
+readiness), and once every required check the base branch configures reports
+green on the same published head with readable classic and ruleset policy (an
+unreadable policy or a required check still unreported keeps it waiting), it
 hands back to completion as `checks_green_after_hold`.
 
 A task in `review` whose newest leaf ended `held` with its pull

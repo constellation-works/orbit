@@ -1014,8 +1014,28 @@ def positive(value: str) -> int:
 
 def positive_float(value: str) -> float:
     number = float(value)
-    if not number > 0 or math.isinf(number):
+    if not math.isfinite(number) or number <= 0:
         raise argparse.ArgumentTypeError("must be a finite number above 0")
+    return number
+
+
+def non_negative(value: str) -> int:
+    try:
+        number = int(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError("must be a non-negative integer") from None
+    if number < 0:
+        raise argparse.ArgumentTypeError("must be a non-negative integer")
+    return number
+
+
+def non_negative_finite_float(value: str) -> float:
+    try:
+        number = float(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError("must be a finite number at least 0") from None
+    if not math.isfinite(number) or number < 0:
+        raise argparse.ArgumentTypeError("must be a finite number at least 0")
     return number
 
 
@@ -1064,12 +1084,8 @@ def row_mask_value(value: str) -> str:
     return value
 
 
-def parity_command_value(value: str) -> str:
-    """A --parity value must be one shell-quoted orbit command (ORB-26398, ORB-26439).
-
-    An omitted flag never reaches this check (argparse leaves it None), so an explicit
-    value that splits to no words is refused rather than standing in for no command.
-    """
+def shell_command_value(value: str, empty_message: str) -> str:
+    """Validate a shell-quoted Orbit command without changing its spelling."""
     try:
         words = shlex.split(value)
     except ValueError as error:
@@ -1077,9 +1093,23 @@ def parity_command_value(value: str) -> str:
             f"not a valid shell-quoted orbit command ({error}); check the quotes, "
             "e.g. 'doctor --json'") from None
     if not words:
-        raise argparse.ArgumentTypeError(
-            "takes an orbit command; leave it out to skip the parity command")
+        raise argparse.ArgumentTypeError(empty_message)
     return value
+
+
+def cli_command_value(value: str) -> str:
+    """A --cli value must be one non-empty shell-quoted Orbit command."""
+    return shell_command_value(value, "takes an orbit command")
+
+
+def parity_command_value(value: str) -> str:
+    """A --parity value must be one shell-quoted orbit command (ORB-26398, ORB-26439).
+
+    An omitted flag never reaches this check (argparse leaves it None), so an explicit
+    value that splits to no words is refused rather than standing in for no command.
+    """
+    return shell_command_value(
+        value, "takes an orbit command; leave it out to skip the parity command")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -1088,7 +1118,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--snapshot", required=True, help="fixture.py snapshot directory")
     parser.add_argument("--out", required=True, help="new results directory")
     surface = parser.add_mutually_exclusive_group(required=True)
-    surface.add_argument("--cli", help="orbit arguments to time, e.g. 'doctor --json'")
+    surface.add_argument("--cli", type=cli_command_value,
+                         help="orbit arguments to time, e.g. 'doctor --json'")
     surface.add_argument("--http", help="GET path to time on each arm's own web serve")
     parser.add_argument(
         "--parity", type=parity_command_value,
@@ -1107,15 +1138,13 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--rounds", type=positive, default=3)
     parser.add_argument("--samples", type=positive, default=10)
-    parser.add_argument("--warmup", type=int, default=1)
-    parser.add_argument("--gap-ms", type=int, default=250)
-    parser.add_argument("--bound-ms", type=float)
+    parser.add_argument("--warmup", type=non_negative, default=1)
+    parser.add_argument("--gap-ms", type=non_negative, default=250)
+    parser.add_argument("--bound-ms", type=positive_float)
     parser.add_argument("--qualifying-task-count", action="append", type=named_count,
                         default=[], metavar="NAME=COUNT",
                         help="record one checked fixture qualifying-task count; repeat as needed")
-    parser.add_argument("--lane-wait", type=float,
-                        default=float(os.environ.get("ORBIT_PERF_LANE_WAIT_SECONDS",
-                                                     common.DEFAULT_LANE_WAIT_SECONDS)))
+    parser.add_argument("--lane-wait", type=non_negative_finite_float)
     parser.add_argument("--command-timeout", type=positive_float,
                         default=DEFAULT_COMMAND_TIMEOUT_SECONDS,
                         help="seconds one parity or CLI sample command may run before its "
@@ -1125,6 +1154,15 @@ def main(argv: list[str] | None = None) -> int:
                              "its process group is killed and the run refused")
     parser.add_argument("--keep", action="store_true", help="keep restored roots and work dirs")
     args = parser.parse_args(argv)
+    if args.lane_wait is None:
+        lane_wait = os.environ.get("ORBIT_PERF_LANE_WAIT_SECONDS")
+        if lane_wait is None:
+            args.lane_wait = float(common.DEFAULT_LANE_WAIT_SECONDS)
+        else:
+            try:
+                args.lane_wait = non_negative_finite_float(lane_wait)
+            except argparse.ArgumentTypeError as error:
+                parser.error(f"environment variable ORBIT_PERF_LANE_WAIT_SECONDS: {error}")
     count_names = [name for name, _count in args.qualifying_task_count]
     if len(count_names) != len(set(count_names)):
         parser.error("--qualifying-task-count names must be unique")

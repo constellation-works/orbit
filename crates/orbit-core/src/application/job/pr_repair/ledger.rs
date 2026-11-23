@@ -51,19 +51,32 @@ pub(super) fn out_of_run_starts(
 }
 
 /// The repair attempts `pr_number` has spent and has left, for a skip's
-/// detail; `None` when the ledger cannot be read. Spent counts the watcher's
-/// admitted attempts and the source repairs reserved against the same budget.
-pub(super) fn budget_note(history: &[TaskHistoryEntry], pr_number: &str) -> Option<String> {
+/// detail, or why the ledger evidence is unavailable when it cannot be read.
+/// Spent counts the watcher's admitted attempts and the source repairs
+/// reserved against the same budget.
+pub(super) fn budget_note(
+    history: Result<&[TaskHistoryEntry], &OrbitError>,
+    pr_number: &str,
+) -> String {
     let budget = PR_AUTO_FIX_BUDGET;
-    let spent = pr_auto_fix_spent(history, pr_number).ok()?;
-    Some(if spent >= budget {
-        format!("repair budget spent: {spent} of {budget} attempts used, none remain")
-    } else {
-        format!(
+    let spent = match history {
+        Ok(entries) => pr_auto_fix_spent(entries, pr_number),
+        Err(error) => return unavailable_budget_note(error),
+    };
+    match spent {
+        Ok(spent) if spent >= budget => {
+            format!("repair budget spent: {spent} of {budget} attempts used, none remain")
+        }
+        Ok(spent) => format!(
             "repair attempts: {spent} of {budget} spent, {} remaining",
             budget - spent
-        )
-    })
+        ),
+        Err(error) => unavailable_budget_note(&error),
+    }
+}
+
+fn unavailable_budget_note(error: &OrbitError) -> String {
+    format!("repair attempts unavailable: task ledger unreadable: {error}")
 }
 
 /// `Err` with the skip when the pull request's ledger would not admit a

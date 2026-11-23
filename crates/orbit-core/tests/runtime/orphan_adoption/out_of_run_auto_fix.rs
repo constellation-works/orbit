@@ -439,7 +439,40 @@ impl Fixture {
                 pending_required_checks: pending.iter().map(|name| (*name).to_string()).collect(),
                 passed_required_checks: passed.iter().map(|name| (*name).to_string()).collect(),
                 unreported_required_checks: Vec::new(),
-                requires_status_checks: None,
+                requires_status_checks: Some(true),
+            },
+        );
+    }
+
+    /// The forge reports `leaf`'s open pull request at `head_sha`, authored by
+    /// the delivery identity, with `failed`, `passed` and `unreported`
+    /// required checks. A name in `unreported` is configured by the base
+    /// branch and has not reported on the head at all.
+    pub(super) fn report_partial_required_checks(
+        &self,
+        leaf: &Leaf,
+        head_sha: &str,
+        failed: &[&str],
+        passed: &[&str],
+        unreported: &[&str],
+    ) {
+        let names = |names: &[&str]| names.iter().map(|name| name.to_string()).collect();
+        self.forge.0.lock().unwrap().blockers.insert(
+            leaf.number,
+            PullRequestBlockers {
+                pull: ForgePullRequest {
+                    number: leaf.number,
+                    head_branch: leaf.head.clone(),
+                    body: format!("Delivers {}.", leaf.task),
+                    author: "orbit-bot".to_string(),
+                },
+                head_sha: head_sha.to_string(),
+                conflicting: false,
+                failed_required_checks: names(failed),
+                pending_required_checks: Vec::new(),
+                passed_required_checks: names(passed),
+                unreported_required_checks: names(unreported),
+                requires_status_checks: Some(true),
             },
         );
     }
@@ -1567,6 +1600,111 @@ fn an_unrepaired_check_repair_hold_retries_in_budget_reports_exhausted_and_honor
     assert_eq!(fx.retries(&cleared.run).len(), 1, "{green}");
 }
 
+/// A configured required check that has not reported on the held head is not
+/// green, even while its siblings passed. An auto-fix stop and an unrepaired
+/// check-recovery hold each wait on that partial rollup: no completion retry
+/// and no hand-back start is recorded. Both hand back only once every
+/// configured required check passes on the same published head.
+fn a_partially_reported_rollup_hands_back_only_once_every_required_check_passes() {
+    let fx = fixture();
+    let drain = fx.drain();
+    let unrepaired = fx.delivered_leaf(
+        149,
+        "done",
+        Shelf::Review,
+        LeafEnd::HeldUnrepairedCheckRepair,
+    );
+    let stopped = fx.delivered_leaf(150, "done", Shelf::Review, LeafEnd::HeldAutoFixStop);
+    for leaf in [&unrepaired, &stopped] {
+        fx.report_partial_required_checks(leaf, "published-head", &[], &["Build"], &["Test"]);
+    }
+    record_attempts(
+        &fx,
+        &unrepaired.task,
+        "149",
+        "published-head",
+        &unrepaired.run,
+        1,
+    );
+
+    // A passing classic check with an unreadable layered policy is not a
+    // complete green observation for either held route.
+    for leaf in [&unrepaired, &stopped] {
+        fx.report_required_checks(leaf, "published-head", "orbit-bot", &["Build"], &[]);
+        fx.forge
+            .0
+            .lock()
+            .unwrap()
+            .blockers
+            .get_mut(&leaf.number)
+            .unwrap()
+            .requires_status_checks = None;
+    }
+    let unreadable = fx.pass(&drain, "done", true);
+    for leaf in [&unrepaired, &stopped] {
+        assert!(started(&unreadable, &leaf.task).is_none(), "{unreadable}");
+        assert!(fx.retries(&leaf.run).is_empty(), "{unreadable}");
+        fx.report_partial_required_checks(leaf, "published-head", &[], &["Build"], &["Test"]);
+    }
+
+    let waiting = fx.pass(&drain, "done", true);
+    assert_eq!(
+        repair_skip(&waiting, &unrepaired.task).as_deref(),
+        Some("delivery_repair_dispatched"),
+        "{waiting}"
+    );
+    assert!(
+        skip_detail(&waiting, &unrepaired.task)
+            .contains("repair attempts: 1 of 3 spent, 2 remaining"),
+        "{waiting}"
+    );
+    assert_eq!(
+        repair_skip(&waiting, &stopped.task).as_deref(),
+        Some("auto_fix_stopped"),
+        "{waiting}"
+    );
+    assert!(started(&waiting, &unrepaired.task).is_none(), "{waiting}");
+    assert!(started(&waiting, &stopped.task).is_none(), "{waiting}");
+    assert!(fx.retries(&unrepaired.run).is_empty(), "{waiting}");
+    assert!(fx.retries(&stopped.run).is_empty(), "{waiting}");
+
+    for leaf in [&unrepaired, &stopped] {
+        fx.report_partial_required_checks(leaf, "published-head", &[], &["Build", "Test"], &[]);
+    }
+    let green = fx.pass(&drain, "done", true);
+    for leaf in [&unrepaired, &stopped] {
+        let entry = started(&green, &leaf.task).unwrap_or_else(|| panic!("{green}"));
+        assert_eq!(entry["reason"], "checks_green_after_hold", "{green}");
+        assert_eq!(fx.retries(&leaf.run).len(), 1, "{green}");
+    }
+}
+
+/// A confirmed zero-required-check base still hands back an auto-fix stop, and
+/// a failed required check on an unrepaired check-recovery hold still takes
+/// the repair ledger path while another configured check has not reported.
+fn a_zero_check_base_and_a_failed_check_keep_their_repair_paths() {
+    let fx = fixture();
+    let drain = fx.drain();
+    let zero = fx.delivered_leaf(151, "done", Shelf::Review, LeafEnd::HeldAutoFixStop);
+    fx.report_no_required_checks(&zero, "published-head", "orbit-bot");
+    let failed = fx.delivered_leaf(
+        152,
+        "done",
+        Shelf::Review,
+        LeafEnd::HeldUnrepairedCheckRepair,
+    );
+    fx.report_partial_required_checks(&failed, "published-head", &["Check"], &["Build"], &["Test"]);
+    record_attempts(&fx, &failed.task, "152", "published-head", &failed.run, 1);
+
+    let pass = fx.pass(&drain, "done", true);
+    let handed = started(&pass, &zero.task).unwrap_or_else(|| panic!("{pass}"));
+    assert_eq!(handed["reason"], "checks_green_after_hold", "{pass}");
+    assert_eq!(fx.retries(&zero.run).len(), 1, "{pass}");
+    let repaired = started(&pass, &failed.task).unwrap_or_else(|| panic!("{pass}"));
+    assert_eq!(repaired["blocker"], "failed_checks", "{pass}");
+    assert_eq!(fx.retries(&failed.run).len(), 1, "{pass}");
+}
+
 /// An unrepaired check-repair hold is judged on the head its newest
 /// completion round published. After re-review republished the pull request
 /// through `re_push`, green checks on that head hand completion back through
@@ -2041,6 +2179,334 @@ fn fix_pr_hands_back_a_red_pull_request_a_review_delivery_left() {
     );
 }
 
+fn find_task_events_log(root: &std::path::Path, task_id: &str) -> std::path::PathBuf {
+    fn walk(dir: &std::path::Path, task_id: &str) -> Option<std::path::PathBuf> {
+        for entry in std::fs::read_dir(dir).ok()?.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                if path.file_name().and_then(|name| name.to_str()) == Some(task_id) {
+                    let candidate = path.join("events.jsonl");
+                    if candidate.is_file() {
+                        return Some(candidate);
+                    }
+                }
+                if let Some(found) = walk(&path, task_id) {
+                    return Some(found);
+                }
+            }
+        }
+        None
+    }
+    walk(root, task_id).unwrap_or_else(|| panic!("events.jsonl for {task_id} under {root:?}"))
+}
+
+/// ORB-27266: early job-store failures (reading a task's delivery leaves or a
+/// held leaf's steps) for a known task and PR preserve the original error and
+/// report spent/remaining attempts when the task ledger is readable, or mark
+/// ledger evidence unavailable without inventing counts when it is not.
+fn early_job_store_failures_preserve_errors_and_report_available_or_unavailable_repair_counts() {
+    use orbit_core::application::job::TaskAutoFixError;
+    let fx = fixture();
+    let store = fx.runtime.sqlite_store().unwrap();
+
+    // 1. Newest delivery leaf lookup fails (`pass.rs`), task ledger readable (1 of 3 spent).
+    let leaf_fail = fx.stopped_leaf(171, "review", Shelf::Escalated);
+    record_attempts(&fx, &leaf_fail.task, "171", "head-171", "jrun-earlier", 1);
+    store
+        .connection()
+        .lock()
+        .unwrap()
+        .execute(
+            "UPDATE job_runs SET scheduled_at = 'not-a-timestamp' WHERE run_id = ?1",
+            rusqlite::params![leaf_fail.run],
+        )
+        .unwrap();
+
+    // 2. Held run step lookup fails (`verdict.rs`), task ledger readable (2 of 3 spent).
+    let held_fail = fx.delivered_leaf(
+        172,
+        "done",
+        Shelf::Review,
+        LeafEnd::Held("delivery_check_evidence_inconclusive"),
+    );
+    record_attempts(&fx, &held_fail.task, "172", "head-172", "jrun-earlier", 2);
+    store
+        .connection()
+        .lock()
+        .unwrap()
+        .execute(
+            "UPDATE job_run_steps SET agent_response_json = '{not json' WHERE run_id = ?1",
+            rusqlite::params![held_fail.run],
+        )
+        .unwrap();
+
+    // 3. Newest delivery leaf lookup fails, source repair ledger entry corrupt.
+    let corrupt_ledger = fx.stopped_leaf(173, "review", Shelf::Escalated);
+    fx.runtime
+        .apply_task_automation_update(
+            &corrupt_ledger.task,
+            TaskAutomationUpdate {
+                append_history: vec![orbit_types::task::TaskHistoryEntry {
+                    at: Utc::now(),
+                    by: "system".into(),
+                    event: orbit_types::workflow::SOURCE_REPAIR_RESERVED.into(),
+                    note: Some("{not json".into()),
+                    from_status: None,
+                    to_status: None,
+                    operation_id: None,
+                    decision: None,
+                }],
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    store
+        .connection()
+        .lock()
+        .unwrap()
+        .execute(
+            "UPDATE job_runs SET scheduled_at = 'not-a-timestamp' WHERE run_id = ?1",
+            rusqlite::params![corrupt_ledger.run],
+        )
+        .unwrap();
+
+    // 4. Held run step lookup fails, source repair ledger entry corrupt (single-task Fix PR & drain).
+    let held_corrupt_ledger = fx.delivered_leaf(
+        174,
+        "done",
+        Shelf::Review,
+        LeafEnd::Held("delivery_check_evidence_inconclusive"),
+    );
+    fx.runtime
+        .apply_task_automation_update(
+            &held_corrupt_ledger.task,
+            TaskAutomationUpdate {
+                append_history: vec![orbit_types::task::TaskHistoryEntry {
+                    at: Utc::now(),
+                    by: "system".into(),
+                    event: orbit_types::workflow::SOURCE_REPAIR_RESERVED.into(),
+                    note: Some("{not json".into()),
+                    from_status: None,
+                    to_status: None,
+                    operation_id: None,
+                    decision: None,
+                }],
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    store
+        .connection()
+        .lock()
+        .unwrap()
+        .execute(
+            "UPDATE job_run_steps SET agent_response_json = '{not json' WHERE run_id = ?1",
+            rusqlite::params![held_corrupt_ledger.run],
+        )
+        .unwrap();
+
+    // Single-task Fix PR readiness and start reflect the held-step failure too.
+    let readiness_held = fx
+        .runtime
+        .task_pr_auto_fix_readiness(&held_fail.task, true)
+        .unwrap();
+    assert_eq!(readiness_held["available"], false, "{readiness_held}");
+    assert_eq!(
+        readiness_held["reason"], "store_unreadable",
+        "{readiness_held}"
+    );
+    assert_eq!(readiness_held["pr_number"], "172", "{readiness_held}");
+    let held_detail = readiness_held["detail"].as_str().unwrap_or_default();
+    assert!(
+        held_detail.contains("read the run's steps:")
+            && held_detail.contains("repair attempts: 2 of 3 spent, 1 remaining"),
+        "{readiness_held}"
+    );
+    match fx
+        .runtime
+        .start_task_pr_auto_fix(&held_fail.task, true, Some("dashboard"))
+    {
+        Err(TaskAutoFixError::Refused(refusal)) => {
+            assert_eq!(refusal.reason(), "store_unreadable");
+            assert!(
+                refusal.detail().contains("read the run's steps:")
+                    && refusal
+                        .detail()
+                        .contains("repair attempts: 2 of 3 spent, 1 remaining"),
+                "{refusal}"
+            );
+        }
+        other => panic!("expected refused store_unreadable, got {other:?}"),
+    }
+
+    // A leaf-lookup failure on the single-task Fix PR path is a refusal too,
+    // with the PR number and the same budget as the drain pass reports.
+    let readiness_leaf = fx
+        .runtime
+        .task_pr_auto_fix_readiness(&leaf_fail.task, true)
+        .unwrap();
+    assert_eq!(readiness_leaf["available"], false, "{readiness_leaf}");
+    assert_eq!(
+        readiness_leaf["reason"], "store_unreadable",
+        "{readiness_leaf}"
+    );
+    assert_eq!(readiness_leaf["pr_number"], "171", "{readiness_leaf}");
+    let leaf_detail = readiness_leaf["detail"].as_str().unwrap_or_default();
+    assert!(
+        leaf_detail.contains("read the task's delivery leaves:")
+            && leaf_detail.contains("repair attempts: 1 of 3 spent, 2 remaining"),
+        "{readiness_leaf}"
+    );
+    match fx
+        .runtime
+        .start_task_pr_auto_fix(&leaf_fail.task, true, Some("dashboard"))
+    {
+        Err(TaskAutoFixError::Refused(refusal)) => {
+            assert_eq!(refusal.reason(), "store_unreadable");
+            assert!(
+                refusal
+                    .detail()
+                    .contains("read the task's delivery leaves:")
+                    && refusal
+                        .detail()
+                        .contains("repair attempts: 1 of 3 spent, 2 remaining"),
+                "{refusal}"
+            );
+        }
+        other => panic!("expected refused store_unreadable, got {other:?}"),
+    }
+
+    let readiness_unreadable = fx
+        .runtime
+        .task_pr_auto_fix_readiness(&held_corrupt_ledger.task, true)
+        .unwrap();
+    assert_eq!(
+        readiness_unreadable["reason"], "store_unreadable",
+        "{readiness_unreadable}"
+    );
+    assert_eq!(
+        readiness_unreadable["pr_number"], "174",
+        "{readiness_unreadable}"
+    );
+    let unreadable_detail = readiness_unreadable["detail"].as_str().unwrap_or_default();
+    assert!(
+        unreadable_detail.contains("read the run's steps:")
+            && unreadable_detail.contains("repair attempts unavailable: task ledger unreadable:")
+            && !unreadable_detail.contains("of 3 spent")
+            && !unreadable_detail.contains("remaining"),
+        "{readiness_unreadable}"
+    );
+
+    // Drain pass reports all four early store failures with PR numbers and
+    // either spent/remaining counts or unavailable-ledger diagnostics.
+    let drain = fx.drain();
+    let pass = fx.pass(&drain, "review", true);
+    let skipped = pass["auto_fix"]["skipped"]
+        .as_array()
+        .unwrap_or_else(|| panic!("{pass}"));
+
+    let find_skip = |task_id: &str| -> &Value {
+        skipped
+            .iter()
+            .find(|entry| entry["task_id"] == task_id)
+            .unwrap_or_else(|| panic!("missing skip for {task_id}: {pass}"))
+    };
+
+    let entry_1 = find_skip(&leaf_fail.task);
+    assert_eq!(entry_1["reason"], "store_unreadable", "{entry_1}");
+    assert_eq!(entry_1["pr_number"], "171", "{entry_1}");
+    let detail_1 = entry_1["detail"].as_str().unwrap_or_default();
+    assert!(
+        detail_1.contains("read the task's delivery leaves:")
+            && detail_1.contains("repair attempts: 1 of 3 spent, 2 remaining"),
+        "{entry_1}"
+    );
+
+    let entry_2 = find_skip(&held_fail.task);
+    assert_eq!(entry_2["reason"], "store_unreadable", "{entry_2}");
+    assert_eq!(entry_2["pr_number"], "172", "{entry_2}");
+    let detail_2 = entry_2["detail"].as_str().unwrap_or_default();
+    assert!(
+        detail_2.contains("read the run's steps:")
+            && detail_2.contains("repair attempts: 2 of 3 spent, 1 remaining"),
+        "{entry_2}"
+    );
+
+    let entry_3 = find_skip(&corrupt_ledger.task);
+    assert_eq!(entry_3["reason"], "store_unreadable", "{entry_3}");
+    assert_eq!(entry_3["pr_number"], "173", "{entry_3}");
+    let detail_3 = entry_3["detail"].as_str().unwrap_or_default();
+    assert!(
+        detail_3.contains("read the task's delivery leaves:")
+            && detail_3.contains("repair attempts unavailable: task ledger unreadable:")
+            && !detail_3.contains("of 3 spent")
+            && !detail_3.contains("remaining"),
+        "{entry_3}"
+    );
+
+    let entry_4 = find_skip(&held_corrupt_ledger.task);
+    assert_eq!(entry_4["reason"], "store_unreadable", "{entry_4}");
+    assert_eq!(entry_4["pr_number"], "174", "{entry_4}");
+    let detail_4 = entry_4["detail"].as_str().unwrap_or_default();
+    assert!(
+        detail_4.contains("read the run's steps:")
+            && detail_4.contains("repair attempts unavailable: task ledger unreadable:")
+            && !detail_4.contains("of 3 spent")
+            && !detail_4.contains("remaining"),
+        "{entry_4}"
+    );
+
+    let readiness = fx
+        .runtime
+        .workspace_auto_readiness(&[], None, 10, &[])
+        .unwrap();
+    let entries = readiness["out_of_run_auto_fix"].as_array().unwrap();
+    assert!(
+        entries.iter().any(|item| {
+            item["pr_number"] == "171"
+                && item["reason"] == "store_unreadable"
+                && item["detail"]
+                    .as_str()
+                    .is_some_and(|d| d.contains("repair attempts: 1 of 3 spent, 2 remaining"))
+        }),
+        "{readiness}"
+    );
+    assert!(
+        entries.iter().any(|item| {
+            item["pr_number"] == "173"
+                && item["reason"] == "store_unreadable"
+                && item["detail"].as_str().is_some_and(|d| {
+                    d.contains("repair attempts unavailable: task ledger unreadable:")
+                })
+        }),
+        "{readiness}"
+    );
+
+    // 5. When the task's events.jsonl itself is unreadable while metadata is
+    //    readable, the drain pass reports unavailable ledger evidence too.
+    let events_path = find_task_events_log(fx._root.path(), &leaf_fail.task);
+    let mut damaged = b"{not valid jsonl\n".to_vec();
+    damaged.extend_from_slice(&std::fs::read(&events_path).unwrap());
+    std::fs::write(&events_path, damaged).unwrap();
+    let pass_unreadable_events = fx.pass(&drain, "review", true);
+    let entry_5 = pass_unreadable_events["auto_fix"]["skipped"]
+        .as_array()
+        .unwrap_or_else(|| panic!("{pass_unreadable_events}"))
+        .iter()
+        .find(|entry| entry["task_id"] == leaf_fail.task)
+        .unwrap_or_else(|| panic!("missing skip: {pass_unreadable_events}"));
+    assert_eq!(entry_5["reason"], "store_unreadable", "{entry_5}");
+    assert_eq!(entry_5["pr_number"], "171", "{entry_5}");
+    let detail_5 = entry_5["detail"].as_str().unwrap_or_default();
+    assert!(
+        detail_5.contains("read the task's delivery leaves:")
+            && detail_5.contains("repair attempts unavailable: task ledger unreadable:")
+            && !detail_5.contains("of 3 spent")
+            && !detail_5.contains("remaining"),
+        "{entry_5}"
+    );
+}
+
 crate::scenario_table!(
     out_of_run_auto_fix_scenarios,
     one_tasks_repair_starts_without_a_drain_and_refusals_are_typed,
@@ -2061,10 +2527,13 @@ crate::scenario_table!(
     a_skipped_head_lists_the_attempts_spent_and_remaining,
     an_unrepaired_check_repair_hold_retries_in_budget_reports_exhausted_and_honors_holds,
     an_unrepaired_check_repair_hold_is_judged_on_its_newest_publication,
+    a_partially_reported_rollup_hands_back_only_once_every_required_check_passes,
+    a_zero_check_base_and_a_failed_check_keep_their_repair_paths,
     a_source_repair_and_a_watcher_attempt_share_the_pull_requests_budget,
     source_repairs_alone_spend_the_shared_budget_in_the_refusal,
     a_stuck_pull_request_is_repaired_however_many_deliveries_ran_since,
     a_newer_finished_delivery_of_the_task_keeps_its_older_stopped_leaf_from_resuming,
+    early_job_store_failures_preserve_errors_and_report_available_or_unavailable_repair_counts,
 );
 
 #[cfg(unix)]

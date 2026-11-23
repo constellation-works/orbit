@@ -3,6 +3,7 @@
 ## Contents
 
 - [Reconcile stalled pull requests](#reconcile-stalled-pull-requests)
+- [Refresh a held or review pull request](#refresh-a-held-or-review-pull-request)
 
 ## Reconcile stalled pull requests
 
@@ -109,3 +110,81 @@ can go again keeps its guards: same-handoff retry is operator-only through
 [retry a stopped owner landing](orchestration-retry-landing.md#retry-a-stopped-owner-landing),
 and rework of a published candidate takes the explicit source-repair route in
 [recovery-source-repair.md](recovery-source-repair.md#explicit-source-repair-of-stopped-owner-publications).
+
+## Refresh a held or review pull request
+
+Use this when a held (`blocked`) or `review` task's open delivery pull request
+is red on a failure inherited from its base branch, the base has since fixed
+it, and the head is behind the base tip. Classify the red head first with
+[hosted-check diagnosis](run-debugging-hosted-checks.md#hosted-check-failures-and-inherited-red-bases);
+a candidate-owned failure stays red after the refresh.
+
+A refresh merges the base tip into the head as one conflict-free merge commit
+and starts the required checks on the new head. It never rebases or
+force-pushes, edits no code, and lands nothing.
+
+Call it with the task ID, using MCP `orbit.workflow` with action `refresh`, or:
+
+```bash
+orbit tool run orbit.workflow --input '{"action":"refresh","task_id":"<task-id>"}'
+```
+
+Add the global `--workspace <selector>` option when the task is not in the
+active workspace. `orbit run` has no `refresh` subcommand, so the tool call is
+the only CLI route. The call needs operator capability (an interactive terminal
+or `ORBIT_OPERATOR=1`) or a resident cycle holding the `refresh` right; see
+[the resident cycle](../../orbit/references/resident-cycle-act.md#3-act-within-authority).
+
+The response names `outcome`, `previous_head`, `head_sha` and `checks_started`:
+
+- `updated`: the base tip is merged into the head and `checks_started` is
+  `true`. Verify the new head and its checks before anything else.
+- `already_up_to_date`: the head already contains the base tip. Nothing moves,
+  `checks_started` is `false`, and the existing checks stand. A refresh cannot
+  change that head's checks, so diagnose the failure on it. If the failure is
+  candidate-owned, repair the candidate, publish a new head and start a new
+  delivery attempt.
+- `task_refresh_refused`: the error reads `task_refresh_refused: task '<id>'
+  did not refresh: <reason>`, and the head is unchanged. Act on the reason:
+  - The task is not `blocked` or `review`.
+  - A live run owns the pull request, or a live `run auto` leaf carries the
+    task. Let that run finish, or stop it, before refreshing.
+  - There is no open Orbit delivery pull request, there are several, or the
+    pull request is not open or its base differs from the one Orbit recorded.
+  - The base conflicts with the head. The reason names the conflicting paths
+    and nothing was merged. Resolve them on the branch, revalidate, publish a
+    new head and start a new delivery attempt; see
+    [a failed no-edit rerun](run-debugging-no-edit-rerun.md#a-failed-no-edit-rerun-refresh-before-hold).
+  - The forge refused. The reason carries its message.
+
+Verify the result before landing:
+
+1. Confirm the new head and its checks on the pull request. Its `headRefOid`
+   should equal the response's `head_sha`, and the required checks should be
+   running or complete on it:
+
+   ```bash
+   gh pr view <pr-number> --repo <owner/repo> --json headRefOid,baseRefName,mergeStateStatus
+   gh pr checks <pr-number> --repo <owner/repo> --required
+   ```
+
+2. Read the `pr_refresh` audit rows for the task. `orbit audit list` has no
+   command or task filter, so list the pull-request events and keep the rows
+   whose `command` is `pr_refresh` and whose `task_id` is the task. Read
+   `subcommand` (`requested`, then `updated`, `already_up_to_date`, `refused`
+   or `failed`) and `arguments_json` (`new_head_sha` on a move, or `reason` and
+   `conflicting_paths` on a refusal):
+
+   ```bash
+   orbit audit list --kind pull_request --since 1d --limit 500 --json
+   ```
+
+   A refusal before the forge write (wrong status, a live run, no open pull
+   request) writes no `pr_refresh` row, so the error message is its only
+   record. For the pipeline's own base refresh, see
+   [a failed no-edit rerun](run-debugging-no-edit-rerun.md#a-failed-no-edit-rerun-refresh-before-hold).
+
+`land` is separate. It still refuses while any required check on the new head
+is failed or pending, so wait for green required checks on the new head before
+landing. For the resident right and the review rule on a refreshed head, see
+[the resident cycle](../../orbit/references/resident-cycle-act.md#3-act-within-authority).

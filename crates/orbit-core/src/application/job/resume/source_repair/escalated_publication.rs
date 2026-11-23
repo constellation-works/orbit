@@ -180,6 +180,9 @@ impl OrbitRuntime {
                 blockers.pending_required_checks.join(", ")
             )));
         }
+        if blockers.requires_status_checks.is_none() {
+            return Err(refuse("required check policy is unreadable"));
+        }
         if blockers.passed_required_checks.is_empty()
             && blockers.requires_status_checks != Some(false)
         {

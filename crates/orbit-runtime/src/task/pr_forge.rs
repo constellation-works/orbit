@@ -91,6 +91,7 @@ pub struct PullRequestBlockers {
     pub unreported_required_checks: Vec<String>,
     /// Whether the PR's base branch requires any status checks when known
     /// (`Some(false)` when neither branch protection nor rulesets require any).
+    /// `None` means the complete policy could not be read, even if a check reported.
     pub requires_status_checks: Option<bool>,
 }
 
@@ -896,10 +897,13 @@ fn populate_requires_status_checks(
     pull: &Value,
     blockers: &mut PullRequestBlockers,
 ) {
-    // Classic protection that is configured or unreadable is already decided.
-    // With none, a ruleset may still require checks the head never reported,
-    // so the rules are read even when some required check was observed.
-    if classic_branch_protection_requires_checks(pull) != Some(false) {
+    // Preserve observed checks, but do not claim a complete policy until both
+    // sources have been read successfully.
+    let observed_requirement = blockers.requires_status_checks.take();
+    // An unreadable classic rule cannot establish whether rulesets add checks.
+    // When classic protection is readable, rulesets still layer on top of it,
+    // so inspect them whether classic protection requires checks or not.
+    if classic_branch_protection_requires_checks(pull).is_none() {
         return;
     }
     let Some(base_branch) = pull
@@ -943,7 +947,7 @@ fn populate_requires_status_checks(
         }
     }
     if configured.is_empty() {
-        blockers.requires_status_checks.get_or_insert(false);
+        blockers.requires_status_checks = Some(observed_requirement.unwrap_or(false));
         return;
     }
     blockers.requires_status_checks = Some(true);

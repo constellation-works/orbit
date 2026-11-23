@@ -1412,3 +1412,132 @@ fn run_detail_on_an_unreachable_holding_host_names_the_host_and_reason() {
         },
     );
 }
+
+/// The serving dashboard decides what a forwarded response may do in a
+/// browser. A remote that sends active content with no protective headers, or
+/// with permissive ones, gets it delivered as a sandboxed download; inert
+/// types keep their own media type. The fixtures are inert bytes.
+#[test]
+fn forwarded_active_content_is_isolated_by_the_serving_dashboard() {
+    isolated(
+        "host_forward::forwarded_active_content_is_isolated_by_the_serving_dashboard",
+        || {
+            let b = Fixture::host("hostb", "HB");
+            let b_server = b.server(false);
+            let identity = json_ok(b_server.get("/api/hosts?probe=false")).to_string();
+            let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+            let remote_port = listener.local_addr().unwrap().port();
+            thread::spawn(move || {
+                for stream in listener.incoming() {
+                    let Ok(mut stream) = stream else { continue };
+                    if stream
+                        .set_read_timeout(Some(Duration::from_secs(10)))
+                        .is_err()
+                    {
+                        continue;
+                    }
+                    let Ok(clone) = stream.try_clone() else {
+                        continue;
+                    };
+                    let mut reader = BufReader::new(clone);
+                    let mut first = String::new();
+                    if !matches!(reader.read_line(&mut first), Ok(1..)) {
+                        continue;
+                    }
+                    loop {
+                        let mut line = String::new();
+                        match reader.read_line(&mut line) {
+                            Ok(0) | Err(_) => break,
+                            Ok(_) => {}
+                        }
+                        if line == "\r\n" || line.is_empty() {
+                            break;
+                        }
+                    }
+                    let path = first.split_whitespace().nth(1).unwrap_or_default();
+                    let path = path.split('?').next().unwrap_or_default();
+                    let (headers, body): (&str, &str) = match path {
+                        "/healthz" => ("", ""),
+                        "/api/hosts" => ("Content-Type: application/json\r\n", identity.as_str()),
+                        // Active types the remote declares inline with a
+                        // permissive or absent policy.
+                        "/api/html" => {
+                            ("Content-Type: text/html; charset=utf-8\r\n", "<p>inert</p>")
+                        }
+                        "/api/html-inline" => (
+                            "Content-Type: TEXT/HTML\r\nContent-Disposition: inline\r\nContent-Security-Policy: default-src *\r\n",
+                            "<p>inert</p>",
+                        ),
+                        "/api/svg" => (
+                            "Content-Type: image/svg+xml\r\nContent-Disposition: inline\r\n",
+                            "<svg xmlns=\"http://www.w3.org/2000/svg\"/>",
+                        ),
+                        "/api/xhtml" => ("Content-Type: application/xhtml+xml\r\n", "<html/>"),
+                        "/api/untyped" => ("", "inert"),
+                        // Inert types keep their own media type.
+                        "/api/json" => (
+                            "Content-Type: application/json; charset=utf-8\r\n",
+                            "{\"ok\":true}",
+                        ),
+                        "/api/text" => ("Content-Type: text/plain\r\n", "inert"),
+                        "/api/download" => (
+                            "Content-Type: application/octet-stream\r\nContent-Disposition: attachment\r\n",
+                            "inert",
+                        ),
+                        _ => ("Content-Type: application/json\r\n", "{}"),
+                    };
+                    let _ = write!(
+                        stream,
+                        "HTTP/1.1 200 OK\r\n{headers}Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                        body.len()
+                    );
+                }
+            });
+            let a = Fixture::new();
+            write_hosts(&a, &[("hostb", &b.machine_id(), "hostb-ssh", "HB")]);
+            let stub = StubSsh::new(json!({"hostb-ssh": {"attach": remote_port, "spawn": null}}));
+            let a_server = a.server_with_path(false, stub.bin());
+
+            for route in ["html", "html-inline", "svg", "xhtml", "untyped"] {
+                let response = a_server.get(&format!("/api/on/hostb/{route}{WS}"));
+                assert_eq!(response.status(), 200, "{route}");
+                let headers = response.headers().clone();
+                assert_eq!(
+                    headers["content-type"], "application/octet-stream",
+                    "{route} is not rendered"
+                );
+                assert_eq!(headers["content-disposition"], "attachment", "{route}");
+                assert_eq!(
+                    headers["content-security-policy"], "sandbox; default-src 'none'",
+                    "{route}: the local policy replaces the remote's"
+                );
+                assert_eq!(headers["x-content-type-options"], "nosniff", "{route}");
+                assert_eq!(headers.get_all("content-type").iter().count(), 1);
+                assert_eq!(headers.get_all("content-disposition").iter().count(), 1);
+                assert!(!response.bytes().unwrap().is_empty(), "{route} body intact");
+            }
+
+            for (route, content_type, disposition) in [
+                ("json", "application/json; charset=utf-8", None),
+                ("text", "text/plain", None),
+                ("download", "application/octet-stream", Some("attachment")),
+            ] {
+                let response = a_server.get(&format!("/api/on/hostb/{route}{WS}"));
+                assert_eq!(response.status(), 200, "{route}");
+                let headers = response.headers();
+                assert_eq!(headers["content-type"], content_type, "{route}");
+                assert_eq!(
+                    headers
+                        .get("content-disposition")
+                        .map(|v| v.to_str().unwrap()),
+                    disposition,
+                    "{route}"
+                );
+                assert_eq!(
+                    headers["content-security-policy"], "sandbox; default-src 'none'",
+                    "{route}"
+                );
+            }
+        },
+    );
+}

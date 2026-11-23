@@ -17,6 +17,7 @@ cd "$here" || exit 2
 begin_marker='<!-- constellation-standards:begin -->'
 end_marker='<!-- constellation-standards:end -->'
 status=0
+instruction_status=0
 
 fail() {
   printf 'standards check: FAIL: %s\n' "$1" >&2
@@ -58,6 +59,239 @@ elif ! awk -v b="$begin_marker" -v e="$end_marker" '
   fail "AGENTS.md is missing the managed block between '$begin_marker' and '$end_marker'"
 fi
 
+# A repository may list vendor and mirror roots, one per line, here.
+repository_files() {
+  if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    git ls-files -z --cached --others --exclude-standard | tr '\0' '\n' | sed 's|^|./|'
+  else
+    find . -name .git -prune -o \( -type f -o -type l \) -print
+  fi
+}
+not_excluded() {
+  path=${1#./}
+  if [ -f .standards-skill-excludes ]; then
+    while IFS= read -r exclude || [ -n "$exclude" ]; do
+      exclude=${exclude#./}; exclude=${exclude%/}
+      case "$exclude" in ('' | \#*) continue ;; esac
+      case "$path" in ("$exclude" | "$exclude"/*) return 1 ;; esac
+    done < .standards-skill-excludes
+  fi
+  return 0
+}
+
+paragraph_check() {
+  LC_ALL=C awk -v file="$1" -v standard="$2" -v rule="$3" '
+        # Count characters, not bytes: run in the C locale, then drop UTF-8 continuation bytes.
+        function chars(s,   t) { t=s; return length(s) - gsub(/[\200-\277]/, "", t) }
+        function flush() {
+          if (size > 500) printf "%s:%d: STD-%s §%s: %d characters, limit 500\n", file, start, standard, rule, size
+          size=0
+        }
+        {
+          line=$0; sub(/\r$/, "", line)
+          if (standard == "11" && NR == 1 && line == "---") { fm=1; next }
+          if (fm) { if (line == "---") fm=0; next }
+          if (index(line, "<!-- constellation-standards:begin -->")) { flush(); managed=1; next }
+          if (managed) { if (index(line, "<!-- constellation-standards:end -->")) managed=0; next }
+          if (fence) {
+            closing=line; sub(/^[ \t]*/, "", closing)
+            if (substr(closing, 1, length(fence)) == fence && substr(closing, length(fence)+1) ~ /^[ \t]*$/) fence=""
+            next
+          }
+          opening=line; sub(/^[ \t]*/, "", opening)
+          if (opening ~ /^```+[^`]*$/ || opening ~ /^~~~/) {
+            flush(); char=substr(opening,1,1); fence=""
+            while (substr(opening,length(fence)+1,1) == char) fence=fence char
+            next
+          }
+          if (line ~ /^[ \t]*$/ || line ~ /^[ \t]*#/ || line ~ /^[ \t]*\|/) { flush(); next }
+          if (line ~ /^[ \t]*([-+*]|[0-9]+[.)])[ \t]+/) flush()
+          if (!size) start=NR
+          if (size) size++
+          size+=chars(line)
+        }
+        END { flush() }' "$1"
+}
+
+# STD-10 applies only to adopters. Inspect each instruction name without following
+# directory symlinks; provider symlinks must resolve to the local source.
+if [ -d STD-10-agent-instruction-files ]; then
+  # Walk the files git knows (tracked, or untracked and not ignored) when git is present: other
+  # worktrees, node_modules and target trees can hold instruction copies that are not this repository's.
+  findings=$(cd ../.. && {
+    repository_files
+  } | while IFS= read -r file; do
+    not_excluded "$file" || continue
+    case "${file##*/}" in (AGENTS.md | CLAUDE.md | GEMINI.md) ;; (*) continue ;; esac
+    [ -f "$file" ] || [ -L "$file" ] || continue
+    dir=${file%/*}; name=${file##*/}; source=$dir/AGENTS.md
+    if [ "$name" != AGENTS.md ]; then
+      if [ ! -f "$source" ] || [ -L "$source" ]; then
+        printf '%s: STD-10 §R1: source files 0, required 1\n' "$file"
+      elif [ -L "$file" ]; then
+        if [ ! "$file" -ef "$source" ]; then
+          printf '%s: STD-10 §R1: links to source 0, required 1\n' "$file"
+        fi
+      elif [ "$(head -n 1 "$file" | tr -d "\r")" != '@AGENTS.md' ]; then
+        printf '%s: STD-10 §R1: imports 0, required 1\n' "$file"
+      fi
+    elif [ -L "$file" ]; then
+      printf '%s: STD-10 §R1: regular source files 0, required 1\n' "$file"
+    fi
+    # Inspect source and real import files, but never count a symlink twice.
+    if [ ! -L "$file" ] && [ -f "$file" ]; then
+      paragraph_check "$file" 10 R8
+    fi
+    if [ "$name" = AGENTS.md ] && [ -f "$file" ] && [ ! -L "$file" ]; then
+      bytes=$(wc -c < "$file")
+      for provider in "$dir/CLAUDE.md" "$dir/GEMINI.md"; do
+        if [ -f "$provider" ] && [ ! -L "$provider" ] &&
+           [ "$(head -n 1 "$provider" | tr -d "\r")" = '@AGENTS.md' ]; then
+          # Each provider loads only its own import; check each stack separately.
+          total=$((bytes + $(wc -c < "$provider")))
+          limit=4000; [ "$dir" = . ] && limit=8000
+          [ "$total" -le "$limit" ] || printf '%s + %s: STD-10 §R10: %d bytes, limit %d\n' "$file" "$provider" "$total" "$limit"
+        fi
+      done
+      limit=4000; [ "$dir" = . ] && limit=8000
+      [ "$bytes" -le "$limit" ] || printf '%s: STD-10 §R10: %d bytes, limit %d\n' "$file" "$bytes" "$limit"
+    fi
+  done)
+  if [ -n "$findings" ]; then
+    printf '%s\n' "$findings" >&2
+    instruction_status=1
+  fi
+fi
+
+# check_links FILE SKILL_ROOT — a markdown link resolves against FILE's directory only; a backticked
+# path also resolves against the repository root and against SKILL_ROOT (the directory holding SKILL.md).
+check_links() {
+  awk '
+    { line=$0; t=line; sub(/^[ \t]*/, "", t)
+      if (fence) { if (substr(t,1,length(fence))==fence && substr(t,length(fence)+1) ~ /^[ \t]*$/) fence=""; next }
+      if (t ~ /^```+[^`]*$/ || t ~ /^~~~/) { c=substr(t,1,1); fence=""; while (substr(t,length(fence)+1,1)==c) fence=fence c; next }
+      s=line; while (match(s,/\[[^]]+\]\([^)]*\)/)) { p=substr(s,RSTART,RLENGTH); sub(/^[^]]*\]\(/,"",p); sub(/\)$/, "", p); sub(/[ \t]+.*/,"",p); gsub(/^<|>$/,"",p); print "M\t" p; s=substr(s,RSTART+RLENGTH) }
+      s=line; while (match(s,/`[^`]+`/)) { p=substr(s,RSTART+1,RLENGTH-2); if (p ~ /^([.a-zA-Z0-9_-]+\/)+[.a-zA-Z0-9_-]+$/) print "T\t" p; s=substr(s,RSTART+RLENGTH) }
+    }' "$1" | while IFS="$(printf '\t')" read -r kind link; do
+    link=${link%%#*}; link=${link%%\?*}; link=${link#./}
+    case "$link" in (''|/*|*://*|mailto:*|\$*) continue ;; esac
+    if [ -e "${1%/*}/$link" ] || { [ "$kind" = T ] && { [ -e "$link" ] || [ -e "$2/$link" ]; }; }; then :
+    else printf '%s: STD-11 §R17: %s resolves 0, required 1\n' "$1" "$link"; fi
+  done
+}
+
+# STD-11 uses the same git-known walk and exclusions as STD-10.
+if [ -d STD-11-agent-skills ]; then
+  findings=$(cd ../.. && repository_files | while IFS= read -r skill; do
+    case "$skill" in (*/SKILL.md) ;; (*) continue ;; esac
+    [ -f "$skill" ] && not_excluded "$skill" || continue
+    dir=${skill%/SKILL.md}; skillname=${dir##*/}
+    skill_parent=${dir%/*}
+    case "$skill_parent" in
+      (.orbit-plugin/skills|*/.orbit-plugin/skills)
+        manifest="${skill_parent%/skills}/plugin.yaml"
+        if [ -f "$manifest" ]; then
+          namespace=$(awk '
+            /^metadata:[ \t]*(#.*)?$/ { metadata=1; next }
+            metadata && /^[^ \t#]/ { exit }
+            metadata && /^[ \t]+name:[ \t]*/ {
+              sub(/^[ \t]+name:[ \t]*/, ""); sub(/[ \t]+#.*/, "");
+              sub(/[ \t]+$/, ""); gsub(/^["\047]|["\047]$/, ""); print; exit
+            }' "$manifest")
+          skillname="$namespace-$skillname"
+        fi ;;
+    esac
+    LC_ALL=C awk -v file="$skill" -v expected="$skillname" '
+      function chars(s, t) { t=s; return length(s)-gsub(/[\200-\277]/,"",t) }
+      NR==1 && $0=="---" { fm=1; next }
+      fm && $0=="---" { fm=0; donefm=1; next }
+      fm {
+        if ($0 ~ /^name:[ \t]*/) { name=$0; sub(/^name:[ \t]*/,"",name); gsub(/^["\047]|["\047]$/, "", name) }
+        if (continuation && $0 ~ /^[ \t]+/) { part=$0; sub(/^[ \t]+/,"",part); desc=desc (length(desc)?" ":"") part; next }
+        continuation=0
+        if ($0 ~ /^description:[ \t]*/) { desc=$0; sub(/^description:[ \t]*/,"",desc); gsub(/^["\047]|["\047]$/, "", desc); if (desc ~ /^[>|][-+]?$/) { desc=""; continuation=1 } }
+        next
+      }
+      END {
+        if (!donefm) { name=""; desc="" }
+        n=chars(name); d=chars(desc)
+        if (name != expected || n<1 || n>64 || name !~ /^[a-z0-9]+(-[a-z0-9]+)*$/ || name ~ /anthropic|claude/) printf "%s: STD-11 §R3: name %s, %d characters, required installed name %s and 1..64 valid characters\n",file,name,n,expected
+        if (d<1 || d>1024) printf "%s: STD-11 §R4: description %d characters, limit 1..1024\n",file,d
+        if (NR>500) printf "%s: STD-11 §R16: %d lines > 500\n",file,NR
+      }' "$skill"
+    paragraph_check "$skill" 11 R11
+    bytes=$(wc -c < "$skill"); [ "$bytes" -le 16000 ] || printf '%s: STD-11 §R16: %d bytes, limit 16000\n' "$skill" "$bytes"
+    repository_files | while IFS= read -r file; do
+      case "$file" in ("$dir"/*) ;; (*) continue ;; esac
+      [ -f "$file" ] && not_excluded "$file" || continue
+      rel=${file#"$dir"/}
+      # A nested skill owns its own files, not its ancestor's layout.
+      parent=${file%/*}; nested=0
+      while [ "$parent" != "$dir" ] && [ "$parent" != . ]; do
+        if [ -f "$parent/SKILL.md" ]; then nested=1; break; fi
+        parent=${parent%/*}
+      done
+      [ "$nested" -eq 0 ] || continue
+      case "$rel" in
+        (SKILL.md) ;;
+        (references/*|scripts/*|assets/*)
+          if ! awk -v target="$rel" '
+            { s=$0; t=s; sub(/^[ \t]*/,"",t)
+              if (fence) { if (substr(t,1,length(fence))==fence && substr(t,length(fence)+1) ~ /^[ \t]*$/) fence=""; next }
+              if (t ~ /^```+[^`]*$/ || t ~ /^~~~/) { c=substr(t,1,1); fence=""; while (substr(t,length(fence)+1,1)==c) fence=fence c; next }
+              while (match(s,/\[[^]]+\]\([^)]*\)/)) { p=substr(s,RSTART,RLENGTH); sub(/^[^]]*\]\(/,"",p); sub(/\)$/, "", p); sub(/[ \t]+.*/,"",p); gsub(/^<|>$/,"",p); sub(/^\.\//,"",p); sub(/#.*/,"",p); if (p==target) found=1; s=substr(s,RSTART+RLENGTH) } }
+            END { exit !found }' "$skill"; then
+            printf '%s: STD-11 §R8: links 0, required 1\n' "$file"
+            printf '%s: STD-11 §R10: links 0, required 1\n' "$file"
+          fi ;;
+        (evals/*) ;;
+        (*) printf '%s: STD-11 §R1: allowed locations 0, required 1\n' "$file" ;;
+      esac
+      case "$rel" in (references/*)
+        paragraph_check "$file" 11 R11
+        check_links "$file" "$dir"
+        bytes=$(wc -c < "$file"); [ "$bytes" -le 16000 ] || printf '%s: STD-11 §R16: %d bytes, limit 16000\n' "$file" "$bytes"
+        LC_ALL=C awk -v file="$file" '
+          { t=$0; sub(/^[ \t]*/,"",t)
+            if (fence) { if (substr(t,1,length(fence))==fence && substr(t,length(fence)+1) ~ /^[ \t]*$/) fence=""; next }
+            if (t ~ /^```+[^`]*$/ || t ~ /^~~~/) { c=substr(t,1,1); fence=""; while (substr(t,length(fence)+1,1)==c) fence=fence c; next }
+          }
+          NR<=30 && $0 ~ /^[ \t]*[-*+] +\[/ { text=text "\n" $0 }
+          /^#{1,6}[ \t]+/ { heading=$0; sub(/^#+[ \t]+/,"",heading); sub(/[ \t]+#+[ \t]*$/, "",heading); heading=tolower(heading); gsub(/[^a-z0-9 _-]/,"",heading); gsub(/ /,"-",heading); if (!(heading in headings)) { headings[heading]=1; total++ } }
+          END { if (NR>100) { for (h in headings) if (index(text,"](#" h ")")) found++; if (!total || found<total) printf "%s: STD-11 §R10: contents links %d, required %d for %d lines (limit 100)\n",file,found,total,NR } }' "$file" ;;
+      esac
+    done
+    cases=$(repository_files | while IFS= read -r evalfile; do
+      case "$evalfile" in ("$dir"/evals/*) ;; (*) continue ;; esac
+      [ -f "$evalfile" ] && not_excluded "$evalfile" || continue
+      awk '
+        { text=text $0 "\n"; if ($0 ~ /^[ \t]*([-*+] |[0-9]+[.)] |#{1,6} )/) lines++ }
+        END {
+          if (text ~ /^[ \t\r\n]*[{\[]/) {
+            if (text ~ /^[ \t\r\n]*\[/) sub(/^[ \t\r\n]*/,"",text)
+            else if (match(text,/"cases"[ \t\r\n]*:[ \t\r\n]*\[/)) text=substr(text,RSTART+RLENGTH-1)
+            else { print 0; exit }
+            depth=0; quoted=0; escaped=0; started=0; count=0
+            for (i=1;i<=length(text);i++) {
+              c=substr(text,i,1)
+              if (quoted) { if (escaped) escaped=0; else if (c=="\\") escaped=1; else if (c=="\"") quoted=0; continue }
+              if (c=="\"") { quoted=1; if (depth==1) started=1; continue }
+              if (c=="[" || c=="{") { if (depth==1) started=1; depth++; continue }
+              if (c=="]" || c=="}") { depth--; if (depth==0) { if (started) count++; break }; continue }
+              if (depth==1 && c==",") { if (started) count++; started=0 }
+              else if (depth==1 && c !~ /[ \t\r\n]/) started=1
+            }
+            print count
+          } else print lines+0
+        }' "$evalfile"
+    done | awk 'BEGIN { max=0 } $1>max { max=$1 } END { print max }')
+    [ "$cases" -ge 3 ] || printf '%s/evals/: STD-11 §R19: %d cases, required 3\n' "$dir" "$cases"
+    check_links "$skill" "$dir"
+  done)
+  if [ -n "$findings" ]; then printf '%s\n' "$findings" >&2; instruction_status=1; fi
+fi
+
+
 if [ "$status" -ne 0 ]; then
   {
     printf '%s\n' "vendored standards were edited — re-sync with operations/scripts/sync-standards.sh; record deviations in docs/design/<feature>/4_decisions.md"
@@ -65,5 +299,6 @@ if [ "$status" -ne 0 ]; then
   } >&2
   exit 1
 fi
+if [ "$instruction_status" -ne 0 ]; then exit 1; fi
 printf 'standards check: OK (docs/standards intact, AGENTS.md block present)\n'
 exit 0

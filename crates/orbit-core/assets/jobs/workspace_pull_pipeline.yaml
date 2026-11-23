@@ -63,9 +63,17 @@
 # available to leaf workers and the clock sweep; matching builds must be
 # deployed and restarted before a new drain can admit.
 #
-# `max_iterations` is the fail-closed ceiling, not the intended exit. Every
-# iteration that admits nothing waits at least `poll_sleep_seconds`, so 6000
-# covers a 24h window plus a long tail of in-flight leaves.
+# `max_iterations` is the fail-closed ceiling, not the intended exit.
+# A continuing pass with no admission uses `poll_sleep_seconds` when leaves
+# are unsettled, capacity is full, or the pass is throttled or incomplete;
+# otherwise it uses `idle_sleep_seconds`. The settings are independent
+# (defaults: 30s poll, 60s idle). If all 6000 passes wait, they account for
+# 50–100h of configured sleep at those defaults, plus pass runtime. Passes
+# that admit work need not wait, and shorter settings can exhaust the ceiling
+# before a 24h window and its settling tail end. `fail_when_exhausted` makes
+# the `drain` step and run fail with `loop_exhausted` when all 6000 passes
+# finish without `break_when` holding (the `loop.did_not_converge` audit event
+# is still emitted).
 
 schemaVersion: 2
 kind: Job
@@ -81,9 +89,9 @@ spec:
     # run-control path `orbit run concurrency` writes, so it can be retuned
     # live. The claimed leaf definitions declare no ceiling of their own.
     max_active_leaf_runs: 5
-    # Waited when leaves are in flight or a pass did not complete.
+    # Poll wait while leaves are in flight or a pass did not complete.
     poll_sleep_seconds: 30
-    # Waited when the owner had nothing ready and nothing is in flight.
+    # Idle wait when the owner has nothing ready and nothing is in flight.
     idle_sleep_seconds: 60
     # How long the failure breaker stays open before it admits one probe
     # claim; each failed probe doubles it, at most eight times.
@@ -101,6 +109,7 @@ spec:
     - id: drain
       loop:
         max_iterations: 6000
+        fail_when_exhausted: true
         break_when: "{{ steps.refill.output.done }} == true"
         steps:
           - id: window

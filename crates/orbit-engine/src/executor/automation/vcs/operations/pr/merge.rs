@@ -6,12 +6,18 @@ use serde_json::{Value, json};
 
 use super::super::input::{optional_string, required_string, valid_expected_remote_sha};
 use super::super::process::{execute, run_vcs_process, succeeded};
-use super::super::{BASE_MODIFIED_REFUSAL, MERGE_IN_PROGRESS_REFUSAL, SLOW_TIMEOUT_MS};
+use super::super::{
+    BASE_MODIFIED_REFUSAL, MERGE_CONFLICT_REFUSAL, MERGE_IN_PROGRESS_REFUSAL, SLOW_TIMEOUT_MS,
+};
 
 /// GitHub's reason for refusing a merge because another merge moved the base
 /// between its mergeability check and the mutation (F2026-10-071). The `sha`
 /// condition was not what failed.
 const BASE_MODIFIED_REASON: &str = "Base branch was modified. Review and try the merge again.";
+
+/// GitHub's reason for refusing a merge whose head no longer merges cleanly
+/// into a base that advanced after its mergeability check (F2026-11-440).
+const MERGE_CONFLICT_REASON: &str = "Pull Request has merge conflicts";
 
 pub(in crate::executor::automation::vcs::operations) fn pr_merge(
     input: &Value,
@@ -42,21 +48,18 @@ pub(in crate::executor::automation::vcs::operations) fn pr_merge(
                 "review_gate_stale: deferred auto-merge cannot guarantee the reviewed head; wait for checks and request a synchronous merge".to_string(),
             ));
         }
-        let report_base_modified = input
-            .get("report_base_modified")
-            .and_then(Value::as_bool)
-            .unwrap_or(false);
+        let flag = |name| input.get(name).and_then(Value::as_bool).unwrap_or(false);
         return pr_merge_reviewed(
             selector,
             workspace_path,
             strategy,
             message.as_ref(),
             reviewed_head,
-            report_base_modified,
-            input
-                .get("report_ambiguous")
-                .and_then(Value::as_bool)
-                .unwrap_or(false),
+            ReviewedMergeReports {
+                base_modified: flag("report_base_modified"),
+                ambiguous: flag("report_ambiguous"),
+                conflict: flag("report_conflict"),
+            },
         );
     }
     let mut args = vec![
@@ -89,6 +92,13 @@ pub(in crate::executor::automation::vcs::operations) fn pr_merge(
     }))
 }
 
+/// Which refusals a reviewed merge's caller asks to receive as values.
+struct ReviewedMergeReports {
+    base_modified: bool,
+    ambiguous: bool,
+    conflict: bool,
+}
+
 /// Use the synchronous REST mutation: `sha` is checked by GitHub when it
 /// merges, and this endpoint never enables auto-merge or enters a merge queue.
 /// `gh pr merge --match-head-commit` alone is insufficient because the CLI
@@ -98,8 +108,11 @@ pub(in crate::executor::automation::vcs::operations) fn pr_merge(
 /// refusal returns `{"merged": false, "refusal": "base_modified"}` with the
 /// raw output, so the caller can decide whether to ask again. The exact
 /// merge-in-progress refusal is a distinct value permitting reads, never a
-/// second mutation. Other failures, including a base-modification refusal
-/// without its opt-in, stay errors unless
+/// second mutation. [F2026-11-440] With `report_conflict`, the exact
+/// merge-conflict refusal returns `"refusal": "merge_conflict"`, which
+/// permits one status read and never a second mutation. Other failures,
+/// including a base-modification or conflict refusal without its opt-in,
+/// stay errors unless
 /// `report_ambiguous` opts into reporting an uncertain server response. That
 /// outcome permits the completion caller one read, never a second mutation.
 fn pr_merge_reviewed(
@@ -108,8 +121,7 @@ fn pr_merge_reviewed(
     strategy: &str,
     message: Option<&MergeMessage>,
     reviewed_head: &str,
-    report_base_modified: bool,
-    report_ambiguous: bool,
+    reports: ReviewedMergeReports,
 ) -> Result<Value, OrbitError> {
     // Managed completion supplies a number in the current repository. Refuse
     // other selectors here rather than resolving a URL into a different repo.
@@ -143,7 +155,7 @@ fn pr_merge_reviewed(
         ]);
     }
     let result = run_vcs_process("gh", args, Some(Path::new(workspace_path)), SLOW_TIMEOUT_MS)?;
-    if report_base_modified && is_base_modified_refusal(&result) {
+    if reports.base_modified && is_base_modified_refusal(&result) {
         return Ok(json!({
             "merged": false,
             "refusal": BASE_MODIFIED_REFUSAL,
@@ -159,7 +171,18 @@ fn pr_merge_reviewed(
             "stderr": result.stderr,
         }));
     }
-    let ambiguous = report_ambiguous && is_ambiguous_merge_server_failure(&result);
+    if reports.conflict
+        && result.exit_code.is_some()
+        && is_exact_merge_refusal(&result, MERGE_CONFLICT_REASON)
+    {
+        return Ok(json!({
+            "merged": false,
+            "refusal": MERGE_CONFLICT_REFUSAL,
+            "stdout": result.stdout,
+            "stderr": result.stderr,
+        }));
+    }
+    let ambiguous = reports.ambiguous && is_ambiguous_merge_server_failure(&result);
     let result = match succeeded(result, "reviewed PR merge") {
         Err(error) if ambiguous => {
             return Ok(json!({

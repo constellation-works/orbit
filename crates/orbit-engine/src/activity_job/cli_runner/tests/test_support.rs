@@ -1,10 +1,11 @@
 use std::fs;
 use std::path::Path;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Duration;
 
 use orbit_agent::loop_engine::audit::BlobStore;
-use orbit_common::OrbitError;
+use orbit_common::{OrbitError, StorageLayer};
 use orbit_types::workflow::activity_job::{AgentLoopSpec, Provider};
 
 use super::super::super::audit_writer::V2AuditWriter;
@@ -15,6 +16,33 @@ pub(in crate::activity_job::cli_runner) fn sh_args(script: &str) -> Vec<String> 
     vec!["-c".to_string(), script.to_string()]
 }
 
+/// A persistence-refresh failure a test forces on the post-run path, by the
+/// error class the real store reports for it.
+pub(in crate::activity_job::cli_runner) enum RefreshFailure {
+    /// A store refusal that no retry clears.
+    Store(String),
+    /// A store refused as read-only or access-denied.
+    ReadOnly(String),
+    /// SQLite lock contention that outlasted the busy timeout.
+    LockBusy(String),
+}
+
+impl RefreshFailure {
+    fn error(&self) -> OrbitError {
+        match self {
+            Self::Store(message) => OrbitError::Store(message.clone()),
+            Self::ReadOnly(message) => OrbitError::StorageAccessDenied {
+                layer: StorageLayer::Store,
+                message: message.clone(),
+            },
+            Self::LockBusy(message) => OrbitError::StorageLockBusy {
+                layer: StorageLayer::Store,
+                message: message.clone(),
+            },
+        }
+    }
+}
+
 /// A host that launches `command` as the provider CLI and otherwise keeps the
 /// trait defaults (no task context), except that deny-mode tool policies
 /// resolve against a fixed registry. Sandbox and a
@@ -23,7 +51,10 @@ pub(in crate::activity_job::cli_runner) fn sh_args(script: &str) -> Vec<String> 
 pub(in crate::activity_job::cli_runner) struct TestHost {
     command: String,
     sandbox: Option<ResolvedSandbox>,
-    refresh_error: Option<String>,
+    refresh_failure: Option<RefreshFailure>,
+    /// The first this many refreshes fail; `None` fails every refresh.
+    refresh_failing_calls: Option<u32>,
+    refresh_calls: AtomicU32,
 }
 
 impl TestHost {
@@ -31,7 +62,9 @@ impl TestHost {
         Self {
             command,
             sandbox: None,
-            refresh_error: None,
+            refresh_failure: None,
+            refresh_failing_calls: None,
+            refresh_calls: AtomicU32::new(0),
         }
     }
 
@@ -46,10 +79,26 @@ impl TestHost {
 
     pub(in crate::activity_job::cli_runner) fn fail_persistence_refresh(
         mut self,
-        message: impl Into<String>,
+        failure: RefreshFailure,
     ) -> Self {
-        self.refresh_error = Some(message.into());
+        self.refresh_failure = Some(failure);
         self
+    }
+
+    /// Fail only the first `calls` refreshes, so a bounded retry can clear it.
+    pub(in crate::activity_job::cli_runner) fn fail_persistence_refresh_for(
+        mut self,
+        failure: RefreshFailure,
+        calls: u32,
+    ) -> Self {
+        self.refresh_failure = Some(failure);
+        self.refresh_failing_calls = Some(calls);
+        self
+    }
+
+    /// How many persistence refreshes the post-run path requested.
+    pub(in crate::activity_job::cli_runner) fn persistence_refresh_calls(&self) -> u32 {
+        self.refresh_calls.load(Ordering::SeqCst)
     }
 }
 
@@ -89,9 +138,12 @@ impl crate::test_support::NullRuntimeHost for TestHost {
     }
 
     fn refresh_persistence_after_cli_provider(&self) -> Result<(), OrbitError> {
-        match &self.refresh_error {
-            Some(message) => Err(OrbitError::Store(message.clone())),
-            None => Ok(()),
+        let call = self.refresh_calls.fetch_add(1, Ordering::SeqCst) + 1;
+        match &self.refresh_failure {
+            Some(failure) if self.refresh_failing_calls.is_none_or(|calls| call <= calls) => {
+                Err(failure.error())
+            }
+            _ => Ok(()),
         }
     }
 }

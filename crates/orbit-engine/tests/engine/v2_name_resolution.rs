@@ -458,6 +458,7 @@ fn validation_loop(
                 items: None,
                 max_iterations: 1,
                 break_when: break_when.map(str::to_string),
+                fail_when_exhausted: false,
                 steps,
             },
         },
