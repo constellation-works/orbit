@@ -76,14 +76,17 @@ fn local_run(fixture: &Fixture, merge: Value) -> String {
 
 /// Each case is a fresh fixture. Only the valid completion hold is a
 /// deliberate no-landing; the malformed shapes keep the landing unavailable,
-/// and a real fast-forward is still merged.
+/// and a real fast-forward, including a historical one that omits `merged`,
+/// is still merged.
 pub(super) fn completion_held_local_merge_is_observed_as_no_landing() {
     for case in [
         "completion_held",
         "base_not_text",
         "merged_not_boolean",
+        "merged_not_boolean_with_base",
         "merged_true_without_base",
         "local_fast_forward",
+        "legacy_fast_forward_without_merged",
     ] {
         let fixture = Fixture::new();
         let merge = match case {
@@ -101,7 +104,9 @@ pub(super) fn completion_held_local_merge_is_observed_as_no_landing() {
             }),
             "base_not_text" => json!({"base": 7}),
             "merged_not_boolean" => json!({"merged": "false", "reason": "completion_held"}),
+            "merged_not_boolean_with_base" => json!({"merged": "false", "base": "main"}),
             "merged_true_without_base" => json!({"merged": true}),
+            "legacy_fast_forward_without_merged" => json!({"base": "main"}),
             "local_fast_forward" => json!({
                 "merged": true,
                 "base": "main",
@@ -142,7 +147,7 @@ pub(super) fn completion_held_local_merge_is_observed_as_no_landing() {
                     "{case}: {observed:?}"
                 );
             }
-            "local_fast_forward" => {
+            "local_fast_forward" | "legacy_fast_forward_without_merged" => {
                 assert_eq!(
                     observed.landing.status,
                     LandingObservationStatus::Merged,
@@ -157,9 +162,9 @@ pub(super) fn completion_held_local_merge_is_observed_as_no_landing() {
                     "{case}: {:?}",
                     observed.landing
                 );
+                let expected_landed_commit = (case == "local_fast_forward").then(|| "c".repeat(40));
                 assert_eq!(
-                    observed.landing.landed_commit,
-                    Some("c".repeat(40)),
+                    observed.landing.landed_commit, expected_landed_commit,
                     "{case}: {:?}",
                     observed.landing
                 );
