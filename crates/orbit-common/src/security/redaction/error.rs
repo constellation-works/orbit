@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::path::{Component, Path};
 
 use serde_json::Value;
@@ -500,6 +501,7 @@ fn redact_json_walk(value: Value, redact: fn(&str) -> String, redact_keys: bool)
         ),
         Value::Object(map) => {
             let mut out = serde_json::Map::with_capacity(map.len());
+            let mut next_suffix = HashMap::new();
             for (key, value) in map {
                 let redacted = if is_credential_json_key(&key) {
                     redact_credential_json_value(value, redact, redact_keys)
@@ -507,7 +509,7 @@ fn redact_json_walk(value: Value, redact: fn(&str) -> String, redact_keys: bool)
                     redact_json_walk(value, redact, redact_keys)
                 };
                 let name = if redact_keys {
-                    unique_member_name(&out, redact(&key))
+                    unique_member_name(&out, &mut next_suffix, redact(&key))
                 } else {
                     key
                 };
@@ -520,14 +522,27 @@ fn redact_json_walk(value: Value, redact: fn(&str) -> String, redact_keys: bool)
 }
 
 /// `name`, or `name` with a `#n` suffix when `taken` already holds it.
-fn unique_member_name(taken: &serde_json::Map<String, Value>, name: String) -> String {
+///
+/// Tracks the next untaken suffix per redacted base name so colliding groups
+/// advance without rescanning previously assigned suffixes while still
+/// checking `taken` to preserve literal `#n` member names.
+fn unique_member_name(
+    taken: &serde_json::Map<String, Value>,
+    next_suffix: &mut HashMap<String, usize>,
+    name: String,
+) -> String {
     if !taken.contains_key(&name) {
         return name;
     }
-    (2..)
-        .map(|n| format!("{name}#{n}"))
-        .find(|candidate| !taken.contains_key(candidate))
-        .unwrap_or(name)
+    let start = next_suffix.get(&name).copied().unwrap_or(2);
+    for n in start.. {
+        let candidate = format!("{name}#{n}");
+        if !taken.contains_key(&candidate) {
+            next_suffix.insert(name, n.saturating_add(1));
+            return candidate;
+        }
+    }
+    name
 }
 
 /// Mask the string value of a credential-labelled key.
