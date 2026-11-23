@@ -219,6 +219,18 @@ impl orbit_engine::test_support::NullRuntimeHost for RepairPipeline<'_> {
                         )
                         .unwrap();
                     }
+                    "transition" | "scratch-transition" => {
+                        let repo = &self.fixture.repo;
+                        std::fs::remove_file(repo.join("to-dir")).unwrap();
+                        std::fs::create_dir(repo.join("to-dir")).unwrap();
+                        std::fs::write(repo.join("to-dir/.env"), "new_protected_canary\n").unwrap();
+                        std::fs::write(repo.join("to-dir/ordinary"), "new ordinary content\n")
+                            .unwrap();
+                        std::fs::remove_file(repo.join("to-file/.env")).unwrap();
+                        std::fs::remove_dir(repo.join("to-file")).unwrap();
+                        std::fs::write(repo.join("to-file"), "replacement ordinary content\n")
+                            .unwrap();
+                    }
                     #[cfg(unix)]
                     "symlink" => {
                         std::os::unix::fs::symlink("candidate.txt", self.fixture.repo.join("link"))
@@ -807,6 +819,43 @@ fn final_recovery_does_not_authorize_an_unrecorded_head_change() {
     }
 }
 
+fn final_recovery_transition_evidence_excludes_protected_paths() {
+    for case in ["transition", "scratch-transition"] {
+        let mut fixture = fixture_with_command("test \"$(cat candidate.txt)\" != after");
+        std::fs::write(fixture.repo.join("to-dir"), "old ordinary content\n").unwrap();
+        std::fs::create_dir(fixture.repo.join("to-file")).unwrap();
+        std::fs::write(fixture.repo.join("to-file/.env"), "old_protected_canary\n").unwrap();
+        git(&fixture, &["add", "-f", "to-dir", "to-file/.env"]);
+        git(&fixture, &["commit", "-m", "seed transition"]);
+        git(&fixture, &["branch", "-f", "main", "HEAD"]);
+        fixture.input["base_sha"] = json!(git(&fixture, &["rev-parse", "HEAD"]));
+        let (_, outcome) = run_pipeline(&fixture, case);
+        assert!(outcome.is_err(), "{case}: {outcome:?}");
+        let run = fixture.input["job_run_id"].as_str().unwrap();
+        let name = format!("recovery-uncommitted-{run}.patch");
+        let text = if case.starts_with("scratch-") {
+            std::fs::read_to_string(fixture.repo.join(".orbit/tmp").join(&name)).unwrap()
+        } else {
+            let artifact = fixture
+                .runtime
+                .get_task_artifact(&fixture.task_id, &name)
+                .unwrap()
+                .unwrap();
+            String::from_utf8(artifact.content).unwrap()
+        };
+        assert!(
+            text.contains("repaired")
+                && text.contains("new ordinary content")
+                && text.contains("replacement ordinary content"),
+            "{case}: {text}"
+        );
+        assert!(
+            !text.contains(".env") && !text.contains("protected_canary"),
+            "{case}: {text}"
+        );
+    }
+}
+
 #[cfg(unix)]
 fn final_recovery_scratch_fallback_refuses_redirects() {
     use std::os::unix::fs::{PermissionsExt, symlink};
@@ -1124,6 +1173,7 @@ crate::scenario_table!(
     final_recovery_commits_a_landing_review_repair_with_unsettled_admission,
     final_recovery_does_not_authorize_an_unrecorded_head_change,
     final_recovery_persists_repair_evidence_without_task_write_tools,
+    final_recovery_transition_evidence_excludes_protected_paths,
     resumed_final_recovery_repair_keeps_the_original_checkpoint_owner
 );
 
