@@ -73,37 +73,38 @@ use orbit_types::record::OrbitEvent;
 use orbit_types::task::{TaskDecision, TaskHistoryEntry};
 use orbit_types::workflow::automation::SourceRevision;
 use orbit_types::workflow::{
-    BaselineRedHold, CommitIdentity, HostCandidateOverride, HostKnownRed,
-    KNOWN_RED_VALIDATION_EVENT, KnownRedValidation, REVIEW_BASELINE_ARTIFACT, REVIEW_GATE_ARTIFACT,
-    ReviewBaselineClaim, ReviewValidation, ReviewVerdict, ValidationOutcome, ValidationRole,
+    BaselineRedHold, HostCandidateOverride, HostKnownRed, KNOWN_RED_VALIDATION_EVENT,
+    KnownRedValidation, REVIEW_BASELINE_ARTIFACT, REVIEW_GATE_ARTIFACT, ReviewBaselineClaim,
+    ReviewValidation, ReviewVerdict, ValidationOutcome, ValidationRole,
 };
 use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
 use crate::application::task::TaskRecordUpdateParams;
 
-use super::context::GateContext;
-use super::judgement::{Judgement, extend_note, write_artifact};
+use super::judgement::{Judgement, SettlementInputs, extend_note, write_artifact};
 use crate::application::task::TaskRecords;
 
 impl Judgement {
     /// Check every baseline claim in the report and return the holds the
-    /// review settles under, or none when it settles as before. `candidate`
-    /// is the final candidate the host runs check. `repair` is the
-    /// reviewer's repair commit, which an accept override must name.
-    /// `budget` bounds each claim's host runs.
-    #[allow(clippy::too_many_arguments)]
+    /// review settles under, or none when it settles as before. `inputs`
+    /// carries the final candidate the host runs check and the reviewer's
+    /// repair commit, which an accept override must name. `budget` bounds
+    /// each claim's host runs.
     pub(super) fn verify_baseline_claims(
         &mut self,
         runtime: &OrbitRuntime,
-        context: &GateContext,
+        inputs: SettlementInputs<'_>,
         base: &SourceRevision,
-        candidate: &SourceRevision,
         base_ref: &str,
-        scope: &[String],
-        repair: Option<&CommitIdentity>,
         budget: ReplayBudget,
     ) -> Result<Vec<BaselineRedHold>, OrbitError> {
+        let SettlementInputs {
+            context,
+            candidate,
+            repair,
+            scope,
+        } = inputs;
         let claimed = self
             .validation
             .iter()

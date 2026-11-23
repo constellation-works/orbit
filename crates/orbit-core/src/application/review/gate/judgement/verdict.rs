@@ -7,7 +7,6 @@ use orbit_automation::review::{
 };
 use orbit_common::OrbitError;
 use orbit_engine::review_gate::{path_blob_at, path_changed_between};
-use orbit_types::workflow::automation::SourceRevision;
 use orbit_types::workflow::{
     CommitIdentity, FindingDisposition, ReviewEvidenceRequirement, ReviewExternalEvidence,
     ReviewVerdict, ValidationOutcome, ValidationRole,
@@ -16,9 +15,8 @@ use orbit_types::workflow::{
 use crate::OrbitRuntime;
 
 use super::super::super::evidence::covers_deferral;
-use super::super::context::GateContext;
 
-use super::Judgement;
+use super::{Judgement, SettlementInputs};
 
 impl Judgement {
     /// Resolve a repeated evidence-only report from durable result/log pairs
@@ -26,17 +24,19 @@ impl Judgement {
     /// on an earlier tree count through `carry` only: its patch is unchanged.
     /// `host` holds the results this settlement's own host just produced
     /// ([`Self::fulfil_host_evidence`]), which count like durable ones.
-    #[allow(clippy::too_many_arguments)]
     pub(in crate::application::review::gate) fn reconcile_external_evidence(
         &mut self,
         runtime: &OrbitRuntime,
-        context: &GateContext,
-        candidate: &SourceRevision,
-        repair: Option<&CommitIdentity>,
-        scope: &[String],
+        inputs: SettlementInputs<'_>,
         carry: Option<&orbit_types::workflow::ReviewEvidenceCarried>,
         host: BTreeMap<String, ReviewExternalEvidence>,
     ) -> Result<(), OrbitError> {
+        let SettlementInputs {
+            context,
+            candidate,
+            repair,
+            scope,
+        } = inputs;
         if context.task_ids.len() != 1
             || self.external_evidence.is_empty()
             || self.has_open_findings()
