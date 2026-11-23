@@ -2319,6 +2319,43 @@ fn early_job_store_failures_preserve_errors_and_report_available_or_unavailable_
         other => panic!("expected refused store_unreadable, got {other:?}"),
     }
 
+    // A leaf-lookup failure on the single-task Fix PR path is a refusal too,
+    // with the PR number and the same budget as the drain pass reports.
+    let readiness_leaf = fx
+        .runtime
+        .task_pr_auto_fix_readiness(&leaf_fail.task, true)
+        .unwrap();
+    assert_eq!(readiness_leaf["available"], false, "{readiness_leaf}");
+    assert_eq!(
+        readiness_leaf["reason"], "store_unreadable",
+        "{readiness_leaf}"
+    );
+    assert_eq!(readiness_leaf["pr_number"], "171", "{readiness_leaf}");
+    let leaf_detail = readiness_leaf["detail"].as_str().unwrap_or_default();
+    assert!(
+        leaf_detail.contains("read the task's delivery leaves:")
+            && leaf_detail.contains("repair attempts: 1 of 3 spent, 2 remaining"),
+        "{readiness_leaf}"
+    );
+    match fx
+        .runtime
+        .start_task_pr_auto_fix(&leaf_fail.task, true, Some("dashboard"))
+    {
+        Err(TaskAutoFixError::Refused(refusal)) => {
+            assert_eq!(refusal.reason(), "store_unreadable");
+            assert!(
+                refusal
+                    .detail()
+                    .contains("read the task's delivery leaves:")
+                    && refusal
+                        .detail()
+                        .contains("repair attempts: 1 of 3 spent, 2 remaining"),
+                "{refusal}"
+            );
+        }
+        other => panic!("expected refused store_unreadable, got {other:?}"),
+    }
+
     let readiness_unreadable = fx
         .runtime
         .task_pr_auto_fix_readiness(&held_corrupt_ledger.task, true)
