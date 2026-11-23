@@ -8,6 +8,7 @@ use crate::activity_job::cli_runner::image_input::StagedImages;
 use crate::activity_job::cli_runner::inspection::SourceInspection;
 use crate::activity_job::dispatcher::{DispatchOutcome, ResolvedSandbox};
 use crate::activity_job::workspace::WorktreeBoundaryGuard;
+use crate::context::RuntimeHost;
 
 use super::super::super::super::dispatcher::DispatchError;
 use super::super::completion::{ProviderExit, project_completion};
@@ -15,6 +16,40 @@ use super::super::evidence::{
     emit_build_waits, record_scratch_removals, step_error_after_provider_evidence,
 };
 use super::{CliDispatchContext, subprocess};
+
+/// Attempts for a post-run store refresh that loses only to SQLite lock
+/// contention, and the pause before each retry. Each attempt already waits out
+/// the connection's busy timeout, so the pause only lets a short writer finish.
+const REFRESH_LOCK_BUSY_ATTEMPTS: u32 = 3;
+const REFRESH_LOCK_BUSY_PAUSE: Duration = Duration::from_millis(250);
+
+/// Refreshes the durable store after a provider exits. A lock-busy failure is
+/// retried a bounded number of times; a lock still held afterwards is transient
+/// (`CliInvocationFailed`). Any other failure, such as a read-only or corrupt
+/// store, stays `CliInvocationPermanent`.
+fn refresh_store_after_provider(
+    host: &dyn RuntimeHost,
+    provider: &str,
+) -> Result<(), DispatchError> {
+    let mut attempts = 0;
+    loop {
+        attempts += 1;
+        let Err(error) = host.refresh_persistence_after_cli_provider() else {
+            return Ok(());
+        };
+        let lock_busy = error.is_lock_busy();
+        if lock_busy && attempts < REFRESH_LOCK_BUSY_ATTEMPTS {
+            std::thread::sleep(REFRESH_LOCK_BUSY_PAUSE);
+            continue;
+        }
+        let message = format!("refresh durable store after provider `{provider}` exited: {error}");
+        return Err(if lock_busy {
+            DispatchError::CliInvocationFailed(message)
+        } else {
+            DispatchError::CliInvocationPermanent(message)
+        });
+    }
+}
 
 pub(super) struct CliProviderCompletion<'a> {
     pub(super) started_at: chrono::DateTime<chrono::Utc>,
@@ -95,15 +130,9 @@ pub(super) fn finish_cli_dispatch(
     // failure before it leaves the previous connection and a failure after it
     // leaves the new one. Blobs and `CliInvocationFinished` are recorded on
     // whichever connection remains, then inspection, the Linux guard, and the
-    // worktree boundary run. Integrity failures keep that classification.
-    let refresh_error = host
-        .refresh_persistence_after_cli_provider()
-        .err()
-        .map(|error| {
-            DispatchError::CliInvocationPermanent(format!(
-                "refresh durable store after provider `{provider}` exited: {error}"
-            ))
-        });
+    // worktree boundary run. Integrity failures keep that classification; lock
+    // contention is retried and, if it persists, stays transient.
+    let refresh_error = refresh_store_after_provider(host, &provider).err();
 
     let stdout_blob_ref = audit.write_blob(stdout.bytes());
     let stderr_blob_ref = audit.write_blob(stderr.bytes());
