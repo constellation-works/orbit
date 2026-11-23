@@ -9,7 +9,7 @@ use orbit_types::task::{
 
 use crate::context::RuntimeHost;
 
-use super::super::git::git_output_paths;
+use super::super::git::{git_output_exact_paths, git_output_paths};
 
 /// The run-scoped scratch root (`$ORBIT_SCRATCH_DIR`). Repositories normally
 /// ignore it; it is excluded here as well so no selector can deliver scratch.
@@ -39,22 +39,47 @@ pub(super) enum NewPathPolicy {
 
 /// Resolve the concrete paths a task run delivers: every tracked change and
 /// every untracked path outside the scratch root. Gitignored output is never
-/// listed. Refusing a protected claimed path, or an owner candidate that is
-/// not a regular file (other than an admitted crate-guide symlink), before
-/// staging preserves both its bytes and the exact index the worker left behind.
+/// listed. Refusing a path whose name is not UTF-8, a protected claimed path,
+/// or an owner candidate that is not a regular file (other than an admitted
+/// crate-guide symlink), before staging preserves both its bytes and the exact
+/// index the worker left behind.
 /// Rename detection stays off so both source deletions and destination
 /// additions are available for task attribution and path-scoped commits.
 pub(super) fn task_candidate_paths(
     workspace_path: &Path,
     policy: NewPathPolicy,
 ) -> Result<BTreeSet<String>, OrbitError> {
-    let untracked = git_output_paths(
+    let untracked = git_output_exact_paths(
         workspace_path,
         &["ls-files", "--others", "--exclude-standard", "-z", "--"],
-    )?
-    .into_iter()
-    .filter(|path| !path_matches_scope(path, SCRATCH_DIR))
-    .collect::<Vec<_>>();
+    )?;
+    let tracked = git_output_exact_paths(
+        workspace_path,
+        &[
+            "diff",
+            "--name-only",
+            "--no-renames",
+            "-z",
+            "--relative",
+            "HEAD",
+            "--",
+        ],
+    )?;
+    // Lossy decoding would rename such a path with U+FFFD; staging that name
+    // then omits the native path, or touches a different tracked one, while
+    // the rest of the delivery commits. Refuse the whole candidate instead.
+    refuse_unrepresentable_paths(
+        untracked
+            .unrepresentable
+            .iter()
+            .filter(|path| !path_matches_scope(path, SCRATCH_DIR))
+            .chain(&tracked.unrepresentable),
+    )?;
+    let untracked = untracked
+        .paths
+        .into_iter()
+        .filter(|path| !path_matches_scope(path, SCRATCH_DIR))
+        .collect::<Vec<_>>();
     if policy == NewPathPolicy::Claimed {
         let protected = untracked
             .iter()
@@ -72,20 +97,7 @@ pub(super) fn task_candidate_paths(
         }
     }
 
-    let mut candidates = git_output_paths(
-        workspace_path,
-        &[
-            "diff",
-            "--name-only",
-            "--no-renames",
-            "-z",
-            "--relative",
-            "HEAD",
-            "--",
-        ],
-    )?
-    .into_iter()
-    .collect::<BTreeSet<_>>();
+    let mut candidates = tracked.paths.into_iter().collect::<BTreeSet<_>>();
     candidates.extend(untracked);
     if policy == NewPathPolicy::Owner {
         // A nested repository would be committed as a gitlink, and every later
@@ -106,6 +118,42 @@ pub(super) fn task_candidate_paths(
         }
     }
     Ok(candidates)
+}
+
+/// Exact UTF-8 path names from a NUL-delimited Git listing, refusing the
+/// listing when any name is not UTF-8. For listings that feed staging or a
+/// commit, where a lossy name would silently drop or misname a path.
+pub(super) fn exact_delivery_paths(
+    workspace_path: &Path,
+    args: &[&str],
+) -> Result<Vec<String>, OrbitError> {
+    let listed = git_output_exact_paths(workspace_path, args)?;
+    refuse_unrepresentable_paths(&listed.unrepresentable)?;
+    Ok(listed.paths)
+}
+
+/// Delivery names every path as UTF-8 text (pathspecs, selectors, attribution
+/// and evidence), so it cannot stage a name whose bytes are not UTF-8 exactly.
+/// Committing the rest without it would report a delivery that omits visible
+/// work, so the whole delivery is refused before the index changes.
+fn refuse_unrepresentable_paths<'a>(
+    paths: impl IntoIterator<Item = &'a String>,
+) -> Result<(), OrbitError> {
+    let paths = paths
+        .into_iter()
+        .map(|path| format!("`{path}`"))
+        .collect::<Vec<_>>();
+    if paths.is_empty() {
+        return Ok(());
+    }
+    Err(OrbitError::Execution(format!(
+        "task delivery refused paths whose names are not valid UTF-8 (bytes shown escaped): {}. \
+         Delivery stages and records every path by its UTF-8 name, so it cannot commit these \
+         names exactly and does not commit the remaining changes without them. Rename each \
+         path to a UTF-8 name or remove it, then deliver again. Orbit did not change the index \
+         or any listed file",
+        paths.join(", ")
+    )))
 }
 
 /// Candidates Git would not stage as a regular file or a removal: a path with
