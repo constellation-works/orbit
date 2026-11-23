@@ -1,3 +1,13 @@
+//! The test-only `NullRuntimeHost` trait: one signature per `RuntimeHost`
+//! capability, each with the answer of a host that lacks it. The substantive
+//! answers (script refusal, deferral probe, baseline tools, crew environment
+//! overlay, input crew validation) are bodies in `execution.rs`.
+//!
+//! Size exception to the 800-line target: this file keeps every method
+//! signature and the small defaults. The signatures are the trait's contract,
+//! and moving any of them out of the trait would change how test doubles
+//! implement it, so the file's length is that residual and nothing else.
+
 use orbit_common::OrbitError;
 use orbit_common::security::child_env::allowlisted_child_env;
 use orbit_store::contracts::JobRunStepParams;
@@ -26,6 +36,7 @@ use crate::context::dispatch_contract::{
 };
 
 use super::errors::{unsupported_dispatch_capability, unsupported_runtime_capability};
+use super::execution;
 
 use super::super::super::{AutoTaskAdmission, AutoTaskObservation, AutoTaskStepRequest};
 use super::super::super::{
@@ -628,13 +639,8 @@ pub trait NullRuntimeHost: Send + Sync {
         crew_env: &[orbit_types::identity::CrewEnvVar],
         required_env_vars: &[&str],
     ) -> Vec<(String, String)> {
-        let mut env = NullRuntimeHost::agent_subprocess_environment(self, required_env_vars);
-        orbit_common::security::child_env::apply_crew_env_from(
-            &mut env,
-            &std::env::vars().collect::<Vec<_>>(),
-            crew_env,
-        );
-        env
+        let env = NullRuntimeHost::agent_subprocess_environment(self, required_env_vars);
+        execution::overlay_crew_env(env, crew_env)
     }
     fn requires_claude_worker_credential(&self) -> bool {
         false
@@ -794,19 +800,7 @@ pub trait NullRuntimeHost: Send + Sync {
         &self,
         request: &crate::context::ScriptStepRequest,
     ) -> crate::context::ScriptStepRun {
-        crate::context::ScriptStepRun::Refused {
-            code: orbit_types::workflow::activity_job::script_refusal::SANDBOX_UNAVAILABLE,
-            message: "this host runs no script steps".to_string(),
-            record: Box::new(orbit_types::workflow::activity_job::ScriptExecutionRecord {
-                script: request.script.clone(),
-                outcome: "refused".to_string(),
-                refusal_code: Some(
-                    orbit_types::workflow::activity_job::script_refusal::SANDBOX_UNAVAILABLE
-                        .to_string(),
-                ),
-                ..Default::default()
-            }),
-        }
+        execution::refuse_script_step(request)
     }
 
     fn resolve_local_shell_executor(
@@ -836,12 +830,7 @@ pub trait NullRuntimeHost: Send + Sync {
         _fs_profile: Option<&str>,
         _cwd: &Path,
     ) -> NamespaceProbe {
-        NamespaceProbe {
-            command: probe.command.to_string(),
-            exit_code: -1,
-            output: "the probe could not run: this host does not support deferral probes"
-                .to_string(),
-        }
+        execution::unavailable_deferral_probe(probe)
     }
 
     fn task_context_for_agent_input(
@@ -913,13 +902,7 @@ pub trait NullRuntimeHost: Send + Sync {
         _task_ids: &[String],
         baseline_tools: &[String],
     ) -> Result<ResolvedActivityTools, DispatchError> {
-        Ok(ResolvedActivityTools {
-            requested_tools: Vec::new(),
-            effective_tools: baseline_tools.to_vec(),
-            omitted_requirement_notes: Vec::new(),
-            granted_tools: Vec::new(),
-            suppressed_tools: Vec::new(),
-        })
+        Ok(execution::baseline_activity_tools(baseline_tools))
     }
 
     fn checkpoint_step(
@@ -1151,16 +1134,6 @@ pub trait NullRuntimeHost: Send + Sync {
         &self,
         input: &Value,
     ) -> Result<Option<CrewConfig>, DispatchError> {
-        if let Some(crew) = input
-            .get("crew")
-            .and_then(Value::as_str)
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-        {
-            return Err(DispatchError::JobValidation(format!(
-                "explicit activity crew '{crew}' cannot be resolved by this runtime host"
-            )));
-        }
-        Ok(None)
+        execution::validate_input_crew(input)
     }
 }

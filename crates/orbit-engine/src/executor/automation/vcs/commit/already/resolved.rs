@@ -21,12 +21,12 @@ use orbit_types::task::Task;
 use orbit_types::workflow::handoff::AlreadyResolved;
 use serde_json::{Value, json};
 
-use super::super::conventions::meaningful_execution_summary;
-use super::super::git::git_output;
-use super::super::handoff::reports_failure;
+use super::super::super::conventions::meaningful_execution_summary;
+use super::super::super::git::git_output;
+use super::super::super::handoff::reports_failure;
 
 /// Checkpoint decision for an already-resolved clean base.
-pub(super) const DECISION: &str = "verified_already_resolved";
+pub(in crate::executor::automation::vcs::commit) const DECISION: &str = "verified_already_resolved";
 
 const EVIDENCE_KEY: &str = "already_resolved_evidence";
 
@@ -36,7 +36,9 @@ const EVIDENCE_KEY: &str = "already_resolved_evidence";
 /// meaningful summary carried beside them when it gave one. A summary
 /// alone names no check that could show the base resolves the task, so it
 /// is not evidence here. Invalid selectors refuse rather than settle.
-pub(super) fn evidence_from_implementation(input: &Value) -> Result<Option<Value>, OrbitError> {
+pub(in crate::executor::automation::vcs::commit) fn evidence_from_implementation(
+    input: &Value,
+) -> Result<Option<Value>, OrbitError> {
     let Some(implementation) = input
         .get("implementation")
         .filter(|value| value.is_object())
@@ -51,7 +53,7 @@ pub(super) fn evidence_from_implementation(input: &Value) -> Result<Option<Value
         Ok(None) => Vec::new(),
         Err(error) => return Err(OrbitError::InvalidInput(error)),
     };
-    let summary = super::super::claim::implementer_summary(input)
+    let summary = super::super::super::claim::implementer_summary(input)
         .filter(|summary| meaningful_execution_summary(summary).is_some())
         .filter(|summary| !reports_failure(summary));
     if selectors.is_empty() {
@@ -66,7 +68,12 @@ pub(super) fn evidence_from_implementation(input: &Value) -> Result<Option<Value
 /// The settled commit outcome for an already-resolved task. It reuses the
 /// NoDiff route (`skipped_no_diff_expected`), so a claimed pipeline hands off
 /// without publishing a branch or pull request after claim-host validation.
-pub(super) fn checkpoint(task_id: &str, run_id: &str, base_sha: &str, evidence: Value) -> Value {
+pub(in crate::executor::automation::vcs::commit) fn checkpoint(
+    task_id: &str,
+    run_id: &str,
+    base_sha: &str,
+    evidence: Value,
+) -> Value {
     json!({
         "phase": "commit",
         "decision": DECISION,
@@ -81,7 +88,7 @@ pub(super) fn checkpoint(task_id: &str, run_id: &str, base_sha: &str, evidence: 
 
 /// Recheck the checkpoint on the live worktree: HEAD is the pinned
 /// base and nothing is pending.
-pub(super) fn verify_handoff(
+pub(in crate::executor::automation::vcs::commit) fn verify_handoff(
     task: &Task,
     workspace: &Path,
     checkpoint: &Value,
@@ -105,7 +112,7 @@ pub(super) fn verify_handoff(
 
 /// The owner's recheck against its observed base: the checkpoint names this
 /// task and its pinned base, and its embedded evidence still admits.
-pub(super) fn verify_handoff_at_revision(
+pub(in crate::executor::automation::vcs::commit) fn verify_handoff_at_revision(
     task: &Task,
     checkpoint: &Value,
 ) -> Result<(), OrbitError> {

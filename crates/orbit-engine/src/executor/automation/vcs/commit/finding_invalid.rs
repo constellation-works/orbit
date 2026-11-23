@@ -15,7 +15,7 @@ use crate::context::RuntimeHost;
 
 use super::super::git::{git_command_success, git_output_raw};
 use super::super::retry_lineage::{LineageStep, LineageStop, RETRY_LINEAGE_MAX_HOPS, RetryLineage};
-use super::already_landed::run_in_lineage;
+use super::already::landed::run_in_lineage;
 use super::checkpoint::pinned_object_id;
 use super::clean_tree::{Specification, Verifier};
 
