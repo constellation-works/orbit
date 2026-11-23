@@ -374,7 +374,25 @@ fn read_json(path: &Path) -> Option<serde_json::Value> {
     serde_json::from_slice(&std::fs::read(path).ok()?).ok()
 }
 
-/// A regular file named `name` at most `depth` directories below `dir`.
+/// A regular file a worker can launch: on Unix at least one execute bit is
+/// set, so a kit whose shell lost its permissions is no longer installed.
+fn is_executable_file(path: &Path) -> bool {
+    let Ok(metadata) = std::fs::metadata(path) else {
+        return false;
+    };
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        metadata.is_file() && metadata.permissions().mode() & 0o111 != 0
+    }
+    #[cfg(not(unix))]
+    {
+        metadata.is_file()
+    }
+}
+
+/// An executable regular file named `name` at most `depth` directories below
+/// `dir`.
 fn find_executable(dir: &Path, name: &str, depth: usize) -> Option<PathBuf> {
     let mut entries: Vec<PathBuf> = std::fs::read_dir(dir)
         .ok()?
@@ -384,7 +402,7 @@ fn find_executable(dir: &Path, name: &str, depth: usize) -> Option<PathBuf> {
     entries.sort();
     if let Some(found) = entries
         .iter()
-        .find(|path| path.is_file() && path.file_name().is_some_and(|file| file == name))
+        .find(|path| path.file_name().is_some_and(|file| file == name) && is_executable_file(path))
     {
         return Some(found.clone());
     }

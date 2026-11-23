@@ -9,8 +9,9 @@ use serde_json::{Value, json};
 use super::support::{Fixture, isolated, json_ok};
 
 /// Seed `states` as `job`'s finished runs, oldest first, ending now.
-fn seed_runs(fixture: &Fixture, job: &str, states: &[JobRunState]) {
+fn seed_runs(fixture: &Fixture, job: &str, states: &[JobRunState]) -> Vec<orbit_core::JobRun> {
     let now = Utc::now();
+    let mut runs = Vec::new();
     for (index, state) in states.iter().enumerate() {
         let mut run = fixture.seed_run(&format!("{job}-{index}"), job, *state);
         let at = now - Duration::minutes((states.len() - index) as i64);
@@ -18,7 +19,9 @@ fn seed_runs(fixture: &Fixture, job: &str, states: &[JobRunState]) {
         run.started_at = Some(at);
         run.finished_at = Some(at);
         fixture.save_run(&run);
+        runs.push(run);
     }
+    runs
 }
 
 fn seed_fixture(fixture: &Fixture) {
@@ -130,6 +133,71 @@ fn non_runnable_jobs_are_hidden_from_the_failing_badge_and_report_runnability() 
                 field("task_pr_pipeline", "supports_no_input_submission"),
                 false
             );
+        },
+    );
+}
+
+/// Both job surfaces claim agreement only for what was read: a 26-run streak
+/// whose oldest, uninspected run failed differently agrees only in its newest
+/// 25, and a lone failure with no recorded error is unknown.
+#[test]
+fn failure_streaks_claim_agreement_only_for_inspected_runs() {
+    isolated(
+        "job_failure_streaks::failure_streaks_claim_agreement_only_for_inspected_runs",
+        || {
+            use super::support::{run_step, save_record_step};
+            use orbit_core::JobTargetType;
+            let fixture = Fixture::new();
+            fixture.job("long");
+            fixture.job("silent");
+            let mut states = vec![JobRunState::Success];
+            states.extend([JobRunState::Failed; 26]);
+            let runs = seed_runs(&fixture, "long", &states);
+            for (index, run) in runs.iter().enumerate().skip(1) {
+                let mut step = run_step(JobTargetType::Activity, "review", JobRunState::Failed);
+                step.error_message = Some(if index == 1 {
+                    "disk full on the runner".to_string()
+                } else {
+                    format!("[provider_capacity] retry {index}")
+                });
+                save_record_step(&fixture, run, &step);
+            }
+            seed_runs(
+                &fixture,
+                "silent",
+                &[JobRunState::Success, JobRunState::Failed],
+            );
+            let server = fixture.server(false);
+
+            let page = json_ok(server.get("/api/jobs/failure-streaks?workspace=ws_http_fixture"));
+            let long = page["failing"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|streak| streak["job_id"] == "long")
+                .cloned()
+                .unwrap_or_else(|| panic!("long missing from {page}"));
+            assert_eq!(long["count"], 26, "{long}");
+            assert_eq!(long["same_error"], false, "{long}");
+            assert_eq!(long["error_agreement"], "partial", "{long}");
+            assert_eq!(long["errors_inspected"], 25, "{long}");
+
+            let jobs = json_ok(server.get("/api/jobs?workspace=ws_http_fixture"));
+            let streak = |name: &str| -> Value {
+                jobs.as_array()
+                    .unwrap()
+                    .iter()
+                    .find(|job| job["job_id"] == name)
+                    .unwrap_or_else(|| panic!("{name} missing from {jobs}"))["failure_streak"]
+                    .clone()
+            };
+            assert_eq!(streak("long")["error_agreement"], "partial");
+            assert_eq!(streak("long")["same_error"], false);
+            let silent = streak("silent");
+            assert_eq!(silent["count"], 1, "{silent}");
+            assert_eq!(silent["latest_error"], Value::Null, "{silent}");
+            assert_eq!(silent["same_error"], false, "{silent}");
+            assert_eq!(silent["error_agreement"], "unknown", "{silent}");
         },
     );
 }

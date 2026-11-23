@@ -4,7 +4,6 @@
 
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
-use std::process::Command;
 use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
@@ -368,17 +367,15 @@ fn fetch_lock_is_contended(repo: &Path) -> bool {
         .is_none()
 }
 
+/// Setup Git through the bounded support helper, which also drops inherited
+/// `GIT_CONFIG` and `GIT_CONFIG_*` overrides, so a fixture write such as
+/// `git config` lands in the disposable repository, never in a caller's file.
 fn git(directory: &Path, arguments: &[&str]) -> String {
-    let output = Command::new("git")
-        .arg("-C")
-        .arg(directory)
-        .args(arguments)
-        .output()
-        .unwrap();
+    let output = crate::git_test_support::run(directory, arguments).unwrap();
     assert!(
-        output.status.success(),
+        output.success,
         "git {arguments:?} failed: {}",
-        String::from_utf8_lossy(&output.stderr)
+        output.stderr
     );
-    String::from_utf8_lossy(&output.stdout).trim().to_string()
+    output.stdout.trim().to_string()
 }

@@ -65,8 +65,9 @@ A check sources `"$ORBIT_BROWSER_KIT_ENV"` in the shell that runs it, then
 imports `chromium` from `"$PLAYWRIGHT_MODULE"`. Only that shell gets the
 kit's unpacked libraries and fonts: Orbit never puts them on every worker's
 `LD_LIBRARY_PATH`, where they could shadow what other tools load. Without a
-verified kit (none installed, never verified, or changed since its last
-pass), workers receive none of the three.
+verified kit (none installed, never verified, its headless shell missing or
+no longer executable, or changed since its last pass), workers receive none
+of the three.
 
 ## Launching Chromium in a worker
 

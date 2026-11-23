@@ -33,6 +33,33 @@ const LATEST_ERROR_CHARS: usize = 200;
 /// The former `jobs.failure_streak_warn` default, fixed when the key was removed [ORB-22808].
 pub const JOB_FAILURE_STREAK_WARN: u32 = 5;
 
+/// What the inspected error signatures of a streak show.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StreakErrorAgreement {
+    /// Every run in the streak was inspected and all share one signature.
+    Same,
+    /// The inspected runs share one signature, but older runs of the streak
+    /// were not inspected, so agreement covers only the newest ones.
+    Partial,
+    /// At least two inspected runs have different signatures.
+    Different,
+    /// An inspected run recorded no readable error and no difference was
+    /// observed, so agreement cannot be claimed either way.
+    Unknown,
+}
+
+impl StreakErrorAgreement {
+    /// The `error_agreement` value in the dashboard's payload.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Same => "same",
+            Self::Partial => "partial",
+            Self::Different => "different",
+            Self::Unknown => "unknown",
+        }
+    }
+}
+
 /// A job's current run of consecutive failures.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct JobFailureStreak {
@@ -45,13 +72,20 @@ pub struct JobFailureStreak {
     pub latest_run_id: String,
     /// The newest run's error cut to one line, when it recorded one.
     pub latest_error: Option<String>,
-    /// Whether every inspected run in the streak shares one error signature.
-    pub same_error: bool,
+    /// What the inspected runs' error signatures show.
+    pub error_agreement: StreakErrorAgreement,
+    /// Newest runs of the streak whose errors were read, at most 25.
+    pub errors_inspected: usize,
     /// The scan ended inside the streak, so it may be longer.
     pub truncated: bool,
 }
 
 impl JobFailureStreak {
+    /// Every run of the streak was inspected and shares one error signature.
+    pub fn same_error(&self) -> bool {
+        self.error_agreement == StreakErrorAgreement::Same
+    }
+
     /// The dashboard's `failure_streak` object.
     pub fn to_json(&self) -> Value {
         json!({
@@ -60,7 +94,9 @@ impl JobFailureStreak {
             "since": self.since.to_rfc3339(),
             "latest_run_id": self.latest_run_id,
             "latest_error": self.latest_error,
-            "same_error": self.same_error,
+            "same_error": self.same_error(),
+            "error_agreement": self.error_agreement.as_str(),
+            "errors_inspected": self.errors_inspected,
             "truncated": self.truncated,
         })
     }
@@ -95,39 +131,53 @@ impl OrbitRuntime {
             let (Some(newest), Some(oldest)) = (streak.first(), streak.last()) else {
                 continue;
             };
-            let (latest_error, same_error) = self.streak_errors(&streak);
+            let errors = self.streak_errors(&streak);
             streaks.push(JobFailureStreak {
                 job_id: job_id.clone(),
                 count: streak.len(),
                 since: oldest.created_at,
                 latest_run_id: newest.run_id.to_string(),
-                latest_error,
-                same_error,
+                latest_error: errors.latest,
+                error_agreement: errors.agreement,
+                errors_inspected: errors.inspected,
                 truncated: streak.len() == STREAK_SCAN_LIMIT,
             });
         }
         Ok(streaks)
     }
 
-    /// The newest run's one-line error and whether the inspected runs agree.
-    /// A run whose error cannot be read has no signature, so it counts as a
-    /// different one: "same error" is only claimed on evidence.
-    fn streak_errors(&self, streak: &[&JobRun]) -> (Option<String>, bool) {
-        let mut errors = streak
+    /// The newest run's one-line error and what the newest
+    /// [`SIGNATURE_RUN_LIMIT`] runs' signatures show. A run whose error
+    /// cannot be read has no signature: it is neither agreement nor a
+    /// difference, so "same error" is only claimed when every run of the
+    /// streak was read and matched.
+    fn streak_errors(&self, streak: &[&JobRun]) -> StreakErrors {
+        let errors: Vec<Option<String>> = streak
             .iter()
             .take(SIGNATURE_RUN_LIMIT)
-            .map(|run| self.failed_run_error(run));
-        let latest = errors.next().flatten();
-        let Some(latest) = latest else {
-            return (None, streak.len() == 1);
+            .map(|run| self.failed_run_error(run))
+            .collect();
+        let inspected = errors.len();
+        let latest = errors.first().cloned().flatten();
+        let mut signatures = errors.iter().flatten().map(|error| error_signature(error));
+        let first = signatures.next();
+        let differs = first
+            .as_ref()
+            .is_some_and(|first| signatures.any(|signature| &signature != first));
+        let agreement = if differs {
+            StreakErrorAgreement::Different
+        } else if first.is_none() || errors.iter().any(Option::is_none) {
+            StreakErrorAgreement::Unknown
+        } else if inspected < streak.len() {
+            StreakErrorAgreement::Partial
+        } else {
+            StreakErrorAgreement::Same
         };
-        let signature = error_signature(&latest);
-        let same = errors.all(|error| {
-            error
-                .as_deref()
-                .is_some_and(|error| error_signature(error) == signature)
-        });
-        (Some(one_line(&latest)), same)
+        StreakErrors {
+            latest: latest.as_deref().map(one_line),
+            agreement,
+            inspected,
+        }
     }
 
     /// The deepest recorded cause of one failed run as "step: message".
@@ -166,6 +216,12 @@ impl OrbitRuntime {
             (None, None) => None,
         }
     }
+}
+
+struct StreakErrors {
+    latest: Option<String>,
+    agreement: StreakErrorAgreement,
+    inspected: usize,
 }
 
 /// First non-empty line of `text`, cut to [`LATEST_ERROR_CHARS`].

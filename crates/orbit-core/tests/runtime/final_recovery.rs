@@ -534,12 +534,91 @@ fn final_recovery_is_admitted_once_and_a_resume_drops_the_stale_checkpoints() {
         assert_eq!(recorded.resume_context, Some(context));
         assert_eq!(fixture.status(&task), started, "resume writes no task");
 
-        // A run resumed from this state inherits the record, so it is refused.
+        // Retrying on the original run is refused; a distinct resumed run's
+        // inherited checkpoint is proved in
+        // `a_resumed_run_inherits_its_sources_final_recovery_checkpoint`.
         assert!(matches!(
             fixture.admit(&run, &task),
             FinalRecoveryAdmission::Skipped { .. }
         ));
     }
+}
+
+/// A distinct run that `submit_resume_run` seeded from a source whose final
+/// recovery was admitted inherits that checkpoint, so its own admission is
+/// refused. Discarding the inherited checkpoint re-admits the resumed run,
+/// which is what makes the refusal evidence of inheritance rather than of
+/// the original run's record.
+fn a_resumed_run_inherits_its_sources_final_recovery_checkpoint() {
+    let fixture = fixture("[\"sol\"]");
+    // The resumed run executes in a substitute worker that waits until this
+    // directory is removed, so it cannot settle the run mid-assert.
+    let worker = TempDir::new_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
+    crate::worker_fixture::install(worker.path(), "removed");
+    let jobs_dir = fixture.global.join("resources/jobs");
+    std::fs::create_dir_all(&jobs_dir).unwrap();
+    std::fs::write(
+        jobs_dir.join("test_pipeline.yaml"),
+        "schemaVersion: 2\nkind: Job\nmetadata:\n  name: test_pipeline\nspec:\n  state: enabled\n  steps: []\n",
+    )
+    .unwrap();
+    let task = fixture.task();
+    let source = fixture.pipeline_run(&task, "test_pipeline");
+    let mut state = fixture.state(&source);
+    state.record_step(0, JobRunState::Success, Some(json!({ "step": 0 })), None);
+    fixture.jobs.write_run_state(&source, &state).unwrap();
+    assert_eq!(
+        fixture.admit(&source, &task),
+        FinalRecoveryAdmission::Admitted
+    );
+    fixture
+        .jobs
+        .finalize_job_run(&source, JobRunState::Failed, Utc::now(), Some(1))
+        .unwrap();
+
+    let resumed = fixture
+        .runtime
+        .submit_resume_run(&source, Some("operator"), None)
+        .expect("resume the failed source from its checkpoints")
+        .run_id;
+    assert_ne!(resumed, source, "the resume is a distinct run");
+    // The engine marks a resumed run running before it reaches the
+    // final-recovery hook; the substitute worker does not.
+    fixture
+        .jobs
+        .mark_job_run_running(&resumed, Utc::now(), std::process::id())
+        .unwrap();
+    let inherited = fixture
+        .state(&resumed)
+        .final_recovery
+        .expect("the resume seeds the source's final-recovery checkpoint");
+    assert_eq!(inherited.key.run_id, source);
+    let refused = fixture.admit(&resumed, &task);
+    assert!(
+        matches!(&refused, FinalRecoveryAdmission::Skipped { reason } if reason.contains("resumed")),
+        "{refused:?}"
+    );
+    assert_eq!(
+        fixture.state(&resumed).final_recovery.unwrap().key.run_id,
+        source,
+        "a refused admission leaves the inherited checkpoint in place"
+    );
+
+    // Negative control: without the inherited checkpoint the same resumed
+    // run is admitted, so the refusal above would fail had the resume
+    // dropped it.
+    let mut dropped = fixture.state(&resumed);
+    dropped.final_recovery = None;
+    fixture.jobs.write_run_state(&resumed, &dropped).unwrap();
+    assert_eq!(
+        fixture.admit(&resumed, &task),
+        FinalRecoveryAdmission::Admitted
+    );
+    assert_eq!(
+        fixture.state(&resumed).final_recovery.unwrap().key.run_id,
+        resumed
+    );
+    drop(worker);
 }
 
 fn a_resume_after_another_recorded_decision_is_refused_and_keeps_checkpoints() {
@@ -1239,6 +1318,12 @@ crate::scenario_table!(
     final_recovery_log_tail_reads_only_the_requested_runs_bounded_log,
     final_recovery_keeps_run_observers_and_every_declared_tool_write_denied,
     final_recovery_drops_a_required_tool_its_disallow_list_covers
+);
+
+// Its own table: the substitute pipeline worker it installs is process-wide.
+crate::scenario_table!(
+    a_resumed_run_inherits_its_sources_final_recovery_checkpoint_scenarios,
+    a_resumed_run_inherits_its_sources_final_recovery_checkpoint,
 );
 
 crate::scenario_table!(

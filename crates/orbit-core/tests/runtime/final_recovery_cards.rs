@@ -15,9 +15,11 @@ use super::recovery_fixture::{Fixture, fixture};
 
 /// A forge whose pull-request listing, the first step of closing a rejected
 /// task's pull requests, records what the task and its decision request read
-/// at that moment, then fails as an interrupted closure would.
+/// at that moment, then fails as an interrupted closure would. Its read
+/// handle is a runtime without this forge installed, so the forge never
+/// retains the runtime that holds it.
 struct ObservingForge {
-    runtime: std::sync::Mutex<Option<orbit_core::OrbitRuntime>>,
+    runtime: orbit_core::OrbitRuntime,
     task: String,
     request: String,
     seen: std::sync::Mutex<Vec<(TaskStatus, DecisionRequestState)>>,
@@ -36,9 +38,9 @@ impl orbit_core::runtime::task_pr_forge::TaskPrForge for ObservingForge {
         &self,
         _: &std::path::Path,
     ) -> Result<Vec<orbit_core::runtime::task_pr_forge::ForgePullRequest>, OrbitError> {
-        let runtime = self.runtime.lock().unwrap().clone().expect("runtime set");
-        let status = runtime.get_task(&self.task).unwrap().status;
-        let state = runtime
+        let status = self.runtime.get_task(&self.task).unwrap().status;
+        let state = self
+            .runtime
             .get_decision_request(&self.request)
             .unwrap()
             .unwrap()
@@ -591,13 +593,12 @@ fn a_reject_option_records_its_resolution_before_pull_request_closure() {
         )
         .expect("record the delivery PR");
     let forge = std::sync::Arc::new(ObservingForge {
-        runtime: std::sync::Mutex::new(None),
+        runtime: fx.runtime.clone(),
         task: task.clone(),
         request: request_id.clone(),
         seen: std::sync::Mutex::new(Vec::new()),
     });
     let human = fx.human().with_task_pr_forge(forge.clone());
-    *forge.runtime.lock().unwrap() = Some(human.clone());
 
     human
         .answer_decision_request_as_human(
@@ -625,6 +626,14 @@ fn a_reject_option_records_its_resolution_before_pull_request_closure() {
             "{event}: {history:?}"
         );
     }
+    // Only the equipped runtime holds the forge, so dropping it releases the
+    // forge and, with it, the read handle's runtime and store.
+    drop(human);
+    assert_eq!(
+        std::sync::Arc::strong_count(&forge),
+        1,
+        "no reference cycle keeps the forge alive past the case"
+    );
 }
 
 /// A block-triage reject is refused while a live local run still owns the

@@ -180,6 +180,8 @@ mod provider_failure_hold;
 mod provider_limit_admission;
 mod provider_limit_budget;
 mod provider_limit_hold;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+mod provider_roots;
 mod purpose_crews;
 #[path = "readiness/population.rs"]
 mod readiness_population;

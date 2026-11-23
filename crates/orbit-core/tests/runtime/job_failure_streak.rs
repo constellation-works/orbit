@@ -7,6 +7,7 @@ use std::sync::Arc;
 
 use chrono::{DateTime, Duration, TimeZone, Utc};
 use orbit_core::OrbitRuntime;
+use orbit_core::application::job::StreakErrorAgreement;
 use orbit_store::contracts::{JobRunStepParams, JobRunStoreBackend};
 use orbit_types::workflow::{JobRunState, JobTargetType};
 use serde_json::json;
@@ -176,17 +177,54 @@ fn runs_agree_on_one_error_signature_despite_ids_and_counts_scenario() {
         Some("[provider_capacity] retry 9 for jrun-20261031-1902-b2"),
     );
     let streak = fixture.streak().unwrap();
-    assert!(streak.same_error, "{streak:?}");
+    assert!(streak.same_error(), "{streak:?}");
+    assert_eq!(streak.error_agreement, StreakErrorAgreement::Same);
+    assert_eq!(streak.errors_inspected, 2);
 
     fixture.run(JobRunState::Failed, Some("sandbox refused\nsecond line"));
     let streak = fixture.streak().unwrap();
-    assert!(!streak.same_error, "{streak:?}");
+    assert!(!streak.same_error(), "{streak:?}");
+    assert_eq!(streak.error_agreement, StreakErrorAgreement::Different);
     assert_eq!(
         streak.latest_error.as_deref(),
         Some("review: sandbox refused")
     );
 }
 
+/// Agreement is claimed only on evidence: a streak longer than the inspected
+/// window agrees only partially, even when its uninspected oldest run failed
+/// differently, and a lone run with no readable error is unknown.
+fn agreement_beyond_the_inspected_window_or_without_errors_is_not_claimed_scenario() {
+    let mut fixture = Fixture::new("");
+    fixture.run(JobRunState::Success, None);
+    fixture.run(JobRunState::Failed, None);
+    let streak = fixture.streak().unwrap();
+    assert_eq!(streak.count, 1);
+    assert_eq!(streak.latest_error, None);
+    assert_eq!(streak.error_agreement, StreakErrorAgreement::Unknown);
+    assert!(!streak.same_error(), "{streak:?}");
+
+    fixture.run(JobRunState::Success, None);
+    fixture.run(JobRunState::Failed, Some("disk full on the runner"));
+    for retry in 0..25 {
+        fixture.run(
+            JobRunState::Failed,
+            Some(&format!("[provider_capacity] retry {retry}")),
+        );
+    }
+    let streak = fixture.streak().unwrap();
+    assert_eq!(streak.count, 26, "{streak:?}");
+    assert_eq!(streak.errors_inspected, 25);
+    assert_eq!(streak.error_agreement, StreakErrorAgreement::Partial);
+    assert!(!streak.same_error(), "26 runs, only the newest 25 agree");
+    assert_eq!(streak.to_json()["same_error"], false);
+    assert_eq!(streak.to_json()["error_agreement"], "partial");
+}
+
+crate::scenario_table!(
+    agreement_beyond_the_inspected_window_or_without_errors_is_not_claimed,
+    agreement_beyond_the_inspected_window_or_without_errors_is_not_claimed_scenario
+);
 crate::scenario_table!(
     a_success_ends_the_streak_and_the_newest_failures_are_counted,
     a_success_ends_the_streak_and_the_newest_failures_are_counted_scenario
