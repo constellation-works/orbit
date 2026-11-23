@@ -172,7 +172,7 @@ fn family_schema(family: &ToolFamily, members: &[FamilyMember]) -> ToolSchema {
         })
         .collect::<Vec<_>>()
         .join("; ");
-    let action_summary = format!("Operation to run, with its required fields: {action_summary}.");
+    let action_summary = format!("Action (required fields): {action_summary}.");
     let mut parameters = vec![ToolParam {
         name: TOOL_ACTION_FIELD.to_string(),
         description: action_summary,
@@ -253,9 +253,9 @@ fn merged_description(descriptions: &[(&str, String)], all_actions: usize) -> St
         .map(|(actions, sentence)| {
             let sentence = sentence.trim_end_matches('.');
             if sentence.is_empty() {
-                format!("For {}", actions.join(", "))
+                actions.join(", ")
             } else {
-                format!("For {}: {sentence}", actions.join(", "))
+                format!("{}: {sentence}", actions.join(", "))
             }
         })
         .collect::<Vec<_>>()

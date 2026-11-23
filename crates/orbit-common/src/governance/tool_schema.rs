@@ -9,6 +9,9 @@ use super::operation::EnumValue;
 use super::resident::{CONTROL_ACTIONS, RIGHTS};
 use super::task::TASK_UPDATE_STATUS_VALUES;
 use super::task::operations::{ELIGIBLE_STATUS_VALUES, TASK_TYPE_VALUES};
+
+/// Shared concise description for MCP `workspace` selector parameters.
+pub const WORKSPACE_SELECTOR_DESCRIPTION: &str = "Workspace selector from orbit_workspace_list.";
 /// JSON Schema `pattern` for a provenance `model` value.
 ///
 /// Mirrors `infer_agent_family_from_model` in `orbit-types`: a canonical
