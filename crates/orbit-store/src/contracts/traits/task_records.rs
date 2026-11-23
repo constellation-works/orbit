@@ -17,9 +17,22 @@ pub trait TaskDocumentStoreBackend: Send + Sync {
     fn migrate_task_tool_names(&self, id: &str, actor: &str) -> Result<bool, OrbitError>;
 }
 
+/// Outcome of reading one task's history in a batch: `Ok(Some(entries))`,
+/// `Ok(None)` when the task does not exist, or `Err` when its bundle or event
+/// log is corrupt or unreadable.
+pub type TaskHistoryReadOutcome = Result<Option<Vec<TaskHistoryEntry>>, OrbitError>;
+
 pub trait TaskHistoryStoreBackend: Send + Sync {
     fn get_task_comments(&self, id: &str) -> Result<Option<Vec<TaskComment>>, OrbitError>;
     fn get_task_history(&self, id: &str) -> Result<Option<Vec<TaskHistoryEntry>>, OrbitError>;
+    /// Read the event history of each listed task in request order, checking
+    /// partition settledness once per batch rather than per task. Each entry
+    /// preserves the outcome [`Self::get_task_history`] would return for that
+    /// task (`Ok(Some(entries))`, `Ok(None)` when missing, `Err` when corrupt
+    /// or unreadable).
+    fn get_task_histories(&self, ids: &[String]) -> Vec<TaskHistoryReadOutcome> {
+        ids.iter().map(|id| self.get_task_history(id)).collect()
+    }
     /// Evidence that one task's history and comments are unchanged. Kept as
     /// a compatibility wrapper over the batch operation; aggregate readers
     /// should use [`Self::task_history_stamps`] to avoid a check per task.

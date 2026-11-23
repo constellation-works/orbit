@@ -92,6 +92,14 @@ impl TaskCommitBoundary {
         Ok(!self.interrupted_commit()?)
     }
 
+    /// Whether the current thread is already inside this partition's commit
+    /// boundary. Callers that fan out lock-taking reads onto helper threads
+    /// must stay on the calling thread when this is true so per-thread lock
+    /// re-entrancy still holds.
+    pub(crate) fn is_active_on_current_thread(&self) -> bool {
+        BoundaryDepth::active(&self.partition_dir)
+    }
+
     pub(super) fn recover_pending_in(&self, section: Section) -> Result<(), OrbitError> {
         if BoundaryDepth::active(&self.partition_dir) {
             // This thread is inside its own commit; its journal row is

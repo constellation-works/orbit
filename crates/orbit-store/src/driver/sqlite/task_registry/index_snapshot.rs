@@ -64,15 +64,20 @@ fn load_task_index_snapshot(
     }))
 }
 
+type CachedSnapshot = (String, i64, Arc<TaskIndexSnapshot>);
+
 struct SnapshotReader {
     connection: Connection,
-    cached: Option<(String, i64, Arc<TaskIndexSnapshot>)>,
+    cached: Option<CachedSnapshot>,
 }
 
 /// One retained partition snapshot per registry handle, shared by its clones.
 pub(super) struct TaskIndexSnapshots {
     path: PathBuf,
     reader: Mutex<Option<SnapshotReader>>,
+    /// Cache for read-only handles, keyed by `PRAGMA data_version` on the
+    /// handle's own connection so immutable mounts open no second connection.
+    read_only: Mutex<Option<CachedSnapshot>>,
 }
 
 impl TaskIndexSnapshots {
@@ -80,7 +85,36 @@ impl TaskIndexSnapshots {
         Self {
             path: path.to_path_buf(),
             reader: Mutex::new(None),
+            read_only: Mutex::new(None),
         }
+    }
+
+    pub(super) fn snapshot_for_read_only(
+        &self,
+        registry: &TaskRegistryStore,
+        partition_id: &str,
+    ) -> Result<Arc<TaskIndexSnapshot>, OrbitError> {
+        let mut cached = orbit_common::fs::lock_wait::mutex(&self.read_only)
+            .map_err(|error| OrbitError::Store(format!("task snapshot mutex poisoned: {error}")))?;
+        // Sample BEFORE loading rows so a concurrent commit from another
+        // connection leaves the cache labelled with the old version.
+        let version = {
+            let conn = registry.read()?;
+            conn.query_row("PRAGMA data_version", [], |row| row.get::<_, i64>(0))
+                .ok()
+        };
+        if let Some(version) = version
+            && let Some((partition, cached_version, snapshot)) = cached.as_ref()
+            && partition == partition_id
+            && *cached_version == version
+        {
+            return Ok(Arc::clone(snapshot));
+        }
+        let snapshot = load_task_index_snapshot(registry, partition_id)?;
+        if let Some(version) = version {
+            *cached = Some((partition_id.to_string(), version, Arc::clone(&snapshot)));
+        }
+        Ok(snapshot)
     }
 
     pub(super) fn snapshot_for(
@@ -131,7 +165,9 @@ impl TaskRegistryStore {
         // connection on a mount without writable WAL sidecars. Preserve that
         // connection's read semantics instead of requiring another live one.
         if self.is_read_only()? {
-            return load_task_index_snapshot(self, partition_id);
+            return self
+                .index_snapshots
+                .snapshot_for_read_only(self, partition_id);
         }
         self.index_snapshots.snapshot_for(self, partition_id)
     }
