@@ -71,9 +71,9 @@ pub(crate) use submit::{ChildPipelineAdmission, ChildSubmission};
 pub(crate) use submit::{PipelineSubmission, SubmittedDefinition};
 #[cfg(test)]
 pub(crate) use wait::PipelineWaitClock;
-#[cfg(feature = "test-support")]
-pub use wait::pipeline_worker_observer_completed;
 pub use wait::{PipelineWaitEntry, PipelineWaitResult, PipelineWaitStatus};
+#[cfg(feature = "test-support")]
+pub use wait::{pipeline_worker_observer_completed, pipeline_workers_spawned};
 pub(crate) use worker::command::mark_process_as_pipeline_worker_binary;
 #[cfg(feature = "test-support")]
 pub(crate) use worker::command::worker_command_override;

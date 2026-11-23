@@ -120,7 +120,6 @@ pub mod test_support {
         with_crew_backfill_checkpoint, with_crew_draw_quantile, with_crew_selection_checkpoint,
         without_auto_effort_exploration,
     };
-    pub use crate::application::job::pipeline::pipeline_worker_observer_completed;
     #[cfg(unix)]
     pub use crate::application::job::pipeline::with_pipeline_worker_log_open_hook;
     /// Replaced with the run id in every argv entry of a substitute worker.
@@ -132,6 +131,9 @@ pub mod test_support {
     pub use crate::application::job::pipeline::worker_command_override::install_process_wide as install_substitute_pipeline_worker;
     /// Stop a worker's startup observer around reaping and exit recording.
     pub use crate::application::job::pipeline::{WorkerReapPhase, install_worker_reap_hook};
+    pub use crate::application::job::pipeline::{
+        pipeline_worker_observer_completed, pipeline_workers_spawned,
+    };
     pub use crate::application::job::with_run_root_cause_write_hook;
     pub use crate::application::landing::with_landing_retry_reservation_hook;
     pub use crate::application::managed_assets::test_support::with_auto_task_manifest_read_hook;

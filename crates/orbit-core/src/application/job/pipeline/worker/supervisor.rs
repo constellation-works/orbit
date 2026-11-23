@@ -288,6 +288,14 @@ impl PipelineWorkerSupervisor {
             return Err(stop_unobserved_worker(child, error));
         }
         handoff_worker(sender, child)?;
+        // Recorded once the observer owns the child, before any identity
+        // handshake, so a fixture can wait for this launch's exit.
+        #[cfg(feature = "test-support")]
+        crate::application::job::pipeline::wait::record_worker_spawn(
+            self.workspace(),
+            run_id,
+            child_pid,
+        );
         Ok(child_pid)
     }
 
