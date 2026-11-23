@@ -451,7 +451,7 @@ fn a_source_the_nested_orbit_may_not_read_is_refused_before_the_broker() {
 
 /// A call sent to the broker's socket as the sandboxed agent itself can send
 /// it, bypassing the nested `orbit` and whatever it would prepare.
-pub(super) fn raw_call(
+pub(in super::super) fn raw_call(
     fixture: &Fixture,
     socket: &std::path::Path,
     name: &str,

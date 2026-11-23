@@ -264,8 +264,9 @@ the owner receives that form. A path such as ` review-gate.json` or `./review-ga
 therefore the gate's `review-gate.json`, never an ordinary artifact.
 
 A `review-*` artifact (the prefix matched without ASCII case) is the review gate's and keeps its
-stricter scope. Artifact reads validate their fields before comparing the task ID. A read with
-`task_id` in place of `id` is refused with guidance to pass the task as `id`.
+stricter scope. Task show and artifact calls validate their fields before comparing the task ID,
+accepting `task_id` as an unadvertised alias when `id` is absent and refusing requests that set
+both.
 A `review-*` call with valid fields for a task other than the claimed task is refused as
 `claimed_owner_bridge_refused` before any of the scopes below. The broker carries it only for the
 reviewer activity (`agent_review_repair`),

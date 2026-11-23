@@ -106,6 +106,24 @@ impl Workspace {
         ]
     }
 
+    /// Equivalent reads using the unadvertised `task_id` alias.
+    fn task_id_reads(&self) -> Vec<(&'static str, Value)> {
+        let id = &self.related;
+        vec![
+            (SHOW, json!({"task_id": id})),
+            (
+                SHOW,
+                json!({"task_id": id, "fields": ["status", "comments"]}),
+            ),
+            (
+                SHOW,
+                json!({"task_id": id, "limit": 1, "comments_offset": 1}),
+            ),
+            (SHOW, json!({"task_id": id, "field": "delivery"})),
+            (GET, json!({"task_id": id, "path": "ledger.json"})),
+        ]
+    }
+
     /// Requests the claim still refuses, whatever task they name.
     fn refusals(&self) -> Vec<(&'static str, Value)> {
         let id = &self.related;
@@ -122,11 +140,23 @@ impl Workspace {
             (GET, json!({"id": id, "path": "../ledger.json"})),
             // Another task's review artifacts stay outside the claim.
             (GET, json!({"id": id, "path": REVIEW_MANIFEST_ARTIFACT})),
+            (
+                GET,
+                json!({"task_id": id, "path": REVIEW_MANIFEST_ARTIFACT}),
+            ),
             (GET, json!({"id": id, "path": REVIEW_REPORT_ARTIFACT})),
             (
                 PUT,
                 json!({"id": id, "path": "evidence.json", "source_path": source}),
             ),
+            (
+                PUT,
+                json!({"task_id": id, "path": "evidence.json", "source_path": source}),
+            ),
+            // Conflicting `id` and `task_id` spellings are refused.
+            (SHOW, json!({"id": id, "task_id": id})),
+            (SHOW, json!({"id": id, "task_id": "TSX-2"})),
+            (GET, json!({"id": id, "task_id": id, "path": "ledger.json"})),
         ]
     }
 }
@@ -159,6 +189,7 @@ fn scope_refusal(error: &str) -> bool {
         "claimed_owner_bridge_refused",
         "does not accept",
         "workspace binding mismatch",
+        "alias of `id`",
     ]
     .iter()
     .any(|reason| error.contains(reason))
@@ -192,7 +223,11 @@ fn a_remote_owners_claimed_worker_reads_any_task_of_its_claimed_workspace() {
         orbit_common::process::ancestry::process_start_key(std::process::id()).unwrap(),
     ));
 
-    for (name, input) in workspace.reads() {
+    for (name, input) in workspace
+        .reads()
+        .into_iter()
+        .chain(workspace.task_id_reads())
+    {
         let before = workspace.owner.calls();
         let bridged = fixture.forwarded(&broker, name, input.clone());
         assert!(
@@ -203,6 +238,25 @@ fn a_remote_owners_claimed_worker_reads_any_task_of_its_claimed_workspace() {
             &format!("{name} {input}"),
             bridged,
             workspace.direct(name, &input),
+        );
+    }
+    let claimed_id = &fixture.binding.task_id;
+    for (name, by_id, by_task_id) in [
+        (
+            SHOW,
+            json!({"id": claimed_id}),
+            json!({"task_id": claimed_id}),
+        ),
+        (
+            GET,
+            json!({"id": claimed_id, "path": "ledger.json"}),
+            json!({"task_id": claimed_id, "path": "ledger.json"}),
+        ),
+    ] {
+        same_answer(
+            &format!("claimed {name} {by_task_id}"),
+            fixture.forwarded(&broker, name, by_task_id),
+            fixture.forwarded(&broker, name, by_id),
         );
     }
     let page = fixture
@@ -231,8 +285,10 @@ fn a_remote_owners_claimed_worker_reads_any_task_of_its_claimed_workspace() {
     // it does hold stays the owner's not-found.
     for (name, input) in [
         (SHOW, json!({"id": "TSX-404"})),
+        (SHOW, json!({"task_id": "TSX-404"})),
         (SHOW, json!({"id": "TSX-404", "field": "delivery"})),
         (GET, json!({"id": "TSX-404", "path": "ledger.json"})),
+        (GET, json!({"task_id": "TSX-404", "path": "ledger.json"})),
     ] {
         let error = fixture.forwarded(&broker, name, input.clone()).unwrap_err();
         assert!(outside_workspace(&error), "{name} {input}: {error}");
@@ -300,7 +356,11 @@ fn a_claimed_worker_on_its_owners_machine_gets_the_same_workspace_reads_and_refu
             .map_err(|error| error.to_string())
     };
 
-    for (name, input) in workspace.reads() {
+    for (name, input) in workspace
+        .reads()
+        .into_iter()
+        .chain(workspace.task_id_reads())
+    {
         assert!(
             bridge(name, &input).is_none(),
             "{name} {input} keeps the local owner route"
@@ -318,7 +378,9 @@ fn a_claimed_worker_on_its_owners_machine_gets_the_same_workspace_reads_and_refu
     }
     for (name, input) in [
         (SHOW, json!({"id": "TSX-404"})),
+        (SHOW, json!({"task_id": "TSX-404"})),
         (GET, json!({"id": "TSX-404", "path": "ledger.json"})),
+        (GET, json!({"task_id": "TSX-404", "path": "ledger.json"})),
     ] {
         assert!(bridge(name, &input).is_none(), "{name} {input}");
         let error = route(name, input.clone()).unwrap_err();
@@ -337,25 +399,48 @@ fn a_claimed_worker_on_its_owners_machine_gets_the_same_workspace_reads_and_refu
         );
     }
     // The claimed task's delivery is its leaf run's only.
-    let error = refused(bridge(
-        SHOW,
-        &json!({"id": local.task_id, "field": "delivery", "run_id": "jrun-other"}),
-    ));
-    assert!(
-        error.to_string().contains("delivery_run_refused"),
-        "another run's delivery: {error}"
-    );
+    for input in [
+        json!({"id": local.task_id, "field": "delivery", "run_id": "jrun-other"}),
+        json!({"task_id": local.task_id, "field": "delivery", "run_id": "jrun-other"}),
+    ] {
+        let error = refused(bridge(SHOW, &input));
+        assert!(
+            error.to_string().contains("delivery_run_refused"),
+            "another run's delivery ({input}): {error}"
+        );
+    }
+    // Conflicting `id` and `task_id` on a local-owner put are refused before
+    // materialization without reaching the owner.
+    let source = fixture.worktree.join(".orbit/tmp/ledger.json");
+    for input in [
+        json!({"id": local.task_id, "task_id": local.task_id, "path": "evidence.json", "source_path": source}),
+        json!({"id": local.task_id, "task_id": workspace.related, "path": "evidence.json", "source_path": source}),
+    ] {
+        let error = refused(bridge(PUT, &input));
+        assert!(
+            error.to_string().contains("alias of `id`"),
+            "conflicting put ({input}): {error}"
+        );
+    }
     assert_eq!(workspace.owner.calls(), before);
     for input in [
         json!({"id": local.task_id, "field": "delivery"}),
+        json!({"task_id": local.task_id, "field": "delivery"}),
         json!({"id": local.task_id, "field": "delivery", "run_id": local.bound_run_id}),
+        json!({"task_id": local.task_id, "field": "delivery", "run_id": local.bound_run_id}),
     ] {
         assert!(bridge(SHOW, &input).is_none(), "{input}");
     }
 
-    // The claimed task stays readable, and its own artifact writable.
+    // The claimed task stays readable, and its own artifact writable, under
+    // either spelling.
+    same_answer(
+        "local claimed SHOW task_id",
+        route(SHOW, json!({"task_id": local.task_id})),
+        route(SHOW, json!({"id": local.task_id})),
+    );
     assert!(bridge(SHOW, &json!({"id": local.task_id})).is_none());
-    let source = fixture.worktree.join(".orbit/tmp/ledger.json");
+    assert!(bridge(SHOW, &json!({"task_id": local.task_id})).is_none());
     assert!(
         bridge(
             PUT,
@@ -363,6 +448,27 @@ fn a_claimed_worker_on_its_owners_machine_gets_the_same_workspace_reads_and_refu
         )
         .is_none()
     );
+    assert!(
+        bridge(
+            PUT,
+            &json!({"task_id": local.task_id, "path": "evidence-alias.json", "source_path": source}),
+        )
+        .is_none()
+    );
+    let (put_tool, put_input) = orbit_types::tool::tool_family_call(
+        PUT,
+        json!({"task_id": local.task_id, "path": "evidence-alias.json", "source_path": source}),
+    );
+    assert!(bridge(&put_tool, &put_input).is_none());
+    let prepared = orbit_tools::prepare_remote_task_artifact_put(
+        json!({"task_id": local.task_id, "path": "evidence-alias.json", "source_path": source}),
+        Some(&fixture.worktree),
+        Some(&fixture.worktree),
+        None,
+    )
+    .unwrap();
+    assert_eq!(prepared["id"], local.task_id);
+    assert_eq!(prepared["artifacts"][0]["path"], "evidence-alias.json");
 }
 
 #[test]
@@ -421,17 +527,31 @@ fn a_claimed_worker_on_its_owners_machine_reads_and_writes_review_artifacts_only
             "{path}: {error}"
         );
     }
+    let error = fixture
+        .forwarded(
+            &implementer,
+            GET,
+            json!({"task_id": fixture.binding.task_id, "path": REVIEW_MANIFEST_ARTIFACT}),
+        )
+        .unwrap_err();
+    assert!(
+        error.contains("claimed_review_bridge_refused") && error.contains("before-PR reviewer"),
+        "task_id implementer read: {error}"
+    );
     assert!(
         fixture.owner.reads().is_empty(),
         "a non-reviewer's same-task review reads never reach the owner"
     );
-    let error = fixture
-        .forwarded(&implementer, PUT, put.clone())
-        .unwrap_err();
-    assert!(
-        error.contains("claimed_review_bridge_refused") && error.contains("before-PR reviewer"),
-        "{error}"
-    );
+    for put_input in [
+        put.clone(),
+        json!({"task_id": fixture.binding.task_id, "path": REVIEW_REPORT_ARTIFACT, "source_path": report}),
+    ] {
+        let error = fixture.forwarded(&implementer, PUT, put_input).unwrap_err();
+        assert!(
+            error.contains("claimed_review_bridge_refused") && error.contains("before-PR reviewer"),
+            "{error}"
+        );
+    }
     assert!(
         fixture.owner.puts().is_empty(),
         "the forged report never lands"
@@ -455,10 +575,46 @@ fn a_claimed_worker_on_its_owners_machine_reads_and_writes_review_artifacts_only
         );
     }
     assert_eq!(fixture.owner.reads(), contracts);
+    let manifest_by_task_id = fixture
+        .forwarded(
+            &reviewer,
+            GET,
+            json!({"task_id": fixture.binding.task_id, "path": REVIEW_MANIFEST_ARTIFACT}),
+        )
+        .unwrap();
+    assert_eq!(manifest_by_task_id["id"], fixture.binding.task_id);
     fixture.forwarded(&reviewer, PUT, put).unwrap();
+    fixture
+        .forwarded(
+            &reviewer,
+            PUT,
+            json!({"task_id": fixture.binding.task_id, "path": REVIEW_REPORT_ARTIFACT, "source_path": report}),
+        )
+        .unwrap();
     let puts = fixture.owner.puts();
-    assert_eq!(puts.len(), 1);
+    assert_eq!(puts.len(), 2);
     let content: Vec<u8> =
         serde_json::from_value(puts[0]["artifacts"][0]["content"].clone()).unwrap();
     assert_eq!(content, bytes, "the running reviewer's report lands");
+
+    // An otherwise permitted ordinary local-owner artifact put with `task_id`
+    // stays on the local owner route through full tool dispatch.
+    let ordinary_source = fixture.worktree.join(".orbit/tmp/evidence-alias.json");
+    std::fs::write(&ordinary_source, br#"{"ok":true}"#).unwrap();
+    let (ordinary_tool, ordinary_input) = orbit_types::tool::tool_family_call(
+        PUT,
+        json!({"task_id": fixture.binding.task_id, "path": "evidence-alias.json", "source_path": ordinary_source}),
+    );
+    let ordinary_put = fixture
+        .runtime
+        .execute_tool_command(&ordinary_tool, ordinary_input, None, None)
+        .unwrap();
+    assert_eq!(ordinary_put["id"], fixture.binding.task_id);
+    let puts = fixture.owner.puts();
+    assert_eq!(puts.len(), 3);
+    assert_eq!(puts[2]["id"], fixture.binding.task_id);
+    assert_eq!(puts[2]["artifacts"][0]["path"], "evidence-alias.json");
+    let ordinary_bytes: Vec<u8> =
+        serde_json::from_value(puts[2]["artifacts"][0]["content"].clone()).unwrap();
+    assert_eq!(ordinary_bytes, br#"{"ok":true}"#);
 }

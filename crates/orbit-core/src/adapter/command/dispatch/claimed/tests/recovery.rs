@@ -444,6 +444,45 @@ fn a_claimed_leafs_final_recovery_reads_its_review_evidence_and_delivery_through
             "{name} rides the claim's binding"
         );
     }
+    let report_by_id = fixture
+        .forwarded(
+            &broker,
+            GET,
+            json!({"id": TASK, "path": REVIEW_REPORT_ARTIFACT}),
+        )
+        .unwrap();
+    let report_by_task_id = fixture
+        .forwarded(
+            &broker,
+            GET,
+            json!({"task_id": TASK, "path": REVIEW_REPORT_ARTIFACT}),
+        )
+        .unwrap();
+    assert_eq!(report_by_task_id, report_by_id);
+
+    let delivery_by_task_id = fixture
+        .forwarded(&broker, SHOW, json!({"task_id": TASK, "field": "delivery"}))
+        .unwrap();
+    assert_eq!(delivery_by_task_id["run_id"], fixture.leaf.as_str());
+    refused_with(
+        fixture.forwarded(
+            &broker,
+            SHOW,
+            json!({"task_id": TASK, "field": "delivery", "run_id": "jrun-elsewhere"}),
+        ),
+        "delivery_run_refused",
+        "task_id delivery for another run",
+    );
+    refused_with(
+        fixture.forwarded(
+            &broker,
+            GET,
+            json!({"id": TASK, "task_id": TASK, "path": REVIEW_REPORT_ARTIFACT}),
+        ),
+        "alias of `id`",
+        "conflicting recovery read",
+    );
+
     // An artifact the gate never wrote is the owner's not-found: missing
     // evidence, not a refusal.
     fixture.owner.forget(REVIEW_BASELINE_ARTIFACT);
