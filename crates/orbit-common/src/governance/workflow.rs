@@ -83,13 +83,13 @@ const RUN_ID_PARAM: ParamSpec = required(mcp_only("id", ParamType::String, "Job 
 const CLAIM_TOKEN_PARAM: ParamSpec = mcp_only(
     "claim_token",
     ParamType::String,
-    "Token for this workspace's exclusive claim, required when another operator holds one. Falls back to `ORBIT_WORKSPACE_CLAIM_TOKEN`.",
+    "Exclusive claim token (fallback: `ORBIT_WORKSPACE_CLAIM_TOKEN`).",
 );
 
 const VIEW_PARAM: ParamSpec = mcp_only(
     "view",
     ParamType::String,
-    "bounded: bounded metadata, explicit workspace, pagination and display truncation. Omit for the existing full-record response.",
+    "Bounded metadata view; requires `workspace` (only value: `bounded`).",
 );
 
 const AUTO: OperationSpec<WorkflowVerb> = OperationSpec {
@@ -104,82 +104,78 @@ const AUTO: OperationSpec<WorkflowVerb> = OperationSpec {
         required(mcp_only(
             "action",
             ParamType::Enum(AUTO_ACTIONS),
-            "status, start, stop or resize",
+            "status, start, stop, or resize.",
         )),
         mcp_only(
             "for_seconds",
             ParamType::Integer,
-            "Required for start: window length in seconds, 1 through 86400 (24 hours)",
+            "start: window seconds (1-86400).",
         ),
         mcp_only(
             "auto_concurrency",
             ParamType::Enum(AUTO_CONCURRENCY_MODES),
-            "Start only: off, shadow or enforce for this local drain. Omitted captures machine.auto_concurrency.mode. Retained on resume/restart; changes no configuration. Unsupported for pull drains",
+            "start: off, shadow, or enforce (local drain only).",
         ),
         mcp_only(
             "concurrency",
             ParamType::Integer,
-            "Worker limit, positive u32. Optional for start (omitted uses runtime default); required for resize. Status previews this ceiling; omitted uses the live local drain, then live pull drain, then default. The drain's only ceiling: delivery jobs impose none of their own",
+            "Worker limit (>=1; required for resize).",
         ),
         mcp_only(
             "task",
             ParamType::StringList,
-            "Status only: one task ID or a list to explain instead of the bounded backlog",
+            "status: task ID(s) to explain.",
         ),
         mcp_only(
             "limit",
             ParamType::Integer,
-            "Status only: maximum tasks to explain, including an explicit selection (1-500; default 50)",
+            "status: max tasks to explain (1-500, default 50).",
         ),
         mcp_only(
             "allow_crew",
             ParamType::StringList,
-            "Status only: configured crews to evaluate; omitted uses the live drain's restriction, if any",
+            "status: crews to evaluate.",
         ),
         mcp_only(
             "id",
             ParamType::String,
-            "Resize only: auto- or pull-drain run ID. Omitted targets the workspace's one live drain; refused when none or several are live",
+            "resize: drain run ID (omit if single live drain).",
         ),
         mcp_only(
             "if_revision",
             ParamType::Integer,
-            "Resize only: apply only if the run's worker limit is still at this revision, so a concurrent change is reported rather than overwritten",
+            "resize: expected limit revision for CAS.",
         ),
-        mcp_only(
-            "reason",
-            ParamType::String,
-            "Resize only: note recorded with the change",
-        ),
+        mcp_only("reason", ParamType::String, "resize: change note."),
         mcp_only(
             "complete",
             ParamType::Boolean,
-            "Start only: explicitly authorize automatic completion for all tasks admitted by this window; default false keeps review. Does not approve proposed tasks",
+            "start: auto-complete admitted tasks (default false keeps review).",
         ),
         mcp_only(
             "review",
             ParamType::Enum(REVIEW_LAYERS),
-            "Start only: add this review layer before landing (before-landing recommended; before-pr deprecated but honoured) to the window when workspace policy applies none; every task it admits inherits it. The layer policy already applies is accepted unchanged; the other layer, a workspace that sets neither workflow.purpose_crews.pre_landing_review nor workflow.purpose_crews.review and a workspace that delivers locally are refused. It can only add review. Omitted keeps workspace policy",
+            "Pre-landing review (`before-landing`, or deprecated `before-pr`); adds review only (auto: start only).",
         ),
         mcp_only(
             "approve_proposed",
             ParamType::Boolean,
-            "Start only: each pass pilots qualifying proposed tasks (tagged no-diff-expected, or with context_files and an assessed complexity) and approves into backlog those with no duplicate, already-landed, conflict or warning finding, including tasks filed during the window. Tasks tagged no-drain or no-auto-approve are never approved. Others stay proposed; status reports approved and held counts. Default false",
+            "start: pilot and approve qualifying proposed tasks (default false).",
         ),
         mcp_only(
             "force",
             ParamType::Boolean,
-            "Stop only: also cancel each live drain and stop its in-flight work. A pull drain's claimed leaves are stopped and their tasks return to the owner's backlog with a comment; a local drain's task runs are cancelled. A leaf that cannot be confirmed stopped keeps its claim and fails the call. Default false stops admissions only",
+            "stop: also cancel live drains and stop in-flight work (default false).",
         ),
         mcp_only(
             "claim_token",
             ParamType::String,
-            "Workspace claim token when held by another operator",
+            "Exclusive claim token (fallback: `ORBIT_WORKSPACE_CLAIM_TOKEN`).",
         ),
         required(mcp_only(
             "workspace",
             ParamType::String,
-            "Exact selector returned by workspace discovery. No implicit destination.",
+            crate::governance::tool_schema::WORKSPACE_SELECTOR_DESCRIPTION,
         )),
     ]],
     at_least_one_of: &[],
@@ -201,7 +197,7 @@ const LAND: OperationSpec<WorkflowVerb> = OperationSpec {
     params: &[&[required(mcp_only(
         "task_id",
         ParamType::String,
-        "The task in review whose delivery pull request lands.",
+        "Task in review to land.",
     ))]],
     at_least_one_of: &[],
     retired_fields: &[],
@@ -221,7 +217,7 @@ const REFRESH: OperationSpec<WorkflowVerb> = OperationSpec {
     params: &[&[required(mcp_only(
         "task_id",
         ParamType::String,
-        "The held (blocked) or review task whose open Orbit delivery pull request refreshes.",
+        "Held or review task whose PR refreshes.",
     ))]],
     at_least_one_of: &[],
     retired_fields: &[],
@@ -239,29 +235,21 @@ const RUN_LIST: OperationSpec<WorkflowVerb> = OperationSpec {
     cli_help: CliHelp::NONE,
     effect: Effect::Read,
     params: &[&[
-        mcp_only(
-            "limit",
-            ParamType::Integer,
-            "Maximum runs to return (default 25; values above 200 are rejected).",
-        ),
-        mcp_only("job_id", ParamType::String, "Optional job ID filter."),
+        mcp_only("limit", ParamType::Integer, "Max runs (1-200, default 25)."),
+        mcp_only("job_id", ParamType::String, "Job ID filter."),
         mcp_only(
             "state",
             ParamType::String,
-            "Optional concrete run-state filter, or `terminal`.",
+            "Run-state filter, or `terminal`.",
         ),
-        mcp_only(
-            "since",
-            ParamType::String,
-            "Optional RFC 3339 lower bound for run creation time.",
-        ),
+        mcp_only("since", ParamType::String, "Lower RFC 3339 creation bound."),
         VIEW_PARAM,
-        mcp_only("offset", ParamType::Integer, "Bounded list offset"),
-        mcp_only("status", ParamType::String, "Bounded run state filter"),
+        mcp_only("offset", ParamType::Integer, "Bounded list offset."),
+        mcp_only("status", ParamType::String, "Bounded run-state filter."),
         mcp_only(
             "include_catalog",
             ParamType::Boolean,
-            "Bounded view only: include a paginated no-input job catalog with last-run metadata alongside runs",
+            "With `view: bounded`, include paginated job catalog.",
         ),
     ]],
     at_least_one_of: &[],
@@ -285,7 +273,7 @@ const RUN_RESUME: OperationSpec<WorkflowVerb> = OperationSpec {
         mcp_only(
             "source_repair",
             ParamType::Object,
-            "Explicit operator recovery of an eligible stopped owner-local publication. Inspect: {action: inspect, task_id} returns binding, review, policy_digest, immutable reservations and reservation_digests. Submit: {action: submit, task_id, request_key, binding, diagnosis}; successful or kept inline publication rework also requires unmet_acceptance evidence and the inspected current policy_digest. Select the original publishing run explicitly, including after empty failed successors; inspection authenticates its stopped lineage, unchanged specification and exact PR head. Supply the exact binding object and author a valid execution plan before submission; lifecycle refusal creates no reservation. To recover an existing reservation with no admitted run after correcting only an empty or placeholder plan, use {action: reconcile, task_id, request_key, reservation_digest, binding, diagnosis} with the original key, its inspected reservation_digest, fresh binding and otherwise unchanged evidence/policy. This appends fresh operator authorization while preserving the original reservation and charge; identical replay returns the one admitted run. Other meaning, identity, actor, policy or lease changes refuse reconciliation. Diagnosis and unmet_acceptance accept 1-32768 bytes each. Captures current review and workflow.required_validation_commands: configured commands require fresh candidate evidence; an empty list records skipped_no_required_commands, not a passing check, and does not waive configured review or hosted required checks. Reuses the original PR and preserves historical completion deadlines; grants no completion, merge or auto-fix authority.",
+            "Operator source-repair request: {action: inspect|submit|reconcile, task_id, ...}.",
         ),
     ]],
     at_least_one_of: &[],
@@ -326,12 +314,8 @@ const RUN_SHOW: OperationSpec<WorkflowVerb> = OperationSpec {
     params: &[&[
         RUN_ID_PARAM,
         VIEW_PARAM,
-        mcp_only(
-            "log_offset",
-            ParamType::Integer,
-            "Bounded log record offset",
-        ),
-        mcp_only("limit", ParamType::Integer, "Bounded detail page size"),
+        mcp_only("log_offset", ParamType::Integer, "Bounded log offset."),
+        mcp_only("limit", ParamType::Integer, "Bounded detail page size."),
     ]],
     at_least_one_of: &[],
     retired_fields: &[],
@@ -354,23 +338,23 @@ const SHIP: OperationSpec<WorkflowVerb> = OperationSpec {
         required(mcp_only(
             "task_ids",
             ParamType::StringList,
-            "Explicit task IDs to ship; at least one is required.",
+            "Task IDs to ship (>=1).",
         )),
         mcp_only(
             "mode",
             ParamType::String,
-            "Optional ship mode (`pr` or `local`); defaults to workspace configuration.",
+            "pr or local (default: workspace config).",
         ),
-        mcp_only("base", ParamType::String, "Optional base branch override."),
+        mcp_only("base", ParamType::String, "Base branch override."),
         mcp_only(
             "allowed_crews",
             ParamType::StringList,
-            "Optional configured crews this explicit shipment may dispatch; excluded crews are rejected before provider invocation.",
+            "Allowed crews for this shipment.",
         ),
         mcp_only(
             "review",
             ParamType::Enum(REVIEW_LAYERS),
-            "Optional review layer before landing (`before-landing` recommended; `before-pr` deprecated but honoured) this run adds when workspace policy applies none. The layer policy already applies is accepted unchanged; the other layer, a workspace that sets neither workflow.purpose_crews.pre_landing_review nor workflow.purpose_crews.review and local-only delivery are refused before the run starts. It can only add review. Omitted keeps workspace policy.",
+            "Pre-landing review (`before-landing`, or deprecated `before-pr`); adds review only (auto: start only).",
         ),
         CLAIM_TOKEN_PARAM,
     ]],

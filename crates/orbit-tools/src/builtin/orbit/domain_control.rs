@@ -22,16 +22,16 @@ impl Tool for RoutineControlTool {
     }
     fn schema(&self) -> ToolSchema {
         ToolSchema { name: "orbit.routine.control".into(), description: "List workspace routine status, toggle one definition using its observed enabled state and target, or replace its trigger using its observed trigger and target. Requires trusted operator authority and explicit workspace. Never replay a change after a lost reply; observe authoritative state first.".into(), builtin: true, parameters: vec![
-            crate::tool::tool_param("workspace", "Exact workspace selector from discovery", "string", true),
-            crate::tool::tool_param("action", "list, toggle or set_trigger", "string", true),
-            crate::tool::tool_param("name", "Required for toggle and set_trigger: exact routine name", "string", false),
-            crate::tool::tool_param("expected_enabled", "Required for toggle: observed enabled state", "boolean", false),
-            crate::tool::tool_param("enabled", "Required for toggle: desired enabled state", "boolean", false),
-            crate::tool::tool_param("target", "Required for toggle and set_trigger: observed routine target", "string", false),
-            crate::tool::tool_param("expected_trigger", "Required for set_trigger: observed trigger object, as listed", "object", false),
-            crate::tool::tool_param("trigger", "Required for set_trigger: replacement trigger, exactly one of `cron` (with optional `missed_run`), `state`, `deliveries_landed` or `condition` (checked and explained but never fired in this release; routine must stay disabled)", "object", false),
-            crate::tool::tool_param("offset", "List offset; default 0", "integer", false),
-            crate::tool::tool_param("limit", "List size 1 through 50; default 25", "integer", false),
+            crate::tool::tool_param("workspace", orbit_common::governance::tool_schema::WORKSPACE_SELECTOR_DESCRIPTION, "string", true),
+            crate::tool::tool_param("action", "list, toggle, or set_trigger.", "string", true),
+            crate::tool::tool_param("name", "Routine name (toggle, set_trigger).", "string", false),
+            crate::tool::tool_param("expected_enabled", "Observed enabled state (toggle).", "boolean", false),
+            crate::tool::tool_param("enabled", "Desired enabled state (toggle).", "boolean", false),
+            crate::tool::tool_param("target", "Observed target (toggle, set_trigger).", "string", false),
+            crate::tool::tool_param("expected_trigger", "Observed trigger object (set_trigger).", "object", false),
+            crate::tool::tool_param("trigger", "set_trigger: cron|state|deliveries_landed|condition.", "object", false),
+            crate::tool::tool_param("offset", "List offset (default 0).", "integer", false),
+            crate::tool::tool_param("limit", "Page size 1-50 (default 25).", "integer", false),
         ] }
     }
     fn execute(&self, ctx: &ToolContext, mut input: Value) -> Result<Value, OrbitError> {

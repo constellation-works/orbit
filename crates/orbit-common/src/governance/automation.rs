@@ -39,14 +39,14 @@ const EXPLAIN_PARAMS: &[ParamSpec] = &[
     required(both(
         "definition",
         ParamType::String,
-        "The routine or auto-task carrying the condition: its name, or `routine:<name>` / `auto-task:<name>` when a routine and an auto-task share the name. `job:<name>` explains that job's auto-task steps instead.",
+        "Routine, auto-task, or `job:<name>`.",
         CliArgKind::Positional,
         "Routine or auto-task name (routine:<name> or auto-task:<name> when both exist), or job:<name> for a job's auto-task steps",
     )),
     both(
         "subject",
         ParamType::String,
-        "The subject whose clause tree to show: a task ID for a task-scope condition, `workspace` for a workspace-scope one. Default: the first match, else the first closest miss, else the first subject evaluated.",
+        "Task ID or `workspace`.",
         CliArgKind::flag("subject"),
         "Subject whose clause tree to show (a task ID, or workspace)",
     ),

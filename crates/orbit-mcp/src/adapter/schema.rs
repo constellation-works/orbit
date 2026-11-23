@@ -42,12 +42,15 @@ pub(crate) const WORKSPACE_SELECTOR_PARAM: &str = "workspace";
 ///
 /// Required versus optional stays in the schema `required` array. Routing
 /// rules live in the installed Orbit skill `references/task-fields-*.md` references.
-pub(crate) const WORKSPACE_SELECTOR_DESCRIPTION: &str =
-    "Workspace selector from orbit_workspace_list.";
+pub(crate) use orbit_common::governance::tool_schema::WORKSPACE_SELECTOR_DESCRIPTION;
 
-/// Property descriptions on these tools are hand-written one-sentence contract.
-const HAND_AUTHORED_PROPERTY_TOOLS: &[&str] =
-    &["orbit.task.add", "orbit.task.update", "orbit.task.list"];
+/// Property descriptions on these tools are hand-written concise contracts.
+const HAND_AUTHORED_PROPERTY_TOOLS: &[&str] = &[
+    "orbit.task.add",
+    "orbit.task.update",
+    "orbit.task.list",
+    "orbit.task.show",
+];
 const HAND_AUTHORED_PROPERTY_CAP: usize = 200;
 /// Other property descriptions stay short so `tools/list` cannot regrow.
 const ADVERTISED_PROPERTY_CAP: usize = 48;

@@ -54,7 +54,7 @@ const QUERY: OperationSpec<SearchVerb> = OperationSpec {
         preserve_empty(both(
             "query",
             ParamType::String,
-            "Tasks match non-adjacent terms: full matches first, then partial matches by term count and BM25. Frictions match a case-insensitive substring. Optional with `kind: friction`, where omitting it lists frictions.",
+            "Search terms (optional if `kind: friction`).",
             CliArgKind::Positional,
             "Tasks match non-adjacent terms: all terms first, then partial matches by term count and BM25. Frictions match a case-insensitive substring",
         )),
@@ -62,7 +62,7 @@ const QUERY: OperationSpec<SearchVerb> = OperationSpec {
             both(
                 "kind",
                 ParamType::Enum(KINDS),
-                "Corpus kind: task, friction, or all. Default: all.",
+                "task, friction, or all (default: all).",
                 flag("kind"),
                 "Restrict results to one corpus kind",
             ),
@@ -72,7 +72,7 @@ const QUERY: OperationSpec<SearchVerb> = OperationSpec {
             both(
                 "limit",
                 ParamType::Integer,
-                "Maximum number of results, at most 1000. 0 or omitted uses the default: 10, or 1000 for a friction listing.",
+                "Max results, <=1000 (default: 10; 1000 for friction).",
                 flag("limit"),
                 "Maximum total results returned (across all kinds when --kind all; round-robin per kind to ensure fair representation). 0 uses the default: 10",
             ),
@@ -82,7 +82,7 @@ const QUERY: OperationSpec<SearchVerb> = OperationSpec {
             both(
                 "tag",
                 ParamType::StringList,
-                "AND-filter by tag. Repeat or pass an array. Applies to task and friction.",
+                "AND-filter by tag.",
                 list_flag("tag", Some("TAGS")),
                 "Filter by tag (AND semantics). Applies to task and friction results",
             ),
@@ -91,7 +91,7 @@ const QUERY: OperationSpec<SearchVerb> = OperationSpec {
         both(
             "all",
             ParamType::Switch,
-            "Include every status for the queried kind. Task defaults to proposed/backlog/in-progress/review/blocked; all adds done/rejected/archived/someday. Friction query defaults to open; all adds triaged/resolved.",
+            "Include all statuses.",
             flag("all"),
             "Include every status for the queried kind. Task defaults to proposed/backlog/in-progress/review/blocked; --all adds done/rejected/archived/someday. Friction defaults to open; --all adds triaged/resolved",
         ),
@@ -99,7 +99,7 @@ const QUERY: OperationSpec<SearchVerb> = OperationSpec {
             both(
                 "status",
                 ParamType::StringList,
-                "Explicit per-kind status override using kind:value tokens, such as task:open or friction:open. task:open covers proposed/backlog/in-progress/review/blocked. Overrides `all` for the named kind.",
+                "Per-kind status tokens (e.g. `task:open`).",
                 list_flag("status", None),
                 "Explicit per-kind status override, e.g. task:open,friction:open. task:open covers proposed/backlog/in-progress/review/blocked. Overrides --all for the named kind",
             ),
@@ -109,7 +109,7 @@ const QUERY: OperationSpec<SearchVerb> = OperationSpec {
             both(
                 "workspaces",
                 ParamType::StringList,
-                "Federated scope: registered workspace names, `ws_*` IDs, or absolute checkout paths to search together. Hits carry workspace attribution. Omit to search only the bound workspace.",
+                "Extra workspace selectors to search.",
                 list_flag("workspaces", Some("SELECTOR")),
                 "Search this registered workspace as well. Repeat or comma-separate to federate across several; every hit is labelled with the workspace it came from. Accepts a registered name, a `ws_*` ID, or an absolute checkout path. Distinct from the top-level `orbit --workspace`, which binds the whole invocation to one checkout",
             ),
@@ -119,7 +119,7 @@ const QUERY: OperationSpec<SearchVerb> = OperationSpec {
             both(
                 "all_workspaces",
                 ParamType::Switch,
-                "Search every active workspace registered on the answering machine. Overrides `workspaces`. Not available inside an Orbit-managed run.",
+                "Search all active workspaces (not managed).",
                 flag("all-workspaces"),
                 "Search every active workspace registered on this machine. Overrides `--workspaces`",
             ),
