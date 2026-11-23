@@ -377,7 +377,7 @@ pub(super) const BLOCK_TRIAGE: TaskOperation = TaskOperation {
         mcp_only(
             "options",
             ParamType::Array,
-            "propose: 2-3 {summary, consequence, rewrite?, action?}; action: requeue|re_pilot|change_crew|split|reject|archive.",
+            "propose: 2-3 {summary, consequence, rewrite?, action?}; each option needs a rewrite, an action or both. rewrite: {description?, acceptance_criteria?} with at least one field, each the field's complete new value. action: a tagged object such as {kind: requeue}; kind is requeue, re_pilot, change_crew, split, reject or archive. change_crew adds crew; split adds title, description and acceptance_criteria; reject and archive take no rewrite.",
         ),
         mcp_only(
             "recommended",
