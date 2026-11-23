@@ -104,10 +104,11 @@ impl OrbitRuntime {
                         Ok(Some(run)) if run.state.is_terminal()
                     )
                 };
+                let source_repairs = source_repairs_reserved(&history, &request.pr_number)?;
                 let decided = decide_pr_auto_fix_settled(
                     &attempts,
                     &claim,
-                    pr_auto_fix_budget(&history, &request.pr_number)?,
+                    PR_AUTO_FIX_BUDGET.saturating_sub(source_repairs),
                     &crew.name,
                     &crew_source,
                     &ended,
@@ -135,13 +136,16 @@ impl OrbitRuntime {
                         },
                     )?;
                 }
-                decision = Some(decided);
+                decision = Some((decided, source_repairs));
                 Ok(())
             })?;
-        let decision = decision.ok_or_else(|| {
+        let (decision, source_repairs) = decision.ok_or_else(|| {
             OrbitError::Execution("auto-fix admission did not run under the task lock".to_string())
         })?;
-        Ok(PrAutoFixAdmission::Decided(decision))
+        Ok(PrAutoFixAdmission::Decided {
+            decision,
+            source_repairs,
+        })
     }
 }
 

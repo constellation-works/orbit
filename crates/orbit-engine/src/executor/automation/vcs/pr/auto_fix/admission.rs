@@ -82,9 +82,12 @@ pub(in crate::executor::automation::vcs::pr) fn admit<H: RuntimeHost + ?Sized>(
         blocker,
         allowed_crews: auto_fix.allowed_crews.clone(),
     })?;
-    let decision = match admission {
+    let (decision, source_repairs) = match admission {
         PrAutoFixAdmission::Refused(reason) => return Err(verdict::stopped(pr_number, &reason)),
-        PrAutoFixAdmission::Decided(decision) => decision,
+        PrAutoFixAdmission::Decided {
+            decision,
+            source_repairs,
+        } => (decision, source_repairs),
     };
     match decision {
         PrAutoFixDecision::Admit(attempt) | PrAutoFixDecision::Continue(attempt) => {
@@ -126,7 +129,7 @@ pub(in crate::executor::automation::vcs::pr) fn admit<H: RuntimeHost + ?Sized>(
             ))
         }
         PrAutoFixDecision::Exhausted(attempts) => {
-            let spent = attempts
+            let watcher_evidence = attempts
                 .iter()
                 .map(|attempt| {
                     format!(
@@ -139,11 +142,11 @@ pub(in crate::executor::automation::vcs::pr) fn admit<H: RuntimeHost + ?Sized>(
                 })
                 .collect::<Vec<_>>()
                 .join("; ");
+            let total = attempts.len().saturating_add(source_repairs as usize);
             Err(verdict::stopped(
                 pr_number,
                 &format!(
-                    "auto_fix_budget_exhausted: its {} repairs are spent ({spent})",
-                    attempts.len()
+                    "auto_fix_budget_exhausted: its {total} repairs are spent ({source_repairs} source-repair reservations; watcher attempts: {watcher_evidence})"
                 ),
             ))
         }
