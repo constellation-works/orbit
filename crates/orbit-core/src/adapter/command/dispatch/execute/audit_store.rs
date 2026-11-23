@@ -306,7 +306,8 @@ where
 }
 
 /// Largest serialized redacted argument payload an invalid-input refusal row
-/// stores. Past it the row keeps only the top-level key names.
+/// stores. Past it the row keeps only the top-level key names that fit (see
+/// [`refused_key_names_json`]).
 const REFUSED_ARGUMENTS_MAX_BYTES: usize = 4096;
 
 /// The `arguments_json` of an invalid-input refusal: the refused call's
@@ -318,11 +319,46 @@ fn refused_arguments_json(arguments: Value) -> String {
     if serialized.len() <= REFUSED_ARGUMENTS_MAX_BYTES {
         return serialized;
     }
-    let keys = redacted
+    let keys: Vec<String> = redacted
         .as_object()
-        .map(|object| object.keys().cloned().map(Value::String).collect())
+        .map(|object| object.keys().cloned().collect())
         .unwrap_or_default();
-    Value::Array(keys).to_string()
+    refused_key_names_json(&keys)
+}
+
+/// The key names as a JSON array no longer than [`REFUSED_ARGUMENTS_MAX_BYTES`].
+/// Names are kept in order while they fit; each one that does not fit is left
+/// out and counted by a trailing `+N more` entry, so a single oversized name
+/// cannot push the summary past the limit.
+fn refused_key_names_json(keys: &[String]) -> String {
+    let whole = Value::Array(keys.iter().cloned().map(Value::String).collect()).to_string();
+    if whole.len() <= REFUSED_ARGUMENTS_MAX_BYTES {
+        return whole;
+    }
+    // The marker is sized for the full key count, which has at least as many
+    // digits as the omitted count, so the marker always fits the reservation.
+    // Its separator comma is included.
+    let marker_room = json_string_len(&format!("+{} more", keys.len())) + 1;
+    // The array's brackets are two bytes.
+    let names_budget = REFUSED_ARGUMENTS_MAX_BYTES - 2 - marker_room;
+    let mut kept: Vec<Value> = Vec::new();
+    let mut used = 0;
+    for key in keys {
+        let separator = usize::from(!kept.is_empty());
+        let element = json_string_len(key) + separator;
+        if used + element <= names_budget {
+            used += element;
+            kept.push(Value::String(key.clone()));
+        }
+    }
+    let omitted = keys.len() - kept.len();
+    kept.push(Value::String(format!("+{omitted} more")));
+    Value::Array(kept).to_string()
+}
+
+/// Serialized length of `text` as a JSON string, quotes and escapes included.
+fn json_string_len(text: &str) -> usize {
+    Value::String(text.to_owned()).to_string().len()
 }
 
 /// This dispatch's audit execution id, pushed before the tool runs and popped
