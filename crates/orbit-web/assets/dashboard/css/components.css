@@ -978,6 +978,7 @@ a.progress-strip-hint:hover .progress-strip-label { text-decoration: underline; 
 .global-search-status:empty { display: none; }
 .global-search-status[data-kind="error"] { color: var(--state-failed); }
 #global-search-results:not(:empty) + .global-search-status:not(:empty) { border-top: 1px solid var(--hair); }
+.global-search-popover > :not(:empty) ~ .global-search-unavailable:not(:empty) { border-top: 1px solid var(--hair); }
 
 @media (max-width: 760px) {
   .global-search-popover { left: 0; right: auto; }
