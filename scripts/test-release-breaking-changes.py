@@ -20,7 +20,8 @@ import self_test_hang
 from release_schema_oracle import INSTANCES, bounded_schema_pairs, schema_accepts_instance
 
 SCRIPT = Path(__file__).resolve().parent / "release-breaking-changes.py"
-GIT_LOCATION_ENV = ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE")
+GIT_LOCATION_ENV = ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY",
+                    "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_COMMON_DIR")
 
 
 def git_environment(source):
@@ -304,6 +305,8 @@ class ReleaseBreakingChangesTest(unittest.TestCase):
 
         def sentinel_snapshot():
             return {
+                "objects": {str(p.relative_to(sentinel / ".git/objects")): p.read_bytes()
+                            for p in (sentinel / ".git/objects").rglob("*") if p.is_file()},
                 "head_file": (sentinel / ".git/HEAD").read_bytes(),
                 "head_commit": sentinel_git("rev-parse", "HEAD").stdout,
                 "index": (sentinel / ".git/index").read_bytes(),
@@ -319,6 +322,8 @@ class ReleaseBreakingChangesTest(unittest.TestCase):
             GIT_DIR=str(sentinel / ".git"),
             GIT_WORK_TREE=str(sentinel),
             GIT_INDEX_FILE=str(sentinel / ".git/index"),
+            GIT_OBJECT_DIRECTORY=str(sentinel / ".git/objects"),
+            GIT_ALTERNATE_OBJECT_DIRECTORIES=str(sentinel / ".git/objects"),
         )
         result = subprocess.run(
             [sys.executable, str(Path(__file__).resolve()),

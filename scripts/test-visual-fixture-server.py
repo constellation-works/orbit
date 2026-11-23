@@ -260,6 +260,10 @@ class VisualFixtureServerTest(unittest.TestCase):
         SCRATCH.mkdir(parents=True, exist_ok=True)
         with tempfile.TemporaryDirectory(dir=SCRATCH) as tmp:
             repo = self._mini_checkout(Path(tmp) / "repo")
+            seed_path = repo / "crates/orbit-web/visual/fixtures/remote-host-workspaces.json"
+            seed = json.loads(seed_path.read_text())
+            seed["hosts"][0]["name"] = "fixture café"
+            seed_path.write_text(json.dumps(seed))
             wrapper, record = self._stale_backend(Path(tmp), "present")
             env = self._fixture_env(tmp, wrapper, record, "present")
             server, output, diagnostics = self._start(
@@ -273,14 +277,14 @@ class VisualFixtureServerTest(unittest.TestCase):
                 hosts = json.loads(body)["hosts"]
                 self.assertTrue(hosts[0]["local"], hosts)
                 remote = [row for row in hosts if not row["local"]]
-                self.assertEqual([row["name"] for row in remote], ["fixture-remote"], hosts)
+                self.assertEqual([row["name"] for row in remote], ["fixture café"], hosts)
                 drains_status, _, drains_body = self._fetch(
-                    url, "/api/on/fixture-remote/fleet/drains?workspace=ws_work",
+                    url, "/api/on/fixture%20caf%C3%A9/fleet/drains?workspace=ws_work",
                 )
                 self.assertEqual(drains_status, 200, drains_body[:200])
                 self.assertEqual(json.loads(drains_body), {"items": []})
                 self.assertNotIn(
-                    "GET /api/on/fixture-remote/fleet/drains?workspace=ws_work\n",
+                    "GET /api/on/fixture%20caf%C3%A9/fleet/drains?workspace=ws_work\n",
                     record.read_text(),
                 )
             finally:
@@ -709,6 +713,73 @@ class VisualFixtureServerTest(unittest.TestCase):
             finally:
                 self._stop(server)
 
+    def test_launcher_never_signals_reaped_children(self):
+        SCRATCH.mkdir(parents=True, exist_ok=True)
+        for failure in ("front", "backend"):
+            with self.subTest(failure=failure), tempfile.TemporaryDirectory(dir=SCRATCH) as tmp:
+                root = Path(tmp)
+                repo = self._mini_checkout(root / "repo")
+                wrapper, record = self._stale_backend(root, "present", fixture_cli=True)
+                launcher = repo / "scripts/visual-fixture-server.sh"
+                launcher.write_text(launcher.read_text().replace(
+                    "set -eu\n", "set -eu\nkill() { printf '%s\\n' \"$*\" >> \"$KILL_RECORD\"; command kill \"$@\"; }\n", 1))
+                child_pid = root / "child.pid"
+                if failure == "front":
+                    (repo / "scripts/visual-fixture-front.mjs").write_text(
+                        "import fs from 'node:fs';\n"
+                        "if (!process.argv.includes('--check-assets')) {\n"
+                        " fs.writeFileSync(process.env.CHILD_PID, String(process.pid));\n"
+                        " console.log('ORBIT_VISUAL_URL=http://127.0.0.1:1'); process.exit(37);\n}\n")
+                else:
+                    (root / "stale-server.mjs").write_text(
+                        "import fs from 'node:fs'; fs.writeFileSync(process.env.CHILD_PID, String(process.pid)); process.exit(23);\n")
+                kill_record = root / "kill.record"
+                env = {**self._fixture_env(tmp, wrapper, record, "present"),
+                       "KILL_RECORD": str(kill_record), "CHILD_PID": str(child_pid)}
+                result = subprocess.run([str(launcher), "remote-host-workspaces:empty"], cwd=repo,
+                                        env=env, capture_output=True, text=True, timeout=30)
+                self.assertEqual(result.returncode, 37 if failure == "front" else 1, result.stderr)
+                if failure == "front":
+                    self.assertIn("ORBIT_VISUAL_URL=http://127.0.0.1:1", result.stdout)
+                pid = child_pid.read_text()
+                calls = kill_record.read_text().splitlines() if kill_record.exists() else []
+                self.assertNotIn(pid, calls, calls)
+                if failure == "front":
+                    self._assert_port_closed(self._backend_url(tmp))
+
+    def test_proxy_disconnect_before_upstream_headers_recovers_capacity(self):
+        SCRATCH.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=SCRATCH) as tmp:
+            repo = self._mini_checkout(Path(tmp) / "repo")
+            wrapper, record = self._stale_backend(Path(tmp), "stream-gate", fixture_cli=True)
+            server, output, diagnostics = self._start(
+                repo / "scripts/visual-fixture-server.sh", ["remote-host-workspaces:empty"], repo,
+                self._fixture_env(tmp, wrapper, record, "stream-gate"))
+            holders = []
+            try:
+                self.assertIn("ORBIT_VISUAL_URL=", output, diagnostics)
+                url = self._protocol(output)["ORBIT_VISUAL_URL"]
+                parsed = urllib.parse.urlsplit(url)
+                sock = socket.create_connection((parsed.hostname, parsed.port), timeout=5)
+                try:
+                    sock.sendall(f"GET {LOG_STREAM_PATH} HTTP/1.1\r\nHost: {parsed.netloc}\r\n\r\n".encode())
+                    deadline = time.monotonic() + 5
+                    while "stream waiting" not in record.read_text() and time.monotonic() < deadline:
+                        time.sleep(0.02)
+                    self.assertIn("stream waiting", record.read_text())
+                    sock.settimeout(0.1)
+                    with self.assertRaises(TimeoutError):
+                        sock.recv(1)
+                finally:
+                    self._close_socket(sock)
+                holders = self._established_log_streams(url, NATIVE_LOG_STREAM_CAP)
+                status, _ = self._one_log_stream(url)
+                self.assertEqual(status, 503)
+            finally:
+                for sock in holders:
+                    self._close_socket(sock)
+                self._stop(server)
+
     def test_log_stream_disconnect_releases_upstream_permit(self):
         # The front used to leave the upstream /api/log/stream open after the
         # downstream client closed, including before response headers. The
@@ -845,8 +916,15 @@ class VisualFixtureServerTest(unittest.TestCase):
             "const record = process.env.STALE_RECORD;\n"
             "const mode = process.env.STALE_MODE || 'present';\n"
             "fs.writeFileSync(record, '');\n"
+            "let active = 0, blocked = false;\n"
             "http.createServer((req, res) => {\n"
             "  fs.appendFileSync(record, req.method + ' ' + req.url + '\\n');\n"
+            "  if (mode === 'stream-gate' && req.url === '/api/log/stream') {\n"
+            "    if (active >= 8) { res.writeHead(503); res.end('limit'); return; }\n"
+            "    active++; res.on('close', () => { active--; fs.appendFileSync(record, 'stream closed\\n'); });\n"
+            "    if (!blocked) { blocked = true; fs.appendFileSync(record, 'stream waiting\\n'); return; }\n"
+            "    res.writeHead(200, {'content-type':'text/event-stream'}); res.flushHeaders(); return;\n"
+            "  }\n"
             "  if (req.method === 'OPTIONS') {\n"
             "    const status = mode === 'absent' || mode === 'absent:' + req.url ? 404 : 405;\n"
             "    res.writeHead(status, {'content-type': 'text/plain', 'allow': 'GET'});\n"

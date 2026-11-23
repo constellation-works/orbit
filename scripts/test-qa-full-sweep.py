@@ -1791,11 +1791,21 @@ def candidate_source(repo: Path, excluded_paths=()):
             untracked.append((path, *untracked_entry_identity(repo / path)))
         except FileNotFoundError:
             continue  # removed since listing: no longer part of the candidate
+    changed_paths = list(dict.fromkeys([path for code, path, _ in entries if code != "??"]
+                                       + [path for path, *_ in untracked]))
     material = json.dumps({"head": head, "diff": hashlib.sha256(diff).hexdigest(),
                            "untracked": untracked}, sort_keys=True).encode()
     return {"head": head, "diff_sha256": hashlib.sha256(diff).hexdigest(),
             "untracked": untracked, "candidate_id": hashlib.sha256(material).hexdigest(),
             "status": status_lines, "changed_paths": changed_paths}
+
+
+def changed_file_hashes(repo, candidate):
+    return {
+        path: untracked_entry_identity(repo / path)[1]
+        for path in candidate["changed_paths"]
+        if (repo / path).is_symlink() or (repo / path).is_file()
+    }
 
 
 def execute_retired_case_commands(scenario, *, repo, env, candidate_id, excluded_paths):
@@ -4761,15 +4771,27 @@ def self_test():
             git_identity = ["-c", "user.name=qa-full-sweep", "-c", "user.email=qa@example.invalid",
                             "-c", "commit.gpgsign=false"]
             (path_repo / "old.md").write_text("moved\n", encoding="utf-8")
-            for git_args in (["init", "-q"], ["add", "old.md"],
+            (path_repo / "tracked-link").symlink_to("old.md")
+            for git_args in (["init", "-q"], ["add", "old.md", "tracked-link"],
                              [*git_identity, "commit", "-q", "-m", "fixture"],
                              ["mv", "old.md", "renamed.md"]):
                 subprocess.run(["git", "-C", str(path_repo), *git_args],
                                check=True, capture_output=True, text=True)
             (path_repo / "with space.md").write_text("spaced\n", encoding="utf-8")
             (path_repo / "café.md").write_text("accented\n", encoding="utf-8")
-            changed = set(candidate_source(path_repo)["changed_paths"])
-            if changed != {"renamed.md", "with space.md", "café.md"}:
+            (path_repo / "new").mkdir()
+            (path_repo / "new/leaf.md").write_text("leaf\n")
+            (path_repo / "link.md").symlink_to("missing-target")
+            (path_repo / "tracked-link").unlink()
+            (path_repo / "tracked-link").symlink_to("renamed.md")
+            source = candidate_source(path_repo)
+            changed = set(source["changed_paths"])
+            hashes = changed_file_hashes(path_repo, source)
+            identities = {path: digest for path, _, digest in source["untracked"]}
+            if (hashes.get("link.md") != identities["link.md"] or "new/leaf.md" not in hashes
+                    or hashes.get("tracked-link") != hashlib.sha256(b"renamed.md").hexdigest()):
+                raise AssertionError(f"candidate changed file identities disagree: {hashes}")
+            if changed != {"renamed.md", "with space.md", "café.md", "new/leaf.md", "link.md", "tracked-link"}:
                 raise AssertionError(f"candidate changed paths drop quoted or renamed files: {sorted(changed)}")
 
         # Exercise the shell boundary too: python3 is a capture fixture, so no
@@ -5343,10 +5365,7 @@ def main():
                             "outcome":"NOT_RUN", "assertions":[], "candidate_id":candidate_id})
     full_pass, decision_failures = scenario_decision(inventory, results, candidate_id)
     full_pass = full_pass and not errors
-    changed_hashes = {
-        path: hashlib.sha256((repo / path).read_bytes()).hexdigest()
-        for path in candidate["changed_paths"] if (repo / path).is_file()
-    }
+    changed_hashes = changed_file_hashes(repo, candidate)
     report = {
         "schema_version": 2, "generated_at": datetime.now(timezone.utc).isoformat(),
         "candidate": {"id":candidate_id, "source_revision":candidate["head"]},
