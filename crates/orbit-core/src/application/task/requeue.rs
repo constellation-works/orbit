@@ -536,14 +536,23 @@ impl OrbitRuntime {
             }
         });
         let resumes = match (&resume, &kept) {
-            (Some((_, binding)), _) => Some(json!({
-                // The receipt is the `[BLOCKED]` PR; without one the run's
-                // own pipeline published the PR its failure handoff kept.
-                "source": if receipt.is_some() { "failure_handoff" } else { "pipeline" },
-                "pull_request": binding.pull_request,
-                "branch": binding.branch,
-                "head_sha": binding.head_sha,
-            })),
+            (Some((_, binding)), _) => {
+                let mut entry = json!({
+                    // The receipt is the `[BLOCKED]` PR; without one the run's
+                    // own pipeline published the PR its failure handoff kept.
+                    "source": if receipt.is_some() { "failure_handoff" } else { "pipeline" },
+                    "pull_request": binding.pull_request,
+                    "branch": binding.branch,
+                    "head_sha": binding.head_sha,
+                });
+                if let Some(candidate_head_sha) = &binding.candidate_head_sha {
+                    entry["candidate_head_sha"] = json!(candidate_head_sha);
+                }
+                if let Some(candidate_ref) = &binding.candidate_ref {
+                    entry["candidate_ref"] = json!(candidate_ref);
+                }
+                Some(entry)
+            }
             (None, Some(kept)) => Some(json!({
                 "source": "claim",
                 "pull_request": kept.candidate.pull_request,

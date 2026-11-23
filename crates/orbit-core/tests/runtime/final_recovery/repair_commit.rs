@@ -99,6 +99,16 @@ impl orbit_engine::test_support::NullRuntimeHost for RepairPipeline<'_> {
         self.fixture.runtime.get_task(task)
     }
 
+    fn apply_task_automation_update(
+        &self,
+        task_id: &str,
+        update: orbit_engine::TaskAutomationUpdate,
+    ) -> Result<(), OrbitError> {
+        self.fixture
+            .runtime
+            .apply_task_automation_update(task_id, update)
+    }
+
     fn read_run_state(&self, run: &str) -> Result<Option<PipelineState>, OrbitError> {
         self.fixture.runtime.read_run_state(run)
     }
@@ -683,6 +693,24 @@ fn final_recovery_does_not_authorize_an_unrecorded_head_change() {
             matches!(checkpoint.decision, Some(FinalRecoveryDecision::Escalate { ref diagnosis, .. }) if diagnosis.contains(&format!("recovery_commit_refused:{reason}:"))),
             "{case}: durable refusal: {checkpoint:?}"
         );
+        if matches!(case, "protected" | "reviewed" | "settled-review") {
+            let expected_artifact = format!("recovery-uncommitted-{run}.patch");
+            assert!(
+                matches!(
+                    checkpoint.decision,
+                    Some(FinalRecoveryDecision::Escalate { ref diagnosis, .. })
+                    if diagnosis.contains(&expected_artifact)
+                ),
+                "{case}: diagnosis should name saved diff artifact: {checkpoint:?}"
+            );
+            let artifact = fixture
+                .runtime
+                .get_task_artifact(&fixture.task_id, &expected_artifact)
+                .unwrap()
+                .expect("refused final recovery saves uncommitted diff artifact");
+            let text = String::from_utf8_lossy(&artifact.content);
+            assert!(text.contains("repaired"), "{case}: {text}");
+        }
     }
 }
 

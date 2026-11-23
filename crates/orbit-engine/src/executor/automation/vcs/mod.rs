@@ -57,6 +57,7 @@ pub(crate) use commit::{
 };
 pub(crate) use commit::{
     RecoveryCommit, RecoveryCommitRefusal, RecoveryCommitRequest, commit_recovery_repair,
+    persist_uncommitted_diff_artifact,
 };
 pub use commit::{compose_squash_merge_message, validate_claim_new_paths};
 pub use deferral_probe::run_deferral_probe;

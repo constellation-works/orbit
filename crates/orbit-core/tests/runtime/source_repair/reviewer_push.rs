@@ -228,9 +228,134 @@ fn a_changed_specification_refuses_the_reviewer_head() {
     assert!(error.contains("specification changed"), "{error}");
 }
 
+/// A rejected before-landing review left its fix commit R on `published` P and
+/// `pr_failure_handoff` preserved R onto `refs/orbit/candidates/<task>/<run>`
+/// without pushing to the PR branch. Requeue keeps PR head at P while adopting
+/// R as `candidate_head_sha` so the resumed run starts from R's repair.
+fn a_rejected_landing_review_requeue_resumes_the_preserved_fix_commit() {
+    let mut f = Fixture::new();
+    let path = f
+        ._root
+        .path()
+        .join("global/resources/jobs/task_pr_pipeline.yaml");
+    let yaml = std::fs::read_to_string(&path).unwrap();
+    std::fs::write(
+        &path,
+        yaml.replace(
+            "  task_delivery: {}",
+            "  task_delivery: {}\n  failure_activity: pr_failure_handoff",
+        ) + &format!("    - {{id: {SETTLE}, target: 'activity:review_gate_settle'}}\n"),
+    )
+    .unwrap();
+    let checkout = published_owner::publication(&mut f);
+    escalate(&f, &f.source.run_id);
+    let published = f.head.clone();
+    std::fs::write(checkout.join("review.txt"), "rejected review repair\n").unwrap();
+    git(&checkout, &["add", "review.txt"]);
+    git(
+        &checkout,
+        &["commit", "-qm", "review: fix rules before reject"],
+    );
+    let reviewed = git(&checkout, &["rev-parse", "HEAD"]);
+    let expected_ref = format!("refs/orbit/candidates/{}/{}", f.task, f.source.run_id);
+    let output = f.action(
+        "pr_failure_handoff",
+        json!({"run_id":f.source.run_id,
+        "failed_step_id":SETTLE,"activity_name":"review_gate_settle","error_code":"review_gate_blocked",
+        "error_message":"review_gate_blocked: verdict reject (needs another check)",
+        "job_input":f.source.input,"pipeline":f.state.pipeline}),
+    );
+    assert_eq!(output["decision"], "landing_review_failure", "{output}");
+    assert_eq!(output["reviewer_push"], Value::Null, "{output}");
+    assert_eq!(output["reviewer_preservation"]["decision"], "preserved", "{output}");
+    assert_eq!(output["reviewer_preservation"]["commit_sha"], reviewed, "{output}");
+    assert_eq!(output["reviewer_preservation"]["ref"], expected_ref, "{output}");
+    assert!(
+        git(&f.repo, &["ls-remote", "origin", &f.branch]).starts_with(&published),
+        "reject never pushes to the PR head branch"
+    );
+    assert!(
+        git(&f.repo, &["ls-remote", "origin", &expected_ref]).starts_with(&reviewed),
+        "reject fix commit is reachable on durable ref"
+    );
+
+    let mut answer: Value = serde_json::from_slice(&std::fs::read(&f.answer).unwrap()).unwrap();
+    answer["headRefOid"] = json!(published);
+    std::fs::write(&f.answer, answer.to_string()).unwrap();
+
+    let mut state = f.runtime.read_run_state(&f.source.run_id).unwrap().unwrap();
+    state.record_failure_activity("pr_failure_handoff".into(), SETTLE.into(), output.clone());
+    f.runtime.write_run_state(&f.source.run_id, &state).unwrap();
+    f.state = state;
+    let mut run = f.runtime.show_job_run_observed(&f.source.run_id).unwrap();
+    run.state = JobRunState::Held;
+    run.pid = None;
+    run.pid_start_time = None;
+    run.finished_at = Some(Utc::now());
+    save_run(&f, &run);
+    assert!(
+        f.runtime
+            .complete_job_run_step(
+                &run.run_id,
+                &orbit_store::contracts::JobRunStepParams {
+                    step_index: 40,
+                    target_type: orbit_types::workflow::JobTargetType::Activity,
+                    target_id: SETTLE.into(),
+                    state: JobRunState::Held,
+                    started_at: Utc::now(),
+                    finished_at: Utc::now(),
+                    duration_ms: Some(1),
+                    exit_code: Some(0),
+                    lock_wait_ms: None,
+                    agent_response_json: None,
+                    error_code: Some(
+                        orbit_types::workflow::REVIEW_DECISION_PENDING_ERROR_CODE.into(),
+                    ),
+                    error_message: Some(format!(
+                        "before-landing review did not approve; {}",
+                        orbit_types::workflow::REVIEW_LANDING_DECISION_PENDING
+                    )),
+                },
+            )
+            .unwrap()
+    );
+    f.source = f.runtime.show_job_run_observed(&run.run_id).unwrap();
+    green_forge(&mut f);
+
+    // Tampered preservation attestation is refused rather than trusted.
+    let saved = rewrite_receipt(&f, |receipt| {
+        receipt["reviewer_preservation"]["published_head_sha"] = json!(reviewed);
+    });
+    refused(&f, false, "mismatched published_head_sha");
+    restore_receipt(&f, saved);
+
+    let answer = requeue(&f, false).unwrap();
+    assert_eq!(answer["status"], "backlog", "{answer}");
+    assert_eq!(answer["resumes"]["pull_request"], "17");
+    assert_eq!(answer["resumes"]["head_sha"], published);
+    assert_eq!(answer["resumes"]["candidate_head_sha"], reviewed);
+    assert_eq!(answer["resumes"]["candidate_ref"], expected_ref);
+
+    let (run, setup) = super::published_owner::next(&f);
+    let next_checkout = PathBuf::from(setup["workspace_path"].as_str().unwrap());
+    let resumed = f.action(
+        "candidate_resume",
+        json!({"job_run_id":run.run_id,"task_ids":[f.task],
+        "workspace_path":next_checkout,"base_sha":setup["base_sha"]}),
+    );
+    assert_eq!(resumed["outcome"], "resumed_carried", "{resumed}");
+    assert_eq!(resumed["reused_head_sha"], published);
+    assert_eq!(resumed["source_sha"], reviewed);
+    assert_eq!(
+        std::fs::read_to_string(next_checkout.join("review.txt")).unwrap(),
+        "rejected review repair\n"
+    );
+}
+
 crate::scenario_table!(
     reviewer_push_scenarios,
     a_held_incomplete_review_requeue_resumes_the_attested_reviewer_head,
     unattested_or_moved_reviewer_heads_stay_refused,
-    a_changed_specification_refuses_the_reviewer_head
+    a_changed_specification_refuses_the_reviewer_head,
+    a_rejected_landing_review_requeue_resumes_the_preserved_fix_commit
 );

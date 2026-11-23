@@ -66,31 +66,7 @@ pub(in crate::activity_job::job_executor) fn commit_recovery_repair_after_commit
     let Some(workspace_path) = bound.get("workspace_path").and_then(Value::as_str) else {
         return Ok(());
     };
-    // A review admitted on or settling this head pins it. An older pin, from
-    // before a final-recovery resume moved the candidate, does not.
-    let reviewed_heads = outputs
-        .iter()
-        .flat_map(|output| {
-            let admitted_head =
-                ReviewGateAdmissionOutput::from_value(output)
-                    .ok()
-                    .and_then(|admission| {
-                        admission
-                            .admitted()
-                            .filter(|admitted| !admitted.attempt_id.is_empty())
-                            .map(|admitted| admitted.head_sha.clone())
-                    });
-            [
-                admitted_head,
-                output
-                    .get("reviewed_head_sha")
-                    .and_then(Value::as_str)
-                    .map(str::to_string),
-            ]
-        })
-        .flatten()
-        .filter(|head| !head.is_empty() && !review_follows)
-        .collect::<Vec<_>>();
+    let reviewed_heads = blocking_reviewed_heads(&step.id, &outputs, review_follows);
     let task_ids = match (bound.get("task_id"), bound.get("task_ids")) {
         (Some(Value::String(id)), _) => vec![id.clone()],
         (_, Some(Value::Array(ids))) => ids
@@ -266,4 +242,112 @@ pub(in crate::activity_job::job_executor) fn commit_final_recovery_repair(
         false,
         recovery_model,
     )
+}
+
+/// Review pins that prohibit a recovery commit on `HEAD` unless a later
+/// review follows in the plan. Unsettled `BeforeLanding` admissions on
+/// `landing_review` itself are excluded when recovering mid-review before
+/// rewinding past `commit` -> `landing_review`.
+fn blocking_reviewed_heads(step_id: &str, outputs: &[Value], review_follows: bool) -> Vec<String> {
+    let is_current_landing_review = step_id == "landing_review";
+    outputs
+        .iter()
+        .flat_map(|output| {
+            let admitted_head = ReviewGateAdmissionOutput::from_value(output)
+                .ok()
+                .and_then(|admission| {
+                    admission
+                        .admitted()
+                        .filter(|admitted| {
+                            !admitted.attempt_id.is_empty()
+                                && !(is_current_landing_review
+                                    && admitted.timing
+                                        == orbit_types::workflow::ReviewTiming::BeforeLanding)
+                        })
+                        .map(|admitted| admitted.head_sha.clone())
+                });
+            [
+                admitted_head,
+                output
+                    .get("reviewed_head_sha")
+                    .and_then(Value::as_str)
+                    .map(str::to_string),
+            ]
+        })
+        .flatten()
+        .filter(|head| !head.is_empty() && !review_follows)
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::blocking_reviewed_heads;
+    use orbit_types::workflow::{
+        ReviewBudget, ReviewConsumption, ReviewGateAdmissionOutput, ReviewGateAdmitted,
+        ReviewGateDecision, ReviewGateReviewer, ReviewTiming,
+    };
+    use serde_json::{Value, json};
+
+    fn admission_output(head_sha: &str, timing: ReviewTiming) -> Value {
+        serde_json::to_value(ReviewGateAdmissionOutput::Admitted(Box::new(
+            ReviewGateAdmitted {
+                decision: ReviewGateDecision::Admitted,
+                held_attempt_id: None,
+                first_task_id: "ORB-1".into(),
+                attempt_id: "attempt-1".into(),
+                attempt_index: 1,
+                lineage_key: "lineage".into(),
+                timing,
+                timing_source: "test".into(),
+                reviewer: ReviewGateReviewer {
+                    crew: "review".into(),
+                    crew_source: "test".into(),
+                    provider: "stub".into(),
+                    model: "stub-model".into(),
+                    reasoning_effort: None,
+                    eligible_pool: Vec::new(),
+                    auto_effort: None,
+                },
+                owed_evidence: Vec::new(),
+                owner_owed_evidence: Vec::new(),
+                host_validation: Vec::new(),
+                base_sha: "base".into(),
+                base_tree: "base-tree".into(),
+                head_sha: head_sha.into(),
+                head_tree: "head-tree".into(),
+                implementation_commit_count: 1,
+                task_meaning_digest: "digest".into(),
+                task_selectors: Default::default(),
+                evidence_carry: Value::Null,
+                manifest_artifact: "review-manifest.json".into(),
+                report_artifact: "review-report.json".into(),
+                budget: ReviewBudget::default(),
+                remaining: ReviewConsumption { seconds: 600 },
+                started_at: chrono::Utc::now(),
+                selective_receipt: None,
+            },
+        )))
+        .expect("serialize admission")
+    }
+
+    #[test]
+    fn unsettled_before_landing_admission_does_not_block_landing_review_recovery() {
+        let landing_admit = admission_output("head-landing", ReviewTiming::BeforeLanding);
+        assert!(
+            blocking_reviewed_heads("landing_review", std::slice::from_ref(&landing_admit), false)
+                .is_empty()
+        );
+
+        let before_pr_admit = admission_output("head-pr", ReviewTiming::BeforePr);
+        assert_eq!(
+            blocking_reviewed_heads("validate", &[before_pr_admit], false),
+            vec!["head-pr".to_string()]
+        );
+
+        let settled = json!({"reviewed_head_sha": "head-settled"});
+        assert_eq!(
+            blocking_reviewed_heads("landing_review", &[landing_admit, settled], false),
+            vec!["head-settled".to_string()]
+        );
+    }
 }

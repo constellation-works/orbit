@@ -48,6 +48,10 @@ pub struct SourceRepairBinding {
     /// published head.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub candidate_head_sha: Option<String>,
+    /// Durable remote/local ref (e.g. `refs/orbit/candidates/<task>/<run>`)
+    /// where `candidate_head_sha` is preserved when it is not on `origin/<branch>`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub candidate_ref: Option<String>,
 }
 
 impl SourceRepairBinding {

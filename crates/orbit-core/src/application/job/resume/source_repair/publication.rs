@@ -273,3 +273,118 @@ pub(super) fn incomplete_review_pushed_head<'a>(
     }
     Ok(Some(pushed))
 }
+
+/// Preserved non-accept before-landing reviewer commit `R` on a durable
+/// candidate ref (`refs/orbit/candidates/<task>/<run>`), leaving `origin`
+/// PR branch and PR head at `published`.
+#[derive(Clone, Debug)]
+pub(super) struct PreservedReviewTip {
+    pub(super) head: String,
+    pub(super) durable_ref: String,
+}
+
+/// Read and authenticate `reviewer_preservation` recorded by `pr_failure_handoff`
+/// for a non-accept before-landing review (`reject`, `landing_review` timeout,
+/// or `landing_review_validate` failure).
+pub(super) fn preserved_landing_review_head(
+    job: &JobV2,
+    state: &PipelineState,
+    source: (&str, &Task),
+    published: &str,
+    repo: &std::path::Path,
+) -> Result<Option<PreservedReviewTip>, OrbitError> {
+    let Some(receipt) = state.failure_activity_checkpoint.as_ref() else {
+        return Ok(None);
+    };
+    let output = &receipt.output;
+    let Some(preserved) = output.get("reviewer_preservation").filter(|v| !v.is_null()) else {
+        return Ok(None);
+    };
+    if matches!(
+        preserved.get("decision").and_then(Value::as_str),
+        Some("no_reviewer_commit" | "commit_refused" | "preserve_failed" | "unavailable")
+    ) {
+        return Ok(None);
+    }
+    let disagrees = |what: &str| {
+        refuse_operator_decision(format!(
+            "the failure handoff's reviewer preservation attestation disagrees ({what}); the \
+             preserved commit is not an attested reviewer repair of the published head"
+        ))
+    };
+    let (source_id, task) = source;
+    if job.failure_activity.as_deref() != Some("pr_failure_handoff")
+        || !job.resolved_failure_activity.as_ref().is_some_and(|a| {
+            matches!(&a.spec, ActivityV2Spec::Deterministic(s) if s.action == "pr_failure_handoff")
+        })
+        || receipt.activity_name != "pr_failure_handoff"
+    {
+        return Err(disagrees("not the host failure handoff"));
+    }
+    const LANDING_STEPS: &[&str] = &[
+        "landing_review_gate_admit",
+        "landing_review",
+        "landing_review_gate_settle",
+        "landing_review_validate",
+    ];
+    if !LANDING_STEPS.contains(&receipt.failed_step_id.as_str())
+        || output["failed_step_id"] != receipt.failed_step_id
+        || output["phase"] != "failure_handoff"
+        || output["decision"] != "landing_review_failure"
+        || output["candidate_preserved"] != true
+        || output["handoff_run_id"] != source_id
+        || output["task_id"] != task.id.as_str()
+        || !output["task_spec_digest"]
+            .as_str()
+            .is_some_and(|digest| task.spec_digest_matches(digest))
+    {
+        return Err(disagrees(
+            "not this run's and task's non-accept before-landing review",
+        ));
+    }
+    let opened = job.steps.iter().position(|step| step.id == "pr_open");
+    let failed_step_pos = job
+        .steps
+        .iter()
+        .position(|step| step.id == receipt.failed_step_id);
+    if opened.zip(failed_step_pos).is_none_or(|(open_idx, fail_idx)| fail_idx <= open_idx) {
+        return Err(disagrees("the definition places the review before PR open"));
+    }
+    let landing_push_done = job
+        .steps
+        .iter()
+        .position(|step| step.id == "landing_push")
+        .is_some_and(|idx| state.step_states.get(&(idx as u32)) == Some(&JobRunState::Success))
+        || state
+            .pipeline
+            .get("landing_push")
+            .is_some_and(|v| !v.is_null());
+    if landing_push_done {
+        return Err(disagrees("the before-landing review already landed"));
+    }
+    let commit_sha = preserved
+        .get("commit_sha")
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    let durable_ref = preserved
+        .get("ref")
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    let expected_ref = format!("refs/orbit/candidates/{}/{source_id}", task.id);
+    if preserved["decision"] != "preserved"
+        || preserved["published_head_sha"] != published
+        || durable_ref != expected_ref
+        || !observation::is_exact_sha(commit_sha)
+        || commit_sha == published
+        || !observation::resolves_to_commit(repo, commit_sha)?
+        || !observation::is_git_ancestor(repo, published, commit_sha)?
+    {
+        return Err(disagrees(
+            "it is not an attested preservation commit descending from the published head",
+        ));
+    }
+    Ok(Some(PreservedReviewTip {
+        head: commit_sha.to_string(),
+        durable_ref: durable_ref.to_string(),
+    }))
+}
