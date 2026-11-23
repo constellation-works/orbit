@@ -6,7 +6,10 @@ use orbit_core::OrbitRuntime;
 use orbit_store::contracts::V2AuditEventInsertParams;
 use orbit_store::maintenance::task_registry::{WorkspaceConfig, write_workspace_config};
 use serde_json::{Value, json};
+use std::process::{Child, Command, ExitStatus, Stdio};
+use std::time::{Duration, Instant};
 
+#[test]
 fn readiness_counts_live_agents_by_activity() {
     let temp = tempfile::TempDir::new_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
     let root = temp.path().join("root");
@@ -31,19 +34,14 @@ fn readiness_counts_live_agents_by_activity() {
     );
 
     let alive = u64::from(std::process::id());
-    // A real process this fixture owns, waited on and so reaped: its valid PID
-    // names no live process, so the native liveness probe reports it exited.
-    let mut exited = std::process::Command::new("true")
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .spawn()
-        .unwrap();
+    // Keep the exited child unreaped through readiness. Its zombie PID stays
+    // owned by this fixture and cannot be reused during the liveness probe.
+    let mut exited = ExitedChild::spawn();
     let dead = u64::from(exited.id());
-    assert!(exited.wait().unwrap().success());
+    exited.wait_until_exited();
     assert!(
         !orbit_common::process::identity::process_is_alive(exited.id()),
-        "the reaped child's PID must read as exited before it is recorded"
+        "the exited child's PID must read as dead before it is recorded"
     );
     // Running leaf: two pilots, one recovery, one reviewer, plus an
     // implementer and a finished reviewer that must not count.
@@ -129,6 +127,112 @@ fn readiness_counts_live_agents_by_activity() {
         payload["capacity"]["running_admitted_workers"].is_number(),
         "the admitted-worker field the header still reads stays on the payload"
     );
+    assert!(
+        exited.wait().success(),
+        "the fixture child exits successfully"
+    );
+}
+
+const EXITED_CHILD_DEADLINE: Duration = Duration::from_secs(10);
+const EXITED_CHILD_POLL_INTERVAL: Duration = Duration::from_millis(10);
+
+/// Owns the fixture child until it is reaped, including while readiness reads
+/// its exited PID. On drop, terminate a still-running child and always reap it.
+struct ExitedChild {
+    child: Child,
+    #[cfg(windows)]
+    exit_status: Option<ExitStatus>,
+}
+
+impl ExitedChild {
+    fn spawn() -> Self {
+        let mut command = fixture_exit_command();
+        command
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+        let child = command.spawn().expect("spawn deterministic fixture child");
+        Self {
+            child,
+            #[cfg(windows)]
+            exit_status: None,
+        }
+    }
+
+    fn id(&self) -> u32 {
+        self.child.id()
+    }
+
+    fn wait_until_exited(&mut self) {
+        let deadline = Instant::now() + EXITED_CHILD_DEADLINE;
+        loop {
+            #[cfg(unix)]
+            let exited = !orbit_common::process::identity::process_is_alive(self.id());
+
+            #[cfg(windows)]
+            let exited = match self.child.try_wait().expect("poll fixture child") {
+                Some(status) => {
+                    self.exit_status = Some(status);
+                    true
+                }
+                None => false,
+            };
+
+            if exited {
+                return;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "fixture child {} did not exit within {EXITED_CHILD_DEADLINE:?}",
+                self.id()
+            );
+            std::thread::sleep(EXITED_CHILD_POLL_INTERVAL);
+        }
+    }
+
+    fn wait(&mut self) -> ExitStatus {
+        #[cfg(windows)]
+        if let Some(status) = self.exit_status.take() {
+            return status;
+        }
+
+        self.child.wait().expect("reap fixture child")
+    }
+}
+
+impl Drop for ExitedChild {
+    fn drop(&mut self) {
+        #[cfg(windows)]
+        let already_exited = self.exit_status.is_some();
+        #[cfg(not(windows))]
+        let already_exited = false;
+
+        if !already_exited && self.child.try_wait().ok().flatten().is_none() {
+            let _ = self.child.kill();
+        }
+        let _ = self.child.wait();
+    }
+}
+
+#[cfg(unix)]
+fn fixture_exit_command() -> Command {
+    use std::os::unix::process::CommandExt;
+
+    let mut command = Command::new("/bin/sh");
+    command.args(["-c", "exit 0"]).process_group(0);
+    command
+}
+
+#[cfg(windows)]
+fn fixture_exit_command() -> Command {
+    use std::os::windows::process::CommandExt;
+
+    let system_root = std::env::var_os("SystemRoot").expect("Windows system root");
+    let mut command = Command::new(std::path::PathBuf::from(system_root).join("System32/cmd.exe"));
+    command
+        .args(["/D", "/C", "exit 0"])
+        .creation_flags(0x0000_0200);
+    command
 }
 
 fn insert_run(runtime: &OrbitRuntime, job_id: &str) -> String {
