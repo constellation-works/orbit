@@ -539,7 +539,7 @@ const SHOW: TaskOperation = TaskOperation {
             mcp_only(
                 "snapshot",
                 ParamType::Boolean,
-                "Bounded versioned snapshot; requires `workspace`, rejects `fields`, `field`, `run_id`, `view`, `limit`, offsets.",
+                "Bounded versioned snapshot; requires `workspace`, rejects `run_id`, `view`, offsets; snapshot grants no authority.",
             ),
         ],
         &[

@@ -3052,7 +3052,7 @@
       },
       {
         "name": "snapshot",
-        "description": "Bounded versioned snapshot; requires `workspace`, rejects `fields`, `field`, `run_id`, `view`, `limit`, offsets.",
+        "description": "Bounded versioned snapshot; requires `workspace`, rejects `run_id`, `view`, offsets; snapshot grants no authority.",
         "param_type": "boolean",
         "required": false
       },
