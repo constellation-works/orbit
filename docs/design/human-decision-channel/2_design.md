@@ -103,13 +103,14 @@ per request:
   current field is refused (`answer_not_applicable`) before anything is written, so the task
   stays blocked and the request open. The same card shape serves `proposed_approval` for
   pilot-warning triage, where an option approves or re-pilots the held proposed task.
-  `re_pilot` explicitly submits one pilot even without a field rewrite; while a pilot is
-  pending or running, the answer is refused (`answer_not_applicable`, nothing applied, the
-  request stays open) until that pilot settles. The first routine assessment is automatic. A certified
-  description or acceptance-criteria edit later queues a fresh routine pilot unless a live execution claim or an unresolved failed pilot holds the task; edits to other material or policy never queue one through the routine, but an `--approve-proposed` drain repilots a stale assessment automatically when its certified description/criteria or other material drifted and no live execution claim holds it; delivery waits for a new
-  assessment of edited description/criteria (drain repilot, `orbit task repilot <id>`,
-  `orbit.task.recover` action `repilot`, or task update `repilot: true`). A held warning retains
-  one decision across routine windows until answered or explicitly reassessed.
+  `re_pilot` explicitly submits one pilot even without a field rewrite. While a pilot is
+  pending or running, that explicit answer is refused (`answer_not_applicable`) and the
+  request stays open until the pilot settles. When another answer rewrites the description
+  or criteria and leaves a proposed or backlog task with a stale assessment, Orbit requests
+  a fresh pilot after recording the answer. Delivery waits for the new assessment. If
+  automatic submission fails, the answer stands and the task receives a comment with the
+  reason and the operator command to request a pilot. A held warning retains one decision
+  across routine windows until answered or explicitly reassessed.
 - **Accept a failure handoff:** a block request with a plain requeue option also offers
   **Approve and land** (`land`). This is derived when read, so a request raised just before
   publication and requests stored by older builds gain it without rewriting history.

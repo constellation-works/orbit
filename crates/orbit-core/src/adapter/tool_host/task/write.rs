@@ -218,21 +218,28 @@ pub(super) fn update(
     if !optional_bool_alias(input, &["repilot"])?.unwrap_or(false) {
         return update_without_repilot(runtime, caller, input, operator);
     }
-    runtime.admit_operator_operation("orbit.task.repilot", caller.session_context)?;
+    runtime
+        .admit_operator_operation("orbit.task.repilot", caller.session_context)
+        .map_err(|error| match error {
+            OrbitError::CapabilityDenied(message) => OrbitError::CapabilityDenied(format!(
+                "{message} An operator can run `orbit task repilot <task-id>` on the owning workspace outside a managed activity."
+            )),
+            other => other,
+        })?;
     let id = required_string(input, &["id"], "id")?;
-    if optional_string(input, "status")?
-        .is_some_and(|status| !matches!(status.as_str(), "proposed" | "backlog"))
+    if let Some(status) = optional_string(input, "status")?
+        && !matches!(status.as_str(), "proposed" | "backlog")
     {
-        return Err(OrbitError::InvalidInput(
-            "repilot requires the updated task to remain proposed or backlog".into(),
-        ));
+        return Err(OrbitError::InvalidInput(format!(
+            "`repilot: true` cannot set status to `{status}`. Apply the status edit separately and have an operator run `orbit task repilot {id}` when the task is proposed or backlog."
+        )));
     }
     if let Some(crew) = optional_string(input, "crew")?
         && runtime.is_human_crew(Some(&crew))
     {
-        return Err(OrbitError::InvalidInput(
-            "repilot cannot assign the task to a human crew".into(),
-        ));
+        return Err(OrbitError::InvalidInput(format!(
+            "`repilot: true` cannot assign the task to human crew `{crew}`. Assign an agent crew before asking an operator to run `orbit task repilot {id}`."
+        )));
     }
     let trigger = if caller.session_context.transport.is_some() {
         orbit_types::workflow::JobRunTrigger::mcp()
