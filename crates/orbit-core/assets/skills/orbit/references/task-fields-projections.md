@@ -77,9 +77,11 @@ argument. The `workspace` projection returns the owning registry identity
 
 For ordinary `orbit.task.show`, ordinary `orbit.task.add`, ordinary
 `orbit.task.update`, and `orbit.task.reject`, MCP accepts `fields` as an array
-of task-record field names, or `field` as a single-field alias. The CLI also
-accepts a repeated flag or a comma-separated string. `fields` takes precedence
-when both are supplied. The ordinary task-record projection catalogue is:
+of task-record field names, or `field` as a single-field alias; `fields` takes
+precedence when both are supplied. Only `orbit task show` takes `--fields` on
+the human CLI, as a repeated flag or a comma-separated string. The write
+projections on `add` and `update` are MCP-only, and `reject` is not a CLI verb.
+The ordinary task-record projection catalogue is:
 
 ```text
 id, workspace, parent_id, title, description, acceptance_criteria,
@@ -142,7 +144,9 @@ Ordinary write responses (`orbit.task.add`, `orbit.task.update` without
 append-heavy `comments` and `history`; request those fields explicitly when
 needed. Ordinary write projections use the task-record field catalogue and the
 same shapes above: a `fields` array keys even one field by name, and the `field`
-alias returns its bare value.
+alias returns its bare value. Request them over MCP; `orbit task add` and
+`orbit task update` take no `--fields` flag, so on the CLI read the result back
+with `orbit task show --fields`.
 
 Guarded writes (`request_id` on `orbit.task.add` or `orbit.task.update`) follow
 mode-specific projection rules:
