@@ -256,6 +256,8 @@ impl OrbitRuntime {
                 .and_then(|step| step.error_code.as_deref())
                 .and_then(DeliveryRefusal::from_error_code)
                 .is_some_and(crate::application::job::pr_repair::handed_back_hold);
+        let held_handback = held_handback
+            || (repair.is_some() && crate::application::job::pr_repair::auto_fix_stopped(&source));
         // A host-manager stop is held, and the interruption note tells the
         // operator to resume it. The alive-owner guard below covers it too:
         // an observer writes the hold, the same way it writes `interrupted`.

@@ -248,6 +248,7 @@ impl OrbitRuntime {
                     "blocker": repair["blocker"],
                     "hold_code": repair.get("hold_code").cloned().unwrap_or(Value::Null),
                     "head_sha": repair["head_sha"],
+                    "reason": repair.get("reason").cloned().unwrap_or(Value::Null),
                     "source_run_id": repair["source_run_id"],
                     "drain_run_id": repair["drain_run_id"],
                 }))

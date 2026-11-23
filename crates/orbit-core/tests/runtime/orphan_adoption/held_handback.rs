@@ -228,8 +228,91 @@ fn a_check_runs_absent_hold_is_handed_back_once_the_head_reports_a_check() {
     );
 }
 
+fn auto_fix_stop_waits_for_green_on_published_head_then_resumes_completion() {
+    let fx = fixture();
+    let leaf = fx.delivered_leaf(
+        10678,
+        "done",
+        Shelf::Review,
+        LeafEnd::Held("auto_fix_stopped"),
+    );
+    // A skipped reviewer push may leave a null output; the initial push
+    // remains the published head in that case.
+    let mut state = fx.jobs.read_run_state(&leaf.run).unwrap().unwrap();
+    state.record_pipeline_output("landing_push", Value::Null);
+    fx.jobs.write_run_state(&leaf.run, &state).unwrap();
+    let drain = fx.drain();
+    fx.step(&drain, 0, "adopt_orphans", JobRunState::Success, None);
+    fx.blocked(
+        &leaf,
+        "published-head",
+        "orbit-bot",
+        false,
+        &["Test shard 13"],
+    );
+    let red = fx.pass(&drain, "done", true);
+    assert_eq!(
+        repair_skip(&red, &leaf.task).as_deref(),
+        Some("auto_fix_stopped")
+    );
+    fx.report_required_checks(
+        &leaf,
+        "published-head",
+        "orbit-bot",
+        &["Check"],
+        &["Test shard 13"],
+    );
+    let pending = fx.pass(&drain, "done", true);
+    assert_eq!(
+        repair_skip(&pending, &leaf.task).as_deref(),
+        Some("auto_fix_stopped")
+    );
+    fx.report_required_checks(
+        &leaf,
+        "other-head",
+        "orbit-bot",
+        &["Check", "Test shard 13"],
+        &[],
+    );
+    let moved = fx.pass(&drain, "done", true);
+    assert_eq!(
+        repair_skip(&moved, &leaf.task).as_deref(),
+        Some("publication_identity_changed")
+    );
+    fx.report_required_checks(
+        &leaf,
+        "published-head",
+        "orbit-bot",
+        &["Check", "Test shard 13"],
+        &[],
+    );
+    let green = fx.pass(&drain, "done", true);
+    let entry = started(&green, &leaf.task).unwrap_or_else(|| panic!("{green}"));
+    assert_eq!(entry["reason"], "checks_green_after_hold");
+    let readiness = fx
+        .runtime
+        .workspace_auto_readiness(&[], None, 10, &[])
+        .unwrap();
+    assert!(
+        readiness["out_of_run_auto_fix"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|entry| entry["state"] == "handed_back"
+                && entry["reason"] == "checks_green_after_hold"
+                && entry["pr_number"] == "10678"),
+        "{readiness}"
+    );
+    let retries = fx.retries(&leaf.run);
+    assert_eq!(retries.len(), 1);
+    let state = fx.jobs.read_run_state(&retries[0].run_id).unwrap().unwrap();
+    assert_eq!(state.next_step_index, 4);
+    assert_eq!(retries[0].input.as_ref().unwrap()["completion"], "done");
+}
+
 crate::scenario_table!(
     held_handback_scenarios,
+    auto_fix_stop_waits_for_green_on_published_head_then_resumes_completion,
     held_delivery_leaves_are_handed_back_to_completion,
     a_lineage_that_keeps_holding_on_the_same_head_stops_at_the_ceiling,
     a_check_runs_absent_hold_is_handed_back_once_the_head_reports_a_check,

@@ -1,6 +1,6 @@
 use super::super::held::{
-    HELD_HANDBACK_CEILING, handed_back_hold, held_backoff, held_backoff_until, held_handbacks,
-    held_refusal,
+    HELD_HANDBACK_CEILING, auto_fix_stopped, handed_back_hold, held_backoff, held_backoff_until,
+    held_handbacks, held_refusal,
 };
 use super::super::ledger::ledger_admits;
 use super::pass_types::{BlockerRead, CLEAN_RECHECK, Repair};
@@ -54,9 +54,11 @@ impl OrbitRuntime {
         // is an interruption recorded as a hold and is handed back the same
         // way. Every other hold keeps its own next step.
         let mut operator_stopped = false;
+        let mut auto_fix_hold = false;
         let held = if run.state == JobRunState::Held {
             let refusal = match self.stores().jobs().get_job_run(&run.run_id) {
                 Ok(Some(full)) => {
+                    auto_fix_hold = auto_fix_stopped(&full);
                     operator_stopped = orbit_types::workflow::is_operator_stopped(
                         full.state,
                         full.steps
@@ -72,7 +74,8 @@ impl OrbitRuntime {
             };
             match refusal {
                 _ if operator_stopped => None,
-                Some(refusal) if handed_back_hold(refusal) => Some(refusal),
+                Some(refusal) if handed_back_hold(refusal) => Some(refusal.error_code()),
+                _ if auto_fix_hold => Some("auto_fix_stopped"),
                 refusal => {
                     return Verdict::Ignore(
                         "leaf_held",
@@ -90,7 +93,7 @@ impl OrbitRuntime {
         } else {
             None
         };
-        observation.hold_code = held.map(DeliveryRefusal::error_code);
+        observation.hold_code = held;
         if !ended_at_review
             && held.is_none()
             && !operator_stopped
@@ -177,6 +180,7 @@ impl OrbitRuntime {
             // An operator asking about one task is not held to the drain's
             // backoff; the ceiling still binds both.
             if !reads.fresh
+                && !auto_fix_hold
                 && let Some(until) = held_backoff_until(
                     run.finished_at,
                     held_backoff(&history, &pr_number, refusal),
@@ -184,11 +188,11 @@ impl OrbitRuntime {
                 )
             {
                 return skip(
-                    refusal.error_code(),
+                    refusal,
                     format!(
                         "its delivery run {} held as {}; it is handed back no earlier than {}",
                         run.run_id,
-                        refusal.error_code(),
+                        refusal,
                         until.to_rfc3339()
                     ),
                 );
@@ -244,14 +248,25 @@ impl OrbitRuntime {
                 "the run was started with --complete; this drain was not".to_string(),
             );
         }
-        let (number, head) = match self.read_run_state(&run.run_id) {
+        let (number, head, published_sha) = match self.read_run_state(&run.run_id) {
             Ok(Some(state)) => {
                 let opened = state.pipeline.get("pr_open").unwrap_or(&Value::Null);
                 match (
                     opened.get("pr_number").and_then(Value::as_str),
                     opened.get("head").and_then(Value::as_str),
                 ) {
-                    (Some(number), Some(head)) => (number.to_string(), head.to_string()),
+                    (Some(number), Some(head)) => (
+                        number.to_string(),
+                        head.to_string(),
+                        state
+                            .pipeline
+                            .get("landing_push")
+                            .filter(|push| !push.is_null())
+                            .or_else(|| state.pipeline.get("push"))
+                            .and_then(|push| push.get("local_sha"))
+                            .and_then(Value::as_str)
+                            .map(str::to_string),
+                    ),
                     _ => {
                         if Self::run_published_failure_handoff_pr(&state, task_id, &pr_number) {
                             return skip(
@@ -383,6 +398,25 @@ impl OrbitRuntime {
         // A blocker is repaired through the ledger, whether the leaf stopped
         // or held. A held leaf with none is handed back for completion to
         // read the forge again, within its own ceiling.
+        // An auto-fix stop is reconsidered only after positive, complete check
+        // evidence. Red, pending or absent checks must not trigger another repair.
+        if auto_fix_hold && published_sha.as_deref() != Some(blockers.head_sha.as_str()) {
+            return skip(
+                "publication_identity_changed",
+                format!("#{number} no longer matches the held run's published head"),
+            );
+        }
+        if auto_fix_hold
+            && (blockers.conflicting
+                || !blockers.failed_required_checks.is_empty()
+                || !blockers.pending_required_checks.is_empty()
+                || blockers.passed_required_checks.is_empty())
+        {
+            return skip(
+                "auto_fix_stopped",
+                format!("#{number} does not yet have all required checks green"),
+            );
+        }
         let hold = match (blocker, held) {
             (Some(blocker), _) => {
                 observation.blocker = Some(blocker);
@@ -396,30 +430,28 @@ impl OrbitRuntime {
                 // [ORB-24457] A head that still reports no required check run
                 // has nothing for completion to watch. Keep the hold visible
                 // under its code and do not spend a hand-back on it.
-                if refusal == DeliveryRefusal::CheckRunsAbsent
+                if refusal == DeliveryRefusal::CheckRunsAbsent.error_code()
                     && blockers.pending_required_checks.is_empty()
                     && blockers.passed_required_checks.is_empty()
                 {
                     return skip(
-                        refusal.error_code(),
+                        refusal,
                         format!(
                             "#{number} head {} still reports no required check run, so the {} \
                              hold stays until one does; this pass spends no hand-back",
-                            blockers.head_sha,
-                            refusal.error_code()
+                            blockers.head_sha, refusal
                         ),
                     );
                 }
                 let handed_back = held_handbacks(&history, &number, &blockers.head_sha, refusal);
                 if handed_back >= HELD_HANDBACK_CEILING {
                     return skip(
-                        refusal.error_code(),
+                        refusal,
                         format!(
                             "#{number} was handed back {handed_back} times on {} and its delivery \
                              held again as {}, the ceiling of {HELD_HANDBACK_CEILING} per head \
                              and hold; a person decides it now",
-                            blockers.head_sha,
-                            refusal.error_code()
+                            blockers.head_sha, refusal
                         ),
                     );
                 }
@@ -448,7 +480,10 @@ impl OrbitRuntime {
             "drain_run_id": authority.drain_run_id,
         });
         if let Some(hold) = hold {
-            marker["hold_code"] = json!(hold.error_code());
+            marker["hold_code"] = json!(hold);
+            if hold == "auto_fix_stopped" {
+                marker["reason"] = json!("checks_green_after_hold");
+            }
         }
         Verdict::Repair(Box::new(Repair {
             task_id: task_id.to_string(),

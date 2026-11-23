@@ -2,7 +2,7 @@ use super::super::ledger::OutOfRunStart;
 use super::pass_types::Repair;
 use super::{PassReads, RepairAuthority, Verdict};
 use crate::OrbitRuntime;
-use orbit_types::workflow::{DeliveryRefusal, JobRun, PrAutoFixBlocker};
+use orbit_types::workflow::{JobRun, PrAutoFixBlocker};
 use serde_json::json;
 
 impl OrbitRuntime {
@@ -71,7 +71,7 @@ impl OrbitRuntime {
             task_id = %repair.task_id,
             pr = %repair.pr_number,
             blocker = repair.blocker.map(PrAutoFixBlocker::as_str),
-            hold_code = repair.hold.map(DeliveryRefusal::error_code),
+            hold_code = repair.hold,
             drain_run_id = authority.drain_run_id,
             "handed a pull request back to its delivery for an auto-fix",
         );
@@ -81,7 +81,7 @@ impl OrbitRuntime {
                 pr_number: repair.pr_number.clone(),
                 head_sha: repair.head_sha.clone(),
                 blocker: repair.blocker,
-                hold_code: repair.hold.map(|hold| hold.error_code().to_string()),
+                hold_code: repair.hold.map(str::to_string),
                 source_run_id: run.run_id.clone(),
                 resumed_run_id: invoke.run_id.clone(),
                 drain_run_id: authority.drain_run_id.map(str::to_string),
@@ -94,7 +94,8 @@ impl OrbitRuntime {
             "pr_number": repair.pr_number,
             "head_sha": repair.head_sha,
             "blocker": repair.blocker.map(PrAutoFixBlocker::as_str),
-            "hold_code": repair.hold.map(DeliveryRefusal::error_code),
+            "hold_code": repair.hold,
+            "reason": repair.marker.get("reason"),
         }))
     }
 }

@@ -2081,7 +2081,14 @@ For the full persisted pass, including every skip and any `pass_error`, run
   detail says the hand-back ceiling is not spent. Once spent, resolve it as the
   run-debugging delivery-refusal table describes.
 
-**Held leaves.** A task in `review` whose newest leaf ended `held` with its pull
+**Held leaves.** An `auto_fix_stopped` hold is handed back once the same
+published head has at least one passed required check and no pending or failed
+required checks or conflict. Readiness reports `checks_green_after_hold`.
+Completion still checks the current review, required checks and branch protection;
+a changed head is refused. The hand-back ceiling applies; this green-check hand-back does not wait for the
+held-leaf backoff.
+
+A task in `review` whose newest leaf ended `held` with its pull
 request open is handed back the same way when the hold is one a fresh forge
 read can clear: `delivery_check_evidence_inconclusive`,
 `delivery_completion_budget_expired`, `delivery_evidence_stale`,
