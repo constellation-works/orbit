@@ -2,7 +2,7 @@ use std::str::FromStr;
 
 use axum::body::Body;
 use axum::http::uri::Authority;
-use axum::http::{HeaderValue, Method, Request, StatusCode, header};
+use axum::http::{HeaderMap, HeaderValue, Method, Request, StatusCode, header};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Json, Response};
 use serde_json::json;
@@ -18,7 +18,9 @@ use url::Url;
 ///    `127.0.0.1`, `[::1]`, with an explicit port or the implicit HTTP
 ///    default). Missing or unparsable Host is refused. Browsers omit Origin
 ///    on same-origin GET, so without this gate a rebound hostname can read
-///    every `/api` GET (ORB-12506) and `/healthz?detailed=true` (ORB-12531).
+///    every `/api` GET (ORB-12506), `/healthz?detailed=true` (ORB-12531) and
+///    the dashboard shell and assets (STD-05 §R16). [`require_localhost_host`]
+///    applies this gate alone to routes with no `Origin` policy of their own.
 /// 2. When Origin is present, or the method is unsafe, Origin must also
 ///    match that Host as a loopback `http` origin (ORB-11613 CSRF).
 /// 3. When the browser supplies `Sec-Fetch-Site`, it must say `same-origin`
@@ -27,12 +29,10 @@ use url::Url;
 ///    The header is absent for direct CLI/curl requests and some older
 ///    browsers; those requests retain the Host and Origin checks above.
 pub(crate) async fn require_localhost_origin(request: Request<Body>, next: Next) -> Response {
-    if request.headers().get_all(header::HOST).iter().count() != 1
-        || request.headers().get_all(header::ORIGIN).iter().count() > 1
-    {
+    if request.headers().get_all(header::ORIGIN).iter().count() > 1 {
         return forbidden_cross_origin();
     }
-    let Some(host) = parse_loopback_authority(request.headers().get(header::HOST)) else {
+    let Some(host) = approved_host(request.headers()) else {
         return forbidden_cross_origin();
     };
 
@@ -64,12 +64,32 @@ pub(crate) async fn require_localhost_origin(request: Request<Body>, next: Next)
     next.run(request).await
 }
 
+/// Gate 1 alone (see [`require_localhost_origin`]): refuse a request whose
+/// `Host` is missing, repeated, unparsable or not an approved loopback
+/// authority. The dashboard shell and embedded assets use it, since they carry
+/// no `Origin` policy of their own and a rebound `Host` must not read them.
+pub(crate) async fn require_localhost_host(request: Request<Body>, next: Next) -> Response {
+    if approved_host(request.headers()).is_none() {
+        return forbidden_cross_origin();
+    }
+    next.run(request).await
+}
+
 fn forbidden_cross_origin() -> Response {
     (
         StatusCode::FORBIDDEN,
         Json(json!({"error": "cross-origin requests not allowed"})),
     )
         .into_response()
+}
+
+/// Gate 1 for the request's `Host`: exactly one header, naming an approved
+/// loopback authority. Returns that authority.
+fn approved_host(headers: &HeaderMap) -> Option<Authority> {
+    if headers.get_all(header::HOST).iter().count() != 1 {
+        return None;
+    }
+    parse_loopback_authority(headers.get(header::HOST))
 }
 
 fn parse_loopback_authority(host: Option<&HeaderValue>) -> Option<Authority> {

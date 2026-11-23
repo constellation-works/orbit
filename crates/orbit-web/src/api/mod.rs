@@ -47,7 +47,7 @@ mod tasks;
 mod workspaces;
 
 use helpers::*;
-pub(crate) use origin::{nosniff_json_responses, require_localhost_origin};
+pub(crate) use origin::{nosniff_json_responses, require_localhost_host, require_localhost_origin};
 pub(super) use routes::{request_shutdown, router};
 
 #[cfg(test)]
