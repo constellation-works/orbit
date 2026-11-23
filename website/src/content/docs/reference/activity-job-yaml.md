@@ -442,6 +442,7 @@ Until a condition holds:
 - id: drain
   loop:
     max_iterations: 6000
+    fail_when_exhausted: true
     break_when: "{{ steps.refill.output.done }} == true"
     steps:
       - id: window
@@ -458,8 +459,9 @@ Until a condition holds:
 | `break_when` | A [`when`](#when-conditional-steps) expression, checked after each full pass. |
 | `timeout_seconds` | A template that renders to a non-negative number of seconds. It caps the loop's elapsed time without interrupting a running pass. |
 | `interval_seconds` | The wait between passes that did not break, capped by the remaining timeout. |
+| `fail_when_exhausted` | `false` by default. When `break_when` is set but does not hold before the planned iterations finish, fail the loop with `loop_exhausted`. A timeout does not trigger this failure. |
 
-A failed body step ends the loop and fails the step. A loop records `{ iterations, broke, timed_out, last_output }` under its step id. Reaching `max_iterations` without breaking is not a failure: the step succeeds with `broke: false`.
+A failed body step ends the loop and fails the step. A loop records `{ iterations, broke, timed_out, last_output }` under its step id. When `break_when` is set but never holds, finishing the planned iterations succeeds with `broke: false` by default; set `fail_when_exhausted: true` to fail with `loop_exhausted`. A timeout still succeeds, even when failure on exhaustion is enabled. The shipped pull drain opts in, so reaching its 6000-iteration ceiling without `break_when` holding fails the run.
 
 ## Input and output wiring
 
