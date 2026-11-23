@@ -93,9 +93,9 @@ Confirm the marker before any later step: `cat /etc/orbit-lease-qa-guest` prints
 
 ## Case A — warmed timestamp, unsupported policy
 
-Still as root in the guest, install a password-required rule with a five-minute cache. The
-upstream default is 15 minutes; pinning 5 keeps the warmed timestamp inside the window
-whatever default the guest package was built with. The record stays the package default,
+Still as root in the guest, install a password-required rule with a five-minute cache.
+Pinning the timeout keeps the warmed timestamp inside the window whatever default the
+guest package was built with. The record stays the package default,
 which is one record per terminal. Do not set classic sudo's `timestamp_type=global` or turn
 `tty_tickets` off in this case: that would widen the cache, and it is not the supported
 policy. This fragment is ordinary password-protected `sudo`, which the design does not
