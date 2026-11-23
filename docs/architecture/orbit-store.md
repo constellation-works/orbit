@@ -23,6 +23,6 @@ Enforced by `scripts/check-dependency-direction.sh`; table in `ARCHITECTURE.md`.
 
 ## Entry points
 
-Start reading at `crates/orbit-store/src/lib.rs`; internals in `ARCHITECTURE.md` (orbit-store internals).
+Start reading at [`crates/orbit-store/src/lib.rs`](../../crates/orbit-store/src/lib.rs). The rules for how the store's modules depend on each other (private drivers, `repository` invariants, explicit `workflow` operations, `compose` construction) are in [Crates in ARCHITECTURE.md](../../ARCHITECTURE.md#crates). Task writes commit through one boundary: [task commit boundary](../design-patterns/task_commit_boundary.md).
 
 Design intent: [docs/design/state-compatibility/](../../docs/design/state-compatibility/) — this page describes the code as it is; the design folder holds intent.
