@@ -601,7 +601,7 @@
     },
     {
       "name": "orbit_task_add",
-      "description": "Create a task and return its JSON; rules are in the installed Orbit skill `references/task-fields.md`.",
+      "description": "Create a task and return its JSON; rules are in the installed Orbit skill `references/task-fields-projections.md` (selectors, status) and `references/task-fields-tools.md` (grants).",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -881,7 +881,7 @@
     },
     {
       "name": "orbit_task_list",
-      "description": "List tasks as {tasks, total, truncated}; rules are in the installed Orbit skill `references/task-fields.md`.",
+      "description": "List tasks as {tasks, total, truncated}; rules are in the installed Orbit skill `references/task-fields-projections.md`.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -1107,7 +1107,7 @@
     },
     {
       "name": "orbit_task_show",
-      "description": "Fetch a task as JSON by globally unique `id`; optional `workspace` is a fail-closed filter. Use `fields` (alias `field`) for projections, or `field: \"delivery\"` for bounded commit/landing evidence. Projection, routing and delivery details: installed Orbit skill `references/task-fields.md`.",
+      "description": "Fetch a task as JSON by globally unique `id`; optional `workspace` is a fail-closed filter. Use `fields` (alias `field`) for projections, or `field: \"delivery\"` for bounded commit/landing evidence. Projection, routing and delivery details: installed Orbit skill `references/task-fields-projections.md`.",
       "inputSchema": {
         "type": "object",
         "properties": {
@@ -1171,7 +1171,7 @@
     },
     {
       "name": "orbit_task_update",
-      "description": "Update a task and return its JSON; rules are in the installed Orbit skill `references/task-fields.md`.",
+      "description": "Update a task and return its JSON; rules are in the installed Orbit skill `references/task-fields-projections.md` (Human CLI task update).",
       "inputSchema": {
         "type": "object",
         "properties": {
