@@ -159,25 +159,43 @@ attempts. Each item names the durable run/event and failed-step identifiers,
 the recovery activity, outcome, failure phase, and a redacted bounded
 diagnostic. `limit` and `truncated` say when older attempts were omitted.
 
-An item's `outcome` says only whether the recovery activity completed. Whether
-the failed step was then retried is `retry_admitted`, decided by `decision`:
-the decision file `step_failure_recovery` writes under the worktree's
-`.orbit/tmp/step-recovery/`, never the `recovered` field of its response.
+An item's `outcome` says only whether the recovery activity completed. It is
+not the decision-file verdict, the final host admission, or the retry's own
+result. Those three records stay separate.
+
+The decision-file verdict is the file `step_failure_recovery` writes under the
+worktree's `.orbit/tmp/step-recovery/`. Read it from `decision.status` and
+`decision.verdict`, never from the `recovered` field of the activity response.
 `decision.status` is `verified` (with `verdict` `retry`, `not_recovered` or
-`external_blocker`), `absent` (no file: admits a retry only when the engine
-observes a worktree, base, or validation-environment change since the failure),
-`invalid` (malformed, stale, for another run/step/attempt, or an unsafe path) or
-`unavailable` (the host could not read it); `invalid` and `unavailable` never
-admit a retry and `detail` names why. One narrow exception applies to an
-admitted `--auto-fix` check repair: when `step_failure_recovery` leaves no
-worktree delivery edit and writes no scope record, an `absent` or verified
-`not_recovered` decision still admits one post-recovery check-rerun attempt once
-the host records the no-edit rerun (`decision` preserves the decision file's
-actual `status` and `verdict`, and `retry_admitted` is `true`; if the no-edit
-check or rerun ledger write refuses, `retry_admitted` stays `false` and no
-retry runs). Older runs and other recovery activities carry no `decision`. The
-retried step's own result is the `step.post_recovery_attempt` audit event and
-the `orbit.job.step_post_recovery_attempt` log line.
+`external_blocker`), `absent` (no file), `invalid` (malformed, stale, for
+another run/step/attempt, or an unsafe path) or `unavailable` (the host could
+not read it). `detail` names why a file was rejected or what an absent file
+observed. `invalid` and `unavailable` never admit a retry.
+
+Final host admission is `retry_admitted`. It starts from that verdict: a
+verified `retry` admits a post-recovery attempt, an absent file admits one
+only when the engine observes a worktree, base, or validation-environment
+change since the failure, and every other verdict does not. The host can still
+change that admission after the file is read, without rewriting the verdict.
+A verified `retry` whose repair the host refuses to commit — a protected path,
+a non-regular file, an unexplained CI-repair path, a no-diff route, or a
+candidate already under review — keeps `decision.verdict` as `retry` and sets
+`retry_admitted` to `false`. The step returns that host refusal
+(`recovery_commit_refused:…`) with the original failure, and the no-retry
+warning names host admission and the same refusal, not the decision file. One
+other host adjustment applies to an admitted `--auto-fix` check repair: when
+`step_failure_recovery` leaves no worktree delivery edit and writes no scope
+record, an `absent` or verified `not_recovered` decision still admits one
+post-recovery check-rerun attempt once the host records the no-edit rerun
+(`decision` preserves the decision file's actual `status` and `verdict`, and
+`retry_admitted` is `true`; if the no-edit check or rerun ledger write
+refuses, `retry_admitted` stays `false` and no retry runs). Older runs and
+other recovery activities carry no `decision`.
+
+The retry outcome is recorded separately, and only when an attempt ran: the
+`step.post_recovery_attempt` audit event and the
+`orbit.job.step_post_recovery_attempt` log line. It is absent when the
+decision file or final host admission refused the attempt.
 
 An implementer response refused only for its shape (such as a bare file name in
 `task_artifacts`) is corrected once inside the implement step: the
@@ -484,7 +502,7 @@ orbit run events <run_id> --type cli.invocation.finished --json
 orbit run events <run_id> --json | rg 'failed|error|recovery|cli.invocation|step.started|step.finished|activity.started|activity.finished|run.finished'
 ```
 
-Interpretation: `run.started`/`run.finished` define the overall lifecycle; `step.started`/`step.finished` are job step boundaries; `activity.started`/`activity.finished` identify activity execution and deterministic vs agent-loop type; `cli.invocation.started`/`.finished` identify provider command, model, cwd, timeout, exit code, stdout/stderr blob refs; `step.recovery_attempted` tells whether recovery ran and completed and, in `decision`, whether its written decision admitted the retry; `step.post_recovery_attempt` is that retry's outcome — a failed recovery can be a secondary problem, diagnose the original failed step first.
+Interpretation: `run.started`/`run.finished` define the overall lifecycle; `step.started`/`step.finished` are job step boundaries; `activity.started`/`activity.finished` identify activity execution and deterministic vs agent-loop type; `cli.invocation.started`/`.finished` identify provider command, model, cwd, timeout, exit code, stdout/stderr blob refs; `step.recovery_attempted` tells whether recovery ran and completed; `decision` is the decision-file verdict, and `retry_admitted` is the final host admission (the host can still refuse a verified `retry`); `step.post_recovery_attempt` is the separately recorded retry outcome, absent when no attempt ran — a failed recovery can be a secondary problem, diagnose the original failed step first.
 
 ## Read Logs And Blobs
 

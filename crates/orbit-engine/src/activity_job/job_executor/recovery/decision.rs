@@ -33,6 +33,9 @@ pub(super) struct PendingRecoveryAttempt {
     error_message: Option<String>,
     output: Option<Value>,
     decision: Option<StepRecoveryDecisionRecord>,
+    /// Display of the host guard that vetoed a post-recovery attempt the
+    /// decision file had admitted. The same text prefixes the returned error.
+    host_refusal: Option<String>,
 }
 
 impl PendingRecoveryAttempt {
@@ -45,11 +48,13 @@ impl PendingRecoveryAttempt {
     }
 
     /// Record that a host guard refused the post-recovery attempt while
-    /// preserving the decision file's outcome.
-    pub(super) fn refuse_retry(&mut self) {
+    /// preserving the decision file's outcome. `refusal` is the guard's
+    /// display, the same text the returned step error starts with.
+    pub(super) fn refuse_retry(&mut self, refusal: impl std::fmt::Display) {
         if let Some(decision) = &mut self.decision {
             decision.retry_admitted = false;
         }
+        self.host_refusal = Some(refusal.to_string());
     }
 
     pub(super) fn emit(self, ctx: &ExecCtx<'_>) {
@@ -59,15 +64,32 @@ impl PendingRecoveryAttempt {
                 .as_ref()
                 .is_none_or(|decision| decision.retry_admitted);
         if let Some(decision) = self.decision.as_ref().filter(|_| !retry_admitted) {
-            tracing::warn!(
-                target: "orbit.engine.job_executor",
-                run_id = %ctx.run_id,
-                failed_step_id = %self.step_id,
-                decision_status = %decision.status,
-                decision_verdict = decision.verdict.as_deref(),
-                decision_detail = decision.detail.as_deref(),
-                "recovery decision admits no post-recovery attempt; returning the original failure"
-            );
+            if let Some(refusal) = self.host_refusal.as_deref() {
+                // The decision file asked for a retry. The host vetoed the
+                // attempt afterwards, so the warning must name that veto
+                // rather than the verified decision.
+                tracing::warn!(
+                    target: "orbit.engine.job_executor",
+                    run_id = %ctx.run_id,
+                    failed_step_id = %self.step_id,
+                    decision_status = %decision.status,
+                    decision_verdict = decision.verdict.as_deref(),
+                    decision_detail = decision.detail.as_deref(),
+                    retry_admitted,
+                    host_refusal = refusal,
+                    "host admission refused the post-recovery attempt; returning the original failure"
+                );
+            } else {
+                tracing::warn!(
+                    target: "orbit.engine.job_executor",
+                    run_id = %ctx.run_id,
+                    failed_step_id = %self.step_id,
+                    decision_status = %decision.status,
+                    decision_verdict = decision.verdict.as_deref(),
+                    decision_detail = decision.detail.as_deref(),
+                    "recovery decision admits no post-recovery attempt; returning the original failure"
+                );
+            }
         }
         emit_job_event_lossy(
             &ctx.audit,
@@ -187,6 +209,7 @@ pub(super) fn attempt_recovery_activity(
         error_message,
         output,
         decision,
+        host_refusal: None,
     };
     (admission, Some(pending))
 }

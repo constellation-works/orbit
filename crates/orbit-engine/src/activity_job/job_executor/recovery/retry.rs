@@ -195,7 +195,7 @@ pub(in crate::activity_job::job_executor) fn recover_or_return_original(
                     },
                     Err(refusal) => {
                         if let Some(mut audit) = pending_audit.take() {
-                            audit.refuse_retry();
+                            audit.refuse_retry(&refusal);
                             audit.emit(ctx);
                         }
                         return failure.into_refused_repair(&refusal);
@@ -208,7 +208,7 @@ pub(in crate::activity_job::job_executor) fn recover_or_return_original(
                     if let Err(error) = bind_recovery_context(step, ctx, &mut bound) {
                         let refusal = RecoveryCommitRefusal::Uncommittable(error.to_string());
                         if let Some(mut audit) = pending_audit.take() {
-                            audit.refuse_retry();
+                            audit.refuse_retry(&refusal);
                             audit.emit(ctx);
                         }
                         return failure.into_refused_repair(&refusal);
@@ -297,7 +297,7 @@ pub(in crate::activity_job::job_executor) fn recover_or_return_original(
                 recovery_model.as_deref(),
             ) {
                 if let Some(mut audit) = pending_audit.take() {
-                    audit.refuse_retry();
+                    audit.refuse_retry(&refusal);
                     audit.emit(ctx);
                 }
                 return failure.into_refused_repair(&refusal);
