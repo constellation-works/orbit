@@ -6,7 +6,10 @@
 //! lands nothing. Any conflict is refused with the conflicting paths and
 //! changes nothing; a head that already contains the base tip is a no-op.
 
+use std::collections::HashMap;
+
 use orbit_common::OrbitError;
+use orbit_store::contracts::AuditEventFilter;
 use orbit_types::task::TaskStatus;
 use orbit_types::telemetry::AuditEventStatus;
 use serde::Serialize;
@@ -85,6 +88,75 @@ fn remap_landing_refusal(id: &str, error: OrbitError) -> OrbitError {
 }
 
 impl OrbitRuntime {
+    /// Successful refresh edges from the observed head back to the published
+    /// head, in newest-first order. Completion independently checks each edge
+    /// against Git before using it as delivery evidence.
+    pub(crate) fn audited_delivery_refreshes(
+        &self,
+        task_id: &str,
+        pr_number: &str,
+        head_branch: &str,
+        base_branch: &str,
+        published: &str,
+        reported: &str,
+    ) -> Result<Vec<String>, OrbitError> {
+        let mut filter = AuditEventFilter {
+            target_type: Some("pull_request".into()),
+            target_id: Some(pr_number.into()),
+            workspace_id: Some(self.workspace_id()?),
+            role: Some("system".into()),
+            status: Some(AuditEventStatus::Success),
+            limit: 100,
+            ..Default::default()
+        };
+        let mut current = reported.to_string();
+        let mut heads = Vec::new();
+        let mut parents = HashMap::new();
+        loop {
+            let rows = self.list_audit_events_filtered(&filter)?;
+            for row in &rows {
+                if row.command != PR_REFRESH_AUDIT_COMMAND
+                    || row.subcommand.as_deref() != Some("updated")
+                    || row.task_id.as_deref() != Some(task_id)
+                {
+                    continue;
+                }
+                let Some(detail) = row
+                    .arguments_json
+                    .as_deref()
+                    .and_then(|json| serde_json::from_str::<Value>(json).ok())
+                else {
+                    continue;
+                };
+                if detail["head_branch"].as_str() != Some(head_branch)
+                    || detail["base_branch"].as_str() != Some(base_branch)
+                {
+                    continue;
+                }
+                if let (Some(previous), Some(next)) =
+                    (detail["head_sha"].as_str(), detail["new_head_sha"].as_str())
+                    && previous != next
+                {
+                    parents
+                        .entry(next.to_string())
+                        .or_insert_with(|| previous.to_string());
+                }
+                // The forge writes and their audit rows can finish in different
+                // orders. Follow the exact SHA edges, not insertion order.
+                while let Some(previous) = parents.remove(&current) {
+                    heads.push(std::mem::replace(&mut current, previous));
+                    if current == published {
+                        return Ok(heads);
+                    }
+                }
+            }
+            if rows.len() < filter.limit {
+                return Ok(Vec::new());
+            }
+            filter.before_id = rows.last().map(|row| row.id);
+        }
+    }
+
     /// Bring the held (`blocked`) or `review` task `id`'s one open Orbit
     /// delivery pull request up to the tip of its base branch as one
     /// conflict-free merge commit, starting its required checks.

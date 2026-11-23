@@ -215,6 +215,7 @@ fn drive_pr_to_merged_observed<H: RuntimeHost + ?Sized>(
         head_lag,
         base_candidate,
         base_adopted,
+        audited_refresh_adopted: false,
         reviewed_head_sha,
         watch_only,
         unsettled_polls,

@@ -1077,6 +1077,26 @@ impl RuntimeHost for OrbitRuntime {
         OrbitRuntime::refresh_run_delivery_pull_request(self, request)
     }
 
+    fn audited_delivery_refreshes(
+        &self,
+        task_id: &str,
+        pr_number: &str,
+        head_branch: &str,
+        base_branch: &str,
+        published: &str,
+        reported: &str,
+    ) -> Result<Vec<String>, OrbitError> {
+        OrbitRuntime::audited_delivery_refreshes(
+            self,
+            task_id,
+            pr_number,
+            head_branch,
+            base_branch,
+            published,
+            reported,
+        )
+    }
+
     fn admit_ci_rerun(
         &self,
         task_ids: &[String],

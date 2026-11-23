@@ -38,6 +38,10 @@ impl Store {
             conditions.push(format!("target_type = ?{}", param_values.len() + 1));
             param_values.push(Box::new(target_type.clone()));
         }
+        if let Some(ref target_id) = filter.target_id {
+            conditions.push(format!("target_id = ?{}", param_values.len() + 1));
+            param_values.push(Box::new(target_id.clone()));
+        }
         if let Some(ref status) = filter.status {
             conditions.push(format!("status = ?{}", param_values.len() + 1));
             param_values.push(Box::new(status.to_string()));

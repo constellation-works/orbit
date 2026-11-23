@@ -73,6 +73,11 @@ impl DeliveryPin {
         self.head.as_deref()
     }
 
+    /// The target branch this run published against, if recorded.
+    pub(in crate::executor::automation::vcs) fn base(&self) -> Option<&str> {
+        self.base.as_deref()
+    }
+
     /// The exact head replaced by this run's verified push, if recorded.
     pub(in crate::executor::automation::vcs) fn previous_candidate_sha(&self) -> Option<&str> {
         self.previous_candidate_sha.as_deref()
@@ -118,8 +123,8 @@ impl DeliveryPin {
 
     /// The full pinned identity, including the head commit.
     ///
-    /// Checked before a merge or auto-merge is requested, so a head this run
-    /// did not publish never reaches the provider. Completion also sends this
+    /// Checked before a merge or auto-merge is requested. Only the publication
+    /// or a verified replacement reaches the provider. Completion also sends this
     /// SHA to the synchronous provider mutation, which refuses a head that
     /// moves after the read. The owner landing consumer checks the same
     /// identity on every poll [ORB-12499].

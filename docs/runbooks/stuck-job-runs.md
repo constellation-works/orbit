@@ -2141,8 +2141,8 @@ For the full persisted pass, including every skip and any `pass_error`, run
   and `task_moved`: a later pass tries again.
 - `publication_identity_changed`: the pull request no longer matches the head
   the held run published in its newest completion round, including a re-review
-  republication. A replacement head on the same branch is neither repaired nor
-  handed back, whether its checks are red, green or it conflicts;
+  republication, or an Orbit-audited refresh of that head. Other replacement
+  heads stay outside the held run's repair authority;
 - `completion_held`: a `completion.hold` rule keeps the held task in review
   for a person;
 - a delivery hold code, such as `delivery_check_evidence_inconclusive`: a held
@@ -2156,7 +2156,7 @@ For the full persisted pass, including every skip and any `pass_error`, run
 
 **Held leaves.** A held leaf with typed code `delivery_head_changed` or
 `delivery_repair_dispatched` and an `auto_fix_stopped:` diagnostic in its
-message is handed back once the same published head has no conflict, no pending,
+message is handed back once the published or Orbit-refreshed head has no conflict, no pending,
 unreported or failed required checks, readable classic and ruleset policy, and
 every configured check reported on that head. It must have either at least one
 passed required check or a
@@ -2164,9 +2164,11 @@ forge-confirmed zero-required-check base branch (neither classic branch
 protection nor rulesets require status checks; missing or unreadable policy
 stays skipped under `auto_fix_stopped`). Readiness
 reports `checks_green_after_hold`.
-Completion still checks the current review, required checks and branch protection;
-a changed head is refused. The hand-back ceiling applies; this green-check hand-back does not wait for the
-held-leaf backoff.
+Completion checks the current review, required checks and branch protection.
+It accepts a refreshed head only when its exact first-parent history from
+the publication matches Orbit's successful refresh audits and consists of
+clean base merges. The green-check hand-back skips the held-leaf backoff and
+still counts toward the hand-back ceiling.
 
 A held leaf with typed code `delivery_repair_dispatched` whose `step_failure_recovery`
 failed or admitted no retry before publishing (carrying `pr_auto_fix_check_repair:`
@@ -2176,7 +2178,7 @@ held-leaf backoff: while a blocker remains it retries through the per-PR ledger
 for its remaining attempts (or skips under `budget_exhausted`, `operator_hold`,
 `opted_out`, or `completion_held` with its spent/remaining attempt count in
 readiness), and once every required check the base branch configures reports
-green on the same published head with readable classic and ruleset policy (an
+green on the published or Orbit-refreshed head with readable classic and ruleset policy (an
 unreadable policy or a required check still unreported keeps it waiting), it
 hands back to completion as `checks_green_after_hold`.
 
@@ -2186,7 +2188,7 @@ read can clear: `delivery_check_evidence_inconclusive`,
 `delivery_completion_budget_expired`, `delivery_evidence_stale`,
 `delivery_requirements_unsatisfied`, `delivery_base_checks_pending`,
 `delivery_forge_observation_unavailable`, or `delivery_check_runs_absent`
-once the unchanged head reports a pending or passed required check or the forge
+once the published or Orbit-refreshed head reports a pending or passed required check or the forge
 positively confirms the base branch configures no required status checks. Until
 that check exists or zero required checks are confirmed — missing or unreadable
 policy is never treated as zero required checks — the pass lists
