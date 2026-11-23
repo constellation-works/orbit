@@ -9,7 +9,7 @@ feature: operator-attention
 tags: [operator-attention, federated-mcp, spec]
 related_features: [operator-attention, federated-mcp, host-registry, distributed-drain, mcp-session-context]
 related_artifacts: [ORB-21164, ORB-21171]
-last_updated: 2026-11-14
+last_updated: 2026-11-23
 ---
 
 # Spec: Attention federation
@@ -317,6 +317,11 @@ host answers.
   answers its runtime kinds depends on the destination session's capability: a destination
   session holding only `agent` reports task-level kinds and a `degraded` entry
   (`capability`) for the runtime kinds it may not read.
+- `wait_grant: true` is host-local. A fan-out (any `all`, `host` or `workspace`, or a session not
+  bound to one host-qualified workspace) refuses it with `wait_grant_not_permitted` before any
+  hop, so no destination is read or marked unhealthy for it; a `wait_grant: false` is no grant
+  and is never sent to a hop. A session bound to one host-qualified workspace routes like any
+  other call, and that host's own session decides.
 - The CLI (`orbit attention`) on an operator's shell runs with local Operator capability and
   reaches remote destinations over the same SSH sessions the federated mux uses, with the
   capability that session holds.

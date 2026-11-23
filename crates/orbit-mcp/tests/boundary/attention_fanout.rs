@@ -493,3 +493,48 @@ fn an_unread_owner_of_a_named_workspace_is_degraded() {
         "an empty list with an unread owner is not all-clear: {message}"
     );
 }
+
+/// A wait grant is minted by one host's own session, so a fan-out refuses it
+/// before any hop: no destination is read, and none is marked unhealthy for a
+/// refusal this mux caused. A `wait_grant: false` is no grant and never reaches
+/// a hop [ORB-27452].
+#[test]
+fn a_fan_out_refuses_a_wait_grant_before_any_hop() {
+    let fleet = Fleet::default();
+    fleet.set(FOLLOWER_MACHINE, Behaviour::Answer(candidate_read(vec![])));
+    fleet.set(OWNER_MACHINE, Behaviour::Answer(candidate_read(vec![])));
+    let mux = mux(&fleet, Duration::from_secs(20));
+
+    for input in [
+        json!({"all": true, "wait_grant": true}),
+        json!({"host": "dk-server-2", "wait_grant": true}),
+        json!({"workspace": "ws_orbit", "wait_grant": true}),
+    ] {
+        let error = mux
+            .call_tool(
+                "orbit_attention",
+                input.clone(),
+                ToolSessionContext::default(),
+            )
+            .expect_err("a fan-out must refuse a wait grant");
+        match &error {
+            OrbitError::RemoteTool { code, .. } => {
+                assert_eq!(code.as_str(), "wait_grant_not_permitted", "{input}");
+            }
+            other => panic!("{input}: expected wait_grant_not_permitted, got {other:?}"),
+        }
+    }
+    assert!(
+        fleet.hops.lock().unwrap().is_empty(),
+        "a refused grant reached a hop: {:?}",
+        fleet.hops.lock().unwrap()
+    );
+
+    attention(&mux, json!({"all": true, "wait_grant": false}));
+    let hops = fleet.hops.lock().unwrap().clone();
+    assert!(!hops.is_empty(), "the non-grant read fanned out no hop");
+    assert!(
+        hops.iter().all(|(_, hop)| hop.get("wait_grant").is_none()),
+        "a hop carried wait_grant: {hops:?}"
+    );
+}
