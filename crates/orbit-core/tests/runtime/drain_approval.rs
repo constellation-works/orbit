@@ -342,7 +342,13 @@ impl Workspace {
     /// after `git merge --ff-only`; `None` is an older checkpoint that records
     /// the merge and omits that commit. `commit_sha` is still written on the
     /// commit step, so a proof must not recover the culprit from there.
-    fn record_local_fast_forward(&self, task: &Task, landed: Option<&str>, commit_sha: &str) {
+    fn record_local_fast_forward(
+        &self,
+        task: &Task,
+        landed: Option<&str>,
+        commit_sha: &str,
+        merged: bool,
+    ) {
         self.install_delivery_job();
         std::fs::copy(
             Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/activities/git_merge.yaml"),
@@ -379,8 +385,9 @@ impl Workspace {
             .upsert_job_run_for_workspace(&self.runtime.workspace_id().unwrap(), &run, None)
             .unwrap();
         let mut merge = json!({
-            "merged": true,
+            "merged": merged,
             "base": "main",
+            "base_commit": commit_sha,
             "workspace_path": self.repo.display().to_string(),
             "workspace_branch": "culprit",
         });
@@ -1445,7 +1452,7 @@ fn a_local_fast_forward_culprit_stays_excluded_until_a_later_repair() {
     let fix = ws.commit("the later repair");
     let drain = ws.drain();
     let known = ws.readme_task("known local landing");
-    ws.record_local_fast_forward(&known, Some(&culprit), &culprit);
+    ws.record_local_fast_forward(&known, Some(&culprit), &culprit, true);
     let observed = ws
         .runtime
         .observe_task_delivery(&known.id, None)
@@ -1461,7 +1468,7 @@ fn a_local_fast_forward_culprit_stays_excluded_until_a_later_repair() {
         "the local checkpoint names the fast-forwarded commit: {observed:?}"
     );
     let unnamed = ws.readme_task("landed without a commit");
-    ws.record_local_fast_forward(&unnamed, None, &culprit);
+    ws.record_local_fast_forward(&unnamed, None, &culprit, true);
     let observed = ws
         .runtime
         .observe_task_delivery(&unnamed.id, None)
@@ -1475,6 +1482,17 @@ fn a_local_fast_forward_culprit_stays_excluded_until_a_later_repair() {
         observed.landing.landed_commit.is_none(),
         "an older local checkpoint records no landed commit: {observed:?}"
     );
+    let unchanged = ws.readme_task("already included in base");
+    ws.record_local_fast_forward(&unchanged, None, &fix, false);
+    let observed = ws
+        .runtime
+        .observe_task_delivery(&unchanged.id, None)
+        .unwrap();
+    assert_eq!(
+        observed.landing.status,
+        LandingObservationStatus::NotRequested
+    );
+    assert!(observed.landing.landed_commit.is_none());
     let never_delivered = ws.readme_task("never delivered");
     assert!(
         matches!(
