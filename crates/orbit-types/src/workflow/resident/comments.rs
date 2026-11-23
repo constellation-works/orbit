@@ -356,6 +356,7 @@ impl ResidentCheckpoint {
             &[
                 "progress",
                 "idle",
+                "unchanged",
                 "waiting",
                 "incomplete",
                 "handoff",

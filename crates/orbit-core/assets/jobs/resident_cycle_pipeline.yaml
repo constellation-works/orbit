@@ -10,7 +10,9 @@
 #    synthesized `incomplete` checkpoint, records this cycle's grant (the
 #    effective authority, observe-only while a maintenance notice is open in
 #    scope or the deadline has passed) and builds the brief. A mandate that is
-#    no longer due starts no cycle (`cycle_count: 0`).
+#    no longer due starts no cycle (`cycle_count: 0`). An unchanged,
+#    heartbeat-only check writes an `unchanged` checkpoint and also skips
+#    the model cycle.
 # 2. cycle is the resident's agent. Core scopes every tool call it makes to
 #    the cycle's grant and keys each write `resident:<mandate>:<cycle>:<n>`.
 #    It ends by writing one checkpoint through `orbit.resident.checkpoint`.

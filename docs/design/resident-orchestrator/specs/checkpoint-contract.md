@@ -114,7 +114,7 @@ refused as `resident_action_in_doubt`, and the agent checks the subject's state 
 | `notes` | ≤ 600 characters on new writes: only what changed this cycle and what is next. Standing state stays in structured fields such as `requests[]` and `decisions[]`; operator asks go in `requests[]`/notices, not notes |
 | `continuity` | `resumed`, `rebuilt` (conversation expired or absent) or `off` |
 | `conversation_ref` | Optional provider conversation reference for the next cycle. The cycle copies `brief.conversation_ref` verbatim (`null`/omitted when the brief carries none); core forces `continuity` to `rebuilt` when a claimed `resumed` has no live prior reference |
-| `outcome` | `progress`, `idle` (woke, nothing to do), `waiting` (only open requests), `incomplete` (synthesized), `handoff`, `ended` |
+| `outcome` | `progress`, `idle` (woke, nothing to do), `unchanged` (heartbeat-only check with unchanged wake items; core writes it, no model cycle), `waiting` (only open requests), `incomplete` (synthesized), `handoff`, `ended` |
 
 Limits: 64 KiB per record, 50 actions, 20 decisions, 20 costs. A cycle that reaches a limit does
 not write a second checkpoint; it stops and leaves the rest to the next cycle. Bounded cycles are

@@ -2275,7 +2275,7 @@ PY
     );
     fx.install_codex(&program, script);
 
-    let (_, mandate) = fx.watched_mandate("Ship scribe v2 slice 5");
+    let (watched, mandate) = fx.watched_mandate("Ship scribe v2 slice 5");
     let now = Utc::now();
 
     // Cycle 1: establishes a live conversation_ref ("conv-live").
@@ -2309,6 +2309,20 @@ PY
         ),
     ] {
         let run = fx.cycle_run(&mandate, &format!("resident-continuity-{case}"));
+        // An unchanged heartbeat-only check skips its cycle, so each cycle
+        // here wakes on a real change to the watched task.
+        let status = if case == "live" {
+            TaskStatus::Blocked
+        } else {
+            TaskStatus::Backlog
+        };
+        fx.update_task(
+            &watched,
+            TaskUpdateParams {
+                status: Some(status),
+                ..Default::default()
+            },
+        );
         let brief = fx.begin_cycle(&run, now + Duration::minutes(minutes));
         if case == "live" {
             assert_eq!(brief["continuity"], "resumed", "{case}: {brief}");
@@ -2376,7 +2390,7 @@ fn instructed_checkpoint_preserves_conversation_ref_across_two_resumed_cycles() 
     let fx = isolated_fixture!(
         instructed_checkpoint_preserves_conversation_ref_across_two_resumed_cycles
     );
-    let (_, mandate) = fx.watched_mandate("Ship scribe v2 slice 5");
+    let (watched, mandate) = fx.watched_mandate("Ship scribe v2 slice 5");
     let now = Utc::now();
 
     // Setup only: establish the live provider conversation a later cycle
@@ -2398,6 +2412,20 @@ fn instructed_checkpoint_preserves_conversation_ref_across_two_resumed_cycles() 
         .enumerate()
     {
         let run = fx.cycle_run(&mandate, key);
+        // An unchanged heartbeat-only check skips its cycle, so flip the
+        // watched task to make each dispatched cycle wake on a real change.
+        let status = if index % 2 == 0 {
+            TaskStatus::Blocked
+        } else {
+            TaskStatus::Backlog
+        };
+        fx.update_task(
+            &watched,
+            TaskUpdateParams {
+                status: Some(status),
+                ..Default::default()
+            },
+        );
         let brief = fx.begin_cycle(&run, now + Duration::minutes(130 * (index as i64 + 1)));
         assert_eq!(brief["continuity"], "resumed", "cycle {index}: {brief}");
         assert_eq!(brief["conversation_ref"], "conv-live", "cycle {index}");
@@ -2412,6 +2440,13 @@ fn instructed_checkpoint_preserves_conversation_ref_across_two_resumed_cycles() 
 
     // The second instructed checkpoint still leaves a resumable reference.
     let run = fx.cycle_run(&mandate, "resident-instructed-3");
+    fx.update_task(
+        &watched,
+        TaskUpdateParams {
+            status: Some(TaskStatus::Blocked),
+            ..Default::default()
+        },
+    );
     let brief = fx.begin_cycle(&run, now + Duration::minutes(390));
     assert_eq!(brief["continuity"], "resumed", "{brief}");
     assert_eq!(brief["conversation_ref"], "conv-live");
