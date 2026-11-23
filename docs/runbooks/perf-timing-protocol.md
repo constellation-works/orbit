@@ -699,6 +699,6 @@ Tasks land in `proposed`. Do not approve them.
 
 ## Related references
 
-- [Task authoring guide: timing criteria](../../crates/orbit-core/assets/skills/orbit/references/task-authoring.md)
+- [Task authoring guide: timing criteria](../../crates/orbit-core/assets/skills/orbit/references/task-authoring-contract.md)
 - [Build budget](./build-budget.md) — the admission `build-pair.sh` builds under.
 - [Soak-test dashboard memory](./web-memory-soak.md) — a synthetic-fixture harness for memory, not timing.

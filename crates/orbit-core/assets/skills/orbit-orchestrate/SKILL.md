@@ -14,7 +14,7 @@ is for the operator supervising work.
 Inspect → deduplicate → author → prepare → promote → dispatch → verify → repair.
 
 - Discover the owning workspace and use its returned selector; see
-  [tool surface](../orbit/references/tool-surface.md). Never substitute a local
+  [tool surface](../orbit/references/tool-surface-routing.md). Never substitute a local
   store for an unavailable owner.
 - Follow the user's scope, crew choices and concurrency/build budget. After
   authorized preparation succeeds, promote promptly. An active drain can claim
@@ -136,7 +136,7 @@ implementation with the old candidate discarded. See
 | Salvage an incomplete or stopped candidate instead of starting over | [Salvage an incomplete candidate](references/recovery.md#salvage-an-incomplete-candidate) |
 | Work through typical orchestration decisions | [Walkthroughs](references/walkthroughs.md) |
 
-Use [task authoring](../orbit/references/task-authoring.md) when filing work.
+Use [task authoring](../orbit/references/task-authoring-contract.md) when filing work.
 Use [orbit-setup](../orbit-setup/SKILL.md) when the cause is host configuration,
 installation, scheduler setup or maintenance; do not load those procedures
 for ordinary dispatch.

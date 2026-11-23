@@ -16,7 +16,9 @@ Task search ranks indexed title, description, acceptance criteria, plan, and
 execution summary chunks with SQLite FTS5 BM25. Query words need not be adjacent:
 `"scheduler retry"` ranks chunks containing both terms first. When fewer than
 `limit` full matches survive filtering, any-term matches fill the remaining
-slots, ordered by matched-term count in the best chunk, then BM25. These hits
+slots, ordered by matched-term count in the best chunk, then BM25.
+
+These hits
 carry `matched_by: ["partial", "terms:1/2"]`, also shown in the CLI MATCH column.
 The `terms:n/m` label counts query terms in the best matching chunk.
 Terms are quoted literally before FTS parsing. Prefer a few distinctive terms from
@@ -27,12 +29,16 @@ Comments, external references, and artifact manifest paths are indexed as
 chunks too, so BM25 ranks them like the other indexed fields: their query
 words need not be adjacent either. A substring supplement over the index
 also supplements BM25 for every indexed field, including for queries inside
-a token. That supplement is a literal contiguous substring match: it is
+a token.
+
+That supplement is a literal contiguous substring match: it is
 case-insensitive with Unicode case folding, and it preserves the field's
 raw whitespace, so a multi-word substring query matches only where the
 words appear contiguously with the same internal whitespace. Tasks not yet
 indexed with those sidecar fields still fall back to a bundle-document matcher
-with the same substring semantics. With no usable lexical index, or a status
+with the same substring semantics.
+
+With no usable lexical index, or a status
 selection the generated index cannot answer, that matcher supplements every
 task instead. An `orbit search reindex` after upgrade indexes every task with
 those fields. Artifact payloads are not searched. Frictions match a single

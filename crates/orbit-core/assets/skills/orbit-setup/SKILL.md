@@ -59,7 +59,7 @@ shared workspace. Preserve the user's installation method and existing config.
 | Set up a host-local application that acts on an operator's consent for exact workspace-bound tool calls, including credentials, callbacks, rotation and revocation | [Scoped application authority](references/applications.md) |
 | Manage a legacy external tool (`orbit tool add`, `list`, `show`, `run`, `enable`, `disable`, `remove`, `doctor`) | [Plugins — Managing legacy external tools](references/plugins.md#managing-legacy-external-tools) |
 | Owner/replica roles, multiple machines, or coordinating a breaking workspace-layout upgrade across hosts | [Multi-host](references/multi-host.md#upgrading-a-workspace-together) |
-| Single-owner distributed drain setup or claimed-attempt recovery | [Distributed drain](../orbit/references/setup/distributed-drain.md) |
+| Single-owner distributed drain setup or claimed-attempt recovery | [Distributed drain](../orbit/references/setup/distributed-drain-setup.md) |
 | Owner completion policy for distributed-drain handoffs (`review` versus automatic owner landing) | [Configuration — Distributed-drain completion policy](references/configuration.md#distributed-drain-completion-policy) |
 | Standing-drain keeper (`workflow.standing_drain.*`): what the opt-in keeper submits, its keys and ranges, enabling or turning it off, and verifying it with `orbit doctor --check standing-drain` or `orbit run readiness --json` | [Configuration — Standing-drain keeper](references/configuration.md#standing-drain-keeper) |
 | Task snapshots, backup and restore | [Publication](references/publication.md) |
@@ -82,7 +82,7 @@ its Git/PR credentials. Task search uses local SQLite FTS5 and requires no downl
 
 1. Inspect installed command help, effective config and relevant prerequisites.
    Use the owning host's registered tools for durable state; see the shared
-   [tool surface](../orbit/references/tool-surface.md) for authority and routing.
+   [tool surface](../orbit/references/tool-surface-routing.md) for authority and routing.
 2. Make the authorized configuration changes. Existing approval carries forward;
    do not ask again for routine steps already covered. New scheduling, downloads,
    remote roles or credentials are separate choices when the request omits them.

@@ -26,7 +26,7 @@ submits review-only work. If completion is authorized, use `orbit run ship
 <task-id> --complete` through an available authorized operator command surface
 on the owning host; do not invent a `completion` argument, silently submit a
 review-only run, or use a local shadow store. See
-[tool-surface.md](../../orbit/references/tool-surface.md).
+[tool-surface-routing.md](../../orbit/references/tool-surface-routing.md).
 
 `--complete` is default-off and applies to that submitted run:
 

@@ -209,7 +209,7 @@ template:
     line that looks wrong but is guarded elsewhere is not a finding. Search
     open Orbit tasks tagged `code-review` before filing; skip duplicates.
     Give each confirmed finding a severity — `critical`, `high`,
-    `medium`, `low` or `nit`, by the Severity rubric in the installed `orbit` skill's `references/task-fields.md` —
+    `medium`, `low` or `nit`, by the Severity rubric in the installed `orbit` skill's `references/task-fields-review.md` —
     used as its `regression.severity` and as the filed task's priority (`low`
     for `nit`), file:line evidence at the pinned SHA, the `code-review` tag,
     and its module's ID. A grouped cleanup link takes the highest grouped
@@ -242,7 +242,8 @@ template:
     real impact the evidence shows, not the size of the fix, and take the lower
     level when torn. Choose `unclassified` rather than guess. The scale and the
     `nature` and `escape` values are the Severity rubric and `regression_from`
-    fields in the installed `orbit` skill's `references/task-fields.md`; use only
+    fields in the installed `orbit` skill's `references/task-fields-review.md` and
+    `references/task-fields-relations.md`; use only
     those values and its guidance for choosing the escape.
 
     ## Findings that narrow a shared invariant

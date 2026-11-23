@@ -34,7 +34,7 @@ Global options (see 'orbit --help' for descriptions):
   --json
   --header
 
-Status meanings and lifecycle rules: installed Orbit skill `references/task-fields.md`.
+Status meanings and lifecycle rules: installed Orbit skill `references/task-fields-projections.md`.
 
 Examples:
   orbit task lint <TASK_ID>                   # findings for one task

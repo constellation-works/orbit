@@ -743,7 +743,7 @@ running it in the implementer's lane. Every notice must be one of these
 kinds, and the lane must refuse the probe of each kind present; the implement
 step refuses anything else before commit:
 
-Follow the [Sanctioned sandbox deferral contract](../../crates/orbit-core/assets/skills/orbit/references/task-execution.md#sanctioned-sandbox-deferral) for the implementer's eligibility, summary-only handoff, probe, replay and exclusion rules.
+Follow the [Sanctioned sandbox deferral contract](../../crates/orbit-core/assets/skills/orbit/references/task-execution-handoff-cases.md#sanctioned-sandbox-deferral) for the implementer's eligibility, summary-only handoff, probe, replay and exclusion rules.
 
 | Host | Notices | Probe Orbit runs | Probe result |
 |---|---|---|---|

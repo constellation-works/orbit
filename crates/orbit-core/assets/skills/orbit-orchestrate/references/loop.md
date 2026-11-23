@@ -6,7 +6,7 @@ Call the connected `orbit_workspace_list`, select the owning host/workspace,
 and reuse its exact returned selector in every durable tool call. Prefer MCP;
 CLI examples here assume an authorized administrative surface on that same
 host with workspace routing already established. A checkout path alone does
-not establish authority. See [tool-surface.md](../../orbit/references/tool-surface.md).
+not establish authority. See [tool-surface-routing.md](../../orbit/references/tool-surface-routing.md).
 
 Read workspace goals, existing tasks, recent runs, and the relevant repository
 or runtime evidence. Use `orbit_task_list` with its advertised filters and a
@@ -47,7 +47,7 @@ Separate independent changes so file reservations do not unnecessarily
 serialize them. Do not turn a single incident into a speculative framework.
 For research, state a falsifiable hypothesis, validation method, and what
 would refute it; a simulation of assumed equations does not validate nature.
-See [task-authoring.md](../../orbit/references/task-authoring.md).
+See [task-authoring-contract.md](../../orbit/references/task-authoring-contract.md).
 
 Create as `proposed` with required `complexity` (`low`, `medium`, `hard`, or
 `xhard`).
@@ -285,7 +285,7 @@ Attribute the next action to its actor once the attempt has stopped:
 A policy answer arrives as a delivered human decision, never as a notice. A
 fleet notice (`orbit notice list`, `orbit notice show`) grants no authority
 and no delivery gate reads it; see
-[fleet notices](../../orbit/references/tool-surface.md#fleet-notices). Verify a
+[fleet notices](../../orbit/references/tool-surface-notices.md#fleet-notices). Verify a
 claimed decision by its exact request id — `orbit decision show <request-id>`
 reads `answered` with its resolution (answer, human, note, time), the request
 leaves the open list, the task history holds `decision_answered`, and the

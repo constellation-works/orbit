@@ -104,7 +104,7 @@ Global options (see 'orbit --help' for descriptions):
   --json
   --header
 
-Status meanings, lifecycle and listing-order rules: installed Orbit skill `references/task-fields.md`.
+Status meanings, lifecycle and listing-order rules: installed Orbit skill `references/task-fields-projections.md`.
 
 Examples:
   orbit task list

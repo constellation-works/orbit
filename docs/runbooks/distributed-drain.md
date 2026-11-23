@@ -3002,4 +3002,4 @@ Preserve schedule files; do not bulk-disable routines as cleanup.
 - [Recover stuck job runs](./stuck-job-runs.md)
 - [Distributed drain design](../design/distributed-drain/2_design.md) and
   [task-pull spec](../design/distributed-drain/specs/task-pull.md)
-- Embedded skill: [distributed-drain setup](../../crates/orbit-core/assets/skills/orbit/references/setup/distributed-drain.md)
+- Embedded skill: [distributed-drain setup](../../crates/orbit-core/assets/skills/orbit/references/setup/distributed-drain-setup.md)

@@ -3,7 +3,7 @@
 Remote access reads or operates the accepting host's live store. It does not
 replicate tasks. First identify the owning host and workspace; see
 [multi-host.md](multi-host.md) for owner/replica setup,
-[distributed-drain.md](../../orbit/references/setup/distributed-drain.md) for
+[distributed-drain-setup.md](../../orbit/references/setup/distributed-drain-setup.md) for
 the single-owner drain preflight and recovery, and
 [publication.md](publication.md) for offline snapshots.
 
@@ -89,7 +89,7 @@ file. Automatic migration is no longer available.
 | `host_file_conflict` | Move the retired destinations file aside, re-register its hosts as described above, then delete it. |
 
 Routing and reachability errors have their own remedies in
-[tool-surface.md](../../orbit/references/tool-surface.md#routing-failures-and-remedies).
+[tool-surface-routing.md](../../orbit/references/tool-surface-routing.md#routing-failures-and-remedies).
 
 ```bash
 orbit mcp init --federated --client codex
@@ -99,7 +99,7 @@ This creates a separate client integration and preserves the ordinary one.
 Federation is session-unbound: for workspace-scoped calls, use
 `orbit_workspace_list` and pass its host-qualified `selector` unchanged.
 Single-task calls can instead omit the selector and route by task prefix;
-see [tool-surface.md](../../orbit/references/tool-surface.md#task-ids-and-host-selection).
+see [tool-surface-routing.md](../../orbit/references/tool-surface-routing.md#task-ids-and-host-selection).
 Do not pass `--workspace` or a
 positional SSH destination to federated mode. On a direct server, a session
 binding via `--workspace` is valid, and explicit per-call selectors take

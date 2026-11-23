@@ -10,7 +10,7 @@ when driving an authoritative MCP connection. Observe with
 `orbit_run action show/list`; resume eligible terminal work with
 `orbit_run` action `resume`, which returns a new linked run. These operations
 require operator authority. Managed leaf runs cannot dispatch follow-up runs.
-See [tool-surface.md](../../orbit/references/tool-surface.md).
+See [tool-surface-routing.md](../../orbit/references/tool-surface-routing.md).
 
 The CLI offers additional discovery modes below. Use them only where the user
 and workspace dispatch policy permit auto-discovery; creating tasks or enabling
@@ -381,9 +381,9 @@ The flag selects a pull owner, not the execution host for `run ship`,
 `run show/history/logs` or other host-local commands. For task reads and
 updates on the CLI or federated MCP, omit the workspace to route by task ID
 prefix; task creation/listing and dispatch retain workspace selection.
-See [tool-surface.md](../../orbit/references/tool-surface.md#task-ids-and-host-selection)
+See [tool-surface-routing.md](../../orbit/references/tool-surface-routing.md#task-ids-and-host-selection)
 for the routed tools and error remedies, and
-[distributed-drain.md](../../orbit/references/setup/distributed-drain.md)
+[distributed-drain-setup.md](../../orbit/references/setup/distributed-drain-setup.md)
 for pull setup, captured review policy and owner landing authority.
 
 Runs are asynchronous: these commands return once the run is durable, printing a
@@ -970,7 +970,7 @@ differs from the keeper's previous decision.
 ### Attention items
 
 Both kinds appear only while the keeper is enabled. Detail is in
-[attention](../../orbit/references/attention.md).
+[attention](../../orbit/references/attention-kinds.md#standing-drain-keeper).
 
 - **`drain_paused`** (medium): the intent has been `paused` for over 12 hours
   while `backlog` or `proposed` work waits. First, read `drain_intent` (`by`,

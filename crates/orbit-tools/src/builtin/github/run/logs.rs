@@ -50,7 +50,7 @@ impl crate::Tool for GithubRunLogsTool {
     fn schema(&self) -> orbit_types::tool::ToolSchema {
         super::super::gh_schema(
             "github.run.logs",
-            "Read a bounded excerpt of one GitHub Actions run's logs — failed steps by default, or the full log — plus runner checkout evidence. Source limits, step mapping and job-log recovery: the orbit skill's tool-surface.md reference, section `GitHub run logs`.",
+            "Read a bounded excerpt of one GitHub Actions run's logs — failed steps by default, or the full log — plus runner checkout evidence. Source limits, step mapping and job-log recovery: the orbit skill's tool-surface-registry.md reference, section `GitHub run logs`.",
             vec![
                 super::super::tool_param("run", "Numeric workflow-run ID", "string", true),
                 super::super::tool_param(

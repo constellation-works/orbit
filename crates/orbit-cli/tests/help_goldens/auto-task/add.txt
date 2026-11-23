@@ -104,4 +104,4 @@ Global options (see 'orbit --help' for descriptions):
   --json
   --header
 
-Minted-task status meanings and lifecycle rules: installed Orbit skill `references/task-fields.md`.
+Minted-task status meanings and lifecycle rules: installed Orbit skill `references/task-fields-projections.md`.

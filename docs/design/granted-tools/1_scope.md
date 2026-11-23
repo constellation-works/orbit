@@ -19,7 +19,7 @@ Status: Implemented — all six implementation phases are shipped, as scoped by 
 operator-only, owner-host-only and frozen for a dispatched attempt. Every
 currently denied implementer tool is mutating: grants authorize reviewed
 proposals, never live mutations. See the shipped
-[operator runbook](../../../crates/orbit-core/assets/skills/orbit/references/task-fields.md#operator-runbook-granting-tools).
+[operator runbook](../../../crates/orbit-core/assets/skills/orbit/references/task-fields-tools.md#operator-runbook-granting-tools).
 Bearing: tasks already carry `required_tools`
 ([`artifacts.rs`](../../../crates/orbit-types/src/task/artifacts.rs));
 `agent_implement` is a deny-list activity

@@ -147,7 +147,7 @@ const ANALYTICS: OperationSpec<CodebaseVerb> = OperationSpec {
     verb: CodebaseVerb::Analytics,
     cli_path: &["analytics"],
     tool_name: "orbit.codebase.analytics",
-    tool_description: "Rank repository paths across codebase risk measures. Use action `show` on a ranked path to inspect its evidence. See the installed Orbit skill's `tool-surface.md` reference, Codebase analytics and path detail, for metrics, attribution, filters and response fields.",
+    tool_description: "Rank repository paths across codebase risk measures. Use action `show` on a ranked path to inspect its evidence. See the installed Orbit skill's `tool-surface-codebase.md` reference, Codebase analytics and path detail, for metrics, attribution, filters and response fields.",
     cli_about: "Show the codebase rankings and the paths several share",
     cli_help: CliHelp {
         long_about: None,
@@ -178,7 +178,7 @@ const SHOW: OperationSpec<CodebaseVerb> = OperationSpec {
     verb: CodebaseVerb::Show,
     cli_path: &["show"],
     tool_name: "orbit.codebase.show",
-    tool_description: "Inspect one repository path across codebase rankings and follow counts to tasks and sites. See the installed Orbit skill's `tool-surface.md` reference, Codebase analytics and path detail, for ranking, attribution, filters and response fields.",
+    tool_description: "Inspect one repository path across codebase rankings and follow counts to tasks and sites. See the installed Orbit skill's `tool-surface-codebase.md` reference, Codebase analytics and path detail, for ranking, attribution, filters and response fields.",
     cli_about: "Show one path's rankings and the tasks behind each count",
     cli_help: CliHelp::NONE,
     effect: Effect::Read,

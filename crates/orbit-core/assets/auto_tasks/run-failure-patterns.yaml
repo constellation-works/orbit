@@ -40,7 +40,7 @@ template:
       `orbit.search` (one distinctive token per query: an error code, step or tool name; a
       0-hit multi-word query proves nothing), `orbit.task.add`, `orbit.task.update` (comments
       only), `orbit.task.artifact action get/put`, `orbit.friction` action `add`. Read the installed `orbit`
-      skill's `references/task-authoring.md` before filing.
+      skill's `references/task-authoring-contract.md` and `references/task-authoring-create.md` before filing.
     - A pass that finds nothing new still succeeds, with the report stored. Don't invent work.
 
     ## 1. Windows
@@ -248,7 +248,8 @@ template:
       `severity` is required on a new link; rate the worst real impact, not the
       size of the fix, taking the lower level when torn. The scale and the
       `nature` and `escape` values are the Severity rubric and `regression_from`
-      fields in the installed `orbit` skill's `references/task-fields.md`; use
+      fields in the installed `orbit` skill's `references/task-fields-review.md` and
+      `references/task-fields-relations.md`; use
       only those values.
     - Redact excerpts: at most a few lines, with tokens, credentials, authorization headers,
       cookies, email addresses and home paths replaced. Put excerpts only in text sent through
