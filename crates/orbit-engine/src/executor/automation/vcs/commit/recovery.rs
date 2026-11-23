@@ -11,11 +11,16 @@
 use std::path::Path;
 
 use orbit_common::fs::selector::claim_new_path_is_safe;
+use orbit_common::security::redaction::redact_all;
 
-use super::super::git::git_output;
+use super::super::git::{
+    git_command_success, git_output, git_output_paths_with_env, git_output_raw_with_env,
+    git_output_with_env,
+};
+use super::super::review_gate::uncommitted_paths;
 use super::author::recovery_author;
 use super::git_ops::{
-    ensure_named_branch, ensure_no_unmerged_changes, git_commit_as, stage_paths,
+    ensure_named_branch, ensure_no_unmerged_changes, git_commit_as, literal_pathspec, stage_paths,
     staged_changed_files,
 };
 use super::message::recovery_commit_message;
@@ -210,39 +215,123 @@ fn message(request: &RecoveryCommitRequest<'_>) -> String {
     )
 }
 
-/// Capture all uncommitted tracked, staged, and untracked changes in
-/// `workspace_path` as a unified patch without mutating `.git/index`.
+/// Capture uncommitted tracked, staged, and untracked changes on safe paths in
+/// `workspace_path` as a redacted unified patch without mutating `.git/index`
+/// or copying protected files into the patch or repository object store.
 pub(in crate::executor::automation::vcs) fn capture_uncommitted_diff(
     workspace_path: &Path,
 ) -> Result<Option<String>, orbit_common::OrbitError> {
+    let safe_paths = uncommitted_paths(workspace_path)?
+        .into_iter()
+        .filter(|path| claim_new_path_is_safe(path))
+        .collect::<Vec<_>>();
+    if safe_paths.is_empty() {
+        return Ok(None);
+    }
+
     let dir = tempfile::tempdir().map_err(|error| {
         orbit_common::OrbitError::Io(format!("failed to create scratch diff index dir: {error}"))
     })?;
     let index_path = dir.path().join("index");
     let index_str = index_path.to_string_lossy().into_owned();
-    let env = [("GIT_INDEX_FILE", index_str.as_str())];
-    let has_head = super::super::git::git_command_success(
-        workspace_path,
-        &["rev-parse", "--verify", "HEAD^{commit}"],
-    )?;
-    if has_head {
-        super::super::git::git_output_with_env(workspace_path, &["read-tree", "HEAD"], &env)?;
+    let mut env_storage = vec![("GIT_INDEX_FILE", index_str)];
+    if let Some((temp_objects, alternate_objects)) =
+        isolated_temp_object_store(workspace_path, dir.path())?
+    {
+        env_storage.push(("GIT_OBJECT_DIRECTORY", temp_objects));
+        env_storage.push(("GIT_ALTERNATE_OBJECT_DIRECTORIES", alternate_objects));
     }
-    super::super::git::git_output_with_env(workspace_path, &["add", "--all", "--", "."], &env)?;
+    let env = env_storage
+        .iter()
+        .map(|(key, value)| (*key, value.as_str()))
+        .collect::<Vec<_>>();
+
+    let has_head =
+        git_command_success(workspace_path, &["rev-parse", "--verify", "HEAD^{commit}"])?;
+    if has_head {
+        git_output_with_env(workspace_path, &["read-tree", "HEAD"], &env)?;
+    }
+
+    let stageable = stageable_safe_paths(workspace_path, &safe_paths, has_head, &env)?;
+    if stageable.is_empty() {
+        return Ok(None);
+    }
+
+    let mut add_args = vec!["add".to_string(), "-A".to_string(), "--".to_string()];
+    add_args.extend(stageable.iter().map(|path| literal_pathspec(path)));
+    let add_arg_refs = add_args.iter().map(String::as_str).collect::<Vec<_>>();
+    git_output_with_env(workspace_path, &add_arg_refs, &env)?;
+
     let diff = if has_head {
-        super::super::git::git_output_with_env(workspace_path, &["diff", "--cached", "HEAD"], &env)?
+        git_output_raw_with_env(workspace_path, &["diff", "--cached", "HEAD"], &env)?
     } else {
-        super::super::git::git_output_with_env(workspace_path, &["diff", "--cached"], &env)?
+        git_output_raw_with_env(workspace_path, &["diff", "--cached"], &env)?
     };
     if diff.trim().is_empty() {
         Ok(None)
     } else {
-        Ok(Some(format!("{diff}\n")))
+        Ok(Some(redact_all(&diff)))
     }
 }
 
-/// Capture any uncommitted diff in `workspace_path` and persist it as a task
-/// artifact (falling back to `.orbit/tmp/` if the task record rejects writes).
+/// Point temporary index object writes at a scratch directory backed by the
+/// repository's object store so captured diffs never add blobs to `.git/objects`.
+fn isolated_temp_object_store(
+    workspace_path: &Path,
+    temp_root: &Path,
+) -> Result<Option<(String, String)>, orbit_common::OrbitError> {
+    let raw_objects = git_output(workspace_path, &["rev-parse", "--git-path", "objects"])?;
+    let objects_path = Path::new(&raw_objects);
+    let abs_objects = if objects_path.is_absolute() {
+        objects_path.to_path_buf()
+    } else {
+        workspace_path.join(objects_path)
+    };
+    let Ok(canonical_objects) = abs_objects.canonicalize() else {
+        return Ok(None);
+    };
+    let Ok(alternate) = std::env::join_paths([&canonical_objects]) else {
+        return Ok(None);
+    };
+    let temp_objects = temp_root.join("objects");
+    orbit_common::fs::io::create_private_dir_all(&temp_objects).map_err(|error| {
+        orbit_common::OrbitError::Io(format!(
+            "failed to create scratch diff objects dir: {error}"
+        ))
+    })?;
+    Ok(Some((
+        temp_objects.to_string_lossy().into_owned(),
+        alternate.to_string_lossy().into_owned(),
+    )))
+}
+
+/// Filter `safe_paths` to paths that exist in the worktree or (for deletions)
+/// in the temporary `HEAD` index so `git add -A` never receives a missing pathspec.
+fn stageable_safe_paths(
+    workspace_path: &Path,
+    safe_paths: &[String],
+    has_head: bool,
+    env: &[(&str, &str)],
+) -> Result<Vec<String>, orbit_common::OrbitError> {
+    let mut stageable = Vec::new();
+    let mut missing_on_disk = Vec::new();
+    for path in safe_paths {
+        if std::fs::symlink_metadata(workspace_path.join(path)).is_ok() {
+            stageable.push(path.clone());
+        } else if has_head {
+            missing_on_disk.push(literal_pathspec(path));
+        }
+    }
+    if !missing_on_disk.is_empty() {
+        let mut list_args = vec!["ls-files", "--cached", "-z", "--"];
+        list_args.extend(missing_on_disk.iter().map(String::as_str));
+        stageable.extend(git_output_paths_with_env(workspace_path, &list_args, env)?);
+    }
+    Ok(stageable)
+}
+
+/// Capture any uncommitted diff in `workspace_path` and persist it as a redacted
+/// task artifact (falling back to `.orbit/tmp/` if the task record rejects writes).
 pub(crate) fn persist_uncommitted_diff_artifact<H: crate::RuntimeHost + ?Sized>(
     host: &H,
     task_id: &str,
@@ -252,6 +341,7 @@ pub(crate) fn persist_uncommitted_diff_artifact<H: crate::RuntimeHost + ?Sized>(
     let Some(diff) = capture_uncommitted_diff(workspace_path).map_err(|e| e.to_string())? else {
         return Ok(None);
     };
+    let diff = redact_all(&diff);
     let update = crate::TaskAutomationUpdate {
         upsert_artifacts: vec![orbit_types::task::TaskArtifact::from_text(
             artifact_path,
@@ -262,6 +352,7 @@ pub(crate) fn persist_uncommitted_diff_artifact<H: crate::RuntimeHost + ?Sized>(
     match host.apply_task_automation_update(task_id, update) {
         Ok(()) => Ok(Some(format!("task artifact `{artifact_path}`"))),
         Err(task_error) => {
+            let task_error = redact_all(&task_error.to_string());
             orbit_common::fs::io::write_private_text_beneath(
                 workspace_path,
                 Path::new(".orbit/tmp"),

@@ -208,7 +208,16 @@ impl orbit_engine::test_support::NullRuntimeHost for RepairPipeline<'_> {
                         git(self.fixture, &["commit", "-m", "repair rejected candidate"]);
                     }
                     "protected" | "scratch-ok" | "scratch-redirect" => {
-                        std::fs::write(self.fixture.repo.join(".env"), "TOKEN=x\n").unwrap()
+                        std::fs::write(
+                            self.fixture.repo.join("canary.txt"),
+                            "ordinary safe line\napi_key=synthetic_patch_api_canary\nAuthorization: Bearer synthetic_patch_bearer_canary\nsk-syntheticpatchcanary00000000\n",
+                        )
+                        .unwrap();
+                        std::fs::write(
+                            self.fixture.repo.join(".env"),
+                            "ENV_CANARY=synthetic_env_file_canary\n",
+                        )
+                        .unwrap();
                     }
                     #[cfg(unix)]
                     "symlink" => {
@@ -765,6 +774,35 @@ fn final_recovery_does_not_authorize_an_unrecorded_head_change() {
                 .expect("refused final recovery saves uncommitted diff artifact");
             let text = String::from_utf8_lossy(&artifact.content);
             assert!(text.contains("repaired"), "{case}: {text}");
+            if case == "protected" {
+                assert!(text.contains("ordinary safe line"), "{case}: {text}");
+                assert!(
+                    !text.contains(".env") && !text.contains("synthetic_env_file_canary"),
+                    "{case}: protected env file leaked into patch artifact: {text}"
+                );
+                assert!(
+                    !text.contains("synthetic_patch_api_canary")
+                        && !text.contains("synthetic_patch_bearer_canary")
+                        && !text.contains("sk-syntheticpatchcanary00000000"),
+                    "{case}: unredacted credential canary leaked into patch artifact: {text}"
+                );
+                assert!(
+                    text.contains("[REDACTED_AUTH]") && text.contains("[REDACTED_SECRET]"),
+                    "{case}: expected redaction markers in patch artifact: {text}"
+                );
+                let env_blob = git(&fixture, &["hash-object", ".env"]);
+                let exists = crate::git_test_support::command()
+                    .args(["cat-file", "-e", &env_blob])
+                    .current_dir(&fixture.repo)
+                    .output()
+                    .unwrap()
+                    .status
+                    .success();
+                assert!(
+                    !exists,
+                    "{case}: protected .env blob {env_blob} must not enter repository object store"
+                );
+            }
         }
     }
 }
@@ -809,7 +847,40 @@ fn final_recovery_scratch_fallback_refuses_redirects() {
         } else {
             assert!(diagnosis.contains(&name), "{diagnosis}");
             let path = scratch.join(name);
-            assert!(std::fs::read_to_string(&path).unwrap().contains("repaired"));
+            let scratch_text = std::fs::read_to_string(&path).unwrap();
+            assert!(scratch_text.contains("repaired"), "{scratch_text}");
+            assert!(
+                scratch_text.contains("ordinary safe line"),
+                "{scratch_text}"
+            );
+            assert!(
+                !scratch_text.contains(".env")
+                    && !scratch_text.contains("synthetic_env_file_canary"),
+                "protected env file leaked into scratch patch: {scratch_text}"
+            );
+            assert!(
+                !scratch_text.contains("synthetic_patch_api_canary")
+                    && !scratch_text.contains("synthetic_patch_bearer_canary")
+                    && !scratch_text.contains("sk-syntheticpatchcanary00000000"),
+                "unredacted credential canary leaked into scratch patch: {scratch_text}"
+            );
+            assert!(
+                scratch_text.contains("[REDACTED_AUTH]")
+                    && scratch_text.contains("[REDACTED_SECRET]"),
+                "expected redaction markers in scratch patch: {scratch_text}"
+            );
+            let env_blob = git(&fixture, &["hash-object", ".env"]);
+            let exists = crate::git_test_support::command()
+                .args(["cat-file", "-e", &env_blob])
+                .current_dir(&fixture.repo)
+                .output()
+                .unwrap()
+                .status
+                .success();
+            assert!(
+                !exists,
+                "protected .env blob {env_blob} must not enter repository object store"
+            );
             assert_eq!(
                 std::fs::metadata(path).unwrap().permissions().mode() & 0o777,
                 0o600

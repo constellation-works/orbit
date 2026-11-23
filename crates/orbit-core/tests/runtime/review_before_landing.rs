@@ -928,7 +928,16 @@ fn a_timed_out_before_landing_review_saves_uncommittable_diff_as_artifact_and_na
         .write_all(index_input.as_bytes())
         .unwrap();
     assert!(child.wait().unwrap().success());
-    std::fs::write(fixture.repo.join("conflict.txt"), "resolved locally\n").unwrap();
+    std::fs::write(
+        fixture.repo.join("conflict.txt"),
+        "resolved locally\nsk-syntheticlandingcanary000000\n",
+    )
+    .unwrap();
+    std::fs::write(
+        fixture.repo.join(".env"),
+        "ENV_CANARY=synthetic_landing_env_canary\n",
+    )
+    .unwrap();
 
     let run_id = fixture.input["job_run_id"].as_str().unwrap();
     let expected_artifact = format!("landing-review-uncommitted-{run_id}.patch");
@@ -966,6 +975,27 @@ fn a_timed_out_before_landing_review_saves_uncommittable_diff_as_artifact_and_na
         .expect("uncommitted diff artifact is saved on the task");
     let diff_text = String::from_utf8_lossy(&artifact.content);
     assert!(diff_text.contains("resolved locally"), "{diff_text}");
+    assert!(
+        !diff_text.contains(".env") && !diff_text.contains("synthetic_landing_env_canary"),
+        "protected env file leaked into landing-review patch: {diff_text}"
+    );
+    assert!(
+        !diff_text.contains("sk-syntheticlandingcanary000000")
+            && diff_text.contains("[REDACTED_SECRET]"),
+        "unredacted credential canary leaked into landing-review patch: {diff_text}"
+    );
+    let env_blob = git(&fixture.repo, &["hash-object", ".env"]);
+    let exists = crate::git_test_support::command()
+        .args(["cat-file", "-e", &env_blob])
+        .current_dir(&fixture.repo)
+        .output()
+        .unwrap()
+        .status
+        .success();
+    assert!(
+        !exists,
+        "protected .env blob {env_blob} must not enter repository object store"
+    );
 
     let comments = fixture.runtime.get_task_comments(&fixture.task_id).unwrap();
     assert!(
