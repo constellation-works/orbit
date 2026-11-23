@@ -727,11 +727,11 @@
           "items": {
             "type": "string"
           },
-          "description": "Keyed response fields (`delivery`: commit/landing evidence). Rejects `snapshot`, `view`, pagination."
+          "description": "Keyed response fields (`delivery`, `snapshot` or task). Rejects `view`, claimed pagination."
         },
         "field": {
           "type": "string",
-          "description": "Single-field alias for `fields` (e.g. `\"artifacts\"`). Rejects `snapshot`, `view`, pagination."
+          "description": "Single-field alias for `fields` (e.g. `\"artifacts\"`). Rejects `view`, claimed pagination."
         },
         "run_id": {
           "type": "string",
@@ -747,7 +747,7 @@
         },
         "limit": {
           "type": "integer",
-          "description": "Claimed read page size; not with `snapshot` or projections."
+          "description": "Claimed/bounded page size; ignored (noted) with `snapshot`; not with projections."
         },
         "comments_offset": {
           "type": "integer",

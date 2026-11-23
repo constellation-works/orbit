@@ -3070,13 +3070,13 @@
       },
       {
         "name": "fields",
-        "description": "Keyed response fields (`delivery`: commit/landing evidence). Rejects `snapshot`, `view`, pagination.",
+        "description": "Keyed response fields (`delivery`, `snapshot` or task). Rejects `view`, claimed pagination.",
         "param_type": "string_list",
         "required": false
       },
       {
         "name": "field",
-        "description": "Single-field alias for `fields` (e.g. `\"artifacts\"`). Rejects `snapshot`, `view`, pagination.",
+        "description": "Single-field alias for `fields` (e.g. `\"artifacts\"`). Rejects `view`, claimed pagination.",
         "param_type": "string",
         "required": false
       },
@@ -3100,7 +3100,7 @@
       },
       {
         "name": "limit",
-        "description": "Claimed read page size; not with `snapshot` or projections.",
+        "description": "Claimed/bounded page size; ignored (noted) with `snapshot`; not with projections.",
         "param_type": "integer",
         "required": false
       },

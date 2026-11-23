@@ -313,7 +313,7 @@ fn guarded_writes_name_selector_lists_accepted_fields_and_remedy() {
                 "expected_revision": "test-revision",
                 "verdict": {"outcome": "approve"}, "complexity": "low", "model": "codex",
             }),
-            vec!["'verdict'", "'complete'"],
+            vec!["'verdict'", "'complete'", "'fields'", "'field'"],
         ),
         (
             "comment",

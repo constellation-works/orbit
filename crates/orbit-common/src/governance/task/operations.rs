@@ -554,7 +554,7 @@ const SHOW: TaskOperation = TaskOperation {
                 default: None,
                 redact: crate::governance::operation::Redaction::None,
                 mcp_description: Some(Description::Static(
-                    "Keyed response fields (`delivery`: commit/landing evidence). Rejects `snapshot`, `view`, pagination.",
+                    "Keyed response fields (`delivery`, `snapshot` or task). Rejects `view`, claimed pagination.",
                 )),
                 cli: Some(crate::governance::operation::CliBinding {
                     required: false,
@@ -574,7 +574,7 @@ const SHOW: TaskOperation = TaskOperation {
             mcp_only(
                 "field",
                 ParamType::String,
-                "Single-field alias for `fields` (e.g. `\"artifacts\"`). Rejects `snapshot`, `view`, pagination.",
+                "Single-field alias for `fields` (e.g. `\"artifacts\"`). Rejects `view`, claimed pagination.",
             ),
             ParamSpec {
                 mcp_description: Some(Description::Computed(show_run_id_description)),
@@ -589,7 +589,7 @@ const SHOW: TaskOperation = TaskOperation {
             mcp_only(
                 "limit",
                 ParamType::Integer,
-                "Claimed read page size; not with `snapshot` or projections.",
+                "Claimed/bounded page size; ignored (noted) with `snapshot`; not with projections.",
             ),
             mcp_only(
                 "comments_offset",
