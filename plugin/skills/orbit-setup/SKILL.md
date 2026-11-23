@@ -17,61 +17,83 @@ work, unattended delivery, or remote access. Ask only for choices that cannot
 be inferred, such as the integration branch, provider, or which host owns a
 shared workspace. Preserve the user's installation method and existing config.
 
-| User need | Reference |
+## Reference files
+
+Open a file only when its condition holds; each stands alone.
+
+| Open when | Read |
 |---|---|
-| First installation or another repository | [First run](references/first-run.md); for an agent lane, continue with [Provider setup](references/providers.md#provider-setup) |
-| Add a Copilot, Antigravity or Muse crew; fix provider authentication | [Configuration — Provider setup](references/providers.md#provider-setup) |
-| Pass Claude or Codex credentials, choose a per-crew API key, or diagnose a stale service environment | [Provider credentials](references/providers.md#provider-credentials) |
-| Every `orbit` command fails to load configuration because a crew name contains `:`; repair the defining file by hand | [Configuration — Crew names containing a colon](references/configuration.md#crew-names-containing-a-colon) |
-| Explain crew selection, provider aliases or a dispatch refusal | [Configuration — Provider identity and resolution](references/providers.md#provider-identity-and-resolution) |
-| Configure automatic per-draw effort (`<crew>@auto` bands, `workflow.auto_effort.*`), check which pools accept it, or verify a resolved effort without dispatching work | [Configuration — Automatic effort selection](references/configuration.md#automatic-effort-selection-crewauto) |
-| Configure or verify mid-run steering, including rollout timing and limits | [Configuration — Mid-run steering](references/configuration.md#mid-run-steering); for the operator procedure, see [orbit-orchestrate](../orbit-orchestrate/references/mid-run-steering.md) |
-| Choose an MCP role, configure global MCP roles and toolsets, understand server flag precedence, or inspect the advertised surface | [Configuration — MCP roles and toolsets](references/configuration.md#mcp-roles-and-toolsets); [Remote access](references/remote-access.md#role-and-toolset-selection) |
-| Activity-scoped workspace knowledge: map exact activities in `[workflow.agent_corpus]` to a shared `INDEX.md`, verify `activity.agent_corpus_applied` in the run audit trail, or understand append proposals versus reviewed corpus changes | [Configuration — Activity-scoped agent corpus](references/configuration.md#activity-scoped-agent-corpus) |
-| Experiments: `[experiments]` settings, approved config overlays, operator lifecycle, shadow/live modes and readouts | [Configuration — Experiments](references/configuration.md#experiments) |
-| Executor image input: declaring `spec.image_input` on an executor, `vision = false` on a crew, the canary and visual hold, or reading `orbit agents vision-probe` results | [Configuration — Executor image input](references/configuration.md#executor-image-input-image_input) |
-| Host capability labels: set `machine.labels`, understand the implicit OS label and `requires_labels` matching, or inspect placement waits | [Host capability labels](references/configuration.md#host-capability-labels) |
-| Landed-delivery line classes (Analytics › Metrics › Lines changed): `workflow.test_paths`, `workflow.non_code_paths`, their defaults and verification; backfilling missing history with `migrate --backfill-diff-stats` | [Configuration — Landed diff classification](references/configuration.md#landed-diff-classification) |
-| Configure or verify regression fix layers in codebase analytics, including ordered path matching, defaults, replacement and empty-list behavior | [Workspace tuning — Regression layers](references/workspace-tuning.md#regression-layers) |
-| Tune a repository's workspace policy from evidence: required validation and baseline commands, footprint locks and generated files, task types, type and complexity crew pools, purpose pools, crew selection, review layers | [Workspace tuning](references/workspace-tuning.md) |
-| Keep one task out of automatic drains while an interactive session owns it: apply or remove the reserved `no-drain` tag, its admission and approval effects, explicit dispatch and readiness verification | [Workspace tuning — Keeping a task out of the drain](references/workspace-tuning.md#keeping-a-task-out-of-the-drain-no-drain) |
-| The fixed bounds of fleet notices, the attention feed, the resident evolution ledger and the failing-job warning, and how to verify each | [Configuration — Fleet notices, attention, evolution ledger and failing jobs](references/configuration.md#fleet-notices-attention-evolution-ledger-and-failing-jobs) |
-| Crews, workspace policy and settings, admission policy, host pressure, stalled providers, command timeouts, generated-file conflict recovery and prose-only validation | [Configuration — Common settings](references/configuration.md#common-settings); [Crews](references/configuration.md#crews); [Recovery settings](references/configuration.md#recovery-settings) |
-| Configure another human crew (`[crews.<name>] kind = "human"`), its supported keys and restrictions, dispatch and pilot exclusions, operator status moves, or verify it with config and readiness | [Configuration — Human crews](references/configuration.md#human-crews) |
-| Executor definitions: host OS support, auth probes, inspection tools and shared Cargo-cache grants | [Configuration — Executor definitions](references/configuration.md#executor-definitions) |
-| Per-tag instruction files and review-skip tag mappings | [Configuration — Tag instructions](references/configuration.md#tag-instructions); [Review-skip tags](references/configuration.md#review-skip-tags) |
-| Review baseline commands and owed host evidence | [Configuration — Review baseline commands and owed host evidence](references/configuration.md#review-baseline-commands-and-owed-host-evidence) |
-| Linux execution prerequisites or sandbox failure | [Linux sandbox](references/linux-sandbox.md) |
-| Windows host (Orbit runs inside WSL2) | [Windows through WSL2](references/windows-wsl2.md) |
-| macOS: Claude worker token and the clock env file | [macOS](references/macos.md) |
-| Headless browser kit (`orbit config browser-kit`) so workers can render and screenshot UI changes | [Browser kit](references/browser-checks.md) |
-| Enable or disable a scheduled routine as an operator, verify it, or tell an enabled routine apart from a host-local pause or the host clock | [Automation — Turning the scheduler on](references/automation.md#turning-the-scheduler-on); [Observe and control](references/automation.md#observe-and-control) |
-| Scheduled execution | [Automation](references/automation.md) |
-| Configure task-pilot eligibility or freshness, inspect readiness, or request a later assessment | [Automation — Tuning task-pilot](references/automation.md#tuning-which-tasks-task-pilot-prepares); [Orchestration — task-pilot](../orbit-orchestrate/references/orchestration-pilot-admission.md) |
-| Workspace scripts (`target: script:<name>` job steps): what a script is, granting or revoking one, grant staleness, network and root grants, or verifying a grant | [Automation — Workspace scripts](references/automation.md#workspace-scripts) |
-| Recurring QA and other task templates, including tool grants and the upgrade rule before setting one | [Auto-tasks — Granting tools to every minted task](references/auto-tasks.md#granting-tools-to-every-minted-task) |
-| Prompt-size cost estimates, token usage and unknown cost | [Operational logs — Prompt-size cost accounting](references/operational-logs.md#prompt-size-cost-accounting) |
-| Choose which shipped routines and auto-tasks an existing workspace carries, reconcile a policy change, or diagnose excluded defaults | [Configuration — Seeding policy](references/configuration.md#seeding-policy) |
-| MCP clients, SSH federation or remote dashboard | [Remote access](references/remote-access.md) |
-| Installing plugins, their `orbit <ns>` commands and dashboard panels, and the `.orbit/plugins.yaml` pin file | [Plugins](references/plugins.md) |
-| Decision channels for plugin answer submission | [Plugins — Decision channels](references/plugins.md#decision-channels) |
-| Register Grok's MCP server, understand its shared Claude config and compatibility cases, or verify which source Grok loaded | [First run — Grok MCP registration](references/first-run.md#grok-mcp-registration) |
-| Set up a host-local application that acts on an operator's consent for exact workspace-bound tool calls, including credentials, callbacks, rotation and revocation | [Scoped application authority](references/applications.md) |
-| Manage a legacy external tool (`orbit tool add`, `list`, `show`, `run`, `enable`, `disable`, `remove`, `doctor`) | [Plugins — Managing legacy external tools](references/plugins.md#managing-legacy-external-tools) |
-| Owner/replica roles, multiple machines, or coordinating a breaking workspace-layout upgrade across hosts | [Multi-host](references/multi-host.md#upgrading-a-workspace-together) |
-| Single-owner distributed drain setup or claimed-attempt recovery | [Distributed drain](../orbit/references/setup/distributed-drain-setup.md) |
-| Owner completion policy for distributed-drain handoffs (`review` versus automatic owner landing) | [Configuration — Distributed-drain completion policy](references/configuration.md#distributed-drain-completion-policy) |
-| Standing-drain keeper (`workflow.standing_drain.*`): what the opt-in keeper submits, its keys and ranges, enabling or turning it off, and verifying it with `orbit doctor --check standing-drain` or `orbit run readiness --json` | [Configuration — Standing-drain keeper](references/configuration.md#standing-drain-keeper) |
-| Task snapshots, backup and restore | [Publication](references/publication.md) |
-| Upgrade, resource sync, doctor, worktree GC, workspace removal or teardown, source-remote rebinding, or re-pointing this host at a moved checkout directory (`workspace rebind --path`); inspect layout migrations or repair SQLite permissions offline | [Maintenance](references/maintenance.md#database-and-layout-upgrades); moved checkout: [Maintenance — Rebind a moved checkout](references/maintenance.md#rebind-a-moved-checkout) |
-| Inspect the installed skill catalog or user-level skill links: use `orbit skill list` and `show`, and `orbit skill doctor` to diagnose dangling links. If a client cannot find a skill, inspect the expected links or run `orbit skill link`; a healthy doctor result does not certify that every client link exists. | [Maintenance — Skill management](references/maintenance.md#skill-management) |
-| Retired features and their leftover keys, commands or toolset names (explorer and agent invocation, crew ladder, regression-risk marks, explore brief, visual review, and the other removals): what to delete, what replaces it, the recognition deadline, and how to verify the cleanup with `orbit doctor` | [Maintenance — Retired features](references/maintenance.md#retired-features-and-their-keys) |
-| A removed command, MCP tool name or task input: `orbit orchestrator`, `--role orchestrators`, per-action MCP names such as `orbit_friction_add`, a bare string in a list field, or a `model`, `agent` or `context` task input. Find the replacement and what to delete | [Maintenance — Retired features](references/maintenance.md#retired-features-and-their-keys) |
-| Compare implementer models or crews now that the orchestrator scorecard is gone | `orbit agents rank` in [model ranking](../orbit-orchestrate/references/model-ranking.md); crew comparison in [Configuration — Experiments](references/configuration.md#experiments) |
-| Inspect or compact admission receipt storage on an owner checkout | [Maintenance — Admission receipt storage](references/maintenance.md#admission-receipt-storage) |
-| Scheduler/service logs and host incidents | [Operational logs](references/operational-logs.md) |
-| Inspect one CLI audit event by ID | [Operational logs — Audit Event Log](references/operational-logs.md#audit-event-log) |
-| A task held after a provider failure: which crews, accounts and hosts it excludes and when it clears | [Operational logs — Provider failure holds](references/operational-logs.md#provider-failure-holds) |
+| First installation or another repository: detect state, install, initialize the machine (steps 1–3) | [first-run-machine](references/first-run-machine.md) |
+| Initialize a workspace (step 4): `workspace init`, MCP registration, presets; Grok's MCP server and which source Grok loaded | [first-run-workspace](references/first-run-workspace.md) |
+| Verify and hand off a first run, or choose what to set up next | [first-run-verify](references/first-run-verify.md) |
+| Add a Copilot, Antigravity or Muse crew; fix provider authentication; pass Claude or Codex credentials, per-crew API key, stale service environment; crew selection, provider aliases, a dispatch refusal | [providers](references/providers.md) |
+| Linux execution prerequisites or sandbox failure | [linux-sandbox](references/linux-sandbox.md) |
+| Windows host (Orbit runs inside WSL2) | [windows-wsl2](references/windows-wsl2.md) |
+| macOS: Claude worker token and the clock env file | [macos](references/macos.md) |
+| Headless browser kit (`orbit config browser-kit`) so workers can render and screenshot UI changes | [browser-checks](references/browser-checks.md) |
+| Where config lives and how layers merge; `seeding.*`: which shipped routines and auto-tasks a workspace carries, reconciling a policy change, excluded defaults | [configuration-layers](references/configuration-layers.md) |
+| Choose an MCP role, configure global MCP roles and toolsets, understand server flag precedence, or inspect the advertised surface | [configuration-mcp-roles](references/configuration-mcp-roles.md) |
+| Settings table for workflow policy: base branch, default crew, crew pools, generated paths, lock modes, CI infrastructure retries, provider limits, task types | [configuration-settings-workflow](references/configuration-settings-workflow.md) |
+| Settings table for host pressure, forecast admission, GitHub quota, `execution.*`, `tasks.id_start`, fixed limits | [configuration-settings-host](references/configuration-settings-host.md) |
+| `review.*` settings, review baseline commands and owed host evidence | [configuration-review](references/configuration-review.md) |
+| PR, commit and branch templates, PR labels and reviewers, the PR screenshot section | [configuration-pull-requests](references/configuration-pull-requests.md) |
+| Per-tag instruction files and review-skip tag mappings | [configuration-tags](references/configuration-tags.md) |
+| Completion holds; owner completion policy for distributed-drain handoffs (`review` versus automatic owner landing) | [configuration-completion](references/configuration-completion.md) |
+| Standing-drain keeper (`workflow.standing_drain.*`): what it submits, keys and ranges, enabling or turning it off, verifying with `orbit doctor --check standing-drain` | [configuration-standing-drain](references/configuration-standing-drain.md) |
+| Configure or verify mid-run steering, including rollout timing and limits | [configuration-mid-run-steering](references/configuration-mid-run-steering.md) |
+| The fixed bounds of fleet notices, the attention feed, the resident evolution ledger and the failing-job warning; host capability labels (`machine.labels`, `requires_labels`, placement waits) | [configuration-fleet](references/configuration-fleet.md) |
+| Experiments: `[experiments]` settings, config overlays, lifecycle, shadow/live modes, readouts; crew comparison | [configuration-experiments](references/configuration-experiments.md) |
+| Executor image input: `spec.image_input`, `vision = false`, the canary and visual hold, `orbit agents vision-probe` | [configuration-image-input](references/configuration-image-input.md) |
+| Recovery settings: generated-file conflict recovery, prose-only validation, CI infrastructure reruns | [configuration-recovery](references/configuration-recovery.md) |
+| Crews, human crews (`kind = "human"`), crew selection; every `orbit` command fails to load because a crew name contains `:` (repair the file by hand) | [configuration-crews](references/configuration-crews.md) |
+| Automatic per-draw effort (`<crew>@auto` bands, `workflow.auto_effort.*`): which pools accept it, verifying a resolved effort without dispatching work | [configuration-auto-effort](references/configuration-auto-effort.md) |
+| Activity wall-clock timeouts, environment passthrough, filesystem profiles, executor definitions (host OS support, auth probes, inspection tools, shared Cargo-cache grants) | [configuration-execution](references/configuration-execution.md) |
+| Activity-scoped workspace knowledge: `[workflow.agent_corpus]`, `INDEX.md`, verifying `activity.agent_corpus_applied` | [configuration-agent-corpus](references/configuration-agent-corpus.md) |
+| Landed-delivery line classes (`workflow.test_paths`, `workflow.non_code_paths`); backfilling with `migrate --backfill-diff-stats` | [configuration-diff-classification](references/configuration-diff-classification.md) |
+| Tune a repository's workspace policy from evidence, steps 1–5: base branch, required validation, footprint locks, generated files, light delivery | [workspace-tuning-policy](references/workspace-tuning-policy.md) |
+| Tune crew routing (task types, complexity and purpose pools, draw policy), review layers, analytics and regression fix layers | [workspace-tuning-crews](references/workspace-tuning-crews.md) |
+| Keep one task out of automatic drains while an interactive session owns it: the reserved `no-drain` tag, its admission and approval effects, verification | [workspace-tuning-no-drain](references/workspace-tuning-no-drain.md) |
+| Roll out a tuned policy, optional features, a worked example | [workspace-tuning-rollout](references/workspace-tuning-rollout.md) |
+| Turn the scheduler on, enable or disable a routine as an operator, verify it, tell an enabled routine from a host-local pause or the host clock, "why didn't it fire?" | [automation-scheduler](references/automation-scheduler.md) |
+| The seeded routines, authoring a routine, changing a trigger, condition triggers, routines a plugin seeds | [automation-routines](references/automation-routines.md) |
+| Final recovery of blocked tasks, red-base re-checks, Linux CodeQL evidence for held reviews, GitHub evidence sweeps | [automation-built-in](references/automation-built-in.md) |
+| Workspace scripts (`target: script:<name>` job steps): grant or revoke one, grant staleness, network and root grants, verify a grant | [automation-scripts](references/automation-scripts.md) |
+| Configure task-pilot eligibility or freshness, inspect readiness, request a later assessment; see also [task-pilot admission](../orbit-orchestrate/references/orchestration-pilot-admission.md) | [automation-task-pilot](references/automation-task-pilot.md) |
+| Create a recurring QA or other task template: fields, dedupe, skipping a tick, completion contracts | [auto-tasks-authoring](references/auto-tasks-authoring.md) |
+| Manage definitions; grant tools to every minted task, including the upgrade rule before setting one | [auto-tasks-managing](references/auto-tasks-managing.md) |
+| Adopt a current bundled body from a stale fork | [auto-tasks-adopting](references/auto-tasks-adopting.md) |
+| Delete a definition, definitions a plugin seeds | [auto-tasks-deleting](references/auto-tasks-deleting.md) |
+| The seeded definitions from `qa-sweep` to `host-health` | [auto-tasks-catalog-reviews](references/auto-tasks-catalog-reviews.md) |
+| The seeded definitions from `pilot-block-patterns` to `agent-guidance-audit`; shipped defaults promoted on proven yield | [auto-tasks-catalog-audits](references/auto-tasks-catalog-audits.md) |
+| Delivery consumers: stalls, automatic replay, `reset` | [auto-tasks-delivery](references/auto-tasks-delivery.md) |
+| Scheduler/service logs and host incidents; inspect one CLI audit event by ID | [operational-logs-triage](references/operational-logs-triage.md) |
+| Prompt-size cost estimates, token usage and unknown cost; delivery profiles and admission diagnostics | [operational-logs-cost](references/operational-logs-cost.md) |
+| A task held after a provider failure: which crews, accounts and hosts it excludes and when it clears | [operational-logs-provider-holds](references/operational-logs-provider-holds.md) |
+| Worker resource containment: a run killed or throttled by a worker limit | [operational-logs-containment](references/operational-logs-containment.md) |
+| Install plugins: `orbit <ns>` commands, dashboard panels, the `.orbit/plugins.yaml` pin file, switching one off in a workspace | [plugins-install](references/plugins-install.md) |
+| Certify a plugin for this Orbit; a plugin that is not serving its tools | [plugins-certify](references/plugins-certify.md) |
+| Plugin permissions, grants and secrets | [plugins-permissions](references/plugins-permissions.md) |
+| Decision channels for plugin answer submission | [plugins-decision-channels](references/plugins-decision-channels.md) |
+| Plugin backends: Python with dependencies, built from source | [plugins-backends](references/plugins-backends.md) |
+| Manage a legacy external tool (`orbit tool add`, `list`, `show`, `run`, `enable`, `disable`, `remove`, `doctor`); migrate one to a plugin | [plugins-legacy-tools](references/plugins-legacy-tools.md) |
+| Host-local application acting on an operator's consent for exact tool calls: credentials, callbacks, rotation, revocation | [applications](references/applications.md) |
+| MCP clients, SSH federation, role and toolset selection, authority on the destination, TCP MCP | [remote-access-mcp](references/remote-access-mcp.md) |
+| Remote dashboard and switching hosts in the dashboard | [remote-access-dashboard](references/remote-access-dashboard.md) |
+| Owner/replica roles, multiple machines, a breaking workspace-layout upgrade across hosts | [multi-host](references/multi-host.md) |
+| Task snapshots: bind a workspace, transfer the source repository, HTTPS credentials, the weekly routine | [publication-bind](references/publication-bind.md) |
+| Publish a task snapshot, inspect one, restore deliberately | [publication-snapshots](references/publication-snapshots.md) |
+| `orbit doctor` repairs and task locks | [maintenance-diagnose](references/maintenance-diagnose.md) |
+| Worktree GC and workspace scratch | [maintenance-worktree-gc](references/maintenance-worktree-gc.md) |
+| Upgrade, resource sync, persistent MCP clients during upgrades, database and layout migrations, offline SQLite permission repair | [maintenance-upgrades](references/maintenance-upgrades.md) |
+| Deploy a local build pinned to a source commit; reclaim what deploys leave behind | [maintenance-local-deploys](references/maintenance-local-deploys.md) |
+| Workspace removal or teardown, source-remote rebinding, re-pointing this host at a moved checkout (`workspace rebind --path`) | [maintenance-removal-and-rebind](references/maintenance-removal-and-rebind.md) |
+| Installed skill catalog or user-level skill links (`orbit skill list`, `show`, `doctor`, `link`); a client cannot find a skill | [maintenance-skills](references/maintenance-skills.md) |
+| Retired features and their leftover keys, commands or toolset names, or a removed command, MCP tool name or task input: what to delete, what replaces it, the deadline | [maintenance-retired-features](references/maintenance-retired-features.md) |
+| Deprecated keys that are translated, ignored or fixed; verify the cleanup with `orbit doctor` | [maintenance-deprecated-keys](references/maintenance-deprecated-keys.md) |
+| Store retention, admission receipt storage, audit events, logs, search indexes, what is evidence and must not be edited | [maintenance-storage](references/maintenance-storage.md) |
+| Operator procedure for mid-run steering | [mid-run steering](../orbit-orchestrate/references/mid-run-steering.md) |
+| Single-owner distributed drain setup or claimed-attempt recovery | [distributed drain setup](../orbit/references/setup/distributed-drain-setup.md) |
+| Compare implementer models or crews: `orbit agents rank` | [model ranking](../orbit-orchestrate/references/model-ranking.md) |
 
 Task tracking alone does not require a provider, PR credentials, a scheduler or
 remote hosts. Add those only for the requested workflow. Agent execution needs
@@ -101,7 +123,7 @@ its Git/PR credentials. Task search uses local SQLite FTS5 and requires no downl
 An upgrade must preserve running-client compatibility or refuse before changing
 live state. Check long-lived MCP and service processes, not only active jobs.
 Never delete admission/identity files, bypass schema guards, or start a shadow
-store to recover access. Follow [maintenance](references/maintenance.md).
+store to recover access. Follow [maintenance-upgrades](references/maintenance-upgrades.md).
 
 Seeded schedules are disabled until an operator deliberately enables them, except
 the `worktree-gc` and `task-pilot` routines, which seed enabled when the

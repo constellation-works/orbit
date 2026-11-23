@@ -715,7 +715,7 @@ Without `--operator` on the **calling** side, remote sessions hold `agent`.
 Managed agent sessions cannot acquire operator by changing tool input or
 launching a privileged child. To deny a caller, remove its key from the
 owner's `~/.ssh/authorized_keys`. Details:
-[remote-access.md](../../crates/orbit-core/assets/skills/orbit-setup/references/remote-access.md).
+[remote-access-mcp.md](../../crates/orbit-core/assets/skills/orbit-setup/references/remote-access-mcp.md).
 
 ### 6. Read-only probe (never a health check for admission)
 

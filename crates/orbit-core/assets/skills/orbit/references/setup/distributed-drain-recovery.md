@@ -107,4 +107,4 @@ own context; nothing inherits the old union.
 
 The owner's clock can dispatch final recovery for an eligible blocked task;
 inspect its decision, `blocked` status and `job_run_machine` before a manual
-re-backlog. See [automation.md](../../../orbit-setup/references/automation.md#built-in-final-recovery-of-blocked-tasks).
+re-backlog. See [automation-built-in.md](../../../orbit-setup/references/automation-built-in.md#built-in-final-recovery-of-blocked-tasks).

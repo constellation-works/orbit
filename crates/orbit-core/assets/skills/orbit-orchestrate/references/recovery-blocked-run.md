@@ -10,7 +10,7 @@ orbit run logs <run-id> --step <step-id> --json
 
 A failed run can leave its task `blocked` with the failure attached. The owner's
 clock can dispatch final recovery for an eligible block; inspect its decision
-and current task state first. See [automation.md](../../orbit-setup/references/automation.md#built-in-final-recovery-of-blocked-tasks).
+and current task state first. See [automation-built-in.md](../../orbit-setup/references/automation-built-in.md#built-in-final-recovery-of-blocked-tasks).
 If it remains blocked, read the evidence yourself, then
 make the transition deliberately — return the task to `backlog` only once you
 know why it failed and that a rerun can succeed.

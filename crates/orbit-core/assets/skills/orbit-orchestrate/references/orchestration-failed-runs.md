@@ -4,7 +4,7 @@
 
 A failed run can park its task in `blocked` with the failure attached. The
 owner's clock can dispatch final recovery for an eligible block; inspect its
-decision before intervening. See [automation.md](../../orbit-setup/references/automation.md#built-in-final-recovery-of-blocked-tasks).
+decision before intervening. See [automation-built-in.md](../../orbit-setup/references/automation-built-in.md#built-in-final-recovery-of-blocked-tasks).
 If it remains blocked, read the run and decide whether a rerun can succeed
 before deliberately returning it to backlog.
 

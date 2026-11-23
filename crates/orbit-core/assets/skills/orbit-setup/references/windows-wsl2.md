@@ -31,7 +31,7 @@ unasked.
 
 ## Inside the distribution
 
-Follow [first-run.md](first-run.md) as on Linux, with these WSL rules:
+Follow [first-run-machine.md](first-run-machine.md) as on Linux, with these WSL rules:
 
 1. **systemd.** The clock and worker containment need a systemd user manager.
    Current Ubuntu on WSL boots systemd; other distributions need
@@ -71,7 +71,7 @@ args:    --distribution <Distro> --user <linux-user> --exec <absolute-linux-orbi
 - That entry is agent authority. Add `--operator` after `serve` only when the
   user deliberately wants a human-facing orchestrator client with dispatch
   authority; never for a server an agent launches. See
-  [remote-access.md](remote-access.md#authority-on-the-destination).
+  [remote-access-mcp.md](remote-access-mcp.md#authority-on-the-destination).
 - Verify through the client: discover the workspace and make one read-only
   audited call. Also run `orbit doctor providers --json` through the same
   `wsl.exe --exec` shape to see the environment that server gets.
@@ -79,7 +79,7 @@ args:    --distribution <Distro> --user <linux-user> --exec <absolute-linux-orbi
 ## Scheduler limits
 
 `orbit routine init --install-clock` installs the systemd user timer, managed
-with `orbit clock status|pause|enable|repair` ([automation.md](automation.md)).
+with `orbit clock status|pause|enable|repair` ([automation-scheduler.md](automation-scheduler.md)).
 It ticks only while the distribution runs: systemd services do not keep WSL
 alive, and `wsl --shutdown`, Windows sleep, restart, sign-out and WSL idle
 shutdown stop it. Each routine's `missed_run` policy handles missed slots.

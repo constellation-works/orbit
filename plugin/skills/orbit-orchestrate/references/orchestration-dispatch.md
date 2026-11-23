@@ -133,4 +133,4 @@ override; set the executor host's mode instead. No profiles means forecasting
 adds no restriction. Preserve operator policy when explaining waits: this
 per-drain choice does not authorize starting work or changing machine settings,
 host thresholds, or the worker ceiling. Settings and limits:
-[configuration.md](../../orbit-setup/references/configuration.md#common-settings).
+[configuration-settings-workflow.md](../../orbit-setup/references/configuration-settings-workflow.md#common-settings).

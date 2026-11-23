@@ -26,7 +26,7 @@ keeper off (the default), the intent changes no drain behaviour.
 ### The keeper
 
 Enabling the keeper is the operator's decision, made in configuration:
-[Standing drain keeper](../../orbit-setup/references/configuration.md#standing-drain-keeper).
+[Standing drain keeper](../../orbit-setup/references/configuration-standing-drain.md#standing-drain-keeper).
 Do not turn it on for the operator, and do not turn it on to test on a live host.
 
 With the keeper enabled, each clock tick on the owner host decides whether to

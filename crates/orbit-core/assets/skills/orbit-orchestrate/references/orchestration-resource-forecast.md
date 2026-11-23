@@ -44,4 +44,4 @@ It has three tabs, each with its own address:
 
 The view is read-only. To change the mode or thresholds, use the
 `machine.auto_concurrency.*` settings in
-[configuration.md](../../orbit-setup/references/configuration.md#common-settings).
+[configuration-settings-workflow.md](../../orbit-setup/references/configuration-settings-workflow.md#common-settings).

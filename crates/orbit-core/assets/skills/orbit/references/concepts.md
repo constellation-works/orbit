@@ -66,7 +66,7 @@ an ordinary leaf on its own declared context.
 dedicated Git repository. It has source/workspace/authority identity, a
 generation, a commit, and attachment completeness labels. Inspection is not a
 live task read; restore is an explicit same-authority operation.
-See [publication.md](../../orbit-setup/references/publication.md).
+See [publication-bind.md](../../orbit-setup/references/publication-bind.md).
 
 **Friction** — a record of something that made the work harder than it should
 have been. A ledger of experience, not a queue of work; see

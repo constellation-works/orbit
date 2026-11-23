@@ -293,7 +293,7 @@ Frictions use lexical matching. Search by the words someone would actually have 
 
 Left alone, the corpus rots into duplicates. The seeded `friction-curation`
 auto-task deduplicates it, verifies whether each survivor still reproduces, and
-files fix tasks for the ones that do. → [auto-tasks.md](../../orbit-setup/references/auto-tasks.md)
+files fix tasks for the ones that do. → [auto-tasks-authoring.md](../../orbit-setup/references/auto-tasks-authoring.md)
 
 ## Rules
 

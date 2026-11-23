@@ -127,7 +127,7 @@ returns.
   whose worker has exited (`reclaimed_build_bytes`) and keeps the checkout.
   `orbit gc worktrees --confirm` on the follower removes settled leaves'
   checkouts without asking the owner; see
-  [maintenance.md](../../../orbit-setup/references/maintenance.md).
+  [maintenance-worktree-gc.md](../../../orbit-setup/references/maintenance-worktree-gc.md).
 
 ## Verify
 

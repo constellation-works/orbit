@@ -75,7 +75,7 @@ currently only `release-readiness/v1` is registered.
 
 The definition's
 `completion` block also names an evidence artifact, adapter and maximum age; see
-[completion-contract setup](../../orbit-setup/references/auto-tasks.md#proving-a-job-step-with-a-completion-contract).
+[completion-contract setup](../../orbit-setup/references/auto-tasks-authoring.md#proving-a-job-step-with-a-completion-contract).
 The adapter is a script requiring the owner's grant. Inspect its grant status;
 do not grant it automatically as a repair.
 

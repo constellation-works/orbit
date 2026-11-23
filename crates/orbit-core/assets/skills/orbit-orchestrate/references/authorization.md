@@ -102,7 +102,7 @@ authorization.
 reboot is within the fixed 180-minute hold, holding
 new unattended admissions while leaving running work alone. Later schedules
 are reported while admissions continue. Preserve the schedule; diagnostics do not authorize cancelling shutdown or overriding the
-hold. See [operational-logs.md](../../orbit-setup/references/operational-logs.md#delivery-profiles-and-admission-diagnostics).
+hold. See [operational-logs-cost.md](../../orbit-setup/references/operational-logs-cost.md#delivery-profiles-and-admission-diagnostics).
 
 Sustained host pressure throttles admissions on its own: readiness tasks read
 `resource_throttled`, and `orbit run readiness`, `orbit run show <drain>` and
