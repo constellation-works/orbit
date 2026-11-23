@@ -4,8 +4,9 @@
 //! document (`parse`).
 //!
 //! `io` stays free of TOML and of sibling modules; `paths` uses only std, TOML,
-//! serde and `orbit-common`; `parse` composes the two and admits no policy.
-//! `scripts/check-dependency-direction.sh` enforces those edges.
+//! serde and `orbit-common`. `scripts/check-dependency-direction.sh` enforces
+//! those two leaf rules. `parse` composes the two and admits no policy; that is
+//! design intent the script does not check.
 
 pub(super) mod io;
 pub(super) mod parse;
