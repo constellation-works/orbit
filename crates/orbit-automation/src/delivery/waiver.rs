@@ -1,6 +1,6 @@
 //! Operator waivers for settled failed or exhausted batches.
 
-use crate::{AutomationError, DeferredReason};
+use crate::{AutomationError, DeferredReason, checkpoint};
 use chrono::{DateTime, Utc};
 use orbit_store::contracts::AutomationStoreBackend;
 use orbit_types::workflow::automation::*;
@@ -46,10 +46,7 @@ pub fn waive(
     }
 
     let mut next = previous.clone();
-    next.generation = previous
-        .generation
-        .checked_add(1)
-        .ok_or_else(|| AutomationError::Deferred(DeferredReason::GenerationExhausted))?;
+    next.generation = checkpoint::next_generation(&previous)?;
     next.active = None;
     next.pending.retain(|delivery| {
         !active

@@ -15,7 +15,7 @@
 //! Nothing here covers, waives or discards debt. Coverage still requires valid
 //! evidence from the assigned executor of an admitted action.
 
-use crate::{AutomationError, DeferredReason};
+use crate::{AutomationError, DeferredReason, checkpoint};
 use chrono::{DateTime, Utc};
 use orbit_store::contracts::AutomationStoreBackend;
 use orbit_types::workflow::automation;
@@ -183,10 +183,8 @@ fn plan(
     state: &AutomationState,
 ) -> Result<(AutomationState, RecoveryRecord), AutomationError> {
     let mut next = state.clone();
-    next.generation = state
-        .generation
-        .checked_add(1)
-        .ok_or_else(|| AutomationError::Deferred(DeferredReason::GenerationExhausted))?;
+    let generation = checkpoint::next_generation(state)?;
+    next.generation = generation;
 
     // Recovery is how a stalled consumer resumes, so the marker never
     // survives it: the reason either no longer applies or has to be re-proven.
@@ -209,10 +207,7 @@ fn plan(
         // The replayed state is derived from the pre-recovery one, so the
         // marker has to be cleared again here.
         next.stall = None;
-        next.generation = state
-            .generation
-            .checked_add(1)
-            .ok_or_else(|| AutomationError::Deferred(DeferredReason::GenerationExhausted))?;
+        next.generation = generation;
         Some(record)
     } else {
         None
