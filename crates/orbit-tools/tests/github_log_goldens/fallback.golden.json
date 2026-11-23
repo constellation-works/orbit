@@ -6055,5 +6055,104 @@
       "selected_workspace",
       "selected_workspace"
     ]
+  },
+  "an_invalid_run_log_archive_recovers_the_failed_jobs_own_log": {
+    "output": {
+      "source": "job_api_log",
+      "source_jobs": [
+        {
+          "job_id": 101560010340,
+          "name": "docs",
+          "status": "completed",
+          "conclusion": "failure",
+          "url": "https://github.com/acme/orbit/actions/runs/34060485218/job/101560010340"
+        }
+      ],
+      "fallback_error": null,
+      "parsed": {
+        "log": "﻿2026-09-06T21:15:07.8469063Z Current runner version: '2.337.0'\n2026-09-06T21:15:34.9569214Z [command]/usr/bin/git log -1 --format=%H\n2026-09-06T21:15:34.9602377Z 3d9fc7c65934cdc98cec3954a37e10ba6d387e55\n2026-09-06T21:28:05.5540516Z  Documenting orbit-web v0.19.0\n2026-09-06T21:28:07.0459354Z error: public documentation for `connect` links to private item `reject_root_override`\n2026-09-06T21:28:07.0460831Z   --> crates/orbit-web/src/connect.rs:92:7\n2026-09-06T21:28:07.4229928Z ##[error]Process completed with exit code 101.\n",
+        "truncated": false,
+        "total_bytes": 530,
+        "returned_bytes": 530,
+        "source_complete": true,
+        "diagnostic_unit": null,
+        "failure_regions": null,
+        "checkout_commits": [
+          "3d9fc7c65934cdc98cec3954a37e10ba6d387e55"
+        ],
+        "checkout_evidence": [
+          "/usr/bin/git log -1 --format=%H",
+          "3d9fc7c65934cdc98cec3954a37e10ba6d387e55"
+        ],
+        "checkout_evidence_complete": true,
+        "checkout_evidence_scanned_bytes": 530,
+        "checkout_evidence_source_truncated": false,
+        "checkout_evidence_display_truncated": false
+      }
+    },
+    "calls": [
+      "run view 34060485218 --log-failed",
+      "run view 34060485218 --json databaseId,number,workflowName,displayTitle,status,conclusion,event,headBranch,headSha,createdAt,startedAt,updatedAt,url,jobs",
+      "api --method GET repos/{owner}/{repo}/actions/jobs/101560010340/logs"
+    ],
+    "cwds": [
+      "selected_workspace",
+      "selected_workspace",
+      "selected_workspace"
+    ]
+  },
+  "an_invalid_run_log_archive_reports_both_failures_when_job_logs_are_unavailable": {
+    "output": {
+      "source": "run_log",
+      "source_jobs": [],
+      "fallback_error": "execution failed: gh run view --log failed: failed to get run log: zip: not a valid zip file; job log recovery failed: job log fallback read 1 of 1 candidate job(s): job 101560010340 (`docs`): execution failed: gh api job logs failed: gh: Not Found (HTTP 404) token=[REDACTED_SECRET]",
+      "parsed": {
+        "log": "",
+        "truncated": false,
+        "total_bytes": 0,
+        "returned_bytes": 0,
+        "source_complete": true,
+        "diagnostic_unit": null,
+        "failure_regions": null,
+        "checkout_commits": [],
+        "checkout_evidence": [],
+        "checkout_evidence_complete": true,
+        "checkout_evidence_scanned_bytes": 0,
+        "checkout_evidence_source_truncated": false,
+        "checkout_evidence_display_truncated": false
+      }
+    },
+    "calls": [
+      "run view 34060485218 --log-failed",
+      "run view 34060485218 --json databaseId,number,workflowName,displayTitle,status,conclusion,event,headBranch,headSha,createdAt,startedAt,updatedAt,url,jobs",
+      "api --method GET repos/{owner}/{repo}/actions/jobs/101560010340/logs"
+    ],
+    "cwds": [
+      "selected_workspace",
+      "selected_workspace",
+      "selected_workspace"
+    ]
+  },
+  "an_invalid_run_log_archive_reports_both_failures_for_an_unavailable_step": {
+    "error": "invalid input: log step not found: \"cargo doc\" in run 34060485218 job 101560010340; execution failed: gh run view --log failed: failed to get run log: zip: not a valid zip file; job log recovery failed: job log fallback read 1 of 1 candidate job(s): job 101560010340 (`docs`): execution failed: gh api job logs failed: gh: Not Found (HTTP 404) token=[REDACTED_SECRET]; no log bytes returned",
+    "calls": [
+      "run view 34060485218 --job 101560010340 --log-failed",
+      "run view 34060485218 --json databaseId,number,workflowName,displayTitle,status,conclusion,event,headBranch,headSha,createdAt,startedAt,updatedAt,url,jobs",
+      "api --method GET repos/{owner}/{repo}/actions/jobs/101560010340/logs"
+    ],
+    "cwds": [
+      "selected_workspace",
+      "selected_workspace",
+      "selected_workspace"
+    ]
+  },
+  "an_unrelated_run_log_read_failure_stays_an_error_with_a_readable_job_log": {
+    "error": "execution failed: gh run view --log failed: failed to get run log: unexpected EOF",
+    "calls": [
+      "run view 34060485218 --log-failed"
+    ],
+    "cwds": [
+      "selected_workspace"
+    ]
   }
 }

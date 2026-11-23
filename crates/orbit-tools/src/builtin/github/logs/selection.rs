@@ -16,7 +16,7 @@ const DEFAULT_MAX_FALLBACK_JOBS: usize = 3;
 /// The bytes came from the run-scoped `gh run view --log*` read.
 pub const SOURCE_RUN_LOG: &str = "run_log";
 /// The bytes came from one job's log API, because the run-scoped read had the
-/// known empty/readiness blind spot.
+/// known empty, readiness or invalid-zip blind spot.
 pub const SOURCE_JOB_API_LOG: &str = "job_api_log";
 
 /// How the excerpt budget is divided between the head and the tail of a
@@ -95,8 +95,9 @@ pub struct RunLogRequests {
     /// `gh run view <run> [--job <job>] --log-failed|--log`.
     pub run_log: ExecRequest,
     /// `gh run view <run> --json …`, run only when `run_log` produced no
-    /// output or hit the narrowly classified in-progress readiness response,
-    /// to learn which completed jobs may stand in for it.
+    /// output or hit a narrowly classified fallback response (the in-progress
+    /// readiness response or the invalid run-log zip), to learn which completed
+    /// jobs may stand in for it.
     pub run_view: ExecRequest,
     pub run_id: String,
     /// A single job the caller narrowed the read to, if any.

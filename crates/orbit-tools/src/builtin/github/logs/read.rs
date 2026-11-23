@@ -40,12 +40,13 @@ impl RunLogRead {
 }
 
 /// Read one bounded log excerpt, recovering from per-job logs when the
-/// run-scoped read succeeds with no output or reports the known parent-run
-/// readiness error for this exact run.
+/// run-scoped read succeeds with no output, reports the known parent-run
+/// readiness error for this exact run, or reports the malformed run-level log
+/// archive.
 ///
 /// Other failures stay errors: auth, network, source-limit, and retired-run
 /// failures must remain visible to the caller rather than being mistaken for
-/// the one GitHub readiness gap this fallback can safely answer.
+/// the GitHub gaps this fallback can safely answer.
 ///
 /// `cached_run_view` lets a caller that already holds a verified, freshly
 /// fetched `gh run view` payload for this exact run (projected the same way
@@ -72,7 +73,7 @@ pub fn read_run_log_guarded(
 ) -> Result<RunLogRead, OrbitError> {
     let log = match run_scoped_log(requests, bounds, guard) {
         Ok(log) => log,
-        Err(error) if is_parent_run_log_readiness_error(&error, &requests.run_id) => {
+        Err(error) if is_recoverable_run_log_error(&error, &requests.run_id) => {
             let empty = match &requests.selection {
                 Some(selection) => StreamedLogCollector::scoped(
                     bounds.max_bytes,
@@ -211,6 +212,21 @@ fn selection_not_found_error(
         None => detail,
     };
     OrbitError::InvalidInput(format!("{detail}; no log bytes returned"))
+}
+
+/// Whether a failed run-scoped read may be answered from per-job logs: the
+/// parent-run readiness response for this exact run, or the malformed run-level
+/// archive. Per-job metadata is still identity-checked by `fallback_jobs`.
+fn is_recoverable_run_log_error(error: &OrbitError, run_id: &str) -> bool {
+    is_parent_run_log_readiness_error(error, run_id) || is_invalid_run_log_archive_error(error)
+}
+
+/// GitHub served the run-level log archive as a corrupt zip. The per-job log
+/// endpoint serves each job's log as plain text, so the archive is not needed.
+fn is_invalid_run_log_archive_error(error: &OrbitError) -> bool {
+    let message = error.to_string();
+    message.strip_prefix("execution failed: gh run view --log failed: ")
+        == Some("failed to get run log: zip: not a valid zip file")
 }
 
 /// GitHub CLI's exact readiness response for a parent workflow that has not

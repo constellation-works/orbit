@@ -141,9 +141,9 @@ impl crate::Tool for GithubRunLogsTool {
             "returned_bytes": log.returned_bytes,
             "total_bytes": log.total_bytes,
             // Which query the excerpt above came from, and — when the
-            // run-scoped read hit its empty/readiness blind spot — the job
-            // whose own log stood in for it, so a reader is never left
-            // guessing what these bytes describe.
+            // run-scoped read hit its empty, readiness or invalid-zip blind
+            // spot — the job whose own log stood in for it, so a reader is
+            // never left guessing what these bytes describe.
             "source": read.source,
             "source_jobs": read.source_jobs,
             "fallback_error": read.fallback_error,
