@@ -108,8 +108,459 @@ fn unpublished_held_run_cannot_authorize_repair() {
     assert_eq!(f.runtime.get_task_history(&f.task).unwrap(), history);
 }
 
+fn setup_fake_codex_implement_pipeline(f: &mut Fixture, captured_prompt: &std::path::Path) {
+    use orbit_types::workflow::{ExecutorDef, ExecutorSandboxKind};
+    use std::os::unix::fs::PermissionsExt;
+
+    let global = f._root.path().join("global");
+    // Preserve the source run's original step layout via snapshot before
+    // updating `task_pr_pipeline.yaml` to run `implement_bundle` after `resume_candidate`.
+    let jobs_dir = global.join("resources/jobs");
+    let source_yaml = std::fs::read_to_string(jobs_dir.join("task_pr_pipeline.yaml")).unwrap();
+    let job_runs_dir = &f.runtime.paths().job_runs_dir;
+    std::fs::create_dir_all(job_runs_dir).unwrap();
+    std::fs::write(
+        job_runs_dir.join(format!("{}.job.yaml", f.source.run_id)),
+        &source_yaml,
+    )
+    .unwrap();
+
+    let activities_dir = global.join("resources/activities");
+    std::fs::copy(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("assets/activities/agent_implement.yaml"),
+        activities_dir.join("agent_implement.yaml"),
+    )
+    .unwrap();
+
+    let codex_path = f._root.path().join("bin/codex");
+    let envelope = json!({
+        "schemaVersion": 1,
+        "status": "success",
+        "result": {"summary": "applied operator diagnosis repair"},
+        "error": null
+    })
+    .to_string();
+    std::fs::write(
+        &codex_path,
+        format!(
+            "#!/bin/sh\ncat > '{}'\ncat <<'STDOUT'\n{envelope}\nSTDOUT\n",
+            captured_prompt.display()
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(&codex_path, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+    let mut executor: orbit_types::resource::ExecutorResource = serde_yaml::from_str(
+        &std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/executors/codex.yaml"),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    executor.spec.command = Some(codex_path.display().to_string());
+    executor.spec.sandbox = Some(ExecutorSandboxKind::Off);
+    f.runtime
+        .upsert_executor_def(&ExecutorDef::from_resource_spec(
+            executor.metadata.name,
+            executor.spec,
+            None,
+            None,
+        ))
+        .unwrap();
+
+    let repair_yaml = "schemaVersion: 2\nkind: Job\nmetadata:\n  name: task_pr_pipeline\nspec:\n  state: enabled\n  task_delivery: {}\n  steps:\n    - {id: worktree, target: 'activity:worktree_setup', default_input: {task_ids: '{{ input.task_ids }}', base: '{{ input.base_branch }}', base_sync: '{{ input.base_sync }}'}}\n    - {id: resume_candidate, target: 'activity:candidate_resume', default_input: {job_run_id: '{{ steps.worktree.output.job_run_id }}', task_ids: '{{ input.task_ids }}', workspace_path: '{{ steps.worktree.output.workspace_path }}', base_sha: '{{ steps.worktree.output.base_sha }}', prior_job_run_id: '{{ steps.worktree.output.prior_job_run_id }}'}}\n    - id: implement_bundle\n      when: \"{{ steps.resume_candidate.output.implement }} == true\"\n      loop:\n        items: \"{{ input.task_ids }}\"\n        max_iterations: 1\n        steps:\n          - id: implement_one\n            target: activity:agent_implement\n            default_input:\n              task_id: \"{{ item }}\"\n              workspace_path: \"{{ steps.worktree.output.workspace_path }}\"\n              repo_root: \"{{ steps.worktree.output.workspace_path }}\"\n              base_sha: \"{{ steps.worktree.output.base_sha }}\"\n              resume_candidate: \"{{ steps.resume_candidate.output.repair }}\"\n";
+    std::fs::write(jobs_dir.join("task_pr_pipeline.yaml"), repair_yaml).unwrap();
+    // Reinstall the worker launcher to avoid a bare exit-0 stub; we run the worker in-process.
+    orbit_core::test_support::install_substitute_pipeline_worker(["sh", "-c", "exit 0"]);
+}
+
+fn execute_pending_repair_worker(f: &Fixture, run_id: &str) {
+    let mut run = f.runtime.show_job_run_observed(run_id).unwrap();
+    run.state = JobRunState::Pending;
+    run.started_at = None;
+    run.finished_at = None;
+    run.duration_ms = None;
+    run.pid = None;
+    run.pid_start_time = None;
+    f.runtime
+        .sqlite_store()
+        .unwrap()
+        .upsert_job_run_for_workspace(&f.runtime.workspace_id().unwrap(), &run, None)
+        .unwrap();
+    f.runtime
+        .execute_pipeline_run_worker(run_id)
+        .expect("repair worker should execute worktree, candidate_resume and agent_implement");
+}
+
+fn assert_captured_prompt_carries_diagnosis(
+    captured_prompt: &std::path::Path,
+    diagnosis: &str,
+    excluded: &[&str],
+) {
+    let prompt = std::fs::read_to_string(captured_prompt)
+        .expect("agent_implement must invoke codex and capture the prompt");
+    assert!(
+        prompt.contains(diagnosis),
+        "repair agent prompt must contain operator diagnosis `{diagnosis}`; got:\n{prompt}"
+    );
+    let envelope: Value = prompt
+        .lines()
+        .find_map(|line| {
+            serde_json::from_str::<Value>(line)
+                .ok()
+                .filter(|v| v.get("schemaVersion").is_some())
+        })
+        .expect("repair agent prompt must contain the execution envelope JSON");
+    let resume_output = envelope["input"]["resume_candidate"]["output"]
+        .as_str()
+        .expect("resume_candidate.output must carry the repair prompt payload");
+    assert!(resume_output.contains(diagnosis), "got:\n{resume_output}");
+    for forbidden in excluded {
+        assert!(
+            !resume_output.contains(forbidden),
+            "unexpected content `{forbidden}` in repair diagnosis payload: {resume_output}"
+        );
+    }
+}
+
+fn held_review_task_diagnosis_reaches_agent_prompt_and_spends_budget() {
+    use orbit_core::application::task::TaskUpdateParams;
+    use orbit_types::workflow::{PR_AUTO_FIX_BUDGET, source_repair_reservations};
+
+    let mut f = held_completion_fixture();
+    let captured_prompt = f._root.path().join("captured-agent-prompt.txt");
+    setup_fake_codex_implement_pipeline(&mut f, &captured_prompt);
+
+    let inert_comment = "Inert comment only: should neither trigger nor rewrite repair";
+    f.runtime
+        .update_task_as_human(
+            &f.task,
+            TaskUpdateParams {
+                comment: Some(inert_comment.into()),
+                ..Default::default()
+            },
+            "operator".into(),
+        )
+        .unwrap();
+    let runs_before = f.runtime.job_history("task_pr_pipeline").unwrap().len();
+    assert_eq!(
+        f.runtime.get_task(&f.task).unwrap().status,
+        TaskStatus::Review
+    );
+    assert!(
+        source_repair_reservations(&f.runtime.get_task_history(&f.task).unwrap())
+            .unwrap()
+            .is_empty(),
+        "a task comment alone must not record a repair or spend budget"
+    );
+
+    let diagnosis =
+        "Operator diagnosis: fix visibility in source.txt without replacing PR #17 [held-diag-42].";
+    let binding = f.inspect();
+    let mut submit = f.submit(binding);
+    submit["source_repair"]["diagnosis"] = json!(diagnosis);
+    let admitted = f
+        .runtime
+        .run_tool_as_human("orbit.workflow.run.resume", submit)
+        .unwrap();
+    let repair_run_id = admitted["run_id"].as_str().unwrap();
+    f.wait(repair_run_id);
+
+    // Posting another comment after submission must not alter the admitted repair.
+    f.runtime
+        .update_task_as_human(
+            &f.task,
+            TaskUpdateParams {
+                comment: Some("Post-submit inert comment".into()),
+                ..Default::default()
+            },
+            "operator".into(),
+        )
+        .unwrap();
+
+    let history = f.runtime.get_task_history(&f.task).unwrap();
+    let reservations = source_repair_reservations(&history).unwrap();
+    assert_eq!(reservations.len(), 1);
+    assert_eq!(reservations[0].diagnosis, diagnosis);
+    assert_eq!(reservations[0].attempt, 1);
+    assert_eq!(reservations[0].binding.pull_request, "17");
+
+    // Verify PR budget decreased by 1 (and adding 2 auto-fix attempts exhausts it).
+    assert_eq!(
+        f.runtime.job_history("task_pr_pipeline").unwrap().len(),
+        runs_before + 1
+    );
+    let mut exhausted_history = history.clone();
+    for i in 0..(PR_AUTO_FIX_BUDGET - 1) {
+        exhausted_history.push(orbit_types::task::TaskHistoryEntry {
+            at: Utc::now(),
+            by: "system".into(),
+            event: orbit_types::workflow::PR_AUTO_FIX_ADMITTED_EVENT.into(),
+            note: Some(
+                json!({
+                    "pr_number": "17",
+                    "head_sha": format!("{i:040x}"),
+                    "blocker": "failed_checks",
+                    "attempt": i + 2,
+                    "budget": PR_AUTO_FIX_BUDGET,
+                    "run_id": format!("autofix-{i}"),
+                    "crew": "fixture",
+                    "crew_source": "fixture"
+                })
+                .to_string(),
+            ),
+            from_status: None,
+            to_status: None,
+            operation_id: None,
+            decision: None,
+        });
+    }
+    let remaining_budget = PR_AUTO_FIX_BUDGET.saturating_sub(
+        source_repair_reservations(&exhausted_history)
+            .unwrap()
+            .len() as u32,
+    );
+    let decision = orbit_types::workflow::decide_pr_auto_fix(
+        &orbit_types::workflow::pr_auto_fix_attempts(&exhausted_history, "17"),
+        &orbit_types::workflow::PrAutoFixClaim {
+            pr_number: "17",
+            head_sha: &f.head,
+            blocker: orbit_types::workflow::PrAutoFixBlocker::FailedChecks,
+            run_id: "next-run",
+        },
+        remaining_budget,
+        "fixture",
+        "fixture",
+    );
+    assert!(
+        matches!(
+            decision,
+            orbit_types::workflow::PrAutoFixDecision::Exhausted(_)
+        ),
+        "expected PR budget to reflect the spent source repair: {decision:?}"
+    );
+
+    execute_pending_repair_worker(&f, repair_run_id);
+    assert_captured_prompt_carries_diagnosis(
+        &captured_prompt,
+        diagnosis,
+        &[inert_comment, "Post-submit inert comment"],
+    );
+    assert_eq!(
+        source_repair_reservations(&f.runtime.get_task_history(&f.task).unwrap())
+            .unwrap()
+            .len(),
+        1
+    );
+}
+
+fn held_completion_retry_on_review_task_carries_diagnosis_and_follows_pushed_head() {
+    use orbit_types::workflow::{
+        PR_AUTO_FIX_PUSHED_EVENT, PrAutoFixBlocker, PrAutoFixPush, source_repair_reservations,
+    };
+
+    let mut f = held_completion_fixture();
+    let captured_prompt = f._root.path().join("captured-retry-prompt.txt");
+    setup_fake_codex_implement_pipeline(&mut f, &captured_prompt);
+
+    // Advance the branch via an auto-fix push recorded on a completion retry run R2.
+    std::fs::write(f.repo.join("source.txt"), "auto-fix attempt before hold\n").unwrap();
+    git(&f.repo, &["add", "source.txt"]);
+    git(&f.repo, &["commit", "-qm", "auto-fix repair"]);
+    let advanced_head = git(&f.repo, &["rev-parse", "HEAD"]);
+    git(&f.repo, &["push", "-q", "origin", &f.branch]);
+    let mut answer: Value = serde_json::from_slice(&std::fs::read(&f.answer).unwrap()).unwrap();
+    answer["headRefOid"] = json!(advanced_head);
+    std::fs::write(&f.answer, answer.to_string()).unwrap();
+
+    let mut retry = f
+        .runtime
+        .insert_job_run(
+            "task_pr_pipeline",
+            2,
+            Utc::now() + chrono::Duration::seconds(1),
+            Some(json!({"task_ids":[f.task],"completion":"done","auto_fix":true})),
+            Some(f.source.run_id.clone()),
+        )
+        .unwrap();
+    // Preserve the original catalog definition snapshot for R2 as well.
+    let job_runs_dir = &f.runtime.paths().job_runs_dir;
+    std::fs::copy(
+        job_runs_dir.join(format!("{}.job.yaml", f.source.run_id)),
+        job_runs_dir.join(format!("{}.job.yaml", retry.run_id)),
+    )
+    .unwrap();
+    retry.state = JobRunState::Held;
+    retry.finished_at = Some(Utc::now() + chrono::Duration::seconds(2));
+    f.runtime
+        .sqlite_store()
+        .unwrap()
+        .upsert_job_run_for_workspace(&f.runtime.workspace_id().unwrap(), &retry, None)
+        .unwrap();
+    let mut retry_state = f.state.clone();
+    retry_state.run_id = retry.run_id.clone();
+    f.runtime
+        .write_run_state(&retry.run_id, &retry_state)
+        .unwrap();
+    f.runtime
+        .complete_job_run_step(
+            &retry.run_id,
+            &JobRunStepParams {
+                step_index: 6,
+                target_type: JobTargetType::Job,
+                target_id: retry.job_id.clone(),
+                state: JobRunState::Held,
+                started_at: retry.created_at,
+                finished_at: retry.finished_at.unwrap(),
+                duration_ms: None,
+                exit_code: None,
+                lock_wait_ms: None,
+                agent_response_json: None,
+                error_code: Some(DeliveryRefusal::RepairDispatched.error_code().into()),
+                error_message: Some("auto_fix_stopped: repair already dispatched".into()),
+            },
+        )
+        .unwrap();
+    let push_note = serde_json::to_string(&PrAutoFixPush {
+        pr_number: "17".into(),
+        from_head_sha: f.head.clone(),
+        to_head_sha: advanced_head.clone(),
+        blocker: PrAutoFixBlocker::FailedChecks,
+        run_id: retry.run_id.clone(),
+    })
+    .unwrap();
+    f.runtime
+        .apply_task_automation_update(
+            &f.task,
+            TaskAutomationUpdate {
+                append_history: vec![orbit_types::task::TaskHistoryEntry {
+                    at: Utc::now(),
+                    by: "system".into(),
+                    event: PR_AUTO_FIX_PUSHED_EVENT.into(),
+                    note: Some(push_note),
+                    from_status: None,
+                    to_status: None,
+                    operation_id: None,
+                    decision: None,
+                }],
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    // task.job_run_id remains bound to the checkpoint owner f.source.run_id, while
+    // the held run presented to the operator is `retry.run_id`.
+    assert_eq!(
+        f.runtime.get_task(&f.task).unwrap().job_run_id.as_deref(),
+        Some(f.source.run_id.as_str())
+    );
+
+    let inspect_req = json!({
+        "id": retry.run_id,
+        "source_repair": {"action": "inspect", "task_id": f.task}
+    });
+    let inspected = f
+        .runtime
+        .run_tool_as_human("orbit.workflow.run.resume", inspect_req)
+        .unwrap();
+    assert_eq!(inspected["binding"]["source_run_id"], retry.run_id);
+    assert_eq!(inspected["binding"]["head_sha"], advanced_head);
+
+    let diagnosis =
+        "Operator diagnosis on held retry: update test fixture threshold [retry-diag-7].";
+    let submit_req = json!({
+        "id": retry.run_id,
+        "source_repair": {
+            "action": "submit",
+            "task_id": f.task,
+            "request_key": "held-retry-1",
+            "binding": inspected["binding"],
+            "diagnosis": diagnosis
+        }
+    });
+    let admitted = f
+        .runtime
+        .run_tool_as_human("orbit.workflow.run.resume", submit_req)
+        .unwrap();
+    let repair_run_id = admitted["run_id"].as_str().unwrap();
+    f.wait(repair_run_id);
+
+    let reservations =
+        source_repair_reservations(&f.runtime.get_task_history(&f.task).unwrap()).unwrap();
+    assert_eq!(reservations.len(), 1);
+    assert_eq!(reservations[0].diagnosis, diagnosis);
+    assert_eq!(reservations[0].attempt, 1);
+
+    execute_pending_repair_worker(&f, repair_run_id);
+    assert_captured_prompt_carries_diagnosis(&captured_prompt, diagnosis, &[]);
+}
+
+fn held_review_task_empty_plan_refuses_naming_missing_plan_and_update_call() {
+    use orbit_core::application::task::TaskUpdateParams;
+    use orbit_types::workflow::source_repair_reservations;
+
+    for missing in ["", "To be authored by executing agent at start time."] {
+        let f = held_completion_fixture();
+        f.runtime
+            .update_task_with_identity(
+                &f.task,
+                TaskUpdateParams {
+                    plan: Some(missing.into()),
+                    ..Default::default()
+                },
+                None,
+                None,
+            )
+            .unwrap();
+        let binding = f.inspect();
+        let history_before = f.runtime.get_task_history(&f.task).unwrap();
+        let runs_before = f.runtime.job_history("task_pr_pipeline").unwrap().len();
+
+        let error = f
+            .runtime
+            .run_tool_as_human("orbit.workflow.run.resume", f.submit(binding.clone()))
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("execution plan") && error.contains("orbit.task.update"),
+            "refusal must name missing plan and one-call fix: {error}"
+        );
+        assert_eq!(
+            f.runtime.get_task(&f.task).unwrap().status,
+            TaskStatus::Review
+        );
+        assert_eq!(f.runtime.get_task_history(&f.task).unwrap(), history_before);
+        assert_eq!(
+            f.runtime.job_history("task_pr_pipeline").unwrap().len(),
+            runs_before
+        );
+
+        // Apply the named one-call fix and confirm the submission now succeeds.
+        f.runtime
+            .run_tool(
+                "orbit.task.update",
+                json!({"id": f.task, "plan": "Apply operator diagnosis and revalidate PR #17"}),
+            )
+            .unwrap();
+        let admitted = f
+            .runtime
+            .run_tool_as_human("orbit.workflow.run.resume", f.submit(f.inspect()))
+            .unwrap();
+        f.wait(admitted["run_id"].as_str().unwrap());
+        assert_eq!(
+            source_repair_reservations(&f.runtime.get_task_history(&f.task).unwrap())
+                .unwrap()
+                .len(),
+            1
+        );
+    }
+}
+
 crate::scenario_table!(
     held_publication_source_repair,
     published_completion_hold_starts_repair_at_published_head,
     unpublished_held_run_cannot_authorize_repair,
+    held_review_task_diagnosis_reaches_agent_prompt_and_spends_budget,
+    held_completion_retry_on_review_task_carries_diagnosis_and_follows_pushed_head,
+    held_review_task_empty_plan_refuses_naming_missing_plan_and_update_call,
 );

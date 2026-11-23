@@ -20,7 +20,8 @@ evidence and a fresh request key.
 
 Submit the returned `binding` unchanged with `action: "submit"`, the same
 `task_id`, a new bounded `request_key`, and a `diagnosis` naming the observed
-failure and remaining source work. Submit refuses a missing or placeholder
+failure and remaining source work. A comment on the task, with or without that
+call, does not start or change a repair. Submit refuses a missing or placeholder
 plan before creating a reservation when the task's status requires a plan
 before transitioning to `in-progress`. `backlog` and `in-progress` are exempt;
 their managed run authors the plan at start time.

@@ -52,6 +52,8 @@ pub(super) fn resolves_to_commit(repo: &std::path::Path, sha: &str) -> Result<bo
     )? == sha)
 }
 
+const MAX_HELD_RETRY_HOPS: usize = 64;
+
 impl OrbitRuntime {
     pub(super) fn observe_published_source(
         &self,
@@ -59,7 +61,16 @@ impl OrbitRuntime {
         task: Task,
         explicit: bool,
     ) -> Result<(JobRun, Task, SourceRepairBinding), OrbitError> {
-        self.observe_publication_checkpoints(source, task, explicit, false)
+        self.observe_publication_checkpoints(source, task, explicit, false, None)
+    }
+
+    pub(super) fn observe_held_retry_source(
+        &self,
+        source: JobRun,
+        task: Task,
+        lineage: &[String],
+    ) -> Result<(JobRun, Task, SourceRepairBinding), OrbitError> {
+        self.observe_publication_checkpoints(source, task, true, false, Some(lineage))
     }
 
     /// [`Self::observe_published_source`] for an operator requeue of the
@@ -72,7 +83,148 @@ impl OrbitRuntime {
         source: JobRun,
         task: Task,
     ) -> Result<(JobRun, Task, SourceRepairBinding), OrbitError> {
-        self.observe_publication_checkpoints(source, task, false, true)
+        self.observe_publication_checkpoints(source, task, false, true, None)
+    }
+
+    /// The stopped owner-local completion-retry chain `[owner, ..., source]`
+    /// when `source` is a conclusively stopped `Held` run that reused
+    /// `task.job_run_id`'s published checkpoints without a `failure_activity_checkpoint`.
+    pub(super) fn held_completion_retry_lineage(
+        &self,
+        source: &JobRun,
+        task: &Task,
+    ) -> Result<Option<Vec<String>>, OrbitError> {
+        let Some(owner_id) = task.job_run_id.as_deref() else {
+            return Ok(None);
+        };
+        if source.state != JobRunState::Held
+            || owner_id == source.run_id
+            || source.retry_source_run_id.is_none()
+        {
+            return Ok(None);
+        }
+        let Some(source_state) = self.read_run_state(&source.run_id)? else {
+            return Ok(None);
+        };
+        if source_state.run_id != source.run_id
+            || source_state.job_id != source.job_id
+            || source_state.failure_activity_checkpoint.is_some()
+            || source_state
+                .pipeline
+                .get("worktree")
+                .and_then(|v| v.get("job_run_id"))
+                .and_then(Value::as_str)
+                != Some(owner_id)
+            || source_state.pipeline.get("push").is_none_or(Value::is_null)
+            || source_state
+                .pipeline
+                .get("pr_open")
+                .is_none_or(Value::is_null)
+        {
+            return Ok(None);
+        }
+        let Some(local) = self.automation_machine_identity() else {
+            return Ok(None);
+        };
+        let mut chain = vec![source.run_id.clone()];
+        let mut seen = BTreeSet::from([source.run_id.clone()]);
+        let mut child = source.clone();
+        let owner = loop {
+            if chain.len() > MAX_HELD_RETRY_HOPS {
+                return Err(refuse("held completion retry lineage is unbounded"));
+            }
+            if child
+                .input
+                .as_ref()
+                .is_some_and(|i| i.get(SOURCE_REPAIR_KEY).is_some())
+            {
+                return Ok(None);
+            }
+            let Some(parent_id) = child.retry_source_run_id.as_deref() else {
+                return Ok(None);
+            };
+            if !seen.insert(parent_id.to_string()) {
+                return Err(refuse("held completion retry lineage repeats a run"));
+            }
+            let parent = self
+                .get_job_run_backend(parent_id)?
+                .ok_or_else(|| refuse("held completion retry ancestor is missing"))?;
+            if parent.job_id != orbit_types::workflow::TASK_PR_PIPELINE_JOB
+                || parent.created_at >= child.created_at
+                || !parent.state.is_terminal()
+                || parent.finished_at.is_none()
+                || run_owner_liveness(&parent) != RunOwnerLiveness::Stopped
+                || parent
+                    .executed_on
+                    .as_ref()
+                    .is_none_or(|o| o.machine_id != local)
+                || self
+                    .stores()
+                    .jobs()
+                    .local_pull_for_run(parent_id)?
+                    .is_some()
+                || parent.input.as_ref().is_none_or(|i| {
+                    i.get("claimed").and_then(Value::as_bool) == Some(true)
+                        || carried_task_ids(i) != BTreeSet::from([task.id.clone()])
+                })
+            {
+                return Err(refuse(
+                    "held completion retry lineage contains an active, foreign or non-matching run",
+                ));
+            }
+            chain.push(parent.run_id.clone());
+            if parent.run_id == owner_id {
+                break parent;
+            }
+            let parent_state = self
+                .read_run_state(parent_id)?
+                .ok_or_else(|| refuse("held completion retry ancestor checkpoints missing"))?;
+            if parent_state.failure_activity_checkpoint.is_some() {
+                return Ok(None);
+            }
+            child = parent;
+        };
+        let owner_state = self
+            .read_run_state(&owner.run_id)?
+            .ok_or_else(|| refuse("checkpoint owner state is missing"))?;
+        if owner_state.run_id != owner.run_id
+            || owner_state.job_id != owner.job_id
+            || owner_state.failure_activity_checkpoint.is_some()
+        {
+            return Ok(None);
+        }
+        for key in [
+            "worktree",
+            "commit",
+            "prepare_branch",
+            "sync_base",
+            "push",
+            "pr_open",
+        ] {
+            if source_state.pipeline.get(key) != owner_state.pipeline.get(key) {
+                return Err(refuse(
+                    "held completion retry publication checkpoints disagree with owner",
+                ));
+            }
+        }
+        for key in [
+            "resume_candidate",
+            "review_gate_settle",
+            "review_validate",
+            "landing_review_gate_settle",
+            "landing_review_validate",
+            "landing_push",
+        ] {
+            if source_state.pipeline.get(key).is_some_and(|v| !v.is_null())
+                && source_state.pipeline.get(key) != owner_state.pipeline.get(key)
+            {
+                return Err(refuse(
+                    "held completion retry review checkpoints disagree with owner",
+                ));
+            }
+        }
+        chain.reverse();
+        Ok(Some(chain))
     }
 
     fn observe_publication_checkpoints(
@@ -81,6 +233,7 @@ impl OrbitRuntime {
         task: Task,
         explicit: bool,
         escalation_requeue: bool,
+        held_retry_lineage: Option<&[String]>,
     ) -> Result<(JobRun, Task, SourceRepairBinding), OrbitError> {
         let source_id = source.run_id.as_str();
         let task_id = task.id.as_str();
@@ -121,7 +274,14 @@ impl OrbitRuntime {
                 "stopped escalated publication requires original operator admission or authenticated failure-handoff evidence",
             ));
         }
-        let proof = self.authenticate_publication_chain(&source, &task, &state, job, explicit)?;
+        let proof = self.authenticate_publication_chain(
+            &source,
+            &task,
+            &state,
+            job,
+            explicit,
+            held_retry_lineage,
+        )?;
         let binding = self.bind_source_publication(
             source.clone(),
             task.clone(),
@@ -165,13 +325,13 @@ impl OrbitRuntime {
     }
 }
 
-/// The head `published` reaches through the repaired heads `source_id`
+/// The head `published` reaches through the repaired heads any run in `lineage`
 /// recorded as `pr_auto_fix_pushed` on pull request `number`, each one taken
 /// only from the head before it. A push another run or actor recorded, or one
 /// that does not continue the chain, is not followed.
 pub(super) fn auto_fix_advanced_head(
     history: &[TaskHistoryEntry],
-    source_id: &str,
+    lineage: &[String],
     number: &str,
     published: &str,
 ) -> String {
@@ -182,7 +342,7 @@ pub(super) fn auto_fix_advanced_head(
         .collect::<Vec<_>>();
     let mut head = published.to_string();
     for push in pr_auto_fix_pushes(&recorded, number) {
-        if push.run_id == source_id && push.from_head_sha == head {
+        if lineage.iter().any(|run_id| run_id == &push.run_id) && push.from_head_sha == head {
             head = push.to_head_sha;
         }
     }
