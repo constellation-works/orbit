@@ -1522,6 +1522,10 @@ fn verified_no_diff_promotion_refuses_untracked_bytecode() {
     assert_eq!(git_head(repo), head);
 }
 
+/// A native name that is not UTF-8 cannot be staged by its lossy U+FFFD
+/// form: `ls-files` omits it (or matches a distinct tracked path) while the
+/// ordinary change still commits. Delivery must refuse the whole candidate
+/// before touching the index or HEAD, then deliver once the names are gone.
 #[cfg(unix)]
 fn commit_and_no_diff_preserve_non_utf8_and_replacement_colliding_paths() {
     use std::ffi::OsStr;
@@ -1537,6 +1541,7 @@ fn commit_and_no_diff_preserve_non_utf8_and_replacement_colliding_paths() {
     git_output(repo, &["add", tracked_rel]);
     git_output(repo, &["commit", "-m", "track replacement-char fixture"]);
     let base_head = git_head(repo);
+    let base_tree = git_output(repo, &["rev-parse", "HEAD^{tree}"]);
 
     let non_utf8_cached = cache_dir.join(OsStr::from_bytes(b"mod-\xff.pyc"));
     let non_utf8_cached_bytes = b"\0non-utf8 cached bytecode\xff";
@@ -1545,30 +1550,63 @@ fn commit_and_no_diff_preserve_non_utf8_and_replacement_colliding_paths() {
     fs::write(&non_utf8_cached, non_utf8_cached_bytes).unwrap();
     fs::write(&non_utf8_loose, non_utf8_loose_bytes).unwrap();
     fs::write(repo.join("README.md"), "deliver real edit\n").unwrap();
+    let status_before = git_output(repo, &["status", "--porcelain=v1", "--untracked-files=all"]);
 
     let host = VerifierHost::new(repo, fixture_task());
+    let refusal = action(&host, &commit_input(repo, &base_head))
+        .expect_err("delivery must refuse names it cannot stage exactly")
+        .to_string();
+    assert!(
+        refusal.contains("not valid UTF-8")
+            && refusal.contains(r"`loose-\xff.pyc`")
+            && refusal.contains(r"`pkg/__pycache__/mod-\xff.pyc`")
+            && refusal.contains("Orbit did not change the index"),
+        "the refusal must name each native path, got: {refusal}"
+    );
+    assert_eq!(git_head(repo), base_head, "refusal must not move HEAD");
+    assert_eq!(
+        git_output(repo, &["write-tree"]),
+        base_tree,
+        "refusal must leave the index at HEAD's tree"
+    );
+    assert_eq!(
+        git_output(repo, &["status", "--porcelain=v1", "--untracked-files=all"]),
+        status_before
+    );
+    assert_eq!(fs::read(repo.join(tracked_rel)).unwrap(), tracked_bytes);
+    assert_eq!(fs::read(&non_utf8_cached).unwrap(), non_utf8_cached_bytes);
+    assert_eq!(fs::read(&non_utf8_loose).unwrap(), non_utf8_loose_bytes);
+    assert_eq!(
+        fs::read_to_string(repo.join("README.md")).unwrap(),
+        "deliver real edit\n"
+    );
+
+    // With the unrepresentable names gone, the ordinary change delivers and
+    // the distinct replacement-character path stays exactly as tracked.
+    fs::remove_file(&non_utf8_cached).unwrap();
+    fs::remove_file(&non_utf8_loose).unwrap();
     let committed = action(&host, &commit_input(repo, &base_head))
-        .expect("delivery commit must succeed without deleting colliding or non-UTF-8 files");
+        .expect("delivery commit must succeed once every name is UTF-8");
     assert_eq!(committed["decision"], "performed");
     assert_eq!(committed["committed"], true);
     let delivered_head = git_head(repo);
     assert_ne!(delivered_head, base_head);
+    assert_eq!(
+        git_output(repo, &["ls-tree", "-r", "-z", "--name-only", "HEAD"]),
+        format!("README.md\0{tracked_rel}\0")
+    );
     assert_eq!(
         git_output(repo, &["show", "HEAD:README.md"]),
         "deliver real edit"
     );
     assert_eq!(
         git_output(repo, &["rev-parse", &format!("HEAD:{tracked_rel}")]),
-        git_output(repo, &["hash-object", "--no-filters", tracked_rel])
+        git_output(repo, &["rev-parse", &format!("{base_head}:{tracked_rel}")])
     );
     assert_eq!(fs::read(repo.join(tracked_rel)).unwrap(), tracked_bytes);
-    assert_eq!(fs::read(&non_utf8_cached).unwrap(), non_utf8_cached_bytes);
-    assert_eq!(fs::read(&non_utf8_loose).unwrap(), non_utf8_loose_bytes);
 
     // Clean-tree promotion recheck (`verify_clean_checkout`) must likewise
     // fail closed on the dirty tree and preserve every entry byte-for-byte.
-    fs::remove_file(&non_utf8_cached).unwrap();
-    fs::remove_file(&non_utf8_loose).unwrap();
     let report = evidence_fixture::verifier_no_diff_report(
         &delivered_head,
         "make test",
