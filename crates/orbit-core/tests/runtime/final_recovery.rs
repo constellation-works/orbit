@@ -551,10 +551,10 @@ fn final_recovery_is_admitted_once_and_a_resume_drops_the_stale_checkpoints() {
 /// the original run's record.
 fn a_resumed_run_inherits_its_sources_final_recovery_checkpoint() {
     let fixture = fixture("[\"sol\"]");
-    // The resumed run executes in a substitute worker that waits until this
-    // directory is removed, so it cannot settle the run mid-assert.
-    let worker = TempDir::new_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
-    crate::worker_fixture::install(worker.path(), "removed");
+    // Keep the substitute alive through the assertions and own its teardown
+    // before the fixture workspace is dropped, even on an assertion failure.
+    let release = fixture._root.path().join("worker-release");
+    let mut worker = crate::worker_fixture::install_owned_workers(&release, fixture.repo.clone());
     let jobs_dir = fixture.global.join("resources/jobs");
     std::fs::create_dir_all(&jobs_dir).unwrap();
     std::fs::write(
@@ -618,7 +618,7 @@ fn a_resumed_run_inherits_its_sources_final_recovery_checkpoint() {
         fixture.state(&resumed).final_recovery.unwrap().key.run_id,
         resumed
     );
-    drop(worker);
+    worker.release_and_wait(&[resumed]);
 }
 
 fn a_resume_after_another_recorded_decision_is_refused_and_keeps_checkpoints() {
