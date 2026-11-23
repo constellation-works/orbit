@@ -319,8 +319,9 @@ that token and is the only way a shell without a capability reads attention.
   minted the grant.
 - **Outcomes are distinct and never clean by default.** `orbit attention wait` exits `0` with the
   changed items and next cursor, `3` on timeout, `4` when the `degraded` set changed against the
-  first read of the wait, and `5` when every read failed to the deadline. A timeout still returns
-  the current `degraded` entries and `all_sources_readable`, so an unreadable source is never
+  first read of the wait, and `5` when the final read before the deadline failed, even after earlier reads
+  succeeded. A timeout still returns the current `degraded` entries and
+  `all_sources_readable`, so an unreadable source is never
   reported as clean.
 
 Rejected:

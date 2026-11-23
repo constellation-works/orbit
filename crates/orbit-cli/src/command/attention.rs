@@ -19,7 +19,7 @@ use serde_json::{Value, json};
 const WAIT_EXIT_TIMEOUT: i32 = 3;
 /// Exit code when the delta is empty but the `degraded` set changed.
 const WAIT_EXIT_DEGRADED_CHANGED: i32 = 4;
-/// Exit code when every read failed to the deadline, so nothing is known.
+/// Exit code when the final read before the deadline failed, so the current state is unknown.
 const WAIT_EXIT_UNREADABLE: i32 = 5;
 
 /// The timing of `orbit attention wait`.
@@ -47,8 +47,10 @@ impl Args for AttentionCommand {
                  orbit.attention with wait_grant true over MCP and export the returned token as \
                  ORBIT_ATTENTION_WAIT_TOKEN. Without one the wait is refused.\n\nExit codes: 0 \
                  changed items (printed with the next cursor), 3 timeout with no change, 4 degraded \
-                 set changed, 5 every read failed. A timeout still lists degraded sources: it is \
-                 not all-clear while any are listed.",
+                 set changed, 5 the final read failed: either every read failed, or only the last \
+                 one failed after earlier reads succeeded. Exit 5 prints no envelope; the `wait` \
+                 record carries the error. A timeout still lists degraded sources: it is not \
+                 all-clear while any are listed.",
             )
             .arg(
                 Arg::new("timeout")
