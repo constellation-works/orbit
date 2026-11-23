@@ -6,7 +6,9 @@ spec:
   type: deterministic
   description: >
     Merge a worktree branch either by fast-forwarding into the base branch or by
-    merging the associated GitHub pull request. A fast-forward whose input
+    merging the associated GitHub pull request. A successful fast-forward records
+    `landed_commit`, the commit the base is at after the merge, including a
+    fast-forward that follows a rebase. A fast-forward whose input
     carries `completion: done` first decides the `completion.hold` rules
     against the candidate's diff; a held candidate is not merged and the
     output reports `merged: false` with the held tasks and the hold.
@@ -45,6 +47,11 @@ spec:
     properties:
       merged:
         type: boolean
+      landed_commit:
+        type: string
+        description: >
+          Full commit id the base is at after a successful fast-forward.
+          Absent when the step merged nothing.
       reason:
         type: string
       held_task_ids:

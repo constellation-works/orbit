@@ -1,7 +1,7 @@
 ---
 title: Routines — Design
 owner: claude
-last_updated: 2026-11-20
+last_updated: 2026-11-22
 last_validated: 2026-10-19
 status: Accepted
 feature: routines
@@ -612,8 +612,12 @@ and assessment only when every cited commit exists and at least one is an ancest
 branch that relates to the finding. The commits the finding itself names (any commit in its
 description, and the landed commit of a `regression_from` target) never count, since they are on
 the base branch by construction. A target with no recorded delivery names no commit. A pinned
-delivery definition that cannot be read or parsed is not that case: the proof is refused and the
-finding stays proposed, so a citation of the culprit itself cannot close it. When one is known,
+delivery definition that cannot be read or parsed, and a recorded landing that merged without a
+commit that resolves in this repository, are not that case: the proof is refused and the
+finding stays proposed, so a citation of the culprit itself or of an older same-path change
+cannot close it. A local fast-forward records the commit the base is at after the merge,
+including a fast-forward that follows a rebase. An older local checkpoint that omits that
+commit is a merged landing without a resolvable commit. When one is known,
 a covering commit must descend from all of them, and when the task declared path selectors it
 must touch one of those paths. Human- and orchestrator-filed findings are never archived this
 way. An `--approve-proposed` drain applies the same finding proof and hold.

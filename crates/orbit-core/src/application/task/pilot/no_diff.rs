@@ -31,12 +31,16 @@
 //! itself names (any commit in its description, and the landed commit of each
 //! `regression_from` target) never count as covering. A target with no
 //! recorded delivery names no commit. A pinned delivery definition that
-//! cannot be read or parsed is not that case: the observation fails and the
-//! proof is refused, so a citation of the culprit itself cannot close the
-//! finding. When a culprit commit is known, a covering commit must also be a
-//! strict descendant of every one of them, and when the task declares path
-//! selectors it must touch one of those paths. A finding that names no commit
-//! and declares no path has nothing to relate a citation to, so it is never
+//! cannot be read or parsed, and a recorded landing that merged without a
+//! commit that resolves in this repository, are not that case: the proof is
+//! refused, so a citation of the culprit itself or of an older same-path
+//! change cannot close the finding. A local fast-forward records the commit
+//! the base is at after the merge, including one that follows a rebase; an
+//! older checkpoint that omits it is a merged landing without that commit.
+//! When a culprit commit is known, a covering commit must also be a strict
+//! descendant of every one of them, and when the task declares path selectors
+//! it must touch one of those paths. A finding that names no commit and
+//! declares no path has nothing to relate a citation to, so it is never
 //! proven; anything less is not proof.
 
 use orbit_common::OrbitError;
@@ -505,8 +509,9 @@ fn hex_tokens<'a>(
 /// resolves from its description, and the landed commit of each
 /// `regression_from` target that delivery observed as merged. A target never
 /// delivered names no commit. An unreadable or unparseable pinned definition,
-/// an ambiguous commit prefix, or a Git inspection failure refuses the proof,
-/// since a missed culprit would let a proof citing it close the finding.
+/// an ambiguous commit prefix, a Git inspection failure, or a merged landing
+/// whose commit is missing or does not resolve refuses the proof, since a
+/// missed culprit would let a proof citing it close the finding.
 fn named_commits(
     runtime: &OrbitRuntime,
     source: &dyn SourceGit,
@@ -523,8 +528,8 @@ fn named_commits(
             continue;
         }
         let observation = match runtime.delivery_observation(relation.target.as_str(), None) {
-            Ok(observation) => Some(observation),
-            Err(OrbitError::TaskDeliveryUnavailable(_)) => None,
+            Ok(observation) => observation,
+            Err(OrbitError::TaskDeliveryUnavailable(_)) => continue,
             Err(error) => {
                 return Err(format!(
                     "the delivery of regression culprit {} could not be read: {error}",
@@ -532,12 +537,23 @@ fn named_commits(
                 ));
             }
         };
-        if let Some(sha) = observation
-            .filter(|observation| observation.landing.status == LandingObservationStatus::Merged)
-            .and_then(|observation| observation.landing.landed_commit)
-            && let Some(commit) = resolve_named_commit_object(source, &sha)?
-        {
-            named.push(commit);
+        if observation.landing.status != LandingObservationStatus::Merged {
+            continue;
+        }
+        let Some(sha) = observation.landing.landed_commit else {
+            return Err(format!(
+                "the delivery of regression culprit {} landed without a recorded commit, so its identity is unavailable",
+                relation.target
+            ));
+        };
+        match resolve_named_commit_object(source, &sha)? {
+            Some(commit) => named.push(commit),
+            None => {
+                return Err(format!(
+                    "the landed commit {sha} recorded for regression culprit {} does not resolve to a commit, so its identity is unavailable",
+                    relation.target
+                ));
+            }
         }
     }
     named.sort();

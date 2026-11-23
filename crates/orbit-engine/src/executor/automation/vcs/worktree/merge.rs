@@ -18,6 +18,14 @@ use super::resolve_shared_worktree_path;
 const DEFAULT_BASE: &str = "main";
 const MAX_REBASE_RETRY_ATTEMPTS: usize = 2;
 
+/// Base tip before a successful fast-forward, and the commit the base is at
+/// afterwards. They match when the candidate was already that tip. `after` is
+/// the commit a later rebase retry actually landed, not the pre-rebase head.
+struct FastForwardLanding {
+    before: String,
+    after: String,
+}
+
 pub(in crate::executor::automation) fn merge_batch_worktree_into_base<H: RuntimeHost + ?Sized>(
     host: &H,
     input: &Value,
@@ -67,9 +75,11 @@ pub(in crate::executor::automation) fn merge_batch_worktree_into_base<H: Runtime
         base_sync_mode,
     )?;
     // The branch has moved: the landing is a fact now, so a failure to
-    // record its diff stats is logged and never fails the merge.
-    if let Some((before, after)) = landed
-        && let Err(error) = host.record_direct_landing(&request(before, after))
+    // record its diff stats is logged and never fails the merge. A
+    // fast-forward that does not move the branch still has an identity.
+    let FastForwardLanding { before, after } = landed;
+    if before != after
+        && let Err(error) = host.record_direct_landing(&request(before, after.clone()))
     {
         tracing::warn!(%error, run_id, "recording the local landing's diff stats failed");
     }
@@ -77,6 +87,7 @@ pub(in crate::executor::automation) fn merge_batch_worktree_into_base<H: Runtime
     Ok(json!({
         "merged": true,
         "base": base,
+        "landed_commit": after,
         "workspace_path": workspace_path.to_string_lossy().to_string(),
         "workspace_branch": workspace_branch,
     }))
@@ -111,7 +122,7 @@ fn merge_with_rebase_retry(
     base: &str,
     workspace_branch: &str,
     base_sync_mode: BaseSyncMode,
-) -> Result<Option<(String, String)>, OrbitError> {
+) -> Result<FastForwardLanding, OrbitError> {
     for attempt in 0..=MAX_REBASE_RETRY_ATTEMPTS {
         let start_point = resolve_worktree_start_point(repo_root, base, base_sync_mode)?;
         if base_checkout == repo_root {
@@ -144,9 +155,13 @@ fn merge_with_rebase_retry(
         // recording: operator files can appear while the candidate is built.
         ensure_base_checkout_ready(base_checkout, Some(workspace_branch))?;
         if git_command_success(base_checkout, &["merge", "--ff-only", workspace_branch])? {
-            // The commits the base moved over, when it moved.
-            let (before, after) = (before.trim(), after.trim());
-            return Ok((before != after).then(|| (before.to_string(), after.to_string())));
+            // `after` is the workspace tip this attempt fast-forwarded,
+            // re-read after any rebase retry, so it is the commit now on
+            // the base. A no-op fast-forward records that same tip.
+            return Ok(FastForwardLanding {
+                before: before.trim().to_string(),
+                after: after.trim().to_string(),
+            });
         }
         if attempt == MAX_REBASE_RETRY_ATTEMPTS {
             return Err(OrbitError::Execution(format!(
@@ -202,7 +217,9 @@ fn merge_with_rebase_retry(
         ensure_clean_checkout(workspace_path, "shared batch worktree")?;
     }
 
-    Ok(None)
+    Err(OrbitError::Execution(
+        "merge_batch_worktree_into_base: fast-forward ended without a landed commit".to_string(),
+    ))
 }
 
 /// Locate the linked worktree that already has `base` checked out. Git refuses
