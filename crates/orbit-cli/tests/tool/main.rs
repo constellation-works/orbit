@@ -38,6 +38,7 @@ mod plugin_cli_group;
 mod plugin_hook_workspace_probe;
 mod plugin_secrets;
 mod proc_spawn_managed;
+mod resident_error_key;
 mod skill_lifecycle_cli;
 mod tool_input_hints;
 mod tool_lifecycle_cli;

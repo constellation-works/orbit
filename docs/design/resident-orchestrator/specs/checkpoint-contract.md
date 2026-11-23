@@ -51,7 +51,8 @@ field, option (a), on 2026-11-16 ("Yes, field (a)"): a top-level envelope field 
 omitted when there is no key, so clients that ignore unknown fields keep working — and needs
 no new `OrbitError` variant, detail reshaping or ledger change, while leaving error code,
 status and retryability unchanged. `RemoteTool` replies may carry the key in both places.
-The broker client keeps the key on the reconstructed error's payload as `action_key`.
+The broker client keeps the key on the reconstructed error's payload as `action_key`. A local
+`orbit tool run` JSON error likewise carries the recorded key as `action_key`.
 Pre-admission denials have no ledger key and carry no `action_key`; no key is minted for
 them. A production `gh` merge failure with HTTP 502 is `Execution` when the resident action
 closes, so the envelope now carries its key as `plugin_broker_call_failed` with `action_key`.

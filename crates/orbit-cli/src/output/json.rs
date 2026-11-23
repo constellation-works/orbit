@@ -15,8 +15,13 @@ pub fn render(value: &Value, pretty: bool) -> Result<String, OrbitError> {
 }
 
 pub fn error_payload(error: &OrbitError) -> Value {
+    let action_key = orbit_core::application::resident::take_failed_resident_action_key();
     if let OrbitError::RemoteTool { payload, .. } = error {
-        return payload.clone();
+        let mut payload = payload.clone();
+        if let (Some(key), Some(fields)) = (action_key, payload.as_object_mut()) {
+            fields.insert("action_key".into(), json!(key));
+        }
+        return payload;
     }
     let stored = error.to_string();
     let reader = orbit_common::source_repair_reader_text(&stored);
@@ -27,6 +32,9 @@ pub fn error_payload(error: &OrbitError) -> Value {
     let mut fields = error.wire_details();
     fields.insert("error".into(), json!(shown));
     fields.insert("code".into(), json!(error_code(error)));
+    if let Some(key) = action_key {
+        fields.insert("action_key".into(), json!(key));
+    }
     if let Some(text) = reader.filter(|text| text.line != text.detail) {
         fields.insert("detail".into(), json!(text.detail));
     }

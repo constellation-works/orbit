@@ -227,6 +227,8 @@ fn trimmed_string_field(value: &Value, key: &str) -> Option<String> {
 
 impl Execute for ToolRunArgs {
     fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
+        // A tool invocation owns only the ledger key produced by this call.
+        orbit_core::application::resident::take_failed_resident_action_key();
         let mut input = self.prepare_tool_run_input()?;
 
         // Resolve `workspace` once above local CLI tools, then bind or fail
@@ -299,6 +301,7 @@ impl Execute for ToolRunArgs {
             self.model,
             session_context,
         )?;
+        orbit_core::application::resident::take_failed_resident_action_key();
         let output = crate::command::task::support::attach_bound_workspace_identity(
             &self.name,
             &input,
