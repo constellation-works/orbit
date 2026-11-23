@@ -1039,16 +1039,24 @@ request only when all of these hold, and otherwise refuses with nothing written:
   not a candidate (see [review-gate.md](review-gate.md));
 - the pull request does not conflict with its base, and the forge reports every
   required check on exactly that published head as passed: none failed, none
-  unfinished, none configured by classic branch protection or a readable
+  unfinished, and none configured by classic branch protection or a readable
   ruleset missing from the head's results (`required checks have not reported
-  on the recorded head: <names>`), and either at least one required check
-  passed or the forge positively confirms the base branch configures no required status checks
-  (neither classic branch protection `requiredStatusChecks` nor repository or
-  organization rulesets require any status checks, with readable, non-truncated
-  policy). An empty check rollup when branch protection or a ruleset requires
-  checks, or when required-check policy is unreadable or truncated, is refused
-  (`the recorded head reports no required check, so none has passed`). Checks on
-  another head describe a different candidate and are refused.
+  on the recorded head: <names>`). Checks on another head describe a different
+  candidate and are refused. The required-check policy then decides which of
+  these cases applies:
+  - unknown policy (classic branch protection or a repository or organization
+    ruleset is unreadable or truncated) is refused as `required check policy is
+    unreadable`, even when every reported check passed;
+  - readable policy that requires status checks, with no required check
+    reported as passed on the head, is refused as `the recorded head reports no
+    required check, so none has passed`;
+  - readable policy that requires status checks, with at least one required
+    check passed but a configured check the head never reported, is refused as
+    `required checks have not reported on the recorded head: <names>`;
+  - readable policy that positively confirms the base branch configures no
+    required status checks (neither classic branch protection
+    `requiredStatusChecks` nor a repository or organization ruleset requires
+    any) is accepted with no required check reported.
 
 Requeue resolves the task's bound execution, and that execution must be the
 stopped `failed`, `cancelled`, or `success` run, or `review_decision_pending`
