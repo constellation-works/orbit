@@ -123,15 +123,25 @@ pub(super) fn held_handbacks(
         .count()
 }
 
-/// An untyped auto-fix stop can be reconsidered once checks turn green.
+/// The diagnostic prefix an auto-fix stop carries inside its hold message.
+const AUTO_FIX_STOP_DIAGNOSTIC: &str = "auto_fix_stopped:";
+
+/// A run held by an auto-fix stop that no hand-back hold covers, which can be
+/// reconsidered once checks turn green [ORB-27221].
+///
+/// `hold_auto_fix_stop` gives a stop its typed refusal and keeps the
+/// `auto_fix_stopped: ...` diagnostic inside the step's message, so a stored
+/// hold is that typed code (never `auto_fix_stopped` itself) with the text in
+/// `error_message`. A stop whose typed refusal [`handed_back_hold`] already
+/// covers is handed back under that code instead.
 pub(crate) fn auto_fix_stopped(run: &JobRun) -> bool {
-    run.state == JobRunState::Held
-        && run.steps.last().is_some_and(|step| {
-            step.error_code.as_deref() == Some("auto_fix_stopped")
-                || (step.error_code.is_none()
-                    && step
-                        .error_message
-                        .as_deref()
-                        .is_some_and(|message| message.starts_with("auto_fix_stopped:")))
-        })
+    let Some(refusal) = held_refusal(run) else {
+        return false;
+    };
+    !handed_back_hold(refusal)
+        && run
+            .steps
+            .last()
+            .and_then(|step| step.error_message.as_deref())
+            .is_some_and(|message| message.contains(AUTO_FIX_STOP_DIAGNOSTIC))
 }
