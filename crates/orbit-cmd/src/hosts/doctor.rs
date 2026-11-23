@@ -109,12 +109,19 @@ fn classify(
 ) {
     let name = &target.name;
     if let Some(error) = &host.error {
-        let line = format!("{name}: {}", error.message);
         if error.code == HostRegistryCode::HostIdentityMismatch.as_str() {
-            failures.push(line);
-        } else {
+            failures.push(format!(
+                "{name} probe failed ({}): {}",
+                error.code, error.message
+            ));
+        } else if error.code == "unreachable_destination" {
             warnings.push(format!(
                 "{name} is unreachable ({}): {}",
+                error.code, error.message
+            ));
+        } else {
+            warnings.push(format!(
+                "{name} probe failed ({}): {}",
                 error.code, error.message
             ));
         }
