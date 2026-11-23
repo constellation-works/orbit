@@ -133,8 +133,11 @@ pub fn pipeline_worker_observer_completed(workspace: &Path, run_id: &str, worker
 static SPAWNED_WORKERS: Mutex<Vec<(PathBuf, String, u32)>> = Mutex::new(Vec::new());
 
 /// Record that a worker for `run_id` was launched and handed to its startup
-/// observer, before any identity handshake (test support only). The observer
-/// reaps it, so a fixture that owns the launch can wait for its exit.
+/// observer (test support only). The parent publishes the record once the
+/// observer owns the child. The child runs independently of that publication,
+/// so its identity handshake may land before or after it; the record does not
+/// wait for the handshake. The observer reaps the worker, so a fixture that
+/// owns the launch can wait for its exit.
 #[cfg(feature = "test-support")]
 pub(super) fn record_worker_spawn(workspace: &Path, run_id: &str, worker_pid: u32) {
     SPAWNED_WORKERS
