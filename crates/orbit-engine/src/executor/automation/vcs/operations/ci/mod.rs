@@ -7,7 +7,5 @@ pub(in crate::executor::automation::vcs) use jobs::{
     CiJobObservation, CiJobStatus,
 };
 pub(super) use jobs::{ci_commit_jobs, ci_job_log};
-pub(in crate::executor::automation::vcs) use log_answer::{
-    CiJobLogAnswer, CiLogReadThrottle, CiLogSource,
-};
+pub(in crate::executor::automation::vcs) use log_answer::{CiJobLogAnswer, CiLogReadThrottle};
 pub(super) use rerun::ci_rerun_failed;

@@ -52,6 +52,7 @@ pub(in crate::executor::automation::vcs) fn recover_review_ci(
         pr,
         status,
         deadline_ms,
+        false,
         &mut diagnostic,
     ) {
         Ok(CiRerunRecovery::Retried | CiRerunRecovery::BackingOff(_)) => {

@@ -7,10 +7,14 @@
 //! observations distinct from their known values, so each reader applies its
 //! own completeness policy to the same answer.
 
-use orbit_common::ProviderReadThrottle;
+use orbit_common::{OrbitError, ProviderReadThrottle};
 use orbit_tools::github_cli::{self, SOURCE_JOB_API_LOG, SOURCE_RUN_LOG};
 use serde::{Serialize, Serializer};
 use serde_json::{Map, Value};
+
+use crate::executor::automation::ci::log_signature::{
+    UNATTRIBUTED_STEP, log_columns, step_binding,
+};
 
 use super::jobs::CiJobObservation;
 
@@ -180,6 +184,100 @@ pub(in crate::executor::automation::vcs) struct CiJobLogAnswer {
 }
 
 impl CiJobLogAnswer {
+    /// Validate the selected evidence before caching it: incomplete attribution
+    /// must remain eligible for another provider read.
+    pub(in crate::executor::automation::vcs) fn bound_log(
+        &self,
+        job_name: Option<&str>,
+        step: &str,
+        unique_failed_step: Option<&str>,
+    ) -> Result<String, OrbitError> {
+        if self.source_complete == Some(false) {
+            return Err(OrbitError::Execution(
+                "the job log source is incomplete".to_string(),
+            ));
+        }
+        if matches!(self.source, Some(CiLogSource::Unknown(_))) {
+            return Err(OrbitError::Execution(
+                "the job log source is unknown".to_string(),
+            ));
+        }
+        let selected = self.diagnostic.as_deref();
+        if selected.is_none() && self.failure_regions.is_some() {
+            return self
+                .bound_failure_regions(job_name, unique_failed_step)
+                .map(ToOwned::to_owned)
+                .ok_or_else(|| {
+                    OrbitError::Execution(
+                        "the job log has no complete attributable failure regions".to_string(),
+                    )
+                });
+        }
+        if self.truncated == Some(true) && selected.is_none() {
+            return Err(OrbitError::Execution(
+                "the job log is truncated and has no complete failing command".to_string(),
+            ));
+        }
+        let text = selected
+            .or(self.log.as_deref())
+            .ok_or_else(|| OrbitError::Execution("the log answer carried no log".to_string()))?;
+        // gh's columns bind command evidence to the provider's failed step.
+        // Raw job API logs have no columns; a unique complete failed command is
+        // preferred there so successful setup cannot supply the cause.
+        // `log_columns` treats a timestamp-led line as having no columns, so
+        // payload tabs stay data and the line is kept.
+        let mut selected_lines = Vec::new();
+        for line in text.lines() {
+            if self.source == Some(CiLogSource::JobApiLog) {
+                selected_lines.push(line);
+                continue;
+            }
+            if let Some((_, line_step, _)) = log_columns(line)
+                && line_step != step
+                && line_step != UNATTRIBUTED_STEP
+            {
+                if selected.is_some() {
+                    return Err(OrbitError::Execution(
+                        "the failing command does not match the failed step".to_string(),
+                    ));
+                }
+                continue;
+            }
+            selected_lines.push(line);
+        }
+        Ok(selected_lines.join("\n"))
+    }
+
+    /// Regions omit source bytes, so attribution must come from the collector's
+    /// complete-command proof and the provider's unique failed step, never from
+    /// the display tail. This is the same binding the CI sweep requires.
+    fn bound_failure_regions(
+        &self,
+        job_name: Option<&str>,
+        unique_failed_step: Option<&str>,
+    ) -> Option<&str> {
+        let regions = self.failure_regions.as_ref()?;
+        if self.source_complete != Some(true) || !regions.selection_proven() {
+            return None;
+        }
+        let text = regions
+            .text
+            .as_deref()
+            .filter(|text| !text.trim().is_empty())?;
+        let step = unique_failed_step.filter(|step| !step.trim().is_empty())?;
+        match self.source.as_ref()? {
+            CiLogSource::RunLog => {
+                let name = job_name.filter(|name| !name.trim().is_empty())?;
+                step_binding(text, name, step)?;
+            }
+            // Collection refuses raw evidence from multiple failed commands,
+            // including when their other failures fall outside retained regions.
+            CiLogSource::JobApiLog => {}
+            CiLogSource::Unknown(_) => return None,
+        }
+        Some(text)
+    }
+
     /// The producer: the collector's typed read, field for field.
     pub(super) fn from_read(read: github_cli::RunLogRead) -> Self {
         let github_cli::RunLogRead {

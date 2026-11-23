@@ -40,6 +40,109 @@ fn assert_truncated_without_diagnostic(fx: &Fixture, job_id: u64) {
 }
 
 #[test]
+fn owner_auto_fix_reruns_a_truncated_required_job_once() {
+    isolated(
+        "ci_rerun::unreadable_log::owner_auto_fix_reruns_a_truncated_required_job_once",
+        |sandbox| {
+            for case in [
+                "passes",
+                "unavailable_passes",
+                "still_unreadable",
+                "readable_failure",
+            ] {
+                in_fresh_row(sandbox, |row| {
+                    let (fx, host, _) = fixture(row);
+                    patch_config(&fx, |config| {
+                        config["conclusions"] = json!({"lint": "success"});
+                        config["repeat"] =
+                            json!(matches!(case, "still_unreadable" | "readable_failure"));
+                        if case == "unavailable_passes" {
+                            config["log_404_jobs"] = json!([1000]);
+                        }
+                    });
+                    if case != "unavailable_passes" {
+                        fs::write(fx.forge.join("retry-log-1000"), truncated_log()).unwrap();
+                        assert_truncated_without_diagnostic(&fx, 1000);
+                    }
+                    fs::write(
+                        fx.forge.join("retry-log-1010"),
+                        if case == "still_unreadable" {
+                            truncated_log()
+                        } else {
+                            FAILING_COMMAND.to_owned()
+                        },
+                    )
+                    .unwrap();
+                    let mut input = fx.complete_ungated_input();
+                    input["auto_fix"] = json!(true);
+                    input["completion"] = json!("review");
+                    let outcome = complete_with_logical_clock(&host, &input);
+                    match case {
+                        "passes" | "unavailable_passes" => {
+                            let result = outcome.unwrap_or_else(|error| {
+                                panic!("{case}: green checks finish auto-fix: {error}")
+                            });
+                            assert_eq!(result["merge"]["reason"], "auto_fix_mergeable", "{result}");
+                        }
+                        "still_unreadable" => {
+                            let error =
+                                outcome.expect_err("the second unreadable log stops auto-fix");
+                            assert!(
+                                matches!(
+                                    &error,
+                                    OrbitError::DeliveryRefused {
+                                        refusal: DeliveryRefusal::CheckEvidenceInconclusive,
+                                        ..
+                                    }
+                                ),
+                                "{error}"
+                            );
+                            assert!(error.to_string().contains(
+                                "auto_fix_stopped: pull request #42 cannot be repaired automatically (the log of 'CI / test' could not be read: execution failed: the job log is truncated and has no complete failing command)"
+                            ), "{error}");
+                        }
+                        _ => {
+                            let error =
+                                outcome.expect_err("a readable failure takes the repair route");
+                            assert!(
+                                orbit_types::workflow::is_pr_auto_fix_check_repair(
+                                    &error.to_string()
+                                ),
+                                "{error}"
+                            );
+                        }
+                    }
+                    assert_eq!(
+                        fx.forge_lines("retry-sends"),
+                        vec!["run rerun 700 --failed"],
+                        "{case}"
+                    );
+                    assert_eq!(fx.remote_tip(BRANCH), fx.candidate, "{case}");
+                    let history = host.history(TASK_ID);
+                    let reservations = history
+                        .iter()
+                        .filter_map(CiRerunPlan::from_reservation_entry)
+                        .collect::<Vec<_>>();
+                    let [reservation] = reservations.as_slice() else {
+                        panic!("{case}: expected one authenticated reservation");
+                    };
+                    assert_eq!(reservation.head_sha, fx.candidate, "{case}");
+                    assert_eq!(reservation.run_id, 700, "{case}");
+                    assert_eq!(reservation.run_attempt, 1, "{case}");
+                    assert_eq!(reservation.roots[0].job_id, 1000, "{case}");
+                    assert_eq!(
+                        pr_auto_fix_attempts(&history, "42").len(),
+                        usize::from(case == "readable_failure"),
+                        "{case}"
+                    );
+                    assert!(fx.merge_requests().is_empty(), "{case}");
+                });
+            }
+        },
+    );
+}
+
+#[test]
 fn readable_base_failure_classifies_when_one_log_is_truncated() {
     isolated(
         "ci_rerun::unreadable_log::readable_base_failure_classifies_when_one_log_is_truncated",

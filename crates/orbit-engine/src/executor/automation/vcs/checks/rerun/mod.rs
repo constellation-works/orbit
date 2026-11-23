@@ -9,6 +9,7 @@ mod classification;
 mod conclusion;
 mod plan;
 mod send;
+mod unreadable_log;
 
 use std::path::Path;
 
