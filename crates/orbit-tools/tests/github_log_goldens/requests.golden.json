@@ -230,12 +230,13 @@
       "--limit",
       "100",
       "--json",
-      "databaseId,number,workflowName,displayTitle,status,conclusion,event,headBranch,headSha,createdAt,startedAt,updatedAt,url"
+      "databaseId,number,workflowDatabaseId,workflowName,displayTitle,status,conclusion,event,headBranch,headSha,createdAt,startedAt,updatedAt,url"
     ],
     "cwd": null,
     "projected": {
       "run_id": null,
       "run_number": null,
+      "workflow_id": null,
       "workflow": null,
       "title": null,
       "status": null,
@@ -256,12 +257,13 @@
       "--limit",
       "20",
       "--json",
-      "databaseId,number,workflowName,displayTitle,status,conclusion,event,headBranch,headSha,createdAt,startedAt,updatedAt,url"
+      "databaseId,number,workflowDatabaseId,workflowName,displayTitle,status,conclusion,event,headBranch,headSha,createdAt,startedAt,updatedAt,url"
     ],
     "cwd": null,
     "projected": {
       "run_id": null,
       "run_number": null,
+      "workflow_id": null,
       "workflow": null,
       "title": null,
       "status": null,

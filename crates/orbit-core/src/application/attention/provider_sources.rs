@@ -186,8 +186,18 @@ fn run_number(run: &Value) -> u64 {
         .unwrap_or(0)
 }
 
+/// The operator-facing workflow name: the display name, else the run id.
+fn workflow_label(run: &Value) -> String {
+    let workflow = value_string(&run["workflow"]);
+    if workflow.is_empty() {
+        value_string(&run["run_id"])
+    } else {
+        workflow
+    }
+}
+
 /// The run that decides each workflow's CI state on the base branch, keyed
-/// by workflow (or run id when the workflow is unnamed).
+/// by the provider's workflow id (else the workflow name, else the run id).
 ///
 /// A workflow with a completed run on the current base head is decided by
 /// its newest such run (by `updated_at`, then `run_number`). A workflow
@@ -203,7 +213,14 @@ fn newest_red_candidates(
     base_branch: &str,
     head_sha: &str,
 ) -> (BTreeMap<String, Value>, Vec<String>) {
+    // A run number belongs to its underlying workflow, and distinct workflows
+    // can share a display name, so the provider's workflow id (when it gives
+    // one) is the identity; the display name is the fallback.
     let workflow_key = |run: &Value| {
+        let workflow_id = value_string(&run["workflow_id"]);
+        if !workflow_id.is_empty() {
+            return format!("id:{workflow_id}");
+        }
         let workflow = value_string(&run["workflow"]);
         if workflow.is_empty() {
             value_string(&run["run_id"])
@@ -220,7 +237,7 @@ fn newest_red_candidates(
         )
     };
     let mut on_head: BTreeMap<String, Value> = BTreeMap::new();
-    let mut pending_on_head: std::collections::BTreeSet<String> = Default::default();
+    let mut pending_on_head: BTreeMap<String, String> = BTreeMap::new();
     let mut on_branch: BTreeMap<String, Value> = BTreeMap::new();
     for run in runs {
         if value_string(&run["head_branch"]) != base_branch {
@@ -232,7 +249,7 @@ fn newest_red_candidates(
         let key = workflow_key(run);
         if status != "completed" {
             if current && !status.is_empty() {
-                pending_on_head.insert(key);
+                pending_on_head.insert(key, workflow_label(run));
             }
             continue;
         }
@@ -255,14 +272,14 @@ fn newest_red_candidates(
         }
     }
     let mut missing_history = Vec::new();
-    for key in pending_on_head {
+    for (key, label) in pending_on_head {
         if on_head.contains_key(&key) {
             continue;
         }
         if let Some(run) = on_branch.remove(&key) {
             on_head.insert(key, run);
         } else if runs.len() >= CI_BRANCH_RUN_LIMIT {
-            missing_history.push(key);
+            missing_history.push(label);
         }
     }
     (on_head, missing_history)
@@ -415,11 +432,7 @@ pub(super) fn read_ci_attention(
         } else {
             AttentionSeverity::High
         };
-        let workflow = if workflow_key.is_empty() {
-            run_id.clone()
-        } else {
-            workflow_key.clone()
-        };
+        let workflow = workflow_label(&run);
         let repair = if run_id.is_empty() || pending_commit.is_some() {
             None
         } else {
@@ -475,7 +488,7 @@ pub(super) fn read_ci_attention(
                 AttentionKind::CiRed,
                 &host.machine_id,
                 &workspace.id,
-                &json!(workflow),
+                &json!(workflow_key),
             ),
             kind: AttentionKind::CiRed,
             severity,
