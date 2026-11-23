@@ -3991,6 +3991,153 @@ class RemovedDashboardLabelTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
 
 
+class RemovedCodeIdentifierTests(unittest.TestCase):
+    """Drive scripts/check-removed-code-identifiers.py in a miniature repo."""
+
+    CONST = "LOCAL_ROUTE_JOB"
+    SOURCE = "crates/demo-core/src/contracts.rs"
+    REEXPORT = "crates/demo-policy/src/lib.rs"
+    CSS = "crates/demo-web/assets/dashboard/css/base.css"
+    DOC = "docs/design/orbit-core/1_overview.md"
+
+    def setUp(self):
+        scratch = SCRIPTS.parent / ".orbit/tmp"
+        scratch.mkdir(parents=True, exist_ok=True)
+        self.temporary = tempfile.TemporaryDirectory(prefix="removed-identifiers-", dir=scratch)
+        self.addCleanup(self.temporary.cleanup)
+        self.root = Path(self.temporary.name)
+        scripts = self.root / "scripts"
+        scripts.mkdir(parents=True)
+        shutil.copy2(SCRIPTS / "check-removed-code-identifiers.py", scripts)
+        (scripts / "removed-code-identifiers-allowlist.json").write_text("[]\n")
+        self.write(self.SOURCE, f'pub(crate) const {self.CONST}: &str = "task_local_pipeline";\n')
+        self.write(self.REEXPORT, "pub use demo_common::fs::resolve_symlinks;\n")
+        self.write(self.CSS, ".ws-badge { color: red; }\n")
+        self.write(self.DOC, f"# Overview\n\nThe `{self.CONST}` job name is owned by contracts.\n")
+        self.env = dict(os.environ, GIT_CEILING_DIRECTORIES=str(self.root.parent))
+        for key in ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "CI_TEST_BASE"):
+            self.env.pop(key, None)
+        self.git("init", "-q", "-b", "main")
+        self.git("config", "user.name", "Guard fixture")
+        self.git("config", "user.email", "guard@example.invalid")
+        self.commit_base()
+
+    def write(self, name, text):
+        path = self.root / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text)
+
+    def git(self, *arguments):
+        result = subprocess.run(["git", "-C", str(self.root), *arguments],
+                                env=self.env, capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        return result
+
+    def commit_base(self):
+        self.git("add", ".")
+        self.git("commit", "-qm", "fixture base")
+        self.env["CI_TEST_BASE"] = self.git("rev-parse", "HEAD").stdout.strip()
+
+    def run_check(self):
+        return subprocess.run(
+            [sys.executable, str(self.root / "scripts/check-removed-code-identifiers.py")],
+            env=self.env, text=True, capture_output=True)
+
+    def write_allowlist(self, entries):
+        (self.root / "scripts/removed-code-identifiers-allowlist.json").write_text(
+            json.dumps(entries))
+
+    def test_removed_const_still_named_in_doc_fails(self):
+        self.write(self.SOURCE, "// constant moved out of this module\n")
+        result = self.run_check()
+        self.assertNotEqual(result.returncode, 0, result.stdout)
+        self.assertIn(f'"{self.CONST}"', result.stderr)
+        self.assertIn(self.SOURCE, result.stderr)
+        self.assertIn(f"{self.DOC}:3", result.stderr)
+
+    def test_removed_const_named_through_a_path_prefix_fails(self):
+        self.write(self.SOURCE, "// constant moved out of this module\n")
+        self.write(self.DOC, f"# Overview\n\nThe `orbit_core::{self.CONST}` job name.\n")
+        result = self.run_check()
+        self.assertNotEqual(result.returncode, 0, result.stdout)
+        self.assertIn(f"{self.DOC}:3", result.stderr)
+
+    def test_removed_const_with_doc_updated_passes(self):
+        self.write(self.SOURCE, "// constant moved out of this module\n")
+        self.write(self.DOC, "# Overview\n\nThe contracts module owns the job name.\n")
+        result = self.run_check()
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_removed_identifier_readded_by_the_diff_passes(self):
+        self.write(self.SOURCE, "// constant moved\n")
+        self.write("crates/demo-core/src/jobs.rs",
+                   f'pub(crate) const {self.CONST}: &str = "task_local_pipeline";\n')
+        result = self.run_check()
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_removed_identifier_still_defined_in_tree_passes(self):
+        self.write("crates/demo-core/src/other.rs",
+                   f'pub const {self.CONST}: &str = "task_local_pipeline";\n')
+        self.commit_base()
+        self.write(self.SOURCE, "// constant moved\n")
+        result = self.run_check()
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_removed_reexport_path_named_in_doc_fails(self):
+        self.write("docs/design/policy-sandbox/2_design.md",
+                   "Callers use `demo_policy::resolve_symlinks` for paths.\n")
+        self.commit_base()
+        self.write(self.REEXPORT, "pub fn check() {}\n")
+        result = self.run_check()
+        self.assertNotEqual(result.returncode, 0, result.stdout)
+        self.assertIn("demo_policy::resolve_symlinks", result.stderr)
+        self.assertIn("docs/design/policy-sandbox/2_design.md:1", result.stderr)
+
+    def test_removed_css_class_named_in_doc_fails(self):
+        self.write("docs/design/user-interface/1_overview.md",
+                   "Each row's pill (`.ws-badge`) takes its workspace colour.\n")
+        self.commit_base()
+        self.write(self.CSS, "/* pill removed */\n")
+        result = self.run_check()
+        self.assertNotEqual(result.returncode, 0, result.stdout)
+        self.assertIn('".ws-badge"', result.stderr)
+        self.assertIn("docs/design/user-interface/1_overview.md:1", result.stderr)
+
+    def test_allowlisted_keep_with_reason_passes_and_bad_entries_fail(self):
+        self.write(self.SOURCE, "// constant moved\n")
+        self.write_allowlist([{"identifier": self.CONST, "doc": self.DOC,
+                               "reason": "Historical note keeps the old name."}])
+        result = self.run_check()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.write_allowlist([{"identifier": self.CONST, "doc": self.DOC, "reason": " "}])
+        result = self.run_check()
+        self.assertNotEqual(result.returncode, 0, result.stdout)
+        self.assertIn("needs a reason", result.stderr)
+        self.write_allowlist([
+            {"identifier": self.CONST, "doc": self.DOC,
+             "reason": "Historical note keeps the old name."},
+            {"identifier": "NeverRemovedName", "doc": self.DOC, "reason": "Kept for history."},
+        ])
+        result = self.run_check()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotIn("stale allowlist entry", result.stderr)
+        self.write(self.DOC, "# Overview\n\nThe contracts module owns the job name.\n")
+        result = self.run_check()
+        self.assertNotEqual(result.returncode, 0, result.stdout)
+        self.assertIn("stale allowlist entry", result.stderr)
+        self.assertIn(self.CONST, result.stderr)
+        self.assertNotIn("NeverRemovedName", result.stderr)
+
+    def test_prose_fenced_and_non_live_mentions_do_not_count(self):
+        self.write(self.SOURCE, "// constant moved\n")
+        self.write(self.DOC, f"# Overview\n\nThe {self.CONST} job name is owned by contracts.\n\n"
+                   f"```text\n`{self.CONST}`\n```\n")
+        self.write("docs/design/orbit-core/4_decisions.md", f"Decided `{self.CONST}`.\n")
+        self.write("docs/dev/rca/2026-01-01-record.md", f"Cause: `{self.CONST}`.\n")
+        result = self.run_check()
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+
 class ReleaseAndSmokeScriptRegressionTests(unittest.TestCase):
     """Regress release-check, sync-plugin-skills stderr, and smoke-npm-install hygiene."""
 
