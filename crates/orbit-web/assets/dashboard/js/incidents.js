@@ -1112,24 +1112,6 @@ function detailNode(group, groups, axis, now, ctx) {
       " to read each underlying record.",
     ]));
   }
-  const actions = [];
-  const runIds = [...new Set(group.incidents.flatMap(incidentRunIds))];
-  if (runIds.length === 1 && hasCtx(ctx, "setActiveTab")) {
-    const view = el("button", { class: "incident-action", type: "button", text: "View run", "aria-description": `Open ${runIds[0]}` });
-    view.addEventListener("click", () => ctx.setActiveTab(`runs/${encodeURIComponent(runIds[0])}`));
-    actions.push(view);
-  } else if (runIds.length > 1) {
-    const view = el("button", { class: "incident-action", type: "button", text: `View runs (${runIds.length})` });
-    view.addEventListener("click", () => {
-      runsOpen = true;
-      rerender();
-      const runs = layout && layout.detail.querySelector && layout.detail.querySelector(".incident-runs");
-      if (runs && typeof runs.scrollIntoView === "function") runs.scrollIntoView({ block: "nearest" });
-    });
-    actions.push(view);
-  }
-  actions.push(auditButton(group, "Audit events", "incident-action"));
-
   const node = el("div", { class: "incident-detail" }, [
     el("div", { class: "incident-detail-meta" }, [
       incidentPill(CLASS_NAMES[group.cls] || incidentClassLabel(group.cls, group.sample.class_label),
@@ -1144,13 +1126,12 @@ function detailNode(group, groups, axis, now, ctx) {
       track,
       axisNode(axis, 4, "incident-wide-axis"),
     ]),
-    factsNode(group),
+    el("div", { class: "incident-facts-panel" }, [factsNode(group)]),
     el("section", { class: "incident-message", "aria-label": "Message" }, messageChildren),
     sameCauseNode(group, groups),
     relatedNode(group, groups),
     group.incidents.some(incident => incidentRunIds(incident).length) ? runsNode(group, ctx) : null,
     evidenceNode(group, ctx),
-    el("div", { class: "incident-actions" }, actions),
   ]);
   node.dataset.key = `detail-${group.key}`;
   node.dataset.hash = JSON.stringify([runsOpen, evidenceOpen, live, node.textContent]);
