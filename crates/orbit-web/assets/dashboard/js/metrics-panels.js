@@ -4,7 +4,7 @@ import { sparkline as lineSparkline } from './sparkline.js';
 import { COMPLEXITY_LABELS, delta, fmtMs, previousLabel, seriesLabel, tasks } from './metrics-running.js';
 import { fmtTokens } from './metrics-tokens.js';
 import { fmtTurns } from './metrics-turns.js';
-import { fmtLines } from './metrics-diff.js';
+import { diffCrewLabel, fmtLines } from './metrics-diff.js';
 import { coverageText, fmtAmount } from './metrics-friction.js';
 
 const LOW_ACTOR_SAMPLE = 5;
@@ -125,7 +125,7 @@ function complexityActorsCard(payload, state, rerender) {
   const band = byKey.get(selected);
   if (!band) return card("Actors within a complexity", "last 30d · bar = avg, tick = p95", [tabs, emptyNote("No implementation runs in the last 30d.")], "mx-wide");
   const actors = [...band.actors].sort((a, b) => b.n - a.n || a.actor.localeCompare(b.actor));
-  const max = Math.max(...actors.map((actor) => actor.p95), 1);
+  const max = Math.max(...actors.map((actor) => Math.max(actor.avg, actor.p95)), 1);
   const rows = actors.map((actor) => {
     const bar = el("div", { class: "mx-dist", "aria-hidden": "true" }, [el("div", { class: "mx-dist-avg" }), el("div", { class: "mx-dist-p95" })]);
     const color = providerDot(splitActor(actor.actor).provider).style.background;
@@ -338,9 +338,9 @@ function turnsProviderCard(payload) {
 }
 
 function linesByCrewCard(payload) {
-  const crewRows = (payload?.crews || []).filter(({ total }) => total.n).map(({ key, total }) => {
-    const { code_added, tests_added, code_deleted, tests_deleted, net } = total.sum;
-    return [key === "other" ? "Other crews" : key === "unknown" ? "Unknown crew" : key,
+  const crewRows = (payload?.crews || []).filter(({ total }) => total.n).map((crew) => {
+    const { code_added, tests_added, code_deleted, tests_deleted, net } = crew.total.sum;
+    return [diffCrewLabel(crew),
       code_added + tests_added, code_deleted + tests_deleted, net];
   }).sort(([left, , , net], [right, , , nextNet]) => nextNet - net || left.localeCompare(right));
   const rows = crewRows.map(([label, ...lines]) => [label, ...lines.map(fmtLines)]);

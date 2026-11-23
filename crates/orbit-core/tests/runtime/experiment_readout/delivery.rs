@@ -3,6 +3,7 @@ use orbit_store::contracts::V2AuditEventInsertParams;
 use orbit_types::workflow::{
     ExperimentOverlayRecord, TagInstructionRole, V2AuditEnvelope, V2AuditEvent, V2AuditEventKind,
 };
+use serde_json::Value;
 
 /// Records `kind` in `run`'s audit trail.
 fn audit(runtime: &OrbitRuntime, run: &str, event_id: &str, kind: V2AuditEventKind) {
@@ -41,7 +42,11 @@ fn audit(runtime: &OrbitRuntime, run: &str, event_id: &str, kind: V2AuditEventKi
 /// treatment's primary interval clearly below control's. Each treatment
 /// task's implement step receives the overlay and then finishes with
 /// `step_outcome`.
-fn expired_instruction_experiment(root: &std::path::Path, step_outcome: &str) -> ExperimentReadout {
+fn expired_instruction_experiment(
+    root: &std::path::Path,
+    step_outcome: &str,
+    extra_arms: Vec<Value>,
+) -> ExperimentReadout {
     let global = root.join("home/.orbit");
     let workspace = root.join("repo/.orbit");
     std::fs::create_dir_all(&global).unwrap();
@@ -56,17 +61,19 @@ fn expired_instruction_experiment(root: &std::path::Path, step_outcome: &str) ->
         actor: "readout-test".into(),
         reason: None,
     };
+    let mut arms = vec![
+        json!({ "name": "control", "control": true }),
+        json!({
+            "name": "treatment",
+            "overlay": { "instructions": { "implement": "docs/agents/treatment.md" } }
+        }),
+    ];
+    arms.extend(extra_arms);
     let experiment = runtime
         .create_experiment(
             "treatment-delivery",
             ExperimentDefinitionInput {
-                arms: Some(json!([
-                    { "name": "control", "control": true },
-                    {
-                        "name": "treatment",
-                        "overlay": { "instructions": { "implement": "docs/agents/treatment.md" } }
-                    }
-                ])),
+                arms: Some(Value::Array(arms)),
                 primary_metric: Some("total_tokens".into()),
                 min_sample: Some(100),
                 max_days: Some(1),
@@ -177,7 +184,7 @@ fn readout_withholds_the_verdict_when_the_treatment_never_ran() {
         return;
     }
     let root = tempfile::tempdir_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
-    let readout = expired_instruction_experiment(root.path(), "error");
+    let readout = expired_instruction_experiment(root.path(), "error", Vec::new());
     let primary = readout
         .metrics
         .iter()
@@ -221,7 +228,7 @@ fn readout_keeps_the_verdict_when_the_treatment_is_delivered() {
         return;
     }
     let root = tempfile::tempdir_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
-    let readout = expired_instruction_experiment(root.path(), "success");
+    let readout = expired_instruction_experiment(root.path(), "success", Vec::new());
     assert_eq!(readout.verdict.state, "winner", "{:?}", readout.verdict);
     assert_eq!(readout.verdict.arm.as_deref(), Some("treatment"));
     let arm = readout
@@ -237,4 +244,46 @@ fn readout_keeps_the_verdict_when_the_treatment_is_delivered() {
     let per_protocol = readout.per_protocol.as_ref().unwrap();
     assert_eq!(per_protocol.metric.arms[1].estimate.n, 4);
     assert!(!readout.warnings.iter().any(|w| w.kind == "undelivered"));
+}
+
+#[test]
+fn readout_reports_delivery_requirements_per_arm() {
+    if !crate::dispatch_admission::isolated(
+        "experiment_readout::delivery::readout_reports_delivery_requirements_per_arm",
+    ) {
+        return;
+    }
+    let root = tempfile::tempdir_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
+    let readout = expired_instruction_experiment(
+        root.path(),
+        "success",
+        vec![
+            json!({ "name": "review", "overlay": { "instructions": { "review": "docs/agents/treatment.md" } } }),
+            json!({ "name": "crew", "overlay": { "crew": { "pool": [{ "crew": "sol", "weight": 1 }] } } }),
+        ],
+    );
+    let readout = serde_json::to_value(readout).unwrap();
+    let actual: Vec<_> = readout["arms"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|arm| !arm["delivery"].is_null())
+        .map(|arm| {
+            let delivery = &arm["delivery"];
+            json!([
+                arm["name"],
+                delivery["roles"],
+                delivery["crew"],
+                delivery["delivered"]
+            ])
+        })
+        .collect();
+    assert_eq!(
+        actual,
+        [
+            json!(["treatment", ["implement"], false, 4]),
+            json!(["review", ["review"], false, 0]),
+            json!(["crew", [], true, 0]),
+        ]
+    );
 }

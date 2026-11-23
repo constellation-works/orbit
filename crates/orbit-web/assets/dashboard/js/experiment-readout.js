@@ -181,18 +181,26 @@ export function armEvidenceCard(readout) {
   const unit = (readout.metrics || []).find((metric) => metric.metric === primaryName)?.unit;
   const cost = (readout.metrics || []).find((metric) => metric.metric === "cost_usd");
   const costOf = (arm) => cost?.arms?.find((row) => row.arm === arm.name)?.cost_coverage;
-  const deliveryRoles = arms.find((arm) => arm.delivery)?.delivery.roles || [];
   const minDelivered = Math.round((readout.experiment?.min_delivered_rate ?? 0) * 100);
   const columns = [
     arms.some((arm) => arm.delivery) ? {
       head: "Delivered",
-      hint: `Settled tasks whose ${deliveryRoles.join(", ")} step received this arm's overlay and finished successfully. Below ${minDelivered}% the verdict is withheld. Pending tasks are in flight and not yet delivered.`,
-      cell: (arm) => (arm.delivery ? {
-        text: `${arm.delivery.delivered} of ${arm.delivery.assigned - arm.delivery.pending}`
-          + (arm.delivery.rate != null ? ` (${Math.round(arm.delivery.rate * 100)}%)` : "")
-          + (arm.delivery.pending ? ` · ${arm.delivery.pending} pending` : ""),
-        className: deliveryIsLow(arm.delivery, readout) ? "ex-warn-text" : null,
-      } : { text: "—" }),
+      hint: `Tasks with evidence of the arm's treatment. Below ${minDelivered}% the verdict is withheld. Pending tasks are in flight and excluded from the rate.`,
+      cell: (arm) => {
+        const delivery = arm.delivery;
+        if (!delivery) return { text: "—" };
+        const roles = delivery.roles || [];
+        const evidence = [];
+        if (roles.length) evidence.push(`Steps for ${roles.join(", ")} received the overlay and succeeded.`);
+        if (delivery.crew ?? !roles.length) evidence.push("Admission recorded the arm’s crew overlay.");
+        return {
+          text: `${delivery.delivered} of ${delivery.assigned - delivery.pending}`
+            + (delivery.rate != null ? ` (${Math.round(delivery.rate * 100)}%)` : "")
+            + (delivery.pending ? ` · ${delivery.pending} pending` : ""),
+          hint: evidence.join(" "),
+          className: deliveryIsLow(delivery, readout) ? "ex-warn-text" : null,
+        };
+      },
     } : null,
     readout.per_protocol ? {
       head: "Per-protocol",
@@ -223,7 +231,7 @@ export function armEvidenceCard(readout) {
       el("th", { scope: "row" }, [el("span", { class: "ex-arm-name" }, [armSwatch(armColor(index)), arm.name])]),
       ...columns.map((column) => {
         const cell = column.cell(arm);
-        return el("td", { class: cell.className || null, text: cell.text });
+        return el("td", { class: cell.className || null }, [cell.text, cell.hint ? pinnedInfoHint(cell.hint) : null]);
       }),
     ]))),
   ]);

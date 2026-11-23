@@ -25,13 +25,12 @@ const BODY_ID = "codebase-body";
 const WINDOWS = ["7d", "30d", "90d", "all"];
 const ROLLUPS = ["file", "dir", "crate"];
 const VIEWS = ["hotspots", "file", "coupling"];
-// The dimensions a regression is filtered by, each value in the server's
-// breakdown order. `absent` (a link stored without a classification) and
-// `unclassified` (the filer could not tell) stay apart.
+// The dimensions a regression is filtered by. Layer names come from the
+// workspace, so only the server validates them, including on a cold deep link.
 const REGRESSION_DIMENSIONS = [
   { key: "nature", label: "Nature", values: ["broke_existing", "defect_in_new", "incomplete", "merge_reintroduced", "contract_drift", "unclassified", "absent"] },
   { key: "escape", label: "Escape", values: ["no_test", "test_not_selected", "platform_only", "review_missed", "spec_ambiguous", "nondeterministic", "unclassified", "absent"] },
-  { key: "layer", label: "Layer", values: ["ci_tests", "docs_skills", "dashboard", "sandbox_policy", "store_migration", "vcs_delivery", "config", "cli_mcp", "runtime_lifecycle", "other", "unknown"] },
+  { key: "layer", label: "Layer" },
   { key: "detected_by", label: "Detected by", values: ["delivery_review", "security_review", "code_review", "qa_sweep", "post_merge_ci", "production_run", "operator", "other"] },
 ];
 const VALUE_LABELS = {
@@ -42,7 +41,7 @@ const VALUE_LABELS = {
   runtime_lifecycle: "runtime/lifecycle", delivery_review: "delivery review", security_review: "security review",
   code_review: "code review", qa_sweep: "QA sweep", post_merge_ci: "post-merge CI", production_run: "production run",
 };
-const valueLabel = (value) => VALUE_LABELS[value] || String(value ?? "").replace(/_/g, " ");
+const valueLabel = (value) => Object.hasOwn(VALUE_LABELS, value) ? VALUE_LABELS[value] : String(value ?? "").replace(/_/g, " ");
 const DEFAULT_FILTER = Object.fromEntries(REGRESSION_DIMENSIONS.map((dimension) => [dimension.key, null]));
 const DEFAULT_QUERY = { window: "90d", min_support: 15, rollup: "file", ...DEFAULT_FILTER };
 // The minimum-support choices; a hashed value off the ladder is added to it.
@@ -138,7 +137,7 @@ function normalizedQuery(raw, fallback = DEFAULT_QUERY) {
   // An omitted or cleared filter keeps every value; an unknown one falls back.
   for (const { key, values } of REGRESSION_DIMENSIONS) {
     const value = raw[key];
-    query[key] = value == null || value === "" ? null : values.includes(value) ? value : (fallback[key] ?? null);
+    query[key] = value == null || value === "" ? null : !values || values.includes(value) ? value : (fallback[key] ?? null);
   }
   return query;
 }
@@ -254,14 +253,16 @@ function syncCodebaseControls() {
 
 /// Change the selection and ask for a new hash; an invalid or unchanged
 /// selection asks for nothing.
-function updateQuery(update) {
+function updateQuery(update, target = route) {
   const next = normalizedQuery({ ...codebaseQuery, ...update }, codebaseQuery);
   if (JSON.stringify(next) === JSON.stringify(codebaseQuery)) {
     syncCodebaseControls();
+    navigate(target);
     return;
   }
   dropQueryData();
   codebaseQuery = next;
+  setRoute(target);
   syncCodebaseControls();
   requestHashChange();
 }
@@ -636,15 +637,23 @@ function hotspotSections(model) {
 
 function hotspotTable(model) {
   const { data, signals, index } = model;
+  const { query, multi, singles } = hotspotSections(model);
+  const others = query && Array.isArray(data.known_paths) ? data.known_paths
+    .filter((path) => !index.has(path) && path.toLowerCase().includes(query)).slice(0, OTHER_PATHS_SHOWN) : [];
+  const otherPaths = others.length ? el("div", { class: "codebase-others" }, [
+    el("p", { class: "codebase-eyebrow", text: "Not ranked · open to see what changes with it" }),
+    el("ul", { class: "codebase-other-paths", "aria-label": "Other matching paths" },
+      others.map((path) => el("li", {}, [fileLink(path)]))),
+  ]) : null;
   const box = el("section", { class: "card card-flush codebase-hot", "aria-label": "Hotspots" });
   if (!signals.length) {
     box.appendChild(el("div", { class: "codebase-empty-state" }, [
       el("p", { class: "codebase-empty-title", text: `No path reaches minimum support ${count(data.min_support)} under any signal in this window.` }),
       el("div", { class: "codebase-actions" }, [lowerSupportButton(data, `Show paths with ${LOWERED_SUPPORT}+ tasks`), data.window !== "all" ? actionButton("Use all time", () => updateQuery({ window: "all" })) : null]),
     ]));
-    return keyed(box, "hotspots", { empty: true, min: data.min_support, window: data.window });
+    if (otherPaths) box.appendChild(otherPaths);
+    return keyed(box, "hotspots", { empty: true, min: data.min_support, window: data.window, others });
   }
-  const { query, multi, singles } = hotspotSections(model);
   const head = el("tr", {}, [
     el("th", { class: "codebase-hot-path", text: ROLLUP_NOUNS[data.rollup] || "Path" }),
     ...signals.map((key) => {
@@ -691,24 +700,14 @@ function hotspotTable(model) {
     foot.appendChild(toggle);
   }
   box.appendChild(foot);
-  if (query) {
-    // Paths no signal ranks can still be opened: their files and partners.
-    const ranked = new Set(index.keys());
-    const others = (Array.isArray(data.known_paths) ? data.known_paths : [])
-      .filter((path) => !ranked.has(path) && path.toLowerCase().includes(query)).slice(0, OTHER_PATHS_SHOWN);
-    if (others.length) {
-      const list = el("ul", { class: "codebase-other-paths", "aria-label": "Other matching paths" });
-      for (const path of others) list.appendChild(el("li", {}, [fileLink(path)]));
-      box.appendChild(el("div", { class: "codebase-others" }, [el("p", { class: "codebase-eyebrow", text: "Not ranked · open to see what changes with it" }), list]));
-    }
-  }
+  if (otherPaths) box.appendChild(otherPaths);
   const cells = [...multi, ...singles].map((path) => signals.map((key) => {
     const hit = index.get(path)?.[key];
     return hit ? [hit.rank, hit.row.rate, hit.row.numerator, hit.row.denominator] : null;
   }));
   return keyed(box, "hotspots", {
     signals, rollup: data.rollup, multi, singles, cells, total: index.size, showAll: view.showAll, query,
-    lengths: signals.map((key) => rowsOf(data, key).length), known: query ? data.known_paths || null : null,
+    lengths: signals.map((key) => rowsOf(data, key).length), others,
   });
 }
 
@@ -1075,8 +1074,15 @@ function fileRelated(path) {
   box.appendChild(body);
   const done = (hash) => keyed(box, "file-related", hash);
   if (path.endsWith("/")) {
-    body.appendChild(el("p", { class: "codebase-empty", text: "Changes with pairs single files. Group by file to see what lands alongside one." }));
-    body.appendChild(el("div", { class: "codebase-actions" }, [actionButton("Group by file", () => updateQuery({ rollup: "file" }))]));
+    body.appendChild(el("p", { class: "codebase-empty", text: "Choose a file to see what lands alongside it." }));
+    body.appendChild(el("div", { class: "codebase-actions" }, [actionButton("Group by file", () => {
+      const search = path === "./" ? "" : path;
+      view = { ...view, search };
+      const input = $("codebase-path-search");
+      if (input) input.value = search;
+      updateQuery({ rollup: "file" }, { view: "hotspots", path: null });
+      input?.focus();
+    })]));
     return done({ path, rollup: true });
   }
   // An answer for another path, window or minimum is not this selection's.

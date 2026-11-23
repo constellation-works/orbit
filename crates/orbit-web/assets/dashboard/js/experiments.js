@@ -49,6 +49,7 @@ const WARNING_LABELS = {
   explorer_trace_incomplete: "Explorer uptake unconfirmed",
   crew_mismatch: "Crew outside arm pool",
   crew_mismatch_unavailable: "Crew admission pool unavailable",
+  horizon_unavailable: "Horizon unavailable",
   forced: "Forced assignments",
   explicit_crew: "Explicit-crew exclusions",
   interactive: "Interactive exclusions",
@@ -414,14 +415,19 @@ function readoutNotice(view) {
 // readout: the first start event opens the horizon, as it does the readout's.
 function definitionInfo(experiment) {
   const started = (experiment.events || []).find((event) => event.kind === "started")?.at || null;
-  const startedAt = started ? Date.parse(started) : NaN;
   const days = num(experiment.max_days);
+  let horizon = experiment.horizon_at;
+  // An older host only sends the start and day count.
+  if (!Object.hasOwn(experiment, "horizon_at") && started && days > 0) {
+    const end = new Date(Date.parse(started) + days * 86400000);
+    if (end.getUTCFullYear() >= 1 && end.getUTCFullYear() <= 9999) horizon = end.toISOString();
+  }
   return {
     primary_metric: experiment.primary_metric || null,
     min_sample: num(experiment.min_sample),
     max_days: days,
     started_at: started,
-    horizon_at: Number.isFinite(startedAt) && days != null ? new Date(startedAt + days * 86400000).toISOString() : null,
+    horizon_at: horizon,
   };
 }
 
@@ -573,6 +579,7 @@ function pendingFact(view) {
 
 function horizonText(info) {
   if (info.horizon_at) return formatDateTime(info.horizon_at);
+  if (info.started_at && info.max_days != null) return "Unavailable · saved days exceed calendar range";
   return info.max_days != null ? `${info.max_days} days after start` : "—";
 }
 

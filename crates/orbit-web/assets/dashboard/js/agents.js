@@ -255,17 +255,20 @@ export function wireAgentControls() {
     panelWindows: RANK_WINDOWS,
     onPanelWindow: (next) => (next ? setRankWindow(next) : false),
   });
-  wireSettleSelector();
-  const executions = $("agents-execution-selector");
-  if (executions) {
-    executions.addEventListener("click", (event) => {
-      const button = event.target.closest("[data-execution]");
-      if (!button || !EXECUTIONS.includes(button.dataset.execution) || button.dataset.execution === execution) return;
-      execution = button.dataset.execution;
-      syncExecutionSelector();
-      fetchAndRenderAgents();
-    });
-  }
+  wireAgentTablist("agents-settle-selector", "[data-settle]", (button) => {
+    const next = button.dataset.settle === "live";
+    if (next === rankLive) return;
+    rankLive = next;
+    syncRankChrome();
+    fetchAndRenderAgents();
+  });
+  wireAgentTablist("agents-execution-selector", "[data-execution]", (button) => {
+    const next = button.dataset.execution;
+    if (!EXECUTIONS.includes(next) || next === execution) return;
+    execution = next;
+    syncExecutionSelector();
+    fetchAndRenderAgents();
+  });
   const tier = $("agents-tier");
   if (tier) {
     tierHint = common.pinnedInfoHint("");
@@ -278,26 +281,18 @@ export function wireAgentControls() {
   }
 }
 
-function wireSettleSelector() {
-  const selector = $("agents-settle-selector");
+function wireAgentTablist(id, tabSelector, pick) {
+  const selector = $(id);
   if (!selector || selector.dataset.wired === "true") return;
   selector.dataset.wired = "true";
-  const pick = (button) => {
-    if (!button) return;
-    const next = button.dataset.settle === "live";
-    if (next === rankLive) return;
-    rankLive = next;
-    syncRankChrome();
-    fetchAndRenderAgents();
-  };
   selector.addEventListener("click", (event) => {
-    const button = event.target.closest("[data-settle]");
+    const button = event.target.closest(tabSelector);
     if (!button || !selector.contains(button)) return;
     pick(button);
   });
   selector.addEventListener("keydown", (event) => {
-    const tabs = Array.from(selector.querySelectorAll("[data-settle]"));
-    const index = tabs.indexOf(event.target.closest("[data-settle]"));
+    const tabs = Array.from(selector.querySelectorAll(tabSelector));
+    const index = tabs.indexOf(event.target.closest(tabSelector));
     if (index < 0) return;
     let nextIndex = null;
     if (event.key === "ArrowRight") nextIndex = (index + 1) % tabs.length;

@@ -312,11 +312,15 @@ function definitionBody(state) {
   };
   // Empty-value contract, shared by create, edit and Save and start: a blank
   // optional field is omitted, and an omitted field leaves the stored draft
-  // unchanged. Blank is a value only when the stored draft has none; edit
-  // callers must refuse `clearedOptionalFields` before sending.
+  // unchanged. Also omit an unchanged horizon so an older draft with an
+  // out-of-range value can still be edited. Start validates its saved horizon.
   if (fields.primary_metric) body.primary_metric = fields.primary_metric;
   for (const name of ["min_sample", "max_days"]) {
-    if (fields[name].trim()) body[name] = count(fields[name]);
+    const value = fields[name].trim();
+    if (value) {
+      if (name === "max_days" && value === text(state.original?.max_days)) continue;
+      body[name] = count(value);
+    }
   }
   if (fields.reason.trim()) body.reason = fields.reason.trim();
   const name = fields.name.trim();
@@ -328,14 +332,10 @@ function definitionBody(state) {
 // omitted field the stored draft already sets would silently keep its old
 // value, so callers refuse it before reporting a successful save. Create
 // mode has no stored draft, so nothing is ever cleared there.
-function clearedOptionalFields(original, body) {
+function clearedOptionalFields({ original, fields }) {
   if (!original) return [];
-  const cleared = [];
-  if (body.primary_metric === undefined && text(original.primary_metric).trim() !== "") cleared.push("primary_metric");
-  for (const name of ["min_sample", "max_days"]) {
-    if (body[name] === undefined && text(original[name]).trim() !== "") cleared.push(name);
-  }
-  return cleared;
+  return ["primary_metric", "min_sample", "max_days"]
+    .filter((name) => !fields[name].trim() && text(original[name]).trim());
 }
 
 const CLEAR_REFUSAL = {
@@ -420,7 +420,7 @@ async function submit(start) {
   // old value, so refuse it next to its field instead of saving. This one
   // check covers ordinary Save and the captured Save-and-start body.
   if (state.mode === "edit") {
-    const cleared = clearedOptionalFields(state.original, body);
+    const cleared = clearedOptionalFields(state);
     if (cleared.length) {
       showClearRefusal(state, cleared);
       return;
@@ -937,7 +937,7 @@ function actionsView(state) {
       // Refuse a cleared optional field before confirming, so Save and start
       // cannot capture a body that would silently keep its old value.
       if (state.mode === "edit") {
-        const cleared = clearedOptionalFields(state.original, definitionBody(state));
+        const cleared = clearedOptionalFields(state);
         if (cleared.length) {
           showClearRefusal(state, cleared);
           return;
