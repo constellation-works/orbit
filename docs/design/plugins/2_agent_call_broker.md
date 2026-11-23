@@ -8,7 +8,7 @@ tags: [plugins, security, sandbox, secrets, ipc]
 paths: ["crates/orbit-core/src/adapter/engine_host/actions/sandbox/**", "crates/orbit-exec/src/linux_sandbox/**", "crates/orbit-exec/src/macos_sandbox/**", "crates/orbit-runtime/src/plugin/**", "crates/orbit-engine/src/activity_job/cli_runner/plugin_broker.rs", "crates/orbit-tools/src/plugin/backend/**"]
 related_features: [policy-sandbox, plugins]
 related_artifacts: [ORB-13038, ORB-13008, ORB-13009, ORB-14017, ORB-14194, F2026-09-230]
-last_updated: 2026-11-20
+last_updated: 2026-11-23
 last_validated: 2026-11-15
 ---
 
@@ -164,7 +164,7 @@ naming a resident cycle's run, the nested `orbit` forwards the call. The broker 
 job run it serves is a cycle, then runs the ship through the tool host for that run, so the cycle guard
 decides the live grant, the `dispatch` right and the workspace and writes the action ledger row.
 
-For ship, land, re-pilot and requeue, the managed-run environment is a routing hint. Only the
+For every brokered resident action (ship, decision raise, land, refresh, re-pilot, requeue, delivery recovery and a move to `done`), the managed-run environment is a routing hint. Only the
 broker's authenticated run can exercise the resident exemption. An in-process call still faces
 the operator capability check and cannot use a resident grant or replay its ledger entries.
 
@@ -184,11 +184,13 @@ workspace-wide raise lock lies in `.orbit`, which the cycle's sandbox mounts rea
 for the run it serves. The sandbox gains no write grant. The handler still refuses a task no human crew
 holds, and the request's filer is the run's identity, never one the input names.
 
-**A resident cycle's landing and move to `done`.** `orbit.workflow` action `land`, and an `orbit.task.update`
+**A resident cycle's landing, refresh and move to `done`.** `orbit.workflow` action `land`, and an `orbit.task.update`
 whose `status` is `done`, reach the forge with the host's `gh` credentials, which the cycle's sandbox
 does not hold. The nested `orbit` forwards them on the same terms as the ship, and the broker runs them
 through the tool host for the run it serves, so the cycle guard decides the live grant, the `merge`
 right and the open pull request. The broker carries no other `orbit.task.update` for a cycle.
+
+`orbit.workflow` action `refresh`, which updates a delivery pull request's branch, needs the same host credentials and is forwarded on the same terms.
 
 **Claimed-owner calls.** The last built-ins the broker carries are a claimed worker's
 owner calls (`CLAIMED_OWNER_TOOLS`): `orbit.task.show`, `orbit.search`, `orbit.task.list`,
@@ -365,7 +367,7 @@ existing host seam (`RuntimeHost`) and not through a new crate dependency.
 **Which calls it serves.** Every call a sandboxed nested `orbit` makes to a tool whose
 registration is a plugin backend, plus the five host-credentialed reads, the claimed
 worker's owner calls above and the guarded
-resident actions (`orbit.workflow` action `ship`, `orbit.decision` action `raise`, `orbit.workflow` action `land` and
+resident actions (`orbit.workflow` action `ship`, `orbit.decision` action `raise`, `orbit.workflow` actions `land` and `refresh`, `orbit.task.recover` actions `repilot`, `requeue` and `resume_delivery`, and
 the move to `done` via `orbit.task.update`) below. That covers `orbit tool run <ns>.<verb>`, its
 `orbit <ns> <verb>` spelling, and `tools/call` on an agent's `orbit mcp serve`. Tool listing,
 schemas and `--help` still come from the nested `orbit`. Those need only the plugin rows,
@@ -465,7 +467,7 @@ response: {"schema_version":1,"ok":true,"output":{…}}
 
 The request carries only what the caller legitimately chooses: the tool, its input, a `cwd` the
 broker requires to lie within the run's worktree, and an optional workspace selector the broker
-resolves against the run's own registry. Everything that decides authority comes from the
+resolves against the run's own registry, except that `orbit.task.resume_delivery` takes its target from its input (§4.4). Everything that decides authority comes from the
 broker's own dispatch record and is never read from the request or the client's environment:
 run ID, task ID, the activity's allowlist, the filesystem profile and the tool ceiling.
 Consequently `context.task_id` and `context.job_run_id` (1_scope.md §4.2 "Call identity")
@@ -515,9 +517,18 @@ service side regardless.
 - The request is refused with `plugin_broker_refused` when its `cwd` does not resolve inside
   the run's worktree, it names a workspace other than the run's (the run's own workspace is accepted under any of its spellings: logical id, registered name or task-partition id; a run with no recorded workspace accepts none), it asks for a dry run (the
   nested `orbit` answers those itself), or it names a tool outside the plugin tools, the
-  five read-only `github.*` tools, `CLAIMED_OWNER_TOOLS` and a resident cycle's guarded ship, decision raise, landing and move to `done`
+  five read-only `github.*` tools, `CLAIMED_OWNER_TOOLS` and a resident cycle's guarded ship, decision raise, landing, refresh, re-pilot, requeue, delivery recovery and move to `done`
   (§3). Claimed-owner calls also pass
   the claim-specific scope checks described above.
+- `orbit.task.resume_delivery` is exempt from the run-workspace check in that bullet. The broker
+  passes no workspace to `checked_cwd` for it, so its `cwd` must still lie in the worktree. Its
+  target is the call's input `workspace`, resolved by `resident_recovery_workspace`
+  (`crates/orbit-core/src/application/resident/guard.rs`). A call that names no workspace stays in
+  the run's own workspace. A named workspace needs the grant's `recover` right (`resident_right_refused`
+  otherwise) and must resolve to one local owner workspace the grant covers on this host. One it
+  does not cover is refused with a `resident_scope_refused` message. That message reaches the
+  agent as `plugin_broker_refused`, because every `PolicyDenied` maps to that code
+  (`crates/orbit-runtime/src/plugin/broker/protocol.rs`).
 - The call runs through the same audited dispatch and tool chokepoint as an in-process call,
   with an `agent` session, the run's allowlist or deny policy, and the backend's `context`
   bound to the run's task and job run. An exec backend is confined by the §5 intersection.
