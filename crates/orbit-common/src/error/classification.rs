@@ -1,11 +1,11 @@
 use std::path::Path;
 
 use super::{
-    ArtifactOrigin, ClaimRefusalKind, DecisionRefusalCode, ForceOverridableKind,
-    ForceOverridableRefusal, ForgePushHoldFailure, FrictionNotLocal, HostRegistryCode,
-    NotFoundKind, NoticeRefusalCode, OrbitError, PrivateVcsFailure, RemoteToolCode,
-    SourceRepairAuthorityRefusal, SourceRepairRunStateRefusal, SqliteContention, StorageLayer,
-    TaskPilotRefusalCode, UnknownWorkspaceSelector, WorkflowEvidenceUnavailable,
+    ArtifactOrigin, BoundWorkspace, BoundWorkspaceRemedy, ClaimRefusalKind, DecisionRefusalCode,
+    ForceOverridableKind, ForceOverridableRefusal, ForgePushHoldFailure, FrictionNotLocal,
+    HostRegistryCode, NotFoundKind, NoticeRefusalCode, OrbitError, PrivateVcsFailure,
+    RemoteToolCode, SourceRepairAuthorityRefusal, SourceRepairRunStateRefusal, SqliteContention,
+    StorageLayer, TaskPilotRefusalCode, UnknownWorkspaceSelector, WorkflowEvidenceUnavailable,
     WorkspaceClaimHeld,
 };
 
@@ -793,16 +793,23 @@ impl OrbitError {
     pub fn unknown_workspace_selector(selector: impl Into<String>) -> Self {
         Self::UnknownWorkspaceSelector(Box::new(UnknownWorkspaceSelector {
             selector: selector.into(),
-            bound_workspace: None,
+            bound: None,
         }))
     }
 
-    /// Attach the bound session's workspace name to an unknown-workspace
-    /// refusal while preserving the typed [`Self::UnknownWorkspaceSelector`]
-    /// identity.
-    pub fn with_bound_workspace(mut self, bound_workspace: impl Into<String>) -> Self {
+    /// Attach the bound session's workspace name and the remedy that keeps
+    /// its filter to an unknown-workspace refusal, preserving the typed
+    /// [`Self::UnknownWorkspaceSelector`] identity.
+    pub fn with_bound_workspace(
+        mut self,
+        bound_workspace: impl Into<String>,
+        remedy: BoundWorkspaceRemedy,
+    ) -> Self {
         if let Self::UnknownWorkspaceSelector(unknown) = &mut self {
-            unknown.bound_workspace = Some(bound_workspace.into());
+            unknown.bound = Some(BoundWorkspace {
+                name: bound_workspace.into(),
+                remedy,
+            });
         }
         self
     }

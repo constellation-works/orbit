@@ -8,7 +8,7 @@ use orbit_cmd::registry_runtime::{RegisteredRuntimeFactory, ResolvedWorkspaceSel
 use orbit_cmd::task_owner::{TaskOwnerLookup, WorkspaceIdentity};
 use orbit_common::governance::operation::OperationVerb;
 use orbit_common::governance::workflow::WorkflowVerb;
-use orbit_common::{NotFoundKind, OrbitError};
+use orbit_common::{BoundWorkspaceRemedy, NotFoundKind, OrbitError};
 use orbit_core::OrbitRuntime;
 use orbit_core::adapter::command::{
     GlobalAuditStoreCache, HostPluginMcpCache, HostPluginMcpSurface, ToolEntryPoint,
@@ -528,7 +528,15 @@ impl ServerMcpHost {
                         bound,
                     )
                 {
-                    return error.with_bound_workspace(workspace.workspace.name);
+                    // An ID-resolved tool ignores the binding when `workspace`
+                    // is omitted, so its retry keeps the filter only by naming
+                    // the bound workspace.
+                    let remedy = if ID_RESOLVED_WORKSPACE_TOOLS.contains(&operation) {
+                        BoundWorkspaceRemedy::PassBoundSelector
+                    } else {
+                        BoundWorkspaceRemedy::OmitSelector
+                    };
+                    return error.with_bound_workspace(workspace.workspace.name, remedy);
                 }
                 error
             });
