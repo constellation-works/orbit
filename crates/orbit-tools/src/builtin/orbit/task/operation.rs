@@ -12,7 +12,9 @@
 
 use orbit_common::OrbitError;
 use orbit_common::governance::operation::OperationInput;
-use orbit_common::governance::task::{TASK_CLI_OPTIONS_PARAM, TaskVerb, artifact_listing_hint};
+use orbit_common::governance::task::{
+    TASK_CLI_OPTIONS_PARAM, TASK_ID_WIRE_ALIAS, TaskVerb, artifact_listing_hint,
+};
 use orbit_common::protocol::tool_input::{
     optional_csv_or_string_list_alias, reject_unknown_tool_fields, required_string,
 };
@@ -49,6 +51,7 @@ impl GuardedModes for TaskVerb {
                 &[
                     "workspace",
                     "id",
+                    TASK_ID_WIRE_ALIAS,
                     "snapshot",
                     "model",
                     "fields",
@@ -69,6 +72,7 @@ impl GuardedModes for TaskVerb {
                     "workspace",
                     "view",
                     "id",
+                    TASK_ID_WIRE_ALIAS,
                     "limit",
                     "comments_offset",
                     "history_offset",
