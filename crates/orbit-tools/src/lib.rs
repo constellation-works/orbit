@@ -38,7 +38,6 @@ mod family;
 pub mod github_cli;
 pub mod github_quota;
 mod mcp;
-pub use mcp::builtin_mcp_rules;
 pub mod plugin;
 mod registry;
 pub mod tool_suggestions;
@@ -51,31 +50,22 @@ mod github_run_log_cache;
 mod host;
 mod program_policy;
 mod task_guarded_selectors;
+mod timeouts;
 mod tool;
 
-/// Default network operation timeout (15 s). Used for most GitHub API calls
-/// and Orbit CLI commands where a quick response is expected.
-pub(crate) const TIMEOUT_DEFAULT_MS: u64 = 15_000;
-
-/// Slow operation timeout (30 s). Used for git network operations and PR creation,
-/// which may involve larger payloads or slower remotes.
-pub(crate) const TIMEOUT_SLOW_MS: u64 = 30_000;
-
-/// Long operation timeout (60 s). Used for `gh pr checkout`, which clones or
-/// fetches a branch and may transfer significant data over the network.
-pub(crate) const TIMEOUT_LONG_MS: u64 = 60_000;
-
+pub use artifact_materialize::prepare_remote_task_artifact_put;
 pub use builtin::orbit::pipeline::invoke::has_pipeline_child_admission;
 pub use context::{
     ActivityBinding, DeterministicStepPrograms, PROC_SPAWN_MAX_TIMEOUT_MINUTES, ProcSpawnBudget,
-    ReservationOwnerContext, ToolCaller, ToolContext, WitnessedProgramGrant,
+    ToolCaller, ToolContext, WitnessedProgramGrant,
 };
 pub use fs_audit::{FsAuditLogger, FsCallEvent, FsCallEventKind};
 pub use github_run_log_cache::{GITHUB_RUN_LOG_CACHE_DIR, remove_legacy_github_run_log_cache};
 pub use host::{
     DrainOwnerTransport, OrbitBuiltinAction, OrbitTaskScope, OrbitToolHost, OwnerCoordinator,
-    prepare_remote_task_artifact_put,
+    ReservationOwnerContext,
 };
-pub use registry::{ToolRegistry, canonical_builtin_mcp_tool_definitions};
+pub use registry::{ToolRegistry, builtin_mcp_rules, canonical_builtin_mcp_tool_definitions};
+pub(crate) use timeouts::{TIMEOUT_DEFAULT_MS, TIMEOUT_LONG_MS, TIMEOUT_SLOW_MS};
 pub(crate) use tool::upsert_env;
 pub use tool::{Tool, ToolExecutionKind, check_exec_result, require_str};

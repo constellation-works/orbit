@@ -1,10 +1,11 @@
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use orbit_common::OrbitError;
+use orbit_types::plugin::RESERVED_CLI_COMMANDS;
 use orbit_types::tool::{
-    McpIdRoute, McpToolDefinition, McpToolDefinitionError, McpToolScope, McpToolset, TOOL_FAMILIES,
-    ToolSchema, is_tool_family_operation, mcp_advertised_tool_name, tool_family,
+    McpIdRoute, McpToolDefinition, McpToolDefinitionError, McpToolRules, McpToolScope, McpToolset,
+    TOOL_FAMILIES, ToolSchema, is_tool_family_operation, mcp_advertised_tool_name, tool_family,
     tool_family_of_operation, validate_mcp_tool_definitions,
 };
 use serde_json::Value;
@@ -13,8 +14,8 @@ use crate::family::{
     FamilyMember, FamilyTool, check_family_action_fields, family_members, is_family,
     operation_is_not_a_tool, resolve_family_input,
 };
-use crate::mcp::{builtin_mcp_toolset, mcp_annotations, mcp_rules};
-use crate::plugin::PluginToolBinding;
+use crate::mcp::{self, builtin_mcp_toolset, mcp_annotations, mcp_rules};
+use crate::plugin::{PluginToolBinding, PluginValidationPolicy};
 use crate::{Tool, ToolContext, ToolExecutionKind};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -431,7 +432,7 @@ impl ToolRegistry {
     /// Every registered tool's declared id route, resolved, by tool name.
     /// Includes tools MCP never advertises (CLI-only operations), whose
     /// name-based routing the CLI still consumes.
-    pub(crate) fn declared_id_routes(&self) -> HashMap<String, McpIdRoute> {
+    fn declared_id_routes(&self) -> HashMap<String, McpIdRoute> {
         self.tools
             .values()
             .map(|entry| {
@@ -574,6 +575,54 @@ fn addresses_one_id_with_optional_workspace(definition: &McpToolDefinition) -> b
         None => definition.scope != McpToolScope::Global,
     };
     id_required && workspace_optional
+}
+
+struct BuiltinCatalog {
+    // Includes CLI-only operations and the operations behind MCP families.
+    id_routes: HashMap<String, McpIdRoute>,
+    // Plugin validation uses standalone tool names, including family names.
+    tool_names: Vec<String>,
+}
+
+fn builtin_catalog() -> &'static BuiltinCatalog {
+    static CATALOG: OnceLock<BuiltinCatalog> = OnceLock::new();
+    CATALOG.get_or_init(|| {
+        let mut registry = ToolRegistry::new();
+        registry.register_builtins();
+        BuiltinCatalog {
+            id_routes: registry.declared_id_routes(),
+            tool_names: registry
+                .all_schemas()
+                .into_iter()
+                .map(|schema| schema.name)
+                .collect(),
+        }
+    })
+}
+
+/// Builtin rules for name-based CLI routing, including CLI-only task operations.
+/// Registered plugins receive defaults through the registry instead.
+///
+/// The id route comes from the named builtin's own definition, never from
+/// a hand-kept name list.
+pub fn builtin_mcp_rules(name: &str) -> McpToolRules {
+    let id_route = builtin_catalog()
+        .id_routes
+        .get(name)
+        .cloned()
+        .unwrap_or(McpIdRoute::Unspecified);
+    mcp::builtin_mcp_rules_with_route(name, id_route)
+}
+
+impl PluginValidationPolicy {
+    /// The policy for a host that has not verified the plugin's origin.
+    pub fn host_default() -> Self {
+        Self {
+            first_party_verified: false,
+            builtin_tools: builtin_catalog().tool_names.clone(),
+            reserved_cli_commands: RESERVED_CLI_COMMANDS,
+        }
+    }
 }
 
 /// Workspace-independent source for every canonical registry-backed MCP definition.

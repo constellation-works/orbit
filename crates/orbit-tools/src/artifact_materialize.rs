@@ -1,8 +1,8 @@
-//! Local task-artifact materialization shared by the host surface and the
+//! Local task-artifact materialization shared by the spoke connector and the
 //! `orbit.task.artifact.put` builtin.
 //!
 //! Reads a caller-local file into the bounded, path-free payload a spoke
-//! connector sends to its hub, so `host` need not depend on a builtin leaf.
+//! connector sends to its hub.
 
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -55,6 +55,32 @@ pub(crate) fn source_presence_error(input: &Value) -> Option<OrbitError> {
 
 /// How to supply an artifact's bytes, for a put that omits `source_path`.
 pub(crate) const SOURCE_PATH_REMEDY: &str = "`path` is the artifact name, and `source_path` is the local file to attach under `.orbit/tmp/` (`$ORBIT_SCRATCH_DIR`)";
+
+/// Materialize a task artifact before a spoke sends the coordination request
+/// to its hub. The returned value contains artifact bytes but no source path.
+///
+/// `source_path` is resolved against `cwd` and must land inside
+/// `workspace_root` after symlink resolution. The hub never sees the path.
+/// `transport` comes from the trusted caller context, never the payload:
+/// MCP trims the source string; CLI and deterministic attachments (`None`)
+/// select the exact filesystem name.
+pub fn prepare_remote_task_artifact_put(
+    input: Value,
+    cwd: Option<&Path>,
+    workspace_root: Option<&Path>,
+    transport: Option<orbit_types::tool::McpTransport>,
+) -> Result<Value, OrbitError> {
+    let ctx = ToolContext {
+        cwd: cwd.map(|path| path.to_string_lossy().into_owned()),
+        workspace_root: workspace_root.map(PathBuf::from),
+        session_context: orbit_types::tool::ToolSessionContext {
+            transport,
+            ..Default::default()
+        },
+        ..ToolContext::default()
+    };
+    prepare_remote_payload(input, &ctx)
+}
 
 /// Read a caller-local task artifact into the bounded, path-free payload used
 /// by the spoke connector. The source path is consumed locally and never

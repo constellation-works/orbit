@@ -20,8 +20,6 @@ use orbit_common::governance::workflow::WorkflowVerb;
 use orbit_common::governance::workspace_claim::WorkspaceClaimVerb;
 use serde_json::Value;
 
-use super::context::{ReservationOwnerContext, ToolContext};
-
 /// Owner transport injected by composition. Implementations verify the
 /// destination identity and never substitute an execution-host store.
 pub trait OwnerCoordinator: Send + Sync {
@@ -74,32 +72,6 @@ pub trait DrainOwnerTransport: Send + Sync {
     /// The coordinator a claimed leaf bound to this transport's owner routes
     /// its worker reads and writes through.
     fn worker_coordinator(&self) -> std::sync::Arc<dyn OwnerCoordinator>;
-}
-
-/// Materialize a task artifact before a spoke sends the coordination request
-/// to its hub. The returned value contains artifact bytes but no source path.
-///
-/// `source_path` is resolved against `cwd` and must land inside
-/// `workspace_root` after symlink resolution. The hub never sees the path.
-/// `transport` comes from the trusted caller context, never the payload:
-/// MCP trims the source string; CLI and deterministic attachments (`None`)
-/// select the exact filesystem name.
-pub fn prepare_remote_task_artifact_put(
-    input: Value,
-    cwd: Option<&std::path::Path>,
-    workspace_root: Option<&std::path::Path>,
-    transport: Option<orbit_types::tool::McpTransport>,
-) -> Result<Value, OrbitError> {
-    let ctx = ToolContext {
-        cwd: cwd.map(|path| path.to_string_lossy().into_owned()),
-        workspace_root: workspace_root.map(PathBuf::from),
-        session_context: orbit_types::tool::ToolSessionContext {
-            transport,
-            ..Default::default()
-        },
-        ..ToolContext::default()
-    };
-    crate::artifact_materialize::prepare_remote_payload(input, &ctx)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -232,6 +204,12 @@ pub struct OrbitTaskScope {
     pub orbit_root: Option<PathBuf>,
     pub task_id: Option<String>,
     pub run_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ReservationOwnerContext {
+    pub owner_run_id: String,
+    pub owner_metadata: Option<orbit_types::task::ReservationOwnerMetadata>,
 }
 
 pub trait OrbitToolHost: Send + Sync {

@@ -6,13 +6,7 @@ use std::sync::Arc;
 use orbit_policy::PolicyEngine;
 
 use super::fs_audit::FsAuditLogger;
-use super::host::OrbitToolHost;
-
-#[derive(Debug, Clone, Default, PartialEq)]
-pub struct ReservationOwnerContext {
-    pub owner_run_id: String,
-    pub owner_metadata: Option<orbit_types::task::ReservationOwnerMetadata>,
-}
+use super::host::{OrbitToolHost, ReservationOwnerContext};
 
 /// The managed activity a tool call serves, attested by the host that
 /// dispatched it.
