@@ -1038,8 +1038,10 @@ request only when all of these hold, and otherwise refuses with nothing written:
   not a candidate (see [review-gate.md](review-gate.md));
 - the pull request does not conflict with its base, and the forge reports every
   required check on exactly that published head as passed: none failed, none
-  unfinished, and either at least one required check passed or the forge
-  positively confirms the base branch configures no required status checks
+  unfinished, none configured by classic branch protection or a readable
+  ruleset missing from the head's results (`required checks have not reported
+  on the recorded head: <names>`), and either at least one required check
+  passed or the forge positively confirms the base branch configures no required status checks
   (neither classic branch protection `requiredStatusChecks` nor repository or
   organization rulesets require any status checks, with readable, non-truncated
   policy). An empty check rollup when branch protection or a ruleset requires

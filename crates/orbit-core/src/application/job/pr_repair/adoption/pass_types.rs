@@ -98,8 +98,9 @@ impl PassReads {
 
 pub(in crate::application::job::pr_repair) enum BlockerRead {
     /// The forge could read the pull request's blockers (or determined it is
-    /// no longer open).
-    Complete(Option<crate::runtime::task_pr_forge::PullRequestBlockers>),
+    /// no longer open). Boxed so this enum stays under clippy's
+    /// `large_enum_variant` threshold, as the blocker record grows.
+    Complete(Option<Box<crate::runtime::task_pr_forge::PullRequestBlockers>>),
     /// GitHub is still calculating this pull request's mergeability. This is
     /// local to that candidate and must not defer the rest of the pass.
     MergeabilityUnknown,

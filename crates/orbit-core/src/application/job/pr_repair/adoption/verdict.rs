@@ -664,7 +664,7 @@ impl OrbitRuntime {
             .task_pr_forge()
             .pull_request_blockers(&repo_root, number)
         {
-            Ok(blockers) => Ok(BlockerRead::Complete(blockers)),
+            Ok(blockers) => Ok(BlockerRead::Complete(blockers.map(Box::new))),
             Err(OrbitError::PullRequestMergeabilityUnknown { number: unknown })
                 if unknown == number =>
             {

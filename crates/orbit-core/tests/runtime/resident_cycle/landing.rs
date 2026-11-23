@@ -94,6 +94,7 @@ impl TaskPrForge for LandingForge {
             failed_required_checks: Vec::new(),
             pending_required_checks: state.pending_checks.clone(),
             passed_required_checks: vec!["Test".to_string()],
+            unreported_required_checks: Vec::new(),
             requires_status_checks: None,
         }))
     }

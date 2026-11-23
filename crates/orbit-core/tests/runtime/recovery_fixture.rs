@@ -198,6 +198,7 @@ impl RerunForge {
                 failed_required_checks: failed.iter().map(|name| name.to_string()).collect(),
                 pending_required_checks: Vec::new(),
                 passed_required_checks: Vec::new(),
+                unreported_required_checks: Vec::new(),
                 requires_status_checks: None,
             })),
             reruns: Arc::default(),
