@@ -191,13 +191,34 @@ impl OrbitRuntime {
             );
         }
         // An unknown task is a lookup error, not a refusal.
-        self.get_task(task_id)?;
-        let Some(run) = self.newest_own_delivery_leaf(task_id)? else {
-            return refuse(
-                "no_delivery_leaf",
-                "the task has no delivery run of its own to hand the pull request back to"
-                    .to_string(),
-            );
+        let task = self.get_task(task_id)?;
+        let refuse_skip = |observation: &mut RepairObservation, reason, detail: String| {
+            if observation.pr_number.is_none() {
+                observation.pr_number = task.github_pr_number().map(str::to_string);
+            }
+            refuse(
+                reason,
+                self.skip_detail_with_budget(task_id, observation, reason, &detail),
+            )
+        };
+        let run = match self.newest_own_delivery_leaf(task_id) {
+            Ok(Some(run)) => run,
+            Ok(None) => {
+                return refuse(
+                    "no_delivery_leaf",
+                    "the task has no delivery run of its own to hand the pull request back to"
+                        .to_string(),
+                );
+            }
+            // An early job-store read failure refuses with the repair budget
+            // a drain pass reports for the same failure, not a bare lookup error.
+            Err(error) => {
+                return refuse_skip(
+                    observation,
+                    "store_unreadable",
+                    format!("read the task's delivery leaves: {error}"),
+                );
+            }
         };
         let authority = RepairAuthority {
             drain_run_id: None,
@@ -215,20 +236,14 @@ impl OrbitRuntime {
             Verdict::Repair(repair) => match self.start_repair(&run, &authority, *repair) {
                 Verdict::Started(started) => Ok(started),
                 Verdict::Ignore(reason, detail) => refuse(reason, detail),
-                Verdict::Skip(reason, detail) => refuse(
-                    reason,
-                    self.skip_detail_with_budget(task_id, observation, reason, &detail),
-                ),
+                Verdict::Skip(reason, detail) => refuse_skip(observation, reason, detail),
                 Verdict::Repair(_) => refuse(
                     "resume_failed",
                     "the repair was decided but not started".to_string(),
                 ),
             },
             Verdict::Ignore(reason, detail) => refuse(reason, detail),
-            Verdict::Skip(reason, detail) => refuse(
-                reason,
-                self.skip_detail_with_budget(task_id, observation, reason, &detail),
-            ),
+            Verdict::Skip(reason, detail) => refuse_skip(observation, reason, detail),
             Verdict::Started(started) => Ok(started),
         }
     }
