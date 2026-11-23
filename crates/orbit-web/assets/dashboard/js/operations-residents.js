@@ -622,8 +622,7 @@ function mandateWarnings(mandate) {
 }
 
 function stoppedAt(mandate) {
-  const at = mandate.control?.last?.at || mandate.latest_checkpoint?.at || cycleTimestamp(mandate.latest_checkpoint?.cycle);
-  return at ? clock(at) : "";
+  return mandate.ended_at ? clock(mandate.ended_at) : "Time unknown";
 }
 
 function detailsButton(mandate) {

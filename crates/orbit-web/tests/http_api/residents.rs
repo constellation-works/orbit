@@ -811,3 +811,57 @@ fn every_resident_action_runs_through_its_tool_and_is_audited() {
         },
     );
 }
+
+#[test]
+fn ended_resident_reads_use_the_ending_event() {
+    isolated(
+        "residents::ended_resident_reads_use_the_ending_event",
+        || {
+            let fixture = Fixture::new();
+            resident_fixture(&fixture);
+            let server = fixture.server(true);
+            let archived = create(&server, "Archive after a wake.");
+            json_ok(server.send(
+                "POST",
+                &format!("/api/residents/{archived}/control{WS}"),
+                json!({"action": "wake", "reason": "Earlier wake"}),
+            ));
+            fixture
+                .runtime
+                .archive_task_as_operator(&archived, false)
+                .unwrap();
+            let history = fixture.runtime.get_task_history(&archived).unwrap();
+            let archive_at = history
+                .iter()
+                .find(|entry| entry.to_status == Some(orbit_types::task::TaskStatus::Archived))
+                .unwrap()
+                .at;
+            let shown = json_ok(server.get(&format!("/api/residents/{archived}{WS}")));
+            assert_eq!(shown["ended_at"], json!(archive_at), "{shown}");
+            let stopped = create(&server, "Stop explicitly.");
+            let response = json_ok(server.send(
+                "POST",
+                &format!("/api/residents/{stopped}/control{WS}"),
+                json!({"action": "stop", "reason": "Finished"}),
+            ));
+            let shown = json_ok(server.get(&format!("/api/residents/{stopped}{WS}")));
+            assert_eq!(
+                shown["ended_at"], response["effective_at"],
+                "{shown} {response}"
+            );
+            let list = json_ok(server.get("/api/residents?all=true&workspace=ws_http_fixture"));
+            for (id, expected) in [
+                (&archived, json!(archive_at)),
+                (&stopped, response["effective_at"].clone()),
+            ] {
+                let row = list["mandates"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .find(|row| row["task_id"] == *id)
+                    .unwrap();
+                assert_eq!(row["ended_at"], expected, "{row}");
+            }
+        },
+    );
+}
