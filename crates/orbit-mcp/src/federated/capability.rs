@@ -81,6 +81,7 @@ pub fn mcp_tool_class(tool_name: &str) -> McpToolClass {
         | "orbit_notice_list"
         | "orbit_notice_show"
         | "orbit_workflow_land"
+        | "orbit_workflow_refresh"
         | "orbit_workflow_ship" => McpToolClass::ControlPlane,
         // A replica may resolve an existing host-local legacy friction. Core
         // checks the update's fields and still refuses every other mutation.

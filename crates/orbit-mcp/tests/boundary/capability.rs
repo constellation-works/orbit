@@ -53,6 +53,24 @@ fn a_replica_refuses_control_plane_and_runs_execute_class_tools() {
     }
 }
 
+/// Refresh merges the base branch into an owner delivery PR, a coordination
+/// write like `land` and `ship`; a replica must refuse it with the
+/// control-plane class rather than reach the forge path [ORB-26944].
+#[test]
+fn a_replica_refuses_the_workflow_refresh_write() {
+    let held = CapabilityClasses::for_checkout(
+        &workspace_record(Some("hm_owner")),
+        &checkout_record(Some(WorkspaceCheckoutRole::Replica)),
+    );
+
+    let refused = ensure_tool_class_held("orbit.workflow.refresh", held)
+        .expect_err("a replica is not the control plane");
+    assert!(
+        matches!(&refused, OrbitError::CapabilityRefused(message) if message.contains("control_plane")),
+        "orbit.workflow.refresh: {refused}"
+    );
+}
+
 /// Fleet notices live in the home workspace's owner store, reads included:
 /// a replica answering from a local copy would keep showing a notice the
 /// owner already closed.
