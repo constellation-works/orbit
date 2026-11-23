@@ -37,8 +37,9 @@ the only field is `context_files`.
 - Existence checks verify the filesystem anchor only; a `symbol:` name and
   kind are not looked up. A `symbol:` selector locks its whole file.
 
-Use `allow_missing_context: true` to declare a target before creating its
-file. Missing targets are rejected by default. Each accepted missing selector
+A missing `file:` selector whose parent directory exists is accepted with a
+warning and recorded as creation intent. Other missing targets are rejected
+by default; use `allow_missing_context: true` to declare them. Each accepted missing selector
 records durable creation intent for that **exact selector**; later writes and
 task preparation honor it. Re-sending a declared selector needs no flag, and a
 replacement list that omits it revokes the intent. Syntax, workspace
