@@ -5,7 +5,7 @@ use serde_json::{Value, json};
 use crate::{TIMEOUT_DEFAULT_MS, check_exec_result};
 
 /// The `gh run list --json` fields this tool projects.
-const RUN_LIST_FIELDS: &str = "databaseId,number,workflowName,displayTitle,status,conclusion,event,headBranch,headSha,createdAt,startedAt,updatedAt,url";
+const RUN_LIST_FIELDS: &str = "databaseId,number,workflowDatabaseId,workflowName,displayTitle,status,conclusion,event,headBranch,headSha,createdAt,startedAt,updatedAt,url";
 
 const DEFAULT_LIMIT: u64 = 20;
 /// The largest `--limit` this tool passes to `gh run list`; larger requests
@@ -134,6 +134,7 @@ pub fn project_run(run: &Value) -> Value {
     json!({
         "run_id": run["databaseId"],
         "run_number": run["number"],
+        "workflow_id": run["workflowDatabaseId"],
         "workflow": run["workflowName"],
         "title": run["displayTitle"],
         "status": run["status"],

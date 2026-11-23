@@ -806,6 +806,107 @@ fn ci_red_uses_workflow_run_order_when_created_at_ties() {
     );
 }
 
+fn ci_red_keeps_same_named_workflows_apart() {
+    let fixture = Fixture::new(true);
+    let advance = || {
+        let head = fixture.advance_remote_head();
+        git(&fixture.repo, &["update-ref", "refs/heads/main", &head]);
+        head
+    };
+    let older = fixture.head.clone();
+    let pending_head = advance();
+    let minutes_ago =
+        |minutes: i64| (chrono::Utc::now() - chrono::Duration::minutes(minutes)).to_rfc3339();
+    // Two workflow files that both declare `name: CI`; run numbers are
+    // per workflow, so B's counter is far ahead of A's.
+    let workflow_run = |id: u64,
+                        number: u64,
+                        workflow_id: u64,
+                        conclusion: &str,
+                        created: &str,
+                        updated: &str,
+                        sha: &str| {
+        let mut entry = fixture.run(id, conclusion, updated, sha);
+        entry["number"] = json!(number);
+        entry["workflowDatabaseId"] = json!(workflow_id);
+        entry["createdAt"] = json!(created);
+        entry["startedAt"] = json!(created);
+        entry
+    };
+
+    // Current head pending: A's failure (updated later) and B's success share
+    // a creation time. B's higher number must not suppress A's failure.
+    let shared_created = minutes_ago(10);
+    let mut pending = workflow_run(
+        103,
+        2,
+        1,
+        "",
+        &minutes_ago(1),
+        &minutes_ago(1),
+        &pending_head,
+    );
+    pending["status"] = json!("in_progress");
+    let mut pending_b = workflow_run(
+        104,
+        193,
+        2,
+        "",
+        &minutes_ago(1),
+        &minutes_ago(1),
+        &pending_head,
+    );
+    pending_b["status"] = json!("in_progress");
+    fixture.set_runs(json!([
+        pending,
+        pending_b,
+        workflow_run(
+            101,
+            1,
+            1,
+            "failure",
+            &shared_created,
+            &minutes_ago(3),
+            &older
+        ),
+        workflow_run(
+            102,
+            192,
+            2,
+            "success",
+            &shared_created,
+            &minutes_ago(4),
+            &older
+        ),
+    ]));
+    let red = call(&fixture.runtime, json!({"kind": "ci_red"}));
+    let items = red["items"].as_array().unwrap();
+    assert_eq!(
+        items.len(),
+        1,
+        "a same-named workflow's success must not hide the failure: {red}"
+    );
+    assert_eq!(items[0]["refs"]["run_id"], "101", "{red}");
+    assert_eq!(items[0]["detail"]["workflow"], "CI", "{red}");
+
+    // Both completed on the current head with tied update times: the other
+    // workflow's higher number must not replace the failure.
+    let head = advance();
+    let tied = minutes_ago(2);
+    fixture.set_runs(json!([
+        workflow_run(201, 3, 1, "failure", &tied, &tied, &head),
+        workflow_run(202, 194, 2, "success", &tied, &tied, &head),
+    ]));
+    let red = call(&fixture.runtime, json!({"kind": "ci_red"}));
+    let items = red["items"].as_array().unwrap();
+    assert_eq!(
+        items.len(),
+        1,
+        "tied same-named success must not hide the failure: {red}"
+    );
+    assert_eq!(items[0]["refs"]["run_id"], "201", "{red}");
+}
+
 crate::scenario_table!(
     attention_provider,
     replica_owner_only_candidate_reads_are_silent_and_make_no_provider_call,
@@ -823,5 +924,6 @@ crate::scenario_table!(
     ci_red_survives_a_pending_run_on_a_newer_base_head,
     ci_red_degrades_when_full_page_omits_pending_workflow_history,
     ci_red_uses_workflow_run_order_when_created_at_ties,
+    ci_red_keeps_same_named_workflows_apart,
     friction_untriaged_lists_only_open,
 );
