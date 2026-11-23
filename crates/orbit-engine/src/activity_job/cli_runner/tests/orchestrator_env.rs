@@ -20,7 +20,8 @@ use super::super::super::dispatcher::DispatchError;
 use super::super::super::dispatcher::ResolvedSandbox;
 use super::super::run_cli_backend;
 use super::test_support::{
-    TestHost, persisted_blobs, persisted_writer, test_agent_loop_spec_for, write_executable,
+    RefreshFailure, TestHost, persisted_blobs, persisted_writer, test_agent_loop_spec_for,
+    write_executable,
 };
 
 const STDOUT_MARKER: &str = "provider-stdout-marker";
@@ -205,8 +206,9 @@ fn persistence_refresh_failure_keeps_provider_output_and_finish_event() {
     write_provider_script(&script, false, None);
     let audit_root = temp.path().join("audit");
     let audit = persisted_writer(&audit_root, "job-refresh-failure", "grok:grok-build");
-    let host = TestHost::with_command(script.display().to_string())
-        .fail_persistence_refresh("audit connection refresh refused");
+    let host = TestHost::with_command(script.display().to_string()).fail_persistence_refresh(
+        RefreshFailure::Store("audit connection refresh refused".to_string()),
+    );
 
     let error = run_cli_backend(
         &host,
@@ -229,6 +231,119 @@ fn persistence_refresh_failure_keeps_provider_output_and_finish_event() {
     assert!(
         message.contains("audit connection refresh refused"),
         "{message}"
+    );
+    assert_output_survives(&error, &audit, &audit_root);
+}
+
+/// [ORB-27446] A store lock still held after the bounded refresh retries is
+/// transient: the step fails retryably rather than permanently, and the
+/// provider's output is still evidenced.
+#[test]
+fn persistence_refresh_lock_busy_is_transient_after_bounded_retries() {
+    let temp = tempdir().expect("tempdir");
+    let script = temp.path().join("grok");
+    write_provider_script(&script, false, None);
+    let audit_root = temp.path().join("audit");
+    let audit = persisted_writer(&audit_root, "job-refresh-lock-busy", "grok:grok-build");
+    let host = TestHost::with_command(script.display().to_string()).fail_persistence_refresh(
+        RefreshFailure::LockBusy("write probe failed: database is locked".to_string()),
+    );
+
+    let error = run_cli_backend(
+        &host,
+        &test_agent_loop_spec_for("grok", Duration::from_secs(10)),
+        "test_activity",
+        "job-refresh-lock-busy",
+        audit.clone(),
+        &serde_json::json!({"prompt": "hi"}),
+        None,
+    )
+    .expect_err("a lock that persists past the retries fails the step");
+
+    let DispatchError::CliInvocationFailed(message) = &error else {
+        panic!("lock contention stays transient: {error}");
+    };
+    assert!(
+        message.contains("refresh durable store after provider `grok` exited"),
+        "{message}"
+    );
+    assert!(message.contains("database is locked"), "{message}");
+    assert_eq!(
+        host.persistence_refresh_calls(),
+        3,
+        "lock-busy refreshes are retried a bounded number of times"
+    );
+    assert_output_survives(&error, &audit, &audit_root);
+}
+
+/// [ORB-27446] A store lock that clears within the bounded refresh retries
+/// lets the step complete, with the provider's output recorded.
+#[test]
+fn persistence_refresh_lock_busy_that_clears_completes_step() {
+    let temp = tempdir().expect("tempdir");
+    let script = temp.path().join("grok");
+    write_provider_script(&script, false, None);
+    let audit_root = temp.path().join("audit");
+    let audit = persisted_writer(&audit_root, "job-refresh-lock-clears", "grok:grok-build");
+    let host = TestHost::with_command(script.display().to_string()).fail_persistence_refresh_for(
+        RefreshFailure::LockBusy("write probe failed: database is locked".to_string()),
+        2,
+    );
+
+    let outcome = run_cli_backend(
+        &host,
+        &test_agent_loop_spec_for("grok", Duration::from_secs(10)),
+        "test_activity",
+        "job-refresh-lock-clears",
+        audit,
+        &serde_json::json!({"prompt": "hi"}),
+        None,
+    )
+    .expect("a lock that clears on a retry completes the step");
+
+    assert_eq!(
+        host.persistence_refresh_calls(),
+        3,
+        "the third refresh succeeds after two lock-busy failures"
+    );
+    assert_eq!(outcome.output["marker"], "provider-stdout-marker");
+}
+
+/// [ORB-27446] A read-only store is not lock contention: the refresh is not
+/// retried, and the step fails permanently with its output evidenced.
+#[test]
+fn persistence_refresh_read_only_store_stays_permanent_without_retry() {
+    let temp = tempdir().expect("tempdir");
+    let script = temp.path().join("grok");
+    write_provider_script(&script, false, None);
+    let audit_root = temp.path().join("audit");
+    let audit = persisted_writer(&audit_root, "job-refresh-read-only", "grok:grok-build");
+    let host = TestHost::with_command(script.display().to_string()).fail_persistence_refresh(
+        RefreshFailure::ReadOnly("attempt to write a readonly database".to_string()),
+    );
+
+    let error = run_cli_backend(
+        &host,
+        &test_agent_loop_spec_for("grok", Duration::from_secs(10)),
+        "test_activity",
+        "job-refresh-read-only",
+        audit.clone(),
+        &serde_json::json!({"prompt": "hi"}),
+        None,
+    )
+    .expect_err("a read-only store fails the step");
+
+    let DispatchError::CliInvocationPermanent(message) = &error else {
+        panic!("read-only store stays permanent: {error}");
+    };
+    assert!(
+        message.contains("attempt to write a readonly database"),
+        "{message}"
+    );
+    assert_eq!(
+        host.persistence_refresh_calls(),
+        1,
+        "a read-only store is not retried"
     );
     assert_output_survives(&error, &audit, &audit_root);
 }
