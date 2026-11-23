@@ -9,6 +9,8 @@
 //! activity's `blocked` status before any field check. The operator review
 //! and recovery verbs refuse a managed run before any field check, except a
 //! resident cycle’s brokered recovery actions, which its cycle guard decides.
+//! `resume_delivery` also checks its declared input shape before refusing a
+//! call without that broker.
 
 use orbit_common::OrbitError;
 use orbit_common::governance::operation::OperationInput;
@@ -106,6 +108,10 @@ impl GuardedModes for TaskVerb {
             | TaskVerb::Reject
             | TaskVerb::Delete => None,
         }
+    }
+
+    fn preempt_after_input_check(self) -> bool {
+        matches!(self, TaskVerb::ResumeDelivery)
     }
 
     fn normalize_input(self, input: &mut Value) {

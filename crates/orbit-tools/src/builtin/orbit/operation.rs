@@ -40,6 +40,13 @@ pub(super) trait GuardedModes: OperationVerb {
     /// precede every field check. `None` hands the call on.
     fn preempt(self, ctx: &ToolContext, input: &Value) -> Option<Result<Value, OrbitError>>;
 
+    /// Whether this verb's preemption runs after its input and family fields
+    /// are checked. Some authenticated operations expose their request shape
+    /// as useful feedback before refusing an unauthenticated call.
+    fn preempt_after_input_check(self) -> bool {
+        false
+    }
+
     /// Normalize a noun's legacy wire shapes before strict spec parsing.
     /// Guarded modes have already taken ownership of their input contract.
     fn normalize_input(self, _input: &mut Value) {}
@@ -166,13 +173,19 @@ where
         if let Some(host) = ctx.orbit_host.as_deref() {
             host.prepare_operation_input(self.0.verb.into(), &mut input)?;
         }
-        if let Some(served) = self.0.verb.preempt(ctx, &input) {
+        let preempt_after_input_check = self.0.verb.preempt_after_input_check();
+        if !preempt_after_input_check && let Some(served) = self.0.verb.preempt(ctx, &input) {
             return served;
         }
         self.0.verb.normalize_input(&mut input);
         let input = self.0.parse_input_fields(input)?;
         check(input.as_value())?;
         self.0.require_input_fields(&input)?;
+        if preempt_after_input_check
+            && let Some(served) = self.0.verb.preempt(ctx, input.as_value())
+        {
+            return served;
+        }
         if let Some(served) = self.0.verb.guarded_mode(ctx, &input) {
             return served;
         }

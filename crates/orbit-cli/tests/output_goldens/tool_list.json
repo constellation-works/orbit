@@ -2951,7 +2951,7 @@
       },
       {
         "name": "id",
-        "description": "For requeue: Blocked task to requeue; For resume_delivery: Blocked task to recover; For repilot: Task to assess again; For review_reset: Task in the selected lineage; For reconcile_review: Task in review whose foreign delivery merged.",
+        "description": "For requeue: Blocked task to requeue; For resume_delivery: task ID; For repilot: Task to assess again; For review_reset: Task in the selected lineage; For reconcile_review: Task in review whose foreign delivery merged.",
         "param_type": "string",
         "required": false
       },
@@ -2963,13 +2963,13 @@
       },
       {
         "name": "run_id",
-        "description": "For resume_delivery: Stopped failed or held delivery run.",
+        "description": "For resume_delivery: Stopped recovery run.",
         "param_type": "string",
         "required": false
       },
       {
         "name": "diagnosis",
-        "description": "For resume_delivery: Observed failure and remaining source work.",
+        "description": "For resume_delivery: Cause and remaining work.",
         "param_type": "string",
         "required": false
       },

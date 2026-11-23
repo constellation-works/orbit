@@ -21,6 +21,11 @@ const REQUIRED: &[(&str, &str, &[&str])] = &[
         ],
     ),
     ("orbit.task.recover", "requeue", &["id", "reason"]),
+    (
+        "orbit.task.recover",
+        "resume_delivery",
+        &["id", "run_id", "diagnosis"],
+    ),
     ("orbit.task.recover", "repilot", &["id"]),
     (
         "orbit.task.recover",
