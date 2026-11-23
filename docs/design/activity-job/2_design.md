@@ -264,9 +264,12 @@ against the binary's embedded defaults when their bytes match their recorded
 managed digest. This pass is independent of the host-global defaults stamp.
 `orbit workspace sync` performs the same pass, and `--check` reports it without
 writing. It only refreshes existing tracked files: it never creates missing
-workspace catalog defaults, adopts untracked files, changes opt-outs, or retires
-files. Modified copies and user-authored definitions keep their bytes and
-provenance. Existing retirement and preservation paths remain unchanged.
+workspace catalog defaults, adopts untracked files, or changes opt-outs.
+Tracked files whose activity or job is no longer shipped are retired by their
+recorded digest: unmodified files are removed, while modified files move to the
+catalog's `.retired-managed/` area and sync reports the destination. Modified
+copies of still-shipped defaults and user-authored definitions keep their bytes
+and provenance.
 An unreadable legacy manifest or denied refresh warns without preventing
 unrelated jobs from opening; explicit sync returns the repair error. Doctor
 checks these workspace manifests too, naming an unmodified stale managed copy
