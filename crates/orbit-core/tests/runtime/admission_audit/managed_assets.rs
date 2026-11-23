@@ -291,6 +291,30 @@ fn runtime_open_refreshes_and_retires_legacy_workspace_catalog_copies() {
             "doctor and sync --check must not write"
         );
     }
+    for (directory, name) in [
+        ("activities", "agent_implement"),
+        ("jobs", "task_pr_pipeline"),
+    ] {
+        let path = workspace
+            .join("resources")
+            .join(directory)
+            .join(format!("{name}.yaml"));
+        let findings: Vec<_> = health
+            .iter()
+            .flat_map(|health| &health.findings)
+            .filter(|finding| finding.path == path)
+            .collect();
+        assert!(
+            findings.is_empty(),
+            "locally modified still-shipped default {path:?} must not be reported as deprecated or stale: {findings:?}"
+        );
+        assert!(
+            preview.actions.iter().any(|action| action.path == path
+                && action.scope == ManagedArtifactScope::WorkspaceLocal
+                && action.outcome == ManagedArtifactOutcome::Preserved),
+            "check mode preserves the locally modified still-shipped default {path:?}: {preview:?}"
+        );
+    }
     for (directory, name, provenance) in [
         (
             "activities",
@@ -330,6 +354,13 @@ fn runtime_open_refreshes_and_retires_legacy_workspace_catalog_copies() {
         if provenance == ArtifactProvenance::LocallyModified {
             assert!(findings[0].detail.contains("locally modified"));
             assert!(findings[0].detail.contains(".retired-managed"));
+            assert!(
+                findings[0]
+                    .remediation
+                    .contains("outside the active catalog")
+            );
+        } else {
+            assert!(findings[0].remediation.contains("retires"));
         }
         assert!(path.is_file(), "inspection must not modify the catalog");
     }
@@ -431,6 +462,96 @@ fn runtime_open_refreshes_and_retires_legacy_workspace_catalog_copies() {
         assert_eq!(
             std::fs::read(workspace.join(&relative)).unwrap(),
             std::fs::read(global.join(&relative)).unwrap()
+        );
+    }
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::symlink;
+
+        let external = root.path().join("external.yaml");
+        std::fs::write(&external, &retired_job).unwrap();
+
+        // A symlinked still-shipped tracked job is Faulty (never Deprecated).
+        let shipped_job_link = job_catalog.join("task_pilot_pipeline.yaml");
+        std::fs::remove_file(&shipped_job_link).unwrap();
+        symlink(&external, &shipped_job_link).unwrap();
+
+        // A symlinked retired job reports Deprecated with a link-repair remedy.
+        let retired_job_link = job_catalog.join("linked_retired.yaml");
+        symlink(&external, &retired_job_link).unwrap();
+        add_managed_manifest_entry(&job_catalog, "linked_retired", &retired_job);
+
+        // A modified retired activity whose preservation destination is linked
+        // reports Deprecated + LocallyModified with a destination-repair remedy.
+        let blocked_retired = activity_catalog.join("blocked_retired.yaml");
+        std::fs::write(&blocked_retired, &modified_retired_activity).unwrap();
+        add_managed_manifest_entry(&activity_catalog, "blocked_retired", &retired_activity);
+        let retired_activities_dir = workspace.join("resources/.retired-managed/activities");
+        std::fs::remove_dir_all(&retired_activities_dir).unwrap();
+        let blocked_dest_target = root.path().join("blocked_dest");
+        std::fs::create_dir_all(&blocked_dest_target).unwrap();
+        symlink(&blocked_dest_target, &retired_activities_dir).unwrap();
+
+        let edge_health = runtime
+            .inspect_definition_artifacts()
+            .expect("doctor diagnoses unsafe legacy workspace paths");
+        let shipped_findings: Vec<_> = edge_health
+            .iter()
+            .flat_map(|h| &h.findings)
+            .filter(|f| f.path == shipped_job_link)
+            .collect();
+        assert_eq!(shipped_findings.len(), 1, "{shipped_findings:?}");
+        assert_eq!(shipped_findings[0].condition, ArtifactCondition::Faulty);
+        assert_eq!(
+            shipped_findings[0].provenance,
+            ArtifactProvenance::UserAuthored
+        );
+        assert!(
+            shipped_findings[0].remediation.contains("remove the link"),
+            "{:?}",
+            shipped_findings[0]
+        );
+
+        let retired_link_findings: Vec<_> = edge_health
+            .iter()
+            .flat_map(|h| &h.findings)
+            .filter(|f| f.path == retired_job_link)
+            .collect();
+        assert_eq!(retired_link_findings.len(), 1, "{retired_link_findings:?}");
+        assert_eq!(
+            retired_link_findings[0].condition,
+            ArtifactCondition::Deprecated
+        );
+        assert_eq!(
+            retired_link_findings[0].provenance,
+            ArtifactProvenance::UserAuthored
+        );
+        assert!(
+            retired_link_findings[0]
+                .remediation
+                .contains("remove the link"),
+            "{:?}",
+            retired_link_findings[0]
+        );
+
+        let blocked_findings: Vec<_> = edge_health
+            .iter()
+            .flat_map(|h| &h.findings)
+            .filter(|f| f.path == blocked_retired)
+            .collect();
+        assert_eq!(blocked_findings.len(), 1, "{blocked_findings:?}");
+        assert_eq!(blocked_findings[0].condition, ArtifactCondition::Deprecated);
+        assert_eq!(
+            blocked_findings[0].provenance,
+            ArtifactProvenance::LocallyModified
+        );
+        assert!(
+            blocked_findings[0]
+                .remediation
+                .contains("preservation destination"),
+            "{:?}",
+            blocked_findings[0]
         );
     }
 }
