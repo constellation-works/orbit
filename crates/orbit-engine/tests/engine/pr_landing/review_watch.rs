@@ -323,6 +323,216 @@ fn a_permanent_status_read_failure_still_fails_promptly() {
     );
 }
 
+/// A deadline expiring before or during the PR status read records a held
+/// `pending` observation without manufacturing a head or check result.
+#[test]
+fn an_expired_deadline_before_or_during_status_read_holds_pending() {
+    isolated(
+        "review_watch::an_expired_deadline_before_or_during_status_read_holds_pending",
+        |sandbox| {
+            for mode in ["before_read", "during_read"] {
+                in_fresh_row(sandbox, |row| {
+                    let (fx, host) = fx_host(row);
+                    fx.script_checks(&["success"]);
+                    open_review_delivery(&fx, &host);
+                    if mode == "during_read" {
+                        fx.write_forge("status-hang", "");
+                    }
+                    let clock = std::rc::Rc::new(std::cell::Cell::new(1_000_000_u64));
+                    let now = std::rc::Rc::clone(&clock);
+                    let calls = std::cell::Cell::new(0_u32);
+                    let jump_to = if mode == "before_read" {
+                        1_060_000
+                    } else {
+                        1_059_700
+                    };
+                    let watched = orbit_engine::test_support::with_prerequisite_clock(
+                        move || {
+                            let count = calls.get();
+                            calls.set(count + 1);
+                            if count == 1 {
+                                now.set(jump_to);
+                            }
+                            now.get()
+                        },
+                        |_, _| {},
+                        || action(&host, "pr_checks_watch", &watch_input(&fx, 60)),
+                    )
+                    .expect("budget expiry inside or before status read holds pending");
+                    assert_eq!(watched["recorded"], true, "{mode}: {watched}");
+                    if mode == "before_read" {
+                        assert_eq!(
+                            fx.forge_state("reads"),
+                            None,
+                            "no status read spawns after deadline expiry"
+                        );
+                    }
+                    let observed = observations(&host);
+                    assert_eq!(observed.len(), 1, "{mode}: {observed:?}");
+                    let note = observed[0].observation().expect("a decodable note");
+                    assert_eq!(
+                        note.state(),
+                        LandingChecksObservationState::Pending,
+                        "{mode}: {note:?}"
+                    );
+                    assert_eq!(note.head_sha(), None, "{mode}: {note:?}");
+                    assert_eq!(note.failed_checks(), None, "{mode}: {note:?}");
+                    assert!(note.hold_reason().is_some(), "{mode}: {note:?}");
+                    assert_eq!(host.status(TASK_ID), TaskStatus::Review, "{mode}");
+                    assert_no_mutation(&fx);
+                });
+            }
+        },
+    );
+}
+
+/// A pending status followed by expiry during the normal polling interval
+/// records `pending` at the budget boundary without starting an expired read.
+#[test]
+fn a_pending_status_expiring_during_poll_wait_records_pending_at_boundary() {
+    isolated(
+        "review_watch::a_pending_status_expiring_during_poll_wait_records_pending_at_boundary",
+        |sandbox| {
+            let (fx, host) = fx_host(sandbox);
+            fx.script_checks(&["merge_pending"]);
+            open_review_delivery(&fx, &host);
+            let clock = std::rc::Rc::new(std::cell::Cell::new(1_000_000_u64));
+            let now = std::rc::Rc::clone(&clock);
+            let calls = std::cell::Cell::new(0_u32);
+            let waited = std::rc::Rc::clone(&clock);
+            let waits = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+            let recorded_waits = std::rc::Rc::clone(&waits);
+            let mut input = watch_input(&fx, 60);
+            input["poll_interval_seconds"] = json!(600);
+            let watched = orbit_engine::test_support::with_prerequisite_clock(
+                move || {
+                    let count = calls.get();
+                    calls.set(count + 1);
+                    if count == 1 {
+                        now.set(1_050_000);
+                    }
+                    now.get()
+                },
+                |_, _| {},
+                || {
+                    orbit_engine::test_support::with_vcs_retry_wait(
+                        move |duration| {
+                            let remaining = 1_060_000 - waited.get();
+                            let millis = u64::try_from(duration.as_millis()).unwrap();
+                            recorded_waits.borrow_mut().push((millis, remaining));
+                            waited.set(waited.get() + millis);
+                        },
+                        || action(&host, "pr_checks_watch", &input),
+                    )
+                },
+            )
+            .expect("pending expiry during poll wait records pending at the budget boundary");
+            assert_eq!(
+                waits.borrow().as_slice(),
+                &[(10_000, 10_000)],
+                "poll sleep is bounded by remaining budget"
+            );
+            assert_eq!(clock.get(), 1_060_000, "watch stops at the budget boundary");
+            assert_eq!(
+                fx.forge_state("reads").as_deref(),
+                Some("1"),
+                "no expired read starts after the poll wait reaches the deadline"
+            );
+            assert_eq!(watched["recorded"], true, "{watched}");
+            let observed = observations(&host);
+            assert_eq!(observed.len(), 1, "{observed:?}");
+            let note = observed[0].observation().expect("a decodable note");
+            assert_eq!(
+                note.state(),
+                LandingChecksObservationState::Pending,
+                "{note:?}"
+            );
+            assert_eq!(note.head_sha(), Some(fx.candidate.as_str()), "{note:?}");
+            assert_eq!(note.failed_checks(), None, "{note:?}");
+            assert_eq!(note.hold_reason(), None, "{note:?}");
+            assert_eq!(
+                note.reason(),
+                Some("the checks had not settled after 60s"),
+                "{note:?}"
+            );
+            assert_eq!(host.status(TASK_ID), TaskStatus::Review);
+            assert_no_mutation(&fx);
+        },
+    );
+}
+
+/// Leaving review during an expired status read or during the final pending
+/// poll wait suppresses the observation and ends with `task_left_review`.
+#[test]
+fn leaving_review_before_read_expiry_or_during_pending_wait_does_not_record() {
+    isolated(
+        "review_watch::leaving_review_before_read_expiry_or_during_pending_wait_does_not_record",
+        |sandbox| {
+            for mode in ["during_read", "during_pending_wait"] {
+                in_fresh_row(sandbox, |row| {
+                    let (fx, host) = fx_host(row);
+                    let host = std::rc::Rc::new(host);
+                    fx.script_checks(&[if mode == "during_pending_wait" {
+                        "merge_pending"
+                    } else {
+                        "success"
+                    }]);
+                    open_review_delivery(&fx, &host);
+                    if mode == "during_read" {
+                        fx.write_forge("status-hang", "");
+                    }
+                    let before = host.history(TASK_ID);
+                    let clock = std::rc::Rc::new(std::cell::Cell::new(1_000_000_u64));
+                    let now = std::rc::Rc::clone(&clock);
+                    let calls = std::cell::Cell::new(0_u32);
+                    let waited = std::rc::Rc::clone(&clock);
+                    let probe_host = std::rc::Rc::clone(&host);
+                    let wait_host = std::rc::Rc::clone(&host);
+                    let mut input = watch_input(&fx, 60);
+                    input["poll_interval_seconds"] = json!(600);
+                    let watched = orbit_engine::test_support::with_prerequisite_clock(
+                        move || {
+                            let count = calls.get();
+                            calls.set(count + 1);
+                            if count == 1 {
+                                now.set(if mode == "during_read" {
+                                    1_059_700
+                                } else {
+                                    1_050_000
+                                });
+                            }
+                            now.get()
+                        },
+                        move |_, _| {
+                            if mode == "during_read" {
+                                probe_host.set_status(TASK_ID, TaskStatus::Backlog);
+                            }
+                        },
+                        || {
+                            orbit_engine::test_support::with_vcs_retry_wait(
+                                move |duration| {
+                                    let millis = u64::try_from(duration.as_millis()).unwrap();
+                                    if waited.get() + millis >= 1_060_000 {
+                                        wait_host.set_status(TASK_ID, TaskStatus::Backlog);
+                                    }
+                                    waited.set(waited.get() + millis);
+                                },
+                                || action(&host, "pr_checks_watch", &input),
+                            )
+                        },
+                    )
+                    .expect("leaving review suppresses the pending entry");
+                    assert_eq!(host.status(TASK_ID), TaskStatus::Backlog, "{mode}");
+                    assert_eq!(watched["ended"], "task_left_review", "{mode}: {watched}");
+                    assert_eq!(watched["recorded"], false, "{mode}: {watched}");
+                    assert_eq!(host.history(TASK_ID), before, "{mode}");
+                    assert_no_mutation(&fx);
+                });
+            }
+        },
+    );
+}
+
 /// One push run on `sha` whose `test` job concluded `conclusion`, served to
 /// the substitute `gh` as the commit's jobs and failed-job log.
 fn plant_run(fx: &Fixture, sha: &str, run_id: u64, conclusion: &str, log: &str) {
