@@ -27,10 +27,14 @@ and `routines/release-readiness.yaml` triggers it.
    `orbit script grant release-readiness`. The grant binds the manifest and adapter
    digests, so changing either makes the grant stale and the step holds until the owner
    grants it again. Orbit never widens a grant by itself.
-2. Copy the two definitions to `.orbit/auto_tasks/`. The names replace the installed
-   `security-review` and `release-prep` definitions, so compare them first and keep any
-   owner edits. `orbit auto-task show` then reports each as forked from the bundled
-   default, which is expected. Enable each one deliberately with `orbit auto-task toggle`.
+2. Copy the two definitions to `.orbit/auto_tasks/`. Only `security-review` has a
+   bundled default; `release-prep` is workspace-authored with no bundled default.
+   In a fresh workspace the `security-review` copy replaces the seeded bundled
+   definition while `release-prep` is a new file; when either name already holds
+   an owner copy, compare first and keep any owner edits. `orbit auto-task show`
+   then reports `security-review` as forked from the bundled default and
+   `release-prep` as user-authored, which is expected. Enable each one
+   deliberately with `orbit auto-task toggle`.
 3. Add the block below to the native `qa-full-sweep.yaml`, leaving everything else as it
    is. A definition's digest changes when its body does, so a running job keeps the
    frozen definition it started with:
