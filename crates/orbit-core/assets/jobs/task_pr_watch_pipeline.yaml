@@ -21,9 +21,9 @@
 # - Checks that have not settled within `max_wait_seconds` are recorded as
 #   `pending` at the budget boundary while the task remains in review.
 # - A transient status-read failure keeps the watch polling until its
-#   deadline; if the outage or a status read reaches deadline expiry while
-#   the task stays in review, it records a held `pending` entry naming no
-#   head or check.
+#   deadline; if the outage, a status read, or a CI retry/deferred-read poll
+#   wait reaches deadline expiry while the task stays in review, it records a
+#   held `pending` entry naming no head or check.
 # - A permanent forge read failure fails this run only; the delivery and the
 #   task are unaffected, and an operator can submit the watch again.
 schemaVersion: 2
