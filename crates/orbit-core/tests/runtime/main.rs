@@ -9,7 +9,8 @@
 //! here rather than a new top-level `tests/*.rs` file
 //! (`docs/design-patterns/test_strategy.md`). Declare every top-level file
 //! (`<name>.rs`, or a `<name>/mod.rs` directory) below; `every_top_level_module_is_declared`
-//! fails and names a missing one. A build script is not used: it would rebuild
+//! fails and names a missing one; a `mod` line inside a comment or string does not
+//! count. A build script is not used: it would rebuild
 //! `orbit-core` and every dependent crate on any edit under this directory.
 
 // Integration fixtures unwrap setup invariants.
@@ -209,10 +210,109 @@ mod readiness_population;
 #[test]
 fn every_top_level_module_is_declared() {
     let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/runtime");
-    let main_source = include_str!("main.rs");
-    let mut sources = vec![main_source.to_owned()];
+    let missing = unregistered_top_level_modules(&dir, include_str!("main.rs"));
+    assert!(
+        missing.is_empty(),
+        "add `mod <name>;` to crates/orbit-core/tests/runtime/main.rs for: {missing:?}"
+    );
+}
+
+/// A fixture file: its name beside the crate root, and its text.
+type FixtureFile = (&'static str, &'static str);
+
+/// Runs the registration check over a fixture directory holding `files`, with
+/// `main_source` as the crate root.
+fn unregistered_in_fixture(main_source: &str, files: &[FixtureFile]) -> Vec<String> {
+    let root = tempfile::tempdir().expect("create runtime fixture");
+    for (name, text) in files {
+        std::fs::write(root.path().join(name), text).expect("write runtime fixture file");
+    }
+    unregistered_top_level_modules(root.path(), main_source)
+}
+
+/// Rust compiles a file only through a declaration it reads. A `mod` line in a block
+/// or line comment, or inside a string, declares nothing, so the file stays
+/// unregistered and its tests would silently not run.
+#[test]
+fn commented_or_quoted_module_declaration_is_unregistered() {
+    let activity = [("activity.rs", "")];
+    let cases: [(&str, &[FixtureFile], &[&str]); 6] = [
+        ("/*\nmod activity;\n*/\n", &activity, &["activity"]),
+        ("// mod activity;\n", &activity, &["activity"]),
+        (
+            "/* outer /* inner */ mod activity; */\n",
+            &activity,
+            &["activity"],
+        ),
+        (
+            "const NOTE: &str = \"mod activity;\";\n",
+            &activity,
+            &["activity"],
+        ),
+        (
+            "mod host;\n",
+            &[
+                (
+                    "host.rs",
+                    "/*\n#[path = \"activity.rs\"]\nmod activity;\n*/\n",
+                ),
+                ("activity.rs", ""),
+            ],
+            &["activity"],
+        ),
+        (
+            "",
+            &[
+                ("host.rs", "#[path = \"activity.rs\"]\nmod activity;\n"),
+                ("activity.rs", ""),
+            ],
+            &["activity", "host"],
+        ),
+    ];
+    for (main_source, files, expected) in cases {
+        assert_eq!(
+            unregistered_in_fixture(main_source, files),
+            expected,
+            "crate root {main_source:?}"
+        );
+    }
+}
+
+/// A declaration Rust reads still registers its file, and so does a `#[path]` mount
+/// in a registered sibling.
+#[test]
+fn live_module_declaration_and_sibling_mount_are_registered() {
+    let activity = [("activity.rs", "")];
+    let cases: [(&str, &[FixtureFile]); 3] = [
+        ("mod activity;\n", &activity),
+        (
+            "#[path = \"activity.rs\"]\npub(crate) mod activity;\n",
+            &activity,
+        ),
+        (
+            "mod host;\n",
+            &[
+                ("host.rs", "#[path = \"activity.rs\"]\nmod activity;\n"),
+                ("activity.rs", ""),
+            ],
+        ),
+    ];
+    for (main_source, files) in cases {
+        assert_eq!(
+            unregistered_in_fixture(main_source, files),
+            Vec::<String>::new(),
+            "crate root {main_source:?}"
+        );
+    }
+}
+
+/// Names of the top-level test files and `mod.rs` directories that Rust never
+/// compiles: no uncommented `mod <name>;` at the crate root of `main_source` reaches
+/// them, directly or through a `#[path = "<name>.rs"]` mount in a compiled file.
+fn unregistered_top_level_modules(dir: &std::path::Path, main_source: &str) -> Vec<String> {
     let mut names = Vec::new();
-    for entry in std::fs::read_dir(&dir)
+    let mut files = std::collections::HashMap::new();
+    for entry in std::fs::read_dir(dir)
         .expect("read tests/runtime")
         .flatten()
     {
@@ -223,27 +323,228 @@ fn every_top_level_module_is_declared() {
                 names.push(file_name);
             }
         } else if let Some(stem) = file_name.strip_suffix(".rs").filter(|s| *s != "main") {
+            let text = std::fs::read_to_string(&path).expect("read runtime test file");
+            files.insert(stem.to_owned(), registration(&text));
             names.push(stem.to_owned());
-            sources.push(std::fs::read_to_string(&path).expect("read runtime test file"));
+        }
+    }
+    // The crate root's declarations, then the files they mount, transitively. A
+    // sibling's plain `mod` lines name nested paths, not files beside it, so only its
+    // mounts reach another top-level file.
+    let root = registration(main_source);
+    let mut pending = root.declared;
+    pending.extend(
+        root.mounts
+            .iter()
+            .filter_map(|path| mounted_name(path))
+            .map(str::to_owned),
+    );
+    let mut reached = std::collections::BTreeSet::new();
+    while let Some(name) = pending.pop() {
+        if !reached.insert(name.clone()) {
+            continue;
+        }
+        if let Some(file) = files.get(&name) {
+            pending.extend(
+                file.mounts
+                    .iter()
+                    .filter_map(|path| mounted_name(path))
+                    .map(str::to_owned),
+            );
         }
     }
     names.sort();
-    let missing: Vec<&str> = names
-        .iter()
-        .map(String::as_str)
-        .filter(|name| {
-            let declared = main_source
-                .lines()
-                .any(|line| line.trim() == format!("mod {name};"));
-            // A sibling may mount a top-level file by path, so it compiles once there.
-            let mounted = sources
-                .iter()
-                .any(|text| text.contains(&format!("#[path = \"{name}.rs\"]")));
-            !declared && !mounted
-        })
-        .collect();
-    assert!(
-        missing.is_empty(),
-        "add `mod <name>;` to crates/orbit-core/tests/runtime/main.rs for: {missing:?}"
-    );
+    names
+        .into_iter()
+        .filter(|name| !reached.contains(name))
+        .collect()
+}
+
+/// The module declarations a source file makes at its top level, as Rust reads
+/// them: comments and literals are not code.
+#[derive(Default)]
+struct Registration {
+    /// Names of `mod <name>;` items.
+    declared: Vec<String>,
+    /// Values of the `#[path = "..."]` attributes on `mod <name>;` items.
+    mounts: Vec<String>,
+}
+
+/// The top-level module that a `#[path]` value mounts: `<name>.rs` or
+/// `<name>/mod.rs`, directly under the test directory.
+fn mounted_name(path: &str) -> Option<&str> {
+    let stem = path
+        .strip_suffix("/mod.rs")
+        .or_else(|| path.strip_suffix(".rs"))?;
+    (!stem.contains('/')).then_some(stem)
+}
+
+/// The `mod` items at the top level of `source`, not inside a block or another item.
+fn registration(source: &str) -> Registration {
+    let toks = tokenize(source);
+    let mut reg = Registration::default();
+    let mut depth = 0_usize;
+    let mut mount: Option<String> = None;
+    for (i, tok) in toks.iter().enumerate() {
+        match tok {
+            Tok::Punct('{') => {
+                depth += 1;
+                mount = None;
+            }
+            Tok::Punct('}') => {
+                depth = depth.saturating_sub(1);
+                mount = None;
+            }
+            Tok::Punct(';') => mount = None,
+            Tok::Punct('#') if depth == 0 => mount = path_attribute(&toks[i..]).or(mount),
+            Tok::Word(word) if word == "mod" && depth == 0 => {
+                if let [Tok::Word(name), Tok::Punct(';'), ..] = &toks[i + 1..] {
+                    match mount.take() {
+                        Some(path) => reg.mounts.push(path),
+                        None => reg.declared.push(name.clone()),
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    reg
+}
+
+/// The value of a `#[path = "..."]` attribute that opens `toks`, if one does.
+fn path_attribute(toks: &[Tok]) -> Option<String> {
+    match toks {
+        [
+            Tok::Punct('#'),
+            Tok::Punct('['),
+            Tok::Word(attr),
+            Tok::Punct('='),
+            Tok::Str(path),
+            Tok::Punct(']'),
+            ..,
+        ] if attr == "path" => Some(path.clone()),
+        _ => None,
+    }
+}
+
+/// A lexical token. `Str` keeps the text of a string literal; other literals and all
+/// comments are dropped.
+enum Tok {
+    Word(String),
+    Str(String),
+    Punct(char),
+}
+
+/// Splits Rust source into tokens. Line comments and nested block comments are
+/// dropped. Plain, byte and raw string literals and char literals are read whole, so
+/// a `mod` inside any of them is never code.
+fn tokenize(source: &str) -> Vec<Tok> {
+    let chars: Vec<char> = source.chars().collect();
+    let at = |i: usize| chars.get(i).copied();
+    let mut toks = Vec::new();
+    let mut i = 0;
+    while let Some(c) = at(i) {
+        if c.is_whitespace() {
+            i += 1;
+        } else if c == '/' && at(i + 1) == Some('/') {
+            while at(i).is_some_and(|c| c != '\n') {
+                i += 1;
+            }
+        } else if c == '/' && at(i + 1) == Some('*') {
+            let mut depth = 0_usize;
+            while let Some(c) = at(i) {
+                if c == '/' && at(i + 1) == Some('*') {
+                    depth += 1;
+                    i += 2;
+                } else if c == '*' && at(i + 1) == Some('/') {
+                    depth -= 1;
+                    i += 2;
+                    if depth == 0 {
+                        break;
+                    }
+                } else {
+                    i += 1;
+                }
+            }
+        } else if c == '"' {
+            let (text, next) = quoted(&chars, i + 1);
+            toks.push(Tok::Str(text));
+            i = next;
+        } else if c == '\'' {
+            if at(i + 1) == Some('\\') {
+                // An escaped char literal such as '\n' or '\u{1F600}'.
+                i += 3;
+                while at(i).is_some_and(|c| c != '\'') {
+                    i += 1;
+                }
+                i += 1;
+            } else if at(i + 2) == Some('\'') {
+                i += 3;
+            } else {
+                // A lifetime or a loop label.
+                toks.push(Tok::Punct('\''));
+                i += 1;
+            }
+        } else if c.is_alphanumeric() || c == '_' {
+            let start = i;
+            while at(i).is_some_and(|c| c.is_alphanumeric() || c == '_') {
+                i += 1;
+            }
+            let word: String = chars[start..i].iter().collect();
+            let mut hashes = 0;
+            while at(i + hashes) == Some('#') {
+                hashes += 1;
+            }
+            if matches!(word.as_str(), "r" | "br") && at(i + hashes) == Some('"') {
+                let (text, next) = raw_quoted(&chars, i + hashes + 1, hashes);
+                toks.push(Tok::Str(text));
+                i = next;
+            } else if word == "b" && at(i) == Some('"') {
+                let (text, next) = quoted(&chars, i + 1);
+                toks.push(Tok::Str(text));
+                i = next;
+            } else {
+                toks.push(Tok::Word(word));
+            }
+        } else {
+            toks.push(Tok::Punct(c));
+            i += 1;
+        }
+    }
+    toks
+}
+
+/// Reads a plain string literal whose body starts at `start`. Returns its text and
+/// the index just past the closing quote.
+fn quoted(chars: &[char], start: usize) -> (String, usize) {
+    let mut text = String::new();
+    let mut i = start;
+    while let Some(&c) = chars.get(i) {
+        i += 1;
+        match c {
+            '"' => break,
+            '\\' => {
+                text.push(c);
+                if let Some(&escaped) = chars.get(i) {
+                    text.push(escaped);
+                }
+                i += 1;
+            }
+            _ => text.push(c),
+        }
+    }
+    (text, i)
+}
+
+/// Reads a raw string literal whose body starts at `start` and closes with a quote
+/// followed by `hashes` `#`s. Returns its text and the index just past the closer.
+fn raw_quoted(chars: &[char], start: usize, hashes: usize) -> (String, usize) {
+    let closes_at = |j: usize| {
+        chars.get(j) == Some(&'"') && (1..=hashes).all(|k| chars.get(j + k) == Some(&'#'))
+    };
+    let mut end = start;
+    while end < chars.len() && !closes_at(end) {
+        end += 1;
+    }
+    (chars[start..end].iter().collect(), end + 1 + hashes)
 }
