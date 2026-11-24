@@ -121,7 +121,7 @@ an exact time.
 | `orbit run auto --approve-proposed` | Also [approve `proposed` tasks](/how-to/continuous-delivery/#2-authorize-the-backlog) that pass task-pilot verification. |
 | `orbit run auto --auto-fix` | Also [repair failing checks and conflicts](/how-to/continuous-delivery/#repair-blocked-pull-requests) on the pull requests the drain opens. |
 | `orbit run auto --pull <selector>` | On a replica, [claim work from the owner's backlog](/how-to/distributed-drain/) and hand results back as pull requests. |
-| `orbit run auto --stop` | Stop admitting new work. Running tasks continue. A hand stop also pauses the opt-in [standing-drain keeper](/reference/config/#settable-keys) (`workflow.standing_drain`); only a hand start sets it back on. |
+| `orbit run auto --stop` | Stop admitting new work. Running tasks continue. A hand stop also pauses the opt-in [standing drain](/how-to/continuous-delivery/#standing-drain); only a hand start sets it back on. |
 | `orbit run ship\|auto --complete` | Also [finish delivery](/getting-started/workflows/#completing-work-with---complete) and move shipped tasks to `done` instead of `review`. |
 | `orbit run ship\|auto --review <layer>` | [Add `before-landing` review](/concepts/tasks/#adding-review-to-one-run) to this run when workspace policy applies none. |
 | `orbit run ship\|auto --allow-crew <crew>` | Restrict the run to tasks on these crews. |

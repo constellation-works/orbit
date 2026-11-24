@@ -504,3 +504,52 @@ A delivery window changes a lot of task state. To snapshot it somewhere you
 can restore from, see [Publish and restore tasks](/how-to/task-publication/).
 To operate across hosts, see
 [federated MCP setup](/how-to/mcp-integration/#register-the-federated-mux).
+
+## Standing drain
+
+A standing drain can keep an authorized backlog moving without someone
+restarting each window. It is opt-in: `workflow.standing_drain.enabled` defaults
+to `false`, and enabling it is an operator decision. When enabled, the owner
+host's clock may submit one bounded drain on each tick. A replica never submits
+keeper drains.
+
+### Start and pause drain intent
+
+A hand start records the workspace's drain intent as `on`: run `orbit run auto`,
+click **Drain → Start** in the dashboard, or call MCP `orbit.workflow` `auto`.
+A hand stop records it as `paused`: run `orbit run auto --stop` or click
+**Stop** in the dashboard. The keeper does not resume a pause; start a drain by
+hand to set intent back to `on`. If no one has started a drain, intent is `off`
+and the keeper leaves it alone. A window ending or a drain crashing leaves
+intent `on`.
+
+### What the keeper submits
+
+On each owner clock tick, the keeper submits only when it is enabled, intent is
+`on`, `backlog` or `proposed` work is waiting, no drain is pending or running,
+the newest drain is not held, the minimum interval has passed since that drain
+ended, and the crash breaker is closed. The drain still uses the normal
+admission rules. Its window and options come from these settings, not from the
+last hand-started drain:
+
+| Key | Default | Effect |
+|---|---|---|
+| `workflow.standing_drain.enabled` | `false` | Lets the owner's clock submit bounded drains. Enabling it is an operator decision. |
+| `workflow.standing_drain.window` | `"24h"` | Length of each drain window (`1m`–`24h`). |
+| `workflow.standing_drain.concurrency` | unset | Worker limit (`1`–`64`); unset uses the drain default of 5. |
+| `workflow.standing_drain.complete` | `false` | Marks shipped tasks `done`, like `orbit run auto --complete`. |
+| `workflow.standing_drain.approve_proposed` | `false` | Lets the drain approve `proposed` tasks that pass the task pilot. Enabling it is an operator decision. |
+| `workflow.standing_drain.auto_fix` | `false` | Lets the drain repair failed checks and conflicts on its pull requests. |
+| `workflow.standing_drain.min_resubmit_interval` | `"10m"` | Minimum time after the newest drain ends before another submission (`1m`–`24h`). |
+| `workflow.standing_drain.max_failed_resubmits` | `3` | Failure threshold for the crash breaker (`1`–`100`). |
+
+### Recover an open crash breaker
+
+The breaker opens when this many keeper drains fail or are interrupted within
+one hour of each other. Upgrade interruptions do not count. Once open, it stays
+open even after the failures are older than an hour; a person must start a
+drain by hand to close it. Check `orbit run readiness` and the owner's
+`standing-drain` row in `orbit doctor` for the keeper and breaker state. Resolve
+the failure, then start a drain by hand. `orbit attention` reports
+`drain_breaker_open` while the breaker is open, and `drain_paused` when the
+keeper is enabled, work waits, and intent has been paused for over 12 hours.
