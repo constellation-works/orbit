@@ -27,9 +27,9 @@ use crate::application::task::recovery_checkout_path;
 
 /// The only `codeql` command a fulfilment runs, relative to the held checkout.
 const CODEQL_SCRIPT: &str = "scripts/codeql-rust-local.sh";
-/// Published copy of [`CODEQL_SCRIPT`], pinned to release `v0.49.0`.
+/// Published copy of [`CODEQL_SCRIPT`], pinned to release `v0.54.0`.
 /// That URL returned the script in this checkout (HTTP 200, no fragment).
-const CODEQL_SCRIPT_SOURCE: &str = "https://raw.githubusercontent.com/constellation-works/orbit/v0.49.0/scripts/codeql-rust-local.sh";
+const CODEQL_SCRIPT_SOURCE: &str = "https://raw.githubusercontent.com/constellation-works/orbit/v0.54.0/scripts/codeql-rust-local.sh";
 /// Ceiling for one CodeQL run: toolchain preparation, extraction, analysis.
 const CODEQL_TIMEOUT_MS: u64 = 3 * 60 * 60 * 1000;
 /// Captured output kept per stream in the log artifact.

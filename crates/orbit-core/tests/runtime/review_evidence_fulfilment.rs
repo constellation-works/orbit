@@ -1129,9 +1129,9 @@ fn a_held_host_sandbox_test_outside_its_allowlist_is_refused_without_running() {
     }
 }
 
-/// Published copy of the only script the built-in fulfilment runs, pinned to
-/// the release tag verified with this checkout.
-const PUBLISHED_CODEQL_SCRIPT: &str = "https://raw.githubusercontent.com/constellation-works/orbit/v0.49.0/scripts/codeql-rust-local.sh";
+/// Download documented by the shipped orbit-setup reference for the script
+/// the built-in fulfilment runs.
+const PUBLISHED_CODEQL_SCRIPT: &str = "https://raw.githubusercontent.com/constellation-works/orbit/v0.54.0/scripts/codeql-rust-local.sh";
 
 /// A `codeql` command other than the admitted script is refused before
 /// anything runs. The activity output, its log and the task comment name the
@@ -1170,7 +1170,7 @@ fn a_custom_codeql_command_is_refused_with_the_published_script() {
     assert_eq!(output["reason"], "command_not_allowed", "{output}");
     assert_eq!(output["retryable"], false, "{output}");
     let detail = output["detail"].as_str().unwrap();
-    assert_codeql_refusal_contract(detail);
+    assert_codeql_refusal_contract(detail, command);
     let log = artifact(&fixture, EVIDENCE_LOG).expect("the refusal's log is attached");
     assert_eq!(log["reason"], "command_not_allowed");
     assert_eq!(log["detail"].as_str(), Some(detail));
@@ -1188,6 +1188,11 @@ fn a_custom_codeql_command_is_refused_with_the_published_script() {
     assert!(
         comment.message.contains(PUBLISHED_CODEQL_SCRIPT),
         "the task comment names the published script: {}",
+        comment.message
+    );
+    assert!(
+        comment.message.contains(command),
+        "the task comment preserves the refused command: {}",
         comment.message
     );
 }
@@ -1289,7 +1294,13 @@ fn held_non_executable(stub: Stub, command: &str) -> (Fixture, ReviewEvidenceHol
     (fixture, hold)
 }
 
-fn assert_codeql_refusal_contract(detail: &str) {
+fn assert_codeql_refusal_contract(detail: &str, refused_command: &str) {
+    assert!(
+        detail.starts_with(&format!(
+            "`{refused_command}` is not an admitted CodeQL command:"
+        )),
+        "the refusal preserves the custom command: {detail}"
+    );
     assert!(
         detail.contains(PUBLISHED_CODEQL_SCRIPT),
         "the refusal names the published script, not only a source-tree path: {detail}"
