@@ -983,18 +983,30 @@ class ObservedPipeDrainTests(unittest.TestCase):
             root = Path(temporary)
             helper = root / "broken.py"
             helper.write_text(textwrap.dedent(r'''
-                import ctypes, json, os, signal, subprocess, sys
+                import ctypes, json, os, signal, subprocess, sys, time
                 from pathlib import Path
                 assert ctypes.CDLL(None, use_errno=True).prctl(36, 1, 0, 0, 0) == 0
                 signal.signal(signal.SIGTERM, signal.SIG_IGN)
                 fd = int(os.environ["ORBIT_FIXTURE_WATCHDOG_FD"])
                 code = "import os, signal, sys; signal.signal(signal.SIGTERM, signal.SIG_IGN); " \
+                       "open(sys.argv[1] + '.pid', 'w').write(str(os.getpid())); " \
                        "open(sys.argv[1], 'w').close(); signal.pause()"
                 proc = subprocess.Popen([sys.executable, "-c", os.environ["ORBIT_FIXTURE_ANCHOR"],
                     str(fd), "[]", json.dumps([sys.executable, "-c", code, sys.argv[1]])],
                     start_new_session=True, pass_fds=(fd,))
                 result = proc.wait()
-                _, status = os.waitpid(-1, 0)
+                child_pid = int(Path(sys.argv[1] + ".pid").read_text())
+                deadline = time.monotonic() + 5
+                while True:
+                    try:
+                        reaped, status = os.waitpid(child_pid, os.WNOHANG)
+                    except (ChildProcessError, InterruptedError):
+                        reaped = 0
+                    if reaped == child_pid:
+                        break
+                    if time.monotonic() >= deadline:
+                        raise TimeoutError("watchdog descendant was not adopted and reaped")
+                    time.sleep(0.01)
                 Path(sys.argv[2]).write_text(json.dumps([result, os.waitstatus_to_exitcode(status)]))
             ''').lstrip("\n"))
             proc = spawn_fixture_helper([sys.executable, str(helper), str(root / "ready"), str(root / "result")])
@@ -1180,7 +1192,17 @@ class ObservedPipeDrainTests(unittest.TestCase):
                     raise AssertionError("relay error was swallowed")
                 if sys.platform == "linux":
                     grandchild_pid = int((root / "grandchild.pid").read_text())
-                    reaped, status = os.waitpid(grandchild_pid, 0)
+                    deadline = time.monotonic() + 5
+                    while True:
+                        try:
+                            reaped, status = os.waitpid(grandchild_pid, os.WNOHANG)
+                        except (ChildProcessError, InterruptedError):
+                            reaped = 0
+                        if reaped == grandchild_pid:
+                            break
+                        if time.monotonic() >= deadline:
+                            raise TimeoutError("relay-test descendant was not adopted and reaped")
+                        time.sleep(0.01)
                     result["grandchild_killed"] = reaped == grandchild_pid and os.waitstatus_to_exitcode(status) == -signal.SIGKILL
                 for name in ("child.pid", "grandchild.pid"):
                     (root / name).unlink(missing_ok=True)
