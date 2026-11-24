@@ -131,7 +131,7 @@ class NativeReadinessRegression(unittest.TestCase):
         cls.addClassCleanup(cls.temp.cleanup)
         cls.inputs = Path(cls.temp.name)
         # Mirror the sandbox's flat input mounts, without the checkout cwd.
-        manifest = yaml.safe_load((ROOT / "examples/release-readiness/scripts/release-readiness.yaml").read_text())
+        manifest = yaml.safe_load((ROOT / "docs/dev/examples/release-readiness/scripts/release-readiness.yaml").read_text())
         for entry in manifest["spec"]["files"]["inputs"]:
             target = cls.inputs / entry["as"]
             shutil.copyfile(ROOT / entry["from"], target)

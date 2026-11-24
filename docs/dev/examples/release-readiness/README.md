@@ -9,19 +9,20 @@ embedded registry. Installing them is the workspace owner's decision.
 | --- | --- |
 | `auto_tasks/security-review.yaml` | The current security review, disabled, plus its evidence contract. |
 | `auto_tasks/release-prep.yaml` | The current report-first preparation probe, disabled, plus its evidence contract. |
-| `examples/release-readiness/scripts/release-readiness.yaml` | Script manifest that registers the adapter. |
-| [`scripts/release-readiness-adapter.py`](../../scripts/release-readiness-adapter.py) | The workspace's QA, security and preparation policy. Stays at the repository's `scripts/`. |
+| `routines/release-readiness.yaml` | Condition-triggered routine, disabled, that triggers the release-readiness job. |
+| `docs/dev/examples/release-readiness/scripts/release-readiness.yaml` | Script manifest that registers the adapter. |
+| [`scripts/release-readiness-adapter.py`](../../../../scripts/release-readiness-adapter.py) | The workspace's QA, security and preparation policy. Stays at the repository's `scripts/`. |
 
 There is deliberately no `full-qa-sweep.yaml`. Full QA is this workspace's existing
 `.orbit/auto_tasks/qa-full-sweep.yaml`, whose harness, inventory, supplemental
 forecast scenarios and platform requirements stay as they are. Adding a second
 definition would split that sign-off, so the owner adds one block to the native file
-(step 3). The job and routine that compose these steps are separate examples
-(ORB-20166).
+(step 3). The job that composes these steps is a separate example (ORB-20166),
+and `routines/release-readiness.yaml` triggers it.
 
 ## Installing, when the owner decides to
 
-1. Copy `examples/release-readiness/scripts/release-readiness.yaml` to
+1. Copy `docs/dev/examples/release-readiness/scripts/release-readiness.yaml` to
    `.orbit/resources/scripts/release-readiness.yaml` and grant it:
    `orbit script grant release-readiness`. The grant binds the manifest and adapter
    digests, so changing either makes the grant stale and the step holds until the owner
