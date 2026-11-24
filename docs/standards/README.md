@@ -11,7 +11,7 @@ fails CI on any edit; changes come only from a re-sync.
 | Standard | Version | Title | Rules |
 |---|---|---|---|
 | STD-01 | 2 | CLI surface — command grammar, inputs and effects, output modes, errors, help, and golden-tested public surfaces | [STD-01-cli-surface/STD-01.md](STD-01-cli-surface/STD-01.md) |
-| STD-02 | 4 | Rust architecture and errors — layering, visibility, typed errors, failure semantics, idiom and naming, logging, and test layout for constellation Rust projects | [STD-02-rust-architecture-and-errors/STD-02.md](STD-02-rust-architecture-and-errors/STD-02.md) |
+| STD-02 | 5 | Rust architecture and errors — layering, visibility, typed errors, failure semantics, idiom and naming, logging, and test layout for constellation Rust projects | [STD-02-rust-architecture-and-errors/STD-02.md](STD-02-rust-architecture-and-errors/STD-02.md) |
 | STD-03 | 2 | Concurrency and process safety — locks, channels, durable writes, state evolution, subprocess lifecycles, destructive operations, remote effects, test containment and resource bounds | [STD-03-concurrency-and-process-safety/STD-03.md](STD-03-concurrency-and-process-safety/STD-03.md) |
 | STD-04 | 2 | Testing and verification — test design, hermetic tests, honest gates, docs as contracts, and evidence-based verification conduct | [STD-04-testing-and-verification/STD-04.md](STD-04-testing-and-verification/STD-04.md) |
 | STD-05 | 1 | Security boundaries — authority, filesystem containment, child environments, redaction, local network surfaces, supply chain and consent | [STD-05-security-boundaries/STD-05.md](STD-05-security-boundaries/STD-05.md) |
@@ -24,7 +24,7 @@ deviate: read it first. `why.md` explains each rule, `checks.md` names the gate 
 enforces it, `exemplars.md` points at worked examples in Orbit, and `CHANGELOG.md`
 records its versions.
 
-Source: the constellation umbrella `docs/standards/` at commit `7bca6fd4f27788cd34091bb33782cfd4e5fe291e`.
+Source: the constellation umbrella `docs/standards/` at commit `9dbf412299493e256810f2c82c4d65390c7cca8b`.
 
 ## Normative
 

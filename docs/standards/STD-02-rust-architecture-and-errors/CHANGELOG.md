@@ -4,6 +4,30 @@ Version history of [STD-02](STD-02.md). Adopting repos pin the `version:` in its
 frontmatter as `STD-02@<version>`; a version changes only when a rule is added,
 removed or changed in meaning.
 
+- **5** (2026-11-24): Architecture rules drawn from the scribe-core analysis: R39 added (no
+  import cycles between units; a layer of more than about ten units declares an order inside
+  itself) (ORB-27707).
+  R40 added (persistence holds no validation, authorization or classification rule, imports
+  record types only, and is named for records; an atomic check runs in the caller's
+  transaction) (ORB-27707).
+  R41 added (an operation loads state into values, decides with pure functions, performs
+  effects through ports and commits in one transaction) (ORB-27707).
+  R42 added (a port is defined by the layer that calls it and implemented in composition; each
+  feature keeps its own request and response shapes) (ORB-27707).
+  R43 added (the architecture doc maps every unit with what it owns; new code goes to the
+  lowest unit that can own it; no catch-all unit names outside the foundation) (ORB-27707).
+  R44 added (readers of old formats, migrations and importers live in one unit the live path
+  calls only at open or upgrade) (ORB-27707).
+  R1 changed (the default layer model names an application layer and places persistence below
+  it) (ORB-27707).
+  R2 changed (each operation has one entry point in an application unit; composition only
+  constructs; a surface calls one operation) (ORB-27707).
+  R6 changed (the check also rejects import cycles and enforces in-layer order; crate edge
+  before visibility before grep) (ORB-27707).
+  R7 changed (persistence is a third crate from the day the project takes a storage-driver
+  dependency) (ORB-27707).
+  R18 changed (the size heuristic also covers a type's public methods and a directory's sibling
+  modules) (ORB-27707).
 - **Editorial (2026-11-23, version unchanged):** Orbit trimmed `ARCHITECTURE.md` to its layering
   rules and edge table (constellation-works/orbit#10858), so the R2, R3, R5, R7 and R16 exemplars
   now cite the crate pages under `docs/architecture/`, and R4 cites `ARCHITECTURE.md#architecture`.
