@@ -486,6 +486,11 @@ export function operationColumns(labels) {
   return row;
 }
 
+// The server flags a definition Orbit ships and seeds (`orbit_default`); the dashboard does not infer it from the name.
+export function orbitDefaultBadge() {
+  return el("span", { class: "badge", "data-tone": "muted", text: "Orbit default", title: "Shipped by Orbit and seeded into this workspace" });
+}
+
 export function operationCell(label, children, extraClass = "") {
   const cell = el("div", { class: `operation-cell ${extraClass}`.trim() }, children.filter(Boolean));
   cell.dataset.label = label;
@@ -564,6 +569,7 @@ export function inactivePluginGroup(entries, noun, title = "Plugin off", summary
             el("strong", { text: entry.name }),
             el("span", { class: "operation-state inactive", text: entry.state || "inactive" }),
           ]),
+          entry.orbitDefault ? el("span", { class: "operation-cell-sub operation-chips" }, [orbitDefaultBadge()]) : null,
           entry.detail ? el("span", { class: "operation-cell-sub mono", text: entry.detail }) : null,
         ], "operation-cell-identity"),
         operationCell("Why", [el("span", { class: "operation-cell-main muted", text: entry.reason || "" })]),

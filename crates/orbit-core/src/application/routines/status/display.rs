@@ -1,5 +1,7 @@
 use super::*;
 
+use crate::application::routines::template::is_seeded_routine_file;
+
 /// Consecutive failures at the head of a routine's fire history.
 #[derive(Debug, Clone)]
 pub struct RoutineFailureStreak {
@@ -147,6 +149,7 @@ impl RoutineStatus {
                     .collect::<Vec<_>>()
             ),
             RoutineField::Breaker => breaker_json(self),
+            RoutineField::OrbitDefault => json!(is_seeded_routine_file(&routine.path)),
             RoutineField::FailureStreak => json!({
                 "count": self.failure_streak.count,
                 "since": self.failure_streak.since,
@@ -196,6 +199,9 @@ pub enum RoutineField {
     /// The routine's circuit breaker ([`breaker_json`]), or null when it
     /// never tripped on this host.
     Breaker,
+    /// Whether Orbit ships and seeds this routine's definition file: the file
+    /// stem is the shipped name, not the workspace-qualified `name`.
+    OrbitDefault,
 }
 
 /// `{state, tripped, error_class, last_run_id, tripped_at, trips,

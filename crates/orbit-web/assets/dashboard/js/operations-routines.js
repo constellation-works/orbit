@@ -27,6 +27,7 @@ import {
   operationFact,
   operationSwitch,
   operationsState,
+  orbitDefaultBadge,
   outcomeDot,
   pendingOperations,
   registerOperationsReset,
@@ -527,6 +528,7 @@ function routineRow(payload, routine, workspaceId) {
       operationCell("", [routineButton(payload, routine)], "operation-cell-control"),
       operationCell("Routine", [
         identity,
+        routine.orbit_default ? el("span", { class: "operation-cell-sub operation-chips" }, [orbitDefaultBadge()]) : null,
         el("span", { class: "operation-cell-sub" }, [el("span", { text: "runs " }), jobLink(routine.target)]),
       ], "operation-cell-identity"),
       operationCell("Cadence", [...cadence, routineEditButton({ payload, routine, onOpened: () => { if (routinesRenderOperations) routinesRenderOperations(operationsState.lastOperations || payload, { force: true }); } })]),
@@ -587,7 +589,7 @@ export function renderRoutineRows(payload, body, { workspace, workspaceId, routi
   }
   if (ownerOnly.length) {
     body.appendChild(inactivePluginGroup(
-      ownerOnly.map((routine) => ({ name: routine.name, detail: routine.target, reason: routine.reason, state: "owner-only" })),
+      ownerOnly.map((routine) => ({ name: routine.name, detail: routine.target, reason: routine.reason, state: "owner-only", orbitDefault: routine.orbit_default })),
       "fires", "Owner only", "this replica schedules only worktree GC and store GC on a cron trigger · enable these on the owner machine",
     ));
   }

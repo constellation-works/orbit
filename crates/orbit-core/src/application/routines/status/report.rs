@@ -1,6 +1,7 @@
 use super::*;
 
 use super::fires::{FIRE_HISTORY_LIMIT, automation_fires, fire_history, newest_fire};
+use crate::application::routines::template::is_seeded_routine_file;
 
 /// Everything `orbit routine list` renders.
 #[derive(Debug)]
@@ -70,6 +71,7 @@ impl RoutineStatusReport {
                     "enabled": owned.routine.definition.enabled,
                     "owner_machine": owned.owner_machine,
                     "reason": owned.reason,
+                    "orbit_default": is_seeded_routine_file(&owned.routine.path),
                 })
             })
             .collect()
