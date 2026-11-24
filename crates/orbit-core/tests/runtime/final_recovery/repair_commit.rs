@@ -33,6 +33,18 @@ fn git(fixture: &Fixture, args: &[&str]) -> String {
     String::from_utf8(output.stdout).unwrap().trim().to_string()
 }
 
+/// Whether the repository object database holds `path`'s current bytes.
+fn blob_in_object_store(fixture: &Fixture, path: &str) -> bool {
+    let blob = git(fixture, &["hash-object", path]);
+    crate::git_test_support::command()
+        .args(["cat-file", "-e", &blob])
+        .current_dir(&fixture.repo)
+        .output()
+        .unwrap()
+        .status
+        .success()
+}
+
 fn fixture() -> Fixture {
     fixture_with_command("true")
 }
@@ -814,6 +826,10 @@ fn final_recovery_does_not_authorize_an_unrecorded_head_change() {
                     !exists,
                     "{case}: protected .env blob {env_blob} must not enter repository object store"
                 );
+                assert!(
+                    !blob_in_object_store(&fixture, "canary.txt"),
+                    "{case}: original ordinary-file bytes must not enter repository object store"
+                );
             }
         }
     }
@@ -936,6 +952,56 @@ fn final_recovery_scratch_fallback_refuses_redirects() {
             );
         }
     }
+}
+
+/// An object directory the alternates list cannot represent (its path holds
+/// the path-list separator) must fail evidence capture before anything is
+/// staged, not fall back to writing unredacted blobs into the repository.
+#[cfg(unix)]
+fn final_recovery_evidence_refuses_unisolatable_object_store() {
+    let fixture = fixture_with_command("test \"$(cat candidate.txt)\" != after");
+    let objects = fixture.repo.join(".git/objects");
+    let relocated = fixture._root.path().join("objects:store");
+    std::fs::rename(&objects, &relocated).unwrap();
+    std::os::unix::fs::symlink(&relocated, &objects).unwrap();
+
+    let (_, outcome) = run_pipeline(&fixture, "protected");
+    assert!(outcome.is_err(), "{outcome:?}");
+    let run = fixture.input["job_run_id"].as_str().unwrap();
+    let checkpoint = fixture
+        .runtime
+        .read_run_state(run)
+        .unwrap()
+        .unwrap()
+        .final_recovery
+        .unwrap();
+    let Some(FinalRecoveryDecision::Escalate { diagnosis, .. }) = checkpoint.decision else {
+        panic!("expected escalation")
+    };
+    assert!(
+        diagnosis.contains("cannot isolate scratch diff objects"),
+        "capture reports the isolation failure: {diagnosis}"
+    );
+    let name = format!("recovery-uncommitted-{run}.patch");
+    assert!(
+        fixture
+            .runtime
+            .get_task_artifact(&fixture.task_id, &name)
+            .unwrap()
+            .is_none(),
+        "no patch is saved without isolation"
+    );
+    for path in ["canary.txt", "candidate.txt", ".env"] {
+        assert!(
+            !blob_in_object_store(&fixture, path),
+            "{path}: bytes must stay out of the repository object store"
+        );
+    }
+    assert_eq!(
+        git(&fixture, &["diff", "--cached", "--name-only"]),
+        "",
+        "nothing staged in the real index"
+    );
 }
 
 /// Interrupt the original run after its commit and seed a generic resume from
@@ -1180,5 +1246,6 @@ crate::scenario_table!(
 #[cfg(unix)]
 crate::scenario_table!(
     scratch_fallback_scenarios,
-    final_recovery_scratch_fallback_refuses_redirects
+    final_recovery_scratch_fallback_refuses_redirects,
+    final_recovery_evidence_refuses_unisolatable_object_store
 );
