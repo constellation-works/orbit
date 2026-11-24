@@ -284,10 +284,18 @@ fn decision_cli_lists_shows_and_answers_a_raised_request() {
     let all = fixture.json(&["decision", "list", "--all", "--json"]);
     assert_eq!(all["requests"][0]["state"], "answered", "{all}");
 
-    fixture
-        .command(&["decision", "answer", &request_id, "1"])
+    // The operator re-answering is refused by the answered state, not by
+    // authorization.
+    let second = fixture
+        .command(&["decision", "answer", &request_id, "1", "--json"])
+        .env("ORBIT_OPERATOR", "1")
         .assert()
-        .failure();
+        .failure()
+        .get_output()
+        .clone();
+    let refusal: serde_json::Value =
+        serde_json::from_slice(&second.stderr).expect("stderr is the JSON error");
+    assert_eq!(refusal["code"], "request_superseded", "{refusal}");
     // Answering is not a tool an agent session can call.
     fixture
         .command(&[

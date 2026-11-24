@@ -129,7 +129,10 @@ fn task_grants_are_visible_beside_requirements_and_in_history() {
 
 #[test]
 fn fresh_root_task_list_has_no_startup_warnings() {
-    let workspace = workspace();
+    // Pin the filter: an inherited `RUST_LOG=error` would hide the warnings
+    // under test. File-lock hold warnings are timing noise, not startup
+    // warnings, so that target is silenced; every other WARN stays enabled.
+    let workspace = workspace().with_child_log_filter("warn,orbit.common.fs.file_lock=off");
     let output = workspace.run(&["task", "list", "--json"], "list tasks in a fresh root");
     let tasks: Value = serde_json::from_slice(&output.stdout).unwrap();
     assert!(tasks.as_array().unwrap().is_empty());

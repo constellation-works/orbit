@@ -128,7 +128,7 @@ fn task_list_succeeds_when_astra_effort_is_hard() {
         "warning must name the offending value: {stderr}"
     );
     assert!(
-        stderr.contains("low, medium, high, xhigh, max") || stderr.contains("accepted"),
+        stderr.contains("low, medium, high, xhigh, max"),
         "warning must name accepted values: {stderr}"
     );
 }

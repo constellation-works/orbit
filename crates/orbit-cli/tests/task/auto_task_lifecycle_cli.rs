@@ -973,14 +973,13 @@ fn doctor_scans_all_consumer_pages_and_warns_on_a_later_read_failure() {
         orbit_common::test_env::clear_inherited_authority(|name| {
             command.env_remove(name);
         });
-        let output = command
+        command
             .args(["--exact", TEST, "--nocapture"])
             .env(CHILD, TEST)
             .env("HOME", home.path())
             .env("USERPROFILE", home.path())
-            .current_dir(home.path())
-            .output()
-            .unwrap();
+            .current_dir(home.path());
+        let output = orbit_common::test_env::run_child_test(&mut command, TEST, home.path());
         orbit_common::test_env::assert_child_test_passed(
             TEST,
             output.status,

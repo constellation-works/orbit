@@ -77,13 +77,6 @@
     "reason": "process_group(0) then supervise_child with a 120s bound. The test uses that supervisor, not run_child_test."
   },
   {
-    "path": "crates/orbit-cli/tests/task/auto_task_lifecycle_cli.rs",
-    "function": "doctor_scans_all_consumer_pages_and_warns_on_a_later_read_failure",
-    "call": ".output()",
-    "ordinal": 0,
-    "reason": "Isolated --exact child waited with .output() and assert_child_test_passed. Baselined until it moves to run_child_test."
-  },
-  {
     "path": "crates/orbit-cli/tests/task/review_after_landing_cli.rs",
     "function": "in_isolated_child",
     "call": ".output()",
