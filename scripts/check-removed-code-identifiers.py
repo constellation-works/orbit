@@ -55,7 +55,11 @@ RUST_ITEM = re.compile(
     re.MULTILINE)
 PUB_USE = re.compile(r"\bpub(?:\([^)\n]*\))?[ \t]+use[ \t]+([^;]+);")
 RUST_RAW_STRING = re.compile(r'(?:br|r)(#*)"')
-RUST_QUOTED = re.compile(r'''"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\\n])' ''', re.DOTALL | re.VERBOSE)
+# A character literal is one character, a backslash escape, or a `\x7F` or
+# `\u{2f}` escape; a quoted string runs to its closing quote.
+RUST_QUOTED = re.compile(
+    r'''"(?:\\.|[^"\\])*"|'(?:\\u\{[0-9A-Fa-f_]+\}|\\x[0-9A-Fa-f]{2}|\\.|[^'\\\n])' ''',
+    re.DOTALL | re.VERBOSE)
 # CSS comments, quoted strings and `url(...)` tokens, which name no class even
 # in a selector (`a[href$=".pdf"]`), and selector preludes: the text before
 # each `{` since the last `;`, `{` or `}`. Declarations are never preludes.
