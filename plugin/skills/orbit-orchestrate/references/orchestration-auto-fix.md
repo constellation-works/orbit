@@ -96,8 +96,9 @@ It cannot be combined with `--pull` or `--stop`.
   `delivery_check_evidence_inconclusive`, `delivery_completion_budget_expired`,
   `delivery_evidence_stale`, `delivery_requirements_unsatisfied`,
   `delivery_base_checks_pending`, `delivery_forge_observation_unavailable`, or
-  `delivery_check_runs_absent` once the unchanged head reports a pending or
-  passed required check or the forge positively confirms the base branch
+  `delivery_check_runs_absent` once the published head or a head produced by
+  an Orbit-audited clean base refresh of it reports a pending or passed
+  required check or the forge positively confirms the base branch
   configures no required status checks (neither classic branch protection nor
   rulesets require checks).
 
@@ -107,8 +108,9 @@ It cannot be combined with `--pull` or `--stop`.
     Completion reruns with a fresh budget and repairs only what its own watcher
     then finds; the record and started entry carry `hold_code`.
   - An `auto_fix_stopped:` held leaf (`delivery_head_changed` or
-    `delivery_repair_dispatched`) is likewise handed back once the unchanged
-    published head has no conflict or pending/failed required checks and either
+    `delivery_repair_dispatched`) is likewise handed back once the published
+    head, or a head produced by an Orbit-audited clean base refresh of it, has
+    no conflict or pending/failed required checks and either
     at least one passed required check or a forge-confirmed zero-required-check
     base (missing or unreadable policy stays skipped under `auto_fix_stopped`).
 
@@ -126,7 +128,8 @@ It cannot be combined with `--pull` or `--stop`.
     publishing (`delivery_repair_dispatched` with `pr_auto_fix_check_repair:`)
     is likewise observed without held-leaf backoff and retried through the
     repair ledger while budget remains (or handed back once checks turn green
-    on the published head, or reported with its remaining budget when held or
+    on the published head or a head produced by an Orbit-audited clean base
+    refresh of it, or reported with its remaining budget when held or
     exhausted). Other holds keep their own next step (see the
     [delivery-refusal table](run-debugging-delivery-holds.md#codes-and-next-steps)
     in run debugging), and the source leaf still counts as `held`.
