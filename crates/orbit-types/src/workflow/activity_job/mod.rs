@@ -26,6 +26,7 @@ pub const AUTO_TASK_JOB_SCHEMA_VERSION: u32 = 3;
 pub mod activity_roles;
 pub mod activity_v2;
 pub mod audit_envelope;
+mod deterministic_actions;
 pub mod job_v2;
 pub mod provider_sandbox;
 pub mod response_correction;
@@ -37,146 +38,6 @@ mod worktree_failure;
 pub use worktree_failure::{legacy_worktree_failure, worktree_failure_message};
 
 pub use provider_sandbox::CODEX_PROVIDER_SANDBOX_MODES;
-
-/// The single declaration of the deterministic action catalog. The generated
-/// typed actions make the core/engine ownership boundary exhaustive at compile
-/// time while keeping action names available to YAML assets at runtime.
-macro_rules! deterministic_action_catalog {
-    ($declare:ident) => {
-        $declare! {
-            core {
-                AdoptOrphanedDeliveries => "adopt_orphaned_deliveries",
-                ApplyBlockedTaskRecovery => "apply_blocked_task_recovery",
-                ApplyTaskPilotResults => "apply_task_pilot_results",
-                AttachScriptFiles => "attach_script_files",
-                AwaitApprovalPilot => "await_approval_pilot",
-                ClassifyWorkspaceAutoTasks => "classify_workspace_auto_tasks",
-                ConsolidateCodeScanningTasks => "consolidate_code_scanning_tasks",
-                ContextConflictCheck => "context_conflict_check",
-                CrewMemoryDream => "crew_memory_dream",
-                DrainWindow => "drain_window",
-                FileCiFailureTasks => "file_ci_failure_tasks",
-                FileDependabotAlertTasks => "file_dependabot_alert_tasks",
-                FulfilReviewEvidence => "fulfil_review_evidence",
-                GateStarvationDefer => "gate_starvation_defer",
-                InvokeAndWait => "invoke_and_wait",
-                InvokeDetached => "invoke_detached",
-                ListBacklogTasks => "list_backlog_tasks",
-                OrbitToolCall => "orbit_tool_call",
-                PipelineSuccessGuard => "pipeline_success_guard",
-                PluginToolCall => "plugin.tool_call",
-                PrepareBlockedTaskRecovery => "prepare_blocked_task_recovery",
-                PrepareEscalationTriage => "prepare_escalation_triage",
-                PrepareTaskPilot => "prepare_task_pilot",
-                PromoteAgentMain => "promote_agent_main",
-                PullRefill => "pull_refill",
-                RecordProposedApprovals => "record_proposed_approvals",
-                RefreshBaselineHolds => "refresh_baseline_holds",
-                ReleaseLocks => "release_locks",
-                ResidentFinalize => "resident_finalize",
-                ResidentObserve => "resident_observe",
-                ReserveLocks => "reserve_locks",
-                ResolveDeliveryJob => "resolve_delivery_job",
-                ResolveWorkspaceShipInput => "resolve_workspace_ship_input",
-                ReviewGateAdmit => "review_gate_admit",
-                ReviewGateSettle => "review_gate_settle",
-                ReviewReconciliationPrepare => "review_reconciliation_prepare",
-                ReviewReconciliationSettle => "review_reconciliation_settle",
-                ReviewReconciliationValidate => "review_reconciliation_validate",
-                RevertOnRed => "revert_on_red",
-                ScanUnresolvedWork => "scan_unresolved_work",
-                SelectProposedApprovals => "select_proposed_approvals",
-                Sleep => "sleep",
-                StoreGc => "store_gc",
-                TaskPublication => "task_publication",
-                ValidateBundles => "validate_bundles",
-            }
-            engine {
-                CandidateResume => "candidate_resume",
-                CandidateValidate => "candidate_validate",
-                ClaimCandidateCarry => "claim_candidate_carry",
-                ClaimHandoff => "claim_handoff",
-                ClaimValidate => "claim_validate",
-                CollectCiEvidence => "collect_ci_evidence",
-                CollectDependabotAlerts => "collect_dependabot_alerts",
-                GitCommit => "git_commit",
-                GitMerge => "git_merge",
-                GitPush => "git_push",
-                GitRebase => "git_rebase",
-                HandoffLand => "handoff_land",
-                LocalShell => "local_shell",
-                PrFailureHandoff => "pr_failure_handoff",
-                PrOpen => "pr_open",
-                PrPrepare => "pr_prepare",
-                PrChecksWatch => "pr_checks_watch",
-                PrComplete => "pr_complete",
-                PrPromote => "pr_promote",
-                TaskComplete => "task_complete",
-                UpdateTask => "update_task",
-                WorktreeGc => "worktree_gc",
-                WorktreeSetup => "worktree_setup",
-            }
-        }
-    };
-}
-
-macro_rules! define_deterministic_actions {
-    (
-        core { $( $core_variant:ident => $core_name:literal, )* }
-        engine { $( $engine_variant:ident => $engine_name:literal, )* }
-    ) => {
-        #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-        pub enum CoreDeterministicAction {
-            $( $core_variant, )*
-        }
-
-        #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-        pub enum EngineDeterministicAction {
-            $( $engine_variant, )*
-        }
-
-        #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-        pub enum DeterministicAction {
-            Core(CoreDeterministicAction),
-            Engine(EngineDeterministicAction),
-        }
-
-        impl CoreDeterministicAction {
-            pub const fn name(self) -> &'static str {
-                match self {
-                    $( Self::$core_variant => $core_name, )*
-                }
-            }
-        }
-
-        impl EngineDeterministicAction {
-            pub const fn name(self) -> &'static str {
-                match self {
-                    $( Self::$engine_variant => $engine_name, )*
-                }
-            }
-        }
-
-        impl DeterministicAction {
-            pub fn parse(name: &str) -> Option<Self> {
-                match name {
-                    $( $core_name => Some(Self::Core(CoreDeterministicAction::$core_variant)), )*
-                    $( $engine_name => Some(Self::Engine(EngineDeterministicAction::$engine_variant)), )*
-                    _ => None,
-                }
-            }
-
-            pub const fn name(self) -> &'static str {
-                match self {
-                    Self::Core(action) => action.name(),
-                    Self::Engine(action) => action.name(),
-                }
-            }
-        }
-    };
-}
-
-deterministic_action_catalog!(define_deterministic_actions);
 
 pub use activity_roles::JobActivityRoles;
 pub use activity_v2::{
@@ -192,6 +53,9 @@ pub use audit_envelope::{
     V2_DENIAL_EVENT_TYPES, V2_EVENT_TYPE_FS_CALL_DENIED, V2_EVENT_TYPE_SCRIPT_EXECUTION,
     V2_EVENT_TYPE_STEP_DENIED, V2_EVENT_TYPE_TOOL_DENIED, V2AuditEnvelope, V2AuditEvent,
     V2AuditEventKind,
+};
+pub use deterministic_actions::{
+    CoreDeterministicAction, DeterministicAction, EngineDeterministicAction,
 };
 pub use job_v2::{
     BackoffStrategy, FanInSpec, FanOutBlock, JobKind, JobStage, JobTaskDelivery, JobV2, JobV2Step,
