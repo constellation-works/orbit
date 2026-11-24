@@ -283,6 +283,22 @@ impl orbit_engine::test_support::NullRuntimeHost for RepairPipeline<'_> {
                             .unwrap();
                         std::fs::write(repo.join(".env"), b"ENV_CANARY=top_secret\n").unwrap();
                     }
+                    #[cfg(unix)]
+                    "worktree-rename" => {
+                        use std::ffi::OsStr;
+                        use std::os::unix::ffi::OsStrExt;
+
+                        // A worktree-side rename: the source is deleted on disk and the
+                        // destination is intent-to-add, so porcelain reports ` R` with no
+                        // index-side status.
+                        let repo = &self.fixture.repo;
+                        std::fs::rename(
+                            repo.join(OsStr::from_bytes(b"rename-src-\xfe.txt")),
+                            repo.join("renamed.txt"),
+                        )
+                        .unwrap();
+                        git(self.fixture, &["add", "-N", "renamed.txt"]);
+                    }
                     "staged-ignored" => {
                         let repo = &self.fixture.repo;
                         std::fs::write(repo.join("notes.ignored"), "initial ignored\n").unwrap();
@@ -1565,6 +1581,98 @@ fn final_recovery_refused_patch_preserves_non_utf8_paths() {
     assert!(!checkout.join(".env").exists());
 }
 
+#[cfg(unix)]
+fn final_recovery_refused_patch_reproduces_worktree_rename() {
+    use std::ffi::OsStr;
+    use std::os::unix::ffi::OsStrExt;
+
+    let mut fixture = fixture_with_command("test \"$(cat candidate.txt)\" != after");
+    let native_source = OsStr::from_bytes(b"rename-src-\xfe.txt");
+    std::fs::write(fixture.repo.join(native_source), b"moved native content\n").unwrap();
+    let add = crate::git_test_support::command()
+        .args([OsStr::new("add"), native_source])
+        .current_dir(&fixture.repo)
+        .output()
+        .unwrap();
+    assert!(add.status.success(), "{add:?}");
+    git(&fixture, &["commit", "-m", "seed native rename source"]);
+    git(&fixture, &["branch", "-f", "main", "HEAD"]);
+    fixture.input["base_sha"] = json!(git(&fixture, &["rev-parse", "HEAD"]));
+
+    let (host, outcome) = run_pipeline(&fixture, "worktree-rename");
+    assert!(outcome.is_err(), "{outcome:?}");
+    let run = fixture.input["job_run_id"].as_str().unwrap();
+    let checkpoint = fixture
+        .runtime
+        .read_run_state(run)
+        .unwrap()
+        .unwrap()
+        .final_recovery
+        .unwrap();
+    let Some(FinalRecoveryDecision::Escalate { diagnosis, .. }) = checkpoint.decision else {
+        panic!("expected escalation")
+    };
+    let name = format!("recovery-uncommitted-{run}.patch");
+    assert!(
+        diagnosis.contains("recovery_commit_refused:uncommittable:")
+            && diagnosis.contains("not valid UTF-8")
+            && diagnosis.contains(&name),
+        "refusal and saved patch artifact expected: {diagnosis}"
+    );
+    let artifact = fixture
+        .runtime
+        .get_task_artifact(&fixture.task_id, &name)
+        .unwrap()
+        .expect("refused rename candidate saves uncommitted diff artifact");
+
+    let candidate_head = host.validation_heads.lock().unwrap()[0].0.clone();
+    let root = tempfile::tempdir().unwrap();
+    let checkout = root.path().join("checkout");
+    let clone = crate::git_test_support::command()
+        .args([
+            "clone",
+            "-q",
+            fixture.repo.to_str().unwrap(),
+            checkout.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(clone.status.success(), "{clone:?}");
+    let co = crate::git_test_support::command()
+        .args(["checkout", "-q", &candidate_head])
+        .current_dir(&checkout)
+        .output()
+        .unwrap();
+    assert!(co.status.success(), "{co:?}");
+    assert!(checkout.join(native_source).exists());
+    let patch_file = root.path().join("recovery.patch");
+    std::fs::write(&patch_file, &artifact.content).unwrap();
+    let apply = crate::git_test_support::command()
+        .args(["apply", patch_file.to_str().unwrap()])
+        .current_dir(&checkout)
+        .output()
+        .unwrap();
+    assert!(
+        apply.status.success(),
+        "git apply failed ({}):\n{}",
+        apply.status,
+        String::from_utf8_lossy(&apply.stderr)
+    );
+    assert!(
+        !checkout.join(native_source).exists(),
+        "the rename's native source must be deleted: {}",
+        String::from_utf8_lossy(&artifact.content)
+    );
+    assert_eq!(
+        std::fs::read(checkout.join("renamed.txt")).unwrap(),
+        b"moved native content\n"
+    );
+    assert_eq!(
+        std::fs::read(checkout.join("candidate.txt")).unwrap(),
+        b"repaired\n"
+    );
+}
+
 fn final_recovery_refused_patch_preserves_staged_ignored_addition() {
     let mut fixture = fixture_with_command("test \"$(cat candidate.txt)\" != after");
     std::fs::write(
@@ -1884,5 +1992,6 @@ crate::scenario_table!(
     scratch_fallback_scenarios,
     final_recovery_scratch_fallback_refuses_redirects,
     final_recovery_evidence_refuses_unisolatable_object_store,
-    final_recovery_refused_patch_preserves_non_utf8_paths
+    final_recovery_refused_patch_preserves_non_utf8_paths,
+    final_recovery_refused_patch_reproduces_worktree_rename
 );
