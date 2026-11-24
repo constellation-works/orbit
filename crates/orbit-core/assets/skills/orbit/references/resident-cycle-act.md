@@ -109,7 +109,7 @@ friction between workspaces stays with the operator and the curation pass.
 | `promote_held` | Move an eligible `no-auto-approve` proposal to `backlog` with `orbit.task.update` and `status: "backlog"` |
 | `merge` | Land a reviewed delivery with `orbit.workflow` action `land`; move a task with no open pull request to `done` |
 | `refresh` | Bring a held or review delivery pull request head up to its base branch with `orbit.workflow` action `refresh` and re-run required checks (conflict-free merge commit only; lands nothing) |
-| `recover` | Start a review-only recovery leaf with `orbit.task.recover` action `resume_delivery` in any covered workspace on this host |
+| `recover` | Start a recovery leaf with `orbit.task.recover` action `resume_delivery` in any covered workspace on this host; the leaf may edit the preserved candidate, runs validation and fresh review, and stops at review |
 | (none yet) | `plugin_upgrade` maps to no tool yet; never improvise an install |
 
 Held promotion requires a bug, refactor or chore with a current task-pilot
@@ -187,7 +187,8 @@ To continue a blocked delivery with source changes, call `orbit.task.recover`
 action `resume_delivery` with `id`, `run_id`, `workspace` and `diagnosis`.
 Use the stopped failed or held run that preserved the published candidate.
 Describe the failure and the work still needed. The leaf continues the
-candidate on the current base, runs fresh validation and review, and stops at
+candidate on the current base and makes all source changes it needs (the cycle
+itself makes none). It then runs fresh validation and review and stops at
 review. Landing requires `merge`.
 
 A cycle can attempt delivery recovery once. A task can reserve one resident

@@ -109,7 +109,7 @@ grantable to a resident in v1.
 | `merge` | `orbit.workflow` action `land`, `orbit.task.update` to `done` (refused while the task has an open pull request) |
 | `plugin_upgrade` | none yet: no builtin tool installs or upgrades a plugin |
 | `refresh` | `orbit.workflow` action `refresh` (conflict-free base-branch merge commit into a held or review delivery pull request head, starting its required checks; lands nothing) |
-| `recover` | `orbit.task.recover` action `resume_delivery` (start a review-only source repair for a stopped failed or held delivery) |
+| `recover` | `orbit.task.recover` action `resume_delivery` (start a recovery leaf for a stopped failed or held delivery; the leaf may edit the preserved candidate, runs validation and fresh review, and hands off at review) |
 
 A held proposal must be a bug, refactor or chore with a current pilot
 assessment free of holds and warnings. The `breaking-change`, `design` and
@@ -167,7 +167,8 @@ broker. It accepts a blocked task and the exact failed or held delivery run, in 
 mandate's own workspace or another covered workspace on the same host. It records
 the action key on the home mandate and uses that key for the source-repair
 reservation. The recovery leaf adopts the authenticated published candidate on the
-current base with a fresh review and validation admission. The workspace must
+current base. It makes all source changes the preserved work needs, then runs
+validation and a fresh review and hands off at review. The workspace must
 require before-PR or before-landing review. Security tasks and publications
 requiring separate operator rework consent stay with the operator. A changed head must pass
 those gates and branch protection before a separate `land` call under `merge`.
