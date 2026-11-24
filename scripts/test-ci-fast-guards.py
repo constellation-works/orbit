@@ -4487,6 +4487,26 @@ class RemovedCodeIdentifierTests(unittest.TestCase):
         result = self.run_check()
         self.assertEqual(result.returncode, 0, result.stderr)
 
+    def test_nested_fences_do_not_count(self):
+        self.write(self.CSS, "/* removed */\n")
+        for document in (
+            "> ```css\n> `.ws-badge`\n> ```\n",
+            "- Example:\n\n     ```css\n     `.ws-badge`\n     ```\n",
+            "> - Example:\n>\n>   ~~~css\n>   `.ws-badge`\n>   ~~~\n",
+        ):
+            with self.subTest(document=document):
+                self.write(self.DOC, document)
+                result = self.run_check()
+                self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_wrapped_inline_span_reports_the_identifier_line(self):
+        self.write(self.CSS, "/* removed */\n")
+        self.write(self.DOC, "# Overview\n\nThe `old selector\n.ws-badge` is gone.\n")
+        result = self.run_check()
+        self.assertNotEqual(result.returncode, 0, result.stdout)
+        self.assertIn('".ws-badge"', result.stderr)
+        self.assertIn(f"{self.DOC}:4", result.stderr)
+
 
 class ReleaseAndSmokeScriptRegressionTests(unittest.TestCase):
     """Regress release-check, sync-plugin-skills stderr, and smoke-npm-install hygiene."""
