@@ -20,8 +20,8 @@ struct Fixture {
     ran_marker: PathBuf,
 }
 
-/// A workspace with an ungranted `export` script that writes a marker in a
-/// separate granted root, with `global_config` as the host config.
+/// A workspace with an ungranted `export` script that writes a marker in the
+/// granted outbox, with `global_config` as the host config.
 fn fixture(global_config: &str) -> Fixture {
     crate::scenarios::require_isolated_mutable_fixture("script_roots::fixture");
     let root = tempfile::tempdir_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
@@ -35,9 +35,7 @@ fn fixture(global_config: &str) -> Fixture {
         std::fs::write(global.join("config.toml"), global_config).unwrap();
     }
     let outbox = outbox.canonicalize().unwrap();
-    let marker_root = root.path().join("marker");
-    std::fs::create_dir_all(&marker_root).unwrap();
-    let ran_marker = marker_root.join("ran");
+    let ran_marker = outbox.join("ran");
     std::fs::write(
         repo.join("export.sh"),
         format!(
@@ -67,7 +65,7 @@ fn grant_outbox(fixture: &Fixture, outbox: PathBuf) -> Result<(), orbit_core::Or
         .grant_script(
             "export",
             &ScriptGrantOptions {
-                write_roots: vec![outbox, fixture.ran_marker.parent().unwrap().to_path_buf()],
+                write_roots: vec![outbox],
                 ..Default::default()
             },
         )
@@ -245,6 +243,16 @@ fn a_granted_read_root_replaced_with_a_fifo_refuses_before_spawn() {
         message.contains(&data.display().to_string()),
         "the refusal names the root: {message}"
     );
+    assert!(
+        fixture.ran_marker.starts_with(&fixture.outbox),
+        "the execution marker is inside the surviving outbox grant"
+    );
+    assert!(
+        record.write_roots.contains(&fixture.outbox),
+        "the refusal record retains the marker's outbox grant: {record:?}"
+    );
+    // This host-side launch record remains observable regardless of the
+    // child's write access to the marker.
     assert!(
         record.argv.is_empty() && record.profile.is_none(),
         "refused before the profile was probed or anything spawned: {record:?}"
