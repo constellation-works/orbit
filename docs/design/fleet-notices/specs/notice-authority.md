@@ -96,8 +96,10 @@ input. A resident differs from other managed agents in these ways only:
   `decision` evidence.
 - **Reserved keys.** Keys under `resident:` may be written only by the mandate they name; any
   other poster is refused with `notice_invalid_field`.
-- **Limits.** No linked task or evidence is required. The per-task agent limits are replaced by
-  10 open notices and 30 posts an hour per mandate.
+- **Limits.** No linked task or evidence is required. A mandate can hold 10 open non-status
+  notices; its mandatory status line is exempt from that per-mandate count. All open notices,
+  including the status line, still count toward the 20-per-workspace limit. The rate is 30 posts
+  an hour per mandate.
 - **Close.** The cycle guard admits `orbit.notice.close`; the close still admits only notices the
   mandate's own cycles posted, and no agent can post `maintenance`, so a cycle cannot lift the
   maintenance notice that narrows it.

@@ -54,7 +54,10 @@ Each post of
 a resident's notice renews it: a warn lasts 72 h from the post, at most 168 h.
 An omitted key on a resident's warn is `resident:<mandate>:` plus the usual
 derived key. Keys under `resident:` are refused for every other poster. Its
-limits are 10 open notices and 30 posts an hour per mandate. See
+limits are 10 open non-status notices per mandate, with its mandatory status
+line exempt from that count. All open notices, including the status line,
+count toward the 20-per-workspace limit; the post rate is 30 an hour per
+mandate. See
 [Resident cycle](resident-cycle-escalate.md#6-status-line-and-warns).
 
 Anyone else is refused `notice_poster_unidentified`. Defaults when no expiry is
