@@ -129,11 +129,12 @@ with optional `--ram <mib>` and `--toolchain <version>` and exactly one query
 selector.
 
 Download the script from
-<https://raw.githubusercontent.com/constellation-works/orbit/v0.49.0/scripts/codeql-rust-local.sh>
+<https://raw.githubusercontent.com/constellation-works/orbit/v0.54.0/scripts/codeql-rust-local.sh>
 and save it at `scripts/codeql-rust-local.sh` in the workspace, then make it
 executable (`chmod +x scripts/codeql-rust-local.sh`, committed as mode 100755):
 the fulfilment executes that path directly, so a copy saved without the
-executable bit cannot run. A custom
+executable bit cannot run. Its default extractor toolchain is Rust 1.99.0 plus
+rust-src, confirmed for CodeQL 2.27.5. A custom
 command is not fulfilled by the built-in path: the run attaches its log with
 that refusal and the hold stays.
 
