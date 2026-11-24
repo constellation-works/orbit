@@ -13,6 +13,7 @@ import sqlite3
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from unittest import mock
 
@@ -259,6 +260,37 @@ class McpSmokeTests(unittest.TestCase):
         return subprocess.run(['bash', str(SCRIPTS / script)], cwd=self.root,
                               env=dict(self.env, SMOKE_FIXTURE_MODE=mode, SMOKE_FIXTURE_EXIT=exit_code),
                               capture_output=True, text=True, timeout=30)
+
+    def test_invocation_bounds_retained_pipe_and_preserves_command_status(self):
+        with tempfile.TemporaryDirectory(dir=SCRIPTS.parent / ".orbit/tmp") as temporary:
+            root = Path(temporary)
+            holder = root / "holder.py"
+            holder.write_text("import os, sys, time\n"
+                              "open(sys.argv[1], 'w').write(str(os.getpid()))\n"
+                              "while not os.path.exists(sys.argv[2]): time.sleep(0.02)\n"
+                              "open(sys.argv[2] + '.done', 'w').close()\n")
+            leader = root / "leader.py"
+            leader.write_text("import os, subprocess, sys, time\n"
+                              "subprocess.Popen([sys.executable, sys.argv[1], sys.argv[2], sys.argv[3]], stderr=subprocess.DEVNULL)\n"
+                              "while not os.path.exists(sys.argv[2]): time.sleep(0.02)\n"
+                              "print('leader output', flush=True)\n"
+                              "sys.exit(23)\n")
+            observed, status, ready, release = (root / name for name in ("observed", "status", "ready", "release"))
+            env = {**os.environ, "ORBIT_SMOKE_OBSERVED": str(observed), "ORBIT_SMOKE_COMMAND_STATUS": str(status)}
+            try:
+                result = subprocess.run([sys.executable, str(SCRIPTS / "smoke-claude-mcp-invoke.py"),
+                                         "--", sys.executable, str(leader), str(holder), str(ready), str(release)],
+                                        env=env, capture_output=True, timeout=8)
+                self.assertEqual(result.returncode, 1, result.stderr)
+                self.assertEqual(status.read_text().strip(), "23")
+                self.assertIn(b"leader output", result.stdout)
+                self.assertIn(b"output pipe remained open", result.stderr)
+            finally:
+                release.touch()
+                deadline = time.monotonic() + 5
+                while not Path(str(release) + ".done").exists() and time.monotonic() < deadline:
+                    time.sleep(0.02)
+                self.assertTrue(Path(str(release) + ".done").exists(), "owned holder did not exit")
 
     def test_only_new_successful_mcp_task_list_evidence_passes(self):
         for script in ('smoke-claude-mcp.sh', 'smoke-claude-mcp-sandbox.sh'):

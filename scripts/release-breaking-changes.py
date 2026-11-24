@@ -3,8 +3,8 @@
 
 Read-only and offline except for `orbit task show`, which supplies each landed
 task's tags and execution summary. Without Orbit (`--offline`, or the CLI is
-missing or fails) tasks come from the `[ORB-NNNNN]` in commit subjects alone and
-the decision rests on the detector.
+missing or fails) tasks come from commit subjects and `Orbit-Task` trailers; task-store tags
+and execution summaries are unavailable, so the decision rests on the detector.
 
 Mechanical signals, each compared against the commit's first parent:
 
@@ -2148,7 +2148,7 @@ def main(argv=None):
     parser.add_argument("--repo", default=".", help="repository to survey (default: .)")
     parser.add_argument("--json", action="store_true", help="print the report as JSON")
     parser.add_argument("--offline", action="store_true",
-                        help="don't call Orbit; take tasks from commit subjects only")
+                        help="don't call Orbit; use commit subjects and Orbit-Task trailers without task-store tags or summaries")
     parser.add_argument("--orbit-bin", default="orbit", help="orbit CLI to read tasks with")
     args = parser.parse_args(argv)
     report = survey(args.repo, args.range, args.orbit_bin, args.offline)

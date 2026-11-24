@@ -77,6 +77,7 @@ listing is never read as success.
 """
 
 import argparse
+import math
 from datetime import datetime
 import json
 import os
@@ -540,6 +541,9 @@ def main():
     parser.add_argument("--timeout-seconds", type=float, default=2400)
     parser.add_argument("--absent-grace-seconds", type=float, default=ABSENT_GRACE_SECONDS)
     args = parser.parse_args()
+    for option in ("poll_seconds", "timeout_seconds", "absent_grace_seconds"):
+        if not math.isfinite(getattr(args, option)):
+            parser.error(f"--{option.replace(chr(95), chr(45))} must be finite")
     repository = os.environ["GITHUB_REPOSITORY"]
     run_id = os.environ["GITHUB_RUN_ID"]
     poller = JobListingPoller(repository, run_id, args.poll_seconds)

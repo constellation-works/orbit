@@ -99,7 +99,7 @@ if [[ "$rc" -eq 2 ]]; then
 fi
 if [[ "$rc" -ne 0 ]]; then
   command_rc="$(cat "$ORBIT_SMOKE_COMMAND_STATUS" 2>/dev/null || echo "$rc")"
-  echo "FAIL: claude exited $command_rc; a later audit row is not evidence for this invocation." >&2
+  echo "FAIL: smoke invocation failed (claude exit $command_rc); a later audit row is not evidence for this invocation." >&2
   exit 1
 fi
 

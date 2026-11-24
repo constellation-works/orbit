@@ -267,38 +267,65 @@ const server = http.createServer((req, res) => {
 });
 server.listen(0, '127.0.0.1', () => {
   const started = Date.now();
-  const child = spawn('sh', [path.join(process.env.ROOT, 'install.sh')], {
+  // The Python anchor remains the group leader until streams close or the
+  // watchdog cancels it. It ignores TERM and can therefore reserve the group
+  // identity until the final KILL. The installer itself uses normal signals.
+  const anchor = String.raw`
+import os, signal, subprocess, sys
+signal.signal(signal.SIGTERM, signal.SIG_IGN)
+def reset(): signal.signal(signal.SIGTERM, signal.SIG_DFL)
+child = subprocess.Popen(['sh', sys.argv[1]], preexec_fn=reset)
+os.close(1); os.close(2)
+code = child.wait()
+os.write(3, (str(code) + '\n').encode())
+os.read(0, 1)
+`;
+  const child = spawn('python3', ['-c', anchor, path.join(process.env.ROOT, 'install.sh')], {
     detached: true,
     env: { ...process.env, ORBIT_INSTALL_BASE_URL: `http://127.0.0.1:${server.address().port}`,
       ORBIT_INSTALL_DIR: process.env.INSTALL_DIR,
       ORBIT_RELEASE_TRUSTED_KEYS_FILE: process.env.TRUSTED_KEYS_FILE,
       ORBIT_RELEASE_TRUSTED_KEYS_FILE_ACKNOWLEDGE_TRUST_CHANGE: '1' },
-    stdio: ['ignore', 'pipe', 'pipe'],
+    stdio: ['pipe', 'pipe', 'pipe', 'pipe'],
   });
-  let output = '';
+  // The signal policy is checked against a reaped leader and a pending
+  // teardown without signalling any unrelated operating-system process.
+  const maySignal = state => !state.released && !state.exited;
+  const assert = require('node:assert/strict');
+  assert.equal(maySignal({ released: true, exited: true }), false);
+  assert.equal(maySignal({ released: false, exited: true }), false);
+  assert.equal(maySignal({ released: false, exited: false }), true);
+  let output = '', installerStatus = '', ended = 0, cancelling = false;
+  const identity = { released: false, exited: false };
   child.stdout.on('data', chunk => { output += chunk; });
   child.stderr.on('data', chunk => { output += chunk; });
-  let killEscalation;
-  const signalGroup = (sig) => {
-    if (child.pid) {
-      try {
-        process.kill(-child.pid, sig);
-      } catch (err) {
-        if (err.code !== 'ESRCH') {
-          try { child.kill(sig); } catch {}
-        }
-      }
+  const maybeRelease = () => {
+    if (!cancelling && !identity.released && installerStatus.includes('\n') && ended === 2) {
+      identity.released = true;
+      clearTimeout(deadline);
+      child.stdin.end('x');
     }
   };
+  child.stdout.on('end', () => { ended++; maybeRelease(); });
+  child.stderr.on('end', () => { ended++; maybeRelease(); });
+  child.stdio[3].on('data', chunk => { installerStatus += chunk; maybeRelease(); });
+  child.on('exit', () => { identity.exited = true; });
+  const signalOwnedGroup = sig => {
+    if (maySignal(identity) && child.pid) {
+      try { process.kill(-child.pid, sig); }
+      catch (err) { if (err.code !== 'ESRCH') throw err; }
+    }
+  };
+  let killEscalation;
   const deadline = setTimeout(() => {
-    signalGroup('SIGTERM');
-    killEscalation = setTimeout(() => signalGroup('SIGKILL'), 2000);
+    cancelling = true;
+    signalOwnedGroup('SIGTERM');
+    killEscalation = setTimeout(() => signalOwnedGroup('SIGKILL'), 2000);
   }, 50000);
   child.on('error', err => {
     clearTimeout(deadline);
     clearTimeout(killEscalation);
     clearInterval(timer);
-    signalGroup('SIGKILL');
     server.close();
     console.error(`FAIL: slow progressing archive spawn error: ${err}`);
     process.exitCode = 1;
@@ -307,11 +334,12 @@ server.listen(0, '127.0.0.1', () => {
     clearTimeout(deadline);
     clearTimeout(killEscalation);
     clearInterval(timer);
-    signalGroup('SIGKILL');
     server.close();
-    if (code !== 0 || archiveRequests !== 1 || Date.now() - started <= 30000 ||
+    const installerCode = Number(installerStatus.trim());
+    if (cancelling || code !== 0 || !installerStatus.includes('\n') || installerCode !== 0 ||
+        archiveRequests !== 1 || Date.now() - started <= 30000 ||
         !fs.existsSync(path.join(process.env.INSTALL_DIR, 'orbit'))) {
-      console.error(`FAIL: slow progressing archive: exit=${code}, requests=${archiveRequests}\n${output}`);
+      console.error(`FAIL: slow progressing archive: exit=${installerStatus.trim()}, requests=${archiveRequests}\n${output}`);
       process.exitCode = 1;
     }
   });

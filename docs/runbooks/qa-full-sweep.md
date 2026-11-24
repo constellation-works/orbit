@@ -50,7 +50,11 @@ report's clean candidate and inventory hash, every required scenario with exactl
 its assertions, the four supplemental forecast scenarios, matching macOS and Linux
 evidence, and a discharge for every required capability gap. The report's
 `INCOMPLETE` decision is accepted only when each remaining finding is a required
-capability gap discharged that way. Anything else leaves the step unavailable.
+capability gap discharged that way. Required local command rows must name the
+executed command, carry its exit and verified cleanup, and include the harness's
+executed-test evidence where applicable. Retired checks have their own command
+rows; browser rows also need retained proof. Builtin refusal probes must show the
+expected nonzero exit. Anything else leaves the step unavailable.
 A `qa-full-sweep` task that is merely `done`, whatever its message says, is not
 accepted.
 

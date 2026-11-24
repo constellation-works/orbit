@@ -93,7 +93,7 @@ git log v<prev>..HEAD --pretty='%s' --no-merges | grep -oE '\[[A-Z]+-[0-9]+\]' |
 scripts/release-breaking-changes.py --range v<prev>..HEAD
 ```
 
-- `scripts/release-breaking-changes.py` lists the breaking candidates (tagged, or detected and untagged), decides the bump and drafts the Breaking Changes bullets. Add `--json` for a machine-readable report. It reads tags and execution summaries with `orbit task show` from the checkout. If Orbit is unavailable, or with `--offline`, it takes task IDs from commit subjects only and says so, so tags and notes are missing from that report.
+- `scripts/release-breaking-changes.py` lists the breaking candidates (tagged, or detected and untagged), decides the bump and drafts the Breaking Changes bullets. Add `--json` for a machine-readable report. It reads tags and execution summaries with `orbit task show` from the checkout. If Orbit is unavailable, or with `--offline`, it takes task IDs from commit subjects and `Orbit-Task` trailers and says so; task-store tags and execution summaries are missing from that report.
 - Use the last tag whose version files actually match it. A recovery tag (e.g. `v0.10.1`, whose files still said `0.10.0`) is not a baseline.
 - With more than about 30 task IDs, file a read-only survey task for the release crew (`luna`) instead of looking each one up in-session. The survey lands as an artifact on that task, not as a file in `docs/`.
 - The survey is for understanding and breaking-change triage, not a CHANGELOG inventory.

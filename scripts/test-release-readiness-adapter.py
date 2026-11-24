@@ -26,6 +26,26 @@ IDENTITY_PATHS = (
 )
 
 
+def command_evidence(command, tests=(), rows=(), cases=()):
+    evidence = {"command": command, "exit_code": 0, "cleanup_verified": True, "stdout": "", "stderr": ""}
+    if command[:2] == ["cargo", "test"]:
+        tests = list(tests) or ["fixture_case"]
+        target = (f"tests/{command[command.index('--test') + 1]}.rs"
+                  if "--test" in command else "unittests src/lib.rs")
+        binary = command[command.index("--test") + 1].replace("-", "_") if "--test" in command else "fixture"
+        evidence["stderr"] = f"     Running {target} (target/debug/deps/{binary}-fixture)\n"
+        evidence["stdout"] = (f"running {len(tests)} tests\n" +
+            "".join(f"test {name} ... ok\n" for name in tests) +
+            "\nsuccesses:\n\n" +
+            f"---- {tests[0]} stdout ----\n" +
+            "".join(f"qa-scenario-pass: {row}\n" for row in rows) +
+            "\nsuccesses:\n" + "".join(f"    {name}\n" for name in tests) +
+            f"\ntest result: ok. {len(tests)} passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s\n")
+    elif command and command[0] == "node":
+        evidence["stdout"] = "".join(f"ok {i} - {name}\n" for i, name in enumerate(cases or ["fixture"], 1))
+    return evidence
+
+
 class SecurityReadinessRegression(unittest.TestCase):
     def test_deduplicated_findings_preserve_provenance_and_blockers(self):
         scratch = ROOT / ".orbit/tmp"
@@ -167,14 +187,22 @@ class NativeReadinessRegression(unittest.TestCase):
                                certificate_assertions=scenario["assertions"], native_evidence=cls.native)
                 if scenario.get("capability") == "browser":
                     row["retained_evidence"] = {"directory": "/retained", "files": [{"path": "proof.json", "sha256": "0" * 64}]}
-                if scenario.get("command"):
-                    row["command"] = scenario["command"]
+                if scenario.get("kind") == "builtin" and scenario["id"] != "inventory-guard":
+                    row.update(command_evidence(["orbit", "fixture"]))
+                if scenario.get("command") and scenario.get("capability") != "macos":
+                    command = scenario["command"]
+                    if scenario.get("capability") == "browser":
+                        report["browser"] = {"playwright_module": "/playwright"}
+                        command = harness["expand_scenario_command"](command, "/playwright", "/retained")
+                    row.update(command_evidence(command, scenario.get("required_tests", []),
+                                                scenario.get("required_rows", []), scenario.get("required_cases", [])))
                 report["results"].append(row)
                 for case in scenario.get("retired_cases") or []:
                     if isinstance(case, dict) and case.get("command"):
                         report["results"].append({
                             "scenario": scenario["id"], "candidate_id": CANDIDATE,
-                            "outcome": "PASS", "assertions": [], "command": case["command"]})
+                            "outcome": "PASS", "assertions": [], **command_evidence(
+                                case["command"], case.get("command_tests", []), case.get("command_rows", []))})
         artifacts = {"qa-full-sweep-report.json": {"json": report}, "proof.json": {"json": {}}}
         artifacts["forecast-history-qa.json"] = {"json": {
             "candidate_id": CANDIDATE, "source_revision": REVISION,
@@ -401,6 +429,47 @@ class NativeReadinessRegression(unittest.TestCase):
         for name, (mutate, code) in cases.items():
             with self.subTest(name=name):
                 self.assertEqual(self.judged(mutate), ("unavailable", code))
+
+    def test_local_command_rows_require_actual_execution_evidence(self):
+        inventory = json.loads((self.inputs / "qa-full-sweep-inventory.json").read_text())
+        scenarios = [next(s for s in inventory["scenarios"] if s.get("required") and s.get("capability") == cap
+                          and s.get("kind") != "builtin") for cap in ("local", "linux", "browser")]
+        scenarios.append(next(s for s in inventory["scenarios"] if s.get("retired_cases") and s.get("required")))
+        for scenario in scenarios:
+            for field, value in (("command", None), ("exit_code", None), ("exit_code", 1),
+                                 ("cleanup_verified", False), ("stdout", "")):
+                with self.subTest(scenario=scenario["id"], field=field, value=value):
+                    def mutate(_request, report):
+                        rows = [r for r in report["results"] if r["scenario"] == scenario["id"]]
+                        row = rows[-1] if scenario.get("retired_cases") else rows[0]
+                        row[field] = value
+                    # A non-test command may have an empty stdout legitimately.
+                    if field == "stdout" and not (scenario.get("kind") == "cargo-test" or scenario.get("capability") == "browser"):
+                        continue
+                    self.assertEqual(self.judged(mutate)[0], "unavailable")
+
+    def test_builtin_independent_rows_and_expected_refusal(self):
+        name = "workspace-boundary"
+        def set_refusal(_request, report):
+            row = next(r for r in report["results"] if r["scenario"] == name)
+            row["assertions"].remove("cross-workspace-task-read-refused")
+            report["results"].append({"scenario": name, "candidate_id": CANDIDATE,
+                "outcome": "PASS", "assertions": ["cross-workspace-task-read-refused"],
+                "command": ["orbit", "task", "show"], "exit_code": 3, "cleanup_verified": True,
+                "stdout": "", "stderr": "refused"})
+        self.assertEqual(self.judged(set_refusal), ("passed", None))
+        for field, value in (("command", []), ("exit_code", 0), ("exit_code", None),
+                             ("cleanup_verified", False)):
+            with self.subTest(field=field, value=value):
+                def mutate(request, report):
+                    set_refusal(request, report)
+                    next(r for r in reversed(report["results"]) if r["scenario"] == name)[field] = value
+                self.assertEqual(self.judged(mutate), ("unavailable", "execution-evidence-invalid"))
+        def missing_independent_row(request, report):
+            set_refusal(request, report)
+            report["results"].append({"scenario": name, "candidate_id": CANDIDATE,
+                                      "outcome": "PASS", "assertions": []})
+        self.assertEqual(self.judged(missing_independent_row), ("unavailable", "execution-evidence-invalid"))
 
     def test_incomplete_decision_needs_an_accounting_finding(self):
         def drop_findings(request, report):

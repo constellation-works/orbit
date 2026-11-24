@@ -278,17 +278,24 @@ def main(argv: list[str]) -> int:
     except OSError as error:
         print(f"FAIL: smoke invoke: cannot start {args[0]}: {error}", file=sys.stderr)
         return 1
-    chunks: list[bytes] = []
+    output = bytearray()
+    output_limit = 4 * 1024 * 1024
+    truncated = False
+    output_lock = threading.Lock()
 
     def drain() -> None:
         stream = proc.stdout
         if stream is None:
             return
+        nonlocal truncated
         while True:
-            data = stream.read(4096)
+            data = os.read(stream.fileno(), 4096)
             if not data:
                 break
-            chunks.append(data)
+            with output_lock:
+                remaining = output_limit - len(output)
+                output.extend(data[:remaining])
+                truncated |= len(data) > remaining
 
     thread = threading.Thread(target=drain, daemon=True)
     thread.start()
@@ -314,8 +321,15 @@ def main(argv: list[str]) -> int:
     if status_path:
         with open(status_path, "w", encoding="ascii") as handle:
             handle.write(f"{rc}\n")
-    thread.join()
-    sys.stdout.buffer.write(b"".join(chunks))
+    thread.join(timeout=2)
+    with output_lock:
+        sys.stdout.buffer.write(output)
+    if thread.is_alive():
+        print("FAIL: smoke invoke: output pipe remained open after command exit", file=sys.stderr)
+        return 1
+    if truncated:
+        print("FAIL: smoke invoke: command output exceeded the capture limit", file=sys.stderr)
+        return 1
     if not observable:
         print("FAIL: smoke invoke: cannot observe the process tree", file=sys.stderr)
         return 2
