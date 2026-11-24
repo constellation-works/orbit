@@ -83,12 +83,15 @@ function spanText(seconds) {
 }
 
 /// "in 6h" on the dashboard clock; "" for no time. The absolute time stays in
-/// the node's title, never inline (STD-07: show each thing once).
+/// the node's title, never inline (STD-07: show each thing once). The direction
+/// follows the millisecond delta (not the rounded seconds), so the `in`/`ago`
+/// suffix always agrees with the `resets`/`reset` verb callers print with it.
 function relativeWhen(iso, now) {
   const at = validDate(iso);
   if (!at) return '';
-  const seconds = Math.round((at.getTime() - now) / 1000);
-  return seconds >= 0 ? `in ${spanText(seconds)}` : `${spanText(-seconds)} ago`;
+  const ms = at.getTime() - now;
+  const span = spanText(Math.abs(Math.round(ms / 1000)));
+  return ms >= 0 ? `in ${span}` : `${span} ago`;
 }
 
 /// How one reading reads in the bar and its dialog. `severity` is `critical`
@@ -232,19 +235,22 @@ function observedText(group, now) {
 function pressureModel(pressure, now) {
   if (!pressure) return null;
   const window = pressure.pressure_window;
-  const resets = window?.resets_at ? relativeWhen(window.resets_at, now) : '';
+  const resetsAt = validDate(window?.resets_at);
+  const resets = resetsAt ? relativeWhen(window.resets_at, now) : '';
+  const verb = resetsAt && resetsAt.getTime() < now ? 'reset' : 'resets';
   const basis = window
     ? [`${windowName(window.window || 'weekly', window.scope || '')}${window.scope ? ` · ${window.scope}` : ''}`,
       Number.isFinite(window.used_percent) ? `${Math.round(window.used_percent)}% used` : '',
-      resets ? `resets ${resets}` : ''].filter(Boolean).join(' · ')
+      resets ? `${verb} ${resets}` : ''].filter(Boolean).join(' · ')
     : 'No live weekly usage, so this reads neutral.';
-  const resetsAt = validDate(window?.resets_at);
   return { value: pressureValue(pressure), basis, basisTitle: resetsAt ? formatDateTime(window.resets_at) : '' };
 }
 
 function rowModel(item, now) {
   const at = validDate(item.resetsAt);
   const relative = at ? relativeWhen(item.resetsAt, now) : '';
+  // The verb uses the same millisecond delta as `relativeWhen`, so a reset a
+  // fraction of a second in the past reads `reset … ago`, never `reset in …`.
   return {
     name: item.name, sub: item.sub, value: item.value, fill: item.fill, gate: item.gate, severity: item.severity,
     reset: relative ? `${at.getTime() < now ? 'reset' : 'resets'} ${relative}` : '',
