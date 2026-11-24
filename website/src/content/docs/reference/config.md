@@ -635,9 +635,9 @@ and `machine.task_prefix`. `orbit config keys` prints the same list.
 | `machine.auto_concurrency.mode` | string · **Default:** `off`<br>Global only. Forecast admission: `off`; `shadow` records what it would admit and admits as `off`; `enforce` admits the candidates whose profile fits under the forecast. |
 | `machine.auto_concurrency.admit_cpu_percent` | integer · **Default:** `90`<br>Global only. Maximum forecast CPU utilization as a percentage of host cores (1–100). Distinct from the throttle's `cpu_high_percent`. |
 | `machine.auto_concurrency.min_profile_deliveries` | integer · **Default:** `10`<br>Global only. Completed deliveries needed before a profile is used without fallback. |
-| `machine.github_quota.agent_reserve_percent` | integer · **Default:** `20`<br>Global only. Share of the host's GitHub API quota, per resource (`core`, `graphql`), that agents' `github.*` reads may not spend; once the remaining count is at or below it they are refused locally until the reset. `0` disables the refusal (0–100). |
-| `machine.github_quota.background_reserve_percent` | integer · **Default:** `10`<br>Global only. The same for background reads (sweeps, auto-task sources, deterministic job steps). Delivery keeps no reserve. `0` disables the refusal (0–100). |
-| `machine.github_quota.refresh_interval_seconds` | **Advanced.** integer · **Default:** `60`<br>Global only. Shortest interval between two reads of GitHub's rate-limit endpoint on the host that a command's own timeout did not cut short (10–3600). A cut-short read records nothing and does not start the interval. `orbit tool run github.auth.status` shows the quota record under `quota`. |
+| `machine.github_quota.agent_reserve_percent` | integer · **Default:** `20`<br>Global only. Share of the host's GitHub API quota, per resource (`core`, `graphql`), that agents' `github.*` reads may not spend; once the remaining count is at or below it they are refused locally until the reset. `0` disables the refusal (0–100). See [GitHub quota reserve](#github-quota-reserve). |
+| `machine.github_quota.background_reserve_percent` | integer · **Default:** `10`<br>Global only. The same for background reads (sweeps, auto-task sources, deterministic job steps). Delivery keeps no reserve. `0` disables the refusal (0–100). See [GitHub quota reserve](#github-quota-reserve). |
+| `machine.github_quota.refresh_interval_seconds` | **Advanced.** integer · **Default:** `60`<br>Global only. Shortest interval between two reads of GitHub's rate-limit endpoint on the host that a command's own timeout did not cut short (10–3600). A cut-short read records nothing and does not start the interval. See [GitHub quota reserve](#github-quota-reserve). |
 | `tasks.id_start` | integer · **Default:** Unset<br>Floor for this machine's task-ID allocator. Moves only forward, so machines can hold disjoint ID ranges. |
 | `decision_channel.enabled` | bool · **Default:** `false`<br>Raise decision requests for work held on a human decision. |
 | `experiments.enabled` | bool · **Default:** `false`<br>Allow experiments to start in this workspace. While false, `orbit experiment start` is refused; drafts can still be defined and edited. |
@@ -687,6 +687,50 @@ Notes:
   `orbit auto-task toggle delivery-code-review on`.
 - An installed plugin's declared settings are settable as
   `plugins.<ns>.<key>`, and crew fields as `crews.<name>.<field>`.
+
+## GitHub quota reserve
+
+Every GitHub API call this host makes spends one account's quota. Orbit
+tracks that quota and holds background and agent reads back, so delivery
+keeps a reserve.
+
+```toml
+[machine.github_quota]
+agent_reserve_percent = 20
+background_reserve_percent = 10
+refresh_interval_seconds = 60
+```
+
+These keys are global only. Set them with `orbit config set --global`.
+
+- **What is tracked.** One record per GitHub host and account, with the
+  REST (`core`) and GraphQL (`graphql`) buckets counted apart. Orbit
+  refreshes it from GitHub's rate-limit endpoint, which costs no quota,
+  at most once per `refresh_interval_seconds` (10–3600 seconds, default
+  `60`). A refresh cut short by the calling command's own timeout records
+  nothing and does not start the interval.
+- **Who keeps a reserve.** Delivery (opening, completing, landing and
+  merging pull requests, and the task forge) keeps no reserve and runs
+  the quota to zero. Background reads (sweeps, auto-task sources, and
+  `github.*` calls a deterministic job step makes) stop at
+  `background_reserve_percent` (default `10`). Agent `github.*` reads stop
+  at `agent_reserve_percent` (default `20`). A reserve of `0` disables
+  that class's refusal. A read is refused locally, without calling
+  GitHub, once the remaining count is at or below its class's reserve.
+- **Holds.** After GitHub's authenticated primary rate-limit answer for a
+  resource, or a rate-limit read showing that resource empty, every read
+  of that resource on the host, delivery included, is refused locally
+  until GitHub's reset. The other resource is unaffected. A local refusal
+  carries the same typed throttle as GitHub's own answer: it names the
+  resource and the time reads may resume. Do not retry before then.
+  When GitHub's answer cannot be read, or answers for an
+  unauthenticated caller, reads stay allowed and the quota reports
+  `unknown`, never zero remaining.
+- **Check the record.** `orbit tool run github.auth.status` reports the
+  record under `quota`: per resource the limit, remaining count and reset
+  time (`state: unknown` when GitHub's answer could not be read), whether
+  agent, background or delivery reads are currently refused, and each
+  class's call and refusal counts in the current window.
 
 ## Host evidence
 
