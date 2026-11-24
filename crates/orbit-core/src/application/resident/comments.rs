@@ -140,8 +140,12 @@ impl OrbitRuntime {
                                 .ok()
                                 .as_deref()
                                 == Some("rebuilt");
+                    // Heartbeat skips schedule another check but do not
+                    // replace the provider's last real checkpoint.
                     let had_resumable_ref = prior
-                        .last()
+                        .iter()
+                        .rev()
+                        .find(|checkpoint| checkpoint.outcome != "unchanged")
                         .filter(|last| last.crew == mandate.crew)
                         .and_then(|last| last.conversation_ref.as_deref())
                         .map(str::trim)

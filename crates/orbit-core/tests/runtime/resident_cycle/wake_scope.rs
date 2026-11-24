@@ -336,4 +336,40 @@ fn heartbeat_skips_unchanged_but_runs_when_watched_state_changes() {
             .iter()
             .any(|reason| reason == "digest_changed")
     );
+
+    let checkpoint = fx.write_checkpoint(
+        &result,
+        &changed,
+        json!({
+            "continuity": "resumed",
+            "conversation_ref": "conv-heartbeat-next"
+        }),
+    );
+    assert_eq!(
+        checkpoint["checkpoint"]["continuity"], "resumed",
+        "{checkpoint}"
+    );
+    let stored = fx
+        .runtime
+        .get_task_comments(&mandate)
+        .unwrap()
+        .iter()
+        .filter_map(
+            |comment| match ResidentComment::parse(&comment.message).ok()? {
+                ResidentComment::Checkpoint(checkpoint)
+                    if checkpoint.cycle == result["cycle"].as_str().unwrap() =>
+                {
+                    Some(checkpoint)
+                }
+                _ => None,
+            },
+        )
+        .next_back()
+        .unwrap();
+    assert_eq!(stored.continuity, "resumed");
+    assert_eq!(
+        stored.conversation_ref.as_deref(),
+        Some("conv-heartbeat-next")
+    );
+    fx.finish_cycle(&changed);
 }

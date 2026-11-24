@@ -584,7 +584,7 @@ print(json.dumps({{"schemaVersion": 1, "status": "success", "result": {{"outcome
                 "recovery_of": null,
                 "authority": {"rights": [], "observe_only": false, "narrowed_by": null},
                 "notes": notes,
-                "next_wake": {"reason": "heartbeat", "not_before": now + Duration::hours(2)},
+                "next_wake": {"reason": "heartbeat", "not_before": now + Duration::hours(2) + Duration::minutes(1)},
                 "conversation_ref": reference
             }),
         );
@@ -2389,6 +2389,14 @@ PY
         true,
     );
 
+    // An unchanged heartbeat check records scheduling state without replacing
+    // the provider conversation that the next real cycle must resume.
+    let skip = fx.cycle_run(&mandate, "resident-continuity-heartbeat-skip");
+    let skipped = fx.begin_cycle(&skip, now + Duration::minutes(121));
+    assert_eq!(skipped["cycle_count"], 0, "{skipped}");
+    assert_eq!(skipped["skip_reason"], "unchanged", "{skipped}");
+    fx.stop_run(&skip, JobRunState::Success);
+
     for (case, minutes, reference, next_reference, notes, hours, continuity) in [
         (
             "live",
@@ -2446,6 +2454,24 @@ PY
             checkpoint["checkpoint"]["continuity"], continuity,
             "{case}: expired reference must record continuity: rebuilt in checkpoint"
         );
+        let stored = fx
+            .runtime
+            .get_task_comments(&mandate)
+            .unwrap()
+            .iter()
+            .filter_map(
+                |comment| match ResidentComment::parse(&comment.message).ok()? {
+                    ResidentComment::Checkpoint(checkpoint)
+                        if checkpoint.cycle == brief["cycle"].as_str().unwrap() =>
+                    {
+                        Some(checkpoint)
+                    }
+                    _ => None,
+                },
+            )
+            .next_back()
+            .unwrap();
+        assert_eq!(stored.continuity, continuity, "{case}: {stored:?}");
         fx.finish_cycle(&run);
     }
 
@@ -2575,7 +2601,7 @@ fn dispatch_resumed_cycle_with_fake_codex(
     );
     fx.install_codex(&program, script);
 
-    let (_, mandate) = fx.watched_mandate("Ship scribe v2 slice 5");
+    let (watched, mandate) = fx.watched_mandate("Ship scribe v2 slice 5");
     let now = Utc::now();
     fx.seed_conversation(
         &mandate,
@@ -2587,6 +2613,13 @@ fn dispatch_resumed_cycle_with_fake_codex(
     );
 
     let run2 = fx.cycle_run(&mandate, "resident-resume-under-test");
+    fx.update_task(
+        &watched,
+        TaskUpdateParams {
+            status: Some(TaskStatus::Blocked),
+            ..Default::default()
+        },
+    );
     let brief2 = fx.begin_cycle(&run2, now + Duration::minutes(130));
     assert_eq!(brief2["conversation_ref"], conversation_ref);
     let outcome = fx.dispatch_cycle(&run2, &brief2);
