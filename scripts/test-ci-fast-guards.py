@@ -4340,6 +4340,27 @@ class RemovedCodeIdentifierTests(unittest.TestCase):
 
     GROUP_BASE = "pub use exports::{\n    KEPT,\n    REMOVED,\n    OTHER,\n};\n"
 
+    def test_commented_group_member_removed_and_retained(self):
+        self.write(self.REEXPORT,
+                   "pub use exports::{\n    KEPT,\n    // Old spelling; {,}\n"
+                   "    /* note /* nested */ comment */ REMOVED,\n};\n")
+        self.write("docs/demo.md", "Use `demo_policy::REMOVED`.\n")
+        self.commit_base()
+        self.write(self.REEXPORT, "pub use exports::{\n    KEPT,\n};\n")
+        result = self.run_check()
+        self.assertNotEqual(result.returncode, 0, result.stdout)
+        self.assertIn('"demo_policy::REMOVED"', result.stderr)
+        self.assertIn("docs/demo.md:1", result.stderr)
+        # Removing only the comment must not make a retained name look removed.
+        self.write(self.REEXPORT, "pub use exports::{\n    KEPT,\n    REMOVED,\n};\n")
+        result = self.run_check()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.commit_base()
+        self.write(self.REEXPORT,
+                   "pub use exports::{\n    KEPT,\n    // New comment\n    REMOVED,\n};\n")
+        result = self.run_check()
+        self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_removed_member_of_multiline_group_named_in_doc_fails(self):
         self.write(self.REEXPORT, self.GROUP_BASE)
         self.write("docs/demo.md", "Use `demo_policy::REMOVED` or `demo_policy::KEPT`.\n")
