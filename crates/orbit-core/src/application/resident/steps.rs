@@ -6,18 +6,21 @@
 
 use chrono::{DateTime, Duration, Utc};
 use orbit_common::OrbitError;
+use orbit_types::record::Notice;
 use orbit_types::task::{TaskComment, TaskHistoryEntry};
 use orbit_types::workflow::{
     RESIDENT_BRIEF_CHECKPOINTS, RESIDENT_CHECKPOINT_NOTES_MAX_CHARS, RESIDENT_CYCLE_GRANTED_EVENT,
     RESIDENT_CYCLE_JOB, ResidentCheckpoint, ResidentCheckpointAction, ResidentCheckpointAuthority,
     ResidentCheckpointWake, ResidentComment, ResidentCycleGrant, ResidentLiveCycle,
-    ResidentNextWake,
+    ResidentMandate, ResidentNextWake,
 };
 use serde_json::{Value, json};
 
 use super::due::{checkpoints, cycle_grant, started_cycles};
 use super::guard::action_rows;
-use super::{ResidentMandateState, cycle::live_cycle_from_history};
+use super::{
+    ResidentDue, ResidentEffectiveAuthority, ResidentMandateState, cycle::live_cycle_from_history,
+};
 use crate::OrbitRuntime;
 use crate::application::task::{TaskRecordUpdateParams, TaskRecords};
 
@@ -95,35 +98,14 @@ impl OrbitRuntime {
         let task = self.get_task(&task_id)?;
         let history = self.get_task_history(&task_id)?;
         let view = self.resident_view(task.clone(), &history)?;
-        if view.state().0 != ResidentMandateState::Active {
-            // A stopped mandate never starts another cycle, but its live
-            // cycle may have died before finalizing: recover that handoff
-            // (final checkpoint, live entry cleared, assignment to review)
-            // instead of only skipping. The checkout stays while that cycle
-            // can still act, so pause, takeover and stop do not pull the
-            // worktree out from under a running owner. A liveness lookup
-            // error is returned and the checkout is kept.
-            let mut result = skipped(&task_id, "mandate_not_active");
-            if view.state().0 == ResidentMandateState::Ended {
-                result["handoff"] = json!(self.hand_off_stopped_resident_at(&task_id, now)?);
-            }
-            // `history` is the pre-handoff snapshot, so a dead cycle this
-            // handoff just closed is still visible and its checkout can be
-            // removed. An unreadable snapshot is kept, not deleted.
-            let worktree_removal_error = if let Ok(Some(live)) = live_cycle_from_history(&history)
-                && self.resident_cycle_dead(&live, now)?
-            {
-                self.discard_resident_cycle_worktree(&live.run_id)
-            } else {
-                None
-            };
-            return Ok(with_worktree_removal_error(result, worktree_removal_error));
+        let state = view.state().0;
+        if state != ResidentMandateState::Active {
+            return self.skip_inactive_resident_mandate(&task_id, state, &history, now);
         }
         let Ok(mandate) = view.mandate.clone() else {
             return Ok(skipped(&task_id, "mandate_invalid"));
         };
         let effective = view.effective();
-        let cycle = resident_cycle_id(run_id);
         let live = live_cycle_from_history(&history)?;
         // A resumed run re-enters the cycle it already holds.
         if let Some(live) = &live
@@ -131,105 +113,209 @@ impl OrbitRuntime {
             && let Some(grant) = cycle_grant(&history, &live.cycle)
         {
             self.record_resident_cycle_run_crew(run_id, &mandate)?;
-            let (worktree, worktree_error) = self.create_resident_cycle_worktree(run_id);
-            let mut brief =
-                self.resident_brief(&task_id, &mandate, &grant, &history, None, worktree)?;
-            if let Some(error) = worktree_error {
-                brief["worktree_error"] = json!(error);
-            }
-            return Ok(brief);
+            return self
+                .launch_resident_cycle_brief(&task_id, run_id, &mandate, &grant, &history, None);
         }
         let due = self.resident_due(&task, mandate.clone(), &history, now)?;
+        if let Some(skip) =
+            self.try_skip_resident_cycle_before_start(&task_id, run_id, live.as_ref(), &due)?
+        {
+            return Ok(skip);
+        }
+        let may_skip = self.may_skip_unchanged_heartbeat(&task_id, &mandate, &due, now)?;
+        self.record_resident_cycle_run_crew(run_id, &mandate)?;
+        let worktree_removal_error =
+            self.recover_dead_resident_cycle(&task_id, run_id, due.dead_cycle.as_ref())?;
+        let grant = self.publish_and_grant_resident_cycle(
+            &task_id,
+            run_id,
+            &effective,
+            &due,
+            live.as_ref(),
+            now,
+        )?;
+        if may_skip && grant.reasons == ["heartbeat"] {
+            return self.record_unchanged_heartbeat_skip(&task_id, run_id, &mandate, &grant, now);
+        }
+        // A mandate attached before core owned this status starts here.
+        self.activate_resident_assignment(&task_id);
+        let history = self.get_task_history(&task_id)?;
+        let brief = self.launch_resident_cycle_brief(
+            &task_id,
+            run_id,
+            &mandate,
+            &grant,
+            &history,
+            Some(&due.notices),
+        )?;
+        Ok(with_worktree_removal_error(brief, worktree_removal_error))
+    }
+
+    fn discard_other_cycle_worktree(
+        &self,
+        dead: &ResidentLiveCycle,
+        current_run_id: &str,
+    ) -> Option<String> {
+        (dead.run_id != current_run_id)
+            .then(|| self.discard_resident_cycle_worktree(&dead.run_id))
+            .flatten()
+    }
+
+    fn skip_inactive_resident_mandate(
+        &self,
+        task_id: &str,
+        state: ResidentMandateState,
+        history: &[TaskHistoryEntry],
+        now: DateTime<Utc>,
+    ) -> Result<Value, OrbitError> {
+        // A stopped mandate never starts another cycle, but its live
+        // cycle may have died before finalizing: recover that handoff
+        // (final checkpoint, live entry cleared, assignment to review)
+        // instead of only skipping. The checkout stays while that cycle
+        // can still act, so pause, takeover and stop do not pull the
+        // worktree out from under a running owner. A liveness lookup
+        // error is returned and the checkout is kept.
+        let mut result = skipped(task_id, "mandate_not_active");
+        if state == ResidentMandateState::Ended {
+            result["handoff"] = json!(self.hand_off_stopped_resident_at(task_id, now)?);
+        }
+        // `history` is the pre-handoff snapshot, so a dead cycle this
+        // handoff just closed is still visible and its checkout can be
+        // removed. An unreadable snapshot is kept, not deleted.
+        let worktree_removal_error = if let Ok(Some(live)) = live_cycle_from_history(history)
+            && self.resident_cycle_dead(&live, now)?
+        {
+            self.discard_resident_cycle_worktree(&live.run_id)
+        } else {
+            None
+        };
+        Ok(with_worktree_removal_error(result, worktree_removal_error))
+    }
+
+    fn try_skip_resident_cycle_before_start(
+        &self,
+        task_id: &str,
+        run_id: &str,
+        live: Option<&ResidentLiveCycle>,
+        due: &ResidentDue,
+    ) -> Result<Option<Value>, OrbitError> {
         // A `handoff` checkpoint whose finalize never ran (the agent step
         // failed after writing it) or whose move was refused: it ends the
         // cycles, so settle it instead of starting another one.
         if (live.is_none() || due.dead_cycle.is_some())
-            && let Some(handoff) = self.settle_resident_handoff(&task_id)?
+            && let Some(handoff) = self.settle_resident_handoff(task_id)?
         {
             let mut worktree_removal_error = None;
             if let Some(dead) = &due.dead_cycle {
-                self.set_resident_live_cycle(&task_id, Some(&dead.cycle), None)?;
-                if dead.run_id != run_id {
-                    worktree_removal_error = self.discard_resident_cycle_worktree(&dead.run_id);
-                }
+                self.set_resident_live_cycle(task_id, Some(&dead.cycle), None)?;
+                worktree_removal_error = self.discard_other_cycle_worktree(dead, run_id);
             }
-            let mut result = skipped(&task_id, "handoff_settled");
+            let mut result = skipped(task_id, "handoff_settled");
             result["handoff"] = json!(handoff);
-            return Ok(with_worktree_removal_error(result, worktree_removal_error));
+            return Ok(Some(with_worktree_removal_error(
+                result,
+                worktree_removal_error,
+            )));
         }
         if let Some(reason) = &due.withheld {
             // A dead predecessor may coincide with a withhold (its lease
             // expired before the cadence floor elapsed): its worktree is
             // unreferenced, so discard it as the handoff and recovery
             // paths do rather than leaving it until a later due cycle.
-            let worktree_removal_error = if let Some(dead) = &due.dead_cycle
-                && dead.run_id != run_id
-            {
-                self.discard_resident_cycle_worktree(&dead.run_id)
-            } else {
-                None
-            };
-            return Ok(with_worktree_removal_error(
-                skipped(&task_id, reason),
+            let worktree_removal_error = due
+                .dead_cycle
+                .as_ref()
+                .and_then(|dead| self.discard_other_cycle_worktree(dead, run_id));
+            return Ok(Some(with_worktree_removal_error(
+                skipped(task_id, reason),
                 worktree_removal_error,
-            ));
+            )));
         }
         if due.reasons.is_empty() {
-            return Ok(skipped(&task_id, "not_due"));
+            return Ok(Some(skipped(task_id, "not_due")));
         }
-        let mut may_skip = due.reasons == ["heartbeat"]
+        Ok(None)
+    }
+
+    fn may_skip_unchanged_heartbeat(
+        &self,
+        task_id: &str,
+        mandate: &ResidentMandate,
+        due: &ResidentDue,
+        now: DateTime<Utc>,
+    ) -> Result<bool, OrbitError> {
+        let eligible = due.reasons == ["heartbeat"]
             && due.baseline_unchanged
             && mandate.deadline.is_none_or(|deadline| deadline > now)
             && due.maintenance.is_empty();
-        if may_skip {
-            let comments = self.get_task_comments(&task_id)?;
-            let previous = checkpoints(&task_id, &comments);
-            let last_real = previous.iter().rev().find(|c| c.outcome != "unchanged");
-            may_skip = previous.last().is_some_and(|checkpoint| {
-                // A handoff ended the mandate; reopening it must cycle.
-                checkpoint.outcome != "incomplete" && checkpoint.outcome != "handoff"
-            }) && !self
-                .resident_open_requests(&task_id, &mandate, last_real, &comments)?
+        if !eligible {
+            return Ok(false);
+        }
+        let comments = self.get_task_comments(task_id)?;
+        let previous = checkpoints(task_id, &comments);
+        let last_real = previous.iter().rev().find(|c| c.outcome != "unchanged");
+        let previous_allows_skip = previous.last().is_some_and(|checkpoint| {
+            // A handoff ended the mandate; reopening it must cycle.
+            checkpoint.outcome != "incomplete" && checkpoint.outcome != "handoff"
+        });
+        if !previous_allows_skip
+            || self
+                .resident_open_requests(task_id, mandate, last_real, &comments)?
                 .iter()
-                .any(|request| request["state"] == "open");
-            // Older acted-on tasks can remain in the baseline after the last
-            // checkpoint stops naming them. Their open decisions matter too.
-            for id in due
-                .wake_items
-                .keys()
-                .filter_map(|key| key.strip_prefix("task:"))
+                .any(|request| request["state"] == "open")
+        {
+            return Ok(false);
+        }
+        // Older acted-on tasks can remain in the baseline after the last
+        // checkpoint stops naming them. Their open decisions matter too.
+        for id in due
+            .wake_items
+            .keys()
+            .filter_map(|key| key.strip_prefix("task:"))
+        {
+            if self
+                .get_task_decision_requests(id)?
+                .iter()
+                .any(|request| request.state == orbit_types::task::DecisionRequestState::Open)
             {
-                if self
-                    .get_task_decision_requests(id)?
-                    .iter()
-                    .any(|request| request.state == orbit_types::task::DecisionRequestState::Open)
-                {
-                    may_skip = false;
-                    break;
-                }
+                return Ok(false);
             }
         }
-        self.record_resident_cycle_run_crew(run_id, &mandate)?;
-        let mut worktree_removal_error = None;
-        let recovery_of = match &due.dead_cycle {
-            Some(dead) => {
-                self.synthesize_resident_checkpoint(
-                    &task_id,
-                    dead,
-                    "the cycle died before it wrote a checkpoint (process killed or lease expired)",
-                    None,
-                )?;
-                if dead.run_id != run_id {
-                    worktree_removal_error = self.discard_resident_cycle_worktree(&dead.run_id);
-                }
-                Some(dead.cycle.clone())
-            }
-            None => None,
+        Ok(true)
+    }
+
+    fn recover_dead_resident_cycle(
+        &self,
+        task_id: &str,
+        run_id: &str,
+        dead: Option<&ResidentLiveCycle>,
+    ) -> Result<Option<String>, OrbitError> {
+        let Some(dead) = dead else {
+            return Ok(None);
         };
+        self.synthesize_resident_checkpoint(
+            task_id,
+            dead,
+            "the cycle died before it wrote a checkpoint (process killed or lease expired)",
+            None,
+        )?;
+        Ok(self.discard_other_cycle_worktree(dead, run_id))
+    }
+
+    fn publish_and_grant_resident_cycle(
+        &self,
+        task_id: &str,
+        run_id: &str,
+        effective: &ResidentEffectiveAuthority,
+        due: &ResidentDue,
+        live: Option<&ResidentLiveCycle>,
+        now: DateTime<Utc>,
+    ) -> Result<ResidentCycleGrant, OrbitError> {
+        let cycle = resident_cycle_id(run_id);
         let last_cycle_at_before_publication = due.last_cycle.as_ref().map(|cycle| cycle.at);
         let history_at_publication = self.publish_resident_live_cycle(
-            &task_id,
-            live.as_ref().map(|live| live.cycle.as_str()),
+            task_id,
+            live.map(|live| live.cycle.as_str()),
             &ResidentLiveCycle {
                 cycle: cycle.clone(),
                 run_id: run_id.to_string(),
@@ -258,7 +344,7 @@ impl OrbitRuntime {
         {
             grant_reasons.push("status_request".to_string());
         }
-        let deadline_passed = mandate.deadline.is_some_and(|deadline| deadline <= now);
+        let deadline_passed = due.mandate.deadline.is_some_and(|deadline| deadline <= now);
         let narrowed_by = if let Some(notice) = due.maintenance.first() {
             Some(format!("notice:{notice}"))
         } else if deadline_passed {
@@ -277,91 +363,108 @@ impl OrbitRuntime {
             workspaces: effective.workspaces.clone(),
             observe_only: narrowed_by.is_some(),
             narrowed_by,
-            recovery_of,
+            recovery_of: due.dead_cycle.as_ref().map(|dead| dead.cycle.clone()),
             digest: due.digest.clone(),
             reasons: grant_reasons,
             wake_items: Some(due.wake_items.clone()),
         };
         self.append_resident_history(
-            &task_id,
+            task_id,
             RESIDENT_CYCLE_GRANTED_EVENT,
             serde_json::to_string(&grant)
                 .map_err(|error| OrbitError::Execution(format!("serialize grant: {error}")))?,
         )?;
-        if may_skip && grant.reasons == ["heartbeat"] {
-            let record = ResidentCheckpoint {
-                schema: 1,
-                mandate: task_id.clone(),
-                cycle: grant.cycle.clone(),
-                run_id: run_id.to_string(),
-                crew: mandate.crew.clone(),
-                recovery_of: None,
-                wake: ResidentCheckpointWake {
-                    reasons: grant.reasons.clone(),
-                    digest: grant.digest.clone(),
-                },
-                authority: ResidentCheckpointAuthority {
-                    rights: grant.rights.clone(),
-                    observe_only: grant.observe_only,
-                    narrowed_by: grant.narrowed_by.clone(),
-                },
-                actions: Vec::new(),
-                decisions: Vec::new(),
-                requests: Vec::new(),
-                costs: Vec::new(),
-                notes: String::new(),
-                next_wake: ResidentNextWake {
-                    reason: "heartbeat".into(),
-                    // Publication records its own timestamp just after `now`.
-                    // Clamp to its heartbeat rather than scheduling an early wake.
-                    not_before: now.max(Utc::now())
-                        + Duration::minutes(i64::from(mandate.cadence.heartbeat_minutes)),
-                },
-                continuity: "off".into(),
-                outcome: "unchanged".into(),
-                probe: mandate.probe,
-                error: None,
-                conversation_ref: None,
-            };
-            let message = serde_json::to_string(&ResidentComment::Checkpoint(Box::new(record)))
-                .map_err(|error| OrbitError::Execution(format!("serialize checkpoint: {error}")))?;
-            ResidentComment::parse(&message)
-                .map_err(|error| OrbitError::Execution(error.to_string()))?;
-            self.stores().task_records().update(
-                &task_id,
-                TaskRecordUpdateParams {
-                    actor: "system".into(),
-                    append_comments: vec![TaskComment {
-                        at: now,
-                        by: "system".into(),
-                        message,
-                        operation_id: None,
-                    }],
-                    ..Default::default()
-                },
-            )?;
-            self.set_resident_live_cycle(&task_id, Some(&grant.cycle), None)?;
-            return Ok(skipped(&task_id, "unchanged"));
-        }
-        // A mandate attached before core owned this status starts here.
-        self.activate_resident_assignment(&task_id);
-        let history = self.get_task_history(&task_id)?;
+        Ok(grant)
+    }
+
+    fn record_unchanged_heartbeat_skip(
+        &self,
+        task_id: &str,
+        run_id: &str,
+        mandate: &ResidentMandate,
+        grant: &ResidentCycleGrant,
+        now: DateTime<Utc>,
+    ) -> Result<Value, OrbitError> {
+        let record = ResidentCheckpoint {
+            schema: 1,
+            mandate: task_id.to_string(),
+            cycle: grant.cycle.clone(),
+            run_id: run_id.to_string(),
+            crew: mandate.crew.clone(),
+            recovery_of: None,
+            wake: ResidentCheckpointWake {
+                reasons: grant.reasons.clone(),
+                digest: grant.digest.clone(),
+            },
+            authority: ResidentCheckpointAuthority {
+                rights: grant.rights.clone(),
+                observe_only: grant.observe_only,
+                narrowed_by: grant.narrowed_by.clone(),
+            },
+            actions: Vec::new(),
+            decisions: Vec::new(),
+            requests: Vec::new(),
+            costs: Vec::new(),
+            notes: String::new(),
+            next_wake: ResidentNextWake {
+                reason: "heartbeat".into(),
+                // Publication records its own timestamp just after `now`.
+                // Clamp to its heartbeat rather than scheduling an early wake.
+                not_before: now.max(Utc::now())
+                    + Duration::minutes(i64::from(mandate.cadence.heartbeat_minutes)),
+            },
+            continuity: "off".into(),
+            outcome: "unchanged".into(),
+            probe: mandate.probe,
+            error: None,
+            conversation_ref: None,
+        };
+        self.append_system_resident_checkpoint(task_id, record, now)?;
+        self.set_resident_live_cycle(task_id, Some(&grant.cycle), None)?;
+        Ok(skipped(task_id, "unchanged"))
+    }
+
+    fn launch_resident_cycle_brief(
+        &self,
+        task_id: &str,
+        run_id: &str,
+        mandate: &ResidentMandate,
+        grant: &ResidentCycleGrant,
+        history: &[TaskHistoryEntry],
+        notices: Option<&[Notice]>,
+    ) -> Result<Value, OrbitError> {
         let (worktree, worktree_error) = self.create_resident_cycle_worktree(run_id);
-        let mut brief = self.resident_brief(
-            &task_id,
-            &mandate,
-            &grant,
-            &history,
-            Some(&due.notices),
-            worktree,
-        )?;
+        let mut brief = self.resident_brief(task_id, mandate, grant, history, notices, worktree)?;
         if let Some(error) = worktree_error {
             brief["worktree_error"] = json!(error);
         }
-        if let Some(error) = worktree_removal_error {
-            brief["worktree_removal_error"] = json!(error);
-        }
         Ok(brief)
+    }
+
+    fn append_system_resident_checkpoint(
+        &self,
+        task_id: &str,
+        record: ResidentCheckpoint,
+        at: DateTime<Utc>,
+    ) -> Result<(), OrbitError> {
+        let message = serde_json::to_string(&ResidentComment::Checkpoint(Box::new(record)))
+            .map_err(|error| OrbitError::Execution(format!("serialize checkpoint: {error}")))?;
+        ResidentComment::parse(&message)
+            .map_err(|error| OrbitError::Execution(error.to_string()))?;
+        self.stores().task_records().update(
+            task_id,
+            TaskRecordUpdateParams {
+                actor: "system".into(),
+                append_comments: vec![TaskComment {
+                    at,
+                    by: "system".into(),
+                    message,
+                    operation_id: None,
+                }],
+                ..Default::default()
+            },
+        )?;
+        Ok(())
     }
 
     pub(crate) fn crew_supports_continuity(&self, crew_name: &str) -> bool {
@@ -787,25 +890,7 @@ impl OrbitRuntime {
                     error: Some(error.to_string()),
                     conversation_ref: None,
                 };
-                let message = serde_json::to_string(&ResidentComment::Checkpoint(Box::new(record)))
-                    .map_err(|error| {
-                        OrbitError::Execution(format!("serialize checkpoint: {error}"))
-                    })?;
-                ResidentComment::parse(&message)
-                    .map_err(|error| OrbitError::Execution(error.to_string()))?;
-                self.stores().task_records().update(
-                    task_id,
-                    TaskRecordUpdateParams {
-                        actor: "system".into(),
-                        append_comments: vec![TaskComment {
-                            at: now,
-                            by: "system".into(),
-                            message,
-                            operation_id: None,
-                        }],
-                        ..Default::default()
-                    },
-                )?;
+                self.append_system_resident_checkpoint(task_id, record, now)?;
                 wrote = true;
                 Ok(())
             })?;
