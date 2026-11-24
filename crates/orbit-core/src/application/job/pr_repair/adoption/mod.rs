@@ -62,8 +62,9 @@
 //! `delivery_forge_observation_unavailable`) is handed back too [ORB-23809],
 //! under every other rule above except the blocker: completion reads the
 //! forge again, and repairs only what its own watcher then finds.
-//! `delivery_check_runs_absent` is handed back the same way once the
-//! unchanged head reports a pending or passed required check [ORB-24457].
+//! `delivery_check_runs_absent` is handed back the same way once the published
+//! head, or a head produced by an Orbit-audited clean base refresh of it,
+//! reports a pending or passed required check [ORB-24457].
 //! Until that check exists the pass lists the hold under its code and spends
 //! no hand-back. A held
 //! leaf whose task a `completion.hold` rule keeps in review is not handed
