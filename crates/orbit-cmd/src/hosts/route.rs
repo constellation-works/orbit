@@ -80,8 +80,11 @@ pub fn remote_task_holder(
 /// The federated client a CLI call or a replica GC lookup routes through.
 ///
 /// Only remote destinations are delivered over it: a local id runs
-/// in-process before this is ever composed. `authority` is the caller's own;
-/// the SSH argv downgrades an operator request from an agent process again.
+/// in-process before this is ever composed, and the SSH probe cannot open
+/// the implicit local destination (it has no SSH target). Keeping it would
+/// make every federated `orbit.attention` read report this host as
+/// unreachable [ORB-28012]. `authority` is the caller's own; the SSH argv
+/// downgrades an operator request from an agent process again.
 pub fn routed_client(
     global_root: &Path,
     caller_machine_id: &str,
@@ -92,7 +95,10 @@ pub fn routed_client(
         caller_machine_id,
         caller_machine_id,
         registry.hosts().routes(),
-    );
+    )
+    .into_iter()
+    .filter(|destination| !destination.is_local())
+    .collect::<Vec<_>>();
     let probe = SshDestinationProbe::new(
         caller_machine_id.to_string(),
         DEFAULT_PROBE_TIMEOUT,
