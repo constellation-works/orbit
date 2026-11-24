@@ -184,11 +184,12 @@ impl OrbitRuntime {
         if may_skip {
             let comments = self.get_task_comments(&task_id)?;
             let previous = checkpoints(&task_id, &comments);
+            let last_real = previous.iter().rev().find(|c| c.outcome != "unchanged");
             may_skip = previous.last().is_some_and(|checkpoint| {
                 // A handoff ended the mandate; reopening it must cycle.
                 checkpoint.outcome != "incomplete" && checkpoint.outcome != "handoff"
             }) && !self
-                .resident_open_requests(&task_id, &mandate, previous.last(), &comments)?
+                .resident_open_requests(&task_id, &mandate, last_real, &comments)?
                 .iter()
                 .any(|request| request["state"] == "open");
             // Older acted-on tasks can remain in the baseline after the last
@@ -411,6 +412,8 @@ impl OrbitRuntime {
     ) -> Result<Value, OrbitError> {
         let comments = self.get_task_comments(task_id)?;
         let all = checkpoints(task_id, &comments);
+        // Heartbeat skips record scheduling state, not a new agent observation.
+        let real: Vec<_> = all.iter().filter(|c| c.outcome != "unchanged").collect();
         let since = started_cycles(history)
             .iter()
             .rev()
@@ -421,7 +424,7 @@ impl OrbitRuntime {
             orbit_types::workflow::ResidentContinuity::Prefer => {
                 let resumed_ref = (!super::due::continuity_rebuilt(history, &grant.cycle))
                     .then(|| {
-                        all.last()
+                        real.last()
                             .filter(|last| last.crew == mandate.crew)
                             .and_then(|last| last.conversation_ref.as_deref())
                             .map(str::trim)
@@ -437,17 +440,17 @@ impl OrbitRuntime {
                 }
             }
         };
-        let recent: Vec<ResidentCheckpoint> = all
+        let recent: Vec<ResidentCheckpoint> = real
             .iter()
             .rev()
             .take(1)
-            .cloned()
+            .map(|checkpoint| (*checkpoint).clone())
             .map(|mut checkpoint| {
                 checkpoint.conversation_ref = None;
                 checkpoint
             })
             .collect();
-        let earlier_checkpoint_summaries: Vec<Value> = all
+        let earlier_checkpoint_summaries: Vec<Value> = real
             .iter()
             .rev()
             .skip(1)
@@ -476,7 +479,8 @@ impl OrbitRuntime {
             .as_deref()
             .map(|dead| action_rows(history, dead))
             .unwrap_or_default();
-        let open_requests = self.resident_open_requests(task_id, mandate, all.last(), &comments)?;
+        let open_requests =
+            self.resident_open_requests(task_id, mandate, real.last().copied(), &comments)?;
         let resolved_notices;
         let in_scope_notices = match notices {
             Some(notices) => notices,
