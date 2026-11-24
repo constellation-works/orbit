@@ -17,6 +17,7 @@ use std::sync::mpsc::{Receiver, channel};
 use std::time::{Duration, Instant};
 
 use orbit_common::test_env;
+use orbit_types::workflow::ResidentRight;
 use rusqlite::Connection;
 use serde_json::{Value, json};
 use tempfile::{TempDir, tempdir};
@@ -1559,6 +1560,7 @@ fn advertised_descriptions_are_complete_and_value_lists_move_to_enums() {
 
     // (tool, field, expected values): each set is advertised as an `enum`,
     // on the property itself or on its array items.
+    let resident_rights = ResidentRight::ALL.map(ResidentRight::as_str);
     let enum_cases: &[(&str, &str, &[&str])] = &[
         (
             "orbit_agents_scorecard",
@@ -1578,18 +1580,8 @@ fn advertised_descriptions_are_complete_and_value_lists_move_to_enums() {
             &["code", "flaky", "infrastructure", "unknown"],
         ),
         ("orbit_task_eligible", "status", &["backlog", "proposed"]),
-        (
-            "orbit_resident_grant",
-            "add",
-            &[
-                "dispatch",
-                "promote",
-                "merge",
-                "plugin_upgrade",
-                "refresh",
-                "recover",
-            ],
-        ),
+        ("orbit_resident_grant", "add", &resident_rights),
+        ("orbit_resident_grant", "remove", &resident_rights),
     ];
     for (tool_name, field, expected) in enum_cases {
         let tool = find_tool(&tools, tool_name);

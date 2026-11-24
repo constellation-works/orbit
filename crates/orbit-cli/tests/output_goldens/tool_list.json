@@ -1961,7 +1961,7 @@
   },
   {
     "name": "orbit.resident.grant",
-    "description": "Widen or narrow a resident mandate's authority: its rights (dispatch, promote, merge, plugin_upgrade, refresh, recover) and covered workspaces. Narrowing applies at once; widening is the human's. Rules and output: the orbit skill's tool-surface-registry.md reference, section `Resident tools`.",
+    "description": "Change a resident mandate's rights and covered workspaces. Narrowing applies immediately. Widening requires human approval. See the Orbit skill's `references/tool-surface-registry.md` under Resident tools.",
     "enabled": true,
     "active": true,
     "status": "active",
@@ -1975,7 +1975,7 @@
       },
       {
         "name": "add",
-        "description": "Rights to add: dispatch, promote, merge, plugin_upgrade, refresh or recover. Widening.",
+        "description": "Rights to add.",
         "param_type": "string_list",
         "required": false
       },

@@ -18,13 +18,13 @@ const RECOVER_TOOL: &str = "orbit.task.recover";
 
 /// The tool families a right reaches: `dispatch` ships, re-pilots and requeues,
 /// `merge` lands, `refresh` refreshes and `recover` resumes a delivery.
-/// `promote` and `plugin_upgrade` use tools every cycle already has.
+/// Promotion and `plugin_upgrade` use tools every cycle already has.
 fn tools_of_right(right: ResidentRight) -> &'static [&'static str] {
     match right {
         ResidentRight::Dispatch => &[WORKFLOW_TOOL, RECOVER_TOOL],
         ResidentRight::Merge | ResidentRight::Refresh => &[WORKFLOW_TOOL],
         ResidentRight::Recover => &[RECOVER_TOOL],
-        ResidentRight::Promote | ResidentRight::PluginUpgrade => &[],
+        ResidentRight::Promote | ResidentRight::PromoteHeld | ResidentRight::PluginUpgrade => &[],
     }
 }
 

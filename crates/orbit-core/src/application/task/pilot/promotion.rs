@@ -9,13 +9,16 @@
 
 use std::collections::BTreeSet;
 
+use orbit_common::OrbitError;
 use orbit_engine::DispatchError;
 use orbit_types::task::{
-    NO_AUTO_APPROVE_TAG, NO_DRAIN_TAG, TaskComment, TaskStatus, is_valid_orb_task_id,
+    NO_AUTO_APPROVE_TAG, NO_DRAIN_TAG, Task, TaskComment, TaskStatus, TaskType,
+    is_valid_orb_task_id,
 };
 use orbit_types::workflow::DrainHoldFinding;
 use serde_json::{Value, json};
 
+use super::drain_promotion::{ExplicitAssessmentReuse, PromotionPolicy, classify_reuse};
 use super::{CONTRACT_CONFLICTS, VALIDATION_TOOL_WARNINGS};
 
 /// Warning-shaped findings. `validation_tool_warnings` is the deterministic
@@ -33,6 +36,49 @@ pub(super) const WARNING_FIELDS: [&str; 7] = [
     "surface_warnings",
     VALIDATION_TOOL_WARNINGS,
 ];
+
+/// A held proposal must have no warnings, including advisory findings.
+pub(super) fn has_warning_findings(assessment: &Value) -> bool {
+    WARNING_FIELDS.iter().any(|field| {
+        assessment
+            .get(*field)
+            .is_some_and(|value| !value.as_array().is_some_and(Vec::is_empty))
+    })
+}
+
+impl crate::OrbitRuntime {
+    /// Certify the latest assessment while the caller holds the proposal's
+    /// write lock and can commit the corresponding approval in that lock.
+    pub(in crate::application) fn resident_promotion_assessment(
+        &self,
+        task: &Task,
+    ) -> Result<String, OrbitError> {
+        let refused = |reason: &str| {
+            OrbitError::PolicyDenied(format!("resident_held_promotion_refused: {reason}"))
+        };
+        if !matches!(
+            task.task_type,
+            TaskType::Bug | TaskType::Refactor | TaskType::Chore
+        ) || task
+            .tags
+            .iter()
+            .any(|tag| matches!(tag.as_str(), "breaking-change" | "design" | NO_DRAIN_TAG))
+        {
+            return Err(refused(
+                "only bug, refactor or chore proposals without breaking-change, design or no-drain qualify",
+            ));
+        }
+        match classify_reuse(self, task, true, PromotionPolicy::ResidentHeld)? {
+            ExplicitAssessmentReuse::Promote { operation_id } => Ok(operation_id),
+            ExplicitAssessmentReuse::Hold { reason, .. } => Err(refused(&format!(
+                "the latest task pilot withholds approval ({reason}). Inspect the assessment or ask an operator to approve"
+            ))),
+            ExplicitAssessmentReuse::NotReusable => {
+                Err(refused("the proposal needs a current, clean task pilot"))
+            }
+        }
+    }
+}
 
 /// The `hold` marker on the `utility_warnings` finding the apply boundary
 /// writes when the pilot could not establish a task's lock footprint and so

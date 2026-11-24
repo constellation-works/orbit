@@ -102,8 +102,10 @@ once its covering commits prove the work landed (otherwise apply refuses it), an
 
 A drain judges the task as the tagged task it becomes, so the pass that applies an eligible
 deliverable verdict also approves it when no other hold applies. Tagging is never removed by a
-later pilot. Adding `no-auto-approve` stops automatic approval but leaves the `no-diff-expected`
-tag in place; a person can remove the tag to opt out of the no-diff disposition.
+later pilot. Adding `no-auto-approve` stops drain approval and keeps the `no-diff-expected`
+tag in place. A person can remove the tag to opt out of the no-diff disposition. A separate
+resident grant can approve eligible held proposals with a current clean pilot.
+[Mandate and authority](../resident-orchestrator/specs/mandate-and-authority.md#rights--tools)
 
 ## Compatibility
 

@@ -15,7 +15,7 @@ use orbit_common::governance::memory::MemoryVerb;
 use orbit_common::governance::notice::NoticeVerb;
 use orbit_common::governance::operation::{Effect, OperationVerb};
 use orbit_common::governance::resident::ResidentVerb;
-use orbit_common::governance::task::TaskVerb;
+use orbit_common::governance::task::{TASK_CLI_OPTIONS_PARAM, TaskVerb};
 use orbit_common::governance::workflow::WorkflowVerb;
 use orbit_tools::OrbitBuiltinAction;
 use orbit_types::workflow::ResidentRight;
@@ -68,14 +68,20 @@ fn status(input: &Value) -> Option<&str> {
 fn task_update_class(input: &Value) -> ResidentCallClass {
     // Operator routes and the CLI's status-inferring approval are not a
     // resident's: it names the transition it means.
-    if input.get("force").and_then(Value::as_bool) == Some(true)
-        || input.get("approve").and_then(Value::as_bool) == Some(true)
-    {
+    let enabled = |name| {
+        input.get(name).and_then(Value::as_bool) == Some(true)
+            || input
+                .get(TASK_CLI_OPTIONS_PARAM)
+                .and_then(|options| options.get(name))
+                .and_then(Value::as_bool)
+                == Some(true)
+    };
+    if enabled("force") || enabled("approve") {
         return ResidentCallClass::Refused;
     }
     match status(input) {
         None => ResidentCallClass::Open,
-        Some("backlog") => ResidentCallClass::Gated(ResidentRight::Promote),
+        Some("backlog") => ResidentCallClass::PromoteTask,
         Some("in-progress") => ResidentCallClass::Gated(ResidentRight::Dispatch),
         Some("done") => ResidentCallClass::CompleteTask,
         // Refused with the route that does it: a `handoff` checkpoint.

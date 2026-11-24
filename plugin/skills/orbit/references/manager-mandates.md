@@ -111,7 +111,9 @@ busy queue makes the floor the interval.
 
 ## Relay grants verbatim
 
-Authority rights are `dispatch`, `promote`, `merge`, `plugin_upgrade`, `refresh` and `recover`.
+Authority rights are `dispatch`, `promote`, `merge`, `plugin_upgrade`,
+`refresh`, `recover` and `promote_held`. Grant `promote_held` to let a
+mandate approve eligible `no-auto-approve` proposals with a current clean pilot.
 Anything else — releases, tags, publishing, host changes, config edits,
 secrets — is not grantable to a resident.
 

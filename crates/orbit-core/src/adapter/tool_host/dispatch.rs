@@ -13,7 +13,7 @@ use serde_json::{Value, json};
 
 use crate::OrbitRuntime;
 use crate::application::agents::AgentDetailSurface;
-use crate::application::resident::ResidentCallAdmission;
+use crate::application::resident::{ResidentActionTicket, ResidentCallAdmission};
 use crate::application::task::{
     TaskMutationAudit, audit_status_for_task_mutation_error, with_task_write_provenance,
 };
@@ -128,20 +128,13 @@ pub(super) fn execute(
         ResidentCallAdmission::Ledgered(ticket) => Some(ticket),
         ResidentCallAdmission::AlreadyDone(answer) => return Ok(answer),
     };
-    // The cycle guard ledgers a right-gated write only for a live cycle that
-    // holds the right, so a ledgered call stands in for the operator check
-    // the handler would otherwise repeat.
-    let resident_action_key = ticket
-        .as_ref()
-        .filter(|_| brokered_resident)
-        .map(|ticket| ticket.resident_action_key());
     let mut result = execute_admitted(
         runtime,
         task_scope,
         caller,
         action,
         input,
-        resident_action_key,
+        ticket.as_ref().map(|ticket| (ticket, brokered_resident)),
         &mut redaction_report,
     );
     if let Some(ticket) = ticket {
@@ -156,9 +149,14 @@ fn execute_admitted(
     caller: ToolCaller<'_>,
     action: OrbitBuiltinAction,
     input: Value,
-    resident_action_key: Option<&str>,
+    resident_call: Option<(&ResidentActionTicket, bool)>,
     redaction_report: &mut super::artifact_redaction::ArtifactRedactionReport,
 ) -> Result<Value, OrbitError> {
+    // Only the authenticated broker can substitute the resident ledger
+    // for checks on operator-only operations.
+    let resident_action_key = resident_call
+        .filter(|(_, brokered)| *brokered)
+        .map(|(ticket, _)| ticket.resident_action_key());
     let ToolCaller {
         session_context,
         agent,
@@ -387,6 +385,7 @@ fn execute_admitted(
                     },
                     operator,
                     resident_action_key,
+                    resident_call.map(|(ticket, _)| ticket),
                     verb,
                     input,
                 )

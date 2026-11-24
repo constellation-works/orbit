@@ -144,10 +144,15 @@ flag.
 | `plugin_upgrade` | Install or upgrade a workspace plugin. |
 | `refresh` | Merge the base branch tip into a held or review delivery pull request head (conflict-free) and re-run its required checks. |
 | `recover` | Start a recovery leaf for a blocked task’s preserved delivery. |
+| `promote_held` | Move eligible `no-auto-approve` proposals to `backlog` after a current pilot with no holds or warnings. |
 
 The effective authority is what the resident can act on now: the granted
 rights, in the granted workspaces that the mandate also lists. It is empty for
 an `ended` or `invalid` mandate.
+
+With `promote_held`, a cycle can approve bug, refactor and chore proposals.
+The `breaking-change`, `design` and `no-drain` tags exclude a proposal. Each
+approval records the pilot assessment and resident grant in a task comment.
 
 Refreshing a delivery pull request (`orbit.workflow` action `refresh`, gated by
 the `refresh` right) brings a held (`blocked`) or `review` task's open Orbit

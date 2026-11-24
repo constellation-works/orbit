@@ -61,6 +61,7 @@ pub(crate) const RIGHTS: &[EnumValue] = &[
     EnumValue::plain("plugin_upgrade"),
     EnumValue::plain("refresh"),
     EnumValue::plain("recover"),
+    EnumValue::plain("promote_held"),
 ];
 
 const ATTRIBUTION: &[ParamSpec] = &[mcp_only(
@@ -82,9 +83,9 @@ const GRANT_PARAMS: &[ParamSpec] = &[
     both(
         "add",
         ParamType::EnumList(RIGHTS),
-        "Rights to add: dispatch, promote, merge, plugin_upgrade, refresh or recover. Widening.",
+        "Rights to add.",
         CliArgKind::flag("add"),
-        "Right to add (dispatch, promote, merge, plugin_upgrade, refresh, recover), repeatable",
+        "Right to add (dispatch, promote, merge, plugin_upgrade, refresh, recover, promote_held), repeatable",
     ),
     both(
         "workspaces",
@@ -127,7 +128,7 @@ const GRANT: OperationSpec<ResidentVerb> = OperationSpec {
     verb: ResidentVerb::Grant,
     cli_path: &["grant"],
     tool_name: "orbit.resident.grant",
-    tool_description: "Widen or narrow a resident mandate's authority: its rights (dispatch, promote, merge, plugin_upgrade, refresh, recover) and covered workspaces. Narrowing applies at once; widening is the human's. Rules and output: the orbit skill's tool-surface-registry.md reference, section `Resident tools`.",
+    tool_description: "Change a resident mandate's rights and covered workspaces. Narrowing applies immediately. Widening requires human approval. See the Orbit skill's `references/tool-surface-registry.md` under Resident tools.",
     cli_about: "Widen or narrow a resident mandate's authority",
     cli_help: CliHelp::NONE,
     effect: Effect::Write,

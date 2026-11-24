@@ -475,6 +475,34 @@ the run's broker with the host's credentials like `land`:
   first-parent merge chain in the owner's Git object store whenever the PR head
   moved past the reviewed commit.
 
+## Held proposals require a separate resident promotion grant
+
+Daniel approved option 1 on 2026-11-23. The assignment's approval comment
+records his direction to implement the per-mandate right.
+
+A live resident cycle can use `promote_held` to move a `no-auto-approve`
+proposal to backlog when its latest pilot is current and clean. Eligible
+proposals are bugs, refactors and chores. The `breaking-change`, `design`
+and `no-drain` tags exclude a proposal. The update checks the proposal and
+pilot under the task write lock and records the assessment and cycle grant
+in a task comment with the approval.
+
+The grant applies to eligible proposals in the mandate's own workspace,
+including proposals filed by someone else. Ordinary resident promotion,
+drain approval and human approval keep their existing authority.
+
+One alternative was to limit the grant to proposals filed by the mandate
+within its window. Another was to raise a human decision on each proposal.
+The approved option gives the operator control at the mandate level and
+uses the current pilot to bound each approval.
+
+Cost: Every use needs a reusable pilot receipt and a separate grant.
+Proposals with stale or warning assessments wait for a fresh pilot or
+human approval.
+
+**Code anchors:** `crates/orbit-core/src/application/task/pilot/promotion.rs::resident_promotion_assessment`,
+`crates/orbit-core/src/application/resident/guard.rs::resident_task_update_audit`.
+
 ## Task References
 
 - [ORB-21229] — rewrote the resident-orchestrator design and recorded these decisions
@@ -487,6 +515,7 @@ the run's broker with the host's credentials like `land`:
 - [ORB-12488] — removed the epic pipeline and the earlier resident-orchestrator folder
 - [ORB-10815] — revised the earlier design to v2: epic-owned worktree and windowed drain
 - [ORB-10776] — moved the earlier design's fire clock outside Orbit and added its session log
+- ORB-27598 adds the separate resident grant for held proposals.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.
 

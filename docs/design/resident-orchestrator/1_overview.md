@@ -78,7 +78,7 @@ resident that quietly works around a gap hides it. The evolution loop
   workspaces, crew and cadence, held as a versioned artifact on an `[orchestration]` assignment
   task ([specs/mandate-and-authority.md](./specs/mandate-and-authority.md)).
 - **Authority** — the rights a mandate grants (`dispatch`, `promote`, `merge`, `plugin_upgrade`,
-  `refresh`, `recover`)
+  `refresh`, `recover`, `promote_held`)
   over its covered workspaces. Only the human widens it; anyone may narrow it.
 - **Resident** — the mandate's loop, run by Orbit as cycles. It has state (`active`, `paused`,
   `taken_over`, `ended`) but no process between cycles.

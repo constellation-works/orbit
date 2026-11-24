@@ -58,6 +58,14 @@ pub(crate) fn approval_disqualification(
     if auto_approval_opted_out(tags) {
         return Some(auto_approval_hold_classification(tags));
     }
+    approval_readiness_gap(tags, context_files, complexity)
+}
+
+fn approval_readiness_gap(
+    tags: &[String],
+    context_files: &[String],
+    complexity: Option<TaskComplexity>,
+) -> Option<&'static str> {
     readiness_gaps(ReadinessStage::Proposed, tags, context_files, complexity)
         .into_iter()
         .find(ReadinessGap::is_blocking)
@@ -224,8 +232,14 @@ struct PromotionHold {
     detail: Option<String>,
 }
 
-/// Classify one task under the drain promotion policy, in the single priority
-/// order fresh apply and certified reuse share. `None` means it promotes.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum PromotionPolicy {
+    Drain,
+    ResidentHeld,
+}
+
+/// Classify one task in the priority order fresh apply and certified reuse
+/// share. `None` means the selected authority may promote it.
 ///
 /// The inputs come from each caller's own source: readiness reads `snapshot`,
 /// the opt-out and status read `current`, and `selectors` and `complexity` are
@@ -238,6 +252,7 @@ fn classify_promotion(
     findings: &PromotionFindings<'_>,
     selectors: &[String],
     complexity: Option<TaskComplexity>,
+    policy: PromotionPolicy,
 ) -> Option<PromotionHold> {
     let hold = |classification: &'static str, evidence: Value| {
         Some(PromotionHold {
@@ -261,7 +276,7 @@ fn classify_promotion(
     {
         return hold(super::FINDING_INVALID, finding.clone());
     }
-    if auto_approval_opted_out(&current.tags) {
+    if policy == PromotionPolicy::Drain && auto_approval_opted_out(&current.tags) {
         return hold(
             auto_approval_hold_classification(&current.tags),
             Value::Null,
@@ -270,9 +285,11 @@ fn classify_promotion(
     if !no_diff && let Some(finding) = VerifiedNoDiff::from_assessment(assessment) {
         return hold(PILOT_VERIFIED_NO_DIFF, finding.to_json());
     }
-    if let Some(reason) =
-        approval_disqualification(&snapshot.tags, &snapshot.context_files, snapshot.complexity)
-    {
+    let readiness = match policy {
+        PromotionPolicy::Drain => approval_disqualification,
+        PromotionPolicy::ResidentHeld => approval_readiness_gap,
+    };
+    if let Some(reason) = readiness(&snapshot.tags, &snapshot.context_files, snapshot.complexity) {
         return hold(reason, Value::Null);
     }
     if !findings.already_landed.is_null() {
@@ -294,8 +311,16 @@ fn classify_promotion(
             detail: warning_text(finding).map(str::to_string),
         });
     }
-    if !findings.warnings.is_empty() {
+    if !findings.warnings.is_empty()
+        || (policy == PromotionPolicy::ResidentHeld
+            && super::promotion::has_warning_findings(assessment))
+    {
         return hold("warnings", json!(findings.warnings));
+    }
+    if policy == PromotionPolicy::ResidentHeld
+        && !matches!(disposition, "selectors" | "verified_no_diff")
+    {
+        return hold("unassessed_disposition", json!(disposition));
     }
     if !no_diff && (disposition != "selectors" || selectors.is_empty()) {
         return hold(
@@ -351,6 +376,7 @@ pub(super) fn assess_drain_admission(
         &findings,
         selectors,
         Some(complexity),
+        PromotionPolicy::Drain,
     ) {
         Some(hold) => (
             PromotionDecision::Withhold,
@@ -599,23 +625,25 @@ pub(crate) fn reused_assessment_exclusion(
     runtime: &OrbitRuntime,
     task: &Task,
 ) -> Result<Option<&'static str>, OrbitError> {
-    Ok(match classify_reuse(runtime, task, false)? {
-        ExplicitAssessmentReuse::Promote { .. } => Some("assessment_already_applied"),
-        ExplicitAssessmentReuse::Hold { reason, .. } => {
-            // A stale assessment is not reused, but it is exactly what a
-            // drain child dispatched for a repilot must assess afresh: the
-            // drain selected the task because its meaning changed after the
-            // certified assessment. A live execution claim keeps the hold.
-            if reason == "changed_since_pilot"
-                && !live_execution_claim_tasks(runtime)?.contains(&task.id)
-            {
-                None
-            } else {
-                Some(reason)
+    Ok(
+        match classify_reuse(runtime, task, false, PromotionPolicy::Drain)? {
+            ExplicitAssessmentReuse::Promote { .. } => Some("assessment_already_applied"),
+            ExplicitAssessmentReuse::Hold { reason, .. } => {
+                // A stale assessment is not reused, but it is exactly what a
+                // drain child dispatched for a repilot must assess afresh: the
+                // drain selected the task because its meaning changed after the
+                // certified assessment. A live execution claim keeps the hold.
+                if reason == "changed_since_pilot"
+                    && !live_execution_claim_tasks(runtime)?.contains(&task.id)
+                {
+                    None
+                } else {
+                    Some(reason)
+                }
             }
-        }
-        ExplicitAssessmentReuse::NotReusable => None,
-    })
+            ExplicitAssessmentReuse::NotReusable => None,
+        },
+    )
 }
 
 /// Approve one fresh explicit or routine assessment under the task lock.
@@ -672,26 +700,35 @@ pub(crate) fn classify_explicit_assessment_reuse(
     runtime: &OrbitRuntime,
     task: &Task,
 ) -> Result<ExplicitAssessmentReuse, OrbitError> {
-    classify_reuse(runtime, task, true)
+    classify_reuse(runtime, task, true, PromotionPolicy::Drain)
 }
 
-/// [`classify_explicit_assessment_reuse`], optionally without the live-pilot
-/// hold. A child's own prepare is itself a live pilot of the task, and has
-/// already excluded every other run preparing it.
-fn classify_reuse(
+/// Classify the latest pilot for reuse, optionally without the live-pilot
+/// hold for a drain child preparing its own batch.
+pub(super) fn classify_reuse(
     runtime: &OrbitRuntime,
     task: &Task,
     hold_live_pilot: bool,
+    promotion_policy: PromotionPolicy,
 ) -> Result<ExplicitAssessmentReuse, OrbitError> {
-    let comments = runtime.get_task_pilot_comments(&task.id)?;
+    let comments = match promotion_policy {
+        PromotionPolicy::Drain => runtime.get_task_pilot_comments(&task.id)?,
+        PromotionPolicy::ResidentHeld => runtime.get_task_comments(&task.id)?,
+    };
     let Some((_, receipt)) = super::pilot_receipts(&comments).next() else {
         return Ok(ExplicitAssessmentReuse::NotReusable);
     };
     if !super::is_operation_id(receipt.operation_id) {
         return Ok(ExplicitAssessmentReuse::NotReusable);
     }
-    let Ok(audit) = serde_json::from_str::<Value>(receipt.body) else {
-        return Ok(ExplicitAssessmentReuse::NotReusable);
+    let audit = match promotion_policy {
+        PromotionPolicy::Drain => {
+            let Ok(audit) = serde_json::from_str::<Value>(receipt.body) else {
+                return Ok(ExplicitAssessmentReuse::NotReusable);
+            };
+            audit
+        }
+        PromotionPolicy::ResidentHeld => runtime.task_pilot_audit(&task.id, receipt)?,
     };
     let Some(assessment) = audit.get("assessment").filter(|value| value.is_object()) else {
         return Ok(ExplicitAssessmentReuse::NotReusable);
@@ -704,12 +741,11 @@ fn classify_reuse(
     else {
         return Ok(ExplicitAssessmentReuse::NotReusable);
     };
-    let trigger = runtime
-        .stored_run_state(pilot_run_id)?
-        .and_then(|state| state.trigger);
-    if !trigger
-        .as_ref()
-        .is_some_and(|recorded| reusable_pilot_trigger(recorded.kind))
+    if promotion_policy == PromotionPolicy::Drain
+        && !runtime
+            .stored_run_state(pilot_run_id)?
+            .and_then(|state| state.trigger)
+            .is_some_and(|recorded| reusable_pilot_trigger(recorded.kind))
     {
         return Ok(ExplicitAssessmentReuse::NotReusable);
     }
@@ -722,6 +758,25 @@ fn classify_reuse(
     else {
         return Ok(ExplicitAssessmentReuse::NotReusable);
     };
+    if promotion_policy == PromotionPolicy::ResidentHeld
+        && (written.material.is_none() || written.status != Some(TaskStatus::Proposed))
+    {
+        return Ok(ExplicitAssessmentReuse::NotReusable);
+    }
+    if promotion_policy == PromotionPolicy::ResidentHeld
+        && [
+            "operator_validation_hold",
+            "host_operational_hold",
+            "native_os_hold",
+        ]
+        .iter()
+        .any(|field| audit.get(*field).is_some_and(|hold| !hold.is_null()))
+    {
+        return Ok(ExplicitAssessmentReuse::Hold {
+            reason: "pilot_admission_hold",
+            detail: None,
+        });
+    }
     let Some(complexity) = audit
         .get("complexity_after")
         .and_then(|value| serde_json::from_value::<TaskComplexity>(value.clone()).ok())
@@ -765,7 +820,14 @@ fn classify_reuse(
             detail: Some(format!("{reason}: {detail}")),
         });
     }
-    promotable_reuse(runtime, task, &snapshot, assessment, operation_id)
+    promotable_reuse(
+        runtime,
+        task,
+        &snapshot,
+        assessment,
+        operation_id,
+        promotion_policy,
+    )
 }
 
 fn reusable_pilot_trigger(kind: JobRunTriggerKind) -> bool {
@@ -834,6 +896,7 @@ fn promotable_reuse(
     snapshot: &PreparedTaskSnapshot,
     assessment: &Value,
     operation_id: &str,
+    policy: PromotionPolicy,
 ) -> Result<ExplicitAssessmentReuse, OrbitError> {
     let dependencies = task.dependencies();
     let findings = match promotion_findings(
@@ -859,6 +922,7 @@ fn promotable_reuse(
             &findings,
             &task.context_files,
             task.complexity,
+            policy,
         ) {
             Some(hold) => ExplicitAssessmentReuse::Hold {
                 reason: hold.classification,
