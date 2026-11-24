@@ -86,8 +86,10 @@ function renderCreateAction(payload) {
   const action = $("auto-task-create-action");
   if (!action) return;
   const reason = actionReason(payload, "auto_task_create");
+  const draftOpen = autoTaskDraftOpen();
+  const unavailableReason = reason || (draftOpen ? "Close the open editor or confirmation before creating an auto-task" : "");
   const previous = $("auto-task-create-button");
-  if (previous && (previous.getAttribute("aria-description") || "") === reason) return;
+  if (previous && (previous.getAttribute("aria-description") || "") === unavailableReason) return;
   const selection = selectionSnapshot();
   const button = el("button", {
     id: "auto-task-create-button",
@@ -96,9 +98,10 @@ function renderCreateAction(payload) {
     text: "Create",
     "aria-label": "Create auto-task",
   });
-  button.disabled = Boolean(reason);
+  button.disabled = Boolean(unavailableReason);
+  button.setAttribute("aria-description", unavailableReason);
   button.addEventListener("click", () => {
-    if (!selection.current() || $("auto-task-create-dialog")) return;
+    if (!selection.current() || $("auto-task-create-dialog") || autoTaskDraftOpen()) return;
     openAutoTaskCreate({
       selection,
       onClose: () => $("auto-task-create-button")?.focus(),
@@ -116,7 +119,7 @@ function renderCreateAction(payload) {
       },
     });
   });
-  action.replaceChildren(explainUnavailable(button, reason));
+  action.replaceChildren(explainUnavailable(button, unavailableReason));
 }
 
 function autoTaskFilterBar(payload, total, matched, visible) {
