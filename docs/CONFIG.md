@@ -1916,8 +1916,11 @@ return an optional `repair_evidence` object beside its typed decision, containin
 worktree's `.orbit/tmp/`; names must be unique and cannot overwrite reserved
 artifacts, including `review-*`, `validation/` and `no-diff-handoff/`. The
 handoff runs only for a decision with its required `fault` and `fault_evidence`:
-a resume without them escalates and writes nothing. The host validates the entire
-batch before writing its summary and artifacts to the admitted task. On a claimed
+a resume without them escalates and writes nothing. The engine writes the evidence
+only after the resume's step and any repair commit are admitted, and the host
+validates the entire batch before writing its summary and artifacts to the admitted
+task. A resume refused at either gate escalates and leaves the task's prior summary
+and artifacts unchanged. On a claimed
 run it sends the bytes through the authenticated owner route. The handoff accepts no task selector or lifecycle edits; invalid
 evidence refuses the decision and leaves the candidate for inspection. The
 blocked-task backstop excludes `resume` and does not accept this handoff.

@@ -219,7 +219,7 @@ impl orbit_engine::test_support::NullRuntimeHost for RepairPipeline<'_> {
                         git(self.fixture, &["add", "candidate.txt"]);
                         git(self.fixture, &["commit", "-m", "repair rejected candidate"]);
                     }
-                    "protected" | "scratch-ok" | "scratch-redirect" => {
+                    "protected" | "evidence-protected" | "scratch-ok" | "scratch-redirect" => {
                         std::fs::write(
                             self.fixture.repo.join("canary.txt"),
                             "ordinary safe line\napi_key=synthetic_patch_api_canary\nAuthorization: Bearer synthetic_patch_bearer_canary\nsk-syntheticpatchcanary00000000\n",
@@ -424,11 +424,29 @@ impl orbit_engine::test_support::NullRuntimeHost for RepairPipeline<'_> {
                     }
                     _ => {}
                 }
-                if self.repair == "evidence" {
-                    return Ok(evidence::repair_evidence_output(self.fixture));
-                }
-                if self.repair == "evidence-unattributed" {
-                    return Ok(evidence::unattributed_repair_output(self.fixture));
+                match self.repair {
+                    "evidence" | "evidence-protected" => {
+                        return Ok(evidence::repair_evidence_output(
+                            self.fixture,
+                            "review_gate_settle",
+                        ));
+                    }
+                    "evidence-admission-step" => {
+                        return Ok(evidence::repair_evidence_output(self.fixture, "worktree"));
+                    }
+                    "evidence-missing-step" => {
+                        return Ok(evidence::repair_evidence_output(
+                            self.fixture,
+                            "no_such_step",
+                        ));
+                    }
+                    "evidence-unattributed" => {
+                        return Ok(evidence::unattributed_repair_output(self.fixture));
+                    }
+                    "evidence-bad-artifact" => {
+                        return Ok(evidence::refused_artifact_output(self.fixture));
+                    }
+                    _ => {}
                 }
                 // Deliberately name settlement: the engine must rewind far
                 // enough to admit a fresh reviewer for this repair.
@@ -854,26 +872,7 @@ fn final_recovery_persists_repair_evidence_without_task_write_tools() {
 /// stay as they were.
 fn final_recovery_refuses_unattributed_repair_evidence_before_persisting() {
     let fixture = fixture_with_command("test \"$(cat candidate.txt)\" != after");
-    fixture
-        .runtime
-        .update_task_with_identity(
-            &fixture.task_id,
-            orbit_core::application::task::TaskUpdateParams {
-                upsert_artifacts: vec![orbit_types::task::TaskArtifact::from_text(
-                    "recovery/prior.log",
-                    "prior evidence\n",
-                )],
-                ..Default::default()
-            },
-            None,
-            Some("codex".into()),
-        )
-        .unwrap();
-    let prior_summary = fixture
-        .runtime
-        .get_task(&fixture.task_id)
-        .unwrap()
-        .execution_summary;
+    let prior_summary = attach_prior_evidence(&fixture);
     let (_, outcome) = run_pipeline(&fixture, "evidence-unattributed");
     assert!(
         !outcome.as_ref().is_ok_and(|outcome| outcome.success),
@@ -881,12 +880,14 @@ fn final_recovery_refuses_unattributed_repair_evidence_before_persisting() {
     );
     let run = fixture.input["job_run_id"].as_str().unwrap();
     let state = fixture.runtime.read_run_state(run).unwrap().unwrap();
+    let Some(FinalRecoveryDecision::Escalate { diagnosis, .. }) =
+        state.final_recovery.unwrap().decision
+    else {
+        panic!("a resume without its fault attribution escalates");
+    };
     assert!(
-        matches!(
-            state.final_recovery.unwrap().decision,
-            Some(FinalRecoveryDecision::Escalate { .. })
-        ),
-        "a resume without its fault attribution escalates"
+        diagnosis.contains("the original failure was step"),
+        "the failed step's diagnostic is preserved: {diagnosis}"
     );
     assert_eq!(
         fixture
@@ -913,6 +914,114 @@ fn final_recovery_refuses_unattributed_repair_evidence_before_persisting() {
             .unwrap()
             .is_none(),
         "the refused evidence must not attach its artifacts"
+    );
+}
+
+/// Attaches the prior summary and artifact a refused resume must leave intact,
+/// and returns the prior summary.
+fn attach_prior_evidence(fixture: &Fixture) -> String {
+    fixture
+        .runtime
+        .update_task_with_identity(
+            &fixture.task_id,
+            orbit_core::application::task::TaskUpdateParams {
+                upsert_artifacts: vec![orbit_types::task::TaskArtifact::from_text(
+                    "recovery/prior.log",
+                    "prior evidence\n",
+                )],
+                ..Default::default()
+            },
+            None,
+            Some("codex".into()),
+        )
+        .unwrap();
+    fixture
+        .runtime
+        .get_task(&fixture.task_id)
+        .unwrap()
+        .execution_summary
+}
+
+/// Runs one resume that carries repair evidence and must be refused. Asserts
+/// that it escalated and that the task kept its prior summary and artifacts,
+/// then returns the escalation's diagnosis.
+fn refused_evidence_escalation(repair: &'static str) -> String {
+    let fixture = fixture_with_command("test \"$(cat candidate.txt)\" != after");
+    let prior_summary = attach_prior_evidence(&fixture);
+    let (_, outcome) = run_pipeline(&fixture, repair);
+    assert!(
+        !outcome.as_ref().is_ok_and(|outcome| outcome.success),
+        "{repair}: a refused resume must not succeed: {outcome:?}"
+    );
+    let run = fixture.input["job_run_id"].as_str().unwrap();
+    let checkpoint = fixture
+        .runtime
+        .read_run_state(run)
+        .unwrap()
+        .unwrap()
+        .final_recovery
+        .unwrap();
+    let Some(FinalRecoveryDecision::Escalate { diagnosis, .. }) = &checkpoint.decision else {
+        panic!("{repair}: a refused resume escalates: {checkpoint:?}");
+    };
+    assert_eq!(
+        fixture
+            .runtime
+            .get_task(&fixture.task_id)
+            .unwrap()
+            .execution_summary,
+        prior_summary,
+        "{repair}: the refused evidence must not replace the task summary"
+    );
+    assert_eq!(
+        fixture
+            .runtime
+            .get_task_artifact(&fixture.task_id, "recovery/prior.log")
+            .unwrap()
+            .expect("the prior artifact stays attached")
+            .content,
+        b"prior evidence\n"
+    );
+    assert!(
+        fixture
+            .runtime
+            .get_task_artifact(&fixture.task_id, "recovery/repair.log")
+            .unwrap()
+            .is_none(),
+        "{repair}: the refused evidence must not attach its artifacts"
+    );
+    diagnosis.clone()
+}
+
+/// [ORB-27959] A resume naming a step the engine will not rerun is refused
+/// before its evidence is written.
+fn final_recovery_refuses_evidence_for_an_inadmissible_resume_step() {
+    for repair in ["evidence-admission-step", "evidence-missing-step"] {
+        refused_evidence_escalation(repair);
+    }
+}
+
+/// [ORB-27959] A resume whose worktree repair the commit gate refuses is
+/// escalated before its evidence is written.
+fn final_recovery_refuses_evidence_for_a_refused_repair_commit() {
+    let diagnosis = refused_evidence_escalation("evidence-protected");
+    assert!(
+        diagnosis.contains("recovery_commit_refused:protected_path:"),
+        "{diagnosis}"
+    );
+}
+
+/// [ORB-27959] Evidence the host refuses after the resume is admitted escalates
+/// with the failed step's diagnostic and writes nothing.
+fn final_recovery_refuses_evidence_the_host_rejects_after_admission() {
+    let diagnosis = refused_evidence_escalation("evidence-bad-artifact");
+    assert!(
+        diagnosis.contains("persist final recovery evidence"),
+        "{diagnosis}"
+    );
+    assert!(
+        diagnosis.contains("the original failure was step"),
+        "{diagnosis}"
     );
 }
 
@@ -2172,6 +2281,9 @@ crate::scenario_table!(
     final_recovery_does_not_authorize_an_unrecorded_head_change,
     final_recovery_persists_repair_evidence_without_task_write_tools,
     final_recovery_refuses_unattributed_repair_evidence_before_persisting,
+    final_recovery_refuses_evidence_for_an_inadmissible_resume_step,
+    final_recovery_refuses_evidence_for_a_refused_repair_commit,
+    final_recovery_refuses_evidence_the_host_rejects_after_admission,
     final_recovery_transition_evidence_excludes_protected_paths,
     resumed_final_recovery_repair_keeps_the_original_checkpoint_owner,
     final_recovery_refused_patch_reproduces_binary_and_final_whitespace,

@@ -539,8 +539,10 @@ pub(in crate::activity_job::job_executor) fn attempt_final_recovery(
             input
         })
         .and_then(|input| decision::dispatch_final_recovery(ctx, step, activity, &input));
+    let mut repair_evidence = None;
     let ((decision, fault), recovery_model) = match dispatch {
         Ok(dispatched) => {
+            repair_evidence = dispatched.repair_evidence;
             let malformed = FinalRecoveryDecision::parse_attributed(&dispatched.payload).is_err();
             let (mut decision, fault) =
                 FinalRecoveryDecision::from_attributed_output(Some(&dispatched.payload));
@@ -557,10 +559,9 @@ pub(in crate::activity_job::job_executor) fn attempt_final_recovery(
                 dispatched.model,
             )
         }
-        // No usable answer reaches here: a dispatch that failed, a decision
-        // refused by its parser, or repair evidence that could not be handed
-        // off. Like a malformed answer above, it names the failed step, so the
-        // one escalation carries both failures.
+        // No usable answer reaches here: a dispatch that failed or a decision
+        // refused by its parser. Like a malformed answer above, it names the
+        // failed step, so the one escalation carries both failures.
         Err(message) => {
             let mut diagnosis = format!(
                 "final recovery activity `{}` did not return a decision: {message}",
@@ -652,6 +653,26 @@ pub(in crate::activity_job::job_executor) fn attempt_final_recovery(
             *step_id = job.steps[index].id.clone();
         }
         resume_index = Some(index);
+    }
+    // Evidence is written only once its resume is admitted: the step and any
+    // repair commit have passed their gates. A refused write escalates with the
+    // failed step's diagnostic. The repair commit that was observed stays on the
+    // record, since the candidate's HEAD has moved.
+    if let Some(evidence) = repair_evidence.take()
+        && resume_index.is_some()
+        && let Err(error) =
+            decision::persist_repair_evidence(ctx, &task_id, &worktree.workspace_path, &evidence)
+    {
+        let mut diagnosis = error;
+        append_original_failure(&mut diagnosis, step, error_message);
+        decision = FinalRecoveryDecision::Escalate {
+            diagnosis,
+            human_action: "Inspect the refused repair evidence and its candidate before resuming \
+                           the run."
+                .into(),
+            summary: None,
+        };
+        resume_index = None;
     }
 
     // The context names the admitted step, not the decision's text, which
