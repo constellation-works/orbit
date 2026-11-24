@@ -163,11 +163,16 @@ action its group waits on: **Approve** on a proposed task, **Ship** on a
 backlog task, and **View run** on a task in progress.
 
 To find work, search the top bar from any dashboard page. It covers every
-active workspace you own and ranks the selected workspace's matches first:
-type to find tasks by text, or press Enter on an exact task ID to open that
-task and on an exact run ID (`jrun-…`) to open that run, switching workspace
-when needed. Press `/` to jump to the search box. To narrow the loaded list
-instead, filter by status. Less common filters, such as Done, Not ready, and
+active workspace you own. Task ID-prefix matches rank before title or text
+matches, and the selected workspace is preferred within each group. For
+example, a search for `ABC-1` can put a task with ID `ABC-123` from another
+workspace ahead of a selected-workspace task with ID `XYZ-5` titled
+“Investigate ABC-1”. Type to find tasks by text, or press Enter on an exact
+task ID to open that task and on an exact run ID (`jrun-…`) to open that run,
+switching workspace when needed. Press `/` to jump to the search box. Use the
+status chips to choose which tasks the board loads; changing them can load
+tasks that were not already in the list. Double Shift filters only rows
+already loaded on the board. Less common filters, such as Done, Not ready, and
 Pilot warnings, are under **More**. **New task** proposes a task.
 
 A backlog row says what the task waits on, such as `Waits on ABC-2` or
