@@ -84,7 +84,7 @@ Given a cursor with seen-set `S` and the call's filtered, ordered matching items
    returned)}`. Unchanged items stay; items that resolved drop out; items cut by `--limit` stay
    unseen, so the next call returns them. An item that resolves and later returns with the same
    fingerprint is new again.
-4. When `degraded` is non-empty, the next cursor also carries forward every hash of the cursor
+4. When `degraded` or `acknowledged` is non-empty, the next cursor also carries forward every hash of the cursor
    supplied, so a flapping host or a skipped source does not make its items re-surface as new
    each time it recovers. Carried hashes age out with the cursor's TTL or when a clean pass
    follows.

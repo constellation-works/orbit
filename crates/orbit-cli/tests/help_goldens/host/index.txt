@@ -1,0 +1,25 @@
+Register and inspect the remote Orbit hosts this machine reaches over SSH
+
+Federated MCP, pull drains and replica worktree GC route to the hosts registered here. Each entry stores the host's name, SSH target, machine_id and task prefix, read from the host itself when it is added. Reachability, version, pull protocol and workspaces are read live from each host whenever a command asks. Use offline and online to acknowledge planned downtime while keeping the host registered.
+
+Usage: orbit host [OPTIONS] <COMMAND>
+
+Commands:
+  add      Register a remote host, reading its identity from the host over SSH
+  list     List this host and every registered host with live reachability, version and protocol
+  show     Show one host and what on this machine routes to it
+  rename   Rename a registered host
+  offline  Mark a registered host as intentionally offline
+  online   Clear a registered host's offline acknowledgement
+  remove   Remove a registered host
+
+Options:
+  -h, --help
+          Print help (see a summary with '-h')
+
+Global options (see 'orbit --help' for descriptions):
+  --root <ROOT>
+  --workspace <SELECTOR>
+  --format <MODE>
+  --json
+  --header

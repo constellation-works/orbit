@@ -16,6 +16,8 @@ A session bound to one host-qualified workspace stays on that checkout only when
 
 A host that does not answer, answers under another machine id, or lacks the tool is a `host_unhealthy` item (`critical` when it owns an in-scope workspace) plus a `degraded` entry; `--exclude-kind host_unhealthy` hides the item, never the `degraded` entry. A bound MCP session refuses `all`, `host` and other workspaces with `scope_not_permitted`.
 
+An active `orbit host offline` mark lists the host once under `acknowledged`, with the operator's reason and any deadline. Attention skips probing that host. Treat the entry as planned downtime until the deadline or until the operator runs `orbit host online`.
+
 Agents can read task-level kinds; `run_failed`, `run_stuck`, `claim_stale` and `host_unhealthy` need the Operator capability and otherwise report `degraded` code `capability`. A live resident cycle also reads them, read-only, for the workspaces its mandate covers and no others (host health is withheld while any selected workspace is outside the mandate); this gives it no write capability.
 
 While its home workspace has a pending task commit, the cycle cannot verify its scope and these runtime kinds report `capability` degradation until an ordinary task read recovers the commit. Attention leaves the pending commit untouched. Replica records are never substituted for their owner.

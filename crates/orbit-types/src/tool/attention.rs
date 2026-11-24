@@ -377,6 +377,9 @@ pub struct AttentionEnvelope {
     /// Per-host reachability; present when more than the local host was in scope.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub hosts: Vec<AttentionHostStatus>,
+    /// Registered peers skipped because an operator marked them offline.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub acknowledged: Vec<crate::identity::AcknowledgedHost>,
     /// Incomplete or unreadable sources.
     pub degraded: Vec<AttentionDegraded>,
     /// Explicit human-readable result, including empty and quiet states.

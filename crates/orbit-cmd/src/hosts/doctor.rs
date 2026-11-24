@@ -50,6 +50,7 @@ pub fn doctor_hosts_row(global_root: &Path) -> WorkspaceDoctorResult {
     let targets = registry.hosts().entries();
     let mut failures = Vec::new();
     let mut warnings = Vec::new();
+    let mut acknowledged = Vec::new();
     for owner in &pulls_from {
         if !targets
             .iter()
@@ -63,6 +64,17 @@ pub fn doctor_hosts_row(global_root: &Path) -> WorkspaceDoctorResult {
     }
     let rows = in_parallel(targets, |target| remote_row(target, &local.id, true));
     for (target, host) in targets.iter().zip(&rows) {
+        if let Some(mark) = &host.offline {
+            let name = &target.name;
+            let mut message = format!("{name} acknowledged offline: {}", mark.reason);
+            if host.reachable == Some(true) && host.error.is_none() {
+                message.push_str(&format!(
+                    " (responded; clear with `orbit host online '{name}'`)"
+                ));
+            }
+            acknowledged.push(message);
+            continue;
+        }
         classify(
             target,
             host,
@@ -72,14 +84,19 @@ pub fn doctor_hosts_row(global_root: &Path) -> WorkspaceDoctorResult {
         );
     }
     if failures.is_empty() && warnings.is_empty() {
-        let message = if targets.is_empty() {
-            "no remote hosts are registered".to_string()
+        let online = targets.len() - acknowledged.len();
+        let summary = if targets.is_empty() {
+            Some("no remote hosts are registered".to_string())
         } else {
-            format!(
-                "{} registered host(s) reachable with matching version and protocol",
-                targets.len()
-            )
+            (online != 0).then(|| {
+                format!("{online} registered host(s) reachable with matching version and protocol")
+            })
         };
+        let message = summary
+            .into_iter()
+            .chain(acknowledged)
+            .collect::<Vec<_>>()
+            .join("; ");
         return row(WorkspaceDoctorStatus::Ok, message, None);
     }
     let status = if failures.is_empty() {
@@ -90,6 +107,7 @@ pub fn doctor_hosts_row(global_root: &Path) -> WorkspaceDoctorResult {
     let message = failures
         .into_iter()
         .chain(warnings)
+        .chain(acknowledged)
         .collect::<Vec<_>>()
         .join("; ");
     let remediation =

@@ -20,6 +20,10 @@ pub struct FleetReadinessFacts {
 
 fn attach_readiness_runtime_fields(runtime: &OrbitRuntime, payload: &mut Value) {
     payload["replica"] = json!(runtime.replica_owner_machine().is_some());
+    let acknowledged = hosts::acknowledged_hosts(runtime);
+    if !acknowledged.is_empty() {
+        payload["acknowledged"] = json!(acknowledged);
+    }
     payload["validation_env_warning"] = json!(runtime.readiness_validation_env_warning());
     // [ORB-25965] The recorded drain intent, with who paused it and when. An
     // unreadable row is reported as such, never as `off`.

@@ -289,6 +289,7 @@ mod task_route {
             ssh: name.to_string(),
             task_prefix: prefix.to_string(),
             host_os: None,
+            offline: None,
         }
     }
 

@@ -3,6 +3,7 @@
 //! after it merged every destination's candidate set).
 use super::cursor;
 use chrono::{DateTime, Utc};
+use orbit_types::identity::AcknowledgedHost;
 use orbit_types::tool::{
     AttentionCounts, AttentionCursor, AttentionCursorStatus, AttentionDegraded, AttentionEnvelope,
     AttentionHostStatus, AttentionItem,
@@ -39,6 +40,8 @@ pub struct AttentionPageInput {
     pub degraded: Vec<AttentionDegraded>,
     /// Per-host reachability, present when more than the local host was in scope.
     pub hosts: Vec<AttentionHostStatus>,
+    /// Registered peers skipped with an active offline acknowledgement.
+    pub acknowledged: Vec<AcknowledgedHost>,
 }
 
 /// Cursor parameters of the outermost responder.
@@ -52,8 +55,8 @@ pub struct AttentionPageCursor<'a> {
 /// Order the candidates, select the delta against `since`, cut the public
 /// limit and mint the next cursor.
 ///
-/// When any source was degraded the next cursor also carries every hash the
-/// caller's cursor held, so items from a source that comes back are not
+/// When a source was degraded or skipped as acknowledged offline, the next
+/// cursor carries the caller's hashes so a returning source's items are not
 /// re-injected (attention-cursor rule 4).
 pub fn attention_public_page(
     input: AttentionPageInput,
@@ -65,6 +68,7 @@ pub fn attention_public_page(
         mut items,
         degraded,
         hosts,
+        acknowledged,
     } = input;
     attention_order(&mut items);
     let issued = now.timestamp().max(0) as u64;
@@ -95,7 +99,7 @@ pub fn attention_public_page(
             next_seen.push(hash);
         }
     }
-    if !degraded.is_empty() {
+    if !degraded.is_empty() || !acknowledged.is_empty() {
         for hash in &seen {
             if kept.insert(*hash) {
                 next_seen.push(*hash);
@@ -145,6 +149,7 @@ pub fn attention_public_page(
         },
         items: returned,
         hosts,
+        acknowledged,
         degraded,
         message,
     }

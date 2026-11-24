@@ -1,0 +1,24 @@
+Mark a registered host as intentionally offline
+
+Usage: orbit host offline [OPTIONS] --reason <REASON> <HOST>
+
+Arguments:
+  <HOST>
+          Host name (case-insensitive) or machine_id
+
+Options:
+      --reason <REASON>
+          Reason for the planned downtime
+
+      --until <TIMESTAMP>
+          Expire the acknowledgement at this RFC 3339 timestamp
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+Global options (see 'orbit --help' for descriptions):
+  --root <ROOT>
+  --workspace <SELECTOR>
+  --format <MODE>
+  --json
+  --header

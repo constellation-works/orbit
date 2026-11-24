@@ -1,4 +1,7 @@
 [
+  {"argv": ["host"], "golden": "host/index.txt"},
   {"argv": ["host", "add"], "golden": "host/add.txt"},
+  {"argv": ["host", "offline"], "golden": "host/offline.txt"},
+  {"argv": ["host", "online"], "golden": "host/online.txt"},
   {"argv": ["host", "remove"], "golden": "host/remove.txt"}
 ]

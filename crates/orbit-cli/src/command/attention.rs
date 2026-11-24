@@ -210,6 +210,7 @@ fn attention_payload(value: Value, note: Option<String>) -> Payload {
     if !rows.is_empty() {
         blocks.push(Block::Attention(rows));
     }
+    blocks.extend(super::host::acknowledged_host_lines(&value).map(Block::text));
     for degraded in value["degraded"].as_array().into_iter().flatten() {
         blocks.push(Block::text(format!(
             "{} {}: {}",
@@ -218,6 +219,10 @@ fn attention_payload(value: Value, note: Option<String>) -> Payload {
             degraded["message"].as_str().unwrap_or_default()
         )));
     }
-    records.push(json!({"summary": {"counts": value["counts"], "cursor": value["cursor"], "degraded": value["degraded"]}}));
+    let mut summary = json!({"counts": value["counts"], "cursor": value["cursor"], "degraded": value["degraded"]});
+    if let Some(acknowledged) = value.get("acknowledged") {
+        summary["acknowledged"] = acknowledged.clone();
+    }
+    records.push(json!({"summary": summary}));
     Payload::blocks(value, blocks).with_records(records)
 }

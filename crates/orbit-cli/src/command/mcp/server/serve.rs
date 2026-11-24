@@ -110,11 +110,13 @@ pub(crate) fn federated_aggregate_client(
     )
 }
 
-/// The attention fan-out with the registered host names items are
-/// attributed to. Its deadline is fixed; an unreadable host file leaves the
-/// names empty, since the caller already validated it.
+/// The fixed attention fan-out budget, registered names for attribution,
+/// and the registry to reread for active offline acknowledgements.
 pub(crate) fn attention_fanout(global_root: &std::path::Path) -> federated::AttentionFanout {
-    let mut fanout = federated::AttentionFanout::default();
+    let mut fanout = federated::AttentionFanout {
+        host_registry_root: Some(global_root.to_path_buf()),
+        ..Default::default()
+    };
     if let Ok(registry) = orbit_registry::hosts::load_host_registry(global_root) {
         fanout.host_names = registry
             .hosts()

@@ -31,6 +31,7 @@ fn host_registry_edits_refresh_a_live_workspace_runtime() {
             ssh: "pool-follower".to_string(),
             task_prefix: "RVW".to_string(),
             host_os: Some(orbit_types::task::HostOs::Linux),
+            offline: None,
         }])
         .expect("register host");
     client.call_tool_ok("orbit_task_list", json!({}));

@@ -261,6 +261,13 @@ the aggregator because the destination cannot report on itself:
 | `severity` | `critical` when the host is the owner of any in-scope workspace, as the local replica checkouts name it (`owner_machine_id`); otherwise `high` |
 | `next` | `orbit host show <name>`; `also`: `orbit host list` for a live re-probe, and for `tool_not_on_this_host` the binary-update runbook |
 
+The accepting machine's active `orbit host offline` acknowledgements skip those peers before opening
+sessions. The envelope reports each skipped host once in `acknowledged`, with its `machine_id`,
+`name`, `reason`, `set_by`, `since` and optional `until`. Acknowledged hosts do not produce a
+`host_unhealthy` item or a `degraded` entry, including when a read would have reported an unread
+workspace owner. Local attention also reports active marks from its own registry. At expiry or
+after `orbit host online`, the normal attention rules resume.
+
 Each such failure is *also* a `degraded` entry on the envelope (code `unreachable_destination`,
 `tool_not_on_this_host`, or `attention_read_refused`, scope `host:<name>`). A destination
 that refused the input still has `hosts[].reachability = reachable`; the refusal code

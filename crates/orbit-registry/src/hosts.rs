@@ -53,6 +53,24 @@ pub struct HostEntry {
     /// removed and added again.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub host_os: Option<orbit_types::task::HostOs>,
+    /// The operator's offline mark, when one has been recorded.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub offline: Option<orbit_types::identity::HostOffline>,
+}
+
+impl HostEntry {
+    /// One report row when this host's offline mark is active.
+    pub fn acknowledged_offline(
+        &self,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> Option<orbit_types::identity::AcknowledgedHost> {
+        let offline = self.offline.as_ref().filter(|mark| mark.active_at(now))?;
+        Some(orbit_types::identity::AcknowledgedHost {
+            machine_id: self.machine_id.clone(),
+            name: self.name.clone(),
+            offline: offline.clone(),
+        })
+    }
 }
 
 #[derive(Serialize, Deserialize)]
@@ -469,6 +487,19 @@ fn validate_entries(
         validate_machine_id(&entry.machine_id)?;
         validate_stored_task_prefix(&entry.task_prefix)?;
         validate_ssh_target(&entry.ssh)?;
+        if let Some(mark) = &entry.offline {
+            if mark.reason.trim().is_empty() || mark.reason.chars().any(char::is_control) {
+                return Err(OrbitError::InvalidInput(
+                    "offline reason must be non-empty and contain no control characters".into(),
+                ));
+            }
+            if mark.set_by.trim().is_empty() || mark.until.is_some_and(|until| until <= mark.since)
+            {
+                return Err(OrbitError::InvalidInput(
+                    "offline mark requires an operator and any --until must be after the mark was set".into(),
+                ));
+            }
+        }
         if let Some(local) = local {
             if entry.machine_id == local.id {
                 return Err(OrbitError::host_registry(

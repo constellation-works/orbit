@@ -73,6 +73,7 @@ fn readiness_lines(payload: &Value, formatter: &WaitingTaskFormatter) -> Vec<Str
         "Snapshot only — eligible does not guarantee a task will start. Active leaf runs: {}/{}; free slots: {}.",
         capacity["active_leaf_runs"], capacity["max_active_leaf_runs"], capacity["free_slots"],
     )];
+    lines.extend(crate::command::host::acknowledged_host_lines(payload));
     for warning in payload["crew_pool_warnings"]
         .as_array()
         .into_iter()

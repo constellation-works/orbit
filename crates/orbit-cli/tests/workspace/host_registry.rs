@@ -467,6 +467,154 @@ fn host_file_hand_edits_are_validated_without_rewriting() {
     }
 }
 
+fn acknowledged_downtime_suppresses_unreachable_attention_until_clear_or_expiry() {
+    let fleet = Fleet::new();
+    let alpha = fleet.install("alpha", "alpha", "AL");
+    fleet.route("alpha", &alpha, "plain");
+    fleet.json(&["host", "add", "alpha", "--json"]);
+    let registration = fleet.hosts_bytes();
+    fleet.unroute("alpha");
+
+    let attention = |local| {
+        let args: &[&str] = &[
+            "attention",
+            "--host",
+            "alpha",
+            "--kind",
+            "host_unhealthy",
+            "--json",
+        ];
+        let mut command = fleet.orbit_in(&fleet.local.home, &fleet.local_repo, &[]);
+        if local {
+            command.arg("--root").arg(fleet.local.home.join(".orbit"));
+        }
+        let output = command
+            .args(args)
+            .env("ORBIT_OPERATOR", "1")
+            .assert()
+            .success();
+        serde_json::from_slice::<Value>(&output.get_output().stdout).expect("attention JSON")
+    };
+    let unreachable = attention(false);
+    assert_eq!(
+        unreachable["items"][0]["kind"], "host_unhealthy",
+        "{unreachable}"
+    );
+    assert_eq!(
+        unreachable["degraded"][0]["code"], "unreachable_destination",
+        "{unreachable}"
+    );
+    let calls = fleet.routes.with_extension("calls");
+    let before = fs::read(&calls).expect("recorded SSH calls");
+
+    for reason in ["", "   "] {
+        assert_eq!(
+            fleet
+                .refused(&["host", "offline", "alpha", "--reason", reason])
+                .0,
+            "invalid_input"
+        );
+    }
+    assert_eq!(
+        fleet.hosts_bytes(),
+        registration,
+        "refusals leave the registration alone"
+    );
+    let reason = "planned maintenance";
+    let until = "2099-01-01T00:00:00Z";
+    let marked = fleet.json(&[
+        "host", "offline", "ALPHA", "--reason", reason, "--until", until, "--json",
+    ]);
+    let mark = &marked["entry"]["offline"];
+    assert_eq!(mark["reason"], reason, "{marked}");
+    assert_eq!(mark["until"], until, "{marked}");
+    assert!(
+        mark["set_by"]
+            .as_str()
+            .is_some_and(|actor| !actor.is_empty())
+    );
+    assert!(mark["since"].is_string());
+
+    for local in [false, true] {
+        let response = attention(local);
+        let acknowledged = response["acknowledged"]
+            .as_array()
+            .expect("acknowledgements");
+        assert_eq!(acknowledged.len(), 1, "{response}");
+        assert_eq!(acknowledged[0]["reason"], reason, "{response}");
+        assert_eq!(
+            acknowledged[0]["machine_id"], alpha.machine_id,
+            "{response}"
+        );
+        assert_eq!(acknowledged[0]["since"], mark["since"], "{response}");
+        assert_eq!(acknowledged[0]["until"], until, "{response}");
+        assert_eq!(response["degraded"], json!([]), "{response}");
+        assert_eq!(response["counts"]["matching"], 0, "{response}");
+    }
+    let list = fleet.json(&["host", "list", "--no-probe", "--json"]);
+    let host = host_row(&list, "alpha");
+    assert_eq!(host["offline"], *mark, "{list}");
+    assert_eq!(host["ssh"], "alpha", "{list}");
+    assert_eq!(host["task_prefix"], "AL", "{list}");
+    let readiness = fleet.orbit_ok(&fleet.local_repo, &["run", "readiness", "--json"]);
+    let readiness: Value = serde_json::from_slice(&readiness.stdout).expect("readiness JSON");
+    assert_eq!(
+        readiness["acknowledged"][0]["reason"], reason,
+        "{readiness}"
+    );
+    assert_eq!(
+        fs::read(&calls).expect("recorded SSH calls"),
+        before,
+        "observational reads must skip SSH"
+    );
+
+    let doctor = fleet.doctor_hosts_row();
+    assert_eq!(doctor["status"], "ok", "{doctor}");
+    assert!(
+        doctor["message"]
+            .as_str()
+            .unwrap_or_default()
+            .contains(reason),
+        "{doctor}"
+    );
+    fleet.route("alpha", &alpha, "plain");
+    let show = fleet.json(&["host", "show", "alpha", "--json"]);
+    assert_eq!(show["offline"], *mark, "{show}");
+    assert_eq!(show["reachable"], true, "{show}");
+    fleet.unroute("alpha");
+
+    // Move the recorded window into the past without waiting for a timer.
+    let text = fs::read_to_string(fleet.hosts_file()).expect("marked host file");
+    let expired = text
+        .replace(
+            mark["since"].as_str().expect("set time"),
+            "2020-01-01T00:00:00Z",
+        )
+        .replace(until, "2020-01-02T00:00:00Z");
+    fs::write(fleet.hosts_file(), &expired).expect("expire the mark");
+    let response = attention(false);
+    assert!(response["acknowledged"].is_null(), "{response}");
+    assert_eq!(
+        response["degraded"][0]["code"], "unreachable_destination",
+        "{response}"
+    );
+    assert_eq!(fleet.hosts_bytes().as_deref(), Some(expired.as_bytes()));
+
+    fleet.json(&["host", "offline", "alpha", "--reason", reason, "--json"]);
+    fleet.json(&["host", "online", &alpha.machine_id, "--json"]);
+    let online = fleet.json(&["host", "online", "alpha", "--json"]);
+    assert_eq!(online["action"], "already_online", "{online}");
+    assert_eq!(
+        fleet.hosts_bytes(),
+        registration,
+        "clear restores the original entry"
+    );
+    assert_eq!(
+        attention(false)["degraded"][0]["code"],
+        "unreachable_destination"
+    );
+}
+
 #[test]
 fn host_registry_contracts_0() {
     for (name, check) in [
@@ -498,5 +646,9 @@ fn host_registry_contracts_1() {
     host_file_hand_edits_are_validated_without_rewriting();
     orbit_common::test_env::record_scenario_pass(
         "host_file_hand_edits_are_validated_without_rewriting",
+    );
+    acknowledged_downtime_suppresses_unreachable_attention_until_clear_or_expiry();
+    orbit_common::test_env::record_scenario_pass(
+        "acknowledged_downtime_suppresses_unreachable_attention_until_clear_or_expiry",
     );
 }

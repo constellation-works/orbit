@@ -126,15 +126,20 @@ impl RegistryWorkspaceCatalog {
 impl WorkspaceCatalog for RegistryWorkspaceCatalog {
     fn attention_registered_hosts(
         &self,
-    ) -> Result<Vec<orbit_types::tool::AttentionHost>, OrbitError> {
+    ) -> Result<Vec<orbit_core::runtime::workspace::catalog::RegisteredAttentionHost>, OrbitError>
+    {
+        use orbit_core::runtime::workspace::catalog::RegisteredAttentionHost;
         let registry = orbit_registry::hosts::load_host_registry(&self.global_root)?;
         Ok(registry
             .hosts()
             .entries()
             .iter()
-            .map(|host| orbit_types::tool::AttentionHost {
-                machine_id: host.machine_id.clone(),
-                name: host.name.clone(),
+            .map(|host| RegisteredAttentionHost {
+                host: orbit_types::tool::AttentionHost {
+                    machine_id: host.machine_id.clone(),
+                    name: host.name.clone(),
+                },
+                offline: host.offline.clone(),
             })
             .collect())
     }
