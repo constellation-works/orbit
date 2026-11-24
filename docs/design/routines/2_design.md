@@ -246,6 +246,12 @@ policy:
 Field semantics:
 
 - **`name`** — unique across all routine sources on a host; collision is a load-time error.
+- **`orbit_default`** — true when the definition is a seeded file (`is_seeded_routine_file`):
+  directly under `routines/` and named after one of `orbit_config::SHIPPED_DEFAULT_ROUTINES`, on each
+  `GET /api/routines` row and each `owner_only` row. The identity is the file stem, not `name`:
+  seeding qualifies a default's `name` with its workspace (`ci-failure-sweep-<workspace>`), so an
+  operator's edit to the file keeps the flag. The dashboard shows it as the "Orbit default" badge
+  that auto-tasks use ([auto-tasks](../auto-tasks/2_design.md)).
 - **`enabled`** — the definition toggle. Every registered owner checkout with an
   enabled clock evaluates its cron definitions against its own store;
   delivery/state consumers additionally require their resolved owner machine (§1.1–1.2)

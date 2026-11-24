@@ -532,6 +532,7 @@ const FIRE_COLUMNS: &[(&str, FireField)] = &[
 /// A routine row's columns; `automation` is summarized on render.
 const ROUTINE_COLUMNS: &[(&str, RoutineField)] = &[
     ("name", RoutineField::Name),
+    ("orbit_default", RoutineField::OrbitDefault),
     ("description", RoutineField::Description),
     ("source", RoutineField::Source),
     ("origin", RoutineField::Origin),
