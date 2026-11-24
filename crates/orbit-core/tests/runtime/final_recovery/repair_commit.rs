@@ -427,6 +427,9 @@ impl orbit_engine::test_support::NullRuntimeHost for RepairPipeline<'_> {
                 if self.repair == "evidence" {
                     return Ok(evidence::repair_evidence_output(self.fixture));
                 }
+                if self.repair == "evidence-unattributed" {
+                    return Ok(evidence::unattributed_repair_output(self.fixture));
+                }
                 // Deliberately name settlement: the engine must rewind far
                 // enough to admit a fresh reviewer for this repair.
                 Ok(
@@ -844,6 +847,73 @@ fn final_recovery_persists_repair_evidence_without_task_write_tools() {
         .unwrap()
         .expect("the host attaches recovery evidence without operator action");
     assert_eq!(artifact.content, b"repair validation passed\n");
+}
+
+/// [ORB-27946] A resume whose answer lacks its fault attribution escalates
+/// before its evidence reaches the host, so the prior summary and artifacts
+/// stay as they were.
+fn final_recovery_refuses_unattributed_repair_evidence_before_persisting() {
+    let fixture = fixture_with_command("test \"$(cat candidate.txt)\" != after");
+    fixture
+        .runtime
+        .update_task_with_identity(
+            &fixture.task_id,
+            orbit_core::application::task::TaskUpdateParams {
+                upsert_artifacts: vec![orbit_types::task::TaskArtifact::from_text(
+                    "recovery/prior.log",
+                    "prior evidence\n",
+                )],
+                ..Default::default()
+            },
+            None,
+            Some("codex".into()),
+        )
+        .unwrap();
+    let prior_summary = fixture
+        .runtime
+        .get_task(&fixture.task_id)
+        .unwrap()
+        .execution_summary;
+    let (_, outcome) = run_pipeline(&fixture, "evidence-unattributed");
+    assert!(
+        !outcome.as_ref().is_ok_and(|outcome| outcome.success),
+        "a refused repair must not succeed: {outcome:?}"
+    );
+    let run = fixture.input["job_run_id"].as_str().unwrap();
+    let state = fixture.runtime.read_run_state(run).unwrap().unwrap();
+    assert!(
+        matches!(
+            state.final_recovery.unwrap().decision,
+            Some(FinalRecoveryDecision::Escalate { .. })
+        ),
+        "a resume without its fault attribution escalates"
+    );
+    assert_eq!(
+        fixture
+            .runtime
+            .get_task(&fixture.task_id)
+            .unwrap()
+            .execution_summary,
+        prior_summary,
+        "the refused evidence must not replace the task summary"
+    );
+    assert_eq!(
+        fixture
+            .runtime
+            .get_task_artifact(&fixture.task_id, "recovery/prior.log")
+            .unwrap()
+            .expect("the prior artifact stays attached")
+            .content,
+        b"prior evidence\n"
+    );
+    assert!(
+        fixture
+            .runtime
+            .get_task_artifact(&fixture.task_id, "recovery/repair.log")
+            .unwrap()
+            .is_none(),
+        "the refused evidence must not attach its artifacts"
+    );
 }
 
 fn final_recovery_does_not_authorize_an_unrecorded_head_change() {
@@ -2101,6 +2171,7 @@ crate::scenario_table!(
     final_recovery_commits_a_landing_review_repair_with_unsettled_admission,
     final_recovery_does_not_authorize_an_unrecorded_head_change,
     final_recovery_persists_repair_evidence_without_task_write_tools,
+    final_recovery_refuses_unattributed_repair_evidence_before_persisting,
     final_recovery_transition_evidence_excludes_protected_paths,
     resumed_final_recovery_repair_keeps_the_original_checkpoint_owner,
     final_recovery_refused_patch_reproduces_binary_and_final_whitespace,

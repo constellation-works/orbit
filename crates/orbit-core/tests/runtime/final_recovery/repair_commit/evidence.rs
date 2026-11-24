@@ -125,3 +125,14 @@ pub(super) fn repair_evidence_output(fixture: &Fixture) -> Value {
     json!({"decision": "resume", "fault": "implementer", "fault_evidence": "run fixture: the candidate failed its check", "step_id": "review_gate_settle",
         "rationale": "repaired and verified candidate", "repair_evidence": evidence})
 }
+
+/// The same resume without its fault attribution. The engine must escalate it
+/// before the evidence reaches the host, so the task keeps its prior summary
+/// and artifacts.
+pub(super) fn unattributed_repair_output(fixture: &Fixture) -> Value {
+    let mut output = repair_evidence_output(fixture);
+    let object = output.as_object_mut().unwrap();
+    object.remove("fault");
+    object.remove("fault_evidence");
+    output
+}
