@@ -53,6 +53,15 @@ pub(super) fn reserving_detail() -> String {
         .to_string()
 }
 
+/// The borrowed lock-resolution inputs a surface-reservation pass reads:
+/// where the workspace lives, which paths count as unlocked, and how
+/// overlaps block.
+pub(super) struct SurfaceLockContext<'a> {
+    pub(super) workspace_root: &'a Path,
+    pub(super) unlocked: &'a UnlockedContextPaths,
+    pub(super) lock_modes: &'a FootprintLockModes,
+}
+
 /// Withhold every task in `backlog` that a reservation covers, recording it in
 /// `excluded`, and return the rest in their original order.
 ///
@@ -61,15 +70,12 @@ pub(super) fn reserving_detail() -> String {
 /// sorts ahead of it in dispatch order, using the same frozen-batch expiry
 /// snapshot as the backlog sort. A task in `published_resumes` is never
 /// withheld.
-#[allow(clippy::too_many_arguments)]
 pub(super) fn withhold_reserved_surfaces<'a>(
     backlog: Vec<&'a Task>,
     reserving: &[&Task],
     published_resumes: &BTreeMap<String, PublishedResume>,
     expiring_batches: &BTreeMap<String, DateTime<Utc>>,
-    workspace_root: &Path,
-    unlocked: &UnlockedContextPaths,
-    lock_modes: &FootprintLockModes,
+    locks: &SurfaceLockContext<'_>,
     excluded: &mut Vec<BacklogTaskExclusion>,
 ) -> Vec<&'a Task> {
     if reserving.is_empty() {
@@ -77,7 +83,7 @@ pub(super) fn withhold_reserved_surfaces<'a>(
     }
     let mut reserved: BTreeMap<String, Vec<String>> = BTreeMap::new();
     for task in reserving {
-        for selector in lock_context_files_for_task(task, workspace_root, unlocked) {
+        for selector in lock_context_files_for_task(task, locks.workspace_root, locks.unlocked) {
             reserved.entry(selector).or_default().push(task.id.clone());
         }
     }
@@ -92,13 +98,19 @@ pub(super) fn withhold_reserved_surfaces<'a>(
         |task| published_resumes.contains_key(&task.id),
         expiring_batches,
         |task| {
-            task_lock_overlaps(task, &reserved_index, workspace_root, unlocked, lock_modes)
-                .into_iter()
-                .filter_map(|overlap| {
-                    let reserver = *reserving_by_id.get(overlap.locking_task_id.as_str())?;
-                    Some((overlap, reserver))
-                })
-                .collect()
+            task_lock_overlaps(
+                task,
+                &reserved_index,
+                locks.workspace_root,
+                locks.unlocked,
+                locks.lock_modes,
+            )
+            .into_iter()
+            .filter_map(|overlap| {
+                let reserver = *reserving_by_id.get(overlap.locking_task_id.as_str())?;
+                Some((overlap, reserver))
+            })
+            .collect()
         },
         |task, conflicts: Vec<BacklogTaskConflict>| {
             let mut reserved_for = conflicts

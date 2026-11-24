@@ -16,7 +16,8 @@ use orbit_types::workflow::{REVIEW_RUN_OPTION_SOURCE, ReviewAdmission, ReviewLay
 use super::super::claim_holders::{self, ClaimHolders};
 use super::super::pass_error::PassError;
 use super::super::surface_reservation::{
-    MAX_SURFACE_RESERVATIONS, reserves_surface, reserving_detail, withhold_reserved_surfaces,
+    MAX_SURFACE_RESERVATIONS, SurfaceLockContext, reserves_surface, reserving_detail,
+    withhold_reserved_surfaces,
 };
 use super::super::unknown_footprint::footprint_waits;
 use super::exclusions::{
@@ -728,9 +729,11 @@ pub(super) fn backlog_snapshot_in_mode(
                 &reserving,
                 &published_resumes,
                 &expiring_batches,
-                workspace_root,
-                unlocked,
-                lock_modes,
+                &SurfaceLockContext {
+                    workspace_root,
+                    unlocked,
+                    lock_modes,
+                },
                 &mut excluded,
             );
         }

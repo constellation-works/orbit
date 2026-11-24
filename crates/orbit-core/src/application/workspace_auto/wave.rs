@@ -11,7 +11,7 @@ use orbit_types::task::Task;
 use orbit_types::workflow::ResourceThrottle;
 
 use crate::application::admission::auto_admission::{
-    AdmissionHolders, AdmissionSelection, select_admissions,
+    AdmissionHolders, AdmissionSelection, SelectionContext, select_admissions,
 };
 use crate::application::admission::backlog_exclusion::BacklogSnapshot;
 use crate::application::admission::cpu_light::{CPU_LIGHT_LEAVES, LightBudget, ResourceGate};
@@ -180,9 +180,11 @@ impl<'a> AdmissionWave<'a> {
         select_admissions(
             &self.examined,
             self.task_lookup,
-            self.workspace_root,
-            self.unlocked,
-            &self.holders,
+            &SelectionContext {
+                workspace_root: self.workspace_root,
+                unlocked: self.unlocked,
+                holders: &self.holders,
+            },
             self.published_resumes,
             self.free_slots,
             FootprintGuard {
