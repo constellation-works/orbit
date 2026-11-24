@@ -285,6 +285,7 @@ Retired features are removed from this table along with their folder.
 | Resident Orchestrator | [docs/design/resident-orchestrator/](./resident-orchestrator/) | claude |
 | Review Gate | [docs/design/review-gate/](./review-gate/) | codex |
 | Routines | [docs/design/routines/](./routines/) | claude |
+| Signal Acknowledgement | [docs/design/signal-acknowledgement/](./signal-acknowledgement/) | claude |
 | State Compatibility | [docs/design/state-compatibility/](./state-compatibility/) | claude |
 | Symbol Risk Index | [docs/design/symbol-risk-index/](./symbol-risk-index/) | claude |
 | Task Artifacts | [docs/design/task-artifacts/](./task-artifacts/) | codex |

@@ -167,7 +167,7 @@ Live task progress is in Orbit; this board records what the feature lead last se
 | [Script Steps](./design/script-steps/1_scope.md) | File the explicit script_grant raise surface for orbit-office proposals (phase 4 part; unfiled) | claude |
 | [Standing Drain](./design/standing-drain/1_scope.md) | Phases 1 (intent and surfaces) and 2 (the opt-in keeper) are built; enabling the keeper is Daniel's; next is the deploy hold, ORB-25992 | claude |
 
-### Designing (6)
+### Designing (7)
 
 | Feature | Next | Lead |
 | --- | --- | --- |
@@ -175,6 +175,7 @@ Live task progress is in Orbit; this board records what the feature lead last se
 | [Context Index](./design/context-index/1_overview.md) | Decide from the [ORB-24866] measurement whether to file 2_design.md §13 tasks 1–5 in ws_orbit-graph | claude |
 | [Eval Harness](./design/eval-harness/1_overview.md) | Daniel accepted every recommendation in 2_design.md §14; file build-order tasks 1 to 5 once he names the Q7 spend cap and confirms the Q2 box | claude |
 | [Owner Failover](./design/owner-failover/1_overview.md) | Daniel reviews the proposal and answers its open questions | claude |
+| [Signal Acknowledgement](./design/signal-acknowledgement/1_scope.md) | Daniel approves this scope; ORB-27754 implements phase 1 | claude |
 | [Symbol Risk Index](./design/symbol-risk-index/1_scope.md) | Daniel reviews this scope and 2_design.md; implementation tasks are filed after acceptance | claude |
 | [Task Risk](./design/task-risk/1_scope.md) | Review estimands and evidence prerequisites before authorizing implementation. | codex |
 
@@ -285,6 +286,7 @@ a conservative title/status fallback.
 | [Routines](./design/routines/1_overview.md) | Durable checkout-local routine definitions dispatch catalog jobs on cron, delivery or state eligibility, with host-local checkpoints. | Accepted | claude |
 | [Scheduled Tasks](./design/scheduled-tasks/1_scope.md) | Scope: let a task wait for a date — an optional not_before instant that every dispatcher honours as a self-lifting admission hold, readable by date range so a calendar can show it | Draft | claude |
 | [Script Steps](./design/script-steps/1_scope.md) | Scope: a job step that runs a workspace script by name inside the executor sandbox, authorized by an operator grant bound to the script's content digest, with JSON stdin/stdout, declared files, audit and the job retry policy | Draft | claude |
+| [Signal Acknowledgement](./design/signal-acknowledgement/1_scope.md) | Scope: an operator-only `orbit ack` that marks an attention item, degraded source, doctor warning or run warning as expected, with reason, author and a required expiry, shown as acknowledged and left out of counts | Draft | claude |
 | [Standing Drain](./design/standing-drain/1_scope.md) | Scope: an opt-in, config-gated drain intent that re-submits a bounded auto drain on the owner when none is live, work is waiting and nobody paused it, so deploys and window ends stop leaving ws_orbit idle | Draft | claude |
 | [State Compatibility](./design/state-compatibility/1_overview.md) | How an Orbit binary decides whether it may open workspace state written by a newer Orbit, instead of refusing every command on a version number. | Draft | claude |
 | [Symbol Risk Index](./design/symbol-risk-index/1_scope.md) | Scope: a routine-built per-symbol index of body size, test coverage and regression-site history, read by admission riskiness and a test-priority view, each shipped only if its backtest beats today's model | Draft | claude |
