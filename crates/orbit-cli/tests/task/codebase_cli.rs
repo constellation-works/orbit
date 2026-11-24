@@ -320,7 +320,7 @@ fn codebase_cli_marks_the_absent_partner_in_a_path_show() {
     );
 }
 
-/// A width-limited analytics table keeps the identity of the absent pair member visible.
+/// A width-limited analytics table keeps both pair member identities and the absence marker visible.
 #[cfg(unix)]
 #[test]
 fn codebase_cli_marks_the_absent_coupling_member_at_terminal_width() {
@@ -330,13 +330,109 @@ fn codebase_cli_marks_the_absent_coupling_member_at_terminal_width() {
         return;
     }
 
+    let first = "crates/orbit-core/src/application/codebase/sections/long_left_subsystem/analytics_path/first_absent_member.rs";
+    let second = "crates/orbit-core/src/application/codebase/sections/long_right_subsystem/analytics_path/second_present_member.rs";
+    let (plain, piped_table, rendered, analytics) =
+        run_coupling_pair_analytics(first, second, true, false);
+
+    let pair = &analytics["change_coupling"]["rows"][0];
+    assert_eq!(pair["paths"], json!([first, second]), "{analytics}");
+    assert_eq!(pair["absent_paths_at_head"], json!([first]), "{analytics}");
+    assert_eq!(pair["numerator"], 1, "{analytics}");
+    assert_eq!(pair["denominator"], 1, "{analytics}");
+    assert_eq!(pair["rate"], 1.0, "{analytics}");
+
+    assert!(
+        plain.contains(&format!("{first} [absent at HEAD] <-> {second}")),
+        "untruncated plain analytics text retains both paths and the absence note:\n{plain}"
+    );
+    assert!(
+        plain.contains("100%"),
+        "untruncated plain analytics text retains the rate:\n{plain}"
+    );
+    assert!(
+        piped_table.contains(&format!("{first} [absent at HEAD] <-> {second}")),
+        "untruncated table analytics text retains both paths and the absence note:\n{piped_table}"
+    );
+    assert!(
+        piped_table.contains("FIRST")
+            && piped_table.contains("100%")
+            && piped_table.contains("1/1"),
+        "untruncated table analytics text retains absence indicator and rate:\n{piped_table}"
+    );
+
+    let absent_row = rendered
+        .lines()
+        .find(|line| line.contains("FIRST"))
+        .unwrap_or_else(|| panic!("terminal table marks the first path as absent:\n{rendered}"));
+    assert!(
+        absent_row.contains('…'),
+        "the pair paths are shortened while the absent member remains visible: {absent_row}"
+    );
+    assert!(
+        absent_row.contains("irst_absent_member.rs"),
+        "the shortened row preserves the first member's identity: {absent_row}"
+    );
+    assert!(
+        absent_row.contains(" <-> "),
+        "the shortened row preserves the pair separator: {absent_row}"
+    );
+    assert!(
+        absent_row.contains("ond_present_member.rs"),
+        "the shortened row preserves the second member's identity: {absent_row}"
+    );
+    assert!(
+        absent_row.contains("100%") && absent_row.contains("1/1"),
+        "the shortened row retains the coupling rate and count: {absent_row}"
+    );
+    assert!(
+        rendered.contains("ABSENT MEMBER"),
+        "the terminal table labels its absent-member column:\n{rendered}"
+    );
+
+    // Even when both members share a deep prefix and identical filename, both remain distinguishable.
+    let left_mod =
+        "crates/orbit-core/src/application/codebase/sections/left_shared_subsystem/mod.rs";
+    let right_mod =
+        "crates/orbit-core/src/application/codebase/sections/right_shared_subsystem/mod.rs";
+    let (plain_mod, _, rendered_mod, analytics_mod) =
+        run_coupling_pair_analytics(left_mod, right_mod, false, true);
+    assert_eq!(
+        analytics_mod["change_coupling"]["rows"][0]["absent_paths_at_head"],
+        json!([right_mod]),
+        "{analytics_mod}"
+    );
+    assert!(
+        plain_mod.contains(&format!("{left_mod} <-> {right_mod} [absent at HEAD]")),
+        "untruncated shared-filename pair retains full paths and absence note:\n{plain_mod}"
+    );
+    let mod_row = rendered_mod
+        .lines()
+        .find(|line| line.contains("SECOND"))
+        .unwrap_or_else(|| {
+            panic!("terminal table marks the second path as absent:\n{rendered_mod}")
+        });
+    assert!(
+        mod_row.contains("left_share")
+            && mod_row.contains("right_shar")
+            && mod_row.matches("/mod.rs").count() == 2
+            && mod_row.contains(" <-> "),
+        "the shortened row disambiguates shared-filename members: {mod_row}"
+    );
+}
+
+#[cfg(unix)]
+fn run_coupling_pair_analytics(
+    first: &str,
+    second: &str,
+    remove_first: bool,
+    remove_second: bool,
+) -> (String, String, String, serde_json::Value) {
     use std::io::Read as _;
     use std::os::fd::FromRawFd as _;
     use std::process::{Command, Stdio};
 
     let fixture = Fixture::new();
-    let first = "crates/orbit-core/src/application/codebase/sections/long_left_subsystem/analytics_path/first_absent_member.rs";
-    let second = "crates/orbit-core/src/application/codebase/sections/long_right_subsystem/analytics_path/second_present_member.rs";
     for path in [first, second] {
         let file = fixture.repo.join(path);
         fs::create_dir_all(file.parent().unwrap()).unwrap();
@@ -374,7 +470,12 @@ fn codebase_cli_marks_the_absent_coupling_member_at_terminal_width() {
         .unwrap();
         assert_eq!(reservation["reserved"], true, "{reservation}");
     }
-    fs::remove_file(fixture.repo.join(first)).unwrap();
+    if remove_first {
+        fs::remove_file(fixture.repo.join(first)).unwrap();
+    }
+    if remove_second {
+        fs::remove_file(fixture.repo.join(second)).unwrap();
+    }
 
     let analytics = fixture.json(&[
         "codebase",
@@ -385,39 +486,29 @@ fn codebase_cli_marks_the_absent_coupling_member_at_terminal_width() {
         "1",
         "--json",
     ]);
-    let pair = &analytics["change_coupling"]["rows"][0];
-    assert_eq!(pair["paths"], json!([first, second]), "{analytics}");
-    assert_eq!(pair["absent_paths_at_head"], json!([first]), "{analytics}");
-    assert_eq!(pair["numerator"], 1, "{analytics}");
-    assert_eq!(pair["denominator"], 1, "{analytics}");
-    assert_eq!(pair["rate"], 1.0, "{analytics}");
 
-    let plain = fixture
-        .command(&[
-            "--format",
-            "plain",
-            "codebase",
-            "analytics",
-            "--window",
-            "30d",
-            "--min-support",
-            "1",
-        ])
-        .env("NO_COLOR", "1")
-        .assert()
-        .success()
-        .get_output()
-        .stdout
-        .clone();
-    let plain = String::from_utf8(plain).unwrap();
-    assert!(
-        plain.contains(&format!("{first} [absent at HEAD] <-> {second}")),
-        "untruncated analytics text retains both paths and the absence note:\n{plain}"
-    );
-    assert!(
-        plain.contains("100%"),
-        "untruncated analytics text retains the rate:\n{plain}"
-    );
+    let run_untruncated = |format: &str| {
+        let out = fixture
+            .command(&[
+                "--format",
+                format,
+                "codebase",
+                "analytics",
+                "--window",
+                "30d",
+                "--min-support",
+                "1",
+            ])
+            .env("NO_COLOR", "1")
+            .assert()
+            .success()
+            .get_output()
+            .stdout
+            .clone();
+        String::from_utf8(out).unwrap()
+    };
+    let plain = run_untruncated("plain");
+    let piped_table = run_untruncated("table");
 
     let mut master_fd = -1;
     let mut slave_fd = -1;
@@ -487,18 +578,7 @@ fn codebase_cli_marks_the_absent_coupling_member_at_terminal_width() {
         String::from_utf8_lossy(&output.stderr)
     );
     let rendered = String::from_utf8(rendered).unwrap();
-    let absent_row = rendered
-        .lines()
-        .find(|line| line.contains("FIRST"))
-        .unwrap_or_else(|| panic!("terminal table marks the first path as absent:\n{rendered}"));
-    assert!(
-        absent_row.contains('…'),
-        "the pair paths are shortened while the absent member remains visible: {absent_row}"
-    );
-    assert!(
-        rendered.contains("ABSENT MEMBER"),
-        "the terminal table labels its absent-member column:\n{rendered}"
-    );
+    (plain, piped_table, rendered, analytics)
 }
 
 /// The public CLI reads landed paths rather than inferring them from context.

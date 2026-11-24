@@ -143,7 +143,7 @@ fn analytics_blocks(value: &Value) -> Vec<Block> {
     )));
     let mut table = Table::new(vec![
         Column::new("#").number(),
-        Column::new("PATHS").path(),
+        Column::new("PATHS").path_pair(),
         Column::new("ABSENT MEMBER").fixed().keep_when_uniform(true),
         Column::new("RATE").number(),
         Column::new("COUNT").number(),

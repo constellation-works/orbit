@@ -44,6 +44,8 @@ enum Overflow {
     Tail,
     /// Paths, refs, hashes: both ends identify the value.
     Middle,
+    /// Coupled path pairs joined by ` <-> `: shorten each member independently.
+    PathPair,
 }
 
 /// One column of a list view: its header plus the policy for width, alignment,
@@ -96,6 +98,14 @@ impl Column {
     #[must_use]
     pub fn path(mut self) -> Self {
         self.overflow = Overflow::Middle;
+        self
+    }
+
+    /// Two paths joined by `" <-> "`: shorten each member independently so both
+    /// identities and the separator remain visible.
+    #[must_use]
+    pub(crate) fn path_pair(mut self) -> Self {
+        self.overflow = Overflow::PathPair;
         self
     }
 
@@ -481,8 +491,8 @@ impl Table {
 
     /// The cell as the grid should receive it. Tail truncation is left to
     /// `comfy-table`, which is width-accurate and preserves the cell's styling;
-    /// middle truncation has to be applied here because the library has no such
-    /// mode.
+    /// middle and pair truncation have to be applied here because the library
+    /// has no such modes.
     fn cell(&self, row: &[Cell], index: usize, width: usize) -> Cell {
         let cell = cell_at(row, index);
         let cell = if self.columns[index].neutral_when_filtered {
@@ -490,14 +500,16 @@ impl Table {
         } else {
             cell
         };
-        if self.columns[index].overflow != Overflow::Middle {
-            return cell;
-        }
+        let truncator = match self.columns[index].overflow {
+            Overflow::Tail => return cell,
+            Overflow::Middle => truncate_middle,
+            Overflow::PathPair => truncate_path_pair,
+        };
         let content = cell.content();
         if content.chars().count() <= width {
             return cell;
         }
-        Cell::new(truncate_middle(&content, width))
+        Cell::new(truncator(&content, width))
     }
 }
 
@@ -594,4 +606,103 @@ fn truncate_middle(value: &str, width: usize) -> String {
     truncated.push_str(ELLIPSIS);
     truncated.extend(&chars[chars.len() - tail..]);
     truncated
+}
+
+/// Shorten a `"<left> <-> <right>"` pair cell to fit `width` while keeping both
+/// member identities and the `" <-> "` separator visible.
+///
+/// Coupling tables pair this column with an explicit `ABSENT MEMBER` column, so
+/// when the cell overflows we strip the verbose ` [absent at HEAD]` suffix
+/// from each member before fitting, freeing space for the leaf filenames.
+fn truncate_path_pair(value: &str, width: usize) -> String {
+    const PAIR_SEPARATOR: &str = " <-> ";
+    const ABSENT_MARKER: &str = " [absent at HEAD]";
+
+    let Some((left_raw, right_raw)) = value.split_once(PAIR_SEPARATOR) else {
+        return truncate_middle(value, width);
+    };
+    let left = left_raw.strip_suffix(ABSENT_MARKER).unwrap_or(left_raw);
+    let right = right_raw.strip_suffix(ABSENT_MARKER).unwrap_or(right_raw);
+
+    let sep_len = PAIR_SEPARATOR.chars().count();
+    let left_len = left.chars().count();
+    let right_len = right.chars().count();
+    if left_len + sep_len + right_len <= width {
+        return format!("{left}{PAIR_SEPARATOR}{right}");
+    }
+    if width <= sep_len + 2 {
+        return truncate_middle(&format!("{left}{PAIR_SEPARATOR}{right}"), width);
+    }
+
+    let budget = width - sep_len;
+    let (left_budget, right_budget) = if left_len <= budget / 2 {
+        (left_len, budget - left_len)
+    } else if right_len <= budget - budget / 2 {
+        (budget - right_len, right_len)
+    } else {
+        let left_half = budget.div_ceil(2);
+        (left_half, budget - left_half)
+    };
+
+    let mut left_short = truncate_path_member(left, left_budget);
+    let mut right_short = truncate_path_member(right, right_budget);
+
+    if left_short == right_short && left != right {
+        let prefix = common_dir_prefix(left, right);
+        if !prefix.is_empty() {
+            let left_rel = &left[prefix.len()..];
+            let right_rel = &right[prefix.len()..];
+            if !left_rel.is_empty() && !right_rel.is_empty() {
+                left_short = truncate_relative_member(left_rel, left_budget);
+                right_short = truncate_relative_member(right_rel, right_budget);
+            }
+        }
+    }
+
+    format!("{left_short}{PAIR_SEPARATOR}{right_short}")
+}
+
+/// Shorten one path member to `width`, prioritizing its trailing `/filename`
+/// so distinctive leaf file names remain visible at narrow widths.
+fn truncate_path_member(path: &str, width: usize) -> String {
+    let chars = path.chars().collect::<Vec<_>>();
+    if chars.len() <= width {
+        return path.to_string();
+    }
+    if width <= 1 {
+        return ELLIPSIS.to_string();
+    }
+    let kept = width - 1;
+    let tail = match chars.iter().rposition(|&c| c == '/') {
+        Some(slash) => (chars.len() - slash).clamp(kept / 2, kept),
+        None => kept / 2,
+    };
+    let head = kept - tail;
+    let mut truncated = chars[..head].iter().collect::<String>();
+    truncated.push_str(ELLIPSIS);
+    truncated.extend(&chars[chars.len() - tail..]);
+    truncated
+}
+
+fn truncate_relative_member(rel: &str, width: usize) -> String {
+    if width <= 2 {
+        return truncate_path_member(rel, width);
+    }
+    if rel.chars().count() + 2 <= width {
+        return format!("{ELLIPSIS}/{rel}");
+    }
+    format!("{ELLIPSIS}/{}", truncate_middle(rel, width - 2))
+}
+
+fn common_dir_prefix<'a>(left: &'a str, right: &str) -> &'a str {
+    let mut last_slash = 0;
+    for ((byte_index, left_char), right_char) in left.char_indices().zip(right.chars()) {
+        if left_char != right_char {
+            break;
+        }
+        if left_char == '/' {
+            last_slash = byte_index + 1;
+        }
+    }
+    &left[..last_slash]
 }
