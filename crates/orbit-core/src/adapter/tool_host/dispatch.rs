@@ -374,6 +374,17 @@ fn execute_admitted(
                     || session_context.origin_session_id.is_some()
                     || session_context.write_surface.is_some());
             let started = Instant::now();
+            let comment_checkpoint = (verb == TaskVerb::Update)
+                .then(|| {
+                    input
+                        .get("comment")
+                        .and_then(Value::as_str)
+                        .filter(|comment| {
+                            crate::application::resident::is_checkpoint_comment_json(comment)
+                        })
+                        .map(ToOwned::to_owned)
+                })
+                .flatten();
             let result = with_task_write_provenance(provenance, || {
                 super::task::operation::dispatch(
                     runtime,
@@ -390,6 +401,24 @@ fn execute_admitted(
                     input,
                 )
             });
+            if let Some(comment) = comment_checkpoint.as_deref()
+                && let Some(target_id) = input_task_id.as_deref()
+            {
+                let parsed = serde_json::from_str::<Value>(comment).ok();
+                match &result {
+                    Ok(_) => runtime.clear_resident_checkpoint_refusal_on_accept(
+                        target_id,
+                        task_scope.run_id.as_deref(),
+                        parsed.as_ref(),
+                    ),
+                    Err(error) => runtime.record_resident_checkpoint_refusal_if_live(
+                        target_id,
+                        task_scope.run_id.as_deref(),
+                        parsed.as_ref(),
+                        error,
+                    ),
+                }
+            }
             if let Some(mutation_verb) = mutation_verb
                 && should_audit_mutation
             {
@@ -462,6 +491,7 @@ fn execute_admitted(
         OrbitBuiltinAction::Resident(verb) => super::resident_tools::dispatch(
             runtime,
             session_context,
+            task_scope.run_id.as_deref(),
             verb,
             input,
             agent.as_deref(),

@@ -583,7 +583,7 @@ impl OrbitRuntime {
             self.synthesize_resident_checkpoint(
                 task_id,
                 &live,
-                "the stopped cycle died before finalization (process killed or lease expired)",
+                "unknown: the stopped cycle died before finalization (process killed or lease expired)",
                 None,
             )?;
             self.set_resident_live_cycle(task_id, Some(&live.cycle), None)?;

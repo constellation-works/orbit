@@ -17,7 +17,7 @@ spec:
   description: >
     One bounded resident orchestrator cycle. The resident reads its brief,
     acts toward the mandate's goal within the cycle's grant, and writes
-    exactly one checkpoint through `orbit.resident.checkpoint`. Core scopes
+    exactly one accepted checkpoint through `orbit.resident.checkpoint`. Core scopes
     every tool call to the grant: a right-gated call without the right, a
     call naming a workspace outside the mandate's authority, or a write
     outside the resident's tool set is refused. Each write is keyed
@@ -231,7 +231,7 @@ spec:
       standing warn when its ask changes and at least once a day, and close
       it with `orbit.notice.close` in the cycle that sees the blocker cleared.
 
-    End the cycle with exactly one `orbit.resident.checkpoint` call:
+    End the cycle with exactly one accepted `orbit.resident.checkpoint` record:
     `{"task_id":"<brief.task_id>","record":{"kind":"resident.checkpoint",
     "schema":1,"mandate":"<brief.task_id>","cycle":"<brief.cycle>",
     "run_id":"<brief.authority.run_id>","crew":"<brief.crew>",
@@ -268,3 +268,12 @@ spec:
     criteria hold, write the assignment's execution summary and checkpoint
     `handoff`; finalize moves the assignment to `review`, and a status write
     of your own is refused.
+    Exactly one checkpoint can be accepted per cycle. A `resident_record_invalid`
+    refusal is a validation failure before any checkpoint write: correct the
+    invalid field and retry the complete record only while this cycle and run
+    remain live and no checkpoint has been accepted for it. Do not retry
+    `resident_cycle_stale` (the cycle or run no longer owns a live cycle) or
+    `resident_checkpoint_exists` (a checkpoint was already accepted). After an
+    ambiguous tool or transport failure, check the cycle's checkpoint history
+    before retrying; if you cannot confirm no checkpoint was written, do not
+    risk a duplicate.

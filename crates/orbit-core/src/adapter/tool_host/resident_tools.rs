@@ -17,6 +17,7 @@ use crate::application::resident::{
 pub(super) fn dispatch(
     runtime: &OrbitRuntime,
     session_context: &ToolSessionContext,
+    caller_run_id: Option<&str>,
     verb: ResidentVerb,
     input: Value,
     agent: Option<&str>,
@@ -66,13 +67,14 @@ pub(super) fn dispatch(
                 },
             )
         }
-        ResidentVerb::Checkpoint => runtime.append_resident_checkpoint(
+        ResidentVerb::Checkpoint => runtime.append_resident_checkpoint_for_run(
             &input.required_string("task_id")?,
             input.as_value()["record"].clone(),
             agent.map(ToOwned::to_owned),
             input
                 .optional_string("model")?
                 .or_else(|| model.map(ToOwned::to_owned)),
+            caller_run_id,
         ),
         ResidentVerb::Digest => {
             let top = input

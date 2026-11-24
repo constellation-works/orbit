@@ -16,7 +16,7 @@ owns the assignment's status: `in-progress` while the mandate is active, then
 `review` on a `handoff` checkpoint or a stop.
 
 The clock fires one bounded cycle when the mandate is due; each cycle reads its
-brief from Orbit, does one unit of coordination, and writes exactly one
+brief from Orbit, does one unit of coordination, and writes exactly one accepted
 checkpoint. The next cycle trusts checkpoints, task state, decision records
 and the action ledger — never a previous cycle's final message.
 
