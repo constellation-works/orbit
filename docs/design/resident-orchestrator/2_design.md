@@ -89,7 +89,8 @@ not the prompt.
   `proposed` task to `backlog`, where the drain can admit it), `merge` (land a reviewed PR),
   `plugin_upgrade` (install or upgrade a workspace plugin), `refresh` (merge the base tip into
   a held or review delivery PR and start its required checks, when the merge is conflict-free),
-  `recover` (start a review-only recovery of a stopped delivery's preserved candidate), and
+  `recover` (start a recovery leaf that may make the needed source changes to a stopped
+  delivery's preserved candidate, runs validation and fresh review, and hands off at review), and
   `promote_held` (move an eligible `no-auto-approve` proposal to `backlog` with a current clean
   pilot). Task-pilot assessment
   is a separate gate: it can assess
