@@ -42,7 +42,7 @@ use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use crate::runner::run_probe_process;
-use crate::{EnvironmentMode, ExecRequest, NoSandbox, StdinMode};
+use crate::{EnvironmentMode, ExecRequest, StdinMode};
 
 /// Variables a login shell contributes to the validation environment: PATH
 /// and the locators toolchains on it need to find their own installation.
@@ -357,21 +357,15 @@ impl LoginShell {
             "-c".to_string(),
             format!("exec /bin/sh -c '{}'", printer_script()),
         ]);
-        let outcome = run_probe_process(
-            &ExecRequest {
-                program: shell.clone(),
-                args,
-                current_dir: lookup(base, "HOME").map(ToOwned::to_owned),
-                timeout_ms: Some(u64::try_from(self.timeout.as_millis()).unwrap_or(u64::MAX)),
-                stdin_mode: StdinMode::Null,
-                environment_mode: EnvironmentMode::ClearAndSet(probe_environment(
-                    base,
-                    &self.program,
-                )),
-                debug: false,
-            },
-            &NoSandbox,
-        )
+        let outcome = run_probe_process(&ExecRequest {
+            program: shell.clone(),
+            args,
+            current_dir: lookup(base, "HOME").map(ToOwned::to_owned),
+            timeout_ms: Some(u64::try_from(self.timeout.as_millis()).unwrap_or(u64::MAX)),
+            stdin_mode: StdinMode::Null,
+            environment_mode: EnvironmentMode::ClearAndSet(probe_environment(base, &self.program)),
+            debug: false,
+        })
         .map_err(|error| format!("{label} `{shell}` could not start: {error}"))?;
         if outcome.timed_out {
             return Err(format!(
