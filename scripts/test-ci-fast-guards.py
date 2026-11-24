@@ -4465,6 +4465,48 @@ class RemovedCodeIdentifierTests(unittest.TestCase):
         result = self.run_check()
         self.assertEqual(result.returncode, 0, result.stderr)
 
+    # An attribute selector's quoted value names no class, in the same
+    # stylesheet or another one, so it never keeps a removed class alive.
+    QUOTED_SURVIVOR = 'a[data-file="asset.retired"] { opacity: 1; }\n'
+
+    def test_removed_class_surviving_only_in_quoted_value_is_removed(self):
+        self.write(self.CSS, ".retired { color: red; }\n" + self.QUOTED_SURVIVOR)
+        self.write("docs/design/user-interface/1_overview.md",
+                   "The `.retired` pill dims the row.\n")
+        self.commit_base()
+        self.write(self.CSS, self.QUOTED_SURVIVOR)
+        result = self.run_check()
+        self.assertNotEqual(result.returncode, 0, result.stdout)
+        self.assertIn('".retired"', result.stderr)
+        self.assertIn("docs/design/user-interface/1_overview.md:1", result.stderr)
+
+    def test_removed_class_surviving_only_in_quoted_value_of_another_sheet_is_removed(self):
+        other = "crates/demo-web/assets/dashboard/css/detail.css"
+        self.write(self.CSS, ".retired { color: red; }\n")
+        self.write(other, ".ws-badge { color: red; }\n")
+        self.write("docs/design/user-interface/1_overview.md",
+                   "The `.retired` pill dims the row.\n")
+        self.commit_base()
+        self.write(self.CSS, ".ws-badge { color: red; }\n")
+        self.write(other, ".ws-badge { color: red; }\n" + self.QUOTED_SURVIVOR)
+        result = self.run_check()
+        self.assertNotEqual(result.returncode, 0, result.stdout)
+        self.assertIn('".retired"', result.stderr)
+        self.assertIn("docs/design/user-interface/1_overview.md:1", result.stderr)
+
+    def test_classes_after_element_or_compound_still_count_beside_quoted_value(self):
+        self.write(self.CSS, "a.retired { color: red; }\n.active.pill { opacity: 1; }\n"
+                   + self.QUOTED_SURVIVOR)
+        self.write("docs/design/user-interface/1_overview.md",
+                   "The `.retired` link and `.pill` chip dim the row.\n")
+        self.commit_base()
+        self.write(self.CSS, self.QUOTED_SURVIVOR)
+        result = self.run_check()
+        self.assertNotEqual(result.returncode, 0, result.stdout)
+        self.assertIn('".retired"', result.stderr)
+        self.assertIn('".pill"', result.stderr)
+        self.assertIn("docs/design/user-interface/1_overview.md:1", result.stderr)
+
     def test_removed_class_mention_in_css_comment_passes(self):
         self.write(self.CSS, "/* .retired pill is gone */\n.ws-badge { color: red; }\n")
         self.write("docs/design/user-interface/1_overview.md",
