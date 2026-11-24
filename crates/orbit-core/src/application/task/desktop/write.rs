@@ -58,6 +58,9 @@ impl OrbitRuntime {
             )
             .map_err(|denial| OrbitError::CapabilityDenied(denial.to_string()))?;
         }
+        // Preserve the refusal until after receipt lookup: older versions committed
+        // sanitized resident comments and retries must still match their digest.
+        let mut resident_redaction_error = None;
         // Redact before digesting and durably writing; retries bind to the safe persisted payload.
         match &mut request.operation {
             DesktopTaskOperation::Create {
@@ -74,8 +77,9 @@ impl OrbitRuntime {
             }
             DesktopTaskOperation::Edit { fields, .. } => sanitize(fields),
             DesktopTaskOperation::Comment { comment, .. } => {
-                // Refuse a resident record before redaction can rewrite its verbatim text.
-                self.refuse_resident_comment_needing_redaction(comment.as_str())?;
+                resident_redaction_error = self
+                    .refuse_resident_comment_needing_redaction(comment.as_str())
+                    .err();
                 *comment = redact_all(comment);
             }
             DesktopTaskOperation::Review { verdict, .. } => {
@@ -192,6 +196,9 @@ impl OrbitRuntime {
                     outcome = Some(AtomicTaskMutationOutcome::AlreadyApplied);
                     return Ok(());
                 }
+            }
+            if let Some(error) = resident_redaction_error.take() {
+                return Err(error);
             }
             if self.stores().tasks().desktop_task_revision(&id)? != expected_revision {
                 return Err(OrbitError::TaskRevisionConflict {

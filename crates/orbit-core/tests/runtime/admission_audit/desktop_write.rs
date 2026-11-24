@@ -321,11 +321,100 @@ fn desktop_refuses_resident_records_that_need_redaction() {
     );
 }
 
+fn desktop_replays_pre_upgrade_redacted_resident_comment() {
+    let (_root, runtime) = test_runtime();
+    let agent = session(false);
+    let snapshot = runtime
+        .desktop_task_write(create("legacy-resident-create"), None, None, &agent)
+        .unwrap()
+        .snapshot;
+    let id = snapshot.task.id.clone();
+    let secret = "abc123def456ghi789SECRETTOKEN";
+    let comment =
+        json!({"kind": "resident.answer", "quote": format!("Authorization: Bearer {secret}")})
+            .to_string();
+    let request = DesktopTaskRequest {
+        request_id: "legacy-resident".into(),
+        operation: DesktopTaskOperation::Comment {
+            id: id.clone(),
+            expected_revision: snapshot.revision.clone(),
+            comment: comment.clone(),
+        },
+    };
+    let safe_comment = orbit_common::security::redaction::redact_all(&comment);
+    assert_ne!(safe_comment, comment);
+    let mut old_request = request.clone();
+    if let DesktopTaskOperation::Comment { comment, .. } = &mut old_request.operation {
+        *comment = safe_comment.clone();
+    }
+    super::store_support::tasks(&runtime)
+        .apply_desktop_task_mutation(
+            &id,
+            &orbit_store::contracts::DesktopTaskMutationParams {
+                write_provenance: None,
+                actor: "codex".into(),
+                request_id: request.request_id.clone(),
+                payload_digest: orbit_common::security::release::sha256_hex(
+                    &serde_json::to_vec(&old_request).unwrap(),
+                ),
+                expected_revision: snapshot.revision.clone(),
+                fields: DesktopTaskFields::default(),
+                crew_source: None,
+                comment: Some(safe_comment.clone()),
+                status: None,
+                append_history: Vec::new(),
+            },
+        )
+        .unwrap();
+    let comments = runtime.get_task_comments(&id).unwrap();
+    let history = runtime.get_task_history(&id).unwrap();
+    let committed = runtime.desktop_task_snapshot(&id, &agent).unwrap();
+    let replay = runtime
+        .desktop_task_write(request.clone(), None, None, &agent)
+        .unwrap();
+    assert!(replay.replayed);
+    assert_eq!(replay.snapshot.revision, committed.revision);
+    assert_eq!(comments.len(), 1);
+    assert_eq!(comments[0].message, safe_comment);
+    assert!(!format!("{replay:?} {history:?}").contains(secret));
+
+    let mut conflict = request.clone();
+    if let DesktopTaskOperation::Comment { comment, .. } = &mut conflict.operation {
+        *comment = json!({"kind": "resident.answer", "quote": format!("different Authorization: Bearer {secret}")}).to_string();
+    }
+    assert!(
+        runtime
+            .desktop_task_write(conflict, None, None, &agent)
+            .unwrap_err()
+            .to_string()
+            .contains("different payload")
+    );
+    let mut fresh = request;
+    fresh.request_id = "fresh-resident".into();
+    assert!(
+        runtime
+            .desktop_task_write(fresh, None, None, &agent)
+            .unwrap_err()
+            .to_string()
+            .contains("sensitive text")
+    );
+    assert_eq!(
+        runtime.get_task_comments(&id).unwrap().len(),
+        comments.len()
+    );
+    assert_eq!(runtime.get_task_history(&id).unwrap().len(), history.len());
+    assert_eq!(
+        runtime.desktop_task_snapshot(&id, &agent).unwrap().revision,
+        committed.revision
+    );
+}
+
 // Related boundary scenarios share the isolated table fixture.
 crate::scenario_table!(
     desktop_redacts_before_receipt_and_preserves_retries_scenarios,
     desktop_redacts_before_receipt_and_preserves_retries,
     desktop_legacy_edit_receipt_survives_status_contract_extension,
     desktop_typed_receipts_control_runtime_and_store_replay,
-    desktop_refuses_resident_records_that_need_redaction
+    desktop_refuses_resident_records_that_need_redaction,
+    desktop_replays_pre_upgrade_redacted_resident_comment
 );
