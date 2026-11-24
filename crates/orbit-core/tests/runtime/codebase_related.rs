@@ -105,10 +105,12 @@ fn file_rollup_marks_missing_and_replaced_paths_absent_in_analytics_and_show() {
     let repo = root.path().join("repo");
     let workspace = repo.join(".orbit");
     std::fs::create_dir_all(&global).expect("global");
-    std::fs::create_dir_all(repo.join("src")).expect("src");
+    std::fs::create_dir_all(repo.join("src/nested")).expect("nested directory");
     std::fs::create_dir_all(&workspace).expect("workspace");
     std::fs::write(repo.join("src/live.rs"), "live").expect("file");
     std::fs::write(repo.join("src/replaced.rs"), "historical file").expect("historical file");
+    std::fs::write(repo.join("src/nested/child.rs"), "historical nested file")
+        .expect("historical nested file");
     let runtime = OrbitRuntime::from_roots(&global, &workspace).expect("runtime");
     let add = |title: &str, status, relations| {
         runtime
@@ -119,6 +121,7 @@ fn file_rollup_marks_missing_and_replaced_paths_absent_in_analytics_and_show() {
                     "file:src/live.rs".into(),
                     "file:src/gone.rs".into(),
                     "file:src/replaced.rs".into(),
+                    "file:src/nested/child.rs".into(),
                 ],
                 relations,
                 ..Default::default()
@@ -141,10 +144,28 @@ fn file_rollup_marks_missing_and_replaced_paths_absent_in_analytics_and_show() {
                     "file:src/live.rs".into(),
                     "file:src/gone.rs".into(),
                     "file:src/replaced.rs".into(),
+                    "file:src/nested/child.rs".into(),
                 ],
             }),
         }],
     );
+    let coupled = runtime
+        .add_task(TaskAddParams {
+            title: "coupled".into(),
+            status: Some(TaskStatus::Backlog),
+            context_files: vec!["file:src/live.rs".into(), "file:src/nested/child.rs".into()],
+            ..Default::default()
+        })
+        .expect("coupled task");
+    let reserved = orbit_core::runtime::task::locks::reserve(
+        &runtime,
+        json!({"task_ids": [coupled.id.to_string()], "ttl_seconds": 600}),
+        None,
+        None,
+        None,
+    )
+    .expect("reserve coupled task");
+    assert_eq!(reserved["reserved"], true, "{reserved}");
     let query = |rollup: &str| {
         runtime
             .run_tool(
@@ -161,9 +182,20 @@ fn file_rollup_marks_missing_and_replaced_paths_absent_in_analytics_and_show() {
         .find(|row| row["path"] == "src/replaced.rs")
         .expect("historical file row before replacement");
     assert!(previous_replaced.get("absent_at_head").is_none());
+    let previous_nested = before_replacement["regressions"]["rows"]
+        .as_array()
+        .expect("previous rows")
+        .iter()
+        .find(|row| row["path"] == "src/nested/child.rs")
+        .expect("historical nested row before replacement");
+    assert!(previous_nested.get("absent_at_head").is_none());
 
     std::fs::remove_file(repo.join("src/replaced.rs")).expect("remove historical file");
     std::fs::create_dir(repo.join("src/replaced.rs")).expect("replace file with directory");
+    std::fs::remove_file(repo.join("src/nested/child.rs")).expect("remove nested file");
+    std::fs::remove_dir(repo.join("src/nested")).expect("remove nested directory");
+    std::fs::write(repo.join("src/nested"), "replaced by file")
+        .expect("replace directory with file");
     let analytics = query("file");
     let rows = analytics["regressions"]["rows"].as_array().expect("rows");
     let gone = rows
@@ -204,6 +236,33 @@ fn file_rollup_marks_missing_and_replaced_paths_absent_in_analytics_and_show() {
         previous_replaced["regressed_tasks"]
     );
     assert_eq!(replaced["sites"], previous_replaced["sites"]);
+    let nested = rows
+        .iter()
+        .find(|row| row["path"] == "src/nested/child.rs")
+        .expect("nested file row");
+    assert_eq!(nested["absent_at_head"], true, "{nested}");
+    assert!(nested["numerator"].as_u64().is_some_and(|count| count > 0));
+    assert_eq!(nested["numerator"], previous_nested["numerator"]);
+    assert_eq!(nested["denominator"], previous_nested["denominator"]);
+    assert_eq!(
+        nested["regressed_tasks"],
+        previous_nested["regressed_tasks"]
+    );
+    let pair = analytics["change_coupling"]["rows"]
+        .as_array()
+        .expect("coupling rows")
+        .iter()
+        .find(|row| {
+            row["paths"]
+                .as_array()
+                .is_some_and(|paths| paths.iter().any(|path| path == "src/nested/child.rs"))
+        })
+        .expect("coupling pair naming the nested file");
+    assert_eq!(
+        pair["absent_paths_at_head"],
+        json!(["src/nested/child.rs"]),
+        "{pair}"
+    );
     let detail = runtime
         .run_tool(
             "orbit.codebase.show",
@@ -218,6 +277,13 @@ fn file_rollup_marks_missing_and_replaced_paths_absent_in_analytics_and_show() {
         )
         .expect("replaced file detail");
     assert_eq!(replaced_detail["absent_at_head"], true);
+    let nested_detail = runtime
+        .run_tool(
+            "orbit.codebase.show",
+            json!({"path":"src/nested/child.rs", "window":"all", "min_support":1}),
+        )
+        .expect("nested file detail");
+    assert_eq!(nested_detail["absent_at_head"], true, "{nested_detail}");
     let detail_regressions = &replaced_detail["rankings"]["regressions"];
     assert_eq!(detail_regressions["numerator"], replaced["numerator"]);
     assert_eq!(detail_regressions["denominator"], replaced["denominator"]);
