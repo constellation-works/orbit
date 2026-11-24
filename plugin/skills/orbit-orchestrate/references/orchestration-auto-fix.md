@@ -43,8 +43,14 @@ It cannot be combined with `--pull` or `--stop`.
   - A second failure, missing
     protected result, superseded attempt, changed policy or identity, or completion
     deadline expiry holds the PR. Repair-only authority still cannot merge.
-- Approvals, permissions, administrative rules, unknown or unreadable evidence,
-  infrastructure failures outside that narrow prerequisite case, and optional
+- When a required job's log is unreadable, including a truncated log with no
+  complete failing command, auto-fix can rerun failed jobs once on the unchanged
+  head. The provider must authenticate one workflow and its full failed-job set.
+  This uses the shared unchanged-head rerun budget and the original completion
+  deadline. A second unreadable failure keeps the original stop. A readable
+  result follows its usual classification.
+- Approvals, permissions, administrative rules, unknown status, unreadable
+  evidence outside the retry above, other infrastructure failures, and optional
   failures alone launch no agent; the leaf stops in `review` with the reason.
 - The repair goes through the ordinary commit, required final validation and
   lease-checked push. The watcher then re-checks the new head, and a reviewed
