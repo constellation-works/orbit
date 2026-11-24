@@ -389,6 +389,30 @@ impl orbit_engine::test_support::NullRuntimeHost for RepairPipeline<'_> {
                         )
                         .unwrap();
                     }
+                    "staged-replaced-dir" => {
+                        let repo = &self.fixture.repo;
+                        std::fs::create_dir_all(repo.join("replaced-dir")).unwrap();
+                        std::fs::write(
+                            repo.join("replaced-dir/nested.txt"),
+                            "nested staged content\n",
+                        )
+                        .unwrap();
+                        git(self.fixture, &["add", "replaced-dir/nested.txt"]);
+                        // Replace the staged parent directory on disk with a
+                        // regular file: status reports `AD
+                        // replaced-dir/nested.txt` alongside `??
+                        // replaced-dir`, and `symlink_metadata` on the nested
+                        // path fails with `ENOTDIR` (`NotADirectory`).
+                        std::fs::remove_file(repo.join("replaced-dir/nested.txt")).unwrap();
+                        std::fs::remove_dir(repo.join("replaced-dir")).unwrap();
+                        std::fs::write(repo.join("replaced-dir"), "replacement file content\n")
+                            .unwrap();
+                        std::fs::write(
+                            repo.join(".env"),
+                            "ENV_CANARY=synthetic_replaced_dir_env_canary\n",
+                        )
+                        .unwrap();
+                    }
                     "foreign-branch" => {
                         git(self.fixture, &["checkout", "-b", "foreign"]);
                     }
@@ -1973,6 +1997,103 @@ fn final_recovery_refused_patch_preserves_staged_only_work() {
     );
 }
 
+fn final_recovery_refused_patch_omits_staged_path_under_replaced_dir() {
+    // A staged addition whose parent directory was replaced on disk by a
+    // regular file (`AD replaced-dir/nested.txt` + `?? replaced-dir`) must
+    // not abort the capture: the absent staged path is omitted while the
+    // unrelated safe edit and the replacement file are preserved.
+    let fixture = fixture_with_command("test \"$(cat candidate.txt)\" != after");
+    let (host, outcome) = run_pipeline(&fixture, "staged-replaced-dir");
+    assert!(outcome.is_err(), "{outcome:?}");
+    let run = fixture.input["job_run_id"].as_str().unwrap();
+    let checkpoint = fixture
+        .runtime
+        .read_run_state(run)
+        .unwrap()
+        .unwrap()
+        .final_recovery
+        .unwrap();
+    assert!(checkpoint.repair_commit.is_none());
+    let Some(FinalRecoveryDecision::Escalate { diagnosis, .. }) = checkpoint.decision else {
+        panic!("expected escalation")
+    };
+    let name = format!("recovery-uncommitted-{run}.patch");
+    assert!(
+        diagnosis.contains("recovery_commit_refused:protected_path:")
+            && diagnosis.contains(&name)
+            && !diagnosis.contains("failed to capture uncommitted diff")
+            && !diagnosis.contains("failed to inspect uncommitted path"),
+        "refusal must name the saved patch, not an inspection failure: {diagnosis}"
+    );
+    let artifact = fixture
+        .runtime
+        .get_task_artifact(&fixture.task_id, &name)
+        .unwrap()
+        .expect("refused repair with a replaced parent directory saves patch artifact");
+    let text = String::from_utf8_lossy(&artifact.content);
+    assert!(
+        text.contains("repaired") && text.contains("replacement file content"),
+        "independent safe edit and replacement file must be preserved: {text}"
+    );
+    assert!(
+        !text.contains("nested staged content"),
+        "absent staged path under the replaced directory must be omitted: {text}"
+    );
+    assert!(
+        !text.contains(".env") && !text.contains("synthetic_replaced_dir_env_canary"),
+        "protected env file must stay out of patch: {text}"
+    );
+    assert!(!blob_in_object_store(&fixture, ".env"));
+    assert_eq!(
+        git(&fixture, &["diff", "--cached", "--name-only"]),
+        "replaced-dir/nested.txt",
+        "live index must remain untouched"
+    );
+
+    let candidate_head = host.validation_heads.lock().unwrap()[0].0.clone();
+    let root = tempfile::tempdir().unwrap();
+    let checkout = root.path().join("checkout");
+    let clone = crate::git_test_support::command()
+        .args([
+            "clone",
+            "-q",
+            fixture.repo.to_str().unwrap(),
+            checkout.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(clone.status.success(), "{clone:?}");
+    let co = crate::git_test_support::command()
+        .args(["checkout", "-q", &candidate_head])
+        .current_dir(&checkout)
+        .output()
+        .unwrap();
+    assert!(co.status.success(), "{co:?}");
+    let patch_file = root.path().join("replaced_dir.patch");
+    std::fs::write(&patch_file, &artifact.content).unwrap();
+    let apply = crate::git_test_support::command()
+        .args(["apply", patch_file.to_str().unwrap()])
+        .current_dir(&checkout)
+        .output()
+        .unwrap();
+    assert!(
+        apply.status.success(),
+        "git apply failed ({}):\n{}",
+        apply.status,
+        String::from_utf8_lossy(&apply.stderr)
+    );
+    assert_eq!(
+        std::fs::read_to_string(checkout.join("candidate.txt")).unwrap(),
+        "repaired\n"
+    );
+    assert_eq!(
+        std::fs::read_to_string(checkout.join("replaced-dir")).unwrap(),
+        "replacement file content\n"
+    );
+    assert!(!checkout.join("replaced-dir/nested.txt").exists());
+    assert!(!checkout.join(".env").exists());
+}
+
 // Related boundary scenarios share the isolated table fixture.
 crate::scenario_table!(
     final_recovery_repair_commit_gets_a_fresh_before_pr_review_scenarios,
@@ -1984,7 +2105,8 @@ crate::scenario_table!(
     resumed_final_recovery_repair_keeps_the_original_checkpoint_owner,
     final_recovery_refused_patch_reproduces_binary_and_final_whitespace,
     final_recovery_refused_patch_preserves_staged_ignored_addition,
-    final_recovery_refused_patch_preserves_staged_only_work
+    final_recovery_refused_patch_preserves_staged_only_work,
+    final_recovery_refused_patch_omits_staged_path_under_replaced_dir
 );
 
 #[cfg(unix)]
