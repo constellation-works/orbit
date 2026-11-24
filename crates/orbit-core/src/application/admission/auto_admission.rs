@@ -352,6 +352,14 @@ fn index_holders(holders: &BTreeMap<String, Vec<String>>) -> OverlapIndex<Vec<St
     index
 }
 
+/// The borrowed lock-resolution inputs one admission wave reads: where the
+/// workspace lives, which paths count as unlocked, and the pre-wave holders.
+pub(crate) struct SelectionContext<'a> {
+    pub(crate) workspace_root: &'a Path,
+    pub(crate) unlocked: &'a UnlockedContextPaths,
+    pub(crate) holders: &'a AdmissionHolders,
+}
+
 /// Fill the free slots with a pairwise non-conflicting set, preserving the
 /// candidate order among compatible tasks.
 ///
@@ -369,13 +377,10 @@ fn index_holders(holders: &BTreeMap<String, Vec<String>>) -> OverlapIndex<Vec<St
 /// before it edits anything, so neither holders nor the wave defer it. Its
 /// selectors still join the wave: once admitted it is `in-progress`, and
 /// overlapping work waits on it as on any holder.
-#[allow(clippy::too_many_arguments)]
 pub(crate) fn select_admissions(
     ordered_candidates: &[String],
     task_lookup: &BTreeMap<String, Task>,
-    workspace_root: &Path,
-    unlocked: &UnlockedContextPaths,
-    holders: &AdmissionHolders,
+    ctx: &SelectionContext<'_>,
     published_resumes: &BTreeMap<String, PublishedResume>,
     free_slots: usize,
     footprint: FootprintGuard<'_>,
@@ -389,7 +394,7 @@ pub(crate) fn select_admissions(
     let mut footprint = FootprintWave::new(footprint);
     // The perf task holding the lane: the one running now, else the first
     // selected in this wave.
-    let mut perf_lane = holders.perf_lane_holder.clone();
+    let mut perf_lane = ctx.holders.perf_lane_holder.clone();
 
     for candidate_id in ordered_candidates {
         let task = task_lookup.get(candidate_id);
@@ -418,7 +423,7 @@ pub(crate) fn select_admissions(
             continue;
         };
 
-        let selectors = lock_context_files_for_task(task, workspace_root, unlocked);
+        let selectors = lock_context_files_for_task(task, ctx.workspace_root, ctx.unlocked);
         let edits = !selectors.is_empty();
         if let Some(deferred) = footprint.check(task, edits) {
             selection.deferred.push(deferred);
@@ -434,11 +439,14 @@ pub(crate) fn select_admissions(
         let mut conflicts = Vec::new();
         if !published_resumes.contains_key(candidate_id) {
             for requested_selector in &selectors {
-                conflicts.extend(holders.footprint_conflicts_for_selector(requested_selector));
+                conflicts.extend(
+                    ctx.holders
+                        .footprint_conflicts_for_selector(requested_selector),
+                );
                 conflicts.extend(wave_conflicts(
                     requested_selector,
                     &wave,
-                    &holders.lock_modes,
+                    &ctx.holders.lock_modes,
                 ));
             }
         }
