@@ -794,6 +794,95 @@ fn search_index_doctor_checks_local_coverage_on_owner_and_replica() {
     );
 }
 
+/// Initialize a workspace named `name` under `<checkout>/.orbit` with no task
+/// written, so no search index file exists yet. Returns that root.
+fn init_workspace_without_tasks(fixture: &WorkCheckout, name: &str) -> std::path::PathBuf {
+    let root = fixture.work.join(".orbit");
+    let root_arg = root.to_str().unwrap();
+    command(fixture)
+        .current_dir(&fixture.home)
+        .args([
+            "--root",
+            root_arg,
+            "init",
+            "--non-interactive",
+            "--machine-name",
+            name,
+            "--task-prefix",
+            "FRS",
+        ])
+        .assert()
+        .success();
+    run_ok(
+        fixture,
+        &["--root", root_arg, "workspace", "init", "--name", name],
+    );
+    root
+}
+
+#[test]
+fn search_index_doctor_is_ok_on_a_fresh_workspace_before_any_task() {
+    if in_child("doctor::search_index_doctor_is_ok_on_a_fresh_workspace_before_any_task") {
+        return;
+    }
+    let fixture = WorkCheckout::new();
+    let root = init_workspace_without_tasks(&fixture, "fresh-index");
+    let index = root.join("state/semantic.db");
+    assert!(!index.exists(), "a fresh workspace has no index file yet");
+    let out = run_ok(
+        &fixture,
+        &[
+            "--root",
+            root.to_str().unwrap(),
+            "doctor",
+            "--check",
+            "search-index",
+            "--json",
+        ],
+    );
+    let row: Value = serde_json::from_slice(&out.stdout).expect("search-index JSON");
+    assert_eq!(row["status"], "ok", "{row}");
+    assert!(!index.exists(), "the diagnostic does not create the index");
+}
+
+#[cfg(unix)]
+#[test]
+fn search_index_doctor_warns_when_a_fresh_index_file_is_unreadable() {
+    if in_child("doctor::search_index_doctor_warns_when_a_fresh_index_file_is_unreadable") {
+        return;
+    }
+    // Root reads through any mode bits, so an access refusal needs an ordinary user.
+    if unsafe { libc::geteuid() } == 0 {
+        #[allow(
+            clippy::print_stderr,
+            reason = "the test gate must see when this host runs as root and the case is skipped"
+        )]
+        {
+            eprintln!("SKIP: unreadable-index check requires a non-root user");
+        }
+        return;
+    }
+    let fixture = WorkCheckout::new();
+    let root = init_workspace_without_tasks(&fixture, "unreadable-index");
+    let index = root.join("state/semantic.db");
+    put(&index, "");
+    set_mode(&index, 0o000);
+    let out = run_ok(
+        &fixture,
+        &[
+            "--root",
+            root.to_str().unwrap(),
+            "doctor",
+            "--check",
+            "search-index",
+            "--json",
+        ],
+    );
+    let row: Value = serde_json::from_slice(&out.stdout).expect("search-index JSON");
+    assert_eq!(row["status"], "warning", "{row}");
+    msg_has(&row, "orbit search reindex");
+}
+
 #[test]
 fn default_doctor_checks_schema_and_deep_detects_corrupt_data() {
     if in_child("doctor::default_doctor_checks_schema_and_deep_detects_corrupt_data") {

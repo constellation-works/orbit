@@ -54,16 +54,31 @@ impl OrbitRuntime {
     /// Reindexing uses the workspace's physical task store, including on
     /// replicas where coordination listings hide local task records. Count
     /// that same corpus through the store's observational metadata path.
+    ///
+    /// A fresh workspace has no index file until its first task write. With
+    /// no stored task there is nothing to cover, so a missing file reports an
+    /// empty index. A missing file over stored tasks, or a file that exists
+    /// but cannot be read, stays an error.
     pub fn search_index_coverage(
         &self,
     ) -> Result<(orbit_search::SearchIndexStats, usize), OrbitError> {
-        let stats = self.search_index_stats()?;
+        let stats = self.search_index_stats();
         let tasks = self
             .stores()
             .tasks()
             .observe_task_candidates(&TaskListFilter::default(), 0)?
             .total;
-        Ok((stats, tasks))
+        match stats {
+            Ok(stats) => Ok((stats, tasks)),
+            Err(_) if tasks == 0 && !self.search_index_file_exists() => Ok((
+                orbit_search::SearchIndexStats {
+                    chunks: 0,
+                    tasks: 0,
+                },
+                0,
+            )),
+            Err(error) => Err(error),
+        }
     }
 
     /// Unified search entry point.
