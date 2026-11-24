@@ -3,9 +3,14 @@
 //! the failed-authentication limit and audit rows without secrets. Each test
 //! uses its own temporary token store and touches no Orbit state.
 
-use std::net::SocketAddr;
+use std::io::{self, Read, Write};
+use std::net::{Shutdown, SocketAddr};
 use std::os::unix::fs::PermissionsExt;
+use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
 use axum::Router;
@@ -95,6 +100,93 @@ pub(super) fn short_intake_socket() -> (tempfile::TempDir, PathBuf) {
         }
     }
     panic!("no directory short enough for an intake socket path");
+}
+
+/// Reads one length-prefixed JSON frame; `None` on EOF, a read error or a
+/// malformed frame, so a handler can stop when the listener goes away.
+pub(super) fn read_frame(stream: &mut UnixStream) -> Option<Value> {
+    let mut header = [0; 4];
+    stream.read_exact(&mut header).ok()?;
+    let mut bytes = vec![0; u32::from_be_bytes(header) as usize];
+    stream.read_exact(&mut bytes).ok()?;
+    serde_json::from_slice(&bytes).ok()
+}
+
+/// Writes one length-prefixed JSON frame; `false` when the peer has closed.
+pub(super) fn write_frame(stream: &mut UnixStream, value: &Value) -> bool {
+    let bytes = serde_json::to_vec(value).unwrap();
+    stream
+        .write_all(&(bytes.len() as u32).to_be_bytes())
+        .and_then(|()| stream.write_all(&bytes))
+        .is_ok()
+}
+
+/// A scripted intake socket that owns its accept loop and every connection
+/// handler. `serve` runs once per accepted connection on its own thread.
+/// Dropping the guard stops accepting, shuts down each open connection, and
+/// joins the accept loop and its handlers, so a failed assertion or a
+/// listener that stops early cannot leave a blocked accept or handler behind.
+/// The listener's descriptor closes when the accept loop exits.
+pub(super) struct ScriptedIntake {
+    stop: Arc<AtomicBool>,
+    accept: Option<JoinHandle<()>>,
+}
+
+impl ScriptedIntake {
+    pub(super) fn bind(
+        path: &Path,
+        serve: impl Fn(&mut UnixStream) + Send + Sync + 'static,
+    ) -> Self {
+        let listener = UnixListener::bind(path).unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let stop = Arc::new(AtomicBool::new(false));
+        let accept = {
+            let stop = Arc::clone(&stop);
+            thread::spawn(move || {
+                let serve = Arc::new(serve);
+                let mut open = Vec::<UnixStream>::new();
+                let mut handlers = Vec::new();
+                while !stop.load(Ordering::Acquire) {
+                    match listener.accept() {
+                        Ok((mut stream, _)) => {
+                            if stream.set_nonblocking(false).is_err() {
+                                continue;
+                            }
+                            let _ = stream.set_read_timeout(Some(Duration::from_secs(5)));
+                            if let Ok(handle) = stream.try_clone() {
+                                open.push(handle);
+                            }
+                            let serve = Arc::clone(&serve);
+                            handlers.push(thread::spawn(move || serve(&mut stream)));
+                        }
+                        Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                            thread::sleep(Duration::from_millis(5));
+                        }
+                        Err(_) => break,
+                    }
+                }
+                for stream in &open {
+                    let _ = stream.shutdown(Shutdown::Both);
+                }
+                for handler in handlers {
+                    let _ = handler.join();
+                }
+            })
+        };
+        Self {
+            stop,
+            accept: Some(accept),
+        }
+    }
+}
+
+impl Drop for ScriptedIntake {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::Release);
+        if let Some(accept) = self.accept.take() {
+            let _ = accept.join();
+        }
+    }
 }
 
 pub(super) fn config(

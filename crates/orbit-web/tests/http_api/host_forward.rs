@@ -8,12 +8,14 @@ use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{Ipv4Addr, TcpListener, TcpStream};
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
+use std::process::{Child, Command};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::thread;
 use std::time::{Duration, Instant};
 
 use chrono::{SecondsFormat, Utc};
+use orbit_common::process::ancestry::process_start_key;
 use orbit_common::test_fixtures::TEST_CODEX_MODEL;
 use orbit_core::AuditEventStatus;
 use orbit_core::JobRunState;
@@ -27,7 +29,8 @@ use super::audit::row as audit_row;
 use super::support::{Fixture, Server, error_code, isolated, json_ok, walk_audit_pages};
 
 const WS: &str = "?workspace=ws_http_fixture";
-/// A spawn first waits out the attach budget, longer than the default client timeout.
+/// A spawn first waits out the attach budget, so a request that owns one uses
+/// this explicit bound rather than the shared fixture deadline.
 const SLOW_REQUEST: Duration = Duration::from_secs(40);
 
 /// The stub's directory, config and call log. Dropping it kills every stub it
@@ -67,13 +70,6 @@ impl StubSsh {
             .map(|line| serde_json::from_str(line).unwrap())
             .collect()
     }
-
-    fn pids(&self) -> Vec<i64> {
-        self.calls()
-            .iter()
-            .map(|call| call["pid"].as_i64().unwrap())
-            .collect()
-    }
 }
 
 impl Drop for StubSsh {
@@ -89,19 +85,88 @@ impl Drop for StubSsh {
                 );
             }
         }
-        for pid in self.pids() {
-            // SAFETY: signalling a pid this test's stub recorded.
-            unsafe {
-                libc::kill(pid as libc::pid_t, libc::SIGKILL);
+        for call in self.calls() {
+            // Only a process that still has its logged start key is the stub
+            // this fixture started; a reaped pid may now belong to another process.
+            let Some(pid) = call["pid"].as_i64() else {
+                continue;
+            };
+            if alive(&call) {
+                // SAFETY: the logged start key still matches, so this pid is the stub.
+                unsafe {
+                    libc::kill(pid as libc::pid_t, libc::SIGKILL);
+                }
             }
         }
     }
 }
 
-/// `kill(pid, 0)`: true while the process exists, including as a zombie.
-fn alive(pid: i64) -> bool {
-    // SAFETY: signal 0 only checks existence.
-    unsafe { libc::kill(pid as libc::pid_t, 0) == 0 }
+/// Whether the process logged in `call` is still that process, including as
+/// a zombie. The pid and the kernel start key must both match: a pid alone
+/// can be reaped and reused. A call without a start key (no `/proc`) never
+/// matches, so teardown signals nothing and the stub's own watchdog ends it.
+fn alive(call: &Value) -> bool {
+    let (Some(pid), Some(starttime)) = (call["pid"].as_u64(), call["starttime"].as_u64()) else {
+        return false;
+    };
+    let Ok(pid) = u32::try_from(pid) else {
+        return false;
+    };
+    process_start_key(pid).is_some_and(|key| key.starttime == starttime)
+}
+
+/// Teardown signals a logged stub only while its start key still matches. A
+/// record whose pid now holds a process with another start key, as after a
+/// stub was reaped and its pid reused, is left alone; the matching sentinel
+/// is killed. Both sentinels are children this test starts, and each is
+/// killed and reaped on drop.
+#[test]
+fn teardown_signals_only_a_logged_stub_whose_start_key_still_matches() {
+    struct Sentinel(Child);
+    impl Drop for Sentinel {
+        fn drop(&mut self) {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
+    }
+    let spawn_sentinel = || Sentinel(Command::new("sleep").arg("60").spawn().unwrap());
+    let mut owned = spawn_sentinel();
+    let mut reused = spawn_sentinel();
+    let owned_record = |child: &Sentinel| {
+        let pid = child.0.id();
+        json!({"pid": pid, "starttime": process_start_key(pid).unwrap().starttime})
+    };
+    let logged = owned_record(&owned);
+    let mut stale = owned_record(&reused);
+    stale["starttime"] = json!(stale["starttime"].as_u64().unwrap() + 1);
+    let stub = StubSsh::new(json!({}));
+    let mut log = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(stub.dir.path().join("calls.jsonl"))
+        .unwrap();
+    writeln!(log, "{logged}").unwrap();
+    writeln!(log, "{stale}").unwrap();
+    drop(log);
+    assert!(
+        alive(&logged),
+        "the logged sentinel matches its own start key"
+    );
+    assert!(
+        !alive(&stale),
+        "a pid holding another start key is not the logged stub"
+    );
+
+    drop(stub);
+    wait_until(
+        "teardown to kill the logged stub",
+        Duration::from_secs(10),
+        || owned.0.try_wait().unwrap().is_some(),
+    );
+    assert!(
+        reused.0.try_wait().unwrap().is_none(),
+        "teardown must not signal a process whose start key differs from the log"
+    );
 }
 
 /// Startup and reaping are liveness guards, so allow the same scheduling
@@ -730,9 +795,9 @@ fn forward_failures_are_typed_and_bounded() {
                 "host_identity_mismatch",
             );
             assert_eq!(mismatch["host"], "imposter");
-            let imposter = stub.pids()[before];
+            let imposter = stub.calls()[before].clone();
             wait_until("the mismatched tunnel's ssh to exit", SLOW_REQUEST, || {
-                !alive(imposter)
+                !alive(&imposter)
             });
 
             error_code(
@@ -873,10 +938,7 @@ fn foreign_listener_scenario(preoccupied: bool) {
                     );
                 }
                 for call in &stub.calls()[before..] {
-                    assert!(
-                        !alive(call["pid"].as_i64().unwrap()),
-                        "{host}: every refused child is reaped"
-                    );
+                    assert!(!alive(call), "{host}: every refused child is reaped");
                     assert_eq!(call["mode"], "attach", "{host}: no remote command starts");
                 }
                 assert_eq!(
@@ -1067,22 +1129,25 @@ fn a_spawned_remote_is_operator_matched_and_stopped_on_shutdown() {
                 );
                 for call in &calls[..successful_attach_index] {
                     assert!(
-                        !alive(call["pid"].as_i64().unwrap()),
+                        !alive(call),
                         "each failed allocation's child is reaped before handoff"
                     );
                 }
-                let pids = stub.pids();
+                let pids = stub.calls();
                 assert!(
-                    !alive(pids[successful_attach_index]),
+                    !alive(&pids[successful_attach_index]),
                     "the successful attach probe is reaped before spawn handoff"
                 );
                 assert!(
-                    alive(pids[spawn_index]),
+                    alive(&pids[spawn_index]),
                     "only the owned spawn child serves the verified tunnel"
                 );
                 assert!(a_server.terminate().success());
-                for pid in pids {
-                    assert!(!alive(pid), "graceful shutdown stops every owned ssh child");
+                for call in &pids {
+                    assert!(
+                        !alive(call),
+                        "graceful shutdown stops every owned ssh child"
+                    );
                 }
             }
         },
@@ -1189,19 +1254,16 @@ fn a_spawn_bind_collision_reallocates_on_a_fresh_port() {
             for call in &calls {
                 if call["pid"] != final_spawn["pid"] {
                     assert!(
-                        !alive(call["pid"].as_i64().unwrap()),
+                        !alive(call),
                         "every failed child and the successful attach probe are reaped: {call:?}"
                     );
                 }
             }
-            assert!(
-                alive(final_spawn["pid"].as_i64().unwrap()),
-                "the final spawn serves the tunnel"
-            );
+            assert!(alive(final_spawn), "the final spawn serves the tunnel");
             assert!(a_server.terminate().success());
             for call in &calls {
                 assert!(
-                    !alive(call["pid"].as_i64().unwrap()),
+                    !alive(call),
                     "graceful shutdown stops every owned ssh child"
                 );
             }

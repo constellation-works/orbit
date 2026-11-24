@@ -213,15 +213,11 @@ fn an_mcp_stop_returns_the_shared_projection() {
             "remaining_children": [{
                 "run_id": child,
                 "job_name": "task_auto_pipeline",
-                "phase": stopped["coordinators"][0]["remaining_children"][0]["phase"],
-                "child_status": stopped["coordinators"][0]["remaining_children"][0]["child_status"],
+                "phase": "submitted",
+                "child_status": "running",
             }],
             "forced_runs": [],
         }]),
-        "{stopped:#}"
-    );
-    assert!(
-        stopped["coordinators"][0]["remaining_children"][0]["phase"].is_string(),
         "{stopped:#}"
     );
 }

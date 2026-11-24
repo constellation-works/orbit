@@ -12,7 +12,7 @@ use super::backlog_forecast::comment_on_task;
 use super::metrics_trends::{
     add_task, bucket_of, close_at, index_terminal_row, rewrite_task_events, task_events_path,
 };
-use super::support::{Fixture, isolated, json_ok};
+use super::support::{Fixture, Server, isolated, json_ok};
 
 const WS: &str = "workspace=ws_http_fixture";
 
@@ -223,7 +223,7 @@ fn closed_task_populations_ignore_later_writes_and_report_undated_tasks() {
             let turns = format!("/api/diagnostics/turns_to_edit?since=24h&{WS}");
             let friction =
                 format!("/api/diagnostics/delivery_friction?since=24h&families=tokens&{WS}");
-            let read = || {
+            let read = |server: &Server| {
                 (
                     json_ok(server.get(&tokens)),
                     json_ok(server.get(&turns)),
@@ -252,14 +252,18 @@ fn closed_task_populations_ignore_later_writes_and_report_undated_tasks() {
                     "the rate divides by one done task"
                 );
             };
-            let before = read();
+            let before = read(&server);
             check(&before);
 
             write_metadata_later(&fixture, &member);
             write_metadata_later(&fixture, &outsider);
             assert_index_moved_to_now(&fixture, &[&member, &outsider], now);
 
-            let after = read();
+            // The token, first-edit and friction projections share a 90 s memo
+            // per runtime, so the post-write read runs on a fresh server with a
+            // cold memo. Otherwise it could only repeat the pre-write bodies.
+            let fresh = fixture.server(false);
+            let after = read(&fresh);
             check(&after);
             assert_eq!(after.0["total"], before.0["total"], "token cohort");
             assert_eq!(

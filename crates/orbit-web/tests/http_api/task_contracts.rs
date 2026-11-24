@@ -9,6 +9,7 @@ use orbit_types::task::{
 use orbit_types::workspace::{Workspace, WorkspaceCheckout};
 use reqwest::blocking::Response;
 use serde_json::{Value, json};
+use std::io::Read;
 use std::sync::Arc;
 
 const SECRET_CONTENT: &str = "TOP-SECRET-OUTSIDE-ARTIFACT-ROOT";
@@ -340,11 +341,12 @@ fn swap_artifact_blob_for_symlink(
 /// ORB-10008: a manifest-listed blob replaced on disk by a symlink pointing
 /// outside the artifact root must be refused, not followed.
 ///
-/// The v2 bundle read sha256/size-verifies every manifest entry before any
-/// artifact is served, so the path-containment check (canonicalize +
-/// `starts_with`) is only reachable when the escape target is byte-identical
-/// to the recorded artifact. This test plants exactly that worst case and
-/// asserts the containment validator still rejects the escaping link.
+/// The v2 bundle read resolves each manifest blob through the path-containment
+/// check (canonicalize + `starts_with`) before it checks size and sha256. A
+/// target with different bytes would therefore fail the digest check whether
+/// or not containment held, so this test plants a target that is byte-identical
+/// to the recorded artifact. Then only containment can refuse the escaping
+/// link, and a regression that followed it would serve the artifact.
 #[cfg(unix)]
 #[test]
 fn get_task_artifact_refuses_symlink_escaping_artifact_root() {
@@ -355,8 +357,8 @@ fn get_task_artifact_refuses_symlink_escaping_artifact_root() {
             let server = fixture.server(true);
             let runtime = fixture.runtime.clone();
             let task = seed_task_with_artifact(&runtime);
-            // Byte-identical to the seeded artifact so integrity checks pass and the
-            // containment check itself is exercised.
+            // Byte-identical to the seeded artifact, so size and digest would pass
+            // and only the containment check can refuse the link.
             let outside_twin = runtime.data_root().join("outside-twin.json");
             std::fs::write(&outside_twin, br#"{"ok":true}"#).expect("write outside twin");
             swap_artifact_blob_for_symlink(&runtime, &task.id, &outside_twin);
@@ -1825,26 +1827,77 @@ fn task_locks_paced_history_probe() {
             "{}/api/tasks/locks?workspace=ws_http_fixture",
             server.origin
         );
-        let script = r#"import urllib.request,time,json,sys,math
+        // The probe's opener has no proxy handler, and every proxy variable names
+        // a closed loopback port, so a request that consulted the host proxy
+        // would fail instead of reaching the fixture. Only reachability and the
+        // transport are checked here; the latency assertion below is unchanged.
+        let closed = std::net::TcpListener::bind("127.0.0.1:0")
+            .unwrap()
+            .local_addr()
+            .unwrap();
+        let proxy = format!("http://{closed}");
+        let script = r#"import urllib.request,time,json,sys
+opener=urllib.request.build_opener(urllib.request.ProxyHandler({}))
 samples=[]
 for i in range(21):
     if i: time.sleep(.250)
     start=time.perf_counter()
-    with urllib.request.urlopen(sys.argv[1]) as response: body=response.read()
+    with opener.open(sys.argv[1], timeout=5) as response: body=response.read()
     samples.append({'ms':(time.perf_counter()-start)*1000,'bytes':len(body)})
 warm=sorted(x['ms'] for x in samples[1:])
 print(json.dumps({'first':samples[0],'samples':samples[1:],'p50_ms':warm[9],'p95_ms':warm[18]}))
 "#;
-        let output = std::process::Command::new("python3")
+        let mut child = std::process::Command::new("python3")
             .args(["-c", script, &uri])
-            .output()
+            .envs(
+                [
+                    "HTTP_PROXY",
+                    "http_proxy",
+                    "HTTPS_PROXY",
+                    "https_proxy",
+                    "ALL_PROXY",
+                    "all_proxy",
+                ]
+                .map(|name| (name, proxy.as_str())),
+            )
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
             .unwrap();
-        assert!(
-            output.status.success(),
-            "{}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-        let mut report: Value = serde_json::from_slice(&output.stdout).unwrap();
+        // 21 requests at a 5 s timeout each, paced 250 ms apart, end inside the
+        // step deadline. That deadline still bounds the wait, so a stuck child
+        // cannot hang the suite.
+        let deadline = std::time::Instant::now() + orbit_common::test_env::FIXTURE_STEP_DEADLINE;
+        let status = loop {
+            if let Some(status) = child.try_wait().unwrap() {
+                break status;
+            }
+            if std::time::Instant::now() >= deadline {
+                let _ = child.kill();
+                let _ = child.wait();
+                panic!(
+                    "the paced history probe ran past its {:?} deadline",
+                    orbit_common::test_env::FIXTURE_STEP_DEADLINE
+                );
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        };
+        // Reports are a few kilobytes, far below a pipe buffer, so reading after exit cannot block.
+        let (mut stdout, mut stderr) = (Vec::new(), Vec::new());
+        child
+            .stdout
+            .take()
+            .unwrap()
+            .read_to_end(&mut stdout)
+            .unwrap();
+        child
+            .stderr
+            .take()
+            .unwrap()
+            .read_to_end(&mut stderr)
+            .unwrap();
+        assert!(status.success(), "{}", String::from_utf8_lossy(&stderr));
+        let mut report: Value = serde_json::from_slice(&stdout).unwrap();
         drop(server);
         let server = fixture.counted_task_server();
         let start = server.task_query_trace().len();

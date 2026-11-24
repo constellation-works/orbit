@@ -14,12 +14,13 @@ use orbit_auth::scope::{
     HardLeasePermission, LeasePriorityCeiling, LeaseTokenVerb, PrincipalClass,
 };
 use orbit_web::lease_listener::{lease_listener_router, serve_lease_listener_on};
-use serde_json::{Value, json};
+use serde_json::json;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tower::ServiceExt;
 
 use super::lease_listener::{
-    audit_rows, bearer, config, mint, provisioned_store, send, short_intake_socket,
+    ScriptedIntake, audit_rows, bearer, config, mint, provisioned_store, read_frame, send,
+    short_intake_socket, write_frame,
 };
 
 #[tokio::test]
@@ -141,24 +142,6 @@ async fn address_rejection_never_verifies_a_valid_token_and_recovers() {
     );
 }
 
-fn read_frame(stream: &mut std::os::unix::net::UnixStream) -> Value {
-    use std::io::Read;
-    let mut header = [0; 4];
-    stream.read_exact(&mut header).unwrap();
-    let mut bytes = vec![0; u32::from_be_bytes(header) as usize];
-    stream.read_exact(&mut bytes).unwrap();
-    serde_json::from_slice(&bytes).unwrap()
-}
-
-fn write_frame(stream: &mut std::os::unix::net::UnixStream, value: Value) {
-    use std::io::Write;
-    let bytes = serde_json::to_vec(&value).unwrap();
-    stream
-        .write_all(&(bytes.len() as u32).to_be_bytes())
-        .unwrap();
-    stream.write_all(&bytes).unwrap();
-}
-
 #[tokio::test]
 async fn token_writes_reads_and_other_tokens_have_separate_budgets() {
     let tmp = tempfile::tempdir().unwrap();
@@ -180,27 +163,25 @@ async fn token_writes_reads_and_other_tokens_have_separate_budgets() {
         );
     }
     let (_sockets, socket) = short_intake_socket();
-    let intake = std::os::unix::net::UnixListener::bind(&socket).unwrap();
-    let server = tokio::task::spawn_blocking(move || {
-        for _ in 0..4 {
-            let (mut stream, _) = intake.accept().unwrap();
-            stream
-                .set_read_timeout(Some(Duration::from_secs(5)))
-                .unwrap();
-            read_frame(&mut stream);
-            write_frame(
-                &mut stream,
-                json!({"protocol_version": orbit_web::lease_intake::LEASE_INTAKE_PROTOCOL_VERSION}),
-            );
-            read_frame(&mut stream);
-            write_frame(
-                &mut stream,
-                serde_json::to_value(orbit_web::lease_intake::LeaseIntakeResponse::Ok {
-                    result: json!({"accepted": true}),
-                })
-                .unwrap(),
-            );
+    // Owned by this test: an unexpected response panics below, and unwinding
+    // drops the guard, which stops the accept loop and joins its handlers.
+    let _intake = ScriptedIntake::bind(&socket, |stream| {
+        if read_frame(stream).is_none() {
+            return;
         }
+        let version =
+            json!({"protocol_version": orbit_web::lease_intake::LEASE_INTAKE_PROTOCOL_VERSION});
+        if !write_frame(stream, &version) {
+            return;
+        }
+        if read_frame(stream).is_none() {
+            return;
+        }
+        let response = serde_json::to_value(orbit_web::lease_intake::LeaseIntakeResponse::Ok {
+            result: json!({"accepted": true}),
+        })
+        .unwrap();
+        write_frame(stream, &response);
     });
     let mut settings = config(socket, LeaseClientAddressPolicy::Direct);
     settings.limits.token_writes_per_minute = 1;
@@ -254,7 +235,6 @@ async fn token_writes_reads_and_other_tokens_have_separate_budgets() {
             assert!(headers.contains_key("retry-after"));
         }
     }
-    server.await.unwrap();
 }
 
 struct StalledBody(Arc<tokio::sync::Notify>);

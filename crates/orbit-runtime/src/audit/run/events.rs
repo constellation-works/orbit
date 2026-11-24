@@ -202,6 +202,11 @@ impl RuntimeKernel {
         offset: usize,
         limit: usize,
     ) -> Result<RunEventsPageResult, OrbitError> {
+        // A zero-row page holds nothing, even when rows match: the loop below
+        // pushes before it checks the limit, so it must not run at all.
+        if limit == 0 {
+            return Ok(RunEventsPageResult::Forward(Vec::new()));
+        }
         let known_event_types: Vec<&str> = V2_AUDIT_BODY_KIND_EVENT_TYPES
             .iter()
             .map(|(_, event_type)| *event_type)

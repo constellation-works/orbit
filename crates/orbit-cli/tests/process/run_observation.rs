@@ -1481,14 +1481,18 @@ fn replacement_drain_counts_and_reports_inherited_workers_until_they_finish() {
         json!([]),
         "the CLI returns the stop projection MCP and the dashboard return: {stopped}"
     );
-    assert!(coordinator["remaining_children"].as_array().is_some_and(
-        |children| !children.is_empty()
-            && children.iter().all(|child| {
-                ["run_id", "job_name", "phase", "child_status"]
-                    .iter()
-                    .all(|key| child.get(key).is_some())
-            })
-    ));
+    // The coordinator's one open dispatch is the running wrapper; the finished
+    // wrapper is terminal and is not listed. Its phase is the seeded dispatch's.
+    assert_eq!(
+        coordinator["remaining_children"],
+        json!([{
+            "run_id": &old_wrapper,
+            "job_name": "task_auto_pipeline",
+            "phase": "submitted",
+            "child_status": "running",
+        }]),
+        "the stop lists the coordinator's open child dispatch: {stopped}"
+    );
     assert!(
         runtime
             .read_run_state(&old)

@@ -212,7 +212,7 @@ wf_test!(auto_stop_is_idempotent_and_preserves_in_flight_children, {
         json!({"reason":"first click"}),
     );
     check!(first, "/outcome": "stopped", "/coordinators/0/run_id": coordinator.run_id);
-    eq!(first["coordinators"][0] => json!({ "run_id": coordinator.run_id, "job_id": "workspace_auto_pipeline", "outcome": "stopped", "remaining_children": [{ "run_id": child.run_id, "job_name": "task_auto_pipeline", "phase": first["coordinators"][0]["remaining_children"][0]["phase"], "child_status": first["coordinators"][0]["remaining_children"][0]["child_status"], }], "forced_runs": [], }), "the dashboard returns the stop projection CLI and MCP return: {first}");
+    eq!(first["coordinators"][0] => json!({ "run_id": coordinator.run_id, "job_id": "workspace_auto_pipeline", "outcome": "stopped", "remaining_children": [{ "run_id": child.run_id, "job_name": "task_auto_pipeline", "phase": "submitted", "child_status": "running", }], "forced_runs": [], }), "the dashboard returns the stop projection CLI and MCP return: {first}");
     let stopped = fixture
         .runtime
         .read_run_state(&coordinator.run_id)
@@ -225,6 +225,7 @@ wf_test!(auto_stop_is_idempotent_and_preserves_in_flight_children, {
         json!({"reason":"second click"}),
     );
     check!(repeated, "/outcome": "unchanged", "/coordinators/0/outcome": "unchanged");
+    eq!(repeated["coordinators"][0]["remaining_children"] => json!([{ "run_id": child.run_id, "job_name": "task_auto_pipeline", "phase": "submitted", "child_status": "running" }]), "a repeated stop reports the same live child: {repeated}");
     eq!(repeated["coordinators"][0]["remaining_children"] => first["coordinators"][0]["remaining_children"]);
     eq!(saved_state(&fixture, &coordinator.run_id).unwrap() => stopped, "a repeated stop preserves the first stop's evidence");
     for run in [&coordinator, &child] {

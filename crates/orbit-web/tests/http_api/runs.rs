@@ -155,6 +155,12 @@ fn run_event_pages_body(fixture: &Fixture) {
     let filled = get(&server, &format!("{path}?kind=step_started&limit=1"));
     let first_id = &filled[0]["event_id"];
     assert_eq!(first_id, &json!("e0"), "a page the budget fills is served");
+    let zero = get(&server, &format!("{path}?kind=step_started&limit=0"));
+    assert_eq!(
+        zero,
+        json!([]),
+        "a zero-limit kind page holds no rows even when one matches"
+    );
     let refused = server.get(&format!("{path}?kind=late_marker"));
     assert_eq!(refused.status(), reqwest::StatusCode::PAYLOAD_TOO_LARGE);
     assert_eq!(
@@ -1272,6 +1278,15 @@ fn unregistered_workspace_body(fixture: &Fixture) {
             &format!("{runs}/events?tail=true&workspace={workspace}"),
         );
         assert_eq!(events["total"], 3, "{workspace}: {events}");
+        let zero = get(
+            &server,
+            &format!("{runs}/events?kind=activity_started&limit=0&workspace={workspace}"),
+        );
+        assert_eq!(
+            zero,
+            json!([]),
+            "{workspace}: a zero-limit kind page is empty"
+        );
         assert_eq!(
             events["events"][2]["event_id"], "leaf-2",
             "{workspace}: {events}"
@@ -1371,6 +1386,21 @@ fn cancel_and_replay_body(fixture: &Fixture) {
     assert!(
         second.show_job_run(replay_id).is_ok(),
         "replay must be submitted to the holding workspace: {replay}"
+    );
+    // The replay's owner executes it: the substitute worker resolves the run in
+    // the holding workspace, so the run finishes there rather than only existing.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+    let finished = loop {
+        let run = second.show_job_run(replay_id).unwrap();
+        if run.state.is_terminal() || std::time::Instant::now() >= deadline {
+            break run;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    };
+    assert_eq!(
+        finished.state,
+        JobRunState::Success,
+        "the holding workspace's worker executes the replay: {finished:?}"
     );
     assert!(
         fixture.runtime.show_job_run(replay_id).is_err(),

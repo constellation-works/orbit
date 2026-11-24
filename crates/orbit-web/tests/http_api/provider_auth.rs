@@ -1,6 +1,8 @@
 //! Drain readiness shows every provider reading's age and the authentication
 //! failures that no success of that provider on that host has cleared. A
-//! success clears a failure only when it started after the failure.
+//! success clears a failure only for the same account, and only when it started
+//! after the failure. These cases all use the provider's default login, so
+//! credentials for other accounts are not covered here.
 
 use chrono::{Duration, Utc};
 use orbit_core::{JobRun, JobRunState};
