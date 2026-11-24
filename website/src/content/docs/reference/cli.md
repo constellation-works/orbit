@@ -34,7 +34,7 @@ These options work before or after a subcommand, except where that subcommand al
 | `orbit workspace remove\|teardown <workspace>` | `remove` deregisters a workspace and keeps its `.orbit`; `teardown --confirm` removes all Orbit artifacts from it. |
 | `orbit config show\|keys\|path` \| `get <key>` \| `set <key> <value>` | Read and write [configuration](/reference/config/). `set --global` targets `~/.orbit/config.toml`. |
 | `orbit config browser-kit status\|install\|verify\|remove` | [Manage the headless browser kit](/getting-started/install/#prepare-a-browser-kit-for-ui-tasks) that workers use to check UIs. |
-| `orbit host add <ssh-target>` \| `list` \| `show <host>` \| `rename <host> <new-name>` \| `remove <host>` | Register and inspect the [remote Orbit hosts](/how-to/multi-host/) this machine reaches over SSH. |
+| `orbit host add <ssh-target>` \| `list` \| `show <host>` \| `offline --reason <REASON> [--until <TIMESTAMP>] <HOST>` \| `online <HOST>` \| `rename <host> <new-name>` \| `remove <host>` | Register and inspect the [remote Orbit hosts](/how-to/multi-host/), or [acknowledge planned downtime](/how-to/multi-host/#acknowledge-planned-downtime) while keeping a host registered. |
 | `orbit plugin add <source>` \| `upgrade\|enable\|disable\|remove\|show <name>` \| `list\|doctor\|sync` | [Install, grant and manage plugins](/how-to/plugins/). |
 | `orbit plugin secret set\|rm <plugin> <name>` \| `list <plugin>` | Manage a plugin's [declared secrets](/how-to/plugins/#set-secrets); values are never shown. |
 | `orbit plugin validate\|test <dir>` \| `scaffold <namespace>` \| `migrate <binary>` | [Author a plugin](/reference/plugin-manifest/): check a source, run its conformance cases, generate a starter, or convert v1 tool sidecars. |
