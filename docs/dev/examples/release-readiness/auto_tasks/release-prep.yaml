@@ -55,8 +55,10 @@ template:
     for non-breaking work and a candidate minor bump for breaking candidates.
     Then locate the canonical open release-preparation task by the exact
     title pattern `Prepare v<X.Y.Z> release` and the `release` tag. Search
-    deterministically and select the lexicographically smallest matching task
-    ID if more than one already exists; never create a second canonical task.
+    deterministically and select the numerically smallest matching task ID if
+    more than one already exists: compare the number after the prefix as an
+    integer, so `ORB-99999` precedes `ORB-100000`. Never create a second
+    canonical task.
     If none exists, create exactly one task with that title, the tags
     `release` and `no-diff-expected`, type `chore`, and the candidate version
     and evidence in its description. The canonical task may finish on a clean
