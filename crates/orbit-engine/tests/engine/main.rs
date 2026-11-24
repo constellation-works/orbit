@@ -33,6 +33,8 @@ mod final_recovery;
 #[cfg(unix)]
 mod forge_hold;
 mod git_fixture;
+#[cfg(unix)]
+mod guarded_gh_reads;
 mod handoff_landing;
 mod history_note;
 mod local_completion_push;
