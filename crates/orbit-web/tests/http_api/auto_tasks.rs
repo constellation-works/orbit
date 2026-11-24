@@ -361,6 +361,34 @@ fn list_reports_effective_enabled_and_the_ownership_skip() {
     );
 }
 
+#[test]
+fn list_marks_only_orbit_shipped_defaults_as_orbit_default() {
+    isolated(
+        "auto_tasks::list_marks_only_orbit_shipped_defaults_as_orbit_default",
+        || {
+            let fixture = Fixture::new();
+            seed_auto_task_with_schedule(
+                &fixture,
+                "code-review",
+                AutoTaskSchedule::every_minutes(60),
+            );
+            seed_auto_task_with_schedule(
+                &fixture,
+                "workspace-sweep",
+                AutoTaskSchedule::every_minutes(60),
+            );
+
+            let server = fixture.server(false);
+            let listed = json_ok(server.get(URL));
+            let rows = listed["definitions"].as_array().unwrap();
+            let row = |name: &str| rows.iter().find(|row| row["name"] == name).unwrap();
+
+            assert_eq!(row("code-review")["orbit_default"], true);
+            assert_eq!(row("workspace-sweep")["orbit_default"], false);
+        },
+    );
+}
+
 fn deliveries(owner: Option<&str>) -> AutoTaskSchedule {
     serde_json::from_value(json!({"deliveries_landed": {
         "owner_machine": owner, "branch": "agent-main", "threshold": 1,
@@ -890,6 +918,7 @@ fn listing_profile_preserves_http_fields_and_condition_presence() {
                         "name",
                         "next_evaluation",
                         "open_duplicate",
+                        "orbit_default",
                         "plugin_inactive",
                         "schedule",
                         "schedule_summary",

@@ -8,6 +8,7 @@ use crate::runtime::audit::run_logs::bounded_redacted_text;
 use crate::{OrbitRuntime, Task};
 use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
+use orbit_config::SHIPPED_DEFAULT_AUTO_TASKS;
 use orbit_types::workflow::automation;
 use orbit_types::workflow::{
     AutoTaskCursor, AutoTaskDefinition, AutoTaskSchedule, AutoTaskTemplate, DedupePolicy,
@@ -396,6 +397,7 @@ fn http_listing_json(
     let last_minted_task_status = last_minted.map(|task| task.status);
     json!({
         "name": definition.name,
+        "orbit_default": is_orbit_default(&definition.name),
         "description": definition.description,
         "enabled": definition.enabled,
         "effective_enabled": row.effective_enabled,
@@ -453,6 +455,12 @@ fn http_listing_json(
         "inactive_plugin": listed.inactive_plugin,
         "skipped_reason": row.skipped_reason,
     })
+}
+
+/// Whether Orbit ships and seeds a definition of this name. Seeding keys
+/// shipped defaults by name, so an operator's edit to one keeps the mark.
+fn is_orbit_default(name: &str) -> bool {
+    SHIPPED_DEFAULT_AUTO_TASKS.contains(&name)
 }
 
 fn schedule_summary(schedule: &AutoTaskSchedule) -> String {

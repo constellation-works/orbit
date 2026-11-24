@@ -255,6 +255,11 @@ function autoTaskBadge(text, tone) {
   return el("span", { class: "badge mono", "data-tone": tone, text, title: text });
 }
 
+// The server flags a definition Orbit ships and seeds; the dashboard does not infer it from the name.
+function autoTaskOrbitDefaultBadge() {
+  return el("span", { class: "badge", "data-tone": "muted", text: "Orbit default", title: "Shipped by Orbit and seeded into this workspace" });
+}
+
 function autoTaskEditKey(definition) {
   return `auto-task-schedule:${getWorkspace()}:${definition.name}`;
 }
@@ -495,6 +500,7 @@ function autoTaskRow(payload, definition, workspaceId) {
           definition.condition?.stall ? el("span", { class: "operation-state blocked", text: "stalled" }) : null,
         ]),
         el("span", { class: "operation-cell-sub operation-chips" }, [
+          definition.orbit_default ? autoTaskOrbitDefaultBadge() : null,
           template.crew ? autoTaskBadge(template.crew, "accent") : null,
           template.priority ? autoTaskBadge(template.priority) : null,
         ].filter(Boolean)),

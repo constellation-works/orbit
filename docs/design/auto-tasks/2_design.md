@@ -791,6 +791,10 @@ Both duplicate flags use the scheduler's shared listed-set rule: done,
 archived, rejected and someday instances do not count as open. Delivery-schedule
 automation diagnostics reuse the same open-instance result. The projection is
 recomputed on each request; it does not cache instance state.
+Each HTTP definition row carries `orbit_default`, true when the name is in
+`orbit_config::SHIPPED_DEFAULT_AUTO_TASKS`. The dashboard shows it as an
+"Orbit default" badge in the definition's chip row; an operator's edit to a
+default keeps the badge, because seeding keys shipped defaults by name.
 
 `GET /api/auto-tasks` returns separate `capabilities` decisions for
 `auto_task_toggle`, `auto_task_mint`, `auto_task_schedule` and `auto_task_delete`.
