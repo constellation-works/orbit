@@ -1066,6 +1066,99 @@ fn failed_reviewer_commit_preservation_excludes_protected_changes_and_deletions(
     }
 }
 
+/// Runs the failed-preservation fallback for a reviewer commit on top of
+/// `published_head` and returns the `landing-review-fix` patch it saved.
+fn failed_preservation_patch(fixture: &Fixture, published_head: &str) -> String {
+    let handoff = failure_handoff_after(
+        fixture,
+        "landing_review_gate_settle",
+        "review_gate_blocked: verdict reject",
+        &json!({
+            "sync_base": {"head": "candidate"}, "push": {"local_sha": published_head},
+        }),
+    );
+    let run_id = fixture.input["job_run_id"].as_str().unwrap();
+    let artifact_path = format!("landing-review-fix-{run_id}.patch");
+    assert_eq!(
+        handoff["reviewer_preservation"]["decision"], "preserve_failed",
+        "{handoff}"
+    );
+    assert_eq!(
+        handoff["reviewer_preservation"]["diff_artifact"], artifact_path,
+        "{handoff}"
+    );
+    let artifact = fixture
+        .runtime
+        .get_task_artifact(&fixture.task_id, &artifact_path)
+        .unwrap()
+        .unwrap();
+    String::from_utf8_lossy(&artifact.content).into_owned()
+}
+
+/// A reviewer commit that replaces a published protected directory with an
+/// ordinary file of the same name. A literal pathspec for `d` also matches the
+/// published `d/.env`, so the fallback must exclude that descendant.
+fn failed_reviewer_commit_preservation_excludes_protected_descendants_when_a_file_replaces_a_directory()
+ {
+    let (fixture, _bare, _) = setup_before_landing_remote();
+    std::fs::create_dir(fixture.repo.join("d")).unwrap();
+    std::fs::write(fixture.repo.join("d/.env"), "old_private_value\n").unwrap();
+    git(&fixture.repo, &["add", "-f", "d"]);
+    git(
+        &fixture.repo,
+        &["commit", "-q", "-m", "published protected directory"],
+    );
+    let published_head = git(&fixture.repo, &["rev-parse", "HEAD"]);
+    git(&fixture.repo, &["rm", "-q", "-r", "d"]);
+    std::fs::write(fixture.repo.join("d"), "ordinary replacement\n").unwrap();
+    git(&fixture.repo, &["add", "d"]);
+    git(
+        &fixture.repo,
+        &["commit", "-q", "-m", "reviewer replaces directory"],
+    );
+    git(&fixture.repo, &["remote", "remove", "origin"]);
+
+    let diff = failed_preservation_patch(&fixture, &published_head);
+    assert!(diff.contains("ordinary replacement"), "{diff}");
+    for forbidden in [".env", "old_private_value"] {
+        assert!(!diff.contains(forbidden), "leaked {forbidden}: {diff}");
+    }
+}
+
+/// A reviewer commit that replaces a published ordinary file with a directory
+/// holding a protected file. The published `d` is a literal pathspec match for
+/// the new `d/.env`, so the fallback must exclude that protected addition.
+fn failed_reviewer_commit_preservation_excludes_protected_descendants_when_a_directory_replaces_a_file()
+ {
+    let (fixture, _bare, _) = setup_before_landing_remote();
+    std::fs::write(fixture.repo.join("d"), "ordinary published file\n").unwrap();
+    git(&fixture.repo, &["add", "d"]);
+    git(
+        &fixture.repo,
+        &["commit", "-q", "-m", "published ordinary file"],
+    );
+    let published_head = git(&fixture.repo, &["rev-parse", "HEAD"]);
+    git(&fixture.repo, &["rm", "-q", "d"]);
+    std::fs::create_dir(fixture.repo.join("d")).unwrap();
+    std::fs::write(fixture.repo.join("d/.env"), "new_private_value\n").unwrap();
+    std::fs::write(fixture.repo.join("d/notes.txt"), "ordinary nested note\n").unwrap();
+    git(&fixture.repo, &["add", "-f", "d"]);
+    git(
+        &fixture.repo,
+        &["commit", "-q", "-m", "reviewer replaces file"],
+    );
+    git(&fixture.repo, &["remote", "remove", "origin"]);
+
+    let diff = failed_preservation_patch(&fixture, &published_head);
+    assert!(
+        diff.contains("ordinary nested note") && diff.contains("ordinary published file"),
+        "{diff}"
+    );
+    for forbidden in [".env", "new_private_value"] {
+        assert!(!diff.contains(forbidden), "leaked {forbidden}: {diff}");
+    }
+}
+
 // Related boundary scenarios share the isolated table fixture.
 crate::scenario_table!(
     an_owner_before_landing_review_keeps_the_durable_task_summary_scenarios,
@@ -1080,5 +1173,7 @@ crate::scenario_table!(
     a_rejected_before_landing_review_pushes_nothing,
     a_timed_out_before_landing_review_preserves_uncommitted_repairs_on_a_durable_ref,
     a_timed_out_before_landing_review_saves_uncommittable_diff_as_artifact_and_names_refusal,
-    failed_reviewer_commit_preservation_excludes_protected_changes_and_deletions
+    failed_reviewer_commit_preservation_excludes_protected_changes_and_deletions,
+    failed_reviewer_commit_preservation_excludes_protected_descendants_when_a_file_replaces_a_directory,
+    failed_reviewer_commit_preservation_excludes_protected_descendants_when_a_directory_replaces_a_file
 );

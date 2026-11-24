@@ -326,14 +326,24 @@ fn preserve_landing_reviewer_repair_inner<H: RuntimeHost + ?Sized>(
             )
             .ok()
             .and_then(|paths| {
-                let safe = paths
+                let (safe, protected): (Vec<String>, Vec<String>) = paths
                     .into_iter()
-                    .filter(|path| claim_new_path_is_safe(path))
-                    .map(|path| format!(":(literal){path}"))
-                    .collect::<Vec<_>>();
+                    .partition(|path| claim_new_path_is_safe(path));
                 if safe.is_empty() {
                     return None;
                 }
+                // A literal pathspec also matches descendants. A file that
+                // replaces a published directory (or the reverse) would pull
+                // its protected descendants back in, so exclude them by name.
+                let pathspecs = safe
+                    .iter()
+                    .map(|path| format!(":(literal){path}"))
+                    .chain(
+                        protected
+                            .iter()
+                            .map(|path| format!(":(exclude,literal){path}")),
+                    )
+                    .collect::<Vec<_>>();
                 let mut args = vec![
                     "diff",
                     "--no-renames",
@@ -343,7 +353,7 @@ fn preserve_landing_reviewer_repair_inner<H: RuntimeHost + ?Sized>(
                     &head_sha,
                     "--",
                 ];
-                args.extend(safe.iter().map(String::as_str));
+                args.extend(pathspecs.iter().map(String::as_str));
                 git_output_raw(&worktree, &args).ok()
             })
             .filter(|diff| !diff.trim().is_empty())
