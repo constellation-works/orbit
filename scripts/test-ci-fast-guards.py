@@ -4159,6 +4159,46 @@ class RemovedCodeIdentifierTests(unittest.TestCase):
         self.assertIn('".ws-badge"', result.stderr)
         self.assertIn("docs/design/user-interface/1_overview.md:1", result.stderr)
 
+    def test_removed_class_from_compound_selector_named_in_doc_fails(self):
+        self.write(self.CSS, ".active.retired { color: red; }\n")
+        self.write("docs/design/user-interface/1_overview.md",
+                   "The `.retired` pill dims the row.\n")
+        self.commit_base()
+        self.write(self.CSS, ".active { color: red; }\n")
+        result = self.run_check()
+        self.assertNotEqual(result.returncode, 0, result.stdout)
+        self.assertIn('".retired"', result.stderr)
+        self.assertIn("docs/design/user-interface/1_overview.md:1", result.stderr)
+
+    def test_removed_element_compound_class_named_in_doc_fails(self):
+        self.write(self.CSS, "a.retired { color: red; }\n")
+        self.write("docs/design/user-interface/1_overview.md",
+                   "The `.retired` link dims the row.\n")
+        self.commit_base()
+        self.write(self.CSS, ".ws-badge { color: red; }\n")
+        result = self.run_check()
+        self.assertNotEqual(result.returncode, 0, result.stdout)
+        self.assertIn('".retired"', result.stderr)
+        self.assertIn("docs/design/user-interface/1_overview.md:1", result.stderr)
+
+    def test_removed_standalone_class_still_in_compound_selector_passes(self):
+        self.write(self.CSS, ".retired { color: red; }\n.active.retired { opacity: 1; }\n")
+        self.write("docs/design/user-interface/1_overview.md",
+                   "The `.retired` pill dims the row.\n")
+        self.commit_base()
+        self.write(self.CSS, ".active.retired { opacity: 1; }\n")
+        result = self.run_check()
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_removed_class_mention_in_css_comment_passes(self):
+        self.write(self.CSS, "/* .retired pill is gone */\n.ws-badge { color: red; }\n")
+        self.write("docs/design/user-interface/1_overview.md",
+                   "The `.retired` pill dims the row.\n")
+        self.commit_base()
+        self.write(self.CSS, ".ws-badge { color: red; }\n")
+        result = self.run_check()
+        self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_allowlisted_keep_with_reason_passes_and_bad_entries_fail(self):
         self.write(self.SOURCE, "// constant moved\n")
         self.write_allowlist([{"identifier": self.CONST, "doc": self.DOC,

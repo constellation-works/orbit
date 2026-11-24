@@ -10,7 +10,9 @@ definition the diff deletes:
   (`orbit_policy::resolve_symlinks` for `pub use ...::resolve_symlinks;` in
   `crates/orbit-policy/src/lib.rs`). A re-export in a file outside
   `crates/<crate>/src` has no public path here and is not judged;
-- CSS class selectors, named with their dot (`.ws-badge`).
+- CSS class selectors, named with their dot (`.ws-badge`), including a class in
+  a compound selector (`.active.retired`). A class named only in a CSS comment
+  does not count.
 
 Drop any identifier the same diff adds back, or that the working tree still
 defines, re-exports or styles. Fail when a removed identifier is named as a
@@ -50,9 +52,13 @@ RUST_ITEM = re.compile(
     r"(?:const|static|fn|struct|enum|trait|type)[ \t]+(?:mut[ \t]+)?([A-Za-z_]\w*)",
     re.MULTILINE)
 PUB_USE = re.compile(r"\bpub(?:\([^)\n]*\))?[ \t]+use[ \t]+([^;]+);")
-# A class selector: a dot not preceded by a word character or a closing
-# bracket, so `1.5`, `url(a.png)` and `a.b` are not classes.
-CSS_CLASS = re.compile(r"(?<![\w)\]])\.(-?[A-Za-z_][\w-]*)")
+# CSS comments, and selector preludes: the text before each `{` since the last
+# `;`, `{` or `}`. Declarations are never preludes, so `url(a.png)` names no class.
+CSS_COMMENT = re.compile(r"/\*.*?\*/", re.DOTALL)
+CSS_PRELUDE = re.compile(r"[^{};]*\{")
+# A class in a prelude, including one after another selector part (`a.retired`,
+# `.active.retired`). A letter must follow the dot, so `1.5` is not a class.
+CSS_CLASS = re.compile(r"\.(-?[A-Za-z_][\w-]*)")
 CODE_SPAN = re.compile(r"(?<!`)(?P<ticks>`+)(?!`)(?P<code>.*?)(?<!`)(?P=ticks)(?!`)")
 FENCE = re.compile(r"[ ]{0,3}(?P<marker>`{3,}|~{3,})(?P<info>.*)")
 
@@ -181,10 +187,18 @@ def public_paths(path, text):
             for _, name in use_items(match.group(1))}
 
 
+def css_classes(text):
+    """CSS class selectors a stylesheet names, with their dot, ignoring comments."""
+    text = CSS_COMMENT.sub(" ", text)
+    return {"." + match.group(1)
+            for prelude in CSS_PRELUDE.finditer(text)
+            for match in CSS_CLASS.finditer(prelude.group())}
+
+
 def names_in(path, text):
     """Identifiers a source text defines or re-exports, or the CSS classes it styles."""
     if path.endswith(".css"):
-        return {"." + match.group(1) for match in CSS_CLASS.finditer(text)}
+        return css_classes(text)
     names = {match.group(1) for match in RUST_ITEM.finditer(text)}
     names.discard("_")
     return names | public_paths(path, text)
@@ -213,13 +227,22 @@ def changed_identifiers(base):
         if not path.endswith(SOURCE_SUFFIXES):
             continue
         changed.add(path)
-        for name in names_in(path, removed_text):
-            removed.setdefault(name, set()).add(path)
-        added |= names_in(path, added_text)
+        # A CSS hunk can cut a selector or comment in half, so CSS is judged
+        # from whole files below.
+        if path.endswith(".rs"):
+            for name in names_in(path, removed_text):
+                removed.setdefault(name, set()).add(path)
+            added |= names_in(path, added_text)
     # A zero-context hunk that deletes one member of a multiline `pub use` group
     # leaves the `pub use` opening and `;` outside the removed text, so compare
     # the whole file's public paths before and after the diff.
     for path in sorted(changed):
+        if path.endswith(".css"):
+            old = git("show", f"{base}:{path}")
+            old_classes = css_classes(old.stdout) if old.returncode == 0 else set()
+            for name in old_classes - css_classes(read_text(path) or ""):
+                removed.setdefault(name, set()).add(path)
+            continue
         if module_of(path) is None:
             continue
         old = git("show", f"{base}:{path}")
@@ -253,10 +276,15 @@ def live_docs():
     return docs
 
 
+def name_pattern(name):
+    """Whole-token match for a Rust name; a CSS class also matches as a compound's tail."""
+    before = "" if name.startswith(".") else r"(?<![\w-])"
+    return re.compile(before + re.escape(name) + r"(?![\w-])")
+
+
 def doc_hits(identifiers, docs):
     """Return {identifier: {(document, line)}} for inline code spans that name it."""
-    patterns = {name: re.compile(r"(?<![\w-])" + re.escape(name) + r"(?![\w-])")
-                for name in identifiers}
+    patterns = {name: name_pattern(name) for name in identifiers}
     hits = {name: set() for name in identifiers}
     for doc in docs:
         text = read_text(doc)
