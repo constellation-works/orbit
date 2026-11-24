@@ -97,6 +97,13 @@ impl RuntimeKernel {
         self.context.persistence().as_json_value()
     }
 
+    /// Whether the lexical search index file exists at its configured path.
+    /// Probed from the path rather than the cached index handle, so a
+    /// diagnostic sees the file as it is now.
+    pub fn search_index_file_exists(&self) -> bool {
+        self.context.persistence().semantic_db.exists()
+    }
+
     pub fn automation_store(
         &self,
     ) -> Result<Arc<dyn orbit_store::contracts::AutomationStoreBackend>, OrbitError> {
