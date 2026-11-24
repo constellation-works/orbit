@@ -72,13 +72,21 @@ remains visible in discovery rather than disappearing. `orbit host list` flags a
 host whose `binary_version` or `protocol_fingerprint` differs from this
 machine's, and `orbit doctor` reports it in its `hosts` row.
 
-The doctor's `hosts` row warns on unreachable hosts, missing replica owners,
-and version/protocol differences on other hosts. Invalid
-or conflicting host files, identity mismatch and version/protocol skew on a
-replica's owner are errors. Use `orbit host list` for live details, register
-missing owners, restore SSH reachability and deploy matching builds where
-needed. `host list` is a report and exits zero when the registry loads even
-if a host is down; doctor is the health gate.
+The doctor's `hosts` row warns on unreachable transports
+(`unreachable_destination`), local or other probe failures (`probe_failed`),
+missing replica owners, and version/protocol differences on other hosts. A
+message such as `probe failed (probe_failed): write SSH defaults …` means
+local SSH setup failed before Orbit contacted the destination; check the local
+path and error named in the diagnostic. It does not establish whether the
+destination is reachable. By contrast, `… is unreachable
+(unreachable_destination)` reports a failed transport probe. Invalid or
+conflicting host files, identity mismatch (`host_identity_mismatch`) and
+version/protocol skew on a replica's owner are errors. An identity mismatch
+means the remote answered but its machine ID or task prefix differs from the
+registered entry. Use `orbit host list` for live details, register missing
+owners, restore SSH reachability and deploy matching builds where needed.
+`host list` is a report and exits zero when the registry loads even if a host
+is down; doctor is the health gate.
 
 ### Retired destinations file
 
