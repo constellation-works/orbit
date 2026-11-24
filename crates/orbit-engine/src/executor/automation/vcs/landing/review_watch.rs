@@ -14,6 +14,9 @@
 //! [`LANDING_CHECKS_OBSERVED_EVENT`] to the task's history. Logged transient
 //! failures use completion's durable, bounded rerun path before observation.
 //! It never merges, updates the branch, starts a repair or changes status.
+//! A status read lost to a transient provider failure (after the read's own
+//! bounded retries) keeps the watch polling until its deadline, then records
+//! a held `pending` observation; any other read failure still fails at once.
 //! A task that left review, or a pull request that merged or closed, ends
 //! the watch without an entry.
 
@@ -39,6 +42,7 @@ use super::super::pr::{
     CheckState, PrMergeState, PullRequestStatus, classify_pr_state, read_pr_status_before,
 };
 use super::super::remote_probe::fixed_wait;
+use super::run::transport_failure;
 
 const DEFAULT_MAX_WAIT_SECONDS: u64 = 3600;
 const MAX_WAIT_SECONDS: u64 = 6 * 60 * 60;
@@ -87,7 +91,26 @@ pub(in crate::executor::automation) fn pr_checks_watch<H: RuntimeHost + ?Sized>(
         if !in_review(host, &task_id)? {
             return Ok(ended(&task_id, &pr_number, "task_left_review"));
         }
-        let status = read_pr_status_before(host, &workspace, &pr_number, deadline_ms)?;
+        let status = match read_pr_status_before(host, &workspace, &pr_number, deadline_ms) {
+            Ok(status) => status,
+            // An unknown observation: nothing is classified and nothing is
+            // acted on until a read answers.
+            Err(error) if transport_failure(&error) => {
+                tracing::warn!(
+                    pr_number,
+                    "the pull request status read failed transiently; the watch keeps polling"
+                );
+                if max_wait_seconds == 0 || now_ms()? >= deadline_ms {
+                    return finish(host, &task_id, &pr_number, &unreadable(&pr_number));
+                }
+                fixed_wait(Duration::from_secs(poll_interval_seconds));
+                if now_ms()? >= deadline_ms {
+                    return finish(host, &task_id, &pr_number, &unreadable(&pr_number));
+                }
+                continue;
+            }
+            Err(error) => return Err(error),
+        };
         let expired = max_wait_seconds == 0 || now_ms()? >= deadline_ms;
         let observed = match classify_pr_state(&status) {
             PrMergeState::Merged => return Ok(ended(&task_id, &pr_number, "merged")),
@@ -168,15 +191,38 @@ pub(in crate::executor::automation) fn pr_checks_watch<H: RuntimeHost + ?Sized>(
                 }
             }
         };
-        record(host, &task_id, &observed)?;
-        let observed = serde_json::to_value(&observed).map_err(encode_failed)?;
-        return Ok(json!({
-            "task_id": task_id,
-            "pr_number": pr_number,
-            "recorded": true,
-            "observation": observed,
-        }));
+        return finish(host, &task_id, &pr_number, &observed);
     }
+}
+
+/// Record `observed` and report it as the watch's outcome.
+fn finish<H: RuntimeHost + ?Sized>(
+    host: &H,
+    task_id: &str,
+    pr_number: &str,
+    observed: &RecordedLandingChecksObservation,
+) -> Result<Value, OrbitError> {
+    record(host, task_id, observed)?;
+    let observed = serde_json::to_value(observed).map_err(encode_failed)?;
+    Ok(json!({
+        "task_id": task_id,
+        "pr_number": pr_number,
+        "recorded": true,
+        "observation": observed,
+    }))
+}
+
+/// The held `pending` observation of a pull request whose status the provider
+/// never answered before the watch's deadline. It names no head and no check:
+/// none was observed.
+fn unreadable(pr_number: &str) -> RecordedLandingChecksObservation {
+    RecordedLandingChecksObservation::settled(
+        ObservedState::Pending,
+        pr_number,
+        None,
+        Some("the pull request's status could not be read before the watch ended".to_string()),
+    )
+    .held("the provider kept failing transiently, so the checks were not observed")
 }
 
 /// The one task watched: `task_id`, or a `task_ids` list of exactly one, as

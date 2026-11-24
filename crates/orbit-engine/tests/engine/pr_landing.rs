@@ -5576,6 +5576,11 @@ impl Fixture {
         .unwrap();
         fs::write(self.forge.join("pr-view-reads"), "0\n").unwrap();
     }
+    /// Fail the next `reads` status reads with `stderr`, each before it is counted.
+    fn script_status_failures(&self, reads: u32, stderr: &str) {
+        self.write_forge("status-faults", format!("{reads}\n"));
+        self.write_forge("status-fault-stderr", stderr);
+    }
     fn script_pr_close_failure(&self, diagnostic: &str) {
         fs::write(self.forge.join("pr-close-failure"), diagnostic).unwrap();
     }
@@ -6721,6 +6726,13 @@ status() {
         printf '{"number":42,"state":"MERGED","isDraft":false,"mergedAt":"2026-10-03T00:00:00Z","mergeable":"UNKNOWN","mergeStateStatus":"UNKNOWN","reviewDecision":"","statusCheckRollup":[%s],"headRefName":"%s","headRefOid":"%s","baseRefName":"%s","mergeCommit":{"oid":"%s"},"url":"%s"}\n' \
             "$(check success)" "$pr_head" "$merged_head" "$pr_base" "$(cat "$forge/merged")" "$url"
         return
+    fi
+    # `status-faults` status reads fail with `status-fault-stderr` before one
+    # is counted or answered.
+    if [ -s "$forge/status-faults" ] && [ "$(cat "$forge/status-faults")" -gt 0 ]; then
+        printf '%s\n' "$(( $(cat "$forge/status-faults") - 1 ))" > "$forge/status-faults"
+        cat "$forge/status-fault-stderr" >&2
+        exit 1
     fi
     reads=$(( $(cat "$forge/reads" 2>/dev/null || echo 0) + 1 ))
     printf '%s\n' "$reads" > "$forge/reads"

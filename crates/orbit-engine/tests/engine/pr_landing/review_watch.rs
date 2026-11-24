@@ -103,6 +103,142 @@ fn a_review_delivery_with_failed_checks_records_their_classification() {
     );
 }
 
+const GRAPHQL_OUTAGE: &str = "GraphQL: Something went wrong while executing your query";
+
+fn open_review_delivery(fx: &Fixture, host: &DeliveryHost) {
+    action(host, "pr_open", &fx.open_input(&fx.candidate, &fx.base_sha))
+        .expect("open the delivery's pull request");
+    host.set_status(TASK_ID, TaskStatus::Review);
+}
+
+fn watch_input(fx: &Fixture, max_wait_seconds: u64) -> Value {
+    json!({
+        "task_ids": [TASK_ID],
+        "pr_number": PR_NUMBER,
+        "workspace_path": fx.repo,
+        "base": BASE,
+        "base_sync": "local",
+        "max_wait_seconds": max_wait_seconds,
+        "poll_interval_seconds": 5,
+    })
+}
+
+fn observations(host: &DeliveryHost) -> Vec<HistoricalLandingChecksObservation> {
+    host.history(TASK_ID)
+        .iter()
+        .filter_map(HistoricalLandingChecksObservation::from_history_entry)
+        .collect()
+}
+
+/// No call that changes the pull request, its branch or its checks reached the forge.
+fn assert_no_mutation(fx: &Fixture) {
+    let mutating: Vec<String> = fx
+        .forge_calls()
+        .into_iter()
+        .filter(|call| {
+            [
+                "pr merge",
+                "pr edit",
+                "pr close",
+                "pr comment",
+                "pr ready",
+                "run rerun",
+            ]
+            .iter()
+            .any(|verb| call.starts_with(verb))
+        })
+        .collect();
+    assert!(mutating.is_empty(), "the watch mutated: {mutating:?}");
+}
+
+/// A status read the provider fails transiently is an unknown observation:
+/// the watch keeps polling, then reports what the next answered read shows.
+#[test]
+fn a_transient_status_read_failure_keeps_the_watch_polling() {
+    isolated(
+        "review_watch::a_transient_status_read_failure_keeps_the_watch_polling",
+        |sandbox| {
+            let (fx, host) = fx_host(sandbox);
+            fx.script_checks(&["success"]);
+            open_review_delivery(&fx, &host);
+            // More failures than one read's own bounded retries can absorb.
+            fx.script_status_failures(5, GRAPHQL_OUTAGE);
+            let watched =
+                with_completion_clock(|| action(&host, "pr_checks_watch", &watch_input(&fx, 600)))
+                    .expect("a transient outage shorter than the watch is not a failure");
+            assert_eq!(watched["recorded"], true, "{watched}");
+            assert_eq!(
+                fx.forge_state("status-faults").as_deref(),
+                Some("0"),
+                "every scripted failure went through the watcher's read path"
+            );
+            let observed = observations(&host);
+            assert_eq!(observed.len(), 1, "{observed:?}");
+            let note = observed[0].observation().expect("a decodable note");
+            assert_eq!(
+                note.state(),
+                LandingChecksObservationState::Passed,
+                "{note:?}"
+            );
+            assert_eq!(note.hold_reason(), None, "{note:?}");
+            assert_eq!(host.status(TASK_ID), TaskStatus::Review);
+            assert_no_mutation(&fx);
+        },
+    );
+}
+
+/// An outage that outlasts the watch records a held `pending` observation
+/// naming nothing it did not see, and the run does not fail.
+#[test]
+fn a_transient_status_read_failure_through_the_deadline_holds_pending() {
+    isolated(
+        "review_watch::a_transient_status_read_failure_through_the_deadline_holds_pending",
+        |sandbox| {
+            let (fx, host) = fx_host(sandbox);
+            fx.script_checks(&["success"]);
+            open_review_delivery(&fx, &host);
+            fx.script_status_failures(1_000_000, GRAPHQL_OUTAGE);
+            let watched =
+                with_completion_clock(|| action(&host, "pr_checks_watch", &watch_input(&fx, 60)))
+                    .expect("an outage through the deadline is a hold, not a failed run");
+            assert_eq!(watched["recorded"], true, "{watched}");
+            let observed = observations(&host);
+            assert_eq!(observed.len(), 1, "{observed:?}");
+            let note = observed[0].observation().expect("a decodable note");
+            assert_eq!(
+                note.state(),
+                LandingChecksObservationState::Pending,
+                "{note:?}"
+            );
+            assert_eq!(note.head_sha(), None, "{note:?}");
+            assert_eq!(note.failed_checks(), None, "{note:?}");
+            assert!(note.hold_reason().is_some(), "{note:?}");
+            assert_eq!(host.status(TASK_ID), TaskStatus::Review);
+            assert_no_mutation(&fx);
+        },
+    );
+}
+
+/// A permanent read failure is not an outage to wait out.
+#[test]
+fn a_permanent_status_read_failure_still_fails_promptly() {
+    isolated(
+        "review_watch::a_permanent_status_read_failure_still_fails_promptly",
+        |sandbox| {
+            let (fx, host) = fx_host(sandbox);
+            fx.script_checks(&["success"]);
+            open_review_delivery(&fx, &host);
+            fx.script_status_failures(1_000_000, "gh: Bad credentials (HTTP 401)");
+            let error =
+                with_completion_clock(|| action(&host, "pr_checks_watch", &watch_input(&fx, 600)))
+                    .expect_err("a credential refusal fails the watch");
+            assert!(error.to_string().contains("Bad credentials"), "{error}");
+            assert!(observations(&host).is_empty());
+            assert_no_mutation(&fx);
+        },
+    );
+}
+
 /// One push run on `sha` whose `test` job concluded `conclusion`, served to
 /// the substitute `gh` as the commit's jobs and failed-job log.
 fn plant_run(fx: &Fixture, sha: &str, run_id: u64, conclusion: &str, log: &str) {
