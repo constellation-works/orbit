@@ -11,11 +11,11 @@
 use std::path::Path;
 
 use orbit_common::fs::selector::claim_new_path_is_safe;
-use orbit_common::security::redaction::redact_all;
+use orbit_common::security::redaction::{redact_all, redact_all_bytes};
 
 use super::super::git::{
-    git_command_success, git_output, git_output_paths_with_env, git_output_raw_with_env,
-    git_output_with_env,
+    BINARY_PATCH_DIFF_ARGS, git_command_success, git_output, git_output_bytes_with_env,
+    git_output_paths_with_env, git_output_with_env,
 };
 use super::super::review_gate::uncommitted_paths;
 use super::author::recovery_author;
@@ -216,11 +216,11 @@ fn message(request: &RecoveryCommitRequest<'_>) -> String {
 }
 
 /// Capture uncommitted tracked, staged, and untracked changes on safe paths in
-/// `workspace_path` as a redacted unified patch without mutating `.git/index`
+/// `workspace_path` as a redacted binary-capable patch without mutating `.git/index`
 /// or copying protected files into the patch or repository object store.
 pub(in crate::executor::automation::vcs) fn capture_uncommitted_diff(
     workspace_path: &Path,
-) -> Result<Option<String>, orbit_common::OrbitError> {
+) -> Result<Option<Vec<u8>>, orbit_common::OrbitError> {
     let changed_paths = uncommitted_paths(workspace_path)?;
     let safe_paths = changed_paths
         .iter()
@@ -287,17 +287,18 @@ pub(in crate::executor::automation::vcs) fn capture_uncommitted_diff(
     let add_arg_refs = add_args.iter().map(String::as_str).collect::<Vec<_>>();
     git_output_with_env(workspace_path, &add_arg_refs, &env)?;
 
-    let mut diff_args = vec!["diff", "--cached", "--no-renames"];
+    let mut diff_args = vec!["diff", "--cached"];
+    diff_args.extend_from_slice(BINARY_PATCH_DIFF_ARGS);
     if has_head {
         diff_args.push("HEAD");
     }
     diff_args.push("--");
     diff_args.extend(exclusions.iter().map(String::as_str));
-    let diff = git_output_raw_with_env(workspace_path, &diff_args, &env)?;
-    if diff.trim().is_empty() {
+    let diff = git_output_bytes_with_env(workspace_path, &diff_args, &env)?;
+    if diff.iter().all(u8::is_ascii_whitespace) {
         Ok(None)
     } else {
-        Ok(Some(redact_all(&diff)))
+        Ok(Some(redact_all_bytes(&diff)))
     }
 }
 
@@ -373,11 +374,11 @@ pub(crate) fn persist_uncommitted_diff_artifact<H: crate::RuntimeHost + ?Sized>(
     let Some(diff) = capture_uncommitted_diff(workspace_path).map_err(|e| e.to_string())? else {
         return Ok(None);
     };
-    let diff = redact_all(&diff);
+    let diff = redact_all_bytes(&diff);
     let update = crate::TaskAutomationUpdate {
-        upsert_artifacts: vec![orbit_types::task::TaskArtifact::from_text(
+        upsert_artifacts: vec![orbit_types::task::TaskArtifact::from_bytes(
             artifact_path,
-            &diff,
+            diff.clone(),
         )],
         ..crate::TaskAutomationUpdate::default()
     };
@@ -385,7 +386,7 @@ pub(crate) fn persist_uncommitted_diff_artifact<H: crate::RuntimeHost + ?Sized>(
         Ok(()) => Ok(Some(format!("task artifact `{artifact_path}`"))),
         Err(task_error) => {
             let task_error = redact_all(&task_error.to_string());
-            orbit_common::fs::io::write_private_text_beneath(
+            orbit_common::fs::io::write_private_bytes_beneath(
                 workspace_path,
                 Path::new(".orbit/tmp"),
                 artifact_path,

@@ -53,18 +53,24 @@ pub fn redact_sensitive_env_bytes(bytes: &mut Vec<u8>) -> usize {
 }
 
 fn redact_complete_env_values(bytes: &mut Vec<u8>) {
+    *bytes = redact_utf8_spans(bytes, redact_sensitive_env_text);
+}
+
+/// Apply `redact` to each valid UTF-8 span in `bytes`, copying invalid UTF-8
+/// byte sequences through unchanged.
+pub(super) fn redact_utf8_spans(bytes: &[u8], mut redact: impl FnMut(&str) -> String) -> Vec<u8> {
     let mut out = Vec::with_capacity(bytes.len());
-    let mut rest = bytes.as_slice();
+    let mut rest = bytes;
     while !rest.is_empty() {
         match std::str::from_utf8(rest) {
             Ok(text) => {
-                out.extend_from_slice(redact_sensitive_env_text(text).as_bytes());
+                out.extend_from_slice(redact(text).as_bytes());
                 break;
             }
             Err(err) => {
                 let valid = err.valid_up_to();
                 if let Ok(text) = std::str::from_utf8(&rest[..valid]) {
-                    out.extend_from_slice(redact_sensitive_env_text(text).as_bytes());
+                    out.extend_from_slice(redact(text).as_bytes());
                 } else {
                     out.extend_from_slice(&rest[..valid]);
                 }
@@ -78,7 +84,7 @@ fn redact_complete_env_values(bytes: &mut Vec<u8>) {
             }
         }
     }
-    *bytes = out;
+    out
 }
 
 /// Longest suffix of `text` that is a proper prefix of a sensitive value.

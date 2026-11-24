@@ -333,6 +333,11 @@ pub fn redact_all(input: &str) -> String {
     default_pattern_redactor().apply_str(&env_scrubbed)
 }
 
+/// Apply [`redact_all`] to valid UTF-8 spans while preserving non-UTF-8 bytes.
+pub fn redact_all_bytes(input: &[u8]) -> Vec<u8> {
+    super::env::redact_utf8_spans(input, redact_all)
+}
+
 /// Return true when `input` is exactly one high-confidence credential token.
 ///
 /// Callers that persist free-text artifacts can reject these whole-token values

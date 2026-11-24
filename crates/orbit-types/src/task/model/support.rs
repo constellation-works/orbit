@@ -185,12 +185,15 @@ pub struct TaskArtifact {
 
 impl TaskArtifact {
     pub fn from_text(path: impl Into<String>, content: impl Into<String>) -> Self {
+        Self::from_bytes(path, content.into().into_bytes())
+    }
+
+    pub fn from_bytes(path: impl Into<String>, content: impl Into<Vec<u8>>) -> Self {
         let path = path.into();
-        let content = content.into();
         Self {
             media_type: media_type_for_artifact_path(&path).to_string(),
             path,
-            content: content.into_bytes(),
+            content: content.into(),
             created_by: None,
         }
     }

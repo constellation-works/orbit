@@ -67,6 +67,19 @@ pub(crate) fn git_run(current_dir: &Path, args: &[&str]) -> Result<GitOutcome, O
     })
 }
 
+/// Git diff flags for producing self-contained patches that recreate binary
+/// changes and exact text lines regardless of user diff configuration.
+pub(crate) const BINARY_PATCH_DIFF_ARGS: &[&str] = &[
+    "--binary",
+    "--full-index",
+    "--no-renames",
+    "--no-color",
+    "--src-prefix=a/",
+    "--dst-prefix=b/",
+    "--no-ext-diff",
+    "--no-textconv",
+];
+
 /// Supervise host Git with the same secured environment and process-group
 /// cleanup as `git_run`, retaining stdout bytes and optional stdin bytes.
 pub(crate) fn git_run_bytes(
@@ -74,8 +87,27 @@ pub(crate) fn git_run_bytes(
     args: &[&str],
     stdin: Option<&[u8]>,
 ) -> Result<GitBytesOutcome, OrbitError> {
+    git_run_bytes_with_env(current_dir, args, stdin, &[])
+}
+
+/// Supervise host Git with `env` added to its secured environment, retaining
+/// raw stdout bytes and optional stdin bytes.
+pub(crate) fn git_run_bytes_with_env(
+    current_dir: &Path,
+    args: &[&str],
+    stdin: Option<&[u8]>,
+    env: &[(&str, &str)],
+) -> Result<GitBytesOutcome, OrbitError> {
     let timeout_ms = command_timeout(args)?;
     let mut request = git_request(current_dir, args, timeout_ms);
+    if !env.is_empty()
+        && let EnvironmentMode::ClearAndSet(environment) = &mut request.environment_mode
+    {
+        environment.extend(
+            env.iter()
+                .map(|(key, value)| ((*key).to_string(), (*value).to_string())),
+        );
+    }
     if let Some(bytes) = stdin {
         request.stdin_mode = StdinMode::Bytes(bytes.to_vec());
     }
@@ -259,24 +291,8 @@ pub(crate) fn git_output_exact_paths(
     current_dir: &Path,
     args: &[&str],
 ) -> Result<ExactPaths, OrbitError> {
-    let outcome = git_run_bytes(current_dir, args, None)?;
-    if outcome.timed_out {
-        return Err(git_timeout_error(
-            current_dir,
-            args,
-            outcome.timeout_ms,
-            &outcome.stderr,
-        ));
-    }
-    if !outcome.success {
-        return Err(git_failure_error(
-            current_dir,
-            args,
-            outcome.exit_code,
-            &outcome.stderr,
-        ));
-    }
-    Ok(split_exact_paths(&outcome.stdout))
+    let stdout = git_output_bytes(current_dir, args)?;
+    Ok(split_exact_paths(&stdout))
 }
 
 fn split_exact_paths(stdout: &[u8]) -> ExactPaths {
@@ -327,6 +343,38 @@ pub(crate) fn git_output_raw(current_dir: &Path, args: &[&str]) -> Result<String
         ));
     }
 
+    Ok(outcome.stdout)
+}
+
+/// Run Git and return its raw stdout bytes without UTF-8 lossy decoding or trimming.
+pub(crate) fn git_output_bytes(current_dir: &Path, args: &[&str]) -> Result<Vec<u8>, OrbitError> {
+    git_output_bytes_with_env(current_dir, args, &[])
+}
+
+/// Run Git with `env` added to its secured environment; its raw stdout bytes
+/// without UTF-8 lossy decoding or trimming.
+pub(crate) fn git_output_bytes_with_env(
+    current_dir: &Path,
+    args: &[&str],
+    env: &[(&str, &str)],
+) -> Result<Vec<u8>, OrbitError> {
+    let outcome = git_run_bytes_with_env(current_dir, args, None, env)?;
+    if outcome.timed_out {
+        return Err(git_timeout_error(
+            current_dir,
+            args,
+            outcome.timeout_ms,
+            &outcome.stderr,
+        ));
+    }
+    if !outcome.success {
+        return Err(git_failure_error(
+            current_dir,
+            args,
+            outcome.exit_code,
+            &outcome.stderr,
+        ));
+    }
     Ok(outcome.stdout)
 }
 

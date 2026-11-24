@@ -243,6 +243,19 @@ impl orbit_engine::test_support::NullRuntimeHost for RepairPipeline<'_> {
                         std::fs::write(repo.join("to-file"), "replacement ordinary content\n")
                             .unwrap();
                     }
+                    "reviewed-binary" => {
+                        let repo = &self.fixture.repo;
+                        std::fs::write(
+                            repo.join("tracked.bin"),
+                            b"\x00\x89PNG\r\n\x1a\n\x00\xff\xfe\x04",
+                        )
+                        .unwrap();
+                        std::fs::write(repo.join("raw.dat"), b"hdr\x80\x81\xff\n").unwrap();
+                        std::fs::write(repo.join("trailing.txt"), b"first line\nfinal spaces   \n")
+                            .unwrap();
+                        std::fs::write(repo.join("no_nl.txt"), b"no newline   ").unwrap();
+                        std::fs::write(repo.join("added.bin"), b"\x7fELF\x00\x01\x02\xff").unwrap();
+                    }
                     #[cfg(unix)]
                     "symlink" => {
                         std::os::unix::fs::symlink("candidate.txt", self.fixture.repo.join("link"))
@@ -367,7 +380,7 @@ fn job(fixture: &Fixture, repair: &str) -> JobV2 {
             step("review", "review_report"), step("review_gate_settle", "review_gate_settle"),
         ]},
     }).to_string()).unwrap().spec;
-    if matches!(repair, "reviewed" | "settled-review") {
+    if matches!(repair, "reviewed" | "settled-review" | "reviewed-binary") {
         let mut pin = job.steps[0].clone();
         pin.id = "pin_review".into();
         let orbit_types::workflow::activity_job::JobV2StepBody::Target(target) = &mut pin.body
@@ -1232,6 +1245,92 @@ fn resumed_final_recovery_repair_keeps_the_original_checkpoint_owner() {
     assert_head_refused(&fixture, Some(&resumed), "descendant of the repair");
 }
 
+fn final_recovery_refused_patch_reproduces_binary_and_final_whitespace() {
+    let mut fixture = fixture_with_command("test \"$(cat candidate.txt)\" != after");
+    std::fs::write(fixture.repo.join("tracked.bin"), b"\x00\x01\x02\x03\xff\n").unwrap();
+    std::fs::write(fixture.repo.join("raw.dat"), b"hdr\xfe\xfd\n").unwrap();
+    std::fs::write(
+        fixture.repo.join("trailing.txt"),
+        b"first line\nsecond line\n",
+    )
+    .unwrap();
+    std::fs::write(fixture.repo.join("no_nl.txt"), b"seed\n").unwrap();
+    git(
+        &fixture,
+        &["add", "tracked.bin", "raw.dat", "trailing.txt", "no_nl.txt"],
+    );
+    git(&fixture, &["commit", "-m", "seed binary and text"]);
+    git(&fixture, &["branch", "-f", "main", "HEAD"]);
+    fixture.input["base_sha"] = json!(git(&fixture, &["rev-parse", "HEAD"]));
+
+    let (host, outcome) = run_pipeline(&fixture, "reviewed-binary");
+    assert!(outcome.is_err(), "{outcome:?}");
+    let run = fixture.input["job_run_id"].as_str().unwrap();
+    let name = format!("recovery-uncommitted-{run}.patch");
+    let artifact = fixture
+        .runtime
+        .get_task_artifact(&fixture.task_id, &name)
+        .unwrap()
+        .expect("refused final recovery saves patch artifact");
+    let candidate_head = host.validation_heads.lock().unwrap()[0].0.clone();
+
+    let root = tempfile::tempdir().unwrap();
+    let checkout = root.path().join("checkout");
+    let clone = crate::git_test_support::command()
+        .args([
+            "clone",
+            "-q",
+            fixture.repo.to_str().unwrap(),
+            checkout.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(clone.status.success(), "{clone:?}");
+    let co = crate::git_test_support::command()
+        .args(["checkout", "-q", &candidate_head])
+        .current_dir(&checkout)
+        .output()
+        .unwrap();
+    assert!(co.status.success(), "{co:?}");
+    let patch_file = root.path().join("recovery.patch");
+    std::fs::write(&patch_file, &artifact.content).unwrap();
+    let apply = crate::git_test_support::command()
+        .args(["apply", patch_file.to_str().unwrap()])
+        .current_dir(&checkout)
+        .output()
+        .unwrap();
+    assert!(
+        apply.status.success(),
+        "git apply failed ({}):\n{}",
+        apply.status,
+        String::from_utf8_lossy(&apply.stderr)
+    );
+    assert_eq!(
+        std::fs::read(checkout.join("candidate.txt")).unwrap(),
+        b"repaired\n"
+    );
+    assert_eq!(
+        std::fs::read(checkout.join("tracked.bin")).unwrap(),
+        b"\x00\x89PNG\r\n\x1a\n\x00\xff\xfe\x04"
+    );
+    assert_eq!(
+        std::fs::read(checkout.join("raw.dat")).unwrap(),
+        b"hdr\x80\x81\xff\n"
+    );
+    assert_eq!(
+        std::fs::read(checkout.join("trailing.txt")).unwrap(),
+        b"first line\nfinal spaces   \n"
+    );
+    assert_eq!(
+        std::fs::read(checkout.join("no_nl.txt")).unwrap(),
+        b"no newline   "
+    );
+    assert_eq!(
+        std::fs::read(checkout.join("added.bin")).unwrap(),
+        b"\x7fELF\x00\x01\x02\xff"
+    );
+}
+
 // Related boundary scenarios share the isolated table fixture.
 crate::scenario_table!(
     final_recovery_repair_commit_gets_a_fresh_before_pr_review_scenarios,
@@ -1240,7 +1339,8 @@ crate::scenario_table!(
     final_recovery_does_not_authorize_an_unrecorded_head_change,
     final_recovery_persists_repair_evidence_without_task_write_tools,
     final_recovery_transition_evidence_excludes_protected_paths,
-    resumed_final_recovery_repair_keeps_the_original_checkpoint_owner
+    resumed_final_recovery_repair_keeps_the_original_checkpoint_owner,
+    final_recovery_refused_patch_reproduces_binary_and_final_whitespace
 );
 
 #[cfg(unix)]

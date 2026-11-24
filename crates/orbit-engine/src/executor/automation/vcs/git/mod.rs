@@ -4,10 +4,11 @@ mod timeout;
 
 pub use command::BaseSyncMode;
 pub(crate) use command::{
-    GitBytesOutcome, GitOutcome, direct_remote_target, git_command_success, git_failure_error,
-    git_output, git_output_exact_paths, git_output_paths, git_output_paths_with_env,
-    git_output_raw, git_output_raw_with_env, git_output_with_env, git_request, git_run,
-    git_run_bytes, git_success, is_ancestor, verify_direct_remote_target,
+    BINARY_PATCH_DIFF_ARGS, GitBytesOutcome, GitOutcome, direct_remote_target, git_command_success,
+    git_failure_error, git_output, git_output_bytes, git_output_bytes_with_env,
+    git_output_exact_paths, git_output_paths, git_output_paths_with_env, git_output_raw,
+    git_output_with_env, git_request, git_run, git_run_bytes, git_success, is_ancestor,
+    verify_direct_remote_target,
 };
 pub(in crate::executor::automation) use command::{base_sync_mode_from_input, gh_environment};
 pub use fetch::fetch_remote_base;
