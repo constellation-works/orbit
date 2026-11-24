@@ -805,6 +805,77 @@ fn blocked_task_triage_is_not_seeded_and_an_unedited_earlier_copy_is_retired_by_
     assert!(!catalog.join("blocked_task_triage.yaml").exists());
 }
 
+/// A retired shipped cron routine can target a job that still ships.
+#[test]
+fn unmanifested_crew_memory_dream_retires_without_retiring_its_job() {
+    use orbit_engine::activity_job::V2JobCatalog;
+
+    let dir = tempfile::tempdir_in(orbit_common::test_env::bulk_write_temp_dir())
+        .expect("isolated roots");
+    let (global, workspace) = seeded_host(dir.path());
+    let catalog = workspace.join("routines");
+    let name = "crew_memory_dream";
+    let manifest: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(catalog.join(MANIFEST)).expect("read manifest"))
+            .expect("parse manifest");
+    assert!(manifest["assets"].get(name).is_none());
+    let body = include_str!("../../assets/routines/retired/crew_memory_dream.yaml")
+        .replace("__ORBIT_ROUTINE_NAME__", "crew-memory-dream-repo")
+        .replace("__ORBIT_OWNER_MACHINE__", "hm_test")
+        .replace("__ORBIT_BASE_BRANCH__", "main");
+    assert!(
+        parse_routine_yaml(&body)
+            .expect("shipped routine parses")
+            .enabled
+    );
+    let active = catalog.join(format!("{name}.yaml"));
+    std::fs::write(&active, &body).expect("write unmanifested copy");
+    let authored = "schemaVersion: 1\nname: my-dream\ndescription: Operator schedule\nenabled: true\ntrigger:\n  cron: \"0 3 * * 1\"\n  missed_run: skip\ntarget: job:crew_memory_dream_pipeline\npolicy:\n  timeout_minutes: 30\n  overlap: forbid\n";
+    let authored_path = catalog.join("my_dream.yaml");
+    std::fs::write(&authored_path, authored).expect("write operator routine");
+    assert!(
+        parse_routine_yaml(authored)
+            .expect("operator routine parses")
+            .enabled
+    );
+
+    let sync = |preview| {
+        reconcile_workspace_managed_artifacts(
+            &global,
+            &workspace,
+            Some(&identity()),
+            "main",
+            preview,
+        )
+        .expect("sync")
+    };
+    let retired = |report: &orbit_core::WorkspaceManagedArtifactSyncReport| {
+        report.actions.iter().any(|action| {
+            action.kind == "routine"
+                && action.name == name
+                && action.outcome == ManagedArtifactOutcome::Retired
+        })
+    };
+    assert!(retired(&sync(true)), "preview reports retirement");
+    assert_eq!(std::fs::read_to_string(&active).unwrap(), body);
+    assert!(retired(&sync(false)), "apply reports retirement");
+    assert!(!active.exists());
+    assert_eq!(
+        std::fs::read(workspace.join(".retired-managed/routines/crew_memory_dream.yaml"))
+            .expect("recovery copy"),
+        body.as_bytes()
+    );
+    assert!(!retired(&sync(true)), "second preview converges");
+    assert_eq!(std::fs::read_to_string(authored_path).unwrap(), authored);
+    let mut jobs = V2JobCatalog::new();
+    jobs.load_dir_prefer_existing_best_effort(&global.join("resources/jobs"))
+        .expect("load shipped jobs");
+    assert!(
+        jobs.get("crew_memory_dream_pipeline").is_some(),
+        "job resolves"
+    );
+}
+
 /// An unmanifested pilot-warning copy retires by content [ORB-22889]: the
 /// old shipped `pilot_warning_triage` template targets the still-shipped
 /// `escalation_triage_pipeline` job on the retired `pilot_warnings_held`

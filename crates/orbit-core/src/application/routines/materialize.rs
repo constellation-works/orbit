@@ -550,7 +550,8 @@ pub(crate) fn reconcile_default_routines_for_policy(
 const LEFT_OUT_DETAIL: &str = "`seeding.routines` leaves out this shipped default";
 
 /// Reconcile every top-level definition in `routines_dir` that targets a
-/// retired job and that the manifest does not track. A copy of a template a
+/// retired job or trigger, or matches a retired template, and that the manifest
+/// does not track. A copy of a template a
 /// prior release shipped leaves the active catalog exactly as a tracked one
 /// does; anything else is the operator's own file and is only reported —
 /// with the step that actually clears it, since synchronization never deletes
@@ -591,11 +592,12 @@ fn reconcile_untracked_retired_routines(
             .state
             .as_ref()
             .is_some_and(|state| is_retired_state_trigger(state.kind));
-        if job_retirement.is_none() && !trigger_retired {
+        let retired_shape = shipped_shape_of(stem, &existing) == Some(ShippedShape::Retired);
+        if !retired_shape && job_retirement.is_none() && !trigger_retired {
             continue;
         }
 
-        if shipped_shape_of(stem, &existing) != Some(ShippedShape::Retired) {
+        if !retired_shape {
             let detail = if let Some(retirement) = job_retirement {
                 format!(
                     "routine '{}' targets retired job '{job}' ({retirement}) but is not one Orbit wrote, so `orbit workspace sync` cannot retire it; delete the file or retarget it at a job this Orbit ships",
