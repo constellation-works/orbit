@@ -140,7 +140,7 @@ const DECLINE: OperationSpec<EvolutionVerb> = OperationSpec {
             ParamType::Integer,
             "Suppression days, 1-3650; defaults to 30.",
             CliArgKind::flag("days"),
-            "Suppression days (default: configured suppression, initially 30)",
+            "Suppression days for this decline (default: 30)",
         ),
     ]],
     at_least_one_of: &[],

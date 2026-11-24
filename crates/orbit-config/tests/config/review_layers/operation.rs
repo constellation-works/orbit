@@ -10,6 +10,7 @@ use orbit_config::ConfigRoots;
 
 use orbit_config::OperationLayerSource;
 use orbit_config::ResolvedConfig;
+use orbit_config::admit_config_key;
 use orbit_config::admit_settable_config_key;
 
 /// Load `workspace` over an empty global layer, returning the resolved
@@ -205,6 +206,33 @@ fn retired_auto_ship_loads_with_a_warning_and_refuses_edits() {
             .to_string()
             .contains("ship sweep it opted into was removed"),
         "the refusal says the ship sweep was removed: {error}"
+    );
+}
+
+#[test]
+fn weekly_evolution_pass_warning_distinguishes_baseline_and_decline_override() {
+    let (_config, logs) =
+        load_workspace("[resident.evolution]\nmin_occurrences = 5\n");
+    assert!(
+        warned_deprecated(&logs, "resident.evolution.min_occurrences"),
+        "the retired pass key warns: {logs}"
+    );
+    for detail in [
+        "fixed 14-day cost baseline",
+        "30 days by default",
+        "--days overrides the duration for an individual decline",
+    ] {
+        assert!(
+            logs.contains(detail),
+            "the warning distinguishes the cost baseline and decline default: {logs}"
+        );
+    }
+
+    let error = admit_config_key("resident.evolution.min_occurrences")
+        .expect_err("the retired pass key is not settable");
+    assert!(
+        error.to_string().contains("--days overrides the duration"),
+        "the config-key diagnostic includes the per-decline override: {error}"
     );
 }
 

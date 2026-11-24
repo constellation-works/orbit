@@ -640,8 +640,10 @@ const PARKED_RECLAIM_FIXED_NOTE: &str = "ignored: worktree GC may remove a somed
      stops being recognised after 2026-12-08";
 
 const EVOLUTION_PASS_REMOVED_NOTE: &str = "ignored: the weekly evolution pass routine was \
-     removed; the evolution ledger keeps its fixed 14-day window and 30-day decline. Delete \
-     the key. This key stops being recognised after 2026-12-07";
+     removed, so nothing files evolution proposal tasks automatically. The evolution ledger \
+     remains, with a fixed 14-day cost baseline; declines suppress proposals for 30 days by \
+     default, and --days overrides the duration for an individual decline. Delete the key. \
+     This key stops being recognised after 2026-12-07";
 
 const UX_RULES_REMOVED_NOTE: &str = "ignored: the ux-rules routine and its findings filer were \
      removed, so nothing runs UI rule checks on a schedule or files tasks from them; delete the \
