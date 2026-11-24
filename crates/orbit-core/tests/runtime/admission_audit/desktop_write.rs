@@ -271,10 +271,61 @@ fn desktop_typed_receipts_control_runtime_and_store_replay() {
     }
 }
 
+// A resident record is refused rather than redacted: its verbatim quote is the
+// record itself, so a secret inside it must stop the guarded write before any
+// comment or receipt persists.
+fn desktop_refuses_resident_records_that_need_redaction() {
+    let (_root, runtime) = test_runtime();
+    let session = session(false);
+    let snapshot = runtime
+        .desktop_task_write(create("resident-redaction-create"), None, None, &session)
+        .unwrap()
+        .snapshot;
+    let id = snapshot.task.id.clone();
+    let comments_before = runtime.get_task_comments(&id).unwrap().len();
+    let secret = "abc123def456ghi789SECRETTOKEN";
+    // The bearer shape is one redact_all recognizes, as in the plain-comment case above.
+    let quote = format!("Authorization: Bearer {secret}");
+    let record = json!({"kind": "resident.answer", "quote": quote}).to_string();
+    let error = match runtime.desktop_task_write(
+        DesktopTaskRequest {
+            request_id: "resident-redaction".into(),
+            operation: DesktopTaskOperation::Comment {
+                id: id.clone(),
+                expected_revision: snapshot.revision.clone(),
+                comment: record,
+            },
+        },
+        None,
+        None,
+        &session,
+    ) {
+        Ok(_) => panic!("a resident record needing redaction must be refused"),
+        Err(error) => error,
+    };
+    assert!(
+        error.to_string().contains("sensitive text"),
+        "refused by the redaction check, not by a later rewrite: {error}"
+    );
+    assert_eq!(
+        runtime.get_task_comments(&id).unwrap().len(),
+        comments_before
+    );
+    assert_eq!(
+        runtime
+            .desktop_task_snapshot(&id, &session)
+            .unwrap()
+            .revision,
+        snapshot.revision,
+        "a refused resident record must not mutate"
+    );
+}
+
 // Related boundary scenarios share the isolated table fixture.
 crate::scenario_table!(
     desktop_redacts_before_receipt_and_preserves_retries_scenarios,
     desktop_redacts_before_receipt_and_preserves_retries,
     desktop_legacy_edit_receipt_survives_status_contract_extension,
-    desktop_typed_receipts_control_runtime_and_store_replay
+    desktop_typed_receipts_control_runtime_and_store_replay,
+    desktop_refuses_resident_records_that_need_redaction
 );
