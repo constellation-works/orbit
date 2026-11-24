@@ -143,19 +143,30 @@ fn vcs_environment(extras: &[&str]) -> Vec<(String, String)> {
         .collect()
 }
 
+/// The names `gh` reads to find the host's GitHub credential: a token, the
+/// host, the config location holding a stored login, and the session bus and
+/// runtime directory a Linux login keyring answers on. The governed `github.*`
+/// readers inherit the whole environment and so reach all of them; a guarded
+/// read that omitted the keyring pair saw no login for the same configured
+/// account [ORB-28025]. None names a secret that is not already `gh`'s own
+/// credential route.
+const GH_CREDENTIAL_ENV: &[&str] = &[
+    "GH_TOKEN",
+    "GITHUB_TOKEN",
+    "GH_ENTERPRISE_TOKEN",
+    "GITHUB_ENTERPRISE_TOKEN",
+    "GH_HOST",
+    "GH_CONFIG_DIR",
+    "XDG_CONFIG_HOME",
+    "XDG_RUNTIME_DIR",
+    "DBUS_SESSION_BUS_ADDRESS",
+];
+
 /// The one environment every host-side `gh` child runs under: the baseline
 /// plus GitHub's authentication, host and config names, never the provider's
 /// credentials or the ORBIT_* envelope.
 pub(in crate::executor::automation) fn gh_environment() -> Vec<(String, String)> {
-    vcs_environment(&[
-        "GH_TOKEN",
-        "GITHUB_TOKEN",
-        "GH_ENTERPRISE_TOKEN",
-        "GITHUB_ENTERPRISE_TOKEN",
-        "GH_HOST",
-        "GH_CONFIG_DIR",
-        "XDG_CONFIG_HOME",
-    ])
+    vcs_environment(GH_CREDENTIAL_ENV)
 }
 
 fn git_environment() -> Vec<(String, String)> {

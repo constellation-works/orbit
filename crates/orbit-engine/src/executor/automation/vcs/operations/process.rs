@@ -291,13 +291,36 @@ pub(in crate::executor::automation::vcs) fn shared_exhausted_reset(
     ))
 }
 
+/// Whether `gh`'s diagnostic says it holds no usable GitHub credential: no
+/// login or token found, or GitHub rejecting the one it sent. A permission or
+/// missing-repository answer is a different failure and does not match.
+fn credentials_unavailable(stderr: &str) -> bool {
+    let text = stderr.to_ascii_lowercase();
+    [
+        "gh auth login",
+        "gh_token environment variable",
+        "bad credentials",
+        "not logged in",
+    ]
+    .iter()
+    .any(|token| text.contains(token))
+        || text.contains("http 401")
+}
+
 pub(in crate::executor::automation::vcs) fn succeeded(
     result: orbit_exec::ExecutionResult,
     operation: &str,
 ) -> Result<orbit_exec::ExecutionResult, OrbitError> {
     if !result.success {
+        // Name a missing credential as such, so the caller's refusal is not
+        // read as a missing review or a landing hold [ORB-28025].
+        let reason = if credentials_unavailable(&result.stderr) {
+            "GitHub credentials are unavailable to the host's guarded read: "
+        } else {
+            ""
+        };
         let message = format!(
-            "private automation VCS {operation} failed: {}",
+            "private automation VCS {operation} failed: {reason}{}",
             result.stderr.trim()
         );
         return Err(OrbitError::PrivateVcs(Box::new(PrivateVcsFailure {
