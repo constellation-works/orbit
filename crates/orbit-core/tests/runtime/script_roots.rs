@@ -16,26 +16,36 @@ struct Fixture {
     _root: tempfile::TempDir,
     runtime: OrbitRuntime,
     outbox: PathBuf,
+    /// A granted root separate from the outbox, so it survives the outbox's
+    /// removal and a spawned entry can still create the marker in it.
+    marker_root: PathBuf,
     /// Written by the entry when it runs; must stay absent after a refusal.
     ran_marker: PathBuf,
 }
 
-/// A workspace with an ungranted `export` script that writes a marker in the
-/// granted outbox, with `global_config` as the host config.
+/// A workspace with an ungranted `export` script that writes a marker in a
+/// separate granted root, with `global_config` as the host config.
 fn fixture(global_config: &str) -> Fixture {
     crate::scenarios::require_isolated_mutable_fixture("script_roots::fixture");
     let root = tempfile::tempdir_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
     let global = root.path().join("home/.orbit");
     let repo = root.path().join("repo");
     let outbox = root.path().join("outbox");
-    for dir in [&global, &repo.join(".orbit/resources/scripts"), &outbox] {
+    let marker_root = root.path().join("marker");
+    for dir in [
+        &global,
+        &repo.join(".orbit/resources/scripts"),
+        &outbox,
+        &marker_root,
+    ] {
         std::fs::create_dir_all(dir).unwrap();
     }
     if !global_config.is_empty() {
         std::fs::write(global.join("config.toml"), global_config).unwrap();
     }
     let outbox = outbox.canonicalize().unwrap();
-    let ran_marker = outbox.join("ran");
+    let marker_root = marker_root.canonicalize().unwrap();
+    let ran_marker = marker_root.join("ran");
     std::fs::write(
         repo.join("export.sh"),
         format!(
@@ -55,6 +65,7 @@ fn fixture(global_config: &str) -> Fixture {
         _root: root,
         runtime,
         outbox,
+        marker_root,
         ran_marker,
     }
 }
@@ -65,7 +76,7 @@ fn grant_outbox(fixture: &Fixture, outbox: PathBuf) -> Result<(), orbit_core::Or
         .grant_script(
             "export",
             &ScriptGrantOptions {
-                write_roots: vec![outbox],
+                write_roots: vec![outbox, fixture.marker_root.clone()],
                 ..Default::default()
             },
         )
@@ -123,6 +134,10 @@ fn a_granted_root_missing_at_run_time_refuses_before_spawn() {
     let fixture = fixture("");
     grant_outbox(&fixture, fixture.outbox.clone()).expect("an existing write root is granted");
     std::fs::remove_dir(&fixture.outbox).unwrap();
+    assert!(
+        fixture.marker_root.is_dir() && fixture.ran_marker.starts_with(&fixture.marker_root),
+        "the marker lives in a root that survives the outbox removal"
+    );
 
     let ScriptStepRun::Refused {
         code,
@@ -145,6 +160,10 @@ fn a_granted_root_missing_at_run_time_refuses_before_spawn() {
     assert!(
         !fixture.outbox.exists(),
         "the job's process does not create a missing root"
+    );
+    assert!(
+        record.write_roots.contains(&fixture.marker_root),
+        "the step's grant keeps the marker root writable: {record:?}"
     );
     assert!(!fixture.ran_marker.exists(), "nothing ran");
 }
@@ -221,7 +240,7 @@ fn a_granted_read_root_replaced_with_a_fifo_refuses_before_spawn() {
             "export",
             &ScriptGrantOptions {
                 read_roots: vec![data.clone()],
-                write_roots: vec![fixture.outbox.clone()],
+                write_roots: vec![fixture.outbox.clone(), fixture.marker_root.clone()],
                 ..Default::default()
             },
         )
@@ -244,12 +263,12 @@ fn a_granted_read_root_replaced_with_a_fifo_refuses_before_spawn() {
         "the refusal names the root: {message}"
     );
     assert!(
-        fixture.ran_marker.starts_with(&fixture.outbox),
-        "the execution marker is inside the surviving outbox grant"
+        fixture.ran_marker.starts_with(&fixture.marker_root),
+        "the execution marker is inside its granted marker root"
     );
     assert!(
-        record.write_roots.contains(&fixture.outbox),
-        "the refusal record retains the marker's outbox grant: {record:?}"
+        record.write_roots.contains(&fixture.marker_root),
+        "the refusal record retains the marker's write grant: {record:?}"
     );
     // This host-side launch record remains observable regardless of the
     // child's write access to the marker.
