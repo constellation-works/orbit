@@ -952,29 +952,36 @@ fn evolution_corroboration_and_suppression(
     assert_eq!(second["record"]["minutes"], 10);
     let frictions = runtime.run_tool("orbit.friction.list", json!({})).unwrap();
     assert!(frictions.as_array().is_some_and(|rows| rows.is_empty()));
+    let resolved = runtime
+        .run_tool("orbit.friction.resolve", json!({"id":id}))
+        .unwrap_err()
+        .to_string();
     assert!(
-        runtime
-            .run_tool("orbit.friction.resolve", json!({"id":id}))
-            .is_err(),
-        "evolution cannot be resolved as friction"
+        resolved.contains("friction id must match FYYYY-MM-NNN"),
+        "evolution cannot be resolved as friction: {resolved}"
     );
+    let relation = call(
+        runtime,
+        "orbit.task.update",
+        json!({"id":proposal.id,"relations":[{"type":"resolves","target":id}]}),
+        &orchestrator(),
+    )
+    .unwrap_err();
     assert!(
-        call(
-            runtime,
-            "orbit.task.update",
-            json!({"id":proposal.id,"relations":[{"type":"resolves","target":id}]}),
-            &orchestrator()
-        )
-        .is_err(),
-        "friction resolves relations cannot target evolution"
+        relation.contains("must be an ORB-/F-/ADR- id"),
+        "friction resolves relations cannot target evolution: {relation}"
     );
     let denied = call(
         runtime,
         "orbit.evolution.decline",
         json!({"id":id}),
         &orchestrator(),
+    )
+    .unwrap_err();
+    assert!(
+        denied.contains("is inactive on the agent tool surface"),
+        "only the operator may suppress proposals: {denied}"
     );
-    assert!(denied.is_err(), "only the operator may suppress proposals");
     runtime.decline_evolution_record(id, 30).unwrap();
     let in_state = |state: &str| {
         call(
@@ -1029,8 +1036,12 @@ fn evolution_corroboration_and_suppression(
     let invalid = call(
         runtime,
         "orbit.evolution.add",
-        json!({"event":{"kind":"manual_step", "what":"Bad event", "minutes":1, "retries":0, "slot_minutes":0, "signature":"Wrong_Key"}}),
+        json!({"event":{"kind":"manual_step", "what":"Bad event", "minutes":1, "retries":0, "slot_minutes":0, "wished":"Bad event", "signature":"Wrong_Key"}}),
         &orchestrator(),
+    )
+    .unwrap_err();
+    assert!(
+        invalid.contains("`costs.signature` must be a kebab-case key"),
+        "a malformed signature is refused by name: {invalid}"
     );
-    assert!(invalid.is_err());
 }

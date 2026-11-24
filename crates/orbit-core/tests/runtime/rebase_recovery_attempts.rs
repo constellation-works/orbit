@@ -394,11 +394,11 @@ fn fresh_preparation_certificates_bind_all_observations_across_restart_scenario(
     ] {
         let mut altered = fresh.clone();
         altered[field] = json!("foreign");
+        let verified =
+            restarted.verify_rebase_recovery(&fixture.run, "sync_base_preparation", &altered);
         assert!(
-            !restarted
-                .verify_rebase_recovery(&fixture.run, "sync_base_preparation", &altered)
-                .unwrap_or(false),
-            "altered {field} must never authenticate a fresh preparation"
+            matches!(verified, Ok(false)),
+            "altered {field} must be rejected, not authenticated or errored: {verified:?}"
         );
     }
     assert_eq!(
