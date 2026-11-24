@@ -8,6 +8,7 @@ use std::path::Path;
 use std::time::Duration;
 
 use orbit_common::OrbitError;
+use orbit_common::fs::git::{GitAncestry, git_ancestry};
 use orbit_exec::{
     EnvironmentMode, ExecRequest, ExecutionResult, NoSandbox, StdinMode, run_process,
 };
@@ -54,24 +55,17 @@ pub fn inspect_base_merge(
             "inspecting a base merge requires full commit SHAs".to_string(),
         ));
     }
-    let ancestor = run_git(
-        repo_root,
-        &[
-            "merge-base",
-            "--is-ancestor",
-            "--end-of-options",
-            base_sha,
-            head_sha,
-        ],
-    )?;
-    if ancestor.success {
-        return Ok(BaseMergeInspection::AlreadyUpToDate);
-    }
-    if ancestor.exit_code != Some(1) {
-        return Err(OrbitError::Execution(format!(
-            "git merge-base --is-ancestor failed: {}",
-            ancestor.stderr.trim()
-        )));
+    match git_ancestry(repo_root, base_sha, head_sha)? {
+        GitAncestry::Ancestor => {
+            return Ok(BaseMergeInspection::AlreadyUpToDate);
+        }
+        GitAncestry::NotAncestor => {}
+        GitAncestry::Unanswered { stderr, .. } => {
+            return Err(OrbitError::Execution(format!(
+                "git merge-base --is-ancestor failed: {}",
+                stderr.trim()
+            )));
+        }
     }
     let common = run_git(
         repo_root,

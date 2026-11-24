@@ -3,6 +3,7 @@
 use std::path::Path;
 
 use orbit_common::OrbitError;
+use orbit_types::plugin::is_full_commit_id;
 
 use super::super::git::{git_command_success, git_output};
 use super::super::pr_answers::PullRequestStatus;
@@ -74,10 +75,7 @@ pub fn verify_refreshed_head_from_base(
     if head == reviewed_head {
         return Ok(());
     }
-    let valid_sha = |sha: &str| {
-        matches!(sha.len(), 40 | 64) && sha.bytes().all(|byte| byte.is_ascii_hexdigit())
-    };
-    if !valid_sha(reviewed_head) || !valid_sha(head) {
+    if !is_full_commit_id(reviewed_head) || !is_full_commit_id(head) {
         return Err("refreshed head verification requires exact commit SHAs".to_string());
     }
     let has_remote =
@@ -177,7 +175,7 @@ pub(in crate::executor::automation::vcs) fn verify_published_base_update(
         .head_sha
         .as_deref()
         .ok_or_else(|| refuse("head unavailable".into()))?;
-    if !matches!(head.len(), 40 | 64) || !head.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+    if !is_full_commit_id(head) {
         return Err(refuse(
             "provider head is not an exact commit identity".into(),
         ));
@@ -219,7 +217,7 @@ pub(in crate::executor::automation::vcs) fn verify_published_base_update(
             .merge_commit
             .as_deref()
             .ok_or_else(|| refuse("merge commit unavailable".into()))?;
-        if !matches!(merge.len(), 40 | 64) || !merge.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        if !is_full_commit_id(merge) {
             return Err(refuse(
                 "provider merge is not an exact commit identity".into(),
             ));
@@ -341,8 +339,7 @@ pub fn verify_merged_base_refresh(
         refresh.merged_head,
         refresh.merge_commit,
     ] {
-        if !matches!(commit.len(), 40 | 64) || !commit.bytes().all(|byte| byte.is_ascii_hexdigit())
-        {
+        if !is_full_commit_id(commit) {
             return Err(refuse(format!("{commit} is not an exact commit identity")));
         }
     }
