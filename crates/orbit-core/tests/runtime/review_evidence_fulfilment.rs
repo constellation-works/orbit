@@ -1048,6 +1048,18 @@ fn a_held_host_sandbox_test_outside_its_allowlist_is_refused_without_running() {
             "{reason}: no host command was admitted: {log}"
         );
         assert_held_without(&fixture, HOST_EVIDENCE, reason);
+        // Both `touch owned` canaries: the committed probe writes one above
+        // the checkout, the command writes one in its working directory.
+        for canary in [
+            fixture.repo.join("owned"),
+            fixture._root.path().join("owned"),
+        ] {
+            assert!(
+                !canary.exists(),
+                "{reason}: the refused command ran and left {}",
+                canary.display()
+            );
+        }
         let rows = audit_rows(&fixture);
         assert_eq!(rows.len(), 1, "{rows:?}");
         assert_eq!(rows[0].0, AuditEventStatus::Failure, "{reason}");

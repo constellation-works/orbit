@@ -701,9 +701,9 @@ fn a_reached_bubblewrap_deferral_still_holds_for_host_evidence() {
             )],
         ),
         (
-            "a sandbox test fixture",
+            "a test fixture that mentions bwrap only in its content",
             &[(
-                "crates/orbit-cli/tests/support/broker.rs",
+                "crates/orbit-cli/tests/tool/broker_fixture.rs",
                 "// bwrap fixture\n",
             )],
         ),
