@@ -14,8 +14,8 @@ use orbit_types::{
 
 use crate::OrbitRuntime;
 use crate::application::task::{
-    SYSTEM_ACTOR_LABEL, TaskAddParams, TaskUpdateParams, helpers::effective_actor_label,
-    resolves::pending_resolves_history,
+    SYSTEM_ACTOR_LABEL, TaskAddParams, TaskResidentPort, TaskUpdateParams,
+    helpers::effective_actor_label, resolves::pending_resolves_history,
 };
 
 use super::validation::{bounded_text, criteria, invalid};
@@ -73,7 +73,11 @@ impl OrbitRuntime {
                 }
             }
             DesktopTaskOperation::Edit { fields, .. } => sanitize(fields),
-            DesktopTaskOperation::Comment { comment, .. } => *comment = redact_all(comment),
+            DesktopTaskOperation::Comment { comment, .. } => {
+                // Refuse a resident record before redaction can rewrite its verbatim text.
+                self.refuse_resident_comment_needing_redaction(comment.as_str())?;
+                *comment = redact_all(comment);
+            }
             DesktopTaskOperation::Review { verdict, .. } => {
                 verdict.rationale = redact_all(&verdict.rationale);
                 for e in &mut verdict.evidence {
@@ -268,6 +272,9 @@ impl OrbitRuntime {
                 }
                 DesktopTaskOperation::Comment { comment: c, .. } => {
                     bounded_text(c, true)?;
+                    // Desktop writes carry no operator-decision grant, so the
+                    // resident human-writer exemption never applies here.
+                    self.admit_locked_resident_comment(&task, Some(c.as_str()), false)?;
                     comment = Some(c.clone());
                 }
                 DesktopTaskOperation::Review {

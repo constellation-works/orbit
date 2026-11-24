@@ -792,6 +792,91 @@ fn desktop_governed_status_approval_and_crew_preserve_receipts_and_review_gates(
     assert_eq!(refused["refusal"]["code"], "desktop_validation_refused");
 }
 
+/// [ORB-27767] A guarded task comment takes the same resident-record admission
+/// as an ordinary comment: a structured resident record that the mandate rules
+/// refuse leaves the task's comments and history unchanged, while a plain
+/// guarded comment persists once and replays after a restart.
+fn guarded_comments_apply_resident_admission_and_replay_plain_comments() {
+    let workspace = McpWorkspace::init();
+    let selector = workspace.work.to_str().unwrap();
+    let mut client = workspace.serve_with_args(&["--toolset", "runs"]);
+    let created = client.call_tool_ok(
+        "orbit_task_add",
+        json!({"workspace":selector,"model":"codex","request_id":"guarded-admission-create",
+            "title":"Plain guarded target","description":"Not a resident mandate",
+            "acceptance_criteria":["Refuses resident records"]}),
+    );
+    let id = created["snapshot"]["task"]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let before = client.call_tool_ok(
+        "orbit_task_show",
+        json!({"workspace":selector,"id":id,"snapshot":true}),
+    );
+    assert!(before["comments_total"].is_u64(), "{before}");
+    // A schema-valid resident request is admitted only on a resident mandate's
+    // assignment task, so this plain task refuses it under the task lock.
+    let record = json!({"kind":"resident.request","schema":1,"mandate":id,
+        "cycle":"rcy-guarded-proof","id":"rq-guarded-proof",
+        "decision_request":"DR-guarded-proof","task":id,"class":"product_scope",
+        "question":"Proceed?","recommended":"yes","blocking":false,"blocks":[]})
+    .to_string();
+    let refused = client.call_tool_ok(
+        "orbit_task_update",
+        json!({"workspace":selector,"model":"codex","request_id":"guarded-resident-refused",
+            "id":id,"expected_revision":before["revision"],"comment":record}),
+    );
+    assert_eq!(refused["mutation_applied"], false, "{refused}");
+    assert_eq!(
+        refused["refusal"]["code"], "desktop_validation_refused",
+        "{refused}"
+    );
+    assert!(
+        refused["refusal"]["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("assignment task")),
+        "{refused}"
+    );
+    let after_refusal = client.call_tool_ok(
+        "orbit_task_show",
+        json!({"workspace":selector,"id":id,"snapshot":true}),
+    );
+    assert_eq!(
+        after_refusal["revision"], before["revision"],
+        "{after_refusal}"
+    );
+    assert_eq!(
+        after_refusal["history_total"], before["history_total"],
+        "{after_refusal}"
+    );
+    assert_eq!(
+        after_refusal["comments_total"], before["comments_total"],
+        "{after_refusal}"
+    );
+    let plain = json!({"workspace":selector,"model":"codex","request_id":"guarded-plain-comment",
+        "id":id,"expected_revision":after_refusal["revision"],"comment":"Plain guarded note"});
+    let first = client.call_tool_ok("orbit_task_update", plain.clone());
+    assert!(first.get("refusal").is_none(), "{first}");
+    assert_eq!(first["replayed"], false, "{first}");
+    assert_ne!(
+        first["snapshot"]["comments_total"], after_refusal["comments_total"],
+        "the plain guarded comment persisted: {first}"
+    );
+    drop(client);
+    let mut client = workspace.serve_with_args(&["--toolset", "runs"]);
+    let again = client.call_tool_ok("orbit_task_update", plain);
+    assert_eq!(again["replayed"], true, "{again}");
+    assert_eq!(
+        again["snapshot"]["comments_total"], first["snapshot"]["comments_total"],
+        "{again}"
+    );
+    assert_eq!(
+        again["snapshot"]["revision"], first["snapshot"]["revision"],
+        "{again}"
+    );
+}
+
 /// The bounded run detail reads a fixed metadata budget however long the
 /// run's audit trail is, yet still counts every log, places early logs in
 /// their step, reports the newest provider child and redacts previews. Its
@@ -1157,6 +1242,10 @@ fn desktop_governance_and_bounded_reads() {
         (
             "full_run_show_signals_incomplete_progress_past_the_lifecycle_window",
             full_run_show_signals_incomplete_progress_past_the_lifecycle_window as fn(),
+        ),
+        (
+            "guarded_comments_apply_resident_admission_and_replay_plain_comments",
+            guarded_comments_apply_resident_admission_and_replay_plain_comments as fn(),
         ),
     ] {
         tracing::info!(case = name, "MCP contract row");
