@@ -6727,6 +6727,8 @@ status() {
             "$(check success)" "$pr_head" "$merged_head" "$pr_base" "$(cat "$forge/merged")" "$url"
         return
     fi
+    # `status-hang` stalls the status read until the caller's deadline kills it.
+    if [ -f "$forge/status-hang" ]; then sleep 30; fi
     # `status-faults` status reads fail with `status-fault-stderr` before one
     # is counted or answered.
     if [ -s "$forge/status-faults" ] && [ "$(cat "$forge/status-faults")" -gt 0 ]; then
@@ -6790,6 +6792,7 @@ status() {
         mixed_pending|mixed_failure) merge_state=BLOCKED; rollup=$(check "$observed") ;;
         mixed_success) merge_state=CLEAN; rollup=$(check "$observed") ;;
         optional_pending) merge_state=BLOCKED; rollup=$(check optional_pending) ;;
+        merge_pending) merge_state=PENDING; rollup=$(check pending) ;;
         pending) merge_state=BLOCKED; rollup=$(check pending) ;;
         success) merge_state=CLEAN; rollup=$(check success) ;;
         # Branch protection accepts a skipped or neutral required check.

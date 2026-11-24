@@ -15,16 +15,18 @@
 //! failures use completion's durable, bounded rerun path before observation.
 //! It never merges, updates the branch, starts a repair or changes status.
 //! A status read lost to a transient provider failure (after the read's own
-//! bounded retries) keeps the watch polling until its deadline, then records
-//! a held `pending` observation; any other read failure still fails at once.
-//! A task that left review, or a pull request that merged or closed, ends
-//! the watch without an entry.
+//! bounded retries) keeps the watch polling until its deadline; if the outage
+//! or a status read reaches deadline expiry while the task stays in review, it
+//! records a held `pending` observation naming no head or check. Any permanent
+//! read failure still fails at once. A task that left review, or a pull
+//! request that merged or closed, ends the watch without an entry.
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use orbit_common::OrbitError;
 use orbit_types::task::{TaskHistoryEntry, TaskStatus};
+use orbit_types::workflow::DeliveryRefusal;
 use orbit_types::workflow::handoff::{
     HistoricalLandingChecksObservation, LANDING_CHECKS_OBSERVED_EVENT,
     LandingChecksObservationState as ObservedState, RecordedLandingChecksObservation,
@@ -52,6 +54,16 @@ const MAX_POLL_INTERVAL_SECONDS: u64 = 10 * 60;
 
 /// Who the history entry names.
 const WATCH_ACTOR: &str = "owner-landing";
+const TRANSIENT_OUTAGE_HOLD: &str =
+    "the provider kept failing transiently, so the checks were not observed";
+const DEADLINE_EXPIRED_HOLD: &str =
+    "the watch's deadline expired before the pull request's status was observed";
+
+enum NextPoll {
+    Continue,
+    Expired,
+    TaskLeftReview(Value),
+}
 
 pub(in crate::executor::automation) fn pr_checks_watch<H: RuntimeHost + ?Sized>(
     host: &H,
@@ -86,6 +98,7 @@ pub(in crate::executor::automation) fn pr_checks_watch<H: RuntimeHost + ?Sized>(
     )?
     .max(MIN_POLL_INTERVAL_SECONDS);
     let deadline_ms = now_ms()?.saturating_add(max_wait_seconds.saturating_mul(1000).max(60_000));
+    let mut saw_transient_failure = false;
 
     loop {
         if !in_review(host, &task_id)? {
@@ -96,24 +109,56 @@ pub(in crate::executor::automation) fn pr_checks_watch<H: RuntimeHost + ?Sized>(
             // An unknown observation: nothing is classified and nothing is
             // acted on until a read answers.
             Err(error) if transport_failure(&error) => {
+                saw_transient_failure = true;
                 tracing::warn!(
                     pr_number,
                     "the pull request status read failed transiently; the watch keeps polling"
                 );
-                let remaining_ms = deadline_ms.saturating_sub(now_ms()?);
-                if max_wait_seconds == 0 || remaining_ms == 0 {
-                    return finish(host, &task_id, &pr_number, &unreadable(&pr_number));
-                }
-                fixed_wait(Duration::from_millis(
-                    remaining_ms.min(poll_interval_seconds.saturating_mul(1000)),
-                ));
-                if now_ms()? >= deadline_ms {
+                if max_wait_seconds == 0 {
                     if !in_review(host, &task_id)? {
                         return Ok(ended(&task_id, &pr_number, "task_left_review"));
                     }
-                    return finish(host, &task_id, &pr_number, &unreadable(&pr_number));
+                    return finish(
+                        host,
+                        &task_id,
+                        &pr_number,
+                        &unreadable(&pr_number, TRANSIENT_OUTAGE_HOLD),
+                    );
                 }
-                continue;
+                match wait_for_next_poll(
+                    host,
+                    &task_id,
+                    &pr_number,
+                    deadline_ms,
+                    poll_interval_seconds,
+                )? {
+                    NextPoll::Continue => continue,
+                    NextPoll::TaskLeftReview(ended) => return Ok(ended),
+                    NextPoll::Expired => {
+                        return finish(
+                            host,
+                            &task_id,
+                            &pr_number,
+                            &unreadable(&pr_number, TRANSIENT_OUTAGE_HOLD),
+                        );
+                    }
+                }
+            }
+            Err(error) if deadline_expired(&error) => {
+                if !in_review(host, &task_id)? {
+                    return Ok(ended(&task_id, &pr_number, "task_left_review"));
+                }
+                let hold_reason = if saw_transient_failure {
+                    TRANSIENT_OUTAGE_HOLD
+                } else {
+                    DEADLINE_EXPIRED_HOLD
+                };
+                return finish(
+                    host,
+                    &task_id,
+                    &pr_number,
+                    &unreadable(&pr_number, hold_reason),
+                );
             }
             Err(error) => return Err(error),
         };
@@ -134,23 +179,35 @@ pub(in crate::executor::automation) fn pr_checks_watch<H: RuntimeHost + ?Sized>(
                 observation(&status, &pr_number, ObservedState::Passed, None)
             }
             PrMergeState::Pending if !expired => {
-                fixed_wait(Duration::from_secs(poll_interval_seconds));
-                continue;
+                match wait_for_next_poll(
+                    host,
+                    &task_id,
+                    &pr_number,
+                    deadline_ms,
+                    poll_interval_seconds,
+                )? {
+                    NextPoll::Continue => continue,
+                    NextPoll::TaskLeftReview(ended) => return Ok(ended),
+                    NextPoll::Expired => pending_observation(&status, &pr_number, max_wait_seconds),
+                }
             }
-            PrMergeState::Pending => observation(
-                &status,
-                &pr_number,
-                ObservedState::Pending,
-                Some(format!(
-                    "the checks had not settled after {max_wait_seconds}s"
-                )),
-            ),
+            PrMergeState::Pending => pending_observation(&status, &pr_number, max_wait_seconds),
             PrMergeState::Blocked(block) => {
                 let failed = failed_checks(&status);
                 let running = checks_running(&status);
-                if running && !expired {
-                    fixed_wait(Duration::from_secs(poll_interval_seconds));
-                    continue;
+                let mut now_expired = expired;
+                if running && !now_expired {
+                    match wait_for_next_poll(
+                        host,
+                        &task_id,
+                        &pr_number,
+                        deadline_ms,
+                        poll_interval_seconds,
+                    )? {
+                        NextPoll::Continue => continue,
+                        NextPoll::TaskLeftReview(ended) => return Ok(ended),
+                        NextPoll::Expired => now_expired = true,
+                    }
                 }
                 if failed.is_empty() {
                     observation(
@@ -162,7 +219,7 @@ pub(in crate::executor::automation) fn pr_checks_watch<H: RuntimeHost + ?Sized>(
                 } else {
                     let mut retry_input = input.clone();
                     retry_input["workspace_path"] = json!(workspace);
-                    let hold = if expired {
+                    let hold = if now_expired {
                         None
                     } else {
                         match super::super::pr::recover_review_ci(
@@ -174,8 +231,17 @@ pub(in crate::executor::automation) fn pr_checks_watch<H: RuntimeHost + ?Sized>(
                             deadline_ms,
                         )? {
                             super::super::pr::ReviewCiRetryStep::PollAgain => {
-                                fixed_wait(Duration::from_secs(poll_interval_seconds));
-                                continue;
+                                match wait_for_next_poll(
+                                    host,
+                                    &task_id,
+                                    &pr_number,
+                                    deadline_ms,
+                                    poll_interval_seconds,
+                                )? {
+                                    NextPoll::Continue => continue,
+                                    NextPoll::TaskLeftReview(ended) => return Ok(ended),
+                                    NextPoll::Expired => None,
+                                }
                             }
                             super::super::pr::ReviewCiRetryStep::Hold(reason) => Some(reason),
                             super::super::pr::ReviewCiRetryStep::Observe => None,
@@ -201,6 +267,60 @@ pub(in crate::executor::automation) fn pr_checks_watch<H: RuntimeHost + ?Sized>(
     }
 }
 
+fn deadline_expired(error: &OrbitError) -> bool {
+    matches!(
+        error,
+        OrbitError::DeliveryRefused {
+            refusal: DeliveryRefusal::CompletionBudgetExpired,
+            ..
+        }
+    )
+}
+
+/// Wait up to one poll interval or the remaining watch budget, whichever ends
+/// first. If the wait reaches the deadline after the task has left review,
+/// return `TaskLeftReview` so no stale observation is recorded.
+fn wait_for_next_poll<H: RuntimeHost + ?Sized>(
+    host: &H,
+    task_id: &str,
+    pr_number: &str,
+    deadline_ms: u64,
+    poll_interval_seconds: u64,
+) -> Result<NextPoll, OrbitError> {
+    let remaining_ms = deadline_ms.saturating_sub(now_ms()?);
+    if remaining_ms > 0 {
+        fixed_wait(Duration::from_millis(
+            remaining_ms.min(poll_interval_seconds.saturating_mul(1000)),
+        ));
+    }
+    if now_ms()? >= deadline_ms {
+        if !in_review(host, task_id)? {
+            return Ok(NextPoll::TaskLeftReview(ended(
+                task_id,
+                pr_number,
+                "task_left_review",
+            )));
+        }
+        return Ok(NextPoll::Expired);
+    }
+    Ok(NextPoll::Continue)
+}
+
+fn pending_observation(
+    status: &PullRequestStatus,
+    pr_number: &str,
+    max_wait_seconds: u64,
+) -> RecordedLandingChecksObservation {
+    observation(
+        status,
+        pr_number,
+        ObservedState::Pending,
+        Some(format!(
+            "the checks had not settled after {max_wait_seconds}s"
+        )),
+    )
+}
+
 /// Record `observed` and report it as the watch's outcome.
 fn finish<H: RuntimeHost + ?Sized>(
     host: &H,
@@ -218,17 +338,17 @@ fn finish<H: RuntimeHost + ?Sized>(
     }))
 }
 
-/// The held `pending` observation of a pull request whose status the provider
-/// never answered before the watch's deadline. It names no head and no check:
-/// none was observed.
-fn unreadable(pr_number: &str) -> RecordedLandingChecksObservation {
+/// The held `pending` observation of a pull request whose status was not
+/// answered before the watch's deadline. It names no head and no check: none
+/// was observed.
+fn unreadable(pr_number: &str, hold_reason: &str) -> RecordedLandingChecksObservation {
     RecordedLandingChecksObservation::settled(
         ObservedState::Pending,
         pr_number,
         None,
         Some("the pull request's status could not be read before the watch ended".to_string()),
     )
-    .held("the provider kept failing transiently, so the checks were not observed")
+    .held(hold_reason)
 }
 
 /// The one task watched: `task_id`, or a `task_ids` list of exactly one, as
