@@ -115,6 +115,22 @@ fn codebase_cli_ranks_paths_and_lists_the_tasks_behind_a_count() {
         json!(["symbol:src/lib.rs#parse:function"])
     );
 
+    assert_eq!(detail["absent_at_head"], true);
+    assert_eq!(analytics["regressions"]["rows"][0]["absent_at_head"], true);
+    let text = fixture
+        .command(&[&["codebase", "analytics"][..], &selection].concat())
+        .env("NO_COLOR", "1")
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    assert!(
+        String::from_utf8(text)
+            .unwrap()
+            .contains("src/lib.rs [absent at HEAD]")
+    );
+
     // The human view lists the regressed task with the task that regressed it.
     let human = fixture
         .command(&[&["codebase", "show", "src/lib.rs"][..], &selection].concat())
@@ -131,6 +147,8 @@ fn codebase_cli_ranks_paths_and_lists_the_tasks_behind_a_count() {
         }),
         "the regressed task and its regression are listed:\n{human}"
     );
+
+    assert!(human.contains("absent at HEAD"));
 
     // The human view gives each link's dimensions, and the regression flags
     // filter what the rankings count.

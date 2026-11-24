@@ -23,6 +23,12 @@ rankings, minimum shared-reservation count for change coupling) and `rollup`
 declared footprint (`context_files`, including widened selectors), not the
 landed diff.
 
+At file rollup, a path absent from the current checkout has `absent_at_head: true`
+in its row and in `show`; coupling pairs list missing members in
+`absent_paths_at_head`. CLI text marks those paths. Counts and history stay
+unchanged; use `--rollup dir` to inspect directory history. Directory and crate
+rollups have no absence markers.
+
 Analytics returns six path rankings and an `overlap` summary. Each rate row
 includes its numerator and denominator. Rankings use distinct tasks as their
 counts, except lock contention, which counts distinct requesting identities,

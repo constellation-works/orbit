@@ -113,11 +113,7 @@ fn analytics_blocks(value: &Value) -> Vec<Block> {
             .map(ranking_label)
             .collect::<Vec<_>>()
             .join(", ");
-        table.add_row(vec![
-            text(&row["path"]),
-            rankings,
-            percent(&row["top_rate"]),
-        ]);
+        table.add_row(vec![marked_path(row), rankings, percent(&row["top_rate"])]);
     }
     blocks.push(Block::table(table));
 
@@ -132,7 +128,7 @@ fn analytics_blocks(value: &Value) -> Vec<Block> {
         )));
         let mut table = rate_table("PATH");
         for (index, row) in rows(section).iter().take(TEXT_ROWS).enumerate() {
-            table.add_row(rate_row(index, text(&row["path"]), row));
+            table.add_row(rate_row(index, marked_path(row), row));
         }
         blocks.push(Block::table(table));
         if ranking.key == "regressions" {
@@ -152,6 +148,16 @@ fn analytics_blocks(value: &Value) -> Vec<Block> {
             .into_iter()
             .flatten()
             .filter_map(Value::as_str)
+            .map(|path| {
+                if row["absent_paths_at_head"]
+                    .as_array()
+                    .is_some_and(|missing| missing.iter().any(|item| item.as_str() == Some(path)))
+                {
+                    format!("{path} [absent at HEAD]")
+                } else {
+                    path.to_string()
+                }
+            })
             .collect::<Vec<_>>()
             .join(" <-> ");
         table.add_row(rate_row(index, paths, row));
@@ -163,6 +169,9 @@ fn analytics_blocks(value: &Value) -> Vec<Block> {
          regression cross-tabs. Follow a path to its tasks with `orbit codebase show <path>`.",
         count(&value["row_limit"]),
     )));
+    if value["rollup"] == "file" {
+        blocks.push(Block::prose("Paths marked absent at HEAD are missing from the checkout; use --rollup dir for directory history."));
+    }
     blocks
 }
 
@@ -219,9 +228,14 @@ fn show_blocks(value: &Value) -> Vec<Block> {
     let rankings = &value["rankings"];
     let mut blocks = vec![Block::text(format!(
         "{}\n{}",
-        text(&value["path"]),
+        marked_path(value),
         selection_line(value)
     ))];
+    if value["absent_at_head"] == true {
+        blocks.push(Block::prose(
+            "Path absent at HEAD; use --rollup dir for directory history.",
+        ));
+    }
 
     let mut table = Table::new(vec![
         Column::new("RANKING").fixed(),
@@ -451,6 +465,15 @@ fn strings(value: &Value) -> Vec<String> {
         .filter_map(Value::as_str)
         .map(str::to_string)
         .collect()
+}
+
+fn marked_path(row: &Value) -> String {
+    let path = text(&row["path"]);
+    if row["absent_at_head"] == true {
+        format!("{path} [absent at HEAD]")
+    } else {
+        path
+    }
 }
 
 fn text(value: &Value) -> String {

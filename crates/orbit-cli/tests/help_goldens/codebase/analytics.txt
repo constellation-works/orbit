@@ -51,3 +51,4 @@ Global options (see 'orbit --help' for descriptions):
 "Touched" means a task's declared footprint, not the landed diff. Regressions count
 against the paths their links record as sites, not the whole footprint.
 Follow a ranked path to its tasks with `orbit codebase show <path>`.
+Files absent from the checkout are marked; use --rollup dir for directory history.

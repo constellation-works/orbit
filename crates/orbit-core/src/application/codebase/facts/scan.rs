@@ -122,6 +122,7 @@ pub(in crate::application::codebase) struct LockDenial {
 /// minimum support and rollup.
 #[derive(Debug)]
 pub struct CodebaseFacts {
+    pub(in crate::application::codebase) repo_root: std::path::PathBuf,
     pub(in crate::application::codebase) computed_at: DateTime<Utc>,
     pub(in crate::application::codebase) tasks: Vec<TaskFacts>,
     pub(in crate::application::codebase) reservations: Vec<ReservationFacts>,
@@ -326,6 +327,7 @@ pub(in crate::application::codebase) fn scan(
     }
 
     Ok(CodebaseFacts {
+        repo_root: runtime.paths().repo_root.clone(),
         computed_at,
         tasks: facts,
         reservations,
@@ -369,6 +371,7 @@ pub(in crate::application::codebase) fn scan_regressions(
     let regression_layers = runtime.regression_layers().to_vec();
     attach_regressions(&mut facts, pending_links, &regression_layers);
     Ok(CodebaseFacts {
+        repo_root: runtime.paths().repo_root.clone(),
         computed_at,
         tasks: facts,
         reservations: Vec::new(),

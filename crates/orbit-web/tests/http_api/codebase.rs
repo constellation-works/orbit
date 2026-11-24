@@ -1180,6 +1180,10 @@ analytics_test!(
     codebase_tools_serve_the_dashboard_payload_and_path_detail,
     |fixture| {
         let shared = "src/shared.rs";
+        // The shared file is live in the checkout: a path absent from it carries
+        // the `absent_at_head` marker on every ranking row, overlap included.
+        fs::create_dir_all(fixture.runtime.paths().repo_root.join("src")).unwrap();
+        fs::write(fixture.runtime.paths().repo_root.join(shared), "").unwrap();
         let regressed = done(&fixture, "regressed", &[shared]);
         done(&fixture, "clean", &[shared]);
         let site = "symbol:src/shared.rs#Shared::run:method";
