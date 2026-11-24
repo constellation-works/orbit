@@ -702,20 +702,13 @@ impl RuntimeKernel {
         })
     }
 
-    pub fn collect_run_cli_invocations(
-        &self,
-        run_id: &str,
-    ) -> Result<Vec<RunCliInvocationRecord>, OrbitError> {
-        self.collect_run_cli_invocations_bounded(run_id, None, None)
-    }
-
     /// Collect CLI invocation records for a run, optionally stopping after
     /// `limit` invocations and reading only a preview window of each blob.
     ///
-    /// The unbounded wrapper [`Self::collect_run_cli_invocations`] still loads
-    /// every invocation's full stdout/stderr. Callers that only render a
-    /// truncated preview should pass both bounds so a long run is not charged
-    /// a full multi-MB blob read per invocation.
+    /// Passing `None` for both bounds loads every invocation's full
+    /// stdout/stderr. Callers that only render a truncated preview should
+    /// pass both bounds so a long run is not charged a full multi-MB blob
+    /// read per invocation.
     pub fn collect_run_cli_invocations_bounded(
         &self,
         run_id: &str,
