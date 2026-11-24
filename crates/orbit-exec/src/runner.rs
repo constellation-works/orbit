@@ -99,11 +99,17 @@ pub fn run_process_supervised(
 /// period to protect, and its caller's time bound must hold even when the
 /// child ignores the termination signal (an interactive shell does until it
 /// execs).
-pub(crate) fn run_probe_process(
-    req: &ExecRequest,
-    sandbox: &dyn Sandbox,
-) -> Result<ExecutionResult, OrbitError> {
-    Ok(run_supervised(req, sandbox, true)?.result)
+pub(crate) fn run_probe_process(req: &ExecRequest) -> Result<ExecutionResult, OrbitError> {
+    struct ProbeSandbox;
+    impl Sandbox for ProbeSandbox {
+        fn validate(&self, _req: &ExecRequest) -> Result<(), OrbitError> {
+            Ok(())
+        }
+        fn spawn(&self, req: &ExecRequest) -> Result<Child, OrbitError> {
+            crate::process::spawn_probe(req)
+        }
+    }
+    Ok(run_supervised(req, &ProbeSandbox, true)?.result)
 }
 
 fn run_supervised(

@@ -105,6 +105,10 @@ pub(crate) fn relocate_clear_of_targets(
 /// Build the child process description shared by every spawn path, so a
 /// sandbox that confines the child cannot drift from the unconfined one.
 pub(crate) fn command(req: &ExecRequest) -> Command {
+    command_with_session(req, false)
+}
+
+fn command_with_session(req: &ExecRequest, detached: bool) -> Command {
     let mut command = Command::new(&req.program);
     command.args(&req.args).stdout(Stdio::piped());
     command.stderr(Stdio::piped());
@@ -120,8 +124,23 @@ pub(crate) fn command(req: &ExecRequest) -> Command {
     #[cfg(unix)]
     {
         use std::os::unix::process::CommandExt;
-        command.process_group(0);
+        if detached {
+            // SAFETY: setsid is async-signal-safe and runs in the child before exec.
+            unsafe {
+                command.pre_exec(|| {
+                    if libc::setsid() == -1 {
+                        return Err(std::io::Error::last_os_error());
+                    }
+                    Ok(())
+                });
+            }
+        } else {
+            command.process_group(0);
+        }
     }
+
+    #[cfg(not(unix))]
+    let _ = detached;
 
     if let EnvironmentMode::ClearAndSet(pairs) = &req.environment_mode {
         command.env_clear();
@@ -160,6 +179,13 @@ pub fn spawn_with_inherited_fds(
     let mut command = command(req);
     attach_inherited_fds(&mut command, fds);
     command
+        .spawn()
+        .map_err(|e| OrbitError::Execution(format!("failed to spawn `{}`: {e}", req.program)))
+}
+
+/// Spawn a probe in its own session, retaining a process group for teardown.
+pub(crate) fn spawn_probe(req: &ExecRequest) -> Result<Child, OrbitError> {
+    command_with_session(req, true)
         .spawn()
         .map_err(|e| OrbitError::Execution(format!("failed to spawn `{}`: {e}", req.program)))
 }

@@ -793,3 +793,64 @@ fn python_validation_commands_do_not_write_bytecode() {
         );
     }
 }
+
+/// The worker owns a controlling terminal, while its probe must not inherit it.
+#[cfg(unix)]
+#[test]
+fn interactive_probe_detaches_from_controlling_pty() {
+    if std::env::var_os("ORBIT_TEST_PTY_CHILD").is_some() {
+        // SAFETY: opening the controlling terminal only checks this child's setup.
+        let tty = unsafe { libc::open(c"/dev/tty".as_ptr(), libc::O_RDWR | libc::O_NOCTTY) };
+        assert!(tty >= 0, "fixture must have a controlling terminal");
+        unsafe { libc::close(tty) };
+        let host = Host::new();
+        let started = Instant::now();
+        let resolved = shell(Path::new("/bin/bash"))
+            .resolve(&host.launcher_env())
+            .unwrap();
+        assert_eq!(resolved.mode, LoginShellMode::InteractiveLogin);
+        assert_eq!(resolved.fallback_reason, None);
+        assert!(started.elapsed() < Duration::from_secs(2));
+        return;
+    }
+    // The helper starts a new session with a real controlling PTY and bounds
+    // the child independently of the login probe's ten-second timeout.
+    let script = r#"
+import fcntl, os, pty, signal, subprocess, sys, termios
+master, slave = pty.openpty()
+def attach():
+    os.setsid()
+    fcntl.ioctl(slave, termios.TIOCSCTTY, 0)
+p = subprocess.Popen([sys.argv[1], '--exact', 'interactive_probe_detaches_from_controlling_pty', '--nocapture'], env={**os.environ, 'ORBIT_TEST_PTY_CHILD': '1'}, preexec_fn=attach)
+try:
+    status = p.wait(timeout=3)
+except subprocess.TimeoutExpired:
+    os.killpg(p.pid, signal.SIGKILL)
+    p.wait()
+    raise
+finally:
+    os.close(master)
+    os.close(slave)
+sys.exit(status)
+"#;
+    let dir = tempfile::tempdir().unwrap();
+    let mut command = Command::new("python3");
+    command
+        .arg("-c")
+        .arg(script)
+        .arg(std::env::current_exe().unwrap());
+    let output = orbit_common::test_env::run_child_test_within(
+        &mut command,
+        "controlling PTY",
+        dir.path(),
+        Duration::from_secs(5),
+        Duration::from_secs(6),
+    );
+    assert!(
+        output.status.success(),
+        "stdout: {} stderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(String::from_utf8_lossy(&output.stdout).contains("1 passed"));
+}
