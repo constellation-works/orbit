@@ -127,8 +127,7 @@ store to recover access. Follow [maintenance-upgrades](references/maintenance-up
 
 Seeded schedules are disabled until an operator deliberately enables them, except
 the `worktree-gc` and `task-pilot` routines, which seed enabled when the
-seeding policy selects them, and one dormant experiment routine that mints
-nothing unless a running experiment has a memory arm. The `host-health`
+seeding policy selects them. The `host-health`
 auto-task seeds disabled. Preserve
 existing schedule and enablement choices on an established host. Shared repositories
 need an explicit owner; copying a checkout does not migrate its control plane.

@@ -131,9 +131,8 @@ orbit doctor
   definition, not the preserved edited copy. Selecting a default is separate
   from enabling it: shipped auto-tasks start disabled, including `host-health`.
 
-  The shipped `worktree-gc` and `task-pilot` routines seed enabled, as does
-  one dormant experiment routine that mints nothing unless a running
-  experiment has a memory arm; other shipped routines seed disabled.
+  The shipped `worktree-gc` and `task-pilot` routines seed enabled;
+  other shipped routines seed disabled.
   Preserve existing enablement choices.
 - **Auto-task deletion remains an opt-out.** An opt-out recorded by `orbit
   auto-task delete` survives exclusion and later widening, so sync still leaves

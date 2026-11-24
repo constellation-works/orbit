@@ -93,7 +93,7 @@ which the seeded task-pilot routine uses), when deliveries land on a branch
 
 | Seeded | Routines |
 |---|---|
-| Enabled | `worktree-gc`, `task-pilot`, and an experiment memory routine (which mints nothing unless a running experiment has a memory arm) |
+| Enabled | `worktree-gc`, `task-pilot` |
 | Disabled | `ci-failure-sweep`, `dependabot-alert-sweep`, `resident-cycle`, `store-gc`, `task-publication` |
 
 A workspace initialized earlier keeps the `enabled` values it already has.

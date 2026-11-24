@@ -14,8 +14,7 @@
 (`"all"` by default) from this catalog, with a workspace-unique name
 (`<base>-<workspace>`) resolved at seed time. See [Seeding policy](configuration-layers.md#seeding-policy)
 to change that selection and reconcile an existing workspace. Every routine default starts disabled
-except `worktree-gc` and `task-pilot`, plus one dormant experiment routine that
-mints nothing unless a running experiment has a memory arm.
+except `worktree-gc` and `task-pilot`.
 
 A workspace seeded while `worktree-gc` or `task-pilot`
 shipped disabled keeps its `enabled` value. The `host-health` auto-task is seeded disabled,
