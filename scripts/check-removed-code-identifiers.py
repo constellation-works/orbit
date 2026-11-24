@@ -62,8 +62,11 @@ CSS_PRELUDE = re.compile(r"[^{};]*\{")
 # A class in a prelude, including one after another selector part (`a.retired`,
 # `.active.retired`). A letter must follow the dot, so `1.5` is not a class.
 CSS_CLASS = re.compile(r"\.(-?[A-Za-z_][\w-]*)")
-CODE_SPAN = re.compile(r"(?<!`)(?P<ticks>`+)(?!`)(?P<code>.*?)(?<!`)(?P=ticks)(?!`)")
+CODE_SPAN = re.compile(r"(?<!`)(?P<ticks>`+)(?!`)(?P<code>.*?)(?<!`)(?P=ticks)(?!`)",
+                       re.DOTALL)
 FENCE = re.compile(r"[ ]{0,3}(?P<marker>`{3,}|~{3,})(?P<info>.*)")
+QUOTE = re.compile(r"[ ]{0,3}>[ ]?")
+LIST_ITEM = re.compile(r"([ ]{0,3})(?:[-+*]|[0-9]{1,9}[.)])([ ]{1,4})")
 
 
 def git(*arguments):
@@ -294,20 +297,60 @@ def doc_hits(identifiers, docs):
         if text is None:
             continue
         fence = None
-        for number, line in enumerate(text.splitlines(), 1):
-            opening = FENCE.match(line)
-            if fence is not None:
-                if (opening is not None and opening["marker"][0] == fence[0]
-                        and len(opening["marker"]) >= fence[1] and not opening["info"].strip()):
-                    fence = None
-                continue
-            if opening is not None:
-                fence = (opening["marker"][0], len(opening["marker"]))
-                continue
-            for span in CODE_SPAN.finditer(line):
+        list_indents = []
+        paragraph = []
+
+        def scan_paragraph():
+            if not paragraph:
+                return
+            content = "\n".join(line for _, line in paragraph)
+            for span in CODE_SPAN.finditer(content):
                 for name, pattern in patterns.items():
-                    if pattern.search(span["code"]):
+                    for match in pattern.finditer(span["code"]):
+                        offset = span.start("code") + match.start()
+                        number = paragraph[content.count("\n", 0, offset)][0]
                         hits[name].add((doc, number))
+            paragraph.clear()
+
+        for number, line in enumerate(text.splitlines(), 1):
+            # Strip blockquote containers, then list indentation. A fence may
+            # start on the list marker's line or a later continuation line.
+            rest = line
+            quote_depth = 0
+            while (quote := QUOTE.match(rest)) is not None:
+                rest = rest[quote.end():]
+                quote_depth += 1
+            indent = len(rest) - len(rest.lstrip(" "))
+            while list_indents and (quote_depth != list_indents[-1][0]
+                                    or (rest.strip() and indent < list_indents[-1][1])):
+                list_indents.pop()
+            if list_indents:
+                rest = rest[list_indents[-1][1]:]
+            while fence is None and (item := LIST_ITEM.match(rest)) is not None:
+                consumed = item.end()
+                indent = (list_indents[-1][1] if list_indents else 0) + consumed
+                list_indents.append((quote_depth, indent))
+                rest = rest[consumed:]
+            opening = FENCE.match(rest)
+            if fence is not None:
+                if quote_depth < fence[2] or (fence[3] and
+                        (not list_indents or list_indents[-1][1] < fence[3])):
+                    fence = None
+                else:
+                    if (opening is not None and opening["marker"][0] == fence[0]
+                            and len(opening["marker"]) >= fence[1] and not opening["info"].strip()):
+                        fence = None
+                    continue
+            if opening is not None:
+                scan_paragraph()
+                fence = (opening["marker"][0], len(opening["marker"]), quote_depth,
+                         list_indents[-1][1] if list_indents else 0)
+                continue
+            if not rest.strip():
+                scan_paragraph()
+            else:
+                paragraph.append((number, rest))
+        scan_paragraph()
     return hits
 
 
