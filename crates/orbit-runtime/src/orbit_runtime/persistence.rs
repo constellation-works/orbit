@@ -97,11 +97,21 @@ impl RuntimeKernel {
         self.context.persistence().as_json_value()
     }
 
-    /// Whether the lexical search index file exists at its configured path.
-    /// Probed from the path rather than the cached index handle, so a
-    /// diagnostic sees the file as it is now.
-    pub fn search_index_file_exists(&self) -> bool {
-        self.context.persistence().semantic_db.exists()
+    /// Whether an entry exists at the configured lexical search index path.
+    ///
+    /// Inspect the entry without following a final symlink so a dangling or
+    /// looping index symlink is not mistaken for an absent index. Inspection
+    /// errors for parent components remain visible to the caller.
+    pub fn search_index_file_exists(&self) -> Result<bool, OrbitError> {
+        let path = &self.context.persistence().semantic_db;
+        match std::fs::symlink_metadata(path) {
+            Ok(_) => Ok(true),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+            Err(error) => Err(OrbitError::Io(format!(
+                "cannot inspect search index path {}: {error}",
+                path.display()
+            ))),
+        }
     }
 
     pub fn automation_store(

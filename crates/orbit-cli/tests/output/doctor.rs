@@ -847,6 +847,33 @@ fn search_index_doctor_is_ok_on_a_fresh_workspace_before_any_task() {
 
 #[cfg(unix)]
 #[test]
+fn search_index_doctor_warns_when_a_fresh_index_is_a_symlink_loop() {
+    if in_child("doctor::search_index_doctor_warns_when_a_fresh_index_is_a_symlink_loop") {
+        return;
+    }
+    let fixture = WorkCheckout::new();
+    let root = init_workspace_without_tasks(&fixture, "looping-index");
+    let index = root.join("state/semantic.db");
+    link(std::path::Path::new("semantic.db"), &index);
+
+    let out = run_ok(
+        &fixture,
+        &[
+            "--root",
+            root.to_str().unwrap(),
+            "doctor",
+            "--check",
+            "search-index",
+            "--json",
+        ],
+    );
+    let row: Value = serde_json::from_slice(&out.stdout).expect("search-index JSON");
+    assert_eq!(row["status"], "warning", "{row}");
+    msg_has(&row, "cannot read search index");
+}
+
+#[cfg(unix)]
+#[test]
 fn search_index_doctor_warns_when_a_fresh_index_file_is_unreadable() {
     if in_child("doctor::search_index_doctor_warns_when_a_fresh_index_file_is_unreadable") {
         return;
