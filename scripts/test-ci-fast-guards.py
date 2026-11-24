@@ -4387,6 +4387,39 @@ class RemovedCodeIdentifierTests(unittest.TestCase):
         result = self.run_check()
         self.assertEqual(result.returncode, 0, result.stderr)
 
+    # A block comment can hold a `pub use` spelling that is not code. The
+    # isolated hunk that adds that spelling must not stand in for the re-export.
+    COMMENTED_REEXPORT_BASE = "pub use exports::Removed;\n/*\nnote\n*/\n"
+    COMMENTED_REEXPORT_SPELLING = "/*\nnote\npub /* note */ use exports::Removed;\n*/\n"
+
+    def test_reexport_removed_while_its_spelling_sits_in_a_block_comment_fails(self):
+        self.write(self.REEXPORT, self.COMMENTED_REEXPORT_BASE)
+        self.write("docs/demo.md", "Use `demo_policy::Removed` for the policy.\n")
+        self.commit_base()
+        self.write(self.REEXPORT, self.COMMENTED_REEXPORT_SPELLING)
+        result = self.run_check()
+        self.assertNotEqual(result.returncode, 0, result.stdout)
+        self.assertIn('"demo_policy::Removed"', result.stderr)
+        self.assertIn(self.REEXPORT, result.stderr)
+        self.assertIn("docs/demo.md:1", result.stderr)
+
+    def test_reexport_readded_as_code_beside_a_commented_spelling_passes(self):
+        self.write(self.REEXPORT, self.COMMENTED_REEXPORT_BASE)
+        self.write("docs/demo.md", "Use `demo_policy::Removed` for the policy.\n")
+        self.commit_base()
+        self.write(self.REEXPORT,
+                   self.COMMENTED_REEXPORT_SPELLING + "pub use exports::Removed;\n")
+        result = self.run_check()
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_deleting_a_commented_out_reexport_is_not_a_removal(self):
+        self.write(self.REEXPORT, "pub use exports::Kept;\n/*\npub use exports::Gone;\n*/\n")
+        self.write("docs/demo.md", "Use `demo_policy::Gone` for the policy.\n")
+        self.commit_base()
+        self.write(self.REEXPORT, "pub use exports::Kept;\n/*\n*/\n")
+        result = self.run_check()
+        self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_removed_css_class_named_in_doc_fails(self):
         self.write("docs/design/user-interface/1_overview.md",
                    "Each row's pill (`.ws-badge`) takes its workspace colour.\n")

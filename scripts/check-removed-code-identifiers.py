@@ -8,8 +8,9 @@ definition the diff deletes:
 - Rust `const`, `static`, `fn`, `struct`, `enum`, `trait` and `type` names;
 - Rust `pub use` re-exports, named by their crate-qualified public path
   (`orbit_policy::resolve_symlinks` for `pub use ...::resolve_symlinks;` in
-  `crates/orbit-policy/src/lib.rs`). A re-export in a file outside
-  `crates/<crate>/src` has no public path here and is not judged;
+  `crates/orbit-policy/src/lib.rs`). A `pub use` inside a comment is not a
+  re-export. A re-export in a file outside `crates/<crate>/src` has no public
+  path here and is not judged;
 - CSS class selectors, named with their dot (`.ws-badge`), including a class in
   a compound or element-qualified selector (`.active.retired`, `a.retired`).
   Text in a CSS comment, a quoted string, a `url(...)` or a declaration value
@@ -242,13 +243,18 @@ def css_classes(text):
             for match in CSS_CLASS.finditer(prelude.group())}
 
 
+def rust_items(text):
+    """Names of the Rust items a text defines, without comment handling."""
+    names = {match.group(1) for match in RUST_ITEM.finditer(text)}
+    names.discard("_")
+    return names
+
+
 def names_in(path, text):
     """Identifiers a source text defines or re-exports, or the CSS classes it styles."""
     if path.endswith(".css"):
         return css_classes(text)
-    names = {match.group(1) for match in RUST_ITEM.finditer(text)}
-    names.discard("_")
-    return names | public_paths(path, text)
+    return rust_items(text) | public_paths(path, text)
 
 
 def read_text(relative):
@@ -275,14 +281,16 @@ def changed_identifiers(base):
             continue
         changed.add(path)
         # A CSS hunk can cut a selector or comment in half, so CSS is judged
-        # from whole files below.
+        # from whole files below. A Rust hunk can start or end inside a block
+        # comment, so it supplies item names only: a `pub use` in it may be
+        # commented out, and only the whole file says what is re-exported.
         if path.endswith(".rs"):
-            for name in names_in(path, removed_text):
+            for name in rust_items(removed_text):
                 removed.setdefault(name, set()).add(path)
-            added |= names_in(path, added_text)
+            added |= rust_items(added_text)
     # A zero-context hunk that deletes one member of a multiline `pub use` group
-    # leaves the `pub use` opening and `;` outside the removed text, so compare
-    # the whole file's public paths before and after the diff.
+    # leaves the `pub use` opening and `;` outside the removed text, so public
+    # paths are compared as whole files before and after the diff.
     for path in sorted(changed):
         if path.endswith(".css"):
             old = git("show", f"{base}:{path}")
