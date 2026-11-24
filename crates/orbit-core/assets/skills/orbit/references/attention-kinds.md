@@ -72,6 +72,12 @@ owner before reconciliation or a run beyond its bound:
 - a run that declares
   no bound is stuck beyond 120 minutes.
 
+Either cause also carries `detail.current_step_id` and `detail.current_step_status`: the id
+and state of the latest step the run has recorded, so you can tell an active run from an
+abandoned one without the operator-only `orbit.run` show. A step is recorded when it ends, so
+this is the last finished step, and the step now in flight is not yet named. Both are null
+when the run has recorded no step. No step output or log text is included.
+
 Linux uses
 `/proc` start identity with PID-namespace fencing; macOS uses libproc with a bounded `ps`
 fallback. Unavailable identity is not proof of death; the age bound still applies. Active
