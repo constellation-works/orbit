@@ -63,7 +63,9 @@ are fixed; no key changes them:
 - Size: titles up to 120 characters, bodies up to 4096 UTF-8 bytes, at most
   8 evidence references.
 - Open notices: 20 per workspace, 10 global per owner host, 2 per managed
-  task, 10 per resident mandate.
+  task, and 10 open non-status notices per resident mandate. Its mandatory
+  status line is exempt from the per-mandate count but still counts toward the
+  workspace limit.
 - Post rates: 5 per managed task in 24 hours (corroborations included), 30
   per orchestrator crew per hour, 30 per resident mandate per hour.
 - Retention: closed and expired notices stay listable for 30 days.

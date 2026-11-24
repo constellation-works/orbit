@@ -191,8 +191,10 @@ means something is broken) and never a line in the status notice:
   `done` closes itself.
 
 The brief lists the notices in scope, your own included: check it for warns
-you opened before posting or closing. The limits are 10 open notices and 30
-posts an hour per mandate; a refusal is a cost to record, not a reason to
+you opened before posting or closing. The cap is 10 open non-status notices
+per mandate; its mandatory status line is exempt from that count but still
+counts toward the workspace-wide limit of 20 open notices. The rate remains
+30 posts an hour per mandate. A refusal is a cost to record, not a reason to
 drop the checkpoint.
 
 ## 7. Checkpoint
