@@ -69,11 +69,12 @@ and to read code-scanning and Dependabot alerts. These requests go to the Git
 host you configured, under that host's terms. Scheduled routines that contact
 GitHub or perform delivery are shipped disabled until you enable them. When
 selected by the seeding policy, the local `worktree-gc` and `task-pilot`
-routines seed enabled. Agent memory notes are written
-only while such an experiment runs, and notes already written stay in your
-workspace's local store after it ends. The local `host-health`
-auto-task seeds disabled, like the other shipped auto-tasks. Unattended scheduled runs require the
-host's Orbit scheduler clock to be enabled.
+routines seed enabled. Agent memory notes are written only while at least one
+experiment with a memory arm is running. Once none are running, Orbit stops
+writing notes, and any notes already written remain in your workspace's local
+store. The local `host-health` auto-task seeds disabled, like the other shipped
+auto-tasks. Unattended scheduled runs require the host's Orbit scheduler clock
+to be enabled.
 
 ### Task publication (optional)
 
