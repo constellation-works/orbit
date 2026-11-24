@@ -248,10 +248,28 @@ fn heartbeat_skips_unchanged_but_runs_when_watched_state_changes() {
     }
     let fx = fixture();
     let (watched, mandate) = fx.watched_mandate("Heartbeat subject");
+    let acted = fx.add_task(TaskAddParams {
+        title: "Decide the next step".into(),
+        description: "An acted-on subject".into(),
+        acceptance_criteria: vec!["Decided".into()],
+        crew: Some("dk".into()),
+        ..Default::default()
+    });
     let now = Utc::now();
     let first = fx.cycle_run(&mandate, "heartbeat-first");
     let brief = fx.begin_cycle(&first, now);
-    fx.checkpoint(&brief, &first);
+    fx.as_cycle_agent(&first, || {
+        fx.agent_call(
+            "orbit.task.update",
+            json!({"id": acted, "comment": "Reviewed.", "model": "codex"}),
+        )
+        .unwrap();
+    });
+    let row = fx.latest_action_row(&mandate, brief["cycle"].as_str().unwrap());
+    fx.write_checkpoint(&brief, &first, json!({
+        "actions": [{"key": row.key, "kind": row.tool, "subject": acted, "result": "ok", "ref": null}],
+        "conversation_ref": "conv-heartbeat", "notes": "Preserve this observation."
+    }));
     fx.finish_cycle(&first);
     let skip = fx.cycle_run(&mandate, "heartbeat-skip");
     let result = fx.begin_cycle(&skip, now + Duration::hours(3));
@@ -269,13 +287,22 @@ fn heartbeat_skips_unchanged_but_runs_when_watched_state_changes() {
         .next_back()
         .unwrap();
     assert_eq!(checkpoint.outcome, "unchanged");
-    assert_eq!(
-        checkpoint.wake.digest,
-        brief["wake"]["digest"].as_str().unwrap()
-    );
     let shown = fx.runtime.show_resident_mandate(&mandate).unwrap();
     assert_eq!(shown["stalled"], false, "{shown}");
     fx.stop_run(&skip, JobRunState::Success);
+    let request = fx
+        .runtime
+        .run_tool(
+            "orbit.decision.raise",
+            json!({
+                "task_id": acted, "model": "codex", "question": "Which next step?",
+                "options": [
+                    {"label": "Proceed", "consequence": "Proceed now.", "recommended": true},
+                    {"label": "Wait", "consequence": "Wait for later."}
+                ]
+            }),
+        )
+        .unwrap();
     fx.update_task(
         &watched,
         TaskUpdateParams {
@@ -286,6 +313,22 @@ fn heartbeat_skips_unchanged_but_runs_when_watched_state_changes() {
     let changed = fx.cycle_run(&mandate, "heartbeat-changed");
     let result = fx.begin_cycle(&changed, now + Duration::hours(6));
     assert_eq!(result["cycle_count"], 1, "{result}");
+    assert_eq!(result["continuity"], "resumed", "{result}");
+    assert_eq!(result["conversation_ref"], "conv-heartbeat");
+    assert_eq!(result["checkpoints"][0]["cycle"], brief["cycle"]);
+    assert_eq!(
+        result["checkpoints"][0]["notes"],
+        "Preserve this observation."
+    );
+    assert_eq!(result["checkpoints"][0]["actions"][0]["subject"], acted);
+    assert!(
+        result["open_requests"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|entry| entry["id"] == request["id"]),
+        "{result}"
+    );
     assert!(
         result["wake"]["reasons"]
             .as_array()
