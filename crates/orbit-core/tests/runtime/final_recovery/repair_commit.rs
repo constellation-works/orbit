@@ -283,6 +283,47 @@ impl orbit_engine::test_support::NullRuntimeHost for RepairPipeline<'_> {
                             .unwrap();
                         std::fs::write(repo.join(".env"), b"ENV_CANARY=top_secret\n").unwrap();
                     }
+                    "staged-ignored" => {
+                        let repo = &self.fixture.repo;
+                        std::fs::write(repo.join("notes.ignored"), "initial ignored\n").unwrap();
+                        std::fs::create_dir_all(repo.join("ignored-dir")).unwrap();
+                        std::fs::write(
+                            repo.join("ignored-dir/nested.txt"),
+                            "nested ignored content\n",
+                        )
+                        .unwrap();
+                        std::fs::write(repo.join("ignored-dir/untracked.txt"), "must not stage\n")
+                            .unwrap();
+                        std::fs::write(repo.join("deleted.ignored"), "gone before capture\n")
+                            .unwrap();
+                        std::fs::write(
+                            repo.join(".env"),
+                            "ENV_CANARY=synthetic_ignored_env_canary\n",
+                        )
+                        .unwrap();
+                        std::fs::write(
+                            repo.join(".env.local"),
+                            "ENV_LOCAL_CANARY=synthetic_force_added_env_canary\n",
+                        )
+                        .unwrap();
+                        git(
+                            self.fixture,
+                            &[
+                                "add",
+                                "-f",
+                                "notes.ignored",
+                                "ignored-dir/nested.txt",
+                                "deleted.ignored",
+                                ".env.local",
+                            ],
+                        );
+                        std::fs::write(
+                            repo.join("notes.ignored"),
+                            "staged ignored content\nsk-syntheticignoredcanary0000\n",
+                        )
+                        .unwrap();
+                        std::fs::remove_file(repo.join("deleted.ignored")).unwrap();
+                    }
                     "foreign-branch" => {
                         git(self.fixture, &["checkout", "-b", "foreign"]);
                     }
@@ -1475,6 +1516,128 @@ fn final_recovery_refused_patch_preserves_non_utf8_paths() {
     assert!(!checkout.join(".env").exists());
 }
 
+fn final_recovery_refused_patch_preserves_staged_ignored_addition() {
+    let mut fixture = fixture_with_command("test \"$(cat candidate.txt)\" != after");
+    std::fs::write(
+        fixture.repo.join(".gitignore"),
+        "*.ignored\nignored-dir/\n.env.*\n",
+    )
+    .unwrap();
+    git(&fixture, &["add", ".gitignore"]);
+    git(&fixture, &["commit", "-m", "seed gitignore"]);
+    git(&fixture, &["branch", "-f", "main", "HEAD"]);
+    fixture.input["base_sha"] = json!(git(&fixture, &["rev-parse", "HEAD"]));
+
+    let (host, outcome) = run_pipeline(&fixture, "staged-ignored");
+    assert!(outcome.is_err(), "{outcome:?}");
+    let run = fixture.input["job_run_id"].as_str().unwrap();
+    let checkpoint = fixture
+        .runtime
+        .read_run_state(run)
+        .unwrap()
+        .unwrap()
+        .final_recovery
+        .unwrap();
+    assert!(checkpoint.repair_commit.is_none());
+    let Some(FinalRecoveryDecision::Escalate { diagnosis, .. }) = checkpoint.decision else {
+        panic!("expected escalation")
+    };
+    let name = format!("recovery-uncommitted-{run}.patch");
+    assert!(
+        diagnosis.contains("recovery_commit_refused:protected_path:")
+            && diagnosis.contains(&name)
+            && !diagnosis.contains("failed to capture uncommitted diff"),
+        "refusal and saved patch artifact expected: {diagnosis}"
+    );
+    let artifact = fixture
+        .runtime
+        .get_task_artifact(&fixture.task_id, &name)
+        .unwrap()
+        .expect("refused candidate with staged ignored addition saves patch artifact");
+    let text = String::from_utf8_lossy(&artifact.content);
+    assert!(
+        text.contains("repaired")
+            && text.contains("notes.ignored")
+            && text.contains("staged ignored content")
+            && text.contains("ignored-dir/nested.txt")
+            && text.contains("nested ignored content"),
+        "independent safe edit and staged ignored additions must be preserved: {text}"
+    );
+    assert!(
+        !text.contains("sk-syntheticignoredcanary0000") && text.contains("[REDACTED_SECRET]"),
+        "credential canary inside staged ignored addition must be redacted: {text}"
+    );
+    assert!(
+        !text.contains(".env")
+            && !text.contains("synthetic_ignored_env_canary")
+            && !text.contains("synthetic_force_added_env_canary")
+            && !text.contains("untracked.txt")
+            && !text.contains("must not stage")
+            && !text.contains("deleted.ignored"),
+        "protected, unstaged-ignored, and deleted-staged paths must stay out of patch: {text}"
+    );
+    for path in [".env", "notes.ignored", "candidate.txt"] {
+        assert!(
+            !blob_in_object_store(&fixture, path),
+            "{path}: bytes must stay out of the repository object store"
+        );
+    }
+    assert_eq!(
+        git(&fixture, &["diff", "--cached", "--name-only"]),
+        ".env.local\ndeleted.ignored\nignored-dir/nested.txt\nnotes.ignored",
+        "live index must remain untouched"
+    );
+
+    let candidate_head = host.validation_heads.lock().unwrap()[0].0.clone();
+    let root = tempfile::tempdir().unwrap();
+    let checkout = root.path().join("checkout");
+    let clone = crate::git_test_support::command()
+        .args([
+            "clone",
+            "-q",
+            fixture.repo.to_str().unwrap(),
+            checkout.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(clone.status.success(), "{clone:?}");
+    let co = crate::git_test_support::command()
+        .args(["checkout", "-q", &candidate_head])
+        .current_dir(&checkout)
+        .output()
+        .unwrap();
+    assert!(co.status.success(), "{co:?}");
+    let patch_file = root.path().join("recovery.patch");
+    std::fs::write(&patch_file, &artifact.content).unwrap();
+    let apply = crate::git_test_support::command()
+        .args(["apply", patch_file.to_str().unwrap()])
+        .current_dir(&checkout)
+        .output()
+        .unwrap();
+    assert!(
+        apply.status.success(),
+        "git apply failed ({}):\n{}",
+        apply.status,
+        String::from_utf8_lossy(&apply.stderr)
+    );
+    assert_eq!(
+        std::fs::read_to_string(checkout.join("candidate.txt")).unwrap(),
+        "repaired\n"
+    );
+    assert_eq!(
+        std::fs::read_to_string(checkout.join("notes.ignored")).unwrap(),
+        "staged ignored content\n[REDACTED_SECRET]\n"
+    );
+    assert_eq!(
+        std::fs::read_to_string(checkout.join("ignored-dir/nested.txt")).unwrap(),
+        "nested ignored content\n"
+    );
+    assert!(!checkout.join("ignored-dir/untracked.txt").exists());
+    assert!(!checkout.join("deleted.ignored").exists());
+    assert!(!checkout.join(".env").exists());
+    assert!(!checkout.join(".env.local").exists());
+}
+
 // Related boundary scenarios share the isolated table fixture.
 crate::scenario_table!(
     final_recovery_repair_commit_gets_a_fresh_before_pr_review_scenarios,
@@ -1484,7 +1647,8 @@ crate::scenario_table!(
     final_recovery_persists_repair_evidence_without_task_write_tools,
     final_recovery_transition_evidence_excludes_protected_paths,
     resumed_final_recovery_repair_keeps_the_original_checkpoint_owner,
-    final_recovery_refused_patch_reproduces_binary_and_final_whitespace
+    final_recovery_refused_patch_reproduces_binary_and_final_whitespace,
+    final_recovery_refused_patch_preserves_staged_ignored_addition
 );
 
 #[cfg(unix)]
