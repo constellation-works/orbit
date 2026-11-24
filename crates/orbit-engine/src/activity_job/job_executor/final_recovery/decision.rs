@@ -13,6 +13,9 @@ pub(super) struct RecoveryDispatch {
     pub(super) model: Option<String>,
     /// The provider observed running the judge, never the agent's claim.
     pub(super) judge: Option<String>,
+    /// The resume's `repair_evidence`, held until the engine admits the resume
+    /// step and any repair commit ([`persist_repair_evidence`]).
+    pub(super) repair_evidence: Option<Value>,
 }
 
 /// Dispatch the activity under its configured crew.
@@ -49,31 +52,18 @@ pub(super) fn dispatch_final_recovery(
     persist_dispatch_invocation(ctx, &activity.name, input, &dispatch);
     if dispatch.success {
         let mut payload = decision_payload(&dispatch.output);
-        if let Some(evidence) = payload
+        let repair_evidence = payload
             .as_object_mut()
-            .and_then(|object| object.remove("repair_evidence"))
-        {
-            // Evidence has no task selector. Only a well-formed, fault-attributed
-            // decision reaches the host's writer, using the engine's admitted
-            // task and worktree. A resume without its fault must not replace the
-            // task's summary or attach artifacts before the escalation it earns.
+            .and_then(|object| object.remove("repair_evidence"));
+        if repair_evidence.is_some() {
+            // Only a well-formed, fault-attributed resume may carry evidence. The
+            // write itself waits for admission: a resume the engine refuses must
+            // not replace the task's summary or attach artifacts.
             let (decision, _fault) = FinalRecoveryDecision::parse_attributed(&payload)
                 .map_err(|error| format!("invalid final recovery decision: {error}"))?;
             if !matches!(decision, FinalRecoveryDecision::Resume { .. }) {
                 return Err("evidence handoff requires a repair resume decision".into());
             }
-            let task = input["task_id"].as_str().ok_or("missing recovery task")?;
-            let workspace = input["workspace_path"]
-                .as_str()
-                .ok_or("missing recovery worktree")?;
-            ctx.host
-                .persist_final_recovery_evidence(
-                    &ctx.run_id,
-                    task,
-                    std::path::Path::new(workspace),
-                    &evidence,
-                )
-                .map_err(|error| format!("persist final recovery evidence: {error}"))?;
         }
         let judge = dispatch
             .output
@@ -84,12 +74,33 @@ pub(super) fn dispatch_final_recovery(
             payload,
             model: recovery_model,
             judge,
+            repair_evidence,
         })
     } else {
         Err(dispatch
             .message
             .unwrap_or_else(|| "the activity reported failure without a diagnostic".to_string()))
     }
+}
+
+/// Hand a resume's `repair_evidence` to the host for the admitted task. The
+/// caller runs this only after the resume's step and any repair commit have
+/// passed their gates, and before the decision is recorded: the host writes
+/// evidence only to a recovery that is still undecided.
+pub(super) fn persist_repair_evidence(
+    ctx: &ExecCtx<'_>,
+    task: &str,
+    workspace: &str,
+    evidence: &Value,
+) -> Result<(), String> {
+    ctx.host
+        .persist_final_recovery_evidence(
+            &ctx.run_id,
+            task,
+            std::path::Path::new(workspace),
+            evidence,
+        )
+        .map_err(|error| format!("persist final recovery evidence: {error}"))
 }
 
 /// The agent's own answer inside an activity output.

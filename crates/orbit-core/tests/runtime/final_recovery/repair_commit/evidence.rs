@@ -2,7 +2,7 @@
 
 use super::*;
 
-pub(super) fn repair_evidence_output(fixture: &Fixture) -> Value {
+pub(super) fn repair_evidence_output(fixture: &Fixture, step_id: &str) -> Value {
     let asset = load_activity_asset(
         &std::fs::read_to_string(
             std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -122,7 +122,7 @@ pub(super) fn repair_evidence_output(fixture: &Fixture) -> Value {
             original_summary
         );
     }
-    json!({"decision": "resume", "fault": "implementer", "fault_evidence": "run fixture: the candidate failed its check", "step_id": "review_gate_settle",
+    json!({"decision": "resume", "fault": "implementer", "fault_evidence": "run fixture: the candidate failed its check", "step_id": step_id,
         "rationale": "repaired and verified candidate", "repair_evidence": evidence})
 }
 
@@ -130,9 +130,20 @@ pub(super) fn repair_evidence_output(fixture: &Fixture) -> Value {
 /// before the evidence reaches the host, so the task keeps its prior summary
 /// and artifacts.
 pub(super) fn unattributed_repair_output(fixture: &Fixture) -> Value {
-    let mut output = repair_evidence_output(fixture);
+    let mut output = repair_evidence_output(fixture, "review_gate_settle");
     let object = output.as_object_mut().unwrap();
     object.remove("fault");
     object.remove("fault_evidence");
+    output
+}
+
+/// A valid resume whose evidence batch ends with an artifact the host refuses
+/// after the engine has admitted the resume and its repair commit.
+pub(super) fn refused_artifact_output(fixture: &Fixture) -> Value {
+    let mut output = repair_evidence_output(fixture, "review_gate_settle");
+    output["repair_evidence"]["task_artifacts"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({"path": "recovery/absent.log", "source_path": ".orbit/tmp/absent.log"}));
     output
 }
