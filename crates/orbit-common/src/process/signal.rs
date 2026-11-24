@@ -242,23 +242,7 @@ pub fn process_group_members(pgid: libc::pid_t) -> io::Result<Vec<u32>> {
     }
     #[cfg(target_os = "macos")]
     {
-        // SAFETY: null/zero requests the number of process slots.
-        let size = unsafe { libc::proc_listpgrppids(pgid, std::ptr::null_mut(), 0) };
-        if size <= 0 {
-            return Err(io::Error::last_os_error());
-        }
-        let mut pids = vec![0i32; size as usize + 64];
-        let bytes =
-            i32::try_from(pids.len() * std::mem::size_of::<i32>()).map_err(io::Error::other)?;
-        // SAFETY: the vector provides exactly `bytes` writable bytes.
-        let written = unsafe { libc::proc_listpgrppids(pgid, pids.as_mut_ptr().cast(), bytes) };
-        if written <= 0 {
-            return Err(io::Error::last_os_error());
-        }
-        if written as usize >= pids.len() {
-            return Err(io::Error::other("process group snapshot overflow"));
-        }
-        pids.truncate(written as usize);
+        let pids = super::identity::darwin_list_pgrp_pids(pgid)?;
         Ok(pids
             .into_iter()
             .filter_map(|pid| u32::try_from(pid).ok().filter(|pid| *pid > 1))
