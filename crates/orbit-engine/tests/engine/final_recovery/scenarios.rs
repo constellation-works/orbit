@@ -1498,15 +1498,11 @@ fn completion_observation_classifies_retry_policy_and_candidate_refusal() {
         let observed =
             orbit_engine::test_support::with_vcs_retry_wait(|_| {}, || run(&job, &host, None));
         assert!(observed.result.is_err());
-        // [ORB-25661] A policy requeue (and a spent retry) ends held; a
-        // candidate-changed refusal keeps the failure and its handoff.
-        if kind == "escalate" {
-            assert_failed_completion(&observed);
-            assert_count(&host, "handoff", 1);
-        } else {
-            assert_held_after_recovery(&observed);
-            assert_count(&host, "handoff", 0);
-        }
+        // [ORB-25661] A policy requeue (and a spent retry) ends held.
+        // [ORB-27875] So does a refusal escalation: the read-only observation
+        // changed nothing, and the escalation below stays recorded.
+        assert_held_after_recovery(&observed);
+        assert_count(&host, "handoff", 0);
         assert_eq!(host.count("work"), count);
         assert_count(&host, "decide", 0);
         assert_count(&host, "setup", 1);
@@ -1602,7 +1598,9 @@ fn assert_failed_completion(run: &Run) {
 /// [ORB-25661] A transient observation that final recovery successfully
 /// requeues (current-policy or stopped-run) or that the host parks ends
 /// held, with its recorded disposition intact and no failure handoff. A
-/// candidate-changed refusal and a failed application stay failures.
+/// candidate-changed refusal escalation [ORB-27875] ends held too, with the
+/// escalation and candidate preserved and no retry authorized. A failed
+/// application stays a failure.
 fn transient_observation_held_after_recovery_parks_or_requeues() {
     let stopped = unchanged_observation(CompletionOwnerLiveness::Stopped);
     let (host, observed) = observe_finished_completion(stopped.clone(), vec![Reply::Observation]);
@@ -1629,9 +1627,27 @@ fn transient_observation_held_after_recovery_parks_or_requeues() {
     let mut changed = stopped.clone();
     changed.candidate_unchanged = false;
     let (host, observed) = observe_finished_completion(changed, vec![Reply::Observation]);
+    assert_held_after_recovery(&observed);
+    assert_count(&host, "handoff", 0);
+    assert_attempts(&observed.attempts, &[("escalated", Some("escalate"))]);
+    // One observation, one recorded escalation; the unchanged-candidate retry
+    // was never admitted, so the step ran once and no agent decided.
+    assert_eq!(host.count("work"), 1);
+    assert_count(&host, "decide", 0);
+    let applications = host.applications();
+    assert_eq!(applications.len(), 1);
+    assert!(matches!(
+        &applications[0].decision,
+        FinalRecoveryDecision::Escalate { diagnosis, .. } if diagnosis.contains("candidate-changed")
+    ));
+
+    // An escalation whose application failed is not a held disposition.
+    let mut changed = stopped.clone();
+    changed.candidate_unchanged = false;
+    let (host, observed) =
+        observe_finished_completion_applying(changed, vec![Reply::Observation], ApplyScript::Fail);
     assert_failed_completion(&observed);
     assert_count(&host, "handoff", 1);
-    assert_attempts(&observed.attempts, &[("escalated", Some("escalate"))]);
 
     let (host, observed) =
         observe_finished_completion_applying(stopped, vec![Reply::Observation], ApplyScript::Fail);

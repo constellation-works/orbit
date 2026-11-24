@@ -798,10 +798,12 @@ grant merge authority. When that requeue is successfully applied — or the
 host parks the requeue for a human instead — the run ends `held` as
 `delivery_forge_observation_unavailable`, preserving the recorded recovery
 disposition and without the failure handoff; a failed application of the
-decision keeps the ordinary failed outcome. A changed candidate, a changed policy, or a
-non-transient error keeps its existing refusal: policy drift requeues as a
-policy change, and the other refusals stay candidate-changed or ordinary
-failures. Authenticating the tail for a merge continuation still requires this
+decision keeps the ordinary failed outcome. A changed or unauthenticated
+candidate is never retried: final recovery records its `candidate-changed`
+escalation for human inspection, and when the host applies that escalation the
+run ends `held` the same way, with the escalation and candidate preserved and
+no failure handoff. A changed policy requeues as a policy change; a
+non-transient error and every other escalation keep their ordinary failures. Authenticating the tail for a merge continuation still requires this
 process to own the live run, with no retry parent. No successful receipt is
 rewritten and no replacement PR is created by the continuation.
 

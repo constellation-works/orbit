@@ -447,6 +447,9 @@ pub(in crate::activity_job::job_executor) fn attempt_final_recovery(
         };
         // A refusal must not reach an agent that can request the same stale
         // prefix again. Preserve the publication for explicit governed repair.
+        // [ORB-27875] The escalation stays recorded and nothing is retried,
+        // but a read-only observation that changed nothing on the forge ends
+        // the run held, not failed, when the host applied the park.
         let application = FinalRecoveryApplication {
             task_id,
             failed_step_id: step.id.clone(),
@@ -467,7 +470,8 @@ pub(in crate::activity_job::job_executor) fn attempt_final_recovery(
             completion_done: ctx.input.get("completion").and_then(Value::as_str) == Some("done"),
             infrastructure: None,
         };
-        return settlement::conclude(job, ctx, step, activity, &application, None, None);
+        return settlement::conclude(job, ctx, step, activity, &application, None, None)
+            .held_for_completion_observation();
     }
 
     let recovery_input =
