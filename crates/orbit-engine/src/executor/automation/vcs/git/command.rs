@@ -358,7 +358,27 @@ pub(crate) fn git_output_bytes_with_env(
     args: &[&str],
     env: &[(&str, &str)],
 ) -> Result<Vec<u8>, OrbitError> {
-    let outcome = git_run_bytes_with_env(current_dir, args, None, env)?;
+    git_checked_bytes_with_env(current_dir, args, None, env)
+}
+
+/// Run Git with `env` and `stdin` bytes added to its secured environment; its
+/// raw stdout bytes without UTF-8 lossy decoding or trimming.
+pub(crate) fn git_output_bytes_with_env_and_stdin(
+    current_dir: &Path,
+    args: &[&str],
+    stdin: &[u8],
+    env: &[(&str, &str)],
+) -> Result<Vec<u8>, OrbitError> {
+    git_checked_bytes_with_env(current_dir, args, Some(stdin), env)
+}
+
+fn git_checked_bytes_with_env(
+    current_dir: &Path,
+    args: &[&str],
+    stdin: Option<&[u8]>,
+    env: &[(&str, &str)],
+) -> Result<Vec<u8>, OrbitError> {
+    let outcome = git_run_bytes_with_env(current_dir, args, stdin, env)?;
     if outcome.timed_out {
         return Err(git_timeout_error(
             current_dir,
@@ -421,20 +441,6 @@ pub(crate) fn git_output_with_env(
     Ok(git_output_raw_with_env(current_dir, args, env)?
         .trim()
         .to_string())
-}
-
-/// Run Git with `env` added to its secured environment; NUL-separated paths.
-pub(crate) fn git_output_paths_with_env(
-    current_dir: &Path,
-    args: &[&str],
-    env: &[(&str, &str)],
-) -> Result<Vec<String>, OrbitError> {
-    let raw = git_output_raw_with_env(current_dir, args, env)?;
-    Ok(raw
-        .split('\0')
-        .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned)
-        .collect())
 }
 
 pub(crate) fn git_success(current_dir: &Path, args: &[&str]) -> Result<(), OrbitError> {
