@@ -3,9 +3,9 @@ id: STD-02-rust-architecture-and-errors
 title: Rust architecture and errors — layering, visibility, typed errors, failure semantics, idiom and naming, logging, and test layout for constellation Rust projects
 summary: Normative structure and failure rules for any constellation Rust repo (workspace or single-crate CLI) — dependency direction, crate splits, visibility, one definition per rule, typed thiserror errors translated at the boundary, errors that name verified causes, exhaustive matches, load-time config validation, unknown-never-reads-as-success, fail-closed vs fail-open, batch isolation, preconditions before side effects, no boolean mode parameters, Rust API naming, borrow-general signatures, reasoned and expiring lint suppressions, lossless persisted shapes, tracing, dead code, test layout — plus the copyable lint, dependency-direction and cargo-deny gates. Read before creating or restructuring a Rust project or designing how it fails.
 tags: [standard, rust, architecture, errors, failure-semantics, idioms, naming, testing, lints]
-version: 4
+version: 5
 created: 2026-09-26
-updated: 2026-10-28
+updated: 2026-11-24
 last_validated: 2026-09-26
 related: [STD-01-cli-surface, STD-03-concurrency-and-process-safety, STD-04-testing-and-verification, STD-05-security-boundaries]
 ---
@@ -15,8 +15,8 @@ related: [STD-01-cli-surface, STD-03-concurrency-and-process-safety, STD-04-test
 How a constellation Rust project is layered, what it exposes, how it fails, and where its
 tests live. Orbit (`codebases/orbit`) is the worked example; the rules are written for a
 repo that is not Orbit, including a small one. Several rules (R24–R34, and parts of R10 and
-R16) are language-neutral principles about failure; they are stated portably, with the Rust
-specifics as notes.
+R16) are language-neutral principles about failure, and R39–R44 are language-neutral
+principles about structure; they are stated portably, with the Rust specifics as notes.
 
 Neighbouring standards own the rest, and their rules are not repeated here:
 - Concurrency, async, locking, channels, durable writes and subprocesses: STD-03
@@ -43,12 +43,22 @@ same.
 ### Layering and structure
 
 - **R1.** *Declared layer order.* Code in a lower layer MUST NOT import from a higher one,
-  against an ordered layer model written in the project's architecture doc — foundation
-  (contract types, shared mechanisms) → domain → composition → surfaces.
-- **R2.** *Domain, composition, surfaces are separate.* Domain units own their data and
-  logic; exactly one composition unit joins configuration, storage construction and domain
-  services; surfaces (CLI parsing, HTTP/MCP handlers, rendering) MUST only parse input, call
-  composition, and render the result.
+  against an ordered layer model written in the project's architecture doc. The default model
+  is foundation (contract types, shared mechanisms) → domain (records and pure rules) →
+  application (the operations the product offers, R2) → composition → surfaces. Persistence
+  sits below the application layer and imports record types only (R40). A project MAY merge
+  layers it does not need or name more of them (Orbit names eight); it MUST NOT reorder
+  these.
+- **R2.** *Domain, application, composition and surfaces are separate.* Domain units own
+  their data and logic. Every operation the product offers has exactly one entry point in an
+  application unit, which sequences domain logic, persistence and ports for that operation
+  (R41). Exactly one composition unit joins configuration, storage construction and adapters,
+  and it only constructs. Surfaces (CLI parsing, HTTP/MCP handlers, hooks, rendering) MUST
+  only parse input, call one operation, directly or through composition, and render the
+  result. A surface handler that calls two or more domain or persistence functions in
+  sequence is holding an operation, which belongs in the application unit. A small project
+  MAY keep application and composition in one unit; the line between that unit and its
+  surfaces stays.
 - **R3.** *Resolved inputs flow down.* Domain and runtime code MUST receive resolved
   configuration and filesystem roots as values from composition, never load config or
   discover the cwd or `$HOME` itself.
@@ -59,14 +69,22 @@ same.
   (serde DTOs, IDs, pure constructors, narrow errors) MUST perform no I/O — no `std::fs`,
   `std::net`, `std::process`, database or HTTP — and depend on no crate that does.
 - **R6.** *Direction is machine-checked.* Dependency direction MUST be enforced by a CI
-  check, and a new edge changes that check and the architecture doc in the same change.
+  check, and a new edge changes that check and the architecture doc in the same change. The
+  check MUST also reject an import cycle between units and enforce the order declared inside
+  a layer (R39). A boundary is enforced by the strongest mechanism the project has: a crate
+  edge, then item visibility (`pub(crate)`, `pub(super)`), then a source grep. A boundary
+  that only a grep enforces and that takes more than a few grep rules to state is a candidate
+  for a crate edge (R7).
 - **R7.** *Crates follow build boundaries, not taxonomy.* A new crate MUST be justified by a
   build or dependency need — compile-graph isolation, an independently consumed artifact, or
   a dependency edge that must be enforceable — not by conceptual category. A new CLI SHOULD
-  start as two crates, because the domain/surface edge is exactly such an enforceable edge:
-  a domain library crate that depends on no argument parser, terminal, environment or
+  start as two crates, because the domain/surface edge is exactly such an enforceable edge: a
+  domain library crate that depends on no argument parser, terminal, environment or
   log-subscriber crate, and a CLI crate that holds parsing, composition, rendering and
-  `main`. Any other project starts as one crate. Split further only when another such need
+  `main`. A project that persists state through a database or another storage driver SHOULD
+  make persistence a third crate from the day it takes that dependency, so that `Cargo.toml`
+  confines the driver to it and R40's rule that persistence imports no operation is a crate
+  edge. Any other project starts as one crate. Split further only when another such need
   appears.
 - **R24.** *One definition per rule, enforced at the chokepoint.* Every validation,
   authorization and classification rule MUST have exactly one implementation, enforced in
@@ -80,6 +98,57 @@ same.
   record written, a field set, a check run) SHOULD be performed or verified by deterministic
   code, not left to prompt text, a README step or convention. Instructions may ask for it;
   code produces or checks it before anything depends on it.
+- **R39.** *No cycles; order inside a layer.* The import graph between units MUST be acyclic
+  at every level: between crates, between the top-level modules of a crate, and between the
+  modules of one layer. A layer with more than about ten units MUST declare an order inside
+  itself in the architecture doc (for a domain layer, for example, base values → records →
+  rules), and R1 applies to that order. An item that two units both need moves to the lower
+  of them or to a unit below both; neither imports the other to reach it.
+- **R40.** *Persistence stores; it does not decide.* The persistence unit owns how records
+  reach durable storage: reads, writes, transactions, locking, schema and format upgrades. It
+  MUST NOT hold a validation, authorization or classification rule (R24), and it MUST import
+  record and contract types only, never an application unit, a port or a feature's rules. Its
+  API is named for the records it stores (`entries().get`, `sessions().put`), not for the
+  operations that use them (`settle_pass`, `approve_and_archive`). A check that must be
+  atomic with its write is a domain function that the calling operation runs inside a
+  transaction handle the persistence unit provides: the persistence unit supplies the
+  transaction, the caller supplies the rule. A constraint the storage engine itself enforces
+  (a unique key, a foreign key, a revision compare-and-swap) is mechanism, not a rule, and
+  stays.
+- **R41.** *An operation loads, decides, effects and commits.* A decision (validating,
+  selecting, ranking, classifying, planning) SHOULD be a pure function from values to values,
+  with no I/O and no read of the clock or the environment. An operation (R2) SHOULD follow
+  one shape: load the state it needs into values; decide with pure functions; perform
+  external effects (a model call, a network request, a subprocess) through ports (R42);
+  commit its writes in one transaction that re-checks the state it loaded. Code that performs
+  I/O makes no domain decision, and a decision function is testable with no filesystem,
+  database or network. An operation that cannot follow the shape says why in its doc comment.
+  Locking and durable writes are STD-03.
+- **R42.** *Ports belong to the caller.* A trait that stands for an external system (a model
+  or network service, another process, the clock) MUST be defined in the layer that calls it,
+  speak in that layer's own values, and be implemented in composition or an adapter unit; the
+  unit that defines a port never imports its implementation. Each feature keeps the request
+  and response shapes of its calls beside its own rules, and one file MUST NOT collect the
+  shapes of unrelated features. A trait is introduced for an external effect or when a second
+  implementation exists; the project's own storage is a concrete type until there is a second
+  backend.
+- **R43.** *A unit says what it owns, and new code goes to the lowest unit that can own it.*
+  The architecture doc MUST map every unit (each crate, and each top-level module of a crate)
+  with one sentence stating what it owns and the units it may import; the unit's doc comment
+  states the same sentence. New code goes in the lowest unit whose sentence covers it and
+  that needs no new upward import to hold it. When no unit's sentence covers it, the same
+  change adds the unit and its row; code is not parked in the nearest file that compiles.
+  Outside the foundation layer a unit MUST NOT be named for no responsibility (`common`,
+  `utils`, `helpers`, `misc`, `shared`), and no unit collects the shapes of unrelated
+  features in one `types` or `models` file. The foundation's contract-types unit (R5) is the
+  one shared home, and it holds only what two or more units use. R37 says the same of type
+  names.
+- **R44.** *Legacy and upgrade code is quarantined.* Readers of superseded formats, schema
+  and format migrations, and one-time importers MUST live in one unit named for that purpose
+  (`legacy`, `migrate`), which the live path calls only when it opens or upgrades stored
+  state. The live path reads and writes the current shape only and imports nothing else from
+  that unit. A superseded reader is deleted when no supported version can still produce its
+  input (R17).
 
 ### Visibility and dependencies
 
@@ -232,9 +301,12 @@ when the change touches it for another reason, not in a sweep of its own.
 - **R17.** *Fewest moving parts.* Dead code MUST be deleted together with its docs, tests,
   config keys and design notes; compatibility shims are kept only for an external contract
   or a persisted format (R16), and a retired path is guarded so it does not grow back.
-- **R18.** *File size is a heuristic.* A source file past about 800 lines SHOULD be checked
-  for multiple responsibilities and split along them (not into `part1`/`part2`); closely
-  related functionality MAY stay in one file when a split would only scatter it.
+- **R18.** *Size is a heuristic.* A source file past about 800 lines SHOULD be checked for
+  multiple responsibilities and split along them (not into `part1`/`part2`); closely related
+  functionality MAY stay in one file when a split would only scatter it. The same check
+  applies to a type with more than about 25 public methods or with `impl` blocks spread over
+  several files, and to a directory with more than about 12 sibling modules and no grouping:
+  each is checked for several responsibilities sharing one name.
 
 ### Tests
 
@@ -272,13 +344,19 @@ when the change touches it for another reason, not in a sweep of its own.
 
 - `rust`: every rule, in every constellation Rust project, whether a multi-crate workspace
   or a single-crate CLI; all gates in [Machine checks](checks.md).
-- `universal`: R24–R26, R29–R34 and R36, the classification clause of R10 and the lossless
-  clause of R16 are language-neutral and bind any project; R27 and R28 wherever the
+- `universal`: R24–R26, R29–R34, R36 and R39–R44, the classification clause of R10 and the
+  lossless clause of R16 are language-neutral and bind any project; R27 and R28 wherever the
   language offers exhaustiveness checking and checked conversions.
 - `cli`: R7's two-crate default, R11 and R12's downstream-surface form, and R15's stream
   guard.
 - `service`: R29 (health checks), R31 and R32 bind hardest on long-running services.
-- `stateful`: R16, R33 and R34 for anything that persists state across runs.
+- `stateful`: R16, R33 and R34 for anything that persists state across runs; R40, R44 and
+  R7's persistence crate for anything that persists it through a storage driver.
+
+**Adopting v5.** R39–R44 and the v5 forms of R1, R2, R6, R7 and R18 bind a new project and
+any restructuring of an existing one. A repo that adopted an earlier version records where
+it stands against them as a deviation (below) until it restructures; it is not required to
+restructure in order to re-pin.
 
 Out of scope, and optional for adopters: Orbit's per-crate stability tiers
 (`[package.metadata.orbit] stability`, `codebases/orbit/scripts/check-stability.sh`) and its
@@ -304,4 +382,12 @@ writes stderr from a signal handler and a debug tee, and `orbit-common` probes s
 terminal. As of v4 (measured 2026-10-28 at `7af1c6e74`), Orbit has 459 `#[allow]`
 attributes, none with a reason, and no `#[expect]` (R35); about 58 `pub`/`pub(crate)`
 functions take a `bool` parameter, not yet sorted into modes and data (R36); and 20 public
-`get_` getters (R37). All are grandfathered until touched.
+`get_` getters (R37). All are grandfathered until touched. As of v5 (read 2026-11-24 at
+`79250ad48e`, from `ARCHITECTURE.md` only), Orbit's crate graph has an application tier
+(`orbit-core`) apart from composition (`orbit-cmd`) and a store crate that depends on the
+foundation alone, which is what R1, R2, R7 and R40 ask at crate level. Orbit has two
+foundation crates named `orbit-common` and `orbit-types`, which R43 permits only in the
+foundation. Orbit has not been measured inside its crates against R39, or at all against
+R41–R44. The repo these rules were drawn from is scribe (`codebases/scribe` at `1e1954d`),
+which is being restructured to them under ORB-27707; until that lands it breaks R39, R40
+and R44 and meets R41–R43 only in part.

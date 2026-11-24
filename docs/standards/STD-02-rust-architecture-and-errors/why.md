@@ -18,10 +18,21 @@ contradict it were taken; its advice to use `anyhow` in application code was not
   navigable because every crate sits on one named tier and "lower layers never depend on
   higher ones" is the whole rule; agents new to a repo follow a written order and violate a
   tacit one.
+  v5: the model gained an application layer and a place for persistence. The v4 list (foundation
+  → domain → composition → surfaces) had no home for an operation's sequence or for storage, so
+  scribe put persistence above its business logic, where it could import all of it, and left
+  sequencing to the CLI. Measured in scribe at 1e1954d (2026-11-24); the restructuring is
+  ORB-27707.
 - **R2.** Orbit's CLI, MCP server, dashboard and agent tool hosts are four surfaces over the
   same operations. Where logic leaked into a surface it had to be re-plumbed per surface;
   ORB-10016 split the command layer out of the `orbit-core` god-crate into `orbit-cmd`
   (depending on Core, never the reverse) to get composition out of the kernel.
+  v5: "composition" in v4 covered both constructing the parts and sequencing an operation, and a
+  project could satisfy it with a unit that only constructs. scribe's `app` built the store and
+  the adapters, and each operation was then sequenced in its CLI command or hook handler
+  (`commands/session/pass.rs`, 1,025 lines), so a second surface could not reuse it. The rule
+  now names the application unit and gives a test for a surface that holds an operation.
+  Measured in scribe at 1e1954d (2026-11-24); the restructuring is ORB-27707.
 - **R3.** A unit that reads config or `$HOME` itself cannot be tested against a fixture root
   and silently diverges from what composition resolved. Orbit's config crate takes explicit
   roots, and its dependency check fails if Core's runtime calls `ResolvedConfig::load`.
@@ -34,6 +45,10 @@ contradict it were taken; its advice to use `anyhow` in application code was not
 - **R6.** An undocumented edge is how layering erodes: one convenient import at a time.
   Orbit's `check-dependency-direction.sh` rejects any edge not in its allowlist and any new
   crate without a policy; `AGENTS.md` makes a new edge an `ARCHITECTURE.md` change too.
+  v5: a check that lists allowed edges passes a graph with cycles in it, and a grep can only
+  forbid what someone thought to forbid. scribe's direction script had eleven module rules and
+  all of them held while the domain layer had three cycles and the store imported 22 modules.
+  Measured in scribe at 1e1954d (2026-11-24); the restructuring is ORB-27707.
 - **R7.** Splitting by category multiplies manifests, re-exports and orphan-rule walls
   without buying isolation. Orbit's north-star bearing 5 records that crate splits are
   justified by compile-graph and dependency-direction needs; `orbit-store` stays one crate
@@ -41,6 +56,11 @@ contradict it were taken; its advice to use `anyhow` in application code was not
   default for a new CLI came from building the constellation Rust CLI template (ORB-13117):
   "the domain never imports clap or the terminal" is only machine-checkable as a manifest
   edge, and a single crate can only approximate it with grep bans.
+  v5: persistence is named as an enforceable edge. scribe kept its store as a module inside the
+  domain crate (decision of 2026-09-26, "when persistence earns its own crate, `store/` moves
+  out whole"); by the time it had earned one, the module imported 22 others and could not move
+  out whole. The driver dependency is the moment the edge becomes cheap to draw. Measured in
+  scribe at 1e1954d (2026-11-24); the restructuring is ORB-27707.
 - **R24.** A rule spelled twice drifts, and a guard placed on one surface is routed around
   by the next. Dashboard writes skipped `validate_for_set` (ORB-12744); a guard skipped the
   dashboard API (ORB-12199); a fix landed on the CLI while MCP still capped silently
@@ -60,6 +80,45 @@ contradict it were taken; its advice to use `anyhow` in application code was not
   often, and every run that skipped it wedged at commit" (activity-job:1479), so Orbit now
   derives it from the change. SHOULD rather than MUST: many projects have no instruction
   layer, and some obligations cannot be computed.
+- **R39.** A layer order (R1) says nothing about the units inside one layer, so a layer can be
+  flat and tangled while every declared edge holds. scribe-core followed R1 with one boundary
+  (the store against everything else) and grew 30 top-level modules, eight of them in one
+  import cycle and four more in two-module cycles. Each cycle came from a few misplaced items:
+  a tokenizer living in the question-answering module, a verb enum living in the consistency
+  module. An order inside the layer makes the right home for such an item a lookup. Measured in
+  scribe at 1e1954d (2026-11-24); the restructuring is ORB-27707.
+- **R40.** Rules migrate into the store because a check and its write must share a transaction,
+  and the store is where the transaction is. Once they are there the store must import the
+  features whose rules it runs, and it can no longer be separated or replaced. scribe's store
+  was half its crate (20.5k of about 40k non-test lines), imported 22 of the 29 business
+  modules, and exposed 114 public methods named for use cases; its SQL layer called content
+  validation itself. Handing the caller a transaction keeps atomicity without moving the rule.
+  Measured in scribe at 1e1954d (2026-11-24); the restructuring is ORB-27707.
+- **R41.** When every operation has the same four steps, a reader knows where to look for a
+  rule (the decide step) and where state changes (the commit), and an agent adding an operation
+  has a shape to copy. scribe's pure step functions were sound, but nothing fixed their order:
+  the session pass was sequenced by about 20 calls in a CLI command, and the checks that had to
+  hold at write time ran in the store. One operation was spread over three places. Measured in
+  scribe at 1e1954d (2026-11-24); the restructuring is ORB-27707.
+- **R42.** A port file that holds every feature's request and answer shapes becomes a unit that
+  all features import and that imports all their types, which is how a flat layer turns into a
+  cycle. scribe's `models.rs` was 1,750 lines of shapes for five features behind one trait, and
+  it imported the entry, record, session and voice modules to describe them. Keeping each shape
+  beside the rules that build and judge it leaves the port as a thin trait. Measured in scribe
+  at 1e1954d (2026-11-24); the restructuring is ORB-27707.
+- **R43.** An agent adds code where it compiles. Without a written sentence per unit, the
+  nearest file that already imports the needed types wins, and files grow by accretion:
+  scribe's `ask.rs` (1,816 lines) held the question flow, the tokenizer, the attribution
+  phrasing and a port, and its store facade took whatever needed a transaction. A placement
+  test that can be applied mechanically (lowest unit, no new upward import, otherwise add a
+  row) gives the agent a decision it can make and a reviewer one it can check. Measured in
+  scribe at 1e1954d (2026-11-24); the restructuring is ORB-27707.
+- **R44.** Compatibility code that R16 requires accumulates beside the code it once was, and a
+  reader of the live path cannot tell which branches still run. scribe's `store/format.rs` was
+  3,108 lines holding every persisted shape and 31 format versions, and its document and
+  session modules mixed current reads with the code that moved old files into the database. One
+  named unit makes the live path short and makes R17's deletion a matter of removing a file.
+  Measured in scribe at 1e1954d (2026-11-24); the restructuring is ORB-27707.
 - **R36.** `report(true)` cannot be read at the call site and cannot grow a third mode
   without breaking every caller; a two-variant enum names the choice and extends cleanly.
   Clippy's `fn_params_excessive_bools` cannot tell a mode from data, so the rule is mostly
@@ -203,6 +262,10 @@ contradict it were taken; its advice to use `anyhow` in application code was not
   it today), so the rule is SHOULD. Length is the prompt, responsibility is the test: a
   long file that does one closely related job stays whole, because splitting it would only
   scatter one idea across several files (v3, Daniel, 2026-09-26).
+  v5: a file limit alone is met by splitting one type across files. scribe's `Store` stayed under
+  the heuristic per file with 114 public methods in 19 `impl` blocks, and its crate root listed
+  30 sibling modules. Measured in scribe at 1e1954d (2026-11-24); the restructuring is
+  ORB-27707.
 - **R19.** A sibling test module is not a child of the source module, so it cannot reach
   private items: the file layout itself enforces "test through the exposed seam" and keeps
   `#[cfg(test)]` noise out of production listings. F2026-08-108 found test files that were

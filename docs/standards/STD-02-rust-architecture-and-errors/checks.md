@@ -10,10 +10,16 @@ with the gate its rule names, or say it is review-only.
 | R3 | Dependency-direction check: grep ban on config-loading and root-discovery calls outside composition |
 | R4 | Dependency-direction check |
 | R5 | Dependency-direction check (no internal edges) plus a grep ban on `std::fs`/`std::net`/`std::process` in the contract unit |
-| R6 | Dependency-direction check in CI (fails on an unlisted edge or an unlisted crate) |
+| R6 | Dependency-direction check in CI (fails on an unlisted edge, an unlisted crate, or an import cycle between units) |
 | R7 | Dependency-direction check bans surface crates (`clap`, terminal and log-subscriber crates) in the domain crate; the split decision itself is review-only |
 | R24 | A regression test that drives the rule through the shared function rather than through one surface (Orbit: the ship guard's test calls `submit_ship_run` directly); otherwise review-only |
 | R25 | review-only |
+| R39 | Dependency-direction check: the unit import graph is acyclic and follows the declared in-layer order. Between crates Cargo already refuses a cycle. Between modules the copyable scripts below do not yet have the step; review-only until they do. |
+| R40 | Dependency-direction check: the persistence unit imports no application unit, port or feature-rule unit (a crate edge once persistence is its own crate, R7). The naming of its API is review-only. |
+| R41 | review-only |
+| R42 | Dependency-direction check: the unit that defines a port does not import its implementation. Where the shapes live is review-only. |
+| R43 | review-only (the architecture doc's unit map is reviewed whenever a unit is added) |
+| R44 | Dependency-direction check: only the open and upgrade entry points import the legacy unit. Otherwise review-only. |
 | R8 | review-only (optionally `unreachable_pub = "warn"`, not in Orbit's baseline) |
 | R9 | review-only (Orbit does not gate it; see *Deviations* in [`STD-02.md`](STD-02.md#deviations)) |
 | R10 | review-only; an optional grep for `.contains(` on `stderr`, error `to_string()` or message values in classification code is a useful review aid |
