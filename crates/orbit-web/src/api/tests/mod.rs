@@ -2,6 +2,7 @@
 
 pub(crate) mod test_support;
 
+mod codebase_blocking;
 mod handlers;
 mod log;
 mod workspaces;

@@ -996,6 +996,134 @@ analytics_test!(codebase_window_rollup_and_cache_reuse_one_scan, |fixture| {
     }
 });
 
+// File-rollup checkout marking after the blocking-pool offload: the cold
+// scan miss and the warm memo hit answer the same payload, `Age` header and
+// error mappings, with `absent_at_head` only on the path missing from the
+// checkout. The executor-isolation half lives in
+// `crate::api::tests::codebase_blocking`, which holds the server's only
+// blocking thread and shows warm rank/detail waiting on it; this test locks
+// what the offload must not change over HTTP on both paths.
+analytics_test!(
+    codebase_file_rollup_offload_preserves_payload_age_and_errors,
+    |fixture| {
+        fs::create_dir_all(fixture.runtime.paths().repo_root.join("src")).unwrap();
+        fs::write(fixture.runtime.paths().repo_root.join("src/live.rs"), "").unwrap();
+        let live = add(&fixture, "live", &["src/live.rs"], vec![]);
+        block_on_run_failure(&fixture, &live, "jrun-live", "-", "tests failed");
+        let gone = add(&fixture, "gone", &["src/gone.rs"], vec![]);
+        block_on_run_failure(&fixture, &gone, "jrun-gone", "-", "tests failed");
+
+        let server = fixture.counted_task_server();
+        let before = server.task_query_trace().len();
+        let cold_response =
+            codebase_get(&server, "analytics", "window=all&min_support=1&rollup=file");
+        assert_eq!(
+            cold_response.headers()["age"],
+            "0",
+            "a fresh scan reports its age"
+        );
+        let cold = json_ok(cold_response);
+        let cold_trace = server.task_query_trace()[before..].to_vec();
+        assert!(
+            operations(&cold_trace, "task_history_read") > 0,
+            "the first request scans: {cold_trace:?}"
+        );
+        let live_row = row(&cold["blocked"], "src/live.rs").expect("live checkout path is ranked");
+        assert!(
+            live_row.get("absent_at_head").is_none(),
+            "a path in the checkout carries no marker: {live_row}"
+        );
+        let gone_row =
+            row(&cold["blocked"], "src/gone.rs").expect("missing checkout path is ranked");
+        assert_eq!(
+            gone_row["absent_at_head"],
+            json!(true),
+            "a path missing from the checkout is marked: {gone_row}"
+        );
+
+        let before = server.task_query_trace().len();
+        let warm_response =
+            codebase_get(&server, "analytics", "window=all&min_support=1&rollup=file");
+        let warm_age = warm_response.headers()["age"]
+            .to_str()
+            .expect("warm Age header")
+            .to_owned();
+        let warm = json_ok(warm_response);
+        let warm_trace = server.task_query_trace()[before..].to_vec();
+        assert_eq!(
+            operations(&warm_trace, "task_history_read"),
+            0,
+            "requests inside the cache period reuse the scan: {warm_trace:?}"
+        );
+        assert_eq!(
+            warm["computed_at"], cold["computed_at"],
+            "a request inside the cache period reuses the scan"
+        );
+        assert_eq!(
+            without_computed_at(warm.clone()),
+            without_computed_at(cold.clone()),
+            "the offload preserves the payload"
+        );
+        assert!(
+            warm_age.parse::<u64>().is_ok(),
+            "the offload preserves the Age header: {warm_age}"
+        );
+
+        let show_gone_response =
+            codebase_get(&server, "show", "path=src/gone.rs&window=all&min_support=1");
+        assert_eq!(show_gone_response.status().as_u16(), 200);
+        let show_gone_age = show_gone_response.headers()["age"]
+            .to_str()
+            .expect("show Age header")
+            .to_owned();
+        let show_gone = json_ok(show_gone_response);
+        assert_eq!(show_gone["path"], "src/gone.rs");
+        assert_eq!(
+            show_gone["absent_at_head"],
+            json!(true),
+            "show marks the missing path: {show_gone}"
+        );
+        assert_eq!(
+            show_gone["computed_at"], cold["computed_at"],
+            "show reads the same cached scan"
+        );
+        assert!(
+            show_gone_age.parse::<u64>().is_ok(),
+            "show preserves the Age header: {show_gone_age}"
+        );
+
+        let show_live = json_ok(codebase_get(
+            &server,
+            "show",
+            "path=src/live.rs&window=all&min_support=1",
+        ));
+        assert!(
+            show_live.get("absent_at_head").is_none(),
+            "show leaves the live path unmarked: {show_live}"
+        );
+
+        for (endpoint, query) in [
+            ("analytics", "window=1y"),
+            ("analytics", "rollup=module"),
+            ("show", "path=src/never.rs"),
+        ] {
+            assert_eq!(
+                codebase_get(&server, endpoint, query).status().as_u16(),
+                400,
+                "{endpoint}?{query}"
+            );
+        }
+        assert_eq!(
+            server
+                .get(&format!("/api/codebase/show?{WS}"))
+                .status()
+                .as_u16(),
+            400,
+            "path is required"
+        );
+    }
+);
+
 // A scan keeps each task's history-derived facts in the store, so a later
 // scan by any server process reads no bundle and diffs no commit for an
 // unchanged task; a new history event or a reopen recomputes that task
