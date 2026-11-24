@@ -647,12 +647,23 @@ fn truncate_path_pair(value: &str, width: usize) -> String {
     let mut left_short = truncate_path_member(left, left_budget);
     let mut right_short = truncate_path_member(right, right_budget);
 
-    if left_short == right_short && left != right {
+    if left != right {
         let prefix = common_dir_prefix(left, right);
         if !prefix.is_empty() {
             let left_rel = &left[prefix.len()..];
             let right_rel = &right[prefix.len()..];
-            if !left_rel.is_empty() && !right_rel.is_empty() {
+            // Members sharing a directory prefix and a file name truncate to
+            // a shared head plus a shared tail, hiding both distinguishing
+            // directories. Odd budgets give the members different widths, so
+            // the truncated fragments differ while saying nothing; the
+            // equality check alone never fires there.
+            let hides_distinguishing_dir = leaf_file_name(left) == leaf_file_name(right)
+                && left.chars().count() > left_budget
+                && right.chars().count() > right_budget;
+            if !left_rel.is_empty()
+                && !right_rel.is_empty()
+                && (left_short == right_short || hides_distinguishing_dir)
+            {
                 left_short = truncate_relative_member(left_rel, left_budget);
                 right_short = truncate_relative_member(right_rel, right_budget);
             }
@@ -692,6 +703,14 @@ fn truncate_relative_member(rel: &str, width: usize) -> String {
         return format!("{ELLIPSIS}/{rel}");
     }
     format!("{ELLIPSIS}/{}", truncate_middle(rel, width - 2))
+}
+
+/// The file name after the final `/`, or the whole value when it has none.
+fn leaf_file_name(path: &str) -> &str {
+    match path.rfind('/') {
+        Some(index) => &path[index + 1..],
+        None => path,
+    }
 }
 
 fn common_dir_prefix<'a>(left: &'a str, right: &str) -> &'a str {

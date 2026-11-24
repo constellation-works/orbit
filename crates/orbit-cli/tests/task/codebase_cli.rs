@@ -421,6 +421,97 @@ fn codebase_cli_marks_the_absent_coupling_member_at_terminal_width() {
     );
 }
 
+/// Ten coupling rows widen `#` to 2, so at 80 columns `PATHS` shrinks to the
+/// even width 48 (odd pair budget 43): shared-prefix, shared-filename members
+/// must still disambiguate instead of collapsing to fragments that differ by a
+/// single prefix character (ORB-27878).
+#[cfg(unix)]
+#[test]
+fn codebase_cli_disambiguates_shared_filename_pairs_at_even_column_width() {
+    if crate::isolated_test::run_in_child(
+        "codebase_cli::codebase_cli_disambiguates_shared_filename_pairs_at_even_column_width",
+    ) {
+        return;
+    }
+
+    let left_mod =
+        "crates/orbit-core/src/application/codebase/sections/left_shared_subsystem/mod.rs";
+    let right_mod =
+        "crates/orbit-core/src/application/codebase/sections/right_shared_subsystem/mod.rs";
+    let left_design = "docs/design/auto-tasks/2_design.md";
+    let right_design = "docs/design/model-ranking/2_design.md";
+    // `shared_alpha` rides two reservations so one pair lands at 1/2 (50%):
+    // non-uniform RATE and COUNT columns survive uniform suppression, keeping
+    // all five columns and `PATHS` at the even width 48.
+    let filler: Vec<(String, String)> = (0..6)
+        .map(|index| {
+            (
+                format!("src/filler_{index:02}_alpha.rs"),
+                format!("src/filler_{index:02}_beta.rs"),
+            )
+        })
+        .collect();
+    let mut pairs: Vec<(&str, &str, bool, bool)> = vec![
+        (left_mod, right_mod, false, true),
+        (left_design, right_design, false, false),
+        ("src/shared_alpha.rs", "src/shared_beta.rs", false, false),
+        ("src/shared_alpha.rs", "src/shared_gamma.rs", false, false),
+    ];
+    for (first, second) in &filler {
+        pairs.push((first.as_str(), second.as_str(), false, false));
+    }
+    let (_, _, rendered, analytics) = run_coupling_pairs_analytics(&pairs);
+
+    let rows = analytics["change_coupling"]["rows"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+    assert_eq!(rows.len(), 10, "{analytics}");
+    assert!(
+        rows.iter()
+            .any(|row| row["absent_paths_at_head"] == json!([right_mod])),
+        "the ten-row analytics keeps the absent mod member: {analytics}"
+    );
+    assert!(
+        rows.iter()
+            .any(|row| row["numerator"] == json!(1) && row["denominator"] == json!(2)),
+        "a half-rate pair keeps the RATE and COUNT columns visible: {analytics}"
+    );
+
+    let mod_row = rendered
+        .lines()
+        .find(|line| line.contains("SECOND"))
+        .unwrap_or_else(|| {
+            panic!("terminal table marks the second mod path as absent:\n{rendered}")
+        });
+    assert!(
+        mod_row.contains("left_")
+            && mod_row.contains("right_")
+            && mod_row.matches("/mod.rs").count() == 2
+            && mod_row.contains(" <-> "),
+        "the even-width row keeps both shared-filename member identities: {mod_row}"
+    );
+
+    let design_row = rendered
+        .lines()
+        .find(|line| line.contains("design.md"))
+        .unwrap_or_else(|| panic!("terminal table keeps the design pair's filename:\n{rendered}"));
+    assert!(
+        design_row.contains("auto-tasks")
+            && design_row.contains("model-ran")
+            && design_row.contains(" <-> "),
+        "the even-width row keeps both design feature names: {design_row}"
+    );
+
+    assert!(
+        rendered
+            .lines()
+            .filter(|line| !line.trim().is_empty())
+            .all(|line| line.chars().count() <= 80),
+        "every rendered terminal line stays within 80 columns:\n{rendered}"
+    );
+}
+
 #[cfg(unix)]
 fn run_coupling_pair_analytics(
     first: &str,
@@ -428,15 +519,28 @@ fn run_coupling_pair_analytics(
     remove_first: bool,
     remove_second: bool,
 ) -> (String, String, String, serde_json::Value) {
+    run_coupling_pairs_analytics(&[(first, second, remove_first, remove_second)])
+}
+
+/// Each `(first, second, remove_first, remove_second)` tuple reserves one
+/// coupling pair; removals mark members absent at HEAD. Multiple pairs widen
+/// the `#` column once the table reaches 10 rows, which shrinks `PATHS` to an
+/// even width and exercises the odd pair budget.
+#[cfg(unix)]
+fn run_coupling_pairs_analytics(
+    pairs: &[(&str, &str, bool, bool)],
+) -> (String, String, String, serde_json::Value) {
     use std::io::Read as _;
     use std::os::fd::FromRawFd as _;
     use std::process::{Command, Stdio};
 
     let fixture = Fixture::new();
-    for path in [first, second] {
-        let file = fixture.repo.join(path);
-        fs::create_dir_all(file.parent().unwrap()).unwrap();
-        fs::write(file, "coupling fixture\n").unwrap();
+    for (first, second, _, _) in pairs {
+        for path in [first, second] {
+            let file = fixture.repo.join(path);
+            fs::create_dir_all(file.parent().unwrap()).unwrap();
+            fs::write(file, "coupling fixture\n").unwrap();
+        }
     }
 
     let shown = fixture.json(&["workspace", "show", "--format", "json"]);
@@ -450,31 +554,46 @@ fn run_coupling_pair_analytics(
         let runtime = OrbitRuntime::from_roots(&fixture.root, workspace_root)
             .unwrap()
             .with_actor(ActorIdentity::human("codebase-fixture"));
-        let task = runtime
-            .add_task(TaskAddParams {
-                title: "coupled paths".into(),
-                description: "codebase analytics fixture".into(),
-                context_files: vec![format!("file:{first}"), format!("file:{second}")],
-                status: Some(TaskStatus::Backlog),
-                ..Default::default()
-            })
+        for (index, (first, second, _, _)) in pairs.iter().enumerate() {
+            let task = runtime
+                .add_task(TaskAddParams {
+                    title: format!("coupled paths {index}"),
+                    description: "codebase analytics fixture".into(),
+                    context_files: vec![format!("file:{first}"), format!("file:{second}")],
+                    status: Some(TaskStatus::Backlog),
+                    ..Default::default()
+                })
+                .unwrap();
+            let id = task.id.to_string();
+            let reservation = orbit_core::runtime::task::locks::reserve(
+                &runtime,
+                json!({"task_ids": [id], "ttl_seconds": 600}),
+                None,
+                None,
+                None,
+            )
             .unwrap();
-        let id = task.id.to_string();
-        let reservation = orbit_core::runtime::task::locks::reserve(
-            &runtime,
-            json!({"task_ids": [id], "ttl_seconds": 600}),
-            None,
-            None,
-            None,
-        )
-        .unwrap();
-        assert_eq!(reservation["reserved"], true, "{reservation}");
+            assert_eq!(reservation["reserved"], true, "{reservation}");
+            // History keeps released rows, so release at once: later pairs
+            // may share a file without tripping the live lock.
+            let reservation_id = reservation["reservation_id"].as_str().unwrap().to_string();
+            let released = orbit_core::runtime::task::locks::release(
+                &runtime,
+                json!({ "reservation_id": reservation_id }),
+                None,
+                None,
+            )
+            .unwrap();
+            assert_eq!(released["released"], true, "{released}");
+        }
     }
-    if remove_first {
-        fs::remove_file(fixture.repo.join(first)).unwrap();
-    }
-    if remove_second {
-        fs::remove_file(fixture.repo.join(second)).unwrap();
+    for (first, second, remove_first, remove_second) in pairs {
+        if *remove_first {
+            fs::remove_file(fixture.repo.join(first)).unwrap();
+        }
+        if *remove_second {
+            fs::remove_file(fixture.repo.join(second)).unwrap();
+        }
     }
 
     let analytics = fixture.json(&[
