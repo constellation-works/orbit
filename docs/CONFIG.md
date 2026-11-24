@@ -1914,10 +1914,11 @@ return an optional `repair_evidence` object beside its typed decision, containin
 (up to 65536 characters) and `task_artifacts` (`[{path, source_path}]`, up to
 32 files, each at most 1 MiB). Sources must be regular files under the assigned
 worktree's `.orbit/tmp/`; names must be unique and cannot overwrite reserved
-artifacts, including `review-*`, `validation/` and `no-diff-handoff/`. The host
-validates the entire batch before writing its summary and artifacts to the
-admitted task. On a claimed run it sends the bytes through the authenticated
-owner route. The handoff accepts no task selector or lifecycle edits; invalid
+artifacts, including `review-*`, `validation/` and `no-diff-handoff/`. The
+handoff runs only for a decision with its required `fault` and `fault_evidence`:
+a resume without them escalates and writes nothing. The host validates the entire
+batch before writing its summary and artifacts to the admitted task. On a claimed
+run it sends the bytes through the authenticated owner route. The handoff accepts no task selector or lifecycle edits; invalid
 evidence refuses the decision and leaves the candidate for inspection. The
 blocked-task backstop excludes `resume` and does not accept this handoff.
 

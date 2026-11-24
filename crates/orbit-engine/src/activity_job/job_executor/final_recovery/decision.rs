@@ -53,11 +53,11 @@ pub(super) fn dispatch_final_recovery(
             .as_object_mut()
             .and_then(|object| object.remove("repair_evidence"))
         {
-            // Evidence has no task selector. Only a well-formed decision reaches
-            // the host's writer, using the engine's admitted task and worktree.
-            // The decision's fault fields ride beside it; parsing them is
-            // the caller's.
-            let decision = FinalRecoveryDecision::parse(&payload)
+            // Evidence has no task selector. Only a well-formed, fault-attributed
+            // decision reaches the host's writer, using the engine's admitted
+            // task and worktree. A resume without its fault must not replace the
+            // task's summary or attach artifacts before the escalation it earns.
+            let (decision, _fault) = FinalRecoveryDecision::parse_attributed(&payload)
                 .map_err(|error| format!("invalid final recovery decision: {error}"))?;
             if !matches!(decision, FinalRecoveryDecision::Resume { .. }) {
                 return Err("evidence handoff requires a repair resume decision".into());
