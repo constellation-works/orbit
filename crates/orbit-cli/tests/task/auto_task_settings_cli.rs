@@ -447,6 +447,109 @@ fn older_shipped_bodies_upgrade_with_settings_and_custom_bodies_stay_forked() {
     }
 }
 
+/// The kept copy an upgraded workspace holds after `orbit workspace sync`: an
+/// older release tracked `body`'s bytes, then sync released that provenance.
+fn released_kept_run_failure_copy(fixture: &Fixture, body: &str) -> PathBuf {
+    let path = kept_run_failure_copy(fixture);
+    fs::write(&path, body).unwrap();
+    set_manifest_digest(
+        path.parent().unwrap(),
+        RUN_FAILURE,
+        Some(sha256_hex(body.as_bytes())),
+    );
+    let sync = fixture.json(&["workspace", "sync", "--json"]);
+    assert_eq!(sync_outcome(&sync, RUN_FAILURE), "migrated");
+    path
+}
+
+#[test]
+fn kept_run_failure_settings_edit_after_sync_is_not_reported_stale() {
+    let fixture = Fixture::new();
+    let bundled = include_str!("../../../orbit-core/assets/auto_tasks/run-failure-patterns.yaml");
+    released_kept_run_failure_copy(&fixture, bundled);
+    // The operator edits only a setting, so the body still matches the bundle.
+    fixture.json(&[
+        "auto-task",
+        "update",
+        RUN_FAILURE,
+        "--crew",
+        "opus",
+        "--json",
+    ]);
+    // Sync cannot move a kept copy's settings, so doctor must not report them.
+    let row = auto_task_doctor_row(&fixture);
+    assert_eq!(row["status"], "ok", "{row}");
+}
+
+#[test]
+fn kept_run_failure_older_shipped_body_is_not_a_sync_remedy_before_or_after_sync() {
+    let fixture = Fixture::new();
+    let path = kept_run_failure_copy(&fixture);
+    let dir = path.parent().unwrap().to_path_buf();
+    // An older shipped body that omits the host-aware deduplication contract.
+    let older = include_str!("../fixtures/auto-task-body-history/run-failure-patterns.yaml");
+    fs::write(&path, older).unwrap();
+    set_manifest_digest(&dir, RUN_FAILURE, Some(sha256_hex(older.as_bytes())));
+
+    // Before sync the manifest still tracks these bytes.
+    assert_kept_run_failure_stale_contract_only(&auto_task_doctor_row(&fixture));
+
+    let sync = fixture.json(&["workspace", "sync", "--json"]);
+    assert_eq!(sync_outcome(&sync, RUN_FAILURE), "migrated");
+    // After sync the provenance is released and the file is left as it was.
+    assert_eq!(fs::read_to_string(&path).unwrap(), older);
+    assert_kept_run_failure_stale_contract_only(&auto_task_doctor_row(&fixture));
+}
+
+/// The older body is never a shipped default that sync upgrades, so the only
+/// finding is its stale contract, and its remedy is not `orbit workspace sync`.
+fn assert_kept_run_failure_stale_contract_only(row: &Value) {
+    assert_eq!(row["status"], "warning", "{row}");
+    let message = row["message"].as_str().unwrap();
+    let remediation = row["remediation"].as_str().unwrap();
+    assert!(!message.contains("stale shipped"), "{message}");
+    assert!(!message.contains("only in settings"), "{message}");
+    assert!(message.contains("Stale contract"), "{message}");
+    assert!(!remediation.contains("workspace sync"), "{remediation}");
+}
+
+#[test]
+fn unparsable_kept_run_failure_copy_is_faulty_without_a_collision_warning() {
+    let fixture = Fixture::new();
+    let path = kept_run_failure_copy(&fixture);
+    fs::write(&path, "name: run-failure-patterns\ntemplate: [unclosed\n").unwrap();
+    let row = auto_task_doctor_row(&fixture);
+    let message = row["message"].as_str().unwrap();
+    let remediation = row["remediation"].as_str().unwrap();
+    assert!(message.contains("faulty"), "{message}");
+    assert!(!message.contains("collides"), "{message}");
+    assert!(!remediation.contains("workspace sync"), "{remediation}");
+}
+
+#[test]
+fn kept_run_failure_body_fork_does_not_name_sync_as_its_remedy() {
+    let fixture = Fixture::new();
+    let bundled = include_str!("../../../orbit-core/assets/auto_tasks/run-failure-patterns.yaml");
+    // The bundled body carries the host-aware contract, so the fork's own remedy is what doctor reports.
+    let path = kept_run_failure_copy(&fixture);
+    let forked = bundled.replacen("title: ", "title: Operator body edit ", 1);
+    assert_ne!(forked, bundled);
+    fs::write(&path, &forked).unwrap();
+
+    let row = auto_task_doctor_row(&fixture);
+    let message = row["message"].as_str().unwrap();
+    assert!(
+        message.contains("`run-failure-patterns` is a body fork"),
+        "{message}"
+    );
+    let remediation = row["remediation"].as_str().unwrap();
+    assert!(
+        !remediation.contains("workspace sync"),
+        "a kept copy's body fork is not managed by sync: {remediation}"
+    );
+    assert_eq!(fs::read_to_string(&path).unwrap(), forked);
+}
+
 #[test]
 fn stale_run_failure_contract_holds_mint_and_adopt_preserves_customizations() {
     let fixture = Fixture::new();

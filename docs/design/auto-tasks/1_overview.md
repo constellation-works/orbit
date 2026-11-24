@@ -526,7 +526,9 @@ workspace-local definition: sync no longer refreshes it, `orbit auto-task show`
 reports its body as user-authored, and doctor does not report it as
 deprecated. Doctor checks a kept `run-failure-patterns` copy only against its
 bundled reference body: a stale contract or a body fork, never a stale shipped
-body that sync would upgrade. The demoted bodies stay in `body-history.json`.
+body that sync would upgrade, nor a settings-only difference that sync cannot
+move. Neither finding names `orbit workspace sync` as its remedy. The demoted
+bodies stay in `body-history.json`.
 
 ## Workspace-authored definitions in this repo
 
