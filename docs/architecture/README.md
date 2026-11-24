@@ -1,6 +1,7 @@
 ---
 type: context
 summary: Orbit code map: end-to-end data flow, store and federation, MCP and dashboard surfaces, crate dependency diagram and per-crate pages.
+last_validated: 2026-11-24
 tags: [architecture, code-map]
 ---
 

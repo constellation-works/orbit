@@ -1,6 +1,7 @@
 ---
 type: context
 summary: Architecture map for orbit-common: what it owns, main modules, dependencies and entry points.
+last_validated: 2026-11-24
 tags: [architecture, orbit-common]
 ---
 
@@ -17,7 +18,7 @@ tags: [architecture, orbit-common]
 ## Dependencies
 
 - Depends on (internal, production): `orbit-types`.
-- Depended on by: all except `orbit-types`.
+- Depended on by: all other workspace crates except `orbit-types`.
 
 Enforced by `scripts/check-dependency-direction.sh`; table in `ARCHITECTURE.md`.
 

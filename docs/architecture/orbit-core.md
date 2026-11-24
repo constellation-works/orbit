@@ -1,6 +1,7 @@
 ---
 type: context
 summary: Architecture map for orbit-core: what it owns, main modules, dependencies and entry points.
+last_validated: 2026-11-24
 tags: [architecture, orbit-core]
 ---
 
@@ -8,7 +9,7 @@ tags: [architecture, orbit-core]
 
 ## What it owns
 
-Composes the runtime. `OrbitRuntime` owns a `RuntimeKernel` and derefs to it. Internal graph `runtime ← application ← adapter`, `composition` joins config/bootstrap/runtime/adapters..
+Composes the runtime. `OrbitRuntime` owns a `RuntimeKernel` and derefs to it. Internal graph `runtime ← application ← adapter`, `composition` joins config/bootstrap/runtime/adapters.
 
 ## Layering
 
