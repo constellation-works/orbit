@@ -3,6 +3,7 @@
 //! starts, the run does not fail, and its task returns to the backlog for a
 //! later admission. `footprint_wait_seconds: 0` makes the wait expire on
 //! the first poll, so nothing here sleeps or depends on load.
+#![cfg(unix)]
 
 use chrono::Utc;
 use orbit_core::TaskStatus;

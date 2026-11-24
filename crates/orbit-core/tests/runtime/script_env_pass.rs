@@ -7,6 +7,7 @@
 //!
 //! The env cases run in a child process that holds the fixture variables,
 //! so no test mutates its own process environment.
+#![cfg(unix)]
 
 use std::path::{Path, PathBuf};
 use std::process::Command;

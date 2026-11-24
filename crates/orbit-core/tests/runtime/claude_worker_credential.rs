@@ -4,6 +4,7 @@
 //! With the credential in the drain's environment, the window is unchanged.
 //!
 //! macOS only: the requirement is the host's, and only macOS requires it.
+#![cfg(target_os = "macos")]
 
 use orbit_core::application::job::{JobRunListParams, SubmissionKind};
 use orbit_core::{CompletionPolicy, OrbitError, OrbitRuntime, ShipMode, WorkspacePullRequest};

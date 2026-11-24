@@ -3,6 +3,8 @@
 //! Regression for the moderate alerts silently omitted on 2026-10-06/07.
 //! Code scanning repairs whose rule the owner's installed CodeQL bundle lacks
 //! are held behind one bundle prerequisite (ORB-26147, ORB-26162).
+// The installed-CodeQL fixture is a POSIX shell script.
+#![cfg(unix)]
 
 use std::path::Path;
 

@@ -9,6 +9,7 @@
 //! written after the agent started [ORB-19338]. The compiled plans are pinned
 //! by the sandbox goldens; this checks the resolution through the public
 //! runtime API.
+#![cfg(any(target_os = "linux", target_os = "macos"))]
 
 use orbit_core::OrbitRuntime;
 use orbit_engine::RuntimeHost;

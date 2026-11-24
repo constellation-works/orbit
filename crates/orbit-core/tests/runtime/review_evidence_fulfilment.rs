@@ -10,6 +10,7 @@
 //! for a Linux `host_sandbox_test` the same way [ORB-14334]. The owner's
 //! validation PATH leads with a stand-in `cargo` that runs the candidate's
 //! `tests/host/<target>.sh`, so what a run proves is whatever that probe does.
+#![cfg(target_os = "linux")]
 
 use std::collections::HashMap;
 use std::os::unix::fs::PermissionsExt;
