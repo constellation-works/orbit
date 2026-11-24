@@ -61,7 +61,7 @@ Without `-s`, the object holds:
 - `worker_resource_limit`: present only when the resource watchdog recorded
   evidence for the run.
 
-The full MCP `orbit.workflow.run.show` / `orbit.workflow.run.observe` and
+The full MCP `orbit.run` tool's `show` and `observe` actions and
 HTTP run detail carry the same six pull-drain fields: `pull_claim`,
 `claimed_leaves`, `refused_settlements`, `crew_window`, `pull_occupancy` and
 `pull_breaker`. Unreadable sections are logged and remain null or empty;
