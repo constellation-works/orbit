@@ -463,10 +463,14 @@ fn uncommitted_path_bytes(workspace_path: &Path) -> Result<Vec<Vec<u8>>, orbit_c
         if entry.is_empty() {
             continue;
         }
-        let Some((&index_state, _worktree_state)) = entry.first().zip(entry.get(1)) else {
+        let Some((&index_state, &worktree_state)) = entry.first().zip(entry.get(1)) else {
             continue;
         };
-        let source = if matches!(index_state, b'R' | b'C') {
+        // A rename or copy record carries its source as the next NUL field whichever
+        // column reports it: an intent-to-add destination is reported as ` R` with
+        // only the worktree column set.
+        let renamed = matches!(index_state, b'R' | b'C') || matches!(worktree_state, b'R' | b'C');
+        let source = if renamed {
             fields.next().filter(|source| !source.is_empty())
         } else {
             None
