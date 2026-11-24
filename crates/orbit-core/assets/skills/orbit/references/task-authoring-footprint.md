@@ -155,6 +155,14 @@ If a change requires more surface, raise only the affected ceiling in this
 file as a reviewed decision and explain in the PR why the role needs the extra
 surface, as the file comment requires.
 
+Resident tool rights, control actions and descriptions are defined in the
+`orbit-common` crate's `src/governance/resident.rs`; include that source when a
+change modifies a resident right, a control action or a `tool_description`.
+Any MCP-visible change also affects the derived tool-list goldens in the
+`orbit-cli` crate: `tests/output_goldens/tool_list.json` and
+`tests/output_goldens/tool_list.plain.txt`. Include both and regenerate them
+with `make goldens`, never by hand.
+
 When the planned change establishes a new or renamed action, or a changed
 cross-module interface, follow it through the existing registration wiring
 it requires and declare the exact existing sites that source evidence shows
