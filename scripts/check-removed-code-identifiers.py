@@ -53,6 +53,8 @@ RUST_ITEM = re.compile(
     r"(?:const|static|fn|struct|enum|trait|type)[ \t]+(?:mut[ \t]+)?([A-Za-z_]\w*)",
     re.MULTILINE)
 PUB_USE = re.compile(r"\bpub(?:\([^)\n]*\))?[ \t]+use[ \t]+([^;]+);")
+RUST_RAW_STRING = re.compile(r'(?:br|r)(#*)"')
+RUST_QUOTED = re.compile(r'''"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\\n])' ''', re.DOTALL | re.VERBOSE)
 # CSS comments, quoted strings and `url(...)` tokens, which name no class even
 # in a selector (`a[href$=".pdf"]`), and selector preludes: the text before
 # each `{` since the last `;`, `{` or `}`. Declarations are never preludes.
@@ -184,12 +186,51 @@ def use_items(tree, prefix=""):
     return [(full, name)]
 
 
+def strip_rust_comments(text):
+    """Replace Rust comments with whitespace, preserving quoted literals."""
+    result = []
+    index = 0
+    while index < len(text):
+        raw = RUST_RAW_STRING.match(text, index) if text[index] in 'br' else None
+        if raw:
+            end_marker = '"' + raw.group(1)
+            end = text.find(end_marker, raw.end())
+            end = len(text) if end < 0 else end + len(end_marker)
+        elif text[index] in "\"'" and (quoted := RUST_QUOTED.match(text, index)):
+            end = quoted.end()
+        elif text.startswith('//', index):
+            end = text.find('\n', index)
+            end = len(text) if end < 0 else end
+            result.append(' ')
+            index = end
+            continue
+        elif text.startswith('/*', index):
+            end, depth = index + 2, 1
+            while end < len(text) and depth:
+                if text.startswith('/*', end):
+                    depth += 1
+                    end += 2
+                elif text.startswith('*/', end):
+                    depth -= 1
+                    end += 2
+                else:
+                    end += 1
+            result.append(' ')
+            index = end
+            continue
+        else:
+            end = index + 1
+        result.append(text[index:end])
+        index = end
+    return ''.join(result)
+
+
 def public_paths(path, text):
     module = module_of(path)
     if module is None:
         return set()
     return {f"{module}::{name}"
-            for match in PUB_USE.finditer(text)
+            for match in PUB_USE.finditer(strip_rust_comments(text))
             for _, name in use_items(match.group(1))}
 
 
