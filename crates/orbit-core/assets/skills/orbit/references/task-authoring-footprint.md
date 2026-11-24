@@ -161,7 +161,7 @@ change modifies a resident right, a control action or a `tool_description`.
 Any MCP-visible change also affects the derived tool-list goldens in the
 `orbit-cli` crate: `tests/output_goldens/tool_list.json` and
 `tests/output_goldens/tool_list.plain.txt`. Include both and regenerate them
-with `make goldens`, never by hand.
+with `make goldens UPDATE=1`, never by hand.
 
 When the planned change establishes a new or renamed action, or a changed
 cross-module interface, follow it through the existing registration wiring
