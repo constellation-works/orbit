@@ -150,6 +150,32 @@ class UnitTestRatchetTests(unittest.TestCase):
             "crates": {"alpha": {"test_function_paths": ["lib.rs::fixture"]}},
         })
 
+    def test_write_baseline_through_symlink_refuses_non_regular_referent(self):
+        self.write("crates/alpha/src/lib.rs", "#[test]\nfn fixture() {}\n")
+        referent = self.root / "physical.fifo"
+        os.mkfifo(referent)
+        link = self.root / "requested.json"
+        link.symlink_to(referent.name)
+
+        result = self.run_inventory("--write-baseline", str(link))
+
+        self.assertEqual(result.returncode, 2, result.stderr)
+        self.assertIn("cannot write baseline", result.stderr)
+        self.assertIn("is not a regular file", result.stderr)
+        self.assertNotIn("Traceback", result.stderr)
+        self.assertTrue(link.is_symlink())
+        self.assertEqual(os.readlink(link), referent.name)
+        self.assertTrue(referent.is_fifo())
+        self.assertEqual(list(self.root.glob(".physical.fifo.*")), [])
+        self.assertEqual(list(self.root.glob(".requested.json.*")), [])
+
+        direct = self.run_inventory("--write-baseline", str(referent))
+
+        self.assertEqual(direct.returncode, 2, direct.stderr)
+        self.assertIn("is not a regular file", direct.stderr)
+        self.assertTrue(referent.is_fifo())
+        self.assertEqual(list(self.root.glob(".physical.fifo.*")), [])
+
     def test_counts_inline_and_sibling_tests_per_crate(self):
         self.write("crates/alpha/src/lib.rs", (
             "#[cfg(test)]\nmod tests;\n"

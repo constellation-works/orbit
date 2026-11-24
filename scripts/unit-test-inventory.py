@@ -211,6 +211,9 @@ def main(argv=None):
             destination = args.write_baseline
             if destination.is_symlink():
                 destination = destination.resolve(strict=True)
+            # Resolution proves existence, not type: a FIFO or device would be replaced by os.replace (STD-03 §R29).
+            if destination.exists() and not destination.is_file():
+                raise OSError(f"{destination} is not a regular file")
             with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=destination.parent,
                                              prefix=f".{destination.name}.", delete=False) as stream:
                 temporary = Path(stream.name)
