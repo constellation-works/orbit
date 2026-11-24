@@ -380,24 +380,12 @@ mod macos {
     }
 
     fn process_uid(pid: libc::pid_t) -> Option<u32> {
-        let mut info = std::mem::MaybeUninit::<libc::proc_bsdinfo>::uninit();
-        let size = libc::c_int::try_from(std::mem::size_of::<libc::proc_bsdinfo>()).ok()?;
-        // SAFETY: `info` is writable for `size` bytes. The result is read only
-        // when the kernel reports a full `proc_bsdinfo`.
-        let written = unsafe {
-            libc::proc_pidinfo(
-                pid,
-                libc::PROC_PIDTBSDINFO,
-                0,
-                info.as_mut_ptr().cast(),
-                size,
-            )
-        };
-        if written != size {
-            return None;
-        }
-        // SAFETY: `proc_pidinfo` wrote exactly `size_of::<proc_bsdinfo>()` bytes.
-        Some(unsafe { info.assume_init() }.pbi_uid)
+        let pid = u32::try_from(pid).ok()?;
+        Some(
+            orbit_common::process::identity::darwin_bsd_info(pid, false)
+                .ok()??
+                .uid,
+        )
     }
 
     fn endpoints(ini: &InSockInfo) -> Option<(StdSocketAddr, StdSocketAddr)> {

@@ -263,7 +263,7 @@ fn linux_lstart_utc(pid: u32) -> io::Result<Option<String>> {
 #[cfg(target_os = "macos")]
 pub(crate) fn darwin_lstart_utc(pid: u32) -> Option<String> {
     let key = crate::process::ancestry::process_start_key(pid)?;
-    let seconds = i64::try_from(key.starttime >> 20).ok()?;
+    let seconds = i64::try_from(darwin_start_seconds(key.starttime)).ok()?;
     Some(format_lstart_utc(seconds))
 }
 
@@ -567,37 +567,82 @@ pub fn probe_process_stopped(pid: u32, pid_start_time: Option<&str>) -> bool {
     }
 }
 
-/// Native Darwin process state and process-group id.
-///
-/// `proc_pidinfo(PROC_PIDTBSDINFO)` is a syscall-backed libproc query, so the
-/// 50 ms cancellation poll never spawns `ps`. A failed query is inconclusive;
-/// callers retain `kill(..., 0)` as a conservative existence/permission probe.
+/// Fields returned by the macOS BSD process information query.
 #[cfg(target_os = "macos")]
-fn darwin_process_state(pid: u32) -> Option<(bool, libc::pid_t)> {
-    use std::mem::{MaybeUninit, size_of};
+#[derive(Debug, Clone, Copy)]
+pub struct DarwinBsdInfo {
+    /// Whether the process is a zombie.
+    pub is_zombie: bool,
+    /// Parent process ID.
+    pub ppid: u32,
+    /// Process group ID.
+    pub pgid: u32,
+    /// Effective user ID.
+    pub uid: u32,
+    /// Start time in seconds.
+    pub start_tvsec: u64,
+    /// Start time's microsecond component.
+    pub start_tvusec: u64,
+}
 
+/// Query BSD process information, optionally including zombie records.
+///
+/// Returns `None` when the process is gone and an error when it cannot be read.
+#[cfg(target_os = "macos")]
+pub fn darwin_bsd_info(pid: u32, include_zombies: bool) -> std::io::Result<Option<DarwinBsdInfo>> {
+    use std::mem::{MaybeUninit, size_of};
+    let pid = libc::pid_t::try_from(pid)
+        .map_err(|_| std::io::Error::from(std::io::ErrorKind::InvalidInput))?;
+    let expected = i32::try_from(size_of::<libc::proc_bsdinfo>())
+        .map_err(|_| std::io::Error::from(std::io::ErrorKind::InvalidInput))?;
     let mut info = MaybeUninit::<libc::proc_bsdinfo>::uninit();
-    let expected = i32::try_from(size_of::<libc::proc_bsdinfo>()).ok()?;
-    // Safety: `info` points to `expected` writable bytes and is initialized
-    // only when libproc reports that it filled the complete structure. The
-    // non-zero argument asks XNU's proc_info path to include zombie records;
-    // without it, proc_pidinfo returns no record once the process is zombified.
+    // Safety: errno is thread-local, and info has expected writable bytes.
+    // Read the structure only after libproc reports writing it completely.
     let written = unsafe {
+        *libc::__error() = 0;
         libc::proc_pidinfo(
-            pid as libc::pid_t,
+            pid,
             libc::PROC_PIDTBSDINFO,
-            1,
+            u64::from(include_zombies),
             info.as_mut_ptr().cast(),
             expected,
         )
     };
     if written != expected {
-        return None;
+        let error = std::io::Error::last_os_error();
+        return match error.raw_os_error() {
+            Some(libc::ESRCH | libc::ENOENT) => Ok(None),
+            _ => Err(error),
+        };
     }
-    // Safety: the full structure was written above.
+    // Safety: libproc reported a complete structure.
     let info = unsafe { info.assume_init() };
-    let process_group = libc::pid_t::try_from(info.pbi_pgid).ok()?;
-    Some((info.pbi_status == libc::SZOMB, process_group))
+    Ok(Some(DarwinBsdInfo {
+        is_zombie: info.pbi_status == libc::SZOMB,
+        ppid: info.pbi_ppid,
+        pgid: info.pbi_pgid,
+        uid: info.pbi_uid,
+        start_tvsec: info.pbi_start_tvsec,
+        start_tvusec: info.pbi_start_tvusec,
+    }))
+}
+
+#[cfg(target_os = "macos")]
+pub(crate) fn darwin_start_time(info: &DarwinBsdInfo) -> u64 {
+    (info.start_tvsec << 20) | info.start_tvusec.min((1 << 20) - 1)
+}
+
+#[cfg(target_os = "macos")]
+fn darwin_start_seconds(starttime: u64) -> u64 {
+    starttime >> 20
+}
+
+/// Native Darwin process state and process-group id. A failed query is
+/// inconclusive; callers retain `kill(..., 0)` as a conservative probe.
+#[cfg(target_os = "macos")]
+fn darwin_process_state(pid: u32) -> Option<(bool, libc::pid_t)> {
+    let info = darwin_bsd_info(pid, true).ok()??;
+    Some((info.is_zombie, libc::pid_t::try_from(info.pgid).ok()?))
 }
 
 /// Probe whether a process group contains at least one process that can still
