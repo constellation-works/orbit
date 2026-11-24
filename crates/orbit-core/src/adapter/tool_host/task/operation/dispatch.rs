@@ -6,6 +6,7 @@ use super::lifecycle::{block_triage, delete, lint, reject};
 use super::listing::{eligible, list};
 use super::show::show;
 use crate::OrbitRuntime;
+use crate::application::resident::ResidentActionTicket;
 use orbit_common::OrbitError;
 use orbit_common::governance::operation::OperationVerb;
 use orbit_common::governance::task::TaskVerb;
@@ -19,6 +20,7 @@ pub(in crate::adapter::tool_host) fn dispatch(
     caller: ToolCaller<'_>,
     operator: bool,
     resident_action_key: Option<&str>,
+    resident_ticket: Option<&ResidentActionTicket>,
     verb: TaskVerb,
     input: Value,
 ) -> Result<(Value, Option<String>), OrbitError> {
@@ -42,6 +44,7 @@ pub(in crate::adapter::tool_host) fn dispatch(
             caller,
             input.as_value(),
             operator,
+            resident_ticket,
         )),
         TaskVerb::ArtifactPut => Err(OrbitError::Execution(
             "artifact preparation dispatch invariant violated".into(),

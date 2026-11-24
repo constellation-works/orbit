@@ -22,7 +22,7 @@ use chrono::Utc;
 use orbit_common::governance::{operation::OperationVerb, task::TaskVerb};
 use orbit_common::protocol::tool_input::optional_csv_or_string_list_alias;
 use orbit_common::{NotFoundKind, OrbitError};
-use orbit_types::task::TaskHistoryEntry;
+use orbit_types::task::{NO_AUTO_APPROVE_TAG, NO_DRAIN_TAG, Task, TaskHistoryEntry, TaskStatus};
 use orbit_types::workflow::{
     RESIDENT_ACTION_EVENT, RESIDENT_CYCLE_JOB, ResidentActionPhase, ResidentActionRow,
     ResidentCycleGrant, ResidentRight,
@@ -45,6 +45,8 @@ pub(crate) enum ResidentCallClass {
     Open,
     /// A write that needs this right.
     Gated(ResidentRight),
+    /// A backlog move whose right depends on the task under its write lock.
+    PromoteTask,
     /// Moving a task to `done`: needs the `merge` right and no open pull
     /// request recorded for the task.
     CompleteTask,
@@ -70,6 +72,7 @@ pub(crate) struct ResidentActionTicket {
     ledger_runtime: Option<Box<OrbitRuntime>>,
     task_id: String,
     row: ResidentActionRow,
+    update_grant: Option<Box<ResidentCycleGrant>>,
 }
 
 impl std::fmt::Debug for ResidentActionTicket {
@@ -600,7 +603,9 @@ impl OrbitRuntime {
         // during a live cycle, including when it is subsequently shortened.
         if matches!(
             class,
-            ResidentCallClass::Gated(_) | ResidentCallClass::CompleteTask
+            ResidentCallClass::Gated(_)
+                | ResidentCallClass::PromoteTask
+                | ResidentCallClass::CompleteTask
         ) {
             let mandate = super::resident_mandate_from_artifact(self, &task_id)?
                 .map_err(OrbitError::InvalidInput)?;
@@ -625,6 +630,11 @@ impl OrbitRuntime {
                 ));
             }
             ResidentCallClass::Gated(right) => require_right(&grant, tool, right)?,
+            ResidentCallClass::PromoteTask => {
+                if !grant.rights.contains(&ResidentRight::PromoteHeld) {
+                    require_right(&grant, tool, ResidentRight::Promote)?;
+                }
+            }
             ResidentCallClass::CompleteTask => {
                 require_right(&grant, tool, ResidentRight::Merge)?;
                 self.refuse_done_with_open_pull_request(input)?;
@@ -637,6 +647,51 @@ impl OrbitRuntime {
             }
         }
         self.open_resident_action(&task_id, &grant, tool, input, &history, cross_workspace)
+    }
+
+    /// Check the resident's approval authority on the same locked snapshot
+    /// the update will write. Return the audit text for a held approval.
+    pub(crate) fn resident_task_update_audit(
+        &self,
+        ticket: &ResidentActionTicket,
+        task: &Task,
+        status: Option<TaskStatus>,
+        tags: Option<&[String]>,
+    ) -> Result<Option<String>, OrbitError> {
+        let grant = ticket.update_grant.as_deref().ok_or_else(|| {
+            OrbitError::Execution("resident task update is missing its admission grant".into())
+        })?;
+        let approval_tags = [NO_AUTO_APPROVE_TAG, NO_DRAIN_TAG];
+        let held = task.status == TaskStatus::Proposed
+            && task.tags.iter().any(|tag| tag == NO_AUTO_APPROVE_TAG);
+        if held
+            && (status == Some(TaskStatus::InProgress)
+                || tags.is_some_and(|tags| {
+                    approval_tags.iter().any(|tag| {
+                        task.tags.iter().any(|stored| stored == tag)
+                            && !tags.iter().any(|requested| requested.trim() == *tag)
+                    })
+                }))
+        {
+            return Err(refused(
+                "resident_held_promotion_refused",
+                "a held proposal requires approval before starting and keeps its approval opt-out",
+            ));
+        }
+        if status != Some(TaskStatus::Backlog) {
+            return Ok(None);
+        }
+        let tool = TaskVerb::Update.tool_name();
+        if !held {
+            require_right(grant, tool, ResidentRight::Promote)?;
+            return Ok(None);
+        }
+        require_right(grant, tool, ResidentRight::PromoteHeld)?;
+        let assessment = self.resident_promotion_assessment(task)?;
+        Ok(Some(format!(
+            "Approved after task-pilot assessment {assessment} using the `promote_held` grant for resident action {}.",
+            ticket.row.key,
+        )))
     }
 
     /// A task whose delivery has not landed is not done: refuse the move while
@@ -788,6 +843,7 @@ impl OrbitRuntime {
             ledger_runtime: cross_workspace.then(|| Box::new(self.clone())),
             task_id: task_id.to_string(),
             row,
+            update_grant: (tool == TaskVerb::Update.tool_name()).then(|| Box::new(grant.clone())),
         }))
     }
 
@@ -814,6 +870,7 @@ impl OrbitRuntime {
             ledger_runtime,
             task_id,
             mut row,
+            ..
         } = ticket;
         row.phase = match result {
             Ok(_) => ResidentActionPhase::Ok,

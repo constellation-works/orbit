@@ -105,11 +105,17 @@ friction between workspaces stays with the operator and the curation pass.
 | Right | What it permits in the mandate's own workspace |
 |---|---|
 | `dispatch` | Start a leaf run with `orbit.workflow` action `ship`; move work to `in-progress` |
-| `promote` | Move a `proposed` task to `backlog`; file tasks directly in `backlog` |
+| `promote` | Move an ordinary proposal to `backlog` or file a task directly in `backlog` |
+| `promote_held` | Move an eligible `no-auto-approve` proposal to `backlog` with `orbit.task.update` and `status: "backlog"` |
 | `merge` | Land a reviewed delivery with `orbit.workflow` action `land`; move a task with no open pull request to `done` |
 | `refresh` | Bring a held or review delivery pull request head up to its base branch with `orbit.workflow` action `refresh` and re-run required checks (conflict-free merge commit only; lands nothing) |
 | `recover` | Start a review-only recovery leaf with `orbit.task.recover` action `resume_delivery` in any covered workspace on this host |
 | (none yet) | `plugin_upgrade` maps to no tool yet; never improvise an install |
+
+Held promotion requires a bug, refactor or chore with a current task-pilot
+assessment free of holds and warnings. The `breaking-change`, `design` and
+`no-drain` tags exclude a proposal. Orbit records the assessment and the
+cycle's grant in a task comment when it approves the proposal.
 
 `orbit.attention` reads the runtime kinds (`run_failed`, `run_stuck`, `claim_stale`) and `host_unhealthy` for the covered workspaces while the cycle's grant is live; any other workspace still reports them as `capability` degraded.
 

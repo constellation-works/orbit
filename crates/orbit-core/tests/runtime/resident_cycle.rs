@@ -17,6 +17,7 @@ mod friction_update;
 mod landing;
 #[cfg(unix)]
 mod launch;
+mod promote_held;
 mod recover;
 mod refresh;
 mod wake_scope;

@@ -1534,6 +1534,7 @@ Tag a task `no-drain` when an interactive session owns it and no drain should pi
 
 - **Never admitted automatically.** `orbit run auto` drains, pull-drain followers and any automatic admission pass skip a backlog task carrying `no-drain`. `orbit run readiness` and the backlog-exclusion listing report it with reason `no_drain_tag`.
 - **Implies `no-auto-approve`.** Drain-window auto-approval (`select_proposed_approvals`) never approves a proposed `no-drain` task, even with a clean pilot assessment (held as `no-drain`). Task-pilot may still assess it.
+- **Outside resident held promotion.** The `promote_held` right applies to eligible `no-auto-approve` proposals. A `no-drain` proposal stays outside that right.
 - **Explicit dispatch still works.** `orbit run ship <id>` runs it, and an agent or human can claim it to `in-progress` and deliver it by hand.
 - **Removable.** Removing the tag with `orbit.task.update` (send the full tag list without `no-drain`) makes it eligible on the next admission pass.
 

@@ -93,7 +93,8 @@ the history is already the task's append-only audit trail. Folded, it reads:
 }
 ```
 
-Rights: `dispatch`, `promote`, `merge`, `plugin_upgrade`, `refresh`, `recover`. Unknown rights are refused, not ignored.
+Rights include `dispatch`, `promote`, `merge`, `plugin_upgrade`, `refresh`,
+`recover` and `promote_held`. Unknown rights are refused.
 Releases, tags, publishing, host changes, config edits and secrets are not rights; they are not
 grantable to a resident in v1.
 
@@ -103,11 +104,19 @@ grantable to a resident in v1.
 |---|---|
 | none | read tools, `orbit.workflow` action `auto` with `mode: "status"` (drain readiness read); `orbit.task.add` filed `proposed` (or with no status); `orbit.task.update` without a status (edits, comments); `orbit.task.artifact` action `put`; `orbit.friction` action `add` (own workspace only) and `update` (without `rehome_to` or `move`, in any covered workspace); `orbit.evolution.add`; `orbit.decision` action `raise`; `orbit.notice.post`; `orbit.notice.close` for notices posted by the mandate's own cycles in its own workspace; and `orbit.resident.checkpoint`, including the `handoff` outcome that has finalize move the assignment to `review` |
 | `dispatch` | `orbit.pipeline.invoke`, `orbit.run.auto`/`ship`/`resume`, `orbit.task.recover` action `requeue`/`repilot`, drain pull and claim bind/settle, `orbit.task.update` to `in-progress` |
-| `promote` | `orbit.task.update` to `backlog`, `orbit.task.add` filed `backlog` |
+| `promote` | `orbit.task.update` to `backlog` for ordinary proposals and other backlog moves, `orbit.task.add` filed `backlog` |
+| `promote_held` | `orbit.task.update` to `backlog` for eligible `no-auto-approve` proposals with a current clean pilot |
 | `merge` | `orbit.workflow` action `land`, `orbit.task.update` to `done` (refused while the task has an open pull request) |
 | `plugin_upgrade` | none yet: no builtin tool installs or upgrades a plugin |
 | `refresh` | `orbit.workflow` action `refresh` (conflict-free base-branch merge commit into a held or review delivery pull request head, starting its required checks; lands nothing) |
 | `recover` | `orbit.task.recover` action `resume_delivery` (start a review-only source repair for a stopped failed or held delivery) |
+
+A held proposal must be a bug, refactor or chore with a current pilot
+assessment free of holds and warnings. The `breaking-change`, `design` and
+`no-drain` tags exclude it. A resident cannot remove the opt-out or take
+the proposal directly to `in-progress`. The approval and its comment
+commit together, with the pilot assessment ID and the action key that
+identifies the cycle grant.
 
 The mapping lives in core's tool host beside the dispatch table (`resident_guard`), and core's cycle
 guard applies it to every builtin tool call a `resident_cycle_pipeline` run makes; the run is

@@ -24,6 +24,7 @@ use orbit_types::workflow::RESIDENT_MANDATE_ARTIFACT;
 use serde_json::{Map, Value};
 
 use crate::OrbitRuntime;
+use crate::application::resident::ResidentActionTicket;
 use crate::application::task::{
     ContextCreationAuthorization, ScreenedTaskWrite, TaskAddParams, TaskFieldProjection,
     TaskUpdateAuthority, TaskUpdateParams, TaskWriteResponsePolicy, TaskWriteScreen,
@@ -210,6 +211,51 @@ fn creation_status(value: &str) -> Result<TaskStatus, OrbitError> {
 }
 
 pub(super) fn update(
+    runtime: &OrbitRuntime,
+    caller: ToolCaller<'_>,
+    input: &Value,
+    operator: bool,
+    resident_ticket: Option<&ResidentActionTicket>,
+) -> Result<TaskWriteOutput, OrbitError> {
+    let status = input.get("status").and_then(Value::as_str).map(str::trim);
+    if let Some(ticket) = resident_ticket
+        && (matches!(status, Some("backlog" | "in-progress"))
+            || (status.is_none() && input.get("tags").is_some()))
+    {
+        let id = required_string(input, &["id"], "id")?;
+        let status = optional_string(input, "status")?
+            .map(|value| parse_task_status("status", &value))
+            .transpose()?;
+        let tags = optional_csv_or_string_list_alias(input, &["tags"])?;
+        return runtime.with_task_write_locked(&id, || {
+            let current = runtime.get_task(&id)?;
+            let audit =
+                runtime.resident_task_update_audit(ticket, &current, status, tags.as_deref())?;
+            if let Some(audit) = audit {
+                reject_fields_for_approval_transition(input)?;
+                let response_fields = write_response_fields(input)?;
+                let comment = match optional_string(input, "comment")? {
+                    Some(comment) => format!("{comment}\n\n{audit}"),
+                    None => audit,
+                };
+                // The locked audit already established that this proposal
+                // has a clean pilot. Approval needs no advisory read.
+                let task = runtime.transition_task_to_backlog_with_identity(
+                    &id,
+                    optional_string(input, "note")?,
+                    Some(comment),
+                    caller.agent,
+                    caller.model,
+                )?;
+                return screened_write_response(runtime, task.into(), response_fields.as_ref());
+            }
+            update_tool_task(runtime, caller, input, operator)
+        });
+    }
+    update_tool_task(runtime, caller, input, operator)
+}
+
+fn update_tool_task(
     runtime: &OrbitRuntime,
     caller: ToolCaller<'_>,
     input: &Value,

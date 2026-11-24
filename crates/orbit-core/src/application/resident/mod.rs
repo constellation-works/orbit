@@ -57,7 +57,8 @@ pub use grant::{
 };
 pub use guard::take_failed_resident_action_key;
 pub(crate) use guard::{
-    ResidentCallAdmission, ResidentCallClass, clear_failed_resident_action_key,
+    ResidentActionTicket, ResidentCallAdmission, ResidentCallClass,
+    clear_failed_resident_action_key,
 };
 pub(in crate::application) use routine_status_port::ResidentRoutineStatusPort;
 pub use steps::{RESIDENT_CYCLE_LEASE_MINUTES, resident_cycle_id};
