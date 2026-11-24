@@ -55,6 +55,19 @@ fn a_head_without_any_required_check_run_is_retriggered_once_then_held() {
                     assert!(message.contains("#42"), "{message}");
                     assert!(message.contains(&fx.candidate), "{message}");
                     assert!(message.contains("Next step"), "{message}");
+                    assert!(
+                        message.contains("or its audited clean base refresh"),
+                        "{message}"
+                    );
+                    assert!(message.contains("has no blockers and either"), "{message}");
+                    assert!(
+                        message.contains("pending or passed required check"),
+                        "{message}"
+                    );
+                    assert!(
+                        message.contains("confirms that no checks are required"),
+                        "{message}"
+                    );
                 }
                 other => panic!("expected the absent-check-run hold, got {other}"),
             }

@@ -47,7 +47,9 @@ pub(super) const HELD_BACKOFF_BASE: Duration = Duration::from_secs(300);
 /// [`DeliveryRefusal::CheckRunsAbsent`] is in this set [ORB-24457]. The
 /// auto-fix pass still withholds the hand-back, without spending the
 /// ceiling, while the published head, or a head produced by an Orbit-audited
-/// clean base refresh of it, reports no pending or passed required check.
+/// clean base refresh of it, reports no pending or passed required check and
+/// the forge has not positively confirmed that no checks are required. A
+/// blocker is handled through the repair ledger instead.
 pub(crate) fn handed_back_hold(refusal: DeliveryRefusal) -> bool {
     match refusal {
         DeliveryRefusal::CheckEvidenceInconclusive

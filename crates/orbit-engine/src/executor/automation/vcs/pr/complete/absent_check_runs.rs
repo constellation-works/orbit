@@ -165,8 +165,10 @@ impl AbsentCheckRuns {
                 "pr_complete: pull request #{pr} head {head} has no workflow run and no run of \
                  any required check {waited}s after its one check re-trigger{outcome}{missing}; \
                  the head is unchanged, no repair was spent and the task stays in review. Next \
-                 step: an auto-fix pass hands the task back once head {head} reports a required \
-                 check run. If none appear, confirm the forge runs workflows for this \
+                 step: an auto-fix pass can hand the task back when the published head {head}, \
+                 or its audited clean base refresh, has no blockers and either reports a \
+                 pending or passed required check or the forge confirms that no checks are required. \
+                 If checks are required but none appear, confirm the forge runs workflows for this \
                  repository, then start the required checks on that head by hand or push a new \
                  head",
                 pr = poll.pr_number,
