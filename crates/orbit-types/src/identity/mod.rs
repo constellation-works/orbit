@@ -37,9 +37,9 @@ pub use human_crew::{
 };
 pub use id::OrbitId;
 pub use machine::{
-    LEGACY_TASK_PREFIX, MACHINE_ID_PREFIX, REGISTRY_IDENTIFIER_MAX_BYTES, validate_machine_id,
-    validate_machine_name, validate_new_task_prefix, validate_registry_identifier,
-    validate_stored_task_prefix,
+    AcknowledgedHost, HostOffline, LEGACY_TASK_PREFIX, MACHINE_ID_PREFIX,
+    REGISTRY_IDENTIFIER_MAX_BYTES, validate_machine_id, validate_machine_name,
+    validate_new_task_prefix, validate_registry_identifier, validate_stored_task_prefix,
 };
 pub use workspace::{
     WORKSPACE_ID_PREFIX, canonicalize_workspace_id, validate_workspace_id,

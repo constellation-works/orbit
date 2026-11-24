@@ -2,7 +2,8 @@
 //!
 //! Joins the Registry's host file to the federated MCP probe. Each entry
 //! caches only what never changes on a host (`machine_id`, `task_prefix`) plus
-//! the operator's name and SSH target; reachability, version, protocol and
+//! the operator's name, SSH target and optional offline acknowledgement.
+//! Reachability, version, protocol and
 //! workspaces are read live from the host whenever a command asks, and never
 //! written back. The local workspace projection reuses unchanged registry bytes
 //! and machine validation context in one bounded process-local slot; every read
@@ -25,7 +26,9 @@ use serde::Serialize;
 pub use dependents::dependents_of;
 pub use doctor::doctor_hosts_row;
 pub use list::{list_hosts, list_registered_hosts, show_host, show_registered_host};
-pub use mutate::{HostChange, HostChangeEntry, add_host, remove_host, rename_host};
+pub use mutate::{
+    HostChange, HostChangeEntry, add_host, remove_host, rename_host, set_host_offline,
+};
 pub use probe::local_host_facts;
 pub use route::{
     HostWorkspaceRoute, TaskIdRoute, host_ssh_target, local_mirror_workspace, pull_selector,
@@ -55,6 +58,9 @@ pub struct HostRow {
     pub legacy: bool,
     /// Whether the live probe answered; `None` when no probe ran.
     pub reachable: Option<bool>,
+    /// The active offline acknowledgement, if any.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub offline: Option<orbit_types::identity::HostOffline>,
     /// Why the live probe produced no facts for this host.
     pub error: Option<HostProbeError>,
     pub binary_version: Option<String>,

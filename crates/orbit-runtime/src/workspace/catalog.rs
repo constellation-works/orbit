@@ -69,6 +69,12 @@ pub struct FederatedWorkspaceTarget {
     pub repo_root: PathBuf,
 }
 
+/// A registered peer and its stored offline mark, read without a probe.
+pub struct RegisteredAttentionHost {
+    pub host: orbit_types::tool::AttentionHost,
+    pub offline: Option<orbit_types::identity::HostOffline>,
+}
+
 /// Resolves a [`WorkspaceScope`] and opens runtimes for what it covers.
 ///
 /// Two methods rather than one `Vec<(target, runtime)>` so that a single
@@ -78,9 +84,7 @@ pub struct FederatedWorkspaceTarget {
 pub trait WorkspaceCatalog: Send + Sync {
     /// Registered remote identities used to validate a local attention host filter.
     /// The local host is supplied by the runtime; no network probe is performed.
-    fn attention_registered_hosts(
-        &self,
-    ) -> Result<Vec<orbit_types::tool::AttentionHost>, OrbitError> {
+    fn attention_registered_hosts(&self) -> Result<Vec<RegisteredAttentionHost>, OrbitError> {
         Ok(Vec::new())
     }
 

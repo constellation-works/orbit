@@ -1,4 +1,33 @@
 use super::IdentityError;
+use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
+
+/// An operator's acknowledgement that a registered host is deliberately offline.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HostOffline {
+    pub reason: String,
+    pub set_by: String,
+    pub since: DateTime<Utc>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub until: Option<DateTime<Utc>>,
+}
+
+impl HostOffline {
+    /// A mark expires at its deadline, without a write to the host file.
+    pub fn active_at(&self, now: DateTime<Utc>) -> bool {
+        self.until.is_none_or(|until| now < until)
+    }
+}
+
+/// One active offline acknowledgement in a host-health report.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AcknowledgedHost {
+    pub machine_id: String,
+    pub name: String,
+    #[serde(flatten)]
+    pub offline: HostOffline,
+}
 
 /// Maximum encoded length for a stable registry identifier.
 pub const REGISTRY_IDENTIFIER_MAX_BYTES: usize = 128;

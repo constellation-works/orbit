@@ -12,6 +12,7 @@ use orbit_common::governance::attention::{
     filter::{AttentionFilter, attention_strings},
     page::{AttentionPageCursor, AttentionPageInput, attention_order, attention_public_page},
 };
+use orbit_types::identity::AcknowledgedHost;
 use orbit_types::tool::{
     AttentionCounts, AttentionCursor, AttentionCursorStatus, AttentionDegraded, AttentionEnvelope,
     AttentionHost, AttentionKind, AttentionWorkspace, McpCapability, ToolSessionContext,
@@ -99,12 +100,14 @@ pub(crate) fn attention_query(
         .map(|catalog| catalog.attention_registered_hosts())
         .transpose()?
         .unwrap_or_default();
+    let matches_host = |selector: &str, host: &AttentionHost| {
+        selector == host.machine_id || selector.eq_ignore_ascii_case(&host.name)
+    };
     for selector in &hosts {
-        if selector != &host.machine_id
-            && selector != &host.name
+        if !matches_host(selector, &host)
             && !known_hosts
                 .iter()
-                .any(|host| selector == &host.name || selector == &host.machine_id)
+                .any(|peer| matches_host(selector, &peer.host))
         {
             return Err(OrbitError::InvalidInput(format!(
                 "unknown_host: {selector}; this local attention scope serves {} ({})",
@@ -147,6 +150,23 @@ pub(crate) fn attention_query(
     let mut items = Vec::new();
     let mut degraded = Vec::new();
     let now = Utc::now();
+    let acknowledged = known_hosts
+        .into_iter()
+        .filter(|peer| {
+            hosts.is_empty()
+                || hosts
+                    .iter()
+                    .any(|selector| matches_host(selector, &peer.host))
+        })
+        .filter_map(|peer| {
+            let offline = peer.offline.filter(|offline| offline.active_at(now))?;
+            Some(AcknowledgedHost {
+                machine_id: peer.host.machine_id,
+                name: peer.host.name,
+                offline,
+            })
+        })
+        .collect::<Vec<_>>();
     let mut source_costs = BTreeMap::new();
     let mut matching_before_cap = 0usize;
     let mut capped = false;
@@ -173,12 +193,15 @@ pub(crate) fn attention_query(
     // and return an empty page. The caller then read that as all-clear
     // [ORB-23333]. This process still cannot answer for another host; it says
     // which hosts it did not read.
-    let names_local_host = hosts
-        .iter()
-        .any(|selector| selector == &host.name || selector == &host.machine_id);
+    let names_local_host = hosts.iter().any(|selector| matches_host(selector, &host));
     let foreign_hosts = hosts
         .iter()
-        .filter(|selector| *selector != &host.name && *selector != &host.machine_id)
+        .filter(|selector| !matches_host(selector, &host))
+        .filter(|selector| {
+            !acknowledged.iter().any(|peer| {
+                **selector == peer.machine_id || selector.eq_ignore_ascii_case(&peer.name)
+            })
+        })
         .cloned()
         .collect::<Vec<_>>();
     let targets = if !hosts.is_empty() && !names_local_host {
@@ -334,6 +357,7 @@ pub(crate) fn attention_query(
     // Host health is one host-level answer: the session is told it was
     // withheld whenever any selected workspace could not read it.
     if filter.selected(AttentionKind::HostUnhealthy)
+        && (hosts.is_empty() || names_local_host)
         && !operator
         && (host_health_withheld || workspaces.is_empty())
     {
@@ -358,6 +382,7 @@ pub(crate) fn attention_query(
                 items,
                 degraded,
                 hosts: Vec::new(),
+                acknowledged,
             },
             AttentionPageCursor {
                 since: filter.input["since"].as_str(),
@@ -410,6 +435,7 @@ fn attention_candidate_envelope(
         message: format!("{} candidate items", items.len()),
         items,
         hosts: Vec::new(),
+        acknowledged: Vec::new(),
         degraded,
     }
 }

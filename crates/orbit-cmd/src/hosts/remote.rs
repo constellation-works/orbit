@@ -20,6 +20,11 @@ pub(super) fn remote_row(target: &HostEntry, caller_machine_id: &str, probe: boo
         local: false,
         legacy: false,
         reachable: None,
+        offline: target
+            .offline
+            .as_ref()
+            .filter(|mark| mark.active_at(chrono::Utc::now()))
+            .cloned(),
         error: None,
         binary_version: None,
         protocol_fingerprint: None,
@@ -48,6 +53,9 @@ pub(super) fn remote_row(target: &HostEntry, caller_machine_id: &str, probe: boo
                 .iter()
                 .map(|workspace| remote_workspace(workspace, &target.machine_id))
                 .collect();
+        }
+        Err(OrbitError::UnreachableDestination(_)) if row.offline.is_some() => {
+            row.reachable = Some(false);
         }
         Err(error) => {
             // An identity mismatch did answer; it is listed as reachable, but

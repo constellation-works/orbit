@@ -8,18 +8,19 @@
 //! local-only read. The hop carries `all: true` or the workspaces that
 //! destination itself lists, the item filters and `candidate_read: true`,
 //! never `since` or `limit`. Each destination reports only what it is
-//! authoritative for. A destination that cannot be read, and an owner of an
-//! in-scope workspace who was not a destination of this read, becomes a
-//! `degraded` entry, never a shorter all-clear list. Ordering, the cursor
+//! authoritative for. Active offline marks skip the destination before any
+//! hop and produce acknowledgements. Other unread destinations and owners
+//! of in-scope workspaces produce `degraded` entries. Ordering, the cursor
 //! and the public limit then run once, here. Nothing is written and nothing
 //! is cached between calls.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::{Arc, mpsc};
 use std::time::{Duration, Instant};
 
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use orbit_common::governance::attention::{
     ATTENTION_AGGREGATOR_CLIENT, attention_candidate_read_refusal, attention_wait_grant_refusal,
     cursor,
@@ -27,6 +28,8 @@ use orbit_common::governance::attention::{
     page::{AttentionPageCursor, AttentionPageInput, attention_public_page},
 };
 use orbit_common::{OrbitError, RemoteToolCode};
+use orbit_registry::hosts::load_host_registry;
+use orbit_types::identity::AcknowledgedHost;
 use orbit_types::tool::{
     AttentionDegraded, AttentionEnvelope, AttentionHost, AttentionHostStatus, AttentionItem,
     AttentionKind, AttentionNext, AttentionSeverity, AttentionWorkspace, ToolSessionContext,
@@ -61,6 +64,8 @@ pub struct AttentionFanout {
     pub budget: Duration,
     /// Registered host names by `machine_id`, for attribution and `--host`.
     pub host_names: BTreeMap<String, String>,
+    /// The accepting machine's host registry, reread for each attention call.
+    pub host_registry_root: Option<PathBuf>,
 }
 
 impl Default for AttentionFanout {
@@ -68,6 +73,7 @@ impl Default for AttentionFanout {
         Self {
             budget: Duration::from_secs(ATTENTION_FANOUT_BUDGET_SECONDS),
             host_names: BTreeMap::new(),
+            host_registry_root: None,
         }
     }
 }
@@ -117,13 +123,26 @@ impl FederatedMcpHost {
         let named_scope = input.get("all") == Some(&Value::Bool(true))
             || !attention_strings(input, "host").is_empty()
             || !attention_strings(input, "workspace").is_empty();
-        let session_routes_one_host = !named_scope
-            && session_context
-                .workspace
-                .as_deref()
-                .is_some_and(qualified_selector);
-        if session_routes_one_host {
-            return None;
+        let bound = session_context
+            .workspace
+            .as_deref()
+            .filter(|_| !named_scope)
+            .and_then(|selector| MachineQualifiedSelector::from_str(selector.trim()).ok());
+        let now = Utc::now();
+        let offline = match self.attention_fanout().acknowledged_hosts(now) {
+            Ok(offline) => offline,
+            Err(error) => return Some(Err(error)),
+        };
+        if let Some(bound) = bound {
+            if !offline.contains_key(bound.machine_id()) {
+                return None;
+            }
+            let mut input = input.clone();
+            if let Some(object) = input.as_object_mut() {
+                object.insert("host".into(), json!(bound.machine_id()));
+                object.insert("workspace".into(), json!(session_context.workspace));
+            }
+            return Some(self.fan_out_attention(&input, session_context, now, offline));
         }
         // A grant is minted by one host's own session. A fan-out hop would carry
         // it to every destination, where it is refused, and that refusal would
@@ -131,18 +150,28 @@ impl FederatedMcpHost {
         if input.get("wait_grant").and_then(Value::as_bool) == Some(true) {
             return Some(Err(attention_wait_grant_refusal()));
         }
-        Some(self.fan_out_attention(input, session_context))
+        Some(self.fan_out_attention(input, session_context, now, offline))
     }
 
     fn fan_out_attention(
         &self,
         input: &Value,
         session_context: &ToolSessionContext,
+        now: DateTime<Utc>,
+        offline: BTreeMap<String, AcknowledgedHost>,
     ) -> Result<Value, OrbitError> {
         let filter = AttentionFilter::parse(input.clone())?;
-        let now = Utc::now();
         let settings = self.attention_fanout();
-        let destinations = self.attention_destinations(&attention_strings(input, "host"))?;
+        let mut destinations = self.attention_destinations(&attention_strings(input, "host"))?;
+        let mut acknowledged = BTreeSet::new();
+        destinations.retain(|destination| {
+            let id = &destination.machine_id;
+            if destination.is_local() || !offline.contains_key(id) {
+                return true;
+            }
+            acknowledged.insert(id.clone());
+            false
+        });
         let selectors = attention_strings(input, "workspace");
         let mut hop = input.clone();
         if let Some(object) = hop.as_object_mut() {
@@ -192,7 +221,23 @@ impl FederatedMcpHost {
         let attempted = destinations
             .iter()
             .map(|destination| destination.machine_id.clone())
+            .chain(offline.keys().cloned())
             .collect::<BTreeSet<_>>();
+        let mut every_destination_answered = acknowledged.is_empty();
+        acknowledged.extend(
+            outcomes
+                .iter()
+                .filter_map(outcome_snapshot)
+                .flat_map(|snapshot| {
+                    snapshot
+                        .workspaces
+                        .iter()
+                        .filter(|workspace| caller_names_workspace(&selectors, workspace))
+                        .filter_map(|workspace| workspace.owner_machine_id.as_ref())
+                        .filter(|owner| offline.contains_key(*owner))
+                        .cloned()
+                }),
+        );
         let mut items = Vec::new();
         let mut degraded = Vec::new();
         let mut hosts = Vec::new();
@@ -200,7 +245,6 @@ impl FederatedMcpHost {
         let mut read_workspaces = Vec::new();
         let mut matched_selectors = BTreeSet::new();
         let mut noted_owners = BTreeSet::new();
-        let mut every_destination_answered = true;
         for (destination, outcome) in destinations.iter().zip(outcomes) {
             let host = AttentionHost {
                 machine_id: destination.machine_id.clone(),
@@ -361,6 +405,10 @@ impl FederatedMcpHost {
                 items,
                 degraded,
                 hosts,
+                acknowledged: acknowledged
+                    .iter()
+                    .filter_map(|id| offline.get(id).cloned())
+                    .collect(),
             },
             AttentionPageCursor {
                 since: input.get("since").and_then(Value::as_str),
@@ -413,6 +461,23 @@ impl FederatedMcpHost {
 }
 
 impl AttentionFanout {
+    fn acknowledged_hosts(
+        &self,
+        now: DateTime<Utc>,
+    ) -> Result<BTreeMap<String, AcknowledgedHost>, OrbitError> {
+        let Some(root) = self.host_registry_root.as_ref() else {
+            return Ok(BTreeMap::new());
+        };
+        let registry = load_host_registry(root)?;
+        Ok(registry
+            .hosts()
+            .entries()
+            .iter()
+            .filter_map(|host| host.acknowledged_offline(now))
+            .map(|host| (host.machine_id.clone(), host))
+            .collect())
+    }
+
     /// The registered name, else the name the destination reported, else
     /// its configured display identity.
     fn host_name(
@@ -586,10 +651,6 @@ fn outcome_snapshot(outcome: &HopOutcome) -> Option<&DestinationSnapshot> {
         }
         HopOutcome::Failed { snapshot, .. } => snapshot.as_ref(),
     }
-}
-
-fn qualified_selector(selector: &str) -> bool {
-    MachineQualifiedSelector::from_str(selector.trim()).is_ok()
 }
 
 /// The workspace echo for one checkout this read opened.

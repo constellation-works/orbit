@@ -115,6 +115,8 @@ impl Commands {
                     HostSubcommand::List(_) => ("list", None),
                     HostSubcommand::Show(args) => ("show", Some(args.host.as_str())),
                     HostSubcommand::Rename(args) => ("rename", Some(args.host.as_str())),
+                    HostSubcommand::Offline(args) => ("offline", Some(args.target.host.as_str())),
+                    HostSubcommand::Online(args) => ("online", Some(args.host.as_str())),
                     HostSubcommand::Remove(args) => ("remove", Some(args.host.as_str())),
                 };
                 CommandOperation::new(

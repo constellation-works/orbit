@@ -73,7 +73,7 @@ host_os = "macos" # optional; reported by the host during registration
 ### Invariants
 
 1. `schema_version` and each entry's `name`, `machine_id`, `ssh` and `task_prefix` are
-   required. The top-level `hosts` array and each entry's `host_os` are optional. Unknown
+   required. The top-level `hosts` array and each entry's `host_os` and `offline` are optional. Unknown
    keys and an unsupported `schema_version` fail the load and leave the file's bytes intact.
 2. `name` passes the `machine.name` validator. It is unique, compared case-insensitively,
    across all entries and the local `machine.name`.
@@ -93,6 +93,9 @@ host_os = "macos" # optional; reported by the host during registration
 8. Writes validate a clone, serialize canonically (entries sorted by `name`) and replace the
    file atomically. A refused mutation leaves the prior bytes. Hand edits are allowed and go
    through the same validation on load.
+9. An `offline` table records `reason`, `set_by` and `since`, with an optional `until`.
+   The mark expires when `until` is reached. Older Orbit builds refuse host files
+   containing this table. Clear the mark with `orbit host online` before downgrading.
 
 ## Identity probe
 
@@ -172,6 +175,10 @@ when the remote reports it; `--no-probe` uses the stored snapshot.
   have `reachable: null`; the local row stays `reachable: true`. A host that answers with
   another identity is reachable and carries `host_identity_mismatch` as its error.
   `error.message` does not repeat `error.code`.
+- With or without a probe, an active acknowledgement appears as `offline` in JSON
+  and as acknowledged offline with its reason in the table. A probe that confirms
+  the registered identity adds a responded indication. An unreachable probe on a
+  marked host carries no unreachable error.
 - Exit status is 0 when the file loads, whatever the hosts' reachability, because the
   command is a report. `orbit doctor` is the gate.
 
@@ -193,6 +200,27 @@ Refuses with `host_in_use` while a local replica checkout names the host as owne
 running `orbit run auto --pull` drain targets it. The error lists the dependents. `--force`
 removes the entry anyway and prints which dependents will lose their route. Removing the
 local host is `host_is_local`.
+
+### `orbit host offline <host> --reason <reason> [--until <timestamp>]`
+
+Acknowledges planned downtime for a registered remote host. The reason must be non-empty
+and on one line. The command records the OS login (or the local machine name when no login
+can be resolved) and the current time. Supply a future RFC 3339 timestamp to make the mark
+lapse automatically. Running the command again replaces the mark.
+
+`orbit host online <host>` clears the mark, including an expired one. If the mark is already
+clear, the command reports that and leaves the file alone. Both commands use the
+host's existing name or machine ID and write only the host file. The host keeps its SSH route,
+task prefix and other registered fields. Pull admission and lockstep still apply.
+
+Attention skips probing a marked host and reports it under `acknowledged`, once per read.
+`orbit doctor` and `orbit run readiness` also show the reason. Doctor can still detect that a
+marked host has responded, so the operator can clear the mark.
+
+Operators read the acknowledgement for the reason and deadline. Agents use it to recognize
+planned downtime. Each report adds at most one row per active mark and omits the field when
+there are no marks. A single outage contributes one row per poll (24 rows across 24 polls),
+with no history accumulated in the response.
 
 ## Dashboard
 

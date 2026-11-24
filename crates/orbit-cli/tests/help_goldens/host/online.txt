@@ -1,0 +1,18 @@
+Clear a registered host's offline acknowledgement
+
+Usage: orbit host online [OPTIONS] <HOST>
+
+Arguments:
+  <HOST>
+          Host name (case-insensitive) or machine_id
+
+Options:
+  -h, --help
+          Print help (see a summary with '-h')
+
+Global options (see 'orbit --help' for descriptions):
+  --root <ROOT>
+  --workspace <SELECTOR>
+  --format <MODE>
+  --json
+  --header

@@ -184,6 +184,7 @@ fn mux(fleet: &Fleet, budget: Duration) -> FederatedMcpHost {
     .with_attention_fanout(AttentionFanout {
         budget,
         host_names: BTreeMap::from([(OWNER_MACHINE.to_string(), "dk-server-2".to_string())]),
+        host_registry_root: None,
     })
 }
 
@@ -466,6 +467,7 @@ fn an_unread_owner_of_a_named_workspace_is_degraded() {
     .with_attention_fanout(AttentionFanout {
         budget: Duration::from_secs(20),
         host_names: BTreeMap::from([(OWNER_MACHINE.to_string(), "dk-server-2".to_string())]),
+        host_registry_root: None,
     });
     let response = attention(
         &mux,

@@ -83,6 +83,7 @@ fn local_row(global_root: &Path, identity: &MachineIdentity) -> HostRow {
         local: true,
         legacy: false,
         reachable: Some(true),
+        offline: None,
         error: None,
         binary_version: Some(local_binary_version().to_string()),
         protocol_fingerprint: Some(local_protocol_fingerprint().to_string()),

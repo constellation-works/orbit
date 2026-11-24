@@ -1,10 +1,12 @@
-//! `orbit host add|rename|remove` over the registered host entries.
+//! Host registry mutations.
 
 use std::path::Path;
 
+use chrono::{DateTime, Utc};
+use orbit_common::security::child_env::os_login_name;
 use orbit_common::{HostRegistryCode, OrbitError};
 use orbit_registry::hosts::{HostEntry, ResolvedHost, load_host_registry, validate_ssh_target};
-use orbit_types::identity::validate_machine_name;
+use orbit_types::identity::{HostOffline, validate_machine_name};
 use serde::Serialize;
 
 use super::probe::{LiveHost, probe_ssh};
@@ -13,7 +15,7 @@ use super::{HostDependents, HostRow, host_dependents, remote_row, require_local}
 /// What one `orbit host` mutation wrote.
 #[derive(Debug, Clone, Serialize)]
 pub struct HostChange {
-    /// `added`, `renamed` or `removed`.
+    /// `added`, `renamed`, `removed`, `offline`, `online` or `already_online`.
     pub action: &'static str,
     /// The entry as written, or as it was before removal.
     pub entry: HostChangeEntry,
@@ -38,6 +40,8 @@ pub struct HostChangeEntry {
     pub ssh: String,
     /// The registered task prefix, retained as optional for JSON compatibility.
     pub task_prefix: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub offline: Option<HostOffline>,
 }
 
 impl From<HostEntry> for HostChangeEntry {
@@ -47,6 +51,7 @@ impl From<HostEntry> for HostChangeEntry {
             machine_id: entry.machine_id,
             ssh: entry.ssh,
             task_prefix: Some(entry.task_prefix),
+            offline: entry.offline,
         }
     }
 }
@@ -121,6 +126,7 @@ pub fn add_host(
         ssh: ssh.to_string(),
         task_prefix,
         host_os: facts.host_os,
+        offline: None,
     };
     let mut entries = registry.hosts().entries().to_vec();
     entries.push(entry.clone());
@@ -136,6 +142,64 @@ pub fn add_host(
         host: Some(host),
         orphaned: None,
     })
+}
+
+/// Mark a registered remote host offline, or clear its mark when no reason is
+/// supplied. The write uses the same snapshot and lock as the other mutations.
+pub fn set_host_offline(
+    global_root: &Path,
+    selector: &str,
+    offline: Option<(&str, Option<&str>)>,
+) -> Result<HostChange, OrbitError> {
+    let registry = load_host_registry(global_root)?;
+    let local = require_local(&registry)?;
+    let ResolvedHost::Entry(target) = registry.resolve(selector)? else {
+        return Err(OrbitError::host_registry(
+            HostRegistryCode::HostIsLocal,
+            "choose a registered remote host from `orbit host list`",
+        ));
+    };
+    let mut entries = registry.hosts().entries().to_vec();
+    let Some(entry) = entries
+        .iter_mut()
+        .find(|entry| entry.machine_id == target.machine_id)
+    else {
+        return Err(vanished(&target.machine_id));
+    };
+    let already_online = offline.is_none() && entry.offline.is_none();
+    entry.offline = if let Some((reason, until)) = offline {
+        let until = until
+            .map(DateTime::parse_from_rfc3339)
+            .transpose()
+            .map_err(|error| {
+                OrbitError::InvalidInput(format!("--until requires an RFC 3339 timestamp: {error}"))
+            })?
+            .map(|until| until.with_timezone(&Utc));
+        Some(HostOffline {
+            reason: reason.trim().to_string(),
+            set_by: os_login_name().unwrap_or_else(|| local.name.clone()),
+            since: Utc::now(),
+            until,
+        })
+    } else {
+        None
+    };
+    let change = HostChange {
+        action: match (offline.is_some(), already_online) {
+            (true, _) => "offline",
+            (false, true) => "already_online",
+            (false, false) => "online",
+        },
+        entry: entry.clone().into(),
+        previous_name: None,
+        migrated: Vec::new(),
+        host: None,
+        orphaned: None,
+    };
+    if !already_online {
+        registry.commit(entries)?;
+    }
+    Ok(change)
 }
 
 /// Rename a remote entry. The local host's name is `machine.name`.

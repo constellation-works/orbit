@@ -866,6 +866,10 @@ live drain's restriction, if any. All three JSON responses include `replica`
 and `validation_env_warning` (null when no warning applies). CLI text prints
 that warning when present. Selection never reserves work or starts a drain.
 
+Readiness reports this machine's active `orbit host offline` marks under
+`acknowledged`, with one entry per host and its reason and optional deadline.
+This is an observation. Registered routes, lockstep and pull admission still apply.
+
 Every admission receipt captures the owner's
 `workflow.required_validation_commands` and `review.baseline_commands`, whether
 or not review is on. A claimed leaf validates against those captured gates,
