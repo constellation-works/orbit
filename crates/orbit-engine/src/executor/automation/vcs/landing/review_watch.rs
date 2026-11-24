@@ -108,6 +108,9 @@ pub(in crate::executor::automation) fn pr_checks_watch<H: RuntimeHost + ?Sized>(
                     remaining_ms.min(poll_interval_seconds.saturating_mul(1000)),
                 ));
                 if now_ms()? >= deadline_ms {
+                    if !in_review(host, &task_id)? {
+                        return Ok(ended(&task_id, &pr_number, "task_left_review"));
+                    }
                     return finish(host, &task_id, &pr_number, &unreadable(&pr_number));
                 }
                 continue;

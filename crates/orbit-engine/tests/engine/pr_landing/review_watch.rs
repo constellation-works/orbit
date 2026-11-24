@@ -258,6 +258,51 @@ fn a_transient_status_read_failure_through_the_deadline_holds_pending() {
     );
 }
 
+/// Leaving review in the final wait suppresses the held outage observation.
+#[test]
+fn leaving_review_during_the_final_outage_wait_does_not_record() {
+    isolated(
+        "review_watch::leaving_review_during_the_final_outage_wait_does_not_record",
+        |sandbox| {
+            let (fx, host) = fx_host(sandbox);
+            let host = std::rc::Rc::new(host);
+            fx.script_checks(&["success"]);
+            open_review_delivery(&fx, &host);
+            fx.script_status_failures(1_000_000, GRAPHQL_OUTAGE);
+            let before = host.history(TASK_ID);
+            let clock = std::rc::Rc::new(std::cell::Cell::new(1_000_000_u64));
+            let now = std::rc::Rc::clone(&clock);
+            let waited = std::rc::Rc::clone(&clock);
+            let wait_host = std::rc::Rc::clone(&host);
+            let mut input = watch_input(&fx, 60);
+            input["poll_interval_seconds"] = json!(600);
+            let watched = orbit_engine::test_support::with_prerequisite_clock(
+                move || now.get(),
+                |_, _| {},
+                || {
+                    orbit_engine::test_support::with_vcs_retry_wait(
+                        move |duration| {
+                            let millis = u64::try_from(duration.as_millis()).unwrap();
+                            if waited.get() + millis >= 1_060_000 {
+                                wait_host.set_status(TASK_ID, TaskStatus::Backlog);
+                            }
+                            waited.set(waited.get() + millis);
+                        },
+                        || action(&host, "pr_checks_watch", &input),
+                    )
+                },
+            )
+            .expect("the watch ends when the task leaves review");
+            assert_eq!(clock.get(), 1_060_000);
+            assert_eq!(host.status(TASK_ID), TaskStatus::Backlog);
+            assert_eq!(watched["ended"], "task_left_review", "{watched}");
+            assert_eq!(watched["recorded"], false, "{watched}");
+            assert_eq!(host.history(TASK_ID), before);
+            assert_no_mutation(&fx);
+        },
+    );
+}
+
 /// A permanent read failure is not an outage to wait out.
 #[test]
 fn a_permanent_status_read_failure_still_fails_promptly() {
