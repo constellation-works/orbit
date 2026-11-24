@@ -318,13 +318,22 @@ if [[ -z "$inputs" ]]; then
     note "cannot read the CodeQL version or build environment for the reuse key, so no earlier run is reused and no later run will reuse this one"
   fi
 elif [[ -z "$fresh" ]]; then
+  # Each --fresh run writes its own passing run, and scratch names are random,
+  # so several passing runs can share one key. Reuse the most recently
+  # completed one: inputs.sha256 is the last file a passing run writes.
+  reusable=
   for prior in "$scratch_root"/codeql-rust-local.??????; do
     [[ -f "$prior/inputs.sha256" && -s "$prior/results.sarif" && "$(<"$prior/inputs.sha256")" == "$inputs" ]] || continue
-    echo "codeql-rust-local: run directory: $prior" >&2
-    note "reusing the passing run in $prior: its sources, configuration, query, toolchain and CodeQL version match this invocation byte for byte, so nothing was extracted or queried; pass --fresh to run again"
-    echo "codeql-rust-local: analysis completed; inspect rule and affected locations in $prior/results.sarif"
-    exit 0
+    if [[ -z "$reusable" || "$prior/inputs.sha256" -nt "$reusable/inputs.sha256" ]]; then
+      reusable="$prior"
+    fi
   done
+  if [[ -n "$reusable" ]]; then
+    echo "codeql-rust-local: run directory: $reusable" >&2
+    note "reusing the passing run in $reusable: its sources, configuration, query, toolchain and CodeQL version match this invocation byte for byte, so nothing was extracted or queried; pass --fresh to run again"
+    echo "codeql-rust-local: analysis completed; inspect rule and affected locations in $reusable/results.sarif"
+    exit 0
+  fi
 fi
 
 run_dir="$(mktemp -d "$scratch_root/codeql-rust-local.XXXXXX")" || fail "cannot create run scratch for Rust $toolchain"
