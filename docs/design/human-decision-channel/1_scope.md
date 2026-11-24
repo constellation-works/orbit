@@ -1,11 +1,11 @@
 ---
 title: "Scope: human decision channel"
 owner: claude
-last_updated: 2026-11-07
-last_validated: 2026-11-07
-status: Draft
+last_updated: 2026-11-24
+last_validated: 2026-11-24
+status: Accepted
 stage: shipped
-next: "Review the plugin-raised decision design (ORB-22824), then file its slices"
+next: "File the plugin-raised request slices (2_design.md §12, designed in ORB-22824); none filed"
 feature: human-decision-channel
 doc_role: scope
 type: design
@@ -30,9 +30,9 @@ human update path (`update_task_as_human`,
 (`crates/orbit-common/src/governance/authorization/`), state and cron triggers
 (`crates/orbit-types/src/workflow/automation/members.rs`,
 [automation-triggers](../automation-triggers/3_vision.md)), and the plugin standard
-([plugins](../plugins/1_scope.md)). Anchors re-checked at `b32997c50` (2026-11-01). The two `authorization/` symbols in
+([plugins](../plugins/1_scope.md)). Anchors re-checked at `0444775f0` (2026-11-24). The two `authorization/` symbols in
 Shape are still `CallerProvenance` and `GOVERNED_OPERATIONS`; [2_design.md](./2_design.md)
-cites the other mechanisms. Line numbers that no longer sit on the symbol were dropped.
+cites the other mechanisms. Line numbers were dropped.
 
 ## Problem
 
@@ -52,7 +52,7 @@ written by a non-automation writer label through the human surfaces: the dashboa
 comment endpoint and the bare CLI, both funnelling into `update_task_as_human`
 (`operator_decision_authority: true`). Pilot admission's `operator_resolution`
 explicitly discards any resolution whose writer `is_automation_actor`
-(`crates/orbit-types/src/identity/actor.rs:308`). A plugin backend calling back into
+(`is_automation_actor` in `crates/orbit-types/src/identity/actor.rs`). A plugin backend calling back into
 Orbit tools is an automation actor with a plugin provenance; at the surveyed revision
 nothing in the plugin callback path
 (`crates/orbit-tools/src/plugin/callback/session.rs`) can stamp a human writer label.
@@ -106,7 +106,7 @@ entry and audit row carry the channel provenance (`via email`, request id, token
 fingerprint). The plugin never writes the task; it submits a *decision submission*
 to one governed core tool, and core either applies it as the human or refuses it.
 [2_design.md](./2_design.md) §3 shows the fit with `CallerProvenance`
-(`crates/orbit-common/src/governance/authorization/caller.rs:18`) and
+(`crates/orbit-common/src/governance/authorization/caller.rs`) and
 `GOVERNED_OPERATIONS` (`crates/orbit-common/src/governance/authorization/catalog/operations.rs`).
 
 ### Email transport (plugin)
@@ -215,14 +215,14 @@ Later extensions of the same record, also done: final-recovery `decide`
 ([ORB-20629]) and agent-raised questions on human-crew tasks ([ORB-20736]).
 
 Retired: model-answered decisions ([ORB-21089]) were removed with decision assistance in
-[ORB-22808]. Requests keep the per-answer risk tier and stored category that work
+[ORB-22808] (which removed the model service, model answers and `orbit decision assist`). Requests keep the per-answer risk tier and stored category that work
 added; nothing records `answered_by: model` or consults a model before notifying any more,
 and model answers already in task history still read. [2_design.md](./2_design.md) §11
 holds the channel changes; the archived
 [consumer spec](../_archived/decision-assistance/specs/precedent-decisions.md) holds the
 rest.
 
-Designed, not implemented: plugin-raised decision requests ([ORB-22824]), with scribe's
+Designed and approved at review, not implemented and no slice filed: plugin-raised decision requests ([ORB-22824]), with scribe's
 consistency proposals as the first consumer. A plugin raises a closed question on a task and names an apply tool from its own manifest; a
 human answers and core runs that tool once with the answer, never through precedent or
 the model, and only on the host that owns the task. [2_design.md](./2_design.md) §12
@@ -270,6 +270,7 @@ agent-raised requests on human-crew tasks. Slice [ORB-21242] is done.
 ## Task References
 
 - [ORB-22824] — designs plugin-raised decision requests with an apply callback (2_design.md §12)
+- [ORB-22808] — removed decision assistance, and with it model-answered decisions, in a config-surface reduction.
 - [ORB-21242] — resident-orchestrator slice 1: implements the `resident_authority` decision gate
 - [ORB-21097] — implements category enablement, self-answer and the notification wait for precedent decisions.
 - [ORB-21092] — implements model-answer provenance, the `model_answer_review` gate and veto.
