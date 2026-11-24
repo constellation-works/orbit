@@ -41,6 +41,32 @@ orbit host list --json
 
 Host arguments take an exact name (case-insensitive) or a `machine_id`.
 
+## Acknowledge planned downtime
+
+Mark a registered host offline while you perform planned maintenance:
+
+```bash
+orbit host offline \
+  --reason "Planned maintenance" \
+  owner
+```
+
+`--reason` is required. Add `--until <TIMESTAMP>` to expire the acknowledgement
+at an RFC 3339 timestamp; omit it when there is no scheduled end. The
+acknowledgement stays on the registered entry in `~/.orbit/hosts.toml`; the
+host remains registered. When maintenance ends, clear the acknowledgement:
+
+```bash
+orbit host online owner
+```
+
+While the acknowledgement is active, `orbit host list` shows one of two states
+in its `REACHABLE` column: `acknowledged offline`, or `acknowledged offline
+(responded)` when the probe succeeds. The table adds an `OFFLINE REASON` column.
+`orbit host show` includes the reason and, when set, the expiry time.
+`orbit run readiness` and `orbit attention` also report it as
+`<HOST> acknowledged offline: <REASON>`.
+
 ## Route a task by its prefix
 
 Suppose the registered owner mints IDs with the prefix `BOX`. From the other
