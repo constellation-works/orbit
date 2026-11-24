@@ -3,6 +3,7 @@
 //! granted read root, recorded with its source and SHA-256, and bound
 //! read-only at `in/<as>`; a missing or out-of-bounds input refuses the step
 //! naming it, and nothing runs.
+#![cfg(unix)]
 
 use std::path::{Path, PathBuf};
 

@@ -1,4 +1,5 @@
 //! Public API checks for exact task consent without operator capability.
+#![cfg(unix)]
 use chrono::{Duration, Utc};
 use orbit_core::adapter::command::ToolEntryPoint;
 use orbit_core::{OrbitRuntime, application::task::TaskAddParams};

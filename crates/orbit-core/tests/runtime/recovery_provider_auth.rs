@@ -1,4 +1,5 @@
 //! Recovery authentication through the public CLI runner, readiness and purpose draw.
+#![cfg(unix)]
 
 use chrono::{DateTime, Duration, Utc};
 use orbit_engine::{RuntimeHost, V2AuditWriter};

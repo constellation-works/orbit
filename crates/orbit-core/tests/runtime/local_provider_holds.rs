@@ -1,6 +1,7 @@
 //! Provider failures through the public worker and its real run finalizer.
 //! A scripted CLI makes capacity, usage limits and the negative control
 //! deterministic without consuming provider quota or relying on host load.
+#![cfg(unix)]
 
 use chrono::{Duration, Utc};
 use orbit_common::OrbitError;

@@ -1,4 +1,5 @@
 //! Completion refusals through the real provider adapter, worker and finalizer.
+#![cfg(unix)]
 
 use std::os::unix::fs::PermissionsExt;
 

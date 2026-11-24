@@ -3,6 +3,7 @@
 //! not inherit them from the caller, or resolution would follow the caller's
 //! configuration and create provider roots outside the fixture's own state.
 //! A fixture that wants an override sets it deliberately after this scrub.
+#![cfg(any(target_os = "linux", target_os = "macos"))]
 
 /// Every override the profile resolver consults for a provider root.
 pub(crate) const PROVIDER_ROOT_OVERRIDES: [&str; 6] = [

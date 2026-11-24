@@ -3,6 +3,7 @@
 //! real job executor with a scripted Muse CLI, so the refusal is recorded by
 //! the provider completion projection exactly as on a real follower, and the
 //! next claimed admission of the same automatic task reads it back.
+#![cfg(unix)]
 
 use chrono::{Duration, Utc};
 use orbit_common::OrbitError;

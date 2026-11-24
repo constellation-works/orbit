@@ -5,9 +5,11 @@
 //! outside Orbit, orphaned delivery adoption, plugin inspection, the sandbox
 //! opt-out, the agent sandbox mask and cold lexical search hydration.
 //!
-//! One integration-test binary per area keeps link cost down; add a module
-//! here rather than a new top-level `tests/*.rs` file
-//! (`docs/design-patterns/test_strategy.md`).
+//! One integration-test binary per area keeps link cost down. Every top-level
+//! file here (`<name>.rs`, or a `<name>/mod.rs` directory) is registered by
+//! `crates/orbit-core/build.rs`, so a new module needs no edit to this file. A
+//! new area still joins this binary rather than a new top-level `tests/*.rs`
+//! file (`docs/design-patterns/test_strategy.md`).
 
 // Integration fixtures unwrap setup invariants.
 #![allow(clippy::expect_used, clippy::unwrap_used)]
@@ -23,9 +25,6 @@ mod task_params_test_support;
 
 orbit_common::isolate_test_process!();
 
-mod scenarios;
-mod store_gc;
-
 /// Keep related permutations in one table with isolated fixture state.
 macro_rules! scenario_table {
     ($table:ident, $($row:ident),+ $(,)?) => {
@@ -39,181 +38,11 @@ macro_rules! scenario_table {
 }
 pub(crate) use scenario_table;
 
-mod actor_identity;
-mod admission_forecast;
-mod admitted_crew_write_back;
-#[cfg(any(target_os = "linux", target_os = "macos"))]
-mod agent_sandbox_mask;
-#[cfg(unix)]
-mod application_authority;
-mod artifact_tools;
-mod attention_observation;
-mod attention_provider;
-mod attention_wait;
-mod audit_commit_report;
-mod auto_task_job_steps;
-mod auto_task_update;
-mod backlog_resource_fit;
-mod backlog_review_modes;
-mod baseline_hold_refresh;
-mod baseline_hold_tick;
-mod baseline_red_repair;
-mod blocked_recheck;
-mod bundle_validation;
-mod cascade_outcomes;
-mod child_wait_audit;
-mod ci_retry_journal_wait;
-#[cfg(unix)]
-mod claimed_model_access;
-#[cfg(target_os = "macos")]
-mod claude_worker_credential;
-mod config_settings;
-mod crew_accounts;
-mod crew_memory;
-mod decision_channel;
-mod decision_precedent;
-mod decision_raise;
-mod decision_requested;
-mod default_catalog;
-#[cfg(unix)]
-mod delivery_holds;
-mod dispatch_admission;
-mod distributed_drain;
-mod drain_approval;
-mod drain_cancel;
-mod drain_crew_pools;
-mod drain_extend;
-mod drain_live_agents;
-mod escalation_triage_crews;
-mod experiment_lifecycle;
-mod experiment_readout;
-mod final_recovery;
-mod final_recovery_cards;
-mod final_recovery_mechanical;
-mod fixture_template;
-mod flaky_validation;
-#[cfg(unix)]
-mod footprint_hold;
-mod forecast_accuracy;
-mod forge_hold_resume;
-mod friction_stats_observation;
-mod git_protection;
-mod granted_mutation_proposals;
-mod granted_tools;
-mod granted_tools_window;
-mod held_child_guard;
-#[cfg(unix)]
-mod local_provider_holds;
-#[cfg(target_os = "linux")]
-mod muse_state_grant;
-mod operator_ship_override;
-#[cfg(unix)]
-mod origin_fetch_hold;
-mod pilot_warning_cards;
-mod pre_family_tool_names;
-mod promotion_commit;
-mod rebase_recovery_attempts;
-mod recovery_fixture;
-mod relation_auto_close;
-mod resume_ownership;
-mod retired_stubs;
-mod review_admission_shape;
-mod review_baseline_hold;
-mod review_before_landing;
-mod review_budget_hold;
-mod review_continuation;
-#[cfg(target_os = "linux")]
-mod review_evidence_fulfilment;
-mod review_evidence_paths;
-mod review_evidence_writers;
-mod review_failed_reviewer_hold;
-mod review_gate_audit;
-mod review_held_resume;
-#[cfg(target_os = "linux")]
-mod review_owner_host_evidence;
-mod review_record_ids;
-mod review_report_revisions;
-mod review_run_option;
-mod reviewable_lines;
-mod sandbox_off;
-mod scheduled_tasks;
-#[cfg(unix)]
-mod script_env_pass;
-#[cfg(unix)]
-mod script_file_inputs;
-mod script_grant_request;
-mod script_roots;
-mod search_hydration;
-// The installed-CodeQL fixture is a POSIX shell script.
-#[cfg(unix)]
-mod security_alert_sweep;
-mod session_events;
-mod shared_root_identity;
-mod standing_drain_keeper;
-mod step_recovery;
-mod system_work_crews;
-mod workspace_seed;
+// Every top-level module in this directory, as written by crates/orbit-core/build.rs.
+// It follows `scenario_table`, so each module can use the macro. The file must sit
+// beside this one: rustc resolves its `mod` lines from its own directory.
+include!(".generated_modules.rs");
 
-mod codebase_regressions;
-mod codebase_related;
-mod host_labels;
-mod host_os_executor;
-mod host_os_routing;
-mod host_resources;
-mod host_ui_routing;
-mod human_crew_work;
-mod implement_blocker;
-mod invocation_metrics;
-mod job_failure_streak;
-mod job_finalization;
-mod light_delivery;
-mod local_route_before_pr;
-mod mid_run_steering;
-mod named_accepted_history;
-mod notice_authority;
-mod orphan_adoption;
-mod plugin_inspection;
-mod pr_forge_admission;
-mod pr_infrastructure;
-mod process_isolation;
-mod provider_failure_hold;
-mod provider_limit_admission;
-mod provider_limit_budget;
-mod provider_limit_hold;
-#[cfg(any(target_os = "linux", target_os = "macos"))]
-mod provider_roots;
-mod purpose_crews;
+// `readiness/` has no `mod.rs`; its one file is mounted here by path.
 #[path = "readiness/population.rs"]
 mod readiness_population;
-#[cfg(unix)]
-mod recovery_provider_auth;
-mod resident_authority;
-mod resident_cycle;
-mod resident_digest;
-mod resident_metrics;
-mod resource_profiles;
-
-mod run_cli_invocations;
-mod run_history;
-mod run_outcome_contract;
-mod tag_instructions;
-mod task_context_comment_budget;
-mod task_delivery;
-mod task_external_merge;
-mod task_lint_paths;
-mod task_pilot;
-mod task_pr_closure;
-mod task_selector_hints;
-mod task_update;
-mod task_workspace_projection;
-mod upgrade_pending_requeue;
-mod upgrade_resume;
-mod usage_pressure_draws;
-mod vision_probe;
-mod worker_exit_diagnostic;
-mod worker_fixture;
-mod worktree_reclaim;
-
-mod admission_audit;
-
-mod run_failure_diagnostic;

@@ -1,5 +1,6 @@
 //! Owner landing settlement must reach the host replay, just as a claimed
 //! settlement does, without accepting sandbox deferrals as execution.
+#![cfg(target_os = "linux")]
 
 use std::os::unix::fs::PermissionsExt;
 

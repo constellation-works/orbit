@@ -6,6 +6,7 @@
 //! the grant would also leave a `~/.config/muse` behind; this checks both
 //! through the public runtime API. The macOS profile is covered beside the
 //! `orbit-exec` compiler. [ORB-16577]
+#![cfg(target_os = "linux")]
 
 use std::path::Path;
 

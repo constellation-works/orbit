@@ -1,6 +1,7 @@
 //! A transport outage before `worktree_setup` holds the run while all tasks
 //! remain in backlog. For an already-in-progress task, the run fails through
 //! ordinary failure handling instead of leaving it in an unresumable hold.
+#![cfg(unix)]
 
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
