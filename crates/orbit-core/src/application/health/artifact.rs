@@ -62,7 +62,9 @@ use super::artifact_diagnosis;
 use crate::OrbitRuntime;
 use crate::application::auto_tasks::auto_tasks_dir;
 
-use crate::application::auto_tasks::{DEFAULT_AUTO_TASK_FILES, render_default_auto_task};
+use crate::application::auto_tasks::{
+    DEFAULT_AUTO_TASK_FILES, REFERENCE_AUTO_TASK_FILES, render_default_auto_task,
+};
 use crate::application::job::catalog::DEFAULT_JOB_FILES;
 use crate::application::managed_assets::{
     ConfinedAssetPath, MANAGED_ASSET_MANIFEST_FILE, ManagedAssetLayout,
@@ -304,6 +306,16 @@ impl ManagedCatalog {
         self
     }
 
+    /// Add bundled reference copies this binary can reproduce but does not
+    /// ship: a local copy is diagnosed against them, yet a missing one is not
+    /// a fault, so they stay out of `shipped`.
+    fn with_references(mut self, references: impl IntoIterator<Item = (String, String)>) -> Self {
+        if let Some(embedded) = self.embedded.as_mut() {
+            embedded.extend(references);
+        }
+        self
+    }
+
     /// Keep tracked copies of the demoted defaults `kept` out of retirement.
     fn keeping<'a>(mut self, kept: impl IntoIterator<Item = &'a str>) -> Self {
         self.kept = kept.into_iter().map(str::to_string).collect();
@@ -403,6 +415,14 @@ fn managed_catalogs(runtime: &OrbitRuntime) -> Vec<ManagedCatalog> {
                 )
             }),
         )
+        // A kept demoted default is not seeded, but its local copy is still
+        // diagnosed against the bundled reference body (stale contract).
+        .with_references(REFERENCE_AUTO_TASK_FILES.iter().map(|(name, content)| {
+            (
+                (*name).to_string(),
+                render_default_auto_task(content, &auto_task_base_branch).into_owned(),
+            )
+        }))
         .leaving_out(left_out.auto_task_set())
         .keeping(DEMOTED_DEFAULT_AUTO_TASKS.iter().copied()),
         // Routines are loaded and reconciled from the shared catalog. A linked

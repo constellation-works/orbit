@@ -6,8 +6,9 @@
 //! kept: `orbit workspace sync` drops only its managed-manifest provenance,
 //! so the file stays in place as a workspace-local definition, with its
 //! operator settings, schedule and `enabled` state untouched. Managed
-//! reconciliation would otherwise retire it as a dropped default, and doctor
-//! skips it for the same reason.
+//! reconciliation would otherwise retire it as a dropped default. Doctor checks
+//! such a copy only against its bundled reference body (see
+//! `REFERENCE_AUTO_TASK_FILES`), never as a stale shipped body sync would upgrade.
 
 use std::path::Path;
 

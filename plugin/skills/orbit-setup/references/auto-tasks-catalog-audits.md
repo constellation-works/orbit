@@ -7,48 +7,6 @@
 
 ## Seeded definitions: audits and health
 
-- **`pilot-block-patterns`** (`medium`) — daily. The upstream counterpart of
-  `run-failure-patterns`. A first pass, with no prior cursor, reads the 3 days
-  before scan start; a later pass reads the 14 days before scan start, unless
-  the prior cursor still has `resume_after`, in which case the pass continues
-  that window instead of advancing it.
-
-  It takes candidates from
-  `escalation_triage_pipeline` and `blocked_task_recovery_pipeline` run history
-  plus the current proposed and blocked tasks, and it reads at most 60 tasks
-  per pass, oldest candidate first.
-
-  A pass that hits the cap still completes:
-  it stores `pilot-block-report.json` with `partial` true and the tasks it read,
-  and `pilot-block-cursor.json` with `resume_after` and `resume_after_task` set
-  to the last candidate read (its sort time and task id, not an occurrence
-  time). The next pass skips candidates up to that boundary and tasks already
-  read.
-
-  Its first input is the
-  disposition `escalation_triage_pipeline` recorded (the `pilot_warning_triaged`
-  and, on older history, `blocked_task_triaged` markers and comments, plus final
-  recovery's decision cards, whose named human actions recur), then task history, `pilot_warnings` and run records for what triage
-  did not cover.
-
-  It groups them by cause and routes each group that recurs (at
-  least 3 occurrences across 2 tasks) to its source: the filer that writes
-  unverifiable tasks, the task-pilot activity for holds that proved harmless,
-  the final-recovery activity for blocks a cheap step later resolved,
-  `run-failure-patterns` for run failures (where it only makes sure a fix is
-  open), or a friction or setup chore for the host.
-
-  It comments on open coverage
-  and files at most 5 `proposed` fix tasks per pass, tagged
-  `pilot-block-patterns` and `no-auto-approve`, compares each group with the
-  prior pass and files a regression when a done fix did not reduce its group.
-  When the workspace maps a tracked corpus index and provides the corpus script,
-  it proposes every observed group in the corpus and regenerates its index.
-  Otherwise it records the missing prerequisite and leaves a clean worktree.
-
-  It never acts on an individual blocked or held task; that stays with
-  `escalation_triage_pipeline`. Like `run-failure-patterns`, it runs on the owner
-  and stops with `wrong_host` on a follower.
 - **`architecture-audit`** (`hard`) — every 14 days.
 
   Audits the package and
@@ -168,19 +126,6 @@
   (cadence, merge, template fix or disable), each naming its definition
   and numbers. It never edits, toggles or mints definitions.
 
-- **`recovery-fault-audit`** (`medium`) — weekly. Re-judges 10 final-recovery
-  fault attributions that another model family recorded, blind to the
-  implementer's crew and model: it reads decisions through the
-  `final_recovery` task field and judges each from the task's title,
-  description, criteria and recorded evidence.
-
-  Each run attaches
-  `recovery-fault-audit.json` with per-season cumulative disagreement rates
-  carried from the previous run, marks a season above 20% `suspended`, and
-  files at most one `proposed` rubric-revision task. It never changes a
-  recorded decision. Seasons read `season-0` until model ranking records
-  them.
-
 - **`regression-label-audit`** (`medium`) — weekly. Re-labels 10
   `regression_from` links from the last 7 days that another model family
   filed, blind to the filer's labels and to any model, provider or crew
@@ -194,8 +139,7 @@
   and the evidence packet (title, description, criteria and context files).
 
   It uses `created_by` and `created_by_model` only to skip the auditor's
-  own family, the same family skip as `recovery-fault-audit`, and never
-  prints them. The helper reads the recorded labels only after the model
+  own family, and never prints them. The helper reads the recorded labels only after the model
   has saved its second labels, then scores agreement. Sample size and
   period are definition fields in the brief.
 
@@ -246,7 +190,8 @@ A default that stops paying for itself can be
 demoted the same way.
 
 These former defaults were demoted for unproven yield: `backlog-hygiene`,
-`ci-budget-watch`, `design-sync`, `flaky-test-hunt`, `structure-sweep`,
+`ci-budget-watch`, `design-sync`, `flaky-test-hunt`, `pilot-block-patterns`,
+`recovery-fault-audit`, `run-failure-patterns`, `structure-sweep`,
 `suppression-ratchet` and `workflow-health-audit`. `blocked-task-triage` was
 retired earlier, superseded by final recovery, and `crew-ladder-review` was
 retired with the crew ladder it reviewed.

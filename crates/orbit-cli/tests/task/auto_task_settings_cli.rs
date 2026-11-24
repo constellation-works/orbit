@@ -23,6 +23,23 @@ fn definition_path(fixture: &Fixture, name: &str) -> PathBuf {
     PathBuf::from(shown["definition_source"]["path"].as_str().unwrap())
 }
 
+/// `run-failure-patterns` is a demoted default [ORB-27816]: a fresh workspace
+/// no longer seeds it, but an operator who kept a copy has one. Plant the
+/// bundled body as that copy beside the seeded definitions.
+fn kept_run_failure_copy(fixture: &Fixture) -> PathBuf {
+    let dir = definition_path(fixture, "qa-sweep")
+        .parent()
+        .unwrap()
+        .to_path_buf();
+    let path = dir.join(format!("{RUN_FAILURE}.yaml"));
+    fs::write(
+        &path,
+        include_str!("../../../orbit-core/assets/auto_tasks/run-failure-patterns.yaml"),
+    )
+    .unwrap();
+    path
+}
+
 fn read_json(path: &Path) -> Value {
     serde_json::from_slice(&fs::read(path).unwrap()).unwrap()
 }
@@ -281,6 +298,7 @@ fn settings_only_fork_migrates_and_a_body_fork_is_preserved_and_reported() {
 
 fn older_shipped_bodies_upgrade_with_settings_and_custom_bodies_stay_forked() {
     let fixture = Fixture::new();
+    kept_run_failure_copy(&fixture);
     let sources: Value = serde_json::from_str(include_str!(
         "../fixtures/auto-task-body-history/sources.json"
     ))
@@ -289,12 +307,11 @@ fn older_shipped_bodies_upgrade_with_settings_and_custom_bodies_stay_forked() {
     let doc_duties = sources["doc-duties"]["669d9bbdc91fd9e639394e35c826f26492a5a847"]
         .as_str()
         .unwrap();
+    // run-failure-patterns is a demoted default [ORB-27816]: sync releases its
+    // copy rather than upgrading it, so its older bodies are checked by the
+    // kept-copy tests below.
     for (name, older) in [
         ("doc-duties", doc_duties),
-        (
-            "run-failure-patterns",
-            include_str!("../fixtures/auto-task-body-history/run-failure-patterns.yaml"),
-        ),
         (
             "delivery-code-review",
             include_str!("../fixtures/auto-task-body-history/delivery-code-review.yaml"),
@@ -420,7 +437,10 @@ fn older_shipped_bodies_upgrade_with_settings_and_custom_bodies_stay_forked() {
         );
         assert!(!message.contains("stale shipped body"), "{message}");
         let sync = fixture.json(&["workspace", "sync", "--json"]);
-        assert_eq!(sync_outcome(&sync, "run-failure-patterns"), "preserved");
+        // An untracked kept copy has nothing for managed reconciliation to
+        // act on, so sync reports no action for it; the content checks below
+        // are what prove the edit survives.
+        assert_eq!(sync_outcome(&sync, "run-failure-patterns"), "");
         assert_eq!(fs::read_to_string(&path).unwrap(), edited);
         let shown = fixture.json(&["auto-task", "show", "run-failure-patterns", "--json"]);
         assert_eq!(shown["layering"]["body"], "forked");
@@ -430,6 +450,7 @@ fn older_shipped_bodies_upgrade_with_settings_and_custom_bodies_stay_forked() {
 #[test]
 fn stale_run_failure_contract_holds_mint_and_adopt_preserves_customizations() {
     let fixture = Fixture::new();
+    kept_run_failure_copy(&fixture);
     let path = definition_path(&fixture, "run-failure-patterns");
     let dir = path.parent().unwrap().to_path_buf();
     let bundled = fs::read_to_string(&path).unwrap();
@@ -595,6 +616,7 @@ fn stale_run_failure_contract_holds_job_step_and_automation_mints() {
             .copied(),
     );
     let fixture = Fixture::new();
+    kept_run_failure_copy(&fixture);
     write_stale_run_failure_body(&fixture);
     auto_task_tool(
         &fixture,
@@ -1366,6 +1388,7 @@ fn land_delivery(
 #[test]
 fn adopt_on_a_compliant_managed_body_writes_nothing() {
     let fixture = Fixture::new();
+    kept_run_failure_copy(&fixture);
     // The shipped body already carries the host-aware contract, so adopting it
     // is a no-op: it must not record an operator edit stamp or settings entry.
     fixture.json(&[

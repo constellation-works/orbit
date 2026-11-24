@@ -64,7 +64,7 @@ Open a file only when its condition holds; each stands alone.
 | Adopt a current bundled body from a stale fork | [auto-tasks-adopting](references/auto-tasks-adopting.md) |
 | Delete a definition, definitions a plugin seeds | [auto-tasks-deleting](references/auto-tasks-deleting.md) |
 | The seeded definitions from `qa-sweep` to `host-health` | [auto-tasks-catalog-reviews](references/auto-tasks-catalog-reviews.md) |
-| The seeded definitions from `pilot-block-patterns` to `agent-guidance-audit`; shipped defaults promoted on proven yield | [auto-tasks-catalog-audits](references/auto-tasks-catalog-audits.md) |
+| The seeded definitions from `architecture-audit` to `agent-guidance-audit`; shipped defaults promoted or demoted on proven yield | [auto-tasks-catalog-audits](references/auto-tasks-catalog-audits.md) |
 | Delivery consumers: stalls, automatic replay, `reset` | [auto-tasks-delivery](references/auto-tasks-delivery.md) |
 | Scheduler/service logs and host incidents; inspect one CLI audit event by ID | [operational-logs-triage](references/operational-logs-triage.md) |
 | Prompt-size cost estimates, token usage and unknown cost; delivery profiles and admission diagnostics | [operational-logs-cost](references/operational-logs-cost.md) |
