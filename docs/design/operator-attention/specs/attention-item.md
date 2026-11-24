@@ -180,7 +180,7 @@ The task-level implementation returns at most 32 warning findings in `detail.fin
 | `blocked` | `orbit decision answer` on the folded request; else `orbit.task.recover` action `requeue`; `also`: `orbit.task.show` |
 | `decision_open` | `orbit.decision` action `show` (read the options); `also`: one `orbit decision answer` per allowed answer |
 | `review_waiting` | merge the pull request and `orbit --workspace '<ws>' task update <id> --approve` for `completion_hold`; for `delivery_hold`, `orbit.run` action `resume` with `orbit --workspace '<ws>' job resume <run>` only for `delivery_forge_observation_unavailable`, otherwise `orbit.run` action `show` with `orbit --workspace '<ws>' run show <run>`, each with `input {id: <run>, workspace: <ws>}`; `orbit --workspace '<ws>' task update <id> --approve` for `approval`; `orbit.task.recover` action `review_reset` (needs `lineage`, `reason`) for `review_budget` |
-| `run_failed` | `orbit.run` action `resume` when the run is resumable, else `orbit.run` action `show`; `also`: run logs |
+| `run_failed` | `orbit.run` action `resume` when the run is resumable, else `orbit.run` action `show`; `also`: run logs. A superseded PR watcher (`detail.superseded`, condition in the `run_failed` and the owner's task note above) instead gets `orbit.task.show` on its task (`input {id, workspace}`); `also`: run logs |
 | `run_stuck` | `orbit.run` action `show`; `also`: `orbit run cancel` |
 | `claim_stale` | `orbit.task.recover` action `recover_claim` (needs exact tool keys `reason`, `request_key`, `expected_phase`, `status`; CLI flags `--reason`, `--request`, `--phase`, `--status`); `also`: the claim inspection |
 | `ci_red` | the repair task's `orbit.task.show` when one exists, else `github.run.view` on the failing run |
