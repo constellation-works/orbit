@@ -410,11 +410,14 @@ fn checkout_file(root: &std::path::Path, path: &str) -> CheckoutPresence {
     }
 }
 
+// A path whose parent component is now a regular file cannot exist in the
+// checkout (ENOTDIR), so it is absent; other lookup failures stay unknown.
 fn checkout_lookup_error(error: &std::io::Error) -> CheckoutPresence {
-    if error.kind() == std::io::ErrorKind::NotFound {
-        CheckoutPresence::Absent
-    } else {
-        CheckoutPresence::Indeterminate
+    match error.kind() {
+        std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory => {
+            CheckoutPresence::Absent
+        }
+        _ => CheckoutPresence::Indeterminate,
     }
 }
 
