@@ -12,7 +12,7 @@ use orbit_types::task::TaskComment;
 use orbit_types::telemetry::AuditEventStatus;
 use serde_json::{Value, json};
 
-use super::support::{Fixture, error_code, isolated, json_ok};
+use super::support::{Fixture, add_workspace, error_code, isolated, json_ok};
 
 const WS: &str = "?workspace=ws_http_fixture";
 
@@ -864,6 +864,45 @@ fn ended_resident_reads_use_the_ending_event() {
                     .unwrap();
                 assert_eq!(row["ended_at"], expected, "{row}");
             }
+        },
+    );
+}
+
+/// The resident list reads routine status for the selected workspace alone:
+/// an unrelated registered workspace, even one holding the same routine or an
+/// unreadable routines directory, neither changes nor breaks the `routine` row.
+#[test]
+fn resident_list_routine_ignores_unrelated_registered_workspaces() {
+    isolated(
+        "residents::resident_list_routine_ignores_unrelated_registered_workspaces",
+        || {
+            let fixture = Fixture::new();
+            resident_fixture(&fixture);
+            let server = fixture.server(true);
+            let alone_all =
+                json_ok(server.get("/api/residents?all=true&workspace=ws_http_fixture"));
+            let alone = json_ok(server.get(&format!("/api/residents{WS}")));
+            assert!(alone_all["routine"].is_object(), "{alone_all}");
+
+            // One workspace holds the same routine definition: a host-wide
+            // read would mark the target's routine a duplicate owner.
+            let twin = add_workspace(&fixture, "ws_twin", "twin");
+            let twin_routines = twin.paths().orbit_dir.join("routines");
+            fs::create_dir_all(&twin_routines).unwrap();
+            fs::copy(
+                fixture.work.join("routines/resident_cycle.yaml"),
+                twin_routines.join("resident_cycle.yaml"),
+            )
+            .unwrap();
+            // Another has a routines directory that cannot be read.
+            let broken = add_workspace(&fixture, "ws_broken", "broken");
+            fs::write(broken.paths().orbit_dir.join("routines"), "not a directory").unwrap();
+
+            let with_others_all =
+                json_ok(server.get("/api/residents?all=true&workspace=ws_http_fixture"));
+            let with_others = json_ok(server.get(&format!("/api/residents{WS}")));
+            assert_eq!(with_others_all, alone_all);
+            assert_eq!(with_others, alone);
         },
     );
 }

@@ -50,7 +50,7 @@ use std::time::Instant;
 use axum::extract::{Path, Query, State};
 use axum::response::{IntoResponse, Json, Response};
 use chrono::Utc;
-use orbit_cmd::registry_routines::routine_statuses;
+use orbit_cmd::registry_routines::routine_statuses_for_workspace;
 use orbit_common::governance::authorization::{DASHBOARD_RESIDENT_WRITE, DASHBOARD_ROUTINE_TOGGLE};
 use orbit_core::application::resident::{
     ResidentDashboardGrant, ResidentDashboardGrantOutcome, ResidentDashboardGrantParams,
@@ -165,8 +165,15 @@ fn non_blank(value: Option<&str>) -> Option<String> {
 }
 
 /// The workspace's resident cycle routine row, as Routines lists it.
+///
+/// Reads routine status for this workspace alone: a host-wide read loads
+/// every registered workspace's definitions, configuration and store rows,
+/// which this one row never needs.
 fn resident_cycle_routine(state: &DashboardState, runtime: &OrbitRuntime) -> Value {
-    let Ok(report) = routine_statuses(state.global_root()) else {
+    let Ok(workspace_id) = runtime.workspace_id() else {
+        return Value::Null;
+    };
+    let Ok(report) = routine_statuses_for_workspace(state.global_root(), &workspace_id) else {
         return Value::Null;
     };
     // The routine's source is the registered workspace whose `.orbit`
