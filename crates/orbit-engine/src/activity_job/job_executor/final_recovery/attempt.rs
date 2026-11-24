@@ -133,11 +133,21 @@ pub(in crate::activity_job::job_executor) fn attempt_final_recovery(
         std::mem::replace(budget, types::FinalRecoveryBudget::Spent)
     {
         // A replayed current-policy requeue of the unchanged publication
-        // holds a transient completion observation as a fresh one does.
+        // holds a transient completion observation as a fresh one does
+        // [ORB-25661]. A replayed candidate-change escalation for the same
+        // observation holds the same way as its fresh application does
+        // [ORB-27875]: the read changed nothing on the forge, the recorded
+        // escalation stands, and no retry is authorized. A failed
+        // application keeps its failure path through
+        // `held_for_completion_observation`, and any other error keeps its
+        // own verdict.
         let completion_requeue = matches!(
             error,
             DispatchError::CompletionObservationUnavailable { .. }
-        ) && matches!(decision, FinalRecoveryDecision::Requeue { .. });
+        ) && matches!(
+            decision,
+            FinalRecoveryDecision::Requeue { .. } | FinalRecoveryDecision::Escalate { .. }
+        );
         let application = FinalRecoveryApplication {
             task_id,
             failed_step_id: step.id.clone(),

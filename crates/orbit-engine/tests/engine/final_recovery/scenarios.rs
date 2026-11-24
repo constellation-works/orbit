@@ -1465,7 +1465,7 @@ recovery_contracts!(recovery_contracts_1: a_resume_reruns_from_the_named_step_an
 recovery_contracts!(recovery_contracts_2: an_escalation_still_runs_the_failure_handoff, an_error_that_skips_step_recovery_still_reaches_final_recovery, step_recovery_runs_first_and_final_recovery_only_once_it_is_spent, final_recovery_runs_at_most_once_per_run, a_run_resumed_after_a_final_recovery_resume_never_runs_it_again, a_run_resumed_after_a_crash_mid_settlement_replays_the_recorded_decision, an_evidence_hold_after_step_recovery_holds_the_run, a_cancelled_child_after_step_recovery_cancels_the_run);
 recovery_contracts!(recovery_contracts_3: a_provider_authentication_failure_skips_final_recovery, an_empty_crew_pool_skips_final_recovery, a_resume_to_a_later_step_reruns_the_failed_contract_and_records_the_downgrade, a_resume_to_an_earlier_step_keeps_the_named_target, a_resume_to_an_admission_or_nonexistent_step_is_escalated, a_malformed_decision_is_escalated, a_decision_carries_its_fault_and_one_without_a_fault_escalates, the_recovery_packet_withholds_the_implementers_model);
 recovery_contracts!(recovery_contracts_4: a_stopped_rebase_resumes_its_rebasing_step_without_a_repair_commit, completion_observation_classifies_retry_policy_and_candidate_refusal, a_failure_before_the_worktree_exists_skips_final_recovery, failed_recovery_dispatch_is_injected_before_final_recovery, final_recovery_injects_only_its_runs_bounded_evidence_in_order, final_recovery_dispatches_with_newest_attempts_and_failure_signatures_when_evidence_overflows, final_recovery_keeps_post_recovery_output_when_a_later_step_fails, final_recovery_resume_checkpoints_the_latest_conflict_diagnostics, transient_infrastructure_is_escalated_without_an_agent, a_github_rate_limit_is_requeued_without_an_agent, worktree_setup_dependency_not_found_skips_final_recovery);
-recovery_contracts!(recovery_contracts_5: finished_run_tls_observation_readmits_unchanged_publication, transient_observation_held_after_recovery_parks_or_requeues);
+recovery_contracts!(recovery_contracts_5: finished_run_tls_observation_readmits_unchanged_publication, transient_observation_held_after_recovery_parks_or_requeues, replayed_candidate_change_escalation_holds_after_the_same_observation_failure);
 
 /// The executor cannot turn a policy refusal into completion authority, and
 /// the deterministic retry spends the existing once-only recovery budget.
@@ -1654,6 +1654,58 @@ fn transient_observation_held_after_recovery_parks_or_requeues() {
     assert_failed_completion(&observed);
     assert_count(&host, "handoff", 1);
     assert_attempts(&observed.attempts, &[("escalated", Some("requeue"))]);
+}
+
+/// [ORB-27890] A crash between checkpointing the candidate-change escalation
+/// and completing settlement replays it. The same subsequent completion
+/// observation failure holds without a failure handoff or a retry, as the
+/// fresh escalation does. A failed application and an unrelated error keep
+/// their failure paths.
+fn replayed_candidate_change_escalation_holds_after_the_same_observation_failure() {
+    let escalation = FinalRecoveryDecision::Escalate {
+        diagnosis: "unchanged completion reuse refused: candidate-changed: host has no \
+                    authenticated completion prefix; original error: TLS handshake timeout"
+            .to_string(),
+        human_action: INSPECT_PUBLICATION.to_string(),
+        summary: None,
+    };
+
+    // The same observation failure replays the recorded escalation and holds.
+    let state = resumed_after(escalation.clone(), None);
+    let host = RecoveryHost::new([("work", vec![Reply::Observation])]);
+    let observed = run(&pipeline(false), &host, Some(&state));
+    assert_held_after_recovery(&observed);
+    assert_count(&host, "handoff", 0);
+    assert_count(&host, "decide", 0);
+    assert!(host.admissions.lock().unwrap().is_empty());
+    assert_eq!(host.count("work"), 1, "no retry is authorized");
+    let applications = host.applications();
+    assert_eq!(applications.len(), 1);
+    assert_eq!(applications[0].decision, escalation);
+    assert_attempts(&observed.attempts, &[("escalated", Some("escalate"))]);
+
+    // A failed application of the replayed escalation stays a failure.
+    let state = resumed_after(escalation.clone(), None);
+    let mut host = RecoveryHost::new([("work", vec![Reply::Observation])]);
+    host.apply_script = ApplyScript::Fail;
+    let observed = run(&pipeline(false), &host, Some(&state));
+    assert_failed_completion(&observed);
+    assert_count(&host, "handoff", 1);
+    assert_count(&host, "decide", 0);
+
+    // An unrelated error replays the same recorded escalation without a hold.
+    let state = resumed_after(escalation, None);
+    let host = RecoveryHost::new([("work", vec![Reply::Fail])]);
+    let run = run(&pipeline(false), &host, Some(&state));
+    assert!(run.result.is_err());
+    assert!(
+        !matches!(run.result, Err(DispatchError::DeliveryRefused { .. })),
+        "an unrelated error is not held: {:?}",
+        run.result
+    );
+    assert_count(&host, "handoff", 1);
+    assert_count(&host, "decide", 0);
+    assert!(host.admissions.lock().unwrap().is_empty());
 }
 
 fn decision_text(decision: &FinalRecoveryDecision) -> String {
