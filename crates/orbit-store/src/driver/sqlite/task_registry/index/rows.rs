@@ -1,10 +1,10 @@
 //! Task index rows: replacement from bundle envelopes and the status,
 //! complexity and version projections read from them.
 
-use super::partition_id::validate_partition_id;
-use super::queries::{TaskIndexWriter, task_bundle_by_id, task_ids_for_workspace};
-use super::relations::validate_replacement_relations;
-use super::store::TaskRegistryStore;
+use super::super::partition_id::validate_partition_id;
+use super::super::queries::{TaskIndexWriter, task_bundle_by_id, task_ids_for_workspace};
+use super::super::relations::validate_replacement_relations;
+use super::super::store::TaskRegistryStore;
 use crate::contracts::{
     TaskCompletionByComplexity, TaskDefectFiling, TaskIndexFilter, TaskTerminalTransition,
 };

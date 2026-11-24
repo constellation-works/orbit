@@ -20,7 +20,7 @@ mod ordering;
 mod path_leases;
 #[path = "allocation_admission/reservation_grants.rs"]
 mod reservation_grants;
-#[path = "allocation_admission/task_index.rs"]
+#[path = "allocation_admission/task_index/mod.rs"]
 mod task_index;
 #[path = "allocation_admission/unscoped_claim_writes.rs"]
 mod unscoped_claim_writes;
