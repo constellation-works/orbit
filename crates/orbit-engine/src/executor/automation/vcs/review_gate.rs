@@ -163,13 +163,16 @@ pub fn uncommitted_paths(workspace_path: &Path) -> Result<Vec<String>, OrbitErro
             continue;
         }
         let mut codes = entry.chars();
-        let (Some(index_state), Some(_worktree_state)) = (codes.next(), codes.next()) else {
+        let (Some(index_state), Some(worktree_state)) = (codes.next(), codes.next()) else {
             continue;
         };
         // A rename or copy is followed by a second NUL-terminated field holding
         // the source path, which belongs to the record before it rather than
-        // starting a new record. Both names changed, so both are reported.
-        let source = if matches!(index_state, 'R' | 'C') {
+        // starting a new record. An intent-to-add rename is reported with only
+        // the worktree column set (` R`), so either column marks it. Both names
+        // changed, so both are reported.
+        let renamed = matches!(index_state, 'R' | 'C') || matches!(worktree_state, 'R' | 'C');
+        let source = if renamed {
             fields.next().filter(|source| !source.is_empty())
         } else {
             None
