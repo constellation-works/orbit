@@ -14,6 +14,7 @@ import subprocess
 import sys
 import tempfile
 import textwrap
+import time
 import unittest
 from unittest import mock
 
@@ -45,31 +46,32 @@ else:
 """
 
 
-def spawn_fixture_helper(command):
+def spawn_fixture_helper(command, pass_fds=()):
     watcher, child_socket = socket.socketpair()
     env = dict(os.environ, ORBIT_FIXTURE_WATCHDOG_FD=str(child_socket.fileno()),
                ORBIT_FIXTURE_ANCHOR=ANCHOR)
     try:
         proc = subprocess.Popen(command, start_new_session=True, stdout=subprocess.PIPE,
-                                stderr=subprocess.PIPE, env=env, pass_fds=(child_socket.fileno(),))
+                                stderr=subprocess.PIPE, env=env,
+                                pass_fds=(child_socket.fileno(), *pass_fds))
     finally:
         child_socket.close()
     proc.fixture_watchdog = watcher
     return proc
 
 
-def stop_owned_helper(proc):
+def stop_owned_helper(proc, *, sigterm_timeout=5, watchdog_timeout=5):
     """Cancel owned descendants through their live anchor and reap the helper."""
     if proc.returncode is None:
         with contextlib.suppress(ProcessLookupError):
             proc.send_signal(signal.SIGTERM)
         try:
-            proc.communicate(timeout=5)
+            proc.communicate(timeout=sigterm_timeout)
         except subprocess.TimeoutExpired:
             with contextlib.suppress(OSError):
                 proc.fixture_watchdog.sendall(b"x")
             try:
-                proc.communicate(timeout=5)
+                proc.communicate(timeout=watchdog_timeout)
             except subprocess.TimeoutExpired:
                 proc.kill()
                 proc.communicate()
@@ -78,6 +80,22 @@ def stop_owned_helper(proc):
     with contextlib.suppress(OSError):
         proc.fixture_watchdog.sendall(b"x")
     proc.fixture_watchdog.close()
+
+
+def reap_adopted_descendant(pid, *, timeout=5, poll_interval=0.01,
+                            waitpid=os.waitpid, monotonic=time.monotonic, sleep=time.sleep):
+    """Wait boundedly for an adopted descendant PID to be reparented and reaped."""
+    deadline = monotonic() + timeout
+    while True:
+        try:
+            reaped, status = waitpid(pid, os.WNOHANG)
+        except (ChildProcessError, InterruptedError):
+            reaped = 0
+        if reaped == pid:
+            return os.waitstatus_to_exitcode(status)
+        if monotonic() >= deadline:
+            raise TimeoutError("watchdog descendant was not adopted and reaped")
+        sleep(poll_interval)
 
 
 def assert_phase_sums(testcase, summary):
@@ -983,42 +1001,213 @@ class ObservedPipeDrainTests(unittest.TestCase):
             root = Path(temporary)
             helper = root / "broken.py"
             helper.write_text(textwrap.dedent(r'''
-                import ctypes, json, os, signal, subprocess, sys, time
+                import ctypes, importlib.util, json, os, signal, subprocess, sys, threading
                 from pathlib import Path
-                assert ctypes.CDLL(None, use_errno=True).prctl(36, 1, 0, 0, 0) == 0
+
+                spec = importlib.util.spec_from_file_location("watchdog_helpers", sys.argv[1])
+                helpers = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(helpers)
+
+                libc = ctypes.CDLL(None, use_errno=True)
+                libc.prctl.argtypes = [ctypes.c_int, ctypes.c_ulong, ctypes.c_ulong, ctypes.c_ulong, ctypes.c_ulong]
+                libc.prctl.restype = ctypes.c_int
+                assert libc.prctl(36, 1, 0, 0, 0) == 0
                 signal.signal(signal.SIGTERM, signal.SIG_IGN)
+
+                pid_path, result_path = Path(sys.argv[2]), Path(sys.argv[3])
+                ready_write, ping_read, pong_write = map(int, sys.argv[4:7])
                 fd = int(os.environ["ORBIT_FIXTURE_WATCHDOG_FD"])
-                code = "import os, signal, sys; signal.signal(signal.SIGTERM, signal.SIG_IGN); " \
-                       "open(sys.argv[1] + '.pid', 'w').write(str(os.getpid())); " \
-                       "open(sys.argv[1], 'w').close(); signal.pause()"
-                proc = subprocess.Popen([sys.executable, "-c", os.environ["ORBIT_FIXTURE_ANCHOR"],
-                    str(fd), "[]", json.dumps([sys.executable, "-c", code, sys.argv[1]])],
-                    start_new_session=True, pass_fds=(fd,))
-                result = proc.wait()
-                child_pid = int(Path(sys.argv[1] + ".pid").read_text())
-                deadline = time.monotonic() + 5
+
+                grandchild_code = (
+                    "import os, pathlib, signal, sys; "
+                    "signal.signal(signal.SIGTERM, signal.SIG_IGN); "
+                    "pathlib.Path(sys.argv[1]).write_text(str(os.getpid())); "
+                    "os.write(int(sys.argv[2]), b'R'); "
+                    "os.close(int(sys.argv[2])); "
+                    "signal.pause()"
+                )
+                child_code = (
+                    "import os, signal, subprocess, sys; "
+                    "signal.signal(signal.SIGTERM, signal.SIG_IGN); "
+                    "ready_fd = int(sys.argv[2]); "
+                    "subprocess.Popen([sys.executable, '-c', sys.argv[3], sys.argv[1], str(ready_fd)], "
+                    "pass_fds=(ready_fd,)); "
+                    "os.close(ready_fd); "
+                    "signal.pause()"
+                )
+                # Anchor waits only on its direct child, so the unwaited grandchild stays
+                # adopted by this subreaper regardless of SIGKILL exit order in the group.
+                anchor_proc = subprocess.Popen(
+                    [sys.executable, "-c", os.environ["ORBIT_FIXTURE_ANCHOR"],
+                     str(fd), json.dumps([ready_write]),
+                     json.dumps([sys.executable, "-c", child_code, str(pid_path),
+                                 str(ready_write), grandchild_code])],
+                    start_new_session=True, pass_fds=(fd, ready_write))
+                os.close(ready_write)
+
+                def ack_liveness():
+                    if os.read(ping_read, 1) == b"p":
+                        os.write(pong_write, b"P")
+
+                threading.Thread(target=ack_liveness, daemon=True).start()
+                result = anchor_proc.wait()
+                grandchild_pid = int(pid_path.read_text())
+                adopted_status = helpers.reap_adopted_descendant(grandchild_pid, timeout=5)
                 while True:
                     try:
-                        reaped, status = os.waitpid(child_pid, os.WNOHANG)
-                    except (ChildProcessError, InterruptedError):
-                        reaped = 0
-                    if reaped == child_pid:
+                        reaped, _ = os.waitpid(-1, os.WNOHANG)
+                    except ChildProcessError:
                         break
-                    if time.monotonic() >= deadline:
-                        raise TimeoutError("watchdog descendant was not adopted and reaped")
-                    time.sleep(0.01)
-                Path(sys.argv[2]).write_text(json.dumps([result, os.waitstatus_to_exitcode(status)]))
+                    if reaped == 0:
+                        break
+                result_path.write_text(json.dumps([result, adopted_status]))
             ''').lstrip("\n"))
-            proc = spawn_fixture_helper([sys.executable, str(helper), str(root / "ready"), str(root / "result")])
+            ready_read, ready_write = os.pipe()
+            ping_read, ping_write = os.pipe()
+            pong_read, pong_write = os.pipe()
+            open_fds = {ready_read, ready_write, ping_read, ping_write, pong_read, pong_write}
+
+            def close_fd(fd):
+                if fd in open_fds:
+                    open_fds.remove(fd)
+                    os.close(fd)
+
+            proc = None
             try:
-                deadline = __import__("time").monotonic() + self.DEADLINE_SECONDS
-                while not (root / "ready").exists() and __import__("time").monotonic() < deadline:
-                    __import__("time").sleep(0.02)
-                self.assertTrue((root / "ready").exists())
+                proc = spawn_fixture_helper(
+                    [sys.executable, str(helper), str(SCRIPTS / "test-ci-test-affected.py"),
+                     str(root / "grandchild.pid"), str(root / "result"),
+                     str(ready_write), str(ping_read), str(pong_write)],
+                    pass_fds=(ready_write, ping_read, pong_write))
+                for child_fd in (ready_write, ping_read, pong_write):
+                    close_fd(child_fd)
+
+                ready, _, _ = select.select([ready_read], [], [], self.DEADLINE_SECONDS)
+                self.assertTrue(ready, "watchdog fixture descendant did not become ready")
+                self.assertEqual(os.read(ready_read, 1), b"R")
+
+                proc.send_signal(signal.SIGTERM)
+                self.assertEqual(os.write(ping_write, b"p"), 1)
+                pong, _, _ = select.select([pong_read], [], [], self.DEADLINE_SECONDS)
+                self.assertTrue(pong, "supervisor did not survive SIGTERM")
+                self.assertEqual(os.read(pong_read, 1), b"P")
+                self.assertIsNone(proc.poll())
+
+                proc.fixture_watchdog.sendall(b"x")
+                stdout, stderr = proc.communicate(timeout=self.DEADLINE_SECONDS)
+                self.assertEqual(proc.returncode, 0, (stdout + stderr).decode(errors="replace"))
+                self.assertEqual(json.loads((root / "result").read_text()), [-signal.SIGKILL, -signal.SIGKILL])
+                grandchild_pid = int((root / "grandchild.pid").read_text())
+                with self.assertRaises(ProcessLookupError):
+                    os.kill(grandchild_pid, 0)
             finally:
-                stop_owned_helper(proc)
-            self.assertEqual(proc.returncode, 0)
-            self.assertEqual(json.loads((root / "result").read_text()), [-signal.SIGKILL, -signal.SIGKILL])
+                for fd in list(open_fds):
+                    close_fd(fd)
+                if proc is not None:
+                    stop_owned_helper(proc)
+
+    def test_watchdog_ordering_separates_cancellation_adoption_and_timeout_budget(self):
+        """Controlled-clock proof of the -9 failure ordering and separated budgets."""
+        class FakeClock:
+            def __init__(self):
+                self.now = 0.0
+
+            def monotonic(self):
+                return self.now
+
+            def sleep(self, seconds):
+                self.now += seconds
+
+        class FakeSocket:
+            def __init__(self, on_send):
+                self.on_send = on_send
+                self.sent = []
+                self.closed = False
+
+            def sendall(self, data):
+                self.sent.append(data)
+                self.on_send(data)
+
+            def close(self):
+                self.closed = True
+
+        class FakeSupervisor:
+            def __init__(self, clock, *, exit_after_watchdog=None):
+                self.clock = clock
+                self.exit_after_watchdog = exit_after_watchdog
+                self.returncode = None
+                self.signals = []
+                self.watchdog_at = None
+                self.fixture_watchdog = FakeSocket(self._on_watchdog)
+
+            def _on_watchdog(self, _data):
+                self.watchdog_at = self.clock.now
+
+            def send_signal(self, sig):
+                self.signals.append((sig, self.clock.now))
+
+            def kill(self):
+                self.signals.append((signal.SIGKILL, self.clock.now))
+                self.returncode = -signal.SIGKILL
+
+            def communicate(self, timeout=None):
+                if self.returncode is not None:
+                    return b"", b""
+                if self.watchdog_at is not None and self.exit_after_watchdog is not None:
+                    elapsed = self.clock.now - self.watchdog_at
+                    if timeout is None or self.exit_after_watchdog <= elapsed + timeout:
+                        self.clock.sleep(max(0.0, self.exit_after_watchdog - elapsed))
+                        self.returncode = 0
+                        return b"", b""
+                if timeout is not None:
+                    self.clock.sleep(timeout)
+                    raise subprocess.TimeoutExpired(["broken.py"], timeout)
+                return b"", b""
+
+        # Case 1: If ANCHOR reaps the tracked child (yielding ECHILD) or adoption exceeds
+        # stop_owned_helper's 5s watchdog_timeout, stop_owned_helper calls proc.kill() -> -9.
+        clock = FakeClock()
+        preempted = FakeSupervisor(clock, exit_after_watchdog=5.1)
+        stop_owned_helper(preempted, sigterm_timeout=5, watchdog_timeout=5)
+        self.assertEqual(preempted.returncode, -signal.SIGKILL)
+        self.assertEqual(preempted.signals, [(signal.SIGTERM, 0.0), (signal.SIGKILL, 10.0)])
+        self.assertEqual(preempted.fixture_watchdog.sent, [b"x", b"x"])
+        self.assertTrue(preempted.fixture_watchdog.closed)
+
+        # Case 2: Transient ECHILD (while intermediate child exits) then WNOHANG=0 then SIGKILL
+        # adoption/reaping succeeds deterministically within budget.
+        adopt_clock = FakeClock()
+        sigkill_status = os.W_EXITCODE(0, signal.SIGKILL) if hasattr(os, "W_EXITCODE") else signal.SIGKILL
+        outcomes = iter([ChildProcessError(10, "No child processes"), (0, 0), (4321, sigkill_status)])
+
+        def scripted_waitpid(pid, flags):
+            self.assertEqual((pid, flags), (4321, os.WNOHANG))
+            outcome = next(outcomes)
+            if isinstance(outcome, BaseException):
+                raise outcome
+            return outcome
+
+        exitcode = reap_adopted_descendant(
+            4321, timeout=5, poll_interval=0.01, waitpid=scripted_waitpid,
+            monotonic=adopt_clock.monotonic, sleep=adopt_clock.sleep)
+        self.assertEqual(exitcode, -signal.SIGKILL)
+        self.assertAlmostEqual(adopt_clock.monotonic(), 0.02)
+
+        # Case 3: With helper adoption_timeout (5s) strictly inside outer deadline (10s),
+        # an un-adopted descendant raises TimeoutError at 5s rather than being masked as -9.
+        timeout_clock = FakeClock()
+
+        def never_adopted(_pid, _flags):
+            raise ChildProcessError(10, "No child processes")
+
+        with self.assertRaises(TimeoutError):
+            reap_adopted_descendant(
+                4321, timeout=5, poll_interval=0.5, waitpid=never_adopted,
+                monotonic=timeout_clock.monotonic, sleep=timeout_clock.sleep)
+        self.assertEqual(timeout_clock.monotonic(), 5.0)
+        bounded = FakeSupervisor(FakeClock(), exit_after_watchdog=5.0)
+        stop_owned_helper(bounded, sigterm_timeout=5, watchdog_timeout=10)
+        self.assertEqual(bounded.returncode, 0)
 
     def test_executor_sigterm_stops_the_separate_child_session(self):
         scratch = SCRIPTS.parent / ".orbit" / "tmp"
