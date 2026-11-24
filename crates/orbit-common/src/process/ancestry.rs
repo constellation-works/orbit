@@ -82,28 +82,8 @@ fn linux_start_and_parent(pid: u32) -> Option<(u64, u32)> {
 
 #[cfg(target_os = "macos")]
 fn darwin_start_and_parent(pid: u32) -> Option<(u64, u32)> {
-    use std::mem::{MaybeUninit, size_of};
-
-    let mut info = MaybeUninit::<libc::proc_bsdinfo>::uninit();
-    let expected = i32::try_from(size_of::<libc::proc_bsdinfo>()).ok()?;
-    // Safety: `info` points to `expected` writable bytes and is initialized
-    // only when libproc reports that it filled the complete structure.
-    let written = unsafe {
-        libc::proc_pidinfo(
-            pid as libc::pid_t,
-            libc::PROC_PIDTBSDINFO,
-            1,
-            info.as_mut_ptr().cast(),
-            expected,
-        )
-    };
-    if written != expected {
-        return None;
-    }
-    // Safety: the full structure was written above.
-    let info = unsafe { info.assume_init() };
-    let starttime = (info.pbi_start_tvsec << 20) | info.pbi_start_tvusec.min((1 << 20) - 1);
-    Some((starttime, info.pbi_ppid))
+    let info = super::identity::darwin_bsd_info(pid, true).ok()??;
+    Some((super::identity::darwin_start_time(&info), info.ppid))
 }
 
 /// One live process in a worker's tree, named so a reused pid is not the
@@ -623,28 +603,10 @@ pub(super) mod darwin_tree {
     }
 
     fn read_start(pid: u32) -> Result<(u64, u32), ReadError> {
-        let mut info = MaybeUninit::<libc::proc_bsdinfo>::uninit();
-        let expected =
-            i32::try_from(size_of::<libc::proc_bsdinfo>()).map_err(|_| ReadError::Unreadable)?;
-        clear_errno();
-        // Safety: `info` points to `expected` writable bytes and is read only
-        // after libproc reports that it filled the complete structure.
-        let written = unsafe {
-            libc::proc_pidinfo(
-                pid as libc::pid_t,
-                libc::PROC_PIDTBSDINFO,
-                1,
-                info.as_mut_ptr().cast(),
-                expected,
-            )
-        };
-        if written != expected {
-            return Err(classify_errno());
-        }
-        // Safety: the full structure was written above.
-        let info = unsafe { info.assume_init() };
-        let starttime = (info.pbi_start_tvsec << 20) | info.pbi_start_tvusec.min((1 << 20) - 1);
-        Ok((starttime, info.pbi_ppid))
+        let info = super::super::identity::darwin_bsd_info(pid, true)
+            .map_err(|_| ReadError::Unreadable)?
+            .ok_or(ReadError::Gone)?;
+        Ok((super::super::identity::darwin_start_time(&info), info.ppid))
     }
 
     /// Own CPU time, reaped children's CPU time and physical footprint. The
