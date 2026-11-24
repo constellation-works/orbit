@@ -46,8 +46,8 @@ pub(super) const HELD_BACKOFF_BASE: Duration = Duration::from_secs(300);
 ///
 /// [`DeliveryRefusal::CheckRunsAbsent`] is in this set [ORB-24457]. The
 /// auto-fix pass still withholds the hand-back, without spending the
-/// ceiling, while the unchanged head reports no pending or passed required
-/// check.
+/// ceiling, while the published head, or a head produced by an Orbit-audited
+/// clean base refresh of it, reports no pending or passed required check.
 pub(crate) fn handed_back_hold(refusal: DeliveryRefusal) -> bool {
     match refusal {
         DeliveryRefusal::CheckEvidenceInconclusive
