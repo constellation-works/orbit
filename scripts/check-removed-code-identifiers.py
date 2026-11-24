@@ -192,8 +192,8 @@ def use_items(tree, prefix=""):
     return [(full, name)]
 
 
-def strip_rust_comments(text):
-    """Replace Rust comments with whitespace, preserving quoted literals."""
+def rust_code_without_comments_or_literals(text):
+    """Replace Rust comments and literals with whitespace, preserving line breaks."""
     result = []
     index = 0
     while index < len(text):
@@ -202,8 +202,14 @@ def strip_rust_comments(text):
             end_marker = '"' + raw.group(1)
             end = text.find(end_marker, raw.end())
             end = len(text) if end < 0 else end + len(end_marker)
+            result.append(''.join('\n' if char == '\n' else ' ' for char in text[index:end]))
+            index = end
+            continue
         elif text[index] in "\"'" and (quoted := RUST_QUOTED.match(text, index)):
             end = quoted.end()
+            result.append(''.join('\n' if char == '\n' else ' ' for char in text[index:end]))
+            index = end
+            continue
         elif text.startswith('//', index):
             end = text.find('\n', index)
             end = len(text) if end < 0 else end
@@ -236,7 +242,7 @@ def public_paths(path, text):
     if module is None:
         return set()
     return {f"{module}::{name}"
-            for match in PUB_USE.finditer(strip_rust_comments(text))
+            for match in PUB_USE.finditer(rust_code_without_comments_or_literals(text))
             for _, name in use_items(match.group(1))}
 
 
