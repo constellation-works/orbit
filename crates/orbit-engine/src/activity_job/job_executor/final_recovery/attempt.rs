@@ -541,8 +541,21 @@ pub(in crate::activity_job::job_executor) fn attempt_final_recovery(
         .and_then(|input| decision::dispatch_final_recovery(ctx, step, activity, &input));
     let ((decision, fault), recovery_model) = match dispatch {
         Ok(dispatched) => {
-            let (decision, fault) =
+            let malformed = FinalRecoveryDecision::parse_attributed(&dispatched.payload).is_err();
+            let (mut decision, fault) =
                 FinalRecoveryDecision::from_attributed_output(Some(&dispatched.payload));
+            // A malformed answer escalates, and nothing in it names what
+            // failed. Carry the original failed step and its bounded,
+            // redacted error next to the parser error, so the operator sees
+            // both failures in one handoff. The decision stays an
+            // escalation: the refused response authorizes nothing.
+            if malformed && let FinalRecoveryDecision::Escalate { diagnosis, .. } = &mut decision {
+                diagnosis.push_str(&format!(
+                    "; the original failure was step `{}`: {}",
+                    step.id,
+                    redacted_recovery_diagnostic(error_message)
+                ));
+            }
             (
                 (decision, fault.judged_by(dispatched.judge)),
                 dispatched.model,

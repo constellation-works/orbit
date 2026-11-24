@@ -2,7 +2,7 @@
 type: issue
 applies_to: [final_recovery]
 status: active
-links: [ORB-20833]
+links: [ORB-20833, ORB-27941]
 ---
 
 # Final recovery decision rejected for an unknown field
@@ -14,6 +14,12 @@ links: [ORB-20833]
 ## Mechanism
 
 The recovery agent returned a `friction_reported` decision that included `diagnosis`. The current schema rejects that field on `friction_reported`: it requires `fault`, `fault_evidence`, and `human_action`, plus either `friction_id` or both `friction_title` and `friction_body`; `summary` is optional. An unknown field fails the decision, and the engine escalates instead of applying it. This is a contract miss by the agent, not a lost run result. `diagnosis` is accepted on `escalate`.
+
+The same rejection fires for any unknown field, for example `rationale` on a decision that does not take it (ORB-27932, jrun-20261124-1209-c3).
+
+## Where the operator sees both failures
+
+Since ORB-27941 the escalation's diagnosis, shown in the task's Final recovery and decision request records, carries the parser error followed by `the original failure was step `<id>`: <error>`. The error is the failed step's own message, redacted and capped at 4096 characters. Before that change the diagnosis held only the parser error, so a failure such as `managed_block_not_writable` was visible only in the task's execution summary. The response still authorizes nothing: the decision stays an escalation with an `unknown` fault.
 
 ## Resolution
 

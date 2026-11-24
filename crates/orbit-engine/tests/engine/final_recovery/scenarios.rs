@@ -941,6 +941,44 @@ fn a_malformed_decision_is_escalated() {
     assert_count(&host, "handoff", 1);
 }
 
+/// [ORB-27941] A refused response keeps the original failure beside the
+/// parser error, bounded and redacted, in the one escalation the host gets.
+fn a_malformed_decision_keeps_the_failed_step_evidence() {
+    const SECRET: &str = "sk-abcdefghijklmnopqrstuvwxyz0123456789";
+    let failure = format!(
+        "managed_block_not_writable: ORB-27941-marker AGENTS.md; key {SECRET}; {}",
+        "x".repeat(16 * 1024)
+    );
+    let host = work_decide_host(
+        vec![Reply::Diagnostic(failure)],
+        // A valid resume carrying a field the schema does not know.
+        Reply::Ok(json!({
+            "decision": "resume", "fault": "implementer", "fault_evidence": FAULT_EVIDENCE,
+            "step_id": "work", "rationale": "retry", "unexpected_field": "x",
+        })),
+    );
+    let run = run_pipeline(false, &host);
+    assert!(run.result.is_err());
+    // The refused response authorizes no resume, requeue or completion.
+    assert_count(&host, "work", 1);
+    assert_count(&host, "handoff", 1);
+    let applications = host.applications();
+    assert_eq!(applications.len(), 1, "one escalation reaches the host");
+    let application = &applications[0];
+    assert_eq!(application.failed_step_id, "work");
+    assert!(application.resume_step_index.is_none());
+    assert_eq!(application.fault.fault, RecoveryFault::Unknown);
+    let FinalRecoveryDecision::Escalate { diagnosis, .. } = &application.decision else {
+        panic!("a malformed decision escalates: {application:?}");
+    };
+    assert!(diagnosis.contains("malformed decision"), "{diagnosis}");
+    assert!(diagnosis.contains("unexpected_field"), "{diagnosis}");
+    assert!(diagnosis.contains("step `work`"), "{diagnosis}");
+    assert!(diagnosis.contains("ORB-27941-marker"), "{diagnosis}");
+    assert!(!diagnosis.contains(SECRET), "{diagnosis}");
+    assert!(diagnosis.len() < 8 * 1024, "bounded: {} B", diagnosis.len());
+}
+
 fn a_decision_carries_its_fault_and_one_without_a_fault_escalates() {
     let (host, _) = failing_run(
         false,
@@ -1463,7 +1501,7 @@ macro_rules! recovery_contracts {
 }
 recovery_contracts!(recovery_contracts_1: a_resume_reruns_from_the_named_step_and_the_run_completes, resume_context_is_opaque_when_the_target_inherits_job_input, a_refused_deferral_reaches_the_resumed_nested_implementer_and_a_restart, an_oversized_refusal_reaches_the_resumed_step_bounded_under_the_admitted_id, an_oversized_refused_output_reaches_the_resumed_implementer_bounded, a_settling_decision_ends_the_run_without_the_failure_handoff);
 recovery_contracts!(recovery_contracts_2: an_escalation_still_runs_the_failure_handoff, an_error_that_skips_step_recovery_still_reaches_final_recovery, step_recovery_runs_first_and_final_recovery_only_once_it_is_spent, final_recovery_runs_at_most_once_per_run, a_run_resumed_after_a_final_recovery_resume_never_runs_it_again, a_run_resumed_after_a_crash_mid_settlement_replays_the_recorded_decision, an_evidence_hold_after_step_recovery_holds_the_run, a_cancelled_child_after_step_recovery_cancels_the_run);
-recovery_contracts!(recovery_contracts_3: a_provider_authentication_failure_skips_final_recovery, an_empty_crew_pool_skips_final_recovery, a_resume_to_a_later_step_reruns_the_failed_contract_and_records_the_downgrade, a_resume_to_an_earlier_step_keeps_the_named_target, a_resume_to_an_admission_or_nonexistent_step_is_escalated, a_malformed_decision_is_escalated, a_decision_carries_its_fault_and_one_without_a_fault_escalates, the_recovery_packet_withholds_the_implementers_model);
+recovery_contracts!(recovery_contracts_3: a_provider_authentication_failure_skips_final_recovery, an_empty_crew_pool_skips_final_recovery, a_resume_to_a_later_step_reruns_the_failed_contract_and_records_the_downgrade, a_resume_to_an_earlier_step_keeps_the_named_target, a_resume_to_an_admission_or_nonexistent_step_is_escalated, a_malformed_decision_is_escalated, a_malformed_decision_keeps_the_failed_step_evidence, a_decision_carries_its_fault_and_one_without_a_fault_escalates, the_recovery_packet_withholds_the_implementers_model);
 recovery_contracts!(recovery_contracts_4: a_stopped_rebase_resumes_its_rebasing_step_without_a_repair_commit, completion_observation_classifies_retry_policy_and_candidate_refusal, a_failure_before_the_worktree_exists_skips_final_recovery, failed_recovery_dispatch_is_injected_before_final_recovery, final_recovery_injects_only_its_runs_bounded_evidence_in_order, final_recovery_dispatches_with_newest_attempts_and_failure_signatures_when_evidence_overflows, final_recovery_keeps_post_recovery_output_when_a_later_step_fails, final_recovery_resume_checkpoints_the_latest_conflict_diagnostics, transient_infrastructure_is_escalated_without_an_agent, a_github_rate_limit_is_requeued_without_an_agent, worktree_setup_dependency_not_found_skips_final_recovery);
 recovery_contracts!(recovery_contracts_5: finished_run_tls_observation_readmits_unchanged_publication, transient_observation_held_after_recovery_parks_or_requeues, replayed_candidate_change_escalation_holds_after_the_same_observation_failure);
 
