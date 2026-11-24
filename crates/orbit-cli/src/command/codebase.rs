@@ -141,18 +141,38 @@ fn analytics_blocks(value: &Value) -> Vec<Block> {
         "\nChange coupling: reserved together ÷ reserved either ({} pairs below minimum support)",
         count(&coupling["below_support"]),
     )));
-    let mut table = rate_table("PATHS");
+    let mut table = Table::new(vec![
+        Column::new("#").number(),
+        Column::new("PATHS").path(),
+        Column::new("ABSENT MEMBER").fixed().keep_when_uniform(true),
+        Column::new("RATE").number(),
+        Column::new("COUNT").number(),
+    ])
+    .empty_message("nothing reaches the minimum support in this window");
     for (index, row) in rows(coupling).iter().take(TEXT_ROWS).enumerate() {
-        let paths = row["paths"]
+        let paths: Vec<&str> = row["paths"]
             .as_array()
             .into_iter()
             .flatten()
             .filter_map(Value::as_str)
+            .collect();
+        let is_absent = |path: &str| {
+            row["absent_paths_at_head"]
+                .as_array()
+                .is_some_and(|missing| missing.iter().any(|item| item.as_str() == Some(path)))
+        };
+        let first_absent = paths.first().is_some_and(|path| is_absent(path));
+        let second_absent = paths.get(1).is_some_and(|path| is_absent(path));
+        let absent_member = match (first_absent, second_absent) {
+            (false, false) => "NONE",
+            (true, false) => "FIRST",
+            (false, true) => "SECOND",
+            (true, true) => "BOTH",
+        };
+        let paths = paths
+            .into_iter()
             .map(|path| {
-                if row["absent_paths_at_head"]
-                    .as_array()
-                    .is_some_and(|missing| missing.iter().any(|item| item.as_str() == Some(path)))
-                {
+                if is_absent(path) {
                     format!("{path} [absent at HEAD]")
                 } else {
                     path.to_string()
@@ -160,7 +180,13 @@ fn analytics_blocks(value: &Value) -> Vec<Block> {
             })
             .collect::<Vec<_>>()
             .join(" <-> ");
-        table.add_row(rate_row(index, paths, row));
+        table.add_row(vec![
+            (index + 1).to_string(),
+            paths,
+            absent_member.to_string(),
+            percent(&row["rate"]),
+            fraction(row),
+        ]);
     }
     blocks.push(Block::table(table));
 
