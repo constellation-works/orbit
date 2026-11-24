@@ -9,7 +9,7 @@ feature: resident-orchestrator
 tags: [resident-orchestrator, spec]
 related_features: [resident-orchestrator, activity-job, mid-run-steering]
 related_artifacts: [ORB-21229, ORB-21243, ORB-21246]
-last_updated: 2026-11-22
+last_updated: 2026-11-23
 ---
 
 # Spec: Checkpoint and resume contract
@@ -17,7 +17,8 @@ last_updated: 2026-11-22
 Every resident cycle ends with exactly one `resident.checkpoint` record on its mandate's
 assignment task, written by the agent through `orbit.resident.checkpoint` or, failing that,
 synthesized by the cycle's finalize step. The next cycle builds its brief from the latest full checkpoint, bounded earlier summaries
-and Orbit state; it never reads the previous agent's final message. Questions the
+and Orbit state, both skipping heartbeat `unchanged` records ([Resume](#resume)); it never reads
+the previous agent's final message. Questions the
 resident escalates and words the manager relays use two more shapes, `resident.request` and
 `resident.answer`. All three are task comments whose message is one JSON object, validated by core
 on write.
@@ -114,7 +115,7 @@ refused as `resident_action_in_doubt`, and the agent checks the subject's state 
 | `notes` | ≤ 600 characters on new writes: only what changed this cycle and what is next. Standing state stays in structured fields such as `requests[]` and `decisions[]`; operator asks go in `requests[]`/notices, not notes |
 | `continuity` | `resumed`, `rebuilt` (conversation expired or absent) or `off` |
 | `conversation_ref` | Optional provider conversation reference for the next cycle. The cycle copies `brief.conversation_ref` verbatim (`null`/omitted when the brief carries none); core forces `continuity` to `rebuilt` when a claimed `resumed` has no live prior reference |
-| `outcome` | `progress`, `idle` (woke, nothing to do), `unchanged` (heartbeat-only check with unchanged wake items; core writes it, no model cycle), `waiting` (only open requests), `incomplete` (synthesized), `handoff`, `ended` |
+| `outcome` | `progress`, `idle` (woke, nothing to do), `unchanged` (heartbeat-only check with unchanged wake items; core writes it, no model cycle, and the brief skips it, see [Resume](#resume)), `waiting` (only open requests), `incomplete` (synthesized), `handoff`, `ended` |
 
 Limits: 64 KiB per record, 50 actions, 20 decisions, 20 costs. A cycle that reaches a limit does
 not write a second checkpoint; it stops and leaves the rest to the next cycle. Bounded cycles are
@@ -151,7 +152,7 @@ of that checkpoint, or null when the mandate has no checkpoint. The parsed objec
 write time. The dashboard's GET reads move the time into `latest_checkpoint.at` and drop the
 top-level field ([2_design.md §6.1](../2_design.md#61-the-dashboard-path)). Ordinary comments and
 request/answer records do not obscure the latest checkpoint. The text output includes its cycle,
-outcome and notes.
+outcome and notes. This `latest_checkpoint` is the latest persisted record, so it can be an `unchanged` heartbeat record; the brief's full checkpoint skips those ([Resume](#resume)), so the two can differ.
 Recovery checkpoints may also list action keys from `recovery_of`, since retrying a dead cycle's
 action must reuse its original key. Other cycles' action keys are refused.
 
@@ -214,7 +215,7 @@ tool refuses any field naming rights or workspaces. A `resident.answer` is a wak
 The brief `resident_observe` builds, in order:
 
 1. the mandate artifact and the effective authority, including `observe_only` and why;
-2. `checkpoints`: the latest checkpoint in full; `earlier_checkpoint_summaries`: up to four earlier records, newest first, each with only `cycle`, `outcome` and the first 600 characters of `notes`. There is no older-notes tail;
+2. `checkpoints`: the latest checkpoint whose `outcome` is not `unchanged`, in full; `earlier_checkpoint_summaries`: up to four earlier records that are not `unchanged`, newest first, each with only `cycle`, `outcome` and the first 600 characters of `notes`. There is no older-notes tail. Heartbeat `unchanged` records hold scheduling state, not an observation, so the brief leaves them out of both: after a skipped heartbeat, the full checkpoint is the last real observation, not the skip record;
 3. open `resident.request` entries with their decision state and answers;
 4. `resident.answer` and other non-resident comments since the last checkpoint;
 5. the wake reasons with the facts behind them (task status, run outcome, PR/CI state);

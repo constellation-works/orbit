@@ -127,7 +127,7 @@ rejected appear only with `--all`. `show` reports one mandate in full.
 `stalled_reason`, `mandate`, `effective_authority`, `authority`,
 `open_requests`, `latest_checkpoint`, `latest_checkpoint_at` and, while a cycle
 is live, `live_cycle`. `latest_checkpoint` is the latest checkpoint's complete
-record, unchanged and with no time field, or null. Its `cycle` names the cycle
+record, unchanged and with no time field, or null. It can be a heartbeat `unchanged` record, which a cycle's brief skips. Its `cycle` names the cycle
 the record belongs to, not the time it was written. `latest_checkpoint_at` is that checkpoint comment's write time,
 a top-level field, and is null when the mandate has no checkpoint.
 `mandate_error` or `authority_error` appears when that record cannot be read.
@@ -386,6 +386,9 @@ comment, for a cycle that is already live. It does not start a cycle.
 
 Each cycle reads the latest checkpoint in full and up to four earlier summaries
 (cycle, outcome and at most 600 characters of notes), with no older-notes tail.
+Both skip heartbeat checks that ended `unchanged`. Those record scheduling state, not
+an observation, so after a skipped heartbeat the full checkpoint is the last real one.
+`show` reports the latest record, which can be an `unchanged` one.
 Historical checkpoints with longer notes remain readable.
 
 ## Evolution ledger

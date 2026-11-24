@@ -1,7 +1,7 @@
 ---
 title: Resident Orchestrator — Design
 owner: claude
-last_updated: 2026-11-22
+last_updated: 2026-11-23
 last_validated: 2026-11-08
 status: Draft
 feature: resident-orchestrator
@@ -262,7 +262,7 @@ A cycle is one run of `resident_cycle_pipeline`, a catalog job with three phases
 
 1. **`resident_observe`** (deterministic). Takes the cycle lease (a fenced lease keyed by the
    mandate; a held lease defers the fire). Loads the mandate, effective authority, the latest full checkpoint
-   and up to four earlier summaries, open requests and their answers, the wake reasons and their facts, the
+   and up to four earlier summaries (both skip heartbeat `unchanged` records; [checkpoint contract](specs/checkpoint-contract.md#resume)), open requests and their answers, the wake reasons and their facts, the
    notices in scope, and the workspace's standing goals. Computes the cycle's tool grant
    ([§3](#3-authority)), narrowed to observe-only when a maintenance notice is open
    ([§7](#7-notices)). If the previous cycle has no checkpoint, it marks this cycle a **recovery
@@ -320,7 +320,7 @@ bounded by one floor interval. Recovery cost is measured ([§9](#9-metrics-that-
 actions with keys and results, decisions taken with their class and reversibility, open requests,
 cost events, delta-only `notes` of at most 600 characters for the next cycle, the next planned wake, and the outcome. The
 `resident.request` and `resident.answer` shapes cover escalated questions and manager relays. An
-expired provider conversation reconstructs from the mandate, the authority, the latest full checkpoint and bounded earlier summaries,
+expired provider conversation reconstructs from the mandate, the authority, the latest full checkpoint and bounded earlier summaries (the brief's selection, which skips `unchanged` heartbeat records),
 open requests with answers, wake events and notices: the same brief every cycle gets. Continuity, a
 resumed conversation, is an adapter that adds context and never changes correctness. Full schemas:
 [specs/checkpoint-contract.md](./specs/checkpoint-contract.md).
@@ -399,7 +399,7 @@ publishes the live cycle and records a `resident_cycle_granted` history entry: t
 (`rights`, `workspaces`, `observe_only`, `narrowed_by`, `recovery_of`, `digest`, `reasons`). An open
 maintenance notice in a covered workspace (or the global scope) empties the rights with
 `narrowed_by: notice:<id>`; a passed deadline does the same with `narrowed_by: deadline`. An
-unreadable notice store narrows too. The brief carries the mandate, the grant, the latest full checkpoint and up to four earlier summaries, open requests, comments since the last cycle, the wake, the notices (title and body as
+unreadable notice store narrows too. The brief carries the mandate, the grant, the latest full checkpoint and up to four earlier summaries (both skipping heartbeat `unchanged` records), open requests, comments since the last cycle, the wake, the notices (title and body as
 `untrusted_*`), and for a recovery cycle the dead cycle's ledger rows. Standing goals and the skill
 reference arrive with [ORB-21250]. Observe also makes a detached managed checkout of the registered
 workspace's current `HEAD` for this cycle (with Git's parallel checkout workers, which write the
