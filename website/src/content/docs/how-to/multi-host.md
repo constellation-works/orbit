@@ -113,8 +113,16 @@ in the dashboard's [Observe › Fleet](/how-to/dashboard/#fleet) page.
 
 Start with `orbit host list` and `orbit doctor` on the calling machine. `host
 list` is a report: an unreachable host does not make it fail. The `hosts` row
-in `orbit doctor` is the health check: it fails on an identity mismatch or on
-skew with a replica's owner, and warns on unreachable hosts.
+in `orbit doctor` is the health check. It warns on unreachable transports
+(`unreachable_destination`) and on local probe failures (`probe_failed`). For
+example, `probe failed (probe_failed): write SSH defaults …` means the local
+SSH setup failed before Orbit contacted the destination; check the local path
+and error in the diagnostic. It does not establish whether the destination is
+reachable. By contrast, `… is unreachable (unreachable_destination)` reports a
+failed transport probe. An identity mismatch (`host_identity_mismatch`) means
+the remote answered but its machine ID or task prefix differs from the
+registered entry; this is an error, as is version or protocol skew with a
+replica's owner.
 
 | Code | What to do |
 |---|---|
@@ -122,6 +130,7 @@ skew with a replica's owner, and warns on unreachable hosts.
 | `unknown_task_prefix` | Register the machine that minted the task, or pass `--workspace` to read a mirror. |
 | `task_prefix_remote` | A plain local or remote MCP server does not relay to other hosts. Use federated MCP, or connect to the host the error names. |
 | `unreachable_destination` / `owner_unreachable` | Check the SSH target, non-interactive login and `orbit` on the remote `PATH`. |
+| `probe_failed` | Read the named cause. For `write SSH defaults`, local SSH setup failed before remote probing; resolve the write error at the named local path and rerun `orbit doctor`. Reachability was not established. |
 | `host_too_old` | Upgrade Orbit on the remote. |
 | `host_exists` | That machine ID is already registered. Inspect or rename the existing entry. |
 | `host_name_conflict` | Choose another name. Names are unique across remote entries and this machine. |
