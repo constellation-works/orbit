@@ -15,7 +15,10 @@ docs/design-patterns/test_strategy.md), so the numbers stay comparable.
 
 import argparse
 import json
+import os
+import tempfile
 import re
+import stat
 import sys
 from collections import Counter
 from pathlib import Path
@@ -203,8 +206,24 @@ def main(argv=None):
         return 2
 
     if args.write_baseline:
-        args.write_baseline.write_text(json.dumps(baseline_of(current), indent=2, sort_keys=True) + "\n",
-                                       encoding="utf-8")
+        temporary = None
+        try:
+            with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=args.write_baseline.parent,
+                                             prefix=f".{args.write_baseline.name}.", delete=False) as stream:
+                temporary = Path(stream.name)
+                if args.write_baseline.is_file():
+                    os.fchmod(stream.fileno(), stat.S_IMODE(args.write_baseline.stat().st_mode))
+                stream.write(json.dumps(baseline_of(current), indent=2, sort_keys=True) + "\n")
+            os.replace(temporary, args.write_baseline)
+        except OSError as error:
+            print(f"unit-test ratchet: cannot write baseline {args.write_baseline}: {error}", file=sys.stderr)
+            return 2
+        finally:
+            if temporary is not None and temporary.exists():
+                try:
+                    temporary.unlink()
+                except OSError as error:
+                    print(f"unit-test ratchet: cannot remove temporary baseline {temporary}: {error}", file=sys.stderr)
         return 0
 
     if args.check:

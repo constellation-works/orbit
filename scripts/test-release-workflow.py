@@ -39,6 +39,33 @@ DESKTOP_MANIFEST = "orbit-desktop-checksums.txt"
 DESKTOP_SIGNATURE = DESKTOP_MANIFEST + ".sig"
 
 
+def serve_publish_barrier(listener, deadline, labels, errors, on_arrival=lambda: None):
+    """Release both peers only if they arrive within the shared deadline."""
+    connections = []
+    try:
+        for _ in range(2):
+            listener.settimeout(max(0.001, deadline - time.monotonic()))
+            connection, _ = listener.accept()
+            connections.append(connection)
+            label = bytearray()
+            while not label.endswith(b"\n"):
+                connection.settimeout(max(0.001, deadline - time.monotonic()))
+                chunk = connection.recv(64)
+                if not chunk:
+                    raise EOFError("barrier peer disconnected")
+                label.extend(chunk)
+            labels.append(label.rstrip(b"\n").decode())
+            on_arrival()
+        for connection in connections:
+            connection.sendall(b"+")
+    except (OSError, EOFError) as exc:
+        errors["barrier"] = exc
+    finally:
+        for connection in connections:
+            connection.close()
+        listener.close()
+
+
 @unittest.skipIf(yaml is None, "PyYAML not installed; the workflow guard skips locally without it")
 class ReleaseWorkflowTests(unittest.TestCase):
     def setUp(self):
@@ -163,8 +190,11 @@ class ReleaseWorkflowTests(unittest.TestCase):
                 barrier = os.environ.get("FAKE_GH_BARRIER")
                 if barrier:
                     import socket
+                    import time
+                    deadline = float(os.environ["FAKE_GH_BARRIER_DEADLINE"])
                     host, port = barrier.rsplit(":", 1)
-                    with socket.create_connection((host, int(port)), timeout=15) as gate:
+                    with socket.create_connection((host, int(port)), timeout=max(0.001, deadline - time.monotonic())) as gate:
+                        gate.settimeout(max(0.001, deadline - time.monotonic()))
                         label = os.environ.get("FAKE_GH_BARRIER_LABEL", "publish")
                         gate.sendall(label.encode() + b"\\n")
                         assert gate.recv(1) == b"+"
@@ -503,6 +533,37 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertEqual(self.uploaded_names(), [])
         self.assertEqual({path.name: path.read_bytes() for path in self.remote.iterdir()}, published)
 
+    def test_publish_barrier_waits_for_both_and_times_out_missing_peer(self):
+        for complete in (True, False):
+            with self.subTest(complete=complete):
+                listener = socket.socket()
+                listener.bind(("127.0.0.1", 0))
+                listener.listen(2)
+                address = listener.getsockname()
+                labels, errors = [], {}
+                arrived = threading.Event()
+                deadline = time.monotonic() + (5 if complete else 0.3)
+                worker = threading.Thread(target=serve_publish_barrier,
+                                          args=(listener, deadline, labels, errors, arrived.set))
+                worker.start()
+                with socket.create_connection(address, timeout=2) as first:
+                    first.settimeout(2)
+                    first.sendall(b"first\n")
+                    self.assertTrue(arrived.wait(2))
+                    if complete:
+                        with socket.create_connection(address, timeout=2) as second:
+                            second.settimeout(2)
+                            second.sendall(b"second\n")
+                            self.assertEqual(first.recv(1), b"+")
+                            self.assertEqual(second.recv(1), b"+")
+                    else:
+                        self.assertEqual(first.recv(1), b"")
+                worker.join(2)
+                self.assertFalse(worker.is_alive())
+                self.assertEqual(labels, ["first", "second"] if complete else ["first"])
+                self.assertEqual("barrier" in errors, not complete)
+                self.assertEqual(listener.fileno(), -1)
+
     def test_distinct_release_tags_publish_desktop_side_by_side(self):
         # Different groups must not take the same lock: both publishers reach
         # gh release view before either is released, then each signs its own tag.
@@ -522,33 +583,14 @@ class ReleaseWorkflowTests(unittest.TestCase):
         labels = []
         errors = {}
 
-        def serve():
-            connections = []
-            try:
-                for _ in range(2):
-                    connection, _ = listener.accept()
-                    connections.append(connection)
-                    label = bytearray()
-                    while not label.endswith(b"\n"):
-                        chunk = connection.recv(64)
-                        if not chunk:
-                            break
-                        label.extend(chunk)
-                    labels.append(label.rstrip(b"\n").decode())
-                for connection in connections:
-                    connection.sendall(b"+")
-            except Exception as exc:
-                errors["barrier"] = exc
-            finally:
-                for connection in connections:
-                    connection.close()
-                listener.close()
+        deadline = time.monotonic() + self_test_hang.HANG_CEILING_SECONDS
 
         def publish(tag, cwd, remote, accept):
             try:
                 errors[tag] = self.publish_desktop(
                     cwd=cwd,
                     FAKE_GH_BARRIER=barrier_address,
+                    FAKE_GH_BARRIER_DEADLINE=str(deadline),
                     FAKE_GH_BARRIER_LABEL=tag,
                     FAKE_ACCEPT_TAGS=accept,
                     FAKE_RELEASE=str(remote),
@@ -558,7 +600,7 @@ class ReleaseWorkflowTests(unittest.TestCase):
             except Exception as exc:
                 errors[tag] = exc
 
-        server = threading.Thread(target=serve)
+        server = threading.Thread(target=serve_publish_barrier, args=(listener, deadline, labels, errors))
         server.start()
         first = threading.Thread(target=publish, args=("v1.2.3", self.root, self.remote, "v1.2.3"))
         second = threading.Thread(target=publish, args=("v9.9.9", other, other_remote, "v9.9.9"))

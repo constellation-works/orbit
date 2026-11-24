@@ -254,6 +254,31 @@ template:
         self.run_generator("--check", code=1)
         self.assertEqual(self.snapshot(), before)
 
+    def test_deleted_entry_and_unreadable_blob_are_distinct(self):
+        self.run_generator()
+        self.successor()
+        self.git("add", ".")
+        self.git("commit", "-qm", "Successor")
+        self.run_generator()
+        before = self.snapshot()
+        blob = self.git("rev-parse", f"{self.original}:{ASSETS / 'example.yaml'}").strip()
+        object_path = self.root / ".git/objects" / blob[:2] / blob[2:]
+        object_path.unlink()
+        failed = self.run_generator(code=1)
+        self.assertIn("cannot read", failed.stderr)
+        self.assertIn(self.original, failed.stderr)
+        self.assertEqual(self.snapshot(), before)
+
+    def test_deleted_revision_has_no_source(self):
+        self.run_generator()
+        self.git("rm", str(ASSETS / "example.yaml"))
+        self.git("commit", "-qm", "Delete asset")
+        revision = self.git("rev-parse", "HEAD").strip()
+        self.run_generator()
+        sources = json.loads(self.sources.read_text())["example"]
+        self.assertNotIn(revision, sources)
+        self.assertIn(self.original, sources)
+
     def test_shallow_check_refuses_incomplete_history_but_generation_retains_fixtures(self):
         self.run_generator()
         self.successor()

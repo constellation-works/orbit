@@ -437,7 +437,9 @@ selection. `--check --check-cargo-selections` runs the same inventory guard
 without executing behavior. The review-evidence fulfilment fixture compiles only
 on Linux; other hosts retain that selection as `NOT_RUN` and require matching
 Linux execution rather than treating the absent native case as stale. A zero selection or absent required case fails the
-guard before sign-off. Listing does not earn the scenario's assertions.
+guard before sign-off. Discovery also fails if command output is incomplete or
+worker cleanup is unverified; in the latter case its scratch directory is
+retained and named in the diagnostic. Listing does not earn the scenario's assertions.
 
 `required_tests` names current executable cases. For consolidated fixtures,
 `required_rows` preserves the original behavioral row names: the fixture emits

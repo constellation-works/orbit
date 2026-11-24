@@ -760,7 +760,7 @@ def fresh_request_growth(fixture: Fixture, path: str, extra_env, startup_timeout
         "bytes": timing["bytes"],
         "rss_before_mb": round(before["rss_kb"] / 1024, 1),
         "rss_after_mb": round(after["rss_kb"] / 1024, 1),
-        "rss_growth_mb": round((after["rss_kb"] - before["rss_kb"]) / 1024, 1),
+        "rss_growth_mb": (after["rss_kb"] - before["rss_kb"]) / 1024,
         "hwm_growth_mb": round((after["hwm_kb"] - before["hwm_kb"]) / 1024, 1),
     }
 
@@ -779,7 +779,7 @@ def soak(fixture: Fixture, rounds: int, interval: float, extra_env, startup_time
                 status = proc_status(server.pid)
                 sample = {
                     "round": number,
-                    "rss_mb": round(status["rss_kb"] / 1024, 1),
+                    "rss_mb": status["rss_kb"] / 1024,
                     "hwm_mb": round(status["hwm_kb"] / 1024, 1),
                     "threads": status["threads"],
                     "arena_like_mappings": arena_like_mappings(server.pid),
@@ -813,9 +813,9 @@ def soak(fixture: Fixture, rounds: int, interval: float, extra_env, startup_time
         "startup_rss_mb": round(start["rss_kb"] / 1024, 1),
         "rss_after_round_3_mb": rss_baseline,
         "rss_after_last_round_mb": rss_final,
-        "drift": round((rss_final - rss_baseline) / rss_baseline, 3),
+        "drift": (rss_final - rss_baseline) / rss_baseline,
         "rss_range_from_round_3_mb": [min(settled), max(settled)],
-        "peak_rss_mb": round(final["hwm_kb"] / 1024, 1),
+        "peak_rss_mb": final["hwm_kb"] / 1024,
         "samples": samples,
     }
 
@@ -868,6 +868,18 @@ def startup_timeout_seconds(value: str) -> float:
     if not math.isfinite(parsed) or parsed <= 0:
         raise argparse.ArgumentTypeError("must be a finite positive number of seconds")
     return parsed
+
+
+def budget_checks(soak_report, fresh):
+    return {
+        "soak_drift_within_15pct": abs(soak_report["drift"]) <= SOAK_DRIFT_BUDGET,
+        "peak_rss_under_512mb": soak_report["peak_rss_mb"] < PEAK_RSS_BUDGET_MB,
+        **{
+            f"single_request_under_20mb:{item['path'].split('?')[0]}": item["rss_growth_mb"]
+            < SINGLE_REQUEST_BUDGET_MB
+            for item in fresh
+        },
+    }
 
 
 def main() -> int:
@@ -924,7 +936,7 @@ def main() -> int:
         ]
         for item in fresh:
             print(
-                f"  {item['path']}: rss +{item['rss_growth_mb']} MB, "
+                f"  {item['path']}: rss +{item['rss_growth_mb']:.1f} MB, "
                 f"hwm +{item['hwm_growth_mb']} MB, {item['ms']} ms"
             )
         print(f"Soak: {args.rounds} rounds every {args.interval:g}s", flush=True)
@@ -938,15 +950,7 @@ def main() -> int:
         if temp is not None:
             temp.cleanup()
 
-    checks = {
-        "soak_drift_within_15pct": abs(soak_report["drift"]) <= SOAK_DRIFT_BUDGET,
-        "peak_rss_under_512mb": soak_report["peak_rss_mb"] < PEAK_RSS_BUDGET_MB,
-        **{
-            f"single_request_under_20mb:{item['path'].split('?')[0]}": item["rss_growth_mb"]
-            < SINGLE_REQUEST_BUDGET_MB
-            for item in fresh
-        },
-    }
+    checks = budget_checks(soak_report, fresh)
     report = {
         "binary": str(binary),
         "server_env": extra_env,

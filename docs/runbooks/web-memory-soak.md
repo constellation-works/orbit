@@ -86,6 +86,10 @@ The run exits 0 when every budget holds, and prints one `PASS` or `FAIL` line pe
 | `peak_rss_under_512mb` | Peak VmHWM under 512 MB |
 | `single_request_under_20mb:<path>` | One request on a fresh server grows VmRSS by under 20 MB |
 
+Budgets use the unrounded measurements; displayed values can round to the
+boundary even when the underlying measurement falls just below or above it.
+The drift limit is inclusive, while the memory limits are strict.
+
 The summary line also prints the range VmRSS spans from round 3 onwards. A ratchet shows in
 the per-round lines as VmRSS that keeps climbing. A swing within a steady range is
 round-to-round variation in what the concurrent requests leave live, such as pooled SQLite readers and

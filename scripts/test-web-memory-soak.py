@@ -58,6 +58,34 @@ class WebMemorySoakCliTests(unittest.TestCase):
         self.assertNotIn("Traceback", combined)
         self.assertNotIn("ValueError", combined)
 
+    def test_exact_measurements_set_budget_results(self):
+        module = load_soak()
+        class FakeServer:
+            pid = 1
+            def __init__(self, *args):
+                pass
+            def get(self, path):
+                return {"ms": 1, "bytes": 1}
+            def stop(self):
+                pass
+        def status(rss, hwm=None):
+            return {"rss_kb": rss, "hwm_kb": hwm if hwm is not None else rss, "threads": 1}
+        with mock.patch.object(module, "Server", FakeServer), mock.patch.object(module, "settle"), \
+             mock.patch.object(module, "arena_like_mappings", return_value=0):
+            for offset in (-1, 0, 1):
+                with self.subTest(offset=offset):
+                    peak = 512 * 1024 + offset
+                    growth = 20 * 1024 + offset
+                    with mock.patch.object(module, "proc_status", side_effect=[status(100000), status(100000 + growth)]):
+                        fresh = module.fresh_request_growth(None, "/sample", {})
+                    samples = [status(100000)] * 4 + [status(115000 + offset), status(115000 + offset, peak)]
+                    with mock.patch.object(module, "proc_status", side_effect=samples):
+                        report = module.soak(None, 4, 0, {})
+                    checks = module.budget_checks(report, [fresh])
+                    self.assertEqual(checks["single_request_under_20mb:/sample"], offset < 0)
+                    self.assertEqual(checks["peak_rss_under_512mb"], offset < 0)
+                    self.assertEqual(checks["soak_drift_within_15pct"], offset <= 0)
+
     def test_rounds_below_3_are_a_usage_error(self):
         for rounds in ("1", "2"):
             with self.subTest(rounds=rounds):
