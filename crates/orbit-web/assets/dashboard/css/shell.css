@@ -565,6 +565,9 @@ button.provider-usage:focus-visible { outline: 2px solid var(--accent); outline-
 .usage-observed { margin-left: auto; color: var(--fg-mute); font-size: var(--text-sm); font-variant-numeric: tabular-nums; }
 .usage-section { margin: 0 0 var(--space-12); }
 .usage-section-head { display: flex; align-items: baseline; justify-content: space-between; gap: var(--space-8); }
+/* The explainer bubble lives inside the uppercase section heading, so it
+   resets the heading's casing and tracking back to body text. */
+.usage-pressure-hint > .info-hint-text { text-transform: none; letter-spacing: normal; }
 .usage-section-title { margin: 0 0 var(--space-6); font-size: var(--text-xs); font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--fg-mute); }
 .usage-pressure-value { font-family: var(--font-mono); font-size: var(--text-lg); font-weight: 600; color: var(--fg-strong); }
 .usage-note { margin: var(--space-4) 0 0; color: var(--fg-dim); font-size: var(--text-sm); line-height: 1.45; }

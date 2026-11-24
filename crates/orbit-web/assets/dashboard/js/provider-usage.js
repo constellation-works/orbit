@@ -5,7 +5,7 @@
 // or the Pin button keeps it open. The readings ride the host resource poll
 // (`provider_limits` and `provider_pressures` in its payload), so they follow
 // the selected host and pause with it in a hidden tab.
-import { resourcePillTone, el, escCloseButton, formatDateTime } from './common.js';
+import { resourcePillTone, el, escCloseButton, formatDateTime, pinnedInfoHint } from './common.js';
 
 const DIALOG_ID = 'provider-usage-dialog';
 // One dialog lists every provider; it opens from the `+N more` chip and, on
@@ -82,13 +82,13 @@ function spanText(seconds) {
   return `${Math.floor(hours / 24)}d ${hours % 24}h`;
 }
 
-/// "2026-10-25 18:00 UTC · in 6h" on the dashboard clock; "" for no time.
-function whenText(iso, now) {
+/// "in 6h" on the dashboard clock; "" for no time. The absolute time stays in
+/// the node's title, never inline (STD-07: show each thing once).
+function relativeWhen(iso, now) {
   const at = validDate(iso);
   if (!at) return '';
   const seconds = Math.round((at.getTime() - now) / 1000);
-  const relative = seconds >= 0 ? `in ${spanText(seconds)}` : `${spanText(-seconds)} ago`;
-  return `${formatDateTime(iso)} · ${relative}`;
+  return seconds >= 0 ? `in ${spanText(seconds)}` : `${spanText(-seconds)} ago`;
 }
 
 /// How one reading reads in the bar and its dialog. `severity` is `critical`
@@ -216,29 +216,39 @@ function pillFor(group) {
   };
 }
 
+/// "observed 5m ago"; the absolute time stays in the node's title. "" (with
+/// no title) when the group holds no readings.
 function observedText(group, now) {
   const times = group.items.map(item => item.observedAt).filter(validDate).sort();
-  if (!times.length) return group.items.length ? 'observed at an unknown time' : '';
-  const at = new Date(times.at(-1));
-  return `observed ${formatDateTime(times.at(-1))} · ${spanText(Math.max(0, (now - at.getTime()) / 1000))} ago`;
+  if (!times.length) return group.items.length ? { text: 'observed at an unknown time', title: '' } : { text: '', title: '' };
+  const latest = times.at(-1);
+  const at = new Date(latest);
+  return {
+    text: `observed ${spanText(Math.max(0, (now - at.getTime()) / 1000))} ago`,
+    title: formatDateTime(latest),
+  };
 }
 
 function pressureModel(pressure, now) {
   if (!pressure) return null;
   const window = pressure.pressure_window;
+  const resets = window?.resets_at ? relativeWhen(window.resets_at, now) : '';
   const basis = window
     ? [`${windowName(window.window || 'weekly', window.scope || '')}${window.scope ? ` · ${window.scope}` : ''}`,
       Number.isFinite(window.used_percent) ? `${Math.round(window.used_percent)}% used` : '',
-      window.resets_at ? `resets ${whenText(window.resets_at, now)}` : ''].filter(Boolean).join(' · ')
+      resets ? `resets ${resets}` : ''].filter(Boolean).join(' · ')
     : 'No live weekly usage, so this reads neutral.';
-  return { value: pressureValue(pressure), basis };
+  const resetsAt = validDate(window?.resets_at);
+  return { value: pressureValue(pressure), basis, basisTitle: resetsAt ? formatDateTime(window.resets_at) : '' };
 }
 
 function rowModel(item, now) {
-  const resets = whenText(item.resetsAt, now);
+  const at = validDate(item.resetsAt);
+  const relative = at ? relativeWhen(item.resetsAt, now) : '';
   return {
     name: item.name, sub: item.sub, value: item.value, fill: item.fill, gate: item.gate, severity: item.severity,
-    reset: resets ? `${validDate(item.resetsAt).getTime() < now ? 'reset' : 'resets'} ${resets}` : '',
+    reset: relative ? `${at.getTime() < now ? 'reset' : 'resets'} ${relative}` : '',
+    resetTitle: at ? formatDateTime(item.resetsAt) : '',
     gateText: item.noGate ? 'no gate' : `gate at ${item.limit}%`,
     flags: [item.stale ? 'old' : '', item.gated ? 'gated' : '', item.partial ? 'partial' : ''].filter(Boolean),
     stale: item.stale,
@@ -297,7 +307,7 @@ const chipClasses = (chip, kind) => `host-resource provider-usage ${kind} ${chip
 const ui = {
   key: null, pinned: false, anchor: null, host: null, signature: '', views: new Map(), chips: new Map(),
   pointerInside: false, openTimer: null, closeTimer: null, suppressFocus: false, bound: false, closeButton: null, pinButton: null,
-  focusedChip: null,
+  pressureHint: null, focusedChip: null,
 };
 
 function dialogNode() {
@@ -355,7 +365,7 @@ function windowRow(row) {
     ]),
     meter(row.fill, row.gate),
     el('div', { class: 'usage-row-foot' }, [
-      el('span', { class: 'usage-row-reset', text: row.reset }),
+      el('span', { class: 'usage-row-reset', text: row.reset, title: row.resetTitle || null }),
       el('span', { class: 'usage-row-gate', text: row.gateText }),
     ]),
   ]);
@@ -388,20 +398,29 @@ function pinButton() {
   return button;
 }
 
+// The weekly-pressure explainer as hover help on the section heading: the
+// dialog scrolls and clips, so this is a viewport-pinned hint (not an inline
+// paragraph), focusable like every info hint. `preserveAction` keeps the
+// dialog's own Escape handling while the hint has focus.
+function pressureExplainer() {
+  const hint = pinnedInfoHint(PRESSURE_EXPLAINED, { preserveAction: true });
+  hint.classList.add('usage-pressure-hint');
+  return hint;
+}
+
 function providerDialog(view) {
   return [
     el('div', { class: 'usage-head dialog-header' }, [
       el('h2', { text: view.title }),
       el('span', { class: 'pill', 'data-tone': resourcePillTone(view.pill.tone), text: view.pill.text }),
-      ...(view.observed ? [el('span', { class: 'usage-observed', text: view.observed })] : []),
+      ...(view.observed.text ? [el('span', { class: 'usage-observed', text: view.observed.text, title: view.observed.title || null })] : []),
     ]),
     ...(view.pressure ? [el('section', { class: 'usage-section usage-pressure' }, [
       el('div', { class: 'usage-section-head' }, [
-        el('h3', { class: 'usage-section-title', text: 'Weekly pressure' }),
+        el('h3', { class: 'usage-section-title', text: 'Weekly pressure' }, [pressureExplainer()]),
         el('span', { class: 'usage-pressure-value', text: view.pressure.value }),
       ]),
-      el('p', { class: 'usage-note', text: PRESSURE_EXPLAINED }),
-      el('p', { class: 'usage-note usage-basis', text: view.pressure.basis }),
+      el('p', { class: 'usage-note usage-basis', text: view.pressure.basis, title: view.pressure.basisTitle || null }),
     ])] : []),
     el('section', { class: 'usage-section' }, [
       el('h3', { class: 'usage-section-title', text: 'Windows' }),
@@ -475,6 +494,7 @@ function fillDialog() {
   ui.closeButton = escCloseButton('Close usage (Esc)', { onClick: () => closeUsage({ restoreFocus: true }) });
   header.append(ui.closeButton);
   dialog.replaceChildren(header, el('div', { class: 'dialog-body' }, rest), actions);
+  ui.pressureHint = dialog.querySelector('.usage-pressure-hint');
 }
 
 function closeUsage({ restoreFocus = false } = {}) {
@@ -484,6 +504,7 @@ function closeUsage({ restoreFocus = false } = {}) {
   ui.key = null;
   ui.pinned = false;
   ui.anchor = null;
+  ui.pressureHint = null;
   setHidden(dialogNode(), true);
   syncExpanded();
   if (restoreFocus && hadFocus) focusQuietly(anchor);
@@ -580,17 +601,23 @@ function bindOnce() {
   on(dialog, 'keydown', event => {
     if (event.key !== 'Tab' || !ui.anchor) return;
     const active = document.activeElement;
+    // The pressure explainer hint sits between Close and Pin in DOM order, so
+    // the cycle runs chip → Close → hint → Pin → chip. Tab on the hint itself
+    // moves on naturally (Pin is next), as does Shift+Tab (Close is previous).
+    const hint = ui.pressureHint?.isConnected ? ui.pressureHint : null;
     if (event.shiftKey) {
       if (active === ui.closeButton) {
         event.preventDefault?.();
         focusQuietly(ui.anchor);
       } else if (active === ui.pinButton) {
         event.preventDefault?.();
-        ui.closeButton?.focus?.();
+        if (hint) hint.focus?.();
+        else ui.closeButton?.focus?.();
       }
     } else if (active === ui.closeButton) {
       event.preventDefault?.();
-      ui.pinButton?.focus?.();
+      if (hint) hint.focus?.();
+      else ui.pinButton?.focus?.();
     } else if (active === ui.pinButton) {
       event.preventDefault?.();
       focusQuietly(ui.anchor);
@@ -668,7 +695,8 @@ export function renderProviderUsage(payload, host = document.getElementById('pro
   const refocus = document.activeElement?.dataset?.usageKey;
   // Changed readings rebuild the open dialog, and with it the focused control.
   const focusedDialogControl = document.activeElement === ui.closeButton ? 'close'
-    : document.activeElement === ui.pinButton ? 'pin' : null;
+    : document.activeElement === ui.pinButton ? 'pin'
+    : document.activeElement === ui.pressureHint ? 'hint' : null;
   // The rebuilt chips are under the same pointer, but the removed ones never
   // report it leaving.
   ui.pointerInside = !!(ui.key && (ui.anchor?.matches?.(':hover') || dialogNode().matches?.(':hover')));
@@ -698,6 +726,7 @@ export function renderProviderUsage(payload, host = document.getElementById('pro
       syncExpanded();
       if (focusedDialogControl === 'close') ui.closeButton?.focus?.();
       else if (focusedDialogControl === 'pin') ui.pinButton?.focus?.();
+      else if (focusedDialogControl === 'hint') ui.pressureHint?.focus?.();
     } else closeUsage();
   } else if (ui.key) closeUsage();
   if (refocus && ui.chips.has(refocus)) focusQuietly(ui.chips.get(refocus).find(node => node === visibleChip(refocus)));
