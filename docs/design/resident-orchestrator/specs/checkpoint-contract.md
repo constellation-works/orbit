@@ -144,9 +144,12 @@ secrets, sensitive environment values and the caller's home directory, checked i
 strings on both write surfaces and in direct core writes. Unknown fields, including nested fields,
 are refused. A guarded retry of a comment that a pre-upgrade build committed after redacting it is
 reconciled, not refused: when the digest of the sanitized request matches the stored receipt, the
-call returns the committed result with `replayed: true` and writes no second comment. A guarded
-retry whose sanitized digest differs from its receipt, and a fresh guarded write of sensitive text,
-are refused with `mutation_applied: false`.
+call is a replay. A matching receipt acknowledges the original mutation without repeating it: the
+retry writes no second comment and returns the task's current snapshot with `replayed: true`. That
+snapshot is read when the retry runs, so after an intervening edit it carries the task's current
+revision, not the one the original write produced. A guarded retry whose sanitized digest differs
+from its receipt, and a fresh guarded write of sensitive text, are refused with
+`mutation_applied: false`.
 Records cannot be initial task-creation comments: they need an existing, usable mandate.
 Dedicated start/approval/rejection transitions require a separate comment-only update for resident
 records, so their specialized lifecycle writers cannot bypass resident admission.
