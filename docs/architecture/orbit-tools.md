@@ -1,6 +1,7 @@
 ---
 type: context
 summary: Architecture map for orbit-tools: what it owns, main modules, dependencies and entry points.
+last_validated: 2026-11-24
 tags: [architecture, orbit-tools]
 ---
 
