@@ -54,6 +54,7 @@ RUST_ITEM = re.compile(
     r"(?:const|static|fn|struct|enum|trait|type)[ \t]+(?:mut[ \t]+)?([A-Za-z_]\w*)",
     re.MULTILINE)
 PUB_USE = re.compile(r"\bpub(?:\([^)\n]*\))?[ \t]+use[ \t]+([^;]+);")
+USE_PATH_SEPARATOR = re.compile(r"\s*::\s*")
 RUST_RAW_STRING = re.compile(r'(?:br|r)(#*)"')
 # A character literal is one character, a backslash escape, or a `\x7F` or
 # `\u{2f}` escape; a quoted string runs to its closing quote.
@@ -169,7 +170,7 @@ def top_level_commas(text):
 
 def use_items(tree, prefix=""):
     """Return (path, public name) for each item of a `use` tree; globs are skipped."""
-    tree = " ".join(tree.split())
+    tree = USE_PATH_SEPARATOR.sub("::", " ".join(tree.split()))
     brace = tree.find("{")
     if brace >= 0:
         head = prefix + tree[:brace]
@@ -186,7 +187,7 @@ def use_items(tree, prefix=""):
     else:
         full = prefix + target
     name = alias.strip() or full.rsplit("::", 1)[-1]
-    if not full or name == "_":
+    if not full or not name or name == "_":
         return []
     return [(full, name)]
 
