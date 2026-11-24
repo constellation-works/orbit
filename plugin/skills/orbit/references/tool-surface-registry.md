@@ -47,6 +47,39 @@ failed steps by default, or the full log, plus runner checkout evidence.
   completed job belonging to that run; `failed` scope is restricted to
   unsuccessful jobs. `source` and `source_jobs` identify the recovery. Other
   errors remain errors.
+- **Cache.** A completed job's or run's log is kept under `state/github-run-logs/`
+  in the Orbit data root (`ORBIT_ROOT` when set, else `~/.orbit`), so paging one
+  log in windows downloads it once. The directory is `0700` and each entry a
+  `0600` file, written through a staging file and renamed into place. Agent
+  sandboxes mask the directory, so an agent reads a cached log only through this
+  tool's bounded, redacted response.
+- **Redaction.** Before any byte is stored, each span the response redactor would
+  rewrite is overwritten with `*` bytes of the same length, so byte and line
+  coordinates stay those of the log GitHub served. Every read of a cached log, the
+  read that fills the cache included, renders from that masked copy, so a cold and
+  a warm read return the same output.
+- **Read rules.** Every read first asks GitHub for the job's or run's status under
+  the caller's current credential and checkout. The cache serves a read only when
+  that request succeeds and reports the job or run completed. Keys use the host and
+  repository GitHub reports, not the `repo` text the request names:
+  - a job-scoped read (`job`): run, job and scope;
+  - a run-scoped read: run, attempt and scope, so a rerun never serves an earlier
+    attempt's log;
+  - the job-log fallback: run and job, not scope, kept apart from the run-scoped
+    entry for that job.
+
+  A refused or failed status request is a plain read, never a cached log.
+- **Never cached.** A job or run that is not completed, an empty log, a log whose
+  secret the redactor finds only across lines, a read whose status request failed,
+  and a status answer that names no host and repository. A read past the 8 MiB
+  source limit fails and stores nothing.
+- **Bounds.** At most 256 MiB in total and 24 hours per entry; there are no
+  settings. Every store removes entries past either bound (oldest first for size,
+  and any staging file a crashed write left behind), and a lookup removes an
+  expired entry it finds.
+- **Earlier releases.** Earlier releases kept unredacted logs in
+  `cache/github-run-logs/`. Orbit does not read those files; it removes them when
+  the cache is next opened or an agent sandbox is prepared.
 
 ### GitHub auth status
 
