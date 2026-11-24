@@ -1,8 +1,8 @@
-# Weekly crew memory dreaming (dormant). Seeded enabled because the action
-# is its own gate: it mints nothing unless a running shadow or live
-# experiment has a memory arm, the one switch of the dormant machinery. Monday
-# 02:00 host-local follows the Sunday crew-rankings note, so both read the
-# same settled week, and collides with no other shipped default.
+# Retired `crew_memory_dream` default. Orbit no longer seeds this weekly
+# dreaming routine; the job it targeted, `crew_memory_dream_pipeline`, still
+# ships. Kept as a provenance shape only, so `orbit workspace sync` can tell an
+# Orbit-seeded copy from an operator-authored one — see
+# `RETIRED_ROUTINE_FILES` in `application/routines/seed.rs`.
 schemaVersion: 1
 name: __ORBIT_ROUTINE_NAME__
 description: >

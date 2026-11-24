@@ -41,14 +41,14 @@ initialization and persisted debt. [3_vision.md](./3_vision.md) holds deferred w
 > the scheduler kernels, with Core supplying task facts, dispatch and status assembly.
 
 `orbit workspace init` seeds the default routine templates (`ci_failure_sweep`,
-`dependabot_alert_sweep`, `task_pilot`, `resident_cycle`, `worktree_gc`, `store_gc`,
-`task_publication` and `crew_memory_dream`) under
-`.orbit/routines/`. Their routine names use hyphens and the registered workspace name as a
-suffix (for example, `task-pilot-<workspace-name>`). `worktree_gc` and `task_pilot` are
-seeded enabled in a newly initialized workspace [ORB-22802], as is `crew_memory_dream`, whose action
-mints nothing unless a memory experiment runs [ORB-23115]; a workspace seeded earlier keeps
-its `enabled` value, because a template refresh never changes it. Other defaults are
-`enabled: false`. `crew_performance_refresh` ([ORB-17816]), once seeded enabled, was retired
+`dependabot_alert_sweep`, `task_pilot`, `resident_cycle`, `worktree_gc`, `store_gc` and
+`task_publication`) under `.orbit/routines/`. Their routine names use hyphens and the
+registered workspace name as a suffix (for example, `task-pilot-<workspace-name>`).
+`worktree_gc` and `task_pilot` are seeded enabled in a newly initialized workspace
+[ORB-22802]. `crew_memory_dream` [ORB-23115] is no longer a shipped default [ORB-27813]: its
+template is a retired shape, and `orbit workspace sync` retires an unedited copy. A workspace
+seeded earlier keeps its `enabled` value, because a template refresh never changes it. Other
+defaults are `enabled: false`. `crew_performance_refresh` ([ORB-17816]), once seeded enabled, was retired
 with crew-performance weighting in [ORB-22804]; `orbit workspace sync` removes an unedited
 copy. `finding_verification`, `pilot_warning_triage`, `evolution_pass` and `ux-rules` were
 retired in [ORB-22844]: their templates moved to `assets/routines/retired/`, so
@@ -187,5 +187,6 @@ fragmentation this feature exists to end.
 - [ORB-22844] retired the `finding_verification`, `pilot_warning_triage`, `evolution_pass` and `ux-rules` routines.
 - [ORB-22688] split the clock into its own `orbit-clock` crate to cut serial `orbit-core` compile work.
 - [ORB-23115] added the seeded `crew_memory_dream` routine, which mints nothing unless a memory experiment runs.
+- [ORB-27813] retired `crew_memory_dream` as a shipped default; its job and activity still ship.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

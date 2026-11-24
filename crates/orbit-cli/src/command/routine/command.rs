@@ -37,9 +37,8 @@ use crate::command::CommandOut;
                   fires fail 3 times in a row with the same error stops firing until\n\
                   a trial succeeds or `breaker reset`. `enable` and `disable` edit the definition's\n\
                   versioned `enabled` field like the dashboard toggle, are operator-only\n\
-                  and are audited. A newly initialized workspace seeds `task-pilot`,\n\
-                  `worktree-gc` and `crew-memory-dream` (which mints nothing while\n\
-                  no experiment with a memory arm is running) enabled and the other shipped routines\n\
+                  and are audited. A newly initialized workspace seeds `task-pilot`\n\
+                  and `worktree-gc` enabled and the other shipped routines\n\
                   (`ci-failure-sweep`, `dependabot-alert-sweep`, `resident-cycle`,\n\
                   `store-gc`, `task-publication`) off until enabled. A workspace initialized earlier keeps the `enabled`\n\
                   value its definitions already hold. The host scheduler is controlled\n\

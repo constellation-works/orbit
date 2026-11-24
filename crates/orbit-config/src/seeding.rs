@@ -35,7 +35,6 @@ pub const SHIPPED_DEFAULT_ROUTINES: &[&str] = &[
     "worktree_gc",
     "task_publication",
     "store_gc",
-    "crew_memory_dream",
 ];
 
 /// Default routines a prior release shipped and this one no longer seeds.
@@ -49,6 +48,7 @@ pub const RETIRED_DEFAULT_ROUTINES: &[&str] = &[
     "ux-rules",
     "finding_verification",
     "pilot_warning_triage",
+    "crew_memory_dream",
 ];
 
 /// Names of the default auto-tasks this Orbit ships, in seeding order.

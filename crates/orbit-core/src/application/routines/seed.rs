@@ -23,8 +23,7 @@
 //! in the state trigger's owner. Most seeded routines are disabled when
 //! written; they exist so a fresh workspace gets reviewable, opt-in schedules
 //! without silently enabling unattended work. `worktree_gc` and `task_pilot`
-//! are seeded enabled, as is `crew_memory_dream`, whose action mints nothing
-//! while no memory experiment is running. `enabled` is the operator's: a refresh onto a changed
+//! are seeded enabled. `enabled` is the operator's: a refresh onto a changed
 //! template keeps the on-disk value, so a workspace seeded while a default was
 //! disabled stays disabled.
 //!
@@ -80,10 +79,6 @@ pub(crate) const DEFAULT_ROUTINE_FILES: &[(&str, &str)] = &[
         "store_gc",
         include_str!("../../../assets/routines/store_gc.yaml"),
     ),
-    (
-        "crew_memory_dream",
-        include_str!("../../../assets/routines/crew_memory_dream.yaml"),
-    ),
 ];
 
 /// Default routines a prior release seeded that this Orbit no longer ships,
@@ -135,6 +130,10 @@ pub(crate) const RETIRED_ROUTINE_FILES: &[(&str, &str)] = &[
     (
         "pilot_warning_triage",
         include_str!("../../../assets/routines/retired/pilot_warning_triage.yaml"),
+    ),
+    (
+        "crew_memory_dream",
+        include_str!("../../../assets/routines/retired/crew_memory_dream.yaml"),
     ),
 ];
 
