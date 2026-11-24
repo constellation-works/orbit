@@ -109,3 +109,49 @@ fn checkpoint_notes_refuse_non_delta_length_without_losing_legacy_history() {
             .is_empty()
     );
 }
+
+#[test]
+fn agent_checkpoint_refuses_the_system_heartbeat_skip_outcome() {
+    if !crate::dispatch_admission::isolated(
+        "resident_cycle::checkpoint_history::agent_checkpoint_refuses_the_system_heartbeat_skip_outcome",
+    ) {
+        return;
+    }
+    let fx = fixture();
+    let (watched, mandate) = fx.watched_mandate("Reserve the heartbeat skip");
+    let now = Utc::now();
+    let run = fx.cycle_run(&mandate, "resident-reserved-outcome");
+    let brief = fx.begin_cycle(&run, now);
+    let written = fx.write_checkpoint(&brief, &run, json!({"outcome": "idle"}));
+    fx.finish_cycle(&run);
+
+    fx.update_task(
+        &watched,
+        TaskUpdateParams {
+            comment: Some("Cycle delta arrived".into()),
+            ..Default::default()
+        },
+    );
+    let run = fx.cycle_run(&mandate, "resident-reserved-outcome-next");
+    let brief = fx.begin_cycle(&run, now + Duration::minutes(15));
+    let mut record = written["checkpoint"].clone();
+    record["cycle"] = brief["cycle"].clone();
+    record["run_id"] = json!(run);
+    record["outcome"] = json!("unchanged");
+    let before = fx.runtime.get_task_comments(&mandate).unwrap().len();
+    for tool in ["orbit.resident.checkpoint", "orbit.task.update"] {
+        let input = if tool == "orbit.resident.checkpoint" {
+            json!({"task_id": mandate, "record": record})
+        } else {
+            json!({"id": mandate, "comment": record.to_string()})
+        };
+        let error = call(&fx.runtime, tool, input, McpCapability::Agent).unwrap_err();
+        assert!(error.contains("reserved"), "{tool}: {error}");
+        assert_eq!(
+            fx.runtime.get_task_comments(&mandate).unwrap().len(),
+            before
+        );
+    }
+    // The same cycle still writes its one real checkpoint.
+    fx.write_checkpoint(&brief, &run, json!({"outcome": "idle"}));
+}

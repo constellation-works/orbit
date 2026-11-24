@@ -14,6 +14,9 @@ pub const RESIDENT_COMMENT_MAX_BYTES: usize = 64 * 1024;
 /// Maximum cycle-delta notes on newly written checkpoints.
 pub const RESIDENT_CHECKPOINT_NOTES_MAX_CHARS: usize = 600;
 
+/// The outcome core writes for a heartbeat skip; agents may not submit it.
+const HEARTBEAT_SKIP_OUTCOME: &str = "unchanged";
+
 type RecordResult = Result<(), ResidentCommentError>;
 
 /// The three reserved task-comment shapes. Unknown fields are refused even
@@ -237,12 +240,19 @@ impl ResidentComment {
     /// Parse new input, enforcing delta-only checkpoint notes before admission.
     pub fn parse_for_write(message: &str) -> Result<Self, ResidentCommentError> {
         let record = Self::decode_resident_comment(message)?;
-        if let Self::Checkpoint(checkpoint) = &record
-            && checkpoint.notes.chars().count() > RESIDENT_CHECKPOINT_NOTES_MAX_CHARS
-        {
-            return Err(invalid(format!(
-                "`notes` exceeds {RESIDENT_CHECKPOINT_NOTES_MAX_CHARS} characters; notes are the cycle's delta: what changed this cycle and what is next"
-            )));
+        if let Self::Checkpoint(checkpoint) = &record {
+            if checkpoint.notes.chars().count() > RESIDENT_CHECKPOINT_NOTES_MAX_CHARS {
+                return Err(invalid(format!(
+                    "`notes` exceeds {RESIDENT_CHECKPOINT_NOTES_MAX_CHARS} characters; notes are the cycle's delta: what changed this cycle and what is next"
+                )));
+            }
+            // Core alone writes the heartbeat skip, through `parse`; an agent
+            // observation carrying it would be hidden from later briefs.
+            if checkpoint.outcome == HEARTBEAT_SKIP_OUTCOME {
+                return Err(invalid(format!(
+                    "`outcome` `{HEARTBEAT_SKIP_OUTCOME}` is reserved for the system heartbeat skip; use `idle` when the cycle found nothing to do"
+                )));
+            }
         }
         record.validate()?;
         Ok(record)
