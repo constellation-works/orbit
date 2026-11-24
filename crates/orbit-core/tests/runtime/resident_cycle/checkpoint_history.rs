@@ -155,3 +155,117 @@ fn agent_checkpoint_refuses_the_system_heartbeat_skip_outcome() {
     // The same cycle still writes its one real checkpoint.
     fx.write_checkpoint(&brief, &run, json!({"outcome": "idle"}));
 }
+
+#[test]
+fn invalid_checkpoint_can_be_corrected_before_single_accepted_write() {
+    if !crate::dispatch_admission::isolated(
+        "resident_cycle::checkpoint_history::invalid_checkpoint_can_be_corrected_before_single_accepted_write",
+    ) {
+        return;
+    }
+    let fx = fixture();
+    let (_watched, mandate) = fx.watched_mandate("Repair a refused checkpoint");
+    let run = fx.cycle_run(&mandate, "resident-checkpoint-retry");
+    let brief = fx.begin_cycle(&run, Utc::now());
+    let cycle = brief["cycle"].as_str().unwrap().to_owned();
+    let mut record = json!({
+        "kind": "resident.checkpoint",
+        "schema": 1,
+        "mandate": mandate,
+        "cycle": cycle,
+        "run_id": run,
+        "crew": "sol",
+        "recovery_of": brief["recovery_of"],
+        "wake": brief["wake"],
+        "authority": {
+            "rights": brief["authority"]["rights"],
+            "observe_only": brief["authority"]["observe_only"],
+            "narrowed_by": brief["authority"]["narrowed_by"]
+        },
+        "actions": [],
+        "decisions": [],
+        "requests": [],
+        "costs": [{
+            "kind": "manual_step",
+            "what": "Checked the checkpoint schema",
+            "minutes": 1,
+            "retries": 0,
+            "slot_minutes": 0,
+            "signature": "manual-schema-check"
+        }],
+        "notes": "Correct the rejected cost and record the cycle.",
+        "next_wake": {
+            "reason": "heartbeat",
+            "not_before": Utc::now() + Duration::hours(2)
+        },
+        "continuity": "rebuilt",
+        "outcome": "progress",
+        "probe": false
+    });
+    let comments_before = fx.runtime.get_task_comments(&mandate).unwrap().len();
+    let accepted_for_cycle = || {
+        fx.runtime
+            .get_task_comments(&mandate)
+            .unwrap()
+            .iter()
+            .filter_map(|comment| ResidentComment::parse(&comment.message).ok())
+            .filter(|record| {
+                matches!(record, ResidentComment::Checkpoint(checkpoint) if checkpoint.cycle == cycle)
+            })
+            .count()
+    };
+
+    let error = call(
+        &fx.runtime,
+        "orbit.resident.checkpoint",
+        json!({"task_id": mandate, "record": record}),
+        McpCapability::Agent,
+    )
+    .unwrap_err();
+    assert!(
+        error.contains("resident_record_invalid") && error.contains("costs.wished"),
+        "unexpected refusal: {error}"
+    );
+    assert_eq!(
+        fx.runtime.get_task_comments(&mandate).unwrap().len(),
+        comments_before
+    );
+    assert_eq!(
+        accepted_for_cycle(),
+        0,
+        "validation refusal wrote no checkpoint"
+    );
+
+    record["costs"][0]["wished"] = json!("Automatic checkpoint schema validation");
+    let accepted = call(
+        &fx.runtime,
+        "orbit.resident.checkpoint",
+        json!({"task_id": mandate, "record": record.clone()}),
+        McpCapability::Agent,
+    )
+    .unwrap();
+    assert_eq!(accepted["checkpoint"], record);
+    assert_eq!(
+        accepted_for_cycle(),
+        1,
+        "corrected checkpoint was accepted once"
+    );
+
+    let duplicate = call(
+        &fx.runtime,
+        "orbit.resident.checkpoint",
+        json!({"task_id": mandate, "record": record}),
+        McpCapability::Agent,
+    )
+    .unwrap_err();
+    assert!(
+        duplicate.contains("resident_checkpoint_exists"),
+        "{duplicate}"
+    );
+    assert_eq!(
+        accepted_for_cycle(),
+        1,
+        "duplicate refusal added no checkpoint"
+    );
+    fx.finish_cycle(&run);
+}

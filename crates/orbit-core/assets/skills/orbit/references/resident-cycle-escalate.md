@@ -199,8 +199,8 @@ drop the checkpoint.
 
 ## 7. Checkpoint
 
-End every cycle with exactly one `orbit.resident.checkpoint` call carrying
-the complete checkpoint record:
+End every cycle with exactly one accepted `orbit.resident.checkpoint`
+record. Submit the complete checkpoint record:
 
 - your cycle and run ids,
 - the wake reasons and
@@ -245,3 +245,13 @@ is refused without writes. If you cannot checkpoint, the finalize step
 synthesizes an `incomplete` checkpoint from the ledger, so the next cycle
 recovers rather than repeats — but a synthesized checkpoint carries no
 decisions, costs or notes, so write your own whenever you can.
+
+Exactly one checkpoint can be accepted per cycle. A `resident_record_invalid`
+refusal is a validation failure before any checkpoint write: correct the
+invalid field and retry the complete record only while the same cycle and run
+are still live and no checkpoint has been accepted for that cycle. Do not
+retry `resident_cycle_stale` (the cycle or run no longer owns a live cycle) or
+`resident_checkpoint_exists` (a checkpoint was already accepted). For an
+ambiguous tool or transport failure, check the cycle's checkpoint history
+before retrying; if you cannot confirm that no checkpoint was written, do not
+risk a duplicate.
