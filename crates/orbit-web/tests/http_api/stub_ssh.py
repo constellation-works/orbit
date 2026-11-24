@@ -14,9 +14,11 @@
                                 "fail_first_spawn_bind": <bool>,
                                 "bind_delay": <seconds>}}}
 
-Every invocation first appends one JSON line to `log`: its pid, its mode
-(`attach` for a bare `-N` forward, `spawn` when a remote command follows the
-host), the host, the remote command and the full argv. Then:
+Every invocation first appends one JSON line to `log`: its pid, its start
+key (`starttime`, the Linux `/proc/<pid>/stat` field 22 that tells this process
+from a later one reusing its pid; null without `/proc`), its mode (`attach` for
+a bare `-N` forward, `spawn` when a remote command follows the host), the host,
+the remote command and the full argv. Then:
 
 - an unknown host exits 255, as ssh does when it cannot connect;
 - `exit` sleeps `delay` seconds and exits with that status, never binding.
@@ -68,6 +70,16 @@ def phase(stage, **details):
         os.close(fd)
 
 
+def start_key():
+    """This process's kernel start key, or None where /proc is absent."""
+    try:
+        stat = Path("/proc/self/stat").read_text()
+    except OSError:
+        return None
+    # Fields after the parenthesised command name start at field 3.
+    return int(stat.rsplit(")", 1)[1].split()[19])
+
+
 def main():
     phase("child_started")
     config = json.loads((Path(sys.argv[0]).resolve().parent / "ssh.json").read_text())
@@ -78,6 +90,7 @@ def main():
     command = " ".join(argv[separator + 2:])
     record = {
         "pid": os.getpid(),
+        "starttime": start_key(),
         "mode": "attach" if "-N" in argv else "spawn",
         "host": host,
         "command": command,

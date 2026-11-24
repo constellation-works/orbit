@@ -3,8 +3,6 @@
 //! answer as on other routes, streams end with the listener, and an Orbit of
 //! another intake protocol version is refused.
 
-use std::io::{Read, Write};
-use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::Path;
 use std::time::Duration;
 
@@ -26,51 +24,32 @@ use tokio::net::TcpStream;
 use tower::ServiceExt;
 
 use super::lease_listener::{
-    audit_rows, bearer, config, mint, provisioned_store, send, short_intake_socket,
+    ScriptedIntake, audit_rows, bearer, config, mint, provisioned_store, read_frame, send,
+    short_intake_socket, write_frame,
 };
-
-fn read_frame(stream: &mut UnixStream) -> Option<Value> {
-    let mut header = [0; 4];
-    stream.read_exact(&mut header).ok()?;
-    let mut bytes = vec![0; u32::from_be_bytes(header) as usize];
-    stream.read_exact(&mut bytes).ok()?;
-    serde_json::from_slice(&bytes).ok()
-}
-
-fn write_frame(stream: &mut UnixStream, value: &Value) -> bool {
-    let bytes = serde_json::to_vec(value).unwrap();
-    stream
-        .write_all(&(bytes.len() as u32).to_be_bytes())
-        .and_then(|()| stream.write_all(&bytes))
-        .is_ok()
-}
 
 /// An intake socket that speaks `version` and answers every operation with
 /// an empty notice page; `events` then sends an empty page every 50 ms
-/// until the listener closes the connection.
-fn scripted_intake(path: &Path, version: u32) {
-    let intake = UnixListener::bind(path).unwrap();
-    std::thread::spawn(move || {
-        for stream in intake.incoming() {
-            let Ok(mut stream) = stream else { return };
-            std::thread::spawn(move || {
-                read_frame(&mut stream);
-                if !write_frame(&mut stream, &json!({"protocol_version": version})) {
-                    return;
-                }
-                let Some(request) = read_frame(&mut stream) else {
-                    return;
-                };
-                let page = serde_json::to_value(LeaseIntakeResponse::Ok {
-                    result: json!({"notices": [], "cursor": request["input"]["after"]}),
-                })
-                .unwrap();
-                while write_frame(&mut stream, &page) && request["operation"] == "events" {
-                    std::thread::sleep(Duration::from_millis(50));
-                }
-            });
+/// until the listener closes the connection. The returned guard owns the
+/// listener and every connection handler, so bind it to a named local
+/// (`let _intake = …`, not `let _ = …`) to keep it alive for the test.
+fn scripted_intake(path: &Path, version: u32) -> ScriptedIntake {
+    ScriptedIntake::bind(path, move |stream| {
+        read_frame(stream);
+        if !write_frame(stream, &json!({"protocol_version": version})) {
+            return;
         }
-    });
+        let Some(request) = read_frame(stream) else {
+            return;
+        };
+        let page = serde_json::to_value(LeaseIntakeResponse::Ok {
+            result: json!({"notices": [], "cursor": request["input"]["after"]}),
+        })
+        .unwrap();
+        while write_frame(stream, &page) && request["operation"] == "events" {
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    })
 }
 
 async fn open_stream(router: &axum::Router, peer: &str, auth: &str) -> Response {
@@ -108,7 +87,7 @@ async fn open_notice_streams_count_toward_the_listeners_limits() {
     }
     let [alice, bob, carol]: [String; 3] = tokens.try_into().unwrap();
     let (_sockets, socket) = short_intake_socket();
-    scripted_intake(&socket, LEASE_INTAKE_PROTOCOL_VERSION);
+    let _intake = scripted_intake(&socket, LEASE_INTAKE_PROTOCOL_VERSION);
     let mut settings = config(socket, LeaseClientAddressPolicy::Direct);
     settings.limits.max_in_flight_requests = 2;
     settings.limits.max_streams_per_token = 1;
@@ -209,7 +188,7 @@ async fn opening_a_notice_stream_spends_the_tokens_read_budget() {
     );
     let alice = bearer(&secret);
     let (_sockets, socket) = short_intake_socket();
-    scripted_intake(&socket, LEASE_INTAKE_PROTOCOL_VERSION);
+    let _intake = scripted_intake(&socket, LEASE_INTAKE_PROTOCOL_VERSION);
     let mut settings = config(socket, LeaseClientAddressPolicy::Direct);
     settings.limits.token_reads_per_minute = 1;
     let router = lease_listener_router(&settings, store);
@@ -244,7 +223,7 @@ async fn a_notice_stream_holds_a_connection_and_ends_at_shutdown() {
         HardLeasePermission::Allow,
     );
     let (_sockets, socket) = short_intake_socket();
-    scripted_intake(&socket, LEASE_INTAKE_PROTOCOL_VERSION);
+    let _intake = scripted_intake(&socket, LEASE_INTAKE_PROTOCOL_VERSION);
     let mut settings = config(socket, LeaseClientAddressPolicy::Direct);
     settings.limits.max_connections = 1;
     settings.limits.request_timeout_seconds = 60;
@@ -321,7 +300,7 @@ async fn a_refused_health_check_is_read_before_its_overload_response() {
         HardLeasePermission::Allow,
     );
     let (_sockets, socket) = short_intake_socket();
-    scripted_intake(&socket, LEASE_INTAKE_PROTOCOL_VERSION);
+    let _intake = scripted_intake(&socket, LEASE_INTAKE_PROTOCOL_VERSION);
     let mut settings = config(socket, LeaseClientAddressPolicy::Direct);
     settings.limits.max_connections = 1;
     settings.limits.header_timeout_seconds = 30;
@@ -356,9 +335,13 @@ async fn a_refused_health_check_is_read_before_its_overload_response() {
         max_connections_refusal_is_audited(&home),
         "the excess connection was not refused"
     );
-    let saw_early_bytes = matches!(
-        tokio::time::timeout(Duration::from_millis(500), excess.peek(&mut [0u8; 1])).await,
-        Ok(Ok(read)) if read > 0
+    // The refusal reads the request head before it answers, so no byte can
+    // arrive before the request below. Any early byte fails here, whether or
+    // not the later response would parse.
+    let early = tokio::time::timeout(Duration::from_millis(500), excess.peek(&mut [0u8; 1])).await;
+    assert!(
+        !matches!(early, Ok(Ok(read)) if read > 0),
+        "a refused connection wrote bytes before its request was read"
     );
     let (mut sender, connection) = tokio::time::timeout(
         Duration::from_secs(5),
@@ -381,7 +364,7 @@ async fn a_refused_health_check_is_read_before_its_overload_response() {
         .expect("refused /healthz answered within 5s")
         .unwrap_or_else(|error| {
             panic!(
-                "refused /healthz must be a 503 after the request is read; a response written first surfaces as UnexpectedMessage (bytes before the request: {saw_early_bytes}): {error:?}"
+                "refused /healthz must be a 503 after the request is read; a response written first surfaces as UnexpectedMessage: {error:?}"
             );
         });
     assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
@@ -436,7 +419,7 @@ async fn an_orbit_of_another_intake_protocol_version_is_refused_naming_both() {
     );
     let (_sockets, socket) = short_intake_socket();
     let other = LEASE_INTAKE_PROTOCOL_VERSION + 1;
-    scripted_intake(&socket, other);
+    let _intake = scripted_intake(&socket, other);
 
     let error = LeaseIntakeClient::connect(&socket, Duration::from_secs(5))
         .err()

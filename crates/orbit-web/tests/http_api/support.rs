@@ -940,19 +940,34 @@ fn install_selection_barrier(parties: usize) {
 pub(super) fn execute_replay_worker() {
     let root = PathBuf::from(std::env::var_os(FIXTURE_ROOT).unwrap());
     let global = root.join("global");
+    let run_id = std::env::var("ORBIT_HTTP_REPLAY_RUN").unwrap();
     let registry = orbit_registry::workspace_registry::load_registry_from(
         &orbit_registry::workspace_registry::registry_path_for(&global),
     )
     .unwrap();
-    let runtime = orbit_cmd::registry_runtime::RegisteredRuntimeFactory::open_registered_checkout(
-        &global,
-        &registry.workspaces[0],
-        &registry.checkouts[0],
-    )
-    .unwrap();
-    runtime
-        .execute_pipeline_run_worker(&std::env::var("ORBIT_HTTP_REPLAY_RUN").unwrap())
-        .unwrap();
+    // A run lives in the store of the workspace that owns it, and the production
+    // worker looks it up there only. Open each registered checkout and execute
+    // the run in the one whose store holds it.
+    for checkout in &registry.checkouts {
+        let Some(workspace) = registry
+            .workspaces
+            .iter()
+            .find(|workspace| workspace.id == checkout.workspace_id)
+        else {
+            continue;
+        };
+        let runtime =
+            orbit_cmd::registry_runtime::RegisteredRuntimeFactory::open_registered_checkout(
+                &global, workspace, checkout,
+            )
+            .unwrap();
+        // The read-only lookup: NotFound from any other workspace's store.
+        if runtime.show_job_run_observed(&run_id).is_ok() {
+            runtime.execute_pipeline_run_worker(&run_id).unwrap();
+            return;
+        }
+    }
+    panic!("no registered workspace owns replay run {run_id}");
 }
 
 pub(super) fn write_json(path: &Path, value: Value) {

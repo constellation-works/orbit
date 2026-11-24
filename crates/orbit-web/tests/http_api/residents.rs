@@ -1,6 +1,8 @@
 //! The Automation › Residents view: an operator sets up a resident mandate
-//! from the dashboard alone, and every write goes through the resident tools
-//! with a dashboard audit row beside the history entry core writes.
+//! from the dashboard alone. Control actions dispatch through their resident
+//! tool, and create calls the shared runtime method from the audited dashboard
+//! wrapper. Each dashboard write leaves a dashboard audit row beside the history
+//! entry core writes.
 
 use std::fs;
 
@@ -708,9 +710,9 @@ fn invalid_mandate_forms_are_refused_with_the_server_message_and_write_nothing()
 }
 
 #[test]
-fn every_resident_action_runs_through_its_tool_and_is_audited() {
+fn every_resident_action_is_audited_at_the_dashboard_boundary() {
     isolated(
-        "residents::every_resident_action_runs_through_its_tool_and_is_audited",
+        "residents::every_resident_action_is_audited_at_the_dashboard_boundary",
         || {
             let fixture = Fixture::new();
             resident_fixture(&fixture);

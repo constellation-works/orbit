@@ -837,9 +837,12 @@ projections_test!(
         check_eq!(fixture.runtime.workspace_id().unwrap() => "ws_http_fixture"; "fixture workspace id");
         let now = Utc::now();
         let selected_at = now - Duration::minutes(2);
-        let foreign_at = now - Duration::minutes(1);
+        // Inside `since` but past `until` (now - 30 s): only the until bound excludes it.
+        let past_until_at = now - Duration::seconds(10);
+        // Newest overall, in another workspace: the limit must not consume it.
+        let foreign_at = now - Duration::seconds(5);
         let run = "shared-run";
-        // Every distractor misses exactly one filter; the last row is a newer foreign-workspace match that must not consume the limit.
+        // Every distractor misses exactly one filter.
         let act = "selected-activity";
         let ag = "selected-agent";
         let mo = Some("selected-model");
@@ -875,13 +878,22 @@ projections_test!(
             foreign_at,
             Some("ws_other"),
         );
+        // Same-workspace rows that differ from the selection in only one filter.
+        seed_filtered(
+            &fixture,
+            "other-run",
+            (act, ag, mo, ta, to),
+            selected_at,
+            None,
+        );
+        seed_filtered(&fixture, run, (act, ag, mo, ta, to), past_until_at, None);
         let server = fixture.server(false);
         let get = |path: &str| get_ok(&server, path);
         let unfiltered = get("/api/metrics/invocations?limit=1&workspace=ws_http_fixture");
         let unfiltered_rows = unfiltered.as_array().unwrap();
         check_eq!(unfiltered_rows.len() => 1; "unfiltered limit: {unfiltered}");
         assert_fields!(unfiltered_rows[0], "job_run_id": json!(run));
-        check_eq!(parse_ts(&unfiltered_rows[0]["ts"]) => selected_at; "unfiltered row timestamp");
+        check_eq!(parse_ts(&unfiltered_rows[0]["ts"]) => past_until_at; "unfiltered row timestamp");
         let since = (now - Duration::minutes(3))
             .to_rfc3339()
             .replace("+00:00", "Z");
@@ -889,10 +901,25 @@ projections_test!(
             .to_rfc3339()
             .replace("+00:00", "Z");
         let ws = "workspace=ws_http_fixture";
-        let query = format!(
-            "/api/metrics/invocations?job_run_id={run}&activity_id=selected-activity&agent=selected-agent&model=selected-model&task_id=ORB-SELECTED&tool_name=selected-tool&since={since}&until={until}&limit=20&{ws}"
-        );
-        let filtered = get(&query);
+        let compose = |run_id: Option<&str>, until: Option<&str>| {
+            let mut query = format!(
+                "/api/metrics/invocations?activity_id=selected-activity&agent=selected-agent&model=selected-model&task_id=ORB-SELECTED&tool_name=selected-tool&since={since}&limit=20&{ws}"
+            );
+            if let Some(run_id) = run_id {
+                query.push_str(&format!("&job_run_id={run_id}"));
+            }
+            if let Some(until) = until {
+                query.push_str(&format!("&until={until}"));
+            }
+            query
+        };
+        let filtered = get(&compose(Some(run), Some(until.as_str())));
+        // Each filter must change the result: dropping `until` admits the
+        // past-until row, and dropping `job_run_id` admits the other-run row.
+        let without_until = get(&compose(Some(run), None));
+        check_eq!(without_until.as_array().unwrap().len() => 2; "without until the past-until row matches: {without_until}");
+        let without_run = get(&compose(None, Some(until.as_str())));
+        check_eq!(without_run.as_array().unwrap().len() => 2; "without job_run_id the other-run row matches: {without_run}");
         let filtered_rows = filtered.as_array().unwrap();
         check_eq!(filtered_rows.len() => 1; "all filters compose with workspace selection: {filtered}");
         assert_fields!(filtered_rows[0], "job_run_id": json!(run), "activity_id": json!("selected-activity"), "agent": json!("selected-agent"), "model": json!("selected-model"), "task_ids": json!(["ORB-SELECTED"]));
