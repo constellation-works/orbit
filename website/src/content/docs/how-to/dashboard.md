@@ -162,10 +162,13 @@ the rules, see [Post and retire fleet notices](/how-to/fleet-notices/).
 action its group waits on: **Approve** on a proposed task, **Ship** on a
 backlog task, and **View run** on a task in progress.
 
-To find a task, search by ID or title from the top bar, or filter by status.
-Less common filters, such as Done, Not ready, and Pilot warnings, are under
-**More**. Press Enter on a full task ID to open it even when the filter or
-selected workspace hides it. **New task** proposes a task.
+To find work, search the top bar from any dashboard page. It covers every
+active workspace you own and ranks the selected workspace's matches first:
+type to find tasks by text, or press Enter on an exact task ID to open that
+task and on an exact run ID (`jrun-…`) to open that run, switching workspace
+when needed. Press `/` to jump to the search box. To narrow the loaded list
+instead, filter by status. Less common filters, such as Done, Not ready, and
+Pilot warnings, are under **More**. **New task** proposes a task.
 
 A backlog row says what the task waits on, such as `Waits on ABC-2` or
 `Throttled`. A percentage on a row is the task's estimated regression risk,
@@ -209,7 +212,8 @@ notification when a drain ends or a task is newly held on a red base.
 Press Shift twice to open a floating filter bar over the task list. It
 narrows only the rows the board already loaded: it never asks the server,
 so it cannot find tasks outside the loaded list. The top-bar search is the
-opposite: it queries the server and jumps to the task, wherever it is.
+opposite: it queries the server and jumps to the task or run, in whatever
+workspace holds it.
 
 Type to filter. Every word you type must match something on the row:
 
@@ -752,6 +756,10 @@ and auto-tasks are, see [Schedule recurring work](/how-to/recurring-work/).
 Each routine's switch writes its `enabled` field; it does not start or stop
 the scheduler clock. Paused routines sit in the collapsed **Paused** group.
 
+Use **edit** on a row to change only when the routine fires. **Save** stays
+off until the draft differs, and a refused value keeps the draft open with
+the error.
+
 The **Next hour** strip shows each routine due in the next hour: solid if it
 will fire, hollow if it is paused. A paused routine's slot is skipped, not
 queued. An enabled routine that cannot take effect shows a **blocked** pill.
@@ -780,8 +788,18 @@ Auto-task definitions are checked on every scheduler clock tick, so pausing
 the clock pauses scheduled mints. A row whose previous task is still open
 says whether the next due slot is skipped or mints again.
 
+Click **Create** to define a new auto-task in the selected workspace: a name
+and description, a trigger (cron schedule, fixed interval, or deliveries
+landed), the title and body of the task it mints, whether it starts enabled,
+and advanced options for acceptance criteria, tags, tools, crew, type,
+priority, complexity, initial status, and whether a due slot mints again
+while its previous task is still open.
+
 - The switch writes the definition's `enabled` field after a confirmation. A
   disabled definition is skipped, not deleted.
+- **edit** on a row changes only the definition's schedule. **Save** stays
+  off until the draft differs, and a refused value keeps the draft open with
+  the error.
 - **Mint now** creates one task immediately, as `orbit auto-task mint <name>`
   does. It ignores the schedule, the enabled flag, and dedupe, so it creates
   another task even when one is open.
@@ -1008,7 +1026,8 @@ Two gates apply to writes:
 
 These need operator capability:
 
-- Automation switches, **Mint now**, **Run ▸**, and clock controls.
+- Automation switches, auto-task **Create**, routine and auto-task trigger
+  edits, **Mint now**, **Run ▸**, and clock controls.
 - Settings, crew, host, and plugin changes.
 - A window's **Mark shipped tasks done**, **Approve qualifying proposals**,
   and **Auto-fix PR blockers**, plus **Stop** and **Send pending results**.
