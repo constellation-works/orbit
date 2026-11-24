@@ -68,6 +68,23 @@ class UnitTestRatchetTests(unittest.TestCase):
         self.assertEqual(self.baseline.read_text(), "old baseline\n")
         self.assertEqual(list(self.root.glob(".baseline.json.*")), [])
 
+    def test_write_baseline_through_symlink_updates_referent(self):
+        self.write("crates/alpha/src/lib.rs", "#[test]\nfn fixture() {}\n")
+        referent = self.root / "physical.json"
+        referent.write_text("old baseline\n", encoding="utf-8")
+        link = self.root / "requested.json"
+        link.symlink_to(referent.name)
+
+        result = self.run_inventory("--write-baseline", str(link))
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue(link.is_symlink())
+        self.assertEqual(os.readlink(link), referent.name)
+        self.assertEqual(json.loads(referent.read_text(encoding="utf-8")), {
+            "schema_version": 2,
+            "crates": {"alpha": {"test_function_paths": ["lib.rs::fixture"]}},
+        })
+
     def test_counts_inline_and_sibling_tests_per_crate(self):
         self.write("crates/alpha/src/lib.rs", (
             "#[cfg(test)]\nmod tests;\n"

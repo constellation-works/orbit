@@ -208,13 +208,16 @@ def main(argv=None):
     if args.write_baseline:
         temporary = None
         try:
-            with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=args.write_baseline.parent,
-                                             prefix=f".{args.write_baseline.name}.", delete=False) as stream:
+            destination = args.write_baseline
+            if destination.is_symlink():
+                destination = destination.resolve(strict=True)
+            with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=destination.parent,
+                                             prefix=f".{destination.name}.", delete=False) as stream:
                 temporary = Path(stream.name)
-                if args.write_baseline.is_file():
-                    os.fchmod(stream.fileno(), stat.S_IMODE(args.write_baseline.stat().st_mode))
+                if destination.is_file():
+                    os.fchmod(stream.fileno(), stat.S_IMODE(destination.stat().st_mode))
                 stream.write(json.dumps(baseline_of(current), indent=2, sort_keys=True) + "\n")
-            os.replace(temporary, args.write_baseline)
+            os.replace(temporary, destination)
         except OSError as error:
             print(f"unit-test ratchet: cannot write baseline {args.write_baseline}: {error}", file=sys.stderr)
             return 2
