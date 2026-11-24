@@ -4420,6 +4420,34 @@ class RemovedCodeIdentifierTests(unittest.TestCase):
         result = self.run_check()
         self.assertEqual(result.returncode, 0, result.stderr)
 
+    # Escaped character literals: `'\u{2f}'` must close as one literal, or the
+    # next apostrophes pair up, `"` opens a string and the `/*` below runs to EOF.
+    ESCAPED_CHAR_LITERALS = ("macro_rules! consume { ($($token:tt)*) => {} }\n"
+                             "consume!('\\u{2f}' '\"');\n"
+                             "const MARKER: &str = \"/*\";\n")
+
+    def test_escaped_char_literals_beside_retained_reexport_pass(self):
+        self.write(self.REEXPORT, "pub use exports::Kept;\n")
+        self.write("docs/demo.md", "Use `demo_policy::Kept` for the policy.\n")
+        self.commit_base()
+        self.write(self.REEXPORT, self.ESCAPED_CHAR_LITERALS + "pub use exports::Kept;\n")
+        result = self.run_check()
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_real_removal_beside_escaped_char_literals_is_detected(self):
+        self.write(self.REEXPORT,
+                   self.ESCAPED_CHAR_LITERALS + "pub use exports::Kept;\n"
+                   "pub use exports::Removed;\n/*\npub use exports::Gone;\n*/\n")
+        self.write("docs/demo.md", "Use `demo_policy::Removed` or `demo_policy::Gone` here.\n")
+        self.commit_base()
+        self.write(self.REEXPORT, self.ESCAPED_CHAR_LITERALS + "pub use exports::Kept;\n/*\n*/\n")
+        result = self.run_check()
+        self.assertNotEqual(result.returncode, 0, result.stdout)
+        self.assertIn('"demo_policy::Removed"', result.stderr)
+        self.assertIn("docs/demo.md:1", result.stderr)
+        self.assertNotIn("demo_policy::Gone", result.stderr)
+        self.assertNotIn("demo_policy::Kept", result.stderr)
+
     def test_removed_css_class_named_in_doc_fails(self):
         self.write("docs/design/user-interface/1_overview.md",
                    "Each row's pill (`.ws-badge`) takes its workspace colour.\n")
