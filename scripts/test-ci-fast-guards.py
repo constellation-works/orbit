@@ -4361,6 +4361,55 @@ class RemovedCodeIdentifierTests(unittest.TestCase):
         result = self.run_check()
         self.assertEqual(result.returncode, 0, result.stderr)
 
+    def test_separator_trivia_on_deleted_group_member_reports_exact_identifier(self):
+        self.write("docs/demo.md", "Use `demo_policy::Removed` and `demo_policy::Kept`.\n")
+        for member in (
+            "nested::/* note */Removed,",
+            "nested:: Removed,",
+            "nested :: /* note */ Removed,",
+        ):
+            with self.subTest(member=member):
+                self.write(self.REEXPORT,
+                           f"pub use exports::{{\n    {member}\n    nested::Kept,\n}};\n")
+                self.commit_base()
+                self.write(self.REEXPORT, "pub use exports::{\n    nested::Kept,\n};\n")
+                result = self.run_check()
+                self.assertNotEqual(result.returncode, 0, result.stdout)
+                self.assertIn('"demo_policy::Removed"', result.stderr)
+                self.assertIn("docs/demo.md:1", result.stderr)
+                self.assertNotIn("demo_policy::Kept", result.stderr)
+        # Trivia around the group opening `:: {` also extracts clean names.
+        self.write(self.REEXPORT,
+                   "pub use exports :: /* note */ {\n    nested::Removed,\n    nested::Kept,\n};\n")
+        self.commit_base()
+        self.write(self.REEXPORT, "pub use exports :: /* note */ {\n    nested::Kept,\n};\n")
+        result = self.run_check()
+        self.assertNotEqual(result.returncode, 0, result.stdout)
+        self.assertIn('"demo_policy::Removed"', result.stderr)
+        self.assertIn("docs/demo.md:1", result.stderr)
+        self.assertNotIn("demo_policy::Kept", result.stderr)
+
+    def test_separator_trivia_changes_on_retained_group_member_pass(self):
+        self.write("docs/demo.md",
+                   "Use `demo_policy::Removed`, `demo_policy::Kept`, and `demo_policy::nested`.\n")
+        spaced = ("pub use exports :: /* head */ {\n"
+                  "    nested::/* note */Removed,\n"
+                  "    nested:: Kept,\n"
+                  "    nested :: /* sub */ { /* inner */ self },\n};\n")
+        compact = ("pub use exports::{\n"
+                   "    nested::Removed,\n"
+                   "    nested::Kept,\n"
+                   "    nested::{ self },\n};\n")
+        self.write(self.REEXPORT, spaced)
+        self.commit_base()
+        self.write(self.REEXPORT, compact)
+        result = self.run_check()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.commit_base()
+        self.write(self.REEXPORT, spaced)
+        result = self.run_check()
+        self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_removed_member_of_multiline_group_named_in_doc_fails(self):
         self.write(self.REEXPORT, self.GROUP_BASE)
         self.write("docs/demo.md", "Use `demo_policy::REMOVED` or `demo_policy::KEPT`.\n")
