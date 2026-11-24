@@ -39,6 +39,7 @@ value wins and the old key is simply removed.
 
 | Key | What to do instead | Recognized until |
 |---|---|---|
+| `crew_memory.enabled` | Nothing. Crew memory has no switch of its own; it runs only while an experiment with a memory arm is running. Delete this key. | None stated |
 | `workflow.system_crew` | Nothing. System work draws its crew from the `workflow.<tier>_complexity_crews` pools. | None stated |
 | `workflow.auto_ship` | Nothing. Dispatch with `orbit run auto` drains or `orbit run ship`. | None stated |
 | `workflow.validation_env.login_shell`, `workflow.validation_env.interactive` | Nothing. Required validation always probes the interactive login shell, falling back to a login shell. | 2026-12-08 |

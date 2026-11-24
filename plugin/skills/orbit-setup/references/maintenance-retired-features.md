@@ -37,9 +37,24 @@ becomes.
 | Retired activity-backend repair | `orbit doctor --fix-retired-activity-backends` is gone. A schemaVersion 2 `agent_loop` activity file that still declares the scalar `spec.backend: http` or `spec.backend: auto` warns on `orbit doctor`, naming the file and the rejected value. | None. Delete only that scalar key from the activity file by hand, then verify with `orbit doctor`. Leave a plugin manifest's structured `spec.backend` command backend (timeout and sandbox settings) in place; it is still supported. | No window stated; removed in 0.50.0. |
 | Executor type `cli_command` | `spec.executor_type: cli_command` in an Executor definition. After changing it, verify with `orbit doctor providers` (a subcommand of `orbit doctor`): it lists each executor and fails on a definition that does not load. | `spec.executor_type: local_shell`, the deterministic action. The `command`, `args`, `env` and `timeout_seconds` fields are unchanged. | Not recognized: a definition with this value fails to load until the value changes. |
 
-The `finding-verification`, `evolution-pass`, and `ux-rules` routines are retired,
-while `pilot-warning-triage` is retired via its `pilot_warnings_held` state
-trigger rather than its job. `orbit workspace sync` retires their seeded copies.
+### Retired seeded routines
+
+These retired templates let Orbit recognize routines it seeded in earlier
+releases. `orbit workspace sync` retires an unchanged seeded copy and preserves
+operator-authored routines.
+
+| Retired routine | Replacement or current behavior | `orbit workspace sync` effect |
+|---|---|---|
+| `auto_task_scheduler` | Each clock tick evaluates auto-task definitions directly, so this routine has no job to fire. | Retires the unchanged seeded copy; the retained template lets Orbit distinguish it from an operator-authored routine. |
+| `blocked_task_triage` | Replaced the retired `blocked-task-triage` auto-task; the `escalation_triage_pipeline` now serves dashboard triage only. | Retires the seeded auto-task and does not enable this routine. |
+| `crew_memory_dream` | Orbit no longer seeds the weekly routine. The `crew_memory_dream_pipeline` job still ships and can run through an optional routine or an explicit job run. | Retires the unchanged seeded copy; the retained template lets Orbit distinguish it from an operator-authored routine. |
+| `crew_performance_refresh` | This enabled hourly snapshot routine and crew-performance weighting were removed. Route by task type with `workflow.type_complexity_crews`. | Retires the unchanged seeded copy. |
+| `evolution_pass` | The weekly proposal routine was removed; the evolution ledger uses a fixed 14-day window and 30-day decline. | Retires the unchanged seeded copy. |
+| `finding_verification` | The routine was removed; the task pilot's `finding_invalid` result and an implementer's `finding-invalid.json` still reject an invalid finding. | Retires the unchanged seeded copy. |
+| `pilot_warning_triage` | Retired through its `pilot_warnings_held` state trigger; use the dashboard's Triage action for a task held on pilot warnings. | Retires the unchanged seeded copy; the pipeline remains available for dashboard triage. |
+| `ship_sweep` | The scheduled ship sweep is gone. Dispatch with `orbit run auto` drains or ship on demand with `orbit run ship`; this routine has no job to fire. | Retires the unchanged seeded copy; the retained template lets Orbit distinguish it from an operator-authored routine. |
+| `task_triage` | Terminal failed-run triage is gone: failed runs park tasks in `blocked` with the failure attached, and re-backlogging is a deliberate human transition. | Retires the unchanged seeded copy; the retained template lets Orbit distinguish it from an operator-authored routine. |
+| `ux-rules` | The routine and installed command were removed; nothing runs UX rules on a schedule. | Retires the unchanged seeded copy. |
 
 A
 routine you wrote that targets one of the three removed jobs
