@@ -5,7 +5,7 @@
 
 use std::fs;
 use std::io::Write as _;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use chrono::{DateTime, Duration, Utc};
 use orbit_core::application::agents::{AgentRole, Owner, Problem};
@@ -116,22 +116,11 @@ pub(super) fn sited_regression(
     )
 }
 
-pub(super) fn bundle_dir(root: &Path, task_id: &str) -> Option<PathBuf> {
-    for entry in fs::read_dir(root).ok()? {
-        let path = entry.ok()?.path();
-        if !path.is_dir() {
-            continue;
-        }
-        if path.file_name().is_some_and(|name| name == task_id)
-            && path.join(TASK_EVENTS_FILE_NAME).is_file()
-        {
-            return Some(path);
-        }
-        if let Some(found) = bundle_dir(&path, task_id) {
-            return Some(found);
-        }
-    }
-    None
+pub(super) fn bundle_dir(fixture: &Fixture, task_id: &str) -> PathBuf {
+    let partition = fixture.runtime.workspace_id().unwrap();
+    orbit_store::maintenance::task_registry::task_workspaces_dir(&fixture.global)
+        .join(partition)
+        .join(task_id)
 }
 
 /// Append one history row to a disposable fixture task, as a lifecycle writer
@@ -145,8 +134,7 @@ pub(super) fn append(
     note: Option<&str>,
     to_status: Option<TaskStatus>,
 ) {
-    let dir = bundle_dir(fixture.path("").as_path(), task_id).expect("fixture task bundle");
-    let path = dir.join(TASK_EVENTS_FILE_NAME);
+    let path = bundle_dir(fixture, task_id).join(TASK_EVENTS_FILE_NAME);
     let rows = fs::read_to_string(&path).unwrap().lines().count();
     let row = TaskEventRowV2 {
         schema_version: TASK_ARTIFACT_SCHEMA_VERSION,
@@ -1619,9 +1607,8 @@ fn count_windows_exclude_old_attempts_on_recently_commented_tasks() {
                         relations: vec![],
                     },
                 );
-                let path = bundle_dir(&fixture.path(""), &old)
-                    .unwrap()
-                    .join(orbit_types::task::TASK_ENVELOPE_FILE_NAME);
+                let path =
+                    bundle_dir(&fixture, &old).join(orbit_types::task::TASK_ENVELOPE_FILE_NAME);
                 let mut envelope: orbit_types::task::TaskEnvelopeV2 =
                     serde_yaml::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
                 envelope.created_at = old_start - Duration::days(1);

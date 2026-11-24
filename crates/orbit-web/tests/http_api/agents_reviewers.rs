@@ -61,8 +61,7 @@ fn commit(repo: &Path, files: &[(&str, &str)]) -> String {
 /// A comment on a fixture task at `at`, as the review gate posts its
 /// settlement: the public comment write stamps the current time.
 fn comment_at(fixture: &Fixture, task_id: &str, at: DateTime<Utc>, message: &str) {
-    let dir = bundle_dir(fixture.path("").as_path(), task_id).expect("fixture task bundle");
-    let path = dir.join(TASK_COMMENTS_FILE_NAME);
+    let path = bundle_dir(fixture, task_id).join(TASK_COMMENTS_FILE_NAME);
     let rows = fs::read_to_string(&path)
         .unwrap_or_default()
         .lines()
@@ -223,8 +222,7 @@ fn filed_finding(fixture: &Fixture, filer: &str, verdict: &str, severity: Option
     } else {
         record["rejection"] = json!({"reason": "premise_wrong", "detail": "the code handles it"});
     }
-    let dir = bundle_dir(fixture.path("").as_path(), &id).expect("fixture task bundle");
-    let events = dir.join(orbit_types::task::TASK_EVENTS_FILE_NAME);
+    let events = bundle_dir(fixture, &id).join(orbit_types::task::TASK_EVENTS_FILE_NAME);
     let rows = fs::read_to_string(&events).unwrap().lines().count();
     let row = orbit_types::task::TaskEventRowV2 {
         schema_version: TASK_ARTIFACT_SCHEMA_VERSION,
@@ -740,9 +738,7 @@ fn reviewer_scorecard_scores_findings_that_held_false_rejects_and_late_misses() 
                 scorecard["rows"],
                 "event plus comment counts once and preserves nearest-earlier-review scoring"
             );
-            let comments_path = bundle_dir(fixture.path("").as_path(), &failed)
-                .unwrap()
-                .join(TASK_COMMENTS_FILE_NAME);
+            let comments_path = bundle_dir(&fixture, &failed).join(TASK_COMMENTS_FILE_NAME);
             let mut comments: Vec<TaskCommentRowV2> = fs::read_to_string(&comments_path)
                 .unwrap()
                 .lines()

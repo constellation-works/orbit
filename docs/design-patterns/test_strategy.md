@@ -1629,6 +1629,149 @@ Warmups (excluded): baseline 9.26 s, candidate 7.23 s; the control series ran wi
 
 **Hosted compliance is not restored by this change, and is owed after merge.** The operator runs `python3 scripts/ci-p90.py --limit 20 --budget-seconds 400` once the latest 20 completed PR `ci.yml` runs carry this revision, under the [hosted CI budget handoff](../DEVELOPMENT.md#hosted-ci-budget-handoff), and reports executed, skipped, cancelled and missing counts separately from elapsed time.
 
+### Direct fixture lookups and smaller Test build cache (2026-11-24)
+
+The ORB-27903 watch measured the latest 20 completed `pull_request`
+`ci.yml` runs (45360158620 through 45367310348). Check executed and
+succeeded 15 times, skipped five times, and had zero cancelled or missing
+runs. Elapsed p90 was **562 s** (rank 14 of 15), median 472 s, with 13 runs
+over the 400 s budget. The four-tier case took 62.8–172.6 s on 14 hosted
+runs. It dominated partition 12, which finished last on 11 runs. Test build
+had a 298 s median, including 53 s for warm workspace cache restore and
+188 s for the folded build and archive step.
+
+#### Four-tier fixture
+
+The fixture writes two history events for each of 1,260 landed tasks. Its
+helper found each event file by recursively opening directories under the
+fixture root, including bundles for other tasks. It now uses the runtime's
+task-store partition and the supplied task ID to build the path directly.
+Task creation, regression relations, implementation runs, event rows and the
+HTTP scorecard lookup all still run. The 252/307, 149/311, 150/313 and 70/317
+peer rates, the approximately +3.3e-10 escaped-regression contribution and
+the exact positive zero for the other terms still have their original
+assertions.
+
+A separate `strace -f -c -e trace=openat,getdents64,newfstatat,statx` diagnostic
+counted 6,218,234 directory reads before the base fixture's five-minute
+child deadline killed the traced process. The candidate completed under
+the same tracing options with 11,632 directory reads. These counts identify
+avoidable fixture work on the actual path. The trace is excluded from the
+timing series.
+
+Measurements used one Linux checkout and host (AMD Ryzen AI Max+ 395,
+32 logical CPUs, affinity 0–3), Rust 1.98.1, nextest 0.9.136 and the default
+Cargo test build profile.
+Base revision `b1377192ed4a605cec161c38ab87dee8e096e2b3` had no fixture edits.
+The uncommitted candidate at that HEAD used Git blobs `d3d18108cb7e`
+(`agents.rs`) and `85974c67bdd1` (`agents_reviewers.rs`). Each source
+snapshot was restored with its original mtimes before each run and selected
+its own warm target via `CARGO_TARGET_DIR`. Both arms used the same
+scratch filesystem for fixture temporary directories. After one build per
+arm, the commands were:
+
+```sh
+filter='test(=agents_implementers::four_tier_sub_grid_excess_keeps_its_score_sign)'
+scripts/build-budget.py -- cargo nextest run --profile ci -p orbit-web --test http_api -E "$filter" --no-run
+cargo nextest run --profile ci -p orbit-web --test http_api -E "$filter"
+```
+
+The build ran outside the timed samples. The test command alternated base
+then candidate five times, followed by five unchanged-base controls.
+Each invocation passed exactly one test and reused the warm build. Load is
+the host's one-minute load average before and after the invocation.
+
+| Sample | Base wall s | Base load | Candidate wall s | Candidate load | Control wall s | Control load |
+|---|---:|---|---:|---|---:|---|
+| 1 | 81.079 | 7.02 → 4.24 | 8.738 | 4.24 → 3.90 | 73.894 | 1.47 → 2.35 |
+| 2 | 78.570 | 3.90 → 2.61 | 8.686 | 2.61 → 2.36 | 78.230 | 2.35 → 2.98 |
+| 3 | 69.765 | 2.36 → 1.56 | 8.580 | 1.56 → 1.52 | 80.424 | 2.98 → 2.46 |
+| 4 | 72.617 | 1.52 → 1.48 | 8.679 | 1.48 → 1.48 | 83.169 | 2.46 → 1.86 |
+| 5 | 70.538 | 1.48 → 1.51 | 8.623 | 1.51 → 1.47 | 74.271 | 1.86 → 3.14 |
+
+Median and range in seconds were **72.617 (69.765–81.079)** on the base,
+**8.679 (8.580–8.738)** on the candidate and **78.230 (73.894–83.169)**
+on the unchanged base. The **63.938 s** drop in medians exceeds the
+**9.275 s** control spread. Cache, archive, lint and workflow validation used
+other pinned CPUs during portions of the series. The hosted 62.8–172.6 s
+baseline still applies. The local replay identifies the repeated directory
+walk and quantifies its cost on this host. Per-test hosted resource traces
+would be needed to attribute the full variation across runners.
+
+#### Test build
+
+The p90 run's build log shows 41 rebuilt workspace units, 17 fresh units,
+231 s in the folded compile and test listing, and 12 s creating the
+archive. The cache restored about 2.14 GB and contained 24 changed source
+inputs by the time the source manifest was verified. Cargo still needs to
+rebuild the affected units and run the same lint and list checks.
+[Hosted Test build log](https://github.com/constellation-works/orbit/actions/runs/45364572719/job/138343010562)
+
+The v2 workspace cache precompresses `target/` with
+`tar -cf - target | zstd -q -c -3 --long=29 -T0` on protected pushes. A
+cache-action miss in v2 tries the legacy format. On v2 hits,
+`zstd -q -dc -M512MB ARCHIVE | tar -xf -` unpacks the target before the
+same source manifest verification. PRs omit manifest capture because they
+only read the cache.
+
+The restore replay used the same 5 GiB warm CI-profile target for both
+formats, Linux CPUs 4–7, and Zstandard 1.5.7. The base used
+`tar -cf - target | zstd -q -3 -T0`; the candidate used the packed target
+inside a default-compression cache-action tar stream. Both used
+`tar --use-compress-program=unzstd -xf` on the outer stream and the
+candidate also ran its unpack command. The run order was base, packed,
+packed, base. The unpacked target tar streams had the same SHA-256.
+Replaying the workflow steps also preserved the source mtime, executable
+mode and hard links, including when replacing a previously packed entry
+on a push.
+
+| Workspace restore replay | Base | Candidate |
+|---|---:|---:|
+| Cache payload bytes | 1,317,239,167 | 1,031,685,082 |
+| Local unpack wall samples (s) | 3.93, 3.20 | 3.78, 3.89 |
+| Inner producer pack wall (s) | 4.59 | 7.94 |
+| Peak local unpack RSS (MiB) | about 8 | about 517 |
+
+The payload fell by 21.7%. The candidate's local unpack times fall within
+the original spread. The larger history costs memory and push-side
+packing time. The replay measures local extraction and bytes, so the
+hosted download and restore wall are owed in the next cohort.
+
+The native test archive used by the partition proof now uses
+`--zstd-level=-7`. On Linux CPUs 4–7, after warming the workspace through
+`ci-guardrails.sh --test-archive` with CI's strip, debug and incremental
+settings, the same warm target ran
+`scripts/with-test-build-lint.sh cargo nextest archive --locked --workspace --bins --tests --zstd-level=LEVEL --archive-file PATH`
+at levels 0, −7, −7, 0. Each invocation reused all compilation. The next
+command for each archive was
+`python3 scripts/ci-repack-nextest.py pack PATH TRANSFER --parts 4`.
+One-minute loads at invocation start were 2.12, 2.56, 2.76 and 3.42.
+
+| Archive replay | Level 0 | Level −7 |
+|---|---:|---:|
+| Archive wall samples (s) | 2.80, 2.73 | 1.99, 2.03 |
+| Repack wall samples (s) | 5.282, 5.293 | 5.308, 5.237 |
+| Archive + repack medians (s) | 8.05 | 7.28 |
+| Native file size (GB, approximate) | 0.88 | 1.61 |
+| Total transfer size (MB, approximate) | 658 | 658 |
+
+The size increase stays on the build runner. All 346 archive member names,
+types, modes, link targets and content hashes match. The original partition
+proof covers all 4,431 tests exactly once across 13 count partitions with
+both compression levels. Required job names, the shard-1 sandbox gates and
+download digest verification retain their existing workflow steps. Both
+transfers selected 302 portable enforcement tests, two ignored Bubblewrap
+tests and three Landlock ruleset tests from the extracted metadata.
+
+**Operator handoff after merge.** Once the latest 20 completed
+`pull_request` runs of `ci.yml` carry the merged revision, run
+`python3 scripts/ci-p90.py --limit 20 --budget-seconds 400`. Report executed,
+skipped, cancelled and missing counts separately along with nearest-rank
+p90 for Check elapsed, which must be at most 400 s. Report queue wait
+separately, Test build cache version and restore time (including v2
+unpack), the folded build and archive times, and the shard timing. Hosted
+compliance is pending that measurement.
+
 ## Why
 
 On 2026-10-03, unit tests under `crates/*/src/**` were about 295k lines and 7,675 test functions, more lines than the production code they covered. Crate-root integration tests were 37k lines. Most unit tests pinned internals, so a refactor that kept behaviour unchanged still broke dozens of them, and each break cost an agent tokens to repair a test rather than find a bug. A review of all of them kept 180 (2.3%).
