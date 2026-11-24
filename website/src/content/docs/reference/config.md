@@ -246,6 +246,7 @@ Most ignored keys stop being recognised on 2026-12-07 or
 | A boolean `machine.worker_containment` (a deprecated value, not a retired key) | Rewritten in place, and the key stays settable: `true` becomes `warn`, `false` becomes `off`, or `strict` when `worker_containment_strict = true` is also set |
 | `workflow.crew_performance_types` | `workflow.task_types` |
 | `workflow.system_crew`, `crew: system` in a template or job | Ignored. System work routes through the [pools](#system-work). |
+| `crew_memory.enabled` | Ignored. Crew memory runs only while an experiment with a memory arm is running. |
 | `[visual_review]`, `[ux_rules]`, `[lease]`, `[assistance]`, `[workflow.crew_ladder]`, `[workflow.regression_risk]`, `[workflow.explore_brief]`, `[review.selective_before_landing]`, `[machine.web_terminal]`, `[machine.web_session]`, `workflow.explore.*`, `workflow.crew_performance*`, `workflow.auto_ship`, `review.verify_findings`, `publication.routine_*`, the `explorer` and `visual_review` purpose pools | Ignored. The feature was removed. |
 | `[attention]`, `[notice]`, `[resident.evolution]`, the `[runtime]` log keys, and any other key under `pr`, `commit`, `workflow`, `machine`, `execution`, `experiments`, `retention`, `automation`, `ci_failure`, `jobs`, `security_alert_sweep` or `worktree` that warns as deprecated | Ignored. The value is fixed, and the warning states it. |
 
@@ -630,7 +631,7 @@ and `machine.task_prefix`. `orbit config keys` prints the same list.
 | `machine.worker_tasks_max` | **Advanced.** integer · **Default:** `4096`<br>Global only. Worker scope `TasksMax=` (processes plus threads). The macOS watchdog counts processes only. |
 | `machine.mcp.toolsets` | array&lt;string&gt; · **Default:** `[]`<br>Global only. MCP toolsets `orbit mcp serve` and `orbit mcp listen` advertise beside the role or the default surface. A server's `--toolset` replaces this list. See [MCP toolsets](/how-to/mcp-integration/#toolsets). |
 | `machine.mcp.role` | string · **Default:** unset<br>Global only. MCP role `orbit mcp serve` and `orbit mcp listen` serve: `operator`, `manager`, `resident`, `agent` or `reader`. Unset serves the default surface. A server's `--role` replaces it. See [MCP roles](/how-to/mcp-integration/#roles). |
-| `machine.worker_cpu_quota` | **Advanced.** integer · **Default:** unset<br>Global only, Linux only. Worker scope `CPUQuota=` as a percentage of one core (`400` is four cores). `0` or unset sets no limit. |
+| `machine.worker_cpu_quota` | **Advanced.** integer · **Default:** `0`<br>Global only, Linux only. Worker scope `CPUQuota=` as a percentage of one core (`400` is four cores). `0` or unset sets no limit. |
 | `machine.auto_concurrency.mode` | string · **Default:** `off`<br>Global only. Forecast admission: `off`; `shadow` records what it would admit and admits as `off`; `enforce` admits the candidates whose profile fits under the forecast. |
 | `machine.auto_concurrency.admit_cpu_percent` | integer · **Default:** `90`<br>Global only. Maximum forecast CPU utilization as a percentage of host cores (1–100). Distinct from the throttle's `cpu_high_percent`. |
 | `machine.auto_concurrency.min_profile_deliveries` | integer · **Default:** `10`<br>Global only. Completed deliveries needed before a profile is used without fallback. |
