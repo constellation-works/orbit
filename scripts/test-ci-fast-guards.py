@@ -4495,6 +4495,45 @@ class RemovedCodeIdentifierTests(unittest.TestCase):
         result = self.run_check()
         self.assertEqual(result.returncode, 0, result.stderr)
 
+    # A Rust item spelled only inside a block comment defines nothing. Items are
+    # judged from whole files, so moving a live item into a comment removes it,
+    # and deleting a spelling that was already commented out removes nothing.
+    COMMENTED_ITEM_BASE = "pub fn removed_fn() {}\n/*\nnote\n*/\n"
+
+    def test_live_item_moved_into_block_comment_is_removed(self):
+        self.write(self.REEXPORT, self.COMMENTED_ITEM_BASE)
+        self.write("docs/demo.md", "Call `removed_fn` for the policy.\n")
+        self.commit_base()
+        self.write(self.REEXPORT, "/*\nnote\npub fn removed_fn() {}\n*/\n")
+        result = self.run_check()
+        self.assertNotEqual(result.returncode, 0, result.stdout)
+        self.assertIn('"removed_fn"', result.stderr)
+        self.assertIn(self.REEXPORT, result.stderr)
+        self.assertIn("docs/demo.md:1", result.stderr)
+
+    def test_deleting_item_spelling_only_in_block_comment_is_not_a_removal(self):
+        self.write(self.REEXPORT, "/*\npub fn removed_fn() {}\n*/\n")
+        self.write("docs/demo.md", "Call `removed_fn` for the policy.\n")
+        self.commit_base()
+        self.write(self.REEXPORT, "/*\n*/\n")
+        result = self.run_check()
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_retained_or_restored_live_item_still_suppresses_removal(self):
+        self.write(self.REEXPORT, self.COMMENTED_ITEM_BASE)
+        self.write("docs/demo.md", "Call `removed_fn` for the policy.\n")
+        self.commit_base()
+        # The live item stays defined beside a new commented spelling.
+        self.write(self.REEXPORT,
+                   "pub fn removed_fn() {}\n/*\nnote\npub fn removed_fn() {}\n*/\n")
+        result = self.run_check()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        # The live item moves into a comment while another file defines it live.
+        self.write(self.REEXPORT, "/*\npub fn removed_fn() {}\n*/\n")
+        self.write("crates/demo-policy/src/policy.rs", "pub fn removed_fn() {}\n")
+        result = self.run_check()
+        self.assertEqual(result.returncode, 0, result.stderr)
+
     # Escaped character literals: `'\u{2f}'` must close as one literal, or the
     # next apostrophes pair up, `"` opens a string and the `/*` below runs to EOF.
     ESCAPED_CHAR_LITERALS = ("macro_rules! consume { ($($token:tt)*) => {} }\n"

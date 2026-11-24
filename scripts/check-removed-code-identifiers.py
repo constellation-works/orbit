@@ -5,7 +5,8 @@ From the delivery diff against the guardrails base (`CI_TEST_BASE`, with the
 merge-base fallback `scripts/ci-guardrails.sh` uses), take the identifiers whose
 definition the diff deletes:
 
-- Rust `const`, `static`, `fn`, `struct`, `enum`, `trait` and `type` names;
+- Rust `const`, `static`, `fn`, `struct`, `enum`, `trait` and `type` names, outside
+  comments and quoted literals;
 - Rust `pub use` re-exports, named by their crate-qualified public path
   (`orbit_policy::resolve_symlinks` for `pub use ...::resolve_symlinks;` in
   `crates/orbit-policy/src/lib.rs`). A `pub use` inside a comment is not a
@@ -100,47 +101,12 @@ def comparison_base():
     raise ValueError("cannot resolve agent-main; set CI_TEST_BASE to the delivery base commit")
 
 
-def diff_path(text):
-    text = text.rstrip("\t")
-    if text == "/dev/null" or text[:2] not in ("a/", "b/"):
-        return text
-    return text[2:]
-
-
-def hunks(base):
-    """Return (path, removed text, added text) for each hunk of the diff.
-
-    Header lines are read only before a file's first hunk, so a removed line
-    that begins with `--` is still content."""
-    result = git("diff", "--no-color", "--no-ext-diff", "--no-renames", "--unified=0",
-                 "--src-prefix=a/", "--dst-prefix=b/", base, "--")
+def changed_paths(base):
+    """Return the paths the diff touches against the base, including deleted ones."""
+    result = git("diff", "--name-only", "--no-renames", "-z", base, "--")
     if result.returncode != 0:
         raise ValueError(f"git diff against {base} failed: {result.stderr.strip()}")
-    blocks = []
-    path = old_path = ""
-    current = None
-    for line in result.stdout.splitlines():
-        if line.startswith("diff --git "):
-            if current is not None:
-                blocks.append(current)
-            current = None
-            path = old_path = ""
-        elif line.startswith("@@"):
-            if current is not None:
-                blocks.append(current)
-            current = (path, [], [])
-        elif current is not None and line.startswith("-"):
-            current[1].append(line[1:])
-        elif current is not None and line.startswith("+"):
-            current[2].append(line[1:])
-        elif current is None and line.startswith("--- "):
-            old_path = diff_path(line[4:])
-        elif current is None and line.startswith("+++ "):
-            new_path = diff_path(line[4:])
-            path = old_path if new_path == "/dev/null" else new_path
-    if current is not None:
-        blocks.append(current)
-    return [(path, "\n".join(removed), "\n".join(added)) for path, removed, added in blocks]
+    return [name for name in result.stdout.split("\0") if name]
 
 
 def module_of(path):
@@ -237,12 +203,13 @@ def rust_code_without_comments_or_literals(text):
     return ''.join(result)
 
 
-def public_paths(path, text):
+def public_paths(path, code):
+    """Crate-qualified public paths a Rust source re-exports, outside comments and literals."""
     module = module_of(path)
     if module is None:
         return set()
     return {f"{module}::{name}"
-            for match in PUB_USE.finditer(rust_code_without_comments_or_literals(text))
+            for match in PUB_USE.finditer(code)
             for _, name in use_items(match.group(1))}
 
 
@@ -254,18 +221,21 @@ def css_classes(text):
             for match in CSS_CLASS.finditer(prelude.group())}
 
 
-def rust_items(text):
-    """Names of the Rust items a text defines, without comment handling."""
-    names = {match.group(1) for match in RUST_ITEM.finditer(text)}
+def rust_items(code):
+    """Names of the Rust items a source defines, from its code without comments or literals."""
+    names = {match.group(1) for match in RUST_ITEM.finditer(code)}
     names.discard("_")
     return names
 
 
 def names_in(path, text):
-    """Identifiers a source text defines or re-exports, or the CSS classes it styles."""
+    """Identifiers a source text defines or re-exports, or the CSS classes it styles.
+
+    A Rust item or re-export spelled in a comment or a quoted literal names nothing."""
     if path.endswith(".css"):
         return css_classes(text)
-    return rust_items(text) | public_paths(path, text)
+    code = rust_code_without_comments_or_literals(text)
+    return rust_items(code) | public_paths(path, code)
 
 
 def read_text(relative):
@@ -283,43 +253,20 @@ def worktree_files(*options):
 
 
 def changed_identifiers(base):
-    """Return {identifier: source paths} for identifiers the diff removes and does not re-add."""
+    """Return {identifier: source paths} for identifiers the diff removes from the base.
+
+    A hunk alone cannot tell live code from a comment: it can start or end inside a
+    block comment, and a zero-context hunk can leave a `pub use` opening outside its
+    text. So each changed Rust or CSS file is compared whole, before and after the diff."""
     removed = {}
-    added = set()
-    changed = set()
-    for path, removed_text, added_text in hunks(base):
+    for path in changed_paths(base):
         if not path.endswith(SOURCE_SUFFIXES):
             continue
-        changed.add(path)
-        # A CSS hunk can cut a selector or comment in half, so CSS is judged
-        # from whole files below. A Rust hunk can start or end inside a block
-        # comment, so it supplies item names only: a `pub use` in it may be
-        # commented out, and only the whole file says what is re-exported.
-        if path.endswith(".rs"):
-            for name in rust_items(removed_text):
-                removed.setdefault(name, set()).add(path)
-            added |= rust_items(added_text)
-    # A zero-context hunk that deletes one member of a multiline `pub use` group
-    # leaves the `pub use` opening and `;` outside the removed text, so public
-    # paths are compared as whole files before and after the diff.
-    for path in sorted(changed):
-        if path.endswith(".css"):
-            old = git("show", f"{base}:{path}")
-            old_classes = css_classes(old.stdout) if old.returncode == 0 else set()
-            for name in old_classes - css_classes(read_text(path) or ""):
-                removed.setdefault(name, set()).add(path)
-            continue
-        if module_of(path) is None:
-            continue
         old = git("show", f"{base}:{path}")
-        old_paths = public_paths(path, old.stdout) if old.returncode == 0 else set()
-        for name in old_paths - public_paths(path, read_text(path) or ""):
+        old_names = names_in(path, old.stdout) if old.returncode == 0 else set()
+        for name in old_names - names_in(path, read_text(path) or ""):
             removed.setdefault(name, set()).add(path)
-    for path in worktree_files("--others"):
-        text = read_text(path) if path.endswith(SOURCE_SUFFIXES) else None
-        if text is not None:
-            added |= names_in(path, text)
-    return {name: files for name, files in removed.items() if name not in added}
+    return removed
 
 
 def tree_names():
