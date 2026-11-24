@@ -22,6 +22,10 @@ Do not edit the minified blobs by hand.
    requested regular file directly without extracting the archive. Absolute
    paths, parent traversal, links and special files cause the refresh to fail
    on every supported Python version.
+   The blobs, manifest and lockfile are staged, checked together by
+   `check-dashboard-vendor.py`, and only then published. A failure in any
+   step, including lockfile generation, names the step and leaves all three
+   unchanged.
 3. Confirm `./scripts/check-dashboard-vendor.py` exits 0.
 4. Load the dashboard (`orbit web serve`) and check Markdown rendering.
 

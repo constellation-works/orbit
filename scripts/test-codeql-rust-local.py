@@ -12,6 +12,7 @@ import shutil
 import subprocess
 import re
 import select
+import shlex
 import signal
 import sys
 import tempfile
@@ -142,6 +143,8 @@ def ignored_by(config):
 name = Path(sys.argv[0]).name
 args = sys.argv[1:]
 if name == "codeql" and args == ["version", "--format=terse"]:
+    if os.environ.get("STUB_VERSION_FAIL"):
+        sys.exit(2)
     print(os.environ.get("STUB_CODEQL_VERSION", "2.27.1"))
     sys.exit(0)
 keys = ("RUSTUP_HOME", "CARGO_HOME", "CARGO_TARGET_DIR", "TMPDIR",
@@ -159,6 +162,18 @@ with open(os.environ["STUB_CALLS"], "a") as log:
 if args[:2] == ["database", "create"] and os.environ.get("STUB_ADMISSION_EVENT"):
     with open(os.environ["STUB_ADMISSION_EVENT"], "w") as pipe:
         pipe.write("create\n")
+
+
+# A source edited, removed, or made unreadable to the SHA256SUM stand-in,
+# mid-phase.
+def disturb(phase):
+    if os.environ.get(f"STUB_EDIT_DURING_{phase}"):
+        with open(os.environ[f"STUB_EDIT_DURING_{phase}"], "a") as edited:
+            edited.write("pub fn edited() {}\n")
+    if os.environ.get(f"STUB_UNREADABLE_DURING_{phase}"):
+        Path(os.environ[f"STUB_UNREADABLE_DURING_{phase}"]).write_text("")
+    if os.environ.get(f"STUB_REMOVE_DURING_{phase}"):
+        Path(os.environ[f"STUB_REMOVE_DURING_{phase}"]).unlink()
 
 
 def event(kind):
@@ -200,9 +215,7 @@ elif args[:2] == ["database", "create"]:
     (registry / "config.json").write_text("{}")
     (Path(os.environ["CARGO_TARGET_DIR"]) / "debug").mkdir(parents=True)
     (Path(os.environ["CARGO_TARGET_DIR"]) / "debug/out").write_text("build")
-    if os.environ.get("STUB_EDIT_DURING_CREATE"):
-        with open(os.environ["STUB_EDIT_DURING_CREATE"], "a") as edited:
-            edited.write("pub fn edited() {}\n")
+    disturb("CREATE")
     log = os.environ.get("STUB_EXTRACTION_LOG", "INFO semantic crate graph extracted")
     if os.environ.get("STUB_LOG_FILE_ONLY"):
         (database / "log/extractor.log").write_text(log)
@@ -217,6 +230,7 @@ elif args[:2] == ["database", "analyze"]:
         sys.exit(7)
     output = next(arg.split("=", 1)[1] for arg in args if arg.startswith("--output="))
     Path(output).write_text(json.dumps({"version": "2.1.0", "runs": [{"results": []}]}))
+    disturb("ANALYZE")
     event("end")
 else:
     sys.exit(99)
@@ -232,6 +246,15 @@ RESIDUE = ["target/debug/build/serde-1/out/generated.rs",
 # Tracked production source plus a new file a candidate has not yet committed;
 # the shared configuration still excludes tests.
 SELECTED = ["crates/core/src/added.rs", "crates/core/src/lib.rs"]
+# sha256sum as the host runs it, until the marker file exists; then it refuses
+# as it does for a file it may not read. A mode change would not stop root.
+SHA256SUM = '''#!/bin/sh
+if [ -e "$STUB_UNREADABLE" ]; then
+  echo "sha256sum: ./crates/core/src/lib.rs: Permission denied" >&2
+  exit 1
+fi
+exec REAL_SHA256SUM "$@"
+'''
 # What a passing run keeps as evidence; a failed run also keeps the dataset
 # and build scratch.
 EVIDENCE = ["analysis.log", "codeql-config.yml", "codeql-logs", "database",
@@ -357,6 +380,9 @@ class LocalCodeqlTests(unittest.TestCase):
         if not self.calls_file.exists():
             return []
         return [json.loads(line) for line in self.calls_file.read_text().splitlines()]
+
+    def codeql_calls(self):
+        return [call["args"][:2] for call in self.calls() if call["name"] == "codeql"]
 
     def assert_no_result(self, result, expected_calls):
         self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
@@ -1040,19 +1066,183 @@ os.execv({real_mv!r}, sys.argv)
         self.assertFalse((second_dir / "inputs.sha256").exists())
         self.assert_isolated()
 
-    def test_failed_or_edited_run_is_never_reused(self):
+    def test_failed_run_is_never_reused(self):
         failed = self.run_script("fixture.ql", STUB_ANALYZE_FAIL="1")
         self.assertNotEqual(failed.returncode, 0)
-        edited = self.run_script("fixture.ql", STUB_EDIT_DURING_CREATE=str(self.repo / "crates/core/src/lib.rs"))
-        self.assertEqual(edited.returncode, 0, edited.stderr)
-        self.assertIn("the checkout changed during this run", edited.stderr)
-        self.assertFalse((self.run_dir(edited) / "inputs.sha256").exists())
         self.calls_file.write_text("")
         result = self.run_script("fixture.ql")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual([call["args"][:2] for call in self.calls()],
                          [["database", "create"], ["database", "analyze"]])
         self.assertTrue((self.run_dir(result) / "inputs.sha256").is_file())
+
+    def use_unreadable_marker(self):
+        real = shutil.which("sha256sum", path=self.tool_path)
+        self.assertIsNotNone(real)
+        stand_in = self.bin / "sha256sum"
+        stand_in.write_text(SHA256SUM.replace("REAL_SHA256SUM", shlex.quote(real)))
+        stand_in.chmod(0o755)
+        marker = self.root / "unreadable"
+        self.env["STUB_UNREADABLE"] = str(marker)
+        return marker
+
+    def test_changed_or_unreadable_sources_leave_no_usable_evidence(self):
+        source = self.repo / "crates/core/src/lib.rs"
+        marker = self.use_unreadable_marker()
+        external = self.root / "external queries"
+        external.mkdir()
+        (external / "check.ql").write_text('select "local"\n')
+        create, analyze = ["database", "create"], ["database", "analyze"]
+        changed = "the checkout changed during this run"
+        unread = "the checkout could not be read again to confirm its source identity"
+        cases = [
+            ("edited in extraction", dict(STUB_EDIT_DURING_CREATE=str(source)), [create], changed),
+            ("edited in analysis", dict(STUB_EDIT_DURING_ANALYZE=str(source)), [create, analyze], changed),
+            ("unreadable in extraction", dict(STUB_UNREADABLE_DURING_CREATE=str(marker)), [create], unread),
+            ("unreadable in analysis", dict(STUB_UNREADABLE_DURING_ANALYZE=str(marker)), [create, analyze],
+             unread),
+        ]
+        # A pack selector is eligible for reuse and a local path is not; the
+        # sources must hold still for both.
+        for selector in ("fixture.ql", str(external / "check.ql")):
+            for label, env, expected_calls, cause in cases:
+                with self.subTest(label, selector=selector):
+                    marker.unlink(missing_ok=True)
+                    self.calls_file.write_text("")
+                    result = self.run_script("--fresh", selector, **env)
+                    self.assertEqual(result.returncode, 1, result.stderr)
+                    self.assertEqual(result.stdout, "")
+                    self.assertNotIn("analysis completed", result.stderr)
+                    self.assertEqual(self.codeql_calls(), expected_calls)
+                    final = [line for line in result.stderr.splitlines()
+                             if line.startswith("codeql-rust-local: ")][-1]
+                    self.assertIn(cause, final)
+                    self.assertEqual("no query was run" in final, expected_calls == [create], final)
+                    run_dir = self.run_dir(result)
+                    self.assertFalse((run_dir / "results.sarif").exists())
+                    self.assertFalse((run_dir / "inputs.sha256").exists())
+                    self.assertEqual((run_dir / "results.source-unstable.sarif").is_file(),
+                                     expected_calls == [create, analyze])
+                    # A failed run keeps its logs, dataset and build scratch.
+                    self.assertTrue((run_dir / "extraction.log").is_file())
+                    self.assertEqual((run_dir / "analysis.log").is_file(), expected_calls == [create, analyze])
+                    for bulk in BULK:
+                        self.assertTrue((run_dir / bulk).is_dir(), bulk)
+        self.assertEqual(list(self.scratch.rglob("results.sarif")), [])
+        self.assertEqual(list(self.scratch.rglob("inputs.sha256")), [])
+
+        marker.unlink(missing_ok=True)
+        self.calls_file.write_text("")
+        result = self.run_script("fixture.ql")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.codeql_calls(), [create, analyze])
+        self.assertTrue((self.run_dir(result) / "inputs.sha256").is_file())
+        self.assert_isolated()
+
+    def test_ignored_files_written_by_extraction_are_not_source_changes(self):
+        # Build scripts that extraction runs write generated files the checkout
+        # ignores; they follow from the sources and are not a source change.
+        (self.repo / ".gitignore").write_text("generated/\n")
+        generated = self.repo / "desktop/generated"
+        generated.mkdir(parents=True)
+        create, analyze = ["database", "create"], ["database", "analyze"]
+        for phase, expected_calls in (("CREATE", [create, analyze]), ("ANALYZE", [create, analyze])):
+            with self.subTest(phase=phase):
+                self.calls_file.write_text("")
+                result = self.run_script("--fresh", "fixture.ql",
+                                         **{f"STUB_EDIT_DURING_{phase}": str(generated / "schema.rs")})
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertIn("analysis completed", result.stdout)
+                self.assertEqual(self.codeql_calls(), expected_calls)
+                run_dir = self.run_dir(result)
+                self.assertTrue((run_dir / "results.sarif").is_file())
+                self.assertTrue((run_dir / "inputs.sha256").is_file())
+        # The generated file changed twice and the passing run is still reused.
+        self.assertEqual(len((generated / "schema.rs").read_text().splitlines()), 2)
+        self.calls_file.write_text("")
+        again = self.run_script("fixture.ql")
+        self.assertEqual(again.returncode, 0, again.stderr)
+        self.assertEqual(self.codeql_calls(), [])
+        self.assertEqual(self.run_dir(again), run_dir)
+
+        # A file Git does not ignore is a source, tracked or not, new or not.
+        for label, path in (("new untracked", self.repo / "crates/core/src/appeared.rs"),
+                            ("existing untracked", self.repo / "crates/core/src/added.rs")):
+            with self.subTest(label):
+                self.calls_file.write_text("")
+                result = self.run_script("--fresh", "fixture.ql", STUB_EDIT_DURING_CREATE=str(path))
+                self.assertEqual(result.returncode, 1, result.stderr)
+                self.assertIn("the checkout changed during this run", result.stderr)
+                self.assertEqual(self.codeql_calls(), [create])
+                self.assertFalse((self.run_dir(result) / "results.sarif").exists())
+
+    def test_tracked_file_removed_during_a_run_is_a_source_change(self):
+        source = self.repo / "crates/core/src/test_support.rs"
+        result = self.run_script("fixture.ql", STUB_REMOVE_DURING_CREATE=str(source))
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertIn("the checkout changed during this run", result.stderr)
+        self.assertEqual(self.codeql_calls(), [["database", "create"]])
+        self.assertFalse((self.run_dir(result) / "results.sarif").exists())
+        # A checkout that already lacks a tracked file has one identity.
+        result = self.run_script("fixture.ql")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue((self.run_dir(result) / "inputs.sha256").is_file())
+
+    def test_checkout_without_git_metadata_counts_every_file(self):
+        # An exported tree has no ignore rules to consult, so every file and
+        # symlink outside Orbit state, Cargo output and scratch is a source.
+        shutil.rmtree(self.repo / ".git")
+        (self.repo / ".gitignore").write_text("generated/\n")
+        generated = self.repo / "desktop/generated"
+        generated.mkdir(parents=True)
+        (self.repo / "crates/core/src/link.rs").symlink_to("lib.rs")
+        create, analyze = ["database", "create"], ["database", "analyze"]
+        first = self.run_script("fixture.ql")
+        self.assertEqual(first.returncode, 0, first.stderr)
+        self.assertEqual(self.codeql_calls(), [create, analyze])
+        self.calls_file.write_text("")
+        again = self.run_script("fixture.ql")
+        self.assertEqual(again.returncode, 0, again.stderr)
+        self.assertEqual(self.codeql_calls(), [])
+        self.assertEqual(self.run_dir(again), self.run_dir(first))
+        for label, path in (("source", self.repo / "crates/core/src/lib.rs"),
+                            ("generated", generated / "schema.rs")):
+            with self.subTest(label):
+                self.calls_file.write_text("")
+                result = self.run_script("--fresh", "fixture.ql", STUB_EDIT_DURING_CREATE=str(path))
+                self.assertEqual(result.returncode, 1, result.stderr)
+                self.assertIn("the checkout changed during this run", result.stderr)
+                self.assertEqual(self.codeql_calls(), [create])
+                self.assertFalse((self.run_dir(result) / "results.sarif").exists())
+
+    def test_unreadable_sources_refuse_before_preparation(self):
+        marker = self.use_unreadable_marker()
+        marker.write_text("")
+        for args in (["fixture.ql"], ["--fresh", "fixture.ql"]):
+            with self.subTest(args=args):
+                result = self.run_script(*args)
+                self.assertEqual(result.returncode, 1, result.stderr)
+                self.assertIn("cannot read every input of this checkout to record its source identity",
+                              result.stderr)
+                self.assertIn("No extraction or query was run", result.stderr)
+                self.assertIn("Permission denied", result.stderr)
+                self.assert_no_result(result, [])
+                self.assertEqual(list(self.scratch.glob("codeql-rust-local.??????")), [])
+
+    def test_unreadable_reuse_key_runs_without_reuse(self):
+        # Reuse eligibility is not source stability: a run whose reuse key
+        # cannot be built still analyzes sources that held still.
+        for attempt in range(2):
+            with self.subTest(attempt=attempt):
+                self.calls_file.write_text("")
+                result = self.run_script("fixture.ql", STUB_VERSION_FAIL="1")
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertIn("cannot read the CodeQL version or build environment for the reuse key",
+                              result.stderr)
+                self.assertEqual(self.codeql_calls(), [["database", "create"], ["database", "analyze"]])
+                run_dir = self.run_dir(result)
+                self.assertTrue((run_dir / "results.sarif").is_file())
+                self.assertFalse((run_dir / "inputs.sha256").exists())
 
     def test_passing_run_keeps_evidence_and_failing_run_keeps_everything(self):
         passed = self.run_dir(self.run_script("fixture.ql"))

@@ -1374,5 +1374,163 @@ class ObservedPipeDrainTests(unittest.TestCase):
         self.assertEqual(children[0].returncode, -signal.SIGKILL)
 
 
+class NextestRelayBoundTests(unittest.TestCase):
+    """Drive run_nextest with a scripted runner stream: no build and no child.
+
+    The stream hands out exactly the scripted chunks, so where a line is split
+    between two reads is fixed, and it refuses a read without a size bound.
+    """
+
+    NOTICE = "DEFERRED: bubblewrap unavailable: fixture: No permissions to create new namespace"
+    PASS = "        PASS [   0.010s] suite::fixture quiet\n"
+    FAIL = "        FAIL [   0.010s] suite::fixture broken\n"
+
+    def relay(self, chunks, exit_code=0):
+        """Returns the exit status, notices, relayed stderr text and archived bytes."""
+        import importlib.util
+        import io
+        from collections import deque
+        from types import SimpleNamespace
+
+        spec = importlib.util.spec_from_file_location("ci_test_affected_relay", SCRIPTS / "ci-test-affected.py")
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        scratch = SCRIPTS.parent / ".orbit/tmp"
+        scratch.mkdir(parents=True, exist_ok=True)
+        temporary = tempfile.TemporaryDirectory(prefix="nextest-relay-", dir=scratch)
+        self.addCleanup(temporary.cleanup)
+        module.ROOT = Path(temporary.name)
+        testcase = self
+        self.reads, self.writes = [], []
+
+        class Stream:
+            def __init__(self):
+                self.chunks = deque(chunks)
+
+            def read1(self, size=-1):
+                if size is None or size < 0:
+                    raise AssertionError("the relay read without a size bound")
+                testcase.reads.append(size)
+                if not self.chunks:
+                    return b""
+                chunk = self.chunks.popleft()
+                if len(chunk) > size:
+                    self.chunks.appendleft(chunk[size:])
+                    chunk = chunk[:size]
+                return chunk
+
+            def unbounded(self, *args):
+                raise AssertionError("the relay read a whole line or stream without a size bound")
+
+            __iter__ = __next__ = readline = readlines = read = unbounded
+
+        class Process:
+            stdout = Stream()
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+            def wait(self):
+                return exit_code
+
+            def terminate(self):
+                pass
+
+        class Relay(io.StringIO):
+            def write(self, text):
+                testcase.writes.append(len(text))
+                return super().write(text)
+
+        module.subprocess = SimpleNamespace(Popen=lambda *args, **kwargs: Process(),
+                                            PIPE=subprocess.PIPE, STDOUT=subprocess.STDOUT)
+        relayed = Relay()
+        environment = {name: value for name, value in os.environ.items()
+                       if not name.startswith("ORBIT_COMMAND_EVIDENCE_")}
+        with mock.patch.dict(os.environ, environment, clear=True), contextlib.redirect_stderr(relayed):
+            code, notices, _ = module.run_nextest(["fixture-runner"], environment)
+        [log] = (module.ROOT / ".orbit/tmp").glob("ci-test-affected-nextest-*.log")
+        self.module = module
+        lines = relayed.getvalue().splitlines(keepends=True)
+        self.assertTrue(lines[0].startswith("ci-test-affected: full nextest output: "), lines[:1])
+        return code, notices, "".join(lines[1:]), log.read_bytes()
+
+    def test_split_reads_relay_and_classify_like_whole_lines(self):
+        stream = (
+            self.PASS + "ordinary passing noise\n"
+            + f"\x1b[31m{self.NOTICE}\x1b[0m\n"
+            + "  skipping: second notice é\n"
+            + "fixture: sandbox_apply: Operation not permitted\n"
+            + self.FAIL + "failure détail ✓\n"
+            + "     Summary [   0.020s] 2 tests run: 1 passed, 1 failed\n"
+            + "unterminated tail").encode()
+        expected = (
+            self.PASS + self.NOTICE + "\n" + "  skipping: second notice é\n"
+            + "fixture: sandbox_apply: Operation not permitted\n"
+            + self.FAIL + "failure détail ✓\n"
+            + "     Summary [   0.020s] 2 tests run: 1 passed, 1 failed\n"
+            + "unterminated tail")
+        for size in (len(stream), 1, 2, 7, 64):
+            with self.subTest(read_size=size):
+                chunks = [stream[index:index + size] for index in range(0, len(stream), size)]
+                code, notices, relayed, archived = self.relay(chunks, exit_code=100)
+                self.assertEqual(code, 100)
+                self.assertEqual(notices, [self.NOTICE, "skipping: second notice é"])
+                self.assertEqual(relayed, expected)
+                self.assertEqual(archived, stream)
+
+    def test_an_endless_line_is_read_relayed_and_archived_in_bounded_pieces(self):
+        megabyte = 1024 * 1024
+        marker = b"No permissions to create a new namespace"
+        stream = (self.PASS.encode() + b"p" * megabyte + marker + b"q" * megabyte + b"\n"
+                  + self.FAIL.encode() + "é".encode() * megabyte + b"\n"
+                  + b"DEFERRED: " + b"n" * megabyte + b"\n"
+                  + self.NOTICE.encode() + b"\n")
+        code, notices, relayed, archived = self.relay([stream])
+        bound = self.module.RELAY_CHUNK_BYTES
+        self.assertEqual(code, 0)
+        self.assertEqual(archived, stream, "the full raw log keeps every byte")
+        self.assertLessEqual(max(self.reads), bound)
+        self.assertLessEqual(max(self.writes), bound)
+        # The failing line and the notice line are relayed whole; of the
+        # passing line only the piece that carries the host marker is.
+        self.assertEqual(relayed.count("é"), megabyte)
+        self.assertNotIn("�", relayed, "a piece boundary must not split a character")
+        self.assertEqual(relayed.count("n" * 1024), megabyte // 1024)
+        self.assertIn(marker.decode(), relayed)
+        self.assertLessEqual(relayed.count("p") + relayed.count("q"), bound)
+        cut = self.module.HOST_NOTICE_CUT
+        self.assertEqual(notices, ["DEFERRED: " + "n" * (self.module.HOST_NOTICE_CHARS - 10) + cut, self.NOTICE])
+
+    def test_notices_over_the_bound_are_counted_in_a_final_entry(self):
+        limit = None
+        for extra in (0, 5):
+            with self.subTest(extra=extra):
+                if limit is None:
+                    self.relay([b""])
+                    limit = self.module.HOST_NOTICE_LIMIT
+                lines = [f"DEFERRED: bubblewrap unavailable: test {index}: refused\n"
+                         for index in range(limit + extra)]
+                stream = (self.PASS + "".join(lines)).encode()
+                code, notices, relayed, archived = self.relay([stream])
+                self.assertEqual(code, 0)
+                self.assertEqual(archived, stream)
+                self.assertEqual(notices[:limit], [line.strip() for line in lines[:limit]])
+                for line in lines:
+                    self.assertIn(line, relayed)
+                if not extra:
+                    self.assertEqual(len(notices), limit)
+                    self.assertNotIn("not listed", relayed)
+                    continue
+                [overflow] = notices[limit:]
+                self.assertTrue(overflow.startswith(f"ci-test-affected: {extra} more host notices are not listed"),
+                                overflow)
+                # Not a deferral: a reader requiring every notice to be one refuses.
+                self.assertFalse(overflow.startswith(("DEFERRED:", "SKIP:", "skipping")))
+                self.assertIn(overflow + "\n", relayed)
+
+
 if __name__ == "__main__":
     unittest.main()

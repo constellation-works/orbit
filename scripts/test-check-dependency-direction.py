@@ -1526,6 +1526,126 @@ class RelativeImportTests(unittest.TestCase):
              "        super::super::super::adapter::Probe;\n    }\n}\n"),
         ], rejected=True)
 
+    # Every caller of the shared `super::` scanner outside named-path mode, as
+    # `(file, supers at file depth that reach the forbidden name, name)`.
+    INLINE_DEPTH_CALLERS = (
+        # orbit-core application modules: contracts, task, job, the grouped
+        # layer checks, landing and routines.
+        ("application/contracts/probe.rs", 2, "task"),
+        ("application/task/probe.rs", 2, "job"),
+        ("application/task/probe.rs", 2, "review"),
+        ("application/job/worker.rs", 2, "distributed"),
+        ("application/job/worker.rs", 2, "review"),
+        ("application/automation/probe.rs", 2, "auto_tasks"),
+        ("application/automation/probe.rs", 2, "review"),
+        ("application/distributed/probe.rs", 2, "experiment"),
+        ("application/distributed/probe.rs", 2, "pull_drain"),
+        ("application/agents/probe.rs", 2, "experiment"),
+        ("application/review/probe.rs", 2, "codebase"),
+        ("application/review/probe.rs", 2, "landing"),
+        ("application/backlog_forecast/probe.rs", 2, "codebase"),
+        ("application/codebase/probe.rs", 2, "backlog_forecast"),
+        ("application/resident/probe.rs", 2, "routines"),
+        # orbit-core bootstrap, composition and runtime layering.
+        ("application/workspace/sync.rs", 3, "bootstrap"),
+        ("adapter/tool_host/operation.rs", 3, "composition"),
+        ("runtime/probe.rs", 2, "application"),
+    )
+    INLINE_DEPTH_CONFIG_CALLERS = (
+        ("operation/probe.rs", 2, "layering"),
+        ("crew/probe.rs", 2, "registry"),
+        ("layering/probe.rs", 2, "store"),
+        ("registry/probe.rs", 2, "resolved"),
+    )
+    INLINE_DEPTH_ENGINE_CALLERS = (
+        ("context/probe.rs", 2, "activity_job"),
+        ("executor/automation/probe.rs", 3, "activity_job"),
+        ("activity_job/cli_runner/probe.rs", 2, "DECLARED_FAILURE_EVIDENCE_KEY"),
+    )
+    # Named-path callers already resolved inline depth; they stay in step.
+    INLINE_DEPTH_STORE_CALLERS = (
+        ("contracts/probe.rs", 2, "repository"),
+        ("driver/file/probe.rs", 3, "driver::sqlite"),
+        ("driver/sqlite/probe.rs", 3, "repository"),
+        ("fs/probe.rs", 2, "workflow"),
+    )
+
+    @staticmethod
+    def inline_chain(supers, name):
+        return "mod inner {\n    use " + "super::" * supers + name + "::Probe;\n}\n"
+
+    def inline_depth_bases(self):
+        crates = self.root / "crates"
+        return (
+            (crates / "orbit-core/src", self.INLINE_DEPTH_CALLERS),
+            (crates / "orbit-config/src", self.INLINE_DEPTH_CONFIG_CALLERS),
+            (crates / "orbit-engine/src", self.INLINE_DEPTH_ENGINE_CALLERS),
+            (crates / "orbit-store/src", self.INLINE_DEPTH_STORE_CALLERS),
+        )
+
+    def test_inline_module_child_escape_rejected_for_every_scanner_caller(self):
+        # An inline `mod inner` is one module deeper than its file, so the
+        # chain that leaves the scanned module needs one more `super` there.
+        # The ordinary and crate-root modes once resolved it from the file's
+        # depth alone and missed the edge out of a task or job file.
+        for base, callers in self.inline_depth_bases():
+            self.check_rows([
+                (relative, self.inline_chain(supers + 1, name))
+                for relative, supers, name in callers
+            ], rejected=True, base=base)
+        self.check_rows([
+            ("task/probe.rs", "mod outer {\n    mod inner {\n"
+             "        use super::super::super::super::job::Probe;\n    }\n}\n"),
+            ("task/body.rs", "mod inner {\n    fn probe() {\n"
+             "        super::super::super::job::step();\n    }\n}\n"),
+            # The plain path is caught by a text pattern first; the grouped
+            # tree reaches the scanner.
+            ("task/grouped.rs", "mod inner {\n    use super::super::super::{automation::Probe};\n}\n"),
+            ("job/grouped.rs", "mod inner {\n    use super::{super::super::{pull_drain::Probe}};\n}\n"),
+        ], rejected=True)
+        # Single-file callers are scanned by exact path; one run covers them.
+        exact = {
+            f"{dependency_guard_fixture.CORE_APPLICATION}/tag_instructions.rs":
+                self.inline_chain(2, "experiment"),
+            "crates/orbit-engine/src/sandbox_spawn.rs": self.inline_chain(2, "activity_job"),
+            "crates/orbit-config/src/aliases.rs": self.inline_chain(2, "layering"),
+            "crates/orbit-config/src/seeding.rs": self.inline_chain(2, "store"),
+            "crates/orbit-config/src/resolved/compatibility.rs": self.inline_chain(3, "store"),
+        }
+        with self.fixture_files(self.root, exact):
+            result = self.run_guard()
+            self.assertEqual(result.stderr, "", result.stderr)
+            self.assertEqual(result.returncode, 1, result.stdout)
+            for relative in exact:
+                with self.subTest(file=relative):
+                    self.assertIn(f"{self.root / relative}:2:", result.stdout)
+
+    def test_inline_module_sibling_path_accepted_for_every_scanner_caller(self):
+        # The same chain that leaves the module at file depth stays inside it
+        # from an inline child: `super::super::job` there is
+        # `application::task::job`, a module of task. It was once reported as
+        # the upper module.
+        for base, callers in self.inline_depth_bases():
+            self.check_rows([
+                (relative, self.inline_chain(supers, name))
+                for relative, supers, name in callers
+            ], rejected=False, base=base)
+        self.check_rows([
+            ("task/probe.rs", "mod outer {\n    mod inner {\n"
+             "        use super::super::super::job::Probe;\n    }\n}\n"),
+            ("task/body.rs", "mod inner {\n    fn probe() {\n"
+             "        super::super::job::step();\n    }\n}\n"),
+            ("job/grouped.rs", "mod inner {\n    use super::{super::{pull_drain::Probe}};\n}\n"),
+        ], rejected=False)
+        self.check_files({
+            f"{dependency_guard_fixture.CORE_APPLICATION}/tag_instructions.rs":
+                self.inline_chain(1, "experiment"),
+            "crates/orbit-engine/src/sandbox_spawn.rs": self.inline_chain(1, "activity_job"),
+            "crates/orbit-config/src/aliases.rs": self.inline_chain(1, "layering"),
+            "crates/orbit-config/src/seeding.rs": self.inline_chain(1, "store"),
+            "crates/orbit-config/src/resolved/compatibility.rs": self.inline_chain(2, "store"),
+        }, rejected=False, base=self.root)
+
     def test_inline_module_with_unicode_identifier_resolves_at_its_lexical_depth(self):
         # [ORB-26563] `mod détours` is a compiler-valid inline module. Two
         # `super` segments there name application::adapter (allowed); three

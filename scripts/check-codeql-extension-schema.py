@@ -255,9 +255,12 @@ def _parse_flow(text: str, start: int, line: int) -> tuple[Any, int]:
                 return mapping, index + 1
             if text[index] == ",":
                 raise YamlError("unexpected ',' in flow mapping", line)
+            key_line = line + text.count("\n", 0, index)
             key_obj, index = _parse_flow(text, index, line)
             if not isinstance(key_obj, str):
                 raise YamlError("flow mapping keys must be strings", line)
+            if key_obj in mapping:
+                raise YamlError(f"duplicate mapping key {key_obj!r}", key_line)
             index = _skip_space(text, index)
             if index >= len(text) or text[index] != ":":
                 raise YamlError("expected ':' in flow mapping", line)
@@ -335,8 +338,20 @@ def _sequence_item_text(text: str) -> str:
     return text[1:]
 
 
-def _parse_mapping(lines: list[LogicalLine], index: int, indent: int) -> tuple[dict[str, Any], int]:
-    mapping: dict[str, Any] = {}
+def _parse_mapping(
+    lines: list[LogicalLine],
+    index: int,
+    indent: int,
+    mapping: dict[str, Any] | None = None,
+) -> tuple[dict[str, Any], int]:
+    """Parse block mapping entries at `indent`, refusing a repeated key.
+
+    A caller continuing a mapping it already started (a sequence item's
+    inline first key) passes it as `mapping`, so one duplicate rule covers
+    those keys too.
+    """
+    if mapping is None:
+        mapping = {}
     while index < len(lines):
         current = lines[index]
         if current.indent != indent or _is_sequence_item(current.text):
@@ -386,10 +401,9 @@ def _parse_sequence(lines: list[LogicalLine], index: int, indent: int) -> tuple[
                 if _is_sequence_item(lines[index].text):
                     raise YamlError("unexpected sequence item in mapping",
                                     lines[index].line)
-                nested, next_index = _parse_mapping(lines, index, lines[index].indent)
+                _, next_index = _parse_mapping(lines, index, lines[index].indent, mapping)
                 if next_index <= index:
                     raise YamlError("expected mapping content", lines[index].line)
-                mapping.update(nested)
                 index = next_index
             items.append(mapping)
             continue

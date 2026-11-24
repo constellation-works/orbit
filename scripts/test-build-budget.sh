@@ -709,6 +709,52 @@ for invalid in 0 banana 1025; do
     || fail "test-threads file value $invalid did not explain the invalid value"
 done
 
+# Digit text too long for an integer conversion is one more invalid value: the
+# same named bound and status 64, from the environment and from the host files,
+# before the wrapped command or the job-count query runs.
+oversized="$(printf '9%.0s' $(seq 1 5000))"
+mkdir -p "$TMP/oversized-home"
+expect_oversized_refusal() {
+  local label="$1" bound="$2" status
+  shift 2
+  rm -f "$TMP/oversized-ran"
+  set +e
+  env -i HOME="$TMP/oversized-home" PATH="$PATH" OVERSIZED_RAN="$TMP/oversized-ran" ${1+"$@"} \
+    >"$TMP/oversized.out" 2>"$TMP/oversized.err"
+  status=$?
+  set -e
+  [[ "$status" == "64" ]] || fail "$label: oversized value returned $status instead of 64"
+  grep -Fq "build-budget: $bound; got " "$TMP/oversized.err" \
+    || fail "$label: oversized value did not get the named bound diagnostic"
+  [[ "$(wc -l <"$TMP/oversized.err" | tr -d ' ')" == "1" && "$(wc -c <"$TMP/oversized.err")" -lt 400 ]] \
+    || fail "$label: oversized value was not reported as one bounded line"
+  [[ ! -s "$TMP/oversized.out" && ! -e "$TMP/oversized-ran" ]] \
+    || fail "$label: the command ran despite an oversized value"
+}
+slots_bound='ORBIT_BUILD_SLOTS must be a decimal integer from 1 through 128'
+jobs_bound='ORBIT_CARGO_JOBS/CARGO_BUILD_JOBS must be a decimal integer from 1 through 1024'
+threads_bound='ORBIT_TEST_THREADS must be a decimal integer from 1 through 1024'
+oversized_command=("$WRAPPER" -- sh -c ': >"$OVERSIZED_RAN"')
+for setting in "ORBIT_BUILD_SLOTS|$slots_bound" "ORBIT_CARGO_JOBS|$jobs_bound" \
+  "CARGO_BUILD_JOBS|$jobs_bound" "ORBIT_TEST_THREADS|$threads_bound"; do
+  name="${setting%%|*}"
+  expect_oversized_refusal "$name" "${setting#*|}" \
+    ORBIT_BUILD_BUDGET_DIR="$TMP/oversized-env" "$name=$oversized" "${oversized_command[@]}"
+  expect_oversized_refusal "$name with the budget bypassed" "${setting#*|}" \
+    ORBIT_BUILD_BUDGET_DIR="$TMP/oversized-env" ORBIT_BUILD_BUDGET=0 "$name=$oversized" "${oversized_command[@]}"
+done
+expect_oversized_refusal "ORBIT_CARGO_JOBS job query" "$jobs_bound" \
+  ORBIT_BUILD_BUDGET_DIR="$TMP/oversized-env" "ORBIT_CARGO_JOBS=$oversized" "$WRAPPER" --cargo-jobs
+for setting in "slots|$slots_bound" "cargo-jobs|$jobs_bound" "test-threads|$threads_bound"; do
+  file="${setting%%|*}"
+  mkdir -p "$TMP/oversized-file-$file"
+  printf '%s\n' "$oversized" >"$TMP/oversized-file-$file/$file"
+  expect_oversized_refusal "$file file" "${setting#*|}" \
+    ORBIT_BUILD_BUDGET_DIR="$TMP/oversized-file-$file" "${oversized_command[@]}"
+done
+expect_oversized_refusal "cargo-jobs file job query" "$jobs_bound" \
+  ORBIT_BUILD_BUDGET_DIR="$TMP/oversized-file-cargo-jobs" "$WRAPPER" --cargo-jobs
+
 # Explicit bypass avoids admission but retains the resolved Cargo job setting.
 mkdir -p "$TMP/bypass-home"
 HOME="$TMP/bypass-home" ORBIT_BUILD_BUDGET_DIR="$TMP/locks-bypass" \

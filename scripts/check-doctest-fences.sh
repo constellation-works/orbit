@@ -263,8 +263,14 @@ def parse_block(text, index, line):
 
 
 def block_doc_comments(text):
-    """Return block doc comments in source order, with beautified body lines."""
+    """Return block doc comments in source order, with beautified body lines.
+
+    Also returns the physical lines that begin inside a string literal or an
+    ordinary block comment. Their text is literal or comment content, never a
+    `///` or `//!` doc comment, however it is spelled.
+    """
     comments = []
+    interior = set()
     length = len(text)
     index = 0
     line = 1
@@ -289,6 +295,8 @@ def block_doc_comments(text):
                     "end_line": end_line,
                     "contents": beautify_block_lines(body_lines),
                 })
+            else:
+                interior.update(range(line + 1, end_line + 1))
             if new_index <= index:
                 index += 1
             else:
@@ -297,14 +305,16 @@ def block_doc_comments(text):
             continue
         skipped = try_skip_literal(text, index, line)
         if skipped is not None:
-            new_index, line = skipped
+            new_index, end_line = skipped
+            interior.update(range(line + 1, end_line + 1))
+            line = end_line
             if new_index <= index:
                 index += 1
             else:
                 index = new_index
             continue
         index += 1
-    return comments
+    return comments, interior
 
 
 def line_start_offsets(lines):
@@ -350,12 +360,12 @@ def doc_lines(text):
     A fence opened in one doc comment closes in a later one only while no item
     sits between them, since each item has its own docs. Yields `(None, None)`
     where an item ends the docs so far and the caller drops its open fence.
-    Lines that belong to a block doc are not also read as `///` lines.
+    Lines that belong to a block doc, or that begin inside a string literal
+    or an ordinary block comment, are not also read as `///` lines.
     """
     lines = physical_lines(text)
     offsets = line_start_offsets(lines)
-    blocks = block_doc_comments(text)
-    occupied = set()
+    blocks, occupied = block_doc_comments(text)
     for block in blocks:
         occupied.update(range(block["start_line"], block["end_line"] + 1))
     events = []

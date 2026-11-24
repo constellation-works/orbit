@@ -59,11 +59,45 @@ resolve_status() {
 fail=0
 skipped=0
 
-# Each distinct owner/repo@sha is resolved once. Deduplication happens in the
-# producer (sort on the first two fields) rather than an associative array so
-# the script runs under bash 3.2 (macOS /bin/bash), which the guard self-tests
+discovery_failed() {
+  echo "check-workflow-action-pins: discovery error: $1; the pin scan is incomplete" >&2
+  exit 2
+}
+
+# Discovery finishes, with every stage's status checked, before any pin is
+# resolved: a scan that stops early must not read as "all pins resolved".
+# grep exits 1 for a tree with no pinned reference and above 1 for a scan
+# error, including one after it already printed some matches.
+pin_pattern='uses:[[:space:]]*[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+(/[A-Za-z0-9_./-]+)?@[0-9a-fA-F]{40}'
+scan_status=0
+matches="$(grep -rnE "$pin_pattern" "$workflows_dir")" || scan_status=$?
+if [[ "$scan_status" -gt 1 ]]; then
+  discovery_failed "grep exited $scan_status scanning $workflows_dir"
+fi
+
+# Each distinct owner/repo@sha is resolved once. Deduplication happens here
+# (sort on the first two fields) rather than in an associative array so the
+# script runs under bash 3.2 (macOS /bin/bash), which the guard self-tests
 # use; only the first workflow location of a repeated pin is reported.
+pins=""
+if [[ "$scan_status" -eq 0 ]]; then
+  fields="$(printf '%s\n' "$matches" |
+    sed -E 's#^([^:]+):([0-9]+):.*uses:[[:space:]]*([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)(/[A-Za-z0-9_./-]+)?@([0-9a-fA-F]{40}).*#\3\t\5\t\1\t\2#')" ||
+    discovery_failed "sed exited $? extracting pins"
+  pins="$(printf '%s\n' "$fields" | sort -t "$(printf '\t')" -k1,2 -u)" ||
+    discovery_failed "sort exited $? deduplicating pins"
+  if [[ -z "$pins" ]]; then
+    discovery_failed "matched workflow lines produced no pin"
+  fi
+fi
+
 while IFS=$'\t' read -r owner_repo sha file line_no; do
+  if [[ -z "$pins" ]]; then
+    break
+  fi
+  if [[ ! "$sha" =~ ^[0-9a-fA-F]{40}$ || ! "$line_no" =~ ^[0-9]+$ || -z "$file" ]]; then
+    discovery_failed "unreadable pin record '$owner_repo'"
+  fi
   status="$(resolve_status "$api_base/repos/$owner_repo/commits/$sha")"
 
   case "$status" in
@@ -83,11 +117,7 @@ while IFS=$'\t' read -r owner_repo sha file line_no; do
       fi
       ;;
   esac
-done < <(
-  grep -rnE 'uses:[[:space:]]*[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+(/[A-Za-z0-9_./-]+)?@[0-9a-fA-F]{40}' "$workflows_dir" |
-    sed -E 's#^([^:]+):([0-9]+):.*uses:[[:space:]]*([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)(/[A-Za-z0-9_./-]+)?@([0-9a-fA-F]{40}).*#\3\t\5\t\1\t\2#' |
-    sort -t "$(printf '\t')" -k1,2 -u
-)
+done <<<"$pins"
 
 if [[ "$fail" -ne 0 ]]; then
   echo "check-workflow-action-pins: one or more workflow action pins failed the resolution guard" >&2

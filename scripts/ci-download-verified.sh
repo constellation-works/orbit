@@ -201,26 +201,21 @@ def download():
     # Warm path: a restored archive is published only after the same SHA-256
     # check as a download. A tampered cache entry fails closed instead of
     # falling through to the network, so corruption is never masked.
+    # The check reads a private copy on the destination filesystem, and that
+    # copy is what gets published. Linking the cache path instead would publish
+    # whatever the path names by then, and would leave the destination sharing
+    # the cache entry's inode. Publication never replaces an existing entry.
     if args.cache_file is not None and os.path.lexists(args.cache_file):
-        if verified_digest(args.cache_file) != args.sha256.lower():
-            raise ValueError("SHA-256 mismatch; refusing cached archive")
-        remaining()
-        try:
-            os.link(args.cache_file, args.destination)
-        except FileExistsError:
-            raise
-        except OSError:
-            # Copy onto the destination filesystem, then publish atomically.
-            # Copying directly to destination would overwrite a racing file or
-            # follow a racing symlink after the preflight check.
-            import shutil
-            with tempfile.TemporaryDirectory(prefix=".ci-download-", dir=args.destination.parent) as scratch:
-                candidate = Path(scratch) / "cached"
-                shutil.copyfile(args.cache_file, candidate)
-                if verified_digest(candidate) != args.sha256.lower():
-                    raise ValueError("SHA-256 mismatch; refusing cached archive")
-                remaining()
-                os.link(candidate, args.destination)
+        with tempfile.TemporaryDirectory(prefix=".ci-download-", dir=args.destination.parent) as scratch:
+            candidate = Path(scratch) / "cached"
+            with args.cache_file.open("rb") as source, candidate.open("xb") as staged:
+                while chunk := source.read(1024 * 1024):
+                    remaining()
+                    staged.write(chunk)
+            if verified_digest(candidate) != args.sha256.lower():
+                raise ValueError("SHA-256 mismatch; refusing cached archive")
+            remaining()
+            os.link(candidate, args.destination)
         log("cache=hit outcome=verified")
         return
 

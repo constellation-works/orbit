@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # Recopy dashboard vendor blobs from the npm packages pinned in package.json
-# and rewrite vendor-manifest.json digests/versions plus the lockfile.
+# and rewrite vendor-manifest.json digests/versions plus the lockfile. The
+# blobs, manifest and lockfile are staged and checked together first, then
+# published as one set: a failed step leaves all three as they were.
 #
 # Usage: ./scripts/refresh-dashboard-vendor.sh
 set -euo pipefail
@@ -46,6 +48,7 @@ package_dir = repo_root / "crates" / "orbit-web" / "assets" / "dashboard"
 vendor = package_dir / "vendor"
 manifest_path = vendor / "vendor-manifest.json"
 package_path = package_dir / "package.json"
+lockfile_path = package_dir / "package-lock.json"
 
 manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
 package = json.loads(package_path.read_text(encoding="utf-8"))
@@ -86,11 +89,19 @@ def patch_marked_list_setext_tabs(blob):
     )
 
 
+def unchanged(step):
+    return (
+        f"refresh-dashboard-vendor: {step}; "
+        "vendor blobs, manifest and lockfile are unchanged"
+    )
+
+
 # Stage replacements on the vendor filesystem so the install renames stay
 # on one filesystem even when TMPDIR is elsewhere; tarballs still land in
-# the TMPDIR work area. The install loop below runs only after every asset
-# was fetched and validated, manifest last, so a failure above leaves the
-# vendor tree untouched.
+# the TMPDIR work area. Publication below runs only after every asset was
+# fetched and validated, the lockfile was generated and the staged records
+# passed the vendor guard together, so a failure before it leaves the
+# vendor tree and lockfile untouched.
 stage_root = Path(tempfile.mkdtemp(prefix=".vendor-refresh-", dir=str(vendor)))
 try:
     staging = stage_root / "staged"
@@ -165,19 +176,74 @@ try:
         asset["source"] = f"https://registry.npmjs.org/{npm_package}/-/{npm_package}-{version}.tgz"
         print(f"refresh-dashboard-vendor: {asset['path']} <- {spec}:{asset['npm_file']} ({digest})")
 
-    # Every asset fetched and validated above; only now move them into place,
-    # manifest last, so a failure above leaves the vendor tree untouched.
+    staged_manifest = stage_root / manifest_path.name
+    staged_manifest.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+
+    # Generate the lockfile from a private copy of the package identity, so
+    # a failed or partial npm run cannot touch the checked-in lockfile.
+    lock_stage = work / "lock"
+    lock_stage.mkdir()
+    shutil.copyfile(package_path, lock_stage / package_path.name)
+    if lockfile_path.is_file():
+        shutil.copyfile(lockfile_path, lock_stage / lockfile_path.name)
+    lock_command = [
+        "npm", "install", "--package-lock-only", "--ignore-scripts", "--no-audit", "--no-fund",
+    ]
+    status = subprocess.run(lock_command, cwd=lock_stage, env=env).returncode
+    if status != 0:
+        raise SystemExit(
+            unchanged(f"lockfile generation failed ({' '.join(lock_command[:3])} exited {status})")
+        )
+    if not (lock_stage / lockfile_path.name).is_file():
+        raise SystemExit(
+            unchanged(f"lockfile generation wrote no {lockfile_path.name} ({' '.join(lock_command[:3])})")
+        )
+    staged_lockfile = stage_root / lockfile_path.name
+    shutil.copyfile(lock_stage / lockfile_path.name, staged_lockfile)
+
+    # Check the staged blobs, manifest, package.json and lockfile against
+    # each other with the vendor guard before publishing any of them.
+    verify_root = work / "verify"
+    verify_package = verify_root / package_dir.relative_to(repo_root)
+    verify_vendor = verify_package / vendor.name
+    verify_vendor.mkdir(parents=True)
+    shutil.copyfile(package_path, verify_package / package_path.name)
+    shutil.copyfile(staged_lockfile, verify_package / lockfile_path.name)
+    shutil.copyfile(staged_manifest, verify_vendor / manifest_path.name)
     for destination, staged_path in staged:
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        install_staged(staged_path, destination)
-    manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+        shutil.copyfile(staged_path, verify_vendor / destination.name)
+    guard = repo_root / "scripts" / "check-dashboard-vendor.py"
+    status = subprocess.run([sys.executable, str(guard), "--root", str(verify_root)]).returncode
+    if status != 0:
+        raise SystemExit(unchanged(f"staged records failed {guard.name} (exit {status})"))
+
+    # Publish the verified set. A failure part-way restores every record
+    # already replaced, so the three stay mutually consistent either way.
+    backups = stage_root / "backups"
+    backups.mkdir()
+    replaced = []  # (destination, backup or None)
+    try:
+        for destination, staged_path in staged + [
+            (manifest_path, staged_manifest),
+            (lockfile_path, staged_lockfile),
+        ]:
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            backup = None
+            if destination.exists():
+                backup = backups / str(len(replaced))
+                shutil.copyfile(destination, backup)
+            replaced.append((destination, backup))
+            install_staged(staged_path, destination)
+    except BaseException as error:
+        for destination, backup in reversed(replaced):
+            if backup is None:
+                destination.unlink(missing_ok=True)
+            else:
+                shutil.copyfile(backup, destination)
+        print(unchanged(f"publication failed ({error}) and was rolled back"), file=sys.stderr)
+        raise
 finally:
     shutil.rmtree(stage_root, ignore_errors=True)
 PY
-
-(
-  cd "$package_dir"
-  npm install --package-lock-only --ignore-scripts --no-audit --no-fund
-)
 
 "$repo_root/scripts/check-dashboard-vendor.py"

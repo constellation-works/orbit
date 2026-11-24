@@ -19,9 +19,12 @@ metadata = json.load(sys.stdin)
 workspace_members = set(metadata["workspace_members"])
 
 orbit_packages = sorted(
-    (pkg["name"], pkg.get("metadata"))
-    for pkg in metadata["packages"]
-    if pkg["id"] in workspace_members and pkg["name"].startswith("orbit-")
+    (
+        (pkg["name"], pkg.get("metadata"))
+        for pkg in metadata["packages"]
+        if pkg["id"] in workspace_members and pkg["name"].startswith("orbit-")
+    ),
+    key=lambda package: package[0],
 )
 
 errors = []
@@ -32,9 +35,10 @@ for name, pkg_metadata in orbit_packages:
     if tier is None:
         errors.append(f"{name}: missing [package.metadata.orbit] stability = \"<tier>\"")
         continue
-    if tier not in ALLOWED:
+    # An array or table is unhashable, so test the type before the set.
+    if not isinstance(tier, str) or tier not in ALLOWED:
         errors.append(
-            f"{name}: invalid stability {tier!r} (allowed: {sorted(ALLOWED)})"
+            f"{name}: invalid stability {json.dumps(tier)} (allowed: {sorted(ALLOWED)})"
         )
         continue
     rows.append((name, tier))

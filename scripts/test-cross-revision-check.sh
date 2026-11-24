@@ -217,6 +217,79 @@ for arm in baseline candidate; do
     || fail "$arm target retained an artifact from the prior invocation"
 done
 
+# --- 2b. An arm writes only a log it owns ------------------------------------
+# A reused workdir's earlier logs are replaced, never appended to.
+
+work="$TMP/work-log-retained"
+mkdir -p "$work"
+printf 'earlier run output\n' >"$work/baseline.log"
+printf 'earlier run output\n' >"$work/candidate.log"
+out="$TMP/log-retained.out"
+status="$(run_helper "$out" --workdir "$work" \
+  --baseline-marker MARKER_BASELINE --candidate-marker MARKER_CANDIDATE \
+  -- ./probe.sh)"
+assert_eq "$status" "0" "a reused workdir with earlier logs should succeed"
+for arm in baseline candidate; do
+  assert_absent "$work/$arm.log" "earlier run output" "$arm log must be replaced, not appended to"
+  [[ -f "$work/$arm.log" && ! -L "$work/$arm.log" ]] || fail "$arm log should be a regular file"
+done
+assert_contains "$work/baseline.log" "marker=MARKER_BASELINE" "the replaced baseline log holds this run"
+assert_contains "$work/candidate.log" "marker=MARKER_CANDIDATE" "the replaced candidate log holds this run"
+
+# A link at either log path is refused before any arm runs, and what it names
+# outside the workdir is left exactly as it was.
+for kind in symlink dangling hardlink directory; do
+  for arm in baseline candidate; do
+    work="$TMP/work-log-$kind-$arm"
+    outside="$TMP/outside-$kind-$arm"
+    mkdir -p "$work"
+    printf 'outside sentinel\n' >"$outside"
+    case "$kind" in
+      symlink) ln -s "$outside" "$work/$arm.log" ;;
+      dangling) rm "$outside" && ln -s "$outside" "$work/$arm.log" ;;
+      hardlink) ln "$outside" "$work/$arm.log" ;;
+      directory) mkdir "$work/$arm.log" ;;
+    esac
+    out="$TMP/log-$kind-$arm.out"
+    status="$(run_helper "$out" --workdir "$work" -- ./probe.sh)"
+    assert_eq "$status" "1" "a $kind at the $arm log path must be refused"
+    assert_contains "$out" "$work/$arm.log" "the refusal must name the $arm log path"
+    assert_absent "$out" "==> " "no arm may run once a $kind log path is refused"
+    [[ ! -e "$work/baseline" && ! -e "$work/candidate" ]] \
+      || fail "a refused $kind log path must not extract a revision"
+    case "$kind" in
+      dangling)
+        [[ -L "$work/$arm.log" && ! -e "$outside" ]] \
+          || fail "a dangling $arm log link must be left alone and its target not created"
+        ;;
+      directory)
+        [[ -d "$work/$arm.log" ]] || fail "a directory at the $arm log path must be left alone"
+        ;;
+      *)
+        assert_eq "$(cat "$outside")" "outside sentinel" "the $kind target must be unchanged"
+        [[ -e "$work/$arm.log" || -L "$work/$arm.log" ]] || fail "the $kind must be left in place"
+        ;;
+    esac
+  done
+done
+
+# A link placed after the first check, while the baseline arm runs, is refused
+# when the candidate arm reaches it.
+work="$TMP/work-log-late"
+outside="$TMP/outside-late"
+printf 'outside sentinel\n' >"$outside"
+out="$TMP/log-late.out"
+status="$(
+  export LATE_LINK_TARGET="$outside"
+  run_helper "$out" --workdir "$work" \
+    -- sh -c '[ -e ../candidate.log ] || [ -L ../candidate.log ] || ln -s "$LATE_LINK_TARGET" ../candidate.log'
+)"
+assert_eq "$status" "1" "a link placed at the candidate log path mid-run must be refused"
+assert_contains "$out" "refusing to write an arm log through a symlink: $work/candidate.log" \
+  "the late refusal must name the candidate log"
+assert_eq "$(cat "$outside")" "outside sentinel" "the late link target must be unchanged"
+[[ -f "$work/baseline.log" && ! -L "$work/baseline.log" ]] || fail "the baseline log should remain as evidence"
+
 # --- 3. A failing producer stays a failure behind bounded output -------------
 
 work="$TMP/work-exit"
