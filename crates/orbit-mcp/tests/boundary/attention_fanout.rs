@@ -21,11 +21,16 @@ const FOLLOWER_MACHINE: &str = "hm_follower";
 #[derive(Clone)]
 enum Behaviour {
     Answer(Value),
-    SelectorRefusal { remote: bool },
+    SelectorRefusal {
+        remote: bool,
+    },
     Down,
     AnswersAs(&'static str),
     WithoutAttention,
     Slow(Duration),
+    /// An SSH-only probe asked to open the reading host itself, exactly as
+    /// `SshDestinationProbe` refuses a `Local` destination [ORB-28012].
+    LocalOverSsh,
 }
 
 /// Destinations whose behaviour a test changes between polls.
@@ -61,6 +66,10 @@ impl DestinationProbe for Fleet {
     fn open_route(&self, destination: &Destination) -> Result<Box<dyn RoutedSession>, OrbitError> {
         let behaviour = self.behaviours.lock().unwrap()[&destination.machine_id].clone();
         match behaviour {
+            Behaviour::LocalOverSsh => Err(OrbitError::InvalidInput(format!(
+                "local destination '{}' cannot be opened over SSH",
+                destination.machine_id
+            ))),
             Behaviour::Down => Err(OrbitError::UnreachableDestination(format!(
                 "{}: ssh: connect to host owner port 22: Connection refused\nsecond line",
                 destination.machine_id
@@ -538,5 +547,78 @@ fn a_fan_out_refuses_a_wait_grant_before_any_hop() {
     assert!(
         hops.iter().all(|(_, hop)| hop.get("wait_grant").is_none()),
         "a hop carried wait_grant: {hops:?}"
+    );
+}
+
+/// The reading host itself behind an SSH-only probe is left out of the
+/// fan-out, never reported as unreachable, while a genuinely down remote
+/// is still `host_unhealthy` [ORB-28012].
+#[test]
+fn local_destination_behind_ssh_probe_is_left_out_not_unreachable() {
+    use orbit_mcp::federated::federated_membership;
+    use orbit_registry::hosts::HostRoute;
+
+    const LOCAL_MACHINE: &str = "hm_reader";
+    let destinations = federated_membership(
+        LOCAL_MACHINE,
+        "mac",
+        vec![HostRoute {
+            ssh: "owner.example".to_string(),
+            machine_id: OWNER_MACHINE.to_string(),
+        }],
+    );
+    assert!(
+        destinations
+            .iter()
+            .any(|destination| destination.machine_id == LOCAL_MACHINE && destination.is_local()),
+        "the registry membership includes the reading host itself: {destinations:?}"
+    );
+    assert!(
+        destinations
+            .iter()
+            .any(|destination| destination.machine_id == OWNER_MACHINE && !destination.is_local()),
+        "the registry membership includes the remote: {destinations:?}"
+    );
+
+    let fleet = Fleet::default();
+    fleet.set(LOCAL_MACHINE, Behaviour::LocalOverSsh);
+    fleet.set(OWNER_MACHINE, Behaviour::Down);
+    let mux = FederatedMcpHost::new(destinations, Arc::new(fleet.clone())).with_attention_fanout(
+        AttentionFanout {
+            budget: Duration::from_secs(20),
+            host_names: BTreeMap::from([(OWNER_MACHINE.to_string(), "dk-server-2".to_string())]),
+            host_registry_root: None,
+        },
+    );
+
+    let response = attention(&mux, json!({"all": true}));
+    let degraded = response["degraded"].as_array().unwrap();
+    assert!(
+        !degraded.iter().any(|entry| {
+            entry["message"]
+                .as_str()
+                .is_some_and(|message| message.contains(LOCAL_MACHINE))
+        }),
+        "the reading host itself is degraded: {response}"
+    );
+    assert_eq!(
+        degraded.len(),
+        1,
+        "only the down remote is degraded: {response}"
+    );
+    assert_eq!(degraded[0]["code"], "unreachable_destination", "{response}");
+
+    let items = response["items"].as_array().unwrap();
+    assert!(
+        !items.iter().any(|item| {
+            item["host"]["machine_id"] == LOCAL_MACHINE && item["kind"] == "host_unhealthy"
+        }),
+        "the reading host itself is host_unhealthy: {response}"
+    );
+    assert_eq!(kinds(&response), ["host_unhealthy"], "{response}");
+    assert_eq!(items[0]["host"]["machine_id"], OWNER_MACHINE, "{response}");
+    assert_eq!(
+        items[0]["detail"]["cause"], "unreachable_destination",
+        "{response}"
     );
 }

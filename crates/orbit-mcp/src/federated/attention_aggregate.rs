@@ -257,6 +257,19 @@ impl FederatedMcpHost {
                     message,
                     snapshot,
                 } => {
+                    if destination.is_local()
+                        && cause == UNREACHABLE
+                        && message.contains("cannot be opened over SSH")
+                    {
+                        // An SSH-only mux that still carries the implicit
+                        // local destination (the `routed_client` shape before
+                        // [ORB-28012]): the reading host is not a remote to
+                        // open over SSH, so it is left out of the fan-out
+                        // rather than reported as unreachable. The
+                        // `attempted` set above still names it, so its owned
+                        // workspaces are not re-reported as unread owners.
+                        continue;
+                    }
                     every_destination_answered = false;
                     hosts.push(host_status(
                         &host,
