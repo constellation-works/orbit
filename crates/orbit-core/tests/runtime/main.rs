@@ -306,9 +306,39 @@ fn live_module_declaration_and_sibling_mount_are_registered() {
     }
 }
 
+/// A dot-prefixed file names no module, so a leftover one beside the crate root, such
+/// as the `.generated_modules.rs` a removed build script wrote, is not reported. A
+/// plain unregistered file still is.
+#[test]
+fn dot_prefixed_leftover_is_not_a_module() {
+    let cases: [(&str, &[FixtureFile], &[&str]); 2] = [
+        (
+            "mod activity;\n",
+            &[
+                (".generated_modules.rs", "mod actor_identity;\n"),
+                ("activity.rs", ""),
+            ],
+            &[],
+        ),
+        (
+            "",
+            &[(".generated_modules.rs", ""), ("activity.rs", "")],
+            &["activity"],
+        ),
+    ];
+    for (main_source, files, expected) in cases {
+        assert_eq!(
+            unregistered_in_fixture(main_source, files),
+            expected,
+            "crate root {main_source:?}"
+        );
+    }
+}
+
 /// Names of the top-level test files and `mod.rs` directories that Rust never
 /// compiles: no uncommented `mod <name>;` at the crate root of `main_source` reaches
 /// them, directly or through a `#[path = "<name>.rs"]` mount in a compiled file.
+/// Dot-prefixed entries are skipped: no module can be named `.<name>`.
 fn unregistered_top_level_modules(dir: &std::path::Path, main_source: &str) -> Vec<String> {
     let mut names = Vec::new();
     let mut files = std::collections::HashMap::new();
@@ -318,6 +348,9 @@ fn unregistered_top_level_modules(dir: &std::path::Path, main_source: &str) -> V
     {
         let path = entry.path();
         let file_name = entry.file_name().to_string_lossy().into_owned();
+        if file_name.starts_with('.') {
+            continue;
+        }
         if path.is_dir() {
             if path.join("mod.rs").is_file() {
                 names.push(file_name);

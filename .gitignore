@@ -92,3 +92,5 @@ build/
 !crates/orbit-tools/tests/fixtures/plugins/*/uv.lock
 .vscode
 .cowork-launch-env.txt
+# Leftover of the removed crates/orbit-core/build.rs, which wrote this file beside tests/runtime/main.rs. Remove the rule once no checkout still holds it.
+crates/orbit-core/tests/runtime/.generated_modules.rs
