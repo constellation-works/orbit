@@ -208,12 +208,24 @@ def changed_identifiers(base):
     """Return {identifier: source paths} for identifiers the diff removes and does not re-add."""
     removed = {}
     added = set()
+    changed = set()
     for path, removed_text, added_text in hunks(base):
         if not path.endswith(SOURCE_SUFFIXES):
             continue
+        changed.add(path)
         for name in names_in(path, removed_text):
             removed.setdefault(name, set()).add(path)
         added |= names_in(path, added_text)
+    # A zero-context hunk that deletes one member of a multiline `pub use` group
+    # leaves the `pub use` opening and `;` outside the removed text, so compare
+    # the whole file's public paths before and after the diff.
+    for path in sorted(changed):
+        if module_of(path) is None:
+            continue
+        old = git("show", f"{base}:{path}")
+        old_paths = public_paths(path, old.stdout) if old.returncode == 0 else set()
+        for name in old_paths - public_paths(path, read_text(path) or ""):
+            removed.setdefault(name, set()).add(path)
     for path in worktree_files("--others"):
         text = read_text(path) if path.endswith(SOURCE_SUFFIXES) else None
         if text is not None:
