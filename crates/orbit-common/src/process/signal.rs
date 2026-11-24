@@ -8,6 +8,44 @@ use super::identity::{
     ProbeOutcome, is_stable_token, probe_process_start_identity, stable_tokens_match,
 };
 
+/// Open a pidfd for `pid`. The OS error is captured before anything can
+/// overwrite `errno`; callers map `ESRCH` (gone) and `ENOSYS` (pre-5.3 kernel).
+#[cfg(target_os = "linux")]
+pub(crate) fn pidfd_open(pid: libc::pid_t) -> io::Result<std::os::fd::OwnedFd> {
+    use std::os::fd::FromRawFd;
+    // SAFETY: pidfd_open takes a pid and flags and returns a new descriptor.
+    let raw = unsafe { libc::syscall(libc::SYS_pidfd_open, pid, 0) };
+    if let Ok(fd) = i32::try_from(raw)
+        && fd >= 0
+    {
+        // SAFETY: the kernel just returned this descriptor to this call alone.
+        return Ok(unsafe { std::os::fd::OwnedFd::from_raw_fd(fd) });
+    }
+    Err(io::Error::last_os_error())
+}
+
+/// Send `signal` (0 probes permission and existence) through a pidfd, with no
+/// siginfo and no flags. The OS error is returned unmapped.
+#[cfg(target_os = "linux")]
+pub fn pidfd_send_signal(fd: std::os::fd::BorrowedFd<'_>, signal: libc::c_int) -> io::Result<()> {
+    use std::os::fd::AsRawFd;
+    // SAFETY: a valid borrowed pidfd, a signal number, no siginfo, no flags.
+    let rc = unsafe {
+        libc::syscall(
+            libc::SYS_pidfd_send_signal,
+            fd.as_raw_fd(),
+            signal,
+            std::ptr::null::<libc::siginfo_t>(),
+            0,
+        )
+    };
+    if rc == 0 {
+        Ok(())
+    } else {
+        Err(io::Error::last_os_error())
+    }
+}
+
 /// A process identity retained across signals and waits. Linux uses a pidfd;
 /// macOS uses libproc's unique process id and audited, pid-version-bound signals.
 #[cfg(unix)]
@@ -32,22 +70,10 @@ impl BoundProcess {
             ));
         }
         #[cfg(target_os = "linux")]
-        let process = {
-            use std::os::fd::FromRawFd;
-            // SAFETY: pidfd_open returns a new descriptor owned by this call.
-            let raw = unsafe { libc::syscall(libc::SYS_pidfd_open, pid as libc::pid_t, 0) };
-            if raw < 0 {
-                let error = io::Error::last_os_error();
-                return if error.raw_os_error() == Some(libc::ESRCH) {
-                    Ok(None)
-                } else {
-                    Err(error)
-                };
-            }
-            Self {
-                pid,
-                fd: unsafe { std::os::fd::OwnedFd::from_raw_fd(raw as i32) },
-            }
+        let process = match pidfd_open(pid as libc::pid_t) {
+            Ok(fd) => Self { pid, fd },
+            Err(error) if error.raw_os_error() == Some(libc::ESRCH) => return Ok(None),
+            Err(error) => return Err(error),
         };
         #[cfg(target_os = "macos")]
         let process = match darwin_info(pid)? {
@@ -140,21 +166,11 @@ impl BoundProcess {
     pub fn signal(&self, signal: libc::c_int) -> io::Result<bool> {
         #[cfg(target_os = "linux")]
         let error = {
-            use std::os::fd::AsRawFd;
-            // SAFETY: valid owned pidfd, signal, no siginfo, no flags.
-            let rc = unsafe {
-                libc::syscall(
-                    libc::SYS_pidfd_send_signal,
-                    self.fd.as_raw_fd(),
-                    signal,
-                    std::ptr::null::<libc::siginfo_t>(),
-                    0,
-                )
-            };
-            if rc == 0 {
-                return Ok(true);
+            use std::os::fd::AsFd;
+            match pidfd_send_signal(self.fd.as_fd(), signal) {
+                Ok(()) => return Ok(true),
+                Err(error) => error,
             }
-            io::Error::last_os_error()
         };
         #[cfg(target_os = "macos")]
         let error = {
