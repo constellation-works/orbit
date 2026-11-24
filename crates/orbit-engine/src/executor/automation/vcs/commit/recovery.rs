@@ -253,22 +253,44 @@ pub(in crate::executor::automation::vcs) fn capture_uncommitted_diff(
     let has_head =
         git_command_success(workspace_path, &["rev-parse", "--verify", "HEAD^{commit}"])?;
     let mut head_paths = BTreeSet::new();
+    let mut head_gitlinks = BTreeSet::new();
     let mut head_protected = Vec::new();
     if has_head {
         git_output_with_env(workspace_path, &["read-tree", "HEAD"], &env)?;
-        for path in split_nul_bytes(&git_output_bytes_with_env(
+        for entry in split_nul_bytes(&git_output_bytes_with_env(
             workspace_path,
-            &["ls-files", "--cached", "-z"],
+            &["ls-files", "--stage", "-z"],
             &env,
         )?) {
+            let Some(tab) = entry.iter().position(|byte| *byte == b'\t') else {
+                continue;
+            };
+            let header = &entry[..tab];
+            let path = entry[tab + 1..].to_vec();
             if !is_safe_path_bytes(&path) {
                 head_protected.push(path.clone());
+            }
+            if header.starts_with(b"160000 ") {
+                head_gitlinks.insert(path.clone());
             }
             head_paths.insert(path);
         }
     }
 
-    let stageable = stageable_safe_paths(workspace_path, &safe_paths, &head_paths)?;
+    let live_cached_paths = split_nul_bytes(&git_output_bytes(
+        workspace_path,
+        &["ls-files", "--cached", "-z"],
+    )?)
+    .into_iter()
+    .collect::<BTreeSet<_>>();
+
+    let stageable = stageable_safe_paths(
+        workspace_path,
+        &safe_paths,
+        &head_paths,
+        &head_gitlinks,
+        &live_cached_paths,
+    )?;
     if stageable.is_empty() {
         return Ok(None);
     }
@@ -280,23 +302,7 @@ pub(in crate::executor::automation::vcs) fn capture_uncommitted_diff(
     let base_ref = if head_protected.is_empty() {
         has_head.then(|| "HEAD".to_string())
     } else {
-        let mut rm_input = Vec::new();
-        for path in &head_protected {
-            append_pathspec(&mut rm_input, b":(literal)", path);
-        }
-        git_output_bytes_with_env_and_stdin(
-            workspace_path,
-            &[
-                "rm",
-                "--cached",
-                "-q",
-                "--ignore-unmatch",
-                "--pathspec-from-file=-",
-                "--pathspec-file-nul",
-            ],
-            &rm_input,
-            &env,
-        )?;
+        git_rm_cached_nul(workspace_path, &head_protected, &env)?;
         Some(git_output_with_env(workspace_path, &["write-tree"], &env)?)
     };
 
@@ -308,17 +314,32 @@ pub(in crate::executor::automation::vcs) fn capture_uncommitted_diff(
     protected.sort();
     protected.dedup();
 
-    let mut add_input = Vec::new();
-    for path in &stageable {
-        append_pathspec(&mut add_input, b":(literal)", path);
-    }
-    for path in &protected {
-        append_pathspec(&mut add_input, b":(exclude,literal)", path);
-    }
-    git_output_bytes_with_env_and_stdin(
+    git_rm_cached_nul(workspace_path, &stageable.remove_from_index, &env)?;
+
+    // Only emit `:(exclude,literal)` for protected paths beneath a directory in
+    // `normal_add`; an ignored top-level protected path (such as a force-added
+    // `.env`) passed as an exclude pathspec makes non-force `git add` fail.
+    let normal_excludes = protected
+        .iter()
+        .filter(|path| {
+            stageable
+                .normal_add_dirs
+                .iter()
+                .any(|dir| path_is_under_dir(path, dir))
+        })
+        .collect::<Vec<_>>();
+    git_add_nul(
         workspace_path,
-        &["add", "-A", "--pathspec-from-file=-", "--pathspec-file-nul"],
-        &add_input,
+        false,
+        &stageable.normal_add,
+        &normal_excludes,
+        &env,
+    )?;
+    git_add_nul(
+        workspace_path,
+        true,
+        &stageable.staged_addition_add,
+        &[],
         &env,
     )?;
 
@@ -444,19 +465,138 @@ fn path_from_git_bytes(bytes: &[u8]) -> Result<Cow<'_, Path>, orbit_common::Orbi
     }
 }
 
-/// Filter `safe_paths` to paths that exist in the worktree or (for deletions)
-/// in the temporary `HEAD` index so `git add -A` never receives a missing pathspec.
+fn git_rm_cached_nul(
+    workspace_path: &Path,
+    paths: &[Vec<u8>],
+    env: &[(&str, &str)],
+) -> Result<(), orbit_common::OrbitError> {
+    if paths.is_empty() {
+        return Ok(());
+    }
+    let mut rm_input = Vec::new();
+    for path in paths {
+        append_pathspec(&mut rm_input, b":(literal)", path);
+    }
+    git_output_bytes_with_env_and_stdin(
+        workspace_path,
+        &[
+            "rm",
+            "--cached",
+            "-q",
+            "--ignore-unmatch",
+            "--pathspec-from-file=-",
+            "--pathspec-file-nul",
+        ],
+        &rm_input,
+        env,
+    )?;
+    Ok(())
+}
+
+fn git_add_nul(
+    workspace_path: &Path,
+    force: bool,
+    paths: &[Vec<u8>],
+    excludes: &[&Vec<u8>],
+    env: &[(&str, &str)],
+) -> Result<(), orbit_common::OrbitError> {
+    if paths.is_empty() {
+        return Ok(());
+    }
+    let mut add_input = Vec::new();
+    for path in paths {
+        append_pathspec(&mut add_input, b":(literal)", path);
+    }
+    for path in excludes {
+        append_pathspec(&mut add_input, b":(exclude,literal)", path);
+    }
+    let args: &[&str] = if force {
+        &[
+            "add",
+            "-f",
+            "-A",
+            "--pathspec-from-file=-",
+            "--pathspec-file-nul",
+        ]
+    } else {
+        &["add", "-A", "--pathspec-from-file=-", "--pathspec-file-nul"]
+    };
+    git_output_bytes_with_env_and_stdin(workspace_path, args, &add_input, env)?;
+    Ok(())
+}
+
+fn path_is_under_dir(path: &[u8], dir: &[u8]) -> bool {
+    let dir = dir.strip_suffix(b"/").unwrap_or(dir);
+    dir == b"."
+        || path
+            .strip_prefix(dir)
+            .is_some_and(|rest| rest.starts_with(b"/"))
+}
+
+struct StageableSafePaths {
+    remove_from_index: Vec<Vec<u8>>,
+    normal_add: Vec<Vec<u8>>,
+    normal_add_dirs: Vec<Vec<u8>>,
+    staged_addition_add: Vec<Vec<u8>>,
+}
+
+impl StageableSafePaths {
+    fn is_empty(&self) -> bool {
+        self.remove_from_index.is_empty()
+            && self.normal_add.is_empty()
+            && self.staged_addition_add.is_empty()
+    }
+}
+
+/// Partition `safe_paths` by how the temporary `HEAD` index can stage each
+/// change without triggering `.gitignore` failures on staged live-index
+/// additions or descending into directories that could hold ignored secrets.
 fn stageable_safe_paths(
     workspace_path: &Path,
     safe_paths: &[Vec<u8>],
     head_paths: &BTreeSet<Vec<u8>>,
-) -> Result<Vec<Vec<u8>>, orbit_common::OrbitError> {
-    let mut stageable = Vec::new();
+    head_gitlinks: &BTreeSet<Vec<u8>>,
+    live_cached_paths: &BTreeSet<Vec<u8>>,
+) -> Result<StageableSafePaths, orbit_common::OrbitError> {
+    let mut stageable = StageableSafePaths {
+        remove_from_index: Vec::new(),
+        normal_add: Vec::new(),
+        normal_add_dirs: Vec::new(),
+        staged_addition_add: Vec::new(),
+    };
     for path in safe_paths {
         let rel = path_from_git_bytes(path)?;
         match std::fs::symlink_metadata(workspace_path.join(rel.as_ref())) {
-            Ok(_) => stageable.push(path.clone()),
-            Err(_) if head_paths.contains(path.as_slice()) => stageable.push(path.clone()),
+            Ok(meta) if meta.file_type().is_dir() => {
+                if head_paths.contains(path.as_slice()) {
+                    if head_gitlinks.contains(path.as_slice()) {
+                        stageable.normal_add.push(path.clone());
+                        stageable.normal_add_dirs.push(path.clone());
+                    } else {
+                        // A tracked file/symlink replaced by a directory: remove the
+                        // old index entry without descending into ignored descendants.
+                        stageable.remove_from_index.push(path.clone());
+                    }
+                } else if !live_cached_paths.contains(path.as_slice()) {
+                    // Untracked non-ignored directory (e.g. a nested repository).
+                    stageable.normal_add.push(path.clone());
+                    stageable.normal_add_dirs.push(path.clone());
+                }
+            }
+            Ok(_) => {
+                if !head_paths.contains(path.as_slice())
+                    && live_cached_paths.contains(path.as_slice())
+                {
+                    // Non-directory path already staged in the live index: safe to
+                    // force-add into the temporary index even if `.gitignore` matches.
+                    stageable.staged_addition_add.push(path.clone());
+                } else {
+                    stageable.normal_add.push(path.clone());
+                }
+            }
+            Err(_) if head_paths.contains(path.as_slice()) => {
+                stageable.remove_from_index.push(path.clone());
+            }
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
             Err(error) => {
                 return Err(orbit_common::OrbitError::Io(format!(
