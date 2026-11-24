@@ -236,6 +236,187 @@ fn codebase_cli_ranks_paths_and_lists_the_tasks_behind_a_count() {
     );
 }
 
+/// A width-limited analytics table keeps the identity of the absent pair member visible.
+#[cfg(unix)]
+#[test]
+fn codebase_cli_marks_the_absent_coupling_member_at_terminal_width() {
+    if crate::isolated_test::run_in_child(
+        "codebase_cli::codebase_cli_marks_the_absent_coupling_member_at_terminal_width",
+    ) {
+        return;
+    }
+
+    use std::io::Read as _;
+    use std::os::fd::FromRawFd as _;
+    use std::process::{Command, Stdio};
+
+    let fixture = Fixture::new();
+    let first = "crates/orbit-core/src/application/codebase/sections/long_left_subsystem/analytics_path/first_absent_member.rs";
+    let second = "crates/orbit-core/src/application/codebase/sections/long_right_subsystem/analytics_path/second_present_member.rs";
+    for path in [first, second] {
+        let file = fixture.repo.join(path);
+        fs::create_dir_all(file.parent().unwrap()).unwrap();
+        fs::write(file, "coupling fixture\n").unwrap();
+    }
+
+    let shown = fixture.json(&["workspace", "show", "--format", "json"]);
+    let workspace_root = Path::new(shown["orbit_root"].as_str().unwrap());
+    {
+        let _authority = orbit_common::test_env::unset(
+            orbit_common::test_env::INHERITED_AUTHORITY_ENV
+                .iter()
+                .copied(),
+        );
+        let runtime = OrbitRuntime::from_roots(&fixture.root, workspace_root)
+            .unwrap()
+            .with_actor(ActorIdentity::human("codebase-fixture"));
+        let task = runtime
+            .add_task(TaskAddParams {
+                title: "coupled paths".into(),
+                description: "codebase analytics fixture".into(),
+                context_files: vec![format!("file:{first}"), format!("file:{second}")],
+                status: Some(TaskStatus::Backlog),
+                ..Default::default()
+            })
+            .unwrap();
+        let id = task.id.to_string();
+        let reservation = orbit_core::runtime::task::locks::reserve(
+            &runtime,
+            json!({"task_ids": [id], "ttl_seconds": 600}),
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+        assert_eq!(reservation["reserved"], true, "{reservation}");
+    }
+    fs::remove_file(fixture.repo.join(first)).unwrap();
+
+    let analytics = fixture.json(&[
+        "codebase",
+        "analytics",
+        "--window",
+        "30d",
+        "--min-support",
+        "1",
+        "--json",
+    ]);
+    let pair = &analytics["change_coupling"]["rows"][0];
+    assert_eq!(pair["paths"], json!([first, second]), "{analytics}");
+    assert_eq!(pair["absent_paths_at_head"], json!([first]), "{analytics}");
+    assert_eq!(pair["numerator"], 1, "{analytics}");
+    assert_eq!(pair["denominator"], 1, "{analytics}");
+    assert_eq!(pair["rate"], 1.0, "{analytics}");
+
+    let plain = fixture
+        .command(&[
+            "--format",
+            "plain",
+            "codebase",
+            "analytics",
+            "--window",
+            "30d",
+            "--min-support",
+            "1",
+        ])
+        .env("NO_COLOR", "1")
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let plain = String::from_utf8(plain).unwrap();
+    assert!(
+        plain.contains(&format!("{first} [absent at HEAD] <-> {second}")),
+        "untruncated analytics text retains both paths and the absence note:\n{plain}"
+    );
+    assert!(
+        plain.contains("100%"),
+        "untruncated analytics text retains the rate:\n{plain}"
+    );
+
+    let mut master_fd = -1;
+    let mut slave_fd = -1;
+    let mut dimensions = libc::winsize {
+        ws_row: 24,
+        ws_col: 80,
+        ws_xpixel: 0,
+        ws_ypixel: 0,
+    };
+    // SAFETY: openpty initializes both descriptors on success and reads a valid winsize.
+    let rc = unsafe {
+        libc::openpty(
+            &mut master_fd,
+            &mut slave_fd,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            std::ptr::addr_of_mut!(dimensions),
+        )
+    };
+    assert_eq!(rc, 0, "openpty: {}", std::io::Error::last_os_error());
+    // SAFETY: openpty returned two fresh, distinct descriptors, each wrapped once.
+    let mut master = unsafe { fs::File::from_raw_fd(master_fd) };
+    // SAFETY: openpty returned two fresh, distinct descriptors, each wrapped once.
+    let slave = unsafe { fs::File::from_raw_fd(slave_fd) };
+    let mut command = Command::new(assert_cmd::cargo::cargo_bin!("orbit"));
+    orbit_common::test_env::clear_inherited_authority(|name| {
+        command.env_remove(name);
+    });
+    let child = command
+        .current_dir(&fixture.repo)
+        .env("HOME", &fixture.home)
+        .env("USERPROFILE", &fixture.home)
+        .env("XDG_CONFIG_HOME", fixture.home.join("xdg"))
+        .env("TERM", "xterm-256color")
+        .env("COLUMNS", "80")
+        .env("NO_COLOR", "1")
+        .arg("--root")
+        .arg(&fixture.root)
+        .args([
+            "codebase",
+            "analytics",
+            "--window",
+            "30d",
+            "--min-support",
+            "1",
+        ])
+        .stdin(Stdio::null())
+        .stdout(Stdio::from(slave))
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    drop(command);
+    let mut rendered = Vec::new();
+    let mut buffer = [0; 2048];
+    loop {
+        match master.read(&mut buffer) {
+            Ok(0) => break,
+            Ok(read) => rendered.extend_from_slice(&buffer[..read]),
+            Err(error) if error.raw_os_error() == Some(libc::EIO) => break,
+            Err(error) => panic!("read terminal output: {error}"),
+        }
+    }
+    let output = child.wait_with_output().unwrap();
+    assert!(
+        output.status.success(),
+        "analytics command failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let rendered = String::from_utf8(rendered).unwrap();
+    let absent_row = rendered
+        .lines()
+        .find(|line| line.contains("FIRST"))
+        .unwrap_or_else(|| panic!("terminal table marks the first path as absent:\n{rendered}"));
+    assert!(
+        absent_row.contains('…'),
+        "the pair paths are shortened while the absent member remains visible: {absent_row}"
+    );
+    assert!(
+        rendered.contains("ABSENT MEMBER"),
+        "the terminal table labels its absent-member column:\n{rendered}"
+    );
+}
+
 /// The public CLI reads landed paths rather than inferring them from context.
 #[test]
 fn codebase_related_cli_reports_landed_markdown_partner() {
