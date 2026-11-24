@@ -550,37 +550,41 @@ pub(in crate::activity_job::job_executor) fn attempt_final_recovery(
             // both failures in one handoff. The decision stays an
             // escalation: the refused response authorizes nothing.
             if malformed && let FinalRecoveryDecision::Escalate { diagnosis, .. } = &mut decision {
-                diagnosis.push_str(&format!(
-                    "; the original failure was step `{}`: {}",
-                    step.id,
-                    redacted_recovery_diagnostic(error_message)
-                ));
+                append_original_failure(diagnosis, step, error_message);
             }
             (
                 (decision, fault.judged_by(dispatched.judge)),
                 dispatched.model,
             )
         }
-        Err(message) => (
+        // No usable answer reaches here: a dispatch that failed, a decision
+        // refused by its parser, or repair evidence that could not be handed
+        // off. Like a malformed answer above, it names the failed step, so the
+        // one escalation carries both failures.
+        Err(message) => {
+            let mut diagnosis = format!(
+                "final recovery activity `{}` did not return a decision: {message}",
+                activity.name
+            );
+            append_original_failure(&mut diagnosis, step, error_message);
             (
-                FinalRecoveryDecision::Escalate {
-                    diagnosis: format!(
-                        "final recovery activity `{}` did not return a decision: {message}",
-                        activity.name
-                    ),
-                    human_action:
-                        "Inspect the failed run and its final-recovery invocation, then move \
-                               the task by hand."
-                            .to_string(),
-                    summary: None,
-                },
-                FaultAttribution::unknown(format!(
-                    "final recovery activity `{}` for run {} returned no decision",
-                    activity.name, ctx.run_id
-                )),
-            ),
-            None,
-        ),
+                (
+                    FinalRecoveryDecision::Escalate {
+                        diagnosis,
+                        human_action:
+                            "Inspect the failed run and its final-recovery invocation, then move \
+                                   the task by hand."
+                                .to_string(),
+                        summary: None,
+                    },
+                    FaultAttribution::unknown(format!(
+                        "final recovery activity `{}` for run {} returned no decision",
+                        activity.name, ctx.run_id
+                    )),
+                ),
+                None,
+            )
+        }
     };
     let (mut decision, mut resume_index, downgrade) =
         decision::admit_resume_step(job, step_index, decision);
@@ -714,6 +718,17 @@ pub(in crate::activity_job::job_executor) fn attempt_final_recovery(
     } else {
         verdict
     }
+}
+
+/// Name the failed step and its bounded, redacted original failure in an
+/// escalation that could not use the agent's answer [ORB-27944]. The host
+/// receives one escalation carrying the refusal and the failure it answered.
+fn append_original_failure(diagnosis: &mut String, step: &JobV2Step, error_message: &str) {
+    diagnosis.push_str(&format!(
+        "; the original failure was step `{}`: {}",
+        step.id,
+        redacted_recovery_diagnostic(error_message)
+    ));
 }
 
 /// Whether `error` is a `worktree_setup` failure caused by a dependency

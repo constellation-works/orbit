@@ -50,6 +50,8 @@ after the wrapper signals that its queue interval earned the capped credit.
 - `a_resume_to_an_earlier_step_keeps_the_named_target`
 - `a_resume_to_an_admission_or_nonexistent_step_is_escalated`
 - `a_malformed_decision_is_escalated`
+- `a_malformed_decision_keeps_the_failed_step_evidence`
+- `a_malformed_decision_with_repair_evidence_keeps_the_failed_step_evidence`
 
 ### `final_recovery::recovery_contracts_4`
 
