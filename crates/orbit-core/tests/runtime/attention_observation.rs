@@ -480,6 +480,96 @@ fn run_stuck_respects_declared_windows_and_progress() {
     );
 }
 
+/// A stuck run's item names the run's latest recorded step, so a caller
+/// without the operator-only run read can tell an active run from an
+/// abandoned one. A run with no recorded step reports null.
+fn run_stuck_names_the_current_step() {
+    let (_root, runtime) = attention_runtime();
+    let operator = session(McpCapability::Operator);
+    let jobs = runtime.stores().jobs();
+    let now = Utc::now();
+    let started = now - Duration::hours(3);
+
+    let record_step = |run_id: &str, index: usize, target: &str, state: JobRunState| {
+        jobs.complete_job_run_step(
+            run_id,
+            &JobRunStepParams {
+                lock_wait_ms: None,
+                step_index: index,
+                target_type: JobTargetType::Activity,
+                target_id: target.into(),
+                started_at: started,
+                finished_at: started,
+                duration_ms: Some(1),
+                exit_code: None,
+                agent_response_json: Some(json!({"log": "never copied into attention"})),
+                state,
+                error_code: None,
+                error_message: None,
+            },
+        )
+        .unwrap();
+    };
+
+    // Over its bound with the live owner (this process) and two steps.
+    let slow = jobs
+        .insert_job_run("some_job", 1, started, Some(json!({})), None)
+        .unwrap();
+    jobs.mark_job_run_running(&slow.run_id, started, std::process::id())
+        .unwrap();
+    record_step(&slow.run_id, 0, "worktree_setup", JobRunState::Success);
+    record_step(&slow.run_id, 1, "implement", JobRunState::Success);
+
+    // An owner that is gone, with one recorded step, and another with none.
+    let mut child = std::process::Command::new("true").spawn().unwrap();
+    let dead_pid = child.id();
+    child.wait().unwrap();
+    let dead = jobs
+        .insert_job_run("some_job", 1, started, Some(json!({})), None)
+        .unwrap();
+    jobs.mark_job_run_running(&dead.run_id, started, dead_pid)
+        .unwrap();
+    record_step(&dead.run_id, 0, "worktree_setup", JobRunState::Failed);
+    let fresh = jobs
+        .insert_job_run("some_job", 1, started, Some(json!({})), None)
+        .unwrap();
+    jobs.mark_job_run_running(&fresh.run_id, started, dead_pid)
+        .unwrap();
+
+    let response = call(&runtime, json!({"kind": "run_stuck"}), &operator);
+    let item = |run_id: &str| -> Value {
+        response["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|item| item["refs"]["run_id"] == run_id)
+            .unwrap_or_else(|| panic!("run {run_id} must be run_stuck: {response}"))
+            .clone()
+    };
+
+    let slow_item = item(&slow.run_id);
+    assert_eq!(slow_item["detail"]["cause"], "wall_clock_bound");
+    assert_eq!(slow_item["detail"]["current_step_id"], "implement");
+    assert_eq!(slow_item["detail"]["current_step_status"], "success");
+    assert!(slow_item["detail"]["last_progress_at"].is_string());
+    assert!(
+        !slow_item
+            .to_string()
+            .contains("never copied into attention"),
+        "step output stays out of attention: {slow_item}"
+    );
+
+    let dead_item = item(&dead.run_id);
+    assert_eq!(dead_item["detail"]["cause"], "dead_owner");
+    assert_eq!(dead_item["detail"]["current_step_id"], "worktree_setup");
+    assert_eq!(dead_item["detail"]["current_step_status"], "failed");
+
+    let fresh_item = item(&fresh.run_id);
+    assert_eq!(fresh_item["detail"]["cause"], "dead_owner");
+    assert!(fresh_item["detail"]["current_step_id"].is_null());
+    assert!(fresh_item["detail"]["current_step_status"].is_null());
+}
+
 fn attention_runtime() -> (tempfile::TempDir, OrbitRuntime) {
     let root = tempfile::tempdir_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
     let global = root.path().join("home/.orbit");
@@ -830,6 +920,7 @@ crate::scenario_table!(
     friction_attention_does_not_recover_a_pending_task_commit,
     delivery_hold_attention_next_is_workspace_qualified_with_tool,
     run_stuck_respects_declared_windows_and_progress,
+    run_stuck_names_the_current_step,
     owner_run_failed_skips_a_terminal_task_and_keeps_an_open_one,
     follower_run_failed_degrades_when_the_owner_task_status_cannot_be_read,
     run_failed_settled_claims_are_not_held_and_a_live_claim_is,

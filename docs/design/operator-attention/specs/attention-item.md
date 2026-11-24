@@ -112,7 +112,9 @@ Notes that bind implementations:
   therefore reads that progress (a raw store read, never a reconciling one) alongside the
   liveness check. A drain inside its declared window whose pipeline is still advancing is
   not stuck, however long it has run; `detail` names `declared_deadline` and
-  `last_progress_at` when a declared bound was used.
+  `last_progress_at` when a declared bound was used. Every `run_stuck` item also names the
+  latest recorded step in `current_step_id` and `current_step_status` (null when none), so a
+  caller without the operator-only run read can tell an active run from an abandoned one.
 
 ### Runtime liveness and locality
 

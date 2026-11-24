@@ -17,7 +17,7 @@ use orbit_types::{
         AttentionHost, AttentionItem, AttentionKind, AttentionNext, AttentionSeverity,
         AttentionWorkspace,
     },
-    workflow::{JobRun, JobRunState},
+    workflow::{JobRun, JobRunState, JobRunStep},
 };
 use serde_json::{Value, json};
 use std::{
@@ -182,7 +182,11 @@ impl RuntimeAttention<'_> {
     /// any recorded step start/finish, and the run's own start. Reading
     /// pipeline state here is a raw store read, like the run rows above:
     /// it never reconciles or resumes anything.
-    fn run_stuck_bounds(&self, run: &JobRun) -> (Option<DateTime<Utc>>, DateTime<Utc>) {
+    fn run_stuck_bounds(
+        &self,
+        run: &JobRun,
+        steps: &[JobRunStep],
+    ) -> (Option<DateTime<Utc>>, DateTime<Utc>) {
         let state = self
             .runtime
             .stores()
@@ -195,17 +199,6 @@ impl RuntimeAttention<'_> {
         if let Some(state) = &state {
             last_progress = last_progress.max(state.updated_at);
         }
-        let recorded = self
-            .runtime
-            .stores()
-            .jobs()
-            .get_job_run(&run.run_id)
-            .ok()
-            .flatten();
-        let steps: &[orbit_types::workflow::JobRunStep] = match &recorded {
-            Some(recorded) if !recorded.steps.is_empty() => &recorded.steps,
-            _ => &run.steps,
-        };
         for step in steps {
             for at in [step.started_at, step.finished_at].into_iter().flatten() {
                 last_progress = last_progress.max(at);
@@ -242,6 +235,23 @@ impl RuntimeAttention<'_> {
             }
         }
         (deadline, last_progress)
+    }
+
+    /// The steps a stuck run has recorded: the stored run's rows, or the
+    /// listed run's own when the store holds none. A raw read like the run
+    /// rows above; it never reconciles or resumes anything.
+    fn recorded_steps(&self, run: &JobRun) -> Vec<JobRunStep> {
+        let recorded = self
+            .runtime
+            .stores()
+            .jobs()
+            .get_job_run(&run.run_id)
+            .ok()
+            .flatten();
+        match recorded {
+            Some(recorded) if !recorded.steps.is_empty() => recorded.steps,
+            _ => run.steps.clone(),
+        }
     }
 
     fn run_items(
@@ -285,6 +295,7 @@ impl RuntimeAttention<'_> {
                 }
                 let mut declared_deadline: Option<DateTime<Utc>> = None;
                 let mut last_progress_at: Option<DateTime<Utc>> = None;
+                let mut current_step: Option<(String, JobRunState)> = None;
                 let (since, cause) = match kind {
                     AttentionKind::RunFailed
                         if is_newest
@@ -332,12 +343,20 @@ impl RuntimeAttention<'_> {
                         let since = run.started_at.unwrap_or(run.scheduled_at);
                         let bound =
                             Duration::minutes(i64::from(super::ATTENTION_RUN_STUCK_AFTER_MINUTES));
+                        let steps = self.recorded_steps(run);
+                        // The latest recorded step: its id and status stand in
+                        // for the operator-only run read. Ids and states only,
+                        // no step output or log text.
+                        current_step = steps
+                            .iter()
+                            .max_by_key(|step| step.step_index)
+                            .map(|step| (step.target_id.to_string(), step.state));
                         let cause = if (run.pid.is_some() || run.state == JobRunState::Running)
                             && job::run_owner_liveness(run) == RunOwnerLiveness::Stopped
                         {
                             "dead_owner"
                         } else {
-                            let (deadline, last_progress) = self.run_stuck_bounds(run);
+                            let (deadline, last_progress) = self.run_stuck_bounds(run, &steps);
                             declared_deadline = deadline;
                             last_progress_at = Some(last_progress);
                             match deadline {
@@ -422,6 +441,11 @@ impl RuntimeAttention<'_> {
                 let mut detail = json!({"job_id": run.job_id, "state": run.state, "cause": cause, "held_claim": held});
                 if kind == AttentionKind::RunFailed {
                     detail["claimed_leaf"] = json!(claimed_leaf);
+                }
+                if kind == AttentionKind::RunStuck {
+                    detail["current_step_id"] = json!(current_step.as_ref().map(|(id, _)| id));
+                    detail["current_step_status"] =
+                        json!(current_step.as_ref().map(|(_, state)| state));
                 }
                 if let Some(deadline) = declared_deadline {
                     detail["declared_deadline"] =
