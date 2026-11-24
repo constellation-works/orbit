@@ -36,6 +36,9 @@ mod riskiness;
 mod sections;
 mod stored;
 
+#[cfg(test)]
+mod tests;
+
 use std::time::Duration;
 
 use chrono::{DateTime, SecondsFormat, Utc};
@@ -327,43 +330,96 @@ fn mark_absent_rows(payload: &mut Value, root: &std::path::Path) {
 fn mark_absent_row(
     row: &mut Value,
     root: &std::path::Path,
-    cache: &mut std::collections::BTreeMap<String, bool>,
+    cache: &mut std::collections::BTreeMap<String, CheckoutPresence>,
 ) {
-    let absent = |path: &str, cache: &mut std::collections::BTreeMap<String, bool>| {
+    mark_absent_row_with_lookup(row, cache, |path| checkout_file(root, path));
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CheckoutPresence {
+    File,
+    Absent,
+    Indeterminate,
+}
+
+fn mark_absent_row_with_lookup(
+    row: &mut Value,
+    cache: &mut std::collections::BTreeMap<String, CheckoutPresence>,
+    mut lookup: impl FnMut(&str) -> CheckoutPresence,
+) {
+    let absent = |path: &str,
+                  cache: &mut std::collections::BTreeMap<String, CheckoutPresence>,
+                  lookup: &mut dyn FnMut(&str) -> CheckoutPresence| {
         if path.ends_with('/') {
             return false;
         }
-        *cache.entry(path.to_string()).or_insert_with(|| {
-            let relative = std::path::Path::new(path);
-            if !relative
-                .components()
-                .all(|c| matches!(c, std::path::Component::Normal(_)))
-            {
-                return false;
-            }
-            // Canonicalization also prevents following a symlink outside the checkout.
-            match (root.canonicalize(), root.join(relative).canonicalize()) {
-                (Ok(root), Ok(target)) => !target.starts_with(root),
-                (Ok(_), Err(_)) => true,
-                _ => false,
-            }
-        })
+        let relative = std::path::Path::new(path);
+        if !relative
+            .components()
+            .all(|component| matches!(component, std::path::Component::Normal(_)))
+        {
+            return false;
+        }
+        *cache
+            .entry(path.to_string())
+            .or_insert_with(|| lookup(path))
+            == CheckoutPresence::Absent
     };
     if let Some(path) = row["path"].as_str() {
-        if absent(path, cache) {
+        if absent(path, cache, &mut lookup) {
             row["absent_at_head"] = json!(true);
         }
     } else if let Some(paths) = row["paths"].as_array() {
         let missing: Vec<String> = paths
             .iter()
             .filter_map(Value::as_str)
-            .filter(|path| absent(path, cache))
+            .filter(|path| absent(path, cache, &mut lookup))
             .map(str::to_string)
             .collect();
         if !missing.is_empty() {
             row["absent_paths_at_head"] = json!(missing);
         }
     }
+}
+
+fn checkout_file(root: &std::path::Path, path: &str) -> CheckoutPresence {
+    let root = match root.canonicalize() {
+        Ok(root) => root,
+        Err(_) => return CheckoutPresence::Indeterminate,
+    };
+    let target = match root.join(path).canonicalize() {
+        Ok(target) => target,
+        Err(error) => return checkout_lookup_error(&error),
+    };
+    if !target.starts_with(&root) {
+        return CheckoutPresence::Absent;
+    }
+    match target.metadata() {
+        Ok(metadata) if metadata.is_file() => CheckoutPresence::File,
+        Ok(_) => CheckoutPresence::Absent,
+        Err(error) => checkout_lookup_error(&error),
+    }
+}
+
+fn checkout_lookup_error(error: &std::io::Error) -> CheckoutPresence {
+    if error.kind() == std::io::ErrorKind::NotFound {
+        CheckoutPresence::Absent
+    } else {
+        CheckoutPresence::Indeterminate
+    }
+}
+
+#[cfg(test)]
+pub(super) fn test_mark_absent_row_with_lookup(
+    row: &mut Value,
+    mut lookup: impl FnMut(&str) -> std::io::Result<bool>,
+) {
+    let mut cache = std::collections::BTreeMap::new();
+    mark_absent_row_with_lookup(row, &mut cache, |path| match lookup(path) {
+        Ok(true) => CheckoutPresence::File,
+        Ok(false) => CheckoutPresence::Absent,
+        Err(error) => checkout_lookup_error(&error),
+    });
 }
 
 /// Rank files that changed alongside `path` in landed tasks. Related queries

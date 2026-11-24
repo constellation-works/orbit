@@ -88,9 +88,9 @@ fn assert_window_age(since: &serde_json::Value, days: i64) {
 }
 
 #[test]
-fn analytics_marks_missing_checkout_paths_without_changing_rollups() {
+fn file_rollup_marks_missing_and_replaced_paths_absent_in_analytics_and_show() {
     if !isolated(
-        "codebase_related::analytics_marks_missing_checkout_paths_without_changing_rollups",
+        "codebase_related::file_rollup_marks_missing_and_replaced_paths_absent_in_analytics_and_show",
     ) {
         return;
     }
@@ -108,13 +108,18 @@ fn analytics_marks_missing_checkout_paths_without_changing_rollups() {
     std::fs::create_dir_all(repo.join("src")).expect("src");
     std::fs::create_dir_all(&workspace).expect("workspace");
     std::fs::write(repo.join("src/live.rs"), "live").expect("file");
+    std::fs::write(repo.join("src/replaced.rs"), "historical file").expect("historical file");
     let runtime = OrbitRuntime::from_roots(&global, &workspace).expect("runtime");
     let add = |title: &str, status, relations| {
         runtime
             .add_task(TaskAddParams {
                 title: title.into(),
                 status: Some(status),
-                context_files: vec!["file:src/live.rs".into(), "file:src/gone.rs".into()],
+                context_files: vec![
+                    "file:src/live.rs".into(),
+                    "file:src/gone.rs".into(),
+                    "file:src/replaced.rs".into(),
+                ],
                 relations,
                 ..Default::default()
             })
@@ -132,7 +137,11 @@ fn analytics_marks_missing_checkout_paths_without_changing_rollups() {
                 escape: RegressionEscape::Unclassified,
                 severity: DefectSeverity::Medium,
                 severity_source: SeveritySource::Filer,
-                sites: vec!["file:src/live.rs".into(), "file:src/gone.rs".into()],
+                sites: vec![
+                    "file:src/live.rs".into(),
+                    "file:src/gone.rs".into(),
+                    "file:src/replaced.rs".into(),
+                ],
             }),
         }],
     );
@@ -144,18 +153,57 @@ fn analytics_marks_missing_checkout_paths_without_changing_rollups() {
             )
             .expect("analytics")
     };
+    let before_replacement = query("file");
+    let previous_replaced = before_replacement["regressions"]["rows"]
+        .as_array()
+        .expect("previous rows")
+        .iter()
+        .find(|row| row["path"] == "src/replaced.rs")
+        .expect("historical file row before replacement");
+    assert!(previous_replaced.get("absent_at_head").is_none());
+
+    std::fs::remove_file(repo.join("src/replaced.rs")).expect("remove historical file");
+    std::fs::create_dir(repo.join("src/replaced.rs")).expect("replace file with directory");
     let analytics = query("file");
     let rows = analytics["regressions"]["rows"].as_array().expect("rows");
     let gone = rows
         .iter()
         .find(|row| row["path"] == "src/gone.rs")
         .expect("missing row");
+    let replaced = rows
+        .iter()
+        .find(|row| row["path"] == "src/replaced.rs")
+        .expect("historical file row");
     let live = rows
         .iter()
         .find(|row| row["path"] == "src/live.rs")
         .expect("existing row");
     assert_eq!(gone["absent_at_head"], true);
+    assert_eq!(replaced["absent_at_head"], true);
     assert!(live.get("absent_at_head").is_none());
+    assert!(
+        replaced["numerator"]
+            .as_u64()
+            .is_some_and(|count| count > 0)
+    );
+    assert!(
+        replaced["denominator"]
+            .as_u64()
+            .is_some_and(|count| count > 0)
+    );
+    assert!(
+        !replaced["regressed_tasks"]
+            .as_array()
+            .expect("history")
+            .is_empty()
+    );
+    assert_eq!(replaced["numerator"], previous_replaced["numerator"]);
+    assert_eq!(replaced["denominator"], previous_replaced["denominator"]);
+    assert_eq!(
+        replaced["regressed_tasks"],
+        previous_replaced["regressed_tasks"]
+    );
+    assert_eq!(replaced["sites"], previous_replaced["sites"]);
     let detail = runtime
         .run_tool(
             "orbit.codebase.show",
@@ -163,6 +211,22 @@ fn analytics_marks_missing_checkout_paths_without_changing_rollups() {
         )
         .expect("detail");
     assert_eq!(detail["absent_at_head"], true);
+    let replaced_detail = runtime
+        .run_tool(
+            "orbit.codebase.show",
+            json!({"path":"src/replaced.rs", "window":"all", "min_support":1}),
+        )
+        .expect("replaced file detail");
+    assert_eq!(replaced_detail["absent_at_head"], true);
+    let detail_regressions = &replaced_detail["rankings"]["regressions"];
+    assert_eq!(detail_regressions["numerator"], replaced["numerator"]);
+    assert_eq!(detail_regressions["denominator"], replaced["denominator"]);
+    assert!(
+        !detail_regressions["tasks"]
+            .as_array()
+            .expect("history")
+            .is_empty()
+    );
     for rollup in ["dir", "crate"] {
         let result = query(rollup);
         assert!(
