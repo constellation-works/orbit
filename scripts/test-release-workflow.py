@@ -39,24 +39,40 @@ DESKTOP_MANIFEST = "orbit-desktop-checksums.txt"
 DESKTOP_SIGNATURE = DESKTOP_MANIFEST + ".sig"
 
 
-def serve_publish_barrier(listener, deadline, labels, errors, on_arrival=lambda: None):
-    """Release both peers only if they arrive within the shared deadline."""
+def remaining_until(deadline, clock=time.monotonic):
+    """Seconds left before the absolute monotonic deadline; expired work is refused."""
+    left = deadline - clock()
+    if left <= 0:
+        raise TimeoutError("publish barrier deadline expired")
+    return left
+
+
+def serve_publish_barrier(listener, deadline, labels, errors, on_arrival=lambda: None,
+                          clock=time.monotonic):
+    """Release both peers only if every step finishes within the shared deadline.
+
+    Ready sockets do not extend the budget: the deadline is checked before each
+    accept, after each label and again before any success marker is sent.
+    """
     connections = []
     try:
         for _ in range(2):
-            listener.settimeout(max(0.001, deadline - time.monotonic()))
+            listener.settimeout(remaining_until(deadline, clock))
             connection, _ = listener.accept()
             connections.append(connection)
             label = bytearray()
             while not label.endswith(b"\n"):
-                connection.settimeout(max(0.001, deadline - time.monotonic()))
+                connection.settimeout(remaining_until(deadline, clock))
                 chunk = connection.recv(64)
                 if not chunk:
                     raise EOFError("barrier peer disconnected")
                 label.extend(chunk)
+            remaining_until(deadline, clock)
             labels.append(label.rstrip(b"\n").decode())
             on_arrival()
+        remaining_until(deadline, clock)
         for connection in connections:
+            connection.settimeout(remaining_until(deadline, clock))
             connection.sendall(b"+")
     except (OSError, EOFError) as exc:
         errors["barrier"] = exc
@@ -192,12 +208,19 @@ class ReleaseWorkflowTests(unittest.TestCase):
                     import socket
                     import time
                     deadline = float(os.environ["FAKE_GH_BARRIER_DEADLINE"])
+                    def remaining():
+                        left = deadline - time.monotonic()
+                        if left <= 0:
+                            sys.exit("publish barrier deadline expired")
+                        return left
                     host, port = barrier.rsplit(":", 1)
-                    with socket.create_connection((host, int(port)), timeout=max(0.001, deadline - time.monotonic())) as gate:
-                        gate.settimeout(max(0.001, deadline - time.monotonic()))
+                    with socket.create_connection((host, int(port)), timeout=remaining()) as gate:
+                        gate.settimeout(remaining())
                         label = os.environ.get("FAKE_GH_BARRIER_LABEL", "publish")
                         gate.sendall(label.encode() + b"\\n")
+                        gate.settimeout(remaining())
                         assert gate.recv(1) == b"+"
+                        remaining()
                 fields = option("--json")
                 if fields == "tagName":
                     assert option("--jq") == ".tagName", args
@@ -563,6 +586,89 @@ class ReleaseWorkflowTests(unittest.TestCase):
                 self.assertEqual(labels, ["first", "second"] if complete else ["first"])
                 self.assertEqual("barrier" in errors, not complete)
                 self.assertEqual(listener.fileno(), -1)
+
+    def barrier_listener(self):
+        listener = socket.socket()
+        listener.bind(("127.0.0.1", 0))
+        listener.listen(2)
+        return listener
+
+    def assert_refused_peer(self, peer):
+        """A refused peer sees a closed socket, never the success marker."""
+        try:
+            data = peer.recv(1)
+        except ConnectionError:
+            return
+        self.assertEqual(data, b"", "a refused peer must not receive the success marker")
+
+    def test_publish_barrier_refuses_peers_queued_after_expiry(self):
+        listener = self.barrier_listener()
+        address = listener.getsockname()
+        labels, errors = [], {}
+        # Both peers are connected, labelled and queued before the deadline
+        # has passed, so every socket call below is immediately ready.
+        with socket.create_connection(address, timeout=2) as first, \
+                socket.create_connection(address, timeout=2) as second:
+            first.sendall(b"first\n")
+            second.sendall(b"second\n")
+            for peer in (first, second):
+                peer.settimeout(2)
+            serve_publish_barrier(listener, time.monotonic() - 1, labels, errors)
+            self.assertEqual(labels, [])
+            self.assertIsInstance(errors.get("barrier"), TimeoutError)
+            self.assertEqual(listener.fileno(), -1)
+            self.assert_refused_peer(first)
+            self.assert_refused_peer(second)
+
+    def test_publish_barrier_refuses_release_when_deadline_expires_mid_flight(self):
+        # A scripted clock expires the budget after the labels are read, while
+        # both peers are connected and the success marker is ready to send.
+        listener = self.barrier_listener()
+        address = listener.getsockname()
+        labels, errors = [], {}
+        arrivals = []
+        now = [0.0]
+
+        def clock():
+            return now[0]
+
+        def on_arrival():
+            arrivals.append(len(labels))
+            if len(arrivals) == 2:
+                now[0] = 10.0
+
+        with socket.create_connection(address, timeout=2) as first, \
+                socket.create_connection(address, timeout=2) as second:
+            first.sendall(b"first\n")
+            second.sendall(b"second\n")
+            for peer in (first, second):
+                peer.settimeout(2)
+            serve_publish_barrier(listener, 5.0, labels, errors, on_arrival, clock=clock)
+            self.assertEqual(labels, ["first", "second"])
+            self.assertIsInstance(errors.get("barrier"), TimeoutError)
+            self.assertEqual(listener.fileno(), -1)
+            self.assert_refused_peer(first)
+            self.assert_refused_peer(second)
+
+    def test_publisher_stub_refuses_an_expired_barrier_before_connecting(self):
+        self.prepare_desktop()
+        listener = self.barrier_listener()
+        listener.setblocking(False)
+        host, port = listener.getsockname()
+        env = dict(self.env, FAKE_GH_BARRIER=f"{host}:{port}",
+                   FAKE_GH_BARRIER_DEADLINE=str(time.monotonic() - 1))
+        try:
+            result = self_test_hang.run(
+                ["gh", "release", "view", "v1.2.3", "--repo", "offline/orbit",
+                 "--json", "tagName", "--jq", ".tagName"],
+                step="gh release view", cwd=self.root, env=env, text=True,
+                capture_output=True)
+            self.assertNotEqual(result.returncode, 0, result.stdout)
+            self.assertIn("deadline expired", result.stderr)
+            with self.assertRaises(BlockingIOError):
+                listener.accept()
+        finally:
+            listener.close()
 
     def test_distinct_release_tags_publish_desktop_side_by_side(self):
         # Different groups must not take the same lock: both publishers reach
