@@ -251,8 +251,11 @@ sync [ORB-27881]).
   `crates/orbit-cmd/src/workspace_removal.rs` (382 lines) sequence domain and
   persistence calls instead of only constructing operations. Rationale: these
   are the ORB-10016 extraction residuals plus later command groups grown the
-  same way; moving each slice to the registry shape is the touch-it-move-it
-  ratchet of the operations-as-data bearing above, not a sweep of its own.
+  same way. Their registry migration belongs to the planned, one-noun-at-a-time
+  sequence in [Migrate the remaining nouns on a plan, not on
+  contact](../operations-as-data/4_decisions.md#migrate-the-remaining-nouns-on-a-plan-not-on-contact);
+  touching one of these areas for unrelated work does not itself trigger a
+  migration.
 - STD-02@5 §R6 and §R39: the machine check covers the 11-module chain only.
   `docs/architecture/orbit-core.md:17` declares the order `contracts < task <
   job < automation < review < distributed < pull_drain < admission <
@@ -327,11 +330,11 @@ sync [ORB-27881]).
 ### Consequences
 
 - This change restructures nothing, per the Adopting v5 clause; the recorded
-  remediation direction for R2, R41 and R42 is the operations-as-data bearing
-  above.
-- A later change that touches any listed area cites this entry (or the bearing
-  it moves toward) or supersedes it; reviewers may ask "why not the registry
-  shape?" per the pilot ratchet.
+  remediation for R2, R41 and R42 follows the accepted noun-by-noun migration
+  plan linked above.
+- The listed areas remain as-is until their noun is reached in the accepted
+  planned migration; unrelated changes do not trigger a migration. When a
+  planned migration reaches one, the registry shape is the target.
 - Cost: registry-shaped and inherent-method slices coexist indefinitely, and
   readers must recognize both idioms until the migration reaches each noun.
 
