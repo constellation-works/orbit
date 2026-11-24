@@ -4,8 +4,11 @@
 From the delivery diff against the guardrails base (`CI_TEST_BASE`, with the
 merge-base fallback `scripts/ci-guardrails.sh` uses), take quoted multi-word
 labels on lines removed from `crates/orbit-web/assets/dashboard/**`, drop any
-label the same diff re-adds, and fail when the label is still present in
-current-state docs, the website or shipped skills. A label used as the prefix
+label the same diff re-adds or the dashboard still renders elsewhere, and
+fail when the label is still present in current-state docs, the website or
+shipped skills. Removed, added and remaining labels are read by one rule
+(`labels_in`), so a label that survives only in a comment, a class list or a
+property name is still a removal. A label used as the prefix
 of a longer command inside inline or fenced code is not a label mention; an
 exact code value and visible prose still count. Legitimate keeps are recorded
 in `scripts/removed-dashboard-labels-allowlist.json`. An entry is
@@ -168,25 +171,47 @@ def removed_and_added_labels(base):
     return {label: files for label, files in removed.items() if label not in added}
 
 
+def file_labels(text, path):
+    """Labels a whole dashboard file renders: `labels_in` on each line outside
+    the interior of a block comment that opens its line."""
+    comment = COMMENT_ONLY_BLOCKS.get(os.path.splitext(path)[1])
+    labels = set()
+    inside = False
+    for line in text.splitlines():
+        if inside:
+            closing = line.find(comment[1])
+            if closing < 0:
+                continue
+            inside = False
+            line = line[closing + len(comment[1]):]
+        elif comment is not None:
+            stripped = line.lstrip()
+            if stripped.startswith(comment[0]) and comment[1] not in stripped[len(comment[0]):]:
+                inside = True
+                continue
+        labels.update(labels_in(line, path))
+    return labels
+
+
 def filter_still_present(removed):
-    # A label removed from one dashboard file but still present elsewhere in
+    # A label removed from one dashboard file but still rendered elsewhere in
     # the worktree dashboard is not a removal: docs may name the remaining
-    # instance. Check raw substrings, mirroring doc_hits.
+    # instance.
     if not removed:
         return removed
     root = ROOT / DASHBOARD
     if not root.is_dir():
         return removed
-    texts = []
+    remaining = set()
     for path in sorted(root.rglob("*")):
         if not path.is_file():
             continue
         try:
-            texts.append(path.read_text(errors="replace"))
+            text = path.read_text(errors="replace")
         except OSError:
             continue
-    return {label: files for label, files in removed.items()
-            if not any(label in text for text in texts)}
+        remaining |= file_labels(text, path.relative_to(ROOT).as_posix())
+    return {label: files for label, files in removed.items() if label not in remaining}
 
 
 def doc_paths():

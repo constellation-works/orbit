@@ -218,6 +218,22 @@ else
   OWNED_WORKDIR=1
 fi
 
+# An arm's log is a regular file this run creates. A reused --workdir may hold
+# an earlier run's log, which is replaced; a symlink, a file with another hard
+# link or any other entry at that path is refused, because writing through it
+# would change a file outside the scratch root. Both arms are checked before
+# either runs, so a refusal costs no build.
+refuse_unowned_log() {
+  local log="$1"
+  [[ -e "$log" || -L "$log" ]] || return 0
+  [[ ! -L "$log" ]] || die "refusing to write an arm log through a symlink: $log"
+  [[ -f "$log" ]] || die "arm log path is not a regular file: $log"
+  [[ -n "$(find "$log" -maxdepth 0 -type f -links 1)" ]] \
+    || die "refusing to replace an arm log that has another hard link: $log"
+}
+refuse_unowned_log "$WORKDIR/baseline.log"
+refuse_unowned_log "$WORKDIR/candidate.log"
+
 # A self-made scratch root is disposable only when every check held; otherwise
 # the logs are the evidence and must outlive the run.
 RUN_FAILED=1
@@ -282,13 +298,27 @@ run_arm() {
     )
   fi
 
+  # Unlink an earlier run's log, then create this arm's own: with noclobber the
+  # open is exclusive, so an entry placed there meanwhile is refused, never
+  # followed or truncated. The arm writes to that descriptor, not to the path.
+  refuse_unowned_log "$ARM_LOG"
+  rm -f -- "$ARM_LOG"
+  set -o noclobber
+  if ! { exec 9>"$ARM_LOG"; } 2>/dev/null; then
+    set +o noclobber
+    die "cannot create an owned arm log (an entry appeared at $ARM_LOG)"
+  fi
+  set +o noclobber
+
   # Redirect, then capture. A filter here would report its own success
   # (F2026-09-077); the bounded display reads the file afterwards instead.
   ARM_STATUS=0
   (
+    exec 9>&-
     cd "$ARM_TREE"
     without_git_location_overrides env "${arm_env[@]}" "${COMMAND[@]}"
-  ) >"$ARM_LOG" 2>&1 || ARM_STATUS=$?
+  ) >&9 2>&1 || ARM_STATUS=$?
+  exec 9>&-
 }
 
 outcome_of() {

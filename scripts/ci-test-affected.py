@@ -782,15 +782,62 @@ class BoundedCapture:
         return b"".join(self.parts)
 
 
+# The relay reads the runner in chunks of this size and judges at most this
+# much of one line at a time, so a test that prints one endless line cannot
+# grow gate memory.
+RELAY_CHUNK_BYTES = 64 * 1024
+# Host notices kept for the validation summary: at most this many, each cut to
+# this many characters. Every notice is still relayed and archived whole.
+HOST_NOTICE_LIMIT = 1000
+HOST_NOTICE_CHARS = 2048
+HOST_NOTICE_CUT = " [cut; the full line is in the nextest log]"
+
+
+def relay_pieces(stream, log):
+    """Yield (bytes, starts_line) pieces of `stream`, none over RELAY_CHUNK_BYTES.
+
+    Every chunk is written to `log` as it is read, before it is split or
+    decoded. A piece ends at a newline, or at the size bound inside a longer
+    line; the pieces that continue such a line have starts_line False.
+    """
+    pending = b""
+    starts_line = True
+    while chunk := stream.read1(RELAY_CHUNK_BYTES):
+        log.write(chunk)
+        pending += chunk
+        start = 0
+        while True:
+            newline = pending.find(b"\n", start, start + RELAY_CHUNK_BYTES)
+            if newline >= 0:
+                end = newline + 1
+            elif len(pending) - start > RELAY_CHUNK_BYTES:
+                end = start + RELAY_CHUNK_BYTES
+                # Keep a UTF-8 sequence in one piece.
+                while end > start + RELAY_CHUNK_BYTES - 3 and pending[end] & 0xC0 == 0x80:
+                    end -= 1
+            else:
+                break
+            yield pending[start:end], starts_line
+            starts_line = newline >= 0
+            start = end
+        pending = pending[start:]
+    if pending:
+        yield pending, starts_line
+
+
 def run_nextest(command, environment):
     """Retain the complete merged stream, relaying diagnostics and failed blocks.
 
     Nextest prints a status header before each captured test-output block.
     Passing blocks are suppressed except for host-evidence notices; progress
     headers and the summary delimit them and are always relayed. Returns the
-    exit status and every line that leads with a host-notice prefix.
+    exit status and the lines that lead with a host-notice prefix, bounded by
+    HOST_NOTICE_LIMIT and HOST_NOTICE_CHARS. When more notices were printed,
+    the last entry says how many are not listed: it is not a deferral, so a
+    reader that requires every notice to be one refuses the run.
     """
     notices = []
+    unlisted = 0
     captured = BoundedCapture(COMMAND_EVIDENCE_BYTES)
     scratch = ROOT / ".orbit/tmp"
     scratch.mkdir(parents=True, exist_ok=True)
@@ -798,32 +845,45 @@ def run_nextest(command, environment):
                                      dir=scratch, delete=False) as log:
         print(f"ci-test-affected: full nextest output: {log.name}", file=sys.stderr, flush=True)
         passing_block = False
+        # Decided where a line starts and kept for the pieces that continue it.
+        relay_line = prefixed = False
         with subprocess.Popen(command, cwd=ROOT, env=environment, stdout=subprocess.PIPE,
                               stderr=subprocess.STDOUT) as process:
             try:
-                for raw in process.stdout:
-                    log.write(raw)
+                for raw, starts_line in relay_pieces(process.stdout, log):
                     line = raw.decode("utf-8", errors="replace")
                     plain = ANSI_ESCAPE.sub("", line)
                     captured.append(plain)
-                    status = NEXTEST_STATUS.match(plain)
-                    # Nextest right-aligns the status in a 12-column field.
-                    # Captured payload has its own indentation: a test printing
-                    # nested runner output must not open a failing block here.
-                    if status and status.end(2) != 12:
-                        status = None
-                    if status:
-                        passing_block = status.group(2).endswith("PASS")
-                    elif plain.startswith("────────") or plain.startswith("     Summary "):
-                        passing_block = False
-                    if plain.lstrip().startswith(HOST_NOTICE_PREFIXES):
-                        notices.append(plain.strip())
-                    notice = (plain.lstrip().startswith(HOST_NOTICE_PREFIXES)
-                              or any(marker in plain for marker in HOST_NOTICE_MARKERS))
-                    if status or not passing_block or notice:
-                        print(plain if notice else line, end="", file=sys.stderr, flush=True)
+                    if starts_line:
+                        status = NEXTEST_STATUS.match(plain)
+                        # Nextest right-aligns the status in a 12-column field.
+                        # Captured payload has its own indentation: a test printing
+                        # nested runner output must not open a failing block here.
+                        if status and status.end(2) != 12:
+                            status = None
+                        if status:
+                            passing_block = status.group(2).endswith("PASS")
+                        elif plain.startswith("────────") or plain.startswith("     Summary "):
+                            passing_block = False
+                        prefixed = plain.lstrip().startswith(HOST_NOTICE_PREFIXES)
+                        if prefixed and len(notices) < HOST_NOTICE_LIMIT:
+                            text = plain.strip()
+                            if len(text) > HOST_NOTICE_CHARS:
+                                text = text[:HOST_NOTICE_CHARS] + HOST_NOTICE_CUT
+                            notices.append(text)
+                        elif prefixed:
+                            unlisted += 1
+                        relay_line = bool(status) or not passing_block or prefixed
+                    marked = any(marker in plain for marker in HOST_NOTICE_MARKERS)
+                    if relay_line or marked:
+                        print(plain if prefixed or marked else line, end="", file=sys.stderr, flush=True)
                 exit_code = process.wait()
                 log.flush()
+                if unlisted:
+                    overflow = (f"ci-test-affected: {unlisted} more host notices are not listed "
+                                f"(the summary keeps {HOST_NOTICE_LIMIT}); every notice is in {log.name}")
+                    notices.append(overflow)
+                    print(overflow, file=sys.stderr, flush=True)
                 if exit_code:
                     report_command_evidence(Path(log.name))
                 return exit_code, notices, captured.text()

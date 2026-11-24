@@ -838,6 +838,7 @@ scripts/cross-revision-check.sh \
 | Read-only Git access (`rev-parse`, `archive`, `GIT_OPTIONAL_LOCKS=0`) | Writes to a managed read-only `.git`, or a mutated source checkout |
 | Git location, index and object overrides scrubbed on helper Git calls and arm commands | Inherited Git authority redirecting `--repo`, scratch-checkout validation or a producer's Git discovery to another repository |
 | Explicit and automatic workdirs refused inside the source checkout or Orbit state; only descendants of the declared `ORBIT_SCRATCH_DIR` are allowed beneath `.orbit/` | Scratch trees landing in the state being validated |
+| Each arm's log is a regular file the run creates; a symlink, a file with another hard link or any other entry at `<workdir>/<arm>.log` is refused before either arm runs | A reused `--workdir` redirecting an arm's output over a file outside scratch |
 
 In managed executors, use the injected `ORBIT_SCRATCH_DIR` and set `TMPDIR` to
 an existing run directory beneath it. The scratch root must resolve to an
@@ -875,7 +876,8 @@ Limits worth stating in a validation summary:
   the producer directly and let `--tail` do the bounding.
 
 Regression fixtures for the helper — arm isolation, mtime normalization, cache
-opt-out, producer exit code through bounded output, read-only `.git`, and
+opt-out, owned arm logs in a reused workdir, producer exit code through bounded
+output, read-only `.git`, and
 workdir containment (including managed scratch authority and protected TMPDIR),
 and inherited Git overrides against a sentinel repository whose HEAD, refs,
 index, config, objects and dirty worktree must remain unchanged
@@ -899,6 +901,16 @@ scripts/bench-compiler-cache.sh
 # On a host that can create user namespaces, also require the concurrent test:
 ORBIT_COMPILER_CACHE_REQUIRE_NS=1 scripts/bench-compiler-cache.sh
 ```
+
+With `ORBIT_COMPILER_CACHE_REQUIRE_NS=1` the benchmark exits nonzero and
+records `cache_concurrent=failed` with the reason in `namespace_probe=`
+whenever the concurrent arm does not run: no sccache, no namespaces, or a
+namespace script that reports itself not applicable or skipped. Without it
+the same cases record `cache_concurrent=skipped` and exit 0. Every cache arm
+and the namespace arm set `ORBIT_COMPILER_CACHE=1` themselves (the result
+logs `cache_arm_env=`), so an inherited `ORBIT_COMPILER_CACHE=0` cannot
+time plain `rustc` under a cache label; the baseline arms set
+`ORBIT_COMPILER_CACHE=0`.
 
 The benchmark requires Python 3 for path admission and ownership claiming.
 Use a dedicated one-run `ORBIT_COMPILER_CACHE_BENCH_DIR`; do not modify it
@@ -938,7 +950,9 @@ a deletion recorder that never deletes. It covers parent and symlink escapes,
 literal external caches, workdir equality, cache/target overlap, refusal of
 a pre-existing unowned workdir (with `a`, `a-target` and cache sentinels
 verified unchanged and no recorded transport events) and private cache
-operation without compiling or starting daemons:
+operation without compiling or starting daemons. It also runs every arm
+against a recording Cargo and namespace script to check the cache switch each
+arm receives and the required-namespace outcomes above:
 
 ```bash
 python3 scripts/test-bench-compiler-cache.py

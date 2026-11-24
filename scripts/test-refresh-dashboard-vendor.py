@@ -56,7 +56,16 @@ if sys.argv[1] == 'pack':
     destination = Path(sys.argv[sys.argv.index('--pack-destination') + 1])
     shutil.copyfile(os.environ['VENDOR_TEST_TARBALL'], destination / 'fixture.tgz')
     print(json.dumps([{'filename': 'fixture.tgz'}]))
-elif sys.argv[1] != 'install':
+elif sys.argv[1] == 'install':
+    # Lock generation runs in a private directory holding the package
+    # identity; record it so the test can check it is not the checkout.
+    with open(os.environ['VENDOR_TEST_NPM_LOG'] + '.cwd', 'a') as log:
+        log.write(os.getcwd() + '\\n')
+    if 'VENDOR_TEST_LOCK' in os.environ:
+        Path('package-lock.json').write_text(os.environ['VENDOR_TEST_LOCK'])
+    if os.environ.get('VENDOR_TEST_INSTALL_STATUS'):
+        raise SystemExit(int(os.environ['VENDOR_TEST_INSTALL_STATUS']))
+else:
     raise SystemExit('unexpected npm command')
 """)
         # The old signature rejects filter before entering the function. With
@@ -69,6 +78,13 @@ if os.environ.get('VENDOR_TEST_INJECT_EXDEV') == '1':
     def _exdev_replace(self, target):
         raise OSError(errno.EXDEV, 'Invalid cross-device link')
     _PatchedPath.replace = _exdev_replace
+if os.environ.get('VENDOR_TEST_FAIL_PUBLISH'):
+    _real_replace = _PatchedPath.replace
+    def _failing_replace(self, target):
+        if _PatchedPath(target).name == os.environ['VENDOR_TEST_FAIL_PUBLISH']:
+            raise OSError(errno.EIO, 'injected publication failure')
+        return _real_replace(self, target)
+    _PatchedPath.replace = _failing_replace
 original = tarfile.TarFile.extractall
 tarfile.TarFile.extraction_filter = staticmethod(lambda member, destination: member)
 def legacy_extractall(self, path='.', members=None, *, numeric_owner=False):
@@ -119,6 +135,59 @@ exec(compile(sys.stdin.read(), '<refresh-dashboard-vendor>', 'exec'))
         for path, content in self.before.items():
             self.assertEqual(path.read_bytes(), content, f"failed refresh changed {path}")
         self.assertNotIn("install", self.npm_log.read_text().splitlines())
+
+    def assert_unchanged(self, result, step):
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn(step, result.stderr)
+        self.assertIn("vendor blobs, manifest and lockfile are unchanged", result.stderr)
+        after = {path: path.read_bytes() for path in self.package.rglob("*") if path.is_file()}
+        self.assertEqual(after, self.before)
+
+    def refreshed_lock(self):
+        lock = json.loads((self.package / CHECKER.LOCKFILE_NAME).read_text())
+        lock["packages"]["node_modules/dompurify"]["integrity"] = "sha512-fixture"
+        return json.dumps(lock, indent=2) + "\n"
+
+    def test_failed_lock_generation_leaves_every_record_unchanged(self):
+        # Valid assets are packed and staged; npm then fails after writing a
+        # partial lockfile. Nothing may be published.
+        self.write_tarball()
+        result = self.refresh(extra_env={"VENDOR_TEST_INSTALL_STATUS": "7",
+                                         "VENDOR_TEST_LOCK": "{ partial"})
+        self.assert_unchanged(result, "lockfile generation failed (npm install --package-lock-only exited 7)")
+        self.assertEqual(self.npm_log.read_text().splitlines(), ["pack", "pack", "install"])
+        install_cwd = Path(Path(str(self.npm_log) + ".cwd").read_text().strip())
+        self.assertNotEqual(install_cwd.resolve(), self.package.resolve())
+
+    def test_inconsistent_staged_lockfile_is_refused_before_publication(self):
+        self.write_tarball()
+        lock = json.loads(self.refreshed_lock())
+        lock["packages"]["node_modules/dompurify"]["version"] = "1.0.0"
+        result = self.refresh(extra_env={"VENDOR_TEST_LOCK": json.dumps(lock)})
+        self.assert_unchanged(result, "staged records failed check-dashboard-vendor.py (exit 1)")
+        self.assertIn("node_modules/dompurify is '1.0.0'", result.stderr)
+
+    def test_failed_publication_restores_every_record(self):
+        self.write_tarball()
+        for name in (CHECKER.LOCKFILE_NAME, CHECKER.MANIFEST_NAME, self.assets[-1]["path"]):
+            with self.subTest(failing=name):
+                result = self.refresh(extra_env={"VENDOR_TEST_FAIL_PUBLISH": name,
+                                                 "VENDOR_TEST_LOCK": self.refreshed_lock()})
+                self.assert_unchanged(result, "publication failed")
+
+    def test_successful_refresh_publishes_the_generated_lockfile(self):
+        self.write_tarball()
+        lock = self.refreshed_lock()
+        result = self.refresh(extra_env={"VENDOR_TEST_LOCK": lock})
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual((self.package / CHECKER.LOCKFILE_NAME).read_text(), lock)
+        manifest = json.loads(self.manifest.read_text())
+        for asset in manifest["assets"]:
+            self.assertEqual((self.vendor / asset["path"]).read_bytes(), PAYLOAD)
+            self.assertEqual(asset["sha256"], hashlib.sha256(PAYLOAD).hexdigest())
+        self.assertEqual(CHECKER.check_vendor(self.repo), [])
+        # The guard ran on the staged set and again on the published tree.
+        self.assertEqual(result.stdout.count("vendored dashboard JS matches recorded pins"), 2)
 
     def test_escaping_member_with_expected_assets_is_refused(self):
         # ../../../ escapes both extract-<package> and the mktemp directory,

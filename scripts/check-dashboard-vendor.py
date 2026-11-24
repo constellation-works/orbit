@@ -189,6 +189,10 @@ def check_vendor(root: Path) -> list[str]:
                 f"(recorded {recorded}, actual {actual})"
             )
 
+        # A non-string npm_package already has its field failure above; it
+        # cannot key the pin tables (an array or object is unhashable).
+        if not isinstance(npm_package, str):
+            continue
         pinned = dependencies.get(npm_package)
         if pinned is None:
             failures.append(
@@ -389,6 +393,33 @@ def verify_fixture_reporting() -> None:
                 "extra-lockfile-dep fixture did not report set mismatch: "
                 f"expected {expected!r} in {failures!r}"
             )
+
+
+    for malformed in (["dompurify"], {"name": "dompurify"}):
+        with tempfile.TemporaryDirectory(prefix="orbit-dashboard-vendor-") as temporary:
+            root = Path(temporary) / "package-type"
+            write_fixture(root)
+            manifest_path = root / VENDOR_DIR / MANIFEST_NAME
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            manifest["assets"][0]["npm_package"] = malformed
+            manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+            marked = root / VENDOR_DIR / "marked.umd.js"
+            recorded = sha256_file(marked)
+            marked.write_bytes(b"undocumented-swap\n")
+            failures = check_vendor(root)
+            expected_field = (
+                f"{VENDOR_DIR / MANIFEST_NAME}: assets[0]: npm_package must be a non-empty string"
+            )
+            expected_other = (
+                f"{VENDOR_DIR / 'marked.umd.js'}: sha256 mismatch for marked 18.0.5 "
+                f"(recorded {recorded}, actual {sha256_file(marked)})"
+            )
+            if expected_field not in failures or expected_other not in failures:
+                raise RuntimeError(
+                    "malformed-npm_package fixture did not report the field and the "
+                    f"other asset: expected {expected_field!r} and {expected_other!r} "
+                    f"in {failures!r}"
+                )
 
 
 def main() -> int:

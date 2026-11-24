@@ -96,6 +96,26 @@ FIELDS = (".jobs[] | {id, run_id, run_attempt, head_sha, name, status, conclusio
           " steps: [.steps[]? | {name, number, status, conclusion}]}")
 
 
+def usable_jobs(rows):
+    """Map each job name to its row, or None when any row is not a usable job.
+
+    The waiter reads `name`, `status` and `steps` from every row, so a row that
+    is not an object, or whose name, status or steps have another shape, makes
+    the whole listing unusable: a partial listing would report a job absent."""
+    jobs = {}
+    for row in rows:
+        if not isinstance(row, dict):
+            return None
+        name, steps = row.get("name"), row.get("steps")
+        if not isinstance(name, str) or not name or not isinstance(row.get("status"), str):
+            return None
+        if steps is not None and not (isinstance(steps, list)
+                                      and all(isinstance(step, dict) for step in steps)):
+            return None
+        jobs[name] = row
+    return jobs
+
+
 class ListingTimeout(Exception):
     """The job listing was still running when the wait budget ran out."""
 
@@ -170,6 +190,7 @@ class JobListingPoller:
         self.artifact_rate_wait = None
         self._page_rate_wait = None
         self._last_http_status = ""
+        self._malformed_rows = False
 
     def _backoff_minimum(self, headers, http_status):
         """Fold one response's backoff headers into the poll interval floor."""
@@ -198,6 +219,8 @@ class JobListingPoller:
     def _error_signature(self):
         if self._last_http_status in ("403", "429"):
             return f"rate limit exceeded (HTTP {self._last_http_status})"
+        if self._malformed_rows:
+            return "malformed job rows in the listing"
         if self._last_http_status:
             return f"HTTP {self._last_http_status}"
         return "listing failed or malformed"
@@ -265,9 +288,20 @@ class JobListingPoller:
             pages.append((http_status, headers, body))
         return pages
 
+    def _usable_rows(self, lines):
+        """Jobs from one JSON row per line, or None when a line or row is unusable."""
+        try:
+            jobs = usable_jobs([json.loads(line) for line in lines if line.strip()])
+        except ValueError:
+            jobs = None
+        if jobs is None:
+            self._malformed_rows = True
+        return jobs
+
     def read_job_listing(self, remaining):
         self._page_rate_wait = None
         self._last_http_status = ""
+        self._malformed_rows = False
         try:
             result = self._read_job_listing(remaining)
         except ListingTimeout:
@@ -289,29 +323,16 @@ class JobListingPoller:
             if not pages:
                 if status:
                     return None
-                try:
-                    return {job["name"]: job for line in stdout.splitlines() if line.strip()
-                            for job in [json.loads(line)]}
-                except (ValueError, KeyError):
-                    return None
+                return self._usable_rows(stdout.splitlines())
             minimum = self.server_minimum
             for http_status, headers, _ in pages:
                 minimum = max(minimum, self._backoff_minimum(headers, http_status))
             self.poll_seconds = max(minimum, self.fallback_seconds)
             if status:
                 return None
-            jobs = {}
-            try:
-                for http_status, _, body in pages:
-                    if http_status != "200":
-                        return None
-                    for line in body:
-                        if line.strip():
-                            job = json.loads(line)
-                            jobs[job["name"]] = job
-            except (ValueError, KeyError):
+            if any(http_status != "200" for http_status, _, _ in pages):
                 return None
-            return jobs
+            return self._usable_rows(line for _, _, body in pages for line in body)
         arguments = ["--include", self.endpoint]
         if self.etag:
             arguments += ["--header", f"If-None-Match: {self.etag}"]
@@ -345,12 +366,18 @@ class JobListingPoller:
                 payload = json.loads(body)
                 if not isinstance(payload, dict) or not isinstance(payload.get("jobs"), list):
                     return None
-                jobs = payload["jobs"]
-                if payload.get("total_count") != len(jobs):
+                rows = payload["jobs"]
+                if payload.get("total_count") != len(rows):
                     return None
-                self.jobs = {job["name"]: job for job in jobs}
-                if len(self.jobs) != len(jobs):
+                # Keep the last good listing and its ETag until this one is
+                # whole: a later 304 must not answer with rejected rows.
+                jobs = usable_jobs(rows)
+                if jobs is None:
+                    self._malformed_rows = True
                     return None
+                if len(jobs) != len(rows):
+                    return None
+                self.jobs = jobs
                 self.etag = headers.get("etag")
             except (ValueError, KeyError, TypeError):
                 return None

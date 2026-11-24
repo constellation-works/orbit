@@ -11,8 +11,9 @@ definition the diff deletes:
   `crates/orbit-policy/src/lib.rs`). A re-export in a file outside
   `crates/<crate>/src` has no public path here and is not judged;
 - CSS class selectors, named with their dot (`.ws-badge`), including a class in
-  a compound selector (`.active.retired`). A class named only in a CSS comment
-  does not count.
+  a compound or element-qualified selector (`.active.retired`, `a.retired`).
+  Text in a CSS comment, a quoted string, a `url(...)` or a declaration value
+  names no class.
 
 Drop any identifier the same diff adds back, or that the working tree still
 defines, re-exports or styles. Fail when a removed identifier is named as a
@@ -52,9 +53,11 @@ RUST_ITEM = re.compile(
     r"(?:const|static|fn|struct|enum|trait|type)[ \t]+(?:mut[ \t]+)?([A-Za-z_]\w*)",
     re.MULTILINE)
 PUB_USE = re.compile(r"\bpub(?:\([^)\n]*\))?[ \t]+use[ \t]+([^;]+);")
-# CSS comments, and selector preludes: the text before each `{` since the last
-# `;`, `{` or `}`. Declarations are never preludes, so `url(a.png)` names no class.
-CSS_COMMENT = re.compile(r"/\*.*?\*/", re.DOTALL)
+# CSS comments, quoted strings and `url(...)` tokens, which name no class even
+# in a selector (`a[href$=".pdf"]`), and selector preludes: the text before
+# each `{` since the last `;`, `{` or `}`. Declarations are never preludes.
+CSS_OPAQUE = re.compile(
+    r"""/\*.*?\*/|"(?:\\.|[^"\\\n])*"|'(?:\\.|[^'\\\n])*'|\burl\([^)\n]*\)""", re.DOTALL)
 CSS_PRELUDE = re.compile(r"[^{};]*\{")
 # A class in a prelude, including one after another selector part (`a.retired`,
 # `.active.retired`). A letter must follow the dot, so `1.5` is not a class.
@@ -188,8 +191,8 @@ def public_paths(path, text):
 
 
 def css_classes(text):
-    """CSS class selectors a stylesheet names, with their dot, ignoring comments."""
-    text = CSS_COMMENT.sub(" ", text)
+    """CSS class selectors a stylesheet names, with their dot."""
+    text = CSS_OPAQUE.sub(" ", text)
     return {"." + match.group(1)
             for prelude in CSS_PRELUDE.finditer(text)
             for match in CSS_CLASS.finditer(prelude.group())}

@@ -807,5 +807,92 @@ finally:
             self.raw_job_body = None
 
 
+    # Rows that are not usable jobs. The awaited "Test build" row beside each
+    # is healthy and complete, so a listing accepted without the bad row would
+    # start the missing-job grace for "Test shard 1/2" and, with no grace,
+    # report it absent at once.
+    MALFORMED_ROWS = (
+        None, "text", 7, [], [job("Test shard 1/2")],
+        dict(job("Test shard 1/2"), name=None), dict(job("Test shard 1/2"), name=7),
+        dict(job("Test shard 1/2"), name=""), dict(job("Test shard 1/2"), status=None),
+    )
+    # The paginated projection rebuilds `steps`, so only a single page can
+    # carry these.
+    MALFORMED_STEPS = (dict(job("Test shard 1/2"), steps="none"), dict(job("Test shard 1/2"), steps=[None]))
+
+    def assert_unusable_listing(self, result):
+        combined = result.stdout + result.stderr
+        self.assertNotIn("Traceback", combined)
+        self.assertEqual(result.returncode, 1, combined)
+        self.assertNotIn("absent from the run", combined)
+        self.assertNotIn("succeeded", combined)
+        self.assertIn("timed out after 30 s waiting for every job (job listing has been unavailable", result.stderr)
+
+    def test_malformed_single_page_job_rows_are_an_unusable_listing(self):
+        for row in (*self.MALFORMED_ROWS, *self.MALFORMED_STEPS):
+            with self.subTest(row=row):
+                self.requests.clear()
+                self.job_reply = lambda elapsed: (200, {}, [job("Test build"), row])
+                result = self.wait(timeout="30", poll="15", virtual=True, grace="0",
+                                   jobs=["Test build", "Test shard 1/2"])
+                self.assert_unusable_listing(result)
+                self.assertIn("last error malformed job rows in the listing", result.stderr)
+                self.assertGreaterEqual(len(self.requests), 2, self.requests)
+                self.assertEqual(float((self.root / "elapsed").read_text()), 30)
+
+    def test_malformed_paginated_job_rows_are_an_unusable_listing(self):
+        # Rows that are not objects fail the projection; the others reach the
+        # waiter as rows with a null or misshapen field.
+        for row in self.MALFORMED_ROWS:
+            for bad_page in (0, 1):
+                with self.subTest(row=row, bad_page=bad_page):
+                    self.requests.clear()
+                    self.pages = [[job("Test build")], [job("Lint")]]
+                    self.pages[bad_page].append(row)
+                    result = self.wait([job("unused")], timeout="30", poll="15", virtual=True, grace="0",
+                                       jobs=["Test build", "Test shard 1/2"])
+                    self.assert_unusable_listing(result)
+                    self.assertGreaterEqual(len(self.requests), 3, self.requests)
+                    self.assertEqual(float((self.root / "elapsed").read_text()), 30)
+
+    def test_malformed_rows_keep_rate_limit_headers_and_healthy_listings(self):
+        # Single page: the malformed reply's Retry-After still sets the next
+        # poll, and the healthy listing after it is read as usual.
+        def reply(elapsed):
+            if elapsed < 20:
+                return 200, {"Retry-After": "20"}, [job("Test build"), None]
+            return 200, {}, [job("Test build")]
+        self.job_reply = reply
+        result = self.wait(timeout="60", poll="15", virtual=True, jobs=["Test build"])
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual([float(headers["X-Fixture-Time"]) for headers in self.request_headers], [0, 20])
+        self.assertIn("all 1 awaited jobs succeeded", result.stdout)
+
+        # Paginated: every page's backoff is folded in before the rows are judged.
+        self.job_reply = None
+        self.request_headers.clear()
+        self.pages = [[job("Test build")], [dict(job("Test shard 1/2"), name=None)]]
+        self.response_headers = {"Retry-After": "60"}
+        result = self.wait([job("unused")], timeout="30", poll="15", virtual=True, grace="0",
+                           jobs=["Test build", "Test shard 1/2"])
+        self.assert_unusable_listing(result)
+        self.assertEqual([float(headers["X-Fixture-Time"]) for headers in self.request_headers], [0, 0, 0])
+
+    def test_a_rejected_listing_never_answers_a_later_not_modified_reply(self):
+        # The second listing names one job twice and is rejected. The third
+        # reply is 304 for the first listing's ETag, so it must answer with the
+        # first listing, not with rows of the rejected one.
+        def response(elapsed):
+            if 15 <= elapsed < 30:
+                return [job("Test build", "in_progress"), job("Test build", conclusion="failure")]
+            return [job("Test build", "completed" if elapsed >= 45 else "in_progress")]
+        self.timed_response = response
+        self.response_headers = {"X-Poll-Interval": "15"}
+        result = self.wait(timeout="120", poll="15", virtual=True, jobs=["Test build"])
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertNotIn("concluded failure", result.stderr)
+        self.assertRegex(result.stdout, r"not_modified=[1-9]")
+
+
 if __name__ == "__main__":
     unittest.main()

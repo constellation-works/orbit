@@ -2377,6 +2377,46 @@ if status == "000":
         commit_calls = [c for c in calls if c.endswith(f"/commits/{sha}")]
         self.assertEqual(len(commit_calls), 1)
 
+    def test_zero_pins_succeed_without_requests(self):
+        self.write_workflow("check.yml", ["./.github/actions/local", "actions/checkout@v4"])
+        for strict in ("0", "1"):
+            with self.subTest(strict=strict):
+                result = self.run_guard(env_overrides={"ORBIT_STRICT_WORKFLOW_ACTION_PINS": strict})
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertIn("all workflow action pins resolved", result.stdout)
+                self.assertFalse(self.log.exists())
+
+    def test_discovery_fault_fails_in_both_modes(self):
+        sha = "a" * 40
+        self.write_workflow("check.yml", [f"actions/checkout@{sha} # v1"])
+        self.set_statuses({self.pin_url("actions/checkout", sha): "200"})
+        match = f".github/workflows/check.yml:4:      - uses: actions/checkout@{sha} # v1"
+        faults = {
+            # A scan error with no output, and one after a complete match.
+            "grep": ("#!/bin/sh\nexit 2\n", "grep exited 2"),
+            "grep-partial": (f"#!/bin/sh\nprintf '%s\\n' '{match}'\nexit 2\n", "grep exited 2"),
+            "sed": ("#!/bin/sh\ncat >/dev/null\nexit 4\n", "sed exited 4"),
+            "sort": ("#!/bin/sh\ncat\nexit 3\n", "sort exited 3"),
+            # Output cut inside a record: no pin can be read from it.
+            "sed-truncated": ("#!/bin/sh\ncat >/dev/null\nprintf 'actions/checkout\\n'\n",
+                              "unreadable pin record"),
+        }
+        for name, (body, message) in faults.items():
+            tool = name.split("-")[0]
+            for strict in ("0", "1"):
+                with self.subTest(fault=name, strict=strict):
+                    self.log.write_text("")
+                    self.write_executable(self.bin / tool, body)
+                    self.addCleanup((self.bin / tool).unlink, missing_ok=True)
+                    result = self.run_guard(
+                        env_overrides={"ORBIT_STRICT_WORKFLOW_ACTION_PINS": strict})
+                    (self.bin / tool).unlink()
+                    self.assertEqual(result.returncode, 2, result.stderr)
+                    self.assertIn("check-workflow-action-pins: discovery error: " + message,
+                                  result.stderr)
+                    self.assertNotIn("all workflow action pins resolved", result.stdout)
+                    self.assertEqual(self.log.read_text(), "")
+
 
 class WorkflowYamlGuardrailTests(unittest.TestCase):
     def setUp(self):
@@ -3573,6 +3613,72 @@ exec {shlex.quote(real_mktemp)} "$@"
         self.assertFalse(Path("/err").exists(), "opened /err on the host")
 
 
+class StabilityCheckTests(unittest.TestCase):
+    """Drive scripts/check-stability.sh against recorded `cargo metadata`."""
+
+    def setUp(self):
+        scratch = SCRIPTS.parent / ".orbit/tmp"
+        scratch.mkdir(parents=True, exist_ok=True)
+        self.temporary = tempfile.TemporaryDirectory(prefix="stability-", dir=scratch)
+        self.addCleanup(self.temporary.cleanup)
+        self.root = Path(self.temporary.name)
+        (self.root / "scripts").mkdir()
+        shutil.copy2(SCRIPTS / "check-stability.sh", self.root / "scripts")
+        bin_dir = self.root / "bin"
+        bin_dir.mkdir()
+        cargo = bin_dir / "cargo"
+        cargo.write_text('#!/bin/sh\n[ "$1" = metadata ] || exit 64\ncat "$STABILITY_METADATA"\n')
+        cargo.chmod(0o755)
+        self.env = dict(os.environ, PATH=f"{bin_dir}{os.pathsep}{os.environ['PATH']}",
+                        STABILITY_METADATA=str(self.root / "metadata.json"))
+
+    def run_check(self, packages):
+        """`packages` maps a crate name to its `[package.metadata]` value."""
+        (self.root / "metadata.json").write_text(json.dumps({
+            "workspace_members": [f"path+file:///w/{name}#0.1.0" for name in packages],
+            "packages": [{"id": f"path+file:///w/{name}#0.1.0", "name": name, "metadata": metadata}
+                         for name, metadata in packages.items()],
+        }))
+        return subprocess.run(["bash", str(self.root / "scripts/check-stability.sh")],
+                              env=self.env, text=True, capture_output=True)
+
+    @staticmethod
+    def tier(value):
+        return {"orbit": {"stability": value}}
+
+    def test_valid_tiers_print_the_table(self):
+        result = self.run_check({"orbit-web": self.tier("experimental"), "orbit-core": self.tier("stable"),
+                                 "orbit-cli": self.tier("internal"), "helper": None})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual([line.split() for line in result.stdout.splitlines()],
+                         [["crate", "tier"], ["orbit-cli", "internal"], ["orbit-core", "stable"],
+                          ["orbit-web", "experimental"]])
+        self.assertEqual(result.stderr, "")
+
+    def test_each_invalid_tier_is_one_named_error(self):
+        invalid = {
+            "orbit-array": ["stable"],
+            "orbit-empty-array": [],
+            "orbit-map": {"tier": "stable"},
+            "orbit-number": 1,
+            "orbit-bool": True,
+            "orbit-unknown": "beta",
+        }
+        packages = {name: self.tier(value) for name, value in invalid.items()}
+        packages.update({"orbit-core": self.tier("stable"), "orbit-missing": {"orbit": {}},
+                         "orbit-no-metadata": None})
+        result = self.run_check(packages)
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertEqual(result.stdout, "")
+        self.assertNotIn("Traceback", result.stderr)
+        expected = [f"stability check failed: {name}: invalid stability {json.dumps(value)} "
+                    "(allowed: ['experimental', 'internal', 'stable'])"
+                    for name, value in invalid.items()]
+        expected += [f'stability check failed: {name}: missing [package.metadata.orbit] stability = "<tier>"'
+                     for name in ("orbit-missing", "orbit-no-metadata")]
+        self.assertEqual(sorted(result.stderr.splitlines()), sorted(expected))
+
+
 class DoctestFenceGuardTests(unittest.TestCase):
     """Script boundary for runnable fences in line and block doc comments."""
 
@@ -3708,10 +3814,41 @@ class DoctestFenceGuardTests(unittest.TestCase):
                 "*/\n"
                 '"#;\n'
             ),
+            # Literal and ordinary-comment lines shaped like line docs are
+            # not docs: rustdoc never sees them.
+            "raw-string-line-doc": (
+                'const SAMPLE: &str = r#"\n'
+                "    /// ```rust\n"
+                "    /// assert_eq!(1, 2);\n"
+                "    /// ```\n"
+                "    //! ```\n"
+                '"#;\n'
+            ),
+            "cooked-string-line-doc": 'const SAMPLE: &str = "\n/// ```rust\n\\\n//! ```\n";\n',
+            "block-comment-line-doc": "/*\n/// ```rust\n/// assert_eq!(1, 2);\n//! ```\n*/\n",
+            "nested-block-comment-line-doc": "/* outer /* inner */\n/// ```rust\n*/\n",
         }
         for name, source in cases.items():
             with self.subTest(name=name):
                 self.assert_clean(source)
+
+    def test_real_docs_beside_literals_and_plain_comments_still_fail(self):
+        # The literal or comment ends on the line before; the next line is a
+        # real doc again and keeps its own source position.
+        cases = {
+            "after-raw-string": (
+                'const SAMPLE: &str = r#"\n/// ```rust\n"#;\n'
+                "/// ```rust\n/// assert_eq!(1, 2);\n/// ```\npub fn value() {}\n", 4),
+            "after-block-comment": (
+                "/*\n/// ```text\n*/\n/// ```rust\n/// assert_eq!(1, 2);\n/// ```\npub fn value() {}\n", 4),
+            "block-doc-after-raw-string": (
+                'const SAMPLE: &str = r#"\n//! ```rust\n"#;\n'
+                "/**\n```rust\nassert_eq!(1, 2);\n```\n*/\npub fn value() {}\n", 5),
+        }
+        for name, (source, line) in cases.items():
+            with self.subTest(name=name):
+                result = self.assert_fence_at(source, line)
+                self.assertNotIn("crates/probe/src/lib.rs:2:", result.stderr)
 
 
 class PythonPreflightTests(unittest.TestCase):
@@ -3982,6 +4119,61 @@ class RemovedDashboardLabelTests(unittest.TestCase):
         self.assertNotIn(f"{self.DOC}:2", result.stderr)
         self.assertNotIn(f"{self.DOC}:4", result.stderr)
 
+    def remove_label_keeping(self, retained):
+        """Remove the panel's label while other first-party files keep `retained`."""
+        dashboard = self.root / "crates/orbit-web/assets/dashboard"
+        for path in sorted(dashboard.rglob("*")):
+            if path.is_file() and path != self.panel:
+                path.unlink()
+        for name, text in retained.items():
+            path = dashboard / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(text)
+        self.git("add", ".")
+        self.git("commit", "-qm", "fixture base with other dashboard files")
+        self.env["CI_TEST_BASE"] = self.git("rev-parse", "HEAD").stdout.strip()
+        self.panel.write_text("export const title = 'New Panel';\n")
+        return self.run_check()
+
+    def test_label_still_rendered_elsewhere_is_not_a_removal(self):
+        rendered = {
+            "JS string": {"js/other.js": f'export const heading = "{self.LABEL}";\n'},
+            "JS after a block comment": {
+                "js/other.js": f'/* heading\n   copy */ export const heading = "{self.LABEL}";\n'},
+            "HTML attribute": {"index.html": f'<button class="btn wide" aria-label="{self.LABEL}">+</button>\n'},
+        }
+        for case, retained in rendered.items():
+            with self.subTest(case):
+                result = self.remove_label_keeping(retained)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.git("reset", "-q", "--hard", "HEAD")
+
+    def test_label_remaining_only_as_non_label_text_is_a_removal(self):
+        # None of these is a label where the diff removes or adds it, so none
+        # keeps a removed label alive either.
+        not_rendered = {
+            "JS line comment": {"js/other.js": f'// was "{self.LABEL}"\nexport const n = 1;\n'},
+            "JS block comment": {
+                "js/other.js": f'/*\n * formerly "{self.LABEL}"\n */\nexport const n = 1;\n'},
+            "HTML comment": {"index.html": f'<!-- "{self.LABEL}" -->\n<main></main>\n'},
+            "HTML multi-line comment": {
+                "index.html": f'<!--\n  title="{self.LABEL}"\n-->\n<main></main>\n'},
+            "HTML class list": {"index.html": f'<div class="{self.LABEL}"></div>\n'},
+            "JS class list": {"js/other.js": f'node.className = "{self.LABEL}";\n'},
+            "longer string": {"js/other.js": f'export const tip = "{self.LABEL} details";\n'},
+            "JS and HTML together": {
+                "js/other.js": f'// "{self.LABEL}"\nnode.className = "{self.LABEL}";\n',
+                "index.html": f'<!-- "{self.LABEL}" -->\n<div class="{self.LABEL}"></div>\n'},
+        }
+        for case, retained in not_rendered.items():
+            with self.subTest(case):
+                result = self.remove_label_keeping(retained)
+                self.assertNotEqual(result.returncode, 0, result.stdout)
+                self.assertIn(f'"{self.LABEL}"', result.stderr)
+                self.assertIn(f"{self.DOC}:3", result.stderr)
+                self.git("reset", "-q", "--hard", "HEAD")
+                self.git("clean", "-qfd")
+
     def test_removed_dashboard_comments_do_not_supply_labels(self):
         comment_labels = (
             ("js-comments.js", '// `JavaScript comment label`\n'),
@@ -4187,6 +4379,43 @@ class RemovedCodeIdentifierTests(unittest.TestCase):
                    "The `.retired` pill dims the row.\n")
         self.commit_base()
         self.write(self.CSS, ".active.retired { opacity: 1; }\n")
+        result = self.run_check()
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_removed_standalone_class_still_in_element_qualified_selector_passes(self):
+        self.write(self.CSS, ".retired { color: red; }\na.retired:hover > span { opacity: 1; }\n")
+        self.write("docs/design/user-interface/1_overview.md",
+                   "The `.retired` pill dims the row.\n")
+        self.commit_base()
+        self.write(self.CSS, "@media (min-width: 40.5em) {\n  a.retired:hover > span { opacity: 1; }\n}\n")
+        result = self.run_check()
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    # Class-shaped text in a declaration value, a URL, a string or an
+    # attribute selector's string.
+    CSS_WITHOUT_RETIRED_CLASS = (
+        '@import url(theme.retired);\n'
+        '.ws-badge { background: url(img/sprite.retired) 0 0; animation: fade.retired 1s;\n'
+        '  content: ".retired {"; }\n'
+        "a[href$='.retired'] { color: red; }\n")
+
+    def test_class_surviving_only_in_values_urls_and_strings_is_removed(self):
+        self.write(self.CSS, ".retired { color: red; }\n")
+        self.write("docs/design/user-interface/1_overview.md",
+                   "The `.retired` pill dims the row.\n")
+        self.commit_base()
+        self.write(self.CSS, self.CSS_WITHOUT_RETIRED_CLASS)
+        result = self.run_check()
+        self.assertNotEqual(result.returncode, 0, result.stdout)
+        self.assertIn('".retired"', result.stderr)
+        self.assertIn("docs/design/user-interface/1_overview.md:1", result.stderr)
+
+    def test_removed_values_urls_and_strings_are_not_removed_classes(self):
+        self.write(self.CSS, self.CSS_WITHOUT_RETIRED_CLASS)
+        self.write("docs/design/user-interface/1_overview.md",
+                   "Files ending `.retired` are sprites.\n")
+        self.commit_base()
+        self.write(self.CSS, ".ws-badge { color: red; }\n")
         result = self.run_check()
         self.assertEqual(result.returncode, 0, result.stderr)
 

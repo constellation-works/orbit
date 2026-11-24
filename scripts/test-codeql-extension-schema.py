@@ -266,6 +266,46 @@ class CodeqlExtensionSchemaTests(unittest.TestCase):
         self.assertIn(pack_file.relative_to(self.root).as_posix(), result.stderr)
         self.assertIn("line 10", result.stderr)
 
+    def test_duplicate_mapping_keys_fail_with_file_and_line(self):
+        # One invalid model, spelled as an ordinary block map, a flow map and
+        # a block sequence map (inline first key and a later repeat). Every
+        # spelling must be refused at the repeated key's line, not overwritten.
+        flow = TWO_VALID_ROWS.replace(
+            "  - addsTo:\n      pack: codeql/rust-all\n      extensible: barrierModel\n",
+            "  - addsTo: {pack: codeql/rust-all, extensible: barrierModel,\n"
+            "             pack: codeql/java-all}\n")
+        cases = {
+            "block map": (TWO_VALID_ROWS.replace(
+                "      extensible: barrierModel\n",
+                "      extensible: barrierModel\n      pack: codeql/java-all\n"), 5, "pack"),
+            "top-level block map": (TWO_VALID_ROWS + "extensions: []\n",
+                                    len(TWO_VALID_ROWS.splitlines()) + 1, "extensions"),
+            "flow map": (TWO_VALID_ROWS.replace(
+                "  - addsTo:\n      pack: codeql/rust-all\n      extensible: barrierModel\n",
+                "  - addsTo: {pack: codeql/rust-all, extensible: barrierModel, pack: codeql/java-all}\n"),
+                2, "pack"),
+            "multi-line flow map": (flow, 3, "pack"),
+            "sequence map inline first key": (TWO_VALID_ROWS.replace(
+                "    data:\n", "    addsTo:\n      pack: codeql/java-all\n    data:\n", 1), 5, "addsTo"),
+            "sequence map later keys": (TWO_VALID_ROWS + "    data: []\n",
+                                        len(TWO_VALID_ROWS.splitlines()) + 1, "data"),
+            "sequence map scalar first key": (
+                "extensions:\n  - pack: codeql/rust-all\n    extensible: barrierModel\n"
+                "    pack: codeql/java-all\n", 4, "pack"),
+        }
+        data_file = self.write_pack(TWO_VALID_ROWS)
+        relative = data_file.relative_to(self.root).as_posix()
+        self.assertEqual(self._public_guard().returncode, 0)
+        for label, (source, line, key) in cases.items():
+            with self.subTest(case=label):
+                self.assertNotEqual(source, TWO_VALID_ROWS)
+                data_file.write_text(source, encoding="utf-8")
+                result = self._public_guard()
+                self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+                self.assertIn(
+                    f"{relative}: malformed YAML: line {line}: duplicate mapping key {key!r}",
+                    result.stderr)
+
     def test_unsupported_predicate_fails_clearly(self):
         self.write_pack(UNSUPPORTED_PREDICATE)
         errors = self.errors()

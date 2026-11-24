@@ -1,29 +1,16 @@
 #!/usr/bin/env python3
-"""Exercise benchmark path admission without compiling, daemons, or deletion."""
+"""Exercise benchmark path admission and arm environments without compiling,
+daemons, or deletion."""
 
 import argparse
 import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import tempfile
 
-
-def check_benchmark(script, root, scenario):
-    fixture = root / scenario
-    work = fixture / "work"
-    outside = fixture / "operator-cache"
-    tools = fixture / "bin"
-    for directory in (work, outside, tools, fixture / "tree"):
-        if directory == work and scenario == "private-nested":
-            continue  # Exercise a workdir and cache tail that do not exist yet.
-        directory.mkdir(parents=True)
-    sentinel = outside / "sentinel"
-    sentinel.write_text("operator data\n")
-    (fixture / "tree" / "fixture.txt").write_text("tiny archive\n")
-    events = fixture / "events.jsonl"
-    transport = tools / "transport"
-    transport.write_text(r'''#!/usr/bin/env python3
+TRANSPORT = r'''#!/usr/bin/env python3
 import json
 import os
 from pathlib import Path
@@ -52,6 +39,11 @@ if name == "rm":
     event["unsafe"] = any(path == work or work not in path.parents for path in paths)
 if name == "sccache":
     event.update(cache=os.environ.get("SCCACHE_DIR"), uds=os.environ.get("SCCACHE_SERVER_UDS"))
+if name == "cargo":
+    # The effective environment of each arm, as the rustc wrapper would see it.
+    event.update(cache_switch=os.environ.get("ORBIT_COMPILER_CACHE"),
+                 cache_bin=os.environ.get("ORBIT_COMPILER_CACHE_BIN"),
+                 incremental=os.environ.get("CARGO_INCREMENTAL"))
 with open(os.environ["BENCH_EVENTS"], "a") as log:
     log.write(json.dumps(event) + "\n")
 if name == "rm":
@@ -59,16 +51,185 @@ if name == "rm":
     sys.exit(93 if event["unsafe"] else 0)
 if name == "git":
     sys.exit(subprocess.call(["tar", "-cf", "-", "-C", os.environ["BENCH_TREE"], "."]))
+if name == "cargo" and args[:1] == ["generate-lockfile"]:
+    Path("Cargo.lock").write_text("# fixture lockfile\n")
 if name in ("cargo", "rustc", "sccache"):
     print(name + " fixture")
     sys.exit(0)
 if name == "bwrap":
-    sys.exit(1)
+    sys.exit(0 if os.environ.get("BENCH_BWRAP") == "ok" else 1)
+if name == "curl":
+    sys.exit(22)  # No network: the isolated sccache install fails.
 raise SystemExit("unexpected transport: " + name)
-''')
+'''
+
+# Stands in for scripts/test-compiler-cache-namespaces.sh. Like that script it
+# exits 0 without running when the cache is disabled, and prints its `ok` line
+# only for a real run.
+NAMESPACES = r'''#!/usr/bin/env python3
+import json
+import os
+
+with open(os.environ["BENCH_EVENTS"], "a") as log:
+    log.write(json.dumps(dict(
+        tool="namespaces", cache_switch=os.environ.get("ORBIT_COMPILER_CACHE"),
+        cache_bin=os.environ.get("ORBIT_COMPILER_CACHE_BIN"),
+        require_ns=os.environ.get("ORBIT_COMPILER_CACHE_REQUIRE_NS"))) + "\n")
+prefix = "test-compiler-cache-namespaces: "
+if os.environ.get("ORBIT_COMPILER_CACHE") == "0":
+    print(prefix + "not applicable: host compiler cache is disabled (ORBIT_COMPILER_CACHE=0)")
+elif os.environ.get("BENCH_NAMESPACES") == "unwritable":
+    print(prefix + "not applicable: host compiler cache is disabled "
+          "(cache directory unset or not writable)")
+else:
+    print(prefix + "ok")
+'''
+
+
+def write_transport(tools, names):
+    transport = tools / "transport"
+    transport.write_text(TRANSPORT)
     transport.chmod(0o755)
-    for tool in ("git", "cargo", "rustc", "sccache", "bwrap", "rm"):
+    for tool in names:
         (tools / tool).symlink_to(transport)
+
+
+def path_without_sccache(shadows):
+    """The host PATH with any `sccache` hidden, so its absence is the fixture's."""
+    entries = []
+    for index, entry in enumerate(os.environ["PATH"].split(os.pathsep)):
+        directory = Path(entry)
+        if not (directory / "sccache").exists():
+            entries.append(entry)
+            continue
+        shadow = shadows / str(index)
+        shadow.mkdir(parents=True)
+        for item in directory.iterdir():
+            if item.name != "sccache":
+                (shadow / item.name).symlink_to(item)
+        entries.append(str(shadow))
+    return os.pathsep.join(entries)
+
+
+def check_arms(script, root, scenario):
+    """Run every arm with fake transports and check each effective environment."""
+    fixture = root / scenario
+    checkout = fixture / "checkout"
+    tools = fixture / "bin"
+    work = fixture / "work"
+    for directory in (checkout / "scripts", checkout / ".cargo", tools,
+                      fixture / "tree", fixture / "home"):
+        directory.mkdir(parents=True)
+    (fixture / "tree" / "fixture.txt").write_text("tiny archive\n")
+    source = script.parent.parent
+    bench = checkout / "scripts" / "bench-compiler-cache.sh"
+    shutil.copy2(script, bench)
+    shutil.copy2(source / "scripts" / "rustc-compiler-cache.sh", checkout / "scripts")
+    shutil.copy2(source / ".cargo" / "config.toml", checkout / ".cargo")
+    namespaces = checkout / "scripts" / "test-compiler-cache-namespaces.sh"
+    namespaces.write_text(NAMESPACES)
+    namespaces.chmod(0o755)
+    without_sccache = "no-sccache" in scenario
+    write_transport(tools, ("git", "cargo", "rustc", "bwrap", "rm", "curl")
+                    + (() if without_sccache else ("sccache",)))
+    required = scenario.startswith("required-")
+    events = fixture / "events.jsonl"
+    env = dict(os.environ)
+    for key in list(env):
+        if key.startswith(("SCCACHE_", "ORBIT_COMPILER_CACHE")):
+            del env[key]
+    env.update(PATH=str(tools) + os.pathsep + path_without_sccache(fixture / "shadow"),
+               HOME=str(fixture / "home"), ORBIT_COMPILER_CACHE_BENCH_DIR=str(work),
+               ORBIT_COMPILER_CACHE_BENCH_RESULT=str(work / "result.txt"),
+               BENCH_WORK=str(work), BENCH_TREE=str(fixture / "tree"),
+               BENCH_EVENTS=str(events),
+               BENCH_BWRAP="refused" if "no-namespace" in scenario else "ok")
+    if not without_sccache:
+        env["ORBIT_COMPILER_CACHE_BIN"] = str(tools / "sccache")
+    if required:
+        env["ORBIT_COMPILER_CACHE_REQUIRE_NS"] = "1"
+    if "opt-out" in scenario:
+        env["ORBIT_COMPILER_CACHE"] = "0"
+    if "unwritable" in scenario:
+        env["BENCH_NAMESPACES"] = "unwritable"
+    process = subprocess.run(["bash", str(bench)], env=env, text=True,
+                             stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=60)
+    recorded = [json.loads(line) for line in events.read_text().splitlines()] if events.exists() else []
+    result = (work / "result.txt").read_text() if (work / "result.txt").exists() else ""
+    lines = result.splitlines()
+    builds = [event for event in recorded if event["tool"] == "cargo"
+              and event["args"][:1] in (["check"], ["clippy"])]
+    namespace_runs = [event for event in recorded if event["tool"] == "namespaces"]
+    errors = []
+    if [event["cache_switch"] for event in builds[:2]] != ["0", "0"]:
+        errors.append("baseline arms did not run with the cache disabled")
+    if without_sccache:
+        if len(builds) != 2:
+            errors.append("cache arms ran without sccache")
+    else:
+        # Unnormalized pair, same-path pair, Clippy and the incremental probe.
+        cached = builds[2:]
+        if len(cached) != 6 or [event["args"][0] for event in cached] != ["check"] * 4 + ["clippy", "check"]:
+            errors.append("cache arms did not all run")
+        if any(event["cache_switch"] != "1" or event["cache_bin"] != str(tools / "sccache")
+               for event in cached):
+            errors.append("an arm labelled cached ran without an enabled cache")
+        if [event["incremental"] for event in cached] != ["0"] * 5 + ["1"]:
+            errors.append("cache arms changed their incremental setting")
+    ran = not without_sccache and "no-namespace" not in scenario
+    if len(namespace_runs) != int(ran):
+        errors.append("concurrent namespace arm was not invoked exactly as expected")
+    for event in namespace_runs:
+        if event["cache_switch"] != "1" or event["cache_bin"] != str(tools / "sccache"):
+            errors.append("namespace arm did not receive an enabled cache")
+        if event["require_ns"] != ("1" if required else "0"):
+            errors.append("namespace arm did not receive the required-coverage setting")
+    measured = ran and "unwritable" not in scenario
+    concurrent = [line.split("=", 1)[1] for line in lines if line.startswith("cache_concurrent=")]
+    if measured:
+        if process.returncode != 0:
+            errors.append("measured benchmark failed")
+        if len(concurrent) != 1 or not concurrent[0].replace(".", "", 1).isdigit():
+            errors.append(f"concurrent arm has no wall time: {concurrent}")
+    elif required:
+        if process.returncode == 0:
+            errors.append("required namespace arm did not run but the benchmark passed")
+        if concurrent != ["failed"]:
+            errors.append(f"required namespace failure was not recorded: {concurrent}")
+        if "ORBIT_COMPILER_CACHE_REQUIRE_NS=1: the required concurrent arm did not run" not in lines:
+            errors.append("required namespace failure was not named")
+    else:
+        if process.returncode != 0:
+            errors.append("optional namespace skip failed the benchmark")
+        if concurrent != ["skipped"]:
+            errors.append(f"optional namespace skip was not explicit: {concurrent}")
+    reasons = [line for line in lines if line.startswith("namespace_probe=")]
+    expected_reason = ("sccache is not available" if without_sccache
+                       else "cannot create mount namespace" if "no-namespace" in scenario
+                       else "cache directory unset or not writable" if "unwritable" in scenario
+                       else "bwrap can create mount namespaces")
+    if len(reasons) != 1 or expected_reason not in reasons[0]:
+        errors.append(f"namespace outcome was not explained: {reasons}")
+    if any(event.get("unsafe") for event in recorded):
+        errors.append("external or workdir deletion reached recorder")
+    return dict(scenario=scenario, exit_code=process.returncode, errors=errors,
+                events=recorded, stderr=process.stderr[-3000:])
+
+
+def check_benchmark(script, root, scenario):
+    fixture = root / scenario
+    work = fixture / "work"
+    outside = fixture / "operator-cache"
+    tools = fixture / "bin"
+    for directory in (work, outside, tools, fixture / "tree"):
+        if directory == work and scenario == "private-nested":
+            continue  # Exercise a workdir and cache tail that do not exist yet.
+        directory.mkdir(parents=True)
+    sentinel = outside / "sentinel"
+    sentinel.write_text("operator data\n")
+    (fixture / "tree" / "fixture.txt").write_text("tiny archive\n")
+    events = fixture / "events.jsonl"
+    write_transport(tools, ("git", "cargo", "rustc", "sccache", "bwrap", "rm"))
 
     cache = work / "cache"
     if scenario == "parent-escape":
@@ -185,6 +346,10 @@ def main():
             "cache-target-overlap", "cache-target-ancestor", "result-symlink",
             "private-nested", "private-dot", "private-symlink",
             "private-empty", "existing-unowned", "existing-unowned-cache", "existing-unowned-file")]
+        results += [check_arms(args.script.resolve(), Path(directory), scenario) for scenario in (
+            "required-opt-out", "optional-opt-out", "required-no-sccache", "optional-no-sccache",
+            "required-no-sccache-opt-out", "required-unwritable", "optional-unwritable",
+            "required-no-namespace", "optional-no-namespace")]
     if args.report:
         args.report.write_text(json.dumps(results, indent=2) + "\n")
     for result in results:

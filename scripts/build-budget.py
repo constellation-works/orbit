@@ -87,14 +87,14 @@ def fail(message: str, status: int = 64) -> NoReturn:
 
 
 def positive_integer(name: str, value: str, maximum: int) -> int:
-    if not value.isascii() or not value.isdecimal() or value.startswith("0"):
-        fail(f"{name} must be a decimal integer from 1 through {maximum}; got {value!r}")
+    # Compare lengths before converting: int() raises on very long digit text,
+    # and no value with more digits than the maximum is in range.
+    if (not value.isascii() or not value.isdecimal() or value.startswith("0")
+            or len(value) > len(str(maximum)) or int(value) > maximum):
+        shown = repr(value) if len(value) <= 32 else f"{value[:32]!r}... ({len(value)} characters)"
+        fail(f"{name} must be a decimal integer from 1 through {maximum}; got {shown}")
 
-    parsed = int(value)
-    if parsed > maximum:
-        fail(f"{name} must be a decimal integer from 1 through {maximum}; got {value!r}")
-
-    return parsed
+    return int(value)
 
 
 def command_arguments(arguments: list[str]) -> list[str]:

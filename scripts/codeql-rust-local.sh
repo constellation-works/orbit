@@ -87,6 +87,8 @@ scratch_ignore=
 scratch_rel=
 # What the input fingerprint below skips: never read by extraction.
 input_prune=(-path ./.git -o -path ./.orbit -o -path ./target)
+# The same exclusions as Git pathspecs, for the source listing.
+source_paths=(. ":(exclude,literal).orbit" ":(exclude,literal)target")
 if [[ "$scratch_root" == "$repo_root" ]]; then
   fail "scratch $scratch_root is the checkout itself; choose a scratch directory that holds no tracked source"
 elif [[ "$scratch_root" == "$repo_root"/* ]]; then
@@ -98,6 +100,7 @@ elif [[ "$scratch_root" == "$repo_root"/* ]]; then
   [[ -z "$tracked" ]] || fail "scratch $scratch_root holds tracked checkout files; choose a scratch directory that holds no tracked source"
   scratch_ignore="$scratch_rel/**"
   input_prune+=(-o -path "./$scratch_rel")
+  source_paths+=(":(exclude,literal)$scratch_rel")
 fi
 
 # Earlier runs may have used another scratch inside the checkout. Their run
@@ -118,6 +121,7 @@ while IFS= read -r prior; do
   [[ -z "$tracked" ]] || fail "$repo_root/$prior_rel holds tracked checkout files, so it cannot be excluded as an earlier run directory"
   scratch_ignore+="${scratch_ignore:+$'\n'}$prior_rel/**"
   input_prune+=(-o -path "./$prior_rel")
+  source_paths+=(":(exclude,literal)$prior_rel")
 done <<<"$found"
 
 # The run-scoped configuration is the repository one plus the scratch and
@@ -210,42 +214,108 @@ else
   note "cannot read valid MemTotal from $meminfo; keeping requested --ram $ram MiB"
 fi
 
-# The inputs of a run: every file of the checkout that extraction can read (all
-# but Git metadata, Orbit state, Cargo output and run scratch), the query, the
-# effective configuration, the toolchain and CodeQL versions, and the
-# environment that configures CodeQL, Cargo or rustc, less what this script
-# overrides. A passing run records their digest; an equal digest later means
-# the same database and SARIF, so that run answers the invocation.
-inputs_environment() {
-  env -0 | { grep -zE '^(CODEQL_|RUSTFLAGS=|RUSTDOCFLAGS=|CARGO_(ENCODED_RUSTFLAGS=|BUILD_|PROFILE_|TARGET_|UNSTABLE_))' || [[ $? -eq 1 ]]; } \
-    | { grep -zv '^CARGO_TARGET_DIR=' || [[ $? -eq 1 ]]; } | LC_ALL=C sort -z | sha256sum
+# The source identity of a run: the content of every source file of the
+# checkout, plus the files of a local query or suite path. In a Git work tree
+# the sources are the tracked files and the untracked files Git does not
+# ignore, as the working tree holds them; Git metadata, Orbit state, Cargo
+# output and run scratch are left out. Ignored files are not sources: build
+# scripts that extraction runs write generated files there, and those follow
+# from the sources. Outside a Git work tree every file and symlink counts.
+# The identity is taken before extraction and compared again after extraction
+# and after analysis, for every selector: a database built while its sources
+# changed, or one whose sources cannot be read back, describes no single
+# version of the checkout, so that run fails and leaves no SARIF at the
+# documented path.
+checkout_git() {
+  env -u GIT_DIR -u GIT_WORK_TREE -u GIT_INDEX_FILE -u GIT_COMMON_DIR -u GIT_OBJECT_DIRECTORY \
+    -u GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_OPTIONAL_LOCKS=0 \
+    git -C "$repo_root" -c core.quotepath=off -c core.fsmonitor=false "$@"
+}
+git_sources=
+if work_tree="$(checkout_git rev-parse --show-toplevel 2>/dev/null)" \
+  && [[ -n "$work_tree" && "$(cd "$work_tree" && pwd -P)" == "$repo_root" ]]; then
+  git_sources=1
+fi
+
+# One line per path: a symlink with its target (readlink: find -printf is
+# GNU-only), a file with its digest, a nested repository Git lists as one
+# directory entry, a tracked path the working tree lacks.
+# xargs batches by argument size, which the environment changes between calls,
+# so callers sort the lines.
+source_entries() {
+  xargs -0r sh -c '
+    count=$#
+    for path do
+      if [ -L "$path" ]; then
+        target="$(readlink -- "$path")" || exit 255
+        printf "%s -> %s\n" "$path" "$target"
+      elif [ -d "$path" ]; then
+        printf "%s directory\n" "$path"
+      elif [ -e "$path" ]; then
+        set -- "$@" "$path"
+      else
+        printf "%s absent\n" "$path"
+      fi
+    done
+    shift "$count"
+    [ "$#" -eq 0 ] || sha256sum -- "$@" || exit 255' sh
 }
 
-# Symlinks are listed with their targets via readlink: find -printf is GNU-only.
-inputs_digest() {
+source_identity() {
   {
-    printf '%s\n' "$inputs_header" \
-      && find . \( "${input_prune[@]}" \) -prune -o -type f -print0 | LC_ALL=C sort -z | xargs -0r sha256sum -- \
-      && find . \( "${input_prune[@]}" \) -prune -o -type l -exec sh -c \
-        'for link do target="$(readlink -- "$link")" || exit; printf "%s -> %s\n" "$link" "$target"; done' \
-        sh {} + | LC_ALL=C sort \
+    if [[ -n "$git_sources" ]]; then
+      checkout_git ls-files -z --cached --others --exclude-standard -- "${source_paths[@]}" \
+        | LC_ALL=C sort -z -u | source_entries | LC_ALL=C sort
+    else
+      find . \( "${input_prune[@]}" \) -prune -o \( -type f -o -type l \) -print0 \
+        | LC_ALL=C sort -z | source_entries | LC_ALL=C sort
+    fi \
       && if [[ -e "$query" ]]; then
         find -L "$query" -type f -print0 | LC_ALL=C sort -z | xargs -0r sha256sum --
       fi
   } | sha256sum | cut -d' ' -f1
 }
 
+# $1 says which phases had already run when the sources stopped matching.
+require_stable_sources() {
+  local now cause
+  now="$(source_identity)" || now=
+  if [[ "$now" == "$source_before" ]]; then return 0; fi
+  cause="the checkout changed during this run"
+  if [[ -z "$now" ]]; then cause="the checkout could not be read again to confirm its source identity"; fi
+  if [[ -e "$run_dir/results.sarif" || -L "$run_dir/results.sarif" ]]; then
+    mv -f -- "$run_dir/results.sarif" "$run_dir/results.source-unstable.sarif" \
+      || fail "$cause, and the SARIF could not be set aside: $run_dir/results.sarif is not analysis evidence"
+    fail "$cause, so the database and SARIF describe no single version of the sources ($1). The SARIF was set aside as $run_dir/results.source-unstable.sarif and is not analysis evidence; logs and the database are kept in $run_dir. Run again while nothing edits the checkout"
+  fi
+  fail "$cause, so the database describes no single version of the sources ($1). Logs and the database are kept in $run_dir. Run again while nothing edits the checkout"
+}
+
+source_before="$(source_identity)" && [[ -n "$source_before" ]] \
+  || fail "cannot read every input of this checkout to record its source identity; a run whose sources cannot be identified is not analysis evidence. No extraction or query was run"
+
+# Whether a run can be reused is a separate question from whether its sources
+# held still. The reuse key adds the query selector, the effective
+# configuration, the toolchain and CodeQL versions, and the environment that
+# configures CodeQL, Cargo or rustc, less what this script overrides. A passing
+# run records the key; an equal key later means the same database and SARIF, so
+# that run answers the invocation.
+inputs_environment() {
+  env -0 | { grep -zE '^(CODEQL_|RUSTFLAGS=|RUSTDOCFLAGS=|CARGO_(ENCODED_RUSTFLAGS=|BUILD_|PROFILE_|TARGET_|UNSTABLE_))' || [[ $? -eq 1 ]]; } \
+    | { grep -zv '^CARGO_TARGET_DIR=' || [[ $? -eq 1 ]]; } | LC_ALL=C sort -z | sha256sum
+}
+
 inputs=
 if [[ -e "$query" || -L "$query" ]]; then
   note "local query or suite path selected; referenced queries and imported libraries are not fingerprinted, so result reuse is disabled"
 elif codeql_version="$(codeql version --format=terse)" && environment_digest="$(inputs_environment)"; then
-  inputs_header="$(printf 'codeql-rust-local inputs 1\nquery %s\ntoolchain %s\ncodeql %s\nenvironment %s\n%s' \
-    "$query" "$toolchain" "$codeql_version" "$environment_digest" "$effective_config")"
-  inputs="$(inputs_digest)" || inputs=
+  inputs="$(printf 'codeql-rust-local inputs 2\nquery %s\ntoolchain %s\ncodeql %s\nenvironment %s\n%s\nsources %s\n' \
+    "$query" "$toolchain" "$codeql_version" "$environment_digest" "$effective_config" "$source_before" \
+    | sha256sum | cut -d' ' -f1)" || inputs=
 fi
 if [[ -z "$inputs" ]]; then
   if [[ ! -e "$query" && ! -L "$query" ]]; then
-    note "cannot fingerprint this run's inputs, so no earlier run is reused and no later run will reuse this one"
+    note "cannot read the CodeQL version or build environment for the reuse key, so no earlier run is reused and no later run will reuse this one"
   fi
 elif [[ -z "$fresh" ]]; then
   for prior in "$scratch_root"/codeql-rust-local.??????; do
@@ -467,6 +537,8 @@ if [[ "$create_status" -ne 0 ]]; then
   cat "$run_dir/extraction.log" >&2
   fail "extraction failed with exit $create_status using Rust $toolchain; no query was run"
 fi
+# Sources edited while extraction read them leave a database of neither version.
+require_stable_sources "extraction had finished; no query was run"
 
 phase_started="$(now_us)"
 if ! codeql database analyze "$database" "$query" "--ram=$ram" "--threads=$threads" \
@@ -478,9 +550,8 @@ if ! codeql database analyze "$database" "$query" "--ram=$ram" "--threads=$threa
 fi
 [[ -s "$run_dir/results.sarif" ]] || fail "query produced no SARIF; see $run_dir/analysis.log"
 note "query analysis took $(seconds_since "$phase_started")s with $threads threads"
-# Sources edited while the run read them leave a database of neither version.
-final_inputs=
-if [[ -n "$inputs" ]]; then final_inputs="$(inputs_digest)" || final_inputs=; fi
+# The SARIF is evidence only for sources that held still until it was written.
+require_stable_sources "extraction and analysis had finished"
 if [[ -n "$slot_fd" ]]; then exec {slot_fd}>&-; fi
 
 # The evidence of a passing run is its logs, configuration, database/log,
@@ -491,9 +562,5 @@ pruned=("$database"/db-* "$CARGO_TARGET_DIR" "$CARGO_HOME" "$TMPDIR" "$XDG_CACHE
   "$run_dir/codeql-cache" "$run_dir/query-cache")
 if [[ "$RUSTUP_HOME" == "$run_dir/rustup" ]]; then pruned+=("$RUSTUP_HOME"); fi
 rm -rf -- "${pruned[@]}" || note "could not remove all of the database dataset and build scratch in $run_dir"
-if [[ -n "$inputs" && "$final_inputs" == "$inputs" ]]; then
-  printf '%s\n' "$inputs" >"$run_dir/inputs.sha256"
-elif [[ -n "$inputs" ]]; then
-  note "the checkout changed during this run, or could not be fingerprinted again, so no later run will reuse it"
-fi
+if [[ -n "$inputs" ]]; then printf '%s\n' "$inputs" >"$run_dir/inputs.sha256"; fi
 echo "codeql-rust-local: analysis completed; inspect rule and affected locations in $run_dir/results.sarif"

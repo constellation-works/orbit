@@ -492,26 +492,21 @@ class VerifiedDownloadTests(unittest.TestCase):
         self.assertEqual(self.calls(), [], "an existing archive must not bypass verification")
         self.assertEqual(self.destination.read_bytes(), BODY)
 
-    def test_publication_races_and_cross_filesystem_cache(self):
+    def test_publication_races_never_replace_the_destination(self):
         # sitecustomize intercepts the actual helper's link at publication,
         # deterministically placing an entry after its preflight check.
         hooks = self.root / "hooks"
         hooks.mkdir()
         (hooks / "sitecustomize.py").write_text("""
-import errno, os
+import os
 from pathlib import Path
 real_link = os.link
 def link(src, dst, *args, **kwargs):
     if str(dst) == os.environ.get('RACE_DEST'):
-        mode = os.environ['RACE_MODE']
-        if mode.startswith('exdev') and str(src) == os.environ.get('RACE_CACHE'):
-            raise OSError(errno.EXDEV, 'cross-device link')
-        race = mode.removeprefix('exdev-')
-        if race in ('file', 'symlink'):
-            if race == 'file':
-                Path(dst).write_bytes(b'sentinel')
-            else:
-                os.symlink(os.environ['RACE_TARGET'], dst)
+        if os.environ['RACE_MODE'] == 'file':
+            Path(dst).write_bytes(b'sentinel')
+        else:
+            os.symlink(os.environ['RACE_TARGET'], dst)
     return real_link(src, dst, *args, **kwargs)
 os.link = link
 """)
@@ -525,25 +520,111 @@ os.link = link
                 with self.subTest(warm=warm, mode=mode):
                     destination = self.root / f"race-{warm}-{mode}"
                     self.env.update(PYTHONPATH=str(hooks), RACE_DEST=str(destination),
-                                    RACE_MODE=mode, RACE_TARGET=str(target), RACE_CACHE=str(cache))
+                                    RACE_MODE=mode, RACE_TARGET=str(target))
                     result = self.invoke(cache_file=cache if warm else None, destination=destination)
                     self.assertNotEqual(result.returncode, 0, result.stderr)
                     self.assertEqual(target.read_bytes(), b'sentinel')
                     self.assertEqual(destination.read_bytes(), b'sentinel')
                     self.assertEqual(destination.is_symlink(), mode == 'symlink')
-        for mode in ('file', 'symlink'):
-            destination = self.root / f'cross-device-race-{mode}'
-            self.env.update(RACE_DEST=str(destination), RACE_MODE=f'exdev-{mode}')
-            result = self.invoke(cache_file=cache, destination=destination)
-            self.assertNotEqual(result.returncode, 0, result.stderr)
-            self.assertEqual(destination.read_bytes(), b'sentinel')
-            self.assertEqual(destination.is_symlink(), mode == 'symlink')
-            self.assertEqual(target.read_bytes(), b'sentinel')
-        destination = self.root / 'cross-device'
-        self.env.update(RACE_DEST=str(destination), RACE_MODE='exdev')
-        result = self.invoke(cache_file=cache, destination=destination)
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(destination.read_bytes(), BODY)
+                    self.assertEqual(cache.read_bytes(), BODY)
+                    self.assert_clean()
+
+    def test_published_bytes_are_the_verified_private_copy(self):
+        # sitecustomize changes the cache entry at a chosen point of the actual
+        # helper, and records what each publication linked from. Whatever
+        # happens to the cache path, the destination holds the verified bytes.
+        hooks = self.root / "hooks"
+        hooks.mkdir()
+        (hooks / "sitecustomize.py").write_text("""
+import hashlib, json, os, stat
+from pathlib import Path
+real_link, real_open = os.link, Path.open
+cache, tampered = os.environ.get('SWAP_CACHE'), os.environ.get('SWAP_TAMPERED')
+mode = os.environ.get('SWAP_MODE', '')
+def disturb():
+    if mode.startswith('swap'):
+        os.replace(tampered, cache)
+    elif mode.startswith('rewrite'):
+        with real_open(Path(cache), 'r+b') as entry:
+            entry.write(Path(tampered).read_bytes())
+            entry.truncate()
+def link(src, dst, *args, **kwargs):
+    if str(dst) == os.environ.get('SWAP_DEST'):
+        if mode.endswith('at-publication'):
+            disturb()
+        parent = os.stat(os.path.dirname(src))
+        with real_open(Path(os.environ['SWAP_RECORD']), 'w') as record:
+            json.dump(dict(source=str(src), digest=hashlib.sha256(Path(src).read_bytes()).hexdigest(),
+                           private=stat.S_IMODE(parent.st_mode) == 0o700 and parent.st_uid == os.getuid()),
+                      record)
+    return real_link(src, dst, *args, **kwargs)
+def opened(self, *args, **kwargs):
+    stream = real_open(self, *args, **kwargs)
+    if mode.endswith('after-open') and str(self) == cache and not os.path.exists(cache + '.disturbed'):
+        real_open(Path(cache + '.disturbed'), 'w').close()
+        disturb()
+    return stream
+os.link = link
+Path.open = opened
+""")
+        pinned = hashlib.sha256(BODY).hexdigest()
+        record = self.root / "published.json"
+        self.env.update(PYTHONPATH=str(hooks), SWAP_RECORD=str(record))
+
+        def publish(name, mode, cache):
+            destination = self.root / f"published-{name}"
+            tampered = self.root / f"tampered-{name}"
+            tampered.write_bytes(b"tampered archive bytes")
+            record.unlink(missing_ok=True)
+            self.env.update(SWAP_DEST=str(destination), SWAP_MODE=mode, SWAP_CACHE=str(cache),
+                            SWAP_TAMPERED=str(tampered))
+            return destination, self.invoke(cache_file=cache, destination=destination)
+
+        def assert_verified_publication(destination, result, cache):
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(destination.read_bytes(), BODY)
+            published = json.loads(record.read_text())
+            self.assertEqual(published["digest"], pinned)
+            self.assertTrue(published["private"], published)
+            self.assertNotEqual(published["source"], str(cache))
+            self.assertEqual(Path(published["source"]).parent.parent, destination.parent)
+            self.assert_clean()
+
+        for mode in ("swap-at-publication", "rewrite-at-publication", "swap-after-open", "rewrite-after-open"):
+            with self.subTest(path="cache", mode=mode):
+                cache = self.root / f"cache-{mode}"
+                cache.write_bytes(BODY)
+                self.configure([response()])
+                destination, result = publish(mode, mode, cache)
+                if mode == "rewrite-after-open":
+                    # The entry changed under the read, so the staged copy is
+                    # refused: nothing unverified is published.
+                    self.assertNotEqual(result.returncode, 0, result.stderr)
+                    self.assertIn("SHA-256 mismatch; refusing cached archive", result.stderr)
+                    self.assertFalse(os.path.lexists(destination))
+                    self.assertFalse(record.exists())
+                    self.assert_clean()
+                else:
+                    assert_verified_publication(destination, result, cache)
+                    self.assertEqual(cache.read_bytes(), b"tampered archive bytes")
+                self.assertEqual(self.calls(), [], "a cache hit must not reach the network")
+
+        with self.subTest(path="cache", mode="undisturbed"):
+            cache = self.root / "cache-quiet"
+            cache.write_bytes(BODY)
+            destination, result = publish("quiet", "", cache)
+            assert_verified_publication(destination, result, cache)
+            self.assertIn("cache=hit outcome=verified", result.stderr)
+            # A later write to either file cannot reach the other.
+            self.assertNotEqual(destination.stat().st_ino, cache.stat().st_ino)
+
+        with self.subTest(path="network"):
+            cache = self.root / "tool-cache" / "archive"
+            self.configure([response()])
+            destination, result = publish("network", "", cache)
+            assert_verified_publication(destination, result, cache)
+            self.assertEqual(len(self.calls()), 1)
+            self.assertEqual(cache.read_bytes(), BODY, "a verified download must populate the cache")
 
     def test_cache_hit_restores_verified_archive_without_network(self):
         cache_file = self.root / "tool-cache" / "archive"

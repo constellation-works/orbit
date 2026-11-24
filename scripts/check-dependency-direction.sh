@@ -328,11 +328,13 @@ contracts_higher="${app_modules}|routines|auto_tasks"
 # With `$4` set to `named-path`, match the `|`-separated path prefixes `$3`
 # anywhere in code, including grouped trees, while preserving comments and
 # literals as non-dependencies. A single name matches that identifier alone.
-# A leading `super::` chain is resolved from the lexical module under `src/`:
+# In every mode a leading `super::` chain is resolved from the lexical module:
 # the file's path plus each enclosing inline `mod`. Two `super` segments
 # inside `mod nested` in `application/probe.rs` land on `application`, so
 # they do not match `crate::adapter`. The same chain at file depth, or one
-# more `super` inside that module, does.
+# more `super` inside that module, does. Likewise `super::super::job` inside
+# `mod nested` in `application/task/probe.rs` is `application::task::job`, a
+# path within `task`, while one more `super` there names `application::job`.
 # With `$5` set to `include-tests`, also scan sibling test modules.
 super_chains_into() {
   python3 - "$1" "$2" "$3" "${4:-}" "${5:-}" <<'PY'
@@ -1225,12 +1227,14 @@ for path in paths:
                 print(f"{path}:{number}:{source.splitlines()[number - 1]}")
                 failed = True
         continue
+    suffixes = None
     index = 0
     while index + 1 < len(tokens):
         if tokens[index][0] not in path_starts or tokens[index + 1][0] != "::":
             index += 1
             continue
         start = tokens[index][1]
+        at = index
         paths, index = use_tree(tokens, index)
         for segments in paths:
             ups = 0
@@ -1241,12 +1245,17 @@ for path in paths:
                 named = (len(absolute) > 0 and absolute[0] in upper
                          and (crate_root or segments[1:2] == (app.name,)))
             else:
-                # Resolve the chain from this file's module depth [ORB-22674]. It
-                # names an upper module when it lands on the climb target and an
-                # `upper` module follows, or when it climbs past the target to the
-                # crate root and descends `application::<upper>`. A landing inside
-                # a module, such as `application::task::distributed`, names none.
-                climbed = parts[: max(len(parts) - ups, 0)]
+                # Resolve the chain from its lexical module: this file's module
+                # depth [ORB-22674] plus each enclosing inline `mod`, as the
+                # named-path mode above does. It names an upper module when it
+                # lands on the climb target and an `upper` module follows, or
+                # when it climbs past the target to the crate root and descends
+                # `application::<upper>`. A landing inside a module, such as
+                # `application::task::distributed`, names none.
+                if suffixes is None:
+                    suffixes = inline_module_suffixes(tokens)
+                here = [*parts, *suffixes[at]]
+                climbed = here[: max(len(here) - ups, 0)]
                 resolved = [*climbed, *segments[ups:]]
                 depth = len(climb_target)
                 named = (len(climbed) <= depth

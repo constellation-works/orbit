@@ -71,7 +71,7 @@ try:
         "probe-c-target", "probe-d-target", "bin",
     )
     files = ("sccache.sock", "last-elapsed", "bwrap-probe.err",
-             ".orbit-compiler-cache-bench-owner")
+             "namespace-arm.out", ".orbit-compiler-cache-bench-owner")
     reserved = [work / name for name in directories + files]
     for path in reserved + [work / "bin" / "sccache"]:
         if path.is_symlink():
@@ -436,12 +436,29 @@ if ! SCCACHE_BIN="$(resolve_sccache)"; then
   fi
 fi
 
+# A required concurrent arm that did not run fails the benchmark, whatever
+# stopped it: a baseline-only result must not pass as required coverage.
+fail_required_namespace() {
+  log ""
+  log "### concurrent Linux namespaces: failed ($1)"
+  log "ORBIT_COMPILER_CACHE_REQUIRE_NS=1: the required concurrent arm did not run"
+  log "cache_concurrent=failed"
+  log "namespace_probe=$1"
+  log "results=$RESULT"
+  exit 1
+}
+
 if [[ -z "$SCCACHE_BIN" || ! -x "$SCCACHE_BIN" ]]; then
   log ""
   log "sccache is not available; cache arms skipped."
   log "Host setup: curl the pinned $SCCACHE_VERSION musl binary into a private dir and set ORBIT_COMPILER_CACHE_BIN. Do not write ~/.orbit/cache from a managed worker."
   log "baseline_a_s=$base_a"
   log "baseline_b_s=$base_b"
+  if [[ "$REQUIRE_NS" == "1" ]]; then
+    fail_required_namespace "sccache is not available"
+  fi
+  log "cache_concurrent=skipped"
+  log "namespace_probe=sccache is not available"
   log "results=$RESULT"
   exit 0
 fi
@@ -449,7 +466,13 @@ fi
 log "sccache_bin=$SCCACHE_BIN"
 log "sccache_version=$(SCCACHE_DIR="$CACHE_DIR" SCCACHE_SERVER_UDS="$BENCH_UDS" "$SCCACHE_BIN" --version 2>/dev/null || echo unknown)"
 log "sccache_uds=$BENCH_UDS"
+# Every cache arm sets ORBIT_COMPILER_CACHE itself. The wrapper execs plain
+# rustc under an inherited ORBIT_COMPILER_CACHE=0, which would time uncached
+# builds under cache labels; the private cache here is not the host cache
+# that opt-out protects.
+log "cache_arm_env=ORBIT_COMPILER_CACHE=1 (inherited ${ORBIT_COMPILER_CACHE:-unset})"
 CACHE_ENV=(
+  ORBIT_COMPILER_CACHE=1
   SCCACHE_DIR="$CACHE_DIR"
   SCCACHE_CACHE_SIZE="${SCCACHE_CACHE_SIZE:-5G}"
   ORBIT_COMPILER_CACHE_BIN="$SCCACHE_BIN"
@@ -583,21 +606,41 @@ if can_create_ns; then
   cp "$WORKDIR/probe-c/Cargo.lock" "$WORKDIR/probe-d/Cargo.lock"
   require_bench_ownership
   conc_start="$(now)"
+  ns_status=0
   PATH="$PATH" TMPDIR="$WORKDIR" SCCACHE_DIR="$CACHE_DIR" \
     SCCACHE_SERVER_UDS="$BENCH_UDS" ORBIT_COMPILER_CACHE_BIN="$SCCACHE_BIN" \
+    ORBIT_COMPILER_CACHE=1 \
     ORBIT_COMPILER_CACHE_BENCH_OWNER="$OWNER_TOKEN" \
     ORBIT_COMPILER_CACHE_REQUIRE_NS="$REQUIRE_NS" \
-    "$ROOT/scripts/test-compiler-cache-namespaces.sh" | tee -a "$RESULT"
-  conc_wall="$(secs "$conc_start" "$(now)")"
+    "$ROOT/scripts/test-compiler-cache-namespaces.sh" \
+    | tee -a "$RESULT" | tee "$WORKDIR/namespace-arm.out" || ns_status=$?
+  if [[ "$ns_status" -ne 0 ]]; then
+    log "cache_concurrent=failed"
+    log "namespace_probe=concurrent namespace test exited $ns_status"
+    log "results=$RESULT"
+    exit "$ns_status"
+  fi
+  # That script exits 0 without running when it finds the cache disabled or
+  # the namespaces unavailable. Neither is a concurrent measurement.
+  ns_not_run="$(grep -E '^test-compiler-cache-namespaces: (not applicable|skip:)' \
+    "$WORKDIR/namespace-arm.out" | head -n 1 || true)"
+  if [[ -n "$ns_not_run" ]]; then
+    ns_detail="concurrent namespace test did not run: ${ns_not_run#test-compiler-cache-namespaces: }"
+    if [[ "$REQUIRE_NS" == "1" ]]; then
+      fail_required_namespace "$ns_detail"
+    fi
+    log "### concurrent Linux namespaces: skipped ($ns_detail)"
+  else
+    conc_wall="$(secs "$conc_start" "$(now)")"
+  fi
 else
   err="$(tr '\n' ' ' <"$WORKDIR/bwrap-probe.err" 2>/dev/null || true)"
   ns_detail="cannot create mount namespace: ${err:-bwrap missing}"
+  if [[ "$REQUIRE_NS" == "1" ]]; then
+    fail_required_namespace "$ns_detail"
+  fi
   log ""
   log "### concurrent Linux namespaces: skipped ($ns_detail)"
-  if [[ "$REQUIRE_NS" == "1" ]]; then
-    log "ORBIT_COMPILER_CACHE_REQUIRE_NS=1: treating skip as failure"
-    exit 1
-  fi
   log "Run scripts/test-compiler-cache-namespaces.sh on a host that can create user namespaces (not nested inside an implementer sandbox)."
 fi
 
