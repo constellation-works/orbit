@@ -109,7 +109,7 @@ friction between workspaces stays with the operator and the curation pass.
 | `promote_held` | Move an eligible `no-auto-approve` proposal to `backlog` with `orbit.task.update` and `status: "backlog"` |
 | `merge` | Land a reviewed delivery with `orbit.workflow` action `land`; move a task with no open pull request to `done` |
 | `refresh` | Bring a held or review delivery pull request head up to its base branch with `orbit.workflow` action `refresh` and re-run required checks (conflict-free merge commit only; lands nothing) |
-| `recover` | Start a recovery leaf with `orbit.task.recover` action `resume_delivery` in any covered workspace on this host; the leaf may edit the preserved candidate, runs validation and fresh review, and stops at review |
+| `recover` | With before-PR or before-landing review policy, start a recovery leaf with `orbit.task.recover` action `resume_delivery` in any covered workspace on this host; the leaf may edit the preserved candidate and submits it to the normal PR pipeline with review as the completion target; fresh validation and review run where their gates apply, subject to normal light-delivery exemptions; handoff remains at review |
 | (none yet) | `plugin_upgrade` maps to no tool yet; never improvise an install |
 
 Held promotion requires a bug, refactor or chore with a current task-pilot
@@ -186,10 +186,13 @@ when only conflict-free base refresh merges follow the reviewed head, while
 To continue a blocked delivery with source changes, call `orbit.task.recover`
 action `resume_delivery` with `id`, `run_id`, `workspace` and `diagnosis`.
 Use the stopped failed or held run that preserved the published candidate.
-Describe the failure and the work still needed. The leaf continues the
-candidate on the current base and makes all source changes it needs (the cycle
-itself makes none). It then runs fresh validation and review and stops at
-review. Landing requires `merge`.
+Describe the failure and the work still needed. Recovery requires before-PR or
+before-landing review policy. The leaf continues the candidate on the current
+base and makes all source changes it needs (the cycle itself makes none). It
+submits the candidate to the normal PR pipeline with review as the completion
+target and stops at review. Fresh validation and review run where their normal
+gates apply; light-delivery exemptions may make either gate not applicable.
+Landing remains a separate `merge` action.
 
 A cycle can attempt delivery recovery once. A task can reserve one resident
 recovery per rolling 24 hours across mandates. The leaf shares a 120-minute

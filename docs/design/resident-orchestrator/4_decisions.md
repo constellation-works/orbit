@@ -531,10 +531,13 @@ to a later dispatch.
 
 Add `recover` for `orbit.task.recover` action `resume_delivery`. The authenticated
 cycle broker records the action and starts the source-repair pipeline for a blocked
-task's stopped failed or held publication in a covered local workspace. The leaf
-continues the authenticated candidate on the current base, validates it, and sends it
-through fresh review. Landing still requires `merge` and the current head's evidence
-and required checks.
+task's stopped failed or held publication in a covered local workspace with
+before-PR or before-landing review policy. The leaf continues the authenticated
+candidate on the current base, makes its source changes and submits it through the
+normal PR pipeline with review as the completion target. Fresh validation and review
+run where their normal gates apply; light-delivery exemptions may make either gate
+not applicable. Landing still requires a separate `merge` action and applicable
+landing checks.
 
 The operator retains decision answers, live-claim recovery, review resets and
 reconciliation, handoff retry and revocation, and general source-repair submission
