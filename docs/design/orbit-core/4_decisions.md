@@ -1,7 +1,7 @@
 ---
 title: Orbit Core — Decisions
 owner: claude
-last_updated: 2026-10-28
+last_updated: 2026-11-24
 status: Accepted
 feature: orbit-core
 doc_role: decisions
@@ -214,6 +214,127 @@ downgraded to review.
   gone from the tree, recoverable only from history. The removal migration is
   breaking: an older binary reads `operation_grants` at handoff commit.
 
+## Standing against STD-02@5 (R2, R6, R18, R39–R44)
+
+**Recorded:** 2026-11-24 · [ORB-27886]
+
+### Context
+
+STD-02@5 adds R39–R44 and extends R1, R2, R6, R7 and R18. Its Adopting v5
+clause lets an existing adopter re-pin by recording where it stands against
+the v5 rules as deviations in its design docs until it restructures, with no
+restructure required to re-pin. STD-02@5's own Deviations section notes Orbit
+had been measured only at crate level from `ARCHITECTURE.md`, not inside its
+crates against R39 or at all against R41–R44. This entry records the measured
+standing below, verified at base `77a211d1d429` (spawned from the STD-02@5
+sync [ORB-27881]).
+
+### Standing — met at crate level
+
+- STD-02@5 §R1, §R7: met at crate level. The layer order is declared in
+  `ARCHITECTURE.md`, and `orbit-store` depends only on the foundation crates
+  (`crates/orbit-store/Cargo.toml` `[dependencies]`: `orbit-common`,
+  `orbit-types`, plus third-party crates).
+- STD-02@5 §R2: met at crate level (domain, application, composition and
+  surfaces are separate crates). The in-crate residuals below are the
+  deviation, not the crate shape.
+
+### Deviations — deferred until restructure
+
+- STD-02@5 §R2 (inside `orbit-cmd`): the composition unit holds command logic
+  beyond construction. `crates/orbit-cmd/src/doctor/` (e.g. `commands.rs`,
+  397 lines), `crates/orbit-cmd/src/hosts/` (e.g. `route.rs` with
+  `route_task_id`, `resolve_host_workspace`, `host_ssh_target`),
+  `crates/orbit-cmd/src/update/` (14 files: admission, channel, converge,
+  flow, staging, reporting), `crates/orbit-cmd/src/browser_kit/` (e.g.
+  `install.rs`, `libraries.rs` at 591 lines) and
+  `crates/orbit-cmd/src/workspace_removal.rs` (382 lines) sequence domain and
+  persistence calls instead of only constructing operations. Rationale: these
+  are the ORB-10016 extraction residuals plus later command groups grown the
+  same way; moving each slice to the registry shape is the touch-it-move-it
+  ratchet of the operations-as-data bearing above, not a sweep of its own.
+- STD-02@5 §R6 and §R39: the machine check covers the 11-module chain only.
+  `docs/architecture/orbit-core.md:17` declares the order `contracts < task <
+  job < automation < review < distributed < pull_drain < admission <
+  workspace_auto < backlog_forecast < sweep_filing`, enforced by
+  `scripts/check-dependency-direction.sh` (`app_modules` at line 312). But
+  `crates/orbit-core/src/application/mod.rs` declares 44 production sibling
+  modules (46 `mod` lines minus the `#[cfg(test)]` `test_support` and `tests`
+  modules), and `pub mod automation;` sits after the test modules at line 87,
+  outside declaration order. Cargo enforces acyclic crate edges, but there is
+  no general in-crate cycle check and no declared order across the ~33
+  modules outside the 11-module chain.
+- STD-02@5 §R18: size signals for several responsibilities under one name.
+  91 `*.rs` files under `crates/` (outside `*/tests/*`) exceed 800 lines —
+  36 in `orbit-core`, 33 of them under `src/application/` (e.g.
+  `application/notice/post.rs` at 1006 lines,
+  `application/job/crew_pools/candidates.rs` at 976 lines). `impl
+  OrbitRuntime` blocks appear in 324 files under `crates/orbit-core/src`
+  (311 under `src/application/`), and `application/mod.rs` holds the 44
+  ungrouped sibling modules above (its doc comment groups them in prose only).
+  Rationale: checked, not split — splitting along responsibilities belongs to
+  the planned noun-by-noun registry migration, which dissolves the
+  inherent-impl spread rather than scattering it across more files first.
+- STD-02@5 §R40: the persistence crate holds domain rules.
+  `crates/orbit-store/src/contracts/` (29 entries) owns classification and
+  validation shapes — `incident/classify.rs` (127 lines), `friction.rs`,
+  `compat.rs`, `task/query.rs` (379 lines), `task/registry.rs` — and
+  `crates/orbit-store/src/contracts/traits/task.rs` exposes operation-named
+  trait methods (`record_task_decision_snapshots`,
+  `resolve_execution_claims`, `admit_owner_wave`, `mutate_execution_claim`,
+  `verify_worker_claim`). The crate edge itself holds: `orbit-store` imports
+  record and contract types only, never an application unit.
+- STD-02@5 §R41 and §R42: operations are not yet load/decide/effect/commit
+  shaped, and ports are not yet per-feature. `OrbitRuntime` inherent methods
+  mix loading, deciding, effects and commits (e.g.
+  `crates/orbit-core/src/application/job/pilot_submit.rs:194` `impl
+  OrbitRuntime`); decision logic is not isolated as pure functions, so it is
+  not testable without filesystem, database or network. Multi-feature shapes
+  collect in `crates/orbit-store/src/contracts/` (29 entries across incident,
+  task, params, traits) and
+  `crates/orbit-core/src/application/contracts/` (18 files: `claimed_leaf.rs`,
+  `crew_draw.rs`, `pilot.rs`, `jobs.rs`, …). Rationale: the split-table shape
+  proven by the friction pilot (spec table in `orbit-common`, handler match in
+  `orbit-core`) is the destination; the remaining nouns migrate on the plan
+  from [Migrate the remaining nouns on a plan, not on
+  contact](../operations-as-data/4_decisions.md#migrate-the-remaining-nouns-on-a-plan-not-on-contact).
+- STD-02@5 §R43: units do not each state what they own. The per-crate "What
+  it owns" sections in `docs/architecture/orbit-*.md` have no per-module
+  ownership/import sentence matching the module doc comments, and five modules
+  outside the foundation layer use catch-all names:
+  `crates/orbit-core/src/application/task/helpers.rs`,
+  `crates/orbit-web/src/api/helpers.rs`,
+  `crates/orbit-agent/src/providers/common.rs`,
+  `crates/orbit-cli/src/command/mcp/setup/providers/common.rs`,
+  `crates/orbit-tools/src/builtin/github/common.rs` (R43 permits a shared
+  home only in the foundation's contract-types unit). Rationale: renaming and
+  per-module sentences are written when each unit is touched for the registry
+  migration, so the sentences describe the unit's destination ownership, not
+  its pre-migration contents.
+- STD-02@5 §R44: legacy and upgrade code is not quarantined in one unit.
+  Superseded-format readers and migrations span
+  `crates/orbit-config/src/operation/legacy.rs`,
+  `crates/orbit-common/src/fs/generation/admission/legacy.rs`,
+  `crates/orbit-cmd/src/migrate.rs`,
+  `crates/orbit-core/src/application/tool_name_migration/`,
+  `crates/orbit-core/src/application/task_bundle/migration.rs` and
+  `crates/orbit-core/src/application/plugin/lifecycle/migrate.rs`.
+  Rationale: each quarantines against the live path it upgrades (the live
+  path reads and writes the current shape only); consolidating them into one
+  unit is deferred to a restructure that can move each reader with its format
+  owner.
+
+### Consequences
+
+- This change restructures nothing, per the Adopting v5 clause; the recorded
+  remediation direction for R2, R41 and R42 is the operations-as-data bearing
+  above.
+- A later change that touches any listed area cites this entry (or the bearing
+  it moves toward) or supersedes it; reviewers may ask "why not the registry
+  shape?" per the pilot ratchet.
+- Cost: registry-shaped and inherent-method slices coexist indefinitely, and
+  readers must recognize both idioms until the migration reaches each noun.
+
 ## Task References
 
 - [ORB-00289] — trimmed six admin and maintenance tools from the agent MCP surface.
@@ -231,5 +352,7 @@ downgraded to review.
 - [ORB-12770] — removed the `orbit operation` CLI group, `run auto --grant`, and the MCP tools.
 - [ORB-12771] — removed the Core `application/operation` module and the Common governance module.
 - [ORB-12772] — removed the config keys, the `operation_grants` table, and the design folder ([Remove operation mode rather than keep an unused authorization layer](#remove-operation-mode-rather-than-keep-an-unused-authorization-layer)).
+- [ORB-27881] — synced the vendored constellation standards STD-02@4 → @5.
+- [ORB-27886] — recorded Orbit's standing and deviations against STD-02@5 §R2, §R6, §R18 and §R39–R44 ([Standing against STD-02@5 (R2, R6, R18, R39–R44)](#standing-against-std-025-r2-r6-r18-r39r44)).
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.
