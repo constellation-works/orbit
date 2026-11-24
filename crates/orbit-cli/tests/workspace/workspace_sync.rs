@@ -391,11 +391,62 @@ fn retired_delivery_qa_is_absent_after_init_and_a_modified_copy_is_kept() {
 /// A default a release demoted for unproven yield is no longer seeded, but a
 /// workspace's existing copy stays: it loads with its operator settings,
 /// doctor does not call it deprecated, sync keeps its bytes and releases it
-/// as a workspace-local definition, and it still mints.
+/// as a workspace-local definition, and it still mints. ORB-27816 demoted
+/// three more defaults the same way, so every demoted name runs the check.
 fn demoted_default_copy_is_kept_as_a_workspace_local_definition() {
+    let sources: Value = serde_json::from_slice(&read(
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/auto-task-body-history/sources.json"),
+    ))
+    .expect("parse shipped body sources");
+    // Each copy plants a shipped body already in the current tool-name spelling,
+    // so the tool-name migration that sync also runs leaves it alone. The
+    // newest `recovery-fault-audit` body still spells its tools with dots, so
+    // that copy plants the earlier revision; `run-failure-patterns` plants the
+    // bundled reference body.
+    let run_failure =
+        include_str!("../../../orbit-core/assets/auto_tasks/run-failure-patterns.yaml");
+    for (demoted, body) in [
+        (
+            "backlog-hygiene",
+            shipped_body(
+                &sources,
+                "backlog-hygiene",
+                "4c84ad7a63527d297d01ba42b3bf25b523f80074",
+            ),
+        ),
+        (
+            "pilot-block-patterns",
+            shipped_body(
+                &sources,
+                "pilot-block-patterns",
+                "29b3a1d572eb2f860518da5ce0cd84134b2e36cc",
+            ),
+        ),
+        (
+            "recovery-fault-audit",
+            shipped_body(
+                &sources,
+                "recovery-fault-audit",
+                "ece2cce0fa66cdec8e5bf16d30cfd813df4bc1a6",
+            ),
+        ),
+        ("run-failure-patterns", run_failure.to_string()),
+    ] {
+        keep_demoted_copy(demoted, &body);
+    }
+}
+
+fn shipped_body(sources: &Value, name: &str, revision: &str) -> String {
+    sources[name][revision]
+        .as_str()
+        .expect("a previously shipped body")
+        .to_string()
+}
+
+fn keep_demoted_copy(demoted: &str, body: &str) {
     use orbit_common::security::release::sha256_hex;
 
-    const DEMOTED: &str = "backlog-hygiene";
     let home = tempdir().expect("home tempdir");
     let repo = home.path().join("workspace");
     git_repo::init(&repo);
@@ -407,7 +458,7 @@ fn demoted_default_copy_is_kept_as_a_workspace_local_definition() {
     .success();
 
     let auto_tasks = repo.join(".orbit/auto_tasks");
-    let definition = auto_tasks.join(format!("{DEMOTED}.yaml"));
+    let definition = auto_tasks.join(format!("{demoted}.yaml"));
     assert!(!definition.exists(), "init must not seed a demoted default");
     let manifest_path = auto_tasks.join(".orbit-managed-assets.json");
     let mut manifest: Value =
@@ -416,19 +467,8 @@ fn demoted_default_copy_is_kept_as_a_workspace_local_definition() {
     // A previous release seeded this exact body, recorded its digest, and the
     // operator enabled it through the settings table. The workspace still
     // lists it in its seeding policy.
-    let sources: Value = serde_json::from_slice(&read(
-        Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("tests/fixtures/auto-task-body-history/sources.json"),
-    ))
-    .expect("parse shipped body sources");
-    let body = sources[DEMOTED]
-        .as_object()
-        .and_then(|bodies| bodies.values().next())
-        .and_then(Value::as_str)
-        .expect("a previously shipped body")
-        .to_string();
-    std::fs::write(&definition, &body).expect("plant the previously seeded copy");
-    manifest["assets"][DEMOTED] = Value::String(sha256_hex(body.as_bytes()));
+    std::fs::write(&definition, body).expect("plant the previously seeded copy");
+    manifest["assets"][demoted] = Value::String(sha256_hex(body.as_bytes()));
     std::fs::write(
         &manifest_path,
         format!(
@@ -439,17 +479,17 @@ fn demoted_default_copy_is_kept_as_a_workspace_local_definition() {
     .expect("record the seeded digest");
     std::fs::write(
         auto_tasks.join(".orbit-auto-task-settings.json"),
-        format!(r#"{{"schemaVersion":1,"definitions":{{"{DEMOTED}":{{"enabled":true}}}}}}"#),
+        format!(r#"{{"schemaVersion":1,"definitions":{{"{demoted}":{{"enabled":true}}}}}}"#),
     )
     .expect("enable the copy through operator settings");
     let config_path = repo.join(".orbit/config.toml");
     let mut config = read_optional(&config_path).unwrap_or_default();
-    config.extend(format!("\n[seeding]\nauto_tasks = [\"{DEMOTED}\", \"qa-sweep\"]\n").bytes());
+    config.extend(format!("\n[seeding]\nauto_tasks = [\"{demoted}\", \"qa-sweep\"]\n").bytes());
     std::fs::write(&config_path, config).expect("list the demoted default in seeding");
 
     let shown = |what: &str| -> Value {
         let output = run(
-            orbit(&repo, home.path()).args(["auto-task", "show", DEMOTED, "--json"]),
+            orbit(&repo, home.path()).args(["auto-task", "show", demoted, "--json"]),
             what,
         )
         .success()
@@ -482,7 +522,7 @@ fn demoted_default_copy_is_kept_as_a_workspace_local_definition() {
         .find(|row| row["check"] == "artifacts-auto-tasks")
         .expect("auto-task artifact row");
     assert!(
-        !row.to_string().contains(DEMOTED),
+        !row.to_string().contains(demoted),
         "doctor must not report a kept demoted copy: {row}"
     );
 
@@ -502,7 +542,7 @@ fn demoted_default_copy_is_kept_as_a_workspace_local_definition() {
         .as_array()
         .expect("actions")
         .iter()
-        .filter(|action| action["kind"] == "auto_task" && action["name"] == DEMOTED)
+        .filter(|action| action["kind"] == "auto_task" && action["name"] == demoted)
         .collect();
     assert!(
         actions.len() == 1
@@ -513,7 +553,7 @@ fn demoted_default_copy_is_kept_as_a_workspace_local_definition() {
         "sync must release the copy and nothing else: {report}"
     );
     assert!(
-        !report["warnings"].to_string().contains(DEMOTED),
+        !report["warnings"].to_string().contains(demoted),
         "releasing a demoted copy is not a warning: {report}"
     );
     assert_eq!(
@@ -523,7 +563,7 @@ fn demoted_default_copy_is_kept_as_a_workspace_local_definition() {
     );
     let released: Value = serde_json::from_slice(&read(&manifest_path)).expect("reread manifest");
     assert!(
-        released["assets"].get(DEMOTED).is_none(),
+        released["assets"].get(demoted).is_none(),
         "the kept copy is no longer managed provenance: {released}"
     );
     let layered = shown("show after sync");
@@ -531,13 +571,13 @@ fn demoted_default_copy_is_kept_as_a_workspace_local_definition() {
 
     let repeat = sync("repeat orbit workspace sync");
     assert!(
-        !repeat.to_string().contains(DEMOTED),
+        !repeat.to_string().contains(demoted),
         "a released copy is user-authored on the next sync: {repeat}"
     );
     assert_eq!(read(&definition), body.as_bytes());
 
     run(
-        orbit(&repo, home.path()).args(["auto-task", "mint", DEMOTED, "--json"]),
+        orbit(&repo, home.path()).args(["auto-task", "mint", demoted, "--json"]),
         "orbit auto-task mint",
     )
     .success();

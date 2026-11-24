@@ -682,9 +682,6 @@ paths = ["docs/**", "**/*.md", "!crates/**", "!plugin/**", ".github/**", "script
 [workflow.review_skip_tags."auto-task:qa-sweep"]
 paths = ["docs/**", "**/*.md", "!crates/**", "!plugin/**", ".github/**", "scripts/ci-*", "scripts/test-*-workflow*.py"]
 
-[workflow.review_skip_tags."auto-task:run-failure-patterns"]
-paths = ["docs/**", "**/*.md", "!crates/**", "!plugin/**", ".github/**", "scripts/ci-*", "scripts/test-*-workflow*.py"]
-
 [workflow.review_skip_tags."auto-task:security-review"]
 paths = ["docs/**", "**/*.md", "!crates/**", "!plugin/**", ".github/**", "scripts/ci-*", "scripts/test-*-workflow*.py"]
 ```

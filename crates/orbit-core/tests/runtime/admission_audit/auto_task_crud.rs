@@ -75,7 +75,7 @@ fn implementation_mints_enter_proposed_including_legacy_workspace_forks() {
 
     for source in [
         include_str!("../../../assets/auto_tasks/doc-duties.yaml"),
-        include_str!("../../../assets/auto_tasks/pilot-block-patterns.yaml"),
+        include_str!("../../../assets/auto_tasks/comment-hygiene.yaml"),
         include_str!("../../../assets/auto_tasks/host-health.yaml"),
     ] {
         let definition: AutoTaskDefinition = serde_yaml::from_str(source).expect("bundled body");

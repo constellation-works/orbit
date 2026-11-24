@@ -396,7 +396,9 @@ pub(super) fn diagnose_catalog(runtime: &OrbitRuntime, catalog: &ManagedCatalog)
                     path,
                     tracked.contains_key(name),
                     &overrides.overrides,
-                    overrides.stale_shipped_body,
+                    // Sync releases a kept demoted copy instead of upgrading
+                    // it, so its older body is a fork, never "will upgrade".
+                    overrides.stale_shipped_body && !catalog.kept.contains(name),
                 );
                 if let (Ok(effective), Some(bundled)) = (
                     orbit_common::protocol::yaml::parse_auto_task_yaml(&on_disk),

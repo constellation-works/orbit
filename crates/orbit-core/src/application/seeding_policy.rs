@@ -22,8 +22,8 @@ use orbit_config::{
 use serde::Serialize;
 
 use crate::OrbitRuntime;
-use crate::application::auto_tasks::DEFAULT_AUTO_TASK_FILES;
 use crate::application::auto_tasks::retired::{RETIRED_AUTO_TASK_FILES, RetiredAutoTask};
+use crate::application::auto_tasks::{DEFAULT_AUTO_TASK_FILES, REFERENCE_AUTO_TASK_FILES};
 use crate::application::routines::seed::{DEFAULT_ROUTINE_FILES, RETIRED_ROUTINE_FILES};
 
 // `orbit-config` admits policy names against its own lists; these keep them
@@ -54,6 +54,12 @@ const _: () = assert!(
         RETIRED_DEFAULT_AUTO_TASKS
     ),
     "orbit_config::DEMOTED_DEFAULT_AUTO_TASKS must not name a shipped or retired auto-task"
+);
+// A reference copy is bundled for its consumers only, so it must be one of the
+// demoted names: that keeps it out of seeding and admitted in `seeding.auto_tasks`.
+const _: () = assert!(
+    reference_names_are_demoted(REFERENCE_AUTO_TASK_FILES, DEMOTED_DEFAULT_AUTO_TASKS),
+    "every REFERENCE_AUTO_TASK_FILES name must be in orbit_config::DEMOTED_DEFAULT_AUTO_TASKS"
 );
 
 const fn same_str(left: &str, right: &str) -> bool {
@@ -92,6 +98,25 @@ const fn retired_auto_task_names_match(files: &[RetiredAutoTask], names: &[&str]
     let mut index = 0;
     while index < files.len() {
         if !same_str(files[index].name, names[index]) {
+            return false;
+        }
+        index += 1;
+    }
+    true
+}
+
+const fn reference_names_are_demoted(reference: &[(&str, &str)], demoted: &[&str]) -> bool {
+    let mut index = 0;
+    while index < reference.len() {
+        let mut found = false;
+        let mut other = 0;
+        while other < demoted.len() {
+            if same_str(reference[index].0, demoted[other]) {
+                found = true;
+            }
+            other += 1;
+        }
+        if !found {
             return false;
         }
         index += 1;

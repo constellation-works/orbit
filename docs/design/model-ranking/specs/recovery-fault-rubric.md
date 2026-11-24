@@ -23,7 +23,7 @@ Sources inspected at `31bd63f3e7e4cb10fc51216907bc33231e09950e`:
 - [Final recovery, Fault section](../../../../crates/orbit-core/assets/activities/final_recovery.yaml)
   says first supported fault wins, in order `implementer`, `specification`,
   `review`, `infrastructure`, `orbit`, `external`, `unknown`.
-- [Audit, Re-judge and Rate by season sections](../../../../crates/orbit-core/assets/auto_tasks/recovery-fault-audit.yaml)
+- Audit, Re-judge and Rate by season sections of the `recovery-fault-audit` asset, which ORB-27816 removed from the shipped defaults; see the git history before that change
   instead orders `specification`, `review`, `infrastructure`, `orbit`, `external`,
   `implementer`, `unknown`. Thus the audit does not actually mirror recovery's
   precedence. No cited case establishes that ordering alone caused a disagreement.

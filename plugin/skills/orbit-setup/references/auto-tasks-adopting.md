@@ -11,7 +11,9 @@ retired tool. Sync recognizes historical shipped bodies by exact body digest;
 it cannot decide which local prose to discard. Do not weaken that matcher,
 delete/recreate the definition, or use `restore` to replace an existing fork.
 
-`run-failure-patterns` has a narrower reconciliation. When its effective body
+`run-failure-patterns`, a demoted default that a workspace may still keep as a
+local definition, has a narrower reconciliation against its bundled reference
+body. When its effective body
 omits the bundled host-aware deduplication rule (machine id, leaf run id and
 task id), `orbit auto-task show` and `list` report a stale contract, `orbit
 doctor` flags it, and minting is held until the body is reconciled.

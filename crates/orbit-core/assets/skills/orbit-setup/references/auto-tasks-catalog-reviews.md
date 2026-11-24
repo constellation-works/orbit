@@ -189,40 +189,6 @@ For ongoing selection and reconciliation, follow [Seeding policy](configuration-
   A clean batch is a
   successful no-diff run with validated no-diff evidence, and the ledger is
   attached on every run.
-- **`run-failure-patterns`** (`medium`) — weekly. Rate-driven: it always
-  analyses the 7 days before scan start (the prior cursor only splits out
-  new-since-cursor occurrences), computes per-job raw and folded failure rates
-  for 7 and 30 days with deltas, and stores them in `run-failure-report.json`.
-
-  On an owner it also counts the failure and release settlements its followers'
-  claimed leaves sent (`orbit run settlements --no-reconcile`), counting a
-  settlement as a failure only when its typed `accounting.counts_as_failure`
-  is true and reporting designed holds (`review_decision_hold`,
-  `evidence_hold`, `operator_cancel`, `upgrade_paused`, `delivery_hold`) in a
-  separate `held_7d`
-  counter, so raw occurrences equal failures plus holds.
-
-  A run an Orbit upgrade
-  paused (`upgrade_paused` in its history row) counts there too, while a lost
-  or killed worker stays a failure. It folds
-  parent pipelines into their child by the recorded `root_cause` (a parent of
-  a `held` child is no failure) and splits review refusals by escalation
-  category.
-
-  It accounts for the Pareto set — the top classes covering at least
-  80% of a qualifying job's folded failures plus every class with at least 3
-  occurrences across 2 runs in 7 days — giving each a category and disposition
-  and dismissing none by kind alone. A done fix is checked for deployment on
-  each failing host before later occurrences count as regressions, and its own
-  done fixes get effectiveness verdicts.
-
-  Open coverage gets a comment with
-  fresh counts; at most 5 new `proposed` fix tasks are filed per pass, tagged
-  `run-failure-patterns` and `no-auto-approve`, so each waits for human
-  approval; a friction replaces the task only when no cause can be
-  established, never both. It runs on the owner: preparation records a
-  `required_machine` owner-evidence contract before admission, and a follower
-  that still starts it stops with `wrong_host` without filing.
 - **`host-health`** (`low`) — disabled-by-default weekly review of host-local
   `orbit doctor --json` findings, Orbit service logs, and a read-only Orbit
   version and migrations check.

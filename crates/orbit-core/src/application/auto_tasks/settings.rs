@@ -33,7 +33,7 @@ use crate::application::managed_assets::{
 
 use super::body_history::historical_overrides;
 use super::loader::auto_tasks_dir;
-use super::{DEFAULT_AUTO_TASK_FILES, render_default_auto_task};
+use super::{DEFAULT_AUTO_TASK_FILES, REFERENCE_AUTO_TASK_FILES, render_default_auto_task};
 
 /// The `assetKind` of the auto-task managed manifest.
 pub(crate) const AUTO_TASK_ASSET_KIND: &str = "auto_task";
@@ -244,10 +244,12 @@ pub fn adopt_bundled_run_failure_contract(
     changed
 }
 
-/// The rendered bundled body of shipped default `name`, if Orbit ships one.
+/// The rendered bundled body of shipped default `name`, or of a demoted default
+/// whose reference copy Orbit still carries, if Orbit bundles one.
 pub(crate) fn rendered_bundled_body(name: &str, base_branch: &str) -> Option<String> {
     DEFAULT_AUTO_TASK_FILES
         .iter()
+        .chain(REFERENCE_AUTO_TASK_FILES)
         .find(|(shipped, _)| *shipped == name)
         .map(|(_, content)| render_default_auto_task(content, base_branch).into_owned())
 }

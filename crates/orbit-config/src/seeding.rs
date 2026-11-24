@@ -67,12 +67,9 @@ pub const SHIPPED_DEFAULT_AUTO_TASKS: &[&str] = &[
     "full-code-review",
     "host-health",
     "path-risk-review",
-    "pilot-block-patterns",
     "qa-full-sweep",
     "qa-sweep",
-    "recovery-fault-audit",
     "regression-label-audit",
-    "run-failure-patterns",
     "security-review",
 ];
 
@@ -89,6 +86,9 @@ pub const DEMOTED_DEFAULT_AUTO_TASKS: &[&str] = &[
     "ci-budget-watch",
     "design-sync",
     "flaky-test-hunt",
+    "pilot-block-patterns",
+    "recovery-fault-audit",
+    "run-failure-patterns",
     "structure-sweep",
     "suppression-ratchet",
     "workflow-health-audit",

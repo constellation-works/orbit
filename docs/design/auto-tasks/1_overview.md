@@ -271,73 +271,6 @@ re-init does not overwrite a workspace-authored definition of the same name.
   pilot or operator) establishes the selected `file:` selectors before it
   reaches `backlog` — never a selector-free whole-tree holder in a drain
   (design §4e).
-- `run-failure-patterns` — disabled-by-default weekly, rate-driven scan [ORB-18556] of the
-  workspace's own pipeline failures. It always analyses the 7 days before scan
-  start (the prior cursor only splits out new-since-cursor occurrences) and
-  also computes 30-day rates, storing per-job raw and folded failure rates with
-  deltas in `run-failure-report.json` (schema version 2). On an owner it also
-  reads the failure and release settlements followers' claimed leaves sent [ORB-14439],
-  through `orbit run settlements --no-reconcile`, since those leaves never
-  enter the owner's run history, and counts one as a failure only when its
-  typed `accounting.counts_as_failure` is true; designed holds, and runs or leaves an
-  Orbit upgrade paused (`upgrade_paused`), go to a
-  separate `held_7d` counter so raw occurrences reconcile [ORB-21840]. A follower settlement duplicates an owner
-  history row only when all three match: the row's `executed_on.machine_id`
-  equals the settlement's `machine_id`, the row's `run_id` equals the
-  settlement's `leaf_run_id`, and the row's `task_ids` lists the settlement's
-  `task_id`. Run ids come from each store's own sequence, so a same-id leaf
-  seen on another host is a different run and is counted; a row with null
-  `executed_on` never dedupes [ORB-19455]. Parents
-  that fail `pipeline_success_guard` fold into their child by `orbit run
-  show`'s `root_cause`, and a parent of a `held` child is no failure. Review
-  refusals are clustered by escalation category (`base_red`,
-  `external_evidence`, `report_revision`, `scope_or_criteria`, `timeout`,
-  `other`). For each qualifying job it accounts for the Pareto set — the top
-  classes covering at least 80% of folded failures plus every class with at
-  least 3 occurrences across 2 runs in 7 days — giving every Pareto class a
-  category (product defect, misclassified hold, provider/capacity, upstream
-  task quality, environment/flake, true one-off) and a disposition; no class
-  is dismissed by kind alone. A done covering fix is checked for deployment on
-  each failing host before later occurrences count as regressions, and fixes
-  the scan itself filed get an effectiveness verdict (effective, not
-  effective, not yet deployed, too early). Open coverage is pushed forward
-  with a comment rather than a duplicate; at most 5 new redacted `proposed`
-  fix tasks are filed per pass, tagged `run-failure-patterns` and
-  `no-auto-approve` with a `spawned_from` relation; a friction replaces the
-  task only when no cause can be established. The scan runs on the owner:
-  preparation records a `required_machine` owner-evidence contract before
-  admission, and a follower that still starts it stops with `wrong_host`
-  without filing or attaching a cursor. The scan never mutates run state —
-  its run and settlement reads pass `--no-reconcile`, so an orphaned run it
-  lists is not finalized — and a pass with nothing new is a successful no-op
-  that still stores the report and cursor. File-wide fixes use `file:` context
-  selectors, with exclusions coming from the workspace's own agent guidance.
-- `pilot-block-patterns` — disabled-by-default daily upstream counterpart of
-  `run-failure-patterns`. A first pass, with no prior cursor, uses the 3 days
-  before scan start; a later pass uses the 14 days before scan start, unless the
-  prior cursor has `resume_after`, in which case the pass continues that window.
-  Candidates come from `escalation_triage_pipeline` and
-  `blocked_task_recovery_pipeline` run history plus current proposed and blocked
-  tasks, and a pass reads at most 60 tasks. A capped pass still completes, with
-  `pilot-block-report.json` marked `partial` and listing `read_tasks`, while
-  `pilot-block-cursor.json` carries `resume_after` and `resume_after_task`. It reads
-  the dispositions `escalation_triage_pipeline`
-  recorded (`pilot_warning_triaged` and, on older history, `blocked_task_triaged` markers
-  and comments, plus final-recovery decision cards, grouped first by their
-  recurring human actions), then untriaged
-  pilot holds and final-recovery escalations from task history, `pilot_warnings`
-  and run records. Each cause that recurs (at least 3 occurrences across 2
-  tasks) is routed to its source: the filer, the task-pilot activity, the
-  final-recovery activity, `run-failure-patterns` (where it only ensures a fix
-  is open) or host setup. It dedupes against open and 30-day-closed work, files
-  at most 5 `proposed` fixes per pass, compares groups with the prior pass's
-  `pilot-block-report.json`, and files a regression when a done fix did not
-  reduce its group. When the workspace maps a tracked corpus index and provides
-  the corpus script, it appends every observed group to an existing mechanism
-  document and regenerates the index; a group with no document gets a follow-up
-  task naming that document instead of creating it in the same pass [ORB-25391].
-  Otherwise it records the missing prerequisite and leaves a clean worktree. It never acts on an individual blocked or held task, and
-  runs only on the owner (ORB-20516).
 - `delivery-code-review` — disabled-by-default review of newly landed
   deliveries. For behavior changes, its instructions locate documentation,
   website, and shipped-skill directories from tracked files and search them for
@@ -479,31 +412,13 @@ re-init does not overwrite a workspace-authored definition of the same name.
   never edits, toggles or mints definitions; changing configuration is
   the operator's decision.
 
-- `recovery-fault-audit` — disabled-by-default weekly bias check [ORB-23301]
-  of the `fault` every final-recovery decision records
-  ([model ranking §5.2](../model-ranking/2_design.md#52-fault-on-final-recoveries)).
-  It enumerates decisions through the blind `final_recovery` task-field
-  projection, samples 10 not audited before and not judged by the
-  auditor's own model family (`fault_judged_by`), and re-judges each from
-  the task's title, description, criteria, context files and the recorded
-  evidence, never reading the implementer's crew, provider or model. It
-  carries per-season judged and disagreed counts forward from the previous
-  `recovery-fault-audit.json`, reports each season's disagreement rate and
-  marks a season above 20% `suspended`, and files at most one proposed
-  rubric-revision task. Seasons are `season-0` until model ranking records
-  them. It ships with the fault record it audits rather than after proven
-  yield (see [Promotion](#promotion-to-the-shipped-defaults)): the design
-  makes the audit a condition of using the fault, so no workspace could
-  run it earlier. `auto-task-yield-review` measures it like any other
-  default. The minted chore is tagged `no-diff-expected`.
-
 - `regression-label-audit` — disabled-by-default weekly bias check [ORB-23842]
   of the escape, nature and severity a `regression_from` link records.
   `sample_size` (10) and `period_days` (7) are fields of the definition,
   not constants in code. It samples that many links whose filing task was
   created in the window, skipping links a previous audit judged and links
   whose `created_by` or `created_by_model` names the auditor's own model
-  family — the same family test `recovery-fault-audit` applies to
+  family — the same family test the demoted `recovery-fault-audit` applied to
   `fault_judged_by`. The evidence packet is the filing and culprit tasks'
   title, description, acceptance criteria and context files. It contains
   neither the filer's labels nor any model, provider or crew name of the
@@ -517,7 +432,7 @@ re-init does not overwrite a workspace-authored definition of the same name.
   and per-field agreement, and the execution summary reports the sample's
   disagreement rate for each field. It writes only that artifact and its
   own summary or comment. It ships with the labels it audits rather than
-  after proven yield, for the same reason as `recovery-fault-audit`: the
+  after proven yield, for the same reason the demoted `recovery-fault-audit` did: the
   ranking charges on those labels, so no workspace could run the check
   earlier. The minted chore is tagged `no-diff-expected`.
 
@@ -592,7 +507,13 @@ ORB-20704 demoted `backlog-hygiene`, `ci-budget-watch`, `crew-ladder-review`,
 `design-sync` (shipped by [ORB-18557]), `flaky-test-hunt`, `structure-sweep`,
 `suppression-ratchet` and `workflow-health-audit`. Their names are listed in
 `orbit_config::DEMOTED_DEFAULT_AUTO_TASKS`, which `seeding.auto_tasks`
-admission still accepts, and their templates are no longer embedded. [ORB-22803] later
+admission still accepts, and their templates are no longer embedded.
+
+[ORB-27816] demoted `pilot-block-patterns`, `recovery-fault-audit` and
+`run-failure-patterns` the same way. Their templates left the seeded catalog.
+`run-failure-patterns` keeps its bundled body in `REFERENCE_AUTO_TASK_FILES`,
+a table nothing seeds: mint, the bundled-contract check and `orbit auto-task
+update --adopt-bundled-contract` read it. [ORB-22803] later
 retired `crew-ladder-review` with the crew ladder it reviewed: it moved to
 `RETIRED_DEFAULT_AUTO_TASKS` with its last shipped template embedded again, so
 `orbit workspace sync` removes unedited copies.
@@ -603,7 +524,9 @@ and reports one `migrated` action, leaving the file, its settings-table entry,
 its schedule and its cursor untouched. From then on the copy is a
 workspace-local definition: sync no longer refreshes it, `orbit auto-task show`
 reports its body as user-authored, and doctor does not report it as
-deprecated. The demoted bodies stay in `body-history.json`.
+deprecated. Doctor checks a kept `run-failure-patterns` copy only against its
+bundled reference body: a stale contract or a body fork, never a stale shipped
+body that sync would upgrade. The demoted bodies stay in `body-history.json`.
 
 ## Workspace-authored definitions in this repo
 

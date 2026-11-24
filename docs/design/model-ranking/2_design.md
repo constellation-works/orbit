@@ -281,8 +281,8 @@ and the task's typed history decision, and decisions recorded before R1 read `un
 An agent answer without both is malformed and escalates as `unknown`. Orbit records the
 provider Orbit observed for the judging agent as `fault_judged_by`, never from the agent's
 answer; it is `null` when no provider was observed. The packet strips model, provider and crew keys from its
-evidence and masks the run's crew and model names. The audit is the disabled-by-default
-`recovery-fault-audit` auto-task. It samples through the blind `final_recovery` task field
+evidence and masks the run's crew and model names. The audit is the `recovery-fault-audit`
+auto-task, demoted from the shipped defaults by ORB-27816; a workspace that keeps its copy runs it. It samples through the blind `final_recovery` task field
 and skips decisions judged by its own family. Until R2 records seasons, every decision
 counts in `season-0`.
 

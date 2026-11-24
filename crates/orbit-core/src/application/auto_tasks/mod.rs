@@ -92,8 +92,10 @@ pub(crate) const ENABLED_BY_DEFAULT_AUTO_TASKS: &[&str] = &[];
 /// A default a later release dropped moves to
 /// [`retired::RETIRED_AUTO_TASK_FILES`] when something replaced it, or to
 /// `orbit_config::DEMOTED_DEFAULT_AUTO_TASKS` when it had not proven its
-/// yield. A definition joins this list only after it has proven its yield as
-/// a workspace-local definition (`docs/design/auto-tasks/1_overview.md`).
+/// yield (its bundled body then lives in [`REFERENCE_AUTO_TASK_FILES`] only
+/// when a consumer still needs it). A definition joins this list only after it
+/// has proven its yield as a workspace-local definition
+/// (`docs/design/auto-tasks/1_overview.md`).
 pub(crate) const DEFAULT_AUTO_TASK_FILES: &[(&str, &str)] = &[
     (
         "agent-guidance-audit",
@@ -152,10 +154,6 @@ pub(crate) const DEFAULT_AUTO_TASK_FILES: &[(&str, &str)] = &[
         include_str!("../../../assets/auto_tasks/path-risk-review.yaml"),
     ),
     (
-        "pilot-block-patterns",
-        include_str!("../../../assets/auto_tasks/pilot-block-patterns.yaml"),
-    ),
-    (
         "qa-full-sweep",
         include_str!("../../../assets/auto_tasks/qa-full-sweep.yaml"),
     ),
@@ -164,22 +162,27 @@ pub(crate) const DEFAULT_AUTO_TASK_FILES: &[(&str, &str)] = &[
         include_str!("../../../assets/auto_tasks/qa-sweep.yaml"),
     ),
     (
-        "recovery-fault-audit",
-        include_str!("../../../assets/auto_tasks/recovery-fault-audit.yaml"),
-    ),
-    (
         "regression-label-audit",
         include_str!("../../../assets/auto_tasks/regression-label-audit.yaml"),
-    ),
-    (
-        "run-failure-patterns",
-        include_str!("../../../assets/auto_tasks/run-failure-patterns.yaml"),
     ),
     (
         "security-review",
         include_str!("../../../assets/auto_tasks/security-review.yaml"),
     ),
 ];
+
+/// Bundled bodies of demoted defaults that stay available as reference copies
+/// without being seeded. A demoted default's workspace copy keeps its file; the
+/// bundled body here serves only the bundled-contract checks and the adopt path
+/// (`settings::bundled_run_failure_definition`,
+/// `settings::stale_run_failure_contract`, `update --adopt-bundled-contract`).
+/// Seeding and sync read [`DEFAULT_AUTO_TASK_FILES`] alone, so nothing here is
+/// ever seeded. Each name here is also in
+/// `orbit_config::DEMOTED_DEFAULT_AUTO_TASKS`.
+pub(crate) const REFERENCE_AUTO_TASK_FILES: &[(&str, &str)] = &[(
+    "run-failure-patterns",
+    include_str!("../../../assets/auto_tasks/run-failure-patterns.yaml"),
+)];
 
 /// Placeholder the shipped delivery definitions carry for the workspace's
 /// integration branch. Seeding renders it to the registered base branch, so a
