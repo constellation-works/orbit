@@ -14,6 +14,7 @@
 
 use std::collections::HashMap;
 use std::os::unix::fs::PermissionsExt;
+use std::path::PathBuf;
 
 use chrono::Utc;
 use orbit_common::security::release::sha256_hex;
@@ -817,10 +818,6 @@ const PASSING_PROBE: &str = "set -e\n\
 /// stand-in. The workspace branch then moves past the held commit.
 fn held_host(probe: &str, command: &str) -> (Fixture, ReviewEvidenceHold, tempfile::TempDir) {
     let bin = tempfile::TempDir::new_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
-    let cargo = bin.path().join("cargo");
-    // `cargo test -p <package> --test <target> [filter] -- --nocapture`
-    std::fs::write(&cargo, "#!/bin/sh\nexec sh \"tests/host/$5.sh\"\n").unwrap();
-    std::fs::set_permissions(&cargo, std::fs::Permissions::from_mode(0o755)).unwrap();
     let mut fixture = Fixture::new_with_config(
         &[],
         &format!(
@@ -828,6 +825,28 @@ fn held_host(probe: &str, command: &str) -> (Fixture, ReviewEvidenceHold, tempfi
             bin.path().display()
         ),
     );
+    // Both test commands from the refusal cases record in one fixture-owned
+    // file outside the detached checkout. The record remains after cleanup.
+    for (name, script) in [
+        (
+            "cargo",
+            r#"#!/bin/sh
+printf '%s\n' "$PWD" >> "${0%/*}/host-invocations"
+exec sh "tests/host/$5.sh"
+"#,
+        ),
+        (
+            "make",
+            r#"#!/bin/sh
+printf '%s\n' "$PWD" >> "${0%/*}/host-invocations"
+exit 0
+"#,
+        ),
+    ] {
+        let command = bin.path().join(name);
+        std::fs::write(&command, script).unwrap();
+        std::fs::set_permissions(&command, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
     install_substitute_worker(&fixture);
     let script = fixture.repo.join("tests/host/probe.sh");
     std::fs::create_dir_all(script.parent().unwrap()).unwrap();
@@ -868,12 +887,40 @@ fn held_host(probe: &str, command: &str) -> (Fixture, ReviewEvidenceHold, tempfi
     (fixture, hold, bin)
 }
 
+fn host_invocation_log(bin: &tempfile::TempDir) -> PathBuf {
+    bin.path().join("host-invocations")
+}
+
+fn assert_host_invocation_from_removed_checkout(fixture: &Fixture, bin: &tempfile::TempDir) {
+    let records = std::fs::read_to_string(host_invocation_log(bin))
+        .expect("the fixture-owned invocation signal survives checkout cleanup");
+    let mut lines = records.lines();
+    let checkout = PathBuf::from(
+        lines
+            .next()
+            .expect("the command records its working directory"),
+    );
+    assert!(
+        lines.next().is_none(),
+        "one benign host command ran: {records:?}"
+    );
+    assert_ne!(
+        checkout, fixture.repo,
+        "the command ran from its detached checkout"
+    );
+    assert!(
+        !checkout.exists(),
+        "the detached checkout was removed while its fixture-owned signal remained: {}",
+        checkout.display()
+    );
+}
+
 /// A Linux owner whose host creates namespaces runs the held sandbox test at
 /// the held commit without an operator, attaches its result and log, and
 /// requeues review. Where namespaces are unavailable the tick stands down
 /// and the hold stays for an owner that can run it.
 fn a_held_host_sandbox_test_runs_at_the_held_commit_and_its_result_requeues_review() {
-    let (fixture, hold, _bin) = held_host(PASSING_PROBE, HOST_TEST);
+    let (fixture, hold, bin) = held_host(PASSING_PROBE, HOST_TEST);
     configure_job(&fixture, 1, None);
     let probe = orbit_exec::probe_bwrap();
     if !probe.available {
@@ -918,6 +965,7 @@ fn a_held_host_sandbox_test_runs_at_the_held_commit_and_its_result_requeues_revi
     let (run_id, output) = fulfil_once(&fixture);
     assert_eq!(output["fulfilled"], true, "{output}");
     assert_eq!(output["requeued"], true, "{output}");
+    assert_host_invocation_from_removed_checkout(&fixture, &bin);
     let evidence: ReviewExternalEvidence =
         serde_json::from_value(artifact(&fixture, HOST_EVIDENCE).expect("result attached"))
             .unwrap();
@@ -963,6 +1011,26 @@ fn a_held_host_sandbox_test_runs_at_the_held_commit_and_its_result_requeues_revi
     );
 }
 
+/// The positive control runs only the admitted benign probe directly through
+/// the detached-checkout runner, so it does not depend on this host having
+/// Bubblewrap namespaces. Its fixture-owned invocation signal is still
+/// readable after the runner removes the checkout.
+fn a_fixture_owned_host_invocation_signal_survives_checkout_cleanup() {
+    let (fixture, hold, bin) = held_host(PASSING_PROBE, HOST_TEST);
+    let command = orbit_types::workflow::HostSandboxCommand::admit(HOST_TEST, &[]).unwrap();
+    let run = orbit_engine::review_gate::run_host_sandbox_test(
+        &fixture.runtime,
+        &fixture.repo,
+        &hold.candidate,
+        &command,
+        "fixture-owned-host-signal-positive-control",
+    )
+    .unwrap();
+    assert_eq!(run.exit_code, Some(0), "{}", run.output);
+    assert!(run.judgement.is_ok(), "{}", run.output);
+    assert_host_invocation_from_removed_checkout(&fixture, &bin);
+}
+
 /// A host run that executed nothing confined, or failed, is no evidence: its
 /// log is attached and the hold stays with a typed reason.
 fn a_host_sandbox_test_that_skips_or_fails_leaves_the_hold_with_a_typed_reason() {
@@ -1002,7 +1070,9 @@ fn a_held_host_sandbox_test_outside_its_allowlist_is_refused_without_running() {
     ) {
         return;
     }
-    let touching = "touch \"$(git rev-parse --show-toplevel)/../owned\"\n";
+    // If accidentally run, the candidate probe writes only inside its
+    // disposable checkout. The independent invocation signal lives in `bin`.
+    let touching = "touch owned\n";
     for (command, reason) in [
         (
             "cargo test -p orbit-exec --test probe;touch owned",
@@ -1014,7 +1084,7 @@ fn a_held_host_sandbox_test_outside_its_allowlist_is_refused_without_running() {
             "argument_not_allowed",
         ),
     ] {
-        let (fixture, hold, _bin) = held_host(touching, command);
+        let (fixture, hold, bin) = held_host(touching, command);
         configure_job(&fixture, 1, None);
         // Submit the owner workflow directly: unlike a tick, it reaches
         // admission on a host without namespaces too.
@@ -1048,18 +1118,10 @@ fn a_held_host_sandbox_test_outside_its_allowlist_is_refused_without_running() {
             "{reason}: no host command was admitted: {log}"
         );
         assert_held_without(&fixture, HOST_EVIDENCE, reason);
-        // Both `touch owned` canaries: the committed probe writes one above
-        // the checkout, the command writes one in its working directory.
-        for canary in [
-            fixture.repo.join("owned"),
-            fixture._root.path().join("owned"),
-        ] {
-            assert!(
-                !canary.exists(),
-                "{reason}: the refused command ran and left {}",
-                canary.display()
-            );
-        }
+        assert!(
+            !host_invocation_log(&bin).exists(),
+            "{reason}: the refused command left the fixture-owned invocation signal"
+        );
         let rows = audit_rows(&fixture);
         assert_eq!(rows.len(), 1, "{rows:?}");
         assert_eq!(rows[0].0, AuditEventStatus::Failure, "{reason}");
@@ -1272,5 +1334,6 @@ crate::scenario_table!(
     owner_fulfilment_refuses_colliding_persisted_paths_before_running,
     fulfilment_waits_for_disk_and_retries_a_disk_refusal_a_bounded_number_of_times,
     a_held_host_sandbox_test_runs_at_the_held_commit_and_its_result_requeues_review,
+    a_fixture_owned_host_invocation_signal_survives_checkout_cleanup,
     a_host_sandbox_test_that_skips_or_fails_leaves_the_hold_with_a_typed_reason
 );
