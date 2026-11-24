@@ -4338,6 +4338,32 @@ class RemovedCodeIdentifierTests(unittest.TestCase):
         self.assertIn("demo_policy::resolve_symlinks", result.stderr)
         self.assertIn("docs/design/policy-sandbox/2_design.md:1", result.stderr)
 
+    def test_doc_attribute_reexport_spelling_does_not_hide_removed_path(self):
+        self.write(self.REEXPORT,
+                   'mod exports { pub struct Removed; }\n'
+                   '#[doc = "Use pub use path as Example"]\n'
+                   'pub use exports::Removed;\n')
+        self.write("docs/demo.md", "Use `demo_policy::Removed`.\n")
+        self.commit_base()
+        self.write(self.REEXPORT,
+                   'mod exports { pub struct Removed; }\n'
+                   '#[doc = "Use pub use path as Example"]\n'
+                   'pub struct Replacement;\n')
+        result = self.run_check()
+        self.assertNotEqual(result.returncode, 0, result.stdout)
+        self.assertIn('"demo_policy::Removed"', result.stderr)
+        self.assertIn("docs/demo.md:1", result.stderr)
+
+    def test_quoted_reexport_spelling_alone_does_not_create_a_path(self):
+        self.write(self.REEXPORT,
+                   '#[doc = "Use pub use exports::Removed;"]\n'
+                   'pub struct Retained;\n')
+        self.write("docs/demo.md", "Use `demo_policy::Removed`.\n")
+        self.commit_base()
+        self.write(self.REEXPORT, "pub struct Retained;\n")
+        result = self.run_check()
+        self.assertEqual(result.returncode, 0, result.stderr)
+
     GROUP_BASE = "pub use exports::{\n    KEPT,\n    REMOVED,\n    OTHER,\n};\n"
 
     def test_commented_group_member_removed_and_retained(self):
