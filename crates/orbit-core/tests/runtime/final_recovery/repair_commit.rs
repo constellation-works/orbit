@@ -324,6 +324,55 @@ impl orbit_engine::test_support::NullRuntimeHost for RepairPipeline<'_> {
                         .unwrap();
                         std::fs::remove_file(repo.join("deleted.ignored")).unwrap();
                     }
+                    "staged-only" => {
+                        let repo = &self.fixture.repo;
+                        std::fs::write(
+                            repo.join("candidate.txt"),
+                            "staged repair\nsk-syntheticstagedcanary0000\n",
+                        )
+                        .unwrap();
+                        std::fs::write(repo.join("staged_deleted.txt"), "staged new file\n")
+                            .unwrap();
+                        git(
+                            self.fixture,
+                            &["add", "candidate.txt", "staged_deleted.txt"],
+                        );
+                        // Restore `candidate.txt` on disk to HEAD (`"after\n"`) and remove
+                        // `staged_deleted.txt`, leaving both changes only in the live index.
+                        std::fs::write(repo.join("candidate.txt"), "after\n").unwrap();
+                        std::fs::remove_file(repo.join("staged_deleted.txt")).unwrap();
+                        std::fs::write(
+                            repo.join(".env"),
+                            "ENV_CANARY=synthetic_staged_only_env_canary\n",
+                        )
+                        .unwrap();
+                    }
+                    "staged-mixed" => {
+                        let repo = &self.fixture.repo;
+                        std::fs::write(repo.join("tracked_reverted.txt"), "staged reverted edit\n")
+                            .unwrap();
+                        std::fs::write(repo.join("staged_deleted.txt"), "staged deleted new\n")
+                            .unwrap();
+                        std::fs::write(repo.join("both_changed.txt"), "staged intermediate\n")
+                            .unwrap();
+                        git(
+                            self.fixture,
+                            &[
+                                "add",
+                                "tracked_reverted.txt",
+                                "staged_deleted.txt",
+                                "both_changed.txt",
+                            ],
+                        );
+                        std::fs::write(repo.join("tracked_reverted.txt"), "base\n").unwrap();
+                        std::fs::remove_file(repo.join("staged_deleted.txt")).unwrap();
+                        std::fs::write(repo.join("both_changed.txt"), "worktree final\n").unwrap();
+                        std::fs::write(
+                            repo.join(".env"),
+                            "ENV_CANARY=synthetic_staged_mixed_env_canary\n",
+                        )
+                        .unwrap();
+                    }
                     "foreign-branch" => {
                         git(self.fixture, &["checkout", "-b", "foreign"]);
                     }
@@ -1560,8 +1609,10 @@ fn final_recovery_refused_patch_preserves_staged_ignored_addition() {
             && text.contains("notes.ignored")
             && text.contains("staged ignored content")
             && text.contains("ignored-dir/nested.txt")
-            && text.contains("nested ignored content"),
-        "independent safe edit and staged ignored additions must be preserved: {text}"
+            && text.contains("nested ignored content")
+            && text.contains("deleted.ignored")
+            && text.contains("gone before capture"),
+        "independent safe edit and staged ignored additions (including removed-from-disk AD) must be preserved: {text}"
     );
     assert!(
         !text.contains("sk-syntheticignoredcanary0000") && text.contains("[REDACTED_SECRET]"),
@@ -1572,9 +1623,8 @@ fn final_recovery_refused_patch_preserves_staged_ignored_addition() {
             && !text.contains("synthetic_ignored_env_canary")
             && !text.contains("synthetic_force_added_env_canary")
             && !text.contains("untracked.txt")
-            && !text.contains("must not stage")
-            && !text.contains("deleted.ignored"),
-        "protected, unstaged-ignored, and deleted-staged paths must stay out of patch: {text}"
+            && !text.contains("must not stage"),
+        "protected and unstaged-ignored paths must stay out of patch: {text}"
     );
     for path in [".env", "notes.ignored", "candidate.txt"] {
         assert!(
@@ -1632,10 +1682,187 @@ fn final_recovery_refused_patch_preserves_staged_ignored_addition() {
         std::fs::read_to_string(checkout.join("ignored-dir/nested.txt")).unwrap(),
         "nested ignored content\n"
     );
+    assert_eq!(
+        std::fs::read_to_string(checkout.join("deleted.ignored")).unwrap(),
+        "gone before capture\n"
+    );
     assert!(!checkout.join("ignored-dir/untracked.txt").exists());
-    assert!(!checkout.join("deleted.ignored").exists());
     assert!(!checkout.join(".env").exists());
     assert!(!checkout.join(".env.local").exists());
+}
+
+fn final_recovery_refused_patch_preserves_staged_only_work() {
+    // 1. Only staged-only safe work exists (`MM` reverted to HEAD on disk, plus
+    // `AD` newly staged file removed from disk) alongside a protected `.env`.
+    let fixture = fixture_with_command("test \"$(cat candidate.txt)\" != after");
+    let (host, outcome) = run_pipeline(&fixture, "staged-only");
+    assert!(outcome.is_err(), "{outcome:?}");
+    let run = fixture.input["job_run_id"].as_str().unwrap();
+    let checkpoint = fixture
+        .runtime
+        .read_run_state(run)
+        .unwrap()
+        .unwrap()
+        .final_recovery
+        .unwrap();
+    let Some(FinalRecoveryDecision::Escalate { diagnosis, .. }) = checkpoint.decision else {
+        panic!("expected escalation")
+    };
+    let name = format!("recovery-uncommitted-{run}.patch");
+    assert!(
+        diagnosis.contains("recovery_commit_refused:protected_path:") && diagnosis.contains(&name),
+        "staged-only refused repair must attach uncommitted diff artifact: {diagnosis}"
+    );
+    let artifact = fixture
+        .runtime
+        .get_task_artifact(&fixture.task_id, &name)
+        .unwrap()
+        .expect("refused repair with only live-index work saves uncommitted diff artifact");
+    let text = String::from_utf8_lossy(&artifact.content);
+    assert!(
+        text.contains("staged repair") && text.contains("staged new file"),
+        "staged-only tracked edit and deleted addition must appear in patch: {text}"
+    );
+    assert!(
+        !text.contains("sk-syntheticstagedcanary0000") && text.contains("[REDACTED_SECRET]"),
+        "secret canary in staged-only edit must be redacted: {text}"
+    );
+    assert!(
+        !text.contains(".env") && !text.contains("synthetic_staged_only_env_canary"),
+        "protected env file must stay out of patch: {text}"
+    );
+    assert!(!blob_in_object_store(&fixture, ".env"));
+    assert_eq!(
+        git(&fixture, &["diff", "--cached", "--name-only"]),
+        "candidate.txt\nstaged_deleted.txt",
+        "live index must remain untouched"
+    );
+
+    let candidate_head = host.validation_heads.lock().unwrap()[0].0.clone();
+    let root = tempfile::tempdir().unwrap();
+    let checkout = root.path().join("checkout");
+    let clone = crate::git_test_support::command()
+        .args([
+            "clone",
+            "-q",
+            fixture.repo.to_str().unwrap(),
+            checkout.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(clone.status.success(), "{clone:?}");
+    let co = crate::git_test_support::command()
+        .args(["checkout", "-q", &candidate_head])
+        .current_dir(&checkout)
+        .output()
+        .unwrap();
+    assert!(co.status.success(), "{co:?}");
+    let patch_file = root.path().join("staged_only.patch");
+    std::fs::write(&patch_file, &artifact.content).unwrap();
+    let apply = crate::git_test_support::command()
+        .args(["apply", patch_file.to_str().unwrap()])
+        .current_dir(&checkout)
+        .output()
+        .unwrap();
+    assert!(
+        apply.status.success(),
+        "git apply failed ({}):\n{}",
+        apply.status,
+        String::from_utf8_lossy(&apply.stderr)
+    );
+    assert_eq!(
+        std::fs::read_to_string(checkout.join("candidate.txt")).unwrap(),
+        "staged repair\n[REDACTED_SECRET]\n"
+    );
+    assert_eq!(
+        std::fs::read_to_string(checkout.join("staged_deleted.txt")).unwrap(),
+        "staged new file\n"
+    );
+    assert!(!checkout.join(".env").exists());
+
+    // 2. Mixed case: worktree edit + staged-only edits + path with distinct
+    // staged and worktree edits (`both_changed.txt`).
+    let mut mixed = fixture_with_command("test \"$(cat candidate.txt)\" != after");
+    std::fs::write(mixed.repo.join("tracked_reverted.txt"), "base\n").unwrap();
+    std::fs::write(mixed.repo.join("both_changed.txt"), "base\n").unwrap();
+    git(&mixed, &["add", "tracked_reverted.txt", "both_changed.txt"]);
+    git(&mixed, &["commit", "-m", "seed staged-mixed files"]);
+    git(&mixed, &["branch", "-f", "main", "HEAD"]);
+    mixed.input["base_sha"] = json!(git(&mixed, &["rev-parse", "HEAD"]));
+
+    let (mixed_host, mixed_outcome) = run_pipeline(&mixed, "staged-mixed");
+    assert!(mixed_outcome.is_err(), "{mixed_outcome:?}");
+    let mixed_run = mixed.input["job_run_id"].as_str().unwrap();
+    let mixed_name = format!("recovery-uncommitted-{mixed_run}.patch");
+    let mixed_artifact = mixed
+        .runtime
+        .get_task_artifact(&mixed.task_id, &mixed_name)
+        .unwrap()
+        .expect("mixed refused repair saves uncommitted diff artifact");
+    let mixed_text = String::from_utf8_lossy(&mixed_artifact.content);
+    assert!(
+        mixed_text.contains("repaired")
+            && mixed_text.contains("staged reverted edit")
+            && mixed_text.contains("staged deleted new")
+            && mixed_text.contains("worktree final"),
+        "worktree and staged-only work must appear in mixed patch: {mixed_text}"
+    );
+    assert!(
+        mixed_text.contains("retained live index") && mixed_text.contains("both_changed.txt"),
+        "distinct staged state superseded by worktree edit must be expressly identified: {mixed_text}"
+    );
+    assert!(
+        !mixed_text.contains(".env") && !mixed_text.contains("synthetic_staged_mixed_env_canary"),
+        "protected env file must stay out of mixed patch: {mixed_text}"
+    );
+
+    let mixed_head = mixed_host.validation_heads.lock().unwrap()[0].0.clone();
+    let mixed_checkout = root.path().join("mixed_checkout");
+    let clone2 = crate::git_test_support::command()
+        .args([
+            "clone",
+            "-q",
+            mixed.repo.to_str().unwrap(),
+            mixed_checkout.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(clone2.status.success(), "{clone2:?}");
+    let co2 = crate::git_test_support::command()
+        .args(["checkout", "-q", &mixed_head])
+        .current_dir(&mixed_checkout)
+        .output()
+        .unwrap();
+    assert!(co2.status.success(), "{co2:?}");
+    let mixed_patch = root.path().join("mixed.patch");
+    std::fs::write(&mixed_patch, &mixed_artifact.content).unwrap();
+    let apply2 = crate::git_test_support::command()
+        .args(["apply", mixed_patch.to_str().unwrap()])
+        .current_dir(&mixed_checkout)
+        .output()
+        .unwrap();
+    assert!(
+        apply2.status.success(),
+        "git apply failed on mixed patch ({}):\n{}",
+        apply2.status,
+        String::from_utf8_lossy(&apply2.stderr)
+    );
+    assert_eq!(
+        std::fs::read_to_string(mixed_checkout.join("candidate.txt")).unwrap(),
+        "repaired\n"
+    );
+    assert_eq!(
+        std::fs::read_to_string(mixed_checkout.join("tracked_reverted.txt")).unwrap(),
+        "staged reverted edit\n"
+    );
+    assert_eq!(
+        std::fs::read_to_string(mixed_checkout.join("staged_deleted.txt")).unwrap(),
+        "staged deleted new\n"
+    );
+    assert_eq!(
+        std::fs::read_to_string(mixed_checkout.join("both_changed.txt")).unwrap(),
+        "worktree final\n"
+    );
 }
 
 // Related boundary scenarios share the isolated table fixture.
@@ -1648,7 +1875,8 @@ crate::scenario_table!(
     final_recovery_transition_evidence_excludes_protected_paths,
     resumed_final_recovery_repair_keeps_the_original_checkpoint_owner,
     final_recovery_refused_patch_reproduces_binary_and_final_whitespace,
-    final_recovery_refused_patch_preserves_staged_ignored_addition
+    final_recovery_refused_patch_preserves_staged_ignored_addition,
+    final_recovery_refused_patch_preserves_staged_only_work
 );
 
 #[cfg(unix)]

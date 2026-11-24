@@ -9,7 +9,7 @@
 //! touched.
 
 use std::borrow::Cow;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use orbit_common::fs::selector::claim_new_path_is_safe;
@@ -252,37 +252,32 @@ pub(in crate::executor::automation::vcs) fn capture_uncommitted_diff(
 
     let has_head =
         git_command_success(workspace_path, &["rev-parse", "--verify", "HEAD^{commit}"])?;
+    let mut head_entries = BTreeMap::new();
     let mut head_paths = BTreeSet::new();
     let mut head_gitlinks = BTreeSet::new();
     let mut head_protected = Vec::new();
     if has_head {
         git_output_with_env(workspace_path, &["read-tree", "HEAD"], &env)?;
-        for entry in split_nul_bytes(&git_output_bytes_with_env(
-            workspace_path,
-            &["ls-files", "--stage", "-z"],
-            &env,
-        )?) {
-            let Some(tab) = entry.iter().position(|byte| *byte == b'\t') else {
-                continue;
-            };
-            let header = &entry[..tab];
-            let path = entry[tab + 1..].to_vec();
+        for StageEntry { entry, path, .. } in read_stage_entries(workspace_path, Some(&env))? {
             if !is_safe_path_bytes(&path) {
                 head_protected.push(path.clone());
             }
-            if header.starts_with(b"160000 ") {
+            if entry.mode == b"160000" {
                 head_gitlinks.insert(path.clone());
             }
-            head_paths.insert(path);
+            head_paths.insert(path.clone());
+            head_entries.insert(path, entry);
         }
     }
 
-    let live_cached_paths = split_nul_bytes(&git_output_bytes(
-        workspace_path,
-        &["ls-files", "--cached", "-z"],
-    )?)
-    .into_iter()
-    .collect::<BTreeSet<_>>();
+    let mut live_cached_paths = BTreeSet::new();
+    let mut live_staged: BTreeMap<Vec<u8>, Vec<(u8, IndexEntry)>> = BTreeMap::new();
+    for StageEntry { entry, stage, path } in read_stage_entries(workspace_path, None)? {
+        live_cached_paths.insert(path.clone());
+        if is_safe_path_bytes(&path) {
+            live_staged.entry(path).or_default().push((stage, entry));
+        }
+    }
 
     let stageable = stageable_safe_paths(
         workspace_path,
@@ -291,9 +286,6 @@ pub(in crate::executor::automation::vcs) fn capture_uncommitted_diff(
         &head_gitlinks,
         &live_cached_paths,
     )?;
-    if stageable.is_empty() {
-        return Ok(None);
-    }
 
     // Exclude protected paths from both the worktree and HEAD: a file/directory
     // replacement can stage or delete descendants that were never safe pathspecs.
@@ -314,34 +306,94 @@ pub(in crate::executor::automation::vcs) fn capture_uncommitted_diff(
     protected.sort();
     protected.dedup();
 
-    git_rm_cached_nul(workspace_path, &stageable.remove_from_index, &env)?;
+    if !stageable.is_empty() {
+        git_rm_cached_nul(workspace_path, &stageable.remove_from_index, &env)?;
 
-    // Only emit `:(exclude,literal)` for protected paths beneath a directory in
-    // `normal_add`; an ignored top-level protected path (such as a force-added
-    // `.env`) passed as an exclude pathspec makes non-force `git add` fail.
-    let normal_excludes = protected
-        .iter()
-        .filter(|path| {
-            stageable
-                .normal_add_dirs
-                .iter()
-                .any(|dir| path_is_under_dir(path, dir))
-        })
-        .collect::<Vec<_>>();
-    git_add_nul(
-        workspace_path,
-        false,
-        &stageable.normal_add,
-        &normal_excludes,
-        &env,
-    )?;
-    git_add_nul(
-        workspace_path,
-        true,
-        &stageable.staged_addition_add,
-        &[],
-        &env,
-    )?;
+        // Only emit `:(exclude,literal)` for protected paths beneath a directory in
+        // `normal_add`; an ignored top-level protected path (such as a force-added
+        // `.env`) passed as an exclude pathspec makes non-force `git add` fail.
+        let normal_excludes = protected
+            .iter()
+            .filter(|path| {
+                stageable
+                    .normal_add_dirs
+                    .iter()
+                    .any(|dir| path_is_under_dir(path, dir))
+            })
+            .collect::<Vec<_>>();
+        git_add_nul(
+            workspace_path,
+            false,
+            &stageable.normal_add,
+            &normal_excludes,
+            &env,
+        )?;
+        git_add_nul(
+            workspace_path,
+            true,
+            &stageable.staged_addition_add,
+            &[],
+            &env,
+        )?;
+    }
+
+    let worktree_entries = read_stage_entries(workspace_path, Some(&env))?
+        .into_iter()
+        .map(|StageEntry { entry, path, .. }| (path, entry))
+        .collect::<BTreeMap<_, _>>();
+    let mut staged_remove = Vec::new();
+    let mut staged_update = Vec::new();
+    let mut retained_notes = Vec::new();
+    for path in &safe_paths {
+        let head = head_entries.get(path.as_slice());
+        let worktree = worktree_entries.get(path.as_slice());
+        let Some(live) = live_staged.get(path.as_slice()) else {
+            if head.is_some() {
+                if worktree == head {
+                    staged_remove.push(path.clone());
+                } else if worktree.is_some() {
+                    retained_notes.push(RetainedIndexNote {
+                        path: path.clone(),
+                        reason: "staged deletion superseded by worktree file",
+                    });
+                }
+            }
+            continue;
+        };
+        if live.len() != 1 || live[0].0 != 0 {
+            let reason = if worktree == head || worktree.is_none() {
+                "unmerged stages in retained index"
+            } else {
+                "unmerged stages in retained index superseded by worktree file"
+            };
+            retained_notes.push(RetainedIndexNote {
+                path: path.clone(),
+                reason,
+            });
+            continue;
+        }
+        let staged_entry = &live[0].1;
+        if head == Some(staged_entry) || worktree == Some(staged_entry) {
+            continue;
+        }
+        if worktree == head && !has_path_prefix_conflict(path, &worktree_entries) {
+            staged_update.push((path.clone(), staged_entry));
+        } else {
+            let reason = if worktree == head {
+                "staged file conflicts with worktree directory entries"
+            } else if worktree.is_none() {
+                "staged edits superseded by worktree deletion"
+            } else {
+                "staged content superseded by worktree changes"
+            };
+            retained_notes.push(RetainedIndexNote {
+                path: path.clone(),
+                reason,
+            });
+        }
+    }
+    git_rm_cached_nul(workspace_path, &staged_remove, &env)?;
+    git_update_index_info_nul(workspace_path, &staged_update, &env)?;
 
     let mut diff_args = vec!["-c", "core.quotePath=true", "diff", "--cached"];
     diff_args.extend_from_slice(BINARY_PATCH_DIFF_ARGS);
@@ -349,11 +401,19 @@ pub(in crate::executor::automation::vcs) fn capture_uncommitted_diff(
         diff_args.push(base);
     }
     let diff = git_output_bytes_with_env(workspace_path, &diff_args, &env)?;
-    if diff.iter().all(u8::is_ascii_whitespace) {
-        Ok(None)
-    } else {
-        Ok(Some(redact_all_bytes(&diff)))
+    let has_diff = !diff.iter().all(u8::is_ascii_whitespace);
+    if !has_diff && retained_notes.is_empty() {
+        return Ok(None);
     }
+    let mut output = if retained_notes.is_empty() {
+        Vec::new()
+    } else {
+        format_retained_index_header(&retained_notes)
+    };
+    if has_diff {
+        output.extend_from_slice(&diff);
+    }
+    Ok(Some(redact_all_bytes(&output)))
 }
 
 /// Point temporary index object writes at a scratch directory backed by the
@@ -463,6 +523,112 @@ fn path_from_git_bytes(bytes: &[u8]) -> Result<Cow<'_, Path>, orbit_common::Orbi
                 ))
             })
     }
+}
+
+#[derive(Clone, PartialEq, Eq)]
+struct IndexEntry {
+    mode: Vec<u8>,
+    oid: Vec<u8>,
+}
+
+struct StageEntry {
+    entry: IndexEntry,
+    stage: u8,
+    path: Vec<u8>,
+}
+
+struct RetainedIndexNote {
+    path: Vec<u8>,
+    reason: &'static str,
+}
+
+fn read_stage_entries(
+    workspace_path: &Path,
+    env: Option<&[(&str, &str)]>,
+) -> Result<Vec<StageEntry>, orbit_common::OrbitError> {
+    let args = ["ls-files", "--stage", "-z"];
+    let stdout = match env {
+        Some(env) => git_output_bytes_with_env(workspace_path, &args, env)?,
+        None => git_output_bytes(workspace_path, &args)?,
+    };
+    let mut entries = Vec::new();
+    for raw in split_nul_bytes(&stdout) {
+        let Some(tab) = raw.iter().position(|byte| *byte == b'\t') else {
+            continue;
+        };
+        let header = &raw[..tab];
+        let mut parts = header.split(|byte| *byte == b' ');
+        let (Some(mode), Some(oid), Some(stage_bytes)) = (parts.next(), parts.next(), parts.next())
+        else {
+            continue;
+        };
+        let Some(stage) = std::str::from_utf8(stage_bytes)
+            .ok()
+            .and_then(|value| value.parse::<u8>().ok())
+        else {
+            continue;
+        };
+        entries.push(StageEntry {
+            entry: IndexEntry {
+                mode: mode.to_vec(),
+                oid: oid.to_vec(),
+            },
+            stage,
+            path: raw[tab + 1..].to_vec(),
+        });
+    }
+    Ok(entries)
+}
+
+fn has_path_prefix_conflict(path: &[u8], entries: &BTreeMap<Vec<u8>, IndexEntry>) -> bool {
+    entries.keys().any(|existing| {
+        existing.as_slice() != path
+            && (path_is_under_dir(existing, path) || path_is_under_dir(path, existing))
+    })
+}
+
+fn git_update_index_info_nul(
+    workspace_path: &Path,
+    updates: &[(Vec<u8>, &IndexEntry)],
+    env: &[(&str, &str)],
+) -> Result<(), orbit_common::OrbitError> {
+    if updates.is_empty() {
+        return Ok(());
+    }
+    let mut input = Vec::new();
+    for (path, entry) in updates {
+        input.extend_from_slice(&entry.mode);
+        input.push(b' ');
+        input.extend_from_slice(&entry.oid);
+        input.push(b'\t');
+        input.extend_from_slice(path);
+        input.push(0);
+    }
+    git_output_bytes_with_env_and_stdin(
+        workspace_path,
+        &["update-index", "-z", "--index-info"],
+        &input,
+        env,
+    )?;
+    Ok(())
+}
+
+fn format_retained_index_header(notes: &[RetainedIndexNote]) -> Vec<u8> {
+    let mut header = Vec::new();
+    header.extend_from_slice(
+        b"# Orbit retained-index note: the following safe paths have distinct staged state\n\
+          # in the retained live index not represented by this worktree patch:\n",
+    );
+    for note in notes {
+        header.extend_from_slice(b"# - ");
+        for byte in note.path.escape_ascii() {
+            header.push(byte);
+        }
+        header.extend_from_slice(b" (");
+        header.extend_from_slice(note.reason.as_bytes());
+        header.extend_from_slice(b")\n");
+    }
+    header
 }
 
 fn git_rm_cached_nul(
