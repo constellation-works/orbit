@@ -134,7 +134,25 @@ and save it at `scripts/codeql-rust-local.sh` in the workspace, then make it
 executable (`chmod +x scripts/codeql-rust-local.sh`, committed as mode 100755):
 the fulfilment executes that path directly, so a copy saved without the
 executable bit cannot run. Its default extractor toolchain is Rust 1.99.0 plus
-rust-src, confirmed for CodeQL 2.27.5. A custom
+rust-src, confirmed for CodeQL 2.27.5.
+
+The script also exits 1 with `missing CodeQL configuration` unless the checkout
+holds `.github/codeql/codeql-config.yml`, and the fulfilment runs the held
+commit's checkout, so commit that file with the script; one that exists only on
+the owner machine does not count. A minimal compatible file:
+
+```yaml
+name: orbit-codeql
+paths-ignore:
+  - "**/tests/**"
+  - ".orbit/**"
+  - "**/target/**"
+```
+
+Keep `paths-ignore` one top-level block list (a flow list is refused) with
+`.orbit/**` and `**/target/**` in it.
+
+A custom
 command is not fulfilled by the built-in path: the run attaches its log with
 that refusal and the hold stays.
 

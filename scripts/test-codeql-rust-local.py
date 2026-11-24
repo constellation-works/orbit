@@ -517,6 +517,34 @@ class LocalCodeqlTests(unittest.TestCase):
                 self.assert_selects_only_production_source()
                 self.assert_isolated()
 
+    def test_missing_consumer_configuration_refuses_before_any_tool_runs(self):
+        self.config.unlink()
+        result = self.run_script("fixture.qls")
+        self.assert_no_result(result, [])
+        self.assertIn("missing CodeQL configuration", result.stderr)
+
+    def test_documented_minimal_consumer_configuration_reaches_extraction(self):
+        # A consumer follows the shipped setup guidance: the tagged script plus
+        # the minimal configuration it shows. The guidance must carry that
+        # configuration verbatim, in the plugin copies too, and the script must
+        # accept it.
+        fence = re.compile(r"```yaml\n(name: orbit-codeql\n.*?)```", re.S)
+        configs = set()
+        for base in ("crates/orbit-core/assets/skills", "plugin/skills"):
+            for name in ("configuration-review.md", "automation-built-in.md"):
+                text = (REPO_ROOT / base / "orbit-setup/references" / name).read_text()
+                found = fence.findall(text)
+                self.assertEqual(len(found), 1, (base, name))
+                configs.add(found[0])
+        self.assertEqual(len(configs), 1, configs)
+        self.config.write_text(configs.pop())
+        result = self.run_script("fixture.qls")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        # The minimal file leaves out the repository's own test-helper pattern.
+        create = next(call for call in self.calls() if call["args"][:2] == ["database", "create"])
+        self.assertEqual(create["sources"], sorted([*SELECTED, "crates/core/src/test_support.rs"]))
+        self.assert_isolated()
+
     def test_earlier_run_under_another_scratch_is_never_extracted(self):
         earlier = self.repo / "work/codeql scratch"
         self.use_scratch(earlier)
