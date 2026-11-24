@@ -55,10 +55,11 @@ impl OrbitRuntime {
     /// replicas where coordination listings hide local task records. Count
     /// that same corpus through the store's observational metadata path.
     ///
-    /// A fresh workspace has no index file until its first task write. With
-    /// no stored task there is nothing to cover, so a missing file reports an
-    /// empty index. A missing file over stored tasks, or a file that exists
-    /// but cannot be read, stays an error.
+    /// A fresh workspace may have no index file before its first writable
+    /// runtime open. Opening that runtime creates the empty index, even if no
+    /// task is written. With no stored task there is nothing to cover, so a
+    /// missing file reports an empty index. A missing file over stored tasks,
+    /// or a file that exists but cannot be read, stays an error.
     pub fn search_index_coverage(
         &self,
     ) -> Result<(orbit_search::SearchIndexStats, usize), OrbitError> {
