@@ -6,6 +6,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import textwrap
 import unittest
 from pathlib import Path
 
@@ -66,6 +67,70 @@ class UnitTestRatchetTests(unittest.TestCase):
         self.assertEqual(result.returncode, 2, result.stderr)
         self.assertIn("injected rename failure", result.stderr)
         self.assertEqual(self.baseline.read_text(), "old baseline\n")
+        self.assertEqual(list(self.root.glob(".baseline.json.*")), [])
+
+    def test_baseline_replacement_syncs_the_temporary_file_before_rename(self):
+        self.write("crates/alpha/src/lib.rs", "#[test]\nfn fixture() {}\n")
+        self.baseline.write_text("old baseline\n", encoding="utf-8")
+        events = self.root / "events.log"
+        # Record each fsync (with the synced file's size) and each rename, in call order.
+        code = textwrap.dedent("""\
+            import os, runpy, stat, sys
+            script, root, baseline, events = sys.argv[1:5]
+            real_fsync, real_replace = os.fsync, os.replace
+            def record(line):
+                with open(events, "a", encoding="utf-8") as handle:
+                    handle.write(line + "\\n")
+            def fsync(fd):
+                info = os.fstat(fd)
+                record(f"fsync regular={stat.S_ISREG(info.st_mode)} size={info.st_size}")
+                real_fsync(fd)
+            def replace(source, destination, *args, **kwargs):
+                record(f"replace {os.path.basename(os.fspath(source))}")
+                return real_replace(source, destination, *args, **kwargs)
+            os.fsync, os.replace = fsync, replace
+            sys.argv = [script, "--root", root, "--write-baseline", baseline]
+            runpy.run_path(script, run_name="__main__")
+            """)
+        result = subprocess.run(
+            [sys.executable, "-c", code, str(INVENTORY), str(self.root), str(self.baseline), str(events)],
+            capture_output=True, text=True, check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        published = self.baseline.read_bytes()
+        lines = events.read_text(encoding="utf-8").splitlines()
+        # The whole temporary file is synced before the rename, then the parent directory after it.
+        self.assertEqual(len(lines), 3, lines)
+        self.assertEqual(lines[0], f"fsync regular=True size={len(published)}")
+        self.assertTrue(lines[1].startswith("replace .baseline.json."), lines)
+        self.assertTrue(lines[2].startswith("fsync regular=False "), lines)
+        self.assertEqual(json.loads(published)["crates"]["alpha"]["test_function_paths"], ["lib.rs::fixture"])
+
+    def test_failed_temporary_sync_names_the_error_and_keeps_existing_baseline(self):
+        self.write("crates/alpha/src/lib.rs", "#[test]\nfn fixture() {}\n")
+        self.baseline.write_text("old baseline\n", encoding="utf-8")
+        # Fail the first fsync, which is the temporary file's, before any rename can run.
+        code = textwrap.dedent("""\
+            import os, runpy, sys
+            script, root, baseline = sys.argv[1:4]
+            def fsync(fd):
+                raise OSError("injected sync failure")
+            def replace(*args, **kwargs):
+                raise AssertionError("baseline replaced before its temporary file synced")
+            os.fsync, os.replace = fsync, replace
+            sys.argv = [script, "--root", root, "--write-baseline", baseline]
+            runpy.run_path(script, run_name="__main__")
+            """)
+        result = subprocess.run(
+            [sys.executable, "-c", code, str(INVENTORY), str(self.root), str(self.baseline)],
+            capture_output=True, text=True, check=False,
+        )
+        self.assertEqual(result.returncode, 2, result.stderr)
+        self.assertIn("cannot write baseline", result.stderr)
+        self.assertIn("injected sync failure", result.stderr)
+        self.assertNotIn("Traceback", result.stderr)
+        self.assertNotIn("baseline replaced", result.stderr)
+        self.assertEqual(self.baseline.read_text(encoding="utf-8"), "old baseline\n")
         self.assertEqual(list(self.root.glob(".baseline.json.*")), [])
 
     def test_write_baseline_through_symlink_updates_referent(self):
