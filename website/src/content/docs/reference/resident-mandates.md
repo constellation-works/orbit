@@ -139,7 +139,7 @@ flag.
 | Right | Lets the resident |
 |---|---|
 | `dispatch` | Start or requeue leaf runs and drains. |
-| `promote` | Move a `proposed` task to `backlog`. |
+| `promote` | Move an ordinary `proposed` task to `backlog` (held `no-auto-approve` proposals need `promote_held`). |
 | `merge` | Land a reviewed pull request. |
 | `plugin_upgrade` | Install or upgrade a workspace plugin. |
 | `refresh` | Merge the base branch tip into a held or review delivery pull request head (conflict-free) and re-run its required checks. |

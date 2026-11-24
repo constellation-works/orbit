@@ -85,11 +85,13 @@ when it hands off, `done` with an execution summary. A resident never moves its 
 Authority answers one question per action: may this resident do this, here, now? Core answers it,
 not the prompt.
 
-- **Rights.** `dispatch` (start or requeue leaf runs and drains), `promote` (move a `proposed` task
-  to `backlog`, where the drain can admit it), `merge` (land a reviewed PR), `plugin_upgrade`
-  (install or upgrade a workspace plugin), `refresh` (merge the base tip into a held or review
-  delivery PR and start its required checks, when the merge is conflict-free), and `recover`
-  (start a review-only recovery of a stopped delivery's preserved candidate). Task-pilot assessment
+- **Rights.** `dispatch` (start or requeue leaf runs and drains), `promote` (move an ordinary
+  `proposed` task to `backlog`, where the drain can admit it), `merge` (land a reviewed PR),
+  `plugin_upgrade` (install or upgrade a workspace plugin), `refresh` (merge the base tip into
+  a held or review delivery PR and start its required checks, when the merge is conflict-free),
+  `recover` (start a review-only recovery of a stopped delivery's preserved candidate), and
+  `promote_held` (move an eligible `no-auto-approve` proposal to `backlog` with a current clean
+  pilot). Task-pilot assessment
   is a separate gate: it can assess
   eligible `proposed` or `backlog` tasks. Reading, commenting, filing `proposed` tasks, filing
   friction records in the mandate's own workspace, updating friction records in any covered
