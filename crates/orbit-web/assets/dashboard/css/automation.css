@@ -389,11 +389,12 @@ a.routine-fire:focus-visible { outline: 2px solid var(--accent); outline-offset:
 .auto-task-create-dialog :is(select, input[type="checkbox"]) { justify-self: start; }
 .auto-task-create-dialog textarea { resize: vertical; }
 .auto-task-schedule-fields, .auto-task-create-advanced { display: grid; gap: var(--space-12); }
+/* Delivery fields stack on the dialog's label/input spine at every width (STD-07 §P3, §R3, §R27). */
+.auto-task-schedule-fields .schedule-grid { grid-template-columns: minmax(0, 1fr); }
 .auto-task-create-options > summary { cursor: pointer; }
 .auto-task-create-advanced { margin-top: var(--space-12); }
 @media (max-width: 600px) {
   .auto-task-create-dialog .schedule-field { grid-template-columns: minmax(0, 5.5rem) minmax(0, 1fr); }
-  .auto-task-schedule-fields .schedule-grid { grid-template-columns: minmax(0, 1fr); }
 }
 .auto-task-actions { display: flex; flex-wrap: wrap; gap: var(--space-6); justify-content: flex-end; }
 .operation-button.danger {
