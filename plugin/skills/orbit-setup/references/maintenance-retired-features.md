@@ -46,7 +46,7 @@ operator-authored routines.
 | Retired routine | Replacement or current behavior | `orbit workspace sync` effect |
 |---|---|---|
 | `auto_task_scheduler` | Each clock tick evaluates auto-task definitions directly, so this routine has no job to fire. | Retires the unchanged seeded copy; the retained template lets Orbit distinguish it from an operator-authored routine. |
-| `blocked_task_triage` | Replaced the retired `blocked-task-triage` auto-task; the `escalation_triage_pipeline` now serves dashboard triage only. | Retires the seeded auto-task and does not enable this routine. |
+| `blocked_task_triage` | Replaced the retired `blocked-task-triage` auto-task. Final recovery handles blocked tasks; `escalation_triage_pipeline` remains for pilot-warning triage through the dashboard's Triage action or `orbit run job escalation_triage_pipeline`. | Workspace sync retires the unchanged seeded routine, separately from the predecessor auto-task; it does not enable this routine. |
 | `crew_memory_dream` | Orbit no longer seeds the weekly routine. The `crew_memory_dream_pipeline` job still ships and can run through an optional routine or an explicit job run. | Retires the unchanged seeded copy; the retained template lets Orbit distinguish it from an operator-authored routine. |
 | `crew_performance_refresh` | This enabled hourly snapshot routine and crew-performance weighting were removed. Route by task type with `workflow.type_complexity_crews`. | Retires the unchanged seeded copy. |
 | `evolution_pass` | The weekly proposal routine was removed; declines use a fixed 14-day cost baseline, while suppression defaults to 30 days and can be set per decline. | Retires the unchanged seeded copy. |
