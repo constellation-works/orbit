@@ -236,6 +236,90 @@ fn codebase_cli_ranks_paths_and_lists_the_tasks_behind_a_count() {
     );
 }
 
+/// A path's show marks the absent partner of each coupled pair, in JSON and in the text view.
+#[test]
+fn codebase_cli_marks_the_absent_partner_in_a_path_show() {
+    if crate::isolated_test::run_in_child(
+        "codebase_cli::codebase_cli_marks_the_absent_partner_in_a_path_show",
+    ) {
+        return;
+    }
+
+    let fixture = Fixture::new();
+    for path in ["src/live.rs", "src/gone.rs"] {
+        let file = fixture.repo.join(path);
+        fs::create_dir_all(file.parent().unwrap()).unwrap();
+        fs::write(file, "coupling fixture\n").unwrap();
+    }
+
+    let shown = fixture.json(&["workspace", "show", "--format", "json"]);
+    let workspace_root = Path::new(shown["orbit_root"].as_str().unwrap());
+    {
+        let _authority = orbit_common::test_env::unset(
+            orbit_common::test_env::INHERITED_AUTHORITY_ENV
+                .iter()
+                .copied(),
+        );
+        let runtime = OrbitRuntime::from_roots(&fixture.root, workspace_root)
+            .unwrap()
+            .with_actor(ActorIdentity::human("codebase-fixture"));
+        let task = runtime
+            .add_task(TaskAddParams {
+                title: "coupled paths".into(),
+                description: "codebase analytics fixture".into(),
+                context_files: vec!["file:src/live.rs".into(), "file:src/gone.rs".into()],
+                status: Some(TaskStatus::Backlog),
+                ..Default::default()
+            })
+            .unwrap();
+        let reservation = orbit_core::runtime::task::locks::reserve(
+            &runtime,
+            json!({"task_ids": [task.id.to_string()], "ttl_seconds": 600}),
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+        assert_eq!(reservation["reserved"], true, "{reservation}");
+    }
+    fs::remove_file(fixture.repo.join("src/gone.rs")).unwrap();
+
+    let selection = ["--window", "30d", "--min-support", "1"];
+    let detail = fixture.json(
+        &[
+            &["codebase", "show", "src/live.rs"][..],
+            &selection,
+            &["--json"],
+        ]
+        .concat(),
+    );
+    assert!(detail.get("absent_at_head").is_none(), "{detail}");
+    let pairs = detail["rankings"]["change_coupling"]["pairs"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+    assert_eq!(pairs.len(), 1, "{detail}");
+    assert_eq!(
+        pairs[0]["absent_paths_at_head"],
+        json!(["src/gone.rs"]),
+        "{detail}"
+    );
+
+    let human = fixture
+        .command(&[&["codebase", "show", "src/live.rs"][..], &selection].concat())
+        .env("NO_COLOR", "1")
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let human = String::from_utf8(human).unwrap();
+    assert!(
+        human.contains("src/gone.rs [absent at HEAD]"),
+        "the show text labels the absent partner of the pair:\n{human}"
+    );
+}
+
 /// A width-limited analytics table keeps the identity of the absent pair member visible.
 #[cfg(unix)]
 #[test]

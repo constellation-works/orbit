@@ -339,9 +339,14 @@ fn show_blocks(value: &Value) -> Vec<Block> {
             .into_iter()
             .find(|candidate| *candidate != path)
             .unwrap_or_default();
+        let label = if strings(&pair["absent_paths_at_head"]).contains(&other) {
+            format!("{other} [absent at HEAD]")
+        } else {
+            other
+        };
         let _ = writeln!(
             out,
-            "  #{} {other}  {} ({})",
+            "  #{} {label}  {} ({})",
             count(&pair["rank"]),
             percent(&pair["rate"]),
             fraction(pair),

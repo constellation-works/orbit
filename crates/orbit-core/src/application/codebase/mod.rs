@@ -296,6 +296,15 @@ pub fn codebase_path_detail(
     if params.rollup == Rollup::File {
         let mut cache = std::collections::BTreeMap::new();
         mark_absent_row(&mut detail, &facts.repo_root, &mut cache);
+        // Coupled pairs name their partner, which can be absent while the selected path is live.
+        if let Some(pairs) = detail
+            .pointer_mut("/rankings/change_coupling/pairs")
+            .and_then(Value::as_array_mut)
+        {
+            for pair in pairs {
+                mark_absent_row(pair, &facts.repo_root, &mut cache);
+            }
+        }
     }
     detail["regression_filter"] = query.filter.json();
     Ok(sections::merge(detail, query.header(facts, params.since)))
