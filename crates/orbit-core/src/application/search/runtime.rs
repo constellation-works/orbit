@@ -70,14 +70,19 @@ impl OrbitRuntime {
             .total;
         match stats {
             Ok(stats) => Ok((stats, tasks)),
-            Err(_) if tasks == 0 && !self.search_index_file_exists() => Ok((
-                orbit_search::SearchIndexStats {
-                    chunks: 0,
-                    tasks: 0,
-                },
-                0,
-            )),
-            Err(error) => Err(error),
+            Err(error) => {
+                if tasks == 0 && !self.search_index_file_exists()? {
+                    Ok((
+                        orbit_search::SearchIndexStats {
+                            chunks: 0,
+                            tasks: 0,
+                        },
+                        0,
+                    ))
+                } else {
+                    Err(error)
+                }
+            }
         }
     }
 
