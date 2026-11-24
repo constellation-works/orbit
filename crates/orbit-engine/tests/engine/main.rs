@@ -49,6 +49,7 @@ mod provider_limit;
 mod provider_usage_window;
 mod recovery_evidence;
 mod review_fixes;
+mod review_gate_paths;
 #[cfg(unix)]
 mod reviewer_wall_clock;
 mod script_steps;
