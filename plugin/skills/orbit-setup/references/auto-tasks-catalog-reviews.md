@@ -2,9 +2,9 @@
 
 ## Contents
 
-- [The 21 seeded definitions](#the-21-seeded-definitions)
+- [The 18 seeded definitions](#the-18-seeded-definitions)
 
-## The 21 seeded definitions
+## The 18 seeded definitions
 
 `orbit workspace init` seeds the defaults selected by `seeding.auto_tasks`
 (`"all"` by default) from this catalog, disabled,

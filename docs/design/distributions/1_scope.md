@@ -22,8 +22,8 @@ unbuilt are called out separately below.
 Bearing: The [plugin standard](../plugins/1_scope.md) lets a package add tools, CLI groups,
 panels, routines, auto-tasks, activities, jobs and skills from one manifest. Plugin-seeded
 definitions land disabled and become active only through an operator act. Orbit also ships
-7 default routines and 21 default auto-tasks: 28 defaults in total. By default it seeds all
-28 into each workspace. The routines `worktree_gc` and `task_pilot` are seeded
+7 default routines and 18 default auto-tasks: 25 defaults in total. By default it seeds all
+25 into each workspace. The routines `worktree_gc` and `task_pilot` are seeded
 enabled. Other shipped routines are seeded disabled. Among auto-tasks, `host-health` is also seeded disabled
 ([ORB-24934], reversing [ORB-21596]); enable it with
 `orbit auto-task toggle host-health on`. The routine

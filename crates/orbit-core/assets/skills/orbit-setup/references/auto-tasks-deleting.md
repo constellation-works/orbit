@@ -23,7 +23,7 @@ reset before it stays applied, recorded as its own audited reset.
   consumer owned by another machine — and points at
   `orbit auto-task reset <name>` to preview it. `--force` abandons an
   executing action, exactly as it does for `reset`.
-- Deleting one of the shipped defaults [below](auto-tasks-catalog-reviews.md#the-21-seeded-definitions) records an opt-out in
+- Deleting one of the shipped defaults [below](auto-tasks-catalog-reviews.md#the-18-seeded-definitions) records an opt-out in
   `.orbit/auto_tasks/.orbit-managed-assets.json`. `orbit workspace init
   --force` and `orbit workspace sync` leave an opted-out default absent, and
   `orbit doctor` does not report it missing. Use this to drop the code
@@ -113,5 +113,3 @@ it.
 Tasks minted from one carry
 `plugin:<ns>` beside `auto-task:<name>`, so their provenance survives the
 plugin being removed.
-
-<a id="the-twenty-three-seeded-definitions"></a>
