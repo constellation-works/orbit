@@ -31,6 +31,17 @@ UPLOAD = "Upload nextest archive"
 
 
 class AwaitJobsTests(unittest.TestCase):
+    def test_nonfinite_durations_fail_before_network(self):
+        for option in ("--poll-seconds", "--timeout-seconds", "--absent-grace-seconds"):
+            for value in ("nan", "inf", "-inf"):
+                with self.subTest(option=option, value=value):
+                    result = subprocess.run(
+                        [sys.executable, str(SCRIPTS / "ci-await-jobs.py"), "--job", "fixture", f"{option}={value}"],
+                        env={"PATH": os.environ["PATH"]}, capture_output=True, text=True)
+                    self.assertEqual(result.returncode, 2)
+                    self.assertIn(option, result.stderr)
+                    self.assertIn("finite", result.stderr)
+
     def setUp(self):
         scratch = SCRIPTS.parent / ".orbit/tmp"
         scratch.mkdir(parents=True, exist_ok=True)

@@ -43,6 +43,8 @@ class GuardrailTests(unittest.TestCase):
         self.root = Path(self.temporary.name)
         self.guard_calls = self.root / "guard-calls"
         self.guard_calls.mkdir()
+        self.guard_counts = self.root / "guard-counts"
+        self.guard_counts.mkdir()
         self.scripts = self.root / "scripts"
         self.scripts.mkdir()
         self.bin = self.root / "bin"
@@ -53,7 +55,7 @@ class GuardrailTests(unittest.TestCase):
                         GIT_CEILING_DIRECTORIES=str(scratch),
                         GUARD_TEST_LOG=str(self.log), GUARD_TEST_METADATA=str(self.metadata),
                         GUARD_TEST_BIN=str(self.bin / "fixture-test-bin"),
-                        GUARD_TEST_CALLS=str(self.guard_calls))
+                        GUARD_TEST_CALLS=str(self.guard_calls), GUARD_TEST_COUNTS=str(self.guard_counts))
         for key in ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR",
                     "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES",
                     "NEXTEST_SHARDS", "NEXTEST_PARTITIONS", "GUARD_TEST_NICE_ATTEMPTED",
@@ -199,6 +201,8 @@ else:
     def run_guard(self, name, *arguments, env_overrides=None):
         for call in self.guard_calls.iterdir():
             call.unlink()
+        for call in self.guard_counts.iterdir():
+            call.unlink()
         shutil.copy2(SCRIPTS / name, self.scripts / name)
         interpreter = "python3" if name.endswith(".py") else "/bin/bash"
         return subprocess.run([interpreter, str(self.scripts / name), *arguments],
@@ -226,7 +230,7 @@ else:
             path = self.root / relative
             path.parent.mkdir(parents=True, exist_ok=True)
             self.write_executable(path,
-                                  f'#!/bin/bash\nprintf "%s\\n" "$@" > "$GUARD_TEST_CALLS/{path.name}"\n')
+                                  f'#!/bin/bash\nprintf "%s\\n" "$@" > "$GUARD_TEST_CALLS/{path.name}"\nprintf "call\n" >> "$GUARD_TEST_COUNTS/{path.name}.count"\n')
         shutil.copy2(SCRIPTS / "ci-guardrails.sh", self.scripts / "ci-guardrails.sh")
         shutil.copy2(SCRIPTS / "check-ci-macos.sh", self.scripts / "check-ci-macos.sh")
         # The lint wrapper is the environment under test, not a guard.
@@ -1457,13 +1461,34 @@ with open(os.environ["GUARD_TEST_LOG"], "a") as log:
 
         # The two hosted routes must execute the same guard set exactly once.
         # Each runner performs its own Python preflight; it is not guard work.
-        all_guards = {call.name for call in self.guard_calls.iterdir()} - {"require-python.sh"}
+        def counts():
+            return {p.name.removesuffix(".count"): len(p.read_text().splitlines())
+                    for p in self.guard_counts.glob("*.count") if p.name != "require-python.sh.count"}
+
+        def assert_once(observed):
+            self.assertTrue(all(count == 1 for count in observed.values()), observed)
+
+        all_counts = counts()
+        assert_once(all_counts)
+        all_guards = set(all_counts)
         result = self.run_guard("ci-guardrails.sh", "--guards-core")
         self.assertEqual(result.returncode, 0, result.stderr)
-        core_guards = {call.name for call in self.guard_calls.iterdir()} - {"require-python.sh"}
+        core_counts = counts()
+        assert_once(core_counts)
+        core_guards = set(core_counts)
+        repeated_core = dict(core_counts)
+        repeated_core[next(iter(repeated_core))] += 1
+        with self.assertRaises(AssertionError):
+            assert_once(repeated_core)
         result = self.run_guard("ci-guardrails.sh", "--guards-qa")
         self.assertEqual(result.returncode, 0, result.stderr)
-        qa_guards = {call.name for call in self.guard_calls.iterdir()} - {"require-python.sh"}
+        qa_counts = counts()
+        assert_once(qa_counts)
+        qa_guards = set(qa_counts)
+        repeated_qa = dict(qa_counts)
+        repeated_qa[next(iter(repeated_qa))] += 1
+        with self.assertRaises(AssertionError):
+            assert_once(repeated_qa)
         self.assertEqual(core_guards | qa_guards, all_guards)
         self.assertFalse(core_guards & qa_guards, "hosted routes must not duplicate a guard")
         self.assertEqual(qa_guards, {"test-qa-full-sweep.py"})

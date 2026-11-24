@@ -17,6 +17,7 @@ Exit status is 0 for every verdict, so nonzero means the adapter itself failed.
 """
 
 import copy
+import functools
 import hashlib
 import json
 import os
@@ -144,6 +145,7 @@ def authenticated_native_certificate(request, row, name):
                 f"{name}: no operator- or Orbit-written artifact has the native certificate digest {digest}")
 
 
+@functools.lru_cache(maxsize=1)
 def load_harness():
     """Load the QA sweep harness module from the mounted inputs or checkout."""
     root = os.environ.get("ORBIT_SCRIPT_IN")
@@ -345,6 +347,67 @@ def judge_qa_results(request, inventory, report, candidate_id):
                             f"required scenario {name} retired case {case.get('retired')} has no executed command")
         if capability == "linux":
             judge_linux_rows(request, report, scenario, rows)
+        # Builtin probes are independent commands; refusals deliberately exit
+        # nonzero, while all other commands must exit zero. Inventory-guard is
+        # an in-process inventory evaluation, not an executed command.
+        if scenario.get("kind") == "builtin" and name != "inventory-guard":
+            refusal_assertions = {
+                "cross-workspace-task-read-refused", "invalid-setting-refused-without-byte-change",
+                "immutable-machine-id-refused-without-mutation", "immutable-task-prefix-refused-without-mutation",
+                "workspace-scoped-machine-key-refused-without-mutation", "invalid-rename-refused-without-mutation",
+                "legacy-dry-run-reports-pending-without-mutation", "newer-state-refused-without-mutation",
+            }
+            for row in rows:
+                command = row.get("command")
+                assertions = row.get("assertions")
+                is_refusal = isinstance(assertions, list) and len(assertions) == 1 and assertions[0] in refusal_assertions
+                code = row.get("exit_code")
+                if (not isinstance(command, list) or not command or not all(isinstance(arg, str) and arg for arg in command)
+                        or type(code) is not int or (code == 0 if is_refusal else code != 0)
+                        or row.get("cleanup_verified") is not True or row.get("output_truncated")
+                        or not isinstance(row.get("stdout"), str) or not isinstance(row.get("stderr"), str)):
+                    unavailable("execution-evidence-invalid", f"required scenario {name} has invalid builtin command evidence")
+        # Builtins contain independently validated commands, some deliberately
+        # nonzero. Command scenarios and retired checks have a declared argv
+        # and must carry the producer's execution proof on every local row.
+        if scenario.get("kind") != "builtin" and scenario.get("command"):
+            try:
+                harness = load_harness()
+                expected = scenario["command"]
+                if capability == "browser":
+                    module = (report.get("browser") or {}).get("playwright_module")
+                    directory = (rows[0].get("retained_evidence") or {}).get("directory")
+                    if not isinstance(module, str) or not module or not directory:
+                        raise ValueError("browser runtime paths missing")
+                    expected = harness["expand_scenario_command"](expected, module, directory)
+                if not any(row.get("command") == expected for row in rows):
+                    raise ValueError("the scenario command was not executed")
+                retired = {tuple(case["command"]): case for case in scenario.get("retired_cases", [])
+                           if isinstance(case, dict) and case.get("command")}
+                for row in rows:
+                    # Imported Linux evidence is independently authenticated and
+                    # validated by judge_linux_rows above.
+                    if capability == "linux" and (row.get("imported_from") or row.get("evidence_sha256")):
+                        continue
+                    command = row.get("command")
+                    case = retired.get(tuple(command)) if isinstance(command, list) else None
+                    if command != expected and case is None:
+                        raise ValueError("command does not match the scenario or retired check")
+                    assertions = row.get("assertions")
+                    if (not isinstance(assertions, list) or not all(isinstance(item, str) for item in assertions)
+                            or set(assertions) != (set() if case else set(scenario.get("assertions", [])))):
+                        raise ValueError("command row assertions do not match its required checks")
+                    proof = copy.deepcopy(row)
+                    if scenario.get("kind") == "cargo-test" and case is None and not harness["is_cargo_test"](command):
+                        raise ValueError("scenario is not a cargo test")
+                    harness["validate_cargo_test_evidence"](
+                        command, proof, case.get("command_tests", []) if case else scenario.get("required_tests", []),
+                        case.get("command_rows", []) if case else scenario.get("required_rows", []))
+                    harness["validate_node_test_evidence"](command, proof, [] if case else scenario.get("required_cases", []))
+                    if harness["finalize_result"](proof, row.get("assertions", []), candidate_id).get("outcome") != "PASS":
+                        raise ValueError("command execution did not pass")
+            except (OSError, ImportError, KeyError, TypeError, AttributeError, ValueError) as error:
+                unavailable("execution-evidence-invalid", f"required scenario {name} has invalid execution evidence: {error}")
     return discharged
 
 

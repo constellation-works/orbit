@@ -7,6 +7,7 @@ import json
 import os
 from pathlib import Path
 import select
+import socket
 import shutil
 import signal
 import subprocess
@@ -20,20 +21,63 @@ from unittest import mock
 SCRIPTS = Path(__file__).resolve().parent
 
 
-def stop_owned_helper(proc):
-    """Ask the helper to clean its own children, then reap the helper."""
-    if proc.returncode is not None:
-        return
-    # SIGTERM lets run_observed clean up its own unreaped child.
-    with contextlib.suppress(ProcessLookupError):
-        proc.send_signal(signal.SIGTERM)
+# The anchor is the owned child's session leader. A private socket lets the
+# independent watchdog ask that still-live leader to kill its own group; no
+# numeric PID or group ID is signalled after the identity can be recycled.
+ANCHOR = r"""
+import json, os, signal, subprocess, sys, threading
+control = int(sys.argv[1])
+fds = json.loads(sys.argv[2])
+command = json.loads(sys.argv[3])
+signal.signal(signal.SIGTERM, signal.SIG_IGN)
+def cancel():
+    if os.read(control, 1):
+        os.killpg(os.getpgrp(), signal.SIGKILL)
+threading.Thread(target=cancel, daemon=True).start()
+def reset():
+    signal.signal(signal.SIGTERM, signal.SIG_DFL)
+child = subprocess.Popen(command, pass_fds=tuple(fds), preexec_fn=reset)
+code = child.wait()
+if code < 0:
+    os.kill(os.getpid(), -code)
+else:
+    sys.exit(code)
+"""
+
+
+def spawn_fixture_helper(command):
+    watcher, child_socket = socket.socketpair()
+    env = dict(os.environ, ORBIT_FIXTURE_WATCHDOG_FD=str(child_socket.fileno()),
+               ORBIT_FIXTURE_ANCHOR=ANCHOR)
     try:
-        proc.communicate(timeout=5)
-    except subprocess.TimeoutExpired:
-        if proc.returncode is None:
+        proc = subprocess.Popen(command, start_new_session=True, stdout=subprocess.PIPE,
+                                stderr=subprocess.PIPE, env=env, pass_fds=(child_socket.fileno(),))
+    finally:
+        child_socket.close()
+    proc.fixture_watchdog = watcher
+    return proc
+
+
+def stop_owned_helper(proc):
+    """Cancel owned descendants through their live anchor and reap the helper."""
+    if proc.returncode is None:
+        with contextlib.suppress(ProcessLookupError):
+            proc.send_signal(signal.SIGTERM)
+        try:
+            proc.communicate(timeout=5)
+        except subprocess.TimeoutExpired:
             with contextlib.suppress(OSError):
+                proc.fixture_watchdog.sendall(b"x")
+            try:
+                proc.communicate(timeout=5)
+            except subprocess.TimeoutExpired:
                 proc.kill()
-            proc.communicate()
+                proc.communicate()
+    # If a broken supervisor already exited, any surviving anchor still owns
+    # the socket. It alone decides whether it can signal its group safely.
+    with contextlib.suppress(OSError):
+        proc.fixture_watchdog.sendall(b"x")
+    proc.fixture_watchdog.close()
 
 
 def assert_phase_sums(testcase, summary):
@@ -343,8 +387,17 @@ exit "${GUARD_TEST_MACOS_EXIT:-0}"
     def test_untracked_and_deleted_crate_paths_are_selected(self):
         (self.root / "crates/orbit-core/src/new.rs").write_text("// new\n")
         self.assertEqual(self.selected(), self.core_dependents)
+        (self.root / "crates/orbit-core/src/new.rs").unlink()
+        self.assertEqual(self.selected(), [])
         (self.root / "crates/orbit-core/src/lib.rs").unlink()
         self.assertEqual(self.selected(), self.core_dependents)
+        script = self.root / "scripts/ci-test-affected.py"
+        source = script.read_text()
+        original = 'if path}'
+        self.assertIn(original, source)
+        script.write_text(source.replace(original, 'if path and os.fsdecode(path) not in {"crates/orbit-core/src/lib.rs", "scripts/ci-test-affected.py"}}'))
+        self.assertNotEqual(self.selected(), self.core_dependents,
+                            "suppressing deleted paths must invalidate the selection")
 
     def test_cross_crate_asset_reads_select_the_reading_crate_and_its_dependents(self):
         # orbit-engine's tests read orbit-core's assets, though core depends on engine.
@@ -921,6 +974,40 @@ class ObservedPipeDrainTests(unittest.TestCase):
 
     DEADLINE_SECONDS = 10
 
+    def test_watchdog_cancels_owned_group_when_supervisor_ignores_sigterm(self):
+        if sys.platform != "linux":
+            self.skipTest("the fixture checks Linux subreaper adoption")
+        scratch = SCRIPTS.parent / ".orbit/tmp"
+        scratch.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=scratch) as temporary:
+            root = Path(temporary)
+            helper = root / "broken.py"
+            helper.write_text(textwrap.dedent(r'''
+                import ctypes, json, os, signal, subprocess, sys
+                from pathlib import Path
+                assert ctypes.CDLL(None, use_errno=True).prctl(36, 1, 0, 0, 0) == 0
+                signal.signal(signal.SIGTERM, signal.SIG_IGN)
+                fd = int(os.environ["ORBIT_FIXTURE_WATCHDOG_FD"])
+                code = "import os, signal, sys; signal.signal(signal.SIGTERM, signal.SIG_IGN); " \
+                       "open(sys.argv[1], 'w').close(); signal.pause()"
+                proc = subprocess.Popen([sys.executable, "-c", os.environ["ORBIT_FIXTURE_ANCHOR"],
+                    str(fd), "[]", json.dumps([sys.executable, "-c", code, sys.argv[1]])],
+                    start_new_session=True, pass_fds=(fd,))
+                result = proc.wait()
+                _, status = os.waitpid(-1, 0)
+                Path(sys.argv[2]).write_text(json.dumps([result, os.waitstatus_to_exitcode(status)]))
+            ''').lstrip("\n"))
+            proc = spawn_fixture_helper([sys.executable, str(helper), str(root / "ready"), str(root / "result")])
+            try:
+                deadline = __import__("time").monotonic() + self.DEADLINE_SECONDS
+                while not (root / "ready").exists() and __import__("time").monotonic() < deadline:
+                    __import__("time").sleep(0.02)
+                self.assertTrue((root / "ready").exists())
+            finally:
+                stop_owned_helper(proc)
+            self.assertEqual(proc.returncode, 0)
+            self.assertEqual(json.loads((root / "result").read_text()), [-signal.SIGKILL, -signal.SIGKILL])
+
     def test_executor_sigterm_stops_the_separate_child_session(self):
         scratch = SCRIPTS.parent / ".orbit" / "tmp"
         scratch.mkdir(parents=True, exist_ok=True)
@@ -936,8 +1023,15 @@ class ObservedPipeDrainTests(unittest.TestCase):
                 root = Path(sys.argv[2])
                 children = []
                 real_popen = subprocess.Popen
+                def owned_popen(*args, **kwargs):
+                    fd = int(os.environ["ORBIT_FIXTURE_WATCHDOG_FD"])
+                    fds = tuple(kwargs.get("pass_fds") or ())
+                    kwargs["pass_fds"] = fds + (fd,)
+                    command = [sys.executable, "-c", os.environ["ORBIT_FIXTURE_ANCHOR"],
+                               str(fd), json.dumps(fds), json.dumps(args[0])]
+                    return real_popen(command, **kwargs)
                 def recording_popen(*args, **kwargs):
-                    child = real_popen(*args, **kwargs)
+                    child = owned_popen(*args, **kwargs)
                     children.append(child)
                     (root / "child.pid").write_text(str(child.pid))
                     return child
@@ -953,9 +1047,8 @@ class ObservedPipeDrainTests(unittest.TestCase):
                         "code": caught.code, "returncode": children[0].poll(),
                         "signal_restored": signal.getsignal(signal.SIGTERM) == previous}))
             ''').lstrip("\n"))
-            proc = subprocess.Popen(
-                [sys.executable, str(helper), str(SCRIPTS / "ci-test-affected.py"), str(root)],
-                start_new_session=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            proc = spawn_fixture_helper(
+                [sys.executable, str(helper), str(SCRIPTS / "ci-test-affected.py"), str(root)])
             try:
                 ready, _, _ = select.select([proc.stdout], [], [], self.DEADLINE_SECONDS)
                 self.assertTrue(ready, "observed child did not become ready")
@@ -1035,9 +1128,16 @@ class ObservedPipeDrainTests(unittest.TestCase):
                 original = BrokenPipeError("injected relay " + operation)
                 children = []
                 real_popen = subprocess.Popen
+                def owned_popen(*args, **kwargs):
+                    fd = int(os.environ["ORBIT_FIXTURE_WATCHDOG_FD"])
+                    fds = tuple(kwargs.get("pass_fds") or ())
+                    kwargs["pass_fds"] = fds + (fd,)
+                    command = [sys.executable, "-c", os.environ["ORBIT_FIXTURE_ANCHOR"],
+                               str(fd), json.dumps(fds), json.dumps(args[0])]
+                    return real_popen(command, **kwargs)
                 def recording_popen(*args, **kwargs):
                     kwargs["pass_fds"] = tuple(kwargs.get("pass_fds") or ()) + (ack_read, ready_write)
-                    child = real_popen(*args, **kwargs)
+                    child = owned_popen(*args, **kwargs)
                     children.append(child)
                     (root / "child.pid").write_text(str(child.pid))
                     return child
@@ -1092,10 +1192,9 @@ class ObservedPipeDrainTests(unittest.TestCase):
                     ("stdout", "write", "no"), ("stderr", "write", "no"),
                     ("stdout", "flush", "no"), ("stdout", "write", "yes")):
                 with self.subTest(stream=stream, operation=operation, cleanup_error=cleanup_error):
-                    proc = subprocess.Popen(
+                    proc = spawn_fixture_helper(
                         [sys.executable, str(fixture), "helper", str(SCRIPTS / "ci-test-affected.py"),
-                         str(root), stream, operation, cleanup_error],
-                        start_new_session=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                         str(root), stream, operation, cleanup_error])
                     try:
                         stdout, stderr = proc.communicate(timeout=self.DEADLINE_SECONDS)
                     except subprocess.TimeoutExpired:
@@ -1182,7 +1281,12 @@ class ObservedPipeDrainTests(unittest.TestCase):
             spec.loader.exec_module(module)
             real_popen = module.subprocess.Popen
             def recording_popen(*args, **kwargs):
-                child = real_popen(*args, **kwargs)
+                fd = int(os.environ["ORBIT_FIXTURE_WATCHDOG_FD"])
+                fds = tuple(kwargs.get("pass_fds") or ())
+                kwargs["pass_fds"] = fds + (fd,)
+                command = [sys.executable, "-c", os.environ["ORBIT_FIXTURE_ANCHOR"],
+                           str(fd), json.dumps(fds), json.dumps(args[0])]
+                child = real_popen(command, **kwargs)
                 Path(sys.argv[3]).with_suffix(".pid").write_text(str(child.pid))
                 return child
             module.subprocess.Popen = recording_popen
@@ -1190,9 +1294,8 @@ class ObservedPipeDrainTests(unittest.TestCase):
             Path(sys.argv[3]).with_suffix(".pid").unlink(missing_ok=True)
             Path(sys.argv[3]).write_text(json.dumps({"exit_code": code, "output": output}))
         ''').lstrip("\n"))
-        proc = subprocess.Popen(
-            [sys.executable, str(helper), str(SCRIPTS / "ci-test-affected.py"), str(child), str(result_path)],
-            start_new_session=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        proc = spawn_fixture_helper(
+            [sys.executable, str(helper), str(SCRIPTS / "ci-test-affected.py"), str(child), str(result_path)])
         try:
             stdout, stderr = proc.communicate(timeout=self.DEADLINE_SECONDS)
         except subprocess.TimeoutExpired:

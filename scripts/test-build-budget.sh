@@ -243,10 +243,7 @@ finally:
 PY
 chmod +x "$TMP/helper.py"
 
-# Admission under test: the first $2 helpers must be admitted together. Starts are
-# awaited through markers, so host load only delays the barrier and cannot shrink
-# the overlap. The wave then holds for a short settle window, so an over-admitted
-# helper has time to appear in the recorded max before release.
+# Release only once every contender either entered or reported a failed admission.
 hold_first_wave() {
   local state="$1" expected="$2" total="$3"
   "$REAL_PYTHON3" -c '
@@ -254,20 +251,24 @@ from pathlib import Path
 import sys, time
 state = Path(sys.argv[1])
 expected, total = int(sys.argv[2]), int(sys.argv[3])
-def count():
-    return sum(1 for _ in state.glob("started-*"))
-deadline = time.monotonic() + 15.0
-while count() < expected:
+labels = "abcd"[:total]
+deadline = time.monotonic() + 20
+while True:
+    arrived = [label for label in labels if (state / ("started-" + label)).exists()
+               or "waiting for admission" in (state / ("wait-" + label)).read_text(errors="replace")]
+    if len(arrived) == total:
+        started = list(state.glob("started-*"))
+        (state / "release-owner").touch()
+        if len(started) != expected:
+            print(f"admitted {len(started)} helpers, expected {expected}", file=sys.stderr)
+            sys.exit(1)
+        break
     if time.monotonic() >= deadline:
         (state / "release-owner").touch()
-        print(f"only {count()} of {expected} admitted helpers started in {state}", file=sys.stderr)
+        print(f"only {len(arrived)} of {total} contenders reached admission", file=sys.stderr)
         sys.exit(1)
     time.sleep(0.02)
-settle_end = time.monotonic() + 0.5
-while count() < total and time.monotonic() < settle_end:
-    time.sleep(0.02)
-(state / "release-owner").touch()
-' "$state" "$expected" "$total" || fail "first wave did not reach $expected admitted helpers in $state"
+' "$state" "$expected" "$total"
 }
 
 # Agent subprocesses retain HOME and PATH but receive no ORBIT_* settings.
@@ -281,17 +282,18 @@ run_agent_environment_case() {
   mkdir -p "$home" "$state"
 
   for label in a b c d; do
+    : >"$state/wait-$label"
     if [[ -n "$override_slots" ]]; then
       (env -i HOME="$home" PATH="$PATH" ORBIT_BUILD_SLOTS="$override_slots" \
-        "$WRAPPER" -- "$TMP/helper.py" "$state" "$label" barrier 20) &
+        "$WRAPPER" -- "$TMP/helper.py" "$state" "$label" barrier 60 2>"$state/wait-$label") &
     else
       (env -i HOME="$home" PATH="$PATH" \
-        "$WRAPPER" -- "$TMP/helper.py" "$state" "$label" barrier 20) &
+        "$WRAPPER" -- "$TMP/helper.py" "$state" "$label" barrier 60 2>"$state/wait-$label") &
     fi
     pids+=("$!")
   done
 
-  hold_first_wave "$state" "$expected_slots" 4
+  hold_first_wave "$state" "$expected_slots" 4 || fail "agent contenders failed admission barrier"
 
   local pid
   for pid in "${pids[@]}"; do
@@ -300,6 +302,20 @@ run_agent_environment_case() {
   [[ "$(cat "$state/max")" == "$expected_slots" ]] \
     || fail "$case_name agent environment admitted $(cat "$state/max") commands, expected $expected_slots"
 }
+
+# Mutation control: a wrapper that admits every contender must fail the barrier.
+control_state="$TMP/over-admission"
+mkdir -p "$control_state"
+control_pids=()
+for label in a b c d; do
+  : >"$control_state/wait-$label"
+  "$TMP/helper.py" "$control_state" "$label" barrier 60 &
+  control_pids+=("$!")
+done
+if hold_first_wave "$control_state" 2 4; then
+  fail "over-admission control was accepted"
+fi
+for pid in "${control_pids[@]}"; do wait "$pid"; done
 
 run_agent_environment_case agent-default 2
 
@@ -337,15 +353,16 @@ done
 # Different worktree paths share two slots, and the first wave reaches both.
 pids=()
 for label in a b c d; do
+  : >"$TMP/state/wait-$label"
   (
     cd "$TMP/worktrees/$label"
     CARGO_TARGET_DIR="$TMP/targets/$label" ORBIT_BUILD_BUDGET_DIR="$TMP/locks-cross" \
       ORBIT_BUILD_SLOTS=2 ORBIT_CARGO_JOBS=3 \
-      "$WRAPPER" -- "$TMP/helper.py" "$TMP/state" "$label" barrier 20
+      "$WRAPPER" -- "$TMP/helper.py" "$TMP/state" "$label" barrier 60 2>"$TMP/state/wait-$label"
   ) &
   pids+=("$!")
 done
-hold_first_wave "$TMP/state" 2 4
+hold_first_wave "$TMP/state" 2 4 || fail "cross-worktree contenders failed admission barrier"
 for pid in "${pids[@]}"; do
   wait "$pid"
 done
