@@ -1,1 +1,12 @@
-[]
+[
+  {
+    "identifier": "generate",
+    "doc": "docs/design/auto-tasks/1_overview.md",
+    "reason": "This historical reference names the unrelated orbit auto-task command renamed by ORB-10446, not the removed runtime test module helper."
+  },
+  {
+    "identifier": "generate",
+    "doc": "docs/design/auto-tasks/2_design.md",
+    "reason": "This historical reference names the unrelated orbit auto-task command renamed by ORB-10446, not the removed runtime test module helper."
+  }
+]
