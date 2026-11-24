@@ -19,7 +19,7 @@ The same rejection fires for any unknown field, for example `rationale` on a dec
 
 ## Where the operator sees both failures
 
-Since ORB-27941 the escalation's diagnosis, shown in the task's Final recovery and decision request records, carries the parser error followed by `the original failure was step `<id>`: <error>`. The error is the failed step's own message, redacted and capped at 4096 characters. Before that change the diagnosis held only the parser error, so a failure such as `managed_block_not_writable` was visible only in the task's execution summary. The response still authorizes nothing: the decision stays an escalation with an `unknown` fault.
+Since ORB-27941 the escalation's diagnosis carries the parser error followed by `the original failure was step `<id>`: <error>`. The error is the failed step's own message, redacted, retaining the first 4096 characters and appending a single `…` only when truncated. The full diagnosis is written to the task's `final_recovery` comment (`diagnosis: ...`); read that comment for the complete evidence. The decision request carries only a summary: the malformed escalation has `summary: None`, so the applier substitutes the first two sentences capped at 280 bytes, and a long unknown-field name can therefore push all original step evidence out of the request. Before that change the diagnosis held only the parser error, so a failure such as `managed_block_not_writable` was visible only in the task's execution summary. The response still authorizes nothing: the decision stays an escalation with an `unknown` fault.
 
 ## Resolution
 
