@@ -315,7 +315,9 @@ impl OrbitRuntime {
                 requests,
             });
         }
-        // Checkpoint decisions that live on other tasks, each read once.
+        // Checkpoint decisions that live on other tasks, each read once. The
+        // cards' own requests and these never share a task id, so one map
+        // answers every lookup.
         let mut extra: BTreeMap<String, Vec<orbit_types::task::DecisionRequest>> = BTreeMap::new();
         for card in &cards {
             for other in checkpoint_other_tasks(&card.shown, &card.task_id) {
@@ -333,20 +335,85 @@ impl OrbitRuntime {
                 }
             }
         }
+        requests_by_task.extend(extra);
         let mut mandates = Vec::new();
         for card in cards {
             let mut shown = card.shown;
-            shown["open_decisions"] = open_decisions_json_for(
-                &card.requests,
-                &shown,
-                &card.task_id,
-                &requests_by_task,
-                &extra,
-            );
+            shown["open_decisions"] =
+                open_decisions_json_for(&card.requests, &shown, &card.task_id, &requests_by_task);
             shown["cycle_authority"] = cycle_authority_json_for(&shown, &card.history);
             mandates.push(shown);
         }
         Ok(mandates)
+    }
+
+    /// Attach the card's `open_decisions` and `cycle_authority` to one
+    /// mandate's show payload, as `GET /api/residents/<id>` serves it. The
+    /// list card gets the same two fields from
+    /// [`Self::list_resident_mandate_cards`], through the same projections.
+    /// A failed read degrades only its field to `null` with a warning, so the
+    /// card can fall back to the grant requests the show payload already carries.
+    pub fn attach_resident_card_fields(&self, shown: &mut Value) {
+        if !shown.is_object() {
+            return;
+        }
+        let Some(task_id) = shown
+            .get("task_id")
+            .and_then(Value::as_str)
+            .filter(|task_id| !task_id.is_empty())
+            .map(str::to_owned)
+        else {
+            return;
+        };
+        let open_decisions = self.card_open_decisions(&task_id, shown);
+        let cycle_authority = self.card_cycle_authority(&task_id, shown);
+        shown["open_decisions"] = open_decisions;
+        shown["cycle_authority"] = cycle_authority;
+    }
+
+    /// The single card's `open_decisions`. A failed read of the mandate's own
+    /// decisions is `null`; a failed read of another task's checkpoint decision
+    /// drops only that task's entries.
+    fn card_open_decisions(&self, task_id: &str, shown: &Value) -> Value {
+        let own = match self.list_decision_requests(None, Some(task_id), false) {
+            Ok(own) => own,
+            Err(error) => {
+                tracing::warn!(%error, %task_id, "resident card could not list open decisions");
+                return Value::Null;
+            }
+        };
+        let mut others: BTreeMap<String, Vec<orbit_types::task::DecisionRequest>> = BTreeMap::new();
+        for other in checkpoint_other_tasks(shown, task_id) {
+            match self.list_decision_requests(None, Some(&other), false) {
+                Ok(found) => {
+                    others.insert(other, found);
+                }
+                Err(error) => {
+                    tracing::warn!(
+                        %error,
+                        task = %other,
+                        "resident card could not read a checkpoint decision"
+                    );
+                    others.insert(other, Vec::new());
+                }
+            }
+        }
+        open_decisions_json_for(&own, shown, task_id, &others)
+    }
+
+    /// The single card's `cycle_authority`. The history is read only when the
+    /// card names a cycle; a failed read is `null`.
+    fn card_cycle_authority(&self, task_id: &str, shown: &Value) -> Value {
+        if card_cycle_target(shown).is_none() {
+            return Value::Null;
+        }
+        match self.get_task_history(task_id) {
+            Ok(history) => cycle_authority_json_for(shown, &history),
+            Err(error) => {
+                tracing::warn!(%error, %task_id, "resident card could not read cycle authority");
+                Value::Null
+            }
+        }
     }
 
     /// The tasks tagged `resident`, newest first, selected from the task
@@ -526,12 +593,15 @@ fn checkpoint_other_tasks(shown: &Value, task_id: &str) -> Vec<String> {
     out
 }
 
+/// The card's `open_decisions`: the mandate's own open decisions, then the
+/// open checkpoint decisions that live on other tasks. Each group is sorted by
+/// `(raised_at, id)`, and an id appears once. `others` maps task ids to their
+/// decision requests; the mandate's own task is never looked up there.
 fn open_decisions_json_for(
     own: &[orbit_types::task::DecisionRequest],
     shown: &Value,
     task_id: &str,
-    by_task: &BTreeMap<String, Vec<orbit_types::task::DecisionRequest>>,
-    extra: &BTreeMap<String, Vec<orbit_types::task::DecisionRequest>>,
+    others: &BTreeMap<String, Vec<orbit_types::task::DecisionRequest>>,
 ) -> Value {
     let mut seen = BTreeSet::new();
     let mut values = Vec::new();
@@ -542,10 +612,10 @@ fn open_decisions_json_for(
     open.sort_by(|a, b| (a.raised_at, &a.id).cmp(&(b.raised_at, &b.id)));
     for request in open {
         if seen.insert(request.id.clone()) {
-            values.push(view::to_json(request));
+            push_card_decision(&mut values, request);
         }
     }
-    // Checkpoint decisions on other tasks, grouped as the web card did.
+    // Checkpoint decisions on other tasks, grouped by task.
     let mut wanted: BTreeMap<String, Vec<String>> = BTreeMap::new();
     if let Some(rows) = shown
         .get("latest_checkpoint")
@@ -577,10 +647,11 @@ fn open_decisions_json_for(
         }
     }
     for (other_task, decision_ids) in &wanted {
-        let found = by_task.get(other_task).or_else(|| extra.get(other_task));
-        let Some(found) = found else { continue };
-        // The web card listed open decisions only; a checkpoint request that
-        // has since closed must not reappear on the card.
+        let Some(found) = others.get(other_task) else {
+            continue;
+        };
+        // The card lists open decisions only; a checkpoint request that has
+        // since closed must not reappear on it.
         let mut matched: Vec<_> = found
             .iter()
             .filter(|request| {
@@ -591,30 +662,46 @@ fn open_decisions_json_for(
         matched.sort_by(|a, b| (a.raised_at, &a.id).cmp(&(b.raised_at, &b.id)));
         for request in matched {
             if seen.insert(request.id.clone()) {
-                values.push(view::to_json(request));
+                push_card_decision(&mut values, request);
             }
         }
     }
     Value::Array(values)
 }
 
-fn cycle_authority_json_for(shown: &Value, history: &[TaskHistoryEntry]) -> Value {
-    let target_live = if let Some(cycle) = shown
+/// Push one decision as the card renders it. A decision that cannot be
+/// serialized is skipped with a warning, so `open_decisions` never holds a
+/// stray `null`.
+fn push_card_decision(values: &mut Vec<Value>, request: &orbit_types::task::DecisionRequest) {
+    match serde_json::to_value(request) {
+        Ok(value) => values.push(value),
+        Err(error) => {
+            tracing::warn!(%error, decision = %request.id, "resident card skipped a decision it could not render");
+        }
+    }
+}
+
+/// The cycle a card's `cycle_authority` describes: the live cycle when one is
+/// running (`true`), otherwise the latest checkpoint's cycle (`false`).
+fn card_cycle_target(shown: &Value) -> Option<(String, bool)> {
+    if let Some(cycle) = shown
         .get("live_cycle")
         .and_then(|live| live.get("cycle"))
         .and_then(Value::as_str)
         .filter(|cycle| !cycle.is_empty())
     {
-        Some((cycle.to_string(), true))
-    } else {
-        shown
-            .get("latest_checkpoint")
-            .and_then(|checkpoint| checkpoint.get("cycle"))
-            .and_then(Value::as_str)
-            .filter(|cycle| !cycle.is_empty())
-            .map(|cycle| (cycle.to_string(), false))
-    };
-    let Some((target, live)) = target_live else {
+        return Some((cycle.to_string(), true));
+    }
+    let cycle = shown
+        .get("latest_checkpoint")
+        .and_then(|checkpoint| checkpoint.get("cycle"))
+        .and_then(Value::as_str)
+        .filter(|cycle| !cycle.is_empty())?;
+    Some((cycle.to_string(), false))
+}
+
+fn cycle_authority_json_for(shown: &Value, history: &[TaskHistoryEntry]) -> Value {
+    let Some((target, live)) = card_cycle_target(shown) else {
         return Value::Null;
     };
     if let Some(grant) = history.iter().rev().find_map(|entry| {
