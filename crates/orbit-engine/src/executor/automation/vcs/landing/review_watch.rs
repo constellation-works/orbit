@@ -100,10 +100,13 @@ pub(in crate::executor::automation) fn pr_checks_watch<H: RuntimeHost + ?Sized>(
                     pr_number,
                     "the pull request status read failed transiently; the watch keeps polling"
                 );
-                if max_wait_seconds == 0 || now_ms()? >= deadline_ms {
+                let remaining_ms = deadline_ms.saturating_sub(now_ms()?);
+                if max_wait_seconds == 0 || remaining_ms == 0 {
                     return finish(host, &task_id, &pr_number, &unreadable(&pr_number));
                 }
-                fixed_wait(Duration::from_secs(poll_interval_seconds));
+                fixed_wait(Duration::from_millis(
+                    remaining_ms.min(poll_interval_seconds.saturating_mul(1000)),
+                ));
                 if now_ms()? >= deadline_ms {
                     return finish(host, &task_id, &pr_number, &unreadable(&pr_number));
                 }

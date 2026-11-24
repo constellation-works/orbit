@@ -198,9 +198,48 @@ fn a_transient_status_read_failure_through_the_deadline_holds_pending() {
             fx.script_checks(&["success"]);
             open_review_delivery(&fx, &host);
             fx.script_status_failures(1_000_000, GRAPHQL_OUTAGE);
-            let watched =
-                with_completion_clock(|| action(&host, "pr_checks_watch", &watch_input(&fx, 60)))
-                    .expect("an outage through the deadline is a hold, not a failed run");
+            let clock = std::rc::Rc::new(std::cell::Cell::new(1_000_000_u64));
+            let now = std::rc::Rc::clone(&clock);
+            let calls = std::cell::Cell::new(0_u32);
+            let waited = std::rc::Rc::clone(&clock);
+            let waits = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+            let recorded_waits = std::rc::Rc::clone(&waits);
+            let mut input = watch_input(&fx, 60);
+            input["poll_interval_seconds"] = json!(600);
+            let watched = orbit_engine::test_support::with_prerequisite_clock(
+                move || {
+                    let count = calls.get();
+                    calls.set(count + 1);
+                    if count == 1 {
+                        now.set(now.get() + 50_000);
+                    }
+                    now.get()
+                },
+                |_, _| {},
+                || {
+                    orbit_engine::test_support::with_vcs_retry_wait(
+                        move |duration| {
+                            let remaining = 1_060_000 - waited.get();
+                            let millis = u64::try_from(duration.as_millis()).unwrap();
+                            recorded_waits.borrow_mut().push((millis, remaining));
+                            waited.set(waited.get() + millis);
+                        },
+                        || action(&host, "pr_checks_watch", &input),
+                    )
+                },
+            )
+            .expect("an outage through the deadline is a hold, not a failed run");
+            let waits = waits.borrow();
+            let &(last_wait, remaining) = waits.last().expect("the watch waited");
+            assert!(
+                remaining < 60_000,
+                "the read consumed part of the budget: {waits:?}"
+            );
+            assert_eq!(
+                last_wait, remaining,
+                "the watch waits only to expiry: {waits:?}"
+            );
+            assert_eq!(clock.get(), 1_060_000, "the watch ends at expiry");
             assert_eq!(watched["recorded"], true, "{watched}");
             let observed = observations(&host);
             assert_eq!(observed.len(), 1, "{observed:?}");
