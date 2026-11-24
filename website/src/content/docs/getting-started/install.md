@@ -92,13 +92,15 @@ orbit task list
 orbit doctor
 ```
 
-`orbit init` creates the machine database and `orbit workspace init` the task
-index, but neither creates the workspace's search index; the first command
-that opens the workspace does, and `orbit task list` is the simplest.
-`orbit doctor` only observes, so until then it reports a `search-index`
-warning. If a database is missing altogether, it reports a single `runtime`
-error row that names this step instead of the full report. Run
-`orbit task list` once, then `orbit doctor`.
+`orbit init` creates the machine database and `orbit workspace init` registers
+the repository. Successful workspace initialization does not require a
+separate search-index file. Immediately after workspace initialization,
+`orbit doctor` can report `search-index` as `ok` with zero chunks and zero
+indexed tasks when the workspace has no tasks, even if the index file does not
+exist yet. If a required runtime database is missing altogether, doctor
+reports a separate `runtime` error row naming this setup step. Opening a
+writable runtime creates the empty search index, even before a task is written;
+`orbit task list` does this for an empty workspace too.
 
 ### Initialize the machine
 
