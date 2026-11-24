@@ -87,6 +87,7 @@ Notes that bind implementations:
   authoritative on the executing host) and the kind adds one `degraded` entry, code
   `source_unavailable`, message "Task records on a replica are not authoritative; read the
   workspace owner". A failed run that names no task is not degraded for that reason.
+  A failed PR watcher is marked `detail.superseded` and directs the reader to the current task when the owner task points to a newer verified delivery for that task. The current attempt and unverified run IDs retain ordinary advice.
   `detail.held_claim` is true only while a claim bound to the run on this host is still live
   (`claimed`, `running`, `handed_off` or `repair_pending`), or the follower's local pull for
   that run is not `settled`, `idle` or `refused`. A settled claim (`failed`, `landed`,

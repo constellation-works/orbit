@@ -56,6 +56,7 @@ run that names a task is still listed and `run_failed` is `degraded` with code
 `source_unavailable` (task records on a replica are not authoritative; read the workspace
 owner). A failed run that names no task is not degraded for that reason.
 
+A failed PR watcher is marked `detail.superseded` and directs the reader to the current task when the owner task points to a newer verified delivery for that task. The current attempt and unverified run IDs retain ordinary advice.
 `detail.held_claim`
 is true only while a claim for the run is still live. `detail.claimed_leaf` is true when the
 run was a claimed leaf, including after the claim settled as `failed`, `landed` or `revoked`.

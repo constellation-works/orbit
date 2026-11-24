@@ -169,6 +169,32 @@ impl RuntimeAttention<'_> {
             || self.runtime.load_v2_job_asset_by_name(&run.job_id).is_ok())
     }
 
+    // Verify a newer delivery for this task; a watch's parent predates it.
+    fn superseded_watcher(&self, run: &JobRun, task_id: Option<&str>) -> Result<bool, OrbitError> {
+        if run.job_id != "task_pr_watch_pipeline" {
+            return Ok(false);
+        }
+        let Some((task_id, owner_id)) = task_id.and_then(|id| {
+            self.tasks
+                .get(id)
+                .and_then(|task| task.job_run_id.as_deref().map(|owner| (id, owner)))
+        }) else {
+            return Ok(false);
+        };
+        let Some(owner) = self.runtime.stores().jobs().get_job_run(owner_id)? else {
+            return Ok(false);
+        };
+        let names_task = owner.input.as_ref().is_some_and(|input| {
+            input["task_id"].as_str() == Some(task_id)
+                || input["task_ids"]
+                    .as_array()
+                    .is_some_and(|ids| ids.iter().any(|id| id.as_str() == Some(task_id)))
+        });
+        Ok(owner.job_id == orbit_types::workflow::TASK_PR_PIPELINE_JOB
+            && owner.created_at > run.created_at
+            && names_task)
+    }
+
     /// Declared bound and last progress for a running run.
     ///
     /// The declared deadline is the one in force: a drain's stamped
@@ -388,11 +414,28 @@ impl RuntimeAttention<'_> {
                 // `claimed_leaf`; settlement and recovery are unchanged.
                 let (claimed_leaf, held) = self.run_claim_state(run)?;
                 let high = held;
+                let superseded = kind == AttentionKind::RunFailed
+                    && self.superseded_watcher(run, task_id.as_deref())?;
                 let mut next = self.run_next(
                     run,
                     kind == AttentionKind::RunFailed
+                        && !superseded
                         && self.run_resume_advice(run, claimed_leaf)?,
                 );
+                if superseded {
+                    let id = task_id.as_deref().unwrap_or_default();
+                    next = AttentionNext {
+                        summary: "Inspect the current task".into(),
+                        tool: Some("orbit.task.show".into()),
+                        input: Some(json!({"id": id, "workspace": self.workspace.id})),
+                        command: format!(
+                            "orbit --workspace '{}' task show {}",
+                            self.workspace.id, id
+                        ),
+                        needs: Vec::new(),
+                        also: Vec::new(),
+                    };
+                }
                 if kind == AttentionKind::RunFailed {
                     next.also.push(AttentionNext {
                         summary: "Read the run logs".into(),
@@ -441,6 +484,9 @@ impl RuntimeAttention<'_> {
                 let mut detail = json!({"job_id": run.job_id, "state": run.state, "cause": cause, "held_claim": held});
                 if kind == AttentionKind::RunFailed {
                     detail["claimed_leaf"] = json!(claimed_leaf);
+                    if superseded {
+                        detail["superseded"] = json!(true);
+                    }
                 }
                 if kind == AttentionKind::RunStuck {
                     detail["current_step_id"] = json!(current_step.as_ref().map(|(id, _)| id));
