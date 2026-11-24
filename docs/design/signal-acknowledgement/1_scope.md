@@ -137,11 +137,15 @@ row, is never hidden. It stays in its list, its count and the exit status, and o
   themselves (`notice_open`). An acknowledgement attaches to a signal and changes how it is
   counted. The two do not merge. A notice about an incident may link the same fix task that an
   acknowledgement's `--task` names.
-- **Dedicated switches win.** `execution.env.login_auth` and `orbit host offline` stay. They
-  change behaviour (probing, credential checks) as well as display, and they never expire. When
-  a recurring signature deserves a permanent declaration, the fix is a switch or a source
-  change, and the acknowledgement is the stopgap until then. Both are listed in the same
-  acknowledged area of attention.
+- **Dedicated switches win.** `execution.env.login_auth` stays effective while configured.
+  `orbit host offline` changes probing as well as attention display. Without `--until`, its
+  mark is indefinite; with its optional RFC 3339 `--until` deadline, it lapses when that time
+  passes. If the host is still unreachable, normal attention behavior returns: the
+  `host_unhealthy` item and `unreachable_destination` degraded source appear again instead of
+  the host being listed under `acknowledged`. When a recurring signature deserves a permanent
+  declaration, the fix is a switch or a source change, and the acknowledgement is the stopgap
+  until then. An active host-offline mark is listed in the existing `acknowledged` area of
+  attention.
 - **The formation sentry's local `mute`** filters one session's alerts outside Orbit. For
   Orbit signals, a sentry reads the `ack` objects on the surfaces it already polls and keeps no
   mute rule of its own. Its mute remains for non-Orbit signals such as alert email.
