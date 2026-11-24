@@ -293,8 +293,14 @@ fn decision_cli_lists_shows_and_answers_a_raised_request() {
         .failure()
         .get_output()
         .clone();
+    let stderr = std::str::from_utf8(&second.stderr).expect("stderr is UTF-8");
+    let refusal_start = stderr
+        .rfind("\n{")
+        .map(|start| start + 1)
+        .or_else(|| stderr.starts_with('{').then_some(0))
+        .expect("stderr contains the JSON error after any debug logs");
     let refusal: serde_json::Value =
-        serde_json::from_slice(&second.stderr).expect("stderr is the JSON error");
+        serde_json::from_str(&stderr[refusal_start..]).expect("stderr ends with the JSON error");
     assert_eq!(refusal["code"], "request_superseded", "{refusal}");
     // Answering is not a tool an agent session can call.
     fixture
