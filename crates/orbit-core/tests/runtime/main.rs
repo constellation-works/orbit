@@ -306,6 +306,50 @@ fn live_module_declaration_and_sibling_mount_are_registered() {
     }
 }
 
+/// Rust reaches the ordinary sibling through the explicitly mounted hidden source.
+#[test]
+fn mounted_dot_file_reaches_sibling() {
+    let root = tempfile::tempdir().expect("create runtime fixture");
+    let source = "#[path = \".bridge.rs\"] mod bridge;\n";
+    std::fs::write(root.path().join("main.rs"), source).expect("write fixture root");
+    std::fs::write(
+        root.path().join(".bridge.rs"),
+        "#[path = \"activity.rs\"] mod activity;\n",
+    )
+    .expect("write hidden mount");
+    std::fs::write(
+        root.path().join("activity.rs"),
+        "#[test] fn reached_real_module() {}\n",
+    )
+    .expect("write sibling");
+    let binary = root.path().join("fixture");
+    let compiled = std::process::Command::new("rustc")
+        .args(["--edition=2024", "--test"])
+        .arg(root.path().join("main.rs"))
+        .arg("-o")
+        .arg(&binary)
+        .output()
+        .expect("run rustc");
+    assert!(
+        compiled.status.success(),
+        "{}",
+        String::from_utf8_lossy(&compiled.stderr)
+    );
+    let listing = std::process::Command::new(binary)
+        .arg("--list")
+        .output()
+        .expect("list fixture tests");
+    assert!(listing.status.success());
+    assert!(
+        String::from_utf8_lossy(&listing.stdout)
+            .contains("bridge::activity::reached_real_module: test")
+    );
+    assert_eq!(
+        unregistered_top_level_modules(root.path(), source),
+        Vec::<String>::new()
+    );
+}
+
 /// A dot-prefixed file names no module, so a leftover one beside the crate root, such
 /// as the `.generated_modules.rs` a removed build script wrote, is not reported. A
 /// plain unregistered file still is.
@@ -338,7 +382,8 @@ fn dot_prefixed_leftover_is_not_a_module() {
 /// Names of the top-level test files and `mod.rs` directories that Rust never
 /// compiles: no uncommented `mod <name>;` at the crate root of `main_source` reaches
 /// them, directly or through a `#[path = "<name>.rs"]` mount in a compiled file.
-/// Dot-prefixed entries are skipped: no module can be named `.<name>`.
+/// Dot-prefixed entries are not reporting candidates, but explicitly mounted Rust
+/// files are indexed so their mounts can reach ordinary siblings.
 fn unregistered_top_level_modules(dir: &std::path::Path, main_source: &str) -> Vec<String> {
     let mut names = Vec::new();
     let mut files = std::collections::HashMap::new();
@@ -348,17 +393,15 @@ fn unregistered_top_level_modules(dir: &std::path::Path, main_source: &str) -> V
     {
         let path = entry.path();
         let file_name = entry.file_name().to_string_lossy().into_owned();
-        if file_name.starts_with('.') {
-            continue;
-        }
         if path.is_dir() {
-            if path.join("mod.rs").is_file() {
+            if !file_name.starts_with('.') && path.join("mod.rs").is_file() {
                 names.push(file_name);
             }
         } else if let Some(stem) = file_name.strip_suffix(".rs").filter(|s| *s != "main") {
-            let text = std::fs::read_to_string(&path).expect("read runtime test file");
-            files.insert(stem.to_owned(), registration(&text));
-            names.push(stem.to_owned());
+            files.insert(stem.to_owned(), path);
+            if !file_name.starts_with('.') {
+                names.push(stem.to_owned());
+            }
         }
     }
     // The crate root's declarations, then the files they mount, transitively. A
@@ -377,7 +420,9 @@ fn unregistered_top_level_modules(dir: &std::path::Path, main_source: &str) -> V
         if !reached.insert(name.clone()) {
             continue;
         }
-        if let Some(file) = files.get(&name) {
+        if let Some(path) = files.get(&name) {
+            let text = std::fs::read_to_string(path).expect("read runtime test file");
+            let file = registration(&text);
             pending.extend(
                 file.mounts
                     .iter()
