@@ -885,13 +885,31 @@ jobs:
         id: workspace-test-cache
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
+          path: ${{ runner.temp }}/workspace-test-outputs.tar.zst
+          key: v2-workspace-tests-${{ runner.os }}-rust-1.98.1-${{ hashFiles('Cargo.toml', 'Cargo.lock', '.cargo/config.toml', 'scripts/with-test-build-lint.sh', 'scripts/ci-workspace-cache.py', 'crates/*/Cargo.toml') }}-${{ github.sha }}
+          restore-keys: |
+            v2-workspace-tests-${{ runner.os }}-rust-1.98.1-${{ hashFiles('Cargo.toml', 'Cargo.lock', '.cargo/config.toml', 'scripts/with-test-build-lint.sh', 'scripts/ci-workspace-cache.py', 'crates/*/Cargo.toml') }}-
+
+      # Keep the prior target cache available until a protected push has
+      # published a packed entry for this build-input identity.
+      - name: Restore legacy workspace test outputs
+        if: ${{ steps.workspace-test-cache.outputs.cache-matched-key == '' }}
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
           path: target
           key: v1-workspace-tests-${{ runner.os }}-rust-1.98.1-${{ hashFiles('Cargo.toml', 'Cargo.lock', '.cargo/config.toml', 'scripts/with-test-build-lint.sh', 'scripts/ci-workspace-cache.py', 'crates/*/Cargo.toml') }}-${{ github.sha }}
           restore-keys: |
             v1-workspace-tests-${{ runner.os }}-rust-1.98.1-${{ hashFiles('Cargo.toml', 'Cargo.lock', '.cargo/config.toml', 'scripts/with-test-build-lint.sh', 'scripts/ci-workspace-cache.py', 'crates/*/Cargo.toml') }}-
 
       - name: Verify cached workspace inputs
-        run: python3 .orbit/tmp/workflow-ci/scripts/ci-workspace-cache.py restore --workspace "$GITHUB_WORKSPACE"
+        run: |
+          set -euo pipefail
+          archive="$RUNNER_TEMP/workspace-test-outputs.tar.zst"
+          if [[ -f "$archive" ]]; then
+            TIMEFORMAT='workspace_cache_unpack_seconds=%R'
+            time { zstd -q -dc -M512MB "$archive" | tar -xf - -C "$GITHUB_WORKSPACE"; }
+          fi
+          python3 .orbit/tmp/workflow-ci/scripts/ci-workspace-cache.py restore --workspace "$GITHUB_WORKSPACE"
 
       # Each public pinned download retries transient responses until its 60s
       # deadline is spent; there is no fixed attempt count. Attempt diagnostics
@@ -943,7 +961,6 @@ jobs:
           TIMEFORMAT='test_build_seconds=%R'
           time ./scripts/ci-guardrails.sh --test-archive "$RUNNER_TEMP/nextest-archive.tar.zst"
           ls -l "$RUNNER_TEMP/nextest-archive.tar.zst"
-          python3 .orbit/tmp/workflow-ci/scripts/ci-workspace-cache.py capture --workspace "$GITHUB_WORKSPACE"
 
       # Repeated linked executables extend beyond nextest's default 2 MiB
       # compression window. Use a larger window only for transfer, split into
@@ -1046,11 +1063,21 @@ jobs:
           fi
           exit "$(cat "$proof/status")"
 
+      # The wider history compresses repeated linked sections across the
+      # test executables before actions/cache wraps the file for storage.
+      - name: Pack workspace test outputs
+        if: ${{ github.event_name == 'push' && steps.workspace-test-cache.outputs.cache-hit != 'true' }}
+        run: |
+          set -euo pipefail
+          python3 .orbit/tmp/workflow-ci/scripts/ci-workspace-cache.py capture --workspace "$GITHUB_WORKSPACE"
+          TIMEFORMAT='workspace_cache_pack_seconds=%R'
+          time { tar -cf - target | zstd -q -c -3 --long=29 -T0 > "$RUNNER_TEMP/workspace-test-outputs.tar.zst"; }
+
       - name: Save workspace test outputs
         if: ${{ github.event_name == 'push' && steps.workspace-test-cache.outputs.cache-hit != 'true' }}
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
-          path: target
+          path: ${{ runner.temp }}/workspace-test-outputs.tar.zst
           key: ${{ steps.workspace-test-cache.outputs.cache-primary-key }}
 
       - name: Report disk usage

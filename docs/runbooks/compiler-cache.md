@@ -174,11 +174,15 @@ seeder makes the same checkout before its lookup. Without that checkout its
 exact key differed from the Check job's key, so neither could find the
 other's archive as an exact hit.
 The separate Test build workspace-output cache retains `target/`, including
-workspace units and `target/.orbit-source-inputs.json`. Its namespace binds the
-runner OS, pinned compiler, Cargo manifests/lock/configuration, lint wrapper,
-and source-manifest helper. Workflow-only edits retain that identity; Cargo
-still fingerprints changed compiler/profile environment settings, and the
-source manifest refreshes changed workflow bytes if a build consumes them.
+workspace units and `target/.orbit-source-inputs.json`. In v2, a protected push
+packs the directory with a 512 MiB Zstandard history before the cache action
+saves it. A v2 miss tries the legacy v1 target cache. The job unpacks any
+file restored from v2 before verifying the source manifest. The namespace
+binds the runner OS, pinned compiler, Cargo manifests/lock/configuration,
+lint wrapper, and source-manifest helper. Workflow-only edits retain that
+identity. Cargo still fingerprints changed compiler/profile environment
+settings, and the source manifest refreshes changed workflow bytes if a
+build consumes them.
 Each executed `Test build` on a protected-branch push saves a new SHA-keyed
 entry; PRs restore the newest compatible entry and never save one.
 The helper runs from the workflow-revision checkout at the run's `github.sha`.
@@ -197,14 +201,12 @@ checks; the folded Clippy build and every selected test target still run.
 `capture` records current inputs after a successful build. Each runner owns
 its extracted target directory; workers never share a mutable target.
 
-A cache miss performs the ordinary cold workspace build. The first deployment
-of a namespace needs an executed protected-push `Test build` before PRs can
-benefit; the skip-only seeders below populate dependencies, not workspace
-outputs. Source changes below core can invalidate most cached units, and the
-extra archive uses repository cache quota and download time. Measure those
-costs and cache hit/miss strata in the hosted handoff; local reuse timings do
-not establish the hosted budget. The dependency-only caches and seeders remain
-available.
+Missing both formats performs the ordinary cold workspace build. The v2
+format needs an executed protected-push `Test build` before PRs can benefit.
+The skip-only seeders below populate the dependency-only caches. Source
+changes below core can invalidate most cached units, and the workspace archive
+uses repository cache quota and download time. For v2 hits, the hosted handoff
+includes both the cache action and the `workspace_cache_unpack_seconds` line.
 
 - **Who writes.** Every producer rust-cache step has
   `save-if: ${{ github.event_name == 'push' }}`. Only a push to `main` or

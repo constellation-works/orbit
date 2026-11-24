@@ -1350,7 +1350,7 @@ with open(os.environ["GUARD_TEST_LOG"], "a") as log:
                   "--no-run", "--timings", "--message-format", "json"]
         archive = str(self.root / "nextest-archive.tar.zst")
         archive_call = ["nextest", "archive", "--locked", "--workspace", "--bins", "--tests",
-                        "--archive-file", archive]
+                        "--zstd-level=-7", "--archive-file", archive]
 
         # --test-archive: the folded build, then the archive the shards run.
         # No guard, check or test runs.
@@ -1526,7 +1526,7 @@ with open(os.environ["GUARD_TEST_LOG"], "a") as log:
                 self.assertIn(["test", *selection, "--bins", "--tests", "--examples", "--locked", "--no-run", "--timings",
                                "--message-format", "json"], calls)
                 self.assertIn(["nextest", "archive", "--locked", *selection, "--bins", "--tests",
-                               "--archive-file", archive], calls)
+                               "--zstd-level=-7", "--archive-file", archive], calls)
                 result = self.run_guard("ci-guardrails.sh", "--test-partitions", archive,
                                         env_overrides={"NEXTEST_SHARDS": "3"})
                 self.assertEqual(result.returncode, 0, result.stderr)

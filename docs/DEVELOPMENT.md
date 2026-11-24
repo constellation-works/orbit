@@ -502,7 +502,8 @@ The test gate in `ci.yml` runs on parallel runners from one build:
 - `Test build` runs `ci-guardrails.sh --test-archive PATH`. It runs the folded
   workflow test build, then `cargo nextest archive` of the workspace's lib, bin
   and test targets under the same lint environment, so the archive costs no
-  compile. `ci-repack-nextest.py pack SOURCE DESTINATION --parts N` re-encodes
+  compile. The original archive uses Zstandard level −7 for fast local
+  creation. `ci-repack-nextest.py pack SOURCE DESTINATION --parts N` re-encodes
   the same tar stream with zstd level 3, a 512 MiB history window and every
   core for transfer, then splits it into `DESTINATION.1` to `DESTINATION.N`
   (`NEXTEST_ARCHIVE_PARTS` in `ci.yml`).
@@ -756,13 +757,16 @@ the measurements, including why sccache cannot cache folded workspace compilatio
 `scripts/test-pr-state-workflows.py` fails if any cache step in `ci.yml` can
 save on a non-push event.
 
-`Test build` separately restores workspace outputs from `target/`. Its key
-binds the toolchain, Cargo manifests and lockfile, Cargo config, and the lint
-and source-restore implementations. It excludes `ci.yml`: editing job
-scheduling or another job must not discard otherwise reusable workspace
-outputs. Only protected-branch pushes save this cache. A fresh checkout
-gets old source mtimes back only after `ci-workspace-cache.py` verifies
-identical bytes and modes; changed inputs get a fresh mtime. Cargo still
+`Test build` separately restores workspace outputs into `target/`. The
+v2 cache holds a tar stream compressed with a 512 MiB Zstandard history, which
+can match repeated linked code across test executables. A v2 miss falls back
+to restoring the legacy v1 target cache. The key binds the toolchain, Cargo
+manifests and lockfile, Cargo config, and the lint and source-restore
+implementations. Changes to `ci.yml` retain the cache key so job scheduling
+edits can reuse workspace outputs. Only protected-branch pushes save this
+cache. A fresh checkout gets old source mtimes back only after
+`ci-workspace-cache.py` verifies identical bytes and modes. Changed inputs
+get a fresh mtime. Cargo still
 invalidates compiler, features and codegen environment changes. A workflow
 file is an ordinary tracked input: changed bytes get a fresh mtime, and Cargo
 rebuilds a consumer only if it records that file, through an `include_str!`
