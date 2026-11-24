@@ -413,10 +413,10 @@ under `schedule.deliveries_landed`, creating tasks instead of submitting jobs.
 ### Seeded defaults and ownership
 
 `orbit workspace init` seeds `ci_failure_sweep.yaml`, `dependabot_alert_sweep.yaml`,
-`task_pilot.yaml`, `resident_cycle.yaml`, `worktree_gc.yaml`, `store_gc.yaml`,
-`task_publication.yaml` and `crew_memory_dream.yaml` with workspace-unique names. Three ship
-`enabled: true`: `task_pilot.yaml` and `worktree_gc.yaml` [ORB-22802], and `crew_memory_dream.yaml`
-[ORB-23115]. The others ship `enabled: false`.
+`task_pilot.yaml`, `resident_cycle.yaml`, `worktree_gc.yaml`, `store_gc.yaml`
+and `task_publication.yaml` with workspace-unique names. Two ship
+`enabled: true`: `task_pilot.yaml` and `worktree_gc.yaml` [ORB-22802].
+The others ship `enabled: false`.
 [ORB-22844] retired `finding_verification.yaml`, `pilot_warning_triage.yaml`,
 `evolution_pass.yaml` and `ux-rules.yaml` (templates under `routines/retired/`).
 [ORB-17816] added `crew_performance_refresh.yaml`, seeded
@@ -424,8 +424,9 @@ enabled hourly; [ORB-22804] retired it (template under `routines/retired/`, its
 `crew_performance_refresh_pipeline` job in `RETIRED_ROUTINE_JOBS`) with crew-performance
 weighting.
 [ORB-23115] added `crew_memory_dream.yaml`, seeded enabled: Monday 02:00 host-local,
-`missed_run: skip`, `overlap: forbid`, targeting `job:crew_memory_dream_pipeline`. Its action
-is its own gate and mints nothing while no memory experiment runs ([crew memory](../crew-memory/2_design.md) §6.1).
+`missed_run: skip`, `overlap: forbid`, targeting `job:crew_memory_dream_pipeline`; [ORB-27813] retired it
+as a shipped default (template under `routines/retired/`, its `crew_memory_dream_pipeline` job still ships).
+Its action is its own gate and mints nothing while no memory experiment runs ([crew memory](../crew-memory/2_design.md) §6.1).
 [ORB-18378] added the disabled publication default: Sunday 04:47 host-local,
 `missed_run: skip`, `overlap: forbid`, owner-only, and a successful
 `publication_unbound` skip when no publication target is configured.
@@ -1230,5 +1231,6 @@ on each owner; delivery/state admission still requires the consumer's owner mach
 - [ORB-17918] allowed distinct state-trigger kinds to share a job while retaining duplicate-ownership guards.
 - [ORB-18378] seeded disabled weekly task publication and shared owner-bound publishing.
 - [ORB-23115] added the seeded `crew_memory_dream` routine, targeting the crew-memory dream job.
+- [ORB-27813] retired `crew_memory_dream` as a shipped default; its job and activity still ship.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

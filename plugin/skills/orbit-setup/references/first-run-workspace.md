@@ -53,9 +53,8 @@ See [multi-host.md](multi-host.md).
 
 Three things to know about what it seeded and how to finalize:
 
-- **Three shipped routines are seeded enabled when selected by the seeding
-  policy:** `worktree-gc`, `task-pilot` and one dormant experiment routine
-  that mints nothing unless a running experiment has a memory arm. The
+- **Two shipped routines are seeded enabled when selected by the seeding
+  policy:** `worktree-gc` and `task-pilot`. The
   `host-health` auto-task is seeded disabled, like every other shipped
   auto-task, until someone opts in with `orbit auto-task toggle host-health on`. A host clock is still needed
   for unattended runs.
@@ -160,11 +159,9 @@ auto_tasks = []
   `[seeding]`, not here.
 - **`[enable]`** switches on routines and auto-tasks that an enabled plugin
   already seeded into this workspace. It applies after seeding. It never enables
-  a shipped default. The three shipped routines seeded enabled—`worktree-gc`,
-  `task-pilot` and the dormant experiment routine—are on without an opt-in only when the seeding policy selects them.
+  a shipped default. The two shipped routines seeded enabled—`worktree-gc`
+  and `task-pilot`—are on without an opt-in only when the seeding policy selects them.
   The `host-health` auto-task seeds disabled.
-  The experiment routine still mints nothing unless a running experiment
-  has a memory arm.
 
   Every other
   shipped routine and auto-task stays disabled unless someone opts in.

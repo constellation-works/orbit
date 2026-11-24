@@ -1,6 +1,6 @@
-# Weekly crew memory dreaming mint, run by the seeded `crew_memory_dream`
-# routine. Dormant: the action mints nothing unless an experiment with a
-# memory arm is running.
+# Weekly crew memory dreaming mint, run by a routine that targets this job.
+# Orbit no longer seeds a `crew_memory_dream` routine for it. Dormant: the
+# action mints nothing unless an experiment with a memory arm is running.
 schemaVersion: 2
 kind: Job
 metadata:
