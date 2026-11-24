@@ -456,6 +456,7 @@ fn a_ui_repair_waits_for_a_verified_browser_kit() {
             .browsers()
             .join("chromium_headless_shell-1248/chrome-headless-shell");
         // Root may execute a file with any execute bit.
+        // SAFETY: geteuid has no preconditions and cannot fail.
         let denied_mode = if unsafe { libc::geteuid() } == 0 {
             0o000
         } else {

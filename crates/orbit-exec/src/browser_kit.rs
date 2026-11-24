@@ -385,11 +385,11 @@ fn is_executable_file(path: &Path) -> bool {
         let Ok(path) = std::ffi::CString::new(path.as_os_str().as_bytes()) else {
             return false;
         };
+        if !metadata.is_file() {
+            return false;
+        }
         // SAFETY: path is a valid NUL-terminated string, used only for this call.
-        metadata.is_file()
-            && unsafe {
-                libc::faccessat(libc::AT_FDCWD, path.as_ptr(), libc::X_OK, libc::AT_EACCESS)
-            } == 0
+        unsafe { libc::faccessat(libc::AT_FDCWD, path.as_ptr(), libc::X_OK, libc::AT_EACCESS) == 0 }
     }
     #[cfg(not(unix))]
     {

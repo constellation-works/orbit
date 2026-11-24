@@ -879,6 +879,7 @@ fn search_index_doctor_warns_when_a_fresh_index_file_is_unreadable() {
         return;
     }
     // Root reads through any mode bits, so an access refusal needs an ordinary user.
+    // SAFETY: geteuid has no preconditions and cannot fail.
     if unsafe { libc::geteuid() } == 0 {
         #[allow(
             clippy::print_stderr,

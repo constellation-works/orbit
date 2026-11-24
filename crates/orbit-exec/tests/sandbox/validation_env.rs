@@ -802,6 +802,7 @@ fn interactive_probe_detaches_from_controlling_pty() {
         // SAFETY: opening the controlling terminal only checks this child's setup.
         let tty = unsafe { libc::open(c"/dev/tty".as_ptr(), libc::O_RDWR | libc::O_NOCTTY) };
         assert!(tty >= 0, "fixture must have a controlling terminal");
+        // SAFETY: tty is the open descriptor from open above, checked valid and closed once here.
         unsafe { libc::close(tty) };
         let host = Host::new();
         let started = Instant::now();
