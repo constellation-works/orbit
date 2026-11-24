@@ -121,6 +121,24 @@ executable bit cannot run. Its default extractor toolchain is Rust 1.99.0 plus
 rust-src, confirmed for CodeQL 2.27.5. For another CodeQL bundle, pass
 `--toolchain <version>`; do not substitute the host's installed stable Rust.
 
+The script also exits 1 with `missing CodeQL configuration` unless the checkout
+holds `.github/codeql/codeql-config.yml`. The fulfilment runs the held
+commit's checkout, so commit the file with the script; one that exists only on
+the owner machine does not count. A minimal compatible file:
+
+```yaml
+name: orbit-codeql
+paths-ignore:
+  - "**/tests/**"
+  - ".orbit/**"
+  - "**/target/**"
+```
+
+Keep `paths-ignore` one top-level block list (a flow list such as
+`paths-ignore: [...]` is refused) and keep `.orbit/**` and `**/target/**` in
+it, so extraction skips Orbit state and Cargo output. The script adds its own
+scratch exclusions in front of the list.
+
 Configuration accepts any non-empty `codeql` command, and a custom command
 is not fulfilled by the built-in path: the hold stays, and the refusal names
 this contract and that download.
