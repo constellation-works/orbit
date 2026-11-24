@@ -64,9 +64,10 @@
 //! forge again, and repairs only what its own watcher then finds.
 //! `delivery_check_runs_absent` is handed back the same way once the published
 //! head, or a head produced by an Orbit-audited clean base refresh of it,
-//! reports a pending or passed required check [ORB-24457].
-//! Until that check exists the pass lists the hold under its code and spends
-//! no hand-back. A held
+//! has no blocker and either reports a pending or passed required check or
+//! the forge positively confirms that no checks are required [ORB-24457].
+//! Otherwise the pass lists the hold under its code and spends no hand-back
+//! unless it admits a blocker repair. A held
 //! leaf whose task a `completion.hold` rule keeps in review is not handed
 //! back. Its pull request is repaired through the ledger when the forge
 //! reports a blocker; otherwise the hand-back spends none of the ledger and
