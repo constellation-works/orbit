@@ -355,27 +355,59 @@ fn mounted_dot_file_reaches_sibling() {
 /// plain unregistered file still is.
 #[test]
 fn dot_prefixed_leftover_is_not_a_module() {
-    let cases: [(&str, &[FixtureFile], &[&str]); 2] = [
-        (
-            "mod activity;\n",
-            &[
-                (".generated_modules.rs", "mod actor_identity;\n"),
-                ("activity.rs", ""),
-            ],
-            &[],
-        ),
-        (
-            "",
-            &[(".generated_modules.rs", ""), ("activity.rs", "")],
-            &["activity"],
-        ),
-    ];
-    for (main_source, files, expected) in cases {
-        assert_eq!(
-            unregistered_in_fixture(main_source, files),
-            expected,
-            "crate root {main_source:?}"
+    // Compile the actual guard and its scanner into a test binary whose manifest
+    // directory and crate root belong to the fixture, then run the guard itself.
+    let source = include_str!("main.rs");
+    let guard = source
+        .split_once("#[test]\nfn every_top_level_module_is_declared()")
+        .expect("guard entry point")
+        .1
+        .split_once("/// A fixture file")
+        .expect("end of guard")
+        .0;
+    let scanner = source
+        .rsplit_once("fn unregistered_top_level_modules(")
+        .expect("scanner")
+        .1;
+    for (declaration, should_pass) in [("mod activity;\n", true), ("", false)] {
+        let root = tempfile::tempdir().expect("create runtime fixture");
+        let dir = root.path().join("tests/runtime");
+        std::fs::create_dir_all(&dir).expect("create fixture directory");
+        std::fs::write(dir.join(".generated_modules.rs"), "mod actor_identity;\n")
+            .expect("write leftover");
+        std::fs::write(dir.join("activity.rs"), "").expect("write activity");
+        let fixture = format!(
+            "{declaration}#[test]\nfn every_top_level_module_is_declared(){guard}\nfn unregistered_top_level_modules({scanner}"
         );
+        let main = dir.join("main.rs");
+        std::fs::write(&main, fixture).expect("write fixture root");
+        let binary = root.path().join("guard-test");
+        let compiled = std::process::Command::new("rustc")
+            .args(["--edition=2024", "--test"])
+            .env("CARGO_MANIFEST_DIR", root.path())
+            .arg(&main)
+            .arg("-o")
+            .arg(&binary)
+            .output()
+            .expect("compile guard fixture");
+        assert!(
+            compiled.status.success(),
+            "{}",
+            String::from_utf8_lossy(&compiled.stderr)
+        );
+        let output = std::process::Command::new(binary)
+            .arg("every_top_level_module_is_declared")
+            .output()
+            .expect("run guard fixture");
+        assert_eq!(
+            output.status.success(),
+            should_pass,
+            "{}",
+            String::from_utf8_lossy(&output.stdout)
+        );
+        if !should_pass {
+            assert!(String::from_utf8_lossy(&output.stdout).contains("\"activity\""));
+        }
     }
 }
 
