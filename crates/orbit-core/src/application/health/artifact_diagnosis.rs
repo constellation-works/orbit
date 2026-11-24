@@ -4,7 +4,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
-use orbit_common::protocol::yaml::parse_routine_yaml;
+use orbit_common::protocol::yaml::{parse_auto_task_yaml, parse_routine_yaml};
 use orbit_common::security::release::sha256_hex;
 use orbit_engine::activity_job::load_job_asset;
 
@@ -17,14 +17,19 @@ use super::artifact::{
 };
 use crate::OrbitRuntime;
 use crate::application::auto_tasks::collect_auto_tasks;
-use crate::application::auto_tasks::settings::classify_bundled_file;
+use crate::application::auto_tasks::settings::{
+    StaleAutoTaskContract, bundled_run_failure_definition, classify_bundled_file,
+    stale_run_failure_contract,
+};
 use crate::application::managed_assets::{
     ConfinedAssetPath, MANAGED_ASSET_MANIFEST_FILE, ManagedAssetOutcome, ManagedAssetReconcileMode,
     load_managed_asset_manifest, reconcile_managed_assets_in_mode, resolve_confined_asset_path,
 };
 use crate::application::routines::seed::RETIRED_ROUTINE_FILES;
 use crate::application::routines::template::{ShippedShape, shipped_shape_of};
-use orbit_automation::auto_tasks::settings::{AutoTaskOverrides, load_settings_table};
+use orbit_automation::auto_tasks::settings::{
+    AutoTaskOverrides, AutoTaskSettings, load_settings_table,
+};
 
 /// Inspect stale, retired, and preserved legacy workspace copies without
 /// changing them or adopting user files. Startup uses the same refresh mode.
@@ -381,6 +386,20 @@ pub(super) fn diagnose_catalog(runtime: &OrbitRuntime, catalog: &ManagedCatalog)
             if on_disk_digest == rendered_digest {
                 continue;
             }
+            // A kept demoted copy is workspace-local, not a shipped default: sync
+            // neither upgrades nor retires it, so only its reference body applies.
+            if kind == ArtifactKind::AutoTask && catalog.kept.contains(name) {
+                findings.extend(kept_reference_finding(
+                    name,
+                    path,
+                    rendered,
+                    &on_disk,
+                    tracked.get(name),
+                    auto_task_settings.get(name),
+                    auto_task_base_branch.as_deref().unwrap_or_default(),
+                ));
+                continue;
+            }
             if kind == ArtifactKind::AutoTask
                 && manifest.is_some()
                 && let Ok(Some(overrides)) = classify_bundled_file(
@@ -391,35 +410,13 @@ pub(super) fn diagnose_catalog(runtime: &OrbitRuntime, catalog: &ManagedCatalog)
                     auto_task_base_branch.as_deref().unwrap_or_default(),
                 )
             {
-                let mut finding = auto_task_fork_finding(
+                findings.push(auto_task_fork_finding(
                     name,
                     path,
                     tracked.contains_key(name),
                     &overrides.overrides,
-                    // Sync releases a kept demoted copy instead of upgrading
-                    // it, so its older body is a fork, never "will upgrade".
-                    overrides.stale_shipped_body && !catalog.kept.contains(name),
-                );
-                if let (Ok(effective), Some(bundled)) = (
-                    orbit_common::protocol::yaml::parse_auto_task_yaml(&on_disk),
-                    crate::application::auto_tasks::settings::bundled_run_failure_definition(
-                        auto_task_base_branch.as_deref().unwrap_or_default(),
-                    ),
-                ) && let Some(stale) =
-                    crate::application::auto_tasks::settings::stale_run_failure_contract(
-                        &effective, &bundled,
-                    )
-                {
-                    finding.detail = format!(
-                        "{} Stale contract: this body omits {} (missing: {}); a scan \
-                         minted from it would undercount host-distinct follower failures.",
-                        finding.detail,
-                        stale.contract,
-                        stale.missing.join(", ")
-                    );
-                    finding.remediation = stale.remediation;
-                }
-                findings.push(finding);
+                    overrides.stale_shipped_body,
+                ));
                 continue;
             }
             match tracked.get(name) {
@@ -558,6 +555,88 @@ fn auto_task_fork_finding(
             init_command(kind)
         ),
     }
+}
+
+/// Diagnose a kept demoted default's copy against its bundled reference body.
+///
+/// Sync never upgrades a kept copy, so an older shipped body and a settings-only
+/// edit are not reported: no sync can act on either. A body fork is kept as
+/// authored and its remedy is an explicit edit. A stale host-aware deduplication
+/// contract is reported with its adopt remedy. An unparsable copy is a load
+/// fault the auto-task loader reports, not a finding here.
+fn kept_reference_finding(
+    name: &str,
+    path: PathBuf,
+    rendered: &str,
+    on_disk: &str,
+    tracked: Option<&String>,
+    settings: Option<&AutoTaskSettings>,
+    base_branch: &str,
+) -> Option<ArtifactFinding> {
+    let kind = ArtifactKind::AutoTask;
+    let fork = classify_bundled_file(rendered, on_disk, tracked, settings, base_branch)
+        .ok()
+        .flatten()
+        .map(|classified| classified.overrides)
+        .filter(|overrides| !overrides.body_fields.is_empty());
+    let stale = parse_auto_task_yaml(on_disk).ok().and_then(|effective| {
+        bundled_run_failure_definition(base_branch)
+            .and_then(|bundled| stale_run_failure_contract(&effective, &bundled))
+    });
+    let origin = provenance(kind, name, tracked, on_disk);
+    match (fork, stale) {
+        (Some(overrides), stale) => {
+            let settings_fields = overrides.settings.field_names();
+            let settings_clause = if settings_fields.is_empty() {
+                String::new()
+            } else {
+                format!("; operator settings: {}", settings_fields.join(", "))
+            };
+            let mut detail = format!(
+                "`{name}` is a body fork of its bundled default; body fields: {}{settings_clause}. \
+                 Orbit preserves it and no longer applies upstream template changes to it",
+                overrides.body_fields.join(", ")
+            );
+            let mut remediation = format!(
+                "Keep the fork to retain its body edits, or set those body fields back to the bundled values with `orbit auto-task update {name}`; its settings are kept."
+            );
+            if let Some(stale) = stale {
+                detail = format!("{detail}. {}", stale_contract_clause(&stale));
+                remediation = stale.remediation;
+            }
+            Some(ArtifactFinding {
+                kind,
+                name: name.to_string(),
+                path,
+                condition: ArtifactCondition::Forked,
+                provenance: origin,
+                detail,
+                remediation,
+            })
+        }
+        (None, Some(stale)) => Some(ArtifactFinding {
+            kind,
+            name: name.to_string(),
+            path,
+            condition: ArtifactCondition::Stale,
+            provenance: origin,
+            detail: format!(
+                "`{name}` is a workspace-local definition. {}",
+                stale_contract_clause(&stale)
+            ),
+            remediation: stale.remediation,
+        }),
+        (None, None) => None,
+    }
+}
+
+fn stale_contract_clause(stale: &StaleAutoTaskContract) -> String {
+    format!(
+        "Stale contract: this body omits {} (missing: {}); a scan minted from it would \
+         undercount host-distinct follower failures.",
+        stale.contract,
+        stale.missing.join(", ")
+    )
 }
 
 /// Whether `path` is the managed catalog file for `name`.
