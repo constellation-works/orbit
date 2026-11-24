@@ -150,21 +150,40 @@ fn require_input(job: &JobV2, id: &str, key: &str, expected: &str) -> Result<(),
 }
 
 /// Whether `landing_push` ran and left a record. A step its `when:` skipped
-/// (always so under review policy `none`) is checkpointed as a success with a
-/// null output and listed in `skipped_steps`; it published nothing.
+/// (for instance under review policy `none` or when a review made no fix) is
+/// checkpointed as `Success` with `Value::Null` and listed in `skipped_steps`,
+/// and terminal compaction clears `skipped_steps` on `success` and `cancelled`.
+/// Either shape means nothing was published; a `Success` step whose output is
+/// missing altogether or non-null still counts as recorded so tampering or
+/// unauthenticated later publications stay refused.
 fn landing_push_recorded(job: &JobV2, state: &PipelineState) -> bool {
-    let index = job
+    if state
+        .pipeline
+        .get("landing_push")
+        .is_some_and(|v| !v.is_null())
+    {
+        return true;
+    }
+    let Some(index) = job
         .steps
         .iter()
         .position(|step| step.id == "landing_push")
-        .map(|idx| idx as u32);
-    let skipped = index.is_some_and(|idx| state.skipped_steps.contains(&idx));
-    !skipped
-        && (index.is_some_and(|idx| state.step_states.get(&idx) == Some(&JobRunState::Success))
-            || state
-                .pipeline
-                .get("landing_push")
-                .is_some_and(|v| !v.is_null()))
+        .map(|idx| idx as u32)
+    else {
+        return false;
+    };
+    if state.step_output(index).is_some_and(|v| !v.is_null()) {
+        return true;
+    }
+    if state.skipped_steps.contains(&index) {
+        return false;
+    }
+    if state.step_states.get(&index) != Some(&JobRunState::Success) {
+        return false;
+    }
+    let null_skip = state.step_output(index) == Some(&Value::Null)
+        || state.pipeline.get("landing_push") == Some(&Value::Null);
+    !null_skip
 }
 
 pub(super) fn published_head<'a>(

@@ -740,6 +740,179 @@ fn failed_landing_refusals(failed: &str) {
     );
 }
 
+/// A successful review-less publication through `watch_checks` whose PR then
+/// goes red admits `source_repair` `inspect` even after terminal compaction
+/// cleared `skipped_steps` (and when `landing_push` never ran), while a real
+/// later publication without a settled reviewer correction stays refused.
+fn review_less_success_after_watch_checks_admits_inspect_and_refuses_real_later_push() {
+    let mut f = Fixture::new();
+    let activities = f._root.path().join("global/resources/activities");
+    for name in [
+        "review_gate_admit",
+        "agent_review_repair",
+        "invoke_detached",
+    ] {
+        std::fs::copy(
+            Path::new(env!("CARGO_MANIFEST_DIR")).join(format!("assets/activities/{name}.yaml")),
+            activities.join(format!("{name}.yaml")),
+        )
+        .unwrap();
+    }
+    let job_path = f
+        ._root
+        .path()
+        .join("global/resources/jobs/task_pr_pipeline.yaml");
+    let yaml = std::fs::read_to_string(&job_path).unwrap();
+    std::fs::write(
+        &job_path,
+        yaml + &format!(
+            "    - {{id: landing_review_gate_admit, target: 'activity:review_gate_admit'}}\n\
+             \x20   - {{id: landing_review, target: 'activity:agent_review_repair', when: '{{{{ steps.landing_review_gate_admit.output.applies }}}} == true'}}\n\
+             \x20   - {{id: {SETTLE}, target: 'activity:review_gate_settle'}}\n\
+             \x20   - {{id: {VALIDATE}, target: 'activity:candidate_validate', when: '{{{{ steps.{SETTLE}.output.reviewer_fixed }}}} == true'}}\n\
+             \x20   - {{id: {LANDING_PUSH}, target: 'activity:git_push', when: '{{{{ steps.{SETTLE}.output.reviewer_fixed }}}} == true'}}\n\
+             \x20   - {{id: watch_checks, target: 'activity:invoke_detached'}}\n"
+        ),
+    )
+    .unwrap();
+
+    let mut run = f.runtime.show_job_run_observed(&f.source.run_id).unwrap();
+    run.input = Some(json!({
+        "task_ids": [f.task],
+        "completion": "review",
+        "auto_fix": false,
+    }));
+    run.state = JobRunState::Success;
+    run.finished_at = Some(Utc::now());
+    save_run(&f, &run);
+    f.source = f.runtime.show_job_run_observed(&run.run_id).unwrap();
+
+    let mut state = f.runtime.read_run_state(&run.run_id).unwrap().unwrap();
+    state.initial_input = run.input.clone().unwrap();
+    let steps = [
+        (
+            8,
+            "landing_review_gate_admit",
+            json!({"applies": false}),
+            false,
+        ),
+        (9, "landing_review", Value::Null, true),
+        (
+            10,
+            SETTLE,
+            json!({"gate": "not_required", "reviewer_fixed": false}),
+            false,
+        ),
+        (11, VALIDATE, Value::Null, true),
+        (12, LANDING_PUSH, Value::Null, true),
+        (13, "watch_checks", json!({"run_id": "jrun-watch"}), false),
+    ];
+    for (index, id, output, skipped) in steps {
+        state.record_step(index, JobRunState::Success, Some(output.clone()), None);
+        state.record_step_skipped(index, skipped);
+        state.record_pipeline_output(id, output);
+    }
+    assert!(state.compact_for_terminal(JobRunState::Success));
+    assert!(state.skipped_steps.is_empty());
+    f.runtime.write_run_state(&run.run_id, &state).unwrap();
+    f.state = state;
+
+    // The PR went red after `watch_checks`.
+    let mut answer: Value = serde_json::from_slice(&std::fs::read(&f.answer).unwrap()).unwrap();
+    answer["statusCheckRollup"] = json!([
+        {"name": "Check", "status": "COMPLETED", "conclusion": "FAILURE"}
+    ]);
+    std::fs::write(&f.answer, answer.to_string()).unwrap();
+
+    // 1. Compacted review-less run (`skipped_steps` empty, `landing_push` checkpointed
+    //    as `Success` with `Value::Null`) admits `inspect`.
+    let inspection = f
+        .runtime
+        .run_tool_as_human("orbit.workflow.run.resume", f.request("inspect"))
+        .expect("review-less success through watch_checks must admit inspect");
+    assert_eq!(inspection["binding"]["head_sha"], f.head);
+    assert_eq!(inspection["binding"]["pull_request"], "17");
+    assert_eq!(inspection["binding"]["branch"], f.branch);
+    assert!(inspection["policy_digest"].is_string());
+
+    // 2. Uncompacted `Success` + `Value::Null` without a `skipped_steps` entry,
+    //    and `landing_push` never run at all, also admit `inspect`.
+    let mut uncompacted_null = f.state.clone();
+    uncompacted_null.step_output_pointers.remove(&12);
+    uncompacted_null.record_step(12, JobRunState::Success, Some(Value::Null), None);
+    uncompacted_null.record_pipeline_output(LANDING_PUSH, Value::Null);
+    f.runtime
+        .write_run_state(&run.run_id, &uncompacted_null)
+        .unwrap();
+    let uncompacted_inspection = f
+        .runtime
+        .run_tool_as_human("orbit.workflow.run.resume", f.request("inspect"))
+        .expect("uncompacted null landing_push without skipped_steps must admit inspect");
+    assert_eq!(uncompacted_inspection["binding"]["head_sha"], f.head);
+
+    let mut not_run = f.state.clone();
+    not_run.step_states.remove(&12);
+    not_run.step_outputs.remove(&12);
+    not_run.step_output_pointers.remove(&12);
+    not_run
+        .pipeline
+        .as_object_mut()
+        .unwrap()
+        .remove(LANDING_PUSH);
+    f.runtime.write_run_state(&run.run_id, &not_run).unwrap();
+    let not_run_inspection = f
+        .runtime
+        .run_tool_as_human("orbit.workflow.run.resume", f.request("inspect"))
+        .expect("unreached landing_push must admit inspect");
+    assert_eq!(not_run_inspection["binding"]["head_sha"], f.head);
+
+    // 3. A real later publication (non-null output, or `Success` with missing
+    //    output) without a settled reviewer correction stays refused.
+    let mut real_push = f.state.clone();
+    let push_output = json!({
+        "phase": "push",
+        "decision": "reused_current",
+        "branch": f.branch,
+        "local_sha": f.head,
+        "remote_sha_before": f.head,
+        "force_with_lease": true,
+    });
+    real_push.step_output_pointers.remove(&12);
+    real_push.record_step(12, JobRunState::Success, Some(push_output.clone()), None);
+    real_push.record_pipeline_output(LANDING_PUSH, push_output);
+    f.runtime.write_run_state(&run.run_id, &real_push).unwrap();
+    let real_push_err = f
+        .runtime
+        .run_tool_as_human("orbit.workflow.run.resume", f.request("inspect"))
+        .expect_err("real later publication without settled correction must be refused")
+        .to_string();
+    assert!(
+        real_push_err.contains("later publication lacks an authenticated reviewer correction"),
+        "{real_push_err}"
+    );
+
+    let mut missing_output = f.state.clone();
+    missing_output.step_output_pointers.remove(&12);
+    missing_output.step_outputs.remove(&12);
+    missing_output
+        .pipeline
+        .as_object_mut()
+        .unwrap()
+        .remove(LANDING_PUSH);
+    f.runtime
+        .write_run_state(&run.run_id, &missing_output)
+        .unwrap();
+    let missing_output_err = f
+        .runtime
+        .run_tool_as_human("orbit.workflow.run.resume", f.request("inspect"))
+        .expect_err("Success landing_push with missing output must be refused")
+        .to_string();
+    assert!(
+        missing_output_err.contains("later publication lacks an authenticated reviewer correction"),
+        "{missing_output_err}"
+    );
+}
+
 crate::scenario_table!(
     reviewer_push_scenarios,
     a_held_incomplete_review_requeue_resumes_the_attested_reviewer_head,
@@ -748,5 +921,6 @@ crate::scenario_table!(
     a_rejected_landing_review_requeue_resumes_the_preserved_fix_commit,
     a_failed_landing_source_repair_admits_and_applies_preserved_fix,
     a_failed_landing_requeue_resumes_the_preserved_fix_commit,
-    failed_landing_keeps_completed_lease_and_receipt_refusals
+    failed_landing_keeps_completed_lease_and_receipt_refusals,
+    review_less_success_after_watch_checks_admits_inspect_and_refuses_real_later_push
 );
