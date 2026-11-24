@@ -85,8 +85,12 @@ version/protocol skew on a replica's owner are errors. An identity mismatch
 means the remote answered but its machine ID or task prefix differs from the
 registered entry. Use `orbit host list` for live details, register missing
 owners, restore SSH reachability and deploy matching builds where needed.
-`host list` is a report and exits zero when the registry loads even if a host
-is down; doctor is the health gate.
+The local `[machine]` identity must exist before `orbit host list` can succeed
+(run `orbit init` first); without it, listing fails even with `--no-probe` and a
+valid host registry. Once that prerequisite is met, `orbit host list` is a
+report and exits zero when the registry loads, including when remote probes
+fail; those failures appear in the affected host rows. `orbit doctor` is the
+health gate.
 
 ### Retired destinations file
 
