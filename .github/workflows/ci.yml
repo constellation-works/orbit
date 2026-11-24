@@ -1414,6 +1414,33 @@ jobs:
           cargo nextest run --profile ci --no-fail-fast "${reuse[@]}" \
             -E 'package(orbit-exec) & test(/^linux_landlock::tests::ruleset::/)'
 
+      # Require the public CLI permission-denial regression on an ordinary
+      # user. The isolated child forwards skip notices to nextest's output.
+      - name: Unreadable search index gate
+        if: ${{ env.SHARD == '1' && (!contains(needs.scope.outputs.mode, ':') || contains(needs.scope.outputs.mode, 'orbit-cli')) }}
+        run: |
+          set -euo pipefail
+          if [[ $(id -u) -eq 0 ]]; then
+            echo "Unreadable search index gate requires a non-root user" >&2
+            exit 1
+          fi
+          reuse=(--binaries-metadata target/nextest/binaries-metadata.json
+            --cargo-metadata target/nextest/cargo-metadata.json
+            --workspace-remap "$PWD" --target-dir-remap "$PWD/target")
+          filter='package(orbit-cli) & test(=doctor::search_index_doctor_warns_when_a_fresh_index_file_is_unreadable)'
+          selected=$(cargo nextest list "${reuse[@]}" -E "$filter" --message-format json |
+            jq '[."rust-suites"[].testcases[] | select(."filter-match".status == "matches")] | length')
+          if [[ "$selected" -ne 1 ]]; then
+            echo "Unreadable search index gate expected one test, selected $selected" >&2
+            exit 1
+          fi
+          cargo nextest run --profile ci --success-output immediate "${reuse[@]}" -E "$filter" 2>&1 |
+            tee "$RUNNER_TEMP/unreadable-index-gate.log"
+          if grep -Eq '(^|[[:space:]])(SKIP:|DEFERRED:)' "$RUNNER_TEMP/unreadable-index-gate.log"; then
+            echo "Unreadable search index gate skipped or deferred coverage" >&2
+            exit 1
+          fi
+
   test-2:
     needs: [pr-state, scope, test-build]
     if: ${{ !cancelled() && (github.event_name != 'pull_request' || (needs.pr-state.outputs.state == 'open' || needs.pr-state.outputs.state == 'unknown')) && needs.scope.outputs.mode != 'docs' && needs.scope.outputs.mode != 'skip' }}
