@@ -218,6 +218,7 @@ pub(crate) fn router(state: crate::state::DashboardState) -> Router<crate::state
         )
         .route("/routines/clock", post(routines::control_clock))
         .route("/auto-tasks", get(auto_tasks::list_auto_tasks))
+        .route("/auto-tasks/create", post(auto_tasks::create_auto_task))
         .route("/auto-tasks/toggle", post(auto_tasks::toggle_auto_task))
         .route("/auto-tasks/delete", post(auto_tasks::delete_auto_task))
         .route(

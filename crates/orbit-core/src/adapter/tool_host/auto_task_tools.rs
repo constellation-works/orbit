@@ -39,7 +39,7 @@ pub(super) fn dispatch(
     // Re-wraps the input the tool entry already parsed; see `parse_input`.
     let input = verb.spec().parse_input(input)?;
     match verb {
-        AutoTaskVerb::Add => add(runtime, &input),
+        AutoTaskVerb::Add => add(runtime, &input, None),
         AutoTaskVerb::List => list(runtime, &input),
         AutoTaskVerb::Show => show(runtime, &input),
         AutoTaskVerb::Update => update(runtime, &input),
@@ -54,7 +54,25 @@ pub(super) fn dispatch(
     }
 }
 
-fn add(runtime: &OrbitRuntime, input: &OperationInput) -> Result<Value, OrbitError> {
+impl OrbitRuntime {
+    /// Create from the structured auto-task add fields with an optional
+    /// initial enabled state. The dashboard must authorize an operator before
+    /// calling this adapter, since the fields can include tool grants.
+    pub fn auto_task_create_from_fields(
+        &self,
+        fields: Value,
+        enabled: Option<bool>,
+    ) -> Result<Value, OrbitError> {
+        let input = AutoTaskVerb::Add.spec().parse_input(fields)?;
+        add(self, &input, enabled)
+    }
+}
+
+fn add(
+    runtime: &OrbitRuntime,
+    input: &OperationInput,
+    enabled: Option<bool>,
+) -> Result<Value, OrbitError> {
     let name = input.required_string("name")?;
     let description = input
         .optional_raw_string("description")?
@@ -67,7 +85,7 @@ fn add(runtime: &OrbitRuntime, input: &OperationInput) -> Result<Value, OrbitErr
 
     // Validate before the write, so an ungrantable tool leaves nothing behind.
     let warnings = runtime.validate_required_tools(&template.required_tools)?;
-    let definition = runtime.auto_task_add_with_operator_grant(
+    let definition = runtime.write_new_auto_task(
         AutoTaskAddParams {
             name,
             description,
@@ -78,6 +96,7 @@ fn add(runtime: &OrbitRuntime, input: &OperationInput) -> Result<Value, OrbitErr
         input
             .optional_string_list("granted_tools")?
             .unwrap_or_default(),
+        enabled,
     )?;
     with_warnings(to_json(&definition)?, warnings)
 }

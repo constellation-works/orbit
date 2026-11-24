@@ -1,4 +1,4 @@
-//! Auto-task inspection, toggle, manual mint, and delete for the dashboard [ORB-10876].
+//! Auto-task inspection and definition controls for the dashboard.
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -9,8 +9,8 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Json, Response};
 use chrono::{DateTime, Utc};
 use orbit_common::governance::authorization::{
-    DASHBOARD_AUTO_TASK_DELETE, DASHBOARD_AUTO_TASK_MINT, DASHBOARD_AUTO_TASK_SCHEDULE,
-    DASHBOARD_AUTO_TASK_TOGGLE,
+    DASHBOARD_AUTO_TASK_CREATE, DASHBOARD_AUTO_TASK_DELETE, DASHBOARD_AUTO_TASK_MINT,
+    DASHBOARD_AUTO_TASK_SCHEDULE, DASHBOARD_AUTO_TASK_TOGGLE,
 };
 use orbit_core::application::auto_tasks::delete::{self, AutoTaskDeleteProfile};
 use orbit_core::application::auto_tasks::projection::AutoTaskListingProfile;
@@ -18,21 +18,28 @@ use orbit_core::application::auto_tasks::{
     AutoTaskDeleteError, AutoTaskDeleteParams, AutoTaskDeleteRefusal, AutoTaskToggleError,
     AutoTaskToggleOutcome, AutoTaskToggleProfile,
 };
-use orbit_core::{OrbitRuntime, Task};
+use orbit_core::{OrbitError, OrbitRuntime, Task};
 use orbit_types::workflow::auto_task_tag;
 use serde::Deserialize;
-use serde_json::{Value, json};
+use serde_json::{Map, Value, json};
 
-use super::blocking;
 use super::map_runtime_error;
 use super::routines::{
     OperationAudit, OperationsQuery, action_capability, authorization_denied, authorized_caller,
     explicit_workspace, host_cron_zone, named_entity_not_found, selection_conflict,
 };
+use super::{bad_request, blocking};
 use crate::state::DashboardState;
 
 const UNCONDITIONAL_MINT_WARNING: &str = "Manual mint ignores this definition's schedule, \
 enabled flag, and scheduler dedupe policy. It does not read or write the host-local cursor.";
+
+#[derive(Debug, Deserialize)]
+pub(super) struct AutoTaskCreateRequest {
+    enabled: Option<bool>,
+    #[serde(flatten)]
+    fields: Map<String, Value>,
+}
 
 #[derive(Debug, Deserialize)]
 pub(super) struct AutoTaskToggleRequest {
@@ -99,6 +106,83 @@ pub(super) async fn list_auto_tasks(
     {
         Ok(value) => Json(value).into_response(),
         Err(response) => *response,
+    }
+}
+
+/// `POST /api/auto-tasks/create` — create a workspace definition using the
+/// structured fields accepted by auto-task add.
+pub(super) async fn create_auto_task(
+    State(state): State<DashboardState>,
+    Query(query): Query<OperationsQuery>,
+    Json(body): Json<AutoTaskCreateRequest>,
+) -> Response {
+    let workspace = match explicit_workspace(&query) {
+        Ok(workspace) => workspace.to_string(),
+        Err(rejection) => return rejection.into_response(),
+    };
+    let runtime = match resolve_workspace_blocking(&state, &workspace).await {
+        Ok(runtime) => runtime,
+        Err(response) => return *response,
+    };
+    let fields = Value::Object(body.fields);
+    let target = fields
+        .get("name")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .unwrap_or_default()
+        .to_owned();
+    let fields_blake3 = blake3::hash(fields.to_string().as_bytes())
+        .to_hex()
+        .to_string();
+    let audit = OperationAudit::new(
+        &runtime,
+        &workspace,
+        DASHBOARD_AUTO_TASK_CREATE.id,
+        target,
+        json!({"enabled": body.enabled, "fields_blake3": fields_blake3}),
+    );
+    let started = Instant::now();
+    let caller = match authorized_caller(&DASHBOARD_AUTO_TASK_CREATE, state.operator_session()) {
+        Ok(caller) => caller,
+        Err(denial) => {
+            audit.denied(&denial, started).await;
+            return authorization_denied(denial);
+        }
+    };
+    let outcome = match blocking("auto-task create", {
+        let runtime = runtime.clone();
+        move || Ok(runtime.auto_task_create_from_fields(fields, body.enabled))
+    })
+    .await
+    {
+        Ok(outcome) => outcome,
+        Err(response) => return *response,
+    };
+    match outcome {
+        Ok(definition) => {
+            audit.succeeded(&caller, started).await;
+            (StatusCode::CREATED, Json(definition)).into_response()
+        }
+        Err(error) => {
+            let message = error.to_string();
+            audit.failed(&caller, &message, started).await;
+            match error {
+                OrbitError::InvalidInput(_) | OrbitError::InvalidInputDiagnostic { .. } => {
+                    bad_request(message)
+                }
+                OrbitError::CapabilityRefused(_) => (
+                    StatusCode::FORBIDDEN,
+                    Json(json!({"error": message, "code": "capability_refused"})),
+                )
+                    .into_response(),
+                OrbitError::PolicyDenied(_) => (
+                    StatusCode::FORBIDDEN,
+                    Json(json!({"error": message, "code": "policy_denied"})),
+                )
+                    .into_response(),
+                other => auto_task_control_error(other),
+            }
+        }
     }
 }
 
@@ -428,6 +512,7 @@ fn read_only_envelope(generated_at: DateTime<Utc>, workspace: Option<&str>, reas
         "workspace": workspace,
         "controls_authorized": false,
         "capabilities": {
+            "auto_task_create": {"authorized": false, "reason": reason},
             "auto_task_toggle": {"authorized": false, "reason": reason},
             "auto_task_mint": {"authorized": false, "reason": reason},
             "auto_task_schedule": {"authorized": false, "reason": reason},
@@ -497,6 +582,10 @@ fn list_json(
     let role_refusal = runtime
         .coordination_task_write_refusal()
         .map(|error| error.to_string());
+    let create_capability = role_refusal.as_deref().map_or_else(
+        || action_capability(&DASHBOARD_AUTO_TASK_CREATE, operator_session),
+        |reason| json!({"authorized": false, "reason": reason}),
+    );
     let toggle_capability = role_refusal.as_deref().map_or_else(
         || action_capability(&DASHBOARD_AUTO_TASK_TOGGLE, operator_session),
         |reason| json!({"authorized": false, "reason": reason}),
@@ -523,6 +612,7 @@ fn list_json(
         "workspace_name": workspace_name,
         "controls_authorized": controls_authorized,
         "capabilities": {
+            "auto_task_create": create_capability,
             "auto_task_toggle": toggle_capability,
             "auto_task_mint": mint_capability,
             "auto_task_schedule": schedule_capability,

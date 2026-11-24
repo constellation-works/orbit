@@ -134,6 +134,14 @@ pub const DASHBOARD_AUTO_TASK_TOGGLE: GovernedOperation = GovernedOperation {
     rationale: "changing a versioned auto-task definition changes unattended task minting",
 };
 
+/// Create an auto-task definition from the dashboard.
+pub const DASHBOARD_AUTO_TASK_CREATE: GovernedOperation = GovernedOperation {
+    id: "auto_task.create",
+    surface: OperationSurface::Dashboard,
+    allowed: &[McpCapability::Operator],
+    rationale: "creating a recurring definition configures unattended task minting and may grant tools",
+};
+
 /// Auto-task schedule replacement from the dashboard.
 pub const DASHBOARD_AUTO_TASK_SCHEDULE: GovernedOperation = GovernedOperation {
     id: "auto_task.set_schedule",

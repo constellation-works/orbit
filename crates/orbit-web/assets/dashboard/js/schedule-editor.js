@@ -259,7 +259,7 @@ export function autoTaskScheduleValue(draft) {
 // ---------------------------------------------------------------------------
 // Form furniture.
 
-function labelled(label, control, hint = "") {
+export function labelled(label, control, hint = "") {
   const wrap = el("label", { class: "schedule-field" }, [
     el("span", { class: "schedule-field-label", text: label }),
     control,
@@ -465,6 +465,26 @@ export function routineTriggerEditor({ key, routine, cronPreview, save, onClose 
   });
 }
 
+function autoTaskScheduleDetails(draft, changed) {
+  if (draft.kind === "cron") {
+    return [labelled("Cron", textInput(draft, "cron", { placeholder: "m h dom mon dow", onInput: changed }), "host-local time")];
+  }
+  if (draft.kind === "every_minutes") {
+    return [labelled("Every (minutes)", numberInput(draft, "every_minutes", { min: 1 }, changed), "anchored at the definition's first-observed slot")];
+  }
+  return deliveryFields(draft.delivery, changed);
+}
+
+/** Schedule fields for a new auto-task. Changing triggers keeps each draft. */
+export function autoTaskScheduleFields(draft) {
+  const details = el("div", { class: "auto-task-schedule-fields" }, autoTaskScheduleDetails(draft));
+  const trigger = selectInput(Object.entries(AUTO_TASK_KIND_LABELS), draft.kind, (kind) => {
+    draft.kind = kind;
+    details.replaceChildren(...autoTaskScheduleDetails(draft));
+  });
+  return [labelled("Trigger", trigger), details];
+}
+
 /** The open schedule editor for one auto-task. */
 export function autoTaskScheduleEditor({ key, definition, cronPreview, save, onClose }) {
   const kinds = Object.entries(AUTO_TASK_KIND_LABELS);
@@ -473,15 +493,7 @@ export function autoTaskScheduleEditor({ key, definition, cronPreview, save, onC
     title: `Schedule · ${definition.name}`,
     note: "",
     kinds,
-    fields: (draft, changed) => {
-      if (draft.kind === "cron") {
-        return [labelled("Cron", textInput(draft, "cron", { placeholder: "m h dom mon dow", onInput: changed }), "host-local time")];
-      }
-      if (draft.kind === "every_minutes") {
-        return [labelled("Every (minutes)", numberInput(draft, "every_minutes", { min: 1 }, changed), "anchored at the definition's first-observed slot")];
-      }
-      return deliveryFields(draft.delivery, changed);
-    },
+    fields: autoTaskScheduleDetails,
     value: autoTaskScheduleValue,
     preview: (schedule) => (schedule.cron ? `Mints ${cronPreview(schedule.cron)}` : schedule.every_minutes ? `Mints every ${schedule.every_minutes} minute${schedule.every_minutes === 1 ? "" : "s"}` : ""),
     save,

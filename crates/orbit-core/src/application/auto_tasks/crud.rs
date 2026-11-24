@@ -254,8 +254,17 @@ impl OrbitRuntime {
     /// one.
     pub fn auto_task_add_with_operator_grant(
         &self,
+        params: AutoTaskAddParams,
+        granted_tools: Vec<String>,
+    ) -> Result<AutoTaskDefinition, OrbitError> {
+        self.write_new_auto_task(params, granted_tools, None)
+    }
+
+    pub(crate) fn write_new_auto_task(
+        &self,
         mut params: AutoTaskAddParams,
         granted_tools: Vec<String>,
+        enabled: Option<bool>,
     ) -> Result<AutoTaskDefinition, OrbitError> {
         self.ensure_coordination_task_write_permitted()?;
         let state_path = cursor_state_path(&self.paths().state_dir);
@@ -272,10 +281,10 @@ impl OrbitRuntime {
                 // Delivery definitions start disabled until reviewed; a
                 // condition starts disabled so enabling it runs the enable
                 // dry run.
-                enabled: !matches!(
-                    &params.schedule,
+                enabled: enabled.unwrap_or(!matches!(
+                    params.schedule,
                     AutoTaskSchedule::Deliveries { .. } | AutoTaskSchedule::Condition { .. }
-                ),
+                )),
                 schedule: params.schedule,
                 template: params.template,
                 dedupe: params.dedupe,
@@ -308,6 +317,7 @@ impl OrbitRuntime {
                     definition.name
                 )));
             }
+            self.refuse_condition_enable_storm(None, &definition)?;
             self.drop_auto_task_settings(&definition.name)?;
             self.write_auto_task(&definition)?;
             Ok(definition)
@@ -735,7 +745,7 @@ impl OrbitRuntime {
             definition.updated_by = Some(write_actor(self)?);
             definition.updated_at = chrono::Utc::now().to_rfc3339();
             self.validate_auto_task(&definition)?;
-            self.refuse_condition_enable_storm(&before, &definition)?;
+            self.refuse_condition_enable_storm(Some(&before), &definition)?;
             self.persist_auto_task_edit(&definition)?;
             if before.enabled
                 && !definition.enabled
@@ -757,7 +767,7 @@ impl OrbitRuntime {
     /// current matches than `max_matches` refuses the write (§8, §9).
     fn refuse_condition_enable_storm(
         &self,
-        before: &AutoTaskDefinition,
+        before: Option<&AutoTaskDefinition>,
         after: &AutoTaskDefinition,
     ) -> Result<(), OrbitError> {
         use crate::application::automation::condition::{ConditionDefinition, enable_preview};
@@ -767,11 +777,11 @@ impl OrbitRuntime {
         if !after.enabled {
             return Ok(());
         }
-        let epoch_changed = match ConditionDefinition::of_auto_task(before) {
-            Some(previous) => previous.epoch()? != condition.epoch()?,
-            None => true,
-        };
-        if before.enabled && !epoch_changed {
+        if let Some(before) = before
+            && before.enabled
+            && let Some(previous) = ConditionDefinition::of_auto_task(before)
+            && previous.epoch()? == condition.epoch()?
+        {
             return Ok(());
         }
         let preview = enable_preview(self, &condition, chrono::Utc::now())?;

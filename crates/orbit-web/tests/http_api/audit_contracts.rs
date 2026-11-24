@@ -34,22 +34,51 @@ fn toggle_denies_a_caller_without_operator_capability() {
         "audit_contracts::toggle_denies_a_caller_without_operator_capability",
         || {
             let fixture = Fixture::new();
+            let params = chore_params("nightly");
+            let create_url = "/api/auto-tasks/create?workspace=ws_http_fixture";
+            let request = json!({
+                "name": params.name,
+                "description": params.description,
+                "schedule": params.schedule,
+                "template": params.template,
+                "dedupe": params.dedupe,
+                "enabled": false,
+            });
+            {
+                let operator = fixture.server(true);
+                let created = operator.send("POST", create_url, request.clone());
+                assert_eq!(created.status(), StatusCode::CREATED);
+                let saved = fixture.runtime.auto_task_show("nightly").unwrap().unwrap();
+                assert!(!saved.enabled);
+                assert_eq!(saved.schedule, params.schedule);
+                assert_eq!(saved.template, params.template);
+                assert_eq!(saved.description, params.description);
+                assert_eq!(saved.dedupe, params.dedupe);
+
+                let expected = fixture.runtime.auto_task_add(params).unwrap_err();
+                let refused = operator.send("POST", create_url, request);
+                assert_eq!(refused.status(), StatusCode::BAD_REQUEST);
+                assert_eq!(
+                    refused.json::<Value>().unwrap()["error"],
+                    expected.to_string()
+                );
+                assert_eq!(
+                    fixture.runtime.auto_task_show("nightly").unwrap().unwrap(),
+                    saved
+                );
+            }
             let server = fixture.server(false);
-            fixture
-                .runtime
-                .auto_task_add(chore_params("nightly"))
-                .expect("add");
             let response = server.send(
                 "POST",
                 "/api/auto-tasks/toggle?workspace=ws_http_fixture",
-                json!({"name":"nightly","expected_enabled":true,"enabled":false}),
+                json!({"name":"nightly","expected_enabled":false,"enabled":true}),
             );
             assert_eq!(response.status(), StatusCode::FORBIDDEN);
             let json: Value = response.json().unwrap();
             assert_eq!(json["code"], "authorization_denied");
             assert_eq!(json["operation"], "auto_task.toggle");
             assert!(
-                fixture
+                !fixture
                     .runtime
                     .auto_task_show("nightly")
                     .unwrap()

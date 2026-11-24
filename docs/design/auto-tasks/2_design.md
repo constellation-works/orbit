@@ -761,6 +761,21 @@ disclosure. All-workspace and inactive/unknown workspace selections stay
 read-only. Refresh and hash navigation only GET — they never replay a toggle
 or mint.
 
+**Create** opens a form for the selected workspace. It takes a name,
+description, schedule and task template, with optional template settings
+and dedupe under Advanced options. Enabled starts off. On refusal the
+form keeps the draft and shows the command's error. On success it closes
+and filters the refreshed list to the new definition.
+
+`POST /api/auto-tasks/create` accepts the structured add fields `name`,
+`description`, `schedule`, `template`, `granted_tools` and `dedupe`,
+plus the initial `enabled` flag. Omit `enabled` to use the CLI defaults.
+The form sends the flag explicitly so creation is one write under the
+cursor lock. The route shares validation and persistence with
+`orbit auto-task add`, returns the created definition with HTTP 201 and
+audits the operation as `auto_task.create`. The audit records the target,
+the requested enabled state and a digest of the structured add fields.
+
 **Delete** removes one definition with `POST /api/auto-tasks/delete`, a body of
 `name`, an optional `reason` and an optional `force` flag, scoped to the selected
 workspace. The governed operation is `auto_task.delete`, operator-only like the
@@ -797,11 +812,12 @@ Each HTTP definition row carries `orbit_default`, true when the name is in
 default keeps the badge, because seeding keys shipped defaults by name.
 
 `GET /api/auto-tasks` returns separate `capabilities` decisions for
-`auto_task_toggle`, `auto_task_mint`, `auto_task_schedule` and `auto_task_delete`.
+`auto_task_create`, `auto_task_toggle`, `auto_task_mint`, `auto_task_schedule`
+and `auto_task_delete`.
 Each decision uses the same governed operation as its POST endpoint
-(`auto_task.toggle`, `auto_task.mint`, `auto_task.set_schedule` and
+(`auto_task.create`, `auto_task.toggle`, `auto_task.mint`, `auto_task.set_schedule` and
 `auto_task.delete`); no client-side grant is inferred from another action. All
-four currently require operator authority, while bounded-window submission has a
+five currently require operator authority, while bounded-window submission has a
 separate policy. Routine toggle and the clock capabilities are on the routines
 list response instead. The legacy `controls_authorized` field remains for existing
 API consumers and still answers only for toggle and mint.

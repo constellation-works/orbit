@@ -162,6 +162,12 @@ fn body(path: &str) -> Value {
         "/routines/breaker" => json!({
             "name":"missing", "source":"fixture", "action":"reset", "machine_name":"fixture",
         }),
+        "/auto-tasks/create" => json!({
+            "name":"guard-fixture",
+            "schedule":{"every_minutes":60},
+            "template":{"title":"Guard fixture"},
+            "enabled":false,
+        }),
         "/auto-tasks/toggle" => json!({"name":"missing","expected_enabled":true,"enabled":false}),
         "/auto-tasks/delete" => json!({"name":"missing"}),
         "/auto-tasks/schedule" => json!({
