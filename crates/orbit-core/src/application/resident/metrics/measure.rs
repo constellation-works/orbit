@@ -3,14 +3,14 @@ use std::collections::{BTreeMap, BTreeSet};
 use chrono::{DateTime, Duration, Utc};
 use orbit_common::{NotFoundKind, OrbitError};
 use orbit_store::RegisteredTaskResolution;
-use orbit_types::task::{Task, TaskHistoryEntry, TaskStatus};
+use orbit_types::task::{DecisionRequest, Task, TaskComment, TaskHistoryEntry, TaskStatus};
 use orbit_types::workflow::{
-    RESIDENT_MANDATE_ARTIFACT, RESIDENT_TAG, ResidentComment, ResidentMandate,
+    RESIDENT_MANDATE_ARTIFACT, RESIDENT_TAG, ResidentCheckpoint, ResidentComment, ResidentMandate,
 };
 use serde_json::{Value, json};
 
 use super::super::control::RESIDENT_CONTROL_EVENT;
-use super::super::due::{checkpoints, started_cycles};
+use super::super::due::started_cycles;
 use super::report::MetricsReportKind;
 use super::{report, window};
 use crate::OrbitRuntime;
@@ -238,32 +238,69 @@ impl OrbitRuntime {
         let task = self.get_task(task_id)?;
         let history = self.get_task_history(task_id)?;
         let comments = self.get_task_comments(task_id)?;
-        let parsed_checkpoints = checkpoints(task_id, &comments);
-        // Checkpoint timestamps come from their comments, oldest first.
-        let mut checkpoint_times: Vec<(DateTime<Utc>, usize)> = Vec::new();
-        {
-            let mut index = 0usize;
-            for comment in &comments {
-                if let Ok(ResidentComment::Checkpoint(record)) =
-                    ResidentComment::parse(&comment.message)
-                    && record.mandate == task_id
-                {
-                    checkpoint_times.push((comment.at, index));
-                    index += 1;
-                }
-            }
-            let _ = &parsed_checkpoints;
-        }
-        let checkpoint_at = |index: usize| -> Option<DateTime<Utc>> {
-            checkpoint_times
-                .iter()
-                .find(|(_, i)| *i == index)
-                .map(|(at, _)| *at)
-        };
+        let timed_checkpoints = timed_checkpoints(task_id, &comments);
+        let watched = self.metrics_watched_tasks(task_id, &task, &history, &timed_checkpoints)?;
+        let mut references = self.metrics_references(task_id, &watched)?;
+        let (interventions, intervention_times) =
+            self.measure_interventions(&watched, &references, span_start, span_end)?;
+        let escalations = self.measure_escalations(
+            task_id,
+            &watched,
+            &mut references,
+            (&comments, &timed_checkpoints),
+            (span_start, span_end),
+            now,
+        )?;
+        let (reversed, reversal_total, reversed_subjects) = self.measure_reversals(
+            &comments,
+            &timed_checkpoints,
+            &references,
+            span_start,
+            span_end,
+        );
+        let (
+            crashed,
+            recovery_seconds,
+            recovery_slot_minutes,
+            repeated_actions,
+            recovery_interventions,
+        ) = measure_recovery(
+            task_id,
+            &history,
+            &timed_checkpoints,
+            &intervention_times,
+            span_start,
+            span_end,
+        );
+        let (foreign_references, unreachable_references) = reference_summary(&references);
+        Ok(MeasureInputs {
+            interventions,
+            intervention_times,
+            escalations,
+            reversed,
+            reversal_total,
+            reversed_subjects,
+            crashed,
+            recovery_seconds,
+            recovery_slot_minutes,
+            repeated_actions,
+            recovery_interventions,
+            has_checkpoints: !timed_checkpoints.is_empty(),
+            foreign_references,
+            unreachable_references,
+        })
+    }
 
+    fn metrics_watched_tasks(
+        &self,
+        task_id: &str,
+        task: &Task,
+        history: &[TaskHistoryEntry],
+        timed_checkpoints: &[(DateTime<Utc>, ResidentCheckpoint)],
+    ) -> Result<BTreeSet<String>, OrbitError> {
         // Watched tasks: the mandate's watch plus checkpoint action subjects.
         let mut watched: BTreeSet<String> = [task_id.to_string()].into_iter().collect();
-        if let Ok(view) = self.resident_view(task.clone(), &history)
+        if let Ok(view) = self.resident_view(task.clone(), history)
             && let Ok(mandate) = &view.mandate
         {
             watched.extend(mandate.watch.tasks.iter().cloned());
@@ -279,7 +316,7 @@ impl OrbitRuntime {
                 }
             }
         }
-        for checkpoint in &parsed_checkpoints {
+        for (_, checkpoint) in timed_checkpoints {
             for action in &checkpoint.actions {
                 watched.insert(action.subject.clone());
             }
@@ -288,6 +325,32 @@ impl OrbitRuntime {
             watched.insert(relation.target.to_string());
         }
 
+        Ok(watched)
+    }
+
+    fn metrics_references(
+        &self,
+        task_id: &str,
+        watched: &BTreeSet<String>,
+    ) -> Result<BTreeMap<String, MetricsReference>, OrbitError> {
+        // Every referenced task, resolved once: watched tasks plus the
+        // escalation tasks gathered below.
+        let mut references: BTreeMap<String, MetricsReference> = BTreeMap::new();
+        for id in watched {
+            if id != task_id {
+                references.insert(id.clone(), self.metrics_reference(id)?);
+            }
+        }
+        Ok(references)
+    }
+
+    fn measure_interventions(
+        &self,
+        watched: &BTreeSet<String>,
+        references: &BTreeMap<String, MetricsReference>,
+        span_start: DateTime<Utc>,
+        span_end: DateTime<Utc>,
+    ) -> Result<(Vec<Value>, Vec<DateTime<Utc>>), OrbitError> {
         // --- Manual interventions -------------------------------------
         let mut interventions: Vec<Value> = Vec::new();
         let mut intervention_times: Vec<DateTime<Utc>> = Vec::new();
@@ -306,15 +369,7 @@ impl OrbitRuntime {
                 }));
                 times.push(at);
             };
-        // Every referenced task, resolved once: watched tasks plus the
-        // escalation tasks gathered below.
-        let mut references: BTreeMap<String, MetricsReference> = BTreeMap::new();
-        for id in &watched {
-            if id != task_id {
-                references.insert(id.clone(), self.metrics_reference(id)?);
-            }
-        }
-        for watched_id in &watched {
+        for watched_id in watched {
             let watched_history = match references.get(watched_id) {
                 None | Some(MetricsReference::Local) => None,
                 Some(MetricsReference::Foreign { history, .. }) => Some(history.clone()),
@@ -416,14 +471,28 @@ impl OrbitRuntime {
         interventions.sort_by(|a, b| a["at"].as_str().cmp(&b["at"].as_str()));
         intervention_times.sort();
 
+        Ok((interventions, intervention_times))
+    }
+
+    fn measure_escalations(
+        &self,
+        task_id: &str,
+        watched: &BTreeSet<String>,
+        references: &mut BTreeMap<String, MetricsReference>,
+        records: (&[TaskComment], &[TimedCheckpoint]),
+        span: (DateTime<Utc>, DateTime<Utc>),
+        now: DateTime<Utc>,
+    ) -> Result<Vec<DecisionRequest>, OrbitError> {
+        let (comments, timed_checkpoints) = records;
+        let (span_start, span_end) = span;
         // --- Escalation load ------------------------------------------
         let mut resident_request_ids: BTreeSet<String> = BTreeSet::new();
-        for checkpoint in &parsed_checkpoints {
+        for (_, checkpoint) in timed_checkpoints {
             for request in &checkpoint.requests {
                 resident_request_ids.insert(request.decision_request.clone());
             }
         }
-        for comment in &comments {
+        for comment in comments {
             if let Ok(ResidentComment::Request(request)) = ResidentComment::parse(&comment.message)
             {
                 resident_request_ids.insert(request.decision_request.clone());
@@ -441,7 +510,7 @@ impl OrbitRuntime {
                 escalation_task_ids.insert(other.id.to_string());
             }
         }
-        for checkpoint in &parsed_checkpoints {
+        for (_, checkpoint) in timed_checkpoints {
             for request in &checkpoint.requests {
                 escalation_task_ids.insert(request.task.clone());
             }
@@ -479,6 +548,17 @@ impl OrbitRuntime {
             .retain(|request| request.raised_at >= span_start && request.raised_at <= span_end);
         escalations.sort_by_key(|request| request.raised_at);
 
+        Ok(escalations)
+    }
+
+    fn measure_reversals(
+        &self,
+        comments: &[TaskComment],
+        timed_checkpoints: &[(DateTime<Utc>, ResidentCheckpoint)],
+        references: &BTreeMap<String, MetricsReference>,
+        span_start: DateTime<Utc>,
+        span_end: DateTime<Utc>,
+    ) -> (usize, usize, Vec<String>) {
         // --- Reversal rate --------------------------------------------
         let answers: Vec<(DateTime<Utc>, String)> = comments
             .iter()
@@ -492,7 +572,7 @@ impl OrbitRuntime {
         // Human status writes per subject task, read once.
         let mut subject_histories: BTreeMap<String, Vec<orbit_types::task::TaskHistoryEntry>> =
             BTreeMap::new();
-        for checkpoint in &parsed_checkpoints {
+        for (_, checkpoint) in timed_checkpoints {
             for action in &checkpoint.actions {
                 if let std::collections::btree_map::Entry::Vacant(slot) =
                     subject_histories.entry(action.subject.clone())
@@ -511,10 +591,8 @@ impl OrbitRuntime {
         let mut reversal_total = 0usize;
         let mut reversed = 0usize;
         let mut reversed_subjects: Vec<String> = Vec::new();
-        for (index, checkpoint) in parsed_checkpoints.iter().enumerate() {
-            let Some(at) = checkpoint_at(index) else {
-                continue;
-            };
+        for (at, checkpoint) in timed_checkpoints {
+            let at = *at;
             if at < span_start || at > span_end {
                 continue;
             }
@@ -557,102 +635,117 @@ impl OrbitRuntime {
             }
         }
 
-        // --- Recovery cost --------------------------------------------
-        let cycles = started_cycles(&history);
-        let cycle_start: BTreeMap<String, DateTime<Utc>> = cycles
+        (reversed, reversal_total, reversed_subjects)
+    }
+}
+
+type TimedCheckpoint = (DateTime<Utc>, ResidentCheckpoint);
+
+fn timed_checkpoints(task_id: &str, comments: &[TaskComment]) -> Vec<TimedCheckpoint> {
+    comments
+        .iter()
+        .filter_map(
+            |comment| match ResidentComment::parse(&comment.message).ok()? {
+                ResidentComment::Checkpoint(record) if record.mandate == task_id => {
+                    Some((comment.at, *record))
+                }
+                _ => None,
+            },
+        )
+        .collect()
+}
+
+fn measure_recovery(
+    task_id: &str,
+    history: &[TaskHistoryEntry],
+    timed_checkpoints: &[TimedCheckpoint],
+    intervention_times: &[DateTime<Utc>],
+    span_start: DateTime<Utc>,
+    span_end: DateTime<Utc>,
+) -> (usize, Vec<f64>, f64, usize, usize) {
+    // --- Recovery cost --------------------------------------------
+    let cycles = started_cycles(history);
+    let cycle_start: BTreeMap<String, DateTime<Utc>> = cycles
+        .iter()
+        .map(|cycle| (cycle.live.cycle.clone(), cycle.at))
+        .collect();
+    let mut crashed = 0usize;
+    let mut recovery_seconds: Vec<f64> = Vec::new();
+    let mut recovery_interventions = 0usize;
+    for (at, checkpoint) in timed_checkpoints {
+        if checkpoint.outcome != "incomplete" || *at < span_start || *at > span_end {
+            continue;
+        }
+        crashed += 1;
+        let dead_start = cycle_start.get(&checkpoint.cycle).copied().unwrap_or(*at);
+        let next_good = timed_checkpoints
             .iter()
-            .map(|cycle| (cycle.live.cycle.clone(), cycle.at))
-            .collect();
-        let timed_checkpoints: Vec<(DateTime<Utc>, &orbit_types::workflow::ResidentCheckpoint)> =
-            parsed_checkpoints
-                .iter()
-                .enumerate()
-                .filter_map(|(index, checkpoint)| Some((checkpoint_at(index)?, checkpoint)))
-                .collect();
-        let mut crashed = 0usize;
-        let mut recovery_seconds: Vec<f64> = Vec::new();
-        let mut recovery_interventions = 0usize;
-        for (at, checkpoint) in &timed_checkpoints {
-            if checkpoint.outcome != "incomplete" || *at < span_start || *at > span_end {
-                continue;
+            .filter(|(good_at, good)| good.outcome != "incomplete" && *good_at > *at)
+            .map(|(good_at, _)| *good_at)
+            .min();
+        if let Some(good_at) = next_good {
+            recovery_seconds.push((good_at - dead_start).num_seconds().max(0) as f64);
+        }
+        let until = next_good.unwrap_or(span_end);
+        recovery_interventions += intervention_times
+            .iter()
+            .filter(|time| **time > dead_start && **time <= until)
+            .count();
+    }
+    let mut recovery_slot_minutes = 0.0f64;
+    let mut repeated_actions = 0usize;
+    let mut ok_keys: BTreeSet<String> = BTreeSet::new();
+    for (at, checkpoint) in timed_checkpoints {
+        for action in &checkpoint.actions {
+            if action.result == "ok" && !ok_keys.insert(action.key.clone()) {
+                repeated_actions += 1;
             }
-            crashed += 1;
-            let dead_start = cycle_start.get(&checkpoint.cycle).copied().unwrap_or(*at);
-            let next_good = timed_checkpoints
-                .iter()
-                .filter(|(good_at, good)| good.outcome != "incomplete" && *good_at > *at)
-                .map(|(good_at, _)| *good_at)
-                .min();
-            if let Some(good_at) = next_good {
-                recovery_seconds.push((good_at - dead_start).num_seconds().max(0) as f64);
+        }
+        if *at < span_start || *at > span_end {
+            continue;
+        }
+        if let Some(dead) = &checkpoint.recovery_of {
+            if let Some(recovery_start) = cycle_start.get(&checkpoint.cycle) {
+                recovery_slot_minutes += (*at - *recovery_start).num_seconds().max(0) as f64 / 60.0;
             }
-            let until = next_good.unwrap_or(span_end);
-            recovery_interventions += intervention_times
+            // A completed dead-cycle action run again (instead of the
+            // ledger's `already_done`) is a repeat.
+            let dead_prefix = format!("resident:{task_id}:{dead}:");
+            repeated_actions += checkpoint
+                .actions
                 .iter()
-                .filter(|time| **time > dead_start && **time <= until)
+                .filter(|action| action.result == "ok" && action.key.starts_with(&dead_prefix))
                 .count();
         }
-        let mut recovery_slot_minutes = 0.0f64;
-        let mut repeated_actions = 0usize;
-        let mut ok_keys: BTreeSet<String> = BTreeSet::new();
-        for (at, checkpoint) in &timed_checkpoints {
-            for action in &checkpoint.actions {
-                if action.result == "ok" && !ok_keys.insert(action.key.clone()) {
-                    repeated_actions += 1;
-                }
-            }
-            if *at < span_start || *at > span_end {
-                continue;
-            }
-            if let Some(dead) = &checkpoint.recovery_of {
-                if let Some(recovery_start) = cycle_start.get(&checkpoint.cycle) {
-                    recovery_slot_minutes +=
-                        (*at - *recovery_start).num_seconds().max(0) as f64 / 60.0;
-                }
-                // A completed dead-cycle action run again (instead of the
-                // ledger's `already_done`) is a repeat.
-                let dead_prefix = format!("resident:{task_id}:{dead}:");
-                repeated_actions += checkpoint
-                    .actions
-                    .iter()
-                    .filter(|action| action.result == "ok" && action.key.starts_with(&dead_prefix))
-                    .count();
-            }
-        }
-
-        let mut foreign_references = Vec::new();
-        let mut unreachable_references = Vec::new();
-        for (id, reference) in &references {
-            match reference {
-                MetricsReference::Local => {}
-                MetricsReference::Foreign { workspace, .. } => foreign_references.push(json!({
-                    "task_id": id,
-                    "workspace": workspace,
-                    "read": ["history", "decision_requests"],
-                    "not_read": ["comments"],
-                })),
-                MetricsReference::Unreachable { reason } => unreachable_references.push(json!({
-                    "task_id": id,
-                    "reason": reason,
-                })),
-            }
-        }
-
-        Ok(MeasureInputs {
-            interventions,
-            intervention_times,
-            escalations,
-            reversed,
-            reversal_total,
-            reversed_subjects,
-            crashed,
-            recovery_seconds,
-            recovery_slot_minutes,
-            repeated_actions,
-            recovery_interventions,
-            has_checkpoints: !parsed_checkpoints.is_empty(),
-            foreign_references,
-            unreachable_references,
-        })
     }
+
+    (
+        crashed,
+        recovery_seconds,
+        recovery_slot_minutes,
+        repeated_actions,
+        recovery_interventions,
+    )
+}
+
+fn reference_summary(references: &BTreeMap<String, MetricsReference>) -> (Vec<Value>, Vec<Value>) {
+    let mut foreign_references = Vec::new();
+    let mut unreachable_references = Vec::new();
+    for (id, reference) in references {
+        match reference {
+            MetricsReference::Local => {}
+            MetricsReference::Foreign { workspace, .. } => foreign_references.push(json!({
+                "task_id": id,
+                "workspace": workspace,
+                "read": ["history", "decision_requests"],
+                "not_read": ["comments"],
+            })),
+            MetricsReference::Unreachable { reason } => unreachable_references.push(json!({
+                "task_id": id,
+                "reason": reason,
+            })),
+        }
+    }
+
+    (foreign_references, unreachable_references)
 }
