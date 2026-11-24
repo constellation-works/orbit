@@ -197,7 +197,12 @@ pub fn reauthenticate(peer: &Peer, anchor: &PeerAnchor) -> Result<(), Refusal> {
 fn peer_unchanged(peer: &Peer) -> bool {
     #[cfg(target_os = "linux")]
     {
-        if peer.pidfd.as_ref().is_some_and(|pidfd| !pidfd_alive(pidfd)) {
+        use std::os::fd::AsFd;
+        // Signal 0 probes permission and existence: any error, EPERM included,
+        // rejects the peer.
+        if peer.pidfd.as_ref().is_some_and(|pidfd| {
+            orbit_common::process::signal::pidfd_send_signal(pidfd.as_fd(), 0).is_err()
+        }) {
             return false;
         }
         if orbit_common::process::identity::linux_process_state(peer.pid)
@@ -277,21 +282,6 @@ fn peer_pidfd(fd: std::os::fd::RawFd) -> Option<OwnedFd> {
     };
     // SAFETY: on success the kernel returned a new descriptor we now own.
     (rc == 0 && pidfd >= 0).then(|| unsafe { OwnedFd::from_raw_fd(pidfd) })
-}
-
-#[cfg(target_os = "linux")]
-fn pidfd_alive(pidfd: &OwnedFd) -> bool {
-    // SAFETY: signal 0 only probes; the pidfd is owned and open.
-    let rc = unsafe {
-        libc::syscall(
-            libc::SYS_pidfd_send_signal,
-            pidfd.as_raw_fd(),
-            0,
-            std::ptr::null::<libc::siginfo_t>(),
-            0,
-        )
-    };
-    rc == 0
 }
 
 /// The peer's PID (from its audit token, else `LOCAL_PEERPID`) and UID.

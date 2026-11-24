@@ -197,13 +197,14 @@ impl StoppedDescendantWatch {
 #[cfg(target_os = "linux")]
 pub(crate) mod linux {
     use std::collections::{HashMap, HashSet, VecDeque};
-    use std::os::fd::{FromRawFd, OwnedFd};
+    use std::os::fd::AsFd;
     use std::time::Duration;
 
     use super::{COMMAND_LIMIT_BYTES, StoppedDescendant};
     use crate::process::identity::{
         LinuxProcessStat, linux_process_stat, process_start_identity_token,
     };
+    use crate::process::signal::{pidfd_open, pidfd_send_signal};
     use crate::security::redaction::{argv_redactor, redact_all};
 
     /// Every process `/proc` lists, by pid. A process that exits during the
@@ -259,20 +260,13 @@ pub(crate) mod linux {
         let pid_t = libc::pid_t::try_from(pid).ok()?;
         // A pidfd pins the process: once it is open, `pid` cannot be reused
         // under it, so the check below holds for the signal that follows.
-        // SAFETY: pidfd_open takes a pid and flags and returns a new fd.
-        let raw = unsafe { libc::syscall(libc::SYS_pidfd_open, pid_t, 0) };
-        let pidfd = if let Ok(fd) = i32::try_from(raw)
-            && fd >= 0
-        {
-            // SAFETY: the kernel just returned this descriptor to us.
-            Some(unsafe { OwnedFd::from_raw_fd(fd) })
-        } else if std::io::Error::last_os_error().raw_os_error() == Some(libc::ENOSYS) {
+        let pidfd = match pidfd_open(pid_t) {
+            Ok(fd) => Some(fd),
             // Pre-5.3 kernel. A stopped process cannot exit by itself, so its
             // pid stays its own between the check and `kill` unless someone
             // else kills it in that window.
-            None
-        } else {
-            return None;
+            Err(error) if error.raw_os_error() == Some(libc::ENOSYS) => None,
+            Err(_) => return None,
         };
         let current = linux_process_stat(pid)?;
         if current.start_ticks != start_ticks || current.state != 'T' {
@@ -281,23 +275,12 @@ pub(crate) mod linux {
         let pid_start_time = process_start_identity_token(pid);
         let command = command_line(pid);
         let delivered = match &pidfd {
-            Some(fd) => {
-                use std::os::fd::AsRawFd;
-                // SAFETY: a valid pidfd, a signal number, no siginfo, no flags.
-                unsafe {
-                    libc::syscall(
-                        libc::SYS_pidfd_send_signal,
-                        fd.as_raw_fd(),
-                        libc::SIGKILL,
-                        std::ptr::null::<libc::siginfo_t>(),
-                        0,
-                    )
-                }
-            }
+            Some(fd) => pidfd_send_signal(fd.as_fd(), libc::SIGKILL),
             // SAFETY: signals the pid verified just above.
-            None => libc::c_long::from(unsafe { libc::kill(pid_t, libc::SIGKILL) }),
+            None if unsafe { libc::kill(pid_t, libc::SIGKILL) } == 0 => Ok(()),
+            None => Err(std::io::Error::last_os_error()),
         };
-        let end_error = (delivered != 0).then(|| std::io::Error::last_os_error().to_string());
+        let end_error = delivered.err().map(|error| error.to_string());
         Some(StoppedDescendant {
             pid,
             pid_start_time,
