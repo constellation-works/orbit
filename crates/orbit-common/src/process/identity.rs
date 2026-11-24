@@ -772,45 +772,85 @@ pub(super) fn linux_process_group_liveness_with(
     }
 }
 
-/// Darwin libproc group scan. The buffer is retried when libproc fills it,
-/// avoiding a truncated scan being mistaken for a zombie-only group.
+/// Enumerate the PIDs in Darwin process group `pgid` via libproc, retrying with
+/// doubled buffers (up to 3 attempts) if the group grows between probe and fill
+/// so a truncated snapshot is never mistaken for the complete group.
 #[cfg(target_os = "macos")]
-fn darwin_process_group_liveness(pgid: libc::pid_t) -> Option<KernelLiveness> {
+pub(super) fn darwin_list_pgrp_pids(pgid: libc::pid_t) -> std::io::Result<Vec<libc::pid_t>> {
     use std::ffi::c_void;
+    use std::io;
     use std::mem::size_of;
 
-    // Safety: a null/zero probe asks the wrapper for the required PID count.
-    // Unlike `proc_listpids`, `proc_listpgrppids` divides the kernel's byte
-    // count by `sizeof(int)` before returning.
-    let required = unsafe { libc::proc_listpgrppids(pgid, std::ptr::null_mut(), 0) };
-    if required <= 0 {
-        return match signal_presence(-pgid) {
-            SignalPresence::Missing => Some(KernelLiveness::Exited),
-            SignalPresence::Present | SignalPresence::Unknown => None,
+    unsafe fn query(pgid: libc::pid_t, buffer: *mut c_void, buffer_size: i32) -> io::Result<usize> {
+        // Safety: caller guarantees `buffer` is null with `buffer_size == 0`
+        // for a size probe or writable for `buffer_size` bytes; `__error` is
+        // thread-local and cleared so `0` (empty group) is distinct from errors.
+        // Unlike `proc_listpids`, `proc_listpgrppids` divides the kernel's byte
+        // count by `sizeof(int)` before returning.
+        let (count, errno) = unsafe {
+            *libc::__error() = 0;
+            let count = libc::proc_listpgrppids(pgid, buffer, buffer_size);
+            (count, *libc::__error())
         };
+        if count < 0 {
+            return Err(if errno != 0 {
+                io::Error::from_raw_os_error(errno)
+            } else {
+                io::Error::other("process group snapshot failed")
+            });
+        }
+        if count == 0 {
+            return if errno == 0 {
+                Ok(0)
+            } else {
+                Err(io::Error::from_raw_os_error(errno))
+            };
+        }
+        usize::try_from(count).map_err(io::Error::other)
+    }
+
+    // Safety: null/zero requests the required PID slot count.
+    let required = unsafe { query(pgid, std::ptr::null_mut(), 0) }?;
+    if required == 0 {
+        return Ok(Vec::new());
     }
 
     let pid_size = size_of::<libc::pid_t>();
-    let mut slots = usize::try_from(required).ok()?.saturating_mul(2).max(16);
+    let mut slots = required.saturating_mul(2).max(16);
     for _ in 0..3 {
         let mut pids = vec![0 as libc::pid_t; slots];
-        let buffer_size = i32::try_from(pids.len().saturating_mul(pid_size)).ok()?;
+        let buffer_size =
+            i32::try_from(pids.len().saturating_mul(pid_size)).map_err(io::Error::other)?;
         // Safety: `pids` is writable for exactly `buffer_size` bytes.
-        let written_count = unsafe {
-            libc::proc_listpgrppids(pgid, pids.as_mut_ptr().cast::<c_void>(), buffer_size)
-        };
-        if written_count < 0 {
-            return None;
+        let written_count =
+            unsafe { query(pgid, pids.as_mut_ptr().cast::<c_void>(), buffer_size) }?;
+        if written_count == 0 {
+            return Ok(Vec::new());
         }
-        let written_count = usize::try_from(written_count).ok()?;
-        if written_count == pids.len() {
+        if written_count >= pids.len() {
             slots = slots.saturating_mul(2);
             continue;
         }
         pids.truncate(written_count);
-        return Some(darwin_group_liveness_from_pids(pgid, &pids));
+        return Ok(pids);
     }
-    None
+    Err(io::Error::other("process group snapshot overflow"))
+}
+
+/// Darwin libproc group scan. Empty, failed, or overflowing snapshots fall back
+/// to the conservative `signal_presence(-pgid)` check.
+#[cfg(target_os = "macos")]
+fn darwin_process_group_liveness(pgid: libc::pid_t) -> Option<KernelLiveness> {
+    let pids = match darwin_list_pgrp_pids(pgid) {
+        Ok(pids) if !pids.is_empty() => pids,
+        _ => {
+            return match signal_presence(-pgid) {
+                SignalPresence::Missing => Some(KernelLiveness::Exited),
+                SignalPresence::Present | SignalPresence::Unknown => None,
+            };
+        }
+    };
+    Some(darwin_group_liveness_from_pids(pgid, &pids))
 }
 
 #[cfg(target_os = "macos")]
