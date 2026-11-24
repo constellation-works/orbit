@@ -718,6 +718,7 @@ fn cli_dispatch_hands_workers_only_a_verified_browser_kit() -> Result<(), Box<dy
 
     // Losing the execute bits after the recorded verify withdraws the kit.
     // Root may execute a file with any execute bit.
+    // SAFETY: geteuid has no preconditions and cannot fail.
     let denied_mode = if unsafe { libc::geteuid() } == 0 {
         0o000
     } else {

@@ -197,6 +197,7 @@ fn a_non_executable_shell_invalidates_a_recorded_pass() {
     assert_eq!(status()["verified"], true);
 
     // Root may execute a file with any execute bit, so use none for that case.
+    // SAFETY: geteuid has no preconditions and cannot fail.
     let denied_mode = if unsafe { libc::geteuid() } == 0 {
         0o000
     } else {
