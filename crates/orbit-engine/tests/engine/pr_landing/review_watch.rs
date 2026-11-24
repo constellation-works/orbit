@@ -533,6 +533,309 @@ fn leaving_review_before_read_expiry_or_during_pending_wait_does_not_record() {
     );
 }
 
+const TRANSIENT_SIGNATURE: &str = "ci-download: outcome=failed class=transient";
+const TRANSIENT_DOWNLOAD_504: &str = "\
+test\tTests\tcurl: (22) The requested URL returned error: 504
+test\tTests\tci-download: attempt=9 curl_exit=22 http='504' seconds=0.400
+test\tTests\tci-download: failure=total budget cannot accommodate backoff
+test\tTests\tci-download: outcome=failed class=transient attempts=9 total_seconds=57.100 budget_seconds=60.0
+test\tTests\t##[error]Process completed with exit code 1.
+";
+
+fn failing_retry_watch(row: &Path) -> (Fixture, DeliveryHost) {
+    let (fx, host, _) = super::ci_rerun::fixture(row);
+    patch_retry_config(&fx, |config| {
+        config["conclusions"] = json!({"lint": "success"});
+        config["repeat"] = json!(true);
+    });
+    for job in [1000, 1010] {
+        fs::write(
+            fx.forge.join(format!("retry-log-{job}")),
+            TRANSIENT_DOWNLOAD_504,
+        )
+        .unwrap();
+    }
+    (fx, host)
+}
+
+fn patch_retry_config(fx: &Fixture, edit: impl FnOnce(&mut Value)) {
+    let path = fx.forge.join("retry-config.json");
+    let mut config: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    edit(&mut config);
+    fs::write(path, serde_json::to_vec(&config).unwrap()).unwrap();
+}
+
+fn assert_no_pr_or_branch_mutation(fx: &Fixture) {
+    let mutating: Vec<String> = fx
+        .forge_calls()
+        .into_iter()
+        .filter(|call| {
+            ["pr merge", "pr edit", "pr close", "pr comment", "pr ready"]
+                .iter()
+                .any(|verb| call.starts_with(verb))
+        })
+        .collect();
+    assert!(mutating.is_empty(), "the watch mutated: {mutating:?}");
+}
+
+/// Reaching the watch deadline after launching a CI rerun or entering
+/// infrastructure retry backoff records a held `pending` observation naming
+/// no head or check rather than the stale pre-retry failure.
+#[test]
+fn a_rerun_or_backoff_reaching_the_deadline_holds_pending() {
+    isolated(
+        "review_watch::a_rerun_or_backoff_reaching_the_deadline_holds_pending",
+        |sandbox| {
+            for mode in ["rerun", "backoff"] {
+                in_fresh_row(sandbox, |row| {
+                    let (fx, host) = failing_retry_watch(row);
+                    {
+                        let mut config = locked(&host.pr_config);
+                        config.ci_infrastructure_signatures = vec![TRANSIENT_SIGNATURE.into()];
+                        if mode == "backoff" {
+                            config.ci_infrastructure_retry.backoff_seconds = 120;
+                        }
+                    }
+                    patch_retry_config(&fx, |config| {
+                        if mode == "rerun" {
+                            config["repeat"] = json!(false);
+                        } else {
+                            config["fail_attempts"] = json!(2);
+                            config["repeat"] = json!(true);
+                        }
+                    });
+                    let mut input = watch_input(&fx, 60);
+                    input["poll_interval_seconds"] = json!(if mode == "rerun" { 600 } else { 50 });
+                    let clock = std::rc::Rc::new(std::cell::Cell::new(1_000_000_u64));
+                    let read_clock = std::rc::Rc::clone(&clock);
+                    let wait_clock = std::rc::Rc::clone(&clock);
+                    let watched = orbit_engine::test_support::with_prerequisite_clock(
+                        move || {
+                            let now = read_clock.get();
+                            read_clock.set(now + 1);
+                            now
+                        },
+                        |_, _| {},
+                        || {
+                            orbit_engine::test_support::with_vcs_retry_wait(
+                                move |duration| {
+                                    let millis = u64::try_from(duration.as_millis()).unwrap();
+                                    wait_clock.set(wait_clock.get() + millis);
+                                },
+                                || action(&host, "pr_checks_watch", &input),
+                            )
+                        },
+                    )
+                    .expect("expiry after retry or backoff holds pending");
+                    assert!(
+                        clock.get() >= 1_060_000,
+                        "{mode}: watch reached deadline: {}",
+                        clock.get()
+                    );
+                    assert_eq!(watched["recorded"], true, "{mode}: {watched}");
+                    let observed = observations(&host);
+                    assert_eq!(observed.len(), 1, "{mode}: {observed:?}");
+                    let note = observed[0].observation().expect("a decodable note");
+                    assert_eq!(
+                        note.state(),
+                        LandingChecksObservationState::Pending,
+                        "{mode}: {note:?}"
+                    );
+                    assert_eq!(note.head_sha(), None, "{mode}: {note:?}");
+                    assert_eq!(note.failed_checks(), None, "{mode}: {note:?}");
+                    assert_eq!(
+                        note.hold_reason(),
+                        Some(
+                            "the watch's deadline expired before the pull request's status was observed"
+                        ),
+                        "{mode}: {note:?}"
+                    );
+                    assert_eq!(
+                        fx.forge_lines("retry-sends"),
+                        vec!["run rerun 700 --failed".to_string()],
+                        "{mode}"
+                    );
+                    if mode == "backoff" {
+                        assert!(
+                            host.history(TASK_ID).iter().any(|entry| {
+                                entry.event
+                                    == orbit_types::workflow::CI_INFRASTRUCTURE_RETRY_BACKOFF_EVENT
+                            }),
+                            "{mode}: backoff entry recorded"
+                        );
+                    }
+                    assert_eq!(host.status(TASK_ID), TaskStatus::Review, "{mode}");
+                    assert_no_pr_or_branch_mutation(&fx);
+                });
+            }
+        },
+    );
+}
+
+/// Reaching the watch deadline after deferring a throttled failed-job log
+/// read records a held `pending` observation naming no head or check rather
+/// than the stale pre-deferral failure.
+#[test]
+fn a_deferred_throttled_log_read_reaching_the_deadline_holds_pending() {
+    isolated(
+        "review_watch::a_deferred_throttled_log_read_reaching_the_deadline_holds_pending",
+        |sandbox| {
+            let (fx, host) = failing_retry_watch(sandbox);
+            locked(&host.pr_config).ci_infrastructure_signatures = vec![TRANSIENT_SIGNATURE.into()];
+            patch_retry_config(&fx, |config| {
+                config["repeat"] = json!(false);
+            });
+            host.script(
+                "ci.job_log",
+                json!({
+                    "fallback_error": "HTTP 403: API rate limit exceeded for user ID 270255973.",
+                    "read_throttle": {
+                        "retry_after_seconds": 10,
+                        "principal": "user ID 270255973"
+                    }
+                }),
+            );
+            let mut input = watch_input(&fx, 60);
+            input["poll_interval_seconds"] = json!(600);
+            let clock = std::rc::Rc::new(std::cell::Cell::new(1_000_000_u64));
+            let read_clock = std::rc::Rc::clone(&clock);
+            let wait_clock = std::rc::Rc::clone(&clock);
+            let waits = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+            let recorded_waits = std::rc::Rc::clone(&waits);
+            let watched = orbit_engine::test_support::with_prerequisite_clock(
+                move || {
+                    let now = read_clock.get();
+                    read_clock.set(now + 1);
+                    now
+                },
+                |_, _| {},
+                || {
+                    orbit_engine::test_support::with_vcs_retry_wait(
+                        move |duration| {
+                            let millis = u64::try_from(duration.as_millis()).unwrap();
+                            recorded_waits.borrow_mut().push(millis);
+                            wait_clock.set(wait_clock.get() + millis);
+                        },
+                        || action(&host, "pr_checks_watch", &input),
+                    )
+                },
+            )
+            .expect("expiry after deferred log read holds pending");
+            assert_eq!(waits.borrow().len(), 2, "deferral wait then poll wait");
+            assert_eq!(waits.borrow()[0], 10_000, "honors provider retry-after");
+            assert!(clock.get() >= 1_060_000, "{}", clock.get());
+            assert_eq!(watched["recorded"], true, "{watched}");
+            let observed = observations(&host);
+            assert_eq!(observed.len(), 1, "{observed:?}");
+            let note = observed[0].observation().expect("a decodable note");
+            assert_eq!(
+                note.state(),
+                LandingChecksObservationState::Pending,
+                "{note:?}"
+            );
+            assert_eq!(note.head_sha(), None, "{note:?}");
+            assert_eq!(note.failed_checks(), None, "{note:?}");
+            assert_eq!(
+                note.hold_reason(),
+                Some("the watch's deadline expired before the pull request's status was observed"),
+                "{note:?}"
+            );
+            assert!(fx.forge_lines("retry-sends").is_empty());
+            assert_eq!(
+                host.history(TASK_ID)
+                    .iter()
+                    .filter(|entry| entry.event == "pr_auto_fix_read_deferred")
+                    .count(),
+                1
+            );
+            assert_eq!(host.status(TASK_ID), TaskStatus::Review);
+            assert_no_mutation(&fx);
+        },
+    );
+}
+
+/// Leaving review during the final wait after a rerun, backoff, or deferred
+/// throttled read suppresses the held observation and ends with
+/// `task_left_review`.
+#[test]
+fn leaving_review_during_retry_or_deferred_wait_does_not_record() {
+    isolated(
+        "review_watch::leaving_review_during_retry_or_deferred_wait_does_not_record",
+        |sandbox| {
+            for mode in ["rerun", "backoff", "deferred_read"] {
+                in_fresh_row(sandbox, |row| {
+                    let (fx, host) = failing_retry_watch(row);
+                    {
+                        let mut config = locked(&host.pr_config);
+                        config.ci_infrastructure_signatures = vec![TRANSIENT_SIGNATURE.into()];
+                        if mode == "backoff" {
+                            config.ci_infrastructure_retry.backoff_seconds = 120;
+                        }
+                    }
+                    patch_retry_config(&fx, |config| {
+                        if mode == "backoff" {
+                            config["fail_attempts"] = json!(2);
+                            config["repeat"] = json!(true);
+                        } else {
+                            config["repeat"] = json!(false);
+                        }
+                    });
+                    if mode == "deferred_read" {
+                        host.script(
+                            "ci.job_log",
+                            json!({
+                                "fallback_error": "HTTP 403: API rate limit exceeded for user ID 270255973.",
+                                "read_throttle": {
+                                    "retry_after_seconds": 10,
+                                    "principal": "user ID 270255973"
+                                }
+                            }),
+                        );
+                    }
+                    let host = std::rc::Rc::new(host);
+                    let mut input = watch_input(&fx, 60);
+                    input["poll_interval_seconds"] =
+                        json!(if mode == "backoff" { 50 } else { 600 });
+                    let clock = std::rc::Rc::new(std::cell::Cell::new(1_000_000_u64));
+                    let read_clock = std::rc::Rc::clone(&clock);
+                    let wait_clock = std::rc::Rc::clone(&clock);
+                    let wait_host = std::rc::Rc::clone(&host);
+                    let watched = orbit_engine::test_support::with_prerequisite_clock(
+                        move || {
+                            let now = read_clock.get();
+                            read_clock.set(now + 1);
+                            now
+                        },
+                        |_, _| {},
+                        || {
+                            orbit_engine::test_support::with_vcs_retry_wait(
+                                move |duration| {
+                                    let millis = u64::try_from(duration.as_millis()).unwrap();
+                                    if wait_clock.get() + millis >= 1_060_000 {
+                                        wait_host.set_status(TASK_ID, TaskStatus::Backlog);
+                                    }
+                                    wait_clock.set(wait_clock.get() + millis);
+                                },
+                                || action(host.as_ref(), "pr_checks_watch", &input),
+                            )
+                        },
+                    )
+                    .expect("leaving review suppresses the held observation");
+                    assert_eq!(host.status(TASK_ID), TaskStatus::Backlog, "{mode}");
+                    assert_eq!(watched["ended"], "task_left_review", "{mode}: {watched}");
+                    assert_eq!(watched["recorded"], false, "{mode}: {watched}");
+                    assert!(
+                        observations(&host).is_empty(),
+                        "{mode}: no observation recorded: {:?}",
+                        observations(&host)
+                    );
+                    assert_no_pr_or_branch_mutation(&fx);
+                });
+            }
+        },
+    );
+}
+
 /// One push run on `sha` whose `test` job concluded `conclusion`, served to
 /// the substitute `gh` as the commit's jobs and failed-job log.
 fn plant_run(fx: &Fixture, sha: &str, run_id: u64, conclusion: &str, log: &str) {

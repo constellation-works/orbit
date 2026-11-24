@@ -15,11 +15,12 @@
 //! failures use completion's durable, bounded rerun path before observation.
 //! It never merges, updates the branch, starts a repair or changes status.
 //! A status read lost to a transient provider failure (after the read's own
-//! bounded retries) keeps the watch polling until its deadline; if the outage
-//! or a status read reaches deadline expiry while the task stays in review, it
-//! records a held `pending` observation naming no head or check. Any permanent
-//! read failure still fails at once. A task that left review, or a pull
-//! request that merged or closed, ends the watch without an entry.
+//! bounded retries) keeps the watch polling until its deadline; if the outage,
+//! a status read, or a CI retry/deferred-read poll wait reaches deadline expiry
+//! while the task stays in review, it records a held `pending` observation
+//! naming no head or check. Any permanent read failure still fails at once. A
+//! task that left review, or a pull request that merged or closed, ends the
+//! watch without an entry.
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -240,7 +241,14 @@ pub(in crate::executor::automation) fn pr_checks_watch<H: RuntimeHost + ?Sized>(
                                 )? {
                                     NextPoll::Continue => continue,
                                     NextPoll::TaskLeftReview(ended) => return Ok(ended),
-                                    NextPoll::Expired => None,
+                                    NextPoll::Expired => {
+                                        return finish(
+                                            host,
+                                            &task_id,
+                                            &pr_number,
+                                            &unreadable(&pr_number, DEADLINE_EXPIRED_HOLD),
+                                        );
+                                    }
                                 }
                             }
                             super::super::pr::ReviewCiRetryStep::Hold(reason) => Some(reason),

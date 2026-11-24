@@ -22,9 +22,10 @@ failed-job log does not void a readable job's classification; a rate-limited fai
 log read records `deferred` with the provider's reset evidence. The watch retries authenticated
 transient CI failures using that same bounded policy, then resumes observing.
 A status read lost to a transient provider outage keeps the watch polling until its
-deadline; if the outage or a status read reaches deadline expiry while the task stays in
-review, the watch records a `pending` note with `hold_reason` and no `head_sha`. A permanent
-read failure (credentials, permission, not found) still fails the watch at once.
+deadline; if the outage, a status read, or a CI retry/deferred-read poll wait reaches deadline
+expiry while the task stays in review, the watch records a `pending` note with `hold_reason` and
+no `head_sha`. A permanent read failure (credentials, permission, not found) still fails the
+watch at once.
 
 To repair a red or conflicting pull
 request, use the dashboard's **Fix PR** or an `--auto-fix` drain under
