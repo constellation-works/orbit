@@ -8,19 +8,20 @@
 //! widening applies; a repair that fails one is refused before the index is
 //! touched.
 
+use std::borrow::Cow;
+use std::collections::BTreeSet;
 use std::path::Path;
 
 use orbit_common::fs::selector::claim_new_path_is_safe;
 use orbit_common::security::redaction::{redact_all, redact_all_bytes};
 
 use super::super::git::{
-    BINARY_PATCH_DIFF_ARGS, git_command_success, git_output, git_output_bytes_with_env,
-    git_output_paths_with_env, git_output_with_env,
+    BINARY_PATCH_DIFF_ARGS, git_command_success, git_output, git_output_bytes,
+    git_output_bytes_with_env, git_output_bytes_with_env_and_stdin, git_output_with_env,
 };
-use super::super::review_gate::uncommitted_paths;
 use super::author::recovery_author;
 use super::git_ops::{
-    ensure_named_branch, ensure_no_unmerged_changes, git_commit_as, literal_pathspec, stage_paths,
+    ensure_named_branch, ensure_no_unmerged_changes, git_commit_as, stage_paths,
     staged_changed_files,
 };
 use super::message::recovery_commit_message;
@@ -221,10 +222,10 @@ fn message(request: &RecoveryCommitRequest<'_>) -> String {
 pub(in crate::executor::automation::vcs) fn capture_uncommitted_diff(
     workspace_path: &Path,
 ) -> Result<Option<Vec<u8>>, orbit_common::OrbitError> {
-    let changed_paths = uncommitted_paths(workspace_path)?;
+    let changed_paths = uncommitted_path_bytes(workspace_path)?;
     let safe_paths = changed_paths
         .iter()
-        .filter(|path| claim_new_path_is_safe(path))
+        .filter(|path| is_safe_path_bytes(path))
         .cloned()
         .collect::<Vec<_>>();
     if safe_paths.is_empty() {
@@ -251,49 +252,81 @@ pub(in crate::executor::automation::vcs) fn capture_uncommitted_diff(
 
     let has_head =
         git_command_success(workspace_path, &["rev-parse", "--verify", "HEAD^{commit}"])?;
+    let mut head_paths = BTreeSet::new();
+    let mut head_protected = Vec::new();
     if has_head {
         git_output_with_env(workspace_path, &["read-tree", "HEAD"], &env)?;
+        for path in split_nul_bytes(&git_output_bytes_with_env(
+            workspace_path,
+            &["ls-files", "--cached", "-z"],
+            &env,
+        )?) {
+            if !is_safe_path_bytes(&path) {
+                head_protected.push(path.clone());
+            }
+            head_paths.insert(path);
+        }
     }
 
-    // A literal pathspec also matches descendants. Exclude protected names
-    // from both the worktree and HEAD: a file/directory replacement can stage
-    // or delete descendants that were never themselves safe pathspecs.
-    let mut protected = changed_paths
-        .into_iter()
-        .filter(|path| !claim_new_path_is_safe(path))
-        .collect::<Vec<_>>();
-    if has_head {
-        protected.extend(
-            git_output_paths_with_env(workspace_path, &["ls-files", "--cached", "-z"], &env)?
-                .into_iter()
-                .filter(|path| !claim_new_path_is_safe(path)),
-        );
-    }
-    protected.sort();
-    protected.dedup();
-    let exclusions = protected
-        .iter()
-        .map(|path| format!(":(exclude,literal){path}"))
-        .collect::<Vec<_>>();
-
-    let stageable = stageable_safe_paths(workspace_path, &safe_paths, has_head, &env)?;
+    let stageable = stageable_safe_paths(workspace_path, &safe_paths, &head_paths)?;
     if stageable.is_empty() {
         return Ok(None);
     }
 
-    let mut add_args = vec!["add".to_string(), "-A".to_string(), "--".to_string()];
-    add_args.extend(stageable.iter().map(|path| literal_pathspec(path)));
-    add_args.extend(exclusions.iter().cloned());
-    let add_arg_refs = add_args.iter().map(String::as_str).collect::<Vec<_>>();
-    git_output_with_env(workspace_path, &add_arg_refs, &env)?;
+    // Exclude protected paths from both the worktree and HEAD: a file/directory
+    // replacement can stage or delete descendants that were never safe pathspecs.
+    // Removing HEAD-protected paths from the temporary base tree avoids passing
+    // pathspecs to `git diff`, which has no NUL `--pathspec-from-file` mode.
+    let base_ref = if head_protected.is_empty() {
+        has_head.then(|| "HEAD".to_string())
+    } else {
+        let mut rm_input = Vec::new();
+        for path in &head_protected {
+            append_pathspec(&mut rm_input, b":(literal)", path);
+        }
+        git_output_bytes_with_env_and_stdin(
+            workspace_path,
+            &[
+                "rm",
+                "--cached",
+                "-q",
+                "--ignore-unmatch",
+                "--pathspec-from-file=-",
+                "--pathspec-file-nul",
+            ],
+            &rm_input,
+            &env,
+        )?;
+        Some(git_output_with_env(workspace_path, &["write-tree"], &env)?)
+    };
 
-    let mut diff_args = vec!["diff", "--cached"];
-    diff_args.extend_from_slice(BINARY_PATCH_DIFF_ARGS);
-    if has_head {
-        diff_args.push("HEAD");
+    let mut protected = changed_paths
+        .into_iter()
+        .filter(|path| !is_safe_path_bytes(path))
+        .collect::<Vec<_>>();
+    protected.extend(head_protected);
+    protected.sort();
+    protected.dedup();
+
+    let mut add_input = Vec::new();
+    for path in &stageable {
+        append_pathspec(&mut add_input, b":(literal)", path);
     }
-    diff_args.push("--");
-    diff_args.extend(exclusions.iter().map(String::as_str));
+    for path in &protected {
+        append_pathspec(&mut add_input, b":(exclude,literal)", path);
+    }
+    git_output_bytes_with_env_and_stdin(
+        workspace_path,
+        &["add", "-A", "--pathspec-from-file=-", "--pathspec-file-nul"],
+        &add_input,
+        &env,
+    )?;
+
+    let mut diff_args = vec!["-c", "core.quotePath=true", "diff", "--cached"];
+    diff_args.extend_from_slice(BINARY_PATCH_DIFF_ARGS);
+    if let Some(base) = base_ref.as_deref() {
+        diff_args.push(base);
+    }
     let diff = git_output_bytes_with_env(workspace_path, &diff_args, &env)?;
     if diff.iter().all(u8::is_ascii_whitespace) {
         Ok(None)
@@ -338,27 +371,100 @@ fn isolated_temp_object_store(
     ))
 }
 
+fn uncommitted_path_bytes(workspace_path: &Path) -> Result<Vec<Vec<u8>>, orbit_common::OrbitError> {
+    let status = git_output_bytes(
+        workspace_path,
+        &["status", "--porcelain=v1", "-z", "--untracked-files=all"],
+    )?;
+    let mut paths = Vec::new();
+    let mut fields = status.split(|byte| *byte == 0);
+    while let Some(entry) = fields.next() {
+        if entry.is_empty() {
+            continue;
+        }
+        let Some((&index_state, _worktree_state)) = entry.first().zip(entry.get(1)) else {
+            continue;
+        };
+        let source = if matches!(index_state, b'R' | b'C') {
+            fields.next().filter(|source| !source.is_empty())
+        } else {
+            None
+        };
+        let Some(path) = entry.get(3..) else {
+            continue;
+        };
+        if !path.is_empty() {
+            paths.push(path.to_vec());
+        }
+        if let Some(source) = source {
+            paths.push(source.to_vec());
+        }
+    }
+    paths.sort();
+    paths.dedup();
+    Ok(paths)
+}
+
+fn split_nul_bytes(stdout: &[u8]) -> Vec<Vec<u8>> {
+    stdout
+        .split(|byte| *byte == 0)
+        .filter(|entry| !entry.is_empty())
+        .map(ToOwned::to_owned)
+        .collect()
+}
+
+fn is_safe_path_bytes(path: &[u8]) -> bool {
+    // `claim_new_path_is_safe` matches ASCII segment and delimiter patterns;
+    // lossy UTF-8 maps non-UTF-8 bytes to U+FFFD, never matching ASCII.
+    !path.contains(&0) && claim_new_path_is_safe(&String::from_utf8_lossy(path))
+}
+
+fn append_pathspec(buf: &mut Vec<u8>, prefix: &[u8], path: &[u8]) {
+    buf.extend_from_slice(prefix);
+    buf.extend_from_slice(path);
+    buf.push(0);
+}
+
+fn path_from_git_bytes(bytes: &[u8]) -> Result<Cow<'_, Path>, orbit_common::OrbitError> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::ffi::OsStrExt;
+        Ok(Cow::Borrowed(Path::new(std::ffi::OsStr::from_bytes(bytes))))
+    }
+    #[cfg(not(unix))]
+    {
+        std::str::from_utf8(bytes)
+            .map(|s| Cow::Borrowed(Path::new(s)))
+            .map_err(|_| {
+                orbit_common::OrbitError::Execution(format!(
+                    "uncommitted path `{}` is not valid UTF-8 and cannot be probed on this host",
+                    bytes.escape_ascii()
+                ))
+            })
+    }
+}
+
 /// Filter `safe_paths` to paths that exist in the worktree or (for deletions)
 /// in the temporary `HEAD` index so `git add -A` never receives a missing pathspec.
 fn stageable_safe_paths(
     workspace_path: &Path,
-    safe_paths: &[String],
-    has_head: bool,
-    env: &[(&str, &str)],
-) -> Result<Vec<String>, orbit_common::OrbitError> {
+    safe_paths: &[Vec<u8>],
+    head_paths: &BTreeSet<Vec<u8>>,
+) -> Result<Vec<Vec<u8>>, orbit_common::OrbitError> {
     let mut stageable = Vec::new();
-    let mut missing_on_disk = Vec::new();
     for path in safe_paths {
-        if std::fs::symlink_metadata(workspace_path.join(path)).is_ok() {
-            stageable.push(path.clone());
-        } else if has_head {
-            missing_on_disk.push(literal_pathspec(path));
+        let rel = path_from_git_bytes(path)?;
+        match std::fs::symlink_metadata(workspace_path.join(rel.as_ref())) {
+            Ok(_) => stageable.push(path.clone()),
+            Err(_) if head_paths.contains(path.as_slice()) => stageable.push(path.clone()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(orbit_common::OrbitError::Io(format!(
+                    "failed to inspect uncommitted path `{}`: {error}",
+                    path.escape_ascii()
+                )));
+            }
         }
-    }
-    if !missing_on_disk.is_empty() {
-        let mut list_args = vec!["ls-files", "--cached", "-z", "--"];
-        list_args.extend(missing_on_disk.iter().map(String::as_str));
-        stageable.extend(git_output_paths_with_env(workspace_path, &list_args, env)?);
     }
     Ok(stageable)
 }

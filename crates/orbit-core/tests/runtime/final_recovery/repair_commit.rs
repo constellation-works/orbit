@@ -261,6 +261,28 @@ impl orbit_engine::test_support::NullRuntimeHost for RepairPipeline<'_> {
                         std::os::unix::fs::symlink("candidate.txt", self.fixture.repo.join("link"))
                             .unwrap()
                     }
+                    #[cfg(unix)]
+                    "non-utf8" => {
+                        use std::ffi::OsStr;
+                        use std::os::unix::ffi::OsStrExt;
+
+                        let repo = &self.fixture.repo;
+                        std::fs::write(
+                            repo.join(OsStr::from_bytes(b"loose-\xff.pyc")),
+                            b"\x00nonutf8\xff",
+                        )
+                        .unwrap();
+                        let nested = repo.join(OsStr::from_bytes(b"dir-\xfe"));
+                        std::fs::create_dir(&nested).unwrap();
+                        std::fs::write(
+                            nested.join(OsStr::from_bytes(b"sub-\xfd.txt")),
+                            b"native path content\n",
+                        )
+                        .unwrap();
+                        std::fs::write(nested.join(".env"), b"ENV_CANARY=non_utf8_dir_secret\n")
+                            .unwrap();
+                        std::fs::write(repo.join(".env"), b"ENV_CANARY=top_secret\n").unwrap();
+                    }
                     "foreign-branch" => {
                         git(self.fixture, &["checkout", "-b", "foreign"]);
                     }
@@ -1331,6 +1353,128 @@ fn final_recovery_refused_patch_reproduces_binary_and_final_whitespace() {
     );
 }
 
+#[cfg(unix)]
+fn final_recovery_refused_patch_preserves_non_utf8_paths() {
+    use std::ffi::OsStr;
+    use std::os::unix::ffi::OsStrExt;
+
+    let mut fixture = fixture_with_command("test \"$(cat candidate.txt)\" != after");
+    let tracked_fffd = "mod-\u{FFFD}.pyc";
+    std::fs::write(
+        fixture.repo.join(tracked_fffd),
+        b"tracked replacement fixture\n",
+    )
+    .unwrap();
+    git(&fixture, &["add", tracked_fffd]);
+    git(&fixture, &["commit", "-m", "seed replacement-char file"]);
+    git(&fixture, &["branch", "-f", "main", "HEAD"]);
+    fixture.input["base_sha"] = json!(git(&fixture, &["rev-parse", "HEAD"]));
+
+    let (host, outcome) = run_pipeline(&fixture, "non-utf8");
+    assert!(outcome.is_err(), "{outcome:?}");
+    let run = fixture.input["job_run_id"].as_str().unwrap();
+    let checkpoint = fixture
+        .runtime
+        .read_run_state(run)
+        .unwrap()
+        .unwrap()
+        .final_recovery
+        .unwrap();
+    let Some(FinalRecoveryDecision::Escalate { diagnosis, .. }) = checkpoint.decision else {
+        panic!("expected escalation")
+    };
+    let name = format!("recovery-uncommitted-{run}.patch");
+    assert!(
+        diagnosis.contains("recovery_commit_refused:uncommittable:")
+            && diagnosis.contains("not valid UTF-8")
+            && diagnosis.contains(&name),
+        "refusal and saved patch artifact expected: {diagnosis}"
+    );
+    let artifact = fixture
+        .runtime
+        .get_task_artifact(&fixture.task_id, &name)
+        .unwrap()
+        .expect("refused non-UTF-8 candidate saves uncommitted diff artifact");
+    let text = String::from_utf8_lossy(&artifact.content);
+    assert!(
+        !text.contains(".env")
+            && !text.contains("non_utf8_dir_secret")
+            && !text.contains("top_secret"),
+        "protected env files must not leak into patch artifact: {text}"
+    );
+    for protected_rel in [OsStr::from_bytes(b"dir-\xfe/.env"), OsStr::new(".env")] {
+        let blob = crate::git_test_support::command()
+            .args([OsStr::new("hash-object"), protected_rel])
+            .current_dir(&fixture.repo)
+            .output()
+            .unwrap();
+        assert!(blob.status.success());
+        let sha = String::from_utf8(blob.stdout).unwrap();
+        let exists = crate::git_test_support::command()
+            .args(["cat-file", "-e", sha.trim()])
+            .current_dir(&fixture.repo)
+            .output()
+            .unwrap()
+            .status
+            .success();
+        assert!(
+            !exists,
+            "protected blob must not enter repository object store"
+        );
+    }
+
+    let candidate_head = host.validation_heads.lock().unwrap()[0].0.clone();
+    let root = tempfile::tempdir().unwrap();
+    let checkout = root.path().join("checkout");
+    let clone = crate::git_test_support::command()
+        .args([
+            "clone",
+            "-q",
+            fixture.repo.to_str().unwrap(),
+            checkout.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(clone.status.success(), "{clone:?}");
+    let co = crate::git_test_support::command()
+        .args(["checkout", "-q", &candidate_head])
+        .current_dir(&checkout)
+        .output()
+        .unwrap();
+    assert!(co.status.success(), "{co:?}");
+    let patch_file = root.path().join("recovery.patch");
+    std::fs::write(&patch_file, &artifact.content).unwrap();
+    let apply = crate::git_test_support::command()
+        .args(["apply", patch_file.to_str().unwrap()])
+        .current_dir(&checkout)
+        .output()
+        .unwrap();
+    assert!(
+        apply.status.success(),
+        "git apply failed ({}):\n{}",
+        apply.status,
+        String::from_utf8_lossy(&apply.stderr)
+    );
+    assert_eq!(
+        std::fs::read(checkout.join("candidate.txt")).unwrap(),
+        b"repaired\n"
+    );
+    assert_eq!(
+        std::fs::read(checkout.join(OsStr::from_bytes(b"loose-\xff.pyc"))).unwrap(),
+        b"\x00nonutf8\xff"
+    );
+    assert_eq!(
+        std::fs::read(checkout.join(OsStr::from_bytes(b"dir-\xfe/sub-\xfd.txt"))).unwrap(),
+        b"native path content\n"
+    );
+    assert_eq!(
+        std::fs::read(checkout.join(tracked_fffd)).unwrap(),
+        b"tracked replacement fixture\n"
+    );
+    assert!(!checkout.join(OsStr::from_bytes(b"dir-\xfe/.env")).exists());
+    assert!(!checkout.join(".env").exists());
+}
+
 // Related boundary scenarios share the isolated table fixture.
 crate::scenario_table!(
     final_recovery_repair_commit_gets_a_fresh_before_pr_review_scenarios,
@@ -1347,5 +1491,6 @@ crate::scenario_table!(
 crate::scenario_table!(
     scratch_fallback_scenarios,
     final_recovery_scratch_fallback_refuses_redirects,
-    final_recovery_evidence_refuses_unisolatable_object_store
+    final_recovery_evidence_refuses_unisolatable_object_store,
+    final_recovery_refused_patch_preserves_non_utf8_paths
 );
