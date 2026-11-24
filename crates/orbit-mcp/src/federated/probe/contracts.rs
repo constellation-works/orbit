@@ -68,6 +68,17 @@ pub trait DestinationProbe: Send + Sync {
         self.probe(destination)
     }
 
+    /// Whether this probe can open the accepting machine's own destination.
+    ///
+    /// The implicit local destination has no SSH target, so an SSH-only probe
+    /// answers `false`. The fan-out then leaves that destination out before any
+    /// hop, decided by the probe's transport rather than by how a failed open
+    /// was worded [ORB-28043]. Defaults to `true`, so a probe that does serve
+    /// the local destination is never skipped by omission.
+    fn serves_local(&self) -> bool {
+        true
+    }
+
     /// The session for a single routed `tools/call`.
     ///
     /// List and route never share a session or a health cache: a list that

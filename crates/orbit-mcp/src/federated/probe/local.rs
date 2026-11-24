@@ -216,6 +216,10 @@ impl CompositeDestinationProbe {
 }
 
 impl DestinationProbe for CompositeDestinationProbe {
+    fn serves_local(&self) -> bool {
+        self.local.serves_local()
+    }
+
     fn open_internal_drain_route(
         &self,
         destination: &Destination,

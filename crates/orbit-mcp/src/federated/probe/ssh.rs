@@ -102,6 +102,12 @@ impl SshDestinationProbe {
 }
 
 impl DestinationProbe for SshDestinationProbe {
+    /// The implicit local destination has no SSH target, so this probe cannot
+    /// open it: the attention fan-out leaves it out by this answer [ORB-28043].
+    fn serves_local(&self) -> bool {
+        false
+    }
+
     fn open_internal_drain_route(
         &self,
         destination: &Destination,
