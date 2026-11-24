@@ -28,9 +28,10 @@ enum Behaviour {
     AnswersAs(&'static str),
     WithoutAttention,
     Slow(Duration),
-    /// An SSH-only probe asked to open the reading host itself, exactly as
-    /// `SshDestinationProbe` refuses a `Local` destination [ORB-28012].
-    LocalOverSsh,
+    /// The reading host's own open fails, and the failure's wording repeats the
+    /// SSH-only refusal. A probe that serves the local destination must report
+    /// it: only the probe's transport may leave the reader out [ORB-28043].
+    LocalOpenRefused,
 }
 
 /// Destinations whose behaviour a test changes between polls.
@@ -38,6 +39,8 @@ enum Behaviour {
 struct Fleet {
     behaviours: Arc<Mutex<HashMap<String, Behaviour>>>,
     hops: Arc<Mutex<Vec<(String, Value)>>>,
+    /// An SSH-only probe: it has no route to the implicit local destination.
+    ssh_only: bool,
 }
 
 impl Fleet {
@@ -63,11 +66,15 @@ impl DestinationProbe for Fleet {
         Ok(snapshot(&destination.machine_id))
     }
 
+    fn serves_local(&self) -> bool {
+        !self.ssh_only
+    }
+
     fn open_route(&self, destination: &Destination) -> Result<Box<dyn RoutedSession>, OrbitError> {
         let behaviour = self.behaviours.lock().unwrap()[&destination.machine_id].clone();
         match behaviour {
-            Behaviour::LocalOverSsh => Err(OrbitError::InvalidInput(format!(
-                "local destination '{}' cannot be opened over SSH",
+            Behaviour::LocalOpenRefused => Err(OrbitError::UnreachableDestination(format!(
+                "{}: local destination cannot be opened over SSH",
                 destination.machine_id
             ))),
             Behaviour::Down => Err(OrbitError::UnreachableDestination(format!(
@@ -551,8 +558,8 @@ fn a_fan_out_refuses_a_wait_grant_before_any_hop() {
 }
 
 /// The reading host itself behind an SSH-only probe is left out of the
-/// fan-out, never reported as unreachable, while a genuinely down remote
-/// is still `host_unhealthy` [ORB-28012].
+/// fan-out before any hop, never reported as unreachable, while a genuinely
+/// down remote is still `host_unhealthy` [ORB-28012] [ORB-28043].
 #[test]
 fn local_destination_behind_ssh_probe_is_left_out_not_unreachable() {
     use orbit_mcp::federated::federated_membership;
@@ -580,8 +587,12 @@ fn local_destination_behind_ssh_probe_is_left_out_not_unreachable() {
         "the registry membership includes the remote: {destinations:?}"
     );
 
-    let fleet = Fleet::default();
-    fleet.set(LOCAL_MACHINE, Behaviour::LocalOverSsh);
+    let fleet = Fleet {
+        ssh_only: true,
+        ..Fleet::default()
+    };
+    // Even a reader that would answer is never opened: an SSH-only probe has no route to it.
+    fleet.set(LOCAL_MACHINE, Behaviour::Answer(candidate_read(vec![])));
     fleet.set(OWNER_MACHINE, Behaviour::Down);
     let mux = FederatedMcpHost::new(destinations, Arc::new(fleet.clone())).with_attention_fanout(
         AttentionFanout {
@@ -592,6 +603,16 @@ fn local_destination_behind_ssh_probe_is_left_out_not_unreachable() {
     );
 
     let response = attention(&mux, json!({"all": true}));
+    assert!(
+        !fleet
+            .hops
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|(machine, _)| machine == LOCAL_MACHINE),
+        "the SSH-only probe opened the reading host: {:?}",
+        fleet.hops.lock().unwrap()
+    );
     let degraded = response["degraded"].as_array().unwrap();
     assert!(
         !degraded.iter().any(|entry| {
@@ -620,5 +641,53 @@ fn local_destination_behind_ssh_probe_is_left_out_not_unreachable() {
     assert_eq!(
         items[0]["detail"]["cause"], "unreachable_destination",
         "{response}"
+    );
+}
+
+/// A reader the probe can open is read in-process, so its failure is reported
+/// even when the failure's wording repeats the SSH-only refusal. Only the
+/// probe's transport leaves a destination out, so rewording a failure can
+/// neither hide a local read failure nor create one [ORB-28043].
+#[test]
+fn local_read_failure_is_reported_even_when_its_text_repeats_the_ssh_refusal() {
+    use orbit_mcp::federated::federated_membership;
+    use orbit_registry::hosts::HostRoute;
+
+    const LOCAL_MACHINE: &str = "hm_reader";
+    let destinations = federated_membership(
+        LOCAL_MACHINE,
+        "mac",
+        vec![HostRoute {
+            ssh: "owner.example".to_string(),
+            machine_id: OWNER_MACHINE.to_string(),
+        }],
+    );
+    let fleet = Fleet::default();
+    fleet.set(LOCAL_MACHINE, Behaviour::LocalOpenRefused);
+    fleet.set(OWNER_MACHINE, Behaviour::Answer(candidate_read(vec![])));
+    let mux = FederatedMcpHost::new(destinations, Arc::new(fleet.clone())).with_attention_fanout(
+        AttentionFanout {
+            budget: Duration::from_secs(20),
+            host_names: BTreeMap::from([(OWNER_MACHINE.to_string(), "dk-server-2".to_string())]),
+            host_registry_root: None,
+        },
+    );
+
+    let response = attention(&mux, json!({"all": true}));
+    let degraded = response["degraded"].as_array().unwrap();
+    assert!(
+        degraded.iter().any(|entry| {
+            entry["scope"] == "host:mac" && entry["code"] == "unreachable_destination"
+        }),
+        "the reader's own failed open must be degraded: {response}"
+    );
+    let items = response["items"].as_array().unwrap();
+    assert!(
+        items.iter().any(|item| {
+            item["host"]["machine_id"] == LOCAL_MACHINE
+                && item["kind"] == "host_unhealthy"
+                && item["detail"]["cause"] == "unreachable_destination"
+        }),
+        "the reader's own failed open must be host_unhealthy: {response}"
     );
 }

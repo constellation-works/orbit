@@ -163,10 +163,24 @@ impl FederatedMcpHost {
         let filter = AttentionFilter::parse(input.clone())?;
         let settings = self.attention_fanout();
         let mut destinations = self.attention_destinations(&attention_strings(input, "host"))?;
+        // Every destination the host filter names, the reading host included, so
+        // the owner check below never reports a workspace this read covers.
+        let attempted = destinations
+            .iter()
+            .map(|destination| destination.machine_id.clone())
+            .chain(offline.keys().cloned())
+            .collect::<BTreeSet<_>>();
+        let serves_local = self.probe().serves_local();
         let mut acknowledged = BTreeSet::new();
         destinations.retain(|destination| {
             let id = &destination.machine_id;
-            if destination.is_local() || !offline.contains_key(id) {
+            // The reading host is left out only when the probe cannot open it at
+            // all (an SSH-only mux). That is the probe's transport, decided before
+            // any hop, never a failure's wording [ORB-28043].
+            if destination.is_local() {
+                return serves_local;
+            }
+            if !offline.contains_key(id) {
                 return true;
             }
             acknowledged.insert(id.clone());
@@ -218,11 +232,6 @@ impl FederatedMcpHost {
                 _ => None,
             });
 
-        let attempted = destinations
-            .iter()
-            .map(|destination| destination.machine_id.clone())
-            .chain(offline.keys().cloned())
-            .collect::<BTreeSet<_>>();
         let mut every_destination_answered = acknowledged.is_empty();
         acknowledged.extend(
             outcomes
@@ -257,19 +266,6 @@ impl FederatedMcpHost {
                     message,
                     snapshot,
                 } => {
-                    if destination.is_local()
-                        && cause == UNREACHABLE
-                        && message.contains("cannot be opened over SSH")
-                    {
-                        // An SSH-only mux that still carries the implicit
-                        // local destination (the `routed_client` shape before
-                        // [ORB-28012]): the reading host is not a remote to
-                        // open over SSH, so it is left out of the fan-out
-                        // rather than reported as unreachable. The
-                        // `attempted` set above still names it, so its owned
-                        // workspaces are not re-reported as unread owners.
-                        continue;
-                    }
                     every_destination_answered = false;
                     hosts.push(host_status(
                         &host,

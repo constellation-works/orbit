@@ -4523,6 +4523,66 @@ fn federated_mcp_serve_reads_the_host_file_and_refuses_both_host_files() {
     );
 }
 
+/// ORB-28043: a remote-workspace attention call is routed through
+/// `routed_client`, whose fan-out holds only remote destinations. The reading
+/// host never enters that fan-out, and the unreachable holder stays visible.
+fn routed_remote_attention_reports_the_unreachable_holder_not_the_reader() {
+    let workspace = McpWorkspace::init();
+    let orbit_root = workspace.home.join(".orbit");
+    std::fs::write(
+        orbit_root.join("hosts.toml"),
+        "schema_version = 1\n\n[[hosts]]\nname = \"remote\"\nmachine_id = \"hm_remote\"\n\
+         ssh = \"orbit-missing-host\"\ntask_prefix = \"RM\"\n",
+    )
+    .expect("write host file");
+    // The SSH stub is planted on PATH by `ssh_log`, so it must exist before the run.
+    let ssh_log = workspace.ssh_log();
+    let output = workspace.run(&[
+        "--workspace",
+        "hm_remote/ws_remote",
+        "tool",
+        "run",
+        "orbit.attention",
+        "--input",
+        "{}",
+    ]);
+    assert!(
+        std::fs::read_to_string(&ssh_log).is_ok_and(|log| log.contains("orbit-missing-host")),
+        "the routed call must dial the remote holder: {}",
+        stderr(&output)
+    );
+    let response = stdout_json(&output);
+    let hosts = response["hosts"].as_array().expect("hosts");
+    assert_eq!(
+        hosts.len(),
+        1,
+        "the fan-out holds only the remote: {response}"
+    );
+    assert_eq!(hosts[0]["machine_id"], "hm_remote", "{response}");
+    assert_eq!(
+        hosts[0]["reachability"], "unreachable_destination",
+        "{response}"
+    );
+    assert!(
+        response["degraded"]
+            .as_array()
+            .expect("degraded")
+            .iter()
+            .any(|entry| entry["code"] == "unreachable_destination"),
+        "the unreachable holder is degraded: {response}"
+    );
+    assert!(
+        response["items"]
+            .as_array()
+            .expect("items")
+            .iter()
+            .any(|item| {
+                item["host"]["machine_id"] == "hm_remote" && item["kind"] == "host_unhealthy"
+            }),
+        "the unreachable holder is a host_unhealthy item: {response}"
+    );
+}
+
 /// ORB-10967 / ORB-10961: generated argv binds the logical registry ID even
 /// from a linked worktree whose checkout identity diverged from that ID.
 #[test]
@@ -6471,7 +6531,10 @@ fn federated_local_destinations() {
 
 #[test]
 fn federated_host_configuration() {
-    rows!(federated_mcp_serve_reads_the_host_file_and_refuses_both_host_files);
+    rows!(
+        federated_mcp_serve_reads_the_host_file_and_refuses_both_host_files,
+        routed_remote_attention_reports_the_unreachable_holder_not_the_reader
+    );
 }
 
 #[test]
