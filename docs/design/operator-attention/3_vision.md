@@ -1,7 +1,7 @@
 ---
 title: Operator Attention — Vision
 owner: claude
-last_updated: 2026-11-04
+last_updated: 2026-11-24
 last_validated: 2026-11-11
 status: Draft
 feature: operator-attention
@@ -30,7 +30,7 @@ The remaining questions are speculative; the committed scope is in
    fingerprints exist, so an acknowledgement table could key on `(id, fingerprint)` and be
    joined into the derivation without changing the item schema.
    [signal-acknowledgement](../signal-acknowledgement/1_scope.md) proposes the mechanism
-   (ORB-27670), awaiting approval.
+   (ORB-27670), approved; its implementation (ORB-27754) is not started.
 2. **Dashboard reading the same feed.** The derivation is a pure function of a runtime and a
    filter ([2_design.md §3](./2_design.md#3-placement-in-the-code)), so a dashboard endpoint
    can call it. Open: whether the dashboard wants severity-grouped views or live updates, and
@@ -108,5 +108,6 @@ shared store.
 - [ORB-21164] — recorded the deferred directions
 - [ORB-21091] — added decision-request risk tier and category
 - ORB-27670 — proposed the acknowledgement mechanism for question 1
+- ORB-27754 — will implement phase 1 of the acknowledgement mechanism
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

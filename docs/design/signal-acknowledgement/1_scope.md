@@ -3,9 +3,9 @@ title: "Scope: Acknowledge a recurring signal as expected"
 owner: claude
 last_updated: 2026-11-24
 last_validated: 2026-11-24
-status: Draft
+status: Accepted
 stage: designing
-next: "Daniel approves this scope; ORB-27754 implements phase 1"
+next: "Daniel promotes ORB-27754 from someday to start phase 1; phases 2 and 3 are unfiled"
 feature: signal-acknowledgement
 doc_role: scope
 type: design
@@ -140,7 +140,8 @@ row, is never hidden. It stays in its list, its count and the exit status, and o
 - **Dedicated switches win.** `execution.env.login_auth` stays effective while configured.
   `orbit host offline` changes probing as well as attention display. Without `--until`, its
   mark is indefinite; with its optional RFC 3339 `--until` deadline, it lapses when that time
-  passes. If the host is still unreachable, normal attention behavior returns: the
+  passes. If the host is still unreachable, normal attention behavior returns (ORB-27761 corrected this
+  description of the expiry): the
   `host_unhealthy` item and `unreachable_destination` degraded source appear again instead of
   the host being listed under `acknowledged`. When a recurring signature deserves a permanent
   declaration, the fix is a switch or a source change, and the acknowledgement is the stopgap
@@ -198,11 +199,12 @@ row, is never hidden. It stays in its list, its count and the exit status, and o
 ## Phasing
 
 1. **Record, CLI and MCP tools, attention.** Covers both scopes, attention items, degraded
-   entries, counts, cursor handling and the critical rule.
+   entries, counts, cursor handling and the critical rule. Filed as ORB-27754, parked in
+   `someday` after the scope's approval and not started.
 2. **Doctor and run warnings.** Adds the closed warning-code set, doctor annotation and
-   summary counts, and receipt fields.
+   summary counts, and receipt fields. Not filed yet.
 3. **Skill and sentry guidance.** Changes the `orbit` skill's attention reference and the
-   formation sentry to read `ack`, not their own lists.
+   formation sentry to read `ack`, not their own lists. Not filed yet.
 
 ## Open questions
 
@@ -226,6 +228,7 @@ row, is never hidden. It stays in its list, its count and the exit status, and o
 
 - ORB-27670 — designs this acknowledgement mechanism
 - ORB-27669 — added the deliberate host-offline mark that attention lists as acknowledged
-- ORB-27754 — implements phase 1 once this scope is approved
+- ORB-27754 — implements phase 1; parked in `someday` after this scope's approval
+- ORB-27761 — corrected this scope's description of host-offline expiry
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

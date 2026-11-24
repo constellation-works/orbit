@@ -2,7 +2,7 @@
 title: "Scope: Distributions and workspace presets"
 owner: claude
 last_updated: 2026-11-15
-last_validated: 2026-11-15
+last_validated: 2026-11-24
 status: Implemented
 stage: shipped
 next: "—"
