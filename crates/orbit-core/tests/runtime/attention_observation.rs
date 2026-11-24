@@ -721,6 +721,85 @@ fn follower_run_failed_degrades_when_the_owner_task_status_cannot_be_read() {
     );
 }
 
+fn watcher_supersession_requires_a_newer_verified_delivery() {
+    let (_root, runtime) = attention_runtime();
+    let operator = session(McpCapability::Operator);
+    let jobs = runtime.stores().jobs();
+    let now = Utc::now();
+    for (title, newer, delivery, matches_task) in [
+        ("Replaced", true, true, true),
+        ("Current parent", false, true, true),
+        ("Different job", true, false, true),
+        ("Different task", true, true, false),
+    ] {
+        let task = add_named_task(&runtime, title, TaskStatus::Backlog);
+        let watcher = jobs
+            .insert_job_run(
+                "task_pr_watch_pipeline",
+                1,
+                now,
+                Some(json!({"task_ids": [task]})),
+                None,
+            )
+            .unwrap();
+        jobs.mark_job_run_running(&watcher.run_id, now, std::process::id())
+            .unwrap();
+        jobs.finalize_job_run(&watcher.run_id, JobRunState::Failed, now, None)
+            .unwrap();
+        let before = call(&runtime, json!({"kind": "run_failed"}), &operator);
+        let original_next = run_item(&before, &watcher.run_id)["next"].clone();
+        let owner = jobs
+            .insert_job_run(
+                if delivery {
+                    "task_pr_pipeline"
+                } else {
+                    "other_job"
+                },
+                1,
+                now,
+                Some(json!({"task_ids": [if matches_task { task.as_str() } else { "other" }]})),
+                None,
+            )
+            .unwrap();
+        // Explicit timestamps make ordering independent of clock resolution.
+        let connection =
+            rusqlite::Connection::open(runtime.global_root().join("orbit.db")).unwrap();
+        let owner_time = if newer {
+            now + Duration::minutes(1)
+        } else {
+            now - Duration::minutes(1)
+        };
+        connection
+            .execute(
+                "UPDATE job_runs SET created_at = ?1 WHERE run_id = ?2",
+                rusqlite::params![owner_time.to_rfc3339(), owner.run_id],
+            )
+            .unwrap();
+        runtime
+            .update_task_with_identity(
+                &task,
+                TaskUpdateParams {
+                    job_run_id: Some(Some(owner.run_id)),
+                    ..Default::default()
+                },
+                Some("codex".into()),
+                None,
+            )
+            .unwrap();
+        let response = call(&runtime, json!({"kind": "run_failed"}), &operator);
+        let item = run_item(&response, &watcher.run_id);
+        if newer && delivery && matches_task {
+            assert_eq!(item["detail"]["superseded"], true, "{item}");
+            assert_eq!(item["next"]["tool"], "orbit.task.show", "{item}");
+            assert_eq!(item["next"]["input"]["id"], task, "{item}");
+            assert!(!item["next"].to_string().contains("resume"), "{item}");
+        } else {
+            assert!(item["detail"]["superseded"].is_null(), "{item}");
+            assert_eq!(item["next"], original_next, "{item}");
+        }
+    }
+}
+
 pub(crate) fn seed_bound_claim(
     runtime: &OrbitRuntime,
     task_id: &str,
@@ -922,6 +1001,7 @@ crate::scenario_table!(
     run_stuck_respects_declared_windows_and_progress,
     run_stuck_names_the_current_step,
     owner_run_failed_skips_a_terminal_task_and_keeps_an_open_one,
+    watcher_supersession_requires_a_newer_verified_delivery,
     follower_run_failed_degrades_when_the_owner_task_status_cannot_be_read,
     run_failed_settled_claims_are_not_held_and_a_live_claim_is,
     follower_run_failed_settled_local_pull_is_not_a_held_claim,
