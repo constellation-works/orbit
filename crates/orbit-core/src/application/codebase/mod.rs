@@ -269,6 +269,9 @@ pub fn codebase_analytics(
 ) -> Value {
     let params = query.params();
     let mut payload = sections::all_sections(facts, &params);
+    if params.rollup == Rollup::File {
+        mark_absent_rows(&mut payload, &facts.repo_root);
+    }
     payload = sections::merge(payload, query.header(facts, params.since));
     payload["regression_filter"] = query.filter.json();
     payload["known_paths"] = json!(related::known_paths(facts));
@@ -287,8 +290,80 @@ pub fn codebase_path_detail(
 ) -> Result<Value, OrbitError> {
     let params = query.params();
     let mut detail = detail::path_detail(facts, &params, path)?;
+    if params.rollup == Rollup::File {
+        let mut cache = std::collections::BTreeMap::new();
+        mark_absent_row(&mut detail, &facts.repo_root, &mut cache);
+    }
     detail["regression_filter"] = query.filter.json();
     Ok(sections::merge(detail, query.header(facts, params.since)))
+}
+
+// Check each distinct listed path at query time, including cached scan consumers.
+fn mark_absent_rows(payload: &mut Value, root: &std::path::Path) {
+    let mut cache = std::collections::BTreeMap::new();
+    for section in [
+        "regressions",
+        "footprint_misses",
+        "blocked",
+        "rejected",
+        "lock_contention",
+        "change_coupling",
+        "overlap",
+    ] {
+        for list in ["rows", "rows_by_wait"] {
+            if let Some(rows) = payload
+                .get_mut(section)
+                .and_then(|value| value.get_mut(list))
+                .and_then(Value::as_array_mut)
+            {
+                for row in rows {
+                    mark_absent_row(row, root, &mut cache);
+                }
+            }
+        }
+    }
+}
+
+fn mark_absent_row(
+    row: &mut Value,
+    root: &std::path::Path,
+    cache: &mut std::collections::BTreeMap<String, bool>,
+) {
+    let absent = |path: &str, cache: &mut std::collections::BTreeMap<String, bool>| {
+        if path.ends_with('/') {
+            return false;
+        }
+        *cache.entry(path.to_string()).or_insert_with(|| {
+            let relative = std::path::Path::new(path);
+            if !relative
+                .components()
+                .all(|c| matches!(c, std::path::Component::Normal(_)))
+            {
+                return false;
+            }
+            // Canonicalization also prevents following a symlink outside the checkout.
+            match (root.canonicalize(), root.join(relative).canonicalize()) {
+                (Ok(root), Ok(target)) => !target.starts_with(root),
+                (Ok(_), Err(_)) => true,
+                _ => false,
+            }
+        })
+    };
+    if let Some(path) = row["path"].as_str() {
+        if absent(path, cache) {
+            row["absent_at_head"] = json!(true);
+        }
+    } else if let Some(paths) = row["paths"].as_array() {
+        let missing: Vec<String> = paths
+            .iter()
+            .filter_map(Value::as_str)
+            .filter(|path| absent(path, cache))
+            .map(str::to_string)
+            .collect();
+        if !missing.is_empty() {
+            row["absent_paths_at_head"] = json!(missing);
+        }
+    }
 }
 
 /// Rank files that changed alongside `path` in landed tasks. Related queries

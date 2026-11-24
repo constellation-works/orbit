@@ -152,7 +152,7 @@ const ANALYTICS: OperationSpec<CodebaseVerb> = OperationSpec {
     cli_help: CliHelp {
         long_about: None,
         after_help: Some(
-            "\"Touched\" means a task's declared footprint, not the landed diff. Regressions count\nagainst the paths their links record as sites, not the whole footprint.\nFollow a ranked path to its tasks with `orbit codebase show <path>`.",
+            "\"Touched\" means a task's declared footprint, not the landed diff. Regressions count\nagainst the paths their links record as sites, not the whole footprint.\nFollow a ranked path to its tasks with `orbit codebase show <path>`.\nFiles absent from the checkout are marked; use --rollup dir for directory history.",
         ),
         flag_order: &[],
         constraints: &[],
