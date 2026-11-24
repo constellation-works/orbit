@@ -767,7 +767,14 @@ fn stageable_safe_paths(
             Err(_) if head_paths.contains(path.as_slice()) => {
                 stageable.remove_from_index.push(path.clone());
             }
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            // A staged path whose parent directory was replaced on disk by a
+            // regular file cannot exist there (ENOTDIR), so it is absent like
+            // a deleted path; other lookup failures stay hard errors.
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory
+                ) => {}
             Err(error) => {
                 return Err(orbit_common::OrbitError::Io(format!(
                     "failed to inspect uncommitted path `{}`: {error}",
