@@ -17,13 +17,13 @@ evolution pass routine was removed [ORB-22844]. `orbit resident digest --json` r
 escalations, vetoable decisions, the top five pains, open proposals and metrics; `--top` changes
 the pain limit (1–100), and `--since` accepts a span or RFC 3339 window start.
 
-The digest's default window, and the span of ledger cost a decline measures, is a fixed 14
-days. A record stays declined for a fixed 30 days after its proposal task is rejected; a declined
-record reopens early only when its cost within the window doubles. `resident.evolution.window_days`
-and `decline_suppress_days`, which set these before, are [deprecated](#validation-and-errors), and
-so are the removed pass's thresholds
+The digest's default window and the ledger-cost span for a decline are fixed at 14 days. A
+decline suppresses proposals for 30 days by default; `--days` overrides the duration for
+that individual decline. A declined record reopens early only when its cost within the window
+doubles. `resident.evolution.window_days` and `decline_suppress_days`, which set these defaults
+before, are [deprecated](#validation-and-errors), as are the removed pass's thresholds
 (`min_occurrences`, `min_distinct_cycles`, `min_distinct_mandates`, `min_cost_minutes`,
-`max_proposals`) are [deprecated](#validation-and-errors).
+`max_proposals`).
 
 ## Where config lives
 
@@ -3333,7 +3333,7 @@ If **either file** contains `review_policy = "after-landing"`, even if another l
 | `workflow.regression_risk.enabled`, `window_days`, `min_support`, `threshold_percent`, `max_files` | Ignored: regression-risk prompt marks were removed. Task riskiness scores use a fixed 30-day window and a minimum support of 5, the former defaults. Delete the `[workflow.regression_risk]` table. Recognised until 2026-12-07; after that they are unknown keys. |
 | `workflow.explore_brief.enabled`, `tags`, `deliver` | Ignored: the task pilot's explore brief was removed. The pilot no longer returns a brief, no implement dispatch receives one, and the brief-accuracy diagnostics endpoint is gone. Existing `explore-brief.json` task artifacts and `activity.explore_brief_applied` audit rows stay readable. Delete the `[workflow.explore_brief]` table. Recognised until 2026-12-07; after that they are unknown keys. |
 | `visual_review.manifests`, `default_width`, `mode`, `max_mocks`, `reviewer`, `max_images`, `max_image_tokens`, `max_findings`, `require_established`, `block_at`, `file_at`; `workflow.purpose_crews.visual_review` | Ignored: visual review (mock comparison, the `verify-mock-ui` capture, checks, comparison review and post-landing follow-ups) was removed [ORB-22807]. No delivery captures or compares mocks, `mocks/` and `visual/` are ordinary artifact names, and `orbit visual` and the `orbit.visual.*` tools are gone. Delete the `[visual_review]` table and the purpose pool. Recognised until 2026-12-07. |
-| `resident.evolution.min_occurrences`, `min_distinct_cycles`, `min_distinct_mandates`, `min_cost_minutes`, `max_proposals` | Ignored: the weekly evolution pass routine (`evolution_pass_pipeline` and its rank, draft and apply activities) was removed [ORB-22844], so nothing files evolution proposal tasks automatically. The evolution ledger, `orbit evolution`, the `orbit.evolution.*` tools and `orbit resident digest` stay; the ledger keeps its fixed 14-day window and 30-day decline. Delete the keys. Recognised until 2026-12-07. |
+| `resident.evolution.min_occurrences`, `min_distinct_cycles`, `min_distinct_mandates`, `min_cost_minutes`, `max_proposals` | Ignored: the weekly evolution pass routine (`evolution_pass_pipeline` and its rank, draft and apply activities) was removed [ORB-22844], so nothing files evolution proposal tasks automatically. The evolution ledger, `orbit evolution`, the `orbit.evolution.*` tools and `orbit resident digest` stay; the ledger uses a fixed 14-day cost baseline, while declines default to 30 days and `--days` overrides an individual decline. Delete the keys. Recognised until 2026-12-07. |
 | `ux_rules.surfaces`, `runner`, `ui_base_url`, `max_new_tasks`, `file_at`, `disabled` | Ignored: the `ux-rules` routine, `ux_rules_pipeline` and its rule-findings filer were removed [ORB-22844]; nothing runs the rules on a schedule or files tasks from them, and no `ux_rules_runner` script grant is needed. Delete the `[ux_rules]` table. If the workspace set up the routine, also delete `.orbit/resources/scripts/ux_rules_runner.yaml` and run `orbit script revoke ux_rules_runner`: its entry, the routine's deleted `step.mjs` adapter, no longer ships, and jobs that reference the manifest refuse until it is repaired or removed. `orbit doctor` reports it under `retired-scripts`. Recognised until 2026-12-07. |
 | `machine.web_terminal.enabled`, `machine.web_session.ttl` | Ignored: dashboard browser sessions and `orbit web open` were removed [ORB-22808]. The dashboard opens its plain URL, and operator capability still comes from `orbit web serve --operator`. Delete the `[machine.web_terminal]` and `[machine.web_session]` tables. Recognised until 2026-12-08; after that they are unknown keys. |
 | `publication.routine_attachments`, `publication.routine_allow_unscanned_attachments` | Ignored: the scheduled task-publication routine always omits attachments [ORB-22808], the former `omit` default. Publish attachments by hand with `orbit task publication publish --attachments`. Delete the keys. Recognised until 2026-12-08; after that they are unknown keys. |
@@ -3351,6 +3351,6 @@ If **either file** contains `review_policy = "after-landing"`, even if another l
 | `experiments.max_running`, `experiments.min_delivered_rate` | Ignored [ORB-22808]: fixed at 3 running experiments and a 0.9 delivered rate. Delete the keys. Recognised until 2026-12-08. |
 | `machine.application_consent_max_days`, `machine.host_shutdown_hold_minutes` | Ignored [ORB-22808]: fixed at 30 days and 180 minutes. Global only. Delete the keys. Recognised until 2026-12-08. |
 | `machine.auto_concurrency.admit_memory_percent`, `profile_window`, `horizon_cap_minutes`, `head_max_wait_minutes`, `head_stuck_passes` | Ignored [ORB-22808]: fixed at 75%, 50 deliveries, 120 minutes, 30 minutes and 20 passes. `mode`, `admit_cpu_percent` and `min_profile_deliveries` stay settable. Delete the keys. Recognised until 2026-12-08. |
-| `resident.evolution.window_days`, `decline_suppress_days` | Ignored [ORB-22808]: the evolution ledger keeps a fixed 14-day window and 30-day decline. Delete the keys. Recognised until 2026-12-08. |
+| `resident.evolution.window_days`, `decline_suppress_days` | Ignored [ORB-22808]: the evolution ledger uses a fixed 14-day cost baseline, while declines default to 30 days and `--days` overrides an individual decline. Delete the keys. Recognised until 2026-12-08. |
 | `retention.journal_days`, `retention.store_warn_bytes` | Ignored [ORB-22808]: fixed at 14 days and 1 GiB. `retention.audit_days` and `runs_days` stay settable. Delete the keys. Recognised until 2026-12-08. |
 | `runtime.log_retention_days`, `log_max_total_mb`, `log_max_file_mb` | Ignored [ORB-22808]: the operational log keeps archives 7 days within 500 MiB and rolls past 100 MiB. Delete the `[runtime]` table. Recognised until 2026-12-08. |
