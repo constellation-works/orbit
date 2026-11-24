@@ -367,6 +367,34 @@ a.routine-fire:focus-visible { outline: 2px solid var(--accent); outline-offset:
   border-left: 2px solid var(--state-failed); padding-left: var(--space-8);
 }
 .schedule-editor-controls { display: flex; flex-wrap: wrap; gap: var(--space-8); }
+#auto-tasks-panel > header { flex-wrap: nowrap; }
+#auto-tasks-count { margin-inline-start: auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#auto-task-create-action:empty { display: none; }
+.auto-task-create-dialog { width: 640px; padding: 0; }
+.auto-task-create-dialog[open], .auto-task-create-dialog form { display: flex; flex-direction: column; }
+.auto-task-create-dialog form { min-height: 0; }
+.auto-task-create-dialog .dialog-body { overflow: auto; }
+.auto-task-create-dialog .dialog-actions { justify-content: flex-end; }
+.auto-task-create-dialog .schedule-field {
+  display: grid;
+  grid-template-columns: minmax(0, 8rem) minmax(0, 1fr);
+  align-items: center;
+  gap: var(--space-4) var(--space-12);
+}
+.auto-task-create-dialog .schedule-field-label {
+  color: var(--fg); font: var(--text-sm)/1.35 var(--font-sans); text-transform: none; letter-spacing: normal;
+}
+.auto-task-create-dialog .schedule-input { border-color: var(--border-strong); }
+.auto-task-create-dialog .schedule-field-hint { grid-column: 2; }
+.auto-task-create-dialog :is(select, input[type="checkbox"]) { justify-self: start; }
+.auto-task-create-dialog textarea { resize: vertical; }
+.auto-task-schedule-fields, .auto-task-create-advanced { display: grid; gap: var(--space-12); }
+.auto-task-create-options > summary { cursor: pointer; }
+.auto-task-create-advanced { margin-top: var(--space-12); }
+@media (max-width: 600px) {
+  .auto-task-create-dialog .schedule-field { grid-template-columns: minmax(0, 5.5rem) minmax(0, 1fr); }
+  .auto-task-schedule-fields .schedule-grid { grid-template-columns: minmax(0, 1fr); }
+}
 .auto-task-actions { display: flex; flex-wrap: wrap; gap: var(--space-6); justify-content: flex-end; }
 .operation-button.danger {
   color: var(--danger-fg); border-color: var(--danger-line); background: transparent;

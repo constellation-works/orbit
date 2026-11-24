@@ -2,6 +2,7 @@
 
 import { el, fetchJson, getHost, getWorkspace, postJson, requestPanel, statusPill, relativeTime } from './common.js';
 import { conditionStateLabel, renderAutomation, renderCondition } from './automation.js';
+import { openAutoTaskCreate } from './auto-task-create.js';
 import { autoTaskDraft, autoTaskScheduleEditor, closeEditors, editingIn, editorObserved, isOpen, openEditor, scheduleEditButton } from './schedule-editor.js';
 
 import {
@@ -54,6 +55,8 @@ const autoTaskRevealedGroups = new Set();
 const autoTaskDeleteOpen = new Set();
 const autoTaskDeleteReason = new Map();
 registerOperationsReset(() => {
+  $("auto-task-create-dialog")?.remove();
+  $("auto-task-create-action")?.replaceChildren();
   closeEditors("auto-task");
   autoTaskFilterQuery = "";
   autoTaskRevealedGroups.clear();
@@ -76,6 +79,43 @@ function autoTaskMatchesFilter(definition, query) {
 
 function autoTaskDraftOpen() {
   return editingIn("auto-task") || autoTaskDeleteOpen.size > 0;
+}
+
+function renderCreateAction(payload) {
+  const action = $("auto-task-create-action");
+  if (!action) return;
+  const reason = actionReason(payload, "auto_task_create");
+  const previous = $("auto-task-create-button");
+  if (previous && (previous.getAttribute("aria-description") || "") === reason) return;
+  const selection = selectionSnapshot();
+  const button = el("button", {
+    id: "auto-task-create-button",
+    class: "operation-button primary",
+    type: "button",
+    text: "Create",
+    "aria-label": "Create auto-task",
+  });
+  button.disabled = Boolean(reason);
+  button.addEventListener("click", () => {
+    if (!selection.current() || $("auto-task-create-dialog")) return;
+    openAutoTaskCreate({
+      selection,
+      onClose: () => $("auto-task-create-button")?.focus(),
+      onCreated: async (definition) => {
+        autoTaskFilterQuery = definition.name;
+        const message = [`Created ${definition.name}.`, ...(definition.warnings || [])].join(" ");
+        feedback("auto-task-operation-feedback", "success", message);
+        try {
+          await fetchAndRenderAutoTasks({ force: true });
+        } catch (failure) {
+          if (selection.current()) {
+            feedback("auto-task-operation-feedback", "error", `${message} List refresh failed: ${failure.message}`);
+          }
+        }
+      },
+    });
+  });
+  action.replaceChildren(explainUnavailable(button, reason));
 }
 
 function autoTaskFilterBar(payload, total, matched, visible) {
@@ -592,6 +632,7 @@ export function renderAutoTasks(payload, { force = false } = {}) {
   operationsState.lastAutoTasks = payload;
   const body = $("auto-tasks-body");
   if (!body) return;
+  renderCreateAction(payload);
   // An open schedule editor or delete confirmation holds a draft: leave the
   // rows alone until it closes. Success clears the confirmation first, so the
   // refresh that follows still repaints.
@@ -699,7 +740,10 @@ export function renderAutoTasks(payload, { force = false } = {}) {
   syncAutoTaskSchedulerNote();
   const count = $("auto-tasks-count");
   const enabledCount = definitions.filter(autoTaskOn).length;
-  if (count) count.textContent = readable ? `${enabledCount} enabled of ${definitions.length} · ${workspace.name}` : "read-only";
+  if (count) {
+    count.textContent = readable ? `${enabledCount} enabled of ${definitions.length} · ${workspace.name}` : "read-only";
+    count.title = count.textContent;
+  }
   setRailSubtabCount("rail-count-ops-auto-tasks", readable && definitions.length ? `${enabledCount}/${definitions.length}` : "");
   if (preserveFilterFocus) {
     const input = $("auto-tasks-filter-input");
@@ -723,6 +767,6 @@ function loadOperationPanel(bodyId, path, render) {
   return requestPanel(bodyId, path, () => fetchJson(path), render, operationCountId(bodyId));
 }
 
-export function fetchAndRenderAutoTasks() {
-  return loadOperationPanel("auto-tasks-body", withInactivePlugins("/api/auto-tasks"), renderAutoTasks);
+export function fetchAndRenderAutoTasks(options) {
+  return loadOperationPanel("auto-tasks-body", withInactivePlugins("/api/auto-tasks"), (payload) => renderAutoTasks(payload, options));
 }
