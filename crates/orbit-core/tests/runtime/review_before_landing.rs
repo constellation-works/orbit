@@ -1159,6 +1159,227 @@ fn failed_reviewer_commit_preservation_excludes_protected_descendants_when_a_dir
     }
 }
 
+/// Clone `source_repo`, check out `base_rev`, apply `patch`, and return the
+/// temporary root whose `checkout` subdirectory holds the patched files.
+fn apply_patch_in_fresh_checkout(
+    source_repo: &Path,
+    base_rev: &str,
+    patch: &[u8],
+) -> tempfile::TempDir {
+    let root = tempfile::tempdir().unwrap();
+    let checkout = root.path().join("checkout");
+    git(
+        root.path(),
+        &[
+            "clone",
+            "-q",
+            source_repo.to_str().unwrap(),
+            checkout.to_str().unwrap(),
+        ],
+    );
+    git(&checkout, &["checkout", "-q", base_rev]);
+    let patch_file = root.path().join("recovery.patch");
+    std::fs::write(&patch_file, patch).unwrap();
+    let output = crate::git_test_support::command()
+        .args(["apply", patch_file.to_str().unwrap()])
+        .current_dir(&checkout)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "git apply failed ({}):\nstdout:\n{}\nstderr:\n{}",
+        output.status,
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    root
+}
+
+fn refused_reviewer_commit_patch_reproduces_tracked_binary_and_final_whitespace() {
+    let mut fixture = Fixture::before_landing();
+    let tracked_before = b"\x00\x01\x02\x03\xff\n".to_vec();
+    let raw_before = b"hdr\xfe\xfd\n".to_vec();
+    let trailing_before = b"first line\nsecond line\n".to_vec();
+    let no_nl_before = b"seed\n".to_vec();
+    std::fs::write(fixture.repo.join("tracked.bin"), &tracked_before).unwrap();
+    std::fs::write(fixture.repo.join("raw.dat"), &raw_before).unwrap();
+    std::fs::write(fixture.repo.join("trailing.txt"), &trailing_before).unwrap();
+    std::fs::write(fixture.repo.join("no_nl.txt"), &no_nl_before).unwrap();
+    git(
+        &fixture.repo,
+        &["add", "tracked.bin", "raw.dat", "trailing.txt", "no_nl.txt"],
+    );
+    git(
+        &fixture.repo,
+        &["commit", "-q", "-m", "seed binary and text"],
+    );
+
+    let bare = fixture._root.path().join("origin.git");
+    git(
+        fixture._root.path(),
+        &["init", "--bare", "-q", bare.to_str().unwrap()],
+    );
+    git(
+        &fixture.repo,
+        &["remote", "add", "origin", bare.to_str().unwrap()],
+    );
+    git(
+        &fixture.repo,
+        &["push", "-q", "origin", "main", "candidate"],
+    );
+    let published_head = git(&fixture.repo, &["rev-parse", "HEAD"]);
+    published(&fixture);
+    fixture.input["before_landing"] = json!(true);
+    fixture.admit();
+
+    let tracked_after = b"\x00\x89PNG\r\n\x1a\n\x00\xff\xfe\x04".to_vec();
+    let raw_after = b"hdr\x80\x81\xff\n".to_vec();
+    let trailing_after = b"first line\nfinal spaces   \n".to_vec();
+    let no_nl_after = b"no newline   ".to_vec();
+    let added_bin = b"\x7fELF\x00\x01\x02\xff".to_vec();
+    std::fs::write(fixture.repo.join("tracked.bin"), &tracked_after).unwrap();
+    std::fs::write(fixture.repo.join("raw.dat"), &raw_after).unwrap();
+    std::fs::write(fixture.repo.join("trailing.txt"), &trailing_after).unwrap();
+    std::fs::write(fixture.repo.join("no_nl.txt"), &no_nl_after).unwrap();
+    std::fs::write(fixture.repo.join("added.bin"), &added_bin).unwrap();
+    // Detach HEAD to force commit_reviewer_repairs refusal while keeping
+    // tracked ordinary edits and an untracked protected .env in the worktree.
+    git(&fixture.repo, &["checkout", "--detach", "-q", "HEAD"]);
+    std::fs::write(fixture.repo.join(".env"), "ENV_CANARY=refused_commit\n").unwrap();
+
+    let run_id = fixture.input["job_run_id"].as_str().unwrap();
+    let expected_artifact = format!("landing-review-uncommitted-{run_id}.patch");
+    let handoff = failure_handoff_after(
+        &fixture,
+        "landing_review",
+        "review_timeout_incomplete: timed out mid-repair",
+        &json!({
+            "sync_base": {"head": "candidate"},
+            "push": {"local_sha": published_head},
+        }),
+    );
+    assert_eq!(
+        handoff["reviewer_preservation"]["decision"], "commit_refused",
+        "{handoff}"
+    );
+    assert_eq!(
+        handoff["reviewer_preservation"]["diff_artifact"], expected_artifact,
+        "{handoff}"
+    );
+
+    let artifact = fixture
+        .runtime
+        .get_task_artifact(&fixture.task_id, &expected_artifact)
+        .unwrap()
+        .expect("uncommitted diff artifact is saved on the task");
+    let applied_root = apply_patch_in_fresh_checkout(&bare, &published_head, &artifact.content);
+    let applied = applied_root.path().join("checkout");
+    assert_eq!(
+        std::fs::read(applied.join("tracked.bin")).unwrap(),
+        tracked_after
+    );
+    assert_eq!(std::fs::read(applied.join("raw.dat")).unwrap(), raw_after);
+    assert_eq!(
+        std::fs::read(applied.join("trailing.txt")).unwrap(),
+        trailing_after
+    );
+    assert_eq!(
+        std::fs::read(applied.join("no_nl.txt")).unwrap(),
+        no_nl_after
+    );
+    assert_eq!(std::fs::read(applied.join("added.bin")).unwrap(), added_bin);
+    assert!(!applied.join(".env").exists());
+}
+
+fn refused_durable_push_patch_reproduces_saved_commit_binary_changes() {
+    let mut fixture = Fixture::before_landing();
+    std::fs::write(fixture.repo.join("tracked.bin"), b"\x00\x01\x02\x03\xff\n").unwrap();
+    std::fs::write(fixture.repo.join("raw.dat"), b"hdr\xfe\xfd\n").unwrap();
+    std::fs::write(fixture.repo.join("trailing.txt"), b"first\nsecond\n").unwrap();
+    git(
+        &fixture.repo,
+        &["add", "tracked.bin", "raw.dat", "trailing.txt"],
+    );
+    git(
+        &fixture.repo,
+        &["commit", "-q", "-m", "published binary base"],
+    );
+    let bare = fixture._root.path().join("origin.git");
+    git(
+        fixture._root.path(),
+        &["init", "--bare", "-q", bare.to_str().unwrap()],
+    );
+    git(
+        &fixture.repo,
+        &["remote", "add", "origin", bare.to_str().unwrap()],
+    );
+    git(
+        &fixture.repo,
+        &["push", "-q", "origin", "main", "candidate"],
+    );
+    let published_head = git(&fixture.repo, &["rev-parse", "HEAD"]);
+    published(&fixture);
+    fixture.input["before_landing"] = json!(true);
+    fixture.admit();
+
+    let tracked_after = b"\x00\x89PNG\r\n\x1a\n\x00\xff\xfe\x04".to_vec();
+    let raw_after = b"hdr\x80\x81\xff\n".to_vec();
+    let trailing_after = b"first\nfinal spaces   \n".to_vec();
+    let added_bin = b"\x7fELF\x00\x01\x02\xff".to_vec();
+    std::fs::write(fixture.repo.join("tracked.bin"), &tracked_after).unwrap();
+    std::fs::write(fixture.repo.join("raw.dat"), &raw_after).unwrap();
+    std::fs::write(fixture.repo.join("trailing.txt"), &trailing_after).unwrap();
+    std::fs::write(fixture.repo.join("added.bin"), &added_bin).unwrap();
+    git(
+        &fixture.repo,
+        &["add", "tracked.bin", "raw.dat", "trailing.txt", "added.bin"],
+    );
+    git(
+        &fixture.repo,
+        &["commit", "-q", "-m", "reviewer binary commit"],
+    );
+    git(&fixture.repo, &["remote", "remove", "origin"]);
+
+    let handoff = failure_handoff_after(
+        &fixture,
+        "landing_review_gate_settle",
+        "review_gate_blocked: verdict reject",
+        &json!({
+            "sync_base": {"head": "candidate"},
+            "push": {"local_sha": published_head},
+        }),
+    );
+    let run_id = fixture.input["job_run_id"].as_str().unwrap();
+    let artifact_path = format!("landing-review-fix-{run_id}.patch");
+    assert_eq!(
+        handoff["reviewer_preservation"]["decision"], "preserve_failed",
+        "{handoff}"
+    );
+    assert_eq!(
+        handoff["reviewer_preservation"]["diff_artifact"], artifact_path,
+        "{handoff}"
+    );
+
+    let artifact = fixture
+        .runtime
+        .get_task_artifact(&fixture.task_id, &artifact_path)
+        .unwrap()
+        .unwrap();
+    let applied_root =
+        apply_patch_in_fresh_checkout(&fixture.repo, &published_head, &artifact.content);
+    let applied = applied_root.path().join("checkout");
+    assert_eq!(
+        std::fs::read(applied.join("tracked.bin")).unwrap(),
+        tracked_after
+    );
+    assert_eq!(std::fs::read(applied.join("raw.dat")).unwrap(), raw_after);
+    assert_eq!(
+        std::fs::read(applied.join("trailing.txt")).unwrap(),
+        trailing_after
+    );
+    assert_eq!(std::fs::read(applied.join("added.bin")).unwrap(), added_bin);
+}
+
 // Related boundary scenarios share the isolated table fixture.
 crate::scenario_table!(
     an_owner_before_landing_review_keeps_the_durable_task_summary_scenarios,
@@ -1175,5 +1396,7 @@ crate::scenario_table!(
     a_timed_out_before_landing_review_saves_uncommittable_diff_as_artifact_and_names_refusal,
     failed_reviewer_commit_preservation_excludes_protected_changes_and_deletions,
     failed_reviewer_commit_preservation_excludes_protected_descendants_when_a_file_replaces_a_directory,
-    failed_reviewer_commit_preservation_excludes_protected_descendants_when_a_directory_replaces_a_file
+    failed_reviewer_commit_preservation_excludes_protected_descendants_when_a_directory_replaces_a_file,
+    refused_reviewer_commit_patch_reproduces_tracked_binary_and_final_whitespace,
+    refused_durable_push_patch_reproduces_saved_commit_binary_changes
 );

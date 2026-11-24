@@ -32,12 +32,23 @@ pub(crate) fn atomic_write_private_bytes(path: &Path, content: &[u8]) -> io::Res
 
 /// Atomically save private text beneath a root using a relative directory.
 /// Refuses symlinked directory components, traversal and non-file names.
-#[cfg(unix)]
 pub fn write_private_text_beneath(
     root: &Path,
     directory: &Path,
     name: &str,
     content: &str,
+) -> io::Result<()> {
+    write_private_bytes_beneath(root, directory, name, content.as_bytes())
+}
+
+/// Atomically save private bytes beneath a root using a relative directory.
+/// Refuses symlinked directory components, traversal and non-file names.
+#[cfg(unix)]
+pub fn write_private_bytes_beneath(
+    root: &Path,
+    directory: &Path,
+    name: &str,
+    content: &[u8],
 ) -> io::Result<()> {
     use std::ffi::CString;
     use std::os::fd::{AsRawFd, FromRawFd};
@@ -125,7 +136,7 @@ pub fn write_private_text_beneath(
     };
     // SAFETY: fd is newly opened and owned by this File.
     let mut file = unsafe { File::from_raw_fd(fd) };
-    file.write_all(content.as_bytes())?;
+    file.write_all(content)?;
     sync_file(&file)?;
     // renameat replaces a final symlink itself and never follows it.
     // SAFETY: both names and the held directory descriptor remain valid.
@@ -146,11 +157,11 @@ pub fn write_private_text_beneath(
 
 /// Fail closed where descriptor-relative scratch writes are unavailable.
 #[cfg(not(unix))]
-pub fn write_private_text_beneath(
+pub fn write_private_bytes_beneath(
     _root: &Path,
     _directory: &Path,
     _name: &str,
-    _content: &str,
+    _content: &[u8],
 ) -> io::Result<()> {
     Err(io::Error::new(
         io::ErrorKind::Unsupported,

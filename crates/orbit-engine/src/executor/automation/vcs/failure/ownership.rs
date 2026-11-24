@@ -17,7 +17,7 @@ use crate::executor::automation::input::{
 use super::super::claim::carry_to_durable_ref;
 use super::super::commit::{capture_uncommitted_diff, partial_repair_message};
 use super::super::freshness::{commit_sha, rebase_belongs_to_attempt, rebase_provenance_summary};
-use super::super::git::{git_output, git_output_paths, git_output_raw};
+use super::super::git::{BINARY_PATCH_DIFF_ARGS, git_output, git_output_bytes, git_output_paths};
 use super::super::push::push_batch_changes_inner;
 use super::super::resume::ensure_retry_descends_from;
 use super::super::review_gate::{commit_reviewer_repairs, uncommitted_paths};
@@ -236,7 +236,7 @@ fn preserve_landing_reviewer_repair_inner<H: RuntimeHost + ?Sized>(
                             "error": commit_error.to_string(),
                             "diff_artifact": artifact_path,
                         }),
-                        Some(TaskArtifact::from_text(artifact_path, diff)),
+                        Some(TaskArtifact::from_bytes(artifact_path, diff)),
                     );
                 }
                 Ok(None) => {
@@ -344,20 +344,14 @@ fn preserve_landing_reviewer_repair_inner<H: RuntimeHost + ?Sized>(
                             .map(|path| format!(":(exclude,literal){path}")),
                     )
                     .collect::<Vec<_>>();
-                let mut args = vec![
-                    "diff",
-                    "--no-renames",
-                    "--no-ext-diff",
-                    "--no-textconv",
-                    &published,
-                    &head_sha,
-                    "--",
-                ];
+                let mut args = vec!["diff"];
+                args.extend_from_slice(BINARY_PATCH_DIFF_ARGS);
+                args.extend([published.as_str(), head_sha.as_str(), "--"]);
                 args.extend(pathspecs.iter().map(String::as_str));
-                git_output_raw(&worktree, &args).ok()
+                git_output_bytes(&worktree, &args).ok()
             })
-            .filter(|diff| !diff.trim().is_empty())
-            .map(|diff| orbit_common::security::redaction::redact_all(&diff));
+            .filter(|diff| !diff.iter().all(u8::is_ascii_whitespace))
+            .map(|diff| orbit_common::security::redaction::redact_all_bytes(&diff));
             if let Some(diff) = patch {
                 let artifact_path = format!("landing-review-fix-{run_id}.patch");
                 (
@@ -368,7 +362,7 @@ fn preserve_landing_reviewer_repair_inner<H: RuntimeHost + ?Sized>(
                         "error": error,
                         "diff_artifact": artifact_path,
                     }),
-                    Some(TaskArtifact::from_text(artifact_path, diff)),
+                    Some(TaskArtifact::from_bytes(artifact_path, diff)),
                 )
             } else {
                 (
