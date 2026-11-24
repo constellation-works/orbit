@@ -138,10 +138,15 @@ these three shapes, including guarded (`request_id`) desktop writes, which admit
 the task lock before the comment or its receipt persists. Write `resident.request` and
 `resident.answer` using that comment surface; the manager can also write an answer through `orbit.resident.relay` (slice 4). A relay answer must include `source` and
 `relayed_by`; only a human operator write without agent attribution may omit relay attribution. The quote's whitespace is
-preserved. A record containing sensitive text that requires redaction is refused, so redaction
-cannot silently change a verbatim quote. This includes secrets, sensitive environment values
-and the caller's home directory, checked in decoded JSON strings on both write surfaces and
-in direct core writes. Unknown fields, including nested fields, are refused.
+preserved. A fresh record containing sensitive text that requires redaction is refused before any
+comment or receipt is written, so redaction cannot silently change a verbatim quote. This includes
+secrets, sensitive environment values and the caller's home directory, checked in decoded JSON
+strings on both write surfaces and in direct core writes. Unknown fields, including nested fields,
+are refused. A guarded retry of a comment that a pre-upgrade build committed after redacting it is
+reconciled, not refused: when the digest of the sanitized request matches the stored receipt, the
+call returns the committed result with `replayed: true` and writes no second comment. A guarded
+retry whose sanitized digest differs from its receipt, and a fresh guarded write of sensitive text,
+are refused with `mutation_applied: false`.
 Records cannot be initial task-creation comments: they need an existing, usable mandate.
 Dedicated start/approval/rejection transitions require a separate comment-only update for resident
 records, so their specialized lifecycle writers cannot bypass resident admission.
