@@ -8,6 +8,9 @@
 # Set ORBIT_STRICT_WORKFLOW_ACTION_PINS=1 to require every pin to resolve.
 set -euo pipefail
 
+# Keep the credential in this shell, out of unrelated child environments.
+export -n GITHUB_TOKEN
+
 repo_root="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$repo_root"
 
@@ -18,13 +21,6 @@ fi
 
 api_base="https://api.github.com"
 max_attempts=3
-# Expanded as ${auth_header[@]+"${auth_header[@]}"}: bash 3.2 (macOS /bin/bash)
-# treats an empty array as unset under `set -u`.
-auth_header=()
-if [[ -n "${GITHUB_TOKEN:-}" ]]; then
-  auth_header=(-H "Authorization: Bearer ${GITHUB_TOKEN}")
-fi
-
 strict_mode="${ORBIT_STRICT_WORKFLOW_ACTION_PINS:-0}"
 
 resolve_status() {
@@ -32,7 +28,12 @@ resolve_status() {
   for attempt in 1 2 3; do
     # Keep curl's emitted status even when it exits nonzero. Appending a
     # fallback with `|| echo 000` turns curl's emitted 000 into 000000.
-    status="$(curl -s -o /dev/null -m 10 -w '%{http_code}' ${auth_header[@]+"${auth_header[@]}"} "$url" 2>/dev/null || true)"
+    if [[ -n "${GITHUB_TOKEN:-}" ]]; then
+      status="$(printf 'Authorization: Bearer %s\n' "$GITHUB_TOKEN" |
+        curl -s -o /dev/null -m 10 -w '%{http_code}' -H @- "$url" 2>/dev/null || true)"
+    else
+      status="$(curl -s -o /dev/null -m 10 -w '%{http_code}' "$url" 2>/dev/null || true)"
+    fi
     if [[ ! "$status" =~ ^[0-9]{3}$ ]]; then
       status="000"
     fi

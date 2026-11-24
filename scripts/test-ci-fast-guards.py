@@ -2195,7 +2195,9 @@ class DocLinkGuardrailTests(unittest.TestCase):
 
 class WorkflowActionPinGuardrailTests(unittest.TestCase):
     def setUp(self):
-        self.temporary = tempfile.TemporaryDirectory()
+        scratch = SCRIPTS.parent / ".orbit/tmp"
+        scratch.mkdir(parents=True, exist_ok=True)
+        self.temporary = tempfile.TemporaryDirectory(prefix="workflow-pins-", dir=scratch)
         self.addCleanup(self.temporary.cleanup)
         self.root = Path(self.temporary.name)
         self.scripts = self.root / "scripts"
@@ -2203,15 +2205,18 @@ class WorkflowActionPinGuardrailTests(unittest.TestCase):
         self.bin = self.root / "bin"
         self.bin.mkdir()
         self.log = self.root / "curl_calls.log"
+        self.requests = self.root / "curl_requests.jsonl"
         self.status_map = self.root / "curl_status_map.json"
         self.status_map.write_text("{}")
         self.env = dict(
             os.environ,
             PATH=f"{self.bin}:{os.environ['PATH']}",
             FAKE_CURL_LOG=str(self.log),
+            FAKE_CURL_REQUESTS=str(self.requests),
             FAKE_CURL_STATUS_MAP_FILE=str(self.status_map),
         )
         self.env.pop("ORBIT_STRICT_WORKFLOW_ACTION_PINS", None)
+        self.env.pop("GITHUB_TOKEN", None)
         # Curl is already simulated. Record the real guard's requested waits
         # in the same log so ordering/backoff remain observable without sleep.
         self.write_executable(self.bin / "sleep",
@@ -2219,6 +2224,13 @@ class WorkflowActionPinGuardrailTests(unittest.TestCase):
         self.write_executable(self.bin / "curl", '''#!/usr/bin/env python3
 import json, os, sys
 url = sys.argv[-1]
+headers = []
+if "-H" in sys.argv:
+    header = sys.argv[sys.argv.index("-H") + 1]
+    headers = sys.stdin.read().splitlines() if header == "@-" else [header]
+with open(os.environ["FAKE_CURL_REQUESTS"], "a") as f:
+    f.write(json.dumps({"argv": sys.argv[1:], "headers": headers,
+                        "token_in_env": "GITHUB_TOKEN" in os.environ}) + "\\n")
 log = os.environ.get("FAKE_CURL_LOG")
 if log:
     with open(log, "a") as f:
@@ -2278,6 +2290,22 @@ if status == "000":
         result = self.run_guard()
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(self.log.read_text().splitlines(), [self.pin_url("actions/checkout", good_sha)])
+        request = json.loads(self.requests.read_text())
+        self.assertEqual(request["headers"], [])
+
+    def test_authenticated_request_keeps_token_out_of_arguments_and_diagnostics(self):
+        sha = "a" * 40
+        token = "fixture-private-token"
+        self.write_workflow("check.yml", [f"actions/checkout@{sha}"])
+        self.set_statuses({self.pin_url("actions/checkout", sha): "404"})
+        result = self.run_guard(env_overrides={"GITHUB_TOKEN": token})
+        self.assertEqual(result.returncode, 1, result.stderr)
+        request = json.loads(self.requests.read_text())
+        self.assertEqual(request["headers"], [f"Authorization: Bearer {token}"])
+        self.assertNotIn(token, json.dumps(request["argv"]))
+        self.assertFalse(request["token_in_env"])
+        self.assertNotIn(token, result.stdout + result.stderr)
+        self.assertIn("status 404", result.stderr)
 
     def test_fails_when_a_pin_does_not_resolve(self):
         bad_sha = "b" * 40
