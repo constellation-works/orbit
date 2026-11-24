@@ -951,10 +951,10 @@ class NextestShardWorkflowTests(unittest.TestCase):
 
     @staticmethod
     def resolve_download_path(expression, download_outputs):
-        """Evaluate `${{ a || b }}` over download-path outputs: the first output that was set wins."""
+        """Evaluate `${{ a || b }}` over download-path outputs: the first nonempty output wins."""
         assert expression.startswith("${{") and expression.endswith("}}"), expression
         terms = [term.strip() for term in expression[3:-2].split("||")]
-        return next((download_outputs[term] for term in terms if term in download_outputs), "")
+        return next((download_outputs[term] for term in terms if download_outputs.get(term)), "")
 
     def run_step(self, job, name, expected_status=0, *, download_outputs=None):
         step = next(step for step in job["steps"] if step.get("name") == name)
@@ -1020,6 +1020,14 @@ class NextestShardWorkflowTests(unittest.TestCase):
                     job, "Extract nextest archive",
                     download_outputs={f"steps.{step_id}.outputs.download-path": str(directory)})
                 self.assertEqual(Path(extract_call[2]).parent, directory)
+
+    def test_extraction_uses_fallback_when_later_output_is_empty(self):
+        directory = self.root / "fallback"
+        [extract] = self.run_step(
+            self.document["jobs"]["test-1"], "Extract nextest archive",
+            download_outputs={"steps.nextest-archive-download-3.outputs.download-path": "",
+                              "steps.nextest-archive-download-2.outputs.download-path": str(directory)})
+        self.assertEqual(Path(extract[2]).parent, directory)
 
     def test_shard_jobs_partition_once_each_and_the_check_job_awaits_all_of_them(self):
         shards = int(self.document["env"]["NEXTEST_SHARDS"])

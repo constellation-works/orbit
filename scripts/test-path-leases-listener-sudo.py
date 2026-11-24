@@ -17,6 +17,7 @@ import subprocess
 import tempfile
 import termios
 import unittest
+from unittest import mock
 
 RECIPE = Path(__file__).resolve().parent.parent / "docs/dev/qa/path-leases-listener-sudo.md"
 OPENER = "su - operator --session-command 'bash -s' << 'EOF'"
@@ -42,7 +43,10 @@ def run_block(body, scratch, controlling_terminal):
     sudo.chmod(0o755)
     script = scratch / "stdin.sh"
     script.write_text(body.replace("/tmp/", f"{scratch}/"))
-    env = dict(os.environ, PATH=f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
+    home = scratch / "home"
+    home.mkdir(exist_ok=True)
+    # Only the fixture stub, standard utilities, and an isolated home are needed.
+    env = {"PATH": f"{bin_dir}:/usr/bin:/bin", "HOME": str(home), "LC_ALL": "C"}
     with script.open("rb") as stdin:
         if not controlling_terminal:
             return subprocess.run(["bash", "-s"], stdin=stdin, env=env, start_new_session=True,
@@ -72,7 +76,10 @@ class ListenerSudoGuardTests(unittest.TestCase):
     def test_guard_passes_with_a_controlling_terminal(self):
         for case, body in zip("AB", self.blocks):
             with self.subTest(case=case):
-                result = run_block(body, self.scratch / case, controlling_terminal=True)
+                hostile = self.scratch / "bash-env"
+                hostile.write_text("exit 99\n")
+                with mock.patch.dict(os.environ, {"BASH_ENV": str(hostile), "BASH_FUNC_sudo%%": "() { exit 98; }"}):
+                    result = run_block(body, self.scratch / case, controlling_terminal=True)
                 self.assertNotIn("refusing", result.stderr, result.stderr)
                 self.assertIn("warm_exit=0", result.stdout)
                 self.assertIn("child_exit=", result.stdout)

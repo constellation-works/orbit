@@ -45,6 +45,29 @@ class UnitTestRatchetTests(unittest.TestCase):
             env=environment, capture_output=True, text=True, check=check,
         )
 
+    def test_write_baseline_failures_are_named_and_leave_existing_bytes(self):
+        self.write("crates/alpha/src/lib.rs", "pub fn fixture() {}\n")
+        directory = self.run_inventory("--write-baseline", str(self.root))
+        self.assertEqual(directory.returncode, 2, directory.stderr)
+        self.assertIn("cannot write baseline", directory.stderr)
+        self.assertNotIn("Traceback", directory.stderr)
+        self.baseline.write_text("old baseline\n")
+        self.baseline.chmod(0o640)
+        self.assertEqual(self.run_inventory("--write-baseline", str(self.baseline)).returncode, 0)
+        self.assertEqual(self.baseline.stat().st_mode & 0o777, 0o640)
+        self.baseline.write_text("old baseline\n")
+        # Fail the atomic rename after the temporary file was fully written.
+        code = ("import runpy,os,sys; "
+                "os.replace=lambda *a: (_ for _ in ()).throw(OSError('injected rename failure')); "
+                "sys.argv=[sys.argv[1], '--root', sys.argv[2], '--write-baseline', sys.argv[3]]; "
+                "runpy.run_path(sys.argv[0],run_name='__main__')")
+        result = subprocess.run([sys.executable, "-c", code, str(INVENTORY), str(self.root), str(self.baseline)],
+                                capture_output=True, text=True)
+        self.assertEqual(result.returncode, 2, result.stderr)
+        self.assertIn("injected rename failure", result.stderr)
+        self.assertEqual(self.baseline.read_text(), "old baseline\n")
+        self.assertEqual(list(self.root.glob(".baseline.json.*")), [])
+
     def test_counts_inline_and_sibling_tests_per_crate(self):
         self.write("crates/alpha/src/lib.rs", (
             "#[cfg(test)]\nmod tests;\n"

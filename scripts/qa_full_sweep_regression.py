@@ -1,6 +1,9 @@
 """Command-boundary regressions for selection, execution and retained QA bytes."""
 
 import copy
+import contextlib
+import importlib.util
+import io
 import hashlib
 import json
 import os
@@ -11,6 +14,7 @@ import subprocess
 import sys
 import tempfile
 import time
+from unittest import mock
 
 
 # Substitute the repository/capability adapters, then invoke the actual public
@@ -452,10 +456,46 @@ def builtin_readback_self_test(harness, scratch):
             assert artifact["outcome"] == ("FAIL" if mode == "unchanged-artifact" else "PASS"), (mode, artifact)
 
 
+def discovery_cleanup_self_test(harness, scratch):
+    spec = importlib.util.spec_from_file_location("qa_discovery_control", harness)
+    qa = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(qa)
+    inventory = {"scenarios": [{"id": "fixture", "capability": "local",
+                                "command": ["cargo", "test", "-p", "fixture", "--test", "boundary"],
+                                "required_tests": ["fixture::case"]}]}
+    with tempfile.TemporaryDirectory(prefix="qa-discovery-control-", dir=scratch) as tmp:
+        for target in ("metadata", "listing", "help"):
+            qa._LOCAL_COMMAND_CLEANUP.clear()
+            output, diagnostics = io.StringIO(), io.StringIO()
+            def fake_run(argv, **kwargs):
+                kind = "metadata" if "metadata" in argv else "listing" if "--list" in argv else "help"
+                text = (json.dumps({"packages": [{"name": "fixture", "targets": [{"name": "boundary", "kind": ["test"]}]}]})
+                        if kind == "metadata" else "fixture::case: test\n" if kind == "listing" else "Usage: orbit fixture\n")
+                return {"command": argv, "exit_code": 0, "stdout": text, "stderr": "",
+                        "output_truncated": False, "cleanup_verified": kind != target}
+            with mock.patch.object(qa, "run", fake_run), mock.patch.object(tempfile, "tempdir", tmp), \
+                 contextlib.redirect_stdout(output), contextlib.redirect_stderr(diagnostics):
+                if target == "help":
+                    try:
+                        with qa.discovery_scratch("qa-control-") as cwd:
+                            qa.cli_command_paths("orbit", {"fixture"}, Path(cwd), {})
+                    except ValueError:
+                        pass
+                    else:
+                        raise AssertionError("unverified CLI help accepted")
+                else:
+                    errors = qa.cargo_inventory_errors(Path(tmp), inventory, list_cases=True)
+                    assert errors, target
+            assert "retained" in diagnostics.getvalue(), (target, diagnostics.getvalue())
+            assert list(Path(tmp).glob("orbit-qa-*" if target != "help" else "qa-control-*")), target
+            assert "selected_tests" not in output.getvalue(), (target, output.getvalue())
+
+
 def self_test():
     harness = Path(os.environ.get("QA_SWEEP_HARNESS_UNDER_TEST", Path(__file__).with_name("test-qa-full-sweep.py"))).resolve()
     scratch = Path(__file__).resolve().parent.parent / ".orbit/tmp"
     scratch.mkdir(parents=True, exist_ok=True)
+    discovery_cleanup_self_test(harness, scratch)
     builtin_readback_self_test(harness, scratch)
     report_output_self_test(harness, scratch)
     managed_asset_manifest_self_test(harness, scratch)
@@ -571,6 +611,20 @@ def self_test():
                     and len(claim[0]["native_certificate_sha256"]) == 64
                     and report["decision"] == "INCOMPLETE"
                     and report["findings"] == ["macos-platform: missing, failed, or unrun evidence"])
+
+        # Wrong-shaped but valid JSON must settle scratch and produce a refusal report.
+        malformed_path = repo / ".orbit/tmp/malformed.json"
+        malformed_documents = [[], {"schema_version": 2, "candidate": []},
+                               {"schema_version": 2, "candidate": {"id": "fixture-candidate"}, "results": [[]]},
+                               {"schema_version": 2, "candidate": {"id": "fixture-candidate"},
+                                "browser": [], "results": [{"scenario": "first", "outcome": "PASS"}]}]
+        for malformed in malformed_documents:
+            malformed_path.write_text(json.dumps(malformed))
+            report = sweep([*browsers], "complete", ["--platform-evidence", str(malformed_path)])
+            refusal = row(report, "platform-evidence-import")
+            assert refusal["outcome"] == "FAIL" and str(malformed_path) in refusal["stderr"], refusal
+            assert report["scratch_cleanup"]["retained"] is False, report["scratch_cleanup"]
+            assert not Path(report["scratch_cleanup"]["root"]).exists(), report["scratch_cleanup"]
 
         report = sweep([native], "complete")
         assert row(report, "macos-platform")["outcome"] == "NOT_RUN" and not row(report, "macos-platform")["assertions"], report

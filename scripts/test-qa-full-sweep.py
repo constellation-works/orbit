@@ -26,7 +26,7 @@ import tempfile
 import threading
 import time
 import urllib.request
-from contextlib import ExitStack
+from contextlib import ExitStack, contextmanager
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -1627,18 +1627,37 @@ def validate_cargo_target(command, packages):
         raise ValueError("Cargo scenario must select an existing package with -p") from error
 
 
+@contextmanager
+def discovery_scratch(prefix):
+    """Keep a discovery cwd if any child could still be using it."""
+    tmp = tempfile.mkdtemp(prefix=prefix)
+    start = len(_LOCAL_COMMAND_CLEANUP)
+    try:
+        yield tmp
+    finally:
+        if any(item.get("cleanup_verified") is not True for item in _LOCAL_COMMAND_CLEANUP[start:]):
+            print(f"discovery scratch retained: {tmp}", file=sys.stderr)
+        else:
+            shutil.rmtree(tmp)
+
+
+def require_discovery_evidence(evidence, description):
+    if (evidence.get("exit_code") != 0 or evidence.get("cleanup_verified") is not True
+            or evidence.get("output_truncated") or not evidence.get("stdout", "").strip()):
+        raise ValueError(f"{description} failed or cleanup/output was unverified: {evidence.get('stderr', '')}")
+
+
 def cargo_inventory_errors(repo, inventory, *, list_cases=False, offline=False):
     scenarios = [item for item in inventory["scenarios"] if is_cargo_test(item.get("command", []))]
     errors = []
-    with tempfile.TemporaryDirectory(prefix="orbit-qa-cargo-inventory-") as tmp:
+    with discovery_scratch(prefix="orbit-qa-cargo-inventory-") as tmp:
         env = isolated_environment(Path(tmp))
         metadata = observe_local_command(run(
             ["cargo", "metadata", "--no-deps", "--format-version", "1", "--locked",
              *(["--offline"] if offline else [])],
             cwd=repo, env=env))
         try:
-            if metadata.get("output_truncated"):
-                raise ValueError("Cargo inventory metadata output was truncated")
+            require_discovery_evidence(metadata, "Cargo inventory metadata")
             packages = {item["name"]: item["targets"]
                         for item in parse_json(metadata, "Cargo inventory metadata")["packages"]}
         except (ValueError, KeyError) as error:
@@ -1677,8 +1696,7 @@ def cargo_inventory_errors(repo, inventory, *, list_cases=False, offline=False):
 
 def validate_cargo_case_listing(evidence, required_tests):
     """Listing verifies selection only; passing execution is still required."""
-    if evidence["exit_code"] != 0 or evidence.get("output_truncated"):
-        raise ValueError(f"Cargo case discovery failed: {evidence.get('stderr', '')}")
+    require_discovery_evidence(evidence, "Cargo case discovery")
     selected = set(re.findall(r"^(\S+): test$", evidence.get("stdout", ""), re.MULTILINE))
     if not selected:
         raise ValueError("Cargo selection lists zero behavioral cases")
@@ -1707,9 +1725,8 @@ def cli_command_paths(orbit_bin, top_level, cwd, env):
     paths = []
     while pending:
         path = pending.pop(0)
-        evidence = run([orbit_bin, *path, "--help"], cwd=cwd, env=env, timeout=30)
-        if evidence["exit_code"] != 0:
-            raise ValueError(f"help discovery failed for {' '.join(path)}: {evidence['stderr']}")
+        evidence = observe_local_command(run([orbit_bin, *path, "--help"], cwd=cwd, env=env, timeout=30))
+        require_discovery_evidence(evidence, f"help discovery for {' '.join(path)}")
         paths.append(" ".join(path))
         # Task and run use grouped templates (Tasks:, Health:, Workflows:),
         # while clap's standard template uses Commands:. Stop before options
@@ -4636,7 +4653,7 @@ def self_test():
             continue
         raise AssertionError(f"invalid Cargo case discovery passed: {listing}")
     validate_cargo_case_listing({"exit_code": 0, "stdout": "module::required_behavior: test\n",
-                                 "stderr": ""}, ["module::required_behavior"])
+                                 "stderr": "", "cleanup_verified": True}, ["module::required_behavior"])
     inventory = {"scenarios": [{"id":"required", "required":True,
                                 "assertions":["exact-json", "persisted-effect"]}],
                  "required_capability_gaps": {}}
@@ -4956,6 +4973,16 @@ def native_certificate_claim(body, scenario, candidate_id, certificate_sha256, i
 
 def import_platform_evidence(paths, inventory, candidate, repo):
     imported = []
+    for path in paths:
+        try:
+            imported.extend(_import_platform_evidence([path], inventory, candidate, repo))
+        except (AttributeError, TypeError, KeyError, ValueError, OSError) as error:
+            raise ValueError(f"{path}: invalid platform evidence: {error}") from error
+    return imported
+
+
+def _import_platform_evidence(paths, inventory, candidate, repo):
+    imported = []
     candidate_id = candidate["candidate_id"]
     scenarios = {item["id"]: item for item in inventory["scenarios"]}
     for path in paths:
@@ -4970,7 +4997,15 @@ def import_platform_evidence(paths, inventory, candidate, repo):
             continue
         if body.get("schema_version") != 2 or body.get("candidate", {}).get("id") != candidate_id:
             raise ValueError(f"{path}: evidence is for a different or unsupported candidate")
-        for result in body.get("results", []):
+        for key in ("browser", "environment"):
+            if key in body and not isinstance(body[key], dict):
+                raise ValueError(f"{path}: {key} must be an object")
+        results = body.get("results", [])
+        if not isinstance(results, list) or any(not isinstance(result, dict) for result in results):
+            raise ValueError(f"{path}: results must be an array of objects")
+        for result in results:
+            if "retained_evidence" in result and result["retained_evidence"] is not None and not isinstance(result["retained_evidence"], dict):
+                raise ValueError(f"{path}: retained_evidence must be an object")
             # These are harness diagnostics, never behavioral scenario evidence.
             if result.get("scenario") in {"inventory-guard", "platform-evidence-import"}:
                 continue
@@ -5093,9 +5128,13 @@ def main():
         if not args.orbit_bin:
             parser.error("--list-cli-paths requires --orbit-bin")
         binary = str(Path(args.orbit_bin).resolve())
-        with tempfile.TemporaryDirectory(prefix="orbit-qa-cli-grammar-") as tmp:
-            temp = Path(tmp)
-            paths = cli_command_paths(binary, surfaces["cli"], temp, isolated_environment(temp))
+        try:
+            with discovery_scratch(prefix="orbit-qa-cli-grammar-") as tmp:
+                temp = Path(tmp)
+                paths = cli_command_paths(binary, surfaces["cli"], temp, isolated_environment(temp))
+        except ValueError as error:
+            print(str(error), file=sys.stderr)
+            raise SystemExit(1) from error
         print(json.dumps({"evidence_type": "help-grammar-discovery",
                           "behavioral_coverage": False, "command_paths": paths}, indent=2))
         return

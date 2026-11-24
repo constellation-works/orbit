@@ -63,12 +63,22 @@ def source(path, revision):
     # Missing commits in a shallow clone must not erase previously shipped bodies.
     if not commit_available(revision):
         return None
-    # A revision that deleted the asset has no body; the earlier ones do.
+    # Distinguish a deleted tree entry from a present but unreadable blob.
+    entry = subprocess.run(
+        ["git", "ls-tree", "--full-tree", revision, "--", str(path)], cwd=ROOT,
+        text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+    )
+    if entry.returncode:
+        raise ValueError(f"cannot inspect {path} at {revision}: {entry.stderr.strip()}")
+    if not entry.stdout:
+        return ""
     shown = subprocess.run(
         ["git", "show", f"{revision}:{path}"], cwd=ROOT, text=True,
-        stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE,
     )
-    return shown.stdout if shown.returncode == 0 else ""
+    if shown.returncode:
+        raise ValueError(f"cannot read {path} at {revision}: {shown.stderr.strip()}")
+    return shown.stdout
 
 
 def record(raw, revision):

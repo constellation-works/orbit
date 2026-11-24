@@ -4,12 +4,15 @@ import errno
 import hashlib
 import json
 import os
+import select
+import self_test_hang
 from pathlib import Path
 import shlex
 import shutil
 import signal
 import socket
 import subprocess
+import sys
 import tempfile
 import time
 import urllib.error
@@ -31,6 +34,22 @@ PERMIT_RELEASE_DEADLINE_S = 3
 SEQUENTIAL_LOG_STREAMS = NATIVE_LOG_STREAM_CAP + 3
 
 
+def read_ready_line(process, timeout):
+    """Read one complete readiness line without letting partial output block."""
+    deadline = time.monotonic() + timeout
+    data = bytearray()
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0 or not select.select([process.stdout], [], [], max(0, remaining))[0]:
+            raise TimeoutError("fixture readiness deadline expired")
+        chunk = os.read(process.stdout.fileno(), 1)
+        if not chunk:
+            raise RuntimeError("fixture exited before readiness")
+        if chunk == b"\n":
+            return data.decode().strip()
+        data.extend(chunk)
+
+
 def fixture_git_env():
     """Build every fixture Git child without inherited locators or config."""
     return {
@@ -42,6 +61,24 @@ def fixture_git_env():
 
 
 class VisualFixtureServerTest(unittest.TestCase):
+    def test_readiness_timeout_reaps_silent_and_partial_processes(self):
+        for output in ("", "partial"):
+            with self.subTest(output=output):
+                owner = self_test_hang.OwnedProcessGroup(
+                    [sys.executable, "-c", f"import sys,time; sys.stdout.write({output!r}); sys.stdout.flush(); time.sleep(30)"],
+                    stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                process = owner.process
+                group = owner.anchor.pid
+                try:
+                    with self.assertRaises(TimeoutError):
+                        read_ready_line(process, 0.2)
+                finally:
+                    owner.close()
+                self.assertIsNotNone(process.returncode)
+                self.assertIsNotNone(owner.anchor.returncode)
+                with self.assertRaises(ProcessLookupError):
+                    os.killpg(group, 0)
+
     def test_git_setup_and_provenance_ignore_inherited_authority(self):
         SCRATCH.mkdir(parents=True, exist_ok=True)
         with tempfile.TemporaryDirectory(dir=SCRATCH) as tmp:
@@ -596,17 +633,17 @@ class VisualFixtureServerTest(unittest.TestCase):
                 "  console.log('http://127.0.0.1:' + this.address().port);\n"
                 "});\n"
             )
-            decoy = subprocess.Popen(
+            decoy_owner = self_test_hang.OwnedProcessGroup(
                 ["node", str(decoy_script)],
                 cwd=tmp_path,
                 env={**os.environ, "DECOY_RECORD": str(decoy_record)},
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True,
-                start_new_session=True,
             )
+            decoy = decoy_owner.process
             try:
-                decoy_line = decoy.stdout.readline().strip()
+                decoy_line = read_ready_line(decoy, 15)
                 self.assertTrue(decoy_line.startswith("http://127.0.0.1:"), decoy_line)
                 decoy_port = decoy_line.rsplit(":", 1)[1]
                 env = self._fixture_env(tmp, wrapper, record, "present")
@@ -655,11 +692,7 @@ class VisualFixtureServerTest(unittest.TestCase):
                 finally:
                     self._stop(server)
             finally:
-                if decoy.poll() is None:
-                    os.killpg(decoy.pid, signal.SIGTERM)
-                decoy.wait(timeout=15)
-                decoy.stdout.close()
-                decoy.stderr.close()
+                decoy_owner.close()
 
     def test_admitted_checkout_assets_with_separate_backend_identity(self):
         SCRATCH.mkdir(parents=True, exist_ok=True)
@@ -1336,7 +1369,10 @@ class VisualFixtureServerTest(unittest.TestCase):
             with self.assertRaises(AssertionError, msg="timed-out listener passed as closed"):
                 self._assert_port_closed(f"http://127.0.0.1:{listener.getsockname()[1]}/")
         finally:
+            listener.shutdown(socket.SHUT_RDWR)
             listener.close()
+            holder.join(timeout=5)
+            self.assertFalse(holder.is_alive(), "socket holder failed to stop")
             for conn in held:
                 self._close_socket(conn)
 

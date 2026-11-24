@@ -320,9 +320,9 @@ if manifest is not None:
                 if not isinstance(policy, dict):
                     errors.append("marketplace orbit policy must be an object")
                 else:
-                    if policy.get("installation") not in {"AVAILABLE", "NOT_AVAILABLE", "INSTALLED_BY_DEFAULT"}:
+                    if not isinstance(policy.get("installation"), str) or policy.get("installation") not in {"AVAILABLE", "NOT_AVAILABLE", "INSTALLED_BY_DEFAULT"}:
                         errors.append("marketplace orbit policy.installation is invalid")
-                    if policy.get("authentication") not in {"ON_INSTALL", "ON_USE"}:
+                    if not isinstance(policy.get("authentication"), str) or policy.get("authentication") not in {"ON_INSTALL", "ON_USE"}:
                         errors.append("marketplace orbit policy.authentication is invalid")
                 if not isinstance(entry.get("category"), str) or not entry["category"].strip():
                     errors.append("marketplace orbit category must be a non-empty string")

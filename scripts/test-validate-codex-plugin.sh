@@ -110,6 +110,33 @@ payload["mcpServers"]["orbit"]["args"] = ["-y", "@orbit-tools/cli@latest", "mcp"
 (broken / "plugin" / ".codex-plugin" / "plugin.json").write_text(json.dumps(payload), encoding="utf-8")
 expect_failure(broken, "stale launch pin", "stale @latest pin")
 
+for key, values in (("installation", ("AVAILABLE", "NOT_AVAILABLE", "INSTALLED_BY_DEFAULT")),
+                    ("authentication", ("ON_INSTALL", "ON_USE"))):
+    for value in values:
+        valid = clone_fixture(f"valid-policy-{key}-{value}")
+        marketplace = valid / ".agents/plugins/marketplace.json"
+        data = json.loads(marketplace.read_text())
+        data["plugins"][0]["policy"][key] = value
+        marketplace.write_text(json.dumps(data))
+        result = run_validator(valid)
+        if result.returncode:
+            errors.append(f"valid policy {key}={value}: {result.stderr}")
+
+for key in ("installation", "authentication"):
+    for value in ([], {}):
+        broken = clone_fixture(f"bad-policy-{key}-{type(value).__name__}")
+        marketplace = broken / ".agents/plugins/marketplace.json"
+        data = json.loads(marketplace.read_text())
+        entry = data["plugins"][0]
+        entry["policy"][key] = value
+        entry["category"] = ""
+        marketplace.write_text(json.dumps(data))
+        result = run_validator(broken)
+        combined = result.stdout + result.stderr
+        if result.returncode == 0 or f"policy.{key} is invalid" not in combined or "category" not in combined or "Traceback" in combined:
+            errors.append(f"invalid policy {key}: {combined}")
+
+
 broken = clone_fixture("codex-missing-orbit-args")
 payload = json.loads((broken / "plugin" / ".codex-plugin" / "plugin.json").read_text(encoding="utf-8"))
 del payload["mcpServers"]["orbit"]["args"]
