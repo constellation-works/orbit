@@ -460,7 +460,7 @@ exec {shlex.quote(sys.executable)} "$@"
         self.init_ci_git()
         self.env["CI_TEST_BASE"] = self.git("rev-parse", "HEAD").stdout.strip()
         for path in ("server.json",
-                     "examples/release-readiness/scripts/release-readiness.yaml"):
+                     "docs/dev/examples/release-readiness/scripts/release-readiness.yaml"):
             target = self.root / path
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_text("# changed input\n")

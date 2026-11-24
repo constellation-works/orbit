@@ -129,7 +129,7 @@ fn release_readiness_example_loads_and_rejects_nested_input_names() {
     );
     let manifest = fixture.scripts_dir().join("release-readiness.yaml");
     fs::copy(
-        root.join("examples/release-readiness/scripts/release-readiness.yaml"),
+        root.join("docs/dev/examples/release-readiness/scripts/release-readiness.yaml"),
         &manifest,
     )
     .unwrap();
