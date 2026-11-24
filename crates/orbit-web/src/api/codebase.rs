@@ -28,7 +28,7 @@ use axum::response::{IntoResponse, Json, Response};
 use orbit_core::application::codebase::{self, CodebaseQuery, RegressionFilter};
 use serde::Deserialize;
 
-use super::{bad_request, map_runtime_error};
+use super::{bad_request, blocking_join, map_runtime_error};
 use crate::runtime_memo::{CODEBASE_ANALYTICS_STALE_LIMIT, CODEBASE_ANALYTICS_TTL};
 use crate::state::{DashboardState, Ws};
 
@@ -144,15 +144,22 @@ pub(super) async fn codebase_analytics(
         Ok(served) => served,
         Err(response) => return *response,
     };
-    (
-        served.age_header(),
-        Json(codebase::codebase_analytics(
-            &served.body,
-            &query,
-            CODEBASE_ANALYTICS_TTL,
-        )),
-    )
-        .into_response()
+    // File rollup marks each ranked path with checkout existence at query
+    // time (`canonicalize`), which is blocking filesystem I/O. The scan
+    // itself is already off the executor via the memo; run the slicing and
+    // its checkout lookups on the blocking pool as well so a slow checkout
+    // never parks the async worker serving the request, on a miss or a hit.
+    let age = served.age_header();
+    let facts = Arc::clone(&served.body);
+    let payload = match blocking_join("codebase analytics", move || {
+        codebase::codebase_analytics(&facts, &query, CODEBASE_ANALYTICS_TTL)
+    })
+    .await
+    {
+        Ok(payload) => payload,
+        Err(response) => return *response,
+    };
+    (age, Json(payload)).into_response()
 }
 
 /// One path's standing in every ranking, as `orbit codebase show` reports
@@ -173,8 +180,23 @@ pub(super) async fn codebase_show(
         Ok(served) => served,
         Err(response) => return *response,
     };
-    match codebase::codebase_path_detail(&served.body, &selection, path) {
-        Ok(value) => (served.age_header(), Json(value)).into_response(),
+    // Same blocking boundary as analytics: the detail's checkout lookup must
+    // not run on the request worker, including when the scan is a memo hit.
+    // `blocking_join` preserves the typed error so the 400/500 mapping below
+    // is unchanged; only a join panic becomes a 500.
+    let age = served.age_header();
+    let facts = Arc::clone(&served.body);
+    let path = path.to_owned();
+    let detail = match blocking_join("codebase path detail", move || {
+        codebase::codebase_path_detail(&facts, &selection, &path)
+    })
+    .await
+    {
+        Ok(detail) => detail,
+        Err(response) => return *response,
+    };
+    match detail {
+        Ok(value) => (age, Json(value)).into_response(),
         Err(orbit_core::OrbitError::InvalidInput(message)) => bad_request(message),
         Err(error) => map_runtime_error(error),
     }

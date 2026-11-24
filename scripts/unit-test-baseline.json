@@ -718,6 +718,7 @@
     },
     "orbit-web": {
       "test_function_paths": [
+        "api/tests/codebase_blocking.rs::codebase_file_rollup_rank_runs_on_blocking_pool_on_memo_hit",
         "api/tests/handlers.rs::non_operator_dashboard_on_a_terminal_refuses_governed_writes",
         "api/tests/handlers.rs::routine_health_clock_token_for_each_status_combination",
         "api/tests/handlers.rs::successful_clock_change_with_failed_follow_up_read_is_audited_and_unknown",
