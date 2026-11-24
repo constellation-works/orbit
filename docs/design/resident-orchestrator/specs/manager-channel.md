@@ -9,7 +9,7 @@ feature: resident-orchestrator
 tags: [resident-orchestrator, spec, mcp]
 related_features: [resident-orchestrator, operator-attention, fleet-notices, human-decision-channel]
 related_artifacts: [ORB-21229, ORB-21242, ORB-21245]
-last_updated: 2026-11-02
+last_updated: 2026-11-23
 ---
 
 # Spec: Manager channel
@@ -94,7 +94,9 @@ leaves a checkpoint. An unreadable control entry makes the mandate `invalid`, ne
 
 Pause and stop prevent a new cycle from starting. A live cycle keeps its frozen grant, completes,
 checkpoints (or receives a synthesized checkpoint from `resident_finalize`), and exits at the next
-cycle boundary, within at most one agent budget.
+cycle boundary, within at most one agent budget. The deadline is the exception: a live cycle's next
+right-gated write reads the mandate's current deadline, so a passed deadline, including one shortened
+during the cycle, refuses that write while the checkpoint stays available for handoff.
 
 | Action | From state | To state | Effect |
 |---|---|---|---|

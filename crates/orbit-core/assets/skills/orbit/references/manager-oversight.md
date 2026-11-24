@@ -103,6 +103,9 @@ mandate can be disposed of.
 
 Pause and stop do not cancel a live cycle: it keeps its frozen grant,
 checkpoints (or receives a synthesized checkpoint), and exits at its boundary.
+The deadline is the exception: a live cycle's next right-gated write reads the
+current deadline, so a passed deadline, including one shortened during the
+cycle, refuses that write while the cycle can still checkpoint for handoff.
 
 To take a mandate over: `takeover` with `by_session` naming your session,
 then work in the same assignment task and comment as usual — no export or

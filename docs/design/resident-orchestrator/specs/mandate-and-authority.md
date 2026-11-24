@@ -9,7 +9,7 @@ feature: resident-orchestrator
 tags: [resident-orchestrator, spec, security]
 related_features: [resident-orchestrator, human-decision-channel, granted-tools]
 related_artifacts: [ORB-21229, ORB-21242, ORB-26832, ORB-26833, ORB-26834]
-last_updated: 2026-11-22
+last_updated: 2026-11-23
 ---
 
 # Spec: Mandate and authority
@@ -210,13 +210,20 @@ ledger.
 `orbit.resident.control pause|stop` ([ORB-21245]), and a deadline shortened in the mandate are
 narrowing. `--deadline` must be earlier than the current deadline (or set the first one); it
 rewrites the mandate's `deadline` in the same update and records the new deadline in `narrowed[]`.
-A later deadline is refused there; extend a deadline by editing the mandate. Any caller that can write the
-assignment may narrow, including the resident's own cycle. Narrowing takes effect for cycle
-execution at the next cycle boundary, and each narrowing is recorded in `narrowed[]` with its
-caller. Pause and stop prevent a new cycle from starting. A live cycle keeps its frozen grant,
-completes, checkpoints (or receives a synthesized checkpoint from `resident_finalize`), and exits at
-the next cycle boundary, within at most one agent budget. A stop then hands the assignment to
+A later deadline is refused there; extend a deadline by editing the mandate. Any caller that can write
+the assignment may narrow, including the resident's own cycle, and each narrowing is recorded in
+`narrowed[]` with its caller.
+
+Removing a right, dropping a workspace, pausing and stopping take effect for cycle execution at the
+next cycle boundary. Pause and stop prevent a new cycle from starting. A live cycle keeps its frozen
+grant, completes, checkpoints (or receives a synthesized checkpoint from `resident_finalize`), and
+exits at the next cycle boundary, within at most one agent budget. A stop then hands the assignment to
 `review`.
+
+A shortened deadline does not wait for the boundary. A live cycle's next right-gated write reads the
+mandate's current deadline, so once that deadline has passed the write is refused as
+`resident_right_refused`, naming the deadline, while the cycle's checkpoint stays available for
+handoff.
 
 ## Failure modes
 
