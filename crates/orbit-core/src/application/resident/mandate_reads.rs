@@ -3,6 +3,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use orbit_common::OrbitError;
+use orbit_types::record::Notice;
 use orbit_types::task::{DecisionRequestState, Task, TaskComment, TaskHistoryEntry};
 use orbit_types::workflow::{
     RESIDENT_CYCLE_GRANTED_EVENT, RESIDENT_TAG, ResidentAuthority, ResidentComment,
@@ -17,6 +18,18 @@ use super::{
 };
 use crate::OrbitRuntime;
 use crate::application::task::decision_request_json;
+
+fn status_line_notice_json(notice: &Notice) -> Value {
+    json!({
+        "notice_id": notice.id,
+        "title": notice.title,
+        "body": notice.body,
+        "posted_at": notice.updated_at,
+        "expires_at": notice.expires_at,
+        "status": notice.status,
+        "stale": notice.status != orbit_types::record::EffectiveStatus::Open,
+    })
+}
 
 impl OrbitRuntime {
     /// Judge mandate bytes the way every mandate read does: the
@@ -62,41 +75,14 @@ impl OrbitRuntime {
         now: chrono::DateTime<chrono::Utc>,
         cycle_routine_disabled: Option<&str>,
     ) -> Result<Option<due::ResidentStall>, OrbitError> {
-        let Ok(mandate) = &view.mandate else {
+        let Ok(_) = &view.mandate else {
             return Ok(None);
         };
         if view.state().0 != ResidentMandateState::Active {
             return Ok(None);
         }
         let comments = self.get_task_comments(&view.task.id)?;
-        let mut stall = due::resident_stall(&view.task, mandate, &comments, now);
-        if let (Some(stall), Some(routine_name)) = (&mut stall, cycle_routine_disabled) {
-            stall.reason = format!(
-                "{}; {}",
-                stall.reason,
-                resident_cycle_routine_disabled_reason(routine_name)
-            );
-        }
-        if stall.is_none()
-            && let Some(routine_name) = cycle_routine_disabled
-        {
-            let last_checkpoint_at = comments.iter().rev().find_map(|comment| {
-                match ResidentComment::parse(&comment.message).ok()? {
-                    ResidentComment::Checkpoint(record)
-                        if record.mandate == view.task.id.as_str() =>
-                    {
-                        Some(comment.at)
-                    }
-                    _ => None,
-                }
-            });
-            stall = Some(due::ResidentStall {
-                reason: resident_cycle_routine_disabled_reason(routine_name),
-                since: last_checkpoint_at.unwrap_or(view.task.created_at),
-                last_checkpoint_at,
-            });
-        }
-        Ok(stall)
+        Ok(self.resident_stall_in(view, &comments, now, cycle_routine_disabled))
     }
 
     pub(crate) fn resident_view(
@@ -192,15 +178,7 @@ impl OrbitRuntime {
     /// when the notices cannot be read.
     fn resident_status_line_json(&self, task_id: &str) -> Value {
         match self.resident_status_line(task_id) {
-            Ok(Some(notice)) => json!({
-                "notice_id": notice.id,
-                "title": notice.title,
-                "body": notice.body,
-                "posted_at": notice.updated_at,
-                "expires_at": notice.expires_at,
-                "status": notice.status,
-                "stale": notice.status != orbit_types::record::EffectiveStatus::Open,
-            }),
+            Ok(Some(notice)) => status_line_notice_json(&notice),
             Ok(None) => Value::Null,
             Err(error) => {
                 tracing::warn!(task = task_id, %error, "failed to read a resident's status line");
@@ -282,17 +260,9 @@ impl OrbitRuntime {
                 now,
                 cycle_routine_disabled.as_deref(),
             );
-            let status_line = status_lines.get(&task_id).map_or(Value::Null, |notice| {
-                json!({
-                    "notice_id": notice.id,
-                    "title": notice.title,
-                    "body": notice.body,
-                    "posted_at": notice.updated_at,
-                    "expires_at": notice.expires_at,
-                    "status": notice.status,
-                    "stale": notice.status != orbit_types::record::EffectiveStatus::Open,
-                })
-            });
+            let status_line = status_lines
+                .get(&task_id)
+                .map_or(Value::Null, status_line_notice_json);
             let mut shown = resident_show_json(
                 &view,
                 &row.comments,
