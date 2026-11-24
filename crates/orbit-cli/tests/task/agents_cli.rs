@@ -562,7 +562,7 @@ fn agents_scorecard_by_type_returns_cells_and_the_type_list() {
     assert!(plain.get("cells").is_none(), "{plain}");
 
     // Other roles refuse the switch.
-    fixture
+    let refused = fixture
         .command(&[
             "agents",
             "scorecard",
@@ -572,7 +572,14 @@ fn agents_scorecard_by_type_returns_cells_and_the_type_list() {
             "--json",
         ])
         .assert()
-        .failure();
+        .failure()
+        .get_output()
+        .clone();
+    let stderr = String::from_utf8_lossy(&refused.stderr);
+    assert!(
+        stderr.contains("by_type is only supported for implementers"),
+        "the refusal names the by-type restriction: {stderr}"
+    );
 }
 
 /// Plain `--by-type` and `--per-task` output keeps the (model, recorded

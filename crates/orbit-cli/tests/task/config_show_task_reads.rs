@@ -16,20 +16,30 @@ struct CommitLockAcquisitions(Arc<AtomicU64>);
 
 impl<S: tracing::Subscriber> Layer<S> for CommitLockAcquisitions {
     fn on_event(&self, event: &tracing::Event<'_>, _: Context<'_, S>) {
-        struct LockPath(String);
-        impl tracing::field::Visit for LockPath {
+        #[derive(Default)]
+        struct Fields {
+            lock_path: String,
+            message: String,
+        }
+        impl tracing::field::Visit for Fields {
             fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
-                if field.name() == "lock_path" {
-                    self.0 = format!("{value:?}");
+                match field.name() {
+                    "lock_path" => self.lock_path = format!("{value:?}"),
+                    "message" => self.message = format!("{value:?}"),
+                    _ => {}
                 }
             }
         }
         if event.metadata().target() != "orbit.common.fs.file_lock" {
             return;
         }
-        let mut path = LockPath(String::new());
-        event.record(&mut path);
-        if path.0.ends_with("/.task-commit.lock") {
+        let mut fields = Fields::default();
+        event.record(&mut fields);
+        // Only the acquisition event marks an acquisition: the held-past-
+        // threshold and contention warnings share the target and `lock_path`.
+        if fields.message == "advisory file lock acquired"
+            && fields.lock_path.ends_with("/.task-commit.lock")
+        {
             self.0.fetch_add(1, Ordering::Relaxed);
         }
     }
