@@ -1,15 +1,20 @@
 //! Provider invocation, execution and continuity fallback.
 
+use std::path::Path;
 use std::sync::Arc;
+use std::time::Duration;
 
 use orbit_agent::AgentRequest;
-use orbit_common::security::redaction::argv_redactor;
+use orbit_common::security::redaction::{PatternRedactor, argv_redactor};
 use orbit_tools::plugin::BrokeredCaller;
 use orbit_types::workflow::ActivityToolDenyPolicy;
 use orbit_types::workflow::PR_CONFLICT_RECOVERY_ACTIVITY;
-use orbit_types::workflow::activity_job::V2AuditEventKind;
+use orbit_types::workflow::activity_job::{Provider, V2AuditEventKind};
 
-use crate::activity_job::dispatcher::DispatchOutcome;
+use crate::activity_job::audit_writer::V2AuditWriter;
+use crate::activity_job::cli_runner::image_input::StagedImages;
+use crate::activity_job::cli_runner::inspection::InspectionTools;
+use crate::activity_job::dispatcher::{DispatchOutcome, ResolvedSandbox};
 use crate::context::PluginBrokerRun;
 
 use super::super::super::super::super::dispatcher::DispatchError;
@@ -28,6 +33,112 @@ use super::super::super::prepare::{
 use super::super::{CliDispatchContext, post_run, preparation as dispatch_preparation, subprocess};
 
 use super::{environment, preparation};
+
+struct ProviderArgvContext<'a> {
+    provider_enum: Provider,
+    cli_executor_args: &'a [String],
+    codex_mcp_args: Option<&'a [String]>,
+    inspection_tools: Option<&'a InspectionTools>,
+    staged_images: Option<&'a StagedImages>,
+    wall_clock_timeout: Duration,
+    resolved_program: &'a str,
+    sandbox: Option<&'a ResolvedSandbox>,
+    subprocess_cwd: Option<&'a Path>,
+    scratch: &'a Path,
+    redaction: &'a PatternRedactor,
+    audit: &'a V2AuditWriter,
+}
+
+struct PreparedProviderArgv {
+    prompt_file: Option<(&'static str, PromptFile)>,
+    subprocess_args: Vec<String>,
+    print_timeout: Option<Duration>,
+    argv_redacted: Vec<String>,
+    stdin_blob_ref: Option<String>,
+}
+
+impl PreparedProviderArgv {
+    fn stdin_bytes<'a>(&self, prompt: &'a [u8]) -> &'a [u8] {
+        if self.prompt_file.is_some() {
+            &[]
+        } else {
+            prompt
+        }
+    }
+}
+
+/// Stages any prompt file, assembles subprocess argv in canonical order,
+/// applies runtime arg fixups, computes the redacted audit argv, and records
+/// the stdin prompt blob.
+fn stage_provider_argv(
+    ctx: &ProviderArgvContext<'_>,
+    prompt_file_flag: Option<&'static str>,
+    invocation_args: &[String],
+    stdin: &[u8],
+) -> Result<PreparedProviderArgv, DispatchError> {
+    // [ORB-16577] A CLI that cannot read stdin gets its prompt through a
+    // private file in this run's scratch directory instead, so the envelope
+    // still never reaches argv. The file is deleted when dispatch returns.
+    let prompt_file = prompt_file_flag
+        .map(|flag| PromptFile::write(ctx.scratch, stdin).map(|file| (flag, file)))
+        .transpose()?;
+
+    let mut subprocess_args =
+        Vec::with_capacity(ctx.cli_executor_args.len() + invocation_args.len());
+    subprocess_args.extend(ctx.cli_executor_args.iter().cloned());
+    subprocess_args.extend(invocation_args.iter().cloned());
+    if let Some((flag, file)) = &prompt_file {
+        subprocess_args.push((*flag).to_string());
+        subprocess_args.push(file.argument().to_string());
+    }
+    if let Some(mcp_args) = ctx.codex_mcp_args {
+        subprocess_args.extend(mcp_args.iter().cloned());
+    }
+    // Combined executor + transport argv is the only place that can honor a
+    // custom `--print-timeout` without duplicating it, and the spawn deadline
+    // is known here. The provider's argv is fixed at launch, when no
+    // build-admission credit has been earned yet, so the budget derives from
+    // the runtime alone: the provider stops itself before Orbit's wall clock
+    // kills it. [ORB-11337] [ORB-15206]
+    let print_timeout = apply_provider_runtime_arg_fixups(
+        ctx.provider_enum,
+        &mut subprocess_args,
+        ctx.wall_clock_timeout,
+    );
+    if let Some(tools) = ctx.inspection_tools {
+        subprocess_args.extend(tools.args.iter().cloned());
+    }
+    if let Some(staged) = ctx.staged_images {
+        subprocess_args.extend(staged.args.iter().cloned());
+    }
+
+    // The audit argv reflects what actually runs. Under sandbox-exec the
+    // parent is `<trusted sandbox-exec> -p <profile> <program> <args...>`;
+    // under bare exec it's `<program> <args...>`. The redactor still scrubs
+    // the child's program name + args so secrets in argv stay redacted.
+    let audit_argv = try_audit_argv_for_dispatch(
+        ctx.resolved_program,
+        &subprocess_args,
+        ctx.sandbox,
+        ctx.subprocess_cwd,
+    )
+    .map_err(|error| DispatchError::CliInvocationPermanent(error.to_string()))?;
+    let argv_redacted: Vec<String> = audit_argv
+        .iter()
+        .map(|a| ctx.redaction.apply_str(a))
+        .collect();
+
+    // The prompt the provider receives, whether on stdin or in its file.
+    let stdin_blob_ref = ctx.audit.write_blob(stdin);
+
+    Ok(PreparedProviderArgv {
+        prompt_file,
+        subprocess_args,
+        print_timeout,
+        argv_redacted,
+        stdin_blob_ref,
+    })
+}
 pub(in super::super) fn dispatch_prepared_provider(
     context: CliDispatchContext<'_>,
     prepared: dispatch_preparation::PreparedCliDispatch<'_>,
@@ -154,7 +265,7 @@ pub(in super::super) fn dispatch_prepared_provider(
 
     // `invoke` only renders the argv/stdin for the subprocess (nothing has
     // executed yet) — failures here are deterministic request-shaping errors.
-    let mut invocation = agent
+    let invocation = agent
         .invoke(agent_req)
         .map_err(|err| DispatchError::CliInvocationPermanent(format!("agent invoke: {err}")))?;
     let model = agent.model_name().map(str::to_string);
@@ -215,38 +326,28 @@ pub(in super::super) fn dispatch_prepared_provider(
             overlays: experiment_records,
         });
     }
-    // [ORB-16577] A CLI that cannot read stdin gets its prompt through a
-    // private file in this run's scratch directory instead, so the envelope
-    // still never reaches argv. The file is deleted when dispatch returns.
-    let mut prompt_file = invocation
-        .prompt_file_flag
-        .map(|flag| PromptFile::write(&scratch, &invocation.stdin).map(|file| (flag, file)))
-        .transpose()?;
-    let stdin_bytes: &[u8] = if prompt_file.is_some() {
-        &[]
-    } else {
-        &invocation.stdin
+    let redaction = argv_redactor();
+    let argv_ctx = ProviderArgvContext {
+        provider_enum,
+        cli_executor_args: &cli_executor.args,
+        codex_mcp_args: codex_mcp_args.as_deref(),
+        inspection_tools: inspection_tools.as_ref(),
+        staged_images: staged_images.as_ref(),
+        wall_clock_timeout,
+        resolved_program: &resolved_program,
+        sandbox,
+        subprocess_cwd: subprocess_cwd.as_deref(),
+        scratch: &scratch,
+        redaction,
+        audit,
     };
-
-    let mut subprocess_args = Vec::with_capacity(cli_executor.args.len() + invocation.args.len());
-    subprocess_args.extend(cli_executor.args.iter().cloned());
-    subprocess_args.extend(invocation.args.iter().cloned());
-    if let Some((flag, file)) = &prompt_file {
-        subprocess_args.push((*flag).to_string());
-        subprocess_args.push(file.argument().to_string());
-    }
-    if let Some(mcp_args) = &codex_mcp_args {
-        subprocess_args.extend(mcp_args.iter().cloned());
-    }
-    // Combined executor + transport argv is the only place that can honor a
-    // custom `--print-timeout` without duplicating it, and the spawn deadline
-    // is known here. The provider's argv is fixed at launch, when no
-    // build-admission credit has been earned yet, so the budget derives from
-    // the runtime alone: the provider stops itself before Orbit's wall clock
-    // kills it. [ORB-11337] [ORB-15206]
-    let mut print_timeout =
-        apply_provider_runtime_arg_fixups(provider_enum, &mut subprocess_args, wall_clock_timeout);
-    if let Some(budget) = print_timeout {
+    let mut staged_argv = stage_provider_argv(
+        &argv_ctx,
+        invocation.prompt_file_flag,
+        &invocation.args,
+        &invocation.stdin,
+    )?;
+    if let Some(budget) = staged_argv.print_timeout {
         tracing::info!(
             provider = %provider,
             run_id,
@@ -255,30 +356,6 @@ pub(in super::super) fn dispatch_prepared_provider(
             "injected provider print timeout"
         );
     }
-    if let Some(tools) = &inspection_tools {
-        subprocess_args.extend(tools.args.iter().cloned());
-    }
-    if let Some(staged) = &staged_images {
-        subprocess_args.extend(staged.args.iter().cloned());
-    }
-
-    // The audit argv reflects what actually runs. Under sandbox-exec the
-    // parent is `<trusted sandbox-exec> -p <profile> <program> <args...>`;
-    // under bare exec it's `<program> <args...>`. The redactor still scrubs
-    // the child's program name + args so secrets in argv stay redacted.
-    let redaction = argv_redactor();
-    let audit_argv = try_audit_argv_for_dispatch(
-        &resolved_program,
-        &subprocess_args,
-        sandbox,
-        subprocess_cwd.as_deref(),
-    )
-    .map_err(|error| DispatchError::CliInvocationPermanent(error.to_string()))?;
-    let mut argv_redacted: Vec<String> =
-        audit_argv.iter().map(|a| redaction.apply_str(a)).collect();
-
-    // The prompt the provider receives, whether on stdin or in its file.
-    let mut stdin_blob_ref = audit.write_blob(&invocation.stdin);
 
     // L-0095: Provider cwd is advisory; enforce the linked-worktree postcondition.
     // Inspection owns its temporary checkout separately; retain the original
@@ -347,12 +424,14 @@ pub(in super::super) fn dispatch_prepared_provider(
             )
         }),
         task_scope_blob_ref,
-        argv_redacted: argv_redacted.clone(),
-        stdin_blob_ref: stdin_blob_ref.clone(),
+        argv_redacted: staged_argv.argv_redacted.clone(),
+        stdin_blob_ref: staged_argv.stdin_blob_ref.clone(),
         model: model_redacted,
         cwd: subprocess_cwd_string.clone(),
         wall_clock_timeout_ms: wall_clock_timeout.as_millis() as u64,
-        print_timeout_ms: print_timeout.map(|budget| budget.as_millis() as u64),
+        print_timeout_ms: staged_argv
+            .print_timeout
+            .map(|budget| budget.as_millis() as u64),
         effective_deadline_ms: Some(wall_clock_timeout.as_millis() as u64),
         sandbox_backend: prepared_sandbox.metadata.backend.clone(),
         sandbox_trusted_wrapper: prepared_sandbox.metadata.trusted_wrapper.clone(),
@@ -441,12 +520,12 @@ pub(in super::super) fn dispatch_prepared_provider(
         provider: &provider,
         provider_enum,
         resolved_program: &resolved_program,
-        subprocess_args: &subprocess_args,
+        subprocess_args: &staged_argv.subprocess_args,
         child_env: &child_env,
         subprocess_cwd: &subprocess_cwd,
         subprocess_cwd_string: &subprocess_cwd_string,
         sandbox,
-        stdin_bytes,
+        stdin_bytes: staged_argv.stdin_bytes(&invocation.stdin),
         wall_clock_timeout,
         timeout_seconds,
         stall_window,
@@ -485,49 +564,12 @@ pub(in super::super) fn dispatch_prepared_provider(
             .map_err(|err| {
                 DispatchError::CliInvocationPermanent(format!("agent fallback invoke: {err}"))
             })?;
-        invocation = fallback_invocation;
-        prompt_file = invocation
-            .prompt_file_flag
-            .map(|flag| PromptFile::write(&scratch, &invocation.stdin).map(|file| (flag, file)))
-            .transpose()?;
-        let fallback_stdin_bytes: &[u8] = if prompt_file.is_some() {
-            &[]
-        } else {
-            &invocation.stdin
-        };
-        subprocess_args.clear();
-        subprocess_args.extend(cli_executor.args.iter().cloned());
-        subprocess_args.extend(invocation.args.iter().cloned());
-        if let Some((flag, file)) = &prompt_file {
-            subprocess_args.push((*flag).to_string());
-            subprocess_args.push(file.argument().to_string());
-        }
-        if let Some(mcp_args) = &codex_mcp_args {
-            subprocess_args.extend(mcp_args.iter().cloned());
-        }
-        print_timeout = apply_provider_runtime_arg_fixups(
-            provider_enum,
-            &mut subprocess_args,
-            wall_clock_timeout,
-        );
-        if let Some(tools) = &inspection_tools {
-            subprocess_args.extend(tools.args.iter().cloned());
-        }
-        if let Some(staged) = &staged_images {
-            subprocess_args.extend(staged.args.iter().cloned());
-        }
-        let fallback_audit_argv = try_audit_argv_for_dispatch(
-            &resolved_program,
-            &subprocess_args,
-            sandbox,
-            subprocess_cwd.as_deref(),
-        )
-        .map_err(|error| DispatchError::CliInvocationPermanent(error.to_string()))?;
-        argv_redacted = fallback_audit_argv
-            .iter()
-            .map(|a| redaction.apply_str(a))
-            .collect();
-        stdin_blob_ref = audit.write_blob(&invocation.stdin);
+        staged_argv = stage_provider_argv(
+            &argv_ctx,
+            fallback_invocation.prompt_file_flag,
+            &fallback_invocation.args,
+            &fallback_invocation.stdin,
+        )?;
         let fallback_broker = RunPluginBroker::start(host, run_id, broker_run.as_ref(), sandbox);
         child_env.retain(|(key, _)| {
             key != crate::context::PLUGIN_BROKER_ENV && key != "ORBIT_ACTIVITY_RESIDENT_CONTINUITY"
@@ -543,12 +585,12 @@ pub(in super::super) fn dispatch_prepared_provider(
             provider: &provider,
             provider_enum,
             resolved_program: &resolved_program,
-            subprocess_args: &subprocess_args,
+            subprocess_args: &staged_argv.subprocess_args,
             child_env: &child_env,
             subprocess_cwd: &subprocess_cwd,
             subprocess_cwd_string: &subprocess_cwd_string,
             sandbox,
-            stdin_bytes: fallback_stdin_bytes,
+            stdin_bytes: staged_argv.stdin_bytes(&fallback_invocation.stdin),
             wall_clock_timeout,
             timeout_seconds,
             stall_window,
@@ -573,9 +615,9 @@ pub(in super::super) fn dispatch_prepared_provider(
         subprocess_cwd: subprocess_cwd.as_deref(),
         redaction,
         timeout_seconds,
-        argv_redacted,
-        stdin_blob_ref,
-        print_timeout,
+        argv_redacted: staged_argv.argv_redacted,
+        stdin_blob_ref: staged_argv.stdin_blob_ref,
+        print_timeout: staged_argv.print_timeout,
         stall_window,
         inspection: inspection.as_ref(),
         staged_images: staged_images.as_ref(),
