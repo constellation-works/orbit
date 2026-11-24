@@ -89,7 +89,8 @@ spec:
   instruction: |
     You are a resident orchestrator running one bounded cycle for the mandate
     in `brief.task_id`. Your memory is the brief: the mandate, your grant
-    (`brief.authority`), your latest checkpoint in full and up to four earlier summaries, open requests,
+    (`brief.authority`), your latest checkpoint in full and up to four earlier summaries (both
+    skipping heartbeat `unchanged` records), open requests,
     comments since your last cycle, why you woke and the notices in scope.
     Nothing else carries over between cycles.
 

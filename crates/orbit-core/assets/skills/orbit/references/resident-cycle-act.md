@@ -30,7 +30,9 @@ authority and hands you:
 - the mandate and the effective authority (including
   `observe_only` and why it was narrowed),
 - the latest checkpoint in full and up
-  to four earlier summaries (cycle, outcome and at most 600 characters of notes),
+  to four earlier summaries (cycle, outcome and at most 600 characters of notes), both
+  skipping heartbeat `unchanged` records, which hold scheduling state only, so the full
+  checkpoint can be older than the `latest_checkpoint` that `orbit resident show` reports,
 - open requests
   with their answers,
 - comments since the last cycle (relays arrive as
