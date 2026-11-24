@@ -20,7 +20,7 @@
 //! `relations` validates task relations: target existence, dangling targets, and cycles.
 //! `listing` contains the index reads behind bounded task listing: freshness rows,
 //! filtered selection, and the workspace-scoped status projection.
-//! `index_snapshot` reuses freshness rows until a registry commit invalidates them.
+//! `index::snapshot` reuses freshness rows until a registry commit invalidates them.
 //! `change_stamps` reuses task change stamps until a registry commit invalidates them.
 //! `tests` contains the registry unit tests, split to mirror the source modules.
 
@@ -34,7 +34,6 @@ mod decision_snapshots;
 mod decision_snapshots_schema;
 mod envelope_stamps;
 mod index;
-mod index_snapshot;
 mod index_task_type;
 pub(crate) mod ledger;
 mod listing;
@@ -89,7 +88,7 @@ pub use crate::contracts::{
     WorkspaceBinding, WorkspaceCheckoutBinding,
 };
 pub(crate) use allocator::parse_orb_task_number;
-pub(crate) use index_snapshot::{TaskIndexProofRow, TaskIndexSnapshot};
+pub(crate) use index::{TaskIndexProofRow, TaskIndexSnapshot};
 pub(crate) use ledger::registry_compatibility;
 pub use store::TaskRegistryStore;
 

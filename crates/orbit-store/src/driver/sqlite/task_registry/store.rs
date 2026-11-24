@@ -8,7 +8,7 @@ use orbit_common::{OrbitError, StorageLayer};
 use rusqlite::{Connection, OpenFlags};
 
 use super::change_stamps::TaskChangeStamps;
-use super::index_snapshot::TaskIndexSnapshots;
+use super::index::TaskIndexSnapshots;
 use super::schema::{assert_readable_schema, migrate_writable};
 use crate::driver::sqlite::read_pool::{ReadGuard, ReadPool};
 use crate::fs::path_safety::normalize_path;

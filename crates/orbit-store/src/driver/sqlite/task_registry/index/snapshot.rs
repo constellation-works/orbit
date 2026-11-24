@@ -13,7 +13,7 @@ use orbit_common::OrbitError;
 use orbit_common::storage::sqlite::{apply_default_pragmas, sqlite_store_error};
 use rusqlite::{Connection, OpenFlags};
 
-use super::store::TaskRegistryStore;
+use super::super::store::TaskRegistryStore;
 use crate::contracts::{EnvelopeStampRecord, IndexedTaskRow, TaskBundleBinding};
 
 pub(crate) struct TaskIndexSnapshot {
@@ -72,7 +72,7 @@ struct SnapshotReader {
 }
 
 /// One retained partition snapshot per registry handle, shared by its clones.
-pub(super) struct TaskIndexSnapshots {
+pub(in crate::driver::sqlite::task_registry) struct TaskIndexSnapshots {
     path: PathBuf,
     reader: Mutex<Option<SnapshotReader>>,
     /// Cache for read-only handles, keyed by `PRAGMA data_version` on the
@@ -81,7 +81,7 @@ pub(super) struct TaskIndexSnapshots {
 }
 
 impl TaskIndexSnapshots {
-    pub(super) fn new(path: &Path) -> Self {
+    pub(in crate::driver::sqlite::task_registry) fn new(path: &Path) -> Self {
         Self {
             path: path.to_path_buf(),
             reader: Mutex::new(None),
