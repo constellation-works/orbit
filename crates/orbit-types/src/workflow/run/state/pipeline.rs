@@ -67,6 +67,18 @@ pub enum SuccessfulCheckpoint<'a> {
     Inconsistent,
 }
 
+/// Latest rejected checkpoint validation refusal observed for a live resident
+/// cycle on this run, so terminal synthesis can surface the cause and field
+/// instead of reporting an unknown termination.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ResidentCheckpointRefusal {
+    pub cycle: String,
+    pub code: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub field: Option<String>,
+    pub message: String,
+}
+
 /// Persistent pipeline state for a job run.
 ///
 /// Stored as `state.json` in the run bundle directory. Steps read accumulated
@@ -241,6 +253,10 @@ pub struct PipelineState {
     /// run.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub auto_task: Option<super::AutoTaskRunCheckpoint>,
+    /// Latest rejected checkpoint validation refusal observed for a live
+    /// resident cycle on this run; cleared once a valid checkpoint is accepted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resident_checkpoint_refusal: Option<ResidentCheckpointRefusal>,
     pub updated_at: DateTime<Utc>,
 }
 
@@ -280,6 +296,7 @@ impl PipelineState {
             steering_watermarks: BTreeMap::new(),
             steering_rounds: BTreeMap::new(),
             auto_task: None,
+            resident_checkpoint_refusal: None,
             updated_at: Utc::now(),
         }
     }

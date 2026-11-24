@@ -4,11 +4,15 @@ use chrono::Utc;
 use orbit_common::OrbitError;
 use orbit_common::security::redaction::{redact_all, redact_home_dir};
 use orbit_types::task::Task;
-use orbit_types::workflow::{RESIDENT_TAG, ResidentComment};
+use orbit_types::workflow::{
+    PipelineState, RESIDENT_CYCLE_JOB, RESIDENT_TAG, ResidentCheckpointRefusal, ResidentComment,
+    RunStateUpdate,
+};
 use serde_json::{Value, json};
 
 use super::{
-    cycle::live_cycle_from_history, resident_mandate_ended, resident_mandate_from_artifact,
+    cycle::live_cycle_from_history, due::checkpoints, resident_mandate_ended,
+    resident_mandate_from_artifact,
 };
 use crate::OrbitRuntime;
 use crate::application::task::TaskUpdateParams;
@@ -41,6 +45,116 @@ fn resident_record_requires_redaction(value: &Value) -> bool {
         Value::Object(fields) => fields.values().any(resident_record_requires_redaction),
         _ => false,
     }
+}
+
+const MAX_CHECKPOINT_REFUSAL_CHARS: usize = 500;
+
+fn sanitize_refusal_message(raw: &str) -> String {
+    let normalized = raw.replace(['\r', '\n'], " ");
+    let redacted = redact_home_dir(&redact_all(&normalized));
+    let trimmed = redacted.trim();
+    if trimmed.chars().count() <= MAX_CHECKPOINT_REFUSAL_CHARS {
+        trimmed.to_string()
+    } else {
+        let head: String = trimmed.chars().take(MAX_CHECKPOINT_REFUSAL_CHARS).collect();
+        format!("{head}…")
+    }
+}
+
+/// Extract the offending field name from a checkpoint validation message when
+/// one is named.
+pub(crate) fn extract_checkpoint_refusal_field(message: &str) -> Option<String> {
+    let mut rest = message;
+    while let Some(start) = rest.find('`') {
+        let after_start = &rest[start + 1..];
+        let Some(end) = after_start.find('`') else {
+            break;
+        };
+        let token = after_start[..end].trim();
+        if !token.is_empty() && token != "resident_record_invalid" {
+            return Some(token.to_string());
+        }
+        rest = &after_start[end + 1..];
+    }
+    if message.contains("action keys must be unique") {
+        return Some("actions".to_string());
+    }
+    if message.contains("decision ids must be unique") {
+        return Some("decisions".to_string());
+    }
+    if message.contains("checkpoint requires a resident.checkpoint record") {
+        return Some("kind".to_string());
+    }
+    if message.contains("record exceeds 64 KiB") {
+        return Some("record".to_string());
+    }
+    None
+}
+
+/// Classify a checkpoint validation or redaction refusal message into a
+/// structured [`ResidentCheckpointRefusal`], returning `None` for non-validation
+/// refusals such as `resident_cycle_stale` or `resident_checkpoint_exists`.
+pub(crate) fn checkpoint_refusal_from_error_text(
+    cycle: &str,
+    raw_error: &str,
+) -> Option<ResidentCheckpointRefusal> {
+    let trimmed = raw_error.trim();
+    let stripped = trimmed
+        .strip_prefix("invalid input: ")
+        .or_else(|| trimmed.strip_prefix("policy denied: "))
+        .unwrap_or(trimmed);
+    if stripped.starts_with("resident_cycle_stale:")
+        || stripped.starts_with("resident_checkpoint_exists:")
+        || stripped == "the resident mandate has ended"
+        || stripped == "resident records belong on a resident mandate's assignment task"
+        || stripped.starts_with("the mandate is not usable:")
+    {
+        return None;
+    }
+    let code = if stripped.starts_with("resident_record_invalid:") {
+        "resident_record_invalid"
+    } else if stripped.starts_with("resident records must be supplied without sensitive text") {
+        "resident_record_redaction_refused"
+    } else {
+        "resident_checkpoint_invalid"
+    };
+    let message = sanitize_refusal_message(stripped);
+    let field = extract_checkpoint_refusal_field(&message);
+    Some(ResidentCheckpointRefusal {
+        cycle: cycle.to_string(),
+        code: code.to_string(),
+        field,
+        message,
+    })
+}
+
+/// Render a persisted checkpoint refusal into the `error` string carried by a
+/// synthesized `incomplete` checkpoint.
+pub(crate) fn format_checkpoint_refusal_error(refusal: &ResidentCheckpointRefusal) -> String {
+    let prefix = format!("{}:", refusal.code);
+    let mut formatted = if refusal.message.starts_with(&prefix) {
+        format!("checkpoint validation refused: {}", refusal.message)
+    } else {
+        format!(
+            "checkpoint validation refused ({}): {}",
+            refusal.code, refusal.message
+        )
+    };
+    if let Some(field) = refusal.field.as_deref()
+        && !formatted.contains(field)
+    {
+        formatted.push_str(&format!(" (field: {field})"));
+    }
+    formatted
+}
+
+/// Whether a comment string carries a `resident.checkpoint` JSON payload.
+pub(crate) fn is_checkpoint_comment_json(message: &str) -> bool {
+    serde_json::from_str::<Value>(message)
+        .ok()
+        .is_some_and(|value| {
+            value.get("kind").and_then(Value::as_str) == Some("resident.checkpoint")
+        })
 }
 
 impl OrbitRuntime {
@@ -115,14 +229,60 @@ impl OrbitRuntime {
     pub fn append_resident_checkpoint(
         &self,
         task_id: &str,
-        mut record: Value,
+        record: Value,
         agent: Option<String>,
         model: Option<String>,
     ) -> Result<Value, OrbitError> {
+        self.append_resident_checkpoint_for_run(task_id, record, agent, model, None)
+    }
+
+    pub(crate) fn append_resident_checkpoint_for_run(
+        &self,
+        task_id: &str,
+        mut record: Value,
+        agent: Option<String>,
+        model: Option<String>,
+        caller_run_id: Option<&str>,
+    ) -> Result<Value, OrbitError> {
         let initial_message = serde_json::to_string(&record)
             .map_err(|error| invalid(format!("serialize checkpoint: {error}")))?;
+        let attempt = self.try_append_resident_checkpoint(
+            task_id,
+            &mut record,
+            &initial_message,
+            agent,
+            model,
+        );
+        match &attempt {
+            Ok(_) => {
+                self.clear_resident_checkpoint_refusal_on_accept(
+                    task_id,
+                    caller_run_id,
+                    Some(&record),
+                );
+            }
+            Err(error) => {
+                self.record_resident_checkpoint_refusal_if_live(
+                    task_id,
+                    caller_run_id,
+                    Some(&record),
+                    error,
+                );
+            }
+        }
+        attempt
+    }
+
+    fn try_append_resident_checkpoint(
+        &self,
+        task_id: &str,
+        record: &mut Value,
+        initial_message: &str,
+        agent: Option<String>,
+        model: Option<String>,
+    ) -> Result<Value, OrbitError> {
         let ResidentComment::Checkpoint(checkpoint) =
-            ResidentComment::parse_for_write(&initial_message)
+            ResidentComment::parse_for_write(initial_message)
                 .map_err(|error| invalid(error.to_string()))?
         else {
             return Err(invalid("checkpoint requires a resident.checkpoint record"));
@@ -184,5 +344,124 @@ impl OrbitRuntime {
             model,
         )?;
         Ok(json!({"task_id": task_id, "checkpoint": record}))
+    }
+
+    fn resolve_live_cycle_for_refusal(
+        &self,
+        task_id: &str,
+        caller_run_id: Option<&str>,
+        record: Option<&Value>,
+        require_unwritten: bool,
+    ) -> Option<orbit_types::workflow::ResidentLiveCycle> {
+        let task = self.get_task(task_id).ok()?;
+        if !task.tags.iter().any(|tag| tag == RESIDENT_TAG) || resident_mandate_ended(task.status) {
+            return None;
+        }
+        let history = self.get_task_history(task_id).ok()?;
+        let live = live_cycle_from_history(&history)
+            .ok()
+            .flatten()
+            .filter(|live| live.expires_at > Utc::now())?;
+        if require_unwritten {
+            let comments = self.get_task_comments(task_id).ok()?;
+            if checkpoints(task_id, &comments)
+                .iter()
+                .any(|checkpoint| checkpoint.cycle == live.cycle)
+            {
+                return None;
+            }
+        }
+        match caller_run_id.map(str::trim).filter(|id| !id.is_empty()) {
+            Some(run_id) if run_id == live.run_id => Some(live),
+            Some(_) => None,
+            None => {
+                let record = record?;
+                let record_cycle = record.get("cycle").and_then(Value::as_str);
+                let record_run = record.get("run_id").and_then(Value::as_str);
+                (record_cycle == Some(live.cycle.as_str())
+                    && record_run == Some(live.run_id.as_str()))
+                .then_some(live)
+            }
+        }
+    }
+
+    /// Record a live cycle's checkpoint validation refusal on its run state so
+    /// terminal synthesis can surface the cause and field without writing to
+    /// the mandate task on a refused attempt.
+    pub(crate) fn record_resident_checkpoint_refusal_if_live(
+        &self,
+        task_id: &str,
+        caller_run_id: Option<&str>,
+        record: Option<&Value>,
+        error: &OrbitError,
+    ) {
+        let OrbitError::InvalidInput(raw) = error else {
+            return;
+        };
+        let Some(live) = self.resolve_live_cycle_for_refusal(task_id, caller_run_id, record, true)
+        else {
+            return;
+        };
+        let Some(refusal) = checkpoint_refusal_from_error_text(&live.cycle, raw) else {
+            return;
+        };
+        let jobs = self.stores().jobs();
+        match jobs.update_run_state(&live.run_id, &mut |_, state| {
+            state.resident_checkpoint_refusal = Some(refusal.clone());
+            Ok(())
+        }) {
+            Ok(RunStateUpdate::NoState) => {
+                if let Ok(Some(run)) = self.get_job_run_backend(&live.run_id)
+                    && run.job_id == RESIDENT_CYCLE_JOB
+                {
+                    let mut state = PipelineState::new(
+                        run.run_id,
+                        run.job_id,
+                        run.input.unwrap_or_else(|| json!({"task_ids": [task_id]})),
+                    );
+                    state.resident_checkpoint_refusal = Some(refusal.clone());
+                    if matches!(jobs.initialize_run_state(&live.run_id, &state), Ok(false)) {
+                        let _ = jobs.update_run_state(&live.run_id, &mut |_, existing| {
+                            existing.resident_checkpoint_refusal = Some(refusal.clone());
+                            Ok(())
+                        });
+                    }
+                }
+            }
+            Ok(_) => {}
+            Err(update_error) => {
+                tracing::warn!(
+                    task_id,
+                    run_id = %live.run_id,
+                    %update_error,
+                    "failed to record resident checkpoint validation refusal"
+                );
+            }
+        }
+    }
+
+    pub(crate) fn clear_resident_checkpoint_refusal_on_accept(
+        &self,
+        task_id: &str,
+        caller_run_id: Option<&str>,
+        record: Option<&Value>,
+    ) {
+        let Some(live) = self.resolve_live_cycle_for_refusal(task_id, caller_run_id, record, false)
+        else {
+            return;
+        };
+        let _ = self
+            .stores()
+            .jobs()
+            .update_run_state(&live.run_id, &mut |_, state| {
+                if state
+                    .resident_checkpoint_refusal
+                    .as_ref()
+                    .is_some_and(|refusal| refusal.cycle == live.cycle)
+                {
+                    state.resident_checkpoint_refusal = None;
+                }
+                Ok(())
+            });
     }
 }

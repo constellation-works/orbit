@@ -6,8 +6,10 @@
 
 use chrono::{DateTime, Duration, Utc};
 use orbit_common::OrbitError;
+use orbit_store::contracts::AuditEventFilter;
 use orbit_types::record::Notice;
 use orbit_types::task::{TaskComment, TaskHistoryEntry};
+use orbit_types::telemetry::AuditEventStatus;
 use orbit_types::workflow::{
     RESIDENT_BRIEF_CHECKPOINTS, RESIDENT_CHECKPOINT_NOTES_MAX_CHARS, RESIDENT_CYCLE_GRANTED_EVENT,
     RESIDENT_CYCLE_JOB, ResidentCheckpoint, ResidentCheckpointAction, ResidentCheckpointAuthority,
@@ -16,6 +18,9 @@ use orbit_types::workflow::{
 };
 use serde_json::{Value, json};
 
+use super::comments::{
+    checkpoint_refusal_from_error_text, format_checkpoint_refusal_error, is_checkpoint_comment_json,
+};
 use super::due::{checkpoints, cycle_grant, started_cycles};
 use super::guard::action_rows;
 use super::{
@@ -296,7 +301,7 @@ impl OrbitRuntime {
         self.synthesize_resident_checkpoint(
             task_id,
             dead,
-            "the cycle died before it wrote a checkpoint (process killed or lease expired)",
+            "unknown: the cycle died before it wrote a checkpoint (process killed or lease expired)",
             None,
         )?;
         Ok(self.discard_other_cycle_worktree(dead, run_id))
@@ -780,7 +785,7 @@ impl OrbitRuntime {
         let synthesized = self.synthesize_resident_checkpoint(
             &task_id,
             &live,
-            "the cycle's agent ended without a valid checkpoint",
+            "unknown: the cycle ended without a valid checkpoint",
             None,
         )?;
         self.set_resident_live_cycle(&task_id, Some(&live.cycle), None)?;
@@ -811,6 +816,67 @@ impl OrbitRuntime {
         Ok(finished)
     }
 
+    /// Resolve why `cycle` ended without an accepted checkpoint: prefer the
+    /// persisted checkpoint validation refusal on the run state, fall back to
+    /// the run's audited checkpoint-tool failure, and otherwise preserve the
+    /// `unknown:` fallback.
+    fn resolve_synthesized_checkpoint_error(
+        &self,
+        cycle: &ResidentLiveCycle,
+        fallback: &str,
+    ) -> String {
+        if let Ok(Some(state)) = self.read_run_state(&cycle.run_id)
+            && let Some(refusal) = state
+                .resident_checkpoint_refusal
+                .as_ref()
+                .filter(|refusal| refusal.cycle == cycle.cycle)
+        {
+            return format_checkpoint_refusal_error(refusal);
+        }
+        if let Ok(events) = self
+            .stores()
+            .audit_events()
+            .list_audit_events(&AuditEventFilter {
+                job_run_id: Some(cycle.run_id.clone()),
+                limit: 50,
+                ..Default::default()
+            })
+        {
+            for event in events {
+                if !matches!(
+                    event.status,
+                    AuditEventStatus::Failure | AuditEventStatus::Denied
+                ) {
+                    continue;
+                }
+                let is_checkpoint_call = match event.tool_name.as_deref() {
+                    Some("orbit.resident.checkpoint") => true,
+                    Some("orbit.task.update") => event
+                        .arguments_json
+                        .as_deref()
+                        .and_then(|raw| serde_json::from_str::<Value>(raw).ok())
+                        .and_then(|args| {
+                            args.get("comment")
+                                .and_then(Value::as_str)
+                                .map(is_checkpoint_comment_json)
+                        })
+                        .unwrap_or(false),
+                    _ => false,
+                };
+                if !is_checkpoint_call {
+                    continue;
+                }
+                let Some(raw_error) = event.error_message.as_deref() else {
+                    continue;
+                };
+                if let Some(refusal) = checkpoint_refusal_from_error_text(&cycle.cycle, raw_error) {
+                    return format_checkpoint_refusal_error(&refusal);
+                }
+            }
+        }
+        fallback.to_string()
+    }
+
     /// Write the `incomplete` checkpoint for `cycle` unless it already has
     /// one. Trusted: the cycle is no longer live, so this bypasses the
     /// live-cycle admission ordinary checkpoint writes need. Returns whether
@@ -823,6 +889,7 @@ impl OrbitRuntime {
         now: Option<DateTime<Utc>>,
     ) -> Result<bool, OrbitError> {
         let now = now.unwrap_or_else(Utc::now);
+        let resolved_error = self.resolve_synthesized_checkpoint_error(cycle, error);
         let mut wrote = false;
         self.stores()
             .tasks()
@@ -887,7 +954,7 @@ impl OrbitRuntime {
                     continuity: "off".into(),
                     outcome: "incomplete".into(),
                     probe: mandate.probe,
-                    error: Some(error.to_string()),
+                    error: Some(resolved_error.clone()),
                     conversation_ref: None,
                 };
                 self.append_system_resident_checkpoint(task_id, record, now)?;

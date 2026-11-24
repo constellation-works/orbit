@@ -76,6 +76,7 @@ impl Serialize for PipelineState {
             steering_watermarks: &self.steering_watermarks => self.steering_watermarks.is_empty(),
             steering_rounds: &self.steering_rounds => self.steering_rounds.is_empty(),
             auto_task: &self.auto_task => self.auto_task.is_none(),
+            resident_checkpoint_refusal: &self.resident_checkpoint_refusal => self.resident_checkpoint_refusal.is_none(),
             updated_at: &self.updated_at => false,
         }
     }

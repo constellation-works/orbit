@@ -42,7 +42,7 @@ use orbit_types::task::TaskStatus;
 use orbit_types::workflow::ResidentRight;
 use serde::Serialize;
 
-pub(crate) use comments::ensure_resident_comment_redaction_safe;
+pub(crate) use comments::{ensure_resident_comment_redaction_safe, is_checkpoint_comment_json};
 pub use control::{
     ResidentChannelCaller, ResidentControlAction, ResidentControlParams, ResidentControlState,
     ResidentRelayParams,
