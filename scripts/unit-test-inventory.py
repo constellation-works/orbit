@@ -217,7 +217,16 @@ def main(argv=None):
                 if destination.is_file():
                     os.fchmod(stream.fileno(), stat.S_IMODE(destination.stat().st_mode))
                 stream.write(json.dumps(baseline_of(current), indent=2, sort_keys=True) + "\n")
+                # Make the complete temporary file durable before it can replace the baseline (STD-03 §R5).
+                stream.flush()
+                os.fsync(stream.fileno())
             os.replace(temporary, destination)
+            # Sync the parent directory so the rename itself survives a crash (STD-03 §R5).
+            directory_fd = os.open(destination.parent, os.O_RDONLY)
+            try:
+                os.fsync(directory_fd)
+            finally:
+                os.close(directory_fd)
         except OSError as error:
             print(f"unit-test ratchet: cannot write baseline {args.write_baseline}: {error}", file=sys.stderr)
             return 2
