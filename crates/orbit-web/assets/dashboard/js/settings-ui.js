@@ -107,6 +107,12 @@ export function settingsRow({ name, value, source = null, action = null, wide = 
   return node;
 }
 
+// A key's text with a `<wbr>` after each `.` or `_`, the only places it may wrap.
+// `<wbr>` adds no characters, so a copied key is still the exact key.
+function keySegments(text) {
+  return text.split(/(?<=[._])/).flatMap((part) => (/[._]$/.test(part) ? [part, el('wbr')] : [part]));
+}
+
 /// A key as a row name: the full key in monospace with its prefix dimmed (the
 /// part before the row's label, or `prefix` when the section shares one), and
 /// the description on a line under it.
@@ -115,7 +121,10 @@ export function settingsKeyName(key, { label = null, description = null, prefix 
   if (prefix && key.startsWith(prefix)) pre = prefix;
   else if (label && label !== key && key.endsWith(`.${label}`)) pre = key.slice(0, key.length - label.length);
   return [
-    el('div', { class: 'settings-key' }, [pre ? el('span', { class: 'settings-key-pre', text: pre }) : null, key.slice(pre.length)]),
+    el('div', { class: 'settings-key' }, [
+      pre ? el('span', { class: 'settings-key-pre' }, keySegments(pre)) : null,
+      ...keySegments(key.slice(pre.length)),
+    ]),
     description ? el('div', { class: 'settings-desc', text: description }) : null,
   ];
 }

@@ -126,6 +126,8 @@
 .settings-section-body > .settings-row:first-child { border-top: 0; }
 .settings-name, .settings-val { min-width: 0; }
 .settings-wide { grid-column: 2 / -1; }
+/* A key wraps only at the `<wbr>`s settingsKeyName puts after its `.` and `_`.
+   `anywhere` breaks inside a segment only when that one segment is wider than the column. */
 .settings-key { color: var(--fg); font: var(--text-md)/1.45 var(--font-mono); overflow-wrap: anywhere; }
 .settings-key-pre { color: var(--fg-mute); }
 .settings-label { color: var(--fg); font-size: var(--text-md); font-weight: 500; }
