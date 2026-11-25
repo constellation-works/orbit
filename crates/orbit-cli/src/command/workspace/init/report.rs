@@ -85,6 +85,7 @@ pub(super) fn collect_init_report(
     inject_rules: bool,
     browser_kit: BrowserKitOutcome,
     preset: Option<AppliedPresetOutcome>,
+    global_orbit_dir: Option<&Path>,
     env: &Env,
 ) -> Result<WorkspaceInitReport, OrbitError> {
     let onboarding = onboarding_finalize_guidance(&init_result.root, &init_result.orbit_dir);
@@ -113,6 +114,7 @@ pub(super) fn collect_init_report(
             &init_result.root,
             &init_result.orbit_dir,
             &init_result.id,
+            global_orbit_dir,
             env,
         )?;
         for file in files {

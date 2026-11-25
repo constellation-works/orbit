@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 use clap::Args;
+use orbit_common::Env;
 use orbit_core::application::distributed::{
     FollowerRunObserver, LeafHydrationOutcome, LeafHydrationRequest,
 };
@@ -14,7 +15,7 @@ use orbit_types::tool::ToolSessionContext;
 use serde_json::{Value, json};
 
 use crate::command::host_route::caller_authority;
-use crate::command::{Block, CommandOut, Execute, Payload};
+use crate::command::{Block, CommandOut, Payload};
 use crate::parse::parse_since;
 
 #[derive(Args)]
@@ -65,9 +66,9 @@ pub struct RunHydrateSettlementsArgs {
     pub after: Option<String>,
 }
 
-impl Execute for RunHydrateSettlementsArgs {
-    fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
-        if caller_authority() != McpSessionAuthority::Operator {
+impl RunHydrateSettlementsArgs {
+    pub(super) fn execute_with_env(self, runtime: &OrbitRuntime, env: &Env) -> CommandOut {
+        if caller_authority(env) != McpSessionAuthority::Operator {
             return Err(OrbitError::CapabilityRefused(
                 "hydrating settlement evidence reads follower run records and requires the \
                  operator; an agent or managed scan reads `orbit run settlements --no-reconcile` \

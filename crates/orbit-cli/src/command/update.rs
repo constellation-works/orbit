@@ -153,8 +153,7 @@ impl UpdateCommand {
                     Vec::new()
                 }
             };
-            let quiesce =
-                generation::quiesce_bound(&orbit_core::composition::composition_env()).as_secs();
+            let quiesce = generation::quiesce_bound(env).as_secs();
             return Ok(Payload::detail(
                 serde_json::json!({
                     "schema_version": 1,

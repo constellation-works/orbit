@@ -19,6 +19,7 @@ use serde::Serialize;
 use crate::command::init::agent_detect::detect;
 use crate::command::init::config_seed_from_detection;
 use crate::command::{CommandOut, Payload};
+use crate::entry::resolved::Resolved;
 
 use super::super::support::{
     detect_git_remote, dir_name_or_fallback, ensure_orbit_gitignore_entry,
@@ -36,7 +37,12 @@ use super::validate::{
 };
 
 impl WorkspaceInitArgs {
-    pub fn execute_without_runtime(self, root_override: Option<&Path>, env: &Env) -> CommandOut {
+    pub fn execute_without_runtime(
+        self,
+        root_override: Option<&Path>,
+        env: &Env,
+        resolved: &Resolved,
+    ) -> CommandOut {
         let cwd = std::env::current_dir().map_err(|e| OrbitError::Io(e.to_string()))?;
         let roots = RegisteredRuntimeFactory::resolve_bootstrap_roots_for_cwd(&cwd, root_override)?;
         let orbit_dir = roots.shared_root;
@@ -91,6 +97,7 @@ impl WorkspaceInitArgs {
             inject_rules,
             browser_kit,
             preset,
+            resolved.global_orbit_dir().ok(),
             env,
         )?;
 
@@ -158,8 +165,8 @@ impl WorkspaceInitArgs {
 
         let name = self.name.unwrap_or_else(|| dir_name_or_fallback(cwd));
         let id = canonical_workspace_id(&name);
-        let git_remote = detect_git_remote(cwd)?;
-        let default_base_branch = checked_out_branch(cwd)?;
+        let git_remote = detect_git_remote(cwd, env)?;
+        let default_base_branch = checked_out_branch(cwd, env)?;
         // Every read of the registry below feeds the write at the end; the lock
         // keeps a concurrent sweep or init from saving over this registration.
         let (reconciling_existing, registered_shared_root, checkout_role, owner_machine_id) =
@@ -466,12 +473,8 @@ fn apply_preset_definitions(
 /// An explicit `--base-branch` always wins. Repositories without a checked-out
 /// branch retain the long-standing `main` fallback. A Git that timed out is an
 /// error rather than that fallback.
-fn checked_out_branch(cwd: &Path) -> Result<String, OrbitError> {
-    let branch = match orbit_common::fs::git::run_git(
-        &orbit_core::composition::composition_env(),
-        cwd,
-        &["branch", "--show-current"],
-    ) {
+fn checked_out_branch(cwd: &Path, env: &Env) -> Result<String, OrbitError> {
+    let branch = match orbit_common::fs::git::run_git(env, cwd, &["branch", "--show-current"]) {
         Ok(output) if output.success => output.stdout.trim().to_string(),
         Ok(_) => String::new(),
         Err(error @ OrbitError::ProcessTimeout { .. }) => return Err(error),

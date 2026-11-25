@@ -10,6 +10,7 @@ use super::dispatch::{ConfigTarget, action_payload, auto_detected_providers, run
 use super::providers::ServerLaunch;
 use super::workspace::{WorkspaceLayout, env_home_dir, resolve_workspace_layout};
 use crate::command::CommandOut;
+use crate::entry::resolved::Resolved;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum, Default)]
 pub enum ScopeArg {
@@ -212,8 +213,20 @@ pub struct InitArgs {
 }
 
 impl InitArgs {
-    pub fn execute_without_runtime(self, root_override: Option<&Path>, env: &Env) -> CommandOut {
-        let layout = federated_layout(self.federated, self.scope, root_override, env)?;
+    pub fn execute_without_runtime(
+        self,
+        root_override: Option<&Path>,
+        env: &Env,
+        resolved: &Resolved,
+    ) -> CommandOut {
+        let global_orbit_dir = resolved.global_orbit_dir().ok();
+        let layout = federated_layout(
+            self.federated,
+            self.scope,
+            root_override,
+            global_orbit_dir,
+            env,
+        )?;
         // New entries use agent authority. Provider reconciliation retains an
         // existing operator launch; removing it first explicitly resets it.
         // The operator flag explicitly selects operator authority.
@@ -232,6 +245,7 @@ impl InitArgs {
             self.providers.resolve_mode()?,
             home_dir.clone(),
             self.scope,
+            global_orbit_dir,
             env,
         )?;
         action_payload(
@@ -261,8 +275,20 @@ pub struct RemoveArgs {
 }
 
 impl RemoveArgs {
-    pub fn execute_without_runtime(self, root_override: Option<&Path>, env: &Env) -> CommandOut {
-        let layout = federated_layout(self.federated, self.scope, root_override, env)?;
+    pub fn execute_without_runtime(
+        self,
+        root_override: Option<&Path>,
+        env: &Env,
+        resolved: &Resolved,
+    ) -> CommandOut {
+        let global_orbit_dir = resolved.global_orbit_dir().ok();
+        let layout = federated_layout(
+            self.federated,
+            self.scope,
+            root_override,
+            global_orbit_dir,
+            env,
+        )?;
         let action = if self.federated {
             McpAction::RemoveFederated
         } else {
@@ -276,6 +302,7 @@ impl RemoveArgs {
             self.providers.resolve_mode()?,
             home_dir.clone(),
             self.scope,
+            global_orbit_dir,
             env,
         )?;
         action_payload(
@@ -298,12 +325,13 @@ fn federated_layout(
     federated: bool,
     scope: ScopeArg,
     root_override: Option<&Path>,
+    global_orbit_dir: Option<&Path>,
     env: &Env,
 ) -> Result<Option<WorkspaceLayout>, OrbitError> {
     if federated && scope == ScopeArg::Home {
         return Ok(None);
     }
-    resolve_workspace_layout(root_override, env).map(Some)
+    resolve_workspace_layout(root_override, global_orbit_dir, env).map(Some)
 }
 
 fn layout_workspace_id(layout: Option<&WorkspaceLayout>) -> Option<&str> {
@@ -328,6 +356,7 @@ pub(crate) fn init_auto_for_workspace(
     repo_root: &Path,
     orbit_root: &Path,
     workspace_id: &str,
+    global_orbit_dir: Option<&Path>,
     env: &Env,
 ) -> Result<(Vec<String>, Vec<PathBuf>), OrbitError> {
     // `orbit workspace init` is a per-workspace setup, so its auto-MCP path
@@ -374,6 +403,7 @@ pub(crate) fn init_auto_for_workspace(
         ProviderSelectionMode::Explicit(providers),
         home_dir,
         ScopeArg::Workspace,
+        global_orbit_dir,
         env,
     )?;
     // Legacy paths are reported only when reconciliation actually changed a

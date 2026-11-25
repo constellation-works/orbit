@@ -1,4 +1,5 @@
 use clap::Args;
+use orbit_common::Env;
 use orbit_core::application::job::PipelineWorkerLogSnapshot;
 use orbit_core::runtime::audit::run_logs::RunCliInvocationProfile;
 use orbit_core::{JobRun, OrbitRuntime};
@@ -9,7 +10,7 @@ use std::hash::{DefaultHasher, Hasher};
 use std::io::{BufRead, BufReader, Seek, SeekFrom, Write};
 use std::time::Duration;
 
-use crate::command::{CommandOut, Execute, Payload};
+use crate::command::{CommandOut, Payload};
 use crate::output::sink::OutputMode;
 
 use super::steps::{RunRead, resolve_run, resolve_step_filter};
@@ -38,11 +39,12 @@ pub struct RunLogsArgs {
     pub no_reconcile: bool,
 }
 
-impl Execute for RunLogsArgs {
-    fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
+impl RunLogsArgs {
+    pub(super) fn execute_with_env(self, runtime: &OrbitRuntime, env: &Env) -> CommandOut {
         if self.follow {
             return follow_logs_payload(
                 runtime,
+                env,
                 self.run_id.as_deref(),
                 self.step_id.as_deref(),
                 RunRead::from_no_reconcile(self.no_reconcile),
@@ -59,6 +61,7 @@ impl Execute for RunLogsArgs {
 
 fn follow_logs_payload(
     runtime: &OrbitRuntime,
+    env: &Env,
     run_id: Option<&str>,
     step_id: Option<&str>,
     read: RunRead,
@@ -67,9 +70,7 @@ fn follow_logs_payload(
     let steps = runtime.collect_run_audit_steps(&run.run_id)?;
     let step_filter = resolve_step_filter(&run, &steps, step_id)?;
     let runtime = runtime.clone();
-    let log_path = orbit_common::observability::logging::global_jsonl_log_path(
-        &orbit_core::composition::composition_env(),
-    )?;
+    let log_path = orbit_common::observability::logging::global_jsonl_log_path(env)?;
     Ok(Payload::stream(
         json!({"run_id": run.run_id, "follow": true}),
         Box::new(move |sink, writer| {

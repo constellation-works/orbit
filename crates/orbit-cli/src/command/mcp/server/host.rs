@@ -8,7 +8,7 @@ use orbit_cmd::registry_runtime::{RegisteredRuntimeFactory, ResolvedWorkspaceSel
 use orbit_cmd::task_owner::{TaskOwnerLookup, WorkspaceIdentity};
 use orbit_common::governance::operation::OperationVerb;
 use orbit_common::governance::workflow::WorkflowVerb;
-use orbit_common::{BoundWorkspaceRemedy, NotFoundKind, OrbitError};
+use orbit_common::{BoundWorkspaceRemedy, Env, NotFoundKind, OrbitError};
 use orbit_core::OrbitRuntime;
 use orbit_core::adapter::command::{
     GlobalAuditStoreCache, HostPluginMcpCache, HostPluginMcpSurface, ToolEntryPoint,
@@ -73,6 +73,7 @@ impl ServerMcpHost {
         global_root: PathBuf,
         process_machine_id: String,
         process_machine_name: String,
+        env: &Env,
     ) -> Self {
         let host_facts = orbit_cmd::hosts::local_host_facts(&global_root, &process_machine_id);
         Self {
@@ -86,7 +87,7 @@ impl ServerMcpHost {
             owner_route_sessions: federated::RoutedSessionPool::default(),
             task_owners: TaskOwnerLookup::default(),
             audit_store: GlobalAuditStoreCache::default(),
-            env: orbit_core::composition::composition_env(),
+            env: env.clone(),
         }
     }
 

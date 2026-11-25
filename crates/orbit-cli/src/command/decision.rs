@@ -17,12 +17,13 @@
 use std::fmt::Write as _;
 
 use clap::Args;
+use orbit_common::Env;
 use orbit_common::governance::decision::DecisionVerb;
 use orbit_core::{OrbitError, OrbitRuntime};
 use serde_json::Value;
 
 use super::operation_args::Invocation;
-use crate::command::{CommandOut, Execute, Payload};
+use crate::command::{CommandOut, Payload};
 use crate::output::payload::Block;
 use crate::output::table::{Column, Table};
 
@@ -33,8 +34,8 @@ pub struct DecisionCommand {
     pub command: Invocation<DecisionVerb>,
 }
 
-impl Execute for DecisionCommand {
-    fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
+impl DecisionCommand {
+    pub(crate) fn execute_with_env(self, runtime: &OrbitRuntime, env: &Env) -> CommandOut {
         let Invocation { spec, input } = self.command;
         match spec.verb {
             DecisionVerb::List
@@ -60,7 +61,7 @@ impl Execute for DecisionCommand {
             DecisionVerb::ChannelRegister
             | DecisionVerb::ChannelList
             | DecisionVerb::ChannelRevoke
-            | DecisionVerb::ChannelRotateKey => channel_execute(runtime, spec.verb, &input),
+            | DecisionVerb::ChannelRotateKey => channel_execute(runtime, spec.verb, &input, env),
             DecisionVerb::Answer => {
                 let id = required(&input, "id")?;
                 let answer = required(&input, "answer")?;
@@ -177,11 +178,10 @@ fn channel_execute(
     runtime: &OrbitRuntime,
     verb: DecisionVerb,
     input: &serde_json::Map<String, Value>,
+    env: &Env,
 ) -> CommandOut {
     if !matches!(verb, DecisionVerb::ChannelList)
-        && orbit_common::governance::authorization::agent_context_declared(
-            &orbit_core::composition::composition_env(),
-        )
+        && orbit_common::governance::authorization::agent_context_declared(env)
     {
         return Err(OrbitError::PolicyDenied(
             "registering, revoking or rotating a decision channel is the operator's: it is refused from an agent envelope, so no running code can mint itself a human".into(),

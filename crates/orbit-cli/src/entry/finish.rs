@@ -1,3 +1,4 @@
+use super::resolved::Resolved;
 use crate::audit_middleware;
 use crate::command;
 use crate::output;
@@ -5,7 +6,7 @@ use crate::output::sink::{OutputMode, OutputSink};
 
 /// Refuse this invocation if a plugin backend is the caller [ORB-12876].
 ///
-/// The root is the one the command itself will use, so `--root` cannot pick a
+/// The root is the one the command itself will use (`resolved`), so `--root` cannot pick a
 /// different Orbit to be judged against than the one about to be read. A root
 /// that does not resolve is not skipping the gate: the command has no Orbit
 /// state to read either, and `main` fails it a few lines below.
@@ -14,12 +15,10 @@ use crate::output::sink::{OutputMode, OutputSink};
 /// rather than from anything the child controls.
 pub(super) fn refuse_plugin_child_cli(
     audit_meta: &Option<command::operation::CommandMeta>,
-    root_override: Option<&std::path::Path>,
+    resolved: &Resolved,
+    env: &orbit_common::Env,
 ) -> Result<(), orbit_core::OrbitError> {
-    let Ok(root) = orbit_core::runtime::resolve_generation_root(
-        &orbit_core::composition::composition_env(),
-        root_override,
-    ) else {
+    let Ok(root) = resolved.generation_root() else {
         return Ok(());
     };
     let invocation = audit_meta
@@ -28,11 +27,7 @@ pub(super) fn refuse_plugin_child_cli(
             Some(subcommand) => format!("{} {subcommand}", meta.command),
             None => meta.command.clone(),
         });
-    orbit_core::adapter::command::refuse_plugin_child_cli_command(
-        &orbit_core::composition::composition_env(),
-        &root,
-        invocation.as_deref(),
-    )
+    orbit_core::adapter::command::refuse_plugin_child_cli_command(env, root, invocation.as_deref())
 }
 
 /// Render what the command returned, or report why it failed.

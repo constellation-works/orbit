@@ -14,6 +14,7 @@
 use std::sync::OnceLock;
 
 use clap::{Arg, ArgMatches, Command};
+use orbit_common::Env;
 use orbit_common::process::shell::quote_posix_arg;
 use orbit_core::adapter::command::{PluginCliGroup, PluginCliVerb};
 use orbit_core::{OrbitError, OrbitRuntime};
@@ -21,7 +22,7 @@ use serde_json::json;
 
 use super::schema::{DerivedArg, clap_arg, derive_args, input_from_matches};
 use crate::command::tool::ToolRunArgs;
-use crate::command::{CommandOut, Execute, Payload};
+use crate::command::{CommandOut, Payload};
 
 /// One parsed `orbit <ns> <verb>` invocation, already reduced to the tool
 /// call it performs.
@@ -37,8 +38,8 @@ pub struct PluginGroupInvocation {
     pub explain: bool,
 }
 
-impl Execute for PluginGroupInvocation {
-    fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
+impl PluginGroupInvocation {
+    pub(crate) fn execute_with_env(self, runtime: &OrbitRuntime, env: &Env) -> CommandOut {
         if let Some(message) = self.input_error {
             return Err(OrbitError::InvalidInput(message));
         }
@@ -66,7 +67,7 @@ impl Execute for PluginGroupInvocation {
             )
             .into());
         }
-        self.tool_run.execute(runtime)
+        self.tool_run.execute_with_env(runtime, env)
     }
 }
 

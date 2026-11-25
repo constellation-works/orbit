@@ -70,6 +70,7 @@ fn check_concurrent_update(action: McpAction<'static>) {
             ProviderSelectionMode::Explicit(vec![McpProvider::Claude]),
             Some(worker_home),
             ScopeArg::Home,
+            None,
             &orbit_common::Env::default(),
         )
     });

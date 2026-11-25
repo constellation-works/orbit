@@ -1,9 +1,10 @@
 use clap::Args;
+use orbit_common::Env;
 use orbit_config::{admit_config_key, load_effective_config};
 use orbit_core::OrbitRuntime;
 use serde_json::json;
 
-use crate::command::{CommandOut, Execute, Payload};
+use crate::command::{CommandOut, Payload};
 
 use super::support::{ConfigScopeArg, open_store_for_scope, runtime_config_roots};
 
@@ -17,14 +18,11 @@ pub struct ConfigGetArgs {
     pub scope: ConfigScopeArg,
 }
 
-impl Execute for ConfigGetArgs {
-    fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
+impl ConfigGetArgs {
+    pub(super) fn execute_with_env(self, runtime: &OrbitRuntime, env: &Env) -> CommandOut {
         if self.scope == ConfigScopeArg::Effective {
             admit_config_key(&self.key)?;
-            let effective = load_effective_config(
-                &orbit_core::composition::composition_env(),
-                &runtime_config_roots(runtime),
-            )?;
+            let effective = load_effective_config(env, &runtime_config_roots(runtime))?;
             let value = effective
                 .value_for(&self.key)
                 .unwrap_or(serde_json::Value::Null);
@@ -40,7 +38,7 @@ impl Execute for ConfigGetArgs {
             .into());
         }
 
-        let store = open_store_for_scope(runtime, self.scope)?;
+        let store = open_store_for_scope(runtime, self.scope, env)?;
         admit_config_key(&self.key)?;
         let file_exists = store.exists_on_disk();
         let value = store.effective_value(&self.key)?;

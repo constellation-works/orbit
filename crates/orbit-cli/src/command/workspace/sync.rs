@@ -15,6 +15,7 @@ use orbit_types::workspace::{Workspace, WorkspaceCheckout};
 use super::support::ensure_orbit_gitignore_entry;
 use super::sync_all;
 use crate::command::{CommandOut, Payload};
+use crate::entry::resolved::Resolved;
 
 #[derive(Args)]
 pub struct WorkspaceSyncArgs {
@@ -33,6 +34,7 @@ impl WorkspaceSyncArgs {
         self,
         root_override: Option<&Path>,
         workspace_selector: Option<&str>,
+        resolved: &Resolved,
     ) -> CommandOut {
         if self.all {
             if workspace_selector.is_some() {
@@ -40,7 +42,7 @@ impl WorkspaceSyncArgs {
                     "`--all` syncs every registered workspace and cannot be combined with `--workspace`; drop one of them".to_string(),
                 ));
             }
-            return sync_all::execute_sync_all(self.check, root_override);
+            return sync_all::execute_sync_all(self.check, resolved);
         }
         let cwd = std::env::current_dir().map_err(|error| OrbitError::Io(error.to_string()))?;
         let roots = RegisteredRuntimeFactory::try_resolve_initialized_roots(&cwd, root_override)?

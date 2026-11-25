@@ -6,6 +6,7 @@
 use std::io::{self, Write};
 use std::path::Path;
 
+use orbit_common::Env;
 use orbit_config::{
     AgentCrewNames, HumanCrewSeedOutcome, human_crew_seed_collides, normalize_human_crew_name,
     os_user_human_crew_name, seed_operator_human_crew,
@@ -36,16 +37,16 @@ pub(super) fn reject_unusable_human_name(
     force: bool,
     non_interactive: bool,
     requested: Option<&str>,
+    env: &Env,
 ) -> Result<(), OrbitError> {
     let (name, flag) = match requested {
         Some(raw) => (
             Some(normalize_human_crew_name(raw).ok_or_else(|| unusable_name(raw))?),
             true,
         ),
-        None if non_interactive || !sink::stdin_is_terminal() => (
-            os_user_human_crew_name(&orbit_core::composition::composition_env()),
-            false,
-        ),
+        None if non_interactive || !sink::stdin_is_terminal() => {
+            (os_user_human_crew_name(env), false)
+        }
         None => return Ok(()),
     };
     let Some(name) = name else {
@@ -68,52 +69,49 @@ pub(super) fn ensure_human_crew_for_init(
     config_path: &Path,
     non_interactive: bool,
     requested: Option<String>,
+    env: &Env,
 ) -> Result<HumanCrewReport, OrbitError> {
     let flag = requested.clone();
-    let outcome = seed_operator_human_crew(
-        &orbit_core::composition::composition_env(),
-        config_path,
-        |agent_crews| {
-            if let Some(raw) = flag {
-                let name = normalize_human_crew_name(&raw).ok_or_else(|| unusable_name(&raw))?;
-                if agent_crews.contains(&name) {
-                    return Err(flag_collision(&name));
-                }
-                return Ok(name);
-            }
-            let default = os_user_human_crew_name(&orbit_core::composition::composition_env());
-            if !non_interactive && sink::stdin_is_terminal() {
-                let prompt = match default.as_deref() {
-                    Some(name) => format!("Human crew name for your own work [{name}]: "),
-                    None => "Human crew name for your own work: ".to_string(),
-                };
-                let stderr = io::stderr();
-                let mut output = stderr.lock();
-                return collect_human_crew_name(
-                    &prompt,
-                    default,
-                    agent_crews,
-                    &mut output,
-                    |prompt, output| {
-                        prompt_stdin::read_trimmed_line(prompt, output).map_err(|error| {
-                            let error = prompt_stdin::with_remedy(error, HUMAN_CREW_REMEDY);
-                            OrbitError::InvalidInput(error.to_string())
-                        })
-                    },
-                );
-            }
-            let name = default.ok_or_else(|| {
-                OrbitError::InvalidInput(
-                    "the OS user name is unavailable for the human crew; pass --human-name <NAME>"
-                        .to_string(),
-                )
-            })?;
+    let outcome = seed_operator_human_crew(env, config_path, |agent_crews| {
+        if let Some(raw) = flag {
+            let name = normalize_human_crew_name(&raw).ok_or_else(|| unusable_name(&raw))?;
             if agent_crews.contains(&name) {
-                return Err(os_user_collision(&name));
+                return Err(flag_collision(&name));
             }
-            Ok(name)
-        },
-    )?;
+            return Ok(name);
+        }
+        let default = os_user_human_crew_name(env);
+        if !non_interactive && sink::stdin_is_terminal() {
+            let prompt = match default.as_deref() {
+                Some(name) => format!("Human crew name for your own work [{name}]: "),
+                None => "Human crew name for your own work: ".to_string(),
+            };
+            let stderr = io::stderr();
+            let mut output = stderr.lock();
+            return collect_human_crew_name(
+                &prompt,
+                default,
+                agent_crews,
+                &mut output,
+                |prompt, output| {
+                    prompt_stdin::read_trimmed_line(prompt, output).map_err(|error| {
+                        let error = prompt_stdin::with_remedy(error, HUMAN_CREW_REMEDY);
+                        OrbitError::InvalidInput(error.to_string())
+                    })
+                },
+            );
+        }
+        let name = default.ok_or_else(|| {
+            OrbitError::InvalidInput(
+                "the OS user name is unavailable for the human crew; pass --human-name <NAME>"
+                    .to_string(),
+            )
+        })?;
+        if agent_crews.contains(&name) {
+            return Err(os_user_collision(&name));
+        }
+        Ok(name)
+    })?;
     if let HumanCrewSeedOutcome::Unchanged(existing) = &outcome
         && let Some(raw) = requested
             .filter(|raw| normalize_human_crew_name(raw).as_deref() != Some(existing.as_str()))

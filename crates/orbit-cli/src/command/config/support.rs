@@ -6,6 +6,7 @@
 use std::path::PathBuf;
 
 use clap::ValueEnum;
+use orbit_common::Env;
 use orbit_config::{ConfigRoots, ConfigScope, ConfigStore};
 use orbit_core::{OrbitError, OrbitRuntime};
 
@@ -62,11 +63,8 @@ fn resolve_scope(runtime: &OrbitRuntime, scope: ConfigScopeArg) -> (ConfigScope,
 pub(super) fn open_store_for_scope(
     runtime: &OrbitRuntime,
     scope: ConfigScopeArg,
+    env: &Env,
 ) -> Result<ConfigStore, OrbitError> {
     let (resolved_scope, path) = resolve_scope(runtime, scope);
-    ConfigStore::open(
-        &orbit_core::composition::composition_env(),
-        resolved_scope,
-        path,
-    )
+    ConfigStore::open(env, resolved_scope, path)
 }

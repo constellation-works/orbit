@@ -12,6 +12,7 @@ use serde_json::json;
 
 use super::sync::{converge_checkout, host_machine_id};
 use crate::command::{CommandOut, Payload};
+use crate::entry::resolved::Resolved;
 
 /// Live run IDs a skip reason names before it summarises the rest.
 const LIVE_RUNS_NAMED: usize = 3;
@@ -103,17 +104,14 @@ impl WorkspaceSyncRecord {
 /// Sync (or with `check`, inspect) every checkout in this host's workspace
 /// registry. One workspace failing never stops the rest: the exit code is `1`
 /// when any failed, else `3` for `--check` with pending changes, else `0`.
-pub(super) fn execute_sync_all(check: bool, root_override: Option<&Path>) -> CommandOut {
+pub(super) fn execute_sync_all(check: bool, resolved: &Resolved) -> CommandOut {
     // The host root, never derived from cwd: the command works from any
     // directory, including a home directory that holds the global root.
-    let global_root = orbit_core::runtime::resolve_generation_root(
-        &orbit_core::composition::composition_env(),
-        root_override,
-    )?;
+    let global_root = resolved.generation_root()?;
     let registry = workspace_registry::load_registry_from(&workspace_registry::registry_path_for(
-        &global_root,
+        global_root,
     ))?;
-    let machine_id = host_machine_id(&global_root)?;
+    let machine_id = host_machine_id(global_root)?;
 
     let mut records = Vec::new();
     // Checkouts that share one data root would converge the same files under
@@ -144,7 +142,7 @@ pub(super) fn execute_sync_all(check: bool, root_override: Option<&Path>) -> Com
             )
         } else {
             let record =
-                sync_registered_checkout(&global_root, &machine_id, workspace, checkout, check);
+                sync_registered_checkout(global_root, &machine_id, workspace, checkout, check);
             if !matches!(
                 record.status,
                 WorkspaceSyncStatus::Skipped | WorkspaceSyncStatus::Failed

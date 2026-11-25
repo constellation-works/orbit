@@ -149,6 +149,7 @@ fn legacy_grok_entry(
         .transpose()
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) fn run_action(
     action: McpAction<'_>,
     repo_root: Option<&Path>,
@@ -156,12 +157,13 @@ pub(super) fn run_action(
     selection: ProviderSelectionMode,
     home_dir: Option<PathBuf>,
     scope: ScopeArg,
+    global_orbit_dir: Option<&Path>,
     env: &Env,
 ) -> Result<Vec<McpProvider>, OrbitError> {
     let providers = resolve_providers(selection, repo_root, home_dir.as_deref());
     // Local launches carry a non-default catalog. Federated launches ignore
     // it inside `ServerLaunch::with_orbit_root`.
-    let embedded = super::workspace::embedded_launch_root(orbit_root);
+    let embedded = super::workspace::embedded_launch_root(orbit_root, global_orbit_dir);
     for provider in &providers {
         let target = ConfigTarget::resolve(scope, provider, repo_root, home_dir.as_deref(), env)?;
         match action {

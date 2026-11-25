@@ -13,12 +13,11 @@ pub(super) fn dir_name_or_fallback(path: &Path) -> String {
 /// The `origin` URL, or `None` when there is none. A Git that timed out is
 /// an error, never read as no remote; one that could not start (no `git` on
 /// `PATH`) is logged and reads as no remote.
-pub(super) fn detect_git_remote(cwd: &Path) -> Result<Option<String>, OrbitError> {
-    match orbit_common::fs::git::run_git(
-        &orbit_core::composition::composition_env(),
-        cwd,
-        &["remote", "get-url", "origin"],
-    ) {
+pub(super) fn detect_git_remote(
+    cwd: &Path,
+    env: &orbit_common::Env,
+) -> Result<Option<String>, OrbitError> {
+    match orbit_common::fs::git::run_git(env, cwd, &["remote", "get-url", "origin"]) {
         Ok(output) => Ok(output.success.then(|| output.stdout.trim().to_string())),
         Err(error @ OrbitError::ProcessTimeout { .. }) => Err(error),
         Err(error) => {

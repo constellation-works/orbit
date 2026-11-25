@@ -6,10 +6,9 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use orbit_common::{Env, OrbitError};
-use orbit_core::OrbitRuntime;
 use orbit_mcp::federated;
 use orbit_mcp::{ListenerExposure, McpHost, McpListener, McpSessionAuthority};
-use orbit_types::tool::{McpToolsetSelection, ToolSessionContext};
+use orbit_types::tool::{McpToolsetSelection, ToolSessionContext, WorkerInvocation};
 
 use super::host::ServerMcpHost;
 
@@ -51,6 +50,7 @@ pub(in super::super) fn serve_mcp_stdio(
     bound_orchestrator: Option<String>,
     launch: StdioLaunch,
     toolsets: McpToolsetSelection,
+    worker_invocation: Option<WorkerInvocation>,
     env: &Env,
 ) -> Result<(), OrbitError> {
     let (host, mut session_context) = compose_server(
@@ -60,6 +60,7 @@ pub(in super::super) fn serve_mcp_stdio(
         bound_workspace,
         bound_orchestrator,
         toolsets,
+        worker_invocation,
         env,
     )?;
     session_context.worker_host_call = launch.worker_host;
@@ -102,6 +103,7 @@ pub(crate) fn federated_aggregate_client(
         global_root,
         identity.process_machine_id.clone(),
         identity.process_machine_name.clone(),
+        env,
     ));
     let probe = federated::CompositeDestinationProbe::new(
         Arc::new(federated::InProcessDestinationProbe::new(
@@ -158,6 +160,7 @@ pub(in super::super) fn serve_mcp_federated_stdio(
     bound_orchestrator: Option<String>,
     authority: McpSessionAuthority,
     toolsets: McpToolsetSelection,
+    worker_invocation: Option<WorkerInvocation>,
     env: &Env,
 ) -> Result<(), OrbitError> {
     let remotes = federated::load_destinations(&global_root)?;
@@ -174,10 +177,7 @@ pub(in super::super) fn serve_mcp_federated_stdio(
     // [ORB-11313].
     let bound_orchestrator = normalized_selector(bound_orchestrator);
     identity.session_context.orchestrator = bound_orchestrator.clone();
-    identity.session_context.worker_invocation = OrbitRuntime::current_worker_invocation(
-        &orbit_core::composition::composition_env(),
-        &global_root,
-    )?;
+    identity.session_context.worker_invocation = worker_invocation;
     if let Some(binding) = &identity.session_context.worker_invocation {
         identity.session_context.workspace = Some(binding.owner_destination.clone());
         identity
@@ -195,6 +195,7 @@ pub(in super::super) fn serve_mcp_federated_stdio(
         global_root,
         identity.process_machine_id.clone(),
         identity.process_machine_name.clone(),
+        env,
     ));
     // Two budgets, not one: the probe timeout bounds the round trips that
     // decide where a call goes, while the routed `tools/call` is stamped
@@ -230,6 +231,7 @@ pub(in super::super) fn serve_mcp_federated_stdio(
         &identity.session_context,
         &global_root_for_bridge,
         &identity.process_machine_id,
+        env,
     );
     // The mux lists and refuses for every destination at once, so each remote
     // row gets this server's toolsets; its own SSH session serves them all.
@@ -271,6 +273,7 @@ pub(in super::super) fn serve_mcp_listener(
     exposure: ListenerExposure,
     bound_workspace: Option<String>,
     toolsets: McpToolsetSelection,
+    worker_invocation: Option<WorkerInvocation>,
     env: &Env,
 ) -> Result<(), OrbitError> {
     // A listener has no forwarding proxy in front of it, so there is no caller
@@ -301,6 +304,7 @@ pub(in super::super) fn serve_mcp_listener(
         bound_workspace,
         None,
         toolsets,
+        worker_invocation,
         env,
     )?;
     block_on_server(async move {
@@ -323,6 +327,7 @@ pub(in super::super) fn serve_mcp_listener(
 /// trusted `ORBIT_WORKSPACE` envelope. It is still just a selector: it is
 /// resolved against this machine's registry on every call and overridden by an
 /// explicit per-call `workspace`.
+#[allow(clippy::too_many_arguments)]
 fn compose_server(
     global_root: PathBuf,
     remote_caller_machine_id: Option<String>,
@@ -330,12 +335,12 @@ fn compose_server(
     bound_workspace: Option<String>,
     bound_orchestrator: Option<String>,
     toolsets: McpToolsetSelection,
+    worker_invocation: Option<WorkerInvocation>,
     env: &Env,
 ) -> Result<(Arc<dyn McpHost>, ToolSessionContext), OrbitError> {
     let mut identity =
         orbit_mcp::mcp_server_identity(&global_root, remote_caller_machine_id, authority, env)?;
-    identity.session_context.worker_invocation =
-        OrbitRuntime::current_worker_invocation(env, &global_root)?;
+    identity.session_context.worker_invocation = worker_invocation;
     if identity.session_context.worker_invocation.is_some() {
         identity
             .session_context
@@ -348,12 +353,14 @@ fn compose_server(
         global_root.clone(),
         identity.process_machine_id.clone(),
         identity.process_machine_name,
+        env,
     ));
     let host = with_claimed_owner_bridge(
         host,
         &identity.session_context,
         &global_root,
         &identity.process_machine_id,
+        env,
     );
     Ok((
         orbit_mcp::with_mcp_toolsets(host, toolsets),
@@ -368,6 +375,7 @@ fn with_claimed_owner_bridge(
     session_context: &ToolSessionContext,
     global_root: &Path,
     process_machine_id: &str,
+    env: &Env,
 ) -> Arc<dyn McpHost> {
     #[cfg(unix)]
     if session_context.worker_invocation.is_some() {
@@ -375,11 +383,11 @@ fn with_claimed_owner_bridge(
             inner: host,
             global_root: global_root.to_path_buf(),
             process_machine_id: process_machine_id.to_string(),
-            env: orbit_core::composition::composition_env(),
+            env: env.clone(),
         });
     }
     #[cfg(not(unix))]
-    let _ = (session_context, global_root, process_machine_id);
+    let _ = (session_context, global_root, process_machine_id, env);
     host
 }
 
