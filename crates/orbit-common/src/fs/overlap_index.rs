@@ -54,6 +54,7 @@ impl<V> Default for OverlapIndex<V> {
 }
 
 impl<V> OverlapIndex<V> {
+    /// Start with no selectors in either the anchored or exact-match index.
     pub fn new() -> Self {
         Self::default()
     }
@@ -78,6 +79,7 @@ impl<V> OverlapIndex<V> {
         true
     }
 
+    /// Return whether there are no indexed entries, including anchorless selectors.
     pub fn is_empty(&self) -> bool {
         self.anchored.is_empty() && self.exact.is_empty()
     }

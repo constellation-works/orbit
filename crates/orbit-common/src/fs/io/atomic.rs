@@ -290,6 +290,8 @@ impl StagedTextFile {
         })
     }
 
+    /// Rename the staged file into place. A durable write can report a directory sync failure
+    /// after the rename succeeded.
     pub fn commit(&mut self) -> io::Result<()> {
         fs::rename(&self.temp_path, &self.target_path)?;
         self.committed = true;

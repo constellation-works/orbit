@@ -129,6 +129,8 @@ fn normalize_tool_field_name(raw: &str) -> String {
     normalized
 }
 
+/// Read the first present key as a trimmed nonempty string. Missing keys are diagnosed using the
+/// canonical field name.
 pub fn required_string(
     input: &Value,
     keys: &[&str],
@@ -175,6 +177,7 @@ pub fn missing_tool_field(input: &Value, canonical: &str) -> OrbitError {
     OrbitError::InvalidInput(format!("missing `{canonical}`"))
 }
 
+/// Read a trimmed nonempty string. Missing and null both mean absent.
 pub fn optional_string(input: &Value, key: &str) -> Result<Option<String>, OrbitError> {
     match input.get(key) {
         None | Some(Value::Null) => Ok(None),
@@ -193,6 +196,8 @@ pub fn optional_string(input: &Value, key: &str) -> Result<Option<String>, Orbit
     }
 }
 
+/// Read a string byte-for-byte, including empty or whitespace-only text. Missing and null mean
+/// absent.
 pub fn optional_raw_string(input: &Value, key: &str) -> Result<Option<String>, OrbitError> {
     match input.get(key) {
         None | Some(Value::Null) => Ok(None),
@@ -205,6 +210,8 @@ pub fn optional_raw_string(input: &Value, key: &str) -> Result<Option<String>, O
     }
 }
 
+/// Read the first present alias as a trimmed nonempty string. A malformed value, including null,
+/// stops lookup.
 pub fn optional_string_alias(input: &Value, keys: &[&str]) -> Result<Option<String>, OrbitError> {
     for key in keys {
         if let Some(value) = input.get(*key) {
@@ -223,6 +230,7 @@ pub fn optional_string_alias(input: &Value, keys: &[&str]) -> Result<Option<Stri
     Ok(None)
 }
 
+/// Read the first present alias as a JSON number or trimmed decimal string in the `u32` range.
 pub fn optional_u32_alias(input: &Value, keys: &[&str]) -> Result<Option<u32>, OrbitError> {
     for key in keys {
         if let Some(value) = input.get(*key) {
@@ -248,6 +256,8 @@ pub fn optional_u32_alias(input: &Value, keys: &[&str]) -> Result<Option<u32>, O
     Ok(None)
 }
 
+/// Read the first present alias as a string or list of strings. Also recover a JSON array
+/// flattened into one string by a client.
 pub fn optional_string_list_alias(
     input: &Value,
     keys: &[&str],
@@ -297,6 +307,7 @@ pub fn optional_string_list_alias(
     Ok(None)
 }
 
+/// Read the first present alias, splitting a plain scalar on commas while preserving list entries.
 pub fn optional_csv_or_string_list_alias(
     input: &Value,
     keys: &[&str],
@@ -317,6 +328,7 @@ pub fn optional_csv_or_string_list_alias(
     Ok(None)
 }
 
+/// Split on commas, trim each item, and discard empty entries without changing the order.
 pub fn split_csv(raw: &str) -> Vec<String> {
     raw.split(',')
         .map(str::trim)

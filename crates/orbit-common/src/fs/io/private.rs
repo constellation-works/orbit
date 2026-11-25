@@ -228,6 +228,7 @@ pub fn create_dir_symlink(src: &Path, dst: &Path) -> io::Result<()> {
     std::os::unix::fs::symlink(src, dst)
 }
 
+/// Create `dst` as a Windows directory symlink pointing to `src`.
 #[cfg(windows)]
 pub fn create_dir_symlink(src: &Path, dst: &Path) -> io::Result<()> {
     std::os::windows::fs::symlink_dir(src, dst)

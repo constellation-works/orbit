@@ -12,6 +12,8 @@ thread_local! {
 
 static AUDIT_EXECUTION_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
+/// Mint a correlation ID from the trimmed prefix, timestamp, PID and process-local sequence. A
+/// blank prefix uses `exec`.
 pub fn audit_execution_id(prefix: &str) -> String {
     let prefix = if prefix.trim().is_empty() {
         "exec"

@@ -84,6 +84,7 @@ impl OutputSink for CaptureSink {
 pub struct RelaySink(PipeWriter);
 
 impl RelaySink {
+    /// Take ownership of the writer so finishing the stream closes the relay.
     pub fn new(relay: PipeWriter) -> Self {
         Self(relay)
     }

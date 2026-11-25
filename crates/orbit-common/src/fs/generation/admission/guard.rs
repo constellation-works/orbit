@@ -43,7 +43,9 @@ pub struct Participant<'a> {
     pub digest: &'a str,
     /// The state compatibility it was compiled with.
     pub identity: &'a CompatibilityIdentity,
+    /// Invocation role used to decide whether the participant can be waited out.
     pub role: ParticipantRole,
+    /// Access mode requested against the pinned generation.
     pub access: Access,
     /// The resume capability it hands over with when a candidate is renamed
     /// over its executable, if it can (see [`ParticipantRecord::handover`]).

@@ -1,3 +1,5 @@
+//! Registers desktop IPC commands with Tauri's capability manifest for native builds.
+
 #[cfg(feature = "native")]
 fn main() {
     // Declaring the app's commands puts them under the ACL, so only windows a

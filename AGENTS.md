@@ -36,7 +36,7 @@ Orbit is a local-first runtime for coding agents, built as a Rust workspace. `CL
 ## Code
 
 - Layering and scoping: [`ARCHITECTURE.md`](ARCHITECTURE.md). Reusable patterns: [`docs/design-patterns/`](docs/design-patterns/).
-- Lints live in `[workspace.lints]`: `unwrap`/`expect` warn in production code; propagate errors, with `OrbitError` at crate boundaries. No `print!` (use `tracing`), no lock guards across `.await`. `missing_docs` is enforced in `orbit-auth`, `orbit-clock`, `orbit-config` and `orbit-web`; other crate roots opt out.
+- `[workspace.lints]` warns on `unwrap`/`expect`. Propagate `OrbitError` across crates. Use `tracing`. No `print!` or locks across `.await`. `missing_docs` warns in `orbit-auth`, `orbit-cli` (binary), `orbit-clock`, `orbit-common`, `orbit-config`, `orbit-web` and `orbit-desktop`. Other library roots opt out.
 - Default to `pub(crate)`, `.workspace = true` deps, bounded channels and typed `thiserror` variants.
 - Prefer the fewest moving parts: delete dead code and stale docs together; keep compatibility only for an external contract or persisted format.
 - Past ~800 lines, check whether a file holds more than one responsibility and split along those; don't scatter closely related code.

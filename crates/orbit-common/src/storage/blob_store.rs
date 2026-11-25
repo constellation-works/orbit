@@ -25,12 +25,16 @@ use crate::fs::io::{atomic_write_private_bytes, create_private_dir_all};
 use crate::security::redaction::redact_all;
 use crate::security::release::sha256_hex;
 
+/// Stores payloads by SHA-256 of their post-redaction bytes, with optional protection during audit
+/// publication.
 pub struct BlobStore {
     root: PathBuf,
     pending_root: Option<PathBuf>,
 }
 
 impl BlobStore {
+    /// Select the blob root without creating it. Writes create missing directories, and pending
+    /// markers are off until configured.
     pub fn new<P: Into<PathBuf>>(root: P) -> Self {
         Self {
             root: root.into(),
@@ -45,10 +49,13 @@ impl BlobStore {
         self
     }
 
+    /// Return the directory under which the store shards hashes by their first two digits.
     pub fn root(&self) -> &Path {
         &self.root
     }
 
+    /// Redact, store and return the lower-case SHA-256 reference. An existing matching blob is
+    /// retained and its mtime refreshed.
     pub fn write(&self, content: &[u8]) -> io::Result<String> {
         let redacted = self.redact_for_storage(content);
         let hash = sha256_hex(&redacted);
@@ -88,6 +95,8 @@ impl BlobStore {
         }
     }
 
+    /// Read the stored bytes for a lower-case SHA-256 reference. Reject malformed references
+    /// before touching the filesystem.
     pub fn read(&self, sha256: &str) -> io::Result<Vec<u8>> {
         fs::read(self.blob_path(sha256)?)
     }

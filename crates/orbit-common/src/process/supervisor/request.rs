@@ -57,6 +57,7 @@ pub struct Periodic<'a> {
 
 /// One supervised run of a [`SupervisedChild`](super::SupervisedChild).
 pub struct Supervision<'a> {
+    /// Stdin handling for the existing child. Payload delivery requires a pipe created at spawn.
     pub stdin: Stdin,
     /// The child's stdout. [`Stream::Redirected`] attaches nothing.
     pub stdout: Stream,
@@ -74,6 +75,7 @@ pub struct Supervision<'a> {
     /// does not advance never reaches the timeout. The periodic check stays
     /// on the wall clock.
     pub clock: Option<&'a dyn Fn() -> Instant>,
+    /// Teardown policy for supervisor-initiated stops. Cancellation always kills immediately.
     pub termination: Termination,
     /// Kills the group at once when set; checked every poll.
     pub cancelled: Option<&'a AtomicBool>,
@@ -116,6 +118,7 @@ pub struct Supervision<'a> {
 pub struct Outcome {
     /// The child exited zero and no sink or periodic check stopped the run.
     pub success: bool,
+    /// Numeric child exit code when available. A signalled child may have only an exit status.
     pub exit_code: Option<i32>,
     /// The direct child's unmodified exit status when it finished naturally.
     /// A stop before the leader exits has no status; stop metadata describes

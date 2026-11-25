@@ -6,6 +6,7 @@ pub mod build;
 pub mod build_budget;
 pub mod identity;
 pub mod jitter;
+/// Byte-bounded capture that records when a subprocess stream exceeded its limit.
 pub mod output_capture;
 mod owned_child;
 #[cfg(unix)]

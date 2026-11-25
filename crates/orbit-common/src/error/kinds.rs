@@ -1,30 +1,46 @@
 use serde::{Deserialize, Serialize};
 
+/// Identifies how the artifact owner was resolved for an artifact-access diagnostic.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ArtifactOriginMode {
+    /// The operation used a checkout on this host.
     Local,
+    /// The operation addressed an owner through a federated route.
     Federated,
 }
 
+/// Checkout identity carried with artifact-access errors so clients can direct the reader to its
+/// owner.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ArtifactOrigin {
+    /// Whether the owner was reached locally or through federation.
     pub mode: ArtifactOriginMode,
+    /// Root of the worktree on the owning host.
     pub worktree_root: String,
+    /// Checked-out branch when known. Detached or unresolved branches can be absent.
     pub branch: Option<String>,
 }
 
+/// Stable resource class for missing-resource diagnostics and their structured projections.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum NotFoundKind {
+    /// A registered callable tool.
     Tool,
+    /// A task record in the selected workspace.
     Task,
+    /// A recorded friction in the selected scope.
     Friction,
     /// One file stored under a task's artifacts directory.
     Artifact,
+    /// A skill resolved by the skill registry.
     Skill,
+    /// A job definition available to dispatch.
     Job,
+    /// A recorded execution of a job.
     JobRun,
+    /// A registered workspace or its selected checkout.
     Workspace,
 }
 
@@ -54,16 +70,22 @@ impl std::fmt::Display for NotFoundKind {
 /// one rare refusal.
 #[derive(Debug, Serialize)]
 pub struct DependencyNotDelivered {
+    /// Task whose dispatch was refused.
     pub task_id: String,
+    /// Dependency recorded as done without delivery to the selected base.
     pub dependency_id: String,
+    /// Ref from which the requested run would be cut.
     pub base_ref: String,
+    /// Commit the dependency-delivery check used for that ref.
     pub base_sha: String,
+    /// Diagnostic with any known delivery commits and the recovery step.
     pub detail: String,
 }
 
 /// One unmerged index path and the conservative trivial-resolution classification.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ConflictedFile {
+    /// Repository-relative path of the unmerged index entry.
     pub path: String,
     /// True only if index modes and object IDs prove identical sides or an unchanged side.
     pub deterministically_resolvable: bool,
@@ -75,24 +97,20 @@ pub struct ConflictedFile {
 /// on message matching.
 #[derive(Debug, Clone, Serialize)]
 pub struct RecoverableVcsConflict {
+    /// VCS operation that left paths unmerged, such as merge or rebase.
     pub operation: String,
+    /// Commit the candidate was based on before the attempted operation.
     pub original_base_sha: String,
+    /// Commit the recovery operation tried to move the candidate onto.
     pub target_base_sha: String,
+    /// Repository-relative paths still unmerged after the operation.
     pub conflicting_paths: Vec<String>,
+    /// Per-path evidence distinguishing trivial index resolutions from paths requiring review.
     pub conflicting_files: Vec<ConflictedFile>,
+    /// Diagnostic from the operation for the recovery activity to inspect.
     pub diagnostic: String,
 }
 
-/// Evidence behind [`crate::OrbitError::WorkspaceClaimHeld`]: the refused operation,
-/// the incumbent holder, its claim id, and the instant the claim lapses.
-///
-/// The holder's token is deliberately absent. A refusal travels to the
-/// contender, and a contender that could read the token out of its own refusal
-/// would turn the claim into a formality.
-///
-/// Boxed into the error enum for the same reason as
-/// [`DependencyNotDelivered`]: four inline strings for one rare refusal would
-/// widen every `Result<_, OrbitError>` in the workspace.
 /// Evidence behind [`crate::OrbitError::FrictionNotLocal`]: an unqualified
 /// `resolves` target is missing from this workspace but present in others
 /// on the same host [ORB-11078].
@@ -101,18 +119,28 @@ pub struct RecoverableVcsConflict {
 /// every `Result<_, OrbitError>`.
 #[derive(Debug, Serialize)]
 pub struct FrictionNotLocal {
+    /// Unqualified friction ID the caller asked to resolve.
     pub friction_id: String,
+    /// Task carrying the resolves reference.
     pub task_id: String,
+    /// Workspace containing that task and in which the reference was sought.
     pub workspace_id: String,
+    /// Other workspace names where the friction exists on this host.
     pub found_in: Vec<String>,
 }
 
+/// Evidence returned when another actor holds the workspace claim required by an operation.
+///
+/// The holder's token is deliberately absent because the refusal travels to
+/// a contender. The evidence is boxed to preserve the size of
+/// [`crate::OrbitError`].
 #[derive(Debug, Serialize)]
 pub struct WorkspaceClaimHeld {
     /// The governed operation that was refused, e.g. `orbit.workflow.ship`.
     pub operation: String,
     /// The incumbent's actor label.
     pub holder: String,
+    /// Public claim identifier, distinct from the authority-bearing token.
     pub claim_id: String,
     /// RFC 3339 instant at which the claim stops blocking on its own.
     pub expires_at: String,
@@ -124,8 +152,11 @@ pub struct WorkspaceClaimHeld {
 /// so detached-worker recovery never depends on matching an error string.
 #[derive(Debug, Serialize)]
 pub struct SqliteContention {
+    /// Database path that failed to open or initialize.
     pub path: String,
+    /// Bootstrap operation that exhausted its lock wait.
     pub phase: String,
+    /// SQLite diagnostic captured at the failed operation.
     pub detail: String,
 }
 
@@ -296,6 +327,7 @@ pub enum HostRegistryCode {
 }
 
 impl HostRegistryCode {
+    /// Return the stable wire token that CLI and remote clients branch on.
     pub fn as_str(self) -> &'static str {
         match self {
             Self::HostFileConflict => "host_file_conflict",
@@ -572,22 +604,39 @@ pub struct ProviderReadThrottle {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum DecisionRefusalCode {
+    /// No registration covers this caller and channel.
     ChannelNotRegistered,
+    /// The registration exists but was revoked before submission.
     ChannelRevoked,
+    /// The caller's principal is outside the channel's allowed callers.
     CallerNotAllowed,
+    /// The transport omitted the sender or supplied one outside the channel's allowlist.
     SenderNotAllowed,
+    /// The transport's forwarded authentication results failed the channel's checks.
     AuthenticationFailed,
+    /// The supplied raw message failed the required DKIM checks.
     DkimVerificationFailed,
+    /// The DKIM verifier could not decide. The same submission may be retried.
     DkimVerificationUnavailable,
+    /// Channel policy requires a verifiable raw message.
     DkimVerificationRequired,
+    /// The raw message exceeds the verification input limit.
     RawMessageTooLarge,
+    /// The token cannot authorize this submission.
     TokenInvalid,
+    /// The one-time token was already redeemed.
     TokenConsumed,
+    /// The request's answer window has ended.
     RequestExpired,
+    /// A newer decision request superseded this one.
     RequestSuperseded,
+    /// The proposed answer is outside the request's recorded options.
     AnswerNotAllowed,
+    /// The owner could not find the referenced decision request.
     RequestNotFound,
+    /// The decision is already resolved or otherwise cannot accept this answer.
     AnswerNotApplicable,
+    /// Decision-channel submissions are disabled by configuration.
     DecisionChannelDisabled,
 }
 
@@ -647,15 +696,25 @@ impl std::fmt::Display for DecisionRefusalCode {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum NoticeRefusalCode {
+    /// The service could not establish the poster's identity.
     PosterUnidentified,
+    /// The poster is outside the authority for the requested notice scope.
     ScopeRefused,
+    /// This caller cannot post the requested kind of notice.
     KindRefused,
+    /// The post lacks the required evidence or task reference.
     EvidenceRequired,
+    /// The requested expiry outlasts the allowed notice lifetime.
     ExpiryExceedsCap,
+    /// The requested expiry is too early or is fixed by the notice's authority.
     ExpiryInvalid,
+    /// The applicable notice limit has been reached.
     LimitExceeded,
+    /// The caller cannot close the existing notice.
     CloseRefused,
+    /// No notice matched the requested identity in scope.
     NotFound,
+    /// A submitted field failed notice validation.
     InvalidField,
     /// Raised only by owners older than ORB-22808, whose `notice.agent_posting`
     /// switch could refuse agent posts; kept so their refusals still parse.
@@ -770,17 +829,29 @@ pub enum SourceRepairAuthorityRefusal {
     /// The immutable publication admission differs from the bound one. Raised
     /// by the engine's publication check; reports as an execution failure.
     PublicationAdmissionChanged,
+    /// A selector previously widened by the host was removed.
     HostSelectorRemoved,
+    /// The host's recorded selector widening could not be read.
     HostWideningUnreadable,
+    /// Rework permission or the policy bound at admission no longer authorizes publication.
     ReworkAuthorityChanged,
+    /// Retaining the original inline publication requires its complete stopped lineage.
     InlineLineageMissing,
+    /// A newer execution changed after the source was bound.
     SuccessorChanged,
+    /// Ownership of the original checkpoint changed before application.
     CheckpointOwnerChanged,
+    /// The evidence used to bind the repair source changed before application.
     SourceEvidenceChanged,
+    /// The task's authorized intent changed after source binding.
     TaskMeaningChanged,
+    /// The bound source, task, scope or reservation no longer agrees with current state.
     BindingChanged,
+    /// The task's recorded repository or URL conflicts with the authenticated publication.
     PrAssociationRepositoryConflict,
+    /// The task's recorded PR number conflicts with the authenticated publication.
     PrAssociationNumberConflict,
+    /// The authenticated publication has no matching PR association on the task.
     PrAssociationMissing,
 }
 
@@ -850,7 +921,9 @@ impl SourceRepairAuthorityRefusal {
 /// [`crate::OrbitError`]'s 128-byte size budget.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct UnknownWorkspaceSelector {
+    /// The supplied selector that failed workspace and checkout resolution.
     pub selector: String,
+    /// Current session binding and recovery guidance, when the session has a binding.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub bound: Option<BoundWorkspace>,
 }
@@ -859,7 +932,9 @@ pub struct UnknownWorkspaceSelector {
 /// names it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct BoundWorkspace {
+    /// Name of the workspace already bound to this session.
     pub name: String,
+    /// How to retry while preserving that workspace as the query filter.
     pub remedy: BoundWorkspaceRemedy,
 }
 

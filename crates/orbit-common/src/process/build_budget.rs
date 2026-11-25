@@ -16,10 +16,15 @@ pub use crate::env_vars::ORBIT_ACTIVITY_BUILD_BUDGET_DIR as WAIT_DIRECTORY_ENV;
 /// while `queued_wall_ms` counts their interval union for deadline credit.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BuildBudgetWaits {
+    /// Number of build commands observed waiting for admission.
     pub count: u64,
+    /// Sum of all recorded waits in milliseconds, including overlap.
     pub total_ms: u64,
+    /// Longest single command wait in milliseconds.
     pub longest_ms: u64,
+    /// Wall time in milliseconds during which at least one build was queued.
     pub queued_wall_ms: u64,
+    /// Milliseconds credited back to the activity deadline for build admission waits.
     pub deadline_extension_ms: u64,
 }
 
@@ -128,8 +133,11 @@ pub fn read_waits(directory: &Path, timeout_ms: u64) -> BuildBudgetWaits {
 
 /// Resolved host slot capacity and the operator's settings path.
 pub struct BuildBudgetCapacity {
+    /// Resolved slot count after applying environment, settings and default precedence.
     pub slots: u32,
+    /// Whether the host's build admission wrapper is enabled.
     pub enabled: bool,
+    /// Path to the slot-count settings file, even if the override or default won.
     pub settings_file: PathBuf,
 }
 

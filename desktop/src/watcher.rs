@@ -8,8 +8,8 @@
 //! pipeline count and notify once. When more than one host is registered,
 //! notification text names the host. Drain and failure counts are sums across
 //! the hosts that answered. The failure count is distinct failures in the
-//! fetched page (at most [`PAGE`] runs per host), not the endpoint's run
-//! total. A host that does not answer keeps the baseline from its last answer,
+//! fetched page, within the per-host page limit. A host that does not answer
+//! keeps the baseline from its last answer,
 //! so those items are not announced again when it returns, and the missing
 //! answer makes that count unavailable instead of adding zero.
 //! Fleet phases and holds are compared per workspace. Baseline-red task holds

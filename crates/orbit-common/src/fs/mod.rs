@@ -5,11 +5,13 @@ pub mod cwd;
 pub mod directory_lock;
 pub mod file_lock;
 pub mod generation;
+/// Bounded Git invocation, branch and ref discovery, and locks shared across worktrees.
 pub mod git;
 pub mod io;
 pub mod lock_mode;
 pub mod lock_wait;
 pub mod overlap_index;
+/// Paths rooted at the invoking user's home or at a selected workspace checkout.
 pub mod path;
 pub mod path_filter;
 pub mod path_glob;

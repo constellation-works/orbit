@@ -324,6 +324,7 @@ pub fn probe_process_start_identity(pid: u32) -> ProbeOutcome {
     }
 }
 
+/// Report that this platform cannot provide a versioned process-start identity.
 #[cfg(not(unix))]
 pub fn probe_process_start_identity(_pid: u32) -> ProbeOutcome {
     ProbeOutcome::Unavailable
@@ -411,6 +412,7 @@ pub fn probe_process_liveness(pid: u32, pid_start_time: Option<&str>) -> Process
     }
 }
 
+/// Return unknown liveness because this platform cannot verify a PID's start identity.
 #[cfg(not(unix))]
 pub fn probe_process_liveness(_pid: u32, _pid_start_time: Option<&str>) -> ProcessLiveness {
     ProcessLiveness::Unknown
@@ -422,8 +424,12 @@ pub fn probe_process_liveness(_pid: u32, _pid_start_time: Option<&str>) -> Proce
 /// safety decision must preserve the possibility that work is still running.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum KernelLiveness {
+    /// The kernel evidence confirms the target is still present.
     Alive,
+    /// The kernel evidence confirms the target is gone.
     Exited,
+    /// The probe could not establish presence or exit. Preserve the possibility that the target is
+    /// alive.
     Unknown,
 }
 
@@ -470,6 +476,7 @@ pub fn process_is_alive(pid: u32) -> bool {
     !matches!(signal_presence(pid as libc::pid_t), SignalPresence::Missing)
 }
 
+/// This platform lacks the PID-presence probe and always returns `false`.
 #[cfg(not(unix))]
 pub fn process_is_alive(_pid: u32) -> bool {
     false
@@ -495,7 +502,9 @@ pub struct LinuxProcessStat {
     /// Run state: `R`, `S`, `D`, `T` (stopped by a signal), `t` (stopped
     /// under a tracer), `Z`, ...
     pub state: char,
+    /// Parent process ID from Linux stat field 4.
     pub parent_pid: u32,
+    /// Process group ID from Linux stat field 5.
     pub process_group: libc::pid_t,
     /// Start time in clock ticks after boot. With the pid it names one
     /// process: a reused pid starts later.
