@@ -1,5 +1,6 @@
 //! Server-local identity facts attached to one MCP stdio session.
 
+use orbit_common::env_vars;
 use std::collections::BTreeSet;
 use std::path::Path;
 
@@ -109,7 +110,7 @@ pub(super) fn local_identity(global_root: &Path) -> Result<(String, String), Orb
 }
 
 fn observed_ssh_caller_ip() -> Option<String> {
-    std::env::var("SSH_CONNECTION")
+    std::env::var(env_vars::SSH_CONNECTION)
         .ok()
         .and_then(|connection| ssh_caller_ip(&connection))
 }

@@ -2,6 +2,7 @@
 
 use chrono::Utc;
 use orbit_common::OrbitError;
+use orbit_common::env_vars;
 use orbit_common::security::redaction::{redact_all, redact_home_dir};
 use orbit_types::task::Task;
 use orbit_types::workflow::{
@@ -296,7 +297,7 @@ impl OrbitRuntime {
                 orbit_types::workflow::ResidentContinuity::Prefer => {
                     let rebuilt_by_fallback =
                         super::due::continuity_rebuilt(&history, &checkpoint.cycle)
-                            || std::env::var("ORBIT_ACTIVITY_RESIDENT_CONTINUITY")
+                            || std::env::var(env_vars::ORBIT_ACTIVITY_RESIDENT_CONTINUITY)
                                 .ok()
                                 .as_deref()
                                 == Some("rebuilt");

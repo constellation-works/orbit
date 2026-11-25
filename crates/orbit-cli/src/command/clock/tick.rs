@@ -1,5 +1,6 @@
 //! The stateless scheduler tick shared by `orbit clock tick` and `orbit sweep`.
 
+use orbit_common::env_vars;
 use std::path::Path;
 
 use clap::Args;
@@ -207,7 +208,8 @@ fn run_sweep_for_selected_root(
     workspace_selector: Option<&str>,
     options: SweepOptions,
 ) -> Result<SweepOutcome, OrbitError> {
-    let has_env_override = std::env::var("ORBIT_ROOT").is_ok_and(|root| !root.trim().is_empty());
+    let has_env_override =
+        std::env::var(env_vars::ORBIT_ROOT).is_ok_and(|root| !root.trim().is_empty());
     if root_override.is_none() && !has_env_override {
         return run_sweep(options, workspace_selector);
     }

@@ -396,7 +396,7 @@ pub(crate) fn teardown_runtime(runtime: tokio::runtime::Runtime) {
 }
 
 /// Set on a dashboard exec'd to take over from a replaced image.
-const HANDOVER_ENV: &str = "ORBIT_DASHBOARD_HANDOVER";
+use orbit_common::env_vars::ORBIT_DASHBOARD_HANDOVER as HANDOVER_ENV;
 
 /// How often the dashboard checks for a replacement or a pending switch.
 const LIFECYCLE_INTERVAL: Duration = Duration::from_secs(5);

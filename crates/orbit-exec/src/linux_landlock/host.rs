@@ -26,6 +26,7 @@
 //! `gh`), and a toolchain whose runtime files live outside the `bin` directory
 //! on `PATH` needs that tree named by an environment variable.
 
+use orbit_common::env_vars;
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
@@ -119,11 +120,11 @@ struct ToolState {
 /// the same cache paths the macOS profile allows. [ORB-12469]
 const TOOL_STATE: &[ToolState] = &[
     ToolState {
-        variable: "CARGO_HOME",
+        variable: env_vars::CARGO_HOME,
         default_path: Some(".cargo"),
     },
     ToolState {
-        variable: "RUSTUP_HOME",
+        variable: env_vars::RUSTUP_HOME,
         default_path: Some(".rustup"),
     },
     ToolState {
@@ -135,7 +136,7 @@ const TOOL_STATE: &[ToolState] = &[
         default_path: None,
     },
     ToolState {
-        variable: "GH_CONFIG_DIR",
+        variable: env_vars::GH_CONFIG_DIR,
         default_path: Some(".config/gh"),
     },
     ToolState {
@@ -167,15 +168,15 @@ const TOOL_STATE: &[ToolState] = &[
         default_path: None,
     },
     ToolState {
-        variable: "ORBIT_ROOT",
+        variable: env_vars::ORBIT_ROOT,
         default_path: None,
     },
     ToolState {
-        variable: "ORBIT_REGISTRY_ROOT",
+        variable: env_vars::ORBIT_REGISTRY_ROOT,
         default_path: None,
     },
     ToolState {
-        variable: "ORBIT_BIN",
+        variable: env_vars::ORBIT_BIN,
         default_path: None,
     },
     // A temporary file is opened read-write, so a compiler or patch tool that
@@ -185,7 +186,7 @@ const TOOL_STATE: &[ToolState] = &[
     // staged there. `TMPDIR` is already an admitted baseline variable, so an
     // executor that exports it gets a scratch grant for exactly that path.
     ToolState {
-        variable: "TMPDIR",
+        variable: env_vars::TMPDIR,
         default_path: None,
     },
 ];
@@ -225,7 +226,7 @@ pub(super) fn host_read_grants(environment: &[(String, String)]) -> Vec<Landlock
     {
         push_existing_file(&mut grants, Path::new(file));
     }
-    let home = lookup(environment, "HOME").map(PathBuf::from);
+    let home = lookup(environment, env_vars::HOME).map(PathBuf::from);
     for dir in path_directories(environment, home.as_deref()) {
         push_existing_dir(&mut grants, &dir);
     }
@@ -241,7 +242,7 @@ pub(super) fn host_read_grants(environment: &[(String, String)]) -> Vec<Landlock
 /// `~/.local/bin` and `cargo` in `~/.cargo/bin`. `PATH` is the operator's own
 /// statement of where those programs are, so it is what the grants follow.
 fn path_directories(environment: &[(String, String)], home: Option<&Path>) -> Vec<PathBuf> {
-    let Some(search_path) = lookup(environment, "PATH") else {
+    let Some(search_path) = lookup(environment, env_vars::PATH) else {
         return Vec::new();
     };
     std::env::split_paths(search_path)
@@ -292,7 +293,7 @@ fn default_path(default: &str, home: Option<&Path>) -> Option<PathBuf> {
 }
 
 fn xdg_config_home(environment: &[(String, String)], home: Option<&Path>) -> Option<PathBuf> {
-    lookup(environment, "XDG_CONFIG_HOME")
+    lookup(environment, env_vars::XDG_CONFIG_HOME)
         .map(PathBuf::from)
         .or_else(|| Some(home?.join(".config")))
 }
@@ -351,7 +352,7 @@ fn resolve_program(program: &str, environment: &[(String, String)]) -> Option<Pa
     if program.contains('/') {
         return Path::new(program).canonicalize().ok();
     }
-    let search_path = lookup(environment, "PATH")?;
+    let search_path = lookup(environment, env_vars::PATH)?;
     std::env::split_paths(search_path).find_map(|dir| {
         let candidate = dir.join(program);
         candidate.is_file().then(|| candidate.canonicalize().ok())?

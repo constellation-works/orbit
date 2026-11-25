@@ -1,3 +1,4 @@
+use orbit_common::env_vars;
 use std::collections::HashMap;
 
 use orbit_common::OrbitError;
@@ -11,7 +12,7 @@ const RUNTIME_KEY: &str = "grok";
 /// `GROK_HOME` is non-secret state-root context: the sandbox grants exactly
 /// the directory it names, so dropping it would make the CLI resolve
 /// `$HOME/.grok` while the profile granted the override.
-const REQUIRED_ENV_VARS: &[&str] = &["HOME", "PATH", "GROK_HOME"];
+const REQUIRED_ENV_VARS: &[&str] = &[env_vars::HOME, env_vars::PATH, env_vars::GROK_HOME];
 
 pub(crate) struct GrokRuntime {
     command: String,

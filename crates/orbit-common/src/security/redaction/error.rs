@@ -1,3 +1,4 @@
+use crate::env_vars;
 use std::collections::HashMap;
 use std::path::{Component, Path};
 
@@ -659,9 +660,9 @@ fn credential_safe_location_with(raw: &str, redact: fn(&str) -> String) -> Strin
 }
 
 fn home_dir_string() -> Option<String> {
-    std::env::var("HOME")
+    std::env::var(env_vars::HOME)
         .ok()
-        .or_else(|| std::env::var("USERPROFILE").ok())
+        .or_else(|| std::env::var(env_vars::USERPROFILE).ok())
         .filter(|home| {
             let path = Path::new(home);
             path.is_absolute()

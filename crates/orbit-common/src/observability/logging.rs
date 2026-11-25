@@ -43,6 +43,7 @@
 //! [`redact_event_text`] remains available for non-tracing surfaces that must
 //! scrub text before writing it elsewhere.
 
+use crate::env_vars;
 use std::{
     collections::BTreeMap,
     fmt as std_fmt,
@@ -90,10 +91,10 @@ pub fn agent_jsonl_log_path(operational: &Path) -> Option<PathBuf> {
         .then(|| operational.with_file_name("orbit-agent.jsonl"))
 }
 
-const ORBIT_MANAGED_RUN_CONTEXT_ENV: &str = "ORBIT_MANAGED_RUN_CONTEXT";
-const ORBIT_RUN_ID_ENV: &str = "ORBIT_RUN_ID";
-const ORBIT_REGISTRY_ROOT_ENV: &str = "ORBIT_REGISTRY_ROOT";
-const ORBIT_ROOT_ENV: &str = "ORBIT_ROOT";
+use crate::env_vars::ORBIT_MANAGED_RUN_CONTEXT as ORBIT_MANAGED_RUN_CONTEXT_ENV;
+use crate::env_vars::ORBIT_REGISTRY_ROOT as ORBIT_REGISTRY_ROOT_ENV;
+use crate::env_vars::ORBIT_ROOT as ORBIT_ROOT_ENV;
+use crate::env_vars::ORBIT_RUN_ID as ORBIT_RUN_ID_ENV;
 
 /// Field formatter that redacts string-valued and `Debug`-formatted tracing
 /// event fields before they are written to stderr or the JSONL tracing feed.
@@ -477,9 +478,9 @@ fn stderr_ansi_enabled() -> bool {
     let var = |key: &str| std::env::var_os(key).map(|value| value.to_string_lossy().into_owned());
     ansi_allowed(
         io::stderr().is_terminal(),
-        var("TERM").as_deref(),
-        var("NO_COLOR").as_deref(),
-        var("CLICOLOR_FORCE").as_deref(),
+        var(env_vars::TERM).as_deref(),
+        var(env_vars::NO_COLOR).as_deref(),
+        var(env_vars::CLICOLOR_FORCE).as_deref(),
     )
 }
 
@@ -516,7 +517,7 @@ pub fn redact_event_text(message: &str) -> String {
 // Visible to sibling-layout logging tests; the filter construction is a
 // focused seam for subscriber behavior.
 pub(super) fn env_filter(default_filter: &str) -> EnvFilter {
-    EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(default_filter))
+    EnvFilter::try_from_env(env_vars::RUST_LOG).unwrap_or_else(|_| EnvFilter::new(default_filter))
 }
 
 /// Resolve the canonical path to the global JSONL tracing feed
@@ -541,8 +542,8 @@ pub fn global_jsonl_log_path() -> io::Result<PathBuf> {
             _ => managed_root,
         },
         None => {
-            let home = std::env::var_os("HOME")
-                .or_else(|| std::env::var_os("USERPROFILE"))
+            let home = std::env::var_os(env_vars::HOME)
+                .or_else(|| std::env::var_os(env_vars::USERPROFILE))
                 .filter(|value| !value.is_empty())
                 .ok_or_else(|| {
                     io::Error::new(
@@ -634,8 +635,8 @@ fn explicit_root_arg_value() -> Option<String> {
 fn resolve_explicit_log_root(raw: &str) -> io::Result<PathBuf> {
     let value = raw.trim();
     let path = if value == "~" || value.starts_with("~/") {
-        let home = std::env::var_os("HOME")
-            .or_else(|| std::env::var_os("USERPROFILE"))
+        let home = std::env::var_os(env_vars::HOME)
+            .or_else(|| std::env::var_os(env_vars::USERPROFILE))
             .filter(|home| !home.is_empty())
             .ok_or_else(|| {
                 io::Error::new(
@@ -691,7 +692,7 @@ pub const JSONL_QUEUE_LINES: usize = 4_096;
 /// Debug builds stall the agent writer's first disk write on this FIFO so a
 /// test can fill [`JSONL_QUEUE_LINES`] before any relay byte is stored.
 /// Release builds ignore it. Unset for ordinary runs.
-const AGENT_JSONL_GATE_ENV: &str = "ORBIT_TEST_AGENT_JSONL_GATE";
+use crate::env_vars::ORBIT_TEST_AGENT_JSONL_GATE as AGENT_JSONL_GATE_ENV;
 
 struct SplitJsonlWriter {
     operational: NonBlocking,

@@ -15,6 +15,7 @@
 //! `ORBIT_TASK_ACTOR_KIND`, `ORBIT_ACTIVITY_*`) are
 //! injected by the CLI runner or forwarded from the parent when present.
 
+use orbit_common::env_vars;
 use std::path::Path;
 
 use orbit_common::security::child_env::{
@@ -66,10 +67,13 @@ pub(crate) fn provenance_env(config: ProvenanceEnv<'_>) -> Vec<(String, String)>
         vars.push((MCP_MANAGED_CONTEXT_ENV.to_string(), "1".to_string()));
     }
     if let Some(agent_name) = config.orbit_agent_name {
-        vars.push(("ORBIT_AGENT_NAME".to_string(), agent_name.to_string()));
+        vars.push((
+            env_vars::ORBIT_AGENT_NAME.to_string(),
+            agent_name.to_string(),
+        ));
     }
     if let Some(model) = config.orbit_agent_model {
-        vars.push(("ORBIT_AGENT_MODEL".to_string(), model.to_string()));
+        vars.push((env_vars::ORBIT_AGENT_MODEL.to_string(), model.to_string()));
     }
     if let Some(session_id) = config.orbit_session_id {
         vars.push((
@@ -78,7 +82,7 @@ pub(crate) fn provenance_env(config: ProvenanceEnv<'_>) -> Vec<(String, String)>
         ));
     }
     if let Some(task_id) = config.orbit_task_id {
-        vars.push(("ORBIT_TASK_ID".to_string(), task_id.to_string()));
+        vars.push((env_vars::ORBIT_TASK_ID.to_string(), task_id.to_string()));
         if config.orbit_active_task {
             vars.push(("ORBIT_ACTIVE_TASK_ID".to_string(), task_id.to_string()));
         }

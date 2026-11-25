@@ -8,6 +8,7 @@
 //! `orbit_cmd::hosts`; this module only maps commands to tool calls and
 //! renders the answer.
 
+use orbit_common::env_vars;
 use std::path::{Path, PathBuf};
 
 use orbit_cmd::hosts::{self, HostWorkspaceRoute, TaskIdRoute};
@@ -400,7 +401,8 @@ fn requested_host(command: &Commands) -> Option<String> {
 }
 
 fn explicit_root(cli: &Cli) -> bool {
-    cli.root.is_some() || std::env::var("ORBIT_ROOT").is_ok_and(|value| !value.trim().is_empty())
+    cli.root.is_some()
+        || std::env::var(env_vars::ORBIT_ROOT).is_ok_and(|value| !value.trim().is_empty())
 }
 
 /// The id an id-routed `orbit task` subcommand addresses.
@@ -527,8 +529,8 @@ fn declared_tool_run_model(
     input_declared_model(input)
         .or_else(|| trimmed_identity(model))
         .or_else(|| trimmed_identity(agent))
-        .or_else(|| trimmed_identity(std::env::var("ORBIT_AGENT_MODEL").ok().as_deref()))
-        .or_else(|| trimmed_identity(std::env::var("ORBIT_AGENT_NAME").ok().as_deref()))
+        .or_else(|| trimmed_identity(std::env::var(env_vars::ORBIT_AGENT_MODEL).ok().as_deref()))
+        .or_else(|| trimmed_identity(std::env::var(env_vars::ORBIT_AGENT_NAME).ok().as_deref()))
 }
 
 /// Carry a routed `orbit tool run`'s declared model in its forwarded input,

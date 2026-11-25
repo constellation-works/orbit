@@ -25,6 +25,7 @@
 //! withheld: inheritance is not a way to hand `ORBIT_OPERATOR` or
 //! `ORBIT_WORKSPACE_CLAIM_TOKEN` to a child.
 
+use crate::env_vars;
 use std::collections::{BTreeMap, BTreeSet};
 
 use orbit_types::identity::{CrewEnvSource, CrewEnvVar};
@@ -40,43 +41,52 @@ use super::operator_env::read_secret_file;
 /// endpoints are never baseline; an operator opts into those by name through
 /// `[execution.env].pass`.
 pub const AGENT_SUBPROCESS_BASELINE_VARS: &[&str] = &[
-    "HOME", "LANG", "LC_ALL", "LOGNAME", "PATH", "SHELL", "TERM", "TMPDIR", "TZ", "USER",
+    env_vars::HOME,
+    env_vars::LANG,
+    env_vars::LC_ALL,
+    env_vars::LOGNAME,
+    env_vars::PATH,
+    env_vars::SHELL,
+    env_vars::TERM,
+    env_vars::TMPDIR,
+    env_vars::TZ,
+    env_vars::USER,
 ];
 
 /// Managed envelope names that a nested Codex MCP server needs for workspace
 /// binding, attribution, and activity policy. These are names only;
 /// Codex copies their values from the managed child environment.
-pub const MCP_MANAGED_CONTEXT_ENV: &str = "ORBIT_MANAGED_RUN_CONTEXT";
-/// Job-run identity forwarded to a nested MCP server.
-pub const MCP_MANAGED_RUN_ID_ENV: &str = "ORBIT_RUN_ID";
-/// Source-inspection identity forwarded to a nested MCP server.
-pub const MCP_MANAGED_SESSION_ID_ENV: &str = "ORBIT_SESSION_ID";
-/// Logical workspace selector forwarded to a nested MCP server.
-pub const MCP_MANAGED_WORKSPACE_ENV: &str = "ORBIT_WORKSPACE";
+pub use crate::env_vars::ORBIT_MANAGED_RUN_CONTEXT as MCP_MANAGED_CONTEXT_ENV;
 /// Registry locator forwarded to a nested MCP server.
-pub const MCP_MANAGED_REGISTRY_ROOT_ENV: &str = "ORBIT_REGISTRY_ROOT";
+pub use crate::env_vars::ORBIT_REGISTRY_ROOT as MCP_MANAGED_REGISTRY_ROOT_ENV;
+/// Job-run identity forwarded to a nested MCP server.
+pub use crate::env_vars::ORBIT_RUN_ID as MCP_MANAGED_RUN_ID_ENV;
+/// Source-inspection identity forwarded to a nested MCP server.
+pub use crate::env_vars::ORBIT_SESSION_ID as MCP_MANAGED_SESSION_ID_ENV;
+/// Logical workspace selector forwarded to a nested MCP server.
+pub use crate::env_vars::ORBIT_WORKSPACE as MCP_MANAGED_WORKSPACE_ENV;
 
-/// Deny-mode activity tool policy marker (`deny`). Stamped only for an
-/// activity that declares `tool_disallow_list`; absent means the legacy
-/// `ORBIT_ACTIVITY_TOOLS` allowlist mode. [ORB-13315]
-pub const ACTIVITY_TOOL_POLICY_ENV: &str = "ORBIT_ACTIVITY_TOOL_POLICY";
-/// A deny-mode activity's disallow list, comma-separated. Always stamped in
-/// deny mode, even when empty, so its absence can fail back to the allowlist.
-pub const ACTIVITY_TOOLS_DENY_ENV: &str = "ORBIT_ACTIVITY_TOOLS_DENY";
-/// The deny-mode activity's name, used to name it in a denial.
-pub const ACTIVITY_NAME_ENV: &str = "ORBIT_ACTIVITY_NAME";
 /// The managed activity's wall-clock deadline, in milliseconds since the Unix
 /// epoch. The CLI runner stamps it from the provider's own supervision bound,
 /// so a nested `proc.spawn` can run as long as the activity has left, under the
 /// configured ceiling, instead of the 60 s unscoped ceiling.
-pub const ACTIVITY_DEADLINE_ENV: &str = "ORBIT_ACTIVITY_DEADLINE_UNIX_MS";
-/// Original activity budget, bounding build-admission deadline credit.
-pub const ACTIVITY_TIMEOUT_ENV: &str = "ORBIT_ACTIVITY_TIMEOUT_MS";
+pub use crate::env_vars::ORBIT_ACTIVITY_DEADLINE_UNIX_MS as ACTIVITY_DEADLINE_ENV;
 /// Opt-in MCP toolsets the activity's nested `orbit mcp serve` advertises
 /// beside its own selection, comma-separated as `--toolset` takes them. The
 /// dispatch stamps toolsets for the activity's resolved tools. A toolset
 /// changes advertisement only and grants nothing: every call keeps its admission.
-pub const ACTIVITY_MCP_TOOLSETS_ENV: &str = "ORBIT_ACTIVITY_MCP_TOOLSETS";
+pub use crate::env_vars::ORBIT_ACTIVITY_MCP_TOOLSETS as ACTIVITY_MCP_TOOLSETS_ENV;
+/// The deny-mode activity's name, used to name it in a denial.
+pub use crate::env_vars::ORBIT_ACTIVITY_NAME as ACTIVITY_NAME_ENV;
+/// Original activity budget, bounding build-admission deadline credit.
+pub use crate::env_vars::ORBIT_ACTIVITY_TIMEOUT_MS as ACTIVITY_TIMEOUT_ENV;
+/// Deny-mode activity tool policy marker (`deny`). Stamped only for an
+/// activity that declares `tool_disallow_list`; absent means the legacy
+/// `ORBIT_ACTIVITY_TOOLS` allowlist mode. [ORB-13315]
+pub use crate::env_vars::ORBIT_ACTIVITY_TOOL_POLICY as ACTIVITY_TOOL_POLICY_ENV;
+/// A deny-mode activity's disallow list, comma-separated. Always stamped in
+/// deny mode, even when empty, so its absence can fail back to the allowlist.
+pub use crate::env_vars::ORBIT_ACTIVITY_TOOLS_DENY as ACTIVITY_TOOLS_DENY_ENV;
 
 /// Where a sandboxed agent's run plugin broker listens. A nested
 /// `orbit mcp serve` reaches brokered tools (the claimed before-PR review
@@ -84,7 +94,7 @@ pub const ACTIVITY_MCP_TOOLSETS_ENV: &str = "ORBIT_ACTIVITY_MCP_TOOLSETS";
 /// locates a socket and grants nothing: the broker authenticates every
 /// connection by the kernel's peer identity against the run it was started
 /// for, so a forwarded or forged path cannot borrow another run's authority.
-pub const PLUGIN_BROKER_ENV: &str = "ORBIT_PLUGIN_BROKER";
+pub use crate::env_vars::ORBIT_PLUGIN_BROKER as PLUGIN_BROKER_ENV;
 
 /// Exact managed binding, identity, activity policy and broker locator names
 /// Codex must forward.
@@ -94,10 +104,10 @@ pub const MCP_MANAGED_BINDING_ENV_VARS: &[&str] = &[
     MCP_MANAGED_SESSION_ID_ENV,
     MCP_MANAGED_WORKSPACE_ENV,
     MCP_MANAGED_REGISTRY_ROOT_ENV,
-    "ORBIT_AGENT_NAME",
-    "ORBIT_AGENT_MODEL",
-    "ORBIT_TASK_ACTOR_KIND",
-    "ORBIT_ACTIVITY_TOOLS",
+    env_vars::ORBIT_AGENT_NAME,
+    env_vars::ORBIT_AGENT_MODEL,
+    env_vars::ORBIT_TASK_ACTOR_KIND,
+    env_vars::ORBIT_ACTIVITY_TOOLS,
     ACTIVITY_TOOL_POLICY_ENV,
     ACTIVITY_TOOLS_DENY_ENV,
     ACTIVITY_NAME_ENV,
@@ -105,10 +115,10 @@ pub const MCP_MANAGED_BINDING_ENV_VARS: &[&str] = &[
     ACTIVITY_TIMEOUT_ENV,
     ACTIVITY_MCP_TOOLSETS_ENV,
     crate::process::build_budget::WAIT_DIRECTORY_ENV,
-    "ORBIT_ACTIVITY_FS_PROFILE",
-    "ORBIT_PROC_ALLOWED_PROGRAMS",
-    "ORBIT_PROC_PROGRAM_POLICY",
-    "ORBIT_PROC_DISALLOWED_PROGRAMS",
+    env_vars::ORBIT_ACTIVITY_FS_PROFILE,
+    env_vars::ORBIT_PROC_ALLOWED_PROGRAMS,
+    env_vars::ORBIT_PROC_PROGRAM_POLICY,
+    env_vars::ORBIT_PROC_DISALLOWED_PROGRAMS,
     PLUGIN_BROKER_ENV,
 ];
 
@@ -123,22 +133,22 @@ pub const MCP_MANAGED_BINDING_ENV_VARS: &[&str] = &[
 const ORBIT_ENVELOPE_VARS: &[&str] = &[
     MCP_MANAGED_RUN_ID_ENV,
     MCP_MANAGED_CONTEXT_ENV,
-    "ORBIT_AGENT_NAME",
-    "ORBIT_AGENT_MODEL",
+    env_vars::ORBIT_AGENT_NAME,
+    env_vars::ORBIT_AGENT_MODEL,
     MCP_MANAGED_SESSION_ID_ENV,
-    "ORBIT_TASK_ID",
+    env_vars::ORBIT_TASK_ID,
     "ORBIT_ACTIVE_TASK_ID",
-    "ORBIT_ROOT",
+    env_vars::ORBIT_ROOT,
     MCP_MANAGED_REGISTRY_ROOT_ENV,
     MCP_MANAGED_WORKSPACE_ENV,
-    "ORBIT_WORKTREE_ROOT",
+    env_vars::ORBIT_WORKTREE_ROOT,
     "ORBIT_SCRATCH_DIR",
-    "ORBIT_BIN",
-    "ORBIT_STEP_INDEX",
-    "ORBIT_TASK_ACTOR_KIND",
-    "ORBIT_PROC_ALLOWED_PROGRAMS",
-    "ORBIT_PROC_PROGRAM_POLICY",
-    "ORBIT_PROC_DISALLOWED_PROGRAMS",
+    env_vars::ORBIT_BIN,
+    env_vars::ORBIT_STEP_INDEX,
+    env_vars::ORBIT_TASK_ACTOR_KIND,
+    env_vars::ORBIT_PROC_ALLOWED_PROGRAMS,
+    env_vars::ORBIT_PROC_PROGRAM_POLICY,
+    env_vars::ORBIT_PROC_DISALLOWED_PROGRAMS,
 ];
 
 /// Envelope families admitted by prefix because the engine treats them as
@@ -377,8 +387,8 @@ pub(crate) fn backfill_login_identity(vars: &mut BTreeMap<String, String>) {
     let missing = |vars: &BTreeMap<String, String>, key: &str| {
         vars.get(key).is_none_or(|value| value.is_empty())
     };
-    let need_user = missing(vars, "USER");
-    let need_logname = missing(vars, "LOGNAME");
+    let need_user = missing(vars, env_vars::USER);
+    let need_logname = missing(vars, env_vars::LOGNAME);
     if !need_user && !need_logname {
         return;
     }
@@ -388,10 +398,10 @@ pub(crate) fn backfill_login_identity(vars: &mut BTreeMap<String, String>) {
         return;
     };
     if need_user {
-        vars.insert("USER".to_string(), login.clone());
+        vars.insert(env_vars::USER.to_string(), login.clone());
     }
     if need_logname {
-        vars.insert("LOGNAME".to_string(), login);
+        vars.insert(env_vars::LOGNAME.to_string(), login);
     }
 }
 
@@ -438,7 +448,7 @@ pub fn os_login_name() -> Option<String> {
 /// Non-Unix fallback: derive the login name from `USERNAME` if present.
 #[cfg(not(unix))]
 pub fn os_login_name() -> Option<String> {
-    std::env::var("USERNAME")
+    std::env::var(env_vars::USERNAME)
         .ok()
         .filter(|name| !name.is_empty())
 }

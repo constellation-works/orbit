@@ -1,6 +1,7 @@
 //! The audit-store dispatch core: builds the audit row for one tool call,
 //! persists it, and hands the outcome to success finalization.
 
+use orbit_common::env_vars;
 use std::time::Instant;
 
 use orbit_common::security::redaction::redact_all_json_with_keys;
@@ -200,7 +201,7 @@ where
         stdout_truncated: None,
         stderr_truncated: None,
         error_message,
-        host: std::env::var("HOSTNAME").ok(),
+        host: std::env::var(env_vars::HOSTNAME).ok(),
         pid: std::process::id(),
         session_id: audit_context.session_id,
         workspace_id: session_context

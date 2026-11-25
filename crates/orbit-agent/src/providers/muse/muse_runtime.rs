@@ -1,3 +1,4 @@
+use orbit_common::env_vars;
 use std::collections::HashMap;
 
 use orbit_common::OrbitError;
@@ -19,7 +20,12 @@ const RUNTIME_KEY: &str = "muse";
 /// XDG variables locate Muse state and are safe to pass through as runtime
 /// requirements.
 /// [ORB-16577]
-const REQUIRED_ENV_VARS: &[&str] = &["HOME", "PATH", "XDG_CONFIG_HOME", "XDG_DATA_HOME"];
+const REQUIRED_ENV_VARS: &[&str] = &[
+    env_vars::HOME,
+    env_vars::PATH,
+    env_vars::XDG_CONFIG_HOME,
+    env_vars::XDG_DATA_HOME,
+];
 
 /// Launcher switches pinned for every run. The `muse` launcher otherwise
 /// checks for updates hourly and swaps its binary in the background, and can

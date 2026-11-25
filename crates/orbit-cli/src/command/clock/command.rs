@@ -1,3 +1,4 @@
+use orbit_common::env_vars;
 use std::path::Path;
 
 use clap::{Args, Subcommand};
@@ -217,7 +218,8 @@ fn clock_program_doc(unit: &ClockUnitInspection) -> Value {
 }
 
 fn selected_global_root(root_override: Option<&Path>) -> Result<std::path::PathBuf, OrbitError> {
-    let has_env_override = std::env::var("ORBIT_ROOT").is_ok_and(|root| !root.trim().is_empty());
+    let has_env_override =
+        std::env::var(env_vars::ORBIT_ROOT).is_ok_and(|root| !root.trim().is_empty());
     if root_override.is_some() || has_env_override {
         let cwd = std::env::current_dir().map_err(|error| OrbitError::Io(error.to_string()))?;
         return OrbitRuntime::resolve_roots_for_cwd(&cwd, root_override)

@@ -1,5 +1,6 @@
 //! Sandbox launch, environment and scratch lifecycle for a script attempt.
 
+use orbit_common::env_vars;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -174,7 +175,7 @@ pub(super) fn run_in_scratch(plan: RunPlan<'_>) -> Result<ScriptStepRan, Refusal
         .cloned()
         .collect();
     readable.extend(grant.read_roots.iter().cloned());
-    let home = std::env::var_os("HOME");
+    let home = std::env::var_os(env_vars::HOME);
     let timeout_seconds = request
         .timeout_seconds
         .or(asset.spec.requests.timeout_seconds)
@@ -317,7 +318,13 @@ pub(super) fn script_passed_env(
 
 /// The names [`script_env`] sets itself; a grant's `env_pass` never
 /// replaces them.
-const SCRIPT_FIXED_ENV: [&str; 5] = ["PATH", "HOME", "TMPDIR", "LANG", "TZ"];
+const SCRIPT_FIXED_ENV: [&str; 5] = [
+    env_vars::PATH,
+    env_vars::HOME,
+    env_vars::TMPDIR,
+    env_vars::LANG,
+    env_vars::TZ,
+];
 
 /// The script's fixed environment (§3): fixed values and the step context.
 /// The granted `env_pass` variables ([`script_passed_env`]) are added to it.
@@ -339,13 +346,19 @@ pub(crate) fn script_env(
     path_dirs.extend(["/usr/bin".to_string(), "/bin".to_string()]);
     path_dirs.dedup();
     vec![
-        ("PATH".into(), path_dirs.join(":")),
-        ("HOME".into(), mount.join("home").display().to_string()),
-        ("TMPDIR".into(), mount.join("tmp").display().to_string()),
-        ("LANG".into(), "C.UTF-8".into()),
+        (env_vars::PATH.into(), path_dirs.join(":")),
         (
-            "TZ".into(),
-            std::env::var("TZ").unwrap_or_else(|_| "UTC".to_string()),
+            env_vars::HOME.into(),
+            mount.join("home").display().to_string(),
+        ),
+        (
+            env_vars::TMPDIR.into(),
+            mount.join("tmp").display().to_string(),
+        ),
+        (env_vars::LANG.into(), "C.UTF-8".into()),
+        (
+            env_vars::TZ.into(),
+            std::env::var(env_vars::TZ).unwrap_or_else(|_| "UTC".to_string()),
         ),
         ("ORBIT_SCRIPT_NAME".into(), request.script.clone()),
         ("ORBIT_SCRIPT_DIGEST".into(), digest.to_string()),

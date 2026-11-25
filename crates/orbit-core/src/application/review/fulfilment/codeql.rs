@@ -2,6 +2,7 @@
 //! command, check the held commit out into a standalone shallow repository,
 //! run the script there confined by Bubblewrap, and judge its SARIF.
 
+use orbit_common::env_vars;
 use std::path::{Path, PathBuf};
 #[cfg(target_os = "linux")]
 use std::process::{Child, Stdio};
@@ -88,10 +89,10 @@ impl EvidenceCodeqlSandbox {
 #[cfg(target_os = "linux")]
 fn cargo_home_candidates() -> Vec<PathBuf> {
     let mut candidates = Vec::new();
-    if let Some(home) = std::env::var_os("CARGO_HOME").filter(|home| !home.is_empty()) {
+    if let Some(home) = std::env::var_os(env_vars::CARGO_HOME).filter(|home| !home.is_empty()) {
         candidates.push(PathBuf::from(home));
     }
-    if let Some(home) = std::env::var_os("HOME").filter(|home| !home.is_empty()) {
+    if let Some(home) = std::env::var_os(env_vars::HOME).filter(|home| !home.is_empty()) {
         candidates.push(PathBuf::from(home).join(".cargo"));
     }
     let current_dir = std::env::current_dir().ok();

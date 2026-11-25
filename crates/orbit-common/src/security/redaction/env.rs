@@ -1,3 +1,4 @@
+use crate::env_vars;
 use std::{borrow::Cow, sync::OnceLock};
 
 use serde_json::Value;
@@ -262,7 +263,7 @@ pub fn is_sensitive_env_name(name: &str) -> bool {
     let session_metadata = upper.starts_with("XDG_SESSION_")
         || matches!(
             upper.as_str(),
-            "DBUS_SESSION_BUS_ADDRESS" | "SESSION_MANAGER" | "TERM_SESSION_ID"
+            env_vars::DBUS_SESSION_BUS_ADDRESS | "SESSION_MANAGER" | "TERM_SESSION_ID"
         );
     upper.contains("SECRET")
         || upper.contains("TOKEN")

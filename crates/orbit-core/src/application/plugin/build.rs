@@ -11,6 +11,7 @@
 //! cannot pass it. macOS refuses a manifest that declares a network `fetch`
 //! phase (§3.3); its offline builds run.
 
+use orbit_common::env_vars;
 use std::path::{Path, PathBuf};
 
 use orbit_common::OrbitError;
@@ -31,12 +32,12 @@ use crate::runtime::plugin::sandbox_mask::plugin_trees_masked;
 /// Environment names whose presence means no operator is at this command
 /// line (§3.8): a managed-run envelope, or a plugin backend child.
 const UNATTENDED_ENV: &[&str] = &[
-    "ORBIT_MANAGED_RUN_CONTEXT",
-    "ORBIT_RUN_ID",
-    "ORBIT_PLUGIN",
-    "ORBIT_PLUGIN_CALLBACK",
-    "ORBIT_PLUGIN_CALLBACK_FD",
-    "ORBIT_PLUGIN_BROKER",
+    env_vars::ORBIT_MANAGED_RUN_CONTEXT,
+    env_vars::ORBIT_RUN_ID,
+    env_vars::ORBIT_PLUGIN,
+    env_vars::ORBIT_PLUGIN_CALLBACK,
+    env_vars::ORBIT_PLUGIN_CALLBACK_FD,
+    env_vars::ORBIT_PLUGIN_BROKER,
 ];
 
 /// A build that ran and whose outputs wait to be copied into staging.
@@ -117,7 +118,7 @@ pub(super) fn prepare_build(
         ));
     }
     let log = build_log_path(&global_root, name);
-    let home = std::env::var_os("HOME");
+    let home = std::env::var_os(env_vars::HOME);
     let result = run_plugin_build(&PluginBuildRun {
         plan: &plan,
         checkout: &commit.checkout,
@@ -173,7 +174,7 @@ pub(super) fn finish_build(
         artifact_digest,
         consent: PluginBuildConsent {
             at: chrono::Utc::now().to_rfc3339(),
-            os_user: ["USER", "LOGNAME"]
+            os_user: [env_vars::USER, env_vars::LOGNAME]
                 .iter()
                 .find_map(|key| std::env::var(key).ok().filter(|value| !value.is_empty()))
                 .unwrap_or_else(|| "unknown".to_string()),

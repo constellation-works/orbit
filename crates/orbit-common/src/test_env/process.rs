@@ -1,4 +1,5 @@
 use super::FIXTURE_STEP_DEADLINE;
+use crate::env_vars;
 
 /// The host's load averages against its CPU count, for a fixture deadline's
 /// failure message: an overrun on a saturated host then names the pressure
@@ -138,9 +139,9 @@ fn ps_field_utc(pid: u32, field: &str) -> PsRun {
     let mut command = std::process::Command::new("ps");
     command
         .args(["-o", field, "-p", &pid.to_string()])
-        .env("TZ", "UTC")
-        .env("LC_ALL", "C")
-        .env("LANG", "C");
+        .env(env_vars::TZ, "UTC")
+        .env(env_vars::LC_ALL, "C")
+        .env(env_vars::LANG, "C");
     let spawned = match crate::process::run_bounded_capped_typed(
         &mut command,
         std::time::Duration::from_secs(10),

@@ -1,5 +1,6 @@
 //! Cooperative build admission settings and per-invocation wait snapshots.
 
+use crate::env_vars;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
@@ -9,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use crate::OrbitError;
 
 /// Invocation-private directory where build wrappers heartbeat admission waits.
-pub const WAIT_DIRECTORY_ENV: &str = "ORBIT_ACTIVITY_BUILD_BUDGET_DIR";
+pub use crate::env_vars::ORBIT_ACTIVITY_BUILD_BUDGET_DIR as WAIT_DIRECTORY_ENV;
 
 /// Wait statistics. Overlapping commands contribute separately to totals,
 /// while `queued_wall_ms` counts their interval union for deadline credit.
@@ -135,7 +136,7 @@ pub struct BuildBudgetCapacity {
 impl BuildBudgetCapacity {
     /// Read the same environment/file/default precedence as build-budget.py.
     pub fn read() -> Result<Self, OrbitError> {
-        let directory = std::env::var_os("ORBIT_BUILD_BUDGET_DIR")
+        let directory = std::env::var_os(env_vars::ORBIT_BUILD_BUDGET_DIR)
             .filter(|value| !value.is_empty())
             .map(PathBuf::from)
             .map(|path| {
@@ -154,7 +155,7 @@ impl BuildBudgetCapacity {
             )));
         }
         let settings_file = directory.join("slots");
-        let raw = match std::env::var("ORBIT_BUILD_SLOTS") {
+        let raw = match std::env::var(env_vars::ORBIT_BUILD_SLOTS) {
             Ok(value) => value,
             Err(std::env::VarError::NotPresent) => match std::fs::read_to_string(&settings_file) {
                 Ok(value) => value.trim().to_string(),
@@ -183,7 +184,7 @@ impl BuildBudgetCapacity {
                     "ORBIT_BUILD_SLOTS must be a decimal integer from 1 through 128; got {raw:?}"
                 ))
             })?;
-        let enabled = match std::env::var("ORBIT_BUILD_BUDGET").as_deref() {
+        let enabled = match std::env::var(env_vars::ORBIT_BUILD_BUDGET).as_deref() {
             Ok("0") => false,
             Ok("1") | Err(std::env::VarError::NotPresent) => true,
             _ => {

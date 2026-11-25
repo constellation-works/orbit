@@ -485,7 +485,7 @@ fn write_store_conditional<T, R>(
 mod write_gate {
     use std::path::PathBuf;
 
-    const GATE_ENV: &str = "ORBIT_TEST_CONFIG_WRITE_GATE";
+    use orbit_common::env_vars::ORBIT_TEST_CONFIG_WRITE_GATE as GATE_ENV;
 
     fn armed(point: &str) -> Option<PathBuf> {
         let dir = PathBuf::from(std::env::var_os(GATE_ENV)?);

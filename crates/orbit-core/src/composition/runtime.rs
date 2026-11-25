@@ -1,6 +1,7 @@
 //! Runtime composition: root resolution, runtime construction and configuration
 //! initialization for [`OrbitRuntime`].
 
+use orbit_common::env_vars;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -484,11 +485,12 @@ fn has_explicit_root_override(root_override: Option<&Path>) -> bool {
     if root_override.is_some() {
         return true;
     }
-    let env_override = std::env::var("ORBIT_ROOT").is_ok_and(|value| !value.trim().is_empty());
+    let env_override =
+        std::env::var(env_vars::ORBIT_ROOT).is_ok_and(|value| !value.trim().is_empty());
     #[cfg(target_os = "macos")]
     if env_override
         && managed_dispatch_context_from_env()
-        && std::env::var("ORBIT_REGISTRY_ROOT").is_ok_and(|value| !value.trim().is_empty())
+        && std::env::var(env_vars::ORBIT_REGISTRY_ROOT).is_ok_and(|value| !value.trim().is_empty())
     {
         // The sandbox may not create a generation record under the selected
         // workspace `.orbit`. Keep global stores and their generation pin on

@@ -16,6 +16,7 @@
 //! `comfy_table`, so the two styling backends can no longer disagree about
 //! `NO_COLOR` [ADR-0308].
 
+use orbit_common::env_vars;
 use std::io::IsTerminal;
 
 use clap::ValueEnum;
@@ -74,11 +75,11 @@ impl SinkEnv {
     /// Capture the sink-relevant variables from the real process environment.
     pub fn from_process() -> Self {
         Self {
-            columns: read_var("COLUMNS"),
-            format: read_var("ORBIT_FORMAT"),
-            no_color: read_var("NO_COLOR"),
-            clicolor_force: read_var("CLICOLOR_FORCE"),
-            term: read_var("TERM"),
+            columns: read_var(env_vars::COLUMNS),
+            format: read_var(env_vars::ORBIT_FORMAT),
+            no_color: read_var(env_vars::NO_COLOR),
+            clicolor_force: read_var(env_vars::CLICOLOR_FORCE),
+            term: read_var(env_vars::TERM),
         }
     }
 }

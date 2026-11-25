@@ -2,6 +2,7 @@
 use super::clock::refusal_clock;
 use super::{clock::*, record::*, types::*};
 use orbit_common::ProviderReadThrottle;
+use orbit_common::env_vars;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
@@ -59,7 +60,7 @@ impl GithubQuotaStore {
     /// The store under the Orbit data root: `ORBIT_ROOT` when set, else the
     /// machine-global `~/.orbit`.
     pub fn in_data_root() -> Option<Self> {
-        let root = match std::env::var("ORBIT_ROOT") {
+        let root = match std::env::var(env_vars::ORBIT_ROOT) {
             Ok(root) if !root.trim().is_empty() => PathBuf::from(root),
             _ => orbit_common::fs::path::global_orbit_dir().ok()?,
         };

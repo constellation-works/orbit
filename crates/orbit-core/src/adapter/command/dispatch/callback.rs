@@ -1,6 +1,7 @@
 //! The plugin callback boundary: which Orbit tools a plugin backend's child
 //! may reach, and the provenance its calls are audited with.
 
+use orbit_common::env_vars;
 use std::cell::RefCell;
 use std::path::Path;
 
@@ -311,7 +312,7 @@ fn recorded_orbit_tools(
 }
 
 pub(super) fn read_proc_allowed_programs_from_env() -> Vec<String> {
-    std::env::var("ORBIT_PROC_ALLOWED_PROGRAMS")
+    std::env::var(env_vars::ORBIT_PROC_ALLOWED_PROGRAMS)
         .ok()
         .map(|raw| split_env_list(&raw))
         .unwrap_or_default()
@@ -320,10 +321,14 @@ pub(super) fn read_proc_allowed_programs_from_env() -> Vec<String> {
 /// Only a complete, explicit deny envelope selects the new program mode.
 /// Missing or unknown markers retain the legacy allowlist boundary.
 pub(super) fn read_proc_disallowed_programs_from_env() -> Option<Vec<String>> {
-    if std::env::var("ORBIT_PROC_PROGRAM_POLICY").ok().as_deref() != Some("deny") {
+    if std::env::var(env_vars::ORBIT_PROC_PROGRAM_POLICY)
+        .ok()
+        .as_deref()
+        != Some("deny")
+    {
         return None;
     }
-    std::env::var("ORBIT_PROC_DISALLOWED_PROGRAMS")
+    std::env::var(env_vars::ORBIT_PROC_DISALLOWED_PROGRAMS)
         .ok()
         .map(|raw| split_env_list(&raw))
 }
@@ -358,7 +363,11 @@ pub(super) fn read_proc_spawn_budget_from_env() -> Option<ProcSpawnBudget> {
 }
 
 pub(super) fn read_activity_tool_policy_from_env() -> ActivityToolPolicyEnv {
-    if std::env::var("ORBIT_TASK_ACTOR_KIND").ok().as_deref() != Some("agent") {
+    if std::env::var(env_vars::ORBIT_TASK_ACTOR_KIND)
+        .ok()
+        .as_deref()
+        != Some("agent")
+    {
         return ActivityToolPolicyEnv::default();
     }
     let env = |name: &str| std::env::var(name).ok();
@@ -366,7 +375,7 @@ pub(super) fn read_activity_tool_policy_from_env() -> ActivityToolPolicyEnv {
         env(ACTIVITY_TOOL_POLICY_ENV).as_deref(),
         env(ACTIVITY_TOOLS_DENY_ENV).as_deref(),
         env(ACTIVITY_NAME_ENV).as_deref(),
-        env("ORBIT_ACTIVITY_TOOLS").as_deref(),
+        env(env_vars::ORBIT_ACTIVITY_TOOLS).as_deref(),
     )
 }
 

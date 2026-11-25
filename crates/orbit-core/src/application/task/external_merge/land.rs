@@ -35,7 +35,7 @@ const MERGEABILITY_UNKNOWN_BACKOFF_SECS: [u64; 4] = [5, 10, 20, 40];
 /// Debug-build tests set this to `virtual` so the budget advances without
 /// sleeping. Release builds ignore it, so a production binary cannot skip
 /// the wait.
-const MERGEABILITY_WAIT_TEST_ENV: &str = "ORBIT_TEST_MERGEABILITY_WAIT";
+use orbit_common::env_vars::ORBIT_TEST_MERGEABILITY_WAIT as MERGEABILITY_WAIT_TEST_ENV;
 
 use super::candidate::Candidate;
 

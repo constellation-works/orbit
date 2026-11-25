@@ -1,5 +1,6 @@
 //! Provider invocation, execution and continuity fallback.
 
+use orbit_common::env_vars;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
@@ -292,7 +293,7 @@ pub(in super::super) fn dispatch_prepared_provider(
     let codex_mcp_args = if provider == "codex" {
         let orbit_bin = orbit_env
             .iter()
-            .find(|(name, _)| name == "ORBIT_BIN")
+            .find(|(name, _)| name == env_vars::ORBIT_BIN)
             .map(|(_, value)| value.as_str())
             .ok_or_else(|| {
                 DispatchError::CliInvocationPermanent("managed ORBIT_BIN missing".into())
@@ -572,10 +573,11 @@ pub(in super::super) fn dispatch_prepared_provider(
         )?;
         let fallback_broker = RunPluginBroker::start(host, run_id, broker_run.as_ref(), sandbox);
         child_env.retain(|(key, _)| {
-            key != crate::context::PLUGIN_BROKER_ENV && key != "ORBIT_ACTIVITY_RESIDENT_CONTINUITY"
+            key != crate::context::PLUGIN_BROKER_ENV
+                && key != env_vars::ORBIT_ACTIVITY_RESIDENT_CONTINUITY
         });
         child_env.push((
-            "ORBIT_ACTIVITY_RESIDENT_CONTINUITY".to_string(),
+            env_vars::ORBIT_ACTIVITY_RESIDENT_CONTINUITY.to_string(),
             "rebuilt".to_string(),
         ));
         child_env.extend(fallback_broker.env());

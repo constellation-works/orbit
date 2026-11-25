@@ -1,3 +1,4 @@
+use orbit_common::env_vars;
 use std::path::{Component, Path, PathBuf};
 
 use orbit_common::OrbitError;
@@ -124,7 +125,7 @@ fn is_single_worktree_component(dir_name: &str) -> bool {
 }
 
 fn worktree_root() -> Option<PathBuf> {
-    std::env::var("ORBIT_WORKTREE_ROOT")
+    std::env::var(env_vars::ORBIT_WORKTREE_ROOT)
         .ok()
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())

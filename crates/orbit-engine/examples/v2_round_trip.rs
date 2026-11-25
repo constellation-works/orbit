@@ -33,6 +33,7 @@
 //! Usage:
 //!     cargo run -p orbit-engine --example v2_round_trip
 
+use orbit_common::env_vars;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -230,7 +231,7 @@ spec:
 fn reference_dir() -> PathBuf {
     // `cargo run` sets the manifest dir at run time; prefer it over the compile-time
     // value, which a compiler cache can carry over from a different checkout.
-    let manifest = std::env::var_os("CARGO_MANIFEST_DIR")
+    let manifest = std::env::var_os(env_vars::CARGO_MANIFEST_DIR)
         .map_or_else(|| PathBuf::from(env!("CARGO_MANIFEST_DIR")), PathBuf::from);
     let root = manifest
         .parent()

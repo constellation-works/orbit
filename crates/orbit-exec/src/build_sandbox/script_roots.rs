@@ -5,6 +5,7 @@
 //! clock's launch agent or the binary it runs), not to the terminal that
 //! granted.
 
+use orbit_common::env_vars;
 use std::ffi::OsStr;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
@@ -163,7 +164,7 @@ fn denied(label: &str, root: &Path, error: &std::io::Error) -> String {
 
 /// The System Settings privacy pane that governs `root` for a process.
 fn privacy_pane(root: &Path) -> &'static str {
-    let home = std::env::var_os("HOME").map(PathBuf::from);
+    let home = std::env::var_os(env_vars::HOME).map(PathBuf::from);
     let under_home = |folder: &str| {
         home.as_ref()
             .is_some_and(|home| root.starts_with(home.join(folder)))

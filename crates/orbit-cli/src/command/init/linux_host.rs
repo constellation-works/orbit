@@ -6,6 +6,7 @@
 //! signed into this Orbit release is installed root-owned at
 //! [`BUNDLED_BWRAP_PATH`]; executors trust exactly those two paths.
 
+use orbit_common::env_vars;
 use std::fs;
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::process::{Command, Stdio};
@@ -128,8 +129,8 @@ impl RealHost {
     fn new() -> Result<Self, OrbitError> {
         let probe_user = intended_probe_user(
             unsafe { libc::geteuid() },
-            std::env::var("SUDO_UID").ok().as_deref(),
-            std::env::var("SUDO_GID").ok().as_deref(),
+            std::env::var(env_vars::SUDO_UID).ok().as_deref(),
+            std::env::var(env_vars::SUDO_GID).ok().as_deref(),
         )?;
         Ok(Self {
             authorized: false,
@@ -278,8 +279,8 @@ impl Host for RealHost {
         let status = command
             .args(args)
             .env_clear()
-            .env("PATH", "/usr/sbin:/usr/bin:/sbin:/bin")
-            .env("LANG", "C")
+            .env(env_vars::PATH, "/usr/sbin:/usr/bin:/sbin:/bin")
+            .env(env_vars::LANG, "C")
             .env("DEBIAN_FRONTEND", "noninteractive")
             .stdin(Stdio::null())
             // Package-manager progress must not corrupt init's JSON stdout.

@@ -62,4 +62,4 @@ pub(crate) const WORKSPACE_REPLACE_ONLY_KEYS: &[&str] = &[
 
 /// The one key an environment variable can supply, below both files.
 const DEFAULT_CREW_KEY: &str = "workflow.default_crew";
-const DEFAULT_PROVIDER_ENV: &str = "CONSTELLATION_DEFAULT_PROVIDER";
+use orbit_common::env_vars::CONSTELLATION_DEFAULT_PROVIDER as DEFAULT_PROVIDER_ENV;

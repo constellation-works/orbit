@@ -1,6 +1,7 @@
 //! `OrbitRuntime` tool entry methods: the CLI and in-process entry points and
 //! the runtime-backed dispatch that resolves identity, policy and capability.
 
+use orbit_common::env_vars;
 #[cfg(unix)]
 use std::path::Path;
 
@@ -196,7 +197,7 @@ impl OrbitRuntime {
                     && crate::runtime::run_input::managed_run_context_run_id_from_env()
                         .is_some_and(|run_id| self.is_live_resident_cycle_run(&run_id))));
         #[cfg(unix)]
-        if let Some(socket) = std::env::var_os("ORBIT_PLUGIN_BROKER")
+        if let Some(socket) = std::env::var_os(env_vars::ORBIT_PLUGIN_BROKER)
             && session_context.application.is_none()
             && std::env::var_os(
                 orbit_common::security::application_credential::APPLICATION_CREDENTIAL_FD_ENV,

@@ -11,6 +11,7 @@
 //! scratch `RUSTUP_HOME` and must keep working. An install whose resolved root
 //! is outside the workspace (the usual `~/.rustup`) is unchanged.
 
+use orbit_common::env_vars;
 use std::fs;
 use std::path::{Component, Path, PathBuf};
 
@@ -447,7 +448,8 @@ fn auto_writes_rust_docs(
     }
     // `+toolchain` and `RUSTUP_TOOLCHAIN` take precedence, so rustup never reads
     // the toolchain file when either is set.
-    let selected_explicitly = plus.is_some() || env_value(env, "RUSTUP_TOOLCHAIN").is_some();
+    let selected_explicitly =
+        plus.is_some() || env_value(env, env_vars::RUSTUP_TOOLCHAIN).is_some();
     let file_profile = match nearest_toolchain_file(workspace) {
         OverrideFile::Unusable if selected_explicitly => None,
         OverrideFile::Unusable => return false,
@@ -462,7 +464,7 @@ fn auto_writes_rust_docs(
                 return false;
             }
             let file = file_profile
-                .filter(|_| plus.is_none() && env_value(env, "RUSTUP_TOOLCHAIN").is_none());
+                .filter(|_| plus.is_none() && env_value(env, env_vars::RUSTUP_TOOLCHAIN).is_none());
             let components = file
                 .as_ref()
                 .map(|spec| spec.components.as_slice())
@@ -493,7 +495,7 @@ fn active_toolchain(
     if let Some(name) = plus.map(str::trim).filter(|name| !name.is_empty()) {
         return ActiveToolchain::Named(name.to_string());
     }
-    if let Some(name) = env_value(env, "RUSTUP_TOOLCHAIN") {
+    if let Some(name) = env_value(env, env_vars::RUSTUP_TOOLCHAIN) {
         return ActiveToolchain::Named(name);
     }
     // `[overrides]` can name a toolchain this process does not parse. A
@@ -591,7 +593,7 @@ fn rustup_host_triple() -> String {
 }
 
 fn rustup_home(env: &[(String, String)], workspace: &Path) -> PathBuf {
-    if let Some(value) = env_value(env, "RUSTUP_HOME") {
+    if let Some(value) = env_value(env, env_vars::RUSTUP_HOME) {
         let path = PathBuf::from(&value);
         return if path.is_absolute() {
             path
@@ -599,8 +601,8 @@ fn rustup_home(env: &[(String, String)], workspace: &Path) -> PathBuf {
             workspace.join(path)
         };
     }
-    env_value(env, "HOME")
-        .or_else(|| env_value(env, "USERPROFILE"))
+    env_value(env, env_vars::HOME)
+        .or_else(|| env_value(env, env_vars::USERPROFILE))
         .map(|home| PathBuf::from(home).join(".rustup"))
         .unwrap_or_else(|| PathBuf::from("/.rustup-unset"))
 }
@@ -967,7 +969,7 @@ fn resolve_program(program: &str, env: &[(String, String)]) -> Option<PathBuf> {
     if requested.components().count() > 1 {
         return fs::canonicalize(requested).ok();
     }
-    let path = env_raw(env, "PATH")?;
+    let path = env_raw(env, env_vars::PATH)?;
     std::env::split_paths(path).find_map(|dir| fs::canonicalize(dir.join(requested)).ok())
 }
 

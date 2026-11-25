@@ -1,5 +1,6 @@
 //! The installation, platform, and workspace an update runs against.
 
+use orbit_common::env_vars;
 use std::path::{Path, PathBuf};
 
 use chrono::NaiveDate;
@@ -67,7 +68,7 @@ impl UpdateEnvironment {
     ) -> Result<Option<UpdateWorkspace>, OrbitError> {
         let cwd = std::env::current_dir().map_err(|error| OrbitError::Io(error.to_string()))?;
         let root_was_explicit = root_override.is_some()
-            || std::env::var("ORBIT_ROOT").is_ok_and(|root| !root.trim().is_empty());
+            || std::env::var(env_vars::ORBIT_ROOT).is_ok_and(|root| !root.trim().is_empty());
         let roots = RegisteredRuntimeFactory::try_resolve_initialized_roots(&cwd, root_override)?;
         Ok(roots.map(|roots| UpdateWorkspace {
             cwd,
@@ -175,7 +176,7 @@ fn explicit_root_specification(root_override: Option<&Path>) -> Option<String> {
     if let Some(root) = root_override {
         return Some(root.to_string_lossy().into_owned());
     }
-    match std::env::var("ORBIT_ROOT") {
+    match std::env::var(env_vars::ORBIT_ROOT) {
         Ok(explicit) if !explicit.trim().is_empty() => Some(explicit),
         _ => None,
     }

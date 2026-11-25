@@ -16,6 +16,8 @@ use assert_cmd::cargo::cargo_bin_cmd;
 use orbit_common::test_env;
 use tempfile::tempdir;
 
+mod env_reference;
+
 const UPDATE_HELP_GOLDENS_ENV: &str = "ORBIT_UPDATE_HELP_GOLDENS";
 
 /// Explicit argv and a path relative to `tests/help_goldens/`, owned by the

@@ -1,3 +1,4 @@
+use orbit_common::env_vars;
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 
@@ -59,15 +60,15 @@ pub fn compile_macos_sandbox_profile(
     rules: &ResolvedFsProfile,
     provider: &str,
 ) -> Result<String, OrbitError> {
-    let home = std::env::var_os("HOME");
-    let codex_home = std::env::var_os("CODEX_HOME");
-    let claude_config_dir = std::env::var_os("CLAUDE_CONFIG_DIR");
-    let grok_home = std::env::var_os("GROK_HOME");
-    let copilot_home = std::env::var_os("COPILOT_HOME");
-    let xdg_cache_home = std::env::var_os("XDG_CACHE_HOME");
-    let xdg_data_home = std::env::var_os("XDG_DATA_HOME");
-    let xdg_config_home = std::env::var_os("XDG_CONFIG_HOME");
-    let cargo_home = std::env::var_os("CARGO_HOME");
+    let home = std::env::var_os(env_vars::HOME);
+    let codex_home = std::env::var_os(env_vars::CODEX_HOME);
+    let claude_config_dir = std::env::var_os(env_vars::CLAUDE_CONFIG_DIR);
+    let grok_home = std::env::var_os(env_vars::GROK_HOME);
+    let copilot_home = std::env::var_os(env_vars::COPILOT_HOME);
+    let xdg_cache_home = std::env::var_os(env_vars::XDG_CACHE_HOME);
+    let xdg_data_home = std::env::var_os(env_vars::XDG_DATA_HOME);
+    let xdg_config_home = std::env::var_os(env_vars::XDG_CONFIG_HOME);
+    let cargo_home = std::env::var_os(env_vars::CARGO_HOME);
     compile_macos_sandbox_profile_with_env(
         rules,
         provider,

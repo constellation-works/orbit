@@ -2,6 +2,7 @@
 //! a tool call is recorded under.
 
 use orbit_common::OrbitError;
+use orbit_common::env_vars;
 use orbit_tools::{ActivityBinding, ReservationOwnerContext};
 use orbit_types::identity::{
     normalize_agent_family_for_model, normalize_optional_attribution_label,
@@ -57,15 +58,16 @@ pub(super) fn resolve_audit_context(
 
     AuditContext {
         session_id: None,
-        task_id: input_str(input, "task_id").or_else(|| env_str("ORBIT_TASK_ID")),
+        task_id: input_str(input, "task_id").or_else(|| env_str(env_vars::ORBIT_TASK_ID)),
         job_run_id: input_str(input, "job_run_id")
             .or_else(|| input_str(input, "run_id"))
-            .or_else(|| env_str("ORBIT_RUN_ID")),
-        activity_id: input_str(input, "activity_id").or_else(|| env_str("ORBIT_ACTIVITY_ID")),
+            .or_else(|| env_str(env_vars::ORBIT_RUN_ID)),
+        activity_id: input_str(input, "activity_id")
+            .or_else(|| env_str(env_vars::ORBIT_ACTIVITY_ID)),
         step_index: input
             .get("step_index")
             .and_then(Value::as_i64)
-            .or_else(|| env_str("ORBIT_STEP_INDEX").and_then(|s| s.parse().ok())),
+            .or_else(|| env_str(env_vars::ORBIT_STEP_INDEX).and_then(|s| s.parse().ok())),
     }
 }
 
@@ -82,11 +84,11 @@ pub fn trusted_mcp_audit_context() -> AuditContext {
 
     if managed_dispatch_context_from_env() {
         AuditContext {
-            session_id: env_str("ORBIT_SESSION_ID"),
-            task_id: env_str("ORBIT_TASK_ID"),
+            session_id: env_str(env_vars::ORBIT_SESSION_ID),
+            task_id: env_str(env_vars::ORBIT_TASK_ID),
             job_run_id: managed_run_context_run_id_from_env(),
-            activity_id: env_str("ORBIT_ACTIVITY_ID"),
-            step_index: env_str("ORBIT_STEP_INDEX").and_then(|value| value.parse().ok()),
+            activity_id: env_str(env_vars::ORBIT_ACTIVITY_ID),
+            step_index: env_str(env_vars::ORBIT_STEP_INDEX).and_then(|value| value.parse().ok()),
         }
     } else {
         AuditContext::default()
@@ -108,7 +110,7 @@ pub(super) fn reservation_owner_from_env() -> Option<ReservationOwnerContext> {
 /// agent's environment — never from tool input. `None` outside a managed run.
 pub(super) fn activity_binding_from_env() -> Option<ActivityBinding> {
     let job_run_id = managed_run_context_run_id_from_env()?;
-    let task_id = std::env::var("ORBIT_TASK_ID")
+    let task_id = std::env::var(env_vars::ORBIT_TASK_ID)
         .ok()
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty());
@@ -123,10 +125,10 @@ pub(super) fn managed_run_context() -> bool {
 }
 
 fn read_agent_identity_from_env() -> (Option<String>, Option<String>) {
-    let agent = std::env::var("ORBIT_AGENT_NAME")
+    let agent = std::env::var(env_vars::ORBIT_AGENT_NAME)
         .ok()
         .filter(|s| !s.is_empty());
-    let model = std::env::var("ORBIT_AGENT_MODEL")
+    let model = std::env::var(env_vars::ORBIT_AGENT_MODEL)
         .ok()
         .filter(|s| !s.is_empty());
     (agent, model)
@@ -179,10 +181,10 @@ pub fn audit_role_label(
     model_override: Option<&str>,
 ) -> String {
     let (input_agent, input_model) = read_input_identity(input);
-    let env_agent = std::env::var("ORBIT_AGENT_NAME")
+    let env_agent = std::env::var(env_vars::ORBIT_AGENT_NAME)
         .ok()
         .filter(|value| !value.trim().is_empty());
-    let env_model = std::env::var("ORBIT_AGENT_MODEL")
+    let env_model = std::env::var(env_vars::ORBIT_AGENT_MODEL)
         .ok()
         .filter(|value| !value.trim().is_empty());
     let has_input_identity = input_agent.is_some() || input_model.is_some();
@@ -236,10 +238,10 @@ pub fn audit_role_label_for_entry_point(
         return "unverified".to_string();
     }
 
-    let env_agent = std::env::var("ORBIT_AGENT_NAME")
+    let env_agent = std::env::var(env_vars::ORBIT_AGENT_NAME)
         .ok()
         .filter(|value| !value.trim().is_empty());
-    let env_model = std::env::var("ORBIT_AGENT_MODEL")
+    let env_model = std::env::var(env_vars::ORBIT_AGENT_MODEL)
         .ok()
         .filter(|value| !value.trim().is_empty());
     let agent = normalize_agent_family_for_model(env_agent.as_deref(), env_model.as_deref())
@@ -278,7 +280,7 @@ pub(super) fn mcp_audit_session_model(
         return Some(model);
     }
     if managed_run_context() {
-        let env_model = std::env::var("ORBIT_AGENT_MODEL").ok();
+        let env_model = std::env::var(env_vars::ORBIT_AGENT_MODEL).ok();
         if let Some(model) = kept(env_model.as_deref()) {
             return Some(model);
         }

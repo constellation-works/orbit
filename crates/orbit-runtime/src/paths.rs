@@ -1,3 +1,4 @@
+use orbit_common::env_vars;
 use std::ffi::OsStr;
 use std::path::{Component, Path, PathBuf};
 
@@ -108,7 +109,11 @@ fn linked_worktree_root_from_gitfile(start: &Path) -> Option<PathBuf> {
 }
 
 fn git_location_override_set() -> bool {
-    const GIT_LOCATION_OVERRIDES: [&str; 3] = ["GIT_DIR", "GIT_COMMON_DIR", "GIT_WORK_TREE"];
+    const GIT_LOCATION_OVERRIDES: [&str; 3] = [
+        env_vars::GIT_DIR,
+        env_vars::GIT_COMMON_DIR,
+        env_vars::GIT_WORK_TREE,
+    ];
     GIT_LOCATION_OVERRIDES
         .iter()
         .any(|name| std::env::var_os(name).is_some())

@@ -8,7 +8,7 @@ use crate::governance::operation::{
 pub const ATTENTION_AGGREGATOR_CLIENT: &str = "orbit-federated-mux";
 /// The environment variable a shell reads its attention wait grant from.
 /// A flag would put the token in the process list.
-pub const ATTENTION_WAIT_TOKEN_ENV: &str = "ORBIT_ATTENTION_WAIT_TOKEN";
+pub use crate::env_vars::ORBIT_ATTENTION_WAIT_TOKEN as ATTENTION_WAIT_TOKEN_ENV;
 use orbit_types::tool::{McpIdRouteDeclaration, McpToolScope};
 operation_registry! {
     noun: ATTENTION;

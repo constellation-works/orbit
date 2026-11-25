@@ -1,6 +1,7 @@
 //! What a `gh` request spends, whose quota it spends, and the rate-limit
 //! endpoint read that refreshes the record.
 
+use orbit_common::env_vars;
 use std::collections::BTreeMap;
 use std::path::Path;
 use std::time::Instant;
@@ -63,7 +64,7 @@ pub(crate) fn request_account(request: &ExecRequest) -> String {
         };
         value.filter(|value| !value.trim().is_empty())
     };
-    let host = lookup("GH_HOST").unwrap_or_else(|| "github.com".to_string());
+    let host = lookup(env_vars::GH_HOST).unwrap_or_else(|| "github.com".to_string());
     let host = host
         .to_ascii_lowercase()
         .chars()
@@ -77,22 +78,22 @@ pub(crate) fn request_account(request: &ExecRequest) -> String {
         .take(64)
         .collect::<String>();
     let token_names: &[&str] = if host == "github.com" {
-        &["GH_TOKEN", "GITHUB_TOKEN"]
+        &[env_vars::GH_TOKEN, env_vars::GITHUB_TOKEN]
     } else {
         &[
-            "GH_ENTERPRISE_TOKEN",
-            "GITHUB_ENTERPRISE_TOKEN",
-            "GH_TOKEN",
-            "GITHUB_TOKEN",
+            env_vars::GH_ENTERPRISE_TOKEN,
+            env_vars::GITHUB_ENTERPRISE_TOKEN,
+            env_vars::GH_TOKEN,
+            env_vars::GITHUB_TOKEN,
         ]
     };
     let credential = token_names
         .iter()
         .find_map(|name| lookup(name))
         .map(|token| format!("token:{token}"))
-        .or_else(|| lookup("GH_CONFIG_DIR").map(|dir| format!("config:{dir}")))
-        .or_else(|| lookup("XDG_CONFIG_HOME").map(|dir| format!("xdg:{dir}")))
-        .or_else(|| lookup("HOME").map(|dir| format!("home:{dir}")))
+        .or_else(|| lookup(env_vars::GH_CONFIG_DIR).map(|dir| format!("config:{dir}")))
+        .or_else(|| lookup(env_vars::XDG_CONFIG_HOME).map(|dir| format!("xdg:{dir}")))
+        .or_else(|| lookup(env_vars::HOME).map(|dir| format!("home:{dir}")))
         .unwrap_or_default();
     let mut hasher = Sha256::new();
     hasher.update(host.as_bytes());

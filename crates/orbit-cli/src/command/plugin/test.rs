@@ -1,3 +1,4 @@
+use orbit_common::env_vars;
 use std::path::PathBuf;
 
 use clap::Args;
@@ -63,7 +64,8 @@ impl Execute for PluginTestArgs {
                 fixture_config: self.fixture_config.clone(),
                 update_goldens: self.update_goldens,
                 validation_gate: validation_gate_from_env(),
-                require_sandbox_exec: std::env::var("ORBIT_REQUIRE_SANDBOX_EXEC").as_deref()
+                require_sandbox_exec: std::env::var(env_vars::ORBIT_REQUIRE_SANDBOX_EXEC)
+                    .as_deref()
                     == Ok("1"),
             },
         )?;
@@ -194,8 +196,8 @@ fn validation_gate_from_env() -> Option<PluginTestValidationGate> {
             .filter(|value| !value.is_empty())
     };
     Some(PluginTestValidationGate {
-        summary: PathBuf::from(named("ORBIT_VALIDATION_SUMMARY")?),
-        command: named("ORBIT_VALIDATION_GATE"),
-        base: named("ORBIT_VALIDATION_BASE"),
+        summary: PathBuf::from(named(env_vars::ORBIT_VALIDATION_SUMMARY)?),
+        command: named(env_vars::ORBIT_VALIDATION_GATE),
+        base: named(env_vars::ORBIT_VALIDATION_BASE),
     })
 }

@@ -1,3 +1,4 @@
+use crate::env_vars;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -423,11 +424,11 @@ pub fn git_command(workspace_path: &Path, args: &[&str]) -> Result<Command, Orbi
     command
         .args(&admitted)
         .current_dir(workspace_path)
-        .env("LC_ALL", "C")
+        .env(env_vars::LC_ALL, "C")
         .env_remove("LANGUAGE")
         .env("GIT_TERMINAL_PROMPT", "0");
     for (name, _) in std::env::vars_os() {
-        if name == "GIT_DIR"
+        if name == env_vars::GIT_DIR
             || name == "GIT_CONFIG"
             || name.to_string_lossy().starts_with("GIT_CONFIG_")
         {

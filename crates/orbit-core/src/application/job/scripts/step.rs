@@ -25,6 +25,7 @@
 //! the recorded argv before any of them leaves this host boundary, so the
 //! audit record, `orbit run show` and `orbit script history` never hold it.
 
+use orbit_common::env_vars;
 use std::path::{Path, PathBuf};
 
 use orbit_engine::activity_job::{ScriptSnapshot, load_script_snapshot, render_script_args};
@@ -233,7 +234,7 @@ fn prepare_and_run(
     record.env_pass_unset = passed.unset.clone();
 
     let input_text = admitted_input(&snapshot, &request.input)?;
-    let home = std::env::var_os("HOME");
+    let home = std::env::var_os(env_vars::HOME);
     probe_granted_roots(&grant, home.as_deref())?;
 
     // Declared inputs resolve after the grant checks, so a refusal records

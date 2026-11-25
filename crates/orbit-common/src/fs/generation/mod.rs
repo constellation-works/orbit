@@ -180,7 +180,7 @@ pub const LEGACY_GENERATION_CONTRACT: &str = "executable-generation-v1";
 
 /// Environment variable bounding how long a breaking upgrade waits for live
 /// participants to yield, in seconds.
-pub const QUIESCE_TIMEOUT_ENV: &str = "ORBIT_UPGRADE_QUIESCE_SECS";
+pub use crate::env_vars::ORBIT_UPGRADE_QUIESCE_SECS as QUIESCE_TIMEOUT_ENV;
 
 /// Default [`QUIESCE_TIMEOUT_ENV`].
 pub const DEFAULT_QUIESCE_TIMEOUT: Duration = Duration::from_secs(120);

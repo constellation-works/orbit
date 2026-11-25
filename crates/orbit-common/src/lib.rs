@@ -11,6 +11,7 @@
 //! responsibility-based helpers: governance, filesystem, process, storage,
 //! protocol, observability, security, and text.
 
+pub mod env_vars;
 mod error;
 pub mod fs;
 pub mod governance;

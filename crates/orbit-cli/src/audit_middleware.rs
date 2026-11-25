@@ -1,3 +1,4 @@
+use orbit_common::env_vars;
 use std::time::Instant;
 
 use orbit_common::observability::audit_id::audit_execution_id;
@@ -129,7 +130,7 @@ impl Drop for AuditGuard<'_> {
             stdout_truncated: None,
             stderr_truncated: None,
             error_message: self.error_message.clone(),
-            host: std::env::var("HOSTNAME").ok(),
+            host: std::env::var(env_vars::HOSTNAME).ok(),
             pid: std::process::id(),
             session_id: None,
             workspace_id: self
@@ -145,18 +146,18 @@ impl Drop for AuditGuard<'_> {
             origin_session_id: None,
             mcp_call_id: None,
             lease_id: None,
-            task_id: std::env::var("ORBIT_TASK_ID")
+            task_id: std::env::var(env_vars::ORBIT_TASK_ID)
                 .ok()
                 .filter(|s| !s.is_empty()),
-            job_run_id: self
-                .meta
-                .job_run_id
-                .clone()
-                .or_else(|| std::env::var("ORBIT_RUN_ID").ok().filter(|s| !s.is_empty())),
-            activity_id: std::env::var("ORBIT_ACTIVITY_ID")
+            job_run_id: self.meta.job_run_id.clone().or_else(|| {
+                std::env::var(env_vars::ORBIT_RUN_ID)
+                    .ok()
+                    .filter(|s| !s.is_empty())
+            }),
+            activity_id: std::env::var(env_vars::ORBIT_ACTIVITY_ID)
                 .ok()
                 .filter(|s| !s.is_empty()),
-            step_index: std::env::var("ORBIT_STEP_INDEX")
+            step_index: std::env::var(env_vars::ORBIT_STEP_INDEX)
                 .ok()
                 .and_then(|s| s.parse().ok()),
         };

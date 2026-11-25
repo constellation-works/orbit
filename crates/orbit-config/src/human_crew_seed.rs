@@ -5,6 +5,7 @@
 //! module owns the document edit, so the write takes the config write lock and
 //! never replaces a human crew an earlier init or the operator wrote.
 
+use orbit_common::env_vars;
 use std::collections::BTreeSet;
 use std::path::Path;
 
@@ -66,7 +67,7 @@ pub fn normalize_human_crew_name(raw: &str) -> Option<String> {
 /// operator's human crew: `$USER` (or `USERNAME`, `LOGNAME`), else the passwd
 /// entry, normalized. `None` when none yields a usable name.
 pub fn os_user_human_crew_name() -> Option<String> {
-    ["USER", "USERNAME", "LOGNAME"]
+    [env_vars::USER, env_vars::USERNAME, env_vars::LOGNAME]
         .iter()
         .find_map(|key| {
             std::env::var(key)

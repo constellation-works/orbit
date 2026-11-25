@@ -1,5 +1,6 @@
 //! Scoped task-write provenance and owner-side `task.mutation` audit rows.
 
+use orbit_common::env_vars;
 use std::cell::RefCell;
 
 use orbit_common::OrbitError;
@@ -148,7 +149,7 @@ impl OrbitRuntime {
             stdout_truncated: None,
             stderr_truncated: None,
             error_message: error_message.map(|message| redact_sensitive_env_text(&message)),
-            host: std::env::var("HOSTNAME").ok(),
+            host: std::env::var(env_vars::HOSTNAME).ok(),
             pid: std::process::id(),
             session_id: None,
             workspace_id,
@@ -169,13 +170,13 @@ impl OrbitRuntime {
             mcp_call_id: session_context.and_then(|context| context.mcp_call_id.clone()),
             lease_id: None,
             task_id: target_id.map(ToOwned::to_owned),
-            job_run_id: std::env::var("ORBIT_RUN_ID")
+            job_run_id: std::env::var(env_vars::ORBIT_RUN_ID)
                 .ok()
                 .filter(|value| !value.is_empty()),
-            activity_id: std::env::var("ORBIT_ACTIVITY_ID")
+            activity_id: std::env::var(env_vars::ORBIT_ACTIVITY_ID)
                 .ok()
                 .filter(|value| !value.is_empty()),
-            step_index: std::env::var("ORBIT_STEP_INDEX")
+            step_index: std::env::var(env_vars::ORBIT_STEP_INDEX)
                 .ok()
                 .and_then(|value| value.parse().ok()),
         };

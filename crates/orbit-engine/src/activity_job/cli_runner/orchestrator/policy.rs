@@ -2,6 +2,7 @@
 //! receives, including claimed-mode tool denial and live experiment arms'
 //! tool deltas.
 
+use orbit_common::env_vars;
 use orbit_common::security::child_env::{
     ACTIVITY_DEADLINE_ENV, ACTIVITY_MCP_TOOLSETS_ENV, ACTIVITY_NAME_ENV, ACTIVITY_TOOL_POLICY_ENV,
     ACTIVITY_TOOLS_DENY_ENV,
@@ -30,9 +31,9 @@ const NO_CALLABLE_TOOLS_ENTRY: &str = "orbit.activity-policy.none";
 
 /// Process-policy envelope stamped for the current activity and removed from
 /// anything the outer process forwarded. [ORB-13427]
-const PROC_ALLOWED_PROGRAMS_ENV: &str = "ORBIT_PROC_ALLOWED_PROGRAMS";
-const PROC_PROGRAM_POLICY_ENV: &str = "ORBIT_PROC_PROGRAM_POLICY";
-const PROC_DISALLOWED_PROGRAMS_ENV: &str = "ORBIT_PROC_DISALLOWED_PROGRAMS";
+use orbit_common::env_vars::ORBIT_PROC_ALLOWED_PROGRAMS as PROC_ALLOWED_PROGRAMS_ENV;
+use orbit_common::env_vars::ORBIT_PROC_DISALLOWED_PROGRAMS as PROC_DISALLOWED_PROGRAMS_ENV;
+use orbit_common::env_vars::ORBIT_PROC_PROGRAM_POLICY as PROC_PROGRAM_POLICY_ENV;
 
 /// Last pre-migration shipped program lists. An older MCP server understands
 /// only `ORBIT_PROC_ALLOWED_PROGRAMS`, so these preserve the old bound while
@@ -99,7 +100,7 @@ pub fn activity_tool_policy_env(
 ) -> Vec<(String, String)> {
     let Some(disallow_list) = disallow_list else {
         return vec![(
-            "ORBIT_ACTIVITY_TOOLS".to_string(),
+            env_vars::ORBIT_ACTIVITY_TOOLS.to_string(),
             effective_tools.join(","),
         )];
     };
@@ -109,7 +110,7 @@ pub fn activity_tool_policy_env(
         effective_tools.join(",")
     };
     vec![
-        ("ORBIT_ACTIVITY_TOOLS".to_string(), allowlist),
+        (env_vars::ORBIT_ACTIVITY_TOOLS.to_string(), allowlist),
         (
             ACTIVITY_TOOL_POLICY_ENV.to_string(),
             ActivityToolPolicyMode::Deny.as_str().to_string(),
@@ -503,7 +504,7 @@ pub(super) fn activity_policy_env(
         env.push((PROC_DISALLOWED_PROGRAMS_ENV.to_string(), programs.join(",")));
     }
     env.push((
-        "ORBIT_ACTIVITY_FS_PROFILE".to_string(),
+        env_vars::ORBIT_ACTIVITY_FS_PROFILE.to_string(),
         resolved_activity_fs_profile_name(fs_profile).to_string(),
     ));
     env

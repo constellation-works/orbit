@@ -1,3 +1,4 @@
+use crate::env_vars;
 use std::cell::Cell;
 use std::sync::{
     Mutex, MutexGuard, OnceLock,
@@ -67,12 +68,12 @@ impl Drop for DurableSyncs {
 /// context, …) is only correct when these are genuinely unset — a child of a
 /// managed Orbit run inherits them all (ORB-10436).
 pub const MANAGED_RUN_ENV: &[&str] = &[
-    "ORBIT_RUN_ID",
-    "ORBIT_TASK_ID",
+    env_vars::ORBIT_RUN_ID,
+    env_vars::ORBIT_TASK_ID,
     "ORBIT_ACTIVE_TASK_ID",
-    "ORBIT_SESSION_ID",
-    "ORBIT_MANAGED_RUN_CONTEXT",
-    "ORBIT_WORKSPACE",
+    env_vars::ORBIT_SESSION_ID,
+    env_vars::ORBIT_MANAGED_RUN_CONTEXT,
+    env_vars::ORBIT_WORKSPACE,
 ];
 
 /// Every ambient variable a test-spawned `orbit` child process must not
@@ -107,59 +108,59 @@ pub const MANAGED_RUN_ENV: &[&str] = &[
 /// *before* any variable a test sets on purpose, so the deliberate value wins.
 pub const INHERITED_AUTHORITY_ENV: &[&str] = &[
     // Git repository and write destinations override a fixture's cwd.
-    "GIT_DIR",
-    "GIT_WORK_TREE",
-    "GIT_COMMON_DIR",
+    env_vars::GIT_DIR,
+    env_vars::GIT_WORK_TREE,
+    env_vars::GIT_COMMON_DIR,
     "GIT_INDEX_FILE",
     "GIT_OBJECT_DIRECTORY",
     "GIT_ALTERNATE_OBJECT_DIRECTORIES",
     // Durable routing: which registry, workspace, and data root the child
     // writes to. `ORBIT_REGISTRY_ROOT` and `ORBIT_WORKSPACE` outrank `HOME`.
-    "ORBIT_ROOT",
-    "ORBIT_REGISTRY_ROOT",
-    "ORBIT_WORKSPACE",
-    "ORBIT_WORKSPACE_CLAIM_TOKEN",
-    "ORBIT_WORKTREE_ROOT",
-    "ORBIT_JOB_DIR",
-    "ORBIT_ACTIVITY_DIR",
+    env_vars::ORBIT_ROOT,
+    env_vars::ORBIT_REGISTRY_ROOT,
+    env_vars::ORBIT_WORKSPACE,
+    env_vars::ORBIT_WORKSPACE_CLAIM_TOKEN,
+    env_vars::ORBIT_WORKTREE_ROOT,
+    env_vars::ORBIT_JOB_DIR,
+    env_vars::ORBIT_ACTIVITY_DIR,
     // The installation a child treats as the host's installed orbit, whose
     // supported state bounds the migrations a build may apply.
-    "ORBIT_INSTALL_DIR",
+    env_vars::ORBIT_INSTALL_DIR,
     // Managed-run trust boundary and run identity. Clearing the marker alone
     // would be enough to disarm routing today; clearing the whole envelope
     // keeps the fixture correct if that coupling ever changes.
-    "ORBIT_MANAGED_RUN_CONTEXT",
-    "ORBIT_WORKER_CONTEXT_REQUIRED",
-    "ORBIT_RUN_ID",
-    "ORBIT_TASK_ID",
+    env_vars::ORBIT_MANAGED_RUN_CONTEXT,
+    env_vars::ORBIT_WORKER_CONTEXT_REQUIRED,
+    env_vars::ORBIT_RUN_ID,
+    env_vars::ORBIT_TASK_ID,
     "ORBIT_ACTIVE_TASK_ID",
-    "ORBIT_SESSION_ID",
-    "ORBIT_ACTIVITY_ID",
-    "ORBIT_STEP_INDEX",
+    env_vars::ORBIT_SESSION_ID,
+    env_vars::ORBIT_ACTIVITY_ID,
+    env_vars::ORBIT_STEP_INDEX,
     // Actor identity and audit role attributed to the child's writes.
-    "ORBIT_AGENT_NAME",
-    "ORBIT_AGENT_MODEL",
-    "ORBIT_ACTOR",
-    "ORBIT_OPERATOR",
-    "ORBIT_TASK_ACTOR_KIND",
+    env_vars::ORBIT_AGENT_NAME,
+    env_vars::ORBIT_AGENT_MODEL,
+    env_vars::ORBIT_ACTOR,
+    env_vars::ORBIT_OPERATOR,
+    env_vars::ORBIT_TASK_ACTOR_KIND,
     // Sandbox and tool grants leased to the host activity, not to a fixture.
-    "ORBIT_ACTIVITY_TOOLS",
-    "ORBIT_ACTIVITY_TOOL_POLICY",
-    "ORBIT_ACTIVITY_TOOLS_DENY",
-    "ORBIT_ACTIVITY_NAME",
-    "ORBIT_ACTIVITY_FS_PROFILE",
-    "ORBIT_ACTIVITY_DEADLINE_UNIX_MS",
+    env_vars::ORBIT_ACTIVITY_TOOLS,
+    env_vars::ORBIT_ACTIVITY_TOOL_POLICY,
+    env_vars::ORBIT_ACTIVITY_TOOLS_DENY,
+    env_vars::ORBIT_ACTIVITY_NAME,
+    env_vars::ORBIT_ACTIVITY_FS_PROFILE,
+    env_vars::ORBIT_ACTIVITY_DEADLINE_UNIX_MS,
     // Advertised toolsets for the enclosing activity. Inherited, this changes
     // a fixture's default `tools/list`. A fixture that wants the stamp sets
     // it after this scrub.
     crate::security::child_env::ACTIVITY_MCP_TOOLSETS_ENV,
-    "ORBIT_PROC_ALLOWED_PROGRAMS",
-    "ORBIT_PROC_PROGRAM_POLICY",
-    "ORBIT_PROC_DISALLOWED_PROGRAMS",
-    "ORBIT_BIN",
+    env_vars::ORBIT_PROC_ALLOWED_PROGRAMS,
+    env_vars::ORBIT_PROC_PROGRAM_POLICY,
+    env_vars::ORBIT_PROC_DISALLOWED_PROGRAMS,
+    env_vars::ORBIT_BIN,
     // Routes plugin tool calls to the enclosing run's host broker instead of
     // the fixture's own install; a fixture that needs a broker sets its own.
-    "ORBIT_PLUGIN_BROKER",
+    env_vars::ORBIT_PLUGIN_BROKER,
 ];
 
 /// Clear every [`INHERITED_AUTHORITY_ENV`] variable from a child command.

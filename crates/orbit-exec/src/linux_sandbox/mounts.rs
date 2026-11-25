@@ -1,4 +1,5 @@
 use super::*;
+use orbit_common::env_vars;
 
 pub(super) fn cwd_is_writable_root(cwd: &Path, writable_roots: &[PathBuf]) -> bool {
     // A writable descendant cannot justify binding the entire cwd writable
@@ -90,7 +91,8 @@ pub(super) fn cargo_home_dir() -> Option<PathBuf> {
             .filter(|value| !value.is_empty())
             .map(PathBuf::from)
     }
-    non_empty("CARGO_HOME").or_else(|| non_empty("HOME").map(|home| home.join(".cargo")))
+    non_empty(env_vars::CARGO_HOME)
+        .or_else(|| non_empty(env_vars::HOME).map(|home| home.join(".cargo")))
 }
 
 /// Bind Cargo's shared download caches writable inside the namespace.

@@ -1,6 +1,7 @@
 //! Names-only checks of the managed launcher's actual environment. A login
 //! shell is not evidence about a service that was started earlier.
 
+use orbit_common::env_vars;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 use std::collections::BTreeSet;
 #[cfg(target_os = "linux")]
@@ -82,7 +83,7 @@ pub fn crew_source_environment_warnings(
         return warnings;
     }
     #[cfg(any(target_os = "linux", target_os = "macos"))]
-    let Some(home) = std::env::var_os("HOME").map(PathBuf::from) else {
+    let Some(home) = std::env::var_os(env_vars::HOME).map(PathBuf::from) else {
         return warnings;
     };
     #[cfg(target_os = "linux")]

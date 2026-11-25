@@ -1,3 +1,4 @@
+use orbit_common::env_vars;
 use std::collections::HashMap;
 
 use orbit_common::OrbitError;
@@ -14,7 +15,7 @@ const RUNTIME_KEY: &str = "agy";
 ///
 /// Credentials stay in `~/.gemini/antigravity-cli/` from an interactive `agy`
 /// login. Orbit never auto-logs in and never rewrites those files. [ORB-11299]
-const REQUIRED_ENV_VARS: &[&str] = &["HOME", "PATH"];
+const REQUIRED_ENV_VARS: &[&str] = &[env_vars::HOME, env_vars::PATH];
 
 pub(crate) struct AntigravityRuntime {
     command: String,

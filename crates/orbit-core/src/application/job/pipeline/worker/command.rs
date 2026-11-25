@@ -12,6 +12,7 @@ use super::scope::contain_worker_command_with_availability;
 use super::scope::{STRICT_WORKER_CONTAINMENT_ENV, WorkerLimits, contain_worker_command};
 use super::*;
 use crate::application::job::run::definition::pipeline_worker_file_name;
+use orbit_common::env_vars;
 use orbit_common::security::child_env::{
     MCP_MANAGED_BINDING_ENV_VARS, MCP_MANAGED_REGISTRY_ROOT_ENV, MCP_MANAGED_WORKSPACE_ENV,
 };
@@ -82,7 +83,7 @@ pub(crate) fn configure_pipeline_worker_command(
     // workspace identity, either via `--root` (pinned parent) or cwd (default
     // split-root layout), so `ORBIT_ROOT` must never be left to compete with
     // either.
-    command.env_remove("ORBIT_ROOT");
+    command.env_remove(env_vars::ORBIT_ROOT);
     if let Some(root) = root_override {
         // `--root` pins both stores.
         command.arg("--root").arg(root);
@@ -422,7 +423,7 @@ impl WorkerCommandConfig {
                 .filter(|name| {
                     ![MCP_MANAGED_WORKSPACE_ENV, MCP_MANAGED_REGISTRY_ROOT_ENV].contains(name)
                 })
-                .chain(["ORBIT_TASK_ID", "ORBIT_ACTIVE_TASK_ID"])
+                .chain([env_vars::ORBIT_TASK_ID, "ORBIT_ACTIVE_TASK_ID"])
             {
                 command.env_remove(name);
             }

@@ -1,3 +1,4 @@
+use orbit_common::env_vars;
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 
@@ -48,8 +49,8 @@ fn claude_state_dir(home: Option<&OsStr>, claude_config_dir: Option<&OsStr>) -> 
 /// instead of the workspace, where `denyModify: .orbit/**` would block
 /// startup-time writes.
 pub fn claude_state_dir_from_env() -> Option<PathBuf> {
-    let claude_config_dir = std::env::var_os("CLAUDE_CONFIG_DIR");
-    let home = std::env::var_os("HOME");
+    let claude_config_dir = std::env::var_os(env_vars::CLAUDE_CONFIG_DIR);
+    let home = std::env::var_os(env_vars::HOME);
     claude_state_dir(home.as_deref(), claude_config_dir.as_deref())
 }
 

@@ -7,6 +7,7 @@
 //! callers state only what varies.
 
 use orbit_common::OrbitError;
+use orbit_common::env_vars;
 use orbit_common::observability::audit_id::audit_execution_id;
 use orbit_types::telemetry::AuditEventStatus;
 
@@ -64,9 +65,9 @@ pub fn record_system_audit_event(
     let (job_run_id, activity_id, step_index) = match attribution {
         AuditRunAttribution::Run(run_id) => (run_id, None, None),
         AuditRunAttribution::Environment { run_id } => (
-            run_id.or_else(|| non_empty_env("ORBIT_RUN_ID")),
-            non_empty_env("ORBIT_ACTIVITY_ID"),
-            std::env::var("ORBIT_STEP_INDEX")
+            run_id.or_else(|| non_empty_env(env_vars::ORBIT_RUN_ID)),
+            non_empty_env(env_vars::ORBIT_ACTIVITY_ID),
+            std::env::var(env_vars::ORBIT_STEP_INDEX)
                 .ok()
                 .and_then(|s| s.parse().ok()),
         ),
@@ -92,7 +93,7 @@ pub fn record_system_audit_event(
             stdout_truncated: None,
             stderr_truncated: None,
             error_message: None,
-            host: std::env::var("HOSTNAME").ok(),
+            host: std::env::var(env_vars::HOSTNAME).ok(),
             pid: std::process::id(),
             session_id: None,
             workspace_id: workspace_id.map(ToOwned::to_owned),

@@ -10,6 +10,7 @@ use crate::activity_job::dispatcher::{DispatchError, ResolvedSandbox};
 use crate::context::{
     ProvenanceEnv, ResolvedActivityTools, default_python_cache_prefix, provenance_env,
 };
+use orbit_common::env_vars;
 use orbit_common::process::build_budget::WAIT_DIRECTORY_ENV;
 use orbit_common::security::child_env::{
     ACTIVITY_MCP_TOOLSETS_ENV, MCP_MANAGED_REGISTRY_ROOT_ENV, MCP_MANAGED_WORKSPACE_ENV,
@@ -166,7 +167,10 @@ pub(super) fn prepare_provider_environment(
         agent_model: model.as_deref(),
         agent_task_id: task_id,
     });
-    dispatch_env.push(("ORBIT_TASK_ACTOR_KIND".to_string(), "agent".to_string()));
+    dispatch_env.push((
+        env_vars::ORBIT_TASK_ACTOR_KIND.to_string(),
+        "agent".to_string(),
+    ));
     // A nested `proc.spawn` may run as long as this invocation has left. The
     // supervisor's clock starts at spawn, a moment after this, so the stamped
     // deadline never outlasts the provider.
@@ -292,14 +296,14 @@ pub(super) fn prepare_provider_environment(
     if inspection.is_some() {
         // This invocation has no job-run authority. An outer managed process
         // may have passed its own run id through the allowlist.
-        child_env.retain(|(key, _)| key != "ORBIT_RUN_ID");
+        child_env.retain(|(key, _)| key != env_vars::ORBIT_RUN_ID);
     }
     if registry_locator_injected {
         // A host process may itself have been launched with an operator
         // `ORBIT_ROOT`. Do not reinterpret that pinned-data-root input as the
         // managed child's workspace root; the authoritative registry locator
         // above supersedes it for this execution envelope. [ORB-11066]
-        child_env.retain(|(key, _)| key != "ORBIT_ROOT");
+        child_env.retain(|(key, _)| key != env_vars::ORBIT_ROOT);
     }
     // The envelope allowlist forwards an outer run's activity and process
     // policy names; drop them, then stamp this activity's envelope.
@@ -317,7 +321,7 @@ pub(super) fn prepare_provider_environment(
     default_python_cache_prefix(child_env, python_cache_directory.path());
     add_browser_kit_env(child_env);
     if host.worker_invocation().is_some() {
-        child_env.push(("ORBIT_WORKER_CONTEXT_REQUIRED".into(), "1".into()));
+        child_env.push((env_vars::ORBIT_WORKER_CONTEXT_REQUIRED.into(), "1".into()));
     }
     Ok(PreparedProviderEnvironment {
         scratch_dir,

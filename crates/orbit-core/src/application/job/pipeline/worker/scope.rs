@@ -38,6 +38,7 @@
 //! the CLI's `--strict-worker-containment` refuses an unavailable scope before
 //! spawning the worker; the flag is refused while containment is `off`.
 
+use orbit_common::env_vars;
 use std::collections::BTreeMap;
 use std::ffi::OsString;
 #[cfg(target_os = "linux")]
@@ -71,14 +72,16 @@ const SYSTEMD_RUN: &str = "systemd-run";
 pub(crate) const WORKER_OOM_SCORE_ADJ: i32 = 500;
 /// Inherited by a coordinator's child workers so one CLI invocation keeps its
 /// containment policy for every leaf it admits.
-pub(crate) const STRICT_WORKER_CONTAINMENT_ENV: &str = "ORBIT_WORKER_CONTAINMENT_STRICT";
+pub(crate) use orbit_common::env_vars::ORBIT_WORKER_CONTAINMENT_STRICT as STRICT_WORKER_CONTAINMENT_ENV;
 
 /// The user-bus locators `systemd-run --user` needs to reach the user
 /// manager. They belong only in the scope launcher's environment: the
 /// script's own environment is composed separately and never carries them
 /// unless a manifest grant puts them there.
-pub(crate) const USER_BUS_LOCATOR_ENV_VARS: [&str; 2] =
-    ["XDG_RUNTIME_DIR", "DBUS_SESSION_BUS_ADDRESS"];
+pub(crate) const USER_BUS_LOCATOR_ENV_VARS: [&str; 2] = [
+    env_vars::XDG_RUNTIME_DIR,
+    env_vars::DBUS_SESSION_BUS_ADDRESS,
+];
 
 /// The limits applied to one worker scope, admitted from `machine.worker_*`.
 #[derive(Clone, Debug, PartialEq, Eq)]

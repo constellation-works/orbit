@@ -55,6 +55,7 @@
 //! under the workspace confinement `orbit.task.artifact.put` already applies,
 //! and sends the bytes.
 
+use orbit_common::env_vars;
 use std::path::Path;
 
 use base64::Engine as _;
@@ -126,7 +127,7 @@ pub fn bridge_claimed_owner_call(
     workspace_root: &Path,
     entry_point: ToolEntryPoint,
 ) -> Option<ClaimedOwnerRoute> {
-    let socket = std::env::var_os("ORBIT_PLUGIN_BROKER").map(std::path::PathBuf::from);
+    let socket = std::env::var_os(env_vars::ORBIT_PLUGIN_BROKER).map(std::path::PathBuf::from);
     // The bridge and the broker behind it key on the operation a family
     // call reaches; the owner's dispatch receives the family call again.
     let (name, input) = if tool_family(name).is_some() {

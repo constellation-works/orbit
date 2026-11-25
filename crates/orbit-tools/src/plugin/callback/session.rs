@@ -1,7 +1,7 @@
 use super::*;
 
 /// Informational namespace the backend already carries. Not the gate.
-pub const ORBIT_PLUGIN_ENV: &str = "ORBIT_PLUGIN";
+pub use orbit_common::env_vars::ORBIT_PLUGIN as ORBIT_PLUGIN_ENV;
 
 /// The descriptor the host maps the session record onto in a backend child.
 ///
@@ -17,12 +17,12 @@ pub const PLUGIN_CALLBACK_FD: i32 = 3;
 /// the gate. A child that rewrites or drops it only changes which number is
 /// inspected, and a number holding anything but this host's own session
 /// record is no credential at all.
-pub const ORBIT_PLUGIN_CALLBACK_FD_ENV: &str = "ORBIT_PLUGIN_CALLBACK_FD";
+pub use orbit_common::env_vars::ORBIT_PLUGIN_CALLBACK_FD as ORBIT_PLUGIN_CALLBACK_FD_ENV;
 
 /// Backend marker, accepted only as evidence to refuse a caller without the
 /// host-issued descriptor. Older hosts stamped their retired token here;
 /// current hosts stamp a non-secret marker that never authorizes a callback.
-pub const ORBIT_PLUGIN_CALLBACK_ENV: &str = "ORBIT_PLUGIN_CALLBACK";
+pub use orbit_common::env_vars::ORBIT_PLUGIN_CALLBACK as ORBIT_PLUGIN_CALLBACK_ENV;
 
 pub(super) const SESSION_DIR: &str = "state/plugin-callbacks";
 pub(super) const TOKEN_BYTES: usize = 32;

@@ -1,6 +1,7 @@
 //! Operator-facing diagnostics for provider failures caused by the spawn
 //! sandbox or the provider's own configuration.
 
+use orbit_common::env_vars;
 use std::ffi::OsStr;
 use std::path::Path;
 
@@ -185,7 +186,7 @@ pub(super) fn macos_keychain_auth_diagnostic(
     sandbox: Option<&ResolvedSandbox>,
     output: &str,
 ) -> Option<String> {
-    let home = std::env::var_os("HOME");
+    let home = std::env::var_os(env_vars::HOME);
     macos_keychain_auth_diagnostic_with(provider, sandbox, output, home.as_deref())
 }
 

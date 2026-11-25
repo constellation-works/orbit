@@ -21,6 +21,7 @@
 //! for stdout and stderr, a wall-clock bound and a build-directory size bound,
 //! either of which kills the whole process group.
 
+use orbit_common::env_vars;
 mod linux;
 mod macos;
 mod script;
@@ -194,7 +195,7 @@ pub fn run_build_phase(
 /// Credential denies apply even when a credential lives under the fixed
 /// system runtime rather than one of the declared toolchain roots.
 fn credential_denies(home: Option<&OsStr>) -> Vec<(PathBuf, bool)> {
-    let cargo_home = std::env::var_os("CARGO_HOME");
+    let cargo_home = std::env::var_os(env_vars::CARGO_HOME);
     crate::credential_paths::credential_read_denies(home, cargo_home.as_deref())
         .into_iter()
         .map(|deny| (deny.path, deny.file))

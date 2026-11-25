@@ -1,6 +1,7 @@
 //! Finite supported REST-read commands and their trusted runner bindings.
 use super::prerequisite::unreadable;
 use orbit_common::OrbitError;
+use orbit_common::env_vars;
 use serde_json::Value;
 
 /// Bind the failed API step to the prerequisite's source, not arbitrary log
@@ -47,7 +48,7 @@ pub(super) fn safe_environment(env: &Value) -> Result<(), OrbitError> {
         .as_object()
         .ok_or_else(|| unreadable("ambiguous prerequisite environment"))?;
     for (key, value) in env {
-        if matches!(key.as_str(), "GH_TOKEN" | "GITHUB_TOKEN") {
+        if matches!(key.as_str(), env_vars::GH_TOKEN | env_vars::GITHUB_TOKEN) {
             if !matches!(
                 value.as_str(),
                 Some("${{ github.token }}" | "${{ secrets.GITHUB_TOKEN }}")
@@ -69,7 +70,13 @@ pub(super) fn safe_environment(env: &Value) -> Result<(), OrbitError> {
             || key.starts_with("DYLD_")
             || matches!(
                 key.as_str(),
-                "PATH" | "BASH_ENV" | "ENV" | "SHELLOPTS" | "BASHOPTS" | "HOME" | "XDG_CONFIG_HOME"
+                env_vars::PATH
+                    | "BASH_ENV"
+                    | "ENV"
+                    | "SHELLOPTS"
+                    | "BASHOPTS"
+                    | env_vars::HOME
+                    | env_vars::XDG_CONFIG_HOME
             )
         {
             return Err(unreadable("unsupported prerequisite environment override"));
@@ -228,7 +235,7 @@ fn legacy_api_read(command: &str, workflow: &Value, job: &str, step: &Value) -> 
         && step["shell"] == "bash"
         && binding("PR_NUMBER") == Some("${{ github.event.pull_request.number }}")
         && matches!(
-            binding("GH_TOKEN"),
+            binding(env_vars::GH_TOKEN),
             Some("${{ github.token }}" | "${{ secrets.GITHUB_TOKEN }}")
         )
 }
@@ -447,7 +454,7 @@ fn change_scope(workflow: &Value, root: &str, scope: &str, open: &str) -> Result
         .as_str()
         .ok_or_else(|| unreadable("change-scope output identity"))?;
     let mut env = serde_json::json!({
-        "GH_TOKEN": "${{ github.token }}",
+        (env_vars::GH_TOKEN): "${{ github.token }}",
         "GH_REPO": "${{ github.repository }}",
         "EVENT": "${{ github.event_name }}",
         "PR": "${{ github.event.pull_request.number }}",

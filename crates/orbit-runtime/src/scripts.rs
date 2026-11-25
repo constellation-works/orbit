@@ -17,6 +17,7 @@
 //! (`orbit.script.grant` / `orbit.script.revoke`); the chokepoint refuses
 //! agent sessions and plugin callbacks before this code is reached.
 
+use orbit_common::env_vars;
 use std::path::{Path, PathBuf};
 
 use orbit_common::OrbitError;
@@ -605,7 +606,7 @@ impl RuntimeKernel {
         // Each root must exist, resolve, sit outside the credential paths and
         // pass a read (and, for a write root, write) probe by this process.
         // The job's process repeats the probe before every spawn.
-        let home = std::env::var_os("HOME");
+        let home = std::env::var_os(env_vars::HOME);
         let roots = read_roots
             .iter()
             .map(|root| (root, orbit_exec::ScriptRootAccess::Read))
@@ -712,7 +713,7 @@ fn resolve_grant_interpreter_paths(asset: &ScriptAsset) -> Result<Vec<PathBuf>, 
     };
     let (resolved, unresolved) = orbit_tools::plugin::resolve_declared_programs(
         std::slice::from_ref(program),
-        std::env::var_os("PATH").as_deref(),
+        std::env::var_os(env_vars::PATH).as_deref(),
     );
     if let Some((_, reason)) = unresolved.into_iter().next() {
         return Err(OrbitError::InvalidInput(format!(

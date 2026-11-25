@@ -1,9 +1,10 @@
+use orbit_common::env_vars;
 use std::collections::BTreeSet;
 
 use serde_json::Value;
 
 /// Environment marker emitted with the owning run ID for a managed activity.
-pub const ORBIT_MANAGED_RUN_CONTEXT_ENV: &str = "ORBIT_MANAGED_RUN_CONTEXT";
+pub use orbit_common::env_vars::ORBIT_MANAGED_RUN_CONTEXT as ORBIT_MANAGED_RUN_CONTEXT_ENV;
 
 /// Read the managed run ID declared by this process for routing and attribution.
 /// Children can change their environment, so this ID cannot authenticate a resident.
@@ -15,7 +16,7 @@ pub fn managed_run_context_run_id_from_env() -> Option<String> {
         return None;
     }
 
-    std::env::var("ORBIT_RUN_ID")
+    std::env::var(env_vars::ORBIT_RUN_ID)
         .ok()
         .and_then(|value| non_empty(&value).map(ToOwned::to_owned))
 }
@@ -25,7 +26,7 @@ pub fn managed_run_context_run_id_from_env() -> Option<String> {
 /// [`managed_run_context_run_id_from_env`].
 pub fn managed_run_context_task_id_from_env() -> Option<String> {
     managed_run_context_run_id_from_env()?;
-    std::env::var("ORBIT_TASK_ID")
+    std::env::var(env_vars::ORBIT_TASK_ID)
         .ok()
         .and_then(|value| non_empty(&value).map(ToOwned::to_owned))
 }
@@ -43,7 +44,7 @@ pub fn managed_dispatch_context_from_env() -> bool {
         .is_some_and(|value| matches!(value.trim(), "1" | "true" | "TRUE"));
     managed
         && (managed_run_context_from_env()
-            || std::env::var("ORBIT_SESSION_ID")
+            || std::env::var(env_vars::ORBIT_SESSION_ID)
                 .ok()
                 .is_some_and(|value| non_empty(&value).is_some()))
 }
@@ -57,7 +58,7 @@ pub fn managed_workspace_selector_from_env() -> Option<String> {
     if !managed_dispatch_context_from_env() {
         return None;
     }
-    std::env::var("ORBIT_WORKSPACE")
+    std::env::var(env_vars::ORBIT_WORKSPACE)
         .ok()
         .and_then(|value| non_empty(&value).map(ToOwned::to_owned))
 }

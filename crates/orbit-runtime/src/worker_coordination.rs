@@ -1,3 +1,4 @@
+use orbit_common::env_vars;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -458,7 +459,7 @@ fn is_coordination_operation(name: &str) -> bool {
 pub(super) fn restore_process_binding(
     global_root: &std::path::Path,
 ) -> Result<Option<Arc<WorkerInvocation>>, OrbitError> {
-    let required = std::env::var_os("ORBIT_WORKER_CONTEXT_REQUIRED").is_some();
+    let required = std::env::var_os(env_vars::ORBIT_WORKER_CONTEXT_REQUIRED).is_some();
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
     loop {
         if let Some(binding) = super::recovery_authority::current_worker_binding(global_root)? {
