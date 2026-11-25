@@ -1,7 +1,10 @@
-//! Provider runtime trait (`AgentRuntime`), registry, and runtime factory; imports `agent`, `providers`, `types`, and `orbit-common`.
+//! Provider runtime trait (`AgentRuntime`), registry, and runtime factory;
+//! imports `agent`, `providers`, `types`, and `orbit-common`.
 
 mod backend;
+
 mod factory;
+
 mod runtime_trait;
 
 pub(crate) use backend::ProviderRegistry;
