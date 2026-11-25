@@ -366,6 +366,11 @@ td .rel-rate { font-size: var(--text-sm); }
 @media (max-width: 600px) {
   .diagnostics-errors-page-status { flex: 1 1 100%; order: -1; }
   .diagnostics-errors-pager button { min-height: 36px; }
+  /* The Errors header must read in full at phone widths (no ellipsis):
+     let it wrap and let the count wrap with it. */
+  #diagnostics-panel > header { flex-wrap: wrap; }
+  #diag-count { white-space: normal; flex-wrap: wrap; row-gap: var(--space-2); }
+  .diag-count-summary { overflow: visible; text-overflow: clip; white-space: normal; overflow-wrap: anywhere; }
 }
 
 /* Narrow viewports: the Audit tool-health cards keep their labels readable. */

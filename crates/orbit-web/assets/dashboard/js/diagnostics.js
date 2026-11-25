@@ -384,12 +384,11 @@ function errorsPageControls(ordinary, start, end) {
   return nav;
 }
 
-function errorsCountText(rows, ordinary, start, end, paged) {
-  const windowLabel = `window ${getWindow()}`;
-  if (!paged) return `${rows.length} error events · ${windowLabel}`;
-  const range = `Showing ${start + 1}–${end} of ${ordinary.length}`;
-  const fetched = rows.length === ordinary.length ? "" : ` · ${rows.length} error events`;
-  return `${range}${fetched} · ${windowLabel}`;
+// The pager owns the range ("Showing a–b of N", STD-07 R16); the header
+// states only the total ordinary errors and the window. The folded
+// agent-diagnostics rows keep their own label in the disclosure below.
+function errorsCountText(ordinary) {
+  return `${ordinary.length} error events · window ${getWindow()}`;
 }
 
 function bindErrorsPageMedia() {
@@ -434,7 +433,7 @@ function renderDiagnostics(ctx = {}) {
   const end = paged ? Math.min(start + size, ordinary.length) : ordinary.length;
   const count = $("diag-count");
   const coverage = errorsCoverageLabel(last.errors);
-  const summary = `${errorsCountText(rows, ordinary, start, end, paged)}${coverage ? ` · ${coverage}` : ""}`;
+  const summary = `${errorsCountText(ordinary)}${coverage ? ` · ${coverage}` : ""}`;
   count.replaceChildren(el("span", { class: "diag-count-summary", text: summary, title: summary }));
   count.title = coverage
     ? "Most recent step and event failures; log retention or the stderr read cap leaves the start of the selected window unread. Capped by the diag URL parameter (default 50)."
