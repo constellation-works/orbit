@@ -65,12 +65,12 @@ pub(in crate::executor::automation) fn setup_worktree<H: RuntimeHost + ?Sized>(
     let repo_root_str = host.repo_root()?;
     let repo_root = Path::new(&repo_root_str);
 
-    // ORB-28152: a local run cuts from the owner's branch, which a push from
-    // elsewhere leaves behind origin. Advance a clean owner first, or refuse
-    // without moving a dirty or diverged one.
-    if base_sync_mode == BaseSyncMode::Local {
-        advance_local_base_for_admission(repo_root, &base)?;
-    }
+    // Pin the fetched commit without advancing the owner's checkout.
+    let local_start = if base_sync_mode == BaseSyncMode::Local {
+        advance_local_base_for_admission(repo_root, &base)?
+    } else {
+        None
+    };
 
     let start_point =
         match resolve_worktree_start_point_for_admission(repo_root, &base, base_sync_mode) {
@@ -116,14 +116,17 @@ pub(in crate::executor::automation) fn setup_worktree<H: RuntimeHost + ?Sized>(
     // both the worktree creation and every downstream step that needs the base.
     // ORB-11639: this commit is also the only HEAD a reused branch or checkout
     // may already occupy; setup never republishes it against unexplained history.
-    let base_sha = git_output(
-        repo_root,
-        &[
-            "rev-parse",
-            "--verify",
-            &format!("{start_point}^{{commit}}"),
-        ],
-    )?;
+    let base_sha = match local_start {
+        Some(commit) => commit,
+        None => git_output(
+            repo_root,
+            &[
+                "rev-parse",
+                "--verify",
+                &format!("{start_point}^{{commit}}"),
+            ],
+        )?,
+    };
 
     // ORB-10464 (F2026-07-038): a dependency being `done` says nothing about
     // whether its commits reached this base. Verify that before anything
