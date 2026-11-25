@@ -48,7 +48,8 @@ impl FamilyDispatch for OrbitRuntime {
         input: Value,
     ) -> Result<super::super::execute::ToolDispatchOutcome, OrbitError> {
         let (tool, input) = orbit_types::tool::tool_family_call(operation, input);
-        self.execute_tool_command_dispatch(&tool, input, None, None, ToolEntryPoint::Mcp)
+        crate::test_support::with_runtime_env(self.clone(), orbit_common::Env::capture())
+            .execute_tool_command_dispatch(&tool, input, None, None, ToolEntryPoint::Mcp)
     }
 }
 
@@ -977,6 +978,7 @@ fn a_sandboxed_resident_landing_and_completion_are_decided_on_the_host() {
         .expect_err("no pull request to land")
         .to_string();
     assert!(error.contains("task_landing_refused"), "{error}");
+    let runtime = crate::test_support::with_runtime_env(runtime, orbit_common::Env::capture());
     let completed = runtime
         .execute_tool_command_dispatch(
             UPDATE,

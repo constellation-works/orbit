@@ -142,6 +142,8 @@ pub(super) fn call(
     input: Value,
     capability: McpCapability,
 ) -> Result<Value, String> {
+    let runtime =
+        orbit_core::test_support::with_runtime_env(runtime.clone(), orbit_common::Env::capture());
     // MCP names a family action through its family.
     let (tool, input) = orbit_types::tool::tool_family_call(tool, input);
     runtime
@@ -208,7 +210,21 @@ impl Fixture {
     #[cfg(unix)]
     fn as_brokered_cycle<T>(&self, mandate: &str, run_id: &str, body: impl FnOnce() -> T) -> T {
         use orbit_engine::PluginBrokerHandle;
-        let broker = resident_test_broker(&self.runtime, mandate, run_id);
+        // The broker runtime is constructed before the scoped caller
+        // environment below, so give it the same managed-run snapshot the
+        // caller will have while dispatching this cycle.
+        let env = orbit_common::Env::from_vars(
+            self.runtime
+                .env()
+                .vars()
+                .map(|(name, value)| (name.to_os_string(), value.to_os_string()))
+                .chain([
+                    ("ORBIT_MANAGED_RUN_CONTEXT".into(), "1".into()),
+                    ("ORBIT_RUN_ID".into(), run_id.into()),
+                ]),
+        );
+        let runtime = orbit_core::test_support::with_runtime_env(self.runtime.clone(), env);
+        let broker = resident_test_broker(&runtime, mandate, run_id);
         self.with_cycle_environment(run_id, Some(broker.socket_path().to_str().unwrap()), body)
     }
 
@@ -1665,7 +1681,7 @@ fn restoring_lint_refuses_resident_cycles_without_partial_context_writes() {
     // The native `orbit task lint` command uses this public registry API.
     // Lint is intentionally inactive on MCP / `orbit tool run`.
     let lint = |input| {
-        fx.runtime
+        orbit_core::test_support::with_runtime_env(fx.runtime.clone(), orbit_common::Env::capture())
             .run_tool("orbit.task.lint", input)
             .map_err(|error| error.to_string())
     };

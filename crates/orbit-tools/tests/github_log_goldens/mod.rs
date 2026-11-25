@@ -748,8 +748,14 @@ impl CachedLogRead {
         for (key, value) in window.as_object().unwrap() {
             input[key] = value.clone();
         }
-        self.registry
-            .execute("github.run.logs", &ToolContext::default(), input)
+        self.registry.execute(
+            "github.run.logs",
+            &ToolContext {
+                env: orbit_common::Env::capture(),
+                ..ToolContext::default()
+            },
+            input,
+        )
     }
 
     fn calls(&self) -> Vec<String> {
@@ -811,8 +817,14 @@ impl CachedLogRead {
         for (key, value) in window.as_object().unwrap() {
             input[key] = value.clone();
         }
-        self.registry
-            .execute("github.run.logs", &ToolContext::default(), input)
+        self.registry.execute(
+            "github.run.logs",
+            &ToolContext {
+                env: orbit_common::Env::capture(),
+                ..ToolContext::default()
+            },
+            input,
+        )
     }
 
     /// Whole-log downloads of the fallback job's own log API, as opposed to
