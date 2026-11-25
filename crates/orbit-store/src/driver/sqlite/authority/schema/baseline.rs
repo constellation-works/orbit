@@ -1,58 +1,13 @@
-//! Recovery authority's append-only ledger and frozen baseline.
-//!
-//! Each entry owns its shape-defining code. Never edit a shipped body: append
-//! a new migration for later shapes. The additive baseline preserves every
-//! table a pre-ledger binary creates or reads, including the legacy certificate.
-
-use std::path::Path;
+//! Frozen v1 baseline creating the five shipped recovery authority tables.
 
 use orbit_common::OrbitError;
-use orbit_store::contracts::{ForwardCompatibleOpen, MigrationCompatibility, StateComponent};
-use orbit_store::maintenance::migration::{LedgeredDatabase, Migration, run_database_migrations};
-#[cfg(unix)]
-use orbit_store::maintenance::migration::{current_schema_version, evaluate_newer_database};
 use rusqlite::Connection;
 
-use super::error::authority_error;
-
-const DATABASE: LedgeredDatabase = LedgeredDatabase {
-    component: StateComponent::RecoveryAuthority,
-    noun: "recovery authority database",
-    foreign_keys_off: false,
-    stamp: None,
-};
-
-const MIGRATIONS: &[Migration] = &[Migration {
-    version: 1,
-    name: "recovery_authority_baseline",
-    compat: MigrationCompatibility::Additive,
-    apply: apply_baseline_v1,
-}];
-
-#[cfg(unix)]
-const SUPPORTED_VERSION: u32 = MIGRATIONS[MIGRATIONS.len() - 1].version;
-
-pub(super) fn migrate(
-    connection: &Connection,
-    path: &Path,
-) -> Result<Option<ForwardCompatibleOpen>, OrbitError> {
-    run_database_migrations(connection, &DATABASE, MIGRATIONS, Some(path))
-}
-
-/// Worker lookups must not migrate: they run without authority write grants.
-/// Pre-ledger files remain readable, including their optional binding tables.
-#[cfg(unix)]
-pub(super) fn check_read_compatibility(connection: &Connection) -> Result<(), OrbitError> {
-    let current = current_schema_version(connection)?;
-    if current > SUPPORTED_VERSION {
-        evaluate_newer_database(connection, &DATABASE, current, SUPPORTED_VERSION)?;
-    }
-    Ok(())
-}
+use super::super::authority_error;
 
 /// Frozen v1 copy of the five shipped tables, idempotent over their optional
 /// first-use shapes. The engine alone creates the ledger's `schema_meta`.
-fn apply_baseline_v1(connection: &Connection) -> Result<(), OrbitError> {
+pub(super) fn apply_baseline_v1(connection: &Connection) -> Result<(), OrbitError> {
     connection
         .execute_batch(
             "CREATE TABLE IF NOT EXISTS rebase_recovery_certificate (

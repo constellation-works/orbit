@@ -5,7 +5,6 @@ use std::path::{Component, Path, PathBuf};
 
 use orbit_common::OrbitError;
 use orbit_types::policy::ResolvedFsProfile;
-use rusqlite::Connection;
 
 use super::error::path_error;
 
@@ -14,7 +13,7 @@ pub(super) const AUTHORITY_DIR: &str = "state/recovery-authority";
 
 /// Database file name. Its `-wal` and `-shm` sidecars are created beside it and
 /// are covered by the same protected root.
-pub(super) const AUTHORITY_DB: &str = "authority.db";
+pub(super) const AUTHORITY_DB: &str = orbit_store::recovery_authority::FILE_NAME;
 
 /// Owner-only permissions for the authority root and its database. These do not
 /// confine a same-UID leaf on their own; they keep the record off any shared or
@@ -124,35 +123,6 @@ pub(super) fn refuse_symlinked_authority_files(root: &Path) -> Result<(), OrbitE
         if unfollowed_metadata(&file)?.is_some_and(|metadata| metadata.file_type().is_symlink()) {
             return Err(refuse_symlinked(&file));
         }
-    }
-    Ok(())
-}
-
-/// Keep the `-wal` and `-shm` sidecars when the last connection closes.
-///
-/// Workers read this database read-only from inside their sandbox, which may
-/// read the authority root but never write it. SQLite opens a read-only WAL
-/// database without write access only when the shared-memory sidecar already
-/// exists, and by default the last closing connection deletes both sidecars.
-/// When no host connection was open, a worker's binding lookup then failed
-/// with "unable to open database file". Persistent sidecars make the lookup
-/// independent of whether the host happens to hold the database open.
-pub(super) fn persist_wal_sidecars(connection: &Connection) -> Result<(), OrbitError> {
-    let mut enabled: std::ffi::c_int = 1;
-    // SAFETY: the handle is live for the borrow of `connection`, and
-    // SQLITE_FCNTL_PERSIST_WAL reads and writes exactly one `int`.
-    let code = unsafe {
-        rusqlite::ffi::sqlite3_file_control(
-            connection.handle(),
-            c"main".as_ptr(),
-            rusqlite::ffi::SQLITE_FCNTL_PERSIST_WAL,
-            (&raw mut enabled).cast(),
-        )
-    };
-    if code != rusqlite::ffi::SQLITE_OK {
-        return Err(OrbitError::Execution(format!(
-            "keep recovery authority WAL sidecars: sqlite result code {code}"
-        )));
     }
     Ok(())
 }

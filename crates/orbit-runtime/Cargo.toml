@@ -32,7 +32,6 @@ orbit-search = { path = "../orbit-search" }
 orbit-store = { path = "../orbit-store" }
 orbit-tools = { path = "../orbit-tools" }
 orbit-types = { path = "../orbit-types" }
-rusqlite.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 serde_yaml.workspace = true
@@ -48,3 +47,4 @@ libc.workspace = true
 # Unit tests reach the `test-support` hooks through this self dependency.
 orbit-runtime = { path = ".", features = ["test-support"] }
 orbit-engine = { path = "../orbit-engine", features = ["test-support"] }
+orbit-store = { path = "../orbit-store", features = ["test-support"] }

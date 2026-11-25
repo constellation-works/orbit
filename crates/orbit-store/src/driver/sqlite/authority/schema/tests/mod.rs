@@ -1,11 +1,20 @@
-//! Persisted-authority safety: the public leaf API cannot seed host authority.
+//! Recovery authority schema adoption and forward-compatibility tests.
 
-use orbit_store::contracts::{CompatibilityRecord, MigrationCompatibility};
+use std::path::Path;
+
 use rusqlite::{Connection, params, types::Value};
 use tempfile::TempDir;
 
-use super::super::RecoveryAuthority;
-use super::fixtures::{RUN_ID, STEP_ID, scope};
+use crate::contracts::{CompatibilityRecord, MigrationCompatibility};
+use crate::driver::sqlite::authority::FILE_NAME;
+use crate::repository::recovery_authority::{
+    RecoveryAttemptRecord, RecoveryAuthorityReadOnly, RecoveryAuthorityStore,
+};
+
+const RUN_ID: &str = "jrun-20260910-0001-1";
+const STEP_ID: &str = "sync_base";
+const HEAD_BEFORE: &str = "1111111111111111111111111111111111111111";
+const PINNED_BASE: &str = "3333333333333333333333333333333333333333";
 
 const TABLES: [&str; 5] = [
     "rebase_recovery_certificate",
@@ -22,6 +31,24 @@ const LEGACY_INSERTS: [&str; 5] = [
     "INSERT INTO worker_process_binding VALUES (42,'start','{}')",
     "INSERT INTO worker_namespace_binding VALUES ('namespace','{}')",
 ];
+
+fn reserve_attempt(
+    store: &RecoveryAuthorityStore,
+    workspace: &Path,
+) -> Result<u64, orbit_common::OrbitError> {
+    let record = RecoveryAttemptRecord {
+        workspace_path: workspace.to_string_lossy().into_owned(),
+        head_sha_before: HEAD_BEFORE.to_string(),
+        target_base_sha: PINNED_BASE.to_string(),
+    };
+    store.write("reserve rebase recovery attempt", |tx| {
+        let attempt = tx.latest_reservation(RUN_ID, STEP_ID)?.unwrap_or(0) + 1;
+        tx.insert_reservation(RUN_ID, STEP_ID, attempt, &record, "2026-11-25T00:00:00Z")?;
+        u64::try_from(attempt).map_err(|_| {
+            orbit_common::OrbitError::Execution("rebase recovery attempt is out of range".into())
+        })
+    })
+}
 
 fn table_snapshot(connection: &Connection, table: &str) -> (String, Vec<Vec<Value>>) {
     let definition = connection
@@ -45,11 +72,6 @@ fn table_snapshot(connection: &Connection, table: &str) -> (String, Vec<Vec<Valu
 
 #[test]
 fn shipped_authority_shapes_adopt_without_reshaping_or_losing_old_writes() {
-    if crate::tests::run_isolated_test(std::any::type_name_of_val(
-        &shipped_authority_shapes_adopt_without_reshaping_or_losing_old_writes,
-    )) {
-        return;
-    }
     let definitions: Vec<_> = include_str!("fixtures/authority_v0.sql")
         .split(';')
         .filter(|sql| !sql.trim().is_empty())
@@ -69,7 +91,7 @@ fn shipped_authority_shapes_adopt_without_reshaping_or_losing_old_writes() {
             let global = TempDir::new().expect("global root");
             let root = global.path().join("state/recovery-authority");
             std::fs::create_dir_all(&root).expect("legacy root");
-            let path = root.join("authority.db");
+            let path = root.join(FILE_NAME);
             let old = Connection::open(&path).expect("old binary open");
             let mut preserved = Vec::new();
             for index in 0..TABLES.len() {
@@ -84,21 +106,42 @@ fn shipped_authority_shapes_adopt_without_reshaping_or_losing_old_writes() {
             }
             drop(old);
             #[cfg(unix)]
-            assert!(
-                super::super::worker::current_worker_binding(global.path())
-                    .expect("read pre-ledger optional binding tables without migration")
-                    .is_none()
-            );
-            let authority = RecoveryAuthority::open(global.path()).expect("adopt authority");
+            {
+                let reader = RecoveryAuthorityReadOnly::open(&path)
+                    .expect("read pre-ledger optional binding tables without migration");
+                if reader
+                    .has_worker_namespace_table()
+                    .expect("check namespace table")
+                {
+                    assert!(
+                        reader
+                            .worker_namespace_binding("unbound")
+                            .expect("read namespace")
+                            .is_none()
+                    );
+                }
+                if reader
+                    .has_worker_process_table()
+                    .expect("check process table")
+                {
+                    assert!(
+                        reader
+                            .worker_process_binding(999_999, "missing")
+                            .expect("read process")
+                            .is_none()
+                    );
+                }
+            }
+            let authority = RecoveryAuthorityStore::open(&path).expect("adopt authority");
             for (index, before) in &preserved {
                 assert_eq!(
-                    &table_snapshot(&authority.connection, TABLES[*index]),
+                    &table_snapshot(authority.connection(), TABLES[*index]),
                     before,
                     "adoption preserves the pre-ledger table and all its rows"
                 );
             }
             for table in TABLES {
-                let (actual, _) = table_snapshot(&authority.connection, table);
+                let (actual, _) = table_snapshot(authority.connection(), table);
                 let (shipped, _) = table_snapshot(&reference, table);
                 assert_eq!(
                     actual.split_whitespace().collect::<Vec<_>>(),
@@ -106,9 +149,9 @@ fn shipped_authority_shapes_adopt_without_reshaping_or_losing_old_writes() {
                     "each v1 table preserves its shipped shape, including on a fresh database"
                 );
             }
-            let ledger = table_snapshot(&authority.connection, "schema_meta");
+            let ledger = table_snapshot(authority.connection(), "schema_meta");
             let name: String = authority
-                .connection
+                .connection()
                 .query_row(
                     "SELECT value FROM schema_meta WHERE key='migration.v0001'",
                     [],
@@ -117,7 +160,7 @@ fn shipped_authority_shapes_adopt_without_reshaping_or_losing_old_writes() {
                 .expect("v1 recorded");
             assert_eq!(name, "recovery_authority_baseline");
             let raw: String = authority
-                .connection
+                .connection()
                 .query_row(
                     "SELECT value FROM schema_meta WHERE key='migration.compat'",
                     [],
@@ -129,9 +172,7 @@ fn shipped_authority_shapes_adopt_without_reshaping_or_losing_old_writes() {
             assert!(record.breaking.is_empty());
             assert_eq!(record.read_only, Some(vec![]));
             assert_eq!(
-                authority
-                    .begin_attempt(RUN_ID, STEP_ID, &scope(global.path()))
-                    .expect("new writer"),
+                reserve_attempt(&authority, global.path()).expect("new writer"),
                 1
             );
             drop(authority);
@@ -147,15 +188,15 @@ fn shipped_authority_shapes_adopt_without_reshaping_or_losing_old_writes() {
                     .expect("old write after adoption");
             }
             drop(old);
-            let reopened = RecoveryAuthority::open(global.path()).expect("current binary reopens");
+            let reopened = RecoveryAuthorityStore::open(&path).expect("current binary reopens");
             assert_eq!(
-                table_snapshot(&reopened.connection, "schema_meta"),
+                table_snapshot(reopened.connection(), "schema_meta"),
                 ledger,
                 "a current open does not rewrite ledger rows or their timestamps"
             );
             for (index, before) in &preserved {
                 assert_eq!(
-                    &table_snapshot(&reopened.connection, TABLES[*index]),
+                    &table_snapshot(reopened.connection(), TABLES[*index]),
                     before
                 );
             }
@@ -165,11 +206,6 @@ fn shipped_authority_shapes_adopt_without_reshaping_or_losing_old_writes() {
 
 #[test]
 fn newer_authority_schemas_keep_safe_writers_or_hold_reads_or_refuse() {
-    if crate::tests::run_isolated_test(std::any::type_name_of_val(
-        &newer_authority_schemas_keep_safe_writers_or_hold_reads_or_refuse,
-    )) {
-        return;
-    }
     for (label, compatibility) in [
         ("additive", Some(MigrationCompatibility::Additive)),
         (
@@ -182,9 +218,12 @@ fn newer_authority_schemas_keep_safe_writers_or_hold_reads_or_refuse() {
         ("stale", None),
     ] {
         let global = TempDir::new().expect("global root");
-        let authority = RecoveryAuthority::open(global.path()).expect("baseline authority");
+        let root = global.path().join("state/recovery-authority");
+        std::fs::create_dir_all(&root).expect("authority root");
+        let path = root.join(FILE_NAME);
+        let authority = RecoveryAuthorityStore::open(&path).expect("baseline authority");
         authority
-            .connection
+            .connection()
             .execute(
                 "INSERT INTO schema_meta VALUES ('migration.v0002', 'future_authority', 'future')",
                 [],
@@ -203,7 +242,7 @@ fn newer_authority_schemas_keep_safe_writers_or_hold_reads_or_refuse() {
                 ],
             );
             authority
-                .connection
+                .connection()
                 .execute(
                     "UPDATE schema_meta SET value=?1 WHERE key='migration.compat'",
                     [record.encode().expect("encode future compatibility")],
@@ -211,35 +250,35 @@ fn newer_authority_schemas_keep_safe_writers_or_hold_reads_or_refuse() {
                 .expect("future record");
         } else if label == "missing" {
             authority
-                .connection
+                .connection()
                 .execute("DELETE FROM schema_meta WHERE key='migration.compat'", [])
                 .expect("missing record");
         } else if label == "corrupt" {
             authority
-                .connection
+                .connection()
                 .execute(
                     "UPDATE schema_meta SET value=?1 WHERE key='migration.compat'",
                     params!["not-json"],
                 )
                 .expect("corrupt record");
         }
-        let ledger = table_snapshot(&authority.connection, "schema_meta");
+        let ledger = table_snapshot(authority.connection(), "schema_meta");
         drop(authority);
-        let opened = RecoveryAuthority::open(global.path());
+        let opened = RecoveryAuthorityStore::open(&path);
         if matches!(
             compatibility,
             Some(MigrationCompatibility::Additive | MigrationCompatibility::ReadCompatible)
         ) {
             let authority = opened.expect("safe reader opens");
             let query_only: bool = authority
-                .connection
+                .connection()
                 .pragma_query_value(None, "query_only", |row| row.get(0))
                 .expect("writer mode");
             assert_eq!(
                 query_only,
                 compatibility == Some(MigrationCompatibility::ReadCompatible)
             );
-            let write = authority.begin_attempt(RUN_ID, STEP_ID, &scope(global.path()));
+            let write = reserve_attempt(&authority, global.path());
             if query_only {
                 assert!(
                     write
@@ -259,7 +298,6 @@ fn newer_authority_schemas_keep_safe_writers_or_hold_reads_or_refuse() {
                 "{label}: {error}"
             );
         }
-        let root = global.path().join("state/recovery-authority");
         for sidecar in ["authority.db-wal", "authority.db-shm"] {
             assert!(
                 root.join(sidecar).is_file(),
@@ -268,12 +306,12 @@ fn newer_authority_schemas_keep_safe_writers_or_hold_reads_or_refuse() {
         }
         #[cfg(unix)]
         {
-            let lookup = super::super::worker::current_worker_binding(global.path());
+            let lookup = RecoveryAuthorityReadOnly::open(&path);
             if matches!(
                 compatibility,
                 Some(MigrationCompatibility::Additive | MigrationCompatibility::ReadCompatible)
             ) {
-                assert!(lookup.expect("safe worker read").is_none());
+                assert!(lookup.is_ok(), "safe worker read");
             } else {
                 assert!(
                     lookup
@@ -283,9 +321,7 @@ fn newer_authority_schemas_keep_safe_writers_or_hold_reads_or_refuse() {
                 );
             }
         }
-        let connection =
-            Connection::open(global.path().join("state/recovery-authority/authority.db"))
-                .expect("inspect authority");
+        let connection = Connection::open(&path).expect("inspect authority");
         assert_eq!(
             table_snapshot(&connection, "schema_meta"),
             ledger,

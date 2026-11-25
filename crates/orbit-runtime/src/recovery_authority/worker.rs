@@ -3,12 +3,10 @@
 use std::path::Path;
 
 use orbit_common::OrbitError;
-use rusqlite::params;
 #[cfg(unix)]
-use rusqlite::{Connection, OptionalExtension};
+use orbit_store::recovery_authority::RecoveryAuthorityReadOnly;
 
 use super::certificate::RecoveryAuthority;
-use super::error::authority_error;
 #[cfg(unix)]
 use super::root::{
     AUTHORITY_DB, AUTHORITY_DIR, refuse_symlinked, refuse_symlinked_authority_files,
@@ -38,18 +36,9 @@ impl RecoveryAuthority {
 
         let json =
             serde_json::to_string(binding).map_err(|error| OrbitError::Store(error.to_string()))?;
-        self.connection.execute(
-            "INSERT INTO worker_process_binding(pid, identity, binding_json) VALUES (?1,?2,?3) ON CONFLICT(pid,identity) DO NOTHING",
-            params![pid, identity, json],
-        ).map_err(|error| authority_error("bind worker process", error))?;
-        let recorded: String = self
-            .connection
-            .query_row(
-                "SELECT binding_json FROM worker_process_binding WHERE pid=?1 AND identity=?2",
-                params![pid, identity],
-                |row| row.get(0),
-            )
-            .map_err(|error| authority_error("read worker process binding", error))?;
+        let recorded = self
+            .store
+            .insert_or_get_worker_process_binding(pid, &identity, &json)?;
         if recorded != json {
             return Err(OrbitError::PolicyDenied(
                 "worker process binding is immutable".into(),
@@ -147,51 +136,28 @@ fn resolve_worker_binding(
     if !path.try_exists()? {
         return Ok(None);
     }
-    let connection = Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
-        .map_err(|error| authority_error("read worker authority", error))?;
-    super::schema::check_read_compatibility(&connection)?;
-    let namespace_table: bool = connection.query_row(
-        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='worker_namespace_binding')", [], |row| row.get(0),
-    ).map_err(|error| authority_error("inspect namespace authority", error))?;
-    if namespace_table && let Some(key) = namespace_key_probe() {
-        let value: Option<String> = connection
-            .query_row(
-                "SELECT binding_json FROM worker_namespace_binding WHERE namespace_key=?1",
-                params![key],
-                |row| row.get(0),
-            )
-            .optional()
-            .map_err(|error| authority_error("resolve namespace authority", error))?;
-        if let Some(value) = value {
-            let binding: orbit_types::tool::WorkerInvocation = serde_json::from_str(&value)
-                .map_err(|error| OrbitError::Store(error.to_string()))?;
-            binding.validate()?;
-            return Ok(Some(binding));
-        }
+    let reader = RecoveryAuthorityReadOnly::open(&path)?;
+    if reader.has_worker_namespace_table()?
+        && let Some(key) = namespace_key_probe()
+        && let Some(value) = reader.worker_namespace_binding(&key)?
+    {
+        let binding: orbit_types::tool::WorkerInvocation =
+            serde_json::from_str(&value).map_err(|error| OrbitError::Store(error.to_string()))?;
+        binding.validate()?;
+        return Ok(Some(binding));
     }
-    let exists: bool = connection.query_row(
-        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='worker_process_binding')", [], |row| row.get(0),
-    ).map_err(|error| authority_error("inspect worker authority", error))?;
-    if !exists {
+    if !reader.has_worker_process_table()? {
         return Ok(None);
     }
     let mut pid = std::process::id();
     for _ in 0..256 {
-        if let Some(identity) = orbit_common::process::identity::process_start_identity_token(pid) {
-            let value: Option<String> = connection
-                .query_row(
-                    "SELECT binding_json FROM worker_process_binding WHERE pid=?1 AND identity=?2",
-                    params![pid, identity],
-                    |row| row.get(0),
-                )
-                .optional()
-                .map_err(|error| authority_error("resolve worker process", error))?;
-            if let Some(value) = value {
-                let binding: orbit_types::tool::WorkerInvocation = serde_json::from_str(&value)
-                    .map_err(|error| OrbitError::Store(error.to_string()))?;
-                binding.validate()?;
-                return Ok(Some(binding));
-            }
+        if let Some(identity) = orbit_common::process::identity::process_start_identity_token(pid)
+            && let Some(value) = reader.worker_process_binding(pid, &identity)?
+        {
+            let binding: orbit_types::tool::WorkerInvocation = serde_json::from_str(&value)
+                .map_err(|error| OrbitError::Store(error.to_string()))?;
+            binding.validate()?;
+            return Ok(Some(binding));
         }
         let Some(parent) = parent_of(pid)? else {
             return Ok(None);
@@ -286,16 +252,9 @@ impl RecoveryAuthority {
     ) -> Result<(), OrbitError> {
         let json =
             serde_json::to_string(binding).map_err(|error| OrbitError::Store(error.to_string()))?;
-        self.connection.execute("INSERT INTO worker_namespace_binding(namespace_key,binding_json) VALUES (?1,?2) ON CONFLICT(namespace_key) DO NOTHING", params![key,json])
-            .map_err(|error| authority_error("record worker namespace", error))?;
-        let stored: String = self
-            .connection
-            .query_row(
-                "SELECT binding_json FROM worker_namespace_binding WHERE namespace_key=?1",
-                params![key],
-                |row| row.get(0),
-            )
-            .map_err(|error| authority_error("read worker namespace", error))?;
+        let stored = self
+            .store
+            .insert_or_get_worker_namespace_binding(key, &json)?;
         if stored != json {
             return Err(OrbitError::PolicyDenied(
                 "worker namespace binding is immutable".into(),

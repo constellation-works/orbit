@@ -426,3 +426,158 @@ crate::scenario_table!(
     fresh_preparation_certificates_bind_all_observations_across_restart,
     fresh_preparation_certificates_bind_all_observations_across_restart_scenario
 );
+
+/// Databases created by builds before `authority.db` moved under `orbit-store`
+/// (both pre-ledger `ensure_schema` files and v1 ledgered files) open cleanly
+/// through the new driver and verify their persisted certificates without
+/// rewriting existing records.
+fn pre_change_authority_database_opens_and_verifies_certificates_scenario() {
+    use orbit_core::runtime::recovery_authority::RecoveryAuthority;
+
+    let base_checkpoint = |run_id: &str, head_sha: &str, attempt: Option<u64>| {
+        let mut payload = json!({
+            "run_id": run_id,
+            "step_id": STEP,
+            "task_ids": ["ORB-11977"],
+            "workspace_path": "/fixture/workspace",
+            "head": "orbit/ORB-11977",
+            "head_sha_before": "1111111111111111111111111111111111111111",
+            "original_base_sha": "2222222222222222222222222222222222222222",
+            "base_ref": "refs/remotes/origin/agent-main",
+            "target_base_sha": "3333333333333333333333333333333333333333",
+            "base_sha": "3333333333333333333333333333333333333333",
+            "remote_sha_before": Value::Null,
+            "head_sha": head_sha,
+            "rewritten": true,
+        });
+        if let Some(attempt) = attempt {
+            payload["recovery_attempt"] = json!(attempt);
+        }
+        payload
+    };
+
+    // 1. Pre-ledger (`ensure_schema`, no `schema_meta`): adopts v1 and verifies
+    //    both its pre-attempt legacy certificate and its attempt certificate.
+    {
+        let global = TempDir::new_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
+        let authority_dir = global.path().join("state/recovery-authority");
+        std::fs::create_dir_all(&authority_dir).unwrap();
+        let db_path = authority_dir.join(orbit_store::recovery_authority::FILE_NAME);
+        rusqlite::Connection::open(&db_path)
+            .unwrap()
+            .execute_batch(include_str!("../fixtures/pre_change_authority_v0.sql"))
+            .unwrap();
+
+        let authority = RecoveryAuthority::open(global.path()).unwrap();
+        let legacy = base_checkpoint(
+            "jrun-20261004-0001-1",
+            "4444444444444444444444444444444444444444",
+            None,
+        );
+        assert!(
+            authority
+                .verify("jrun-20261004-0001-1", STEP, &legacy)
+                .unwrap()
+        );
+        let mut forged_legacy = legacy.clone();
+        forged_legacy["head_sha"] = json!("9999999999999999999999999999999999999999");
+        assert!(
+            !authority
+                .verify("jrun-20261004-0001-1", STEP, &forged_legacy)
+                .unwrap()
+        );
+
+        let pre_ledger_attempt = base_checkpoint(
+            "jrun-20261015-0002-1",
+            "5555555555555555555555555555555555555555",
+            Some(1),
+        );
+        assert!(
+            authority
+                .verify("jrun-20261015-0002-1", STEP, &pre_ledger_attempt)
+                .unwrap()
+        );
+        let mut forged_attempt = pre_ledger_attempt.clone();
+        forged_attempt["head_sha"] = json!("9999999999999999999999999999999999999999");
+        assert!(
+            !authority
+                .verify("jrun-20261015-0002-1", STEP, &forged_attempt)
+                .unwrap()
+        );
+        assert_eq!(
+            authority.attempts("jrun-20261015-0002-1", STEP).unwrap(),
+            vec![RebaseRecoveryAttemptScope {
+                workspace_path: "/fixture/workspace".to_string(),
+                head_sha_before: "1111111111111111111111111111111111111111".to_string(),
+                target_base_sha: "3333333333333333333333333333333333333333".to_string(),
+            }]
+        );
+        drop(authority);
+
+        let conn = rusqlite::Connection::open(&db_path).unwrap();
+        let baseline_name: String = conn
+            .query_row(
+                "SELECT value FROM schema_meta WHERE key = 'migration.v0001'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(baseline_name, "recovery_authority_baseline");
+    }
+
+    // 2. Pre-change ledgered v1: opens without rewriting `schema_meta` and
+    //    verifies its persisted attempt certificate.
+    {
+        let global = TempDir::new_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
+        let authority_dir = global.path().join("state/recovery-authority");
+        std::fs::create_dir_all(&authority_dir).unwrap();
+        let db_path = authority_dir.join(orbit_store::recovery_authority::FILE_NAME);
+        rusqlite::Connection::open(&db_path)
+            .unwrap()
+            .execute_batch(include_str!("../fixtures/pre_change_authority_v1.sql"))
+            .unwrap();
+
+        let authority = RecoveryAuthority::open(global.path()).unwrap();
+        let ledgered_attempt = base_checkpoint(
+            "jrun-20261124-0003-1",
+            "6666666666666666666666666666666666666666",
+            Some(1),
+        );
+        assert!(
+            authority
+                .verify("jrun-20261124-0003-1", STEP, &ledgered_attempt)
+                .unwrap()
+        );
+        let mut forged = ledgered_attempt.clone();
+        forged["head_sha"] = json!("9999999999999999999999999999999999999999");
+        assert!(
+            !authority
+                .verify("jrun-20261124-0003-1", STEP, &forged)
+                .unwrap()
+        );
+        assert_eq!(
+            authority.attempts("jrun-20261124-0003-1", STEP).unwrap(),
+            vec![RebaseRecoveryAttemptScope {
+                workspace_path: "/fixture/workspace".to_string(),
+                head_sha_before: "1111111111111111111111111111111111111111".to_string(),
+                target_base_sha: "3333333333333333333333333333333333333333".to_string(),
+            }]
+        );
+        drop(authority);
+
+        let conn = rusqlite::Connection::open(&db_path).unwrap();
+        let applied_at: String = conn
+            .query_row(
+                "SELECT updated_at FROM schema_meta WHERE key = 'migration.v0001'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(applied_at, "2026-11-24T00:00:00Z");
+    }
+}
+
+crate::scenario_table!(
+    pre_change_authority_database_opens_and_verifies_certificates,
+    pre_change_authority_database_opens_and_verifies_certificates_scenario
+);

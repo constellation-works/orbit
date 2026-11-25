@@ -82,7 +82,7 @@ answers in advance, and the older binary reads that answer.
 | Older-writer classification and upgrade admission | `crates/orbit-store/src/contracts/compat.rs`, `crates/orbit-common/src/fs/generation/` | Done — [ORB-13631] |
 | Task registry ledger and pre-ledger fence | `crates/orbit-store/src/driver/sqlite/task_registry/ledger.rs` | Done — [ORB-15822] |
 | Frozen feature ledgers absorbed by store v49 | `crates/orbit-store/src/driver/sqlite/host/schema/feature_ledgers/` | Done — [ORB-15823] |
-| Recovery authority's own ledger | `crates/orbit-runtime/src/recovery_authority/schema.rs` | Done — [ORB-15824] |
+| Recovery authority's own ledger | `crates/orbit-store/src/driver/sqlite/authority/schema/mod.rs` | Done — [ORB-15824] |
 | Older-client-safe handoff attribution, store v57 | `crates/orbit-store/src/driver/sqlite/host/schema/task_coordination_rows.rs` | Done — [ORB-17530] |
 | Skipped-step checkpoint fence, layout v9 | `crates/orbit-store/src/workflow/layout/registry.rs` | Done — [ORB-21604] |
 
