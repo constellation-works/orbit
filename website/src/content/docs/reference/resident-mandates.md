@@ -168,8 +168,15 @@ the reviewed head is a conflict-free refresh merge of the base branch, while
 Use `orbit.task.recover` with action `resume_delivery`, the task ID, the failed
 or held run ID, and a diagnosis. Orbit verifies the preserved PR and starts a
 leaf in the covered workspace. The leaf continues the candidate on the
-current base and runs fresh validation and review. Use `land` with the
-`merge` right to land once the head's required checks pass.
+current base and submits it through the normal PR pipeline with review as its
+completion target, so the task hands off at review. Fresh validation and
+review run where their gates apply. Light delivery can make either one not
+applicable: `skip-validation` skips validation and `skip-review` skips review,
+each only while every task the candidate delivers carries the tag and every
+changed path matches [`workflow.light_delivery_paths`](/reference/config/#settable-keys).
+
+Landing is a separate step. Use `land` with the `merge` right once the
+repaired head's required checks pass.
 
 A cycle can attempt recovery once. A task can reserve one resident recovery
 in 24 hours, with up to 120 minutes for the leaf's agent activities. An open
