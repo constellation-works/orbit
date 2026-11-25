@@ -93,11 +93,44 @@ impl ResidentActionTicket {
 
 std::thread_local! {
     /// The key of the most recent ledgered write on this thread that
-    /// failed or was refused. The broker dispatch on the same thread
-    /// takes it to fill the envelope `action_key` (ORB-25284). The CLI
-    /// also takes it for JSON errors; each dispatch clears stale keys first.
+    /// failed, was refused, or failed to close its ledger row. The broker
+    /// dispatch on the same thread takes it to fill the envelope `action_key`
+    /// (ORB-25284). The CLI also takes it for JSON errors; each dispatch clears
+    /// stale keys first.
     static FAILED_RESIDENT_ACTION_KEY: std::cell::RefCell<Option<String>> =
         const { std::cell::RefCell::new(None) };
+}
+
+#[cfg(feature = "test-support")]
+thread_local! {
+    static RESIDENT_ACTION_CLOSE_FAILURE: std::cell::RefCell<Option<Box<dyn FnOnce() -> OrbitError>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Run `operation` with the next terminal resident-action ledger write on this
+/// thread failing with `fail()`, after admission and the tool handler succeed.
+#[cfg(feature = "test-support")]
+pub fn with_resident_action_close_failure<T>(
+    fail: impl FnOnce() -> OrbitError + 'static,
+    operation: impl FnOnce() -> T,
+) -> T {
+    struct Restore(Option<Box<dyn FnOnce() -> OrbitError>>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            RESIDENT_ACTION_CLOSE_FAILURE.with(|slot| *slot.borrow_mut() = self.0.take());
+        }
+    }
+    let previous =
+        RESIDENT_ACTION_CLOSE_FAILURE.with(|slot| slot.borrow_mut().replace(Box::new(fail)));
+    let _restore = Restore(previous);
+    operation()
+}
+
+#[cfg(feature = "test-support")]
+fn take_resident_action_close_failure() -> Option<OrbitError> {
+    RESIDENT_ACTION_CLOSE_FAILURE
+        .with(|slot| slot.borrow_mut().take())
+        .map(|fail| fail())
 }
 
 /// Drop any stale ledger key left on this thread.
@@ -859,8 +892,8 @@ impl OrbitRuntime {
 
     /// Record how a ledgered write ended. The key travels back in the
     /// response (or RemoteTool error detail) so the cycle can cite it in its
-    /// checkpoint. Other error variants have no compatible detail carrier,
-    /// so their key is stashed for the broker envelope `action_key`.
+    /// checkpoint. Other error variants — and a failed terminal ledger write —
+    /// stash their key for the broker or CLI JSON error `action_key`.
     pub(crate) fn close_resident_action(
         &self,
         ticket: ResidentActionTicket,
@@ -906,10 +939,24 @@ impl OrbitRuntime {
             }
             detail["resident_action_key"] = json!(row.key);
         }
-        if result.is_err() {
+        let ledger = ledger_runtime.as_deref().unwrap_or(self);
+        let outcome = {
+            #[cfg(feature = "test-support")]
+            {
+                if let Some(error) = take_resident_action_close_failure() {
+                    Err(error)
+                } else {
+                    ledger.append_resident_action_row(&task_id, &row)
+                }
+            }
+            #[cfg(not(feature = "test-support"))]
+            {
+                ledger.append_resident_action_row(&task_id, &row)
+            }
+        };
+        if result.is_err() || outcome.is_err() {
             record_failed_resident_action_key(&row.key);
         }
-        let ledger = ledger_runtime.as_deref().unwrap_or(self);
-        ledger.append_resident_action_row(&task_id, &row)
+        outcome
     }
 }
