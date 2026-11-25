@@ -6,7 +6,7 @@
 use std::collections::BTreeMap;
 
 use super::ConfigSnapshot;
-use crate::crew_task_types::TaskTypeDefinition;
+use crate::crew_task_type::TaskTypeDefinition;
 use crate::provider_limit::{
     CrewSelection, ProviderLimitBudget, ProviderLimitExplicitCrews, ProviderLimitPolicy,
     ProviderLimitTarget, UsagePressurePolicy, stored_provider_limit_override,

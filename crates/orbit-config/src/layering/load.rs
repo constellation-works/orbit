@@ -7,7 +7,7 @@ use orbit_common::OrbitError;
 use orbit_common::security::redaction::redact_home_dir;
 
 use crate::ConfigRoots;
-use crate::aliases::translate_deprecated_keys;
+use crate::alias::translate_deprecated_keys;
 use crate::config_document;
 use crate::crew_pools::{TYPE_COMPLEXITY_CREWS_KEY, reject_unpoolable_crew_names_in_document};
 use crate::operation::{OperationLayer, OperationLayerSource, OperationPolicy};
@@ -269,7 +269,7 @@ fn load_layered_resolved_with_staged(
     })
 }
 
-/// Translate each layer's deprecated spellings ([`crate::aliases`]). The
+/// Translate each layer's deprecated spellings ([`crate::alias`]). The
 /// workspace file goes first, against the global file as written, so a
 /// deprecated switch it states alone keeps the half it inherited.
 fn translate_layers(

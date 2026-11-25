@@ -123,7 +123,7 @@ const ORDINARY_WRITES: &[(&str, &str)] = &[
 /// This source input is only discovery for a security guard, never a text assertion.
 /// A nonliteral registration fails closed instead of silently dropping coverage.
 fn registered_paths() -> impl Iterator<Item = &'static str> {
-    include_str!("../../src/api/routes.rs")
+    include_str!("../../src/api/route.rs")
         .split(".route(")
         .skip(1)
         .map(|registration| {

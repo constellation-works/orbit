@@ -31,7 +31,7 @@ are implemented; preemption remains later work. §1 is what exists today and wha
 - **Task reservations.** `orbit.task.locks.reserve` reserves either a task's surface or a list of
   file selectors, with `ttl_seconds` (default 1,800, at most 86,400), and
   `orbit.task.locks.release` releases one by its `reservation-<id>`
-  ([commands.rs](../../../crates/orbit-runtime/src/task/locks/commands.rs)). A refused reserve is
+  ([command.rs](../../../crates/orbit-runtime/src/task/locks/command.rs)). A refused reserve is
   written to the denial log that `orbit codebase` and the pilot scorecard read; 832 such denials
   were recorded on ws_orbit between 2026-10-11 and 2026-10-25, some naming a `reservation` rather
   than a task as the holder.
@@ -103,7 +103,7 @@ previous release), and the rows it writes read here as hard task reservations.
 
 **Runtime operations.** `crates/orbit-runtime/src/task/locks/lease/` holds one function per
 verb: `request` in `lease/request.rs`, and `renew`, `release`, `show`, `list`, `check` and
-`notices` in `lease/operations.rs`, each refused naming `lease.enabled` while it is false, and
+`notices` in `lease/operation.rs`, each refused naming `lease.enabled` while it is false, and
 `lease/queue.rs` holds `expand` and the grant pass.
 `request` applies §3: advisory is granted and names the holders it overlaps; hard drops
 `unlocked_context_paths` from the stored surface and, when what is left overlaps a task context

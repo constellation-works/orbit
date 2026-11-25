@@ -168,7 +168,7 @@ macro_rules! with_workflow_keys {
         section: ConfigSection::Delivery, order: 113,
         tier: ConfigKeyTier::Advanced,
         detail: "Each entry has a name, tags and context-file path globs.",
-        resolve: |raw: Option<Vec<TaskTypeDefinition>>| crate::crew_task_types::admit_task_types(raw),
+        resolve: |raw: Option<Vec<TaskTypeDefinition>>| crate::crew_task_type::admit_task_types(raw),
     },
     workflow_purpose_crews_auto_fix: Vec<String> => Vec<String> {
         key: "workflow.purpose_crews.auto_fix", value_type: "array<string>",

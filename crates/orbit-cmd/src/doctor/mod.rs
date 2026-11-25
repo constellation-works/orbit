@@ -46,7 +46,7 @@ use crate::task_store;
 
 mod automation;
 mod browser_kit;
-mod commands;
+mod command;
 mod git_protection;
 mod host_workspaces;
 mod permissions;
@@ -63,8 +63,8 @@ mod worker_token;
 mod workspace;
 
 use automation::*;
-use commands::*;
-pub use commands::{
+use command::*;
+pub use command::{
     DoctorCommands, DoctorProbe, OrphanTaskStoreRemoval, WorkspaceDoctorResult,
     WorkspaceDoctorStatus,
 };

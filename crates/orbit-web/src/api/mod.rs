@@ -35,7 +35,7 @@ mod plugins;
 mod reliability;
 mod residents;
 mod resource_profiles;
-mod routes;
+mod route;
 mod routine_breaker;
 pub(crate) mod routines;
 mod runs;
@@ -48,7 +48,7 @@ mod workspaces;
 
 use helpers::*;
 pub(crate) use origin::{nosniff_json_responses, require_localhost_host, require_localhost_origin};
-pub(super) use routes::{request_shutdown, router};
+pub(super) use route::{request_shutdown, router};
 
 #[cfg(test)]
 pub(crate) mod tests;

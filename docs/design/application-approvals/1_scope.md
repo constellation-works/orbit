@@ -164,7 +164,7 @@ supply), so a checkout cannot lengthen the authority it is granted.
   records why.
 - **No unattended-execution controls.** Routine toggles, trigger edits and unconditional
   mints stay on the operator surfaces: the dashboard (`routine.toggle`, `auto_task.mint`
-  rows in `catalog/types.rs`, listed in `catalog/operations.rs`) and the CLI.
+  rows in `catalog/entry.rs`, listed in `catalog/operation.rs`) and the CLI.
 - **No application MCP sessions or Windows support.** Both still fail closed.
 - **No Office-specific code in Orbit core.** Constraints name tags, statuses, artifact
   paths and JSON pointers. The office profile is data the operator consents to.

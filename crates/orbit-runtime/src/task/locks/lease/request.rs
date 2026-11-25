@@ -11,14 +11,14 @@ use orbit_types::telemetry::AuditEventStatus;
 use serde_json::{Value, json};
 
 use super::super::audit::{emit_expired_lease_events, record_lease_audit_event};
-use super::super::commands::{
+use super::super::command::{
     parse_ttl_seconds, reservation_actor_label, workspace_orbit_dir, workspace_task_reservation_id,
 };
 use super::super::index::{TaskLockIndex, task_lock_conflicts_bounded};
 use super::admission::{
     LEASE_INTAKE_ACTOR, LeaseTokenGrant, TOKEN_MAX_ACTIVE_LEASES, ensure_token_selector_count,
 };
-use super::holders::PathHolders;
+use super::holder::PathHolders;
 use super::input::{LEASE_ID_PREFIX, parse_selectors, required_non_empty};
 use super::policy::{
     lease_principal_class, lower_priority, parse_mode, parse_priority, priority_rank,

@@ -9,7 +9,7 @@ use orbit_common::fs::selector::{OverlapScope, overlaps};
 use orbit_store::contracts::{LeaseMode, LeaseRecord, TaskReservationKind};
 use serde::Serialize;
 
-use super::super::commands::{workspace_orbit_dir, workspace_task_reservation_id};
+use super::super::command::{workspace_orbit_dir, workspace_task_reservation_id};
 use super::super::index::{TaskLockIndex, holds_context_lock, task_lock_status_rank};
 use super::response::ResponseBudget;
 use crate::RuntimeKernel;

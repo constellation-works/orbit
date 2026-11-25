@@ -28,7 +28,7 @@ use std::path::{Path, PathBuf};
 
 mod allocator;
 mod baseline;
-mod bindings;
+mod binding;
 mod change_stamps;
 mod decision_snapshots;
 mod decision_snapshots_schema;

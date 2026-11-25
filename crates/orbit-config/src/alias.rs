@@ -113,7 +113,7 @@ fn translate(
     translate_worker_containment(document, config_path)?;
     rename(
         document,
-        crate::crew::task_types::LEGACY_TASK_TYPES_KEY,
+        crate::crew::task_type::LEGACY_TASK_TYPES_KEY,
         crate::TASK_TYPES_KEY,
     );
     Ok(())

@@ -8,7 +8,7 @@ use orbit_store::contracts::{ActiveTaskReservation, TaskListFilter};
 use orbit_types::task::{TaskEnvelopeV2, TaskStatus};
 use serde_json::{Value, json};
 
-use super::commands::{workspace_orbit_dir, workspace_task_reservation_id};
+use super::command::{workspace_orbit_dir, workspace_task_reservation_id};
 use super::index::{canonical_lock_surface, holds_context_lock, task_lock_status_rank};
 use crate::RuntimeKernel;
 use crate::task::declared_context_files;

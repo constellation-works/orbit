@@ -21,7 +21,7 @@ use orbit_types::telemetry::AuditEventStatus;
 use serde_json::{Value, json};
 
 use super::super::audit::{emit_expired_lease_events, record_lease_audit_event};
-use super::super::commands::{
+use super::super::command::{
     reservation_actor_label, workspace_orbit_dir, workspace_task_reservation_id,
 };
 use super::super::index::{
@@ -31,7 +31,7 @@ use super::admission::{
     LEASE_INTAKE_ACTOR, LeaseTokenGrant, TOKEN_MAX_LEASE_SELECTORS, ensure_token_covers_lease,
     ensure_token_selector_count,
 };
-use super::holders::{PathHolders, selector_covers};
+use super::holder::{PathHolders, selector_covers};
 use super::input::{LEASE_ID_PREFIX, parse_selectors, required_lease_id};
 use super::response::{PLACEHOLDER_TIMESTAMP, ResponseBudget, lease_active, lease_json};
 use crate::RuntimeKernel;

@@ -1,6 +1,6 @@
 mod application;
-mod operations;
-mod types;
+mod entry;
+mod operation;
 
 pub use application::{
     APPLICATION_BACKLOG_TRANSITION_SOURCES, APPLICATION_DIRECT_TASK_STATUSES,
@@ -9,8 +9,7 @@ pub use application::{
     INPUT_DEPENDENT_OPERATION_FLOORS, application_callback_tool, application_operation_ceiling,
     application_operator_floored,
 };
-pub use operations::{GOVERNED_OPERATIONS, governed_command, governed_tool};
-pub use types::{
+pub use entry::{
     DASHBOARD_AUTO_DRAIN_APPROVE_PROPOSED, DASHBOARD_AUTO_DRAIN_AUTO_FIX,
     DASHBOARD_AUTO_DRAIN_COMPLETE, DASHBOARD_AUTO_DRAIN_MODE, DASHBOARD_AUTO_DRAIN_STOP,
     DASHBOARD_AUTO_TASK_CREATE, DASHBOARD_AUTO_TASK_DELETE, DASHBOARD_AUTO_TASK_MINT,
@@ -28,3 +27,4 @@ pub use types::{
     PLUGIN_TOOL_READ_ONLY, RESIDENT_GRANT_OPERATION_ID, TASK_GRANT_TOOLS_OPERATION_ID,
     governed_plugin_tool,
 };
+pub use operation::{GOVERNED_OPERATIONS, governed_command, governed_tool};

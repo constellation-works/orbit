@@ -30,9 +30,9 @@ Design intent: [docs/design/orbit-core/](../../docs/design/orbit-core/) — this
 
 ## Ownership by module
 
-- `aliases`: Read-time translation aliases for deprecated configuration spellings; imports `document`, `crew`, `operation`, and `orbit-common`.
+- `alias`: Read-time translation aliases for deprecated configuration spellings; imports `document`, `crew`, `operation`, and `orbit-common`.
 - `completion_hold`: Parsing and validation for `[[completion.hold]]` rules; imports `orbit-common` and `orbit-types` only.
-- `crew`: Crew admission, task types, auto-effort policies, and weighted crew pools; imports `aliases`, `orbit-common`, and `orbit-types`.
+- `crew`: Crew admission, task types, auto-effort policies, and weighted crew pools; imports `alias`, `orbit-common`, and `orbit-types`.
 - `crew_defaults`: Built-in default crew registry leaf; imports `orbit-common` and `orbit-types` only.
 - `document`: Admitted `config.toml` document paths, no-follow I/O, and TOML parsing below layering; imports `orbit-common` only.
 - `experiment_keys`: Workflow keys explicitly admitted for task-local experiment overrides; imports `orbit-common` and `serde_json` only.
@@ -40,7 +40,7 @@ Design intent: [docs/design/orbit-core/](../../docs/design/orbit-core/) — this
 - `layering`: Global-over-workspace configuration merging and source provenance; imports lower config modules, `orbit-common`, and `orbit-types`.
 - `lock_modes`: Ordered per-path footprint lock modes (`workflow.lock_modes`); imports `orbit-common` and `serde` only.
 - `memory_limit`: Grammar and parser for worker memory limits (`machine.worker_memory_*`); imports `std` and `serde` only.
-- `operation`: Typed review timing and operation preferences; imports `aliases`, `document`, `orbit-common`, and `orbit-types`.
+- `operation`: Typed review timing and operation preferences; imports `alias`, `document`, `orbit-common`, and `orbit-types`.
 - `persistence`: Resolved persistent artifact store paths derived from explicit roots; imports `orbit-types` and `serde_json` only.
 - `plugin_enablement`: Workspace-scoped `[plugin_enablement]` toggle admission; imports `roots`, `document`, `orbit-common`, and `orbit-types`.
 - `plugins`: Dynamically named `[plugins.<ns>]` configuration section admission; imports `jsonschema`, `orbit-common`, and `serde_json` only.

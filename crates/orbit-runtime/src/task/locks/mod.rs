@@ -1,14 +1,14 @@
 //! Task reservation, file-lock and path-lease operations.
 
 mod audit;
-mod commands;
+mod command;
 mod index;
 pub mod lease;
 mod projection;
 mod unlocked;
 
 pub use audit::{emit_expired_reservation_events, emit_task_lock_release_event};
-pub use commands::{
+pub use command::{
     EmptyTaskSurfacePolicy, ReservationOutcome, list, parse_task_ids, release, reserve,
     reserve_deferred_footprint, reserve_with_index, runs_holding_file_reservations,
     workspace_orbit_dir, workspace_task_reservation_id,

@@ -1643,7 +1643,7 @@ manually before treating a workspace as migrated (see the runbook checklist in
 **Enforcement.** `orbit_types::task::inherited_only_epic_roots` is the one definition of the
 withheld population: `backlog_snapshot` excludes such roots (`inherited_only_epic_root`, naming
 descendants and repair), `list_backlog_tasks` applies it to explicit ship overrides, and
-`reserve_with_index` in `crates/orbit-runtime/src/task/locks/commands.rs` refuses them before the
+`reserve_with_index` in `crates/orbit-runtime/src/task/locks/command.rs` refuses them before the
 `EmptyTaskSurfacePolicy` compatibility `Admit`.
 
 ### 7.2 Failed-run triage

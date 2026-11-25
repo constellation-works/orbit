@@ -18,7 +18,7 @@ pub(super) fn read_config_document(path: &Path) -> Result<Option<ConfigDocument>
 /// Parse one file. Deprecated spellings are not translated here: a
 /// workspace file's translation needs the global file beneath it, so the
 /// loader translates each document once it knows its layer
-/// ([`crate::aliases::translate_deprecated_keys`]).
+/// ([`crate::alias::translate_deprecated_keys`]).
 pub(super) fn parse_config_document(path: &Path, raw: &str) -> Result<ConfigDocument, OrbitError> {
     let value = toml::from_str(raw)
         .map_err(|err| crate::config_document::invalid_runtime_config(path, err))?;

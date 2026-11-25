@@ -317,7 +317,7 @@ A person picks. `eval.bakeoff-pick` (mutating, so operator-only under the plugin
 2. rejects each losing candidate with a note naming the winner. Rejection is a terminal decision, on which Orbit closes the candidate's delivery PR (the terms are documented at `superseded.rs:84-99`), and a `rejected` task's worktree and branch are removed by worktree GC (`sweep.rs:29-34`). Task 7 of §13 confirms the PR close on rejection and adds remote-branch deletion if GC leaves the pushed branch;
 3. returns the winner's task id and PR for landing.
 
-The tool does not merge. Landing is `orbit.workflow.land`, an operator-only operation (`crates/orbit-common/src/governance/authorization/catalog/operations.rs`), and a plugin callback holds no operator capability; the operator lands the winner the usual way. When the winner's task reaches `done`, a plugin routine (or the next `bakeoff-status` call) completes T with a verdict citing the winner's merge commit and removes `no-drain`.
+The tool does not merge. Landing is `orbit.workflow.land`, an operator-only operation (`crates/orbit-common/src/governance/authorization/catalog/operation.rs`), and a plugin callback holds no operator capability; the operator lands the winner the usual way. When the winner's task reaches `done`, a plugin routine (or the next `bakeoff-status` call) completes T with a verdict citing the winner's merge commit and removes `no-drain`.
 
 **A judge is advisory.** An optional `eval_bakeoff_judge` activity (read-only, no worktree writes) reads the n diffs without crew names and the acceptance criteria, and writes `eval/judgement.json` on T: a ranking with reasons. It is shown beside the candidates in `bakeoff-status`. It never picks; §14 Q4 asks whether it ever should.
 

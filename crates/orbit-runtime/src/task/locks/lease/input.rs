@@ -6,7 +6,7 @@ use orbit_common::OrbitError;
 use orbit_common::protocol::tool_input::{optional_string_list_alias, required_string};
 use serde_json::Value;
 
-use super::super::commands::{canonicalize_file_lock_selectors, parse_file_lock_selectors};
+use super::super::command::{canonicalize_file_lock_selectors, parse_file_lock_selectors};
 
 pub(super) const LEASE_ID_PREFIX: &str = "lease-";
 

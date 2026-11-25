@@ -92,7 +92,7 @@ Full definitions: [references/glossary.md](./references/glossary.md).
 
 | Concern | File | Task |
 |---------|------|------|
-| Reserve and release path selectors with a TTL (exists) | [crates/orbit-runtime/src/task/locks/commands.rs](../../../crates/orbit-runtime/src/task/locks/commands.rs) | — |
+| Reserve and release path selectors with a TTL (exists) | [crates/orbit-runtime/src/task/locks/command.rs](../../../crates/orbit-runtime/src/task/locks/command.rs) | — |
 | Which tasks hold their context (exists) | [crates/orbit-runtime/src/task/locks/index.rs](../../../crates/orbit-runtime/src/task/locks/index.rs) | — |
 | Reservation rows and lease columns | [crates/orbit-store/src/driver/sqlite/task_reservation_store/](../../../crates/orbit-store/src/driver/sqlite/task_reservation_store/) | [ORB-18404] |
 | Landed paths per task (exists; feeds landing notices) | [crates/orbit-core/src/application/codebase/facts/scan.rs](../../../crates/orbit-core/src/application/codebase/facts/scan.rs) | — |

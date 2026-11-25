@@ -100,12 +100,12 @@ macro_rules! assemble_config_settings {
         section: ConfigSection::Machine, order: 30,
         resolve: |raw: Option<String>| resolve_task_prefix(raw),
     },
-    machine_worker_containment: String => crate::aliases::WorkerContainmentSetting {
+    machine_worker_containment: String => crate::alias::WorkerContainmentSetting {
         key: "machine.worker_containment", value_type: "string",
         description: "How detached pipeline workers are bounded.",
         section: ConfigSection::Machine, order: 40,
-        allowed: one_of(crate::aliases::WorkerContainmentMode::CHOICES),
-        resolve: |raw: Option<crate::aliases::WorkerContainmentSetting>| crate::aliases::resolve_worker_containment(raw).map(|mode| mode.as_str().to_string()),
+        allowed: one_of(crate::alias::WorkerContainmentMode::CHOICES),
+        resolve: |raw: Option<crate::alias::WorkerContainmentSetting>| crate::alias::resolve_worker_containment(raw).map(|mode| mode.as_str().to_string()),
     },
     machine_worker_memory_high: MemoryLimit => String {
         key: "machine.worker_memory_high", value_type: "string",

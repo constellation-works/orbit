@@ -204,7 +204,7 @@ class RelativeImportTests(unittest.TestCase):
 
     def test_missing_config_scan_paths_fail_closed(self):
         src = self.root / "crates/orbit-config/src"
-        for relative in ("aliases.rs", "registry"):
+        for relative in ("alias.rs", "registry"):
             with self.subTest(path=relative):
                 path = src / relative
                 parked = path.with_name(path.name + ".parked")
@@ -1608,7 +1608,7 @@ class RelativeImportTests(unittest.TestCase):
             f"{dependency_guard_fixture.CORE_APPLICATION}/tag_instructions.rs":
                 self.inline_chain(2, "experiment"),
             "crates/orbit-engine/src/sandbox_spawn.rs": self.inline_chain(2, "activity_job"),
-            "crates/orbit-config/src/aliases.rs": self.inline_chain(2, "layering"),
+            "crates/orbit-config/src/alias.rs": self.inline_chain(2, "layering"),
             "crates/orbit-config/src/seeding.rs": self.inline_chain(2, "store"),
             "crates/orbit-config/src/resolved/compatibility.rs": self.inline_chain(3, "store"),
         }
@@ -1641,7 +1641,7 @@ class RelativeImportTests(unittest.TestCase):
             f"{dependency_guard_fixture.CORE_APPLICATION}/tag_instructions.rs":
                 self.inline_chain(1, "experiment"),
             "crates/orbit-engine/src/sandbox_spawn.rs": self.inline_chain(1, "activity_job"),
-            "crates/orbit-config/src/aliases.rs": self.inline_chain(1, "layering"),
+            "crates/orbit-config/src/alias.rs": self.inline_chain(1, "layering"),
             "crates/orbit-config/src/seeding.rs": self.inline_chain(1, "store"),
             "crates/orbit-config/src/resolved/compatibility.rs": self.inline_chain(2, "store"),
         }, rejected=False, base=self.root)
@@ -2127,7 +2127,7 @@ class RelativeImportTests(unittest.TestCase):
             ("provider_limit/budget.rs", "fn probe() { let _ = &crate::CONFIG_KEY_REGISTRY; }"),
         )], rejected=True, base=src)
         self.check_rejected_exact_rows(src, [
-            ("aliases.rs", "use crate::registry::read_optional;\n", 1),
+            ("alias.rs", "use crate::registry::read_optional;\n", 1),
             ("seeding.rs", "use crate::{describe_config_key, raw::Probe};\n", 1),
         ])
         self.check_rows([(relative, source + "\n") for relative, source in (
@@ -2135,7 +2135,7 @@ class RelativeImportTests(unittest.TestCase):
             ("operation/policy.rs", "use super::crew::ReviewCrewPool;"),
             ("provider_limit/policy.rs", "use crate::CrewPerformancePolicy;"),
         )], rejected=False, base=src)
-        self.check_files({"aliases.rs": "use crate::config_document;\n"},
+        self.check_files({"alias.rs": "use crate::config_document;\n"},
                          rejected=False, base=src)
 
     def test_config_document_leaf_admits_only_external_crates(self):

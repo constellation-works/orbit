@@ -28,7 +28,7 @@ pub(crate) const REMOVED_CONFIG_KEYS: &[(&str, &str)] = &[(
 )];
 
 /// Keys retired from the registry that still load: loading translates each
-/// into its replacement ([`crate::aliases`]) or, where its note says so,
+/// into its replacement ([`crate::alias`]) or, where its note says so,
 /// ignores it, and warns that it is deprecated
 /// (`resolved::warn_compatibility_keys`), and
 /// `orbit config get`/`set` refuse it with this note. A later release makes

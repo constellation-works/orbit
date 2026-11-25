@@ -28,7 +28,7 @@
 //! The review keys are resolved per layer by [`crate::operation`] rather than
 //! from the merged document, so their provenance is exact. Each document's
 //! deprecated spellings are translated to their replacement keys before the
-//! merge ([`crate::aliases`]), the workspace file against the global file
+//! merge ([`crate::alias`]), the workspace file against the global file
 //! beneath it, so the merge, the snapshot and `orbit config get` all see the
 //! translated value.
 
