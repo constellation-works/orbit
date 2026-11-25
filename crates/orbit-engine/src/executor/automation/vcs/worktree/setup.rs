@@ -13,7 +13,7 @@ use crate::context::{RuntimeHost, TaskAutomationUpdate};
 use crate::executor::automation::input::input_string_field;
 
 use super::super::git::{
-    GitOutcome, GitTimeoutBudget, GitTimeoutBudgetGuard, base_sync_mode_from_input,
+    BaseSyncMode, GitOutcome, GitTimeoutBudget, GitTimeoutBudgetGuard, base_sync_mode_from_input,
     git_command_success, git_failure_error, git_output, git_run, git_success, git_timeout_error,
     normalize_base_branch, resolve_worktree_start_point_for_admission, timeout_recovery_error,
 };
@@ -22,6 +22,7 @@ use super::dependency_delivery::{
     DependencyDeliveryMode, dependency_delivery_mode_from_input,
     ensure_dependencies_delivered_into_base,
 };
+use super::local_base::advance_local_base_for_admission;
 use super::merge::{checkout_holding_branch, ensure_base_checkout_ready};
 use super::{WorktreeIdentity, is_registered_worktree};
 
@@ -63,6 +64,13 @@ pub(in crate::executor::automation) fn setup_worktree<H: RuntimeHost + ?Sized>(
     let _timeout_budget = GitTimeoutBudgetGuard::install(GitTimeoutBudget::from_input(input)?);
     let repo_root_str = host.repo_root()?;
     let repo_root = Path::new(&repo_root_str);
+
+    // ORB-28152: a local run cuts from the owner's branch, which a push from
+    // elsewhere leaves behind origin. Advance a clean owner first, or refuse
+    // without moving a dirty or diverged one.
+    if base_sync_mode == BaseSyncMode::Local {
+        advance_local_base_for_admission(repo_root, &base)?;
+    }
 
     let start_point =
         match resolve_worktree_start_point_for_admission(repo_root, &base, base_sync_mode) {

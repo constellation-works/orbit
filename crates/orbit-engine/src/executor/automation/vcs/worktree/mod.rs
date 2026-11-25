@@ -3,6 +3,7 @@ mod dependency_delivery;
 mod gc;
 mod identity;
 mod integrate;
+mod local_base;
 mod merge;
 mod paths;
 mod reclaim;

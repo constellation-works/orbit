@@ -65,6 +65,7 @@ mod dependency_delivery_dispatch;
 mod dirty_rescue;
 #[cfg(unix)]
 mod generated_regeneration;
+mod local_base_freshness;
 mod preparation;
 #[cfg(unix)]
 mod resolution_intent;
