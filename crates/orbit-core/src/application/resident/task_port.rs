@@ -29,4 +29,8 @@ impl TaskResidentPort for OrbitRuntime {
     fn refuse_resident_comment_needing_redaction(&self, message: &str) -> Result<(), OrbitError> {
         ensure_resident_comment_redaction_safe(message)
     }
+
+    fn resident_mandate_error(&self, task_id: &str) -> Result<Option<String>, OrbitError> {
+        Ok(super::resident_mandate_from_artifact(self, task_id)?.err())
+    }
 }

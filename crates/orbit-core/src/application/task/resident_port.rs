@@ -37,4 +37,8 @@ pub(in crate::application) trait TaskResidentPort {
     /// Refuse a resident record whose verbatim `message` would need
     /// redaction, before any writer sanitizes it.
     fn refuse_resident_comment_needing_redaction(&self, message: &str) -> Result<(), OrbitError>;
+
+    /// Explain why `task_id`'s `resident/mandate.json` artifact is missing or
+    /// invalid, or `None` when a valid mandate is attached.
+    fn resident_mandate_error(&self, task_id: &str) -> Result<Option<String>, OrbitError>;
 }

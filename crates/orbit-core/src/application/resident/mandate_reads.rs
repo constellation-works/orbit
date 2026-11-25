@@ -210,9 +210,11 @@ impl OrbitRuntime {
         )
     }
 
-    /// Every mandate as [`Self::show_resident_mandate`] reports it, plus the
-    /// card reads (`goal`, `open_decisions`, `cycle_authority`), in one pass:
-    /// one bundle read and one notice scan per list, not per card phase.
+    /// Every valid mandate as [`Self::show_resident_mandate`] reports it,
+    /// plus the card reads (`goal`, `open_decisions`, `cycle_authority`), in
+    /// one pass: one bundle read and one notice scan per list, not per card
+    /// phase. `resident`-tagged tasks without a valid `resident/mandate.json`
+    /// artifact are omitted.
     pub fn list_resident_mandate_cards(
         &self,
         include_ended: bool,
@@ -254,6 +256,9 @@ impl OrbitRuntime {
             };
             let (view, requests) =
                 self.resident_view_in(row.task, &row.history, &row.comments, now)?;
+            if view.mandate.is_err() {
+                continue;
+            }
             let stall = self.resident_stall_in(
                 &view,
                 &row.comments,
@@ -394,8 +399,8 @@ impl OrbitRuntime {
         self.list_task_metadata_with_any_tag(&BTreeSet::from([RESIDENT_TAG.to_string()]))
     }
 
-    /// `orbit.resident.list`: every task tagged `resident`, ended ones only
-    /// with `include_ended`.
+    /// `orbit.resident.list`: every task tagged `resident` with a valid
+    /// `resident/mandate.json` artifact, ended ones only with `include_ended`.
     pub fn list_resident_mandates(&self, include_ended: bool) -> Result<Value, OrbitError> {
         let cycle_routine_disabled = self.resident_cycle_routine_disabled();
         let mut rows = Vec::new();
@@ -410,6 +415,9 @@ impl OrbitRuntime {
             let row = self.get_task_row(&task.id)?;
             let (view, _requests) =
                 self.resident_view_in(row.task, &row.history, &row.comments, now)?;
+            if view.mandate.is_err() {
+                continue;
+            }
             let (state, reason) = view.state();
             let stall = self.resident_stall_in(
                 &view,
