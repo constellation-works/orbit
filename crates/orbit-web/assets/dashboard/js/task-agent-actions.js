@@ -343,6 +343,16 @@ export function appendRecoveryControls(actions, task, detail, context, mutable) 
     discard.addEventListener("click", (e) => { e.stopPropagation(); runRecovery(task, detail, discard, context, "discard"); });
     actions.appendChild(discard);
   }
+  if (!blocked && task.published_candidate && task.status !== "done" && task.status !== "archived") {
+    const discard = el("button", {
+      class: "action requeue-discard",
+      text: "Discard candidate",
+      "aria-description": disabledDescription || "Discard the candidate, close undelivered pull requests, and return the task to the backlog for a fresh run",
+    });
+    discard.disabled = !mutable;
+    discard.addEventListener("click", (e) => { e.stopPropagation(); runRecovery(task, detail, discard, context, "discard"); });
+    actions.appendChild(discard);
+  }
   if (settleable || task.why_stuck) {
     const settle = el("button", {
       class: "action settle-merged",
@@ -383,7 +393,7 @@ async function runRecovery(task, detail, btnNode, context, kind) {
   } else {
     const discard = kind === "discard";
     const explain = discard
-      ? `Discard and re-implement ${task.id}? This discards the candidate its stopped run published, closes the task's undelivered pull requests, and returns the task to the backlog so the next run implements fresh.`
+      ? `${task.status === "blocked" ? "Discard and re-implement" : "Discard candidate for"} ${task.id}? This discards the candidate of a stopped or held delivery, closes the task's undelivered pull requests, and returns the task to the backlog so the next run implements fresh. An executing run is refused.`
       : `Resume candidate for ${task.id}? This returns the blocked task to the backlog with its stopped run's candidate. The next delivery adopts it and its pull request without re-implementing, then validates it. Any fresh independent review follows that delivery's selected review policy, which may be off. The normal landing gates still apply.`;
     if (typeof window.confirm !== "function" || !window.confirm(explain)) return;
     if (typeof window.prompt !== "function") return;
@@ -402,8 +412,9 @@ async function runRecovery(task, detail, btnNode, context, kind) {
   }
   const requestPath = visit.path(taskMutationPath(task, suffix));
   forgetRecoveryRefusal(key);
+  let result;
   try {
-    await submitTaskAgentAction(detail, btnNode, requestPath, body);
+    result = await submitTaskAgentAction(detail, btnNode, requestPath, body);
   } catch (error) {
     if (!visit.isCurrent()) return;
     const code = error && error.code ? error.code : "recovery_refused";
@@ -415,7 +426,9 @@ async function runRecovery(task, detail, btnNode, context, kind) {
     return;
   }
   if (!visit.isCurrent()) return;
-  taskState.taskActionNotice = successText;
+  taskState.taskActionNotice = result && result.discard_closure === "incomplete"
+    ? `${successText}; pull request closure was incomplete`
+    : successText;
   await refreshTasks(context);
 }
 

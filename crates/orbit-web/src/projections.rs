@@ -180,6 +180,10 @@ pub(crate) fn task_detail_json(
         if !hands.is_empty() {
             object.insert("handled_by".to_string(), Value::Array(hands));
         }
+        object.insert(
+            "published_candidate".to_string(),
+            json!(runtime.task_has_discardable_candidate(&row.task)?),
+        );
         crate::why_stuck::attach_why_stuck(runtime, row, object)?;
     }
     Ok(value)

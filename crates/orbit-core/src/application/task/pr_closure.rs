@@ -105,36 +105,37 @@ impl OrbitRuntime {
     /// Close `task`'s open Orbit-authored PRs when an operator or agent moved
     /// it from `previous` back to `backlog` or `someday`, keeping those a
     /// later run may still continue (see the module docs). `discarded` says
-    /// the same write discarded the task's preserved candidate. Returns
-    /// false when a forge error left the pass unfinished.
+    /// the same write discarded the task's preserved candidate. The dashboard
+    /// discard can also close PRs without a status change. Returns false when
+    /// the pass could not finish.
     pub(crate) fn close_task_prs_after_requeue(
         &self,
         previous: TaskStatus,
         task: &Task,
         note: Option<&str>,
         discarded: bool,
+        discard_from_any_open_status: bool,
     ) -> bool {
         // Moving between the shelves (`backlog` and `someday`) in either
         // direction un-shelves or re-shelves the same work; only `backlog` to
         // `someday` puts it away, and an earlier move already decided what
-        // the shelf keeps. Leaving a terminal status never closes anything:
-        // the terminal decision settled which PRs stay open.
-        if previous == task.status
-            || matches!(
-                previous,
-                TaskStatus::Proposed
-                    | TaskStatus::Done
-                    | TaskStatus::Rejected
-                    | TaskStatus::Archived
-            )
-            || (previous == TaskStatus::Someday && task.status == TaskStatus::Backlog)
+        // the shelf keeps. An explicit dashboard discard closes its PRs even
+        // on the same shelf. Done and archived tasks never close PRs here.
+        if (!(discarded && discard_from_any_open_status)
+            && (previous == task.status
+                || matches!(previous, TaskStatus::Proposed | TaskStatus::Rejected)
+                || (previous == TaskStatus::Someday && task.status == TaskStatus::Backlog)))
+            || matches!(previous, TaskStatus::Done | TaskStatus::Archived)
             || !matches!(task.status, TaskStatus::Backlog | TaskStatus::Someday)
             || !orbit_types::workflow::PR_CLOSE_ON_TERMINAL
         {
             return true;
         }
         if self.live_task_delivery(task).is_some() {
-            return true;
+            // A new run may have been admitted after the requeue write. Do
+            // not close its PR; report that the requested discard closure
+            // remains incomplete.
+            return !discarded;
         }
         let mut keep = BTreeSet::new();
         if !discarded {
