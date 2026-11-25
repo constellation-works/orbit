@@ -293,7 +293,7 @@ env_vars! {
         "Unset.",
     );
     const ORBIT_LOG_PATH = (
-        "Path read by `orbit log tail`.",
+        "Path read by `orbit log tail` and the dashboard (`orbit-web`) via `resolve_log_path`.",
         "The global Orbit JSONL log.",
         "Overridden by `orbit log tail --path`.",
     );
@@ -347,12 +347,12 @@ env_vars! {
         "Unset.",
     );
     const ORBIT_RELEASE_TRUSTED_KEYS_FILE = (
-        "File containing additional trusted release signing keys.",
+        "File containing the replacement trusted release signing key set, replacing the shipped release keys.",
         "Shipped release keys only.",
     );
     const ORBIT_RELEASE_TRUSTED_KEYS_FILE_ACKNOWLEDGE_TRUST_CHANGE = (
-        "Set to `1` to acknowledge the configured release signing trust change.",
-        "Unset. An extra trust file requires acknowledgement.",
+        "Set to `1` to acknowledge the replacement release signing trust file.",
+        "Unset. A replacement trust file requires acknowledgement.",
     );
     const ORBIT_REQUIRE_SANDBOX_EXEC = (
         "Set to `1` to require macOS Seatbelt for applicable plugin and host checks.",

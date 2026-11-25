@@ -86,7 +86,7 @@ whole.
 | `ORBIT_INSTALL_REPO` | GitHub repository from which `orbit update` fetches releases. | `constellation-works/orbit`. | — |
 | `ORBIT_JOB_DIR` | Colon-separated extra job catalog directories. | `ORBIT_V2_JOB_DIR`, then the normal catalog paths. | — |
 | `ORBIT_LENT_GENERATION_FENCE` | Generation fence inherited by a child during an update. | Unset. | — |
-| `ORBIT_LOG_PATH` | Path read by `orbit log tail`. | The global Orbit JSONL log. | Overridden by `orbit log tail --path`. |
+| `ORBIT_LOG_PATH` | Path read by `orbit log tail` and the dashboard (`orbit-web`) via `resolve_log_path`. | The global Orbit JSONL log. | Overridden by `orbit log tail --path`. |
 | `ORBIT_MANAGED_RUN_CONTEXT` | Marks a process launched by the managed dispatcher. Some consumers also require a run or session identity. | Unset. | — |
 | `ORBIT_MCP_RESUME` | Resume descriptor passed to a replacement stdio MCP session during handover. | Unset. The server starts a fresh stdio session. | — |
 | `ORBIT_OPERATOR` | Explicit, audited operator authority override for a local caller. | Unset. Normal caller capability rules apply. | — |
@@ -99,8 +99,8 @@ whole.
 | `ORBIT_PROC_PROGRAM_POLICY` | Managed subprocess policy marker. `deny` enables the disallow list. | Unset. The existing allowed-program rules apply. | — |
 | `ORBIT_REGISTRY_ROOT` | Absolute registry root supplied by the dispatcher for a managed invocation. | Normal global registry resolution. | An explicit `--root` can select a different root. |
 | `ORBIT_RELEASE_PUBLIC_KEY_FILE` | Retired release-key override. A release trust file cannot be configured alongside it. | Unset. | — |
-| `ORBIT_RELEASE_TRUSTED_KEYS_FILE` | File containing additional trusted release signing keys. | Shipped release keys only. | — |
-| `ORBIT_RELEASE_TRUSTED_KEYS_FILE_ACKNOWLEDGE_TRUST_CHANGE` | Set to `1` to acknowledge the configured release signing trust change. | Unset. An extra trust file requires acknowledgement. | — |
+| `ORBIT_RELEASE_TRUSTED_KEYS_FILE` | File containing the replacement trusted release signing key set, replacing the shipped release keys. | Shipped release keys only. | — |
+| `ORBIT_RELEASE_TRUSTED_KEYS_FILE_ACKNOWLEDGE_TRUST_CHANGE` | Set to `1` to acknowledge the replacement release signing trust file. | Unset. A replacement trust file requires acknowledgement. | — |
 | `ORBIT_REQUIRE_SANDBOX_EXEC` | Set to `1` to require macOS Seatbelt for applicable plugin and host checks. | Unset. | — |
 | `ORBIT_ROOT` | Explicit Orbit config and state root, or checkout containing an initialized `.orbit` directory. | Normal workspace discovery and global `~/.orbit`. | Overridden by `--root`. |
 | `ORBIT_RUN_ID` | Job-run identifier used for managed dispatch and audit correlation. | Unset. | — |
