@@ -5473,7 +5473,7 @@ fn unreadable_log_hold(row: &std::path::Path, case: &str) {
 fn auto_fix_holds_required_checks_that_change_between_base_tip_and_repair() {
     auto_fix_table(
         "auto_fix::auto_fix_holds_required_checks_that_change_between_base_tip_and_repair",
-        "pending foreign_head",
+        "pending foreign_head stale_rollup",
         |case, row| {
             let (fx, host) = opened_review(row);
             host.script("ci.prerequisite_evidence", json!({"evidence": null}));
@@ -5494,10 +5494,12 @@ fn auto_fix_holds_required_checks_that_change_between_base_tip_and_repair() {
             outcomes.push(case);
             fx.script_required_check_outcomes(&outcomes);
             let error = action(&host, "pr_complete", &auto_fix_input(&fx)).unwrap_err();
-            let refusal = if case == "pending" {
-                orbit_types::workflow::DeliveryRefusal::CheckEvidenceInconclusive
-            } else {
+            // A rollup on an old commit under the unchanged PR head is no
+            // evidence of a move: it holds as inconclusive, like a pending read.
+            let refusal = if case == "foreign_head" {
                 orbit_types::workflow::DeliveryRefusal::HeadChanged
+            } else {
+                orbit_types::workflow::DeliveryRefusal::CheckEvidenceInconclusive
             };
             assert!(
                 matches!(&error, orbit_common::OrbitError::DeliveryRefused { refusal: actual, .. } if *actual == refusal),
@@ -5508,10 +5510,10 @@ fn auto_fix_holds_required_checks_that_change_between_base_tip_and_repair() {
                 "{case}: {error}"
             );
             assert!(
-                error.to_string().contains(if case == "pending" {
-                    "have not all concluded"
-                } else {
-                    "rather than"
+                error.to_string().contains(match case {
+                    "pending" => "have not all concluded",
+                    "stale_rollup" => "still reports head",
+                    _ => "rather than",
                 }),
                 "{case}: {error}"
             );
@@ -5530,6 +5532,22 @@ fn auto_fix_holds_required_checks_that_change_between_base_tip_and_repair() {
             );
             assert!(repair_attempts(&host).is_empty(), "{case}");
             assert_no_merge_or_landing(&fx, &host, TaskStatus::Review, case);
+            if case == "stale_rollup" {
+                // The stale answer cleared: fresh evidence names the same
+                // head with its failed check, and the next pass admits repair.
+                fx.script_required_check_outcomes(&["success"]);
+                host.script(
+                    "ci.job_log",
+                    json!({"log":"error[E0433]: cannot find module `broken`"}),
+                );
+                let error = action(&host, "pr_complete", &auto_fix_input(&fx)).unwrap_err();
+                assert!(
+                    orbit_types::workflow::is_pr_auto_fix_check_repair(&error.to_string()),
+                    "{case}: {error}"
+                );
+                assert_eq!(repair_attempts(&host).len(), 1, "{case}");
+                assert_no_merge_or_landing(&fx, &host, TaskStatus::Review, case);
+            }
         },
     );
 }

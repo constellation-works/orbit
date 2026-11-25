@@ -414,8 +414,49 @@ fn a_repo_with_no_required_checks_hands_back_check_runs_absent_hold() {
     assert_eq!(fx.retries(&leaf.run).len(), 1);
 }
 
+/// A stale required-checks answer under the unchanged published head holds as
+/// inconclusive evidence, so matching red evidence on that head reaches the
+/// repair ledger; a confirmed move to another head still repairs nothing.
+fn a_stale_check_answer_hold_is_repaired_once_the_published_head_is_red() {
+    let fx = fixture();
+    let drain = fx.drain();
+    let stale = fx.delivered_leaf(412, "done", Shelf::Review, LeafEnd::HeldStaleCheckAnswer);
+    let moved = fx.delivered_leaf(413, "done", Shelf::Review, LeafEnd::HeldAutoFixStop);
+    for leaf in [&stale, &moved] {
+        fx.blocked(
+            leaf,
+            "published-head",
+            "orbit-bot",
+            false,
+            &["Test shard 13"],
+        );
+    }
+    let pass = fx.pass(&drain, "done", true);
+    let entry = started(&pass, &stale.task).unwrap_or_else(|| panic!("{pass}"));
+    assert_eq!(entry["blocker"], "failed_checks", "{pass}");
+    assert_eq!(fx.retries(&stale.run).len(), 1, "{pass}");
+    assert_eq!(
+        repair_skip(&pass, &moved.task).as_deref(),
+        Some("auto_fix_stopped"),
+        "{pass}"
+    );
+    assert!(fx.retries(&moved.run).is_empty(), "{pass}");
+
+    // A replacement head the hold does not own is never repaired.
+    fx.blocked(
+        &stale,
+        "replacement-head",
+        "orbit-bot",
+        false,
+        &["Test shard 13"],
+    );
+    let other = fx.pass(&drain, "done", true);
+    assert!(started(&other, &stale.task).is_none(), "{other}");
+}
+
 crate::scenario_table!(
     held_handback_scenarios,
+    a_stale_check_answer_hold_is_repaired_once_the_published_head_is_red,
     auto_fix_stop_waits_for_green_on_published_head_then_resumes_completion,
     held_delivery_leaves_are_handed_back_to_completion,
     a_lineage_that_keeps_holding_on_the_same_head_stops_at_the_ceiling,

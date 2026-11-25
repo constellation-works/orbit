@@ -553,12 +553,29 @@ fn classified_required_failures<H: RuntimeHost + ?Sized>(
                 format!("its required checks could not be read: {error}"),
             )
         })?;
-    if required.head_sha != head_sha || required.reported_head_sha.as_deref() != Some(head_sha) {
+    if required.reported_head_sha.as_deref() == Some(head_sha) {
+        // The forge still reports the pinned head, so there is no evidence of
+        // a move. A rollup naming another commit is an inconsistent answer,
+        // which a fresh read can clear.
+        if required.head_sha != head_sha {
+            return Err(RequiredFailuresStop::held(
+                DeliveryRefusal::CheckEvidenceInconclusive,
+                format!(
+                    "its required checks were read on commit {} while the pull request still \
+                     reports head {head_sha}; no repair is admitted",
+                    required.head_sha
+                ),
+            ));
+        }
+    } else {
         return Err(RequiredFailuresStop::held(
             DeliveryRefusal::HeadChanged,
             format!(
                 "its required checks were read on head {} rather than {head_sha}",
-                required.head_sha
+                required
+                    .reported_head_sha
+                    .as_deref()
+                    .unwrap_or(&required.head_sha)
             ),
         ));
     }

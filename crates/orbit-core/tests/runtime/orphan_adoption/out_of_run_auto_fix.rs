@@ -72,6 +72,9 @@ pub(super) enum LeafEnd {
     /// code, with the `auto_fix_stopped` diagnostic inside the step message
     /// the dispatcher wraps.
     HeldAutoFixStop,
+    /// An auto-fix stop on a required-checks answer whose rollup named an
+    /// older commit while the pull request still reported the published head.
+    HeldStaleCheckAnswer,
     /// Its completion step entered `step_failure_recovery` for an admitted
     /// check repair, recovery failed without publishing, and
     /// `hold_unrepaired_check_repair` held the run as
@@ -243,6 +246,21 @@ impl Fixture {
                          request #{number} cannot be repaired automatically (required checks \
                          name another head); no repair agent runs, the pull request stays open \
                          and the task stays in review"
+                    ),
+                );
+            }
+            LeafEnd::HeldStaleCheckAnswer => {
+                self.jobs.write_run_state(&run, &state).unwrap();
+                self.hold(
+                    &run,
+                    4,
+                    DeliveryRefusal::CheckEvidenceInconclusive.error_code(),
+                    &format!(
+                        "deterministic action `complete_pr` refused: auto_fix_stopped: pull \
+                         request #{number} cannot be repaired automatically (its required \
+                         checks were read on commit old-head while the pull request still \
+                         reports head published-head; no repair is admitted); no repair agent \
+                         runs, the pull request stays open and the task stays in review"
                     ),
                 );
             }
