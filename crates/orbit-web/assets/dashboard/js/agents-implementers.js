@@ -127,8 +127,8 @@ function rangeText(bucket) {
     : `${bucket.lines_from}–${bucket.lines_to} lines`;
 }
 
-function plural(n, one, many = `${one}s`) {
-  return `${n} ${n === 1 ? one : many}`;
+function plural(count, one, many = `${one}s`) {
+  return `${count} ${count === 1 ? one : many}`;
 }
 
 function series() {
@@ -158,10 +158,10 @@ function toggle(crew, on, rerender) {
 function controlsNode(selectedWindow, execution, rerender) {
   const select = el("select", { id: "agents-curves-tier", "aria-label": "Complexity" });
   const counts = new Map((curves && Array.isArray(curves.complexities) ? curves.complexities : []).map((entry) => [entry.tier, entry.tasks]));
-  const total = [...counts.values()].reduce((sum, n) => sum + n, 0);
+  const total = [...counts.values()].reduce((sum, tasks) => sum + tasks, 0);
   for (const [value, text] of [["", "All complexities"], ...Object.entries(TIER_LABELS)]) {
-    const n = value ? counts.get(value) : total;
-    const option = el("option", { text: curves && !curves.failed ? `${text} (${n ?? 0})` : text });
+    const taskCount = value ? counts.get(value) : total;
+    const option = el("option", { text: curves && !curves.failed ? `${text} (${taskCount ?? 0})` : text });
     option.value = value;
     select.append(option);
   }
@@ -245,24 +245,24 @@ function buildPlot(drawnSeries, WIDTH) {
   const plotWidth = WIDTH - PAD.left - PAD.right;
   const plotHeight = HEIGHT - PAD.top - PAD.bottom;
   const slotWidth = plotWidth / Math.max(1, last - first + 1);
-  const x = (index) => PAD.left + (index - first + 0.5) * slotWidth;
-  const y = (rate) => PAD.top + plotHeight * (1 - rate / top);
+  const xOf = (index) => PAD.left + (index - first + 0.5) * slotWidth;
+  const yOf = (rate) => PAD.top + plotHeight * (1 - rate / top);
   const plot = svg("svg", { width: WIDTH, height: HEIGHT, class: "agents-curves-plot", role: "img",
     "aria-label": `Regression rate by lines changed for ${drawnSeries.map((each) => each.crew).join(", ")}; the bucket table below lists every value` });
   const setActive = (crew) => {
     for (const group of plot.querySelectorAll(".agents-curves-series")) group.classList.toggle("is-active", group.dataset.crew === crew);
   };
-  for (let i = 0; i * step <= top + 1e-9; i += 1) {
-    const rate = i * step;
-    plot.append(svg("line", { x1: PAD.left, x2: WIDTH - PAD.right, y1: y(rate), y2: y(rate), class: "agents-curves-grid" }));
-    plot.append(svg("text", { x: PAD.left - 6, y: y(rate), "text-anchor": "end", "dominant-baseline": "central", class: "agents-curves-tick" }, percent(rate)));
+  for (let tickIndex = 0; tickIndex * step <= top + 1e-9; tickIndex += 1) {
+    const rate = tickIndex * step;
+    plot.append(svg("line", { x1: PAD.left, x2: WIDTH - PAD.right, y1: yOf(rate), y2: yOf(rate), class: "agents-curves-grid" }));
+    plot.append(svg("text", { x: PAD.left - 6, y: yOf(rate), "text-anchor": "end", "dominant-baseline": "central", class: "agents-curves-tick" }, percent(rate)));
   }
   const labelEvery = Math.ceil((last - first + 1) / (WIDTH < 640 ? 6 : 10));
   const reference = drawnSeries.flatMap((each) => each.buckets);
   for (let index = first; index <= last; index += 1) {
     if ((index - first) % labelEvery !== 0) continue;
     const bucket = reference.find((each) => each.bucket === index) || { lines_from: 2 ** index - 1 };
-    plot.append(svg("text", { x: x(index), y: HEIGHT - PAD.bottom + 16, "text-anchor": "middle", class: "agents-curves-tick" }, compactLines(bucket.lines_from)));
+    plot.append(svg("text", { x: xOf(index), y: HEIGHT - PAD.bottom + 16, "text-anchor": "middle", class: "agents-curves-tick" }, compactLines(bucket.lines_from)));
   }
   plot.append(svg("text", { x: PAD.left + plotWidth / 2, y: HEIGHT - 6, "text-anchor": "middle", class: "agents-curves-axis" }, "Lines changed (bucket start, doubling)"));
   // Coincident points (same bucket and rate) are dodged on a small ring so
@@ -319,7 +319,7 @@ function buildPlot(drawnSeries, WIDTH) {
     const by = Math.min(Math.max(4, HEIGHT - 4 - boxH), Math.max(4, cy - boxH / 2));
     tip.replaceChildren(
       svg("rect", { class: "agents-curves-tip-box", x: bx, y: by, width: boxW, height: boxH, rx: 4 }),
-      ...wrapped.map((line, i) => svg("text", { class: "agents-curves-tip-text", x: bx + 8, y: by + 15 + i * 15 }, line)),
+      ...wrapped.map((line, lineIndex) => svg("text", { class: "agents-curves-tip-text", x: bx + 8, y: by + 15 + lineIndex * 15 }, line)),
     );
     tip.setAttribute("visibility", "visible");
   };
@@ -393,25 +393,25 @@ function buildPlot(drawnSeries, WIDTH) {
       else setActive(hoveredCrew);
     });
     for (const run of runs) {
-      const upper = run.map((bucket) => `${x(bucket.bucket)},${y(bucket.high)}`);
-      const lower = run.slice().reverse().map((bucket) => `${x(bucket.bucket)},${y(bucket.low)}`);
+      const upper = run.map((bucket) => `${xOf(bucket.bucket)},${yOf(bucket.high)}`);
+      const lower = run.slice().reverse().map((bucket) => `${xOf(bucket.bucket)},${yOf(bucket.low)}`);
       if (run.length > 1) {
         group.append(svg("polygon", { points: [...upper, ...lower].join(" "), class: "agents-curves-band" }));
-        group.append(svg("polyline", { points: run.map((bucket) => `${x(bucket.bucket)},${y(bucket.rate)}`).join(" "), class: "agents-curves-line" }));
+        group.append(svg("polyline", { points: run.map((bucket) => `${xOf(bucket.bucket)},${yOf(bucket.rate)}`).join(" "), class: "agents-curves-line" }));
       } else {
         const [bucket] = run;
-        const cx = x(bucket.bucket);
-        group.append(svg("rect", { x: cx - 7, y: y(bucket.high), width: 14, height: Math.max(1, y(bucket.low) - y(bucket.high)), class: "agents-curves-band" }));
-        group.append(svg("line", { x1: cx, x2: cx, y1: y(bucket.low), y2: y(bucket.high), class: "agents-curves-whisker" }));
-        group.append(svg("line", { x1: cx - 5, x2: cx + 5, y1: y(bucket.high), y2: y(bucket.high), class: "agents-curves-whisker" }));
-        group.append(svg("line", { x1: cx - 5, x2: cx + 5, y1: y(bucket.low), y2: y(bucket.low), class: "agents-curves-whisker" }));
+        const cx = xOf(bucket.bucket);
+        group.append(svg("rect", { x: cx - 7, y: yOf(bucket.high), width: 14, height: Math.max(1, yOf(bucket.low) - yOf(bucket.high)), class: "agents-curves-band" }));
+        group.append(svg("line", { x1: cx, x2: cx, y1: yOf(bucket.low), y2: yOf(bucket.high), class: "agents-curves-whisker" }));
+        group.append(svg("line", { x1: cx - 5, x2: cx + 5, y1: yOf(bucket.high), y2: yOf(bucket.high), class: "agents-curves-whisker" }));
+        group.append(svg("line", { x1: cx - 5, x2: cx + 5, y1: yOf(bucket.low), y2: yOf(bucket.low), class: "agents-curves-whisker" }));
       }
     }
     for (const bucket of each.buckets.filter((entry) => entry.drawn)) {
       const { dx, dy } = dodge(each.crew, bucket);
       const label = pointLabel(each.crew, bucket);
-      const cx = x(bucket.bucket) + dx;
-      const cy = y(bucket.rate) + dy;
+      const cx = xOf(bucket.bucket) + dx;
+      const cy = yOf(bucket.rate) + dy;
       const marker = svg("circle", { cx, cy, r: markerRadius(bucket), class: `agents-curves-marker${bucket.sparse ? " is-sparse" : ""}`, tabindex: 0, role: "img", "aria-label": label });
       const lines = [
         `${each.crew}, ${rangeText(bucket)}`,

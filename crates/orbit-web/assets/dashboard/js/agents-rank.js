@@ -176,7 +176,7 @@ function ladderModel(payload, rows) {
       else bands.push({ label, rows: [row] });
     }
   } else if (ranked.length) {
-    bands.push({ label: "", rows: [...ranked].sort((a, b) => (b.score ?? -Infinity) - (a.score ?? -Infinity)) });
+    bands.push({ label: "", rows: [...ranked].sort((first, second) => (second.score ?? -Infinity) - (first.score ?? -Infinity)) });
   }
   return { ranked, pending, bands, axis: scoreAxis(ranked) };
 }
@@ -192,20 +192,20 @@ const AXIS_MIN_VALUES_TO_CLIP = 6;
 const AXIS_MAX_GAPS = 6;
 const AXIS_STEPS = [5, 10, 20, 25, 50, 100, 200, 250, 500, 1000];
 
-function quantile(sorted, q) {
-  const at = (sorted.length - 1) * q;
+function quantile(sorted, fraction) {
+  const at = (sorted.length - 1) * fraction;
   const below = Math.floor(at);
   const above = Math.ceil(at);
   return sorted[below] + (sorted[above] - sorted[below]) * (at - below);
 }
 
 function axisCoreRange(values) {
-  const sorted = [...values].sort((a, b) => a - b);
+  const sorted = [...values].sort((first, second) => first - second);
   if (sorted.length < AXIS_MIN_VALUES_TO_CLIP) return [sorted[0], sorted[sorted.length - 1]];
   const q1 = quantile(sorted, 0.25);
   const q3 = quantile(sorted, 0.75);
   const margin = Math.max(1.5 * (q3 - q1), AXIS_MIN_MARGIN);
-  const core = sorted.filter((v) => v >= q1 - margin && v <= q3 + margin);
+  const core = sorted.filter((value) => value >= q1 - margin && value <= q3 + margin);
   return [core[0], core[core.length - 1]];
 }
 
@@ -227,14 +227,14 @@ function scoreAxis(rows) {
   let hi = Math.ceil(max / step) * step;
   if (lo === hi) { lo -= step; hi += step; }
   const ticks = [];
-  for (let v = lo; v <= hi + 1e-9; v += step) ticks.push(v);
+  for (let tick = lo; tick <= hi + 1e-9; tick += step) ticks.push(tick);
   return {
     lo,
     hi,
     ticks,
-    pos: (v) => Math.max(0, Math.min(100, ((v - lo) / (hi - lo)) * 100)),
+    pos: (value) => Math.max(0, Math.min(100, ((value - lo) / (hi - lo)) * 100)),
     // -1 below the axis floor, 1 above its ceiling, 0 on the axis.
-    side: (v) => (v < lo - 1e-9 ? -1 : v > hi + 1e-9 ? 1 : 0),
+    side: (value) => (value < lo - 1e-9 ? -1 : value > hi + 1e-9 ? 1 : 0),
   };
 }
 
@@ -264,9 +264,9 @@ function whiskerLabel(row, axis) {
 
 function summaryNode(payload, rows, ladder) {
   const measures = Array.isArray(payload.measures) ? payload.measures : [];
-  const liveWeight = measures.filter((m) => m.status === "measured").reduce((sum, m) => sum + (m.weight || 0), 0);
-  const totalWeight = typeof payload.weights_total === "number" ? payload.weights_total : measures.reduce((sum, m) => sum + (m.weight || 0), 0);
-  const missing = measures.filter((m) => m.status !== "measured").map((m) => m.label || m.key);
+  const liveWeight = measures.filter((measure) => measure.status === "measured").reduce((sum, measure) => sum + (measure.weight || 0), 0);
+  const totalWeight = typeof payload.weights_total === "number" ? payload.weights_total : measures.reduce((sum, measure) => sum + (measure.weight || 0), 0);
+  const missing = measures.filter((measure) => measure.status !== "measured").map((measure) => measure.label || measure.key);
   const tasksScored = ladder.ranked.reduce((sum, row) => sum + (row.units || 0), 0);
   const notScored = payload.not_scored || {};
   const unattributed = payload.unattributed || {};
@@ -383,7 +383,7 @@ function scoreCell(row, axis) {
 }
 
 function modelNode(row) {
-  const crews = Array.isArray(row.crews) ? [...row.crews].sort((a, b) => (b.tasks || 0) - (a.tasks || 0)) : [];
+  const crews = Array.isArray(row.crews) ? [...row.crews].sort((first, second) => (second.tasks || 0) - (first.tasks || 0)) : [];
   const crewNames = crews.map((crew) => crew.crew).filter(Boolean).join(", ");
   const crewTitle = crews.map((crew) => `${crew.crew || "—"} (${crew.tasks ?? 0})`).join(", ");
   const singleTier = typeof row.single_tier === "string" && row.single_tier ? row.single_tier : null;
@@ -513,7 +513,7 @@ function tierEntries(row) {
   const byTier = row.tasks_by_tier || {};
   return Object.entries(byTier)
     .filter(([, count]) => typeof count === "number" && count > 0)
-    .sort(([a], [b]) => rankFormat.tierIndex(a) - rankFormat.tierIndex(b));
+    .sort(([firstTier], [secondTier]) => rankFormat.tierIndex(firstTier) - rankFormat.tierIndex(secondTier));
 }
 
 function tierMixNode(row) {
@@ -570,7 +570,7 @@ function pendingNode(payload, pending) {
   if (rules.min_tiers) gate.push(rules.min_tiers === 1 ? `1 tier with ${rules.min_tier_tasks || 0}+ tasks` : `${rules.min_tiers} tiers with ${rules.min_tier_tasks || 0}+ each`);
   const items = pending
     .map((row) => ({ row, gate: gateProgress(rules, row) }))
-    .sort((a, b) => b.gate.progress - a.gate.progress || (b.row.units || 0) - (a.row.units || 0));
+    .sort((first, second) => second.gate.progress - first.gate.progress || (second.row.units || 0) - (first.row.units || 0));
   const list = el("ul", { class: "agents-rank-pending-list" }, items.map(({ row, gate: progress }) => {
     const raw = typeof row.raw_score === "number" ? row.raw_score : row.score;
     return el("li", { class: "agents-rank-pending-row" }, [
@@ -610,9 +610,9 @@ function pendingNode(payload, pending) {
 function notScoredNode(payload) {
   const notScored = payload.not_scored || {};
   const unattributed = payload.unattributed || {};
-  const reasons = Object.entries(notScored.reasons || {}).filter(([, count]) => count > 0).sort((a, b) => b[1] - a[1]);
+  const reasons = Object.entries(notScored.reasons || {}).filter(([, count]) => count > 0).sort((first, second) => second[1] - first[1]);
   const max = reasons.length ? reasons[0][1] : 0;
-  const crews = Array.isArray(unattributed.crews) ? [...unattributed.crews].sort((a, b) => (b.tasks || 0) - (a.tasks || 0)) : [];
+  const crews = Array.isArray(unattributed.crews) ? [...unattributed.crews].sort((first, second) => (second.tasks || 0) - (first.tasks || 0)) : [];
   const crewText = crews.map((crew) => `${crew.crew || "—"} ${crew.tasks ?? 0}`).join(", ");
   const list = reasons.length
     ? el("ul", { class: "agents-rank-reasons" }, reasons.map(([reason, count]) => el("li", { title: NOT_SCORED_REASONS[reason] || reason.replace(/_/g, " ") }, [
@@ -689,7 +689,7 @@ function contributionsNode(payload, row) {
 
 function tierBreakdownNode(row) {
   const tiers = [...(Array.isArray(row.tiers) ? row.tiers : [])]
-    .sort((a, b) => rankFormat.tierIndex(a.tier) - rankFormat.tierIndex(b.tier));
+    .sort((first, second) => rankFormat.tierIndex(first.tier) - rankFormat.tierIndex(second.tier));
   const head = el("div", { class: "agents-rank-tier-grid agents-rank-tier-head" }, [
     el("span", { text: "Tier" }),
     el("span", { class: "agents-num", text: "Tasks" }),
@@ -718,7 +718,7 @@ function tierBreakdownNode(row) {
 
 function deliveryNode(row) {
   const cost = row.cost || {};
-  const crews = Array.isArray(row.crews) ? [...row.crews].sort((a, b) => (b.tasks || 0) - (a.tasks || 0)) : [];
+  const crews = Array.isArray(row.crews) ? [...row.crews].sort((first, second) => (second.tasks || 0) - (first.tasks || 0)) : [];
   const crewText = crews.length ? crews.map((crew) => `${crew.crew || "—"} ${crew.tasks ?? 0}`).join(" · ") : "—";
   const fact = (label, value) => el("div", { class: "agents-rank-delivery-row" }, [
     el("span", { text: label }),

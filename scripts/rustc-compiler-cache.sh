@@ -94,9 +94,9 @@ file_id() {
 }
 
 same_inode() {
-  local a="$1" b="$2"
-  [[ -e "$a" && -e "$b" ]] || return 1
-  [[ "$(file_id "$a")" == "$(file_id "$b")" ]]
+  local first_path="$1" second_path="$2"
+  [[ -e "$first_path" && -e "$second_path" ]] || return 1
+  [[ "$(file_id "$first_path")" == "$(file_id "$second_path")" ]]
 }
 
 # Source and target aliasing are independent. A private custom CARGO_TARGET_DIR
@@ -116,16 +116,16 @@ fi
 # Managed Linux sandboxes bind the worktree and its target/ at stable /tmp
 # paths so sccache keys do not include the jrun worktree prefix.
 rewrite_value() {
-  local s="$1"
-  if [[ "$target_aliased" -eq 1 && -n "$target_real" && ( "$s" == "$target_real" || "$s" == "$target_real/"* ) ]]; then
-    printf '%s%s' "$STABLE_TGT" "${s#"$target_real"}"
+  local value="$1"
+  if [[ "$target_aliased" -eq 1 && -n "$target_real" && ( "$value" == "$target_real" || "$value" == "$target_real/"* ) ]]; then
+    printf '%s%s' "$STABLE_TGT" "${value#"$target_real"}"
     return
   fi
-  if [[ "$source_aliased" -eq 1 && ( "$s" == "$repo_root" || "$s" == "$repo_root/"* ) ]]; then
-    printf '%s%s' "$STABLE_SRC" "${s#"$repo_root"}"
+  if [[ "$source_aliased" -eq 1 && ( "$value" == "$repo_root" || "$value" == "$repo_root/"* ) ]]; then
+    printf '%s%s' "$STABLE_SRC" "${value#"$repo_root"}"
     return
   fi
-  printf '%s' "$s"
+  printf '%s' "$value"
 }
 
 if [[ "$source_aliased" -eq 1 || "$target_aliased" -eq 1 ]]; then

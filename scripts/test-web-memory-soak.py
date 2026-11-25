@@ -62,10 +62,13 @@ class WebMemorySoakCliTests(unittest.TestCase):
         module = load_soak()
         class FakeServer:
             pid = 1
+
             def __init__(self, *args):
                 pass
+
             def get(self, path):
                 return {"ms": 1, "bytes": 1}
+
             def stop(self):
                 pass
         def status(rss, hwm=None):
