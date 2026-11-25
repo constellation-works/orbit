@@ -125,8 +125,9 @@ fn a_verified_refusal_from_another_task_keeps_its_model_out_of_the_next_batch() 
         return;
     }
 
-    let (fixture, model, account) =
-        consumer_with_pool(r#"["muse-wonder:1000", "muse-alias:1000", "haiku:1", "sonnet:1"]"#);
+    // Keep only the subject model in this pool so irrelevant evidence must
+    // produce that crew, independent of the weighted draw.
+    let (fixture, model, account) = consumer_with_pool(r#"["muse-wonder"]"#);
     let access = (model, account);
     let runtime = open_runtime(&fixture);
 
@@ -173,10 +174,20 @@ fn a_verified_refusal_from_another_task_keeps_its_model_out_of_the_next_batch() 
     let first = land_and_evaluate(&fixture, &runtime, "landed\n")
         .expect("a pool with eligible members mints the batch");
     let task = fixture.json(&["task", "show", &first, "--json"]);
-    assert!(
-        task["crew"].as_str().unwrap().starts_with("muse-"),
-        "nothing above excludes the model, so the 1000-weight aliases are drawn: {task}"
+    assert_eq!(
+        task["crew"], "muse-wonder",
+        "irrelevant evidence does not exclude the only eligible crew: {task}"
     );
+
+    // Exercise the verified refusal against the original mixed pool.
+    let (fixture, model, account) =
+        consumer_with_pool(r#"["muse-wonder:1000", "muse-alias:1000", "haiku:1", "sonnet:1"]"#);
+    let access = (model, account);
+    let runtime = open_runtime(&fixture);
+
+    // Mint the initial mixed-pool batch before checking the next batch.
+    let _first_mixed = land_and_evaluate(&fixture, &runtime, "mixed baseline\n")
+        .expect("the mixed pool mints its initial batch");
 
     // The verified refusal of a different task's owner-local run.
     seed_access(
