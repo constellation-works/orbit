@@ -4300,6 +4300,33 @@ class RemovedCodeIdentifierTests(unittest.TestCase):
         self.assertIn(self.SOURCE, result.stderr)
         self.assertIn(f"{self.DOC}:3", result.stderr)
 
+    def branch_behind_a_base_that_adds(self, name):
+        """Cut `pr` where a doc already names `name`, then move main on with
+        the `fn name` it describes, and leave `pr` checked out with main's tip
+        as the CI base: a pull request whose head predates that base commit."""
+        self.write("docs/design/audit/2_design.md", f"Every write goes through `{name}`.\n")
+        self.commit_base()
+        self.git("checkout", "-qb", "pr")
+        self.git("checkout", "-q", "main")
+        self.write("crates/demo-core/src/audit.rs", f"pub fn {name}() {{}}\n")
+        self.commit_base()
+        self.git("checkout", "-q", "pr")
+
+    def test_identifier_the_base_added_after_the_branch_point_passes(self):
+        self.branch_behind_a_base_that_adds("audit_event")
+        self.write("crates/demo-core/src/unrelated.rs", "pub fn unrelated() {}\n")
+        result = self.run_check()
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_identifier_a_stale_head_removes_still_fails(self):
+        self.branch_behind_a_base_that_adds("audit_event")
+        self.write(self.SOURCE, "// constant moved out of this module\n")
+        result = self.run_check()
+        self.assertNotEqual(result.returncode, 0, result.stdout)
+        self.assertIn(f'"{self.CONST}"', result.stderr)
+        self.assertIn(f"{self.DOC}:3", result.stderr)
+        self.assertNotIn("audit_event", result.stderr)
+
     def test_removed_const_named_through_a_path_prefix_fails(self):
         self.write(self.SOURCE, "// constant moved out of this module\n")
         self.write(self.DOC, f"# Overview\n\nThe `orbit_core::{self.CONST}` job name.\n")
