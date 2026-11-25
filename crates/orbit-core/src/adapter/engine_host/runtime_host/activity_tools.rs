@@ -1,4 +1,5 @@
 use std::collections::BTreeSet;
+use std::path::Path;
 use std::sync::Arc;
 
 use orbit_engine::{DispatchError, ResolvedActivityTools};
@@ -349,6 +350,10 @@ fn admit_required_tools(
     ))
 }
 
+/// Default tool context for a v2 activity, anchored at the primary repository
+/// checkout. Deterministic plugin delivery calls that target a task worktree
+/// rebind this context via [`rebind_activity_tool_context_to_worktree`] after
+/// authenticating the single admitted task and its `worktree_setup` checkout.
 pub(super) fn tool_context_for_activity(
     runtime: &OrbitRuntime,
     run_id: Option<&str>,
@@ -407,4 +412,29 @@ pub(super) fn tool_context_for_activity(
         )),
         ..Default::default()
     }
+}
+
+/// Rebind an activity's tool context onto an authenticated single-task
+/// worktree so plugin workspace context, process cwd, callback scope, and
+/// `{{workspace}}` filesystem grants all follow that checkout together.
+pub(in crate::adapter::engine_host) fn rebind_activity_tool_context_to_worktree(
+    runtime: &OrbitRuntime,
+    tool_context: &mut ToolContext,
+    worktree_root: &Path,
+    run_id: &str,
+    task_id: &str,
+) {
+    let worktree_text = worktree_root.to_string_lossy().into_owned();
+    tool_context.workspace_root = Some(worktree_root.to_path_buf());
+    tool_context.cwd = Some(worktree_text);
+    tool_context.activity_binding = Some(ActivityBinding {
+        job_run_id: run_id.to_string(),
+        task_id: Some(task_id.to_string()),
+    });
+    tool_context.orbit_host = Some(build_orbit_tool_host(
+        runtime,
+        Some(task_id.to_string()),
+        ToolHostRun::InProcess(Some(run_id.to_string())),
+        tool_context.session_context.clone(),
+    ));
 }

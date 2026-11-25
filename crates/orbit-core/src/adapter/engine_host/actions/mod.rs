@@ -18,6 +18,7 @@ pub(super) mod child_dispatch;
 pub(super) mod cli_executor;
 pub(super) mod dispatch;
 pub(super) mod pipeline_actions;
+mod plugin_worktree;
 pub(crate) mod pull;
 pub(super) mod sandbox;
 pub(super) mod task_context;

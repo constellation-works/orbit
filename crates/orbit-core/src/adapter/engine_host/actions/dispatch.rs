@@ -466,6 +466,22 @@ fn plugin_tool_call(
             ),
         ));
     };
+    if let Some(worktree) = super::plugin_worktree::resolve_plugin_delivery_worktree(
+        runtime,
+        action,
+        config,
+        input,
+        &tool_context,
+        &binding,
+    )? {
+        super::super::runtime_host::activity_tools::rebind_activity_tool_context_to_worktree(
+            runtime,
+            &mut tool_context,
+            &worktree.worktree_root,
+            &worktree.run_id,
+            &worktree.task_id,
+        );
+    }
     if let ToolCaller::DeterministicStep(step) = &mut tool_context.caller {
         let plugin = binding.provenance.name.clone();
         let installed = runtime

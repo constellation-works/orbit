@@ -1156,6 +1156,22 @@ removed. A typed task field would do the same job as the tag but change the pers
   job, the error says so. The gate re-resolves the selection. The drain withholds such a task
   from admission as `delivery_job_unavailable` (reported by `orbit run readiness`), so a
   task that stays in `backlog` is not sent to a failing gate on every pass.
+- **Worktree binding for deterministic delivery calls.** A mutating `plugin.tool_call`
+  step inside a job declaring `spec.task_delivery` — or any `plugin.tool_call` step that
+  supplies `workspace_path` — binds to exactly one admitted task and that run's
+  authenticated `worktree_setup` checkout before invoking the plugin. The host verifies
+  that the run is active, carries a single task ID matching the step's `task_id` /
+  single-element `task_ids` and `in-progress` task record, has a completed
+  `worktree_setup` checkpoint, and that `workspace_path` is a non-symlink physical
+  directory matching that checkpoint, the repository's managed worktree root, the run's
+  derived worktree path, and a registered linked Git worktree (never the primary
+  checkout). Missing, mismatched, unowned, invalid, or multi-task bindings fail closed
+  before any plugin process starts. When authenticated, `ToolContext.workspace_root`,
+  `cwd`, `ORBIT_WORKSPACE_ROOT`, `ORBIT_TOOL_CWD`, `context.task_id`, and `{{workspace}}`
+  filesystem grants (`fs.read`, `fs.write`, `fs.write_files`) all bind to the admitted
+  worktree. Existing `plugin.tool_call` calls outside deterministic task delivery (and
+  read-only delivery steps that omit `workspace_path`) keep their existing primary-checkout
+  routing.
 - A workspace job of the same name shadows the plugin's (the catalog layering above). The
   selection resolves to whichever definition name-based execution would run.
 

@@ -124,6 +124,7 @@ mod operator_ship_override;
 mod origin_fetch_hold;
 mod orphan_adoption;
 mod pilot_warning_cards;
+mod plugin_delivery_worktree;
 mod plugin_inspection;
 mod pr_forge_admission;
 mod pr_infrastructure;
