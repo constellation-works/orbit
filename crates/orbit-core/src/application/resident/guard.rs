@@ -33,6 +33,7 @@ use sha2::{Digest, Sha256};
 use super::cycle::live_cycle_from_history;
 use super::due::cycle_grant;
 use crate::OrbitRuntime;
+use crate::application::task::pilot::auto_approval_opted_out;
 use crate::runtime::workspace::catalog::{FederatedWorkspaceTarget, WorkspaceScope};
 
 /// What a tool call needs from a resident cycle's grant.
@@ -695,8 +696,7 @@ impl OrbitRuntime {
             OrbitError::Execution("resident task update is missing its admission grant".into())
         })?;
         let approval_tags = [NO_AUTO_APPROVE_TAG, NO_DRAIN_TAG];
-        let held = task.status == TaskStatus::Proposed
-            && task.tags.iter().any(|tag| tag == NO_AUTO_APPROVE_TAG);
+        let held = task.status == TaskStatus::Proposed && auto_approval_opted_out(&task.tags);
         if held
             && (status == Some(TaskStatus::InProgress)
                 || tags.is_some_and(|tags| {
