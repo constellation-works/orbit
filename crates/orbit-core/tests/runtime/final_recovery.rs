@@ -38,6 +38,25 @@ struct Fixture {
     jobs: Arc<dyn JobRunStoreBackend>,
 }
 
+fn execute_tool_command_with_current_env(
+    runtime: &OrbitRuntime,
+    name: &str,
+    input: Value,
+) -> Result<Value, orbit_core::OrbitError> {
+    let env = orbit_common::Env::capture();
+    runtime
+        .execute_tool_command_dispatch_with_session_context_and_env(
+            &env,
+            name,
+            input,
+            None,
+            None,
+            orbit_core::adapter::command::ToolEntryPoint::Cli,
+            orbit_types::tool::ToolSessionContext::default(),
+        )
+        .map(|outcome| outcome.value)
+}
+
 fn fixture(pool: &str) -> Fixture {
     let root = TempDir::new_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
     let global = root.path().join("global");
@@ -894,15 +913,12 @@ fn final_recovery_keeps_run_observers_and_every_declared_tool_write_denied() {
             let _env = orbit_common::test_env::scoped([("ORBIT_AGENT_NAME", Some("codex"))]);
             for action in ["show", "list"] {
                 let tool = format!("orbit.run:{action}");
-                let error = fixture
-                    .runtime
-                    .execute_tool_command(
-                        "orbit.run",
-                        json!({"action": action, "id": "jrun-missing"}),
-                        None,
-                        None,
-                    )
-                    .unwrap_err();
+                let error = execute_tool_command_with_current_env(
+                    &fixture.runtime,
+                    "orbit.run",
+                    json!({"action": action, "id": "jrun-missing"}),
+                )
+                .unwrap_err();
                 assert!(
                     matches!(error, OrbitError::CapabilityDenied(_)),
                     "{tool} must retain capability_denied for an agent envelope: {error}"
@@ -924,10 +940,8 @@ fn final_recovery_keeps_run_observers_and_every_declared_tool_write_denied() {
                 Some((family, action)) => (family, json!({"action": action})),
                 None => (tool.as_str(), json!({})),
             };
-            let error = fixture
-                .runtime
-                .execute_tool_command(name, input, None, None)
-                .unwrap_err();
+            let error =
+                execute_tool_command_with_current_env(&fixture.runtime, name, input).unwrap_err();
             assert!(
                 matches!(
                     error,
