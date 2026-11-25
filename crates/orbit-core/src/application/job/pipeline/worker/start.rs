@@ -133,7 +133,7 @@ impl OrbitRuntime {
         // Tests substitute the worker program and must not reach the host's
         // service manager; the live containment test opts in on its own
         // supervisor.
-        let settings = self.context.settings().worker_containment();
+        let settings = self.settings().worker_containment();
         let inherited = std::env::var_os(scope::STRICT_WORKER_CONTAINMENT_ENV);
         let strict =
             effective_strict_containment(settings.strict, strict_override, inherited.as_deref());
@@ -146,7 +146,7 @@ impl OrbitRuntime {
             Arc::clone(&self.stores().job_run),
             Arc::clone(&self.stores().audit_event),
             self.paths().clone(),
-            self.event_log.clone(),
+            self.event_log().clone(),
             WorkerCommandConfig::for_paths(self.paths())
                 .environment(self.execution_env_policy().clone())
                 .contained(limits)

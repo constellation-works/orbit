@@ -35,7 +35,7 @@ impl Store {
         workspace: &str,
         run_id: &str,
     ) -> Result<Vec<AgentExecutionRecord>, OrbitError> {
-        let conn = self.read()?;
+        let conn = self.read_connection()?;
         let mut stmt = conn
             .prepare(
                 "SELECT id, run_id, activity_id, provider, model, identity_json, started_at
@@ -81,7 +81,7 @@ impl Store {
         &self,
         query: &AgentExecutionQuery,
     ) -> Result<Vec<AgentExecutionRecord>, OrbitError> {
-        let conn = self.read()?;
+        let conn = self.read_connection()?;
         let mut sql = String::from(
             "SELECT id, run_id, activity_id, provider, model, identity_json, started_at \
              FROM agent_executions WHERE started_at < ?",

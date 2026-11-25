@@ -532,7 +532,7 @@ pub(super) fn readiness_snapshot_with_detail(
             "host_shutdown_holding": host_shutdown_holding.is_some(),
             // [ORB-13901] Sustained host resource pressure holding every new
             // admission, and readings that could not be used (which admit).
-            "resource_cpu_source": runtime.context.settings().resource_throttle().cpu_source,
+            "resource_cpu_source": runtime.settings().resource_throttle().cpu_source,
             "resource_throttle": resource.throttle,
             "resource_telemetry_unknown": resource.unknown,
             // [ORB-14624] Light slots a CPU-only throttle still admits into;

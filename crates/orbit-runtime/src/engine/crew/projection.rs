@@ -113,7 +113,7 @@ impl RuntimeKernel {
         owner_machine_id: Option<String>,
     ) -> Result<CrewDiscoveryV1, OrbitError> {
         let crews = self
-            .context
+            .base()
             .settings()
             .crews()
             .values()
@@ -123,23 +123,19 @@ impl RuntimeKernel {
             schema_version: CREW_DISCOVERY_SCHEMA_VERSION,
             workspace_id: workspace_id.to_string(),
             owner_machine_id,
-            default_crew: self
-                .context
-                .settings()
-                .default_crew()
-                .map(ToOwned::to_owned),
+            default_crew: self.base().settings().default_crew().map(ToOwned::to_owned),
             crews,
         })
     }
 
     pub fn configured_crew_registry_projection(&self) -> ConfiguredCrewRegistryProjection {
         let default_crew = self
-            .context
+            .base()
             .settings()
             .default_crew()
             .map(ToString::to_string);
         let mut crews = self
-            .context
+            .base()
             .settings()
             .crews()
             .values()
@@ -152,7 +148,7 @@ impl RuntimeKernel {
             .collect::<Vec<_>>();
         crews.sort_by(|left, right| left.name.cmp(&right.name));
         let human_crews = self
-            .context
+            .base()
             .settings()
             .human_crews()
             .values()
@@ -198,7 +194,7 @@ impl RuntimeKernel {
         }
 
         let has_resolvable_name =
-            task.crew.is_some() || self.context.settings().default_crew().is_some();
+            task.crew.is_some() || self.base().settings().default_crew().is_some();
         // A human crew has no agent assignment to project.
         if !has_resolvable_name || self.is_human_crew(task.crew.as_deref()) {
             return Ok(None);

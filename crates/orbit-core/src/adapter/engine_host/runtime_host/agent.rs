@@ -20,10 +20,8 @@ pub(super) fn agent_provider_config(
     if policy.sandbox() == "workspace-write" {
         config.insert(
             "writable_dirs_json".to_string(),
-            serde_json::to_string(&codex_workspace_write_writable_dirs(
-                runtime.context.paths(),
-            ))
-            .unwrap_or_else(|_| "[]".to_string()),
+            serde_json::to_string(&codex_workspace_write_writable_dirs(runtime.paths()))
+                .unwrap_or_else(|_| "[]".to_string()),
         );
     }
     // Codex's default login shell rereads profiles, and macOS

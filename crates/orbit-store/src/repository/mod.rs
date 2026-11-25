@@ -1,8 +1,9 @@
-//! Live repositories that coordinate persistence drivers.
+//! Concrete record repositories and cross-driver repositories.
 
 mod file_backends;
 pub(crate) mod friction;
 pub(crate) mod layered_policy;
+pub(crate) mod notice;
 pub(crate) mod recovery_authority;
 pub(crate) mod sqlite_backends;
 pub(crate) mod task;

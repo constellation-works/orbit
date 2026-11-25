@@ -22,5 +22,5 @@ pub(super) fn refresh_persistence_after_cli_provider(
 ) -> Result<(), OrbitError> {
     runtime
         .sqlite_store()?
-        .refresh_file_connections(&runtime.context.persistence().audit_db)
+        .refresh_file_connections(&runtime.persistence().audit_db)
 }

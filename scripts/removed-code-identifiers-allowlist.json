@@ -8,5 +8,10 @@
     "identifier": "generate",
     "doc": "docs/design/auto-tasks/2_design.md",
     "reason": "This historical reference names the unrelated orbit auto-task command renamed by ORB-10446, not the removed runtime test module helper."
+  },
+  {
+    "identifier": "NoticeStoreBackend",
+    "doc": "docs/design/architecture-restructure/2_design.md",
+    "reason": "The architecture-restructure design doc names the removed NoticeStoreBackend trait as the before-state example replaced by snapshot.notice()."
   }
 ]

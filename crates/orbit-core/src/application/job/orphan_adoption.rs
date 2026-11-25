@@ -420,7 +420,7 @@ impl OrbitRuntime {
                 format!("not read after this pass's earlier forge failure: {error}"),
             ));
         }
-        let repo_root = self.context.paths().repo_root.clone();
+        let repo_root = self.paths().repo_root.clone();
         match self.task_pr_forge().open_pull_request(&repo_root, number) {
             Ok(Some(pull)) if pull.head_branch == head => {}
             Ok(_) => {

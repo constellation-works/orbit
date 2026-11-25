@@ -683,12 +683,7 @@ impl OrbitRuntime {
         Ok(matching
             .filter(|merged| {
                 names_delivery(
-                    &self
-                        .context
-                        .settings()
-                        .pr_settings()
-                        .conventions
-                        .branch_name,
+                    &self.settings().pr_settings().conventions.branch_name,
                     merged,
                     &task.id,
                 )

@@ -70,14 +70,14 @@ impl OrbitRuntime {
         }
         let landing = self
             .task_pr_forge()
-            .merged_pull_request(&self.context.paths().repo_root, pull_request)?
+            .merged_pull_request(&self.paths().repo_root, pull_request)?
             .ok_or_else(|| refused(id, "the specified pull request is not merged"))?;
         let rescue = RecoveredMerge {
             claim_id: claim_id.to_string(),
             published_head: published_head.to_ascii_lowercase(),
         };
         self.check_recovered_merge(&task, &rescue, &landing)?;
-        let authors = self.settlement_authors(&self.context.paths().repo_root);
+        let authors = self.settlement_authors(&self.paths().repo_root);
         if !authors.contains(&landing.pull.author.to_ascii_lowercase()) {
             return Err(refused(
                 id,
@@ -167,12 +167,7 @@ impl OrbitRuntime {
             ));
         }
         if !names_delivery(
-            &self
-                .context
-                .settings()
-                .pr_settings()
-                .conventions
-                .branch_name,
+            &self.settings().pr_settings().conventions.branch_name,
             landing,
             id,
         ) || !is_sha1_commit_id(&landing.head_sha)

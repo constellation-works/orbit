@@ -51,7 +51,7 @@ impl ExperimentStoreBackend for Store {
         workspace_id: &str,
         task_id: &str,
     ) -> Result<Vec<crate::contracts::ExperimentAssignment>, OrbitError> {
-        let conn = self.read()?;
+        let conn = self.read_connection()?;
         super::experiment_assignments::load_assignments(&conn, workspace_id, task_id)
     }
 
@@ -60,7 +60,7 @@ impl ExperimentStoreBackend for Store {
         workspace_id: &str,
         experiment_id: &str,
     ) -> Result<Vec<crate::contracts::ExperimentAssignment>, OrbitError> {
-        let conn = self.read()?;
+        let conn = self.read_connection()?;
         super::experiment_assignments::load_experiment_assignments(
             &conn,
             workspace_id,
@@ -171,7 +171,7 @@ impl ExperimentStoreBackend for Store {
         workspace_id: &str,
         id_or_name: &str,
     ) -> Result<Option<ExperimentRecord>, OrbitError> {
-        let conn = self.read()?;
+        let conn = self.read_connection()?;
         let experiment = conn
             .query_row(
                 &format!(
@@ -201,7 +201,7 @@ impl ExperimentStoreBackend for Store {
         workspace_id: &str,
         status: Option<&str>,
     ) -> Result<Vec<ExperimentRecord>, OrbitError> {
-        let conn = self.read()?;
+        let conn = self.read_connection()?;
         let mut statement = conn
             .prepare(&format!(
                 "SELECT {EXPERIMENT_COLUMNS} FROM experiments \

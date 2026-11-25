@@ -14,7 +14,7 @@ impl Store {
         &self,
         query: &FailureIncidentQuery,
     ) -> Result<FailureIncidentReport, OrbitError> {
-        let conn = self.read()?;
+        let conn = self.read_connection()?;
         let (sql, param_values) = failure_incident_scan_sql(query);
         let mut stmt = conn.prepare(&sql).map_err(sqlite_store_error)?;
         let param_refs: Vec<&dyn rusqlite::types::ToSql> =

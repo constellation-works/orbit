@@ -26,7 +26,7 @@ impl Store {
         let mut ids = task_ids.iter().collect::<Vec<_>>();
         ids.sort();
         ids.dedup();
-        let conn = self.read()?;
+        let conn = self.read_connection()?;
         for chunk in ids.chunks(TASK_CHUNK) {
             // Each branch seeks one ownership prefix and stops at its own
             // limit. Joining only the selected run IDs keeps JSON and steps

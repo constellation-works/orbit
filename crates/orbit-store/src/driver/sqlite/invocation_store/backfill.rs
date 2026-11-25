@@ -26,7 +26,7 @@ impl Store {
         workspace_id: &str,
         tolerance: chrono::Duration,
     ) -> Result<Vec<UnidentifiedInvocationLaunch>, OrbitError> {
-        let conn = self.read()?;
+        let conn = self.read_connection()?;
         let mut stmt = conn
             .prepare(
                 "SELECT i.id, i.job_run_id, i.activity_id, i.model, i.ts, i.duration_ms, \
@@ -202,7 +202,7 @@ impl Store {
         &self,
         workspace_id: &str,
     ) -> Result<(Vec<UnrecordedLaunchGroup>, UnrecordedLaunchOmissions), OrbitError> {
-        let conn = self.read()?;
+        let conn = self.read_connection()?;
         let crews: std::collections::HashMap<String, Option<String>> = {
             let mut stmt = conn
                 .prepare("SELECT run_id, resolved_crew FROM job_runs WHERE workspace_id = ?1")

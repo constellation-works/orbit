@@ -25,7 +25,7 @@ impl ApplicationConsentStoreBackend for Store {
         &self,
         id: &str,
     ) -> Result<Option<ApplicationConsentRecord>, OrbitError> {
-        let conn = self.read()?;
+        let conn = self.read_connection()?;
         let row: Option<(String, String, bool)> = conn.query_row("SELECT consent_json, fingerprint, revoked FROM application_consents WHERE consent_id = ?1", [id], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?))).optional().map_err(sqlite_store_error)?;
         row.map(|(json, fingerprint, revoked)| {
             Ok(ApplicationConsentRecord {

@@ -188,7 +188,7 @@ impl RuntimeKernel {
             // sharing it, plus any excluded crew the registry no longer
             // names, so the next admission cannot dispatch onto the same
             // expired login through a sibling crew of the same account.
-            let registry = self.context.settings().crews();
+            let registry = self.base().settings().crews();
             let mut outage_crews: Vec<String> = registry
                 .values()
                 .filter(|crew| {
@@ -267,7 +267,7 @@ impl RuntimeKernel {
                     .ok()
                     .map(|crew| crew.name)
             });
-        let registry = self.context.settings().crews();
+        let registry = self.base().settings().crews();
         let run_crew_config = run_crew
             .as_deref()
             .and_then(|crew| orbit_types::identity::find_crew(crew, registry));

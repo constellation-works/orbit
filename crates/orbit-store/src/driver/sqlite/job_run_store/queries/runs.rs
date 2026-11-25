@@ -48,7 +48,7 @@ impl Store {
              JOIN selected_runs ON selected_runs.run_id = job_run_tasks.run_id \
              WHERE job_run_tasks.workspace_id = ?1"
         );
-        let conn = self.read()?;
+        let conn = self.read_connection()?;
         let mut statement = conn.prepare(&sql).map_err(sqlite_store_error)?;
         let rows = statement
             .query_map(rusqlite::params_from_iter(params.iter()), |row| {
@@ -77,7 +77,7 @@ impl Store {
         let mut ids = job_ids.iter().collect::<Vec<_>>();
         ids.sort();
         ids.dedup();
-        let conn = self.read()?;
+        let conn = self.read_connection()?;
         let mut runs = Vec::new();
         for chunk in ids.chunks(LATEST_JOB_ID_CHUNK) {
             let sql = latest_job_runs_sql(chunk.len());
@@ -199,7 +199,7 @@ impl Store {
         workspace_id: &str,
         run_id: &str,
     ) -> Result<Option<JobRun>, OrbitError> {
-        let conn = self.read()?;
+        let conn = self.read_connection()?;
         get_job_run_for_workspace_conn(&conn, workspace_id, run_id)
     }
 
@@ -217,7 +217,7 @@ impl Store {
         if run_ids.is_empty() {
             return Ok(Vec::new());
         }
-        let conn = self.read()?;
+        let conn = self.read_connection()?;
         let mut runs = Vec::with_capacity(run_ids.len());
         for chunk in run_ids.chunks(STEP_RUN_ID_CHUNK) {
             let placeholders = (0..chunk.len())
@@ -271,7 +271,7 @@ impl Store {
         workspace_id: &str,
         run_id: &str,
     ) -> Result<Option<JobRunState>, OrbitError> {
-        let conn = self.read()?;
+        let conn = self.read_connection()?;
         let state = conn
             .query_row(
                 "SELECT state FROM job_runs WHERE workspace_id = ?1 AND run_id = ?2",
@@ -295,7 +295,7 @@ impl Store {
     /// Each distinct workspace is probed through the `(workspace_id, run_id)`
     /// primary key rather than scanning run rows.
     pub fn job_run_workspace_ids(&self, run_id: &str) -> Result<Vec<String>, OrbitError> {
-        let conn = self.read()?;
+        let conn = self.read_connection()?;
         let mut stmt = conn
             .prepare(
                 "SELECT w.workspace_id FROM (SELECT DISTINCT workspace_id FROM job_runs) w \
@@ -319,7 +319,7 @@ impl Store {
         let (sql, params) = job_run_list_sql(workspace_id, query);
         let param_refs: Vec<&dyn rusqlite::types::ToSql> =
             params.iter().map(|b| b.as_ref()).collect();
-        let conn = self.read()?;
+        let conn = self.read_connection()?;
         let mut stmt = conn.prepare(&sql).map_err(sqlite_store_error)?;
         let rows = stmt
             .query_map(param_refs.as_slice(), |row| {
@@ -354,7 +354,7 @@ impl Store {
         let (where_clause, params) = job_run_filter_sql(workspace_id, query);
         let param_refs: Vec<&dyn rusqlite::types::ToSql> =
             params.iter().map(|b| b.as_ref()).collect();
-        let conn = self.read()?;
+        let conn = self.read_connection()?;
         conn.query_row(
             &format!("SELECT COUNT(*) FROM job_runs WHERE {where_clause}"),
             param_refs.as_slice(),
@@ -374,7 +374,7 @@ impl Store {
         let (where_clause, params) = job_run_filter_sql(workspace_id, query);
         let param_refs: Vec<&dyn rusqlite::types::ToSql> =
             params.iter().map(|b| b.as_ref()).collect();
-        let conn = self.read()?;
+        let conn = self.read_connection()?;
         let mut stmt = conn
             .prepare(&format!(
                 "SELECT duration_ms FROM job_runs \

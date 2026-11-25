@@ -2,7 +2,8 @@
 
 use chrono::{DateTime, Utc};
 use orbit_common::{NoticeRefusalCode, OrbitError};
-use orbit_store::contracts::{NoticeEventRow, NoticeRow, NoticeStoreBackend as _};
+use orbit_store::Store;
+use orbit_store::contracts::{NoticeEventRow, NoticeRow, NoticeScopeFilter};
 use orbit_types::record::{
     AuthorClass, EffectiveStatus, NoticeAuthor, NoticeCloseCause, NoticeClosed,
 };
@@ -76,9 +77,12 @@ impl OrbitRuntime {
         let workspace_id = self.workspace_id()?;
         let now = Utc::now();
         let row = match &selector {
-            NoticeSelector::Id(id) => store.notice_row(id)?,
+            NoticeSelector::Id(id) => store.read()?.notice().get(id)?,
             NoticeSelector::DedupeKey(key) => {
-                let rows = store.notice_rows(Some(std::slice::from_ref(&workspace_id)), false)?;
+                let rows = store
+                    .read()?
+                    .notice()
+                    .list(NoticeScopeFilter::Workspace(&workspace_id))?;
                 let done = self.linked_done_tasks(&rows);
                 rows.into_iter()
                     .filter(|row| row.dedupe_key == *key)
@@ -138,17 +142,16 @@ impl OrbitRuntime {
         // `revision`, so the closing transaction must keep its reports.
         #[cfg(feature = "test-support")]
         test_support::after_notice_close_snapshot();
-        if !store.close_notice(&notice_row(&notice)?, row.revision, &event)? {
+        // The snapshot above can omit a corroboration that committed before
+        // the write. The stored row is what the close returns.
+        let Some(stored) =
+            commit_notice_close(&store, &notice_row(&notice)?, row.revision, &event)?
+        else {
             return Err(OrbitError::Execution(format!(
                 "notice {} changed while closing it; read it again",
                 row.id
             )));
-        }
-        // The snapshot above can omit a corroboration that committed before
-        // the write. The stored row is what the close returns.
-        let stored = store.notice_row(&row.id)?.ok_or_else(|| {
-            OrbitError::Store(format!("notice {} was missing after it closed", row.id))
-        })?;
+        };
         Ok(NoticeCloseResult {
             notice: parse_notice_row(&stored)?,
             already_inactive: false,
@@ -179,7 +182,10 @@ impl OrbitRuntime {
         }
         let workspace_id = self.workspace_id()?;
         let store = self.sqlite_store()?;
-        let rows = store.notice_rows(Some(std::slice::from_ref(&workspace_id)), false)?;
+        let rows = store
+            .read()?
+            .notice()
+            .list(NoticeScopeFilter::Workspace(&workspace_id))?;
         let done = self.linked_done_tasks(&rows);
         for task_id in done.keys() {
             self.materialize_notice_closures(task_id)?;
@@ -193,7 +199,8 @@ impl OrbitRuntime {
         }
         let store = self.sqlite_store()?;
         let now = Utc::now();
-        for row in store.notices_linked_to(task_id)? {
+        let linked = store.read()?.notice().list_linked(task_id)?;
+        for row in linked {
             if !row.close_on_linked_done {
                 continue;
             }
@@ -219,7 +226,7 @@ impl OrbitRuntime {
             // after this read shares `revision` and must survive the write.
             #[cfg(feature = "test-support")]
             test_support::after_notice_close_snapshot();
-            if store.close_notice(&notice_row(&notice)?, row.revision, &event)? {
+            if commit_notice_close(&store, &notice_row(&notice)?, row.revision, &event)?.is_some() {
                 let mut audit = NoticeAudit::new("close", Some(row.id.clone()));
                 audit.poster = Some(AuthorClass::System);
                 audit.detail = serde_json::json!({ "cause": "linked_task_done", "task": task_id });
@@ -228,6 +235,71 @@ impl OrbitRuntime {
         }
         Ok(())
     }
+}
+
+/// Close `row` at `expected_revision` inside one IMMEDIATE transaction,
+/// preserving any corroboration `reports` committed since the snapshot read.
+/// Returns the stored closed row, or `None` when the notice is already closed
+/// or no longer at `expected_revision`.
+fn commit_notice_close(
+    store: &Store,
+    row: &NoticeRow,
+    expected_revision: u32,
+    event: &NoticeEventRow,
+) -> Result<Option<NoticeRow>, OrbitError> {
+    let Some(closed_at) = row.closed_at else {
+        return Err(OrbitError::Store(format!(
+            "closing notice {} without a close time",
+            row.id
+        )));
+    };
+    store.write(|tx| {
+        let notices = tx.notice();
+        // Read inside the write lock. A corroboration that committed after
+        // the caller snapped the row still matches `revision`, and its
+        // `reports` must survive the replacement of `record_json`.
+        let Some(stored) = notices.get(&row.id)? else {
+            return Ok(None);
+        };
+        if stored.closed_at.is_some() || stored.revision != expected_revision {
+            return Ok(None);
+        }
+        let record_json =
+            closing_record_with_stored_reports(&stored.record_json, &row.record_json)?;
+        if !notices.close(&row.id, expected_revision, closed_at, &record_json)? {
+            return Ok(None);
+        }
+        notices.put_event(event)?;
+        let written = notices.get(&row.id)?.ok_or_else(|| {
+            OrbitError::Store(format!("notice {} was missing after it closed", row.id))
+        })?;
+        Ok(Some(written))
+    })
+}
+
+/// The closing document, with `reports` taken from the row locked for the
+/// close. A post can change `reports` without moving `revision`.
+fn closing_record_with_stored_reports(
+    stored_json: &str,
+    closing_json: &str,
+) -> Result<String, OrbitError> {
+    let mut closing: serde_json::Value = serde_json::from_str(closing_json).map_err(|error| {
+        OrbitError::Store(format!("closing notice document is unreadable: {error}"))
+    })?;
+    let stored: serde_json::Value = serde_json::from_str(stored_json).map_err(|error| {
+        OrbitError::Store(format!("stored notice document is unreadable: {error}"))
+    })?;
+    let Some(document) = closing.as_object_mut() else {
+        return Err(OrbitError::Store(
+            "closing notice document is not an object".into(),
+        ));
+    };
+    if let Some(reports) = stored.get("reports").cloned() {
+        document.insert("reports".to_string(), reports);
+    }
+    serde_json::to_string(&closing).map_err(|error| {
+        OrbitError::Store(format!("closing notice document is unreadable: {error}"))
+    })
 }
 
 impl TaskNoticePort for OrbitRuntime {

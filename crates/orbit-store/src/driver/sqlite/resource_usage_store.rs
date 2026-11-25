@@ -118,7 +118,7 @@ impl ResourceUsageStoreBackend for Store {
         workspace_id: &str,
         run_id: &str,
     ) -> Result<Vec<RunResourceMinute>, OrbitError> {
-        let conn = self.read()?;
+        let conn = self.read_connection()?;
         let mut statement = conn
             .prepare(&format!(
                 "SELECT {RUN_MINUTE_COLUMNS}
@@ -138,18 +138,18 @@ impl ResourceUsageStoreBackend for Store {
         &self,
         since: DateTime<Utc>,
     ) -> Result<Vec<DeliveryRunResources>, OrbitError> {
-        super::delivery_run_load::load_delivery_runs(&*self.read()?, since)
+        super::delivery_run_load::load_delivery_runs(&*self.read_connection()?, since)
     }
 
     fn reload_delivery_runs(
         &self,
         previous: Option<DeliveryRunsLoad>,
     ) -> Result<DeliveryRunsLoad, OrbitError> {
-        super::delivery_run_load::reload_delivery_runs(&*self.read()?, previous)
+        super::delivery_run_load::reload_delivery_runs(&*self.read_connection()?, previous)
     }
 
     fn delivery_runs_freshness(&self) -> Result<DeliveryRunsFreshness, OrbitError> {
-        let conn = self.read()?;
+        let conn = self.read_connection()?;
         // Every sampled run counts from its first recorded minute, whatever its
         // index: a failed first read or insert can leave no minute-zero row. The
         // probe reads only retained minute rows, never all of `job_runs`.
@@ -174,7 +174,7 @@ impl ResourceUsageStoreBackend for Store {
     }
 
     fn delivery_runs_stamp(&self) -> Result<Option<i64>, OrbitError> {
-        let conn = self.read()?;
+        let conn = self.read_connection()?;
         // A write-free reader may open a store migrated before the counter.
         let kept: bool = conn
             .query_row(
@@ -200,7 +200,7 @@ impl ResourceUsageStoreBackend for Store {
         &self,
         since: DateTime<Utc>,
     ) -> Result<Vec<HostResourceMinute>, OrbitError> {
-        host_minutes(&*self.read()?, since)
+        host_minutes(&*self.read_connection()?, since)
     }
 
     fn record_admission_forecast(
@@ -258,7 +258,7 @@ impl ResourceUsageStoreBackend for Store {
         &self,
         since: DateTime<Utc>,
     ) -> Result<Vec<AdmissionForecastRecord>, OrbitError> {
-        let conn = self.read()?;
+        let conn = self.read_connection()?;
         let mut statement = conn
             .prepare(
                 r#"
@@ -308,7 +308,7 @@ impl ResourceUsageStoreBackend for Store {
         cutoff: DateTime<Utc>,
         keep: ResourceHistoryKeep,
     ) -> Result<u64, OrbitError> {
-        let conn = self.read()?;
+        let conn = self.read_connection()?;
         let sql = format!(
             "SELECT COUNT(*) FROM {} WHERE {}",
             table.table_name(),
@@ -373,7 +373,7 @@ pub(super) fn select_resource_retention_rows(
         predicate = prunable(table)
     );
     let (cutoff, kept) = prune_bounds(table, cutoff, keep);
-    let conn = store.read()?;
+    let conn = store.read_connection()?;
     let mut stmt = conn.prepare(&sql).map_err(sqlite_store_error)?;
     stmt.query_map(params![cutoff, kept, limit], |row| {
         Ok(ResourceRetentionRow {
@@ -555,7 +555,7 @@ impl Store {
         if job_ids.is_empty() || since >= until {
             return Ok(Vec::new());
         }
-        let conn = self.read()?;
+        let conn = self.read_connection()?;
         let placeholders = vec!["?"; job_ids.len()].join(",");
         // The workspace subquery lets SQLite walk each workspace's job index
         // instead of scanning `job_runs` as one table. See admission load.
@@ -621,7 +621,7 @@ impl crate::contracts::WorkerResourceLimitStoreBackend for Store {
         workspace_id: &str,
         run_id: &str,
     ) -> Result<Option<crate::contracts::WorkerResourceLimitEvidence>, OrbitError> {
-        self.read()?.query_row(
+        self.read_connection()?.query_row(
             "SELECT evidence_json FROM worker_resource_limits WHERE workspace_id = ?1 AND run_id = ?2",
             params![workspace_id, run_id],
             |row| decode(0, &row.get::<_, String>(0)?),

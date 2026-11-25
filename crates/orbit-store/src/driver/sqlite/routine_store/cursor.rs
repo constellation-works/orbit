@@ -10,7 +10,7 @@ use crate::Store;
 impl Store {
     /// Cursor for one routine, if this host has observed it before.
     pub fn routine_cursor(&self, routine_name: &str) -> Result<Option<RoutineCursor>, OrbitError> {
-        let conn = self.read()?;
+        let conn = self.read_connection()?;
         conn.query_row(
             "SELECT routine_name, baseline_at, last_slot FROM routine_cursors
              WHERE routine_name = ?1",
@@ -36,7 +36,7 @@ impl Store {
             return Ok(std::collections::BTreeMap::new());
         }
         let placeholders = vec!["?"; names.len()].join(",");
-        let conn = self.read()?;
+        let conn = self.read_connection()?;
         let mut stmt = conn
             .prepare(&format!(
                 "SELECT routine_name, baseline_at, last_slot FROM routine_cursors

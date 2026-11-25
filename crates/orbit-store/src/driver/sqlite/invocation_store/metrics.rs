@@ -112,7 +112,7 @@ impl Store {
         &self,
         workspace_id: &str,
     ) -> Result<Vec<ToolInvocationMetrics>, OrbitError> {
-        let conn = self.read()?;
+        let conn = self.read_connection()?;
         let mut stmt = conn
             .prepare(
                 r#"
@@ -153,7 +153,7 @@ impl Store {
         &self,
         workspace_id: &str,
     ) -> Result<Vec<InvocationSample>, OrbitError> {
-        let conn = self.read()?;
+        let conn = self.read_connection()?;
         let mut stmt = conn
             .prepare(
                 r#"
@@ -207,7 +207,7 @@ impl Store {
         &self,
         task_id: &str,
     ) -> Result<Vec<TaskInvocationMetrics>, OrbitError> {
-        let conn = self.read()?;
+        let conn = self.read_connection()?;
         let mut stmt = conn
             .prepare(
                 r#"

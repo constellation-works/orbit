@@ -24,7 +24,7 @@ impl BacklogForecastStoreBackend for Store {
         min_model_version: u32,
         limit_per_version: usize,
     ) -> Result<Vec<StoredBacklogForecast>, OrbitError> {
-        let conn = self.read()?;
+        let conn = self.read_connection()?;
         let mut statement = conn
             .prepare(&format!(
                 "SELECT {COLUMNS} FROM (SELECT {COLUMNS}, \
@@ -94,7 +94,7 @@ impl BacklogForecastStoreBackend for Store {
         workspace_id: &str,
         limit: usize,
     ) -> Result<Vec<StoredBacklogForecast>, OrbitError> {
-        let conn = self.read()?;
+        let conn = self.read_connection()?;
         let mut statement = conn
             .prepare(&format!(
                 "SELECT {COLUMNS} FROM backlog_forecasts \

@@ -323,9 +323,9 @@ impl Store {
     /// (`query_only=ON`), so reads proceed concurrently with the writer.
     /// In-memory stores fall back to locking the writer connection. Never
     /// call this while already holding the writer connection (e.g. inside a
-    /// [`Store::with_transaction`] closure): the in-memory fallback would
-    /// deadlock, exactly as the old direct `conn.lock()` did.
-    pub(crate) fn read(&self) -> Result<ReadGuard<'_>, OrbitError> {
+    /// [`Store::with_transaction`] or [`Store::write`] closure): the in-memory
+    /// fallback would deadlock, exactly as the old direct `conn.lock()` did.
+    pub(crate) fn read_connection(&self) -> Result<ReadGuard<'_>, OrbitError> {
         match &self.readers {
             Some(pool) => {
                 let (generation, connection) = pool.checkout()?;
@@ -350,7 +350,7 @@ impl Store {
     where
         F: FnOnce(&Connection) -> Result<T, OrbitError>,
     {
-        let conn = self.read()?;
+        let conn = self.read_connection()?;
         op(&conn)
     }
 
@@ -361,14 +361,14 @@ impl Store {
     /// Current schema version recorded in the migration ledger (0 when no
     /// versioned migration has run). Foundation for `orbit migrate` (P3.4).
     pub fn schema_version(&self) -> Result<u32, OrbitError> {
-        let conn = self.read()?;
+        let conn = self.read_connection()?;
         schema::current_schema_version(&conn)
     }
 
     /// All migrations recorded as applied in the `schema_meta` ledger,
     /// ordered by version ascending.
     pub fn applied_migrations(&self) -> Result<Vec<schema::AppliedMigration>, OrbitError> {
-        let conn = self.read()?;
+        let conn = self.read_connection()?;
         schema::applied_migrations(&conn)
     }
 
@@ -376,7 +376,7 @@ impl Store {
     /// Returns `Ok(())` when SQLite reports `ok`; otherwise an
     /// [`OrbitError::Store`] listing the reported problems.
     pub fn quick_check(&self) -> Result<(), OrbitError> {
-        let conn = self.read()?;
+        let conn = self.read_connection()?;
         let mut stmt = conn
             .prepare("PRAGMA quick_check")
             .map_err(|e| sqlite_error(StorageLayer::Store, &e, format!("quick_check: {e}")))?;

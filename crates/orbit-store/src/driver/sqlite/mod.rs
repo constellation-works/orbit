@@ -12,7 +12,6 @@ pub mod host;
 pub(crate) mod invocation_store;
 pub(crate) mod job_run_store;
 pub(crate) mod landed_diff_store;
-pub(crate) mod notice_store;
 pub(crate) mod plugin_store;
 pub(crate) mod provider_limit_store;
 pub(crate) mod reliability_store;
@@ -32,7 +31,7 @@ pub(crate) mod review;
 pub(crate) mod friction_write;
 
 // SQLite text ordering requires every writer to use the same timestamp encoding.
-mod codec {
+pub(crate) mod codec {
     use chrono::{DateTime, SecondsFormat, Utc};
     use orbit_common::OrbitError;
     use orbit_common::storage::sqlite::sqlite_store_error;
@@ -41,7 +40,7 @@ mod codec {
     use crate::contracts::{HostResourceMinute, RunResourceMinute};
 
     /// Fixed-width UTC RFC3339 text (microseconds, `Z`) for lexical comparisons.
-    pub(super) fn stamp(at: DateTime<Utc>) -> String {
+    pub(crate) fn stamp(at: DateTime<Utc>) -> String {
         at.to_rfc3339_opts(SecondsFormat::Micros, true)
     }
 

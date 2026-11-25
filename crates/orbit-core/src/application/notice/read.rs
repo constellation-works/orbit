@@ -5,7 +5,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use chrono::{DateTime, Duration, Utc};
 use orbit_common::governance::notice::NOTICE_LIST_MAX_LIMIT;
 use orbit_common::{NoticeRefusalCode, OrbitError};
-use orbit_store::contracts::{NoticeRow, NoticeStoreBackend as _};
+use orbit_store::contracts::{NoticeRow, NoticeScopeFilter};
 use orbit_types::record::{EffectiveStatus, Notice, NoticeKind};
 use orbit_types::task::TaskStatus;
 
@@ -80,14 +80,14 @@ impl OrbitRuntime {
     pub fn list_notices(&self, filter: &NoticeListFilter) -> Result<NoticeListing, OrbitError> {
         let workspace_id = self.workspace_id()?;
         let store = self.sqlite_store()?;
-        let rows = if filter.all_workspaces {
-            store.notice_rows(None, false)?
+        let scope = if filter.all_workspaces {
+            NoticeScopeFilter::AllWorkspaces
+        } else if filter.include_global {
+            NoticeScopeFilter::WorkspaceAndGlobal(&workspace_id)
         } else {
-            store.notice_rows(
-                Some(std::slice::from_ref(&workspace_id)),
-                filter.include_global,
-            )?
+            NoticeScopeFilter::Workspace(&workspace_id)
         };
+        let rows = store.read()?.notice().list(scope)?;
         let now = Utc::now();
         let retention_cutoff = now - Duration::days(i64::from(super::limits::RETENTION_DAYS));
         // Decide from stored columns what can be decided there, before
@@ -215,38 +215,43 @@ impl OrbitRuntime {
         with_history: bool,
     ) -> Result<NoticeView, OrbitError> {
         let store = self.sqlite_store()?;
-        let row = store
-            .notice_row(id)?
-            .ok_or_else(|| refuse(NoticeRefusalCode::NotFound, "no such notice"))?;
         let workspace_id = self.workspace_id()?;
-        if row.workspace_id != workspace_id && row.scope != "global" {
-            return Err(refuse(NoticeRefusalCode::NotFound, "no such notice"));
-        }
+        let (row, events) = {
+            let snapshot = store.read()?;
+            let notices = snapshot.notice();
+            let row = notices
+                .get(id)?
+                .ok_or_else(|| refuse(NoticeRefusalCode::NotFound, "no such notice"))?;
+            if row.workspace_id != workspace_id && row.scope != "global" {
+                return Err(refuse(NoticeRefusalCode::NotFound, "no such notice"));
+            }
+            let events = if with_history {
+                Some(notices.events(&row.id)?)
+            } else {
+                None
+            };
+            (row, events)
+        };
         let now = Utc::now();
         let mut notice = parse_notice_row(&row)?;
         let mut linked_cache = LinkedTaskCache::default();
         let done = self.linked_done_tasks_cached(std::iter::once(&row), &mut linked_cache);
         notice.resolve_effective_status(now, linked_done_at(&row, &done));
         self.fill_linked_status(&mut notice, &mut linked_cache);
-        let history = if with_history {
-            Some(
-                store
-                    .notice_events(&row.id)?
-                    .into_iter()
-                    .map(|event| NoticeHistoryEntry {
-                        at: event.at,
-                        action: event.action,
-                        poster_class: event.poster_class,
-                        poster_crew: event.poster_crew,
-                        poster_task_id: event.poster_task_id,
-                        detail: serde_json::from_str(&event.detail_json)
-                            .unwrap_or(serde_json::Value::Null),
-                    })
-                    .collect(),
-            )
-        } else {
-            None
-        };
+        let history = events.map(|events| {
+            events
+                .into_iter()
+                .map(|event| NoticeHistoryEntry {
+                    at: event.at,
+                    action: event.action,
+                    poster_class: event.poster_class,
+                    poster_crew: event.poster_crew,
+                    poster_task_id: event.poster_task_id,
+                    detail: serde_json::from_str(&event.detail_json)
+                        .unwrap_or(serde_json::Value::Null),
+                })
+                .collect()
+        });
         Ok(NoticeView { notice, history })
     }
 
@@ -264,7 +269,9 @@ impl OrbitRuntime {
         let now = Utc::now();
         let mut newest: Option<Notice> = None;
         for row in store
-            .notice_rows(Some(std::slice::from_ref(&workspace_id)), false)?
+            .read()?
+            .notice()
+            .list(NoticeScopeFilter::Workspace(&workspace_id))?
             .iter()
             .filter(|row| row.dedupe_key == key)
         {
@@ -299,7 +306,9 @@ impl OrbitRuntime {
             .collect();
         let mut newest: std::collections::BTreeMap<String, Notice> = Default::default();
         for row in store
-            .notice_rows(Some(std::slice::from_ref(&workspace_id)), false)?
+            .read()?
+            .notice()
+            .list(NoticeScopeFilter::Workspace(&workspace_id))?
             .iter()
             .filter(|row| keys.contains_key(&row.dedupe_key))
         {

@@ -22,6 +22,7 @@ mod driver;
 mod fs;
 pub(crate) mod json_schema;
 mod repository;
+mod store;
 pub mod workflow;
 
 /// Operator-only SQLite and coordination-registry access. Ordinary consumers
@@ -94,7 +95,9 @@ pub use driver::sqlite::host::connection::Store;
 pub(crate) use driver::sqlite::host::connection::StoreTx;
 pub use driver::sqlite::routine_store::try_acquire_routine_sweep_lock;
 pub use fs::lock::read_lock_holder;
+pub use repository::notice::NoticeRepository;
 pub use repository::task::{TaskCommitBoundary, admission_refusal};
+pub use store::{Snapshot, Tx};
 
 /// Hooks for tests in crates that depend on `orbit-store`, behind the
 /// `test-support` feature. Enable it only from `[dev-dependencies]`.

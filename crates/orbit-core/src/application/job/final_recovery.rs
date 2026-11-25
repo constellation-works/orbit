@@ -62,7 +62,7 @@ fn admit(
     run_id: &str,
     request: &FinalRecoveryAdmissionRequest,
 ) -> Result<FinalRecoveryAdmission, OrbitError> {
-    if runtime.context.settings().final_recovery_crews().is_empty() {
+    if runtime.settings().final_recovery_crews().is_empty() {
         return Ok(skipped(
             "final recovery is disabled: `workflow.purpose_crews.final_recovery` is []",
         ));

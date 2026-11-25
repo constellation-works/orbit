@@ -14,7 +14,7 @@ use crate::contracts::InvocationQuery;
 #[test]
 fn succeeded_candidates_probe_later_invocations_by_run() {
     let store = Store::open_in_memory().unwrap();
-    let conn = store.read().unwrap();
+    let conn = store.read_connection().unwrap();
     let query = InvocationQuery {
         succeeded_candidate_only: true,
         since: Some(crate::parse_timestamp("2026-10-04T08:50:22+00:00").unwrap()),

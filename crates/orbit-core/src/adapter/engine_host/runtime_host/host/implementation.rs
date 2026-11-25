@@ -520,8 +520,7 @@ impl RuntimeHost for OrbitRuntime {
     }
 
     fn activity_wall_clock_timeout_seconds(&self, activity_name: &str) -> Option<u64> {
-        self.context
-            .settings()
+        self.settings()
             .activity_wall_clock_timeout_seconds(activity_name)
     }
 
@@ -560,13 +559,7 @@ impl RuntimeHost for OrbitRuntime {
     }
 
     fn orbit_registry_root(&self) -> Option<String> {
-        Some(
-            self.context
-                .paths()
-                .global_dir
-                .to_string_lossy()
-                .into_owned(),
-        )
+        Some(self.paths().global_dir.to_string_lossy().into_owned())
     }
 
     fn orbit_workspace_selector(&self) -> Option<String> {
@@ -590,15 +583,11 @@ impl RuntimeHost for OrbitRuntime {
     }
 
     fn worktree_reclaim_patterns(&self) -> Vec<String> {
-        self.context.settings().worktree_reclaim().to_vec()
+        self.settings().worktree_reclaim().to_vec()
     }
 
     fn worktree_parked_reclaim_after_hours(&self) -> Option<u64> {
-        Some(
-            self.context
-                .settings()
-                .worktree_parked_reclaim_after_hours(),
-        )
+        Some(self.settings().worktree_parked_reclaim_after_hours())
     }
 
     fn lookup_task_for_worktree_gc(
@@ -629,7 +618,7 @@ impl RuntimeHost for OrbitRuntime {
     }
 
     fn data_root(&self) -> &std::path::Path {
-        self.context.data_root()
+        self.data_root_path()
     }
 
     fn cancel_job_run(&self, run_id: &str) -> Result<(), OrbitError> {

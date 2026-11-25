@@ -7,7 +7,7 @@ use crate::{Store, StoreTx, now_string};
 
 impl Store {
     pub fn list_tools(&self) -> Result<Vec<StoredTool>, OrbitError> {
-        let conn = self.read()?;
+        let conn = self.read_connection()?;
 
         let mut stmt = conn
             .prepare(
@@ -34,7 +34,7 @@ impl Store {
     }
 
     pub fn get_tool(&self, name: &str) -> Result<Option<StoredTool>, OrbitError> {
-        let conn = self.read()?;
+        let conn = self.read_connection()?;
 
         let mut stmt = conn
             .prepare(

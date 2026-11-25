@@ -16,7 +16,7 @@ impl Store {
         &self,
         workspace_id: &str,
     ) -> Result<Option<DrainIntentRecord>, OrbitError> {
-        let conn = self.read()?;
+        let conn = self.read_connection()?;
         let row = conn
             .query_row(
                 "SELECT intent, actor, source, reason, updated_at FROM drain_intents \

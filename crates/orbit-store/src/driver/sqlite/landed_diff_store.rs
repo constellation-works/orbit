@@ -69,7 +69,7 @@ impl LandedDiffStoreBackend for Store {
         workspace_id: &str,
         since: Option<DateTime<Utc>>,
     ) -> Result<Vec<LandedDiffStats>, OrbitError> {
-        let conn = self.read()?;
+        let conn = self.read_connection()?;
         let since = since.map_or_else(String::new, stamp);
         let mut statement = conn
             .prepare(&format!(
@@ -86,7 +86,7 @@ impl LandedDiffStoreBackend for Store {
     }
 
     fn landed_diff_task_ids(&self, workspace_id: &str) -> Result<BTreeSet<String>, OrbitError> {
-        let conn = self.read()?;
+        let conn = self.read_connection()?;
         let mut statement = conn
             .prepare("SELECT DISTINCT task_id FROM landed_diff_stats WHERE workspace_id = ?1")
             .map_err(sqlite_store_error)?;

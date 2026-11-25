@@ -5,18 +5,18 @@ use super::RuntimeKernel;
 impl RuntimeKernel {
     /// Effective host resource throttle policy for this runtime.
     pub fn resource_throttle_settings(&self) -> &orbit_config::ResourceThrottleSettings {
-        self.context.settings().resource_throttle()
+        self.base().settings().resource_throttle()
     }
 
     pub fn pr_config(&self) -> &orbit_engine::PrConfig {
-        self.context.settings().pr_config()
+        self.base().settings().pr_config()
     }
 
     /// Config-only `[workflow] base_branch` fallback (default `"main"`).
     /// Delivery defaults must use [`Self::workspace_base_branch`], which
     /// prefers the registered workspace base branch when a binding exists.
     pub fn workflow_base_branch(&self) -> &str {
-        self.context.settings().workflow_base_branch()
+        self.base().settings().workflow_base_branch()
     }
 
     /// Commands every delivered candidate must pass on its exact commit
@@ -25,7 +25,7 @@ impl RuntimeKernel {
     /// a passing log for each. Empty means no required check on any path: no
     /// command runs and a handoff carries no validation logs.
     pub fn workflow_required_validation_commands(&self) -> &[String] {
-        self.context
+        self.base()
             .settings()
             .workflow_required_validation_commands()
     }
@@ -35,7 +35,7 @@ impl RuntimeKernel {
     /// the required validation commands [ORB-14434]. A review admission
     /// captures them, and a failure of one is never a diagnostic [ORB-14684].
     pub fn review_baseline_commands(&self) -> &[String] {
-        self.context.settings().review_baseline_commands()
+        self.base().settings().review_baseline_commands()
     }
 
     /// The note a drain submission shows when this host declares no required
@@ -53,7 +53,7 @@ impl RuntimeKernel {
 
     /// `[workflow.validation_env]` as admitted [ORB-13987].
     pub fn validation_env_policy(&self) -> &orbit_exec::ValidationEnvPolicy {
-        self.context.settings().validation_env()
+        self.base().settings().validation_env()
     }
 
     /// The environment owner-side repository tooling runs in: the allowlisted
@@ -157,14 +157,14 @@ impl RuntimeKernel {
 
     /// `[workflow] distributed_completion`: `review` or `done`.
     pub fn workflow_distributed_completion(&self) -> &str {
-        self.context.settings().workflow_distributed_completion()
+        self.base().settings().workflow_distributed_completion()
     }
 
     /// `[workflow.task_pilot_freshness]`, before any routine override.
     pub fn task_pilot_freshness(
         &self,
     ) -> &orbit_types::workflow::automation::members::PreparationFreshness {
-        self.context.settings().task_pilot_freshness()
+        self.base().settings().task_pilot_freshness()
     }
 
     /// The branch this workspace integrates into: the registered workspace
@@ -185,13 +185,13 @@ impl RuntimeKernel {
     /// `workflow.unlocked_context_paths` as admitted: the declared context
     /// a task's lock surface leaves out.
     pub fn unlocked_context_paths(&self) -> &crate::task::locks::UnlockedContextPaths {
-        self.context.settings().unlocked_context_paths()
+        self.base().settings().unlocked_context_paths()
     }
 
     /// The lease policy this runtime opened with: whether path leases are
     /// accepted and the per-class guards a request is held to.
     pub(crate) fn lease_policy(&self) -> &crate::task::locks::LeasePolicy {
-        self.context.settings().lease_policy()
+        self.base().settings().lease_policy()
     }
 
     /// Whether this runtime accepts path lease operations at all; `false`
@@ -203,53 +203,53 @@ impl RuntimeKernel {
     /// `workflow.lock_modes` as admitted: the paths where a footprint
     /// overlap is shared rather than blocking.
     pub fn footprint_lock_modes(&self) -> &orbit_common::fs::lock_mode::FootprintLockModes {
-        self.context.settings().footprint_lock_modes()
+        self.base().settings().footprint_lock_modes()
     }
 
     /// `workflow.light_delivery_paths`: the paths a candidate may change
     /// and keep its `skip-review` or `skip-validation` tag [ORB-16855].
     pub fn workflow_light_delivery_paths(&self) -> &[String] {
-        self.context.settings().light_delivery_paths()
+        self.base().settings().light_delivery_paths()
     }
 
     /// `completion.hold`: the admitted rules that keep a
     /// completion-authorized run's task in `review`, in configured order.
     pub fn completion_hold_rules(&self) -> &[orbit_types::workflow::CompletionHoldRule] {
-        self.context.settings().completion_hold()
+        self.base().settings().completion_hold()
     }
 
     /// `workflow.test_paths` as a compiled filter: the landed-diff paths
     /// counted as tests.
     pub fn diff_test_paths(&self) -> &orbit_common::fs::path_filter::PathFilter {
-        self.context.settings().diff_test_paths()
+        self.base().settings().diff_test_paths()
     }
 
     /// `workflow.non_code_paths` as a compiled filter: the landed-diff paths
     /// that are not tests and count as other rather than code.
     pub fn diff_non_code_paths(&self) -> &orbit_common::fs::path_filter::PathFilter {
-        self.context.settings().diff_non_code_paths()
+        self.base().settings().diff_non_code_paths()
     }
 
     /// `workflow.non_reviewable_paths` as a compiled filter: paths left out
     /// of the reviewable-lines denominator. Docs and config stay reviewable
     /// until a workspace lists them.
     pub fn diff_non_reviewable_paths(&self) -> &orbit_common::fs::path_filter::PathFilter {
-        self.context.settings().diff_non_reviewable_paths()
+        self.base().settings().diff_non_reviewable_paths()
     }
 
     /// `[workflow.tag_instructions]` as admitted.
     pub fn tag_instruction_settings(&self) -> &orbit_config::TagInstructionSettings {
-        self.context.settings().tag_instructions()
+        self.base().settings().tag_instructions()
     }
 
     /// Additional host capability requirements keyed by normalized task tag.
     pub fn tag_label_requirements(&self) -> &orbit_types::task::TagLabelRequirements {
-        self.context.settings().tag_label_requirements()
+        self.base().settings().tag_label_requirements()
     }
 
     /// `[workflow.review_skip_tags]` as admitted.
     pub fn review_skip_settings(&self) -> &orbit_config::ReviewSkipSettings {
-        self.context.settings().review_skip_tags()
+        self.base().settings().review_skip_tags()
     }
 
     /// The mapped review-skip profiles by tag, for capture in a claim's
@@ -257,37 +257,37 @@ impl RuntimeKernel {
     pub fn review_skip_profiles(
         &self,
     ) -> std::collections::BTreeMap<String, orbit_types::task::ReviewSkipProfile> {
-        self.context.settings().review_skip_tags().as_map()
+        self.base().settings().review_skip_tags().as_map()
     }
 
     /// `workflow.task_types` as admitted: the ordered task types type pools
     /// route by and the implementer scorecard's by-type lens.
     pub fn task_types(&self) -> &[orbit_config::TaskTypeDefinition] {
-        self.context.settings().task_types()
+        self.base().settings().task_types()
     }
 
     /// `workflow.regression_layers` as admitted: the ordered path layers
     /// codebase regression analytics classify a fix by.
     pub fn regression_layers(&self) -> &[orbit_config::RegressionLayerDefinition] {
-        self.context.settings().regression_layers()
+        self.base().settings().regression_layers()
     }
 
     /// The resolved `[operation]` review preferences (layered over the
     /// built-in no-review defaults) with per-field provenance [ORB-11333].
     pub fn operation_policy(&self) -> &orbit_config::OperationPolicy {
-        self.context.settings().operation()
+        self.base().settings().operation()
     }
 
     /// Whether `[decision_channel] enabled` raises decision requests for
     /// work held on a human decision (default `false`).
     pub fn decision_channel_enabled(&self) -> bool {
-        self.context.settings().decision_channel_enabled()
+        self.base().settings().decision_channel_enabled()
     }
 
     /// `experiments.*` as admitted: whether experiments may start, how many
     /// may run at once, and the config keys an arm may override.
     pub fn experiment_settings(&self) -> &orbit_config::ExperimentSettings {
-        self.context.settings().experiments()
+        self.base().settings().experiments()
     }
 }
 

@@ -43,7 +43,7 @@ impl Store {
         let param_refs: Vec<&dyn rusqlite::types::ToSql> =
             params.iter().map(|b| b.as_ref()).collect();
 
-        let conn = self.read()?;
+        let conn = self.read_connection()?;
         let mut stmt = conn.prepare(&sql).map_err(sqlite_store_error)?;
         let rows = stmt
             .query_map(param_refs.as_slice(), row_to_v2_audit_event)
@@ -53,7 +53,7 @@ impl Store {
 
     pub fn count_v2_audit_events(&self, filter: &V2AuditEventFilter) -> Result<i64, OrbitError> {
         let (where_clause, params) = v2_filter_sql(filter);
-        let conn = self.read()?;
+        let conn = self.read_connection()?;
         count_matching(&conn, &where_clause, &params)
     }
 
@@ -82,7 +82,7 @@ impl Store {
         let (where_clause, params) = v2_filter_sql(filter);
         let limit = filter.limit.unwrap_or(1000);
         let offset = filter.offset.unwrap_or(0);
-        let conn = self.read()?;
+        let conn = self.read_connection()?;
         let snapshot = ReadSnapshot::begin(&conn)?;
         let total = count_matching(&conn, &where_clause, &params)?;
         #[cfg(test)]
@@ -110,7 +110,7 @@ impl Store {
             return Ok(Vec::new());
         }
         let mut rows = Vec::new();
-        let conn = self.read()?;
+        let conn = self.read_connection()?;
         for chunk in run_ids.chunks(AUDIT_RUN_ID_CHUNK) {
             let (where_clause, mut params) =
                 run_ids_filter_sql(workspace_id, chunk, source, body_kind, true);
@@ -149,7 +149,7 @@ impl Store {
         if run_ids.is_empty() {
             return Ok(present);
         }
-        let conn = self.read()?;
+        let conn = self.read_connection()?;
         for chunk in run_ids.chunks(AUDIT_RUN_ID_CHUNK) {
             let (where_clause, params) =
                 run_ids_filter_sql(workspace_id, chunk, source, None, true);
@@ -178,7 +178,7 @@ impl Store {
         query: &V2AuditKindForwardQuery<'_>,
     ) -> Result<V2AuditKindForwardPayloads, OrbitError> {
         let scan_limit = i64::try_from(query.scan_limit).unwrap_or(i64::MAX);
-        let conn = self.read()?;
+        let conn = self.read_connection()?;
         let snapshot = ReadSnapshot::begin(&conn)?;
         let past_scan_limit = kind_window_has_row_past_limit(
             &conn,
@@ -326,7 +326,7 @@ impl OptionalQueryRow for Result<(), rusqlite::Error> {
     }
 }
 
-/// Deferred read transaction on a connection borrowed from [`crate::Store::read`].
+/// Deferred read transaction on a connection borrowed from [`crate::Store::read_connection`].
 ///
 /// Drop rolls the transaction back unless [`ReadSnapshot::commit`] ran. The
 /// pooled reader must not return to the pool with a transaction still open.

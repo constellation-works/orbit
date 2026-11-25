@@ -248,7 +248,7 @@ impl crate::OrbitRuntime {
     /// recorded on its latest pass. Disabled settings report nothing.
     pub fn admission_resource_throttle(&self) -> ResourceAdmission {
         let mut admission = self.resource_admission();
-        if admission.throttle.is_none() && self.context.settings().resource_throttle().enabled {
+        if admission.throttle.is_none() && self.settings().resource_throttle().enabled {
             admission.throttle = self.live_drain_resource_throttle();
         }
         admission

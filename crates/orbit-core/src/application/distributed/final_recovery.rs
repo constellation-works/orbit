@@ -79,7 +79,7 @@ impl OrbitRuntime {
             task_id: claim.task_id.clone(),
             run_id: final_recovery.run_id.clone(),
             observed: observed.clone(),
-            repo_root: self.context.paths().repo_root.clone(),
+            repo_root: self.paths().repo_root.clone(),
             base_ref: self.owner_ship_contract().base_branch,
             completion: FinalRecoveryCompletion::Review,
             requeue_bound: FinalRecoveryRequeueBound::default(),

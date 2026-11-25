@@ -34,7 +34,7 @@ impl OrbitRuntime {
             return Ok(Vec::new());
         }
 
-        let repo_root = self.context.paths().repo_root.clone();
+        let repo_root = self.paths().repo_root.clone();
         let forge = self.task_pr_forge();
         let merged = forge.merged_pull_requests(&repo_root)?;
         let authors = OnceCell::new();
@@ -84,7 +84,7 @@ impl OrbitRuntime {
             .settlement_candidate(task, &carried)
             .map_err(|reason| refusal::refused(id, &reason))?;
 
-        let repo_root = self.context.paths().repo_root.clone();
+        let repo_root = self.paths().repo_root.clone();
         let forge = self.task_pr_forge();
         let mut fetched = Vec::new();
         for number in candidate.pr_numbers() {
@@ -93,12 +93,7 @@ impl OrbitRuntime {
         let Some(landing) = self.delivery_merge(&candidate, &fetched, &OnceCell::new())? else {
             let reason = match &candidate.revoked {
                 Some(revoked) => candidate::revoked_handoff_unmerged(
-                    &self
-                        .context
-                        .settings()
-                        .pr_settings()
-                        .conventions
-                        .branch_name,
+                    &self.settings().pr_settings().conventions.branch_name,
                     revoked,
                     fetched.first(),
                     id,

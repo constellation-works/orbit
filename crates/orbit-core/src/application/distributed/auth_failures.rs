@@ -279,7 +279,7 @@ impl OrbitRuntime {
     }
 
     pub(crate) fn provider_of_crew(&self, name: &str) -> Option<String> {
-        let crew = orbit_types::identity::find_crew(name, self.context.settings().crews())?;
+        let crew = orbit_types::identity::find_crew(name, self.settings().crews())?;
         Some(canonical_provider(&crew.assignment.provider))
     }
 
@@ -287,7 +287,7 @@ impl OrbitRuntime {
     /// when it sets `env`, `None` for its provider's default login or a crew
     /// this host does not define.
     pub(crate) fn account_of_crew(&self, name: &str) -> Option<String> {
-        orbit_types::identity::find_crew(name, self.context.settings().crews())?
+        orbit_types::identity::find_crew(name, self.settings().crews())?
             .account()
             .map(ToOwned::to_owned)
     }

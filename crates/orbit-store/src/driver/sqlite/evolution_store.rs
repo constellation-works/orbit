@@ -52,7 +52,7 @@ impl EvolutionStoreBackend for Store {
         })
     }
     fn evolution_records(&self, workspace: &str) -> Result<Vec<EvolutionRecord>, OrbitError> {
-        let conn = self.read()?;
+        let conn = self.read_connection()?;
         let mut stmt = conn
             .prepare("SELECT record_json FROM evolution_records WHERE workspace_id=?1 ORDER BY id")
             .map_err(sqlite_store_error)?;
@@ -62,7 +62,7 @@ impl EvolutionStoreBackend for Store {
             .collect()
     }
     fn evolution_costs(&self, workspace: &str) -> Result<Vec<EvolutionOccurrence>, OrbitError> {
-        let conn = self.read()?;
+        let conn = self.read_connection()?;
         let mut stmt = conn
             .prepare(
                 "SELECT event_json FROM evolution_costs WHERE workspace_id=?1 ORDER BY source_key",

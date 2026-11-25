@@ -183,7 +183,7 @@ impl OrbitRuntime {
             return true;
         }
 
-        let repo_root = self.context.paths().repo_root.clone();
+        let repo_root = self.paths().repo_root.clone();
         let forge = self.task_pr_forge();
         let open = match forge.open_pull_requests(&repo_root) {
             Ok(open) => open,
@@ -211,12 +211,7 @@ impl OrbitRuntime {
             .into_iter()
             .filter(|pr| {
                 names_task_delivery_pull_request(
-                    &self
-                        .context
-                        .settings()
-                        .pr_settings()
-                        .conventions
-                        .branch_name,
+                    &self.settings().pr_settings().conventions.branch_name,
                     &pr.head_branch,
                     &pr.body,
                     &task.id,
@@ -297,7 +292,7 @@ impl OrbitRuntime {
         forge: &dyn TaskPrForge,
         repo_root: &Path,
     ) -> Result<Vec<String>, OrbitError> {
-        let configured = &self.context.settings().pr_settings().delivery_authors;
+        let configured = &self.settings().pr_settings().delivery_authors;
         if configured.is_empty() {
             Ok(vec![
                 forge.authenticated_login(repo_root)?.to_ascii_lowercase(),

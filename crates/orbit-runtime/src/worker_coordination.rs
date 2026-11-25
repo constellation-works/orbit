@@ -123,6 +123,7 @@ impl RuntimeKernel {
     ) -> Result<Self, OrbitError> {
         invocation.validate()?;
         if self
+            .run()
             .worker_invocation
             .as_deref()
             .is_some_and(|old| old != &invocation)
@@ -131,20 +132,20 @@ impl RuntimeKernel {
                 "worker binding is immutable".into(),
             ));
         }
-        self.worker_invocation = Some(Arc::new(invocation));
-        self.owner_coordinator = Some(coordinator);
+        self.run_mut().worker_invocation = Some(Arc::new(invocation));
+        self.run_mut().owner_coordinator = Some(coordinator);
         Ok(self)
     }
 
     pub fn without_worker_routing(&self) -> Self {
         let mut owner = self.clone();
-        owner.worker_invocation = None;
-        owner.owner_coordinator = None;
+        owner.run_mut().worker_invocation = None;
+        owner.run_mut().owner_coordinator = None;
         owner
     }
 
     pub fn with_owner_coordinator(mut self, coordinator: Arc<dyn OwnerCoordinator>) -> Self {
-        self.owner_coordinator = Some(coordinator);
+        self.run_mut().owner_coordinator = Some(coordinator);
         self
     }
 
@@ -154,12 +155,12 @@ impl RuntimeKernel {
         mut self,
         transport: Arc<dyn orbit_tools::DrainOwnerTransport>,
     ) -> Self {
-        self.drain_owner_transport = Some(transport);
+        self.run_mut().drain_owner_transport = Some(transport);
         self
     }
 
     pub fn drain_owner_transport(&self) -> Option<&Arc<dyn orbit_tools::DrainOwnerTransport>> {
-        self.drain_owner_transport.as_ref()
+        self.run().drain_owner_transport.as_ref()
     }
 
     pub fn register_worker_process(&self, pid: u32) -> Result<(), OrbitError> {
@@ -171,7 +172,7 @@ impl RuntimeKernel {
     }
 
     pub fn worker_invocation(&self) -> Option<&WorkerInvocation> {
-        self.worker_invocation.as_deref()
+        self.run().worker_invocation.as_deref()
     }
 
     pub fn read_owner<T: serde::de::DeserializeOwned>(
@@ -283,6 +284,7 @@ impl RuntimeKernel {
         .flatten()
         .filter(|id| *id != bound.task_id);
         let owner = self
+            .run()
             .owner_coordinator
             .as_ref()
             .ok_or_else(|| OrbitError::PolicyDenied("owner destination unavailable".into()))?;

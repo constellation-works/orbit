@@ -121,7 +121,7 @@ impl OrbitRuntime {
         SubmissionNotices {
             kind,
             worker_containment_note: (self.host_os() == Some(orbit_types::task::HostOs::Macos)).then(|| {
-                if self.context.settings().worker_containment().enabled {
+                if self.settings().worker_containment().enabled {
                     "Worker containment: watchdog (1s polling), without kernel enforcement; strict requires kernel containment.".to_string()
                 } else {
                     "Worker containment: off; no watchdog or kernel limits.".to_string()

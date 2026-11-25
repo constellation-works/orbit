@@ -14,7 +14,7 @@ pub use crate::command::operation::CommandMeta;
 /// Feeds the **persistent** SQLite audit event store after runtime bootstrap.
 /// Bootstrap and preflight refusals do not instantiate this guard.
 ///
-/// This is a separate mechanism from the in-process `EventLog` (`OrbitRuntime.event_log`), which
+/// This is a separate mechanism from the in-process `EventLog` (`OrbitRuntime::event_log()`), which
 /// is session-scoped and not persisted. The two channels serve different purposes:
 /// - `AuditGuard` (this file): records structured CLI invocation metadata to SQLite; survives
 ///   process restarts; queryable via `orbit audit list`.

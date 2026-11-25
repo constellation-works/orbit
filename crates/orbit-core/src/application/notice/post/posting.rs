@@ -1,8 +1,6 @@
 use chrono::Duration;
 use orbit_common::{NoticeRefusalCode, OrbitError};
-use orbit_store::contracts::{
-    NoticePostPlan, NoticePostQuery, NoticePostSnapshot, NoticeStoreBackend as _,
-};
+use orbit_store::contracts::{NoticePosterEventFilter, NoticeScopeFilter};
 use orbit_types::record::{
     AuthorClass, Notice, NoticeKind, NoticeScope, NoticeWorkspace, PostOutcome,
     resident_status_notice_key,
@@ -11,7 +9,7 @@ use orbit_types::record::{
 use super::super::authority::{NoticeCaller, NoticePoster};
 use super::super::{NoticeAudit, limits, parse_notice_row, refuse};
 use super::request::NoticePostRequest;
-use super::transaction;
+use super::transaction::{self, NoticePostPlan, NoticePostSnapshot};
 use crate::OrbitRuntime;
 use crate::application::resident::ResidentControlState;
 
@@ -183,9 +181,11 @@ impl OrbitRuntime {
             id: workspace_id,
         };
         let store = self.sqlite_store()?;
-        let linked_done = self.linked_done_tasks(
-            &store.notice_rows(Some(std::slice::from_ref(&workspace.id)), true)?,
-        );
+        let existing = store
+            .read()?
+            .notice()
+            .list(NoticeScopeFilter::WorkspaceAndGlobal(&workspace.id))?;
+        let linked_done = self.linked_done_tasks(&existing);
         let events_since = match poster.class {
             // A resident's rate is hourly, like an orchestrator's.
             AuthorClass::Agent if poster.resident.is_some() => now - Duration::hours(1),
@@ -194,35 +194,57 @@ impl OrbitRuntime {
             AuthorClass::Operator | AuthorClass::System => now,
         };
         let purge_before = now - Duration::days(i64::from(limits::RETENTION_DAYS));
-        let query = NoticePostQuery {
-            workspace_id: &workspace.id,
+        let poster_events_filter = NoticePosterEventFilter {
+            since: events_since,
             poster_task_id: match poster.class {
                 AuthorClass::Agent => poster.task_id.as_deref(),
-                _ => None,
+                AuthorClass::Operator | AuthorClass::Orchestrator | AuthorClass::System => None,
             },
             poster_crew: match poster.class {
                 AuthorClass::Orchestrator => poster.crew.as_deref(),
-                _ => None,
+                AuthorClass::Operator | AuthorClass::Agent | AuthorClass::System => None,
             },
-            events_since,
-            purge_before: Some(purge_before),
         };
-        let outcome = std::cell::Cell::new(PostOutcome::Created);
-        let repeated = std::cell::Cell::new(false);
-        let decide = |snapshot: &NoticePostSnapshot| -> Result<NoticePostPlan, OrbitError> {
+        let (row, outcome, repeated) = store.write(|tx| {
+            let notices = tx.notice();
+            let snapshot = NoticePostSnapshot {
+                unclosed: notices.list_unclosed(&workspace.id)?,
+                poster_events: notices.list_poster_events(&poster_events_filter)?,
+                latest_events: notices.list_latest_events(&workspace.id)?,
+            };
             let (plan, decided) =
-                transaction::decide_post(poster, &workspace, &post, snapshot, &linked_done, now)?;
-            outcome.set(decided);
-            repeated.set(matches!(plan, NoticePostPlan::Unchanged { .. }));
-            Ok(plan)
-        };
-        let row = store.post_notice(&query, &decide)?;
+                transaction::decide_post(poster, &workspace, &post, &snapshot, &linked_done, now)?;
+            if !matches!(plan, NoticePostPlan::Unchanged { .. }) {
+                notices.purge_inactive(&workspace.id, purge_before)?;
+            }
+            match plan {
+                NoticePostPlan::Unchanged { row } => Ok((row, decided, true)),
+                NoticePostPlan::Insert { row, event } => {
+                    notices.put(&row)?;
+                    notices.put_event(&event)?;
+                    Ok((row, decided, false))
+                }
+                NoticePostPlan::Update {
+                    row,
+                    expected_revision,
+                    event,
+                } => {
+                    if !notices.replace_open(&row, expected_revision)? {
+                        return Err(OrbitError::Store(format!(
+                            "notice {} changed inside its posting transaction",
+                            row.id
+                        )));
+                    }
+                    notices.put_event(&event)?;
+                    Ok((row, decided, false))
+                }
+            }
+        })?;
         let mut notice = parse_notice_row(&row)?;
         notice.resolve_effective_status(now, None);
-        let outcome = outcome.get();
         audit.detail["outcome"] = serde_json::Value::String(outcome.as_str().to_string());
         audit.detail["request_fingerprint"] =
             serde_json::json!(post.request_fingerprint(poster, notice.scope));
-        Ok((NoticePostResult { notice, outcome }, repeated.get()))
+        Ok((NoticePostResult { notice, outcome }, repeated))
     }
 }

@@ -103,7 +103,7 @@ impl StoreRetentionBackend for Store {
         &self,
         workspace_id: &str,
     ) -> Result<Vec<crate::contracts::TaskLockDenialRecord>, OrbitError> {
-        let conn = self.read()?;
+        let conn = self.read_connection()?;
         let mut stmt = conn
             .prepare(
                 "SELECT execution_id, timestamp, job_run_id, arguments_json
@@ -125,7 +125,7 @@ impl StoreRetentionBackend for Store {
     }
 
     fn distinct_workspace_ids(&self, source: RetentionIdSource) -> Result<Vec<String>, OrbitError> {
-        let conn = self.read()?;
+        let conn = self.read_connection()?;
         distinct_workspace_ids(&conn, source)
     }
 
@@ -135,7 +135,7 @@ impl StoreRetentionBackend for Store {
         scope: RetentionWorkspaceScope<'_>,
         cutoff: DateTime<Utc>,
     ) -> Result<RetentionSelection, OrbitError> {
-        let conn = self.read()?;
+        let conn = self.read_connection()?;
         let cutoff = cutoff.to_rfc3339();
         let (rows, bytes) = match table {
             AuditRetentionTable::Command => conn
@@ -198,7 +198,7 @@ impl StoreRetentionBackend for Store {
         scope: RetentionWorkspaceScope<'_>,
         cutoff: DateTime<Utc>,
     ) -> Result<RetentionSelection, OrbitError> {
-        let conn = self.read()?;
+        let conn = self.read_connection()?;
         let sql = format!(
             "SELECT COUNT(*), COALESCE(SUM(octet_length(s.pipeline_state_json)), 0) {}",
             archivable_runs_sql()
@@ -266,7 +266,7 @@ impl StoreRetentionBackend for Store {
         scope: RetentionWorkspaceScope<'_>,
         cutoff: DateTime<Utc>,
     ) -> Result<JournalRetentionCandidates, OrbitError> {
-        let conn = self.read()?;
+        let conn = self.read_connection()?;
         let cutoff = cutoff.to_rfc3339();
         let mut stmt = conn
             .prepare(JOURNAL_CANDIDATES_SQL)
@@ -355,7 +355,7 @@ impl StoreRetentionBackend for Store {
     }
 
     fn store_space(&self) -> Result<StoreSpace, OrbitError> {
-        let conn = self.read()?;
+        let conn = self.read_connection()?;
         let pragma = |name: &str| -> Result<u64, OrbitError> {
             conn.query_row(&format!("PRAGMA {name}"), [], |row| row.get::<_, i64>(0))
                 .map(unsigned)
@@ -460,7 +460,7 @@ fn scan_chunks(
     visit: &mut dyn FnMut(&str),
 ) -> Result<(), OrbitError> {
     let through = store
-        .read()?
+        .read_connection()?
         .query_row(
             &format!("SELECT COALESCE(MAX(rowid), ?) FROM {table}"),
             [i64::MIN],
@@ -469,7 +469,7 @@ fn scan_chunks(
         .map_err(sqlite_store_error)?;
     let mut after = i64::MIN;
     while after < through {
-        let conn = store.read()?;
+        let conn = store.read_connection()?;
         let mut stmt = conn.prepare(sql).map_err(sqlite_store_error)?;
         let chunk = REFERENCE_SCAN_CHUNK;
         let mut bound: Vec<&dyn rusqlite::ToSql> = Vec::with_capacity(3 + extra.len());

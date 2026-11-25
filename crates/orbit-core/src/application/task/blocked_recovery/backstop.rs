@@ -44,7 +44,7 @@ impl OrbitRuntime {
                 "this replica checkout does not own its task records; machine '{owner}' recovers them"
             ));
         }
-        if self.context.settings().final_recovery_crews().is_empty() {
+        if self.settings().final_recovery_crews().is_empty() {
             return Some("`workflow.purpose_crews.final_recovery` is empty".to_string());
         }
         None

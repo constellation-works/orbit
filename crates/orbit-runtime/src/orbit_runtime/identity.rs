@@ -11,7 +11,7 @@ use crate::workspace::catalog;
 
 impl RuntimeKernel {
     pub fn with_actor(mut self, actor: ActorIdentity) -> Self {
-        self.context.set_actor(actor);
+        self.base_mut().set_actor(actor);
         self
     }
 
@@ -30,8 +30,8 @@ impl RuntimeKernel {
         mut self,
         location: Option<orbit_types::task::ExecutionLocation>,
     ) -> Self {
-        self.context.set_execution_location(location.clone());
-        self.automation_execution_location = location.map(Arc::new);
+        self.stored_mut().set_execution_location(location.clone());
+        self.run_mut().automation_execution_location = location.map(Arc::new);
         self
     }
 
@@ -41,14 +41,15 @@ impl RuntimeKernel {
     }
 
     pub fn automation_execution_location(&self) -> Option<&orbit_types::task::ExecutionLocation> {
-        self.automation_execution_location.as_deref()
+        self.run().automation_execution_location.as_deref()
     }
 
     /// Registered owner of the bound workspace, when composition supplied a
     /// binding that names one. Delivery automation resolves its default owner
     /// from this rather than from cwd or the running executor.
     pub fn workspace_owner_machine_id(&self) -> Option<&str> {
-        self.workspace_binding
+        self.base()
+            .workspace_binding
             .as_ref()
             .and_then(|binding| binding.owner_machine_id.as_deref())
     }
@@ -56,7 +57,7 @@ impl RuntimeKernel {
     /// Attach the declared remote owner for a replica checkout. This is set by
     /// the registry-owning composition layer, never inferred by Core.
     pub fn with_coordination_write_owner(mut self, owner_machine_id: Option<String>) -> Self {
-        self.coordination_write_owner = owner_machine_id.map(Arc::from);
+        self.run_mut().coordination_write_owner = owner_machine_id.map(Arc::from);
         self
     }
 
@@ -64,12 +65,12 @@ impl RuntimeKernel {
     /// the replica owner above, it is supplied by the registry-owning layer and
     /// never constructed by Core.
     pub fn with_workspace_catalog(mut self, catalog: Arc<dyn catalog::WorkspaceCatalog>) -> Self {
-        self.workspace_catalog = Some(catalog);
+        self.stored_mut().workspace_catalog = Some(catalog);
         self
     }
 
     pub fn workspace_catalog(&self) -> Option<&Arc<dyn catalog::WorkspaceCatalog>> {
-        self.workspace_catalog.as_ref()
+        self.stored().workspace_catalog.as_ref()
     }
 
     /// Attach data composition already loaded for this open.
@@ -77,13 +78,13 @@ impl RuntimeKernel {
     /// The kernel stores the snapshot and never reads it. Callers downcast to
     /// the concrete type they put in.
     pub fn with_composition_snapshot(mut self, snapshot: Arc<dyn Any + Send + Sync>) -> Self {
-        self.composition_snapshot = Some(snapshot);
+        self.base_mut().composition_snapshot = Some(snapshot);
         self
     }
 
     /// The snapshot [`Self::with_composition_snapshot`] stored, if any.
     pub fn composition_snapshot(&self) -> Option<&(dyn Any + Send + Sync)> {
-        self.composition_snapshot.as_deref()
+        self.base().composition_snapshot.as_deref()
     }
 
     /// Record the registry identity of this runtime's checkout as the open
@@ -91,7 +92,7 @@ impl RuntimeKernel {
     /// registry-owning composition layer; Core never loads the registry to
     /// refill it.
     pub fn with_opened_registered_workspace(mut self, identity: Option<(String, String)>) -> Self {
-        self.opened_registered_workspace = Some(identity);
+        self.base_mut().opened_registered_workspace = Some(identity);
         self
     }
 
@@ -99,11 +100,14 @@ impl RuntimeKernel {
     /// The outer `None` means this open carried no registry binding; the inner
     /// `None` is a recorded miss.
     pub fn opened_registered_workspace(&self) -> Option<Option<(&str, &str)>> {
-        self.opened_registered_workspace.as_ref().map(|identity| {
-            identity
-                .as_ref()
-                .map(|(id, name)| (id.as_str(), name.as_str()))
-        })
+        self.base()
+            .opened_registered_workspace
+            .as_ref()
+            .map(|identity| {
+                identity
+                    .as_ref()
+                    .map(|(id, name)| (id.as_str(), name.as_str()))
+            })
     }
 
     /// Why coordination writes are unavailable from this runtime, if they are.
@@ -116,7 +120,7 @@ impl RuntimeKernel {
                 "claimed coordination writes require the owner route".into(),
             ));
         }
-        let owner_machine_id = self.coordination_write_owner.as_deref()?;
+        let owner_machine_id = self.run().coordination_write_owner.as_deref()?;
         Some(OrbitError::CapabilityRefused(format!(
             "control_plane coordination writes are refused in this replica checkout; workspace is owned by machine '{owner_machine_id}'"
         )))
@@ -133,12 +137,12 @@ impl RuntimeKernel {
     }
 
     pub fn coordination_task_reads_visible(&self) -> bool {
-        self.coordination_write_owner.is_none()
+        self.run().coordination_write_owner.is_none()
     }
 
     /// The remote owner declared for a replica checkout, if this is one.
     pub fn coordination_write_owner(&self) -> Option<&str> {
-        self.coordination_write_owner.as_deref()
+        self.run().coordination_write_owner.as_deref()
     }
 
     /// The owner machine id when this runtime is a replica checkout, so a

@@ -163,7 +163,7 @@ impl OrbitRuntime {
         if recorded.is_empty() {
             return Ok(Vec::new());
         }
-        let repo_root = self.context.paths().repo_root.clone();
+        let repo_root = self.paths().repo_root.clone();
         let forge = self.task_pr_forge();
         let mut open = Vec::new();
         for number in recorded {
@@ -278,15 +278,10 @@ impl OrbitRuntime {
             ));
         }
         let pr = &pull.blockers.pull;
-        let authors = self.settlement_authors(&self.context.paths().repo_root);
+        let authors = self.settlement_authors(&self.paths().repo_root);
         if !candidate.pr_numbers().contains(&pr.number)
             || !orbit_types::task::names_task_delivery_pull_request(
-                &self
-                    .context
-                    .settings()
-                    .pr_settings()
-                    .conventions
-                    .branch_name,
+                &self.settings().pr_settings().conventions.branch_name,
                 &pr.head_branch,
                 &pr.body,
                 &task.id,
@@ -317,14 +312,9 @@ impl OrbitRuntime {
         candidate: &Candidate,
     ) -> Result<OpenDelivery, OrbitError> {
         let id = candidate.task.id.as_str();
-        let repo_root = self.context.paths().repo_root.clone();
+        let repo_root = self.paths().repo_root.clone();
         let forge = self.task_pr_forge();
-        let branches = &self
-            .context
-            .settings()
-            .pr_settings()
-            .conventions
-            .branch_name;
+        let branches = &self.settings().pr_settings().conventions.branch_name;
         let mut open = Vec::new();
         for number in candidate.pr_numbers() {
             if let Some(pull) = forge.open_pull_request(&repo_root, number)? {
@@ -390,7 +380,7 @@ impl OrbitRuntime {
         require_passed_check: bool,
         attribution: &super::PullRequestMergeAttribution<'_>,
     ) -> Result<DeliveryMergeOutcome, OrbitError> {
-        let repo_root = self.context.paths().repo_root.clone();
+        let repo_root = self.paths().repo_root.clone();
         let forge = self.task_pr_forge();
         let blockers = match await_known_merge_blockers(number, forge, &repo_root)? {
             KnownMergeBlockers::Ready(blockers) => blockers,
