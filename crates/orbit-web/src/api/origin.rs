@@ -70,16 +70,7 @@ pub(crate) async fn require_localhost_origin(
         return gate.refuse(RefusalReason::OriginMismatch);
     }
 
-    if request
-        .headers()
-        .get_all("sec-fetch-site")
-        .iter()
-        .any(|site| {
-            !site
-                .to_str()
-                .is_ok_and(|site| matches!(site, "same-origin" | "none"))
-        })
-    {
+    if !fetch_site_allowed(request.headers()) {
         return gate.refuse(RefusalReason::SecFetchSite);
     }
 
@@ -102,7 +93,8 @@ pub(crate) async fn require_localhost_origin(
 /// including the trusted-host login check) and, when supplied, a single
 /// `Origin` matching it. Origin-free safe navigation remains allowed. The
 /// dashboard shell and embedded assets use this gate so a rebound Host or an
-/// untrusted Origin cannot read them.
+/// untrusted Origin cannot read them. Trusted hosts also enforce Fetch Metadata;
+/// loopback asset requests retain their existing behavior.
 pub(crate) async fn require_localhost_host(
     State(access): State<Arc<RemoteAccess>>,
     request: Request<Body>,
@@ -111,6 +103,9 @@ pub(crate) async fn require_localhost_host(
     let Some(gate) = Gate::open(&request, &access) else {
         return forbidden_cross_origin();
     };
+    if matches!(gate.host, AdmittedHost::Trusted { .. }) && !fetch_site_allowed(request.headers()) {
+        return gate.refuse(RefusalReason::SecFetchSite);
+    }
     let origins = request.headers().get_all(header::ORIGIN);
     if origins.iter().count() > 1 {
         return gate.refuse(RefusalReason::OriginMismatch);
@@ -126,6 +121,13 @@ pub(crate) async fn require_localhost_host(
         }
     }
     gate.admit(request, next).await
+}
+
+fn fetch_site_allowed(headers: &HeaderMap) -> bool {
+    headers.get_all("sec-fetch-site").iter().all(|site| {
+        site.to_str()
+            .is_ok_and(|site| matches!(site, "same-origin" | "none"))
+    })
 }
 
 /// One request through either gate after Host admission: records what a

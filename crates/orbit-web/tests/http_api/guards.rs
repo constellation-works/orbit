@@ -1164,6 +1164,59 @@ fn trusted_host_admits_only_a_listed_tailscale_login_and_its_https_origin() {
                 );
             }
 
+            for path in ["/", "/static/dashboard.css"] {
+                for site in ["cross-site", "same-site", "unexpected"] {
+                    let response = send(
+                        "GET",
+                        path,
+                        &[("host", host), login, ("sec-fetch-site", site)],
+                    );
+                    assert_eq!(response.status().as_u16(), 403, "{path} {site}");
+                    assert_eq!(
+                        response.json::<Value>().unwrap(),
+                        json!({"error":"cross-origin requests not allowed"})
+                    );
+                }
+                let response = send(
+                    "GET",
+                    path,
+                    &[
+                        ("host", host),
+                        login,
+                        ("sec-fetch-site", "same-origin"),
+                        ("sec-fetch-site", "cross-site"),
+                    ],
+                );
+                assert_eq!(response.status().as_u16(), 403, "{path} duplicate metadata");
+                for site in ["same-origin", "none"] {
+                    assert!(
+                        send(
+                            "GET",
+                            path,
+                            &[("host", host), login, ("sec-fetch-site", site)]
+                        )
+                        .status()
+                        .is_success(),
+                        "{path} {site}"
+                    );
+                }
+                assert!(
+                    send("GET", path, &[("host", host), login])
+                        .status()
+                        .is_success()
+                );
+                assert!(
+                    send(
+                        "GET",
+                        path,
+                        &[("host", "localhost"), ("sec-fetch-site", "cross-site")]
+                    )
+                    .status()
+                    .is_success(),
+                    "loopback {path}"
+                );
+            }
+
             let refused = [
                 ("GET", api, vec![("host", host)]),
                 ("GET", "/", vec![("host", host)]),

@@ -213,8 +213,8 @@ pub(crate) fn health_router(state: &state::DashboardState) -> Router<state::Dash
 /// The complete dashboard app: embedded assets, `/healthz` and `/api`, all
 /// behind [`security_headers`]. The embedded assets require an admitted Host
 /// (loopback, or a trusted host with a listed Tailscale login) and validate a
-/// supplied Origin (STD-05 §§R16–R17), so a rebound hostname or untrusted
-/// Origin cannot read the shell.
+/// supplied Origin (STD-05 §§R16–R17). Trusted hosts also enforce Fetch
+/// Metadata on the shell and assets.
 pub(crate) fn build_app(state: state::DashboardState) -> Result<Router, OrbitError> {
     Ok(assets::dashboard_file_router()?
         .layer(middleware::from_fn_with_state(
@@ -524,7 +524,8 @@ pub(crate) async fn drain_with_grace_period(
 /// Request-level checks in [`api::require_localhost_origin`] mitigate browser
 /// CSRF (`Origin`, ORB-11613) and DNS rebinding (`Host`, ORB-12506), and
 /// [`api::require_localhost_host`] applies the Host check and any supplied
-/// Origin check to the shell and assets. All inspect client-supplied headers
+/// Origin check to the shell and assets, plus Fetch Metadata on trusted hosts.
+/// All inspect client-supplied headers
 /// and are trivially spoofable by any non-browser client (curl, a LAN script).
 /// They are NOT an access-control boundary. Binding to a non-loopback address
 /// would expose the full unauthenticated read/write API to the network, so we
