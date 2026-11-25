@@ -453,8 +453,8 @@ fn plugin_sections_from_raw(
             return Err(config_document::invalid_runtime_config(
                 config_path,
                 format!(
-                    "'[plugins.{namespace}]' is not a plugin namespace: \
-                     use lowercase letters, digits or '-', starting with a letter"
+                    "'[plugins.{namespace}]' is not a plugin namespace: {}",
+                    orbit_types::plugin::namespace_refusal(namespace)
                 ),
             ));
         }

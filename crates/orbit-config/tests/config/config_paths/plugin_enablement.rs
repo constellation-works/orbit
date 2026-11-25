@@ -186,3 +186,23 @@ fn a_toggle_only_workspace_file_keeps_the_security_keys_inherited() {
         );
     }
 }
+
+/// `orbit` passes the character rule and is refused only as the reserved
+/// first-party prefix, so the toggle refusal must name that reason [ORB-28536].
+#[test]
+fn reserved_orbit_toggle_is_refused_by_reason() {
+    let global = tempdir().expect("global tempdir");
+    let workspace = tempdir().expect("workspace tempdir");
+    write_config(workspace.path(), "[plugin_enablement]\norbit = true\n");
+
+    let error = load_workspace_plugin_enablement(&ConfigRoots::new(
+        global.path(),
+        workspace.path(),
+    ))
+    .expect_err("a toggle under the reserved orbit key is refused");
+    let message = error.to_string();
+    assert!(
+        message.contains("reserved"),
+        "[plugin_enablement] orbit must be refused as the reserved namespace [ORB-28536]: {message}"
+    );
+}

@@ -78,9 +78,8 @@ pub(crate) fn plugin_enablement_from_document(
             return Err(config_document::invalid_runtime_config(
                 path,
                 format!(
-                    "'{PLUGIN_ENABLEMENT_TABLE}.{namespace}' is not a \
-                     plugin namespace: use lowercase letters, digits or '-', starting with a \
-                     letter"
+                    "'{PLUGIN_ENABLEMENT_TABLE}.{namespace}' is not a plugin namespace: {}",
+                    orbit_types::plugin::namespace_refusal(namespace)
                 ),
             ));
         }

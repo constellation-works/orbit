@@ -1,7 +1,8 @@
 use orbit_types::plugin::{
-    PluginBackend, PluginBackendType, PluginExecutionKind, PluginManifest, PluginMcpScope,
-    PluginMetadata, PluginPanelGroup, PluginPanelRender, PluginPermissions, PluginRequires,
-    PluginSandbox, PluginSpec, PluginToolSpec, PluginWebLink, PluginWebPanel, PluginWebSection,
+    PluginBackend, PluginBackendType, PluginCliShape, PluginExecutionKind, PluginManifest,
+    PluginMcpScope, PluginMetadata, PluginPanelGroup, PluginPanelRender, PluginPermissions,
+    PluginRequires, PluginSandbox, PluginSpec, PluginToolSpec, PluginWebLink, PluginWebPanel,
+    PluginWebSection,
 };
 
 fn minimal() -> PluginManifest {
@@ -338,6 +339,50 @@ fn namespace_with_underscore_is_refused_without_offering_underscore() {
     assert!(
         !error.message.contains("'_'"),
         "diagnostic must not offer '_' as allowed: {}",
+        error.message
+    );
+}
+
+/// A digit-leading tool name, CLI override or panel id already meets the
+/// character list, so its refusal must state the initial-letter rule
+/// [ORB-28536].
+#[test]
+fn digit_leading_names_are_refused_with_the_initial_letter_rule() {
+    const RULE: &str = "start with a lowercase letter";
+
+    let mut manifest = minimal();
+    manifest.spec.tools[0].name = "1hello".into();
+    let error = manifest.validate_structure().unwrap_err();
+    assert_eq!(error.field, "spec.tools[0].name");
+    assert!(
+        error.message.contains(RULE),
+        "a digit-leading tool name must state the initial-letter rule [ORB-28536]: {}",
+        error.message
+    );
+
+    let mut manifest = minimal();
+    manifest.spec.tools[0].cli = Some(PluginCliShape {
+        verb: Some("1run".into()),
+        positional: vec![],
+    });
+    let error = manifest.validate_structure().unwrap_err();
+    assert_eq!(error.field, "spec.tools[0].cli.verb");
+    assert!(
+        error.message.contains(RULE),
+        "a digit-leading CLI override must state the initial-letter rule [ORB-28536]: {}",
+        error.message
+    );
+
+    let mut manifest = minimal();
+    manifest.spec.web = Some(PluginWebSection {
+        panels: vec![panel("1index", "tool:hello")],
+        links: vec![],
+    });
+    let error = manifest.validate_structure().unwrap_err();
+    assert_eq!(error.field, "spec.web.panels[0].id");
+    assert!(
+        error.message.contains(RULE),
+        "a digit-leading panel id must state the initial-letter rule [ORB-28536]: {}",
         error.message
     );
 }

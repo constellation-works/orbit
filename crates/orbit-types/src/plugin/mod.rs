@@ -48,7 +48,7 @@ pub use manifest::{
 };
 pub use namespace::{
     FIRST_PARTY_PUBLISHER, ORBIT_NAMESPACE_PREFIX, RESERVED_CLI_COMMANDS, is_valid_namespace,
-    is_valid_verb, namespace_collides_with_tool, plugin_tool_name,
+    is_valid_verb, namespace_collides_with_tool, namespace_refusal, plugin_tool_name,
 };
 pub use pin::{
     PIN_FILE_NAME, PIN_FILE_SCHEMA_VERSION, PLUGIN_ARCHIVE_EXTENSIONS, PluginPin, PluginPinFile,
