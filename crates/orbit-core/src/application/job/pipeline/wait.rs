@@ -24,7 +24,8 @@ pub(crate) trait PipelineWaitClock {
 struct SystemPipelineWaitClock {
     started_at: Instant,
     /// Milliseconds the virtual clock has advanced. Absent unless
-    /// `ORBIT_TEST_PIPELINE_WAIT_VIRTUAL` is `1` in a debug `test-support` build.
+    /// `ORBIT_TEST_PIPELINE_WAIT_VIRTUAL` is `1` in a debug build with the
+    /// `test-support` feature or in a unit-test binary.
     #[cfg(all(debug_assertions, any(test, feature = "test-support")))]
     virtual_millis: Option<AtomicU64>,
 }

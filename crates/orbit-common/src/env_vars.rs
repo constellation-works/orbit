@@ -508,13 +508,13 @@ env_vars! {
     );
     #[test_support]
     const ORBIT_TEST_MERGEABILITY_WAIT: orbit_test_mergeability_wait = (
-        "Set to `virtual` in debug builds to exercise mergeability polling without real delays.",
-        "Real polling delays.",
+        "Set to `virtual` to exercise mergeability polling without real delays. Honored only in a debug build with the `test-support` feature or in a unit-test binary.",
+        "Real polling delays. A release build, or a debug build without `test-support` and outside a unit-test binary, always polls in real time.",
     );
     #[test_support]
     const ORBIT_TEST_PIPELINE_WAIT_VIRTUAL: orbit_test_pipeline_wait_virtual = (
-        "Set to `1` in debug builds to use a virtual clock for pipeline wait fixtures.",
-        "Real clock.",
+        "Set to `1` to use a virtual clock for pipeline wait fixtures. Honored only in a debug build with the `test-support` feature or in a unit-test binary.",
+        "Real clock. A release build, or a debug build without `test-support` and outside a unit-test binary, always uses the real clock.",
     );
     #[debug_hook]
     const ORBIT_TEST_RELAXED_DURABILITY: orbit_test_relaxed_durability = (
