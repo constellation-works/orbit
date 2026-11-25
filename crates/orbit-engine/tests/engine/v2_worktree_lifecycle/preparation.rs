@@ -159,7 +159,7 @@ fn run_job(
     );
     let logs = TempDir::new().unwrap();
     let envelope = Arc::new(orbit_engine::V2SqliteSink::for_audit_root(
-        Arc::new(orbit_store::Store::open_in_memory().unwrap()),
+        orbit_store::Store::open_in_memory().unwrap(),
         "ws_preparation",
         &prepared.run_id,
         logs.path(),

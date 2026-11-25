@@ -97,7 +97,7 @@ fn launch_cycle_step(fx: &Fixture, run: &str, brief: &Value) {
     resume.step_outputs.insert(0, brief.clone());
     let audit = V2AuditWriter::with_disk_sinks(
         &fx._root.path().join("audit"),
-        Arc::new(orbit_store::Store::open_in_memory().unwrap()),
+        orbit_store::Store::open_in_memory().unwrap(),
         fx.runtime.workspace_id().unwrap(),
         run,
         "codex:test",

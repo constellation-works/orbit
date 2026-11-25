@@ -236,17 +236,19 @@ impl AgentsFixture {
         self.runtime
             .sqlite_store()
             .unwrap()
-            .begin_agent_execution(
-                &self.workspace,
-                run_id,
-                "implement_one",
-                agent,
-                Some("model-fixture"),
-                &orbit_types::telemetry::AgentExecutionIdentity {
-                    crew: Some(crew.into()),
-                    reasoning_effort: effort,
-                },
-            )
+            .write(|tx| {
+                tx.invocation().insert_agent_execution(
+                    &self.workspace,
+                    run_id,
+                    "implement_one",
+                    agent,
+                    Some("model-fixture"),
+                    &orbit_types::telemetry::AgentExecutionIdentity {
+                        crew: Some(crew.into()),
+                        reasoning_effort: effort,
+                    },
+                )
+            })
             .unwrap()
     }
 
@@ -300,18 +302,20 @@ impl AgentsFixture {
         self.runtime
             .sqlite_store()
             .unwrap()
-            .insert_v2_audit_event(&orbit_core::V2AuditEventInsertParams {
-                workspace_id: self.workspace.clone(),
-                event_id,
-                source: "fixture".into(),
-                schema_version: 1,
-                event_type: event_type.into(),
-                ts,
-                run_id: run_id.into(),
-                agent_identity: "system".into(),
-                parent_event_id,
-                workspace_path: None,
-                payload_json: payload.to_string(),
+            .write(|tx| {
+                tx.v2_audit().insert(&orbit_core::V2AuditEventInsertParams {
+                    workspace_id: self.workspace.clone(),
+                    event_id: event_id.clone(),
+                    source: "fixture".into(),
+                    schema_version: 1,
+                    event_type: event_type.into(),
+                    ts,
+                    run_id: run_id.into(),
+                    agent_identity: "system".into(),
+                    parent_event_id: parent_event_id.clone(),
+                    workspace_path: None,
+                    payload_json: payload.to_string(),
+                })
             })
             .unwrap();
     }

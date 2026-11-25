@@ -3,7 +3,6 @@
 //! backlog tasks and the other recovery outcomes keep their behavior.
 
 use std::collections::BTreeMap;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use chrono::Utc;
@@ -227,7 +226,7 @@ fn fail_pipeline_with(
 ) -> (Value, Vec<(String, Option<String>)>) {
     let audit = V2AuditWriter::with_disk_sinks(
         &fixture.repo.join("audit"),
-        Arc::new(orbit_store::Store::open_in_memory().unwrap()),
+        orbit_store::Store::open_in_memory().unwrap(),
         "ws_fixture",
         run,
         "fixture",

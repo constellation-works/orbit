@@ -2,7 +2,6 @@
 use super::*;
 use orbit_engine::activity_job::{load_activity_asset, load_job_asset};
 use orbit_engine::{FinalRecoveryAdmissionRequest, V2AuditWriter, execute_job_with_resume};
-use std::sync::Arc;
 
 #[path = "completion/mutation.rs"]
 pub(super) mod mutation;
@@ -220,7 +219,7 @@ fn run_tail(
     let state = f.runtime.read_run_state(&f.source.run_id).unwrap().unwrap();
     let audit = V2AuditWriter::with_disk_sinks(
         &f.repo.join(".orbit/tmp/tail-audit"),
-        Arc::new(orbit_store::Store::open_in_memory().unwrap()),
+        orbit_store::Store::open_in_memory().unwrap(),
         "ws_fixture",
         &f.source.run_id,
         "fixture",

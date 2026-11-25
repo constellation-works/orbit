@@ -900,7 +900,7 @@ impl CleanLeaf {
         resume.record_step(2, JobRunState::Success, Some(committed), None);
         let audit = V2AuditWriter::with_disk_sinks(
             &self.pair.follower_repo.join(".orbit/tmp/pipeline-audit"),
-            self.bound.v2_audit_store().unwrap(),
+            self.bound.stores().host_store().clone(),
             self.bound.workspace_id().unwrap(),
             &self.leaf,
             "clean-leaf-fixture",

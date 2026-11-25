@@ -618,7 +618,7 @@ fn repair_host<'a>(fixture: &'a Fixture, repair: &'static str) -> RepairPipeline
 fn audit(fixture: &Fixture, run: &str) -> Arc<V2AuditWriter> {
     V2AuditWriter::with_disk_sinks(
         &fixture.repo.join(".orbit/tmp/audit"),
-        Arc::new(orbit_store::Store::open_in_memory().unwrap()),
+        orbit_store::Store::open_in_memory().unwrap(),
         "ws_fixture",
         run,
         "fixture",

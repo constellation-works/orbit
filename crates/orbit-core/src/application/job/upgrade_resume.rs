@@ -233,16 +233,18 @@ impl OrbitRuntime {
 
     /// Whether an earlier tick already resumed or skipped `run_id`.
     fn upgrade_resume_decided(&self, run_id: &str) -> Result<bool, OrbitError> {
-        let decisions = self
-            .stores()
-            .audit_events()
-            .list_audit_events(&AuditEventFilter {
-                tool_name: Some(UPGRADE_RESUME_AUDIT.to_string()),
-                status: Some(AuditEventStatus::Success),
-                job_run_id: Some(run_id.to_string()),
-                limit: 1,
-                ..AuditEventFilter::default()
-            })?;
+        let decisions =
+            self.stores()
+                .host_store()
+                .read()?
+                .audit_event()
+                .list(&AuditEventFilter {
+                    tool_name: Some(UPGRADE_RESUME_AUDIT.to_string()),
+                    status: Some(AuditEventStatus::Success),
+                    job_run_id: Some(run_id.to_string()),
+                    limit: 1,
+                    ..AuditEventFilter::default()
+                })?;
         Ok(!decisions.is_empty())
     }
 

@@ -8,7 +8,7 @@ use crate::contracts::{DEFAULT_SCAN_LIMIT, FailureIncidentQuery};
 use crate::store::Snapshot;
 use rusqlite::Connection;
 
-use crate::driver::sqlite::audit_event_store::{AUDIT_EVENT_COLUMNS, audit_event_from_row};
+use crate::repository::audit::event::{AUDIT_EVENT_COLUMNS, audit_event_from_row};
 
 /// Read the audit rows from which the application derives incident reports.
 pub struct IncidentRepository<'a> {

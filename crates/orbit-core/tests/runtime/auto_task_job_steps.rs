@@ -296,7 +296,6 @@ fn receipts_respect_step_expiry_after_downtime() {
         AUTO_TASK_CHECKPOINT_VERSION, AutoTaskRunCheckpoint, AutoTaskStepRecord,
         AutoTaskStepStatus, PipelineState,
     };
-    use std::sync::Arc;
 
     struct ReceiptHost<'a> {
         runtime: &'a OrbitRuntime,
@@ -394,7 +393,7 @@ fn receipts_respect_step_expiry_after_downtime() {
             tempfile::tempdir_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
         let audit = V2AuditWriter::with_disk_sinks(
             audit_dir.path(),
-            Arc::new(orbit_store::Store::open_in_memory().unwrap()),
+            orbit_store::Store::open_in_memory().unwrap(),
             "fixture",
             &run.run_id,
             "fixture",

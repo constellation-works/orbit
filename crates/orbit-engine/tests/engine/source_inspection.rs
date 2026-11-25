@@ -187,7 +187,7 @@ fn pilot(provider: Provider) -> ActivityV2Spec {
 fn writer(root: &Path) -> Arc<V2AuditWriter> {
     V2AuditWriter::with_disk_sinks(
         &root.join("audit"),
-        Arc::new(Store::open_in_memory().unwrap()),
+        Store::open_in_memory().unwrap(),
         "fixture",
         "inspection-fixture",
         "pilot",

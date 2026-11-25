@@ -339,7 +339,7 @@ fn store_read_faults_retain_supervision_and_reap_in_a_live_parent() {
         });
         let supervisor = PipelineWorkerSupervisor::new(
             faults,
-            orbit_store::compose::audit_event_store_sqlite(database),
+            database,
             paths.clone(),
             EventLog::default(),
             WorkerCommandConfig::for_paths(&paths, &orbit_common::Env::capture()),
@@ -545,7 +545,7 @@ fn a_sigterm_stopped_worker_keeps_its_rescue_candidate_before_terminalizing() {
     let preserved = Arc::new(Mutex::new(Vec::new()));
     let supervisor = PipelineWorkerSupervisor::new(
         runs.clone(),
-        orbit_store::compose::audit_event_store_sqlite(database),
+        database,
         paths.clone(),
         EventLog::default(),
         WorkerCommandConfig::for_paths(&paths, &orbit_common::Env::capture()),
@@ -611,7 +611,7 @@ fn a_sigkilled_worker_keeps_its_rescue_candidate_before_terminalizing() {
     let provider_probes = Arc::new(AtomicUsize::new(0));
     let supervisor = PipelineWorkerSupervisor::new(
         runs.clone(),
-        orbit_store::compose::audit_event_store_sqlite(database),
+        database,
         paths.clone(),
         EventLog::default(),
         WorkerCommandConfig::for_paths(&paths, &orbit_common::Env::capture()),

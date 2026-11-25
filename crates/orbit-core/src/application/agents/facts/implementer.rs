@@ -106,16 +106,11 @@ fn runs_without_implementing_activity(
     run_ids: &BTreeSet<String>,
 ) -> Result<HashSet<String>, orbit_common::OrbitError> {
     let workspace_id = runtime.workspace_id()?;
-    let store = runtime.v2_audit_store()?;
+    let snapshot = runtime.stores().host_store().read()?;
+    let v2 = snapshot.v2_audit();
     let run_ids: Vec<String> = run_ids.iter().cloned().collect();
     let read = |kind: &str, limit: usize| {
-        store.list_v2_audit_events_for_runs_partitioned(
-            &workspace_id,
-            &run_ids,
-            None,
-            Some(kind),
-            limit,
-        )
+        v2.list_for_runs_partitioned(&workspace_id, &run_ids, None, Some(kind), limit)
     };
     let started: HashSet<String> = read("run_started", 1)?
         .into_iter()

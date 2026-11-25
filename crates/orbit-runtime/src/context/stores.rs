@@ -3,24 +3,20 @@ use orbit_config::{CodexExecutionPolicy, ExecutionEnvPolicy};
 use orbit_policy::PolicyEngine;
 use orbit_search::LexicalIndex;
 use orbit_store::contracts::{
-    AuditEventStoreBackend, InvocationStoreBackend, JobRunStoreBackend, TaskArtifactStoreBackend,
-    TaskDocumentStoreBackend, TaskHistoryStoreBackend, TaskReservationStoreBackend,
-    TaskStoreBackend, V2AuditStoreBackend,
+    JobRunStoreBackend, TaskArtifactStoreBackend, TaskDocumentStoreBackend,
+    TaskHistoryStoreBackend, TaskReservationStoreBackend, TaskStoreBackend,
 };
 use orbit_store::skill_store::SkillDirs;
 use orbit_store::{ExecutorDefDir, FileStore, PolicyDefDirs, Store};
 use orbit_tools::ToolRegistry;
 use std::sync::Arc;
 
-/// Host SQLite handle plus the feature backends composed from it.
+/// Host SQLite handle.
 ///
-/// These wrap the same writer connection the runtime opened at construction.
-/// Accessors clone the handles; they must not call `Store::open` again.
+/// Accessors clone the handle; they must not call `Store::open` again.
 #[derive(Clone)]
 pub(crate) struct OrbitHostStore {
     pub(crate) sqlite: Store,
-    pub(crate) v2_audit: Arc<dyn V2AuditStoreBackend>,
-    pub(crate) invocation: Arc<dyn InvocationStoreBackend>,
 }
 
 #[derive(Clone)]
@@ -32,7 +28,6 @@ pub struct OrbitStores {
     pub(crate) lexical_index: LexicalIndex,
     pub(crate) task_reservation: Arc<dyn TaskReservationStoreBackend>,
     pub job_run: Arc<dyn JobRunStoreBackend>,
-    pub audit_event: Arc<dyn AuditEventStoreBackend>,
     pub(crate) executor_def: FileStore<ExecutorDefDir>,
     pub(crate) policy_def: FileStore<PolicyDefDirs>,
     pub(crate) host: OrbitHostStore,
@@ -48,7 +43,6 @@ impl OrbitStores {
         lexical_index: LexicalIndex,
         task_reservation: Arc<dyn TaskReservationStoreBackend>,
         job_run: Arc<dyn JobRunStoreBackend>,
-        audit_event: Arc<dyn AuditEventStoreBackend>,
         executor_def: FileStore<ExecutorDefDir>,
         policy_def: FileStore<PolicyDefDirs>,
         host: OrbitHostStore,
@@ -61,7 +55,6 @@ impl OrbitStores {
             lexical_index,
             task_reservation,
             job_run,
-            audit_event,
             executor_def,
             policy_def,
             host,
@@ -96,10 +89,6 @@ impl OrbitStores {
 
     pub fn jobs(&self) -> &dyn JobRunStoreBackend {
         self.job_run.as_ref()
-    }
-
-    pub fn audit_events(&self) -> &dyn AuditEventStoreBackend {
-        self.audit_event.as_ref()
     }
 
     /// The host SQLite store: tool, plugin and script grant records, among

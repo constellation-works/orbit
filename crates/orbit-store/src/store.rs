@@ -1,14 +1,18 @@
 //! Store facade: consistent read snapshots (`Store::read`) and IMMEDIATE write
 //! transactions (`Store::write`) over the host SQLite driver.
 
+use std::path::Path;
+
 use orbit_common::OrbitError;
 use orbit_common::storage::sqlite::sqlite_store_error;
 use rusqlite::{Connection, TransactionBehavior};
 
 use crate::Store;
+use crate::contracts::{AuditEventInsertParams, AuditInvocationFields};
 use crate::driver::sqlite::host::read_pool::ReadGuard;
 use crate::repository::admission_load::AdmissionLoadRepository;
 use crate::repository::application_consent::ApplicationConsentRepository;
+use crate::repository::audit::{AuditEventRepository, V2AuditRepository};
 use crate::repository::automation::AutomationRepository;
 use crate::repository::backlog_forecast::BacklogForecastRepository;
 use crate::repository::codebase_fact::{AgentFactRepository, CodebaseFactRepository};
@@ -18,6 +22,7 @@ use crate::repository::evolution::EvolutionRepository;
 use crate::repository::experiment::{ExperimentAssignmentRepository, ExperimentRepository};
 use crate::repository::friction::FrictionRepository;
 use crate::repository::incident::IncidentRepository;
+use crate::repository::invocation::InvocationRepository;
 use crate::repository::landed_diff::LandedDiffRepository;
 use crate::repository::notice::NoticeRepository;
 use crate::repository::plugin::PluginRepository;
@@ -43,6 +48,21 @@ pub struct Snapshot<'a> {
 impl Snapshot<'_> {
     pub(crate) fn connection(&self) -> &Connection {
         &self.conn
+    }
+
+    /// Read-only access to command audit-event records in this snapshot.
+    pub fn audit_event(&self) -> AuditEventRepository<'_, Self> {
+        AuditEventRepository::for_snapshot(self)
+    }
+
+    /// Read-only access to v2 workflow audit-envelope records in this snapshot.
+    pub fn v2_audit(&self) -> V2AuditRepository<'_, Self> {
+        V2AuditRepository::for_snapshot(self)
+    }
+
+    /// Read-only access to invocation trace and agent-execution records in this snapshot.
+    pub fn invocation(&self) -> InvocationRepository<'_, Self> {
+        InvocationRepository::for_snapshot(self)
     }
 
     /// Read-only access to host automation records.
@@ -194,6 +214,21 @@ impl Tx<'_> {
     // use the legacy wrapper for this same transaction.
     pub(crate) fn legacy(&self) -> &crate::StoreTx<'_> {
         self.transaction
+    }
+
+    /// Read-write access to command audit-event records inside this transaction.
+    pub fn audit_event(&self) -> AuditEventRepository<'_, Self> {
+        AuditEventRepository::for_tx(self)
+    }
+
+    /// Read-write access to v2 workflow audit-envelope records inside this transaction.
+    pub fn v2_audit(&self) -> V2AuditRepository<'_, Self> {
+        V2AuditRepository::for_tx(self)
+    }
+
+    /// Read-write access to invocation trace and agent-execution records inside this transaction.
+    pub fn invocation(&self) -> InvocationRepository<'_, Self> {
+        InvocationRepository::for_tx(self)
     }
 
     /// Read-write access to host admission-load records inside this transaction.
@@ -349,5 +384,23 @@ impl Store {
             };
             op(&tx)
         })
+    }
+
+    /// Append one audit row at `path` outside [`Store::write`].
+    ///
+    /// Named second write path for audit lines that cannot share an ordinary
+    /// writable [`Store`] handle or must survive independently of an outer
+    /// command: foreign-generation read-only readers (`is_write_free`) hold a
+    /// read-only handle and must record CLI/tool telemetry without widening
+    /// state access or running migrations, and checkout-rebind recovery appends
+    /// its audit line directly without opening the full store. Opens a narrow
+    /// `NOFOLLOW` connection, checks `current_schema_version == SUPPORTED_SCHEMA_VERSION`,
+    /// and commits in its own `IMMEDIATE` transaction.
+    pub fn append_audit_event_at_path(
+        path: &Path,
+        params: &AuditEventInsertParams,
+        invocation: AuditInvocationFields<'_>,
+    ) -> Result<(), OrbitError> {
+        crate::repository::audit::event::append_at_path(path, params, invocation)
     }
 }

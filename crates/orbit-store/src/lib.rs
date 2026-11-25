@@ -70,15 +70,15 @@ pub use contracts::incident::{
     is_failure_only_diagnostic_surface,
 };
 pub(crate) use contracts::{
-    ActiveTaskReservation, AuditActorAggregate, AuditAttributionAggregate, AuditRoleAggregate,
-    ExpiredTaskReservation, ReleasedTaskReservation, TaskReservationCheckParams,
-    TaskReservationCheckResult, TaskReservationListResult, TaskReservationOwnedConflictsParams,
-    TaskReservationOwnedConflictsResult, TaskReservationRecord,
-    TaskReservationReleaseByOwnerParams, TaskReservationReleaseByOwnerResult,
-    TaskReservationReleaseParams, TaskReservationReleaseResult, TaskReservationReserveResult,
-    TaskReservationScope, WorkspaceClaimAcquireParams, WorkspaceClaimAcquireResult,
-    WorkspaceClaimCheckParams, WorkspaceClaimCheckResult, WorkspaceClaimHolder,
-    WorkspaceClaimReleaseParams, WorkspaceClaimReleaseResult, WorkspaceClaimStatusResult,
+    ActiveTaskReservation, ExpiredTaskReservation, ReleasedTaskReservation,
+    TaskReservationCheckParams, TaskReservationCheckResult, TaskReservationListResult,
+    TaskReservationOwnedConflictsParams, TaskReservationOwnedConflictsResult,
+    TaskReservationRecord, TaskReservationReleaseByOwnerParams,
+    TaskReservationReleaseByOwnerResult, TaskReservationReleaseParams,
+    TaskReservationReleaseResult, TaskReservationReserveResult, TaskReservationScope,
+    WorkspaceClaimAcquireParams, WorkspaceClaimAcquireResult, WorkspaceClaimCheckParams,
+    WorkspaceClaimCheckResult, WorkspaceClaimHolder, WorkspaceClaimReleaseParams,
+    WorkspaceClaimReleaseResult, WorkspaceClaimStatusResult,
 };
 pub use contracts::{
     ActivityInvocationCount, ActivityInvocationMetrics, AuditEventFilter, AuditEventInsertParams,
@@ -103,6 +103,7 @@ pub use fs::lock::read_lock_holder;
 pub use fs::routine_sweep_lock::try_acquire_routine_sweep_lock;
 pub use repository::admission_load::AdmissionLoadRepository;
 pub use repository::application_consent::ApplicationConsentRepository;
+pub use repository::audit::{AuditEventRepository, V2AuditRepository};
 pub use repository::automation::AutomationRepository;
 pub use repository::backlog_forecast::BacklogForecastRepository;
 pub use repository::codebase_fact::{AgentFactRepository, CodebaseFactRepository};
@@ -112,6 +113,7 @@ pub use repository::evolution::EvolutionRepository;
 pub use repository::executor_def::ExecutorDefRepository;
 pub use repository::experiment::{ExperimentAssignmentRepository, ExperimentRepository};
 pub use repository::incident::IncidentRepository;
+pub use repository::invocation::InvocationRepository;
 pub use repository::landed_diff::LandedDiffRepository;
 pub use repository::notice::NoticeRepository;
 pub use repository::plugin::PluginRepository;

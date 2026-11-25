@@ -659,15 +659,16 @@ impl RuntimeKernel {
         }
 
         let workspace_id = self.workspace_id()?;
-        let store = self.v2_audit_store()?;
-        let mut rows = store.list_v2_audit_events_for_runs_partitioned(
+        let snapshot = self.stores().host_store().read()?;
+        let v2 = snapshot.v2_audit();
+        let mut rows = v2.list_for_runs_partitioned(
             &workspace_id,
             run_ids,
             Some("v2_envelope"),
             Some("step_recovery_attempted"),
             RECOVERY_FETCH_PER_RUN,
         )?;
-        rows.extend(store.list_v2_audit_events_for_runs_partitioned(
+        rows.extend(v2.list_for_runs_partitioned(
             &workspace_id,
             run_ids,
             Some("v2_envelope"),
@@ -676,8 +677,7 @@ impl RuntimeKernel {
         )?);
         // Merge newest first before applying the shared per-run display limit.
         rows.sort_by(|a, b| b.ts.cmp(&a.ts).then_with(|| b.id.cmp(&a.id)));
-        let present =
-            store.list_v2_audit_run_ids_with_events(&workspace_id, run_ids, Some("v2_envelope"))?;
+        let present = v2.run_ids_with_events(&workspace_id, run_ids, Some("v2_envelope"))?;
 
         let mut grouped: HashMap<String, Vec<orbit_store::V2AuditEventRow>> = HashMap::new();
         for row in rows {

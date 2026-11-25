@@ -62,20 +62,23 @@ fn cancel_without_effort(pair: &Pair, leaf: String) -> (String, String) {
 /// launch record leaves it.
 fn record_follower_launch(pair: &Pair, leaf: &str, effort: ReasoningEffort) {
     let run = pair.follower_jobs.get_job_run(leaf).unwrap().unwrap();
+    let workspace_id = pair.follower.workspace_id().unwrap();
     pair.follower
         .sqlite_store()
         .unwrap()
-        .begin_agent_execution(
-            &pair.follower.workspace_id().unwrap(),
-            leaf,
-            "implement_one",
-            "fixture",
-            run.crew_model.as_deref(),
-            &orbit_types::telemetry::AgentExecutionIdentity {
-                crew: Some("sol".into()),
-                reasoning_effort: Some(effort),
-            },
-        )
+        .write(|tx| {
+            tx.invocation().insert_agent_execution(
+                &workspace_id,
+                leaf,
+                "implement_one",
+                "fixture",
+                run.crew_model.as_deref(),
+                &orbit_types::telemetry::AgentExecutionIdentity {
+                    crew: Some("sol".into()),
+                    reasoning_effort: Some(effort),
+                },
+            )
+        })
         .unwrap();
 }
 
@@ -91,20 +94,23 @@ fn follower_model(pair: &Pair, leaf: &str) -> Option<String> {
 
 /// [`record_follower_launch`] on `model`.
 fn record_follower_launch_on(pair: &Pair, leaf: &str, effort: ReasoningEffort, model: &str) {
+    let workspace_id = pair.follower.workspace_id().unwrap();
     pair.follower
         .sqlite_store()
         .unwrap()
-        .begin_agent_execution(
-            &pair.follower.workspace_id().unwrap(),
-            leaf,
-            "implement_one",
-            "fixture",
-            Some(model),
-            &orbit_types::telemetry::AgentExecutionIdentity {
-                crew: Some("sol".into()),
-                reasoning_effort: Some(effort),
-            },
-        )
+        .write(|tx| {
+            tx.invocation().insert_agent_execution(
+                &workspace_id,
+                leaf,
+                "implement_one",
+                "fixture",
+                Some(model),
+                &orbit_types::telemetry::AgentExecutionIdentity {
+                    crew: Some("sol".into()),
+                    reasoning_effort: Some(effort),
+                },
+            )
+        })
         .unwrap();
 }
 

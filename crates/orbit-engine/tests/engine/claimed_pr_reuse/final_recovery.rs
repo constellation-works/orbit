@@ -535,7 +535,7 @@ fn scenario(sandbox: &Path, mode: &'static str) {
         publications: Mutex::new(vec![]),
     };
     let sink = Arc::new(orbit_engine::V2SqliteSink::for_audit_root(
-        Arc::new(orbit_store::Store::open_in_memory().unwrap()),
+        orbit_store::Store::open_in_memory().unwrap(),
         "ws-test",
         RUN_ID,
         sandbox,

@@ -20,18 +20,20 @@ fn audit_presence_and_partitioned_reads_require_string_envelope_ids() {
     ];
     for (index, (run, payload)) in payloads.iter().enumerate() {
         store
-            .insert_v2_audit_event(&V2AuditEventInsertParams {
-                workspace_id: "ws".into(),
-                event_id: format!("row-{index}"),
-                source: "v2_envelope".into(),
-                schema_version: 1,
-                event_type: "step_started".into(),
-                ts: chrono::Utc::now(),
-                run_id: (*run).into(),
-                agent_identity: "agent".into(),
-                parent_event_id: None,
-                workspace_path: None,
-                payload_json: (*payload).into(),
+            .write(|tx| {
+                tx.v2_audit().insert(&V2AuditEventInsertParams {
+                    workspace_id: "ws".into(),
+                    event_id: format!("row-{index}"),
+                    source: "v2_envelope".into(),
+                    schema_version: 1,
+                    event_type: "step_started".into(),
+                    ts: chrono::Utc::now(),
+                    run_id: (*run).into(),
+                    agent_identity: "agent".into(),
+                    parent_event_id: None,
+                    workspace_path: None,
+                    payload_json: (*payload).into(),
+                })
             })
             .unwrap();
     }
@@ -40,17 +42,17 @@ fn audit_presence_and_partitioned_reads_require_string_envelope_ids() {
         .map(|(run, _)| (*run).to_string())
         .collect::<Vec<_>>();
     let present = store
-        .list_v2_audit_run_ids_with_events("ws", &runs, Some("v2_envelope"))
+        .read()
+        .unwrap()
+        .v2_audit()
+        .run_ids_with_events("ws", &runs, Some("v2_envelope"))
         .unwrap();
     assert_eq!(present, HashSet::from(["valid".into(), "mixed".into()]));
     let rows = store
-        .list_v2_audit_events_for_runs_partitioned(
-            "ws",
-            &runs,
-            Some("v2_envelope"),
-            Some("step_started"),
-            10,
-        )
+        .read()
+        .unwrap()
+        .v2_audit()
+        .list_for_runs_partitioned("ws", &runs, Some("v2_envelope"), Some("step_started"), 10)
         .unwrap();
     assert_eq!(rows.len(), 2);
     let filter = V2AuditEventFilter {
@@ -58,7 +60,7 @@ fn audit_presence_and_partitioned_reads_require_string_envelope_ids() {
         body_kinds: vec!["step_started".into()],
         ..Default::default()
     };
-    assert_eq!(store.count_v2_audit_events(&filter).unwrap(), 2);
+    assert_eq!(store.read().unwrap().v2_audit().count(&filter).unwrap(), 2);
 }
 
 #[test]
@@ -66,22 +68,27 @@ fn audit_event_with_json_keyed_credentials_is_stored_redacted_and_valid() {
     let store = Store::open_in_memory().unwrap();
     let payload = r#"{"event_id":"keyed","body_kind":"step_failed","headers":{"authorization":"Basic dXNlcjpwYXNz"},"x-api-key":"bare-xapi-key-value-01","api_key":"12345678901234567890","my_api_key":"prefixed-api-key-value1","serviceApiKey":"camel-api-key-value-001","note":"visible-value","api_keyboard":"ordinarybuildvalue"}"#;
     store
-        .insert_v2_audit_event(&V2AuditEventInsertParams {
-            workspace_id: "ws".into(),
-            event_id: "keyed-row".into(),
-            source: "v2_envelope".into(),
-            schema_version: 1,
-            event_type: "step_failed".into(),
-            ts: chrono::Utc::now(),
-            run_id: "keyed".into(),
-            agent_identity: "agent".into(),
-            parent_event_id: None,
-            workspace_path: None,
-            payload_json: payload.into(),
+        .write(|tx| {
+            tx.v2_audit().insert(&V2AuditEventInsertParams {
+                workspace_id: "ws".into(),
+                event_id: "keyed-row".into(),
+                source: "v2_envelope".into(),
+                schema_version: 1,
+                event_type: "step_failed".into(),
+                ts: chrono::Utc::now(),
+                run_id: "keyed".into(),
+                agent_identity: "agent".into(),
+                parent_event_id: None,
+                workspace_path: None,
+                payload_json: payload.into(),
+            })
         })
         .unwrap();
     let rows = store
-        .list_v2_audit_events(&V2AuditEventFilter {
+        .read()
+        .unwrap()
+        .v2_audit()
+        .list(&V2AuditEventFilter {
             workspace_id: "ws".into(),
             run_id: Some("keyed".into()),
             source: Some("v2_envelope".into()),
@@ -130,24 +137,29 @@ fn audit_event_with_url_query_key_stays_valid_json_and_hides_the_key() {
     ];
     for (index, (run, _secret, payload)) in cases.iter().enumerate() {
         store
-            .insert_v2_audit_event(&V2AuditEventInsertParams {
-                workspace_id: "ws".into(),
-                event_id: format!("url-row-{index}"),
-                source: "v2_envelope".into(),
-                schema_version: 1,
-                event_type: "step_failed".into(),
-                ts: chrono::Utc::now(),
-                run_id: (*run).into(),
-                agent_identity: "agent".into(),
-                parent_event_id: None,
-                workspace_path: None,
-                payload_json: (*payload).into(),
+            .write(|tx| {
+                tx.v2_audit().insert(&V2AuditEventInsertParams {
+                    workspace_id: "ws".into(),
+                    event_id: format!("url-row-{index}"),
+                    source: "v2_envelope".into(),
+                    schema_version: 1,
+                    event_type: "step_failed".into(),
+                    ts: chrono::Utc::now(),
+                    run_id: (*run).into(),
+                    agent_identity: "agent".into(),
+                    parent_event_id: None,
+                    workspace_path: None,
+                    payload_json: (*payload).into(),
+                })
             })
             .unwrap();
     }
     for (run, secret, _payload) in &cases {
         let rows = store
-            .list_v2_audit_events(&V2AuditEventFilter {
+            .read()
+            .unwrap()
+            .v2_audit()
+            .list(&V2AuditEventFilter {
                 workspace_id: "ws".into(),
                 run_id: Some((*run).into()),
                 source: Some("v2_envelope".into()),

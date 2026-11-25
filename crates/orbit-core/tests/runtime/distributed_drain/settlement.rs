@@ -1303,17 +1303,19 @@ fn a_follower_reports_its_leafs_recorded_effort_on_settlement() {
         .upsert_job_run_for_workspace(&workspace, &run, None)
         .unwrap();
     store
-        .begin_agent_execution(
-            &workspace,
-            &leaf,
-            "implement_one",
-            "fixture",
-            run.crew_model.as_deref(),
-            &orbit_types::telemetry::AgentExecutionIdentity {
-                crew: Some("sol".into()),
-                reasoning_effort: Some(orbit_types::identity::ReasoningEffort::High),
-            },
-        )
+        .write(|tx| {
+            tx.invocation().insert_agent_execution(
+                &workspace,
+                &leaf,
+                "implement_one",
+                "fixture",
+                run.crew_model.as_deref(),
+                &orbit_types::telemetry::AgentExecutionIdentity {
+                    crew: Some("sol".into()),
+                    reasoning_effort: Some(orbit_types::identity::ReasoningEffort::High),
+                },
+            )
+        })
         .unwrap();
 
     pair.follower

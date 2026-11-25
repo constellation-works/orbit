@@ -14,7 +14,6 @@
 // `payload.text` is the final answer.
 
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use orbit_core::OrbitRuntime;
@@ -195,7 +194,7 @@ fn try_dispatch_activity(
     let audit_dir = tempfile::tempdir().expect("audit tempdir");
     let audit = V2AuditWriter::with_disk_sinks(
         audit_dir.path(),
-        Arc::new(orbit_store::Store::open_in_memory().expect("audit store")),
+        orbit_store::Store::open_in_memory().expect("audit store"),
         "ws_test",
         "muse-fake",
         format!("muse:{MODEL}"),
