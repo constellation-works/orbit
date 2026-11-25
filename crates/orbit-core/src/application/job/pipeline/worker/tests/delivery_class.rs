@@ -2,7 +2,6 @@
 //! chain, and a worker without a scope records nothing.
 
 use chrono::Utc;
-#[cfg(target_os = "linux")]
 use orbit_types::task::{TaskComplexity, TaskStatus};
 use orbit_types::workflow::{JobRun, PipelineState};
 use serde_json::{Value, json};

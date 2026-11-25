@@ -473,7 +473,10 @@ fn macos_worker_records_a_spawned_child_tree() {
 
     let rows = fixture
         .store
-        .run_resource_minutes("ws_test", "jrun-live")
+        .read()
+        .unwrap()
+        .resource_usage()
+        .run_minutes("ws_test", "jrun-live")
         .unwrap();
     assert_eq!(rows.len(), 1, "{rows:#?}");
     assert!(
