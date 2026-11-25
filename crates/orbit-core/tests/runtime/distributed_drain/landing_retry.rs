@@ -1,6 +1,7 @@
 //! Public operator retry of the existing authorized landing.
 
 use super::*;
+use orbit_common::env_vars::{HOME, ORBIT_MANAGED_RUN_CONTEXT, ORBIT_RUN_ID};
 
 /// Reproduces the missing public same-handoff retry seam. The old stopped
 /// attempt survives, the normal landing action completes, and replay keeps
@@ -355,7 +356,7 @@ fn terminal_job_retry_reconciles_external_intent_before_landing() {
 }
 
 fn replica_and_managed_callers_cannot_recover_a_terminal_owner_job() {
-    let (owner, _task, request, _prior) = retry_fixture(false, Some(JobRunState::Cancelled));
+    let (owner, _task, request, prior) = retry_fixture(false, Some(JobRunState::Cancelled));
     let runtime = &owner.pair.wire.owner;
     let before = runtime.landing_attempts().unwrap();
     let replica = runtime
@@ -364,8 +365,20 @@ fn replica_and_managed_callers_cannot_recover_a_terminal_owner_job() {
     assert!(retry_tool(&replica, &request, McpCapability::Operator).is_err());
     assert!(retry_tool(runtime, &request, McpCapability::Agent).is_err());
     {
-        let _managed = orbit_common::test_env::scoped([("ORBIT_MANAGED_RUN_CONTEXT", Some("1"))]);
-        assert!(retry_tool(runtime, &request, McpCapability::Operator).is_err());
+        let run_id = prior.job_run_id.as_deref().expect("owner landing run id");
+        let _managed = orbit_common::test_env::scoped([
+            (ORBIT_MANAGED_RUN_CONTEXT, Some("1")),
+            (ORBIT_RUN_ID, Some(run_id)),
+        ]);
+        let error = retry_tool(runtime, &request, McpCapability::Operator)
+            .expect_err("a managed run must not retry an owner handoff");
+        assert!(
+            matches!(
+                error,
+                OrbitError::CapabilityDenied(ref reason) if reason == "managed runs cannot retry owner handoffs"
+            ),
+            "{error}"
+        );
     }
     assert_eq!(runtime.landing_attempts().unwrap(), before);
 }
@@ -373,7 +386,10 @@ fn replica_and_managed_callers_cannot_recover_a_terminal_owner_job() {
 fn a_redacted_retry_reason_preserves_success_audit_and_replay() {
     let (owner, task, mut request, stopped) = stopped_retry_fixture();
     let runtime = &owner.pair.wire.owner;
-    let home = std::env::var("HOME").unwrap();
+    let home = std::env::var(HOME).unwrap();
+    // Each table row has its own home. Use the fixture's home for redaction
+    // throughout submission and replay instead of the process-start snapshot.
+    let _home = orbit_common::test_env::scoped([(HOME, Some(home.as_str()))]);
     request.reason = format!("provider state refreshed under {home}/provider");
     let result = retry_tool(runtime, &request, McpCapability::Operator);
 
