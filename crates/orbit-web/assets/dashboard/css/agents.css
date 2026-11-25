@@ -338,12 +338,23 @@ a.agents-strip-entry:focus-visible { outline: 2px solid var(--accent); outline-o
   .agents-score-col > .agents-bar { width: 40px; }
   .agents-score-value { min-width: 0; margin-left: var(--space-6); }
   #agents-roles { overflow-x: auto; scrollbar-width: none; }
-  /* Count and calendar windows together outgrow a phone: wrap them. Rank
-     adds its own window, the settled/live board and the execution selector. */
+  /* The role window and execution controls need the full row at phone width,
+     so their labels sit above the segments. Rank keeps its compact labels in
+     the control row and may wrap them when the other controls need space. */
   #agents-window-selector,
   #agents-rank-window-selector,
   #agents-settle-selector,
   #agents-execution-selector { flex-wrap: wrap; max-width: 100%; }
+  #agents-window-control,
+  #agents-execution-control {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: var(--space-4);
+  }
+  #agents-window-selector,
+  #agents-execution-selector { flex-wrap: nowrap; }
+  #agents-window-selector .scoreboard-window-seg,
+  #agents-execution-selector .scoreboard-window-seg { white-space: nowrap; }
   #agents-tier { height: 44px; }
 }
 
