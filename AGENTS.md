@@ -1,26 +1,26 @@
 ---
 type: context
-summary: "Orbit agent guide: rules, branching, gates, code and tests, local CodeQL"
+summary: "Orbit agent guide: rules, branching, gates, code/tests, local CodeQL"
 last_validated: 2026-11-22
 ---
 
 # Orbit — agent guide
 
-Orbit is a local-first runtime for coding agents, built as a Rust workspace. `CLAUDE.md` imports this file. For any Orbit lifecycle work, invoke the `orbit` skill.
+Orbit is a local-first Rust coding-agent runtime. `CLAUDE.md` imports this file; for Orbit lifecycle work, invoke the `orbit` skill.
 
 ## Rules
 
 - Work only on authorized scope. In a managed activity, leave commits and delivery transitions to the pipeline. Neither implementation nor a PR request authorizes merging.
 - Get task IDs from `orbit.task.add` and change tasks with `orbit.task.update`; never invent IDs or edit task files.
-- Don't add cross-crate dependencies without updating [`ARCHITECTURE.md`](ARCHITECTURE.md).
+- Don't add cross-crate deps without updating [`ARCHITECTURE.md`](ARCHITECTURE.md).
 - Historical ADRs are not an authority; judge from current code, tests and requirements.
-- Don't touch `CHANGELOG.md`; it is compiled at release time ([`RELEASING.md`](RELEASING.md)).
+- Don't touch `CHANGELOG.md`; compiled at release time ([`RELEASING.md`](RELEASING.md)).
 - A breaking change by [`RELEASING.md` Versioning](RELEASING.md#versioning) gets the `breaking-change` task tag and one execution-summary line `Breaking: <x removed → use y>`. The implementer sets both and the reviewer confirms them; release tooling derives the version bump and changelog bullet from them.
 - Update affected docs in the same PR as the code. Stale docs are a review blocker.
-- Edit an `AGENTS.md` only when a change adds, changes or removes a rule, a command or a pointer in it; delete or rewrite a rule whose subject a change removes. A new feature is described in its own docs.
-- Never list `docs/CONFIG.md` in a task's `context_files`: it is a shared reference doc, and the implementer updates it in the same PR.
+- Edit an `AGENTS.md` only when a change adds, changes or removes a rule, a command or a pointer in it; delete or rewrite a rule whose subject a change removes. New features get their own docs.
+- Never list `docs/CONFIG.md` in a task's `context_files`: shared reference doc; the implementer updates it in the same PR.
 - The `doc-duties` auto-task also validates the root `AGENTS.md`, `CONTRIBUTING.md`, `SECURITY.md`, `ARCHITECTURE.md` and `RELEASING.md`; keep their `last_validated` frontmatter.
-- Report commands and outcomes at handoff — passed, failed, not run — never "tested". Report unavailable capabilities honestly, not as passing checks.
+- Report commands and outcomes at handoff — passed, failed, not run — never "tested". Never report unavailable capabilities as passing checks.
 
 ## Branching
 
@@ -28,30 +28,30 @@ Orbit is a local-first runtime for coding agents, built as a Rust workspace. `CL
 
 ## Gates
 
-- There is no required local full-suite gate for a diff. The required PR checks (Check / Clippy / Test and Test shards 1–3) cover formatting, lint, goldens and the full suite; a red check is repaired through the PR. Don't run `make ci`, `ci-fast`, `ci-lint`, `goldens` or `ci-test-affected` as blanket pre-handoff gates. Run what the change needs: tests of the changed behavior and `make goldens` when CLI help, MCP text or another golden surface changes (`UPDATE=1` regenerates; review the diff). A managed delivery's final validation runs `task.final_validation_commands`. See [DEVELOPMENT.md](docs/DEVELOPMENT.md#validation-and-ci).
-- Anchor focused `cargo test -p <crate> …` commands with `-p orbit-cli` so they resolve one workspace feature set and reuse the cached build.
-- Pre-handoff checks for a diff, the `docs/INDEX.md` rule and `no-diff-expected`: [gate rules, Gates](docs/agents/gate-rules.md#gates). Light-delivery tags: [CONFIG.md](docs/CONFIG.md#light-delivery-skip-review-and-skip-validation).
-- Cargo gates sharing a target directory run sequentially; overlapping ones need separate `CARGO_TARGET_DIR`s, or a rebuilt `target/debug/orbit` breaks generation-bound fixtures (F2026-10-118).
+- No required local full-suite gate for a diff. The required PR checks (Check/Clippy/Test, Test shards 1–3) cover formatting, lint, goldens and the full suite; repair red checks through the PR. Don't run `make ci`, `ci-fast`, `ci-lint`, `goldens` or `ci-test-affected` as blanket gates. Run what the change needs: affected tests and `make goldens` when CLI help, MCP text or other golden surfaces change (`UPDATE=1` regenerates; review the diff). See [DEVELOPMENT.md](docs/DEVELOPMENT.md#validation-and-ci).
+- Anchor focused `cargo test -p <crate> …` on `-p orbit-cli` so they share one workspace feature set and reuse the cached build.
+- Pre-handoff checks, the `docs/INDEX.md` rule and `no-diff-expected`: [gate rules, Gates](docs/agents/gate-rules.md#gates). Light-delivery tags: [CONFIG.md](docs/CONFIG.md#light-delivery-skip-review-and-skip-validation).
+- Cargo gates sharing a target directory run sequentially; overlapping ones need separate `CARGO_TARGET_DIR`s; a rebuilt `target/debug/orbit` breaks generation-bound fixtures (F2026-10-118).
 
 ## Code
 
-- Layering and scoping: [`ARCHITECTURE.md`](ARCHITECTURE.md). Reusable patterns: [`docs/design-patterns/`](docs/design-patterns/).
+- Layering, scoping: [`ARCHITECTURE.md`](ARCHITECTURE.md). Reusable patterns: [`docs/design-patterns/`](docs/design-patterns/).
 - `[workspace.lints]` warns on `unwrap`/`expect`. Propagate `OrbitError` across crates. Use `tracing`. No `print!` or locks across `.await`. `missing_docs` warns in `orbit-auth`, `orbit-cli` (binary), `orbit-clock`, `orbit-common`, `orbit-config`, `orbit-web` and `orbit-desktop`. Other library roots opt out.
-- Default to `pub(crate)`, `.workspace = true` deps, bounded channels and typed `thiserror` variants.
-- Prefer the fewest moving parts: delete dead code and stale docs together; keep compatibility only for an external contract or persisted format.
-- Past ~800 lines, check whether a file holds more than one responsibility and split along those; don't scatter closely related code.
+- Default to `pub(crate)`, `.workspace = true` deps, bounded channels, typed `thiserror` variants.
+- Prefer the fewest moving parts: delete dead code and stale docs together; compatibility only for an external contract or persisted format.
+- Past ~800 lines, split a file with more than one responsibility along those; don't scatter closely related code.
 - Greppable names and the skill-doc sync command: [code rules](docs/agents/code-rules.md).
 - Never expose internal task/friction IDs in user-facing output, CLI help (Clap renders `///`) or MCP text.
-- User-facing CLI help and errors, MCP descriptions and UI text must stand alone: no Orbit source-tree paths or repo docs, only verified published docs or installed resources. Contributor docs may cite source paths; user-workspace paths like `.orbit/tmp/` are fine.
+- User-facing CLI help/errors, MCP descriptions and UI text must stand alone: no Orbit source-tree paths or repo docs, only verified published docs or installed resources. Contributor docs may cite source paths; user-workspace paths like `.orbit/tmp/` may too.
 
 ## Tests
 
-- Never add UI tests: no browser, Playwright or DOM-stub tests of the dashboard, web pages, docs site or desktop UI, not even for a bug fix. Check UI changes through manual QA and screenshots.
-- Test admission, text matching, test layout and the CI budget: [test and QA rules, Tests](docs/agents/test-and-qa-rules.md#tests). Manual QA, screenshots and STD-07 UI review: [QA](docs/agents/test-and-qa-rules.md#qa).
+- Never add UI tests: no browser, Playwright or DOM-stub tests of the dashboard, web pages, docs site or desktop UI, not even for a bug fix. Check UI changes with manual QA and screenshots.
+- Test admission, text matching, layout and the CI budget: [test and QA rules, Tests](docs/agents/test-and-qa-rules.md#tests). Manual QA, screenshots and STD-07 UI review: [QA](docs/agents/test-and-qa-rules.md#qa).
 
 ## Local Rust CodeQL
 
-When it is owed and how to run it: [gate rules, Local Rust CodeQL](docs/agents/gate-rules.md#local-rust-codeql).
+Owed only when the task repairs a CodeQL finding, is tagged `security` or `security-review`, or edits `.github/codeql/**` or `scripts/codeql-rust-local.sh`. Linux-only: only Linux extracts every module; elsewhere the script exits 3 and the check is owed by a Linux run recorded as `codeql` external evidence. Procedure: [gate rules, Local Rust CodeQL](docs/agents/gate-rules.md#local-rust-codeql).
 
 <!-- constellation-standards:begin -->
 <!-- Managed by the constellation's operations/scripts/sync-standards.sh; edits inside this block are overwritten. -->
