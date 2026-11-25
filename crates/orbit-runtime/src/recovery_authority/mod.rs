@@ -19,7 +19,6 @@
 mod certificate;
 mod error;
 mod root;
-mod schema;
 mod worker;
 
 pub use certificate::RecoveryAuthority;

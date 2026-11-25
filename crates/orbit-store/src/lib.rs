@@ -48,6 +48,15 @@ pub mod friction_store {
     pub use crate::repository::friction::{FrictionAddParams, FrictionListFilter, FrictionStore};
 }
 
+/// Host-only recovery authority persistence (`authority.db`).
+pub mod recovery_authority {
+    pub use crate::driver::sqlite::authority::FILE_NAME;
+    pub use crate::repository::recovery_authority::{
+        AttemptCertificateRow, RecoveryAttemptRecord, RecoveryAuthorityReadOnly,
+        RecoveryAuthorityStore, RecoveryAuthorityTx, RecoveryCertificateRecord,
+    };
+}
+
 use chrono::{DateTime, Utc};
 
 pub use contracts::incident::{
@@ -91,6 +100,7 @@ pub use repository::task::{TaskCommitBoundary, admission_refusal};
 /// `test-support` feature. Enable it only from `[dev-dependencies]`.
 #[cfg(feature = "test-support")]
 pub mod test_support {
+    pub use crate::repository::recovery_authority::seed_legacy_authority_certificate;
     pub use crate::repository::task::coordination::fallback_hook::with_repair_owner_fallback_elapsed;
     pub use crate::repository::task::coordination::lock_timeout_hook::with_task_commit_lock_timeout;
     pub use crate::repository::task::coordination::task_write_hold_hook::with_task_commit_write_hold;

@@ -1,31 +1,26 @@
 use super::super::certificate::{RecoveryAuthority, payload_digest};
 use super::fixtures::{OTHER_RUN_ID, RUN_ID, STEP_ID, checkpoint, fixture, later_attempt, scope};
-use rusqlite::params;
+use orbit_store::recovery_authority::RecoveryCertificateRecord;
 use serde_json::json;
 use tempfile::TempDir;
 
 /// Every attempt certificate row, as `(run, step, attempt, digest, issued_at)`.
 fn certificate_rows(authority: &RecoveryAuthority) -> Vec<(String, String, i64, String, String)> {
-    let mut statement = authority
-        .connection
-        .prepare(
-            "SELECT run_id, step_id, attempt, payload_digest, issued_at
-             FROM rebase_recovery_attempt_certificate ORDER BY run_id, step_id, attempt",
-        )
-        .expect("prepare certificate scan");
-    statement
-        .query_map([], |row| {
-            Ok((
-                row.get(0)?,
-                row.get(1)?,
-                row.get(2)?,
-                row.get(3)?,
-                row.get(4)?,
-            ))
-        })
-        .expect("scan certificates")
-        .collect::<Result<_, _>>()
+    authority
+        .store
+        .list_attempt_certificates()
         .expect("read certificates")
+        .into_iter()
+        .map(|row| {
+            (
+                row.run_id,
+                row.step_id,
+                row.attempt,
+                row.payload_digest,
+                row.issued_at,
+            )
+        })
+        .collect()
 }
 
 #[test]
@@ -326,33 +321,24 @@ fn a_pre_attempt_certificate_verifies_until_a_new_attempt_is_certified() {
     {
         // Lay the database out exactly as the previous binary did.
         let authority = RecoveryAuthority::open(global.path()).expect("open authority");
-        authority
-            .connection
-            .execute_batch(
-                "DROP TABLE rebase_recovery_attempt;
-                 DROP TABLE rebase_recovery_attempt_certificate;
-                 DROP TABLE worker_process_binding;
-                 DROP TABLE worker_namespace_binding;
-                 DROP TABLE schema_meta;",
-            )
-            .expect("strip attempt tables");
-        authority
-            .connection
-            .execute(
-                "INSERT INTO rebase_recovery_certificate
-                     (run_id, step_id, workspace_path, head_sha, base_sha, payload_digest,
-                      issued_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, '2026-10-04T22:04:41Z')",
-                params![
-                    RUN_ID,
-                    STEP_ID,
-                    workspace.path().to_string_lossy(),
-                    legacy["head_sha"].as_str(),
-                    legacy["base_sha"].as_str(),
-                    payload_digest(&legacy),
-                ],
-            )
-            .expect("write legacy certificate");
+        drop(authority);
+        orbit_store::test_support::seed_legacy_authority_certificate(
+            &global
+                .path()
+                .join("state/recovery-authority")
+                .join(orbit_store::recovery_authority::FILE_NAME),
+            &RecoveryCertificateRecord {
+                run_id: RUN_ID.to_string(),
+                step_id: STEP_ID.to_string(),
+                attempt: None,
+                workspace_path: workspace.path().to_string_lossy().into_owned(),
+                head_sha: legacy["head_sha"].as_str().expect("head_sha").to_string(),
+                base_sha: legacy["base_sha"].as_str().expect("base_sha").to_string(),
+                payload_digest: payload_digest(&legacy),
+            },
+            "2026-10-04T22:04:41Z",
+        )
+        .expect("write legacy certificate");
     }
 
     let authority = RecoveryAuthority::open(global.path()).expect("open upgraded authority");
@@ -402,15 +388,12 @@ fn a_pre_attempt_certificate_verifies_until_a_new_attempt_is_certified() {
             .expect("verify legacy"),
         "old evidence must not outlive a newer certified attempt",
     );
-    let legacy_digest: String = authority
-        .connection
-        .query_row(
-            "SELECT payload_digest FROM rebase_recovery_certificate
-             WHERE run_id = ?1 AND step_id = ?2",
-            params![RUN_ID, STEP_ID],
-            |row| row.get(0),
-        )
-        .expect("legacy row survives");
+    let legacy_digest = authority
+        .store
+        .legacy_certificate(RUN_ID, STEP_ID)
+        .expect("legacy row survives")
+        .expect("legacy row present")
+        .payload_digest;
     assert_eq!(legacy_digest, payload_digest(&legacy));
 }
 

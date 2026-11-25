@@ -319,7 +319,7 @@ There is no new layout version, and no shipped migration is changed.
 
 [ORB-15824] moved the protected `authority.db` onto the shared store ledger
 engine. Its additive v1 baseline lives in
-`crates/orbit-runtime/src/recovery_authority/schema.rs` and freezes all five
+`crates/orbit-store/src/driver/sqlite/authority/schema/mod.rs` and freezes all five
 shipped tables, including the formerly first-use worker bindings. The database
 keeps its own `schema_meta` and `migration.compat`; it is separate from both
 the task registry and the ordinary store.

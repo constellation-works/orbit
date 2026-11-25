@@ -346,7 +346,7 @@ would refuse or misread:
   schema; the envelope stamps are one. The recovery authority's
   `authority.db` (`orbit-core`) holds authority and now uses the shared engine
   through `orbit-store::maintenance::migration`, with its own additive v1
-  ledger in `runtime/recovery_authority/schema.rs`. The frozen baseline
+  ledger in `driver/sqlite/authority/schema/mod.rs`. The frozen baseline
   creates all five shipped tables, including the former first-use worker
   bindings, without reshaping any pre-ledger table. Its `schema_meta` ledger
   and `migration.compat` record stay in the protected file; root validation,

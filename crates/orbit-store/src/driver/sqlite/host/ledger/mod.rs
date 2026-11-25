@@ -30,8 +30,8 @@
 //! The engine is not specific to the store database. Each SQLite file that
 //! keeps authority describes itself with a [`LedgeredDatabase`] and owns a
 //! registry of its own: the store ([`STORE_DATABASE`], `schema::MIGRATIONS`), the
-//! task registry (`task_registry::ledger`), and the recovery authority in
-//! `orbit-core`. Each file carries its own
+//! task registry (`task_registry::ledger`), and the recovery authority
+//! (`driver::sqlite::authority::schema`). Each file carries its own
 //! `schema_meta` ledger rows and `migration.compat` record.
 
 use orbit_common::OrbitError;

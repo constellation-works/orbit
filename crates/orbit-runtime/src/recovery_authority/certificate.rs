@@ -5,13 +5,13 @@ use std::path::Path;
 use chrono::Utc;
 use orbit_common::OrbitError;
 use orbit_engine::RebaseRecoveryAttemptScope;
-use rusqlite::{Connection, OptionalExtension, params};
+use orbit_store::recovery_authority::{
+    RecoveryAttemptRecord, RecoveryAuthorityStore, RecoveryCertificateRecord,
+};
 use serde_json::Value;
 
-use super::error::authority_error;
 use super::root::{
-    AUTHORITY_DB, authority_root, persist_wal_sidecars, refuse_symlinked_authority_files,
-    restrict_permissions,
+    AUTHORITY_DB, authority_root, refuse_symlinked_authority_files, restrict_permissions,
 };
 
 /// The checkpoint field carrying the host-assigned recovery attempt.
@@ -21,8 +21,8 @@ const RECOVERY_ATTEMPT_FIELD: &str = "recovery_attempt";
 /// the only evidence a later resume will accept.
 #[derive(Debug)]
 pub struct RecoveryAuthority {
-    // Certificate and worker-binding persistence share this authority connection.
-    pub(super) connection: Connection,
+    // Certificate and worker-binding persistence share this authority repository.
+    pub(super) store: RecoveryAuthorityStore,
 }
 
 /// The identity a certificate binds. Every field is re-derived from the
@@ -48,35 +48,10 @@ impl RecoveryAuthority {
         let root = authority_root(global_root)?;
         refuse_symlinked_authority_files(&root)?;
 
-        let connection = Connection::open(root.join(AUTHORITY_DB))
-            .map_err(|error| authority_error("open recovery authority database", error))?;
-
-        // This is a connection-local flag, not a schema write. Set it before
-        // compatibility evaluation so a query-only open or a refused newer
-        // schema cannot delete the sidecars on close and strand sandboxed readers.
-        persist_wal_sidecars(&connection)?;
-        let forward = super::schema::migrate(&connection, &root.join(AUTHORITY_DB))?;
-        if forward.is_some_and(|open| !open.writable) {
-            connection
-                .pragma_update(None, "query_only", true)
-                .map_err(|error| authority_error("hold recovery authority read-only", error))?;
-        } else {
-            // WAL keeps the sidecars inside the protected root rather than beside
-            // the shared store, and matches how every other Orbit database runs.
-            connection
-                .pragma_update(None, "journal_mode", "WAL")
-                .map_err(|error| authority_error("enable WAL on recovery authority", error))?;
-        }
-        connection
-            .pragma_update(
-                None,
-                "synchronous",
-                orbit_common::fs::io::sqlite_synchronous("FULL"),
-            )
-            .map_err(|error| authority_error("harden recovery authority durability", error))?;
+        let store = RecoveryAuthorityStore::open(&root.join(AUTHORITY_DB))?;
         restrict_permissions(&root)?;
 
-        Ok(Self { connection })
+        Ok(Self { store })
     }
 
     /// Reserve the next recovery attempt of `step_id` in `run_id`.
@@ -107,25 +82,14 @@ impl RecoveryAuthority {
                     .to_string(),
             ));
         }
-        self.immediate("reserve rebase recovery attempt", |connection| {
-            let attempt = latest_reservation(connection, run_id, step_id)?.unwrap_or(0) + 1;
-            connection
-                .execute(
-                    "INSERT INTO rebase_recovery_attempt
-                         (run_id, step_id, attempt, workspace_path, head_sha_before,
-                          target_base_sha, reserved_at)
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-                    params![
-                        run_id,
-                        step_id,
-                        attempt,
-                        scope.workspace_path,
-                        scope.head_sha_before,
-                        scope.target_base_sha,
-                        Utc::now().to_rfc3339(),
-                    ],
-                )
-                .map_err(|error| authority_error("reserve rebase recovery attempt", error))?;
+        let record = RecoveryAttemptRecord {
+            workspace_path: scope.workspace_path.clone(),
+            head_sha_before: scope.head_sha_before.clone(),
+            target_base_sha: scope.target_base_sha.clone(),
+        };
+        self.store.write("reserve rebase recovery attempt", |tx| {
+            let attempt = tx.latest_reservation(run_id, step_id)?.unwrap_or(0) + 1;
+            tx.insert_reservation(run_id, step_id, attempt, &record, &Utc::now().to_rfc3339())?;
             u64::try_from(attempt).map_err(|_| {
                 OrbitError::Execution("rebase recovery attempt is out of range".to_string())
             })
@@ -149,61 +113,46 @@ impl RecoveryAuthority {
                  attempt"
             )));
         };
+        let record = binding.into_record();
 
-        self.immediate("record rebase recovery certificate", |connection| {
-            let Some(scope) = reservation(connection, run_id, step_id, attempt)? else {
-                return Err(OrbitError::PolicyDenied(format!(
-                    "rebase recovery attempt {attempt} for run {run_id} step `{step_id}` was not \
-                     reserved by this host"
-                )));
-            };
-            if latest_reservation(connection, run_id, step_id)? != Some(attempt) {
-                return Err(OrbitError::PolicyDenied(format!(
-                    "rebase recovery attempt {attempt} for run {run_id} step `{step_id}` was \
-                     superseded by a later attempt"
-                )));
-            }
-            if scope.workspace_path != binding.workspace_path
-                || bound_field(checkpoint, "head_sha_before")? != scope.head_sha_before
-                || bound_field(checkpoint, "target_base_sha")? != scope.target_base_sha
-            {
-                return Err(OrbitError::PolicyDenied(format!(
-                    "rebase recovery evidence for run {run_id} step `{step_id}` attempt {attempt} \
-                     does not describe the reserved workspace, original HEAD and pinned base"
-                )));
-            }
-
-            if let Some(recorded) = certificate(connection, run_id, step_id, attempt)? {
-                if recorded == binding {
-                    return Ok(());
+        self.store
+            .write("record rebase recovery certificate", |tx| {
+                let Some(scope) = tx.reservation(run_id, step_id, attempt)? else {
+                    return Err(OrbitError::PolicyDenied(format!(
+                        "rebase recovery attempt {attempt} for run {run_id} step `{step_id}` was \
+                         not reserved by this host"
+                    )));
+                };
+                if tx.latest_reservation(run_id, step_id)? != Some(attempt) {
+                    return Err(OrbitError::PolicyDenied(format!(
+                        "rebase recovery attempt {attempt} for run {run_id} step `{step_id}` was \
+                         superseded by a later attempt"
+                    )));
                 }
-                return Err(OrbitError::Execution(format!(
-                    "rebase recovery for run {run_id} step `{step_id}` attempt {attempt} is \
-                     already certified with different evidence; the accepted certificate is \
-                     immutable"
-                )));
-            }
+                if scope.workspace_path != record.workspace_path
+                    || bound_field(checkpoint, "head_sha_before")? != scope.head_sha_before
+                    || bound_field(checkpoint, "target_base_sha")? != scope.target_base_sha
+                {
+                    return Err(OrbitError::PolicyDenied(format!(
+                        "rebase recovery evidence for run {run_id} step `{step_id}` attempt \
+                         {attempt} does not describe the reserved workspace, original HEAD and \
+                         pinned base"
+                    )));
+                }
 
-            connection
-                .execute(
-                    "INSERT INTO rebase_recovery_attempt_certificate
-                         (run_id, step_id, attempt, workspace_path, head_sha, base_sha,
-                          payload_digest, issued_at)
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-                    params![
-                        binding.run_id,
-                        binding.step_id,
-                        attempt,
-                        binding.workspace_path,
-                        binding.head_sha,
-                        binding.base_sha,
-                        binding.payload_digest,
-                        Utc::now().to_rfc3339(),
-                    ],
-                )
-                .map_err(|error| authority_error("record rebase recovery certificate", error))?;
-            Ok(())
-        })
+                if let Some(recorded) = tx.certificate(run_id, step_id, attempt)? {
+                    if recorded == record {
+                        return Ok(());
+                    }
+                    return Err(OrbitError::Execution(format!(
+                        "rebase recovery for run {run_id} step `{step_id}` attempt {attempt} is \
+                         already certified with different evidence; the accepted certificate is \
+                         immutable"
+                    )));
+                }
+
+                tx.insert_certificate(&record, attempt, &Utc::now().to_rfc3339())
+            })
     }
 
     /// Whether `checkpoint` is exactly the current evidence this host
@@ -225,15 +174,15 @@ impl RecoveryAuthority {
         let Ok(binding) = CertificateBinding::derive(run_id, step_id, checkpoint) else {
             return Ok(false);
         };
-        let latest = latest_certified_attempt(&self.connection, run_id, step_id)?;
+        let latest = self.store.latest_certified_attempt(run_id, step_id)?;
         let recorded = match binding.attempt {
             Some(attempt) if latest == Some(attempt) => {
-                certificate(&self.connection, run_id, step_id, attempt)?
+                self.store.certificate(run_id, step_id, attempt)?
             }
-            None if latest.is_none() => legacy_certificate(&self.connection, run_id, step_id)?,
+            None if latest.is_none() => self.store.legacy_certificate(run_id, step_id)?,
             Some(_) | None => return Ok(false),
         };
-        Ok(recorded == Some(binding))
+        Ok(recorded == Some(binding.into_record()))
     }
 
     /// Every attempt reserved for `run_id` / `step_id`, oldest first.
@@ -242,161 +191,17 @@ impl RecoveryAuthority {
         run_id: &str,
         step_id: &str,
     ) -> Result<Vec<RebaseRecoveryAttemptScope>, OrbitError> {
-        let mut statement = self
-            .connection
-            .prepare(
-                "SELECT workspace_path, head_sha_before, target_base_sha
-                 FROM rebase_recovery_attempt
-                 WHERE run_id = ?1 AND step_id = ?2
-                 ORDER BY attempt",
-            )
-            .map_err(|error| authority_error("read rebase recovery attempts", error))?;
-        let rows = statement
-            .query_map(params![run_id, step_id], |row| {
-                Ok(RebaseRecoveryAttemptScope {
-                    workspace_path: row.get(0)?,
-                    head_sha_before: row.get(1)?,
-                    target_base_sha: row.get(2)?,
-                })
+        Ok(self
+            .store
+            .list_attempts(run_id, step_id)?
+            .into_iter()
+            .map(|row| RebaseRecoveryAttemptScope {
+                workspace_path: row.workspace_path,
+                head_sha_before: row.head_sha_before,
+                target_base_sha: row.target_base_sha,
             })
-            .map_err(|error| authority_error("read rebase recovery attempts", error))?;
-        rows.collect::<Result<Vec<_>, _>>()
-            .map_err(|error| authority_error("read rebase recovery attempts", error))
+            .collect())
     }
-
-    /// Run `body` in one `BEGIN IMMEDIATE` transaction, so a check and the
-    /// write it guards are atomic against every other host connection.
-    fn immediate<T>(
-        &self,
-        action: &str,
-        body: impl FnOnce(&Connection) -> Result<T, OrbitError>,
-    ) -> Result<T, OrbitError> {
-        self.connection
-            .execute_batch("BEGIN IMMEDIATE")
-            .map_err(|error| authority_error(action, error))?;
-        let outcome = body(&self.connection).and_then(|value| {
-            self.connection
-                .execute_batch("COMMIT")
-                .map_err(|error| authority_error(action, error))
-                .map(|()| value)
-        });
-        if outcome.is_err() && !self.connection.is_autocommit() {
-            // The refusal or write failure is what the caller needs; a failed
-            // rollback leaves nothing committed either way.
-            let _ = self.connection.execute_batch("ROLLBACK");
-        }
-        outcome
-    }
-}
-
-fn latest_reservation(
-    connection: &Connection,
-    run_id: &str,
-    step_id: &str,
-) -> Result<Option<i64>, OrbitError> {
-    connection
-        .query_row(
-            "SELECT MAX(attempt) FROM rebase_recovery_attempt WHERE run_id = ?1 AND step_id = ?2",
-            params![run_id, step_id],
-            |row| row.get(0),
-        )
-        .map_err(|error| authority_error("read rebase recovery attempts", error))
-}
-
-fn latest_certified_attempt(
-    connection: &Connection,
-    run_id: &str,
-    step_id: &str,
-) -> Result<Option<i64>, OrbitError> {
-    connection
-        .query_row(
-            "SELECT MAX(attempt) FROM rebase_recovery_attempt_certificate
-             WHERE run_id = ?1 AND step_id = ?2",
-            params![run_id, step_id],
-            |row| row.get(0),
-        )
-        .map_err(|error| authority_error("read rebase recovery certificates", error))
-}
-
-fn reservation(
-    connection: &Connection,
-    run_id: &str,
-    step_id: &str,
-    attempt: i64,
-) -> Result<Option<RebaseRecoveryAttemptScope>, OrbitError> {
-    connection
-        .query_row(
-            "SELECT workspace_path, head_sha_before, target_base_sha
-             FROM rebase_recovery_attempt
-             WHERE run_id = ?1 AND step_id = ?2 AND attempt = ?3",
-            params![run_id, step_id, attempt],
-            |row| {
-                Ok(RebaseRecoveryAttemptScope {
-                    workspace_path: row.get(0)?,
-                    head_sha_before: row.get(1)?,
-                    target_base_sha: row.get(2)?,
-                })
-            },
-        )
-        .optional()
-        .map_err(|error| authority_error("read rebase recovery attempt", error))
-}
-
-fn certificate(
-    connection: &Connection,
-    run_id: &str,
-    step_id: &str,
-    attempt: i64,
-) -> Result<Option<CertificateBinding>, OrbitError> {
-    connection
-        .query_row(
-            "SELECT workspace_path, head_sha, base_sha, payload_digest
-             FROM rebase_recovery_attempt_certificate
-             WHERE run_id = ?1 AND step_id = ?2 AND attempt = ?3",
-            params![run_id, step_id, attempt],
-            |row| {
-                Ok(CertificateBinding {
-                    run_id: run_id.to_string(),
-                    step_id: step_id.to_string(),
-                    attempt: Some(attempt),
-                    workspace_path: row.get(0)?,
-                    head_sha: row.get(1)?,
-                    base_sha: row.get(2)?,
-                    payload_digest: row.get(3)?,
-                })
-            },
-        )
-        .optional()
-        .map_err(|error| authority_error("read rebase recovery certificate", error))
-}
-
-/// The pre-attempt record for `run_id` / `step_id`, read for payloads that
-/// carry no attempt.
-fn legacy_certificate(
-    connection: &Connection,
-    run_id: &str,
-    step_id: &str,
-) -> Result<Option<CertificateBinding>, OrbitError> {
-    connection
-        .query_row(
-            "SELECT workspace_path, head_sha, base_sha, payload_digest
-             FROM rebase_recovery_certificate
-             WHERE run_id = ?1 AND step_id = ?2",
-            params![run_id, step_id],
-            |row| {
-                Ok(CertificateBinding {
-                    run_id: run_id.to_string(),
-                    step_id: step_id.to_string(),
-                    attempt: None,
-                    workspace_path: row.get(0)?,
-                    head_sha: row.get(1)?,
-                    base_sha: row.get(2)?,
-                    payload_digest: row.get(3)?,
-                })
-            },
-        )
-        .optional()
-        .map_err(|error| authority_error("read legacy rebase recovery certificate", error))
 }
 
 impl CertificateBinding {
@@ -422,6 +227,18 @@ impl CertificateBinding {
             base_sha: bound_field(checkpoint, "base_sha")?,
             payload_digest: payload_digest(checkpoint),
         })
+    }
+
+    fn into_record(self) -> RecoveryCertificateRecord {
+        RecoveryCertificateRecord {
+            run_id: self.run_id,
+            step_id: self.step_id,
+            attempt: self.attempt,
+            workspace_path: self.workspace_path,
+            head_sha: self.head_sha,
+            base_sha: self.base_sha,
+            payload_digest: self.payload_digest,
+        }
     }
 }
 
