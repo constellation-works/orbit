@@ -169,7 +169,7 @@ fn task_statuses(lowercase: &str) -> Vec<(String, bool)> {
         }
         let suffix: String = lowercase[after..]
             .chars()
-            .take_while(|c| c.is_alphanumeric() || *c == '_' || *c == '-')
+            .take_while(|ch| ch.is_alphanumeric() || *ch == '_' || *ch == '-')
             .collect();
         let suffix = suffix.trim_end_matches(['-', '_']);
         if suffix.is_empty() {
@@ -219,7 +219,7 @@ fn status_words(segment: &str) -> impl Iterator<Item = (usize, bool)> + '_ {
         segment.match_indices(word).filter_map(move |(at, _)| {
             let before = segment[..at].chars().next_back();
             let after = segment[at + word.len()..].chars().next();
-            let edge = |c: Option<char>| c.is_none_or(|c| !c.is_alphanumeric());
+            let edge = |neighbor: Option<char>| neighbor.is_none_or(|ch| !ch.is_alphanumeric());
             (edge(before) && edge(after)).then_some((at, is_running))
         })
     })

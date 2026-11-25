@@ -48,12 +48,12 @@ impl Summary {
             Self::Live { drains, failed, .. } => {
                 let drains = match drains {
                     Some(1) => "1 drain running".into(),
-                    Some(n) => format!("{n} drains running"),
+                    Some(count) => format!("{count} drains running"),
                     None => "Drains unavailable".into(),
                 };
                 let failed = match failed {
                     Some(1) => "1 failure in 24 h".into(),
-                    Some(n) => format!("{n} failures in 24 h"),
+                    Some(count) => format!("{count} failures in 24 h"),
                     None => "failures unavailable".into(),
                 };
                 format!("{drains} · {failed}")
