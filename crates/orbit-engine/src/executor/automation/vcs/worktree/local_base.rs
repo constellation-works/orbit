@@ -12,6 +12,10 @@
 //! one. A repository with no `origin` remote, or an origin that cannot be
 //! fetched, keeps cutting from the owner's branch as before.
 //!
+//! A fast-forward never overwrites a file the owner's status cannot see: an
+//! ignored file at a path origin starts tracking refuses the advance, naming
+//! the path, and the branch, index and file stay as they were.
+//!
 //! The fetch takes the shared fetch lock. The fast-forward itself does not
 //! take it: the owner's ref moves through Git's own compare-and-swap (or a
 //! checked-out `merge --ff-only`), so a concurrent movement makes this step
@@ -107,7 +111,26 @@ fn fast_forward_owner_base(repo_root: &Path, branch: &str) -> Result<(), OrbitEr
                     "has tracked changes, so it was not fast-forwarded",
                 ));
             }
-            if git_command_success(&checkout, &["merge", "--ff-only", &origin])? {
+            // An ignored owner file is invisible to the status above, so a
+            // path origin starts tracking would be overwritten silently. Name
+            // it up front; the merge flag below is the backstop (STD-03 §R29).
+            let collisions = ignored_collisions(&checkout, &owner, &origin)?;
+            if !collisions.is_empty() {
+                return Err(stale_base_refusal(
+                    &checkout,
+                    branch,
+                    &owner,
+                    &origin,
+                    &format!(
+                        "has ignored files that origin would overwrite ({}), so it was not fast-forwarded",
+                        collisions.join(", ")
+                    ),
+                ));
+            }
+            if git_command_success(
+                &checkout,
+                &["merge", "--ff-only", "--no-overwrite-ignore", &origin],
+            )? {
                 return Ok(());
             }
             Err(stale_base_refusal(
@@ -119,6 +142,53 @@ fn fast_forward_owner_base(repo_root: &Path, branch: &str) -> Result<(), OrbitEr
             ))
         }
     }
+}
+
+/// Ignored files in `checkout` at paths the advance from `owner` to `origin`
+/// adds, which a fast-forward would replace with origin's bytes.
+fn ignored_collisions(
+    checkout: &Path,
+    owner: &str,
+    origin: &str,
+) -> Result<Vec<String>, OrbitError> {
+    let added = git_output_raw(
+        checkout,
+        &[
+            "diff",
+            "--name-only",
+            "--no-renames",
+            "--diff-filter=A",
+            "-z",
+            owner,
+            origin,
+        ],
+    )?;
+    let present: Vec<String> = added
+        .split('\0')
+        .filter(|path| !path.is_empty())
+        .filter(|path| checkout.join(path).symlink_metadata().is_ok())
+        .map(|path| format!(":(literal){path}"))
+        .collect();
+    let mut collisions = Vec::new();
+    for chunk in present.chunks(256) {
+        let mut args = vec![
+            "ls-files",
+            "--others",
+            "--ignored",
+            "--exclude-standard",
+            "-z",
+            "--",
+        ];
+        args.extend(chunk.iter().map(String::as_str));
+        let listed = git_output_raw(checkout, &args)?;
+        collisions.extend(
+            listed
+                .split('\0')
+                .filter(|path| !path.is_empty())
+                .map(str::to_string),
+        );
+    }
+    Ok(collisions)
 }
 
 /// The commit `reference` names, or `None` when the reference does not exist.

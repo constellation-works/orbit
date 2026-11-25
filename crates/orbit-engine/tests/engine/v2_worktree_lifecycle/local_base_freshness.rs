@@ -149,6 +149,79 @@ fn a_diverged_owner_base_is_refused_and_left_unmoved() {
     assert!(host.admitted().is_empty(), "a refused setup admits no task");
 }
 
+/// Ignore `file` in the owner without committing a `.gitignore` change, and
+/// give it unpublished bytes.
+fn ignore_owner_file(fixture: &Fixture, file: &str, contents: &str) {
+    let exclude = fixture.repo.join(".git").join("info").join("exclude");
+    fs::create_dir_all(exclude.parent().unwrap()).unwrap();
+    let mut rules = fs::read_to_string(&exclude).unwrap_or_default();
+    rules.push_str(&format!("/{file}\n"));
+    fs::write(&exclude, rules).unwrap();
+    fs::write(fixture.repo.join(file), contents).unwrap();
+}
+
+/// Origin starts tracking the path of an ignored owner file: setup refuses
+/// before admission, names the path, and preserves the ref, index and bytes.
+fn an_ignored_owner_file_that_origin_would_overwrite_is_refused_and_preserved() {
+    let (fixture, host) = Fixture::hosted();
+    let owner_before = head(&fixture.repo);
+    ignore_owner_file(&fixture, "local-notes.txt", "unpublished bytes\n");
+    let origin_tip = push_to_origin_from_elsewhere(&fixture, "local-notes.txt");
+    let index_before = git(&fixture.repo, &["ls-files", "--stage"]);
+    let checkouts = registered_worktrees(&fixture.repo);
+    host.add_task("T-IGNORED", TaskStatus::Backlog);
+    let error = action(
+        &host,
+        "worktree_setup",
+        &setup_input(&["T-IGNORED"], "jrun-ignored"),
+    )
+    .expect_err("an ignored owner file that origin would overwrite is refused");
+    assert_owner_base_refusal(&error, &fixture.repo, &owner_before, &origin_tip);
+    assert!(
+        error.to_string().contains("local-notes.txt"),
+        "the refusal must name the conflicting path: {error}"
+    );
+    assert_eq!(head(&fixture.repo), owner_before, "the owner ref is kept");
+    assert_eq!(
+        git(&fixture.repo, &["ls-files", "--stage"]),
+        index_before,
+        "the owner index is kept"
+    );
+    assert_eq!(
+        read(fixture.repo.join("local-notes.txt")),
+        "unpublished bytes\n",
+        "the ignored owner file keeps its bytes"
+    );
+    assert!(host.admitted().is_empty(), "a refused setup admits no task");
+    assert_eq!(
+        registered_worktrees(&fixture.repo),
+        checkouts,
+        "a refused setup creates no worktree"
+    );
+}
+
+/// An ignored owner file at an unrelated path stays byte-identical and does not
+/// stop an otherwise safe fast-forward.
+fn an_unrelated_ignored_owner_file_does_not_block_the_fast_forward() {
+    let (fixture, host) = Fixture::hosted();
+    ignore_owner_file(&fixture, "local-notes.txt", "unpublished bytes\n");
+    let origin_tip = push_to_origin_from_elsewhere(&fixture, "from-elsewhere.txt");
+    host.add_task("T-UNRELATED", TaskStatus::Backlog);
+    let output = action(
+        &host,
+        "worktree_setup",
+        &setup_input(&["T-UNRELATED"], "jrun-unrelated"),
+    )
+    .expect("an unrelated ignored file does not block the fast-forward");
+    assert_eq!(output["base_sha"], origin_tip, "the run is cut from origin");
+    assert_eq!(head(&fixture.repo), origin_tip, "the owner advanced");
+    assert_eq!(
+        read(fixture.repo.join("local-notes.txt")),
+        "unpublished bytes\n",
+        "the unrelated ignored file is byte-identical"
+    );
+}
+
 /// Without an origin remote, or with one that cannot be fetched, local setup
 /// keeps cutting from the owner's own branch.
 fn local_setup_keeps_the_owner_base_when_origin_is_absent_or_unreachable() {
@@ -203,6 +276,14 @@ fn local_base_freshness_contracts() {
             (
                 "a_diverged_owner_base_is_refused_and_left_unmoved",
                 a_diverged_owner_base_is_refused_and_left_unmoved,
+            ),
+            (
+                "an_ignored_owner_file_that_origin_would_overwrite_is_refused_and_preserved",
+                an_ignored_owner_file_that_origin_would_overwrite_is_refused_and_preserved,
+            ),
+            (
+                "an_unrelated_ignored_owner_file_does_not_block_the_fast_forward",
+                an_unrelated_ignored_owner_file_does_not_block_the_fast_forward,
             ),
             (
                 "local_setup_keeps_the_owner_base_when_origin_is_absent_or_unreachable",
