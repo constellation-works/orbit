@@ -78,7 +78,7 @@ export function buildActionsRow(task, detail, context, { includeLifecycle = true
   if (includeLifecycle && task.status === "review" && taskPullRequestNumber(task)) appendFixPrControls(actions, task, detail, context, mutable);
   if (includeLifecycle && PILOT_STATUSES.has(task.status)) appendPilotControls(actions, task, detail, context, mutable);
   if (includeLifecycle && escalationTriage(task)) appendTriageControls(actions, task, detail, context, mutable);
-  if (includeLifecycle && (task.status === "blocked" || task.why_stuck)) appendRecoveryControls(actions, task, detail, context, mutable);
+  if (includeLifecycle && (task.status === "blocked" || task.why_stuck || task.published_candidate)) appendRecoveryControls(actions, task, detail, context, mutable);
   if (includeLifecycle && task.status !== "archived") {
     const btn = el("button", { class: "action archive", text: "archive" });
     btn.disabled = !mutable;

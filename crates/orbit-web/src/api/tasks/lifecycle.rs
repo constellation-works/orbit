@@ -78,7 +78,8 @@ pub(super) fn recovery_refusal(error: orbit_core::OrbitError, code: &'static str
     }
 }
 
-/// `POST /tasks/:id/requeue` — operator-gated requeue of a blocked task.
+/// `POST /tasks/:id/requeue` — operator-gated blocked requeue, or discard a
+/// stopped candidate from any open task.
 pub(in crate::api) async fn requeue_task_action(
     State(state): State<DashboardState>,
     headers: HeaderMap,
@@ -119,7 +120,11 @@ pub(in crate::api) async fn requeue_task_action(
             meta,
             |_| None,
             move |runtime| {
-                runtime.requeue_blocked_task_as(&id, &reason, discard, Some(DASHBOARD_ACTOR))
+                if discard {
+                    runtime.discard_task_candidate_as(&id, &reason, DASHBOARD_ACTOR)
+                } else {
+                    runtime.requeue_blocked_task_as(&id, &reason, false, Some(DASHBOARD_ACTOR))
+                }
             },
         )
     })

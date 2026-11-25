@@ -3,7 +3,7 @@
 
 use chrono::Utc;
 use orbit_common::OrbitError;
-use orbit_store::contracts::{CandidateFreshReason, KeptClaimCandidate};
+use orbit_store::contracts::{CandidateFreshReason, JobRunQuery, KeptClaimCandidate};
 use orbit_types::task::Task;
 use orbit_types::workflow::HeldCandidate;
 use serde_json::Value;
@@ -203,6 +203,74 @@ impl OrbitRuntime {
             return Ok(None);
         }
         Ok(Some(held))
+    }
+
+    /// Whether a task still has a published or retained candidate to discard.
+    /// This is a local evidence read, not an authentication of the candidate
+    /// for resumption; a changed specification can be the reason for discard.
+    pub fn task_has_discardable_candidate(&self, task: &Task) -> Result<bool, OrbitError> {
+        use orbit_types::task::{CANDIDATE_DISCARDED_EVENT, TaskStatus};
+        if matches!(task.status, TaskStatus::Done | TaskStatus::Archived) {
+            return Ok(false);
+        }
+        let history = self.get_task_history(&task.id)?;
+        let discarded_at = history
+            .iter()
+            .rev()
+            .find(|entry| entry.event == CANDIDATE_DISCARDED_EVENT)
+            .map(|entry| entry.at);
+        if let Some((_, held_at)) = self.stopped_run_held_candidate(task)?
+            && discarded_at.is_none_or(|at| held_at > at)
+        {
+            return Ok(true);
+        }
+        if let Some(kept) = self.stores().tasks().kept_claim_candidate(
+            &task.id,
+            self.automation_machine_identity().unwrap_or_default(),
+        )? && !matches!(
+            kept.fresh.as_ref().map(|(reason, _)| *reason),
+            Some(CandidateFreshReason::Discarded)
+        ) {
+            return Ok(true);
+        }
+        // A later attempt may have stopped before adopting an older published
+        // candidate. Search the task's local delivery history, not just the
+        // current binding, and ignore publications retired by a discard.
+        let runs = self.stores().jobs().list_job_runs_filtered(&JobRunQuery {
+            job_id: Some(orbit_types::workflow::TASK_PR_PIPELINE_JOB.to_string()),
+            task_id: Some(task.id.clone()),
+            created_since: discarded_at,
+            include_steps: false,
+            ..Default::default()
+        })?;
+        for run in runs {
+            if discarded_at.is_some_and(|at| run.created_at <= at) {
+                continue;
+            }
+            if let Some(state) = self.stored_run_state(&run.run_id)? {
+                let published = ["push", "pr_open"].iter().any(|key| {
+                    state
+                        .pipeline
+                        .get(*key)
+                        .is_some_and(|value| !value.is_null())
+                });
+                let handoff =
+                    state
+                        .failure_activity_checkpoint
+                        .as_ref()
+                        .is_some_and(|checkpoint| {
+                            checkpoint.activity_name == "pr_failure_handoff"
+                                && matches!(
+                                    checkpoint.output.get("decision").and_then(Value::as_str),
+                                    Some("blocked_failure_pr" | "blocked_conflict_pr")
+                                )
+                        });
+                if published || handoff {
+                    return Ok(true);
+                }
+            }
+        }
+        Ok(false)
     }
 
     /// Whether rewriting the specification of blocked `task` to `description`

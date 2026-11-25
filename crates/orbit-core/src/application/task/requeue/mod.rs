@@ -54,8 +54,9 @@
 //! CLI-only: `orbit.task.update` does not accept `discard_candidate`. That
 //! command records the discard, returns the task to the backlog so the next
 //! run implements fresh, and closes the task's undelivered Orbit pull requests.
-//! A blocked task's requeue carries the same discard (the dashboard and
-//! `orbit task requeue <id> --discard-candidate`), and a block-triage decision
+//! A blocked task's requeue carries the same discard (`orbit task requeue
+//! <id> --discard-candidate`). The dashboard also offers it for candidates on
+//! other open tasks, refusing live runs and claims, and a block-triage decision
 //! answer whose rewrite changes the specification discards the candidate with
 //! it, so the answer is not refused.
 //!
