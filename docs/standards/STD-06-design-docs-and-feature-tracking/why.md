@@ -22,6 +22,8 @@ Delivery state lived in prose banners that had to be read one by one and drifted
 independently. A separate `stage` field with five fixed values, plus one `next` line, made the
 state queryable and the next step visible.
 
+**R4.** Scribe standard-10 (agent entry quoting Daniel: "add updated_date and created_date on all frontmatters"). R4 required `last_updated` and no creation date, so a design doc could not record when it was created. The two dates now carry the names in the entry, and `last_updated` is replaced (scribe standard-10).
+
 **R7.** "Approved" and "built" are different moments, and the board is only useful if it moves
 with the work. Tying the change to the change that moves the feature (approving the first
 implementation task, landing the last slice) keeps the update in a diff someone reviews,
