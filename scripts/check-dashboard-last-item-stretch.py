@@ -128,15 +128,7 @@ def parent_pattern(parent):
     return re.compile(r"(?<![\w-])" + r"\s+".join(re.escape(part) for part in parent.split()))
 
 
-def direct_child(selector, stack):
-    match = parent_pattern(stack.parent).search(selector)
-    if match is None:
-        return False
-    tail = selector[match.end():]
-    child_match = re.match(r"\s*>\s*([^\s>+~]+)", tail)
-    if child_match is None:
-        return False
-    compound = child_match.group(1)
+def compound_matches_item(compound, stack):
     if "::" in compound:
         return False
     if stack.child == "*":
@@ -147,6 +139,61 @@ def direct_child(selector, stack):
     names = class_names(compound)
     aliases = {child_class, *(name.removeprefix(".") for name in stack.child_aliases)}
     return compound == "*" or bool(names & aliases) or ":last-child" in compound
+
+
+def direct_child(selector, stack):
+    match = parent_pattern(stack.parent).search(selector)
+    if match is None:
+        return False
+    tail = selector[match.end():]
+    child_match = re.match(r"\s*>\s*([^\s>+~]+)", tail)
+    if child_match is None:
+        return False
+    compound = child_match.group(1)
+    rest = tail[child_match.end():]
+    if rest.strip() == "":
+        return compound_matches_item(compound, stack)
+    # The selector continues past the direct child. Only a pure sibling
+    # chain (+/~) keeps the styled target as a direct child of the stack;
+    # a descendant (space) or nested child (>) styles something inside the
+    # item instead.
+    stripped = rest.strip()
+    if ">" in stripped:
+        return False
+    if not stripped.startswith(("+", "~")):
+        return False
+    parts = []
+    current: list[str] = []
+    depth = 0
+    for char in stripped:
+        if char in "([":
+            depth += 1
+            current.append(char)
+        elif char in ")]":
+            depth = max(0, depth - 1)
+            current.append(char)
+        elif depth == 0 and char in "+~":
+            parts.append("".join(current))
+            current = []
+        else:
+            current.append(char)
+    parts.append("".join(current))
+    for part in parts:
+        inner = part.strip()
+        if inner == "":
+            continue
+        nested = 0
+        for char in inner:
+            if char in "([":
+                nested += 1
+            elif char in ")]":
+                nested = max(0, nested - 1)
+            elif nested == 0 and char.isspace():
+                return False
+    sibling_target = parts[-1].strip()
+    if not sibling_target:
+        return False
+    return compound_matches_item(sibling_target, stack)
 
 
 def last_compound(selector):
