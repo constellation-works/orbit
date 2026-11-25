@@ -1996,69 +1996,130 @@ fn a_claimed_already_resolved_base_replays_its_named_tests_and_completes_without
     }
 }
 
-/// An overlapping required command and native replay retain separate evidence.
+/// An overlapping required command and native replay retain separate evidence,
+/// for both report-free and report-backed clean handoffs.
 #[cfg(unix)]
 fn overlapping_required_command_and_replay_settle_with_separate_valid_evidence() {
-    for job in NO_DIFF_ROUTES {
-        let replay = Replay::new();
-        let mut fixture = CleanLeaf::build_requiring(
-            false,
-            "done",
-            &[],
-            false.into(),
-            None,
-            &Replay::host_command(),
-            &replay.config(),
-            None,
-            None,
-        );
-        fixture.input["implementation"]["already_resolved"] =
-            json!({"selectors": [Replay::SELECTOR]});
-        let handoff = fixture.run_clean_pipeline(job);
-        assert_eq!(
-            fixture.owner_validated_commands(&handoff),
-            vec![Replay::host_command(), Replay::host_command()]
-        );
-        assert_ne!(handoff.validation[0].path, handoff.validation[1].path);
-        assert_eq!(replay.runs().len(), 2);
+    for report in [false, true] {
+        for job in NO_DIFF_ROUTES {
+            let replay = Replay::new();
+            let mut fixture = CleanLeaf::build_requiring(
+                false,
+                "done",
+                &[],
+                report.into(),
+                None,
+                &Replay::host_command(),
+                &replay.config(),
+                None,
+                None,
+            );
+            fixture.input["implementation"]["already_resolved"] =
+                json!({"selectors": [Replay::SELECTOR]});
+            let handoff = fixture.run_clean_pipeline(job);
+            assert_eq!(
+                fixture.owner_validated_commands(&handoff),
+                vec![Replay::host_command(), Replay::host_command()],
+                "{job} (report={report})"
+            );
+            assert_ne!(handoff.validation[0].path, handoff.validation[1].path);
+            assert_eq!(replay.runs().len(), 2);
 
-        let mut missing = handoff.clone();
-        missing.validation.pop();
-        assert!(
-            fixture.settle(&missing).is_err(),
-            "{job}: required check alone is not replay evidence"
-        );
-        let mut repeated = handoff.clone();
-        repeated.validation[1] = repeated.validation[0].clone();
-        assert!(
-            fixture.settle(&repeated).is_err(),
-            "{job}: one artifact cannot stand in for both runs"
-        );
+            let mut missing = handoff.clone();
+            missing.validation.pop();
+            assert!(
+                fixture.settle(&missing).is_err(),
+                "{job} (report={report}): required check alone is not replay evidence"
+            );
+            let mut repeated = handoff.clone();
+            repeated.validation[1] = repeated.validation[0].clone();
+            assert!(
+                fixture.settle(&repeated).is_err(),
+                "{job} (report={report}): one artifact cannot stand in for both runs"
+            );
 
-        let reference = &handoff.validation[1];
-        let artifact = fixture
-            .pair
-            .wire
-            .owner
-            .get_task_artifact(&fixture.task, &reference.path)
-            .unwrap()
-            .unwrap();
-        let original: Value = serde_json::from_slice(&artifact.content).unwrap();
-        let mut invalid = original.clone();
-        invalid["run_id"] = json!("another-run");
-        let content = serde_json::to_vec(&invalid).unwrap();
-        let invalid_path = format!("{}.wrong-run", reference.path);
-        fixture.attach(&invalid_path, invalid);
-        let mut wrong_run = handoff.clone();
-        wrong_run.validation[1].path = invalid_path;
-        wrong_run.validation[1].sha256 = sha256_hex(&content);
-        assert!(
-            fixture.settle(&wrong_run).is_err(),
-            "{job}: replay must match the claim run"
-        );
-        assert_settles_to_review(&fixture, &handoff, job);
-        fixture.land(&handoff);
-        fixture.assert_status("done");
+            let reference = &handoff.validation[1];
+            let artifact = fixture
+                .pair
+                .wire
+                .owner
+                .get_task_artifact(&fixture.task, &reference.path)
+                .unwrap()
+                .unwrap();
+            let original: Value = serde_json::from_slice(&artifact.content).unwrap();
+            let mut invalid = original.clone();
+            invalid["run_id"] = json!("another-run");
+            let content = serde_json::to_vec(&invalid).unwrap();
+            let invalid_path = format!("{}.wrong-run", reference.path);
+            fixture.attach(&invalid_path, invalid);
+            let mut wrong_run = handoff.clone();
+            wrong_run.validation[1].path = invalid_path;
+            wrong_run.validation[1].sha256 = sha256_hex(&content);
+            assert!(
+                fixture.settle(&wrong_run).is_err(),
+                "{job} (report={report}): replay must match the claim run"
+            );
+
+            let mut unrelated_dup = handoff.clone();
+            for index in 0..2 {
+                let mut extra = original.clone();
+                extra["command"] = json!(CHECK);
+                let extra_bytes = serde_json::to_vec(&extra).unwrap();
+                let extra_path = format!("{}.unrelated-{index}", reference.path);
+                fixture.attach(&extra_path, extra);
+                unrelated_dup.validation.push(HandoffArtifactRef {
+                    path: extra_path,
+                    sha256: sha256_hex(&extra_bytes),
+                });
+            }
+            let error = fixture
+                .settle(&unrelated_dup)
+                .expect_err("unrelated duplicate commands must remain refused");
+            assert!(
+                error.to_string().contains("validation command duplicated"),
+                "{job} (report={report}): {error}"
+            );
+
+            let mut third_overlap = handoff.clone();
+            let extra_path = format!("{}.third-overlap", reference.path);
+            fixture.attach(&extra_path, original);
+            third_overlap.validation.push(HandoffArtifactRef {
+                path: extra_path,
+                sha256: reference.sha256.clone(),
+            });
+            assert!(
+                fixture.settle(&third_overlap).is_err(),
+                "{job} (report={report}): more than two logs for an overlapping command must be refused"
+            );
+
+            if report {
+                let HandoffDelivery::NoDiff { evidence } = &handoff.candidate.delivery else {
+                    panic!("{job}: expected NoDiff")
+                };
+                let artifacts = fixture.owner_artifacts();
+                assert!(
+                    artifacts
+                        .iter()
+                        .any(|artifact| artifact.path == "no-diff.json"),
+                    "{job}: report-backed overlap retains no-diff.json"
+                );
+                let checkpoint = artifacts
+                    .iter()
+                    .find(|artifact| artifact.path == evidence.path)
+                    .expect("owner holds the report-backed NoDiff checkpoint");
+                let checkpoint: Value = serde_json::from_slice(&checkpoint.content).unwrap();
+                assert_eq!(checkpoint["decision"], "verified_no_diff", "{job}");
+                assert_eq!(
+                    checkpoint["already_resolved_evidence"]["selectors"],
+                    json!([Replay::SELECTOR]),
+                    "{job}"
+                );
+            }
+
+            assert_settles_to_review(&fixture, &handoff, job);
+            fixture.land(&handoff);
+            fixture.assert_status("done");
+        }
     }
 }
 
