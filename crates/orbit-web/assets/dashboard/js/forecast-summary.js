@@ -82,22 +82,22 @@ export function forecastMetricReason(scenario, quantiles, metric, arrivals) {
   const { source, coverage = {} } = scenario;
   if (source?.schedulable_subset) return SUBSET_REASON;
   const reasons = [];
-  if (metric === "tokens" && num(coverage.uncovered_model)) reasons.push("Some tasks have no priced history.");
+  if (metric === "tokens" && num(coverage.uncovered_model)) reasons.push("Some tasks have no token history for the model.");
   if (metric === "usd" && num(coverage.uncosted)) reasons.push("Some tasks have no costed history.");
   // The rework pool is priced separately from the tasks: with every task
   // priced it alone leaves the total unknown, and the per-task figures
-  // exclude it.
+  // exclude it. Tokens are never priced: their follow-up share is unmeasured.
   const rework = source?.regression_rework;
   if (!reasons.length && rework?.available !== false && rework && !quantilePair(rework[metric])) {
     reasons.push(metric === "usd"
       ? "Regression follow-up cost is unpriced, so the total is unknown. The listed task costs exclude it."
-      : "Regression follow-up tokens are unpriced, so the total is unknown. The per-task figures exclude it.");
+      : "Regression follow-up tokens are unmeasured, so the total is unknown. The per-task figures exclude them.");
   }
   if (scenario.key === "arrivals" && arrivals?.coverage?.[`missing_${metric}`]) {
     reasons.push(metric === "tokens" ? "Some arrival history is missing token telemetry." : "Some arrival history is missing cost telemetry.");
   }
   if (reasons.length) return reasons.join(" ");
-  return metric === "tokens" ? "Not enough priced history." : "Not enough costed history.";
+  return metric === "tokens" ? "Not enough token history." : "Not enough costed history.";
 }
 
 export function forecastCount(value) {
@@ -189,13 +189,25 @@ export function forecastBoundedGap(forecast) {
   const reasonPhrase = reasons.map((reason) => `${reason.label} ${reason.count}`).join(", ");
   const compact = `${gaps} of ${observations} fix observation${observations === 1 ? "" : "s"} missing (${shareText})`;
   const summary = `Bounded regression gaps: ${compact}.`;
+  // Plain-words hint for the amber line: the same facts as above, without the
+  // pool/drawn-fix/footprint/bundle vocabulary (STD-07 P1/R16). The shared
+  // `reasonPhrase` keeps its labels for the unavailable reasons; only this
+  // hint is reworded.
+  const plainReasons = reasons.map((reason) => {
+    const plain = {
+      unmeasured_delivery: "no measured delivery",
+      footprint_unrecoverable: "no recoverable history",
+      origin_completion_missing: "no recorded completion",
+    }[reason.key] ?? reason.label;
+    return `${plain} ${reason.count}`;
+  }).join(", ");
   const scopeParts = [
-    tasks ? `${tasks} task${tasks === 1 ? "" : "s"} sample${tasks === 1 ? "s" : ""} a bounded regression pool` : "Sampled regression pools hold bounded gaps",
-    `${gaps} missing + ${drawnFixes} drawn fix${drawnFixes === 1 ? "" : "es"} = ${shareText}`,
-    reasonPhrase,
-    maxShareText ? `cap ${maxShareText}` : "",
+    tasks ? `${tasks} task${tasks === 1 ? "" : "s"} use${tasks === 1 ? "s" : ""} sampled regression history` : "Sampled regression history holds bounded gaps",
+    `${gaps} of ${observations} recorded fixes missing, ${shareText}`,
+    plainReasons,
+    maxShareText ? `at most ${maxShareText} missing` : "",
   ].filter(Boolean);
-  const detail = `${scopeParts[0]} (${scopeParts.slice(1).join("; ")}). Measured bundles stand in for unmeasured fixes.`;
+  const detail = `${scopeParts[0]} (${scopeParts.slice(1).join("; ")}). Recorded fixes stand in for the missing ones.`;
   return {
     tasks, gaps, drawnFixes, observations, share, shareText, maxShare, maxShareText,
     reasons, reasonPhrase, compact, summary, detail,
