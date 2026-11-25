@@ -375,3 +375,151 @@ fn resident_promote_held_evaluates_active_pilot_admission_holds() {
         assert!(audit_comment.contains("promote_held"), "{audit_comment}");
     });
 }
+
+#[test]
+fn resident_promote_held_keeps_native_holds_despite_no_pilot() {
+    if !crate::dispatch_admission::isolated(
+        "resident_cycle::promote_held::resident_promote_held_keeps_native_holds_despite_no_pilot",
+    ) {
+        return;
+    }
+    let fx = fixture();
+    let proposal = |title: &str, task_type: TaskType, tags: &[&str], criterion: &str| {
+        fx.add_task(TaskAddParams {
+            title: title.into(),
+            description: "Adjust host-specific validation handling.".into(),
+            acceptance_criteria: vec![criterion.into()],
+            task_type: Some(task_type),
+            tags: tags.iter().map(|tag| (*tag).to_string()).collect(),
+            status: Some(TaskStatus::Proposed),
+            ..Default::default()
+        })
+    };
+
+    // Already carrying `no-pilot` before the explicit assessment: preparation
+    // still assesses the proposal and apply seals the existing tags with the
+    // native finding, so the freshness checks succeed.
+    let untagged_no_pilot = proposal(
+        "No-pilot conflicting OS tag leaves required_os untagged",
+        TaskType::Bug,
+        &["no-auto-approve", "no-pilot", "os:macos"],
+        "Linux sandbox validation succeeds.",
+    );
+    let machine_no_pilot = proposal(
+        "No-pilot owner-machine validation required",
+        TaskType::Chore,
+        &["no-auto-approve", "no-pilot"],
+        "Owner machine live store check passes.",
+    );
+    let satisfied_no_pilot = proposal(
+        "No-pilot Linux-only bug fix",
+        TaskType::Bug,
+        &["no-auto-approve", "no-pilot"],
+        "Linux sandbox validation succeeds.",
+    );
+
+    assess_with(
+        &fx,
+        &fx.runtime,
+        &untagged_no_pilot,
+        json!({
+            "required_os": [{
+                "criterion": 1,
+                "os": "linux",
+                "evidence": "Criterion 1 requires a native Linux sandbox.",
+            }],
+        }),
+    );
+    assert!(
+        !fx.runtime
+            .get_task(&untagged_no_pilot)
+            .unwrap()
+            .tags
+            .iter()
+            .any(|tag| tag == "os:linux"),
+        "existing os:macos tag must keep required_os untagged"
+    );
+    assert!(
+        fx.runtime
+            .get_task(&untagged_no_pilot)
+            .unwrap()
+            .tags
+            .iter()
+            .any(|tag| tag == "no-pilot"),
+        "apply must seal the existing no-pilot tag"
+    );
+
+    let automation = fx.automation_runtime();
+    assess_with(
+        &fx,
+        &automation,
+        &machine_no_pilot,
+        json!({
+            "required_machine": [{
+                "criterion": 1,
+                "machine": "fixture-machine",
+                "evidence": "Criterion 1 reads live state on fixture-machine.",
+            }],
+        }),
+    );
+    assert!(
+        fx.runtime
+            .get_task(&machine_no_pilot)
+            .unwrap()
+            .tags
+            .iter()
+            .any(|tag| tag == "no-pilot"),
+        "apply must seal the existing no-pilot tag"
+    );
+
+    let satisfied_assessment = assess_with(
+        &fx,
+        &fx.runtime,
+        &satisfied_no_pilot,
+        json!({
+            "required_os": [{
+                "criterion": 1,
+                "os": "linux",
+                "evidence": "Criterion 1 requires a native Linux sandbox.",
+            }],
+        }),
+    );
+    let satisfied_task = fx.runtime.get_task(&satisfied_no_pilot).unwrap();
+    assert!(
+        satisfied_task.tags.iter().any(|tag| tag == "os:linux"),
+        "pilot apply should add os:linux: {:?}",
+        satisfied_task.tags
+    );
+    assert!(
+        satisfied_task.tags.iter().any(|tag| tag == "no-pilot"),
+        "apply must seal the existing no-pilot tag: {:?}",
+        satisfied_task.tags
+    );
+
+    let mandate = fx.mandate(&satisfied_no_pilot);
+    fx.grant(&mandate, &["promote_held"]);
+    let run = fx.cycle_run(&mandate, "held-promotion-no-pilot-native");
+    fx.begin_cycle(&run, Utc::now());
+    let promote =
+        |id: &str| fx.agent_call("orbit.task.update", json!({"id": id, "status": "backlog"}));
+    fx.as_cycle_agent(&run, || {
+        for id in [&untagged_no_pilot, &machine_no_pilot] {
+            let error = promote(id).unwrap_err();
+            assert!(error.contains("pilot_admission_hold"), "{id}: {error}");
+            assert_eq!(
+                fx.runtime.get_task(id).unwrap().status,
+                TaskStatus::Proposed
+            );
+        }
+
+        let result = promote(&satisfied_no_pilot).unwrap();
+        assert_eq!(result["status"], "backlog", "{result}");
+        let comments = fx.runtime.get_task_comments(&satisfied_no_pilot).unwrap();
+        let audit_comment = &comments.last().unwrap().message;
+        assert!(
+            audit_comment.contains(&satisfied_assessment),
+            "{audit_comment}"
+        );
+        assert!(audit_comment.contains("promote_held"), "{audit_comment}");
+    });
+}

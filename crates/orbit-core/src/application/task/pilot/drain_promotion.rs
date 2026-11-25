@@ -823,6 +823,25 @@ pub(super) fn classify_reuse(
             detail: None,
         });
     }
+    // Resident `promote_held` requires a current pilot free of unresolved
+    // holds, while ordinary dispatch honors the operator's `no-pilot` skip.
+    // The projection above respects that skip, so an outstanding machine or
+    // untagged native OS requirement on a `no-pilot` proposal would otherwise
+    // promote. Keep those native holds here; a matching `os:` routing tag, a
+    // re-scope or a trusted resolution still releases them.
+    if promotion_policy == PromotionPolicy::ResidentHeld
+        && audit
+            .get("native_os_hold")
+            .is_some_and(|hold| !hold.is_null())
+        && runtime
+            .pilot_native_hold_ignoring_pilot_skip(task, &audit, &history)?
+            .is_some()
+    {
+        return Ok(ExplicitAssessmentReuse::Hold {
+            reason: "pilot_admission_hold",
+            detail: None,
+        });
+    }
     promotable_reuse(
         runtime,
         task,
