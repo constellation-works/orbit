@@ -7,7 +7,6 @@
 //! never from a cache.
 
 use chrono::{DateTime, Utc};
-use orbit_common::OrbitError;
 use serde_json::Value;
 
 use super::{HostResourceMinute, RunResourceMinute};
@@ -98,39 +97,4 @@ pub struct AdmissionLoad {
     /// Every delivery run's minutes since `resource_minutes_since`, live or
     /// finished, oldest first.
     pub run_minutes: Vec<AdmissionRunMinute>,
-}
-
-/// The caller's decision: the reservations to write for what it admitted.
-pub type AdmissionDecision<'a> =
-    &'a mut dyn FnMut(&AdmissionLoad) -> Result<Vec<NewAdmissionReservation>, OrbitError>;
-
-pub trait AdmissionLoadStoreBackend: Send + Sync {
-    /// Under the host lock, an `IMMEDIATE` transaction on this database:
-    /// delete expired reservations, read the load fresh, call `decide`, write
-    /// one reservation stamped `query.now` per entry it returns, and commit.
-    /// A task holds one reservation: those written replace any earlier ones
-    /// for the same `(workspace, task)`, while entries of one call for the
-    /// same task (a pending pull's alternatives) are all kept. Returns the
-    /// reservations written. An error from `decide` writes nothing.
-    ///
-    /// `decide` runs while the database is locked for writing: it must only
-    /// compute, and must not call this store, the network or a subprocess.
-    fn admit_under_host_lock(
-        &self,
-        query: &AdmissionLoadQuery<'_>,
-        decide: AdmissionDecision<'_>,
-    ) -> Result<Vec<AdmissionReservation>, OrbitError> {
-        self.admit_under_host_lock_replacing(query, &[], decide)
-    }
-
-    /// Remove each `(workspace, task)` reservation key before reading the
-    /// forecast, then decide and write replacements in the same host lock.
-    /// An error rolls back removals as well as writes. Used to refresh pending
-    /// requests and exchange their capacity for the granted task atomically.
-    fn admit_under_host_lock_replacing(
-        &self,
-        query: &AdmissionLoadQuery<'_>,
-        remove: &[(&str, &str)],
-        decide: AdmissionDecision<'_>,
-    ) -> Result<Vec<AdmissionReservation>, OrbitError>;
 }

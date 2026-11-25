@@ -11,7 +11,7 @@ use orbit_core::application::task::TaskAddParams;
 use orbit_core::{OrbitRuntime, TaskComplexity, TaskStatus, TaskType};
 use orbit_store::contracts::{
     DiffClassCounts, ExperimentAssignment, ExperimentStoreBackend, LandedDiffSource,
-    LandedDiffStats, LandedDiffStoreBackend, ReviewableLines,
+    LandedDiffStats, ReviewableLines,
 };
 use orbit_types::task::TaskHistoryEntry;
 use orbit_types::telemetry::{InvocationTrace, TokenUsage};
@@ -184,27 +184,29 @@ fn lines(
     runtime
         .sqlite_store()
         .unwrap()
-        .record_landed_diff_stats(&LandedDiffStats {
-            workspace_id: runtime.workspace_id().unwrap(),
-            task_id: task_id.to_string(),
-            base_commit: format!("{:040x}", seq * 2),
-            landed_commit: format!("{:040x}", seq * 2 + 1),
-            landed_at: Utc::now(),
-            recorded_at: Utc::now(),
-            job_run_id: None,
-            source: LandedDiffSource::Landing,
-            crew: None,
-            model: None,
-            complexity: None,
-            task_type: None,
-            code: DiffClassCounts {
-                added: class_added,
-                deleted: 0,
-                files: 1,
-            },
-            tests: DiffClassCounts::default(),
-            other: DiffClassCounts::default(),
-            reviewable,
+        .write(|tx| {
+            tx.landed_diff().put(&LandedDiffStats {
+                workspace_id: runtime.workspace_id().unwrap(),
+                task_id: task_id.to_string(),
+                base_commit: format!("{:040x}", seq * 2),
+                landed_commit: format!("{:040x}", seq * 2 + 1),
+                landed_at: Utc::now(),
+                recorded_at: Utc::now(),
+                job_run_id: None,
+                source: LandedDiffSource::Landing,
+                crew: None,
+                model: None,
+                complexity: None,
+                task_type: None,
+                code: DiffClassCounts {
+                    added: class_added,
+                    deleted: 0,
+                    files: 1,
+                },
+                tests: DiffClassCounts::default(),
+                other: DiffClassCounts::default(),
+                reviewable,
+            })
         })
         .unwrap();
 }

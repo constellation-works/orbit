@@ -999,40 +999,40 @@ fn delivery_review_regressions_rank_crews_without_pre_landing_review() {
                     Vec::new(),
                 ));
             }
-            use orbit_store::contracts::{
-                DiffClassCounts, LandedDiffSource, LandedDiffStats, LandedDiffStoreBackend,
-            };
+            use orbit_store::contracts::{DiffClassCounts, LandedDiffSource, LandedDiffStats};
             for (index, id) in ids.iter().take(3).enumerate() {
                 fixture
                     .runtime
                     .sqlite_store()
                     .unwrap()
-                    .record_landed_diff_stats(&LandedDiffStats {
-                        workspace_id: "ws_http_fixture".into(),
-                        task_id: id.clone(),
-                        base_commit: "base".into(),
-                        landed_commit: format!("head-{index}"),
-                        landed_at: Utc::now() - Duration::minutes(10),
-                        recorded_at: Utc::now(),
-                        job_run_id: None,
-                        source: LandedDiffSource::Landing,
-                        crew: None,
-                        model: None,
-                        complexity: None,
-                        task_type: None,
-                        code: DiffClassCounts {
-                            added: if index == 2 { 150 } else { 50 },
-                            ..Default::default()
-                        },
-                        tests: DiffClassCounts {
-                            deleted: 25,
-                            ..Default::default()
-                        },
-                        other: DiffClassCounts {
-                            added: 25,
-                            ..Default::default()
-                        },
-                        reviewable: None,
+                    .write(|tx| {
+                        tx.landed_diff().put(&LandedDiffStats {
+                            workspace_id: "ws_http_fixture".into(),
+                            task_id: id.clone(),
+                            base_commit: "base".into(),
+                            landed_commit: format!("head-{index}"),
+                            landed_at: Utc::now() - Duration::minutes(10),
+                            recorded_at: Utc::now(),
+                            job_run_id: None,
+                            source: LandedDiffSource::Landing,
+                            crew: None,
+                            model: None,
+                            complexity: None,
+                            task_type: None,
+                            code: DiffClassCounts {
+                                added: if index == 2 { 150 } else { 50 },
+                                ..Default::default()
+                            },
+                            tests: DiffClassCounts {
+                                deleted: 25,
+                                ..Default::default()
+                            },
+                            other: DiffClassCounts {
+                                added: 25,
+                                ..Default::default()
+                            },
+                            reviewable: None,
+                        })
                     })
                     .unwrap();
             }

@@ -2673,34 +2673,34 @@ analytics_test!(
 /// A landed-delivery row of `lines` changed lines for `task_id`; `seq`
 /// keeps each row's commit distinct.
 fn landed_row(fixture: &Fixture, task_id: &str, seq: usize, lines: u64) {
-    use orbit_store::contracts::{
-        DiffClassCounts, LandedDiffSource, LandedDiffStats, LandedDiffStoreBackend as _,
-    };
+    use orbit_store::contracts::{DiffClassCounts, LandedDiffSource, LandedDiffStats};
     fixture
         .runtime
         .sqlite_store()
         .unwrap()
-        .record_landed_diff_stats(&LandedDiffStats {
-            workspace_id: "ws_http_fixture".into(),
-            task_id: task_id.into(),
-            base_commit: format!("{:040x}", 2 * seq),
-            landed_commit: format!("{:040x}", 2 * seq + 1),
-            landed_at: Utc::now() - Duration::minutes(1),
-            recorded_at: Utc::now(),
-            job_run_id: None,
-            source: LandedDiffSource::Landing,
-            crew: None,
-            model: None,
-            complexity: None,
-            task_type: None,
-            code: DiffClassCounts {
-                added: lines - lines / 4,
-                deleted: lines / 4,
-                files: 1,
-            },
-            tests: DiffClassCounts::default(),
-            other: DiffClassCounts::default(),
-            reviewable: None,
+        .write(|tx| {
+            tx.landed_diff().put(&LandedDiffStats {
+                workspace_id: "ws_http_fixture".into(),
+                task_id: task_id.into(),
+                base_commit: format!("{:040x}", 2 * seq),
+                landed_commit: format!("{:040x}", 2 * seq + 1),
+                landed_at: Utc::now() - Duration::minutes(1),
+                recorded_at: Utc::now(),
+                job_run_id: None,
+                source: LandedDiffSource::Landing,
+                crew: None,
+                model: None,
+                complexity: None,
+                task_type: None,
+                code: DiffClassCounts {
+                    added: lines - lines / 4,
+                    deleted: lines / 4,
+                    files: 1,
+                },
+                tests: DiffClassCounts::default(),
+                other: DiffClassCounts::default(),
+                reviewable: None,
+            })
         })
         .unwrap();
 }

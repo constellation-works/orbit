@@ -32,7 +32,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use chrono::{DateTime, Utc};
 use orbit_common::security::release::sha256_hex;
-use orbit_store::contracts::{AgentFactsStoreBackend, AgentTaskFactsRow};
+use orbit_store::contracts::AgentTaskFactsRow;
 use orbit_types::task::{Task, TaskHistoryEntry};
 
 use super::super::records::block_cause;
@@ -87,7 +87,11 @@ impl StoredFacts {
         task_ids: &[String],
     ) -> Self {
         let loaded = runtime.workspace_id().and_then(|workspace_id| {
-            let rows = runtime.sqlite_store()?.agent_task_facts(&workspace_id)?;
+            let rows = runtime
+                .sqlite_store()?
+                .read()?
+                .agent_fact()
+                .list(&workspace_id)?;
             Ok((workspace_id, rows))
         });
         let (workspace_id, rows) = match loaded {
@@ -230,7 +234,11 @@ impl StoredFacts {
             if store.is_read_only() {
                 return Ok(());
             }
-            store.write_agent_task_facts(&workspace_id, &self.writes, &removed)
+            store.write(|tx| {
+                let repo = tx.agent_fact();
+                repo.put_many(&workspace_id, &self.writes)?;
+                repo.delete_many(&workspace_id, &removed)
+            })
         });
         if let Err(error) = written {
             tracing::warn!(%error, "agent scorecards: task facts not stored; the next scan recomputes them");

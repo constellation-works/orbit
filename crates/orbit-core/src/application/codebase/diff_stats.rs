@@ -29,10 +29,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
 use orbit_common::fs::path_filter::PathFilter;
-use orbit_store::contracts::{
-    DiffClassCounts, LandedDiffSource, LandedDiffStats, LandedDiffStoreBackend as _,
-    ReviewableLines,
-};
+use orbit_store::contracts::{DiffClassCounts, LandedDiffSource, LandedDiffStats, ReviewableLines};
 use orbit_types::task::{Task, TaskStatus};
 use orbit_types::workflow::automation::DirectLandingRequest;
 use serde::Serialize;
@@ -139,7 +136,9 @@ impl OrbitRuntime {
         since: Option<DateTime<Utc>>,
     ) -> Result<Vec<LandedDiffStats>, OrbitError> {
         self.sqlite_store()?
-            .landed_diff_stats_since(&self.workspace_id()?, since)
+            .read()?
+            .landed_diff()
+            .list_since(&self.workspace_id()?, since)
     }
 
     /// Lines added plus deleted over every landed delivery, per task.
@@ -256,7 +255,9 @@ impl OrbitRuntime {
         }
         let recorded: BTreeSet<String> = self
             .sqlite_store()?
-            .landed_diff_task_ids(&self.workspace_id()?)?;
+            .read()?
+            .landed_diff()
+            .task_ids(&self.workspace_id()?)?;
         let mut done: Vec<Task> = self
             .list_task_metadata()?
             .into_iter()
@@ -361,27 +362,28 @@ impl OrbitRuntime {
             .and_then(|run| run.resolved_crew.clone())
             .or_else(|| task.crew.clone());
         let model = run.and_then(|run| run.crew_model);
+        let row = LandedDiffStats {
+            workspace_id: self.workspace_id()?,
+            task_id: landing.task_id.to_string(),
+            landed_commit: landing.landed_commit.to_string(),
+            base_commit: base_commit.to_string(),
+            job_run_id: landing.job_run_id.map(str::to_owned),
+            landed_at: landing.landed_at,
+            recorded_at: Utc::now(),
+            source: landing.source,
+            crew,
+            model,
+            complexity: task
+                .complexity
+                .map(|complexity| complexity.as_str().to_string()),
+            task_type: Some(task.task_type.to_string()),
+            code: counts.code,
+            tests: counts.tests,
+            other: counts.other,
+            reviewable,
+        };
         self.sqlite_store()?
-            .record_landed_diff_stats(&LandedDiffStats {
-                workspace_id: self.workspace_id()?,
-                task_id: landing.task_id.to_string(),
-                landed_commit: landing.landed_commit.to_string(),
-                base_commit: base_commit.to_string(),
-                job_run_id: landing.job_run_id.map(str::to_owned),
-                landed_at: landing.landed_at,
-                recorded_at: Utc::now(),
-                source: landing.source,
-                crew,
-                model,
-                complexity: task
-                    .complexity
-                    .map(|complexity| complexity.as_str().to_string()),
-                task_type: Some(task.task_type.to_string()),
-                code: counts.code,
-                tests: counts.tests,
-                other: counts.other,
-                reviewable,
-            })?;
+            .write(|tx| tx.landed_diff().put(&row))?;
         Ok(())
     }
 

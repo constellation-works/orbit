@@ -9,7 +9,7 @@ feature: auto-concurrency
 doc_role: design
 summary: Proposed mechanism for predictive admission — per-task CPU and memory sampling from Linux worker scopes and the macOS process tree, resource profiles per workspace, work class and complexity, a host-wide load forecast with admission reservations, gap-fit admission under the existing throttle, and a shadow-first rollout.
 tags: [auto-concurrency, drain, capacity, admission]
-paths: ["crates/orbit-core/src/application/job/pipeline/worker/scope.rs", "crates/orbit-core/src/application/job/pipeline/worker/usage/sampler.rs", "crates/orbit-core/src/application/job/pipeline/worker/delivery_class.rs", "crates/orbit-core/src/application/admission/auto_admission.rs", "crates/orbit-core/src/application/admission/gap_fit.rs", "crates/orbit-core/src/application/workspace_auto/classify/**", "crates/orbit-core/src/application/workspace_auto/limiters.rs", "crates/orbit-core/src/application/pull_drain/refill/**", "crates/orbit-runtime/src/host_resource/**", "crates/orbit-store/src/driver/sqlite/admission_load_store.rs", "crates/orbit-config/src/registry/settings/machine.rs", "crates/orbit-core/src/application/distributed/work_fit.rs", "crates/orbit-store/src/contracts/task/coordination/admission.rs"]
+paths: ["crates/orbit-core/src/application/job/pipeline/worker/scope.rs", "crates/orbit-core/src/application/job/pipeline/worker/usage/sampler.rs", "crates/orbit-core/src/application/job/pipeline/worker/delivery_class.rs", "crates/orbit-core/src/application/admission/auto_admission.rs", "crates/orbit-core/src/application/admission/gap_fit.rs", "crates/orbit-core/src/application/workspace_auto/classify/**", "crates/orbit-core/src/application/workspace_auto/limiters.rs", "crates/orbit-core/src/application/pull_drain/refill/**", "crates/orbit-runtime/src/host_resource/**", "crates/orbit-store/src/repository/admission_load.rs", "crates/orbit-config/src/registry/settings/machine.rs", "crates/orbit-core/src/application/distributed/work_fit.rs", "crates/orbit-store/src/contracts/task/coordination/admission.rs"]
 related_features: [auto-concurrency, distributed-drain]
 related_artifacts: [ORB-15757, ORB-15774]
 ---
@@ -1067,8 +1067,8 @@ task, when a later decision reserves the same task, or after five minutes if
 dispatch failed. The lock covers only computation over local
 tables, so it is held for milliseconds.
 
-Implemented as `OrbitRuntime::admit_against_forecast`, over the store's
-`admit_under_host_lock`:
+Implemented as `OrbitRuntime::admit_against_forecast`, inside `Store::write`
+over `Tx::admission_load()`:
 
 - **One entry point.** The caller passes its decision. It gets the forecast
   and returns its own outcome and the tasks it admitted, each with the profile

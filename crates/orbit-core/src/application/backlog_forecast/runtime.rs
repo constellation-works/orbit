@@ -1,6 +1,6 @@
 use chrono::{DateTime, Duration, Utc};
 use orbit_common::OrbitError;
-use orbit_store::contracts::{BacklogForecastStoreBackend as _, StoredBacklogForecast};
+use orbit_store::contracts::StoredBacklogForecast;
 use orbit_types::task::TaskStatus;
 use serde_json::Value;
 
@@ -94,8 +94,15 @@ impl OrbitRuntime {
         min_interval: Duration,
     ) -> Result<bool, OrbitError> {
         forecast.workspace_id = self.workspace_id()?;
-        self.sqlite_store()?
-            .record_backlog_forecast(&forecast, min_interval)
+        // The check and the insert share one immediate transaction, so two
+        // concurrent readers cannot both store a forecast for the same hour.
+        self.sqlite_store()?.write(|tx| {
+            let repo = tx.backlog_forecast();
+            if repo.has_after(&forecast.workspace_id, forecast.forecast_at - min_interval)? {
+                return Ok(false);
+            }
+            repo.put(&forecast)
+        })
     }
 
     /// This workspace's newest `limit` stored forecasts, newest first.
@@ -104,6 +111,8 @@ impl OrbitRuntime {
         limit: usize,
     ) -> Result<Vec<StoredBacklogForecast>, OrbitError> {
         self.sqlite_store()?
-            .backlog_forecasts(&self.workspace_id()?, limit)
+            .read()?
+            .backlog_forecast()
+            .list(&self.workspace_id()?, limit)
     }
 }

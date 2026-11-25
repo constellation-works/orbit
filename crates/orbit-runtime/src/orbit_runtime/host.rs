@@ -1,13 +1,13 @@
 //! Host lifecycle, forge, and resource probes.
 
+use std::collections::BTreeSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 
 use chrono::{DateTime, Duration, Utc};
 use orbit_common::OrbitError;
 use orbit_store::contracts::{
-    AdmissionForecastRecord, AdmissionLoadQuery, AdmissionLoadStoreBackend,
-    NewAdmissionReservation, ResourceUsageStoreBackend,
+    AdmissionForecastRecord, AdmissionLoad, NewAdmissionReservation, ResourceUsageStoreBackend,
 };
 use orbit_types::task::NO_DIFF_EXPECTED_TAG;
 
@@ -529,30 +529,46 @@ impl RuntimeKernel {
         // Any wait for a CPU window happens here, outside the lock.
         self.host().host_load.prepare();
         let jobs = delivery_jobs();
-        let query = AdmissionLoadQuery {
-            now,
-            delivery_jobs: &jobs,
-            reservations_expire_before: now - Duration::minutes(RESERVATION_TTL_MINUTES),
-            resource_minutes_since: Some(now - Duration::minutes(BASELINE_HISTORY_MINUTES)),
-        };
-        let mut decide = Some(decide);
-        let mut outcome = None;
-        store.admit_under_host_lock_replacing(&query, remove, &mut |load| {
-            let decide = decide.take().ok_or_else(|| {
-                OrbitError::Execution("the admission decision ran twice".to_string())
-            })?;
+        let expire_before = now - Duration::minutes(RESERVATION_TTL_MINUTES);
+        let resource_minutes_since = now - Duration::minutes(BASELINE_HISTORY_MINUTES);
+        store.write(|tx| {
+            let repo = tx.admission_load();
+            repo.delete_expired_reservations(expire_before)?;
+            for (workspace, task) in remove {
+                repo.delete_task_reservations(workspace, task)?;
+            }
+            let reservations = repo.reservations()?;
+            let since = reservations.first().map(|first| first.reserved_at);
+            let load = AdmissionLoad {
+                runs: repo.delivery_runs(&jobs, since)?,
+                reservations,
+                host_minutes: repo.host_minutes(resource_minutes_since)?,
+                run_minutes: repo.run_minutes(resource_minutes_since)?,
+            };
             let forecast = build_forecast(
-                load,
+                &load,
                 Arc::clone(&profiles),
                 self.host().host_load.measure(now),
                 horizon,
                 now,
             );
             let decision = decide(&forecast)?;
-            outcome = Some(decision.outcome);
-            Ok(decision.admitted.into_iter().map(new_reservation).collect())
-        })?;
-        outcome.ok_or_else(|| OrbitError::Execution("the admission decision never ran".to_string()))
+            let decided: Vec<NewAdmissionReservation> =
+                decision.admitted.into_iter().map(new_reservation).collect();
+            // A task holds one reservation: this decision's rows replace the
+            // ones an earlier decision wrote for the same task, while the
+            // rows it writes together (a pending pull's alternatives) stay.
+            let mut replaced = BTreeSet::new();
+            for reservation in &decided {
+                if replaced.insert((&reservation.workspace_id, &reservation.task_id)) {
+                    repo.delete_task_reservations(&reservation.workspace_id, &reservation.task_id)?;
+                }
+            }
+            for reservation in &decided {
+                repo.put_reservation(reservation, now)?;
+            }
+            Ok(decision.outcome)
+        })
     }
 
     /// Delete capacity under the host lock without sampling load or profiles.
@@ -560,18 +576,15 @@ impl RuntimeKernel {
         &self,
         remove: &[(&str, &str)],
     ) -> Result<(), OrbitError> {
-        let now = Utc::now();
-        self.sqlite_store()?.admit_under_host_lock_replacing(
-            &AdmissionLoadQuery {
-                now,
-                delivery_jobs: &[],
-                reservations_expire_before: now - Duration::minutes(RESERVATION_TTL_MINUTES),
-                resource_minutes_since: None,
-            },
-            remove,
-            &mut |_| Ok(Vec::new()),
-        )?;
-        Ok(())
+        let expire_before = Utc::now() - Duration::minutes(RESERVATION_TTL_MINUTES);
+        self.sqlite_store()?.write(|tx| {
+            let repo = tx.admission_load();
+            repo.delete_expired_reservations(expire_before)?;
+            for (workspace, task) in remove {
+                repo.delete_task_reservations(workspace, task)?;
+            }
+            Ok(())
+        })
     }
 
     fn host_resource_paths(&self) -> Vec<PathBuf> {

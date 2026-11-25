@@ -12,7 +12,7 @@
     "runtime_host_required_methods": 153,
     "runtime_top_level_modules_outside_layers": 32,
     "std_env_reads": 188,
-    "store_backend_traits": 31,
+    "store_backend_traits": 24,
     "store_open_outside_store": 7,
     "worker_or_owner_reads": 219
   }

@@ -2,7 +2,7 @@ use std::collections::{BTreeSet, HashMap};
 
 use chrono::{DateTime, Duration, Utc};
 use orbit_common::OrbitError;
-use orbit_store::contracts::{BacklogForecastStoreBackend as _, StoredBacklogForecast};
+use orbit_store::contracts::StoredBacklogForecast;
 use orbit_types::task::{Task, TaskHistoryEntry, TaskRelationType, TaskStatus};
 use orbit_types::workflow::handoff::EXTERNAL_MERGE_SETTLED_EVENT;
 use serde_json::Value;
@@ -146,13 +146,16 @@ pub(super) fn load_forecast_history(
         .into_iter()
         .map(|task| (task.id.to_string(), task))
         .collect();
-    let recent = runtime.backlog_forecasts(SCORED_FORECASTS)?;
-    let mature = runtime.sqlite_store()?.mature_backlog_forecasts(
-        &runtime.workspace_id()?,
-        now - Duration::days(90),
-        9,
-        SCORED_FORECASTS,
-    )?;
+    let (recent, mature) = {
+        let workspace_id = runtime.workspace_id()?;
+        let store = runtime.sqlite_store()?;
+        let snapshot = store.read()?;
+        let repo = snapshot.backlog_forecast();
+        let recent = repo.list(&workspace_id, SCORED_FORECASTS)?;
+        let mature =
+            repo.list_mature(&workspace_id, now - Duration::days(90), 9, SCORED_FORECASTS)?;
+        (recent, mature)
+    };
     let mut stored = recent;
     for row in mature {
         if !stored

@@ -8,7 +8,7 @@ use orbit_common::governance::authorization::{
     CallerCapabilities, CallerEnvelope, agent_context_declared,
 };
 use orbit_common::security::application_credential::ApplicationCredential;
-use orbit_store::contracts::{ApplicationConsentRecord, ApplicationConsentStoreBackend};
+use orbit_store::contracts::ApplicationConsentRecord;
 use orbit_types::tool::{
     ApplicationConsent, ApplicationConsentRequest, ApplicationInvocation, McpCapability,
     ToolSessionContext,
@@ -168,7 +168,7 @@ impl RuntimeKernel {
             self.revoke_application(id, session)?;
         }
         self.sqlite_store()?
-            .insert_application_consent(&record, None)?;
+            .write(|tx| tx.application_consent().put(&record))?;
         self.write_application_witness(&record)?;
         self.audit_application_lifecycle(
             &consent,
@@ -202,10 +202,13 @@ impl RuntimeKernel {
             ));
         }
         let store = self.sqlite_store()?;
+        let workspace_id = self.workspace_id()?;
         let record = store
-            .get_application_consent(id)?
+            .read()?
+            .application_consent()
+            .get(id)?
             .ok_or_else(|| OrbitError::CapabilityDenied("unknown application consent".into()))?;
-        if record.consent.workspace_id != self.workspace_id()? {
+        if record.consent.workspace_id != workspace_id {
             return Err(OrbitError::CapabilityDenied(
                 "application consent belongs to another workspace".into(),
             ));
@@ -221,7 +224,14 @@ impl RuntimeKernel {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
             Err(e) => return Err(e.into()),
         }
-        store.revoke_application_consent(id, &self.workspace_id()?)?;
+        store.write(|tx| {
+            if !tx.application_consent().mark_revoked(id, &workspace_id)? {
+                return Err(OrbitError::CapabilityDenied(
+                    "application consent does not belong to this workspace".into(),
+                ));
+            }
+            Ok(())
+        })?;
         self.audit_application_lifecycle(&record.consent, "revoke")
     }
 

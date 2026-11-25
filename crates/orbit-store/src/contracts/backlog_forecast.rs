@@ -2,8 +2,7 @@
 //! one per workspace per hour and scores the stored ones against what their
 //! tasks did.
 
-use chrono::{DateTime, Duration, Utc};
-use orbit_common::OrbitError;
+use chrono::{DateTime, Utc};
 
 /// One stored forecast. The JSON documents are owned by the forecast model,
 /// which versions them with `model_version`; the store keeps them opaque.
@@ -18,33 +17,4 @@ pub struct StoredBacklogForecast {
     pub result_json: String,
     /// The tasks the forecast covered, each with what it was forecast as.
     pub tasks_json: String,
-}
-
-pub trait BacklogForecastStoreBackend: Send + Sync {
-    /// The newest mature forecasts per model version, bounded by
-    /// `limit_per_version`; keeps horizon calibration independent of the
-    /// recent hourly snapshot window. Versions below `min_model_version`
-    /// are excluded.
-    fn mature_backlog_forecasts(
-        &self,
-        workspace_id: &str,
-        cutoff: DateTime<Utc>,
-        min_model_version: u32,
-        limit_per_version: usize,
-    ) -> Result<Vec<StoredBacklogForecast>, OrbitError>;
-
-    /// Insert `row` unless the workspace already holds a forecast newer than
-    /// `row.forecast_at - min_interval`. `true` when this call wrote it.
-    fn record_backlog_forecast(
-        &self,
-        row: &StoredBacklogForecast,
-        min_interval: Duration,
-    ) -> Result<bool, OrbitError>;
-
-    /// The workspace's newest `limit` forecasts, newest first.
-    fn backlog_forecasts(
-        &self,
-        workspace_id: &str,
-        limit: usize,
-    ) -> Result<Vec<StoredBacklogForecast>, OrbitError>;
 }

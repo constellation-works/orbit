@@ -243,7 +243,7 @@ fn experiment_cumulative_series_is_ratio_of_sums_for_per_line_primary() {
             use orbit_core::{TaskComplexity, TaskStatus, TaskType};
             use orbit_store::contracts::{
                 DiffClassCounts, ExperimentAssignment, ExperimentStoreBackend, LandedDiffSource,
-                LandedDiffStats, LandedDiffStoreBackend, ReviewableLines,
+                LandedDiffStats, ReviewableLines,
             };
             use orbit_types::telemetry::{InvocationTrace, TokenUsage};
 
@@ -344,30 +344,32 @@ fn experiment_cumulative_series_is_ratio_of_sums_for_per_line_primary() {
                 runtime
                     .sqlite_store()
                     .unwrap()
-                    .record_landed_diff_stats(&LandedDiffStats {
-                        workspace_id,
-                        task_id: task.id.to_string(),
-                        base_commit: format!("{:040x}", seq * 2),
-                        landed_commit: format!("{:040x}", seq * 2 + 1),
-                        landed_at: chrono::Utc::now(),
-                        recorded_at: chrono::Utc::now(),
-                        job_run_id: None,
-                        source: LandedDiffSource::Landing,
-                        crew: None,
-                        model: None,
-                        complexity: None,
-                        task_type: None,
-                        code: DiffClassCounts {
-                            added: lines,
-                            deleted: 0,
-                            files: 1,
-                        },
-                        tests: DiffClassCounts::default(),
-                        other: DiffClassCounts::default(),
-                        reviewable: Some(ReviewableLines {
-                            added: lines,
-                            deleted: 0,
-                        }),
+                    .write(|tx| {
+                        tx.landed_diff().put(&LandedDiffStats {
+                            workspace_id,
+                            task_id: task.id.to_string(),
+                            base_commit: format!("{:040x}", seq * 2),
+                            landed_commit: format!("{:040x}", seq * 2 + 1),
+                            landed_at: chrono::Utc::now(),
+                            recorded_at: chrono::Utc::now(),
+                            job_run_id: None,
+                            source: LandedDiffSource::Landing,
+                            crew: None,
+                            model: None,
+                            complexity: None,
+                            task_type: None,
+                            code: DiffClassCounts {
+                                added: lines,
+                                deleted: 0,
+                                files: 1,
+                            },
+                            tests: DiffClassCounts::default(),
+                            other: DiffClassCounts::default(),
+                            reviewable: Some(ReviewableLines {
+                                added: lines,
+                                deleted: 0,
+                            }),
+                        })
                     })
                     .unwrap();
                 task.id.to_string()

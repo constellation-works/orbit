@@ -23,9 +23,7 @@ fn diff_stats_keeps_named_crews_distinct_from_attribution_buckets() {
     isolated(
         "metrics_trends::diff_stats_keeps_named_crews_distinct_from_attribution_buckets",
         || {
-            use orbit_store::contracts::{
-                DiffClassCounts, LandedDiffSource, LandedDiffStats, LandedDiffStoreBackend as _,
-            };
+            use orbit_store::contracts::{DiffClassCounts, LandedDiffSource, LandedDiffStats};
 
             let fixture = Fixture::new();
             let store = fixture.runtime.sqlite_store().unwrap();
@@ -47,27 +45,29 @@ fn diff_stats_keeps_named_crews_distinct_from_attribution_buckets() {
                 let task_id = add_task(&fixture, TaskComplexity::Medium, TaskStatus::Done);
                 assert!(
                     store
-                        .record_landed_diff_stats(&LandedDiffStats {
-                            workspace_id: "ws_http_fixture".into(),
-                            task_id,
-                            base_commit: format!("{:040x}", 2 * index),
-                            landed_commit: format!("{:040x}", 2 * index + 1),
-                            landed_at: now,
-                            recorded_at: now,
-                            job_run_id: None,
-                            source: LandedDiffSource::Landing,
-                            crew: crew.map(str::to_string),
-                            model: None,
-                            complexity: Some("medium".into()),
-                            task_type: None,
-                            code: DiffClassCounts {
-                                added,
-                                deleted: 0,
-                                files: 1
-                            },
-                            tests: DiffClassCounts::default(),
-                            other: DiffClassCounts::default(),
-                            reviewable: None,
+                        .write(|tx| {
+                            tx.landed_diff().put(&LandedDiffStats {
+                                workspace_id: "ws_http_fixture".into(),
+                                task_id,
+                                base_commit: format!("{:040x}", 2 * index),
+                                landed_commit: format!("{:040x}", 2 * index + 1),
+                                landed_at: now,
+                                recorded_at: now,
+                                job_run_id: None,
+                                source: LandedDiffSource::Landing,
+                                crew: crew.map(str::to_string),
+                                model: None,
+                                complexity: Some("medium".into()),
+                                task_type: None,
+                                code: DiffClassCounts {
+                                    added,
+                                    deleted: 0,
+                                    files: 1,
+                                },
+                                tests: DiffClassCounts::default(),
+                                other: DiffClassCounts::default(),
+                                reviewable: None,
+                            })
                         })
                         .unwrap()
                 );
@@ -1892,9 +1892,7 @@ fn diff_stats_keeps_lead_only_crews_for_per_day() {
     isolated(
         "metrics_trends::diff_stats_keeps_lead_only_crews_for_per_day",
         || {
-            use orbit_store::contracts::{
-                DiffClassCounts, LandedDiffSource, LandedDiffStats, LandedDiffStoreBackend as _,
-            };
+            use orbit_store::contracts::{DiffClassCounts, LandedDiffSource, LandedDiffStats};
 
             let fixture = Fixture::new();
             let store = fixture.runtime.sqlite_store().unwrap();
@@ -1917,27 +1915,29 @@ fn diff_stats_keeps_lead_only_crews_for_per_day() {
                 let task_id = add_task(&fixture, TaskComplexity::Medium, TaskStatus::Done);
                 assert!(
                     store
-                        .record_landed_diff_stats(&LandedDiffStats {
-                            workspace_id: "ws_http_fixture".into(),
-                            task_id,
-                            base_commit: format!("{:040x}", 2 * index),
-                            landed_commit: format!("{:040x}", 2 * index + 1),
-                            landed_at: at,
-                            recorded_at: at,
-                            job_run_id: None,
-                            source: LandedDiffSource::Landing,
-                            crew: crew.map(str::to_string),
-                            model: None,
-                            complexity: Some("medium".into()),
-                            task_type: None,
-                            code: DiffClassCounts {
-                                added: 10,
-                                deleted: 0,
-                                files: 1,
-                            },
-                            tests: DiffClassCounts::default(),
-                            other: DiffClassCounts::default(),
-                            reviewable: None,
+                        .write(|tx| {
+                            tx.landed_diff().put(&LandedDiffStats {
+                                workspace_id: "ws_http_fixture".into(),
+                                task_id,
+                                base_commit: format!("{:040x}", 2 * index),
+                                landed_commit: format!("{:040x}", 2 * index + 1),
+                                landed_at: at,
+                                recorded_at: at,
+                                job_run_id: None,
+                                source: LandedDiffSource::Landing,
+                                crew: crew.map(str::to_string),
+                                model: None,
+                                complexity: Some("medium".into()),
+                                task_type: None,
+                                code: DiffClassCounts {
+                                    added: 10,
+                                    deleted: 0,
+                                    files: 1,
+                                },
+                                tests: DiffClassCounts::default(),
+                                other: DiffClassCounts::default(),
+                                reviewable: None,
+                            })
                         })
                         .unwrap()
                 );

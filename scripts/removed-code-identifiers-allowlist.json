@@ -13,5 +13,20 @@
     "identifier": "NoticeStoreBackend",
     "doc": "docs/design/architecture-restructure/2_design.md",
     "reason": "The architecture-restructure design doc names the removed NoticeStoreBackend trait as the before-state example replaced by snapshot.notice()."
+  },
+  {
+    "identifier": "codebase_task_facts",
+    "doc": "docs/design/context-index/2_design.md",
+    "reason": "Names the SQLite table codebase_task_facts (retained as store schema v96), not the removed CodebaseFactsStoreBackend::codebase_task_facts trait method."
+  },
+  {
+    "identifier": "codebase_task_facts",
+    "doc": "docs/design/path-leases/2_design.md",
+    "reason": "Names the SQLite table codebase_task_facts (retained as store schema v96), not the removed CodebaseFactsStoreBackend::codebase_task_facts trait method."
+  },
+  {
+    "identifier": "codebase_task_facts",
+    "doc": "docs/design/user-interface/2_design.md",
+    "reason": "Names the SQLite table codebase_task_facts (retained as store schema v96), not the removed CodebaseFactsStoreBackend::codebase_task_facts trait method."
   }
 ]

@@ -24,7 +24,7 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use orbit_common::security::release::sha256_hex;
-use orbit_store::contracts::{CodebaseFactsStoreBackend, CodebaseTaskFactsRow};
+use orbit_store::contracts::CodebaseTaskFactsRow;
 
 use super::facts::{HistoryFacts, SettledFailure};
 use crate::OrbitRuntime;
@@ -62,7 +62,11 @@ impl StoredFacts {
         stamps: Option<BTreeMap<String, String>>,
     ) -> Self {
         let loaded = runtime.workspace_id().and_then(|workspace_id| {
-            let rows = runtime.sqlite_store()?.codebase_task_facts(&workspace_id)?;
+            let rows = runtime
+                .sqlite_store()?
+                .read()?
+                .codebase_fact()
+                .list(&workspace_id)?;
             Ok((workspace_id, rows))
         });
         let (workspace_id, rows) = match loaded {
@@ -165,7 +169,11 @@ impl StoredFacts {
             if store.is_read_only() {
                 return Ok(());
             }
-            store.write_codebase_task_facts(&workspace_id, &self.writes, &removed)
+            store.write(|tx| {
+                let repo = tx.codebase_fact();
+                repo.put_many(&workspace_id, &self.writes)?;
+                repo.delete_many(&workspace_id, &removed)
+            })
         });
         if let Err(error) = written {
             tracing::warn!(%error, "codebase analytics: task facts not stored; the next scan recomputes them");
