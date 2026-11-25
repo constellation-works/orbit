@@ -8,6 +8,38 @@
 
 use super::*;
 
+#[cfg(unix)]
+fn linked_owner_with_newline_is_used_for_admission() {
+    let (fixture, host) = Fixture::hosted();
+    let owner = head(&fixture.repo);
+    git(&fixture.repo, &["switch", "-c", "other"]);
+    let linked = fixture.root.path().join("base\ncheckout");
+    git(&fixture.repo, &["worktree", "add", path_str(&linked), BASE]);
+    let origin = push_to_origin_from_elsewhere(&fixture, "newline-owner.txt");
+    fs::write(linked.join("README.md"), "owner edit\n").unwrap();
+    host.add_task("T-NEWLINE-DIRTY", TaskStatus::Backlog);
+    let error = action(
+        &host,
+        "worktree_setup",
+        &setup_input(&["T-NEWLINE-DIRTY"], "jrun-newline-dirty"),
+    )
+    .expect_err("the actual linked owner is dirty");
+    assert_owner_base_refusal(&error, &linked, &owner, &origin);
+    assert!(host.admitted().is_empty());
+    git(&linked, &["restore", "README.md"]);
+    host.add_task("T-NEWLINE-CLEAN", TaskStatus::Backlog);
+    let output = action(
+        &host,
+        "worktree_setup",
+        &setup_input(&["T-NEWLINE-CLEAN"], "jrun-newline-clean"),
+    )
+    .expect("the clean linked owner is admitted");
+    assert_eq!(output["base_sha"], origin);
+    assert_eq!(head(&Checkout::from_setup(&output).path), origin);
+    assert_eq!(head(&linked), owner);
+    assert_eq!(host.admitted().len(), 1);
+}
+
 /// Push one commit to `origin/<BASE>` from a second clone, as another checkout
 /// would. Returns the new origin tip.
 fn push_to_origin_from_elsewhere(fixture: &Fixture, file: &str) -> String {
@@ -481,7 +513,7 @@ fn attachment_changes_after_holder_observation() {
         let marker = fixture.root.path().join("listing-seen");
         let target = if attach_base { BASE } else { "other" };
         let script = format!(
-            "#!/bin/sh\ncase \" $* \" in\n  *' worktree list --porcelain '*)\n    if [ ! -e '{}' ]; then\n      /usr/bin/git \"$@\"\n      touch '{}'\n      /usr/bin/git switch '{}' >&2 || exit $?\n      exit 0\n    fi;;\nesac\nexec /usr/bin/git \"$@\"\n",
+            "#!/bin/sh\ncase \" $* \" in\n  *' worktree list --porcelain -z '*)\n    if [ ! -e '{}' ]; then\n      /usr/bin/git \"$@\"\n      touch '{}'\n      /usr/bin/git switch '{}' >&2 || exit $?\n      exit 0\n    fi;;\nesac\nexec /usr/bin/git \"$@\"\n",
             marker.display(),
             marker.display(),
             target
@@ -518,6 +550,8 @@ fn local_base_freshness_contracts() {
     isolated_in(module_path!(), "local_base_freshness_contracts", || {
         #[cfg(unix)]
         attachment_changes_after_holder_observation();
+        #[cfg(unix)]
+        linked_owner_with_newline_is_used_for_admission();
         equal_and_ahead_owner_bases_are_used();
         crate::git_fixture::run_scenarios(&[
             (
