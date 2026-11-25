@@ -242,8 +242,8 @@ fn experiment_cumulative_series_is_ratio_of_sums_for_per_line_primary() {
             use orbit_core::application::task::TaskAddParams;
             use orbit_core::{TaskComplexity, TaskStatus, TaskType};
             use orbit_store::contracts::{
-                DiffClassCounts, ExperimentAssignment, ExperimentStoreBackend, LandedDiffSource,
-                LandedDiffStats, ReviewableLines,
+                DiffClassCounts, ExperimentAssignment, LandedDiffSource, LandedDiffStats,
+                ReviewableLines,
             };
             use orbit_types::telemetry::{InvocationTrace, TokenUsage};
 
@@ -293,22 +293,32 @@ fn experiment_cumulative_series_is_ratio_of_sums_for_per_line_primary() {
                 runtime
                     .sqlite_store()
                     .unwrap()
-                    .assign_experiments(&workspace_id, &task.id, true, true, &|records, _, _| {
-                        let record = records
-                            .iter()
-                            .find(|record| record.experiment.id == experiment.id)
-                            .unwrap();
-                        let arm_row = record.arms.iter().find(|row| row.name == arm).unwrap();
-                        Ok(vec![ExperimentAssignment {
-                            experiment: experiment.id.clone(),
-                            task_id: task.id.to_string(),
-                            arm: Some(arm.into()),
-                            segment: Some(1),
-                            digest: Some(arm_row.overlay_digest.clone()),
-                            assigned_at: chrono::Utc::now(),
-                            forced: false,
-                            exclusion_reason: None,
-                        }])
+                    .write(|tx| {
+                        orbit_core::application::experiment::assign_experiments(
+                            tx,
+                            &workspace_id,
+                            &task.id,
+                            true,
+                            true,
+                            &|records, _, _| {
+                                let record = records
+                                    .iter()
+                                    .find(|record| record.experiment.id == experiment.id)
+                                    .unwrap();
+                                let arm_row =
+                                    record.arms.iter().find(|row| row.name == arm).unwrap();
+                                Ok(vec![ExperimentAssignment {
+                                    experiment: experiment.id.clone(),
+                                    task_id: task.id.to_string(),
+                                    arm: Some(arm.into()),
+                                    segment: Some(1),
+                                    digest: Some(arm_row.overlay_digest.clone()),
+                                    assigned_at: chrono::Utc::now(),
+                                    forced: false,
+                                    exclusion_reason: None,
+                                }])
+                            },
+                        )
                     })
                     .unwrap();
                 runtime

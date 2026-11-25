@@ -72,38 +72,40 @@ fn ended_experiments_change_fresh_claims_but_not_captured_workers() {
             .unwrap();
         // Seed unforced enrollment to keep allocation deterministic while
         // exercising the public admission and readout boundaries below.
-        use orbit_store::contracts::ExperimentStoreBackend as _;
         for task in &pair.tasks {
             owner
                 .sqlite_store()
                 .unwrap()
-                .assign_experiments(
-                    &owner.workspace_id().unwrap(),
-                    task,
-                    true,
-                    true,
-                    &|records, _, _| {
-                        let record = records
-                            .iter()
-                            .find(|record| record.experiment.id == experiment.id)
-                            .unwrap();
-                        let arm = record
-                            .arms
-                            .iter()
-                            .find(|arm| arm.name == "treatment")
-                            .unwrap();
-                        Ok(vec![orbit_store::contracts::ExperimentAssignment {
-                            experiment: experiment.id.clone(),
-                            task_id: task.clone(),
-                            arm: Some(arm.name.clone()),
-                            segment: Some(record.experiment.segment),
-                            digest: Some(arm.overlay_digest.clone()),
-                            assigned_at: Utc::now(),
-                            forced: false,
-                            exclusion_reason: None,
-                        }])
-                    },
-                )
+                .write(|tx| {
+                    orbit_core::application::experiment::assign_experiments(
+                        tx,
+                        &owner.workspace_id().unwrap(),
+                        task,
+                        true,
+                        true,
+                        &|records, _, _| {
+                            let record = records
+                                .iter()
+                                .find(|record| record.experiment.id == experiment.id)
+                                .unwrap();
+                            let arm = record
+                                .arms
+                                .iter()
+                                .find(|arm| arm.name == "treatment")
+                                .unwrap();
+                            Ok(vec![orbit_store::contracts::ExperimentAssignment {
+                                experiment: experiment.id.clone(),
+                                task_id: task.clone(),
+                                arm: Some(arm.name.clone()),
+                                segment: Some(record.experiment.segment),
+                                digest: Some(arm.overlay_digest.clone()),
+                                assigned_at: Utc::now(),
+                                forced: false,
+                                exclusion_reason: None,
+                            }])
+                        },
+                    )
+                })
                 .unwrap();
         }
         let job = pair.owner_repo.join("capture.yaml");
@@ -475,38 +477,40 @@ fn owner_disable_suppresses_claimed_memory_delivery() {
         .change_experiment(&experiment.id, ExperimentChange::Start, actor.clone())
         .unwrap();
     write_note(owner, OWNER_NOTE);
-    use orbit_store::contracts::ExperimentStoreBackend as _;
     let task = &pair.tasks[0];
     owner
         .sqlite_store()
         .unwrap()
-        .assign_experiments(
-            &owner.workspace_id().unwrap(),
-            task,
-            true,
-            true,
-            &|records, _, _| {
-                let record = records
-                    .iter()
-                    .find(|record| record.experiment.id == experiment.id)
-                    .unwrap();
-                let arm = record
-                    .arms
-                    .iter()
-                    .find(|arm| arm.name == "treatment")
-                    .unwrap();
-                Ok(vec![orbit_store::contracts::ExperimentAssignment {
-                    experiment: experiment.id.clone(),
-                    task_id: task.clone(),
-                    arm: Some(arm.name.clone()),
-                    segment: Some(record.experiment.segment),
-                    digest: Some(arm.overlay_digest.clone()),
-                    assigned_at: Utc::now(),
-                    forced: false,
-                    exclusion_reason: None,
-                }])
-            },
-        )
+        .write(|tx| {
+            orbit_core::application::experiment::assign_experiments(
+                tx,
+                &owner.workspace_id().unwrap(),
+                task,
+                true,
+                true,
+                &|records, _, _| {
+                    let record = records
+                        .iter()
+                        .find(|record| record.experiment.id == experiment.id)
+                        .unwrap();
+                    let arm = record
+                        .arms
+                        .iter()
+                        .find(|arm| arm.name == "treatment")
+                        .unwrap();
+                    Ok(vec![orbit_store::contracts::ExperimentAssignment {
+                        experiment: experiment.id.clone(),
+                        task_id: task.clone(),
+                        arm: Some(arm.name.clone()),
+                        segment: Some(record.experiment.segment),
+                        digest: Some(arm.overlay_digest.clone()),
+                        assigned_at: Utc::now(),
+                        forced: false,
+                        exclusion_reason: None,
+                    }])
+                },
+            )
+        })
         .unwrap();
     let job = pair.owner_repo.join("capture.yaml");
     std::fs::write(

@@ -68,24 +68,25 @@ fn store_gc_allows_task_updates_and_dispatch_during_history_selection() {
     .unwrap();
     // One delivery outside the retained cohort makes GC exercise both its
     // planning read and its deletion path.
-    use orbit_store::contracts::ResourceUsageStoreBackend;
     store
-        .record_run_resource_minute(&RunResourceMinute {
-            workspace_id: runtime.workspace_id().unwrap(),
-            run_id: run.run_id.clone(),
-            minute_index: 0,
-            minute_started_at: at,
-            task_id: task.id.clone(),
-            work_class: "change".into(),
-            complexity: Some("medium".into()),
-            resumed: false,
-            delivery_admitted_at: Some(at),
-            cpu_cores: 1.0,
-            cpu_accounting: Some(orbit_store::contracts::CPU_ACCOUNTING_LINUX.into()),
-            memory_bytes: 1024,
-            samples: 1,
-            crew_model: Some("fixture-model".into()),
-            orbit_version: None,
+        .write(|tx| {
+            tx.resource_usage().put_run_minute(&RunResourceMinute {
+                workspace_id: runtime.workspace_id().unwrap(),
+                run_id: run.run_id.clone(),
+                minute_index: 0,
+                minute_started_at: at,
+                task_id: task.id.clone(),
+                work_class: "change".into(),
+                complexity: Some("medium".into()),
+                resumed: false,
+                delivery_admitted_at: Some(at),
+                cpu_cores: 1.0,
+                cpu_accounting: Some(orbit_store::contracts::CPU_ACCOUNTING_LINUX.into()),
+                memory_bytes: 1024,
+                samples: 1,
+                crew_model: Some("fixture-model".into()),
+                orbit_version: None,
+            })
         })
         .unwrap();
     store

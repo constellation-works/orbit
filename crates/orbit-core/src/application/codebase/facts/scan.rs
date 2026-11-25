@@ -4,7 +4,6 @@ use std::collections::BTreeMap;
 
 use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
-use orbit_store::contracts::StoreRetentionBackend;
 use orbit_types::task::{
     Task, TaskHistoryEntry, TaskRelationType, TaskStatus, is_no_diff_expected,
 };
@@ -317,7 +316,9 @@ pub(in crate::application::codebase) fn scan(
     // workspace-scoped facts survive command-audit retention.
     let lock_denials = runtime
         .sqlite_store()?
-        .list_task_lock_denials(&runtime.workspace_id()?)?
+        .read()?
+        .retention()
+        .task_lock_denials(&runtime.workspace_id()?)?
         .iter()
         .filter_map(|event| lock_denial(event, &reservation_tasks))
         .collect();

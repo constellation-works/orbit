@@ -8,8 +8,8 @@ use orbit_core::application::experiment::{
 use orbit_core::application::task::TaskAddParams;
 use orbit_core::{OrbitRuntime, TaskComplexity, TaskStatus, TaskType};
 use orbit_store::contracts::{
-    ExperimentAssignment, ExperimentEventRow, ExperimentStoreBackend, ExperimentWrite,
-    ExperimentWriteOutcome, InvocationInsertParams,
+    ExperimentAssignment, ExperimentEventRow, ExperimentWrite, ExperimentWriteOutcome,
+    InvocationInsertParams,
 };
 use orbit_types::telemetry::{InvocationTrace, TokenUsage, ToolCallTrace};
 use serde_json::json;
@@ -73,26 +73,35 @@ fn large_valid_arm_weights_produce_the_expected_sample_ratio() {
         let task_id = task.id.to_string();
         let arm_name = if index < 100 { "control" } else { "treatment" };
         let assignments = store
-            .assign_experiments(&workspace_id, &task_id, true, true, &|records, _, _| {
-                let record = records
-                    .iter()
-                    .find(|record| record.experiment.id == experiment_id)
-                    .expect("started experiment is in the store");
-                let arm = record
-                    .arms
-                    .iter()
-                    .find(|arm| arm.name == arm_name)
-                    .expect("assigned arm is in the experiment");
-                Ok(vec![ExperimentAssignment {
-                    experiment: experiment_id.clone(),
-                    task_id: task_id.clone(),
-                    arm: Some(arm_name.into()),
-                    segment: Some(1),
-                    digest: Some(arm.overlay_digest.clone()),
-                    assigned_at: Utc::now(),
-                    forced: false,
-                    exclusion_reason: None,
-                }])
+            .write(|tx| {
+                orbit_core::application::experiment::assign_experiments(
+                    tx,
+                    &workspace_id,
+                    &task_id,
+                    true,
+                    true,
+                    &|records, _, _| {
+                        let record = records
+                            .iter()
+                            .find(|record| record.experiment.id == experiment_id)
+                            .expect("started experiment is in the store");
+                        let arm = record
+                            .arms
+                            .iter()
+                            .find(|arm| arm.name == arm_name)
+                            .expect("assigned arm is in the experiment");
+                        Ok(vec![ExperimentAssignment {
+                            experiment: experiment_id.clone(),
+                            task_id: task_id.clone(),
+                            arm: Some(arm_name.into()),
+                            segment: Some(1),
+                            digest: Some(arm.overlay_digest.clone()),
+                            assigned_at: Utc::now(),
+                            forced: false,
+                            exclusion_reason: None,
+                        }])
+                    },
+                )
             })
             .unwrap();
         assert_eq!(assignments.len(), 1);
@@ -213,7 +222,10 @@ fn expired_readout_requires_a_primary_comparison_interval() {
         let workspace_id = runtime.workspace_id().unwrap();
         let store = runtime.sqlite_store().unwrap();
         let mut record = store
-            .experiment_record(&workspace_id, &experiment.id)
+            .read()
+            .unwrap()
+            .experiment()
+            .get(&workspace_id, &experiment.id)
             .unwrap()
             .unwrap();
         let revision = record.experiment.revision;
@@ -225,25 +237,28 @@ fn expired_readout_requires_a_primary_comparison_interval() {
         // exercising expiry without sleeping or replacing the readout's clock.
         assert_eq!(
             store
-                .write_experiment(&ExperimentWrite {
-                    event: ExperimentEventRow {
-                        seq: record.experiment.revision,
-                        kind: "started".into(),
-                        from_status: Some("draft".into()),
-                        to_status: Some("running".into()),
-                        segment: 1,
-                        actor: actor.actor,
-                        at: started_at,
-                        reason: None,
-                        detail_json:
-                            json!({"segment": 1, "weights": {"control": 1, "treatment": 1}})
-                                .to_string(),
-                    },
-                    experiment: record.experiment,
-                    arms: None,
-                    expected_revision: Some(revision),
-                    running_limit: None,
-                })
+                .write(|tx| orbit_core::application::experiment::write_experiment(
+                    tx,
+                    &ExperimentWrite {
+                        event: ExperimentEventRow {
+                            seq: record.experiment.revision,
+                            kind: "started".into(),
+                            from_status: Some("draft".into()),
+                            to_status: Some("running".into()),
+                            segment: 1,
+                            actor: actor.actor,
+                            at: started_at,
+                            reason: None,
+                            detail_json:
+                                json!({"segment": 1, "weights": {"control": 1, "treatment": 1}})
+                                    .to_string(),
+                        },
+                        experiment: record.experiment,
+                        arms: None,
+                        expected_revision: Some(revision),
+                        running_limit: None,
+                    }
+                ))
                 .unwrap(),
             ExperimentWriteOutcome::Written
         );
@@ -404,22 +419,31 @@ fn enroll_arm_task(
     let workspace_id = runtime.workspace_id().unwrap();
     let store = runtime.sqlite_store().unwrap();
     store
-        .assign_experiments(&workspace_id, &task.id, true, true, &|records, _, _| {
-            let record = records
-                .iter()
-                .find(|r| r.experiment.id == experiment_id)
-                .unwrap();
-            let arm = record.arms.iter().find(|arm| arm.name == arm_name).unwrap();
-            Ok(vec![ExperimentAssignment {
-                experiment: experiment_id.into(),
-                task_id: task.id.to_string(),
-                arm: Some(arm_name.into()),
-                segment: Some(1),
-                digest: Some(arm.overlay_digest.clone()),
-                assigned_at: Utc::now(),
-                forced: false,
-                exclusion_reason: None,
-            }])
+        .write(|tx| {
+            orbit_core::application::experiment::assign_experiments(
+                tx,
+                &workspace_id,
+                &task.id,
+                true,
+                true,
+                &|records, _, _| {
+                    let record = records
+                        .iter()
+                        .find(|r| r.experiment.id == experiment_id)
+                        .unwrap();
+                    let arm = record.arms.iter().find(|arm| arm.name == arm_name).unwrap();
+                    Ok(vec![ExperimentAssignment {
+                        experiment: experiment_id.into(),
+                        task_id: task.id.to_string(),
+                        arm: Some(arm_name.into()),
+                        segment: Some(1),
+                        digest: Some(arm.overlay_digest.clone()),
+                        assigned_at: Utc::now(),
+                        forced: false,
+                        exclusion_reason: None,
+                    }])
+                },
+            )
         })
         .unwrap();
     task.id.to_string()

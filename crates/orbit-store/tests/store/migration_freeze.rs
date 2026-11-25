@@ -207,7 +207,6 @@ fn forecast_attribution_migrates_legacy_rows_and_reopens_idempotently() {
     ) {
         return;
     }
-    use orbit_store::contracts::ResourceUsageStoreBackend;
     let path = std::env::current_dir().unwrap().join("attribution.sqlite");
     drop(Store::open(&path).unwrap());
     let conn = Connection::open(&path).unwrap();
@@ -228,7 +227,7 @@ fn forecast_attribution_migrates_legacy_rows_and_reopens_idempotently() {
     let since = "2026-10-16T00:00:00Z".parse().unwrap();
     for _ in 0..2 {
         let store = Store::open(&path).unwrap();
-        let records = store.admission_forecasts(since).unwrap();
+        let records = store.read().unwrap().resource_usage().forecasts(since).unwrap();
         assert_eq!(records.len(), 1);
         assert_eq!(records[0].points[0].cpu_cores, 2.0);
         assert_eq!(records[0].baseline_cpu_cores, None);

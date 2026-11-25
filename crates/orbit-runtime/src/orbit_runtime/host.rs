@@ -6,9 +6,7 @@ use std::sync::Arc;
 
 use chrono::{DateTime, Duration, Utc};
 use orbit_common::OrbitError;
-use orbit_store::contracts::{
-    AdmissionForecastRecord, AdmissionLoad, NewAdmissionReservation, ResourceUsageStoreBackend,
-};
+use orbit_store::contracts::{AdmissionForecastRecord, AdmissionLoad, NewAdmissionReservation};
 use orbit_types::task::NO_DIFF_EXPECTED_TAG;
 
 use super::RuntimeKernel;
@@ -386,7 +384,8 @@ impl RuntimeKernel {
         &self,
         record: &AdmissionForecastRecord,
     ) -> Result<(), OrbitError> {
-        self.sqlite_store()?.record_admission_forecast(record)
+        self.sqlite_store()?
+            .write(|tx| tx.resource_usage().put_forecast(record))
     }
 
     /// Read a selected cohort of recorded forecasts, bounded above by `report_at`.
@@ -428,7 +427,9 @@ impl RuntimeKernel {
             ));
         }
         let store = self.sqlite_store()?;
-        let mut records = store.admission_forecasts(selection.since)?;
+        let snapshot = store.read()?;
+        let repo = snapshot.resource_usage();
+        let mut records = repo.forecasts(selection.since)?;
         records.retain(|record| {
             record.forecast_at <= report_at
                 && selection
@@ -454,8 +455,8 @@ impl RuntimeKernel {
                 let lower = first.forecast_at - Duration::minutes(1);
                 let jobs = delivery_jobs();
                 (
-                    store.host_resource_minutes(lower)?,
-                    store.delivery_runs_overlapping(&jobs, lower, report_at)?,
+                    repo.host_minutes(lower)?,
+                    repo.delivery_runs_overlapping(&jobs, lower, report_at)?,
                 )
             }
             None => (Vec::new(), Vec::new()),
@@ -467,7 +468,7 @@ impl RuntimeKernel {
             .map(|delivery| delivery.admitted_at)
             .min();
         let resources = covered_since
-            .map(|since| store.delivery_run_resources(since))
+            .map(|since| repo.delivery_runs(since))
             .transpose()?
             .unwrap_or_default();
         let report = forecast_accuracy(

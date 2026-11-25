@@ -21,7 +21,6 @@
 
 use chrono::{DateTime, Duration, Utc};
 use orbit_common::OrbitError;
-use orbit_store::contracts::ResourceUsageStoreBackend as _;
 use orbit_types::workflow::AutoConcurrencyMode;
 use serde_json::{Value, json};
 
@@ -95,7 +94,9 @@ pub(super) fn resource_fit_inputs(
     let since = now - Duration::minutes(BASELINE_EVIDENCE_MINUTES);
     let recorded = runtime
         .sqlite_store()?
-        .admission_forecasts(since)?
+        .read()?
+        .resource_usage()
+        .forecasts(since)?
         .into_iter()
         .rev()
         .find(|record| {

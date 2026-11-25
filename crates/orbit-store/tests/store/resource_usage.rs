@@ -1,5 +1,5 @@
 use orbit_store::contracts::{
-    CPU_ACCOUNTING_LINUX, ResourceHistoryKeep, ResourceMinutesTable, ResourceUsageStoreBackend,
+    CPU_ACCOUNTING_LINUX, ResourceHistoryKeep, ResourceMinutesTable,
     RunResourceMinute,
 };
 
@@ -52,7 +52,7 @@ fn resource_retention_selection_does_not_rescan_the_workspace_per_delivery() {
         )
         .unwrap();
     let rows = store
-        .resource_minutes_older_than(
+        .read().unwrap().resource_usage().count_prunable(
             ResourceMinutesTable::Run,
             Utc.with_ymd_and_hms(2026, 2, 1, 0, 0, 0).unwrap(),
             ResourceHistoryKeep {
@@ -80,7 +80,7 @@ fn freshness_tracks_finished_runs_and_retention_removal() {
         .expect("insert delivery");
     let minute_started_at = admitted_at + TimeDelta::minutes(2);
     store
-        .record_run_resource_minute(&RunResourceMinute {
+        .write(|tx| tx.resource_usage().put_run_minute(&RunResourceMinute {
             workspace_id: "ws_resource_usage".into(),
             run_id: run.run_id.clone(),
             minute_index: 0,
@@ -96,10 +96,10 @@ fn freshness_tracks_finished_runs_and_retention_removal() {
             samples: 1,
             crew_model: None,
             orbit_version: None,
-        })
+        }))
         .expect("record first sample");
     store
-        .record_run_resource_minute(&RunResourceMinute {
+        .write(|tx| tx.resource_usage().put_run_minute(&RunResourceMinute {
             workspace_id: "ws_resource_usage".into(),
             run_id: run.run_id.clone(),
             minute_index: 1,
@@ -115,11 +115,11 @@ fn freshness_tracks_finished_runs_and_retention_removal() {
             samples: 1,
             crew_model: None,
             orbit_version: None,
-        })
+        }))
         .expect("record following sample");
 
     assert_eq!(
-        store.delivery_runs_freshness().expect("live freshness"),
+        store.read().unwrap().resource_usage().delivery_runs_freshness().expect("live freshness"),
         Default::default(),
         "an unfinished sampled run does not invalidate the finished-run key"
     );
@@ -129,7 +129,7 @@ fn freshness_tracks_finished_runs_and_retention_removal() {
         .expect("start delivery");
     jobs.finalize_job_run(&run.run_id, JobRunState::Success, finished_at, Some(1))
         .expect("finish delivery");
-    let finished = store.delivery_runs_freshness().expect("finished freshness");
+    let finished = store.read().unwrap().resource_usage().delivery_runs_freshness().expect("finished freshness");
     assert_eq!(finished.finished_runs, 1);
     assert_eq!(
         finished
@@ -140,8 +140,8 @@ fn freshness_tracks_finished_runs_and_retention_removal() {
     );
 
     assert_eq!(
-        store
-            .prune_resource_minutes_batch(
+        prune_batch(
+            &store,
                 ResourceMinutesTable::Run,
                 Utc::now(),
                 ResourceHistoryKeep {
@@ -156,15 +156,15 @@ fn freshness_tracks_finished_runs_and_retention_removal() {
     );
     assert_eq!(
         store
-            .delivery_runs_freshness()
+            .read().unwrap().resource_usage().delivery_runs_freshness()
             .expect("run is still counted")
             .finished_runs,
         1,
         "the run stays counted while its other history is still being pruned"
     );
     assert_eq!(
-        store
-            .prune_resource_minutes_batch(
+        prune_batch(
+            &store,
                 ResourceMinutesTable::Run,
                 Utc::now(),
                 ResourceHistoryKeep {
@@ -179,7 +179,7 @@ fn freshness_tracks_finished_runs_and_retention_removal() {
     );
     assert_eq!(
         store
-            .delivery_runs_freshness()
+            .read().unwrap().resource_usage().delivery_runs_freshness()
             .expect("freshness after retention"),
         Default::default(),
         "removing sampled history invalidates the finished-run key"
@@ -197,7 +197,7 @@ fn freshness_counts_a_finished_run_without_a_minute_zero_sample() {
     // The run's first read failed or its minute-zero insert was lost, so the
     // first recorded sample is minute one.
     store
-        .record_run_resource_minute(&RunResourceMinute {
+        .write(|tx| tx.resource_usage().put_run_minute(&RunResourceMinute {
             workspace_id: "ws_resource_usage".into(),
             run_id: run.run_id.clone(),
             minute_index: 1,
@@ -213,11 +213,11 @@ fn freshness_counts_a_finished_run_without_a_minute_zero_sample() {
             samples: 1,
             crew_model: None,
             orbit_version: None,
-        })
+        }))
         .expect("record only sample");
 
     assert_eq!(
-        store.delivery_runs_freshness().expect("live freshness"),
+        store.read().unwrap().resource_usage().delivery_runs_freshness().expect("live freshness"),
         Default::default(),
         "an unfinished sampled run does not invalidate the finished-run key"
     );
@@ -227,7 +227,7 @@ fn freshness_counts_a_finished_run_without_a_minute_zero_sample() {
         .expect("start delivery");
     jobs.finalize_job_run(&run.run_id, JobRunState::Success, finished_at, Some(1))
         .expect("finish delivery");
-    let finished = store.delivery_runs_freshness().expect("finished freshness");
+    let finished = store.read().unwrap().resource_usage().delivery_runs_freshness().expect("finished freshness");
     assert_eq!(
         finished.finished_runs, 1,
         "a finished run with no minute-zero sample still changes the finished-run key"
@@ -276,10 +276,10 @@ fn reload_matches_a_full_read_as_runs_change() {
         .run_id;
     for index in 0..2 {
         store
-            .record_run_resource_minute(&minute(&live, index, Some("model-a")))
+            .write(|tx| tx.resource_usage().put_run_minute(&minute(&live, index, Some("model-a"))))
             .expect("record live minute");
         store
-            .record_run_resource_minute(&minute(&done, index, None))
+            .write(|tx| tx.resource_usage().put_run_minute(&minute(&done, index, None)))
             .expect("record finished minute");
     }
     jobs.mark_job_run_running(&done, admitted_at, std::process::id())
@@ -288,24 +288,24 @@ fn reload_matches_a_full_read_as_runs_change() {
         .expect("finish run");
     let full = || {
         store
-            .delivery_run_resources(DateTime::UNIX_EPOCH)
+            .read().unwrap().resource_usage().delivery_runs(DateTime::UNIX_EPOCH)
             .expect("full read")
     };
 
-    let first = store.reload_delivery_runs(None).expect("first load");
+    let first = store.read().unwrap().resource_usage().reload_delivery_runs(None).expect("first load");
     assert_eq!(first.runs, full(), "a first load is a full read");
     assert_eq!(first.runs.len(), 2);
 
     // The live run gains a minute, then finishes; the finished run is held.
     store
-        .record_run_resource_minute(&minute(&live, 2, None))
+        .write(|tx| tx.resource_usage().put_run_minute(&minute(&live, 2, None)))
         .expect("record another live minute");
     jobs.mark_job_run_running(&live, admitted_at, std::process::id())
         .expect("start live run");
     jobs.finalize_job_run(&live, JobRunState::Success, Utc::now(), Some(1))
         .expect("finish live run");
     let second = store
-        .reload_delivery_runs(Some(first))
+        .read().unwrap().resource_usage().reload_delivery_runs(Some(first))
         .expect("reload after a finish");
     assert_eq!(
         second.runs,
@@ -323,8 +323,8 @@ fn reload_matches_a_full_read_as_runs_change() {
 
     // Retention removes one minute of history.
     assert_eq!(
-        store
-            .prune_resource_minutes_batch(
+        prune_batch(
+            &store,
                 ResourceMinutesTable::Run,
                 Utc::now(),
                 ResourceHistoryKeep {
@@ -337,7 +337,7 @@ fn reload_matches_a_full_read_as_runs_change() {
         1
     );
     let third = store
-        .reload_delivery_runs(Some(second))
+        .read().unwrap().resource_usage().reload_delivery_runs(Some(second))
         .expect("reload after pruning");
     assert_eq!(third.runs, full(), "a run that lost a minute is read again");
     assert_eq!(
@@ -348,4 +348,19 @@ fn reload_matches_a_full_read_as_runs_change() {
             .sum::<usize>(),
         4
     );
+}
+
+/// One bounded prune batch: the candidate read, then their delete.
+fn prune_batch(
+    store: &Store,
+    table: ResourceMinutesTable,
+    cutoff: chrono::DateTime<Utc>,
+    keep: ResourceHistoryKeep,
+    limit: usize,
+) -> Result<usize, orbit_common::OrbitError> {
+    let rows = store
+        .read()?
+        .resource_usage()
+        .retention_candidates(table, cutoff, keep, limit)?;
+    store.write(|tx| tx.resource_usage().delete_retention_rows(table, &rows))
 }

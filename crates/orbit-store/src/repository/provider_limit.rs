@@ -1,25 +1,29 @@
-//! [ORB-14695] The host's provider usage limits in `provider_limit_observations`,
-//! [ORB-17288] those of its crew accounts in
-//! `provider_account_limit_observations`, and [ORB-16379] its crew outages in
-//! `provider_crew_outages`.
+//! Concrete repository for this host's provider usage limits
+//! (`provider_limit_observations` for the default login,
+//! `provider_account_limit_observations` for named crew accounts) and its
+//! crew outages (`provider_crew_outages`).
 //!
+//! Reached only through [`Snapshot::provider_limit`] (read-only) and
+//! [`Tx::provider_limit`] (read-write inside [`crate::Store::write`]).
 //! Timestamps are stored as fixed-width UTC RFC3339 text (microseconds, `Z`),
-//! so SQLite orders them by comparing the text.
+//! so SQLite orders them by comparing the text. Every write keeps the newest
+//! row of its key: an older observation, an older reading or a shorter outage
+//! never replaces a newer one, because concurrent drains write the same rows.
+
+use std::marker::PhantomData;
 
 use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
 use orbit_common::storage::sqlite::sqlite_store_error;
 use orbit_types::telemetry::{ProviderLimitObservation, ProviderLimitSource};
 use orbit_types::workflow::ProviderCrewOutage;
-use rusqlite::{TransactionBehavior, params};
+use rusqlite::{Connection, params};
 
-use crate::Store;
-use crate::contracts::ProviderLimitStoreBackend;
-
-use super::codec::stamp;
+use crate::driver::sqlite::codec::stamp;
+use crate::store::{Snapshot, Tx};
 
 /// Literal statements for one reading's table; placeholder numbering matches
-/// the bound parameters in `record_provider_usage_reading`.
+/// the bound parameters in [`ProviderLimitRepository::put_reading`].
 struct ReadingSql {
     select: &'static str,
     delete: &'static str,
@@ -46,26 +50,51 @@ const DEFAULT_LOGIN_READING_SQL: ReadingSql = ReadingSql {
              WHERE provider = ?1 AND source = ?2 AND observed_at > ?4)",
 };
 
-impl ProviderLimitStoreBackend for Store {
-    fn record_provider_limit(
-        &self,
-        observation: &ProviderLimitObservation,
-    ) -> Result<bool, OrbitError> {
-        self.with_transaction_behavior(TransactionBehavior::Immediate, |tx| {
-            upsert_observation(tx.connection(), observation)
-        })
+/// Concrete provider-limit repository scoped to a [`Snapshot`] (read-only) or
+/// a [`Tx`] (read-write).
+pub struct ProviderLimitRepository<'a, Access> {
+    conn: &'a Connection,
+    _access: PhantomData<&'a Access>,
+}
+
+impl<'a, 's> ProviderLimitRepository<'a, Snapshot<'s>> {
+    pub(crate) fn for_snapshot(snapshot: &'a Snapshot<'s>) -> Self {
+        Self {
+            conn: snapshot.connection(),
+            _access: PhantomData,
+        }
+    }
+}
+
+impl<'a, 'tx> ProviderLimitRepository<'a, Tx<'tx>> {
+    pub(crate) fn for_tx(tx: &'a Tx<'tx>) -> Self {
+        Self {
+            conn: tx.connection(),
+            _access: PhantomData,
+        }
     }
 
-    fn record_provider_usage_reading(
-        &self,
-        observations: &[ProviderLimitObservation],
-    ) -> Result<(), OrbitError> {
+    /// Store `observation` as the latest for its provider, account, model
+    /// scope and window, unless a newer one is stored. Returns whether it was
+    /// stored.
+    pub fn put(&self, observation: &ProviderLimitObservation) -> Result<bool, OrbitError> {
+        upsert_observation(self.conn, observation)
+    }
+
+    /// [ORB-25967] Replace one provider account's `event` observations with a
+    /// complete usage reading taken at one instant: store each observation as
+    /// [`Self::put`] does, and remove the account's `event` rows of that
+    /// provider that an older reading stored and this one no longer reports.
+    /// `error` observations keep their own expiry. An empty reading changes
+    /// nothing, and neither does a reading older than an `event` row the
+    /// account already has: a retired key keeps no timestamp to reject the
+    /// older insert, so writing it would restore a window the newer reading
+    /// dropped.
+    pub fn put_reading(&self, observations: &[ProviderLimitObservation]) -> Result<(), OrbitError> {
         let Some(first) = observations.first() else {
             return Ok(());
         };
         let account = account_of(first);
-        // Retire only what an older reading wrote: a newer reading that
-        // landed first (a concurrent drain) is the authority, not this one.
         // The statements are literals; the account is a crew name that only
         // ever travels as a bound parameter.
         let sql = if account.is_some() {
@@ -73,68 +102,91 @@ impl ProviderLimitStoreBackend for Store {
         } else {
             &DEFAULT_LOGIN_READING_SQL
         };
-        let (select, delete, newer_exists) = (sql.select, sql.delete, sql.newer_exists);
         let event = ProviderLimitSource::Event.as_str();
         let cutoff = stamp(first.observed_at);
-        self.with_transaction_behavior(TransactionBehavior::Immediate, |tx| {
-            let conn = tx.connection();
-            let account_text = account.unwrap_or_default();
-            // A newer reading already stands for this account. It reported
-            // every window the provider still has and retired the rest, and a
-            // retired key keeps no timestamp to reject this older insert, so
-            // writing any of this reading would restore a window the newer
-            // layout dropped.
-            let superseded: bool = conn
-                .query_row(
-                    newer_exists,
-                    rusqlite::params![first.provider, event, account_text, cutoff],
-                    |row| row.get(0),
-                )
+        let account_text = account.unwrap_or_default();
+        let superseded: bool = self
+            .conn
+            .query_row(
+                sql.newer_exists,
+                params![first.provider, event, account_text, cutoff],
+                |row| row.get(0),
+            )
+            .map_err(sqlite_store_error)?;
+        if superseded {
+            return Ok(());
+        }
+        for observation in observations {
+            upsert_observation(self.conn, observation)?;
+        }
+        let mut statement = self.conn.prepare(sql.select).map_err(sqlite_store_error)?;
+        // `?3` is unused without an account; the placeholder keeps the
+        // numbered parameters contiguous.
+        let bound: [&dyn rusqlite::ToSql; 4] = [&first.provider, &event, &account_text, &cutoff];
+        let stale = statement
+            .query_map(bound, |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })
+            .map_err(sqlite_store_error)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(sqlite_store_error)?;
+        drop(statement);
+        for (model, window) in stale {
+            let reported = observations.iter().any(|observation| {
+                observation.model.as_deref().unwrap_or_default() == model
+                    && observation.window.as_deref().unwrap_or_default() == window
+            });
+            if reported {
+                continue;
+            }
+            let mut bound: Vec<&dyn rusqlite::ToSql> =
+                vec![&first.provider, &model, &window, &event, &cutoff];
+            if account.is_some() {
+                bound.push(&account_text);
+            }
+            self.conn
+                .execute(sql.delete, bound.as_slice())
                 .map_err(sqlite_store_error)?;
-            if superseded {
-                return Ok(());
-            }
-            for observation in observations {
-                upsert_observation(conn, observation)?;
-            }
-            let mut statement = conn.prepare(select).map_err(sqlite_store_error)?;
-            // `?3` is unused without an account; the placeholder keeps the
-            // numbered parameters contiguous.
-            let params: [&dyn rusqlite::ToSql; 4] =
-                [&first.provider, &event, &account_text, &cutoff];
-            let stale = statement
-                .query_map(params, |row| {
-                    Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-                })
-                .map_err(sqlite_store_error)?
-                .collect::<Result<Vec<_>, _>>()
-                .map_err(sqlite_store_error)?;
-            drop(statement);
-            for (model, window) in stale {
-                let reported = observations.iter().any(|observation| {
-                    observation.model.as_deref().unwrap_or_default() == model
-                        && observation.window.as_deref().unwrap_or_default() == window
-                });
-                if reported {
-                    continue;
-                }
-                let mut bound: Vec<&dyn rusqlite::ToSql> =
-                    vec![&first.provider, &model, &window, &event, &cutoff];
-                if account.is_some() {
-                    bound.push(&account_text);
-                }
-                conn.execute(delete, bound.as_slice())
-                    .map_err(sqlite_store_error)?;
-            }
-            Ok(())
-        })
+        }
+        Ok(())
     }
 
-    fn provider_limits(&self) -> Result<Vec<ProviderLimitObservation>, OrbitError> {
-        let conn = self.read_connection()?;
+    /// [ORB-16379] Store `outage` for its provider and crew, unless the stored
+    /// one lasts at least as long. Returns whether it was stored.
+    pub fn put_outage(&self, outage: &ProviderCrewOutage) -> Result<bool, OrbitError> {
+        self.conn
+            .execute(
+                r#"
+                INSERT INTO provider_crew_outages (
+                    provider, crew, until_at, observed_at, run_id
+                ) VALUES (?1, ?2, ?3, ?4, ?5)
+                ON CONFLICT (provider, crew) DO UPDATE SET
+                    until_at = excluded.until_at,
+                    observed_at = excluded.observed_at,
+                    run_id = excluded.run_id
+                WHERE excluded.until_at > provider_crew_outages.until_at
+                "#,
+                params![
+                    outage.provider.as_deref().unwrap_or_default(),
+                    outage.crew,
+                    stamp(outage.until),
+                    stamp(outage.observed_at),
+                    outage.run_id,
+                ],
+            )
+            .map(|changed| changed > 0)
+            .map_err(sqlite_store_error)
+    }
+}
+
+impl<Access> ProviderLimitRepository<'_, Access> {
+    /// The latest observation per provider, account, model scope and window,
+    /// newest first.
+    pub fn list(&self) -> Result<Vec<ProviderLimitObservation>, OrbitError> {
         // [ORB-17288] Rows of the default login's table, every one recorded
         // before accounts were named included, carry no account.
-        let mut statement = conn
+        let mut statement = self
+            .conn
             .prepare(
                 r#"
                 SELECT provider, model_scope, window_label, exhausted, source,
@@ -186,39 +238,10 @@ impl ProviderLimitStoreBackend for Store {
             .map_err(sqlite_store_error)
     }
 
-    fn record_provider_crew_outage(&self, outage: &ProviderCrewOutage) -> Result<bool, OrbitError> {
-        self.with_transaction_behavior(TransactionBehavior::Immediate, |tx| {
-            tx.connection()
-                .execute(
-                    r#"
-                    INSERT INTO provider_crew_outages (
-                        provider, crew, until_at, observed_at, run_id
-                    ) VALUES (?1, ?2, ?3, ?4, ?5)
-                    ON CONFLICT (provider, crew) DO UPDATE SET
-                        until_at = excluded.until_at,
-                        observed_at = excluded.observed_at,
-                        run_id = excluded.run_id
-                    WHERE excluded.until_at > provider_crew_outages.until_at
-                    "#,
-                    params![
-                        outage.provider.as_deref().unwrap_or_default(),
-                        outage.crew,
-                        stamp(outage.until),
-                        stamp(outage.observed_at),
-                        outage.run_id,
-                    ],
-                )
-                .map(|changed| changed > 0)
-                .map_err(sqlite_store_error)
-        })
-    }
-
-    fn provider_crew_outages(
-        &self,
-        now: DateTime<Utc>,
-    ) -> Result<Vec<ProviderCrewOutage>, OrbitError> {
-        let conn = self.read_connection()?;
-        let mut statement = conn
+    /// [ORB-16379] Every crew outage lasting past `now`, newest first.
+    pub fn list_outages(&self, now: DateTime<Utc>) -> Result<Vec<ProviderCrewOutage>, OrbitError> {
+        let mut statement = self
+            .conn
             .prepare(
                 r#"
                 SELECT provider, crew, until_at, observed_at, run_id
@@ -257,7 +280,7 @@ fn account_of(observation: &ProviderLimitObservation) -> Option<&str> {
 
 /// Store `observation` as the latest of its key unless a newer one stands.
 fn upsert_observation(
-    conn: &rusqlite::Connection,
+    conn: &Connection,
     observation: &ProviderLimitObservation,
 ) -> Result<bool, OrbitError> {
     // [ORB-17288] A crew account's readings are kept in their own table,

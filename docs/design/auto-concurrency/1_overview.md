@@ -135,7 +135,7 @@ alongside the original implementation work; source links follow the current
 | Concern | Current source | Task |
 |---------|---------------|------|
 | Linux per-task sampling from the worker scope | [worker/usage/sampler.rs](../../../crates/orbit-core/src/application/job/pipeline/worker/usage/sampler.rs) | ORB-15768 |
-| Per-task and host resource-minute storage | [resource_usage_store.rs](../../../crates/orbit-store/src/driver/sqlite/resource_usage_store.rs) | ORB-15768 |
+| Per-task and host resource-minute storage | [resource_usage.rs](../../../crates/orbit-store/src/repository/resource_usage.rs) | ORB-15768 |
 | Resource profiles and `orbit run profiles` | [host_resource/profile/](../../../crates/orbit-runtime/src/host_resource/profile/mod.rs), [run/profiles.rs](../../../crates/orbit-cli/src/command/run/profiles.rs) | ORB-15770 |
 | Analytics › Resources: profile charts in the dashboard | [api/resource_profiles.rs](../../../crates/orbit-web/src/api/resource_profiles.rs), [js/resources.js](../../../crates/orbit-web/assets/dashboard/js/resources.js) | ORB-16616 |
 | Host-load forecast and admission reservations | [host_resource/forecast/](../../../crates/orbit-runtime/src/host_resource/forecast/mod.rs), [admission_load.rs](../../../crates/orbit-store/src/repository/admission_load.rs) | ORB-15771 |

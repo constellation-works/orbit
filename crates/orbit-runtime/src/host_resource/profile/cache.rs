@@ -8,9 +8,68 @@ use std::time::Instant;
 
 use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
-use orbit_store::contracts::{DeliveryRunsFreshness, DeliveryRunsLoad, ResourceUsageStoreBackend};
+use orbit_store::Store;
+use orbit_store::contracts::{DeliveryRunResources, DeliveryRunsFreshness, DeliveryRunsLoad};
 
 use super::{ProfileBounds, ProfileSet, build_profiles, template_task_ids};
+
+/// The sampled-run reads a profile build makes. The host store is the one
+/// production source; each read takes its own snapshot, so a pass never pins
+/// one read across the probe and the build.
+pub(crate) trait DeliveryRunSource {
+    /// Every sampled run of a delivery admitted at or after `since`.
+    fn delivery_run_resources(
+        &self,
+        since: DateTime<Utc>,
+    ) -> Result<Vec<DeliveryRunResources>, OrbitError>;
+
+    /// The finished sampled runs on the host, as a cache freshness probe.
+    fn delivery_runs_freshness(&self) -> Result<DeliveryRunsFreshness, OrbitError>;
+
+    /// A counter that moves whenever [`Self::delivery_runs_freshness`] may
+    /// have changed. `None` when the source keeps no such counter, so a
+    /// caller always probes.
+    fn delivery_runs_stamp(&self) -> Result<Option<i64>, OrbitError> {
+        Ok(None)
+    }
+
+    /// Every sampled run since the epoch, reusing each run of `previous`
+    /// whose shape still holds. A source that keeps no shapes reads every run.
+    fn reload_delivery_runs(
+        &self,
+        previous: Option<DeliveryRunsLoad>,
+    ) -> Result<DeliveryRunsLoad, OrbitError> {
+        let _ = previous;
+        Ok(DeliveryRunsLoad {
+            runs: self.delivery_run_resources(DateTime::UNIX_EPOCH)?,
+            shapes: Vec::new(),
+        })
+    }
+}
+
+impl DeliveryRunSource for Store {
+    fn delivery_run_resources(
+        &self,
+        since: DateTime<Utc>,
+    ) -> Result<Vec<DeliveryRunResources>, OrbitError> {
+        self.read()?.resource_usage().delivery_runs(since)
+    }
+
+    fn delivery_runs_freshness(&self) -> Result<DeliveryRunsFreshness, OrbitError> {
+        self.read()?.resource_usage().delivery_runs_freshness()
+    }
+
+    fn delivery_runs_stamp(&self) -> Result<Option<i64>, OrbitError> {
+        self.read()?.resource_usage().delivery_runs_stamp()
+    }
+
+    fn reload_delivery_runs(
+        &self,
+        previous: Option<DeliveryRunsLoad>,
+    ) -> Result<DeliveryRunsLoad, OrbitError> {
+        self.read()?.resource_usage().reload_delivery_runs(previous)
+    }
+}
 
 /// Which of the given template task ids carry `no-diff-expected`.
 pub(crate) type NoDiffTasks<'a> =
@@ -55,7 +114,7 @@ impl ResourceProfileCache {
     /// The current profiles.
     pub(crate) fn profiles(
         &self,
-        store: &dyn ResourceUsageStoreBackend,
+        store: &dyn DeliveryRunSource,
         no_diff_tasks: NoDiffTasks<'_>,
         crew_models: BTreeMap<String, String>,
         bounds: ProfileBounds,
@@ -136,7 +195,7 @@ fn tags_unchanged(
 /// Profiles built straight from the store, bypassing and leaving the cache:
 /// what a reader asking for another window gets.
 pub(crate) fn build_uncached(
-    store: &dyn ResourceUsageStoreBackend,
+    store: &dyn DeliveryRunSource,
     no_diff_tasks: NoDiffTasks<'_>,
     crew_models: BTreeMap<String, String>,
     bounds: ProfileBounds,
@@ -165,7 +224,7 @@ struct BuildTiming {
 }
 
 fn build_classified(
-    store: &dyn ResourceUsageStoreBackend,
+    store: &dyn DeliveryRunSource,
     no_diff_tasks: NoDiffTasks<'_>,
     crew_models: BTreeMap<String, String>,
     bounds: ProfileBounds,

@@ -18,8 +18,7 @@ use orbit_core::runtime::host_resource::accuracy::AccuracySelection;
 use orbit_core::runtime::host_resource::forecast::{AdmissionReservationRequest, ForecastDecision};
 use orbit_core::runtime::host_resource::profile::ProfileLookup;
 use orbit_store::contracts::{
-    AdmissionForecastRecord, AdmissionReservation, HostResourceMinute, ResourceUsageStoreBackend,
-    RunResourceMinute,
+    AdmissionForecastRecord, AdmissionReservation, HostResourceMinute, RunResourceMinute,
 };
 use orbit_types::workflow::{DrainPassOutcome, JobRun, PullAdmissionFit};
 
@@ -97,22 +96,24 @@ fn finished_delivery_of(
         .unwrap();
     for minute in 0..31 {
         store
-            .record_run_resource_minute(&RunResourceMinute {
-                workspace_id: workspace.clone(),
-                run_id: run.run_id.clone(),
-                minute_index: minute,
-                minute_started_at: admitted + ChronoDuration::minutes(i64::from(minute)),
-                task_id: task.into(),
-                work_class: work_class.into(),
-                complexity: (!work_class.starts_with("auto-task:")).then(|| "low".into()),
-                resumed: false,
-                delivery_admitted_at: Some(admitted),
-                cpu_cores: cores,
-                cpu_accounting: Some(orbit_store::contracts::CPU_ACCOUNTING_LINUX.into()),
-                memory_bytes: bytes,
-                samples: 12,
-                crew_model: None,
-                orbit_version: None,
+            .write(|tx| {
+                tx.resource_usage().put_run_minute(&RunResourceMinute {
+                    workspace_id: workspace.clone(),
+                    run_id: run.run_id.clone(),
+                    minute_index: minute,
+                    minute_started_at: admitted + ChronoDuration::minutes(i64::from(minute)),
+                    task_id: task.into(),
+                    work_class: work_class.into(),
+                    complexity: (!work_class.starts_with("auto-task:")).then(|| "low".into()),
+                    resumed: false,
+                    delivery_admitted_at: Some(admitted),
+                    cpu_cores: cores,
+                    cpu_accounting: Some(orbit_store::contracts::CPU_ACCOUNTING_LINUX.into()),
+                    memory_bytes: bytes,
+                    samples: 12,
+                    crew_model: None,
+                    orbit_version: None,
+                })
             })
             .unwrap();
     }
@@ -195,7 +196,10 @@ fn forecasts(pair: &Pair) -> Vec<AdmissionForecastRecord> {
     pair.follower
         .sqlite_store()
         .unwrap()
-        .admission_forecasts(Utc::now() - ChronoDuration::hours(1))
+        .read()
+        .unwrap()
+        .resource_usage()
+        .forecasts(Utc::now() - ChronoDuration::hours(1))
         .unwrap()
 }
 
@@ -867,7 +871,9 @@ fn pending_pull_capacity_serializes_other_host_admitters_and_recovers_lost_repli
                 pull: None,
             };
             let store = pair.follower.sqlite_store().unwrap();
-            store.record_admission_forecast(&record).unwrap();
+            store
+                .write(|tx| tx.resource_usage().put_forecast(&record))
+                .unwrap();
 
             let minute_at = record
                 .forecast_at
@@ -911,34 +917,40 @@ fn pending_pull_capacity_serializes_other_host_admitters_and_recovers_lost_repli
                 ),
             ] {
                 store
-                    .record_run_resource_minute(&RunResourceMinute {
-                        workspace_id: workspace.clone(),
-                        run_id: run_id.clone(),
-                        minute_index: 0,
-                        minute_started_at: minute_at,
-                        task_id: task_id.to_string(),
-                        work_class: "change".into(),
-                        complexity: Some("low".into()),
-                        resumed: false,
-                        delivery_admitted_at: Some(delivery_admitted_at),
-                        cpu_cores,
-                        cpu_accounting: Some(orbit_store::contracts::CPU_ACCOUNTING_LINUX.into()),
-                        memory_bytes,
-                        samples: 12,
-                        crew_model: None,
-                        orbit_version: None,
+                    .write(|tx| {
+                        tx.resource_usage().put_run_minute(&RunResourceMinute {
+                            workspace_id: workspace.clone(),
+                            run_id: run_id.clone(),
+                            minute_index: 0,
+                            minute_started_at: minute_at,
+                            task_id: task_id.to_string(),
+                            work_class: "change".into(),
+                            complexity: Some("low".into()),
+                            resumed: false,
+                            delivery_admitted_at: Some(delivery_admitted_at),
+                            cpu_cores,
+                            cpu_accounting: Some(
+                                orbit_store::contracts::CPU_ACCOUNTING_LINUX.into(),
+                            ),
+                            memory_bytes,
+                            samples: 12,
+                            crew_model: None,
+                            orbit_version: None,
+                        })
                     })
                     .unwrap();
             }
             store
-                .offer_host_resource_minute(&HostResourceMinute {
-                    minute_at,
-                    cpu_cores: 5.0,
-                    cpu_count: 15,
-                    memory_bytes: 5 * GIB,
-                    memory_total_bytes: 32 * GIB,
-                    samples: 12,
-                    recorded_by_run_id: Some(leaf),
+                .write(|tx| {
+                    tx.resource_usage().put_host_minute(&HostResourceMinute {
+                        minute_at,
+                        cpu_cores: 5.0,
+                        cpu_count: 15,
+                        memory_bytes: 5 * GIB,
+                        memory_total_bytes: 32 * GIB,
+                        samples: 12,
+                        recorded_by_run_id: Some(leaf),
+                    })
                 })
                 .unwrap();
 

@@ -1,10 +1,11 @@
 //! Sticky enrollment. Decisions execute under the store transaction,
 //! so concurrent admissions and reweights cannot mix segments or surfaces.
 use super::definition::{ExperimentOverlay, PopulationFilter};
+use super::records::assign_experiments;
 use crate::OrbitRuntime;
 use chrono::Utc;
 use orbit_common::OrbitError;
-use orbit_store::contracts::{ExperimentAssignment, ExperimentRecord, ExperimentStoreBackend as _};
+use orbit_store::contracts::{ExperimentAssignment, ExperimentRecord};
 use orbit_types::task::{CrewSource, Task};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
@@ -31,93 +32,98 @@ impl OrbitRuntime {
             .as_deref()
             .is_some_and(|crew| !crew.trim().is_empty())
             && self.task_crew_source(task)? == Some(CrewSource::Explicit);
-        self.sqlite_store()?.assign_experiments(
-            &self.workspace_id()?,
-            &task.id,
-            true,
-            enabled,
-            &|records, existing, admitted| {
-                // The first enabled admission decided the population, even
-                // when nothing matched; the store keeps the same rule.
-                if admitted || task.status.is_terminal() {
-                    return Ok(Vec::new());
-                }
-                let mut occupied = occupied_surfaces(records, existing)?;
-                let mut additions = Vec::new();
-                for record in records {
-                    let experiment = &record.experiment;
-                    if experiment.status != "running"
-                        || !matches!(experiment.mode.as_str(), "shadow" | "live")
-                        || existing.iter().any(|row| row.experiment == experiment.id)
-                    {
-                        continue;
+        let workspace = self.workspace_id()?;
+        self.sqlite_store()?.write(|tx| {
+            assign_experiments(
+                tx,
+                &workspace,
+                &task.id,
+                true,
+                enabled,
+                &|records, existing, admitted| {
+                    // The first enabled admission decided the population, even
+                    // when nothing matched; the store keeps the same rule.
+                    if admitted || task.status.is_terminal() {
+                        return Ok(Vec::new());
                     }
-                    let filter: PopulationFilter =
-                        serde_json::from_str(&experiment.population_json).map_err(|error| {
-                            OrbitError::Store(format!("invalid experiment population: {error}"))
-                        })?;
-                    if !population_matches(&filter, task) {
-                        continue;
-                    }
-                    let surfaces = experiment_surfaces(record)?;
-                    let exclusion_reason = if !occupied.is_disjoint(&surfaces) {
-                        Some(SURFACE_CONFLICT_EXCLUSION.to_string())
-                    } else if explicit_crew && surfaces.contains("crew") {
-                        Some(EXPLICIT_CREW_EXCLUSION.to_string())
-                    } else {
-                        None
-                    };
-                    let mut assignment = ExperimentAssignment {
-                        experiment: experiment.id.clone(),
-                        task_id: task.id.clone(),
-                        arm: None,
-                        segment: None,
-                        digest: None,
-                        assigned_at: Utc::now(),
-                        forced: false,
-                        exclusion_reason,
-                    };
-                    if assignment.exclusion_reason.is_none() {
-                        let arms = record
-                            .arms
-                            .iter()
-                            .filter(|arm| arm.retired_segment.is_none())
-                            .collect::<Vec<_>>();
-                        let total: u64 = arms.iter().map(|arm| u64::from(arm.weight)).sum();
-                        if total == 0 {
-                            return Err(OrbitError::Store(
-                                "running experiment has no weighted arms".into(),
-                            ));
+                    let mut occupied = occupied_surfaces(records, existing)?;
+                    let mut additions = Vec::new();
+                    for record in records {
+                        let experiment = &record.experiment;
+                        if experiment.status != "running"
+                            || !matches!(experiment.mode.as_str(), "shadow" | "live")
+                            || existing.iter().any(|row| row.experiment == experiment.id)
+                        {
+                            continue;
                         }
-                        let digest = Sha256::digest(
-                            format!("{}:{}:{}", experiment.salt, experiment.id, task.id).as_bytes(),
-                        );
-                        let mut bytes = [0u8; 8];
-                        bytes.copy_from_slice(&digest[..8]);
-                        let mut ticket = u64::from_be_bytes(bytes) % total;
-                        let selected = arms
-                            .into_iter()
-                            .find(|arm| {
-                                if ticket < u64::from(arm.weight) {
-                                    true
-                                } else {
-                                    ticket -= u64::from(arm.weight);
-                                    false
-                                }
-                            })
-                            .ok_or_else(|| {
-                                OrbitError::Store("experiment draw exhausted its arms".into())
+                        let filter: PopulationFilter =
+                            serde_json::from_str(&experiment.population_json).map_err(|error| {
+                                OrbitError::Store(format!("invalid experiment population: {error}"))
                             })?;
-                        assignment.arm = Some(selected.name.clone());
-                        assignment.segment = Some(experiment.segment);
-                        assignment.digest = Some(selected.overlay_digest.clone());
-                        occupied.extend(surfaces);
+                        if !population_matches(&filter, task) {
+                            continue;
+                        }
+                        let surfaces = experiment_surfaces(record)?;
+                        let exclusion_reason = if !occupied.is_disjoint(&surfaces) {
+                            Some(SURFACE_CONFLICT_EXCLUSION.to_string())
+                        } else if explicit_crew && surfaces.contains("crew") {
+                            Some(EXPLICIT_CREW_EXCLUSION.to_string())
+                        } else {
+                            None
+                        };
+                        let mut assignment = ExperimentAssignment {
+                            experiment: experiment.id.clone(),
+                            task_id: task.id.clone(),
+                            arm: None,
+                            segment: None,
+                            digest: None,
+                            assigned_at: Utc::now(),
+                            forced: false,
+                            exclusion_reason,
+                        };
+                        if assignment.exclusion_reason.is_none() {
+                            let arms = record
+                                .arms
+                                .iter()
+                                .filter(|arm| arm.retired_segment.is_none())
+                                .collect::<Vec<_>>();
+                            let total: u64 = arms.iter().map(|arm| u64::from(arm.weight)).sum();
+                            if total == 0 {
+                                return Err(OrbitError::Store(
+                                    "running experiment has no weighted arms".into(),
+                                ));
+                            }
+                            let digest = Sha256::digest(
+                                format!("{}:{}:{}", experiment.salt, experiment.id, task.id)
+                                    .as_bytes(),
+                            );
+                            let mut bytes = [0u8; 8];
+                            bytes.copy_from_slice(&digest[..8]);
+                            let mut ticket = u64::from_be_bytes(bytes) % total;
+                            let selected = arms
+                                .into_iter()
+                                .find(|arm| {
+                                    if ticket < u64::from(arm.weight) {
+                                        true
+                                    } else {
+                                        ticket -= u64::from(arm.weight);
+                                        false
+                                    }
+                                })
+                                .ok_or_else(|| {
+                                    OrbitError::Store("experiment draw exhausted its arms".into())
+                                })?;
+                            assignment.arm = Some(selected.name.clone());
+                            assignment.segment = Some(experiment.segment);
+                            assignment.digest = Some(selected.overlay_digest.clone());
+                            occupied.extend(surfaces);
+                        }
+                        additions.push(assignment);
                     }
-                    additions.push(assignment);
-                }
-                Ok(additions)
-            },
-        )
+                    Ok(additions)
+                },
+            )
+        })
     }
 
     /// Operator-only tool entrypoint: force a nonterminal task without an arm
@@ -145,68 +151,79 @@ impl OrbitRuntime {
                 "experiments.enabled is false".into(),
             ));
         }
-        self.sqlite_store()?.assign_experiments(
-            &self.workspace_id()?,
-            &task.id,
-            false,
-            true,
-            &|records, existing, _| {
-                let record = records
-                    .iter()
-                    .find(|record| record.experiment.id == id)
-                    .or_else(|| records.iter().find(|record| record.experiment.name == id))
-                    .ok_or_else(|| {
-                        OrbitError::InvalidInput(format!("no experiment `{id}` in this workspace"))
-                    })?;
-                if record.experiment.status != "running" {
-                    return Err(OrbitError::InvalidInput(
-                        "forced assignment requires a running experiment".into(),
-                    ));
-                }
-                // An explicit-crew exclusion yields to the operator's choice.
-                if existing.iter().any(|row| {
-                    row.experiment == record.experiment.id
-                        && row.exclusion_reason.as_deref() != Some(EXPLICIT_CREW_EXCLUSION)
-                }) {
-                    return Err(OrbitError::InvalidInput(
-                        "task already has a sticky assignment or exclusion for this experiment"
-                            .into(),
-                    ));
-                }
-                if !occupied_surfaces(records, existing)?.is_disjoint(&experiment_surfaces(record)?)
-                {
-                    return Err(OrbitError::InvalidInput(
-                        "surface_conflict: another experiment already owns this task's surface"
-                            .into(),
-                    ));
-                }
-                let selected = record
-                    .arms
-                    .iter()
-                    .find(|candidate| candidate.name == arm && candidate.retired_segment.is_none())
-                    .ok_or_else(|| {
-                        OrbitError::InvalidInput(format!(
-                            "no active arm `{arm}` in experiment `{id}`"
-                        ))
-                    })?;
-                Ok(vec![ExperimentAssignment {
-                    experiment: record.experiment.id.clone(),
-                    task_id: task.id.clone(),
-                    arm: Some(selected.name.clone()),
-                    segment: Some(record.experiment.segment),
-                    digest: Some(selected.overlay_digest.clone()),
-                    assigned_at: Utc::now(),
-                    forced: true,
-                    exclusion_reason: None,
-                }])
-            },
-        )
+        let workspace = self.workspace_id()?;
+        self.sqlite_store()?.write(|tx| {
+            assign_experiments(
+                tx,
+                &workspace,
+                &task.id,
+                false,
+                true,
+                &|records, existing, _| {
+                    let record = records
+                        .iter()
+                        .find(|record| record.experiment.id == id)
+                        .or_else(|| records.iter().find(|record| record.experiment.name == id))
+                        .ok_or_else(|| {
+                            OrbitError::InvalidInput(format!(
+                                "no experiment `{id}` in this workspace"
+                            ))
+                        })?;
+                    if record.experiment.status != "running" {
+                        return Err(OrbitError::InvalidInput(
+                            "forced assignment requires a running experiment".into(),
+                        ));
+                    }
+                    // An explicit-crew exclusion yields to the operator's choice.
+                    if existing.iter().any(|row| {
+                        row.experiment == record.experiment.id
+                            && row.exclusion_reason.as_deref() != Some(EXPLICIT_CREW_EXCLUSION)
+                    }) {
+                        return Err(OrbitError::InvalidInput(
+                            "task already has a sticky assignment or exclusion for this experiment"
+                                .into(),
+                        ));
+                    }
+                    if !occupied_surfaces(records, existing)?
+                        .is_disjoint(&experiment_surfaces(record)?)
+                    {
+                        return Err(OrbitError::InvalidInput(
+                            "surface_conflict: another experiment already owns this task's surface"
+                                .into(),
+                        ));
+                    }
+                    let selected = record
+                        .arms
+                        .iter()
+                        .find(|candidate| {
+                            candidate.name == arm && candidate.retired_segment.is_none()
+                        })
+                        .ok_or_else(|| {
+                            OrbitError::InvalidInput(format!(
+                                "no active arm `{arm}` in experiment `{id}`"
+                            ))
+                        })?;
+                    Ok(vec![ExperimentAssignment {
+                        experiment: record.experiment.id.clone(),
+                        task_id: task.id.clone(),
+                        arm: Some(selected.name.clone()),
+                        segment: Some(record.experiment.segment),
+                        digest: Some(selected.overlay_digest.clone()),
+                        assigned_at: Utc::now(),
+                        forced: true,
+                        exclusion_reason: None,
+                    }])
+                },
+            )
+        })
     }
 
     /// Stored assignment readout, including surface-conflict exclusions.
     pub fn task_experiments(&self, task_id: &str) -> Result<Vec<ExperimentAssignment>, OrbitError> {
         self.sqlite_store()?
-            .task_experiment_assignments(&self.workspace_id()?, task_id)
+            .read()?
+            .experiment_assignment()
+            .list_for_task(&self.workspace_id()?, task_id)
     }
 }
 

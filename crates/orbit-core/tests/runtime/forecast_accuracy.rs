@@ -5,7 +5,7 @@ use orbit_core::OrbitRuntime;
 use orbit_core::runtime::host_resource::accuracy::AccuracySelection;
 use orbit_store::contracts::{
     AdmissionForecastPoint, AdmissionForecastRecord, ForecastDelivery, HostResourceMinute,
-    ResourceUsageStoreBackend, RunResourceMinute,
+    RunResourceMinute,
 };
 
 #[test]
@@ -34,26 +34,28 @@ fn unfinished_minutes_stay_pending_and_only_mature_measurements_form_pairs() {
             ("future", minute + Duration::minutes(5)),
         ] {
             store
-                .record_admission_forecast(&AdmissionForecastRecord {
-                    workspace_id: "ws_fixture".into(),
-                    run_id: format!("jrun-{offset}-{state}"),
-                    forecast_at: target - Duration::minutes(i64::from(offset))
-                        + Duration::seconds(20),
-                    mode: "shadow".into(),
-                    cpu_count: Some(16),
-                    memory_total_bytes: Some(32_000),
-                    baseline_cpu_cores: None,
-                    baseline_memory_bytes: None,
-                    covered_deliveries: None,
-                    points: vec![AdmissionForecastPoint {
-                        offset_minutes: offset,
-                        cpu_cores: 4.0,
-                        memory_bytes: 8_000,
-                    }],
-                    admitted: vec![],
-                    fit_admitted: vec![],
-                    fit_skipped: vec![],
-                    pull: None,
+                .write(|tx| {
+                    tx.resource_usage().put_forecast(&AdmissionForecastRecord {
+                        workspace_id: "ws_fixture".into(),
+                        run_id: format!("jrun-{offset}-{state}"),
+                        forecast_at: target - Duration::minutes(i64::from(offset))
+                            + Duration::seconds(20),
+                        mode: "shadow".into(),
+                        cpu_count: Some(16),
+                        memory_total_bytes: Some(32_000),
+                        baseline_cpu_cores: None,
+                        baseline_memory_bytes: None,
+                        covered_deliveries: None,
+                        points: vec![AdmissionForecastPoint {
+                            offset_minutes: offset,
+                            cpu_cores: 4.0,
+                            memory_bytes: 8_000,
+                        }],
+                        admitted: vec![],
+                        fit_admitted: vec![],
+                        fit_skipped: vec![],
+                        pull: None,
+                    })
                 })
                 .unwrap();
         }
@@ -64,19 +66,31 @@ fn unfinished_minutes_stay_pending_and_only_mature_measurements_form_pairs() {
         (minute, 90.0, 30_000),
     ] {
         store
-            .offer_host_resource_minute(&HostResourceMinute {
-                minute_at: at,
-                cpu_cores: cpu,
-                cpu_count: 16,
-                memory_bytes: memory,
-                memory_total_bytes: 32_000,
-                samples: 1,
-                recorded_by_run_id: None,
+            .write(|tx| {
+                tx.resource_usage().put_host_minute(&HostResourceMinute {
+                    minute_at: at,
+                    cpu_cores: cpu,
+                    cpu_count: 16,
+                    memory_bytes: memory,
+                    memory_total_bytes: 32_000,
+                    samples: 1,
+                    recorded_by_run_id: None,
+                })
             })
             .unwrap();
     }
-    let before_forecasts = store.admission_forecasts(selection.since).unwrap();
-    let before_minutes = store.host_resource_minutes(selection.since).unwrap();
+    let before_forecasts = store
+        .read()
+        .unwrap()
+        .resource_usage()
+        .forecasts(selection.since)
+        .unwrap();
+    let before_minutes = store
+        .read()
+        .unwrap()
+        .resource_usage()
+        .host_minutes(selection.since)
+        .unwrap();
     let report = runtime
         .forecast_accuracy_selected(selection.clone(), report_at)
         .unwrap();
@@ -158,11 +172,21 @@ fn unfinished_minutes_stay_pending_and_only_mature_measurements_form_pairs() {
         assert!(offset.cpu.mean_error.is_none() && offset.memory.worst_miss.is_none());
     }
     assert_eq!(
-        store.admission_forecasts(selection.since).unwrap(),
+        store
+            .read()
+            .unwrap()
+            .resource_usage()
+            .forecasts(selection.since)
+            .unwrap(),
         before_forecasts
     );
     assert_eq!(
-        store.host_resource_minutes(selection.since).unwrap(),
+        store
+            .read()
+            .unwrap()
+            .resource_usage()
+            .host_minutes(selection.since)
+            .unwrap(),
         before_minutes
     );
 }
@@ -190,36 +214,40 @@ fn default_selection_reads_the_newest_forecasts_after_a_break() {
     for (index, run_id) in ["jrun-older", "jrun-newest"].into_iter().enumerate() {
         let minute = last_drain - Duration::hours(1) + Duration::hours(index as i64);
         store
-            .record_admission_forecast(&AdmissionForecastRecord {
-                workspace_id: "ws_fixture".into(),
-                run_id: run_id.into(),
-                forecast_at: minute + Duration::seconds(10),
-                mode: "shadow".into(),
-                cpu_count: Some(16),
-                memory_total_bytes: Some(32_000),
-                baseline_cpu_cores: None,
-                baseline_memory_bytes: None,
-                covered_deliveries: None,
-                points: vec![AdmissionForecastPoint {
-                    offset_minutes: 5,
-                    cpu_cores: 4.0,
-                    memory_bytes: 8_000,
-                }],
-                admitted: vec![],
-                fit_admitted: vec![],
-                fit_skipped: vec![],
-                pull: None,
+            .write(|tx| {
+                tx.resource_usage().put_forecast(&AdmissionForecastRecord {
+                    workspace_id: "ws_fixture".into(),
+                    run_id: run_id.into(),
+                    forecast_at: minute + Duration::seconds(10),
+                    mode: "shadow".into(),
+                    cpu_count: Some(16),
+                    memory_total_bytes: Some(32_000),
+                    baseline_cpu_cores: None,
+                    baseline_memory_bytes: None,
+                    covered_deliveries: None,
+                    points: vec![AdmissionForecastPoint {
+                        offset_minutes: 5,
+                        cpu_cores: 4.0,
+                        memory_bytes: 8_000,
+                    }],
+                    admitted: vec![],
+                    fit_admitted: vec![],
+                    fit_skipped: vec![],
+                    pull: None,
+                })
             })
             .unwrap();
         store
-            .offer_host_resource_minute(&HostResourceMinute {
-                minute_at: minute + Duration::minutes(5),
-                cpu_cores: 5.0,
-                cpu_count: 16,
-                memory_bytes: 8_000,
-                memory_total_bytes: 32_000,
-                samples: 1,
-                recorded_by_run_id: None,
+            .write(|tx| {
+                tx.resource_usage().put_host_minute(&HostResourceMinute {
+                    minute_at: minute + Duration::minutes(5),
+                    cpu_cores: 5.0,
+                    cpu_count: 16,
+                    memory_bytes: 8_000,
+                    memory_total_bytes: 32_000,
+                    samples: 1,
+                    recorded_by_run_id: None,
+                })
             })
             .unwrap();
     }
@@ -271,61 +299,67 @@ fn gc_retained_forecast_excludes_missing_worker_attribution() {
     for index in 0..201 {
         let admitted = forecast_at + Duration::minutes(index);
         store
-            .record_run_resource_minute(&RunResourceMinute {
-                workspace_id: "ws_fixture".into(),
-                run_id: format!("jrun-worker-{index}"),
-                minute_index: 0,
-                minute_started_at: if index == 0 { minute } else { admitted },
-                task_id: format!("task-{index}"),
-                work_class: "change".into(),
-                complexity: Some("hard".into()),
-                resumed: false,
-                delivery_admitted_at: Some(admitted),
-                cpu_cores: 4.0,
-                cpu_accounting: None,
-                memory_bytes: 4_000,
-                samples: 12,
-                crew_model: None,
-                orbit_version: None,
+            .write(|tx| {
+                tx.resource_usage().put_run_minute(&RunResourceMinute {
+                    workspace_id: "ws_fixture".into(),
+                    run_id: format!("jrun-worker-{index}"),
+                    minute_index: 0,
+                    minute_started_at: if index == 0 { minute } else { admitted },
+                    task_id: format!("task-{index}"),
+                    work_class: "change".into(),
+                    complexity: Some("hard".into()),
+                    resumed: false,
+                    delivery_admitted_at: Some(admitted),
+                    cpu_cores: 4.0,
+                    cpu_accounting: None,
+                    memory_bytes: 4_000,
+                    samples: 12,
+                    crew_model: None,
+                    orbit_version: None,
+                })
             })
             .unwrap();
     }
     store
-        .record_admission_forecast(&AdmissionForecastRecord {
-            workspace_id: "ws_fixture".into(),
-            run_id: "jrun-forecast".into(),
-            forecast_at,
-            mode: "shadow".into(),
-            cpu_count: Some(16),
-            memory_total_bytes: Some(32_000),
-            baseline_cpu_cores: Some(1.0),
-            baseline_memory_bytes: Some(1_000),
-            covered_deliveries: Some(vec![ForecastDelivery {
+        .write(|tx| {
+            tx.resource_usage().put_forecast(&AdmissionForecastRecord {
                 workspace_id: "ws_fixture".into(),
-                task_id: "task-0".into(),
-                admitted_at: forecast_at,
-                run_ids: vec!["jrun-worker-0".into()],
-            }]),
-            points: vec![AdmissionForecastPoint {
-                offset_minutes: 5,
-                cpu_cores: 5.0,
-                memory_bytes: 5_000,
-            }],
-            admitted: vec![],
-            fit_admitted: vec![],
-            fit_skipped: vec![],
-            pull: None,
+                run_id: "jrun-forecast".into(),
+                forecast_at,
+                mode: "shadow".into(),
+                cpu_count: Some(16),
+                memory_total_bytes: Some(32_000),
+                baseline_cpu_cores: Some(1.0),
+                baseline_memory_bytes: Some(1_000),
+                covered_deliveries: Some(vec![ForecastDelivery {
+                    workspace_id: "ws_fixture".into(),
+                    task_id: "task-0".into(),
+                    admitted_at: forecast_at,
+                    run_ids: vec!["jrun-worker-0".into()],
+                }]),
+                points: vec![AdmissionForecastPoint {
+                    offset_minutes: 5,
+                    cpu_cores: 5.0,
+                    memory_bytes: 5_000,
+                }],
+                admitted: vec![],
+                fit_admitted: vec![],
+                fit_skipped: vec![],
+                pull: None,
+            })
         })
         .unwrap();
     store
-        .offer_host_resource_minute(&HostResourceMinute {
-            minute_at: minute,
-            cpu_cores: 6.0,
-            cpu_count: 16,
-            memory_bytes: 6_000,
-            memory_total_bytes: 32_000,
-            samples: 12,
-            recorded_by_run_id: None,
+        .write(|tx| {
+            tx.resource_usage().put_host_minute(&HostResourceMinute {
+                minute_at: minute,
+                cpu_cores: 6.0,
+                cpu_count: 16,
+                memory_bytes: 6_000,
+                memory_total_bytes: 32_000,
+                samples: 12,
+                recorded_by_run_id: None,
+            })
         })
         .unwrap();
     let report = || {
@@ -339,7 +373,10 @@ fn gc_retained_forecast_excludes_missing_worker_attribution() {
     runtime.gc_runs(true, Some(30)).unwrap();
     assert!(
         !store
-            .delivery_run_resources(forecast_at)
+            .read()
+            .unwrap()
+            .resource_usage()
+            .delivery_runs(forecast_at)
             .unwrap()
             .iter()
             .any(|run| run.run_id == "jrun-worker-0")

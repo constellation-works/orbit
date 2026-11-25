@@ -15,7 +15,7 @@ use orbit_core::{OrbitRuntime, TaskComplexity, TaskPriority, TaskStatus, TaskTyp
 use orbit_engine::RuntimeHost;
 use orbit_store::contracts::{
     AdmissionForecastPoint, AdmissionRunContext, ExecutionClaim, ExecutionClaimPhase,
-    ExecutionLocation, FrictionListFilter, ResourceUsageStoreBackend, RunResourceMinute,
+    ExecutionLocation, FrictionListFilter, RunResourceMinute,
 };
 use orbit_store::friction_store::FrictionStore;
 use orbit_tools::ToolContext;
@@ -129,22 +129,24 @@ impl Fixture {
             .unwrap();
         for (minute, cores) in cpu.iter().enumerate() {
             store
-                .record_run_resource_minute(&RunResourceMinute {
-                    workspace_id: workspace.clone(),
-                    run_id: run.run_id.clone(),
-                    minute_index: minute as u32,
-                    minute_started_at: admitted + Duration::minutes(minute as i64),
-                    task_id: task.clone(),
-                    work_class: "change".to_string(),
-                    complexity: Some(complexity.to_string()),
-                    resumed: false,
-                    delivery_admitted_at: Some(admitted),
-                    cpu_cores: *cores,
-                    cpu_accounting: Some(orbit_store::contracts::CPU_ACCOUNTING_LINUX.into()),
-                    memory_bytes: memory,
-                    samples: 12,
-                    crew_model: None,
-                    orbit_version: None,
+                .write(|tx| {
+                    tx.resource_usage().put_run_minute(&RunResourceMinute {
+                        workspace_id: workspace.clone(),
+                        run_id: run.run_id.clone(),
+                        minute_index: minute as u32,
+                        minute_started_at: admitted + Duration::minutes(minute as i64),
+                        task_id: task.clone(),
+                        work_class: "change".to_string(),
+                        complexity: Some(complexity.to_string()),
+                        resumed: false,
+                        delivery_admitted_at: Some(admitted),
+                        cpu_cores: *cores,
+                        cpu_accounting: Some(orbit_store::contracts::CPU_ACCOUNTING_LINUX.into()),
+                        memory_bytes: memory,
+                        samples: 12,
+                        crew_model: None,
+                        orbit_version: None,
+                    })
                 })
                 .unwrap();
         }
@@ -900,14 +902,27 @@ fn shadow_and_enforce_passes_record_their_forecast_and_off_records_none() {
 
     let off = classify(&fixture.runtime, &drain, 4);
     assert_eq!(admitted(&off), vec![heavy.clone(), light.clone()]);
-    assert!(store.admission_forecasts(since).unwrap().is_empty());
+    assert!(
+        store
+            .read()
+            .unwrap()
+            .resource_usage()
+            .forecasts(since)
+            .unwrap()
+            .is_empty()
+    );
 
     let shadow = classify(&fixture.with_mode("shadow"), &drain, 4);
     assert_eq!(admitted(&shadow), admitted(&off), "{shadow:#}");
     let enforce = classify(&fixture.with_mode("enforce"), &drain, 4);
     assert_eq!(admitted(&enforce), vec![light.clone()], "{enforce:#}");
 
-    let records = store.admission_forecasts(since).unwrap();
+    let records = store
+        .read()
+        .unwrap()
+        .resource_usage()
+        .forecasts(since)
+        .unwrap();
     let [shadow_record, enforce_record] = records.as_slice() else {
         panic!("{records:#?}");
     };

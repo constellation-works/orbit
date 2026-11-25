@@ -215,9 +215,13 @@ fn mixed_account_auth_failure(run_crew: &str, account: Option<&str>, excluded: &
         "the run's healthy account can take the held task"
     );
 
-    let store =
-        orbit_store::compose::provider_limit_store_from_store(fx.runtime.sqlite_store().unwrap());
-    let outages = store.provider_crew_outages(Utc::now()).unwrap();
+    let store = fx.runtime.sqlite_store().unwrap();
+    let outages = store
+        .read()
+        .unwrap()
+        .provider_limit()
+        .list_outages(Utc::now())
+        .unwrap();
     let mut outage_crews = outages
         .iter()
         .map(|outage| outage.crew.as_str())

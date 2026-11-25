@@ -60,20 +60,20 @@ fn colliding_run_ids_keep_invocations_in_their_own_workspace() {
 
     assert!(
         store
-            .count_invocations_by_activity("ws_a", since, until)
+            .read().unwrap().reliability().count_invocations_by_activity("ws_a", since, until)
             .expect("count ws_a")
             .is_empty(),
         "ws_a's reliability counts included ws_b's invocation"
     );
     let b_counts = store
-        .count_invocations_by_activity("ws_b", since, until)
+        .read().unwrap().reliability().count_invocations_by_activity("ws_b", since, until)
         .expect("count ws_b");
     assert_eq!(b_counts.len(), 1);
     assert_eq!(b_counts[0].invocation_count, 1);
 
     let coverage = |workspace: &str| {
         store
-            .count_invocation_job_runs(workspace, since, until, &["implement_one".to_string()])
+            .read().unwrap().reliability().count_invocation_job_runs(workspace, since, until, &["implement_one".to_string()])
             .expect("count run coverage")
     };
     assert_eq!(coverage("ws_a").total_job_runs, 0);

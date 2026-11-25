@@ -12,7 +12,7 @@ use orbit_core::application::experiment::{
 use orbit_core::application::task::TaskAddParams;
 use orbit_store::contracts::{
     CrewMemoryClosedProposalRow, CrewMemoryEventRow, CrewMemoryProposalDecision,
-    CrewMemoryProposalOutcome, CrewMemoryProposalRow, CrewMemoryStoreBackend,
+    CrewMemoryProposalOutcome, CrewMemoryProposalRow,
 };
 use serde_json::Value;
 
@@ -67,20 +67,23 @@ fn open_proposal(
     created_at: DateTime<Utc>,
 ) {
     let outcome = store
-        .open_crew_memory_proposal(
-            &CrewMemoryProposalRow {
-                workspace_id: workspace_id.to_string(),
-                id: id.to_string(),
-                proposing_key: "model-a".to_string(),
-                proposing_run_id: None,
-                text: format!("note {id}"),
-                evidence_json: "[]".to_string(),
-                status: "open".to_string(),
-                created_at,
-            },
-            &audit(workspace_id, created_at, "proposal_opened", id),
-            u32::MAX,
-        )
+        .write(|tx| {
+            orbit_core::application::crew_memory::open_proposal(
+                tx,
+                &CrewMemoryProposalRow {
+                    workspace_id: workspace_id.to_string(),
+                    id: id.to_string(),
+                    proposing_key: "model-a".to_string(),
+                    proposing_run_id: None,
+                    text: format!("note {id}"),
+                    evidence_json: "[]".to_string(),
+                    status: "open".to_string(),
+                    created_at,
+                },
+                &audit(workspace_id, created_at, "proposal_opened", id),
+                u32::MAX,
+            )
+        })
         .expect("seed proposal");
     assert!(
         matches!(outcome, CrewMemoryProposalOutcome::Opened),
@@ -109,13 +112,22 @@ struct StoredMemory {
 fn stored_memory(store: &orbit_store::Store, workspace_id: &str) -> StoredMemory {
     StoredMemory {
         open: store
-            .crew_memory_open_proposals(workspace_id)
+            .read()
+            .unwrap()
+            .crew_memory()
+            .open_proposals(workspace_id)
             .expect("read open proposals"),
         closed: store
-            .crew_memory_closed_proposals(workspace_id, 100)
+            .read()
+            .unwrap()
+            .crew_memory()
+            .closed_proposals(workspace_id, 100)
             .expect("read decided proposals"),
         events: store
-            .crew_memory_events(workspace_id, "global")
+            .read()
+            .unwrap()
+            .crew_memory()
+            .events(workspace_id, "global")
             .expect("read audit events"),
     }
 }
@@ -145,23 +157,26 @@ fn seed_lapsed_and_acceptance(store: &orbit_store::Store, workspace_id: &str) {
     let decided_at = now - Duration::days(2);
     open_proposal(store, workspace_id, "accepted-mid", decided_at);
     store
-        .decide_crew_memory_proposal(
-            &CrewMemoryProposalDecision {
-                workspace_id: workspace_id.to_string(),
-                id: "accepted-mid".to_string(),
-                status: "accepted".to_string(),
-                actor: "operator".to_string(),
-                at: decided_at,
-                reason: "kept".to_string(),
-            },
-            &audit(
-                workspace_id,
-                decided_at,
-                "proposal_accepted",
-                "accepted-mid",
-            ),
-            None,
-        )
+        .write(|tx| {
+            orbit_core::application::crew_memory::decide_proposal(
+                tx,
+                &CrewMemoryProposalDecision {
+                    workspace_id: workspace_id.to_string(),
+                    id: "accepted-mid".to_string(),
+                    status: "accepted".to_string(),
+                    actor: "operator".to_string(),
+                    at: decided_at,
+                    reason: "kept".to_string(),
+                },
+                &audit(
+                    workspace_id,
+                    decided_at,
+                    "proposal_accepted",
+                    "accepted-mid",
+                ),
+                None,
+            )
+        })
         .expect("seed acceptance");
     let tie_at = now - lapse - Duration::days(3);
     open_proposal(store, workspace_id, "lapsed-tie-a", tie_at);

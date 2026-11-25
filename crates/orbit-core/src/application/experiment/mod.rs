@@ -21,6 +21,8 @@ mod overlay;
 mod progress;
 mod promotion;
 mod readout;
+mod records;
+pub use records::{ExperimentAssignmentDecision, assign_experiments, write_experiment};
 mod run_policy;
 mod skills;
 mod tag_instruction_port;

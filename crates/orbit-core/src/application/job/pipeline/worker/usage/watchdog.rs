@@ -15,7 +15,7 @@ use chrono::Utc;
 use orbit_common::OrbitError;
 use orbit_common::process::ancestry::{self, ProcessStartKey, ProcessTreeProcess};
 use orbit_config::{MemoryLimit, MemoryUnit};
-use orbit_store::contracts::{WorkerResourceLimitEvidence, WorkerResourceLimitStoreBackend};
+use orbit_store::contracts::WorkerResourceLimitEvidence;
 use orbit_types::workflow::{JobRun, JobRunState};
 
 use super::tree::TreeSampler;
@@ -86,7 +86,9 @@ impl OrbitRuntime {
                             top_processes: top,
                         };
                         let message = describe_watchdog_breach(&evidence);
-                        if let Err(error) = store.record_worker_resource_limit_evidence(&evidence) {
+                        if let Err(error) =
+                            store.write(|tx| tx.worker_resource_limit().put(&evidence))
+                        {
                             tracing::error!(%error, "could not persist watchdog resource evidence");
                         }
                         let started_at = run.started_at.unwrap_or(run.scheduled_at);

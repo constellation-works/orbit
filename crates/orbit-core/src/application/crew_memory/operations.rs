@@ -1,14 +1,14 @@
 //! Crew memory's reads and the one write path every writer shares.
 
 use std::collections::BTreeSet;
-use std::sync::Arc;
 
 use chrono::{SubsecRound, Utc};
 use orbit_common::OrbitError;
-use orbit_store::contracts::{CrewMemoryEventRow, CrewMemoryRevisionRow, CrewMemoryStoreBackend};
+use orbit_store::contracts::{CrewMemoryEventRow, CrewMemoryRevisionRow};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
+use super::records::append_revision;
 use super::{
     GLOBAL_MAX_BYTES, GLOBAL_MAX_FILES, MODEL_SPACE_MAX_BYTES, MODEL_SPACE_MAX_FILES, MemoryFile,
     MemoryKey, MemoryLintVocabulary, MemoryWrite, MemoryWriteContext, MemoryWriter,
@@ -29,12 +29,6 @@ const WRITE_VERB: &str = "write";
 const WRITE_EVENT: &str = "revision_written";
 
 impl OrbitRuntime {
-    pub(super) fn crew_memory_store(&self) -> Result<Arc<dyn CrewMemoryStoreBackend>, OrbitError> {
-        Ok(orbit_store::compose::crew_memory_store(
-            self.sqlite_store()?,
-        ))
-    }
-
     /// An operator-named key. A configured crew's name is refused with the
     /// model it runs, since a space belongs to the model, not the crew.
     fn operator_memory_key(&self, raw: &str) -> Result<MemoryKey, OrbitError> {
@@ -125,7 +119,7 @@ impl OrbitRuntime {
     ) -> Result<Value, OrbitError> {
         self.ensure_crew_memory_writes_enabled(WRITE_VERB, key)?;
         self.ensure_coordination_task_write_permitted()?;
-        let store = self.crew_memory_store()?;
+        let store = self.sqlite_store()?;
         let workspace_id = self.workspace_id()?;
         let vocabulary = self.crew_memory_vocabulary(&[key]);
         let context = MemoryWriteContext {
@@ -138,22 +132,24 @@ impl OrbitRuntime {
         // Stored at microsecond precision; truncate so the reply matches a read.
         let now = Utc::now().trunc_subsecs(6);
         if let Err(refusal) = validate_memory_write(&write, &context) {
-            store.append_crew_memory_event(&CrewMemoryEventRow {
-                workspace_id,
-                memory_key: key.to_string(),
-                at: now,
-                action: "write_refused".to_string(),
-                actor: writer.actor().to_string(),
-                revision: None,
-                detail_json: json!({
-                    "verb": WRITE_VERB,
-                    "task_id": task_id,
-                    "rule": refusal.rule,
-                    "file": refusal.file,
-                    "token": refusal.token,
-                    "message": refusal.message,
+            store.write(|tx| {
+                tx.crew_memory().put_event(&CrewMemoryEventRow {
+                    workspace_id,
+                    memory_key: key.to_string(),
+                    at: now,
+                    action: "write_refused".to_string(),
+                    actor: writer.actor().to_string(),
+                    revision: None,
+                    detail_json: json!({
+                        "verb": WRITE_VERB,
+                        "task_id": task_id,
+                        "rule": refusal.rule,
+                        "file": refusal.file,
+                        "token": refusal.token,
+                        "message": refusal.message,
+                    })
+                    .to_string(),
                 })
-                .to_string(),
             })?;
             return Err(OrbitError::InvalidInput(refusal.to_string()));
         }
@@ -189,7 +185,7 @@ impl OrbitRuntime {
             revision: None,
             detail_json: detail.to_string(),
         };
-        let stored = store.append_crew_memory_revision(&row, &event)?;
+        let stored = store.write(|tx| append_revision(tx, &row, &event))?;
         let mut view = revision_view(key, Some(&stored))?;
         view["action"] = json!(WRITE_EVENT);
         Ok(view)
@@ -202,7 +198,7 @@ impl OrbitRuntime {
         key: Option<&str>,
         revision: Option<u32>,
     ) -> Result<Value, OrbitError> {
-        let store = self.crew_memory_store()?;
+        let store = self.sqlite_store()?;
         let workspace_id = self.workspace_id()?;
         let enabled = self.crew_memory_experiment_running();
         let Some(raw) = key else {
@@ -219,7 +215,10 @@ impl OrbitRuntime {
             return Ok(json!({ "enabled": enabled, "count": spaces.len(), "spaces": spaces }));
         };
         let key = self.operator_memory_key(raw)?;
-        let row = store.crew_memory_revision(&workspace_id, key.as_str(), revision)?;
+        let row = store
+            .read()?
+            .crew_memory()
+            .revision(&workspace_id, key.as_str(), revision)?;
         if let (Some(number), None) = (revision, &row) {
             return Err(OrbitError::InvalidInput(format!(
                 "crew memory `{key}` has no revision {number}"
@@ -238,9 +237,9 @@ impl OrbitRuntime {
     /// writer and its open proposal count. Open proposals are read only
     /// while a running experiment has a memory arm.
     pub(super) fn crew_memory_space_rows(&self) -> Result<Vec<Value>, OrbitError> {
-        let store = self.crew_memory_store()?;
+        let store = self.sqlite_store()?;
         let workspace_id = self.workspace_id()?;
-        let current = store.crew_memory_current(&workspace_id)?;
+        let current = store.read()?.crew_memory().current(&workspace_id)?;
         let open = if self.crew_memory_experiment_running() {
             self.unexpired_crew_memory_proposals()?
         } else {

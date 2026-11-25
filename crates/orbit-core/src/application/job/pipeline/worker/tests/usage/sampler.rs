@@ -7,7 +7,7 @@ use std::sync::{Arc, Barrier};
 
 use chrono::{DateTime, TimeDelta, TimeZone, Utc};
 use orbit_store::Store;
-use orbit_store::contracts::{HostResourceMinute, ResourceUsageStoreBackend};
+use orbit_store::contracts::HostResourceMinute;
 use tempfile::TempDir;
 
 use crate::application::job::pipeline::worker::delivery_class::DeliveryResourceClass;
@@ -71,7 +71,7 @@ impl Fixture {
 
     fn sampler(&self, run_id: &str) -> RunResourceSampler {
         RunResourceSampler::new(
-            Arc::clone(&self.store) as Arc<dyn ResourceUsageStoreBackend>,
+            Arc::clone(&self.store),
             self.scope(run_id),
             self.proc_root.clone(),
             "ws_test".into(),
@@ -171,7 +171,13 @@ fn sampler_records_one_row_per_minute_with_mean_cores_and_peak_memory() {
     fixture.run_host(2, host_busy[2], 1024);
     sampler.finish(at(127));
 
-    let rows = fixture.store.run_resource_minutes("ws_test", run).unwrap();
+    let rows = fixture
+        .store
+        .read()
+        .unwrap()
+        .resource_usage()
+        .run_minutes("ws_test", run)
+        .unwrap();
     assert_eq!(
         rows.iter().map(|row| row.minute_index).collect::<Vec<_>>(),
         [0, 1, 2],
@@ -212,7 +218,13 @@ fn sampler_records_one_row_per_minute_with_mean_cores_and_peak_memory() {
 
     // 08:00 began before the first reading and 08:02 never ended for this
     // worker; only 08:01 was seen whole.
-    let host = fixture.store.host_resource_minutes(start()).unwrap();
+    let host = fixture
+        .store
+        .read()
+        .unwrap()
+        .resource_usage()
+        .host_minutes(start())
+        .unwrap();
     assert_eq!(host.len(), 1, "{host:#?}");
     assert_eq!(host[0].minute_at, at(60));
     assert!((host[0].cpu_cores - 3.0).abs() < 1e-6, "{host:#?}");
@@ -225,7 +237,13 @@ fn sampler_records_one_row_per_minute_with_mean_cores_and_peak_memory() {
     // recorded minutes and marks the run resumed, never overwriting them.
     let mut restarted = fixture.sampler(run);
     restarted.finish(at(10));
-    let rows = fixture.store.run_resource_minutes("ws_test", run).unwrap();
+    let rows = fixture
+        .store
+        .read()
+        .unwrap()
+        .resource_usage()
+        .run_minutes("ws_test", run)
+        .unwrap();
     assert_eq!(rows.len(), 4);
     assert!(!rows[0].resumed && rows[3].resumed && rows[3].minute_index == 3);
 }
@@ -272,7 +290,13 @@ fn counter_intervals_credit_the_minutes_they_cover() {
             previous = seconds;
         }
         sampler.finish(at(previous) + TimeDelta::nanoseconds(jitter));
-        let rows = fixture.store.run_resource_minutes("ws_test", run).unwrap();
+        let rows = fixture
+            .store
+            .read()
+            .unwrap()
+            .resource_usage()
+            .run_minutes("ws_test", run)
+            .unwrap();
         let recovered_cpu: u64 = rows
             .iter()
             .map(|row| {
@@ -294,7 +318,13 @@ fn counter_intervals_credit_the_minutes_they_cover() {
                 "{run}: minute {index} must credit its covered interval: {rows:#?}"
             );
         }
-        let host = fixture.store.host_resource_minutes(start()).unwrap();
+        let host = fixture
+            .store
+            .read()
+            .unwrap()
+            .resource_usage()
+            .host_minutes(start())
+            .unwrap();
         assert_eq!(host.len(), expected_host.len(), "{run}: {host:#?}");
         for (row, (seconds, expected)) in host.iter().zip(expected_host) {
             assert_eq!(row.minute_at, at(seconds));
@@ -324,7 +354,13 @@ fn memory_counts_shmem_but_not_page_cache() {
     fixture.sampler(tmpfs).finish(at(1));
 
     let recorded = |run: &str| {
-        let rows = fixture.store.run_resource_minutes("ws_test", run).unwrap();
+        let rows = fixture
+            .store
+            .read()
+            .unwrap()
+            .resource_usage()
+            .run_minutes("ws_test", run)
+            .unwrap();
         assert_eq!(rows.len(), 1, "{rows:#?}");
         rows[0].memory_bytes
     };
@@ -352,7 +388,13 @@ fn concurrent_workers_store_one_host_row_per_minute() {
             sampler.sample(at(seconds));
         }
     }
-    let minutes = fixture.store.host_resource_minutes(start()).unwrap();
+    let minutes = fixture
+        .store
+        .read()
+        .unwrap()
+        .resource_usage()
+        .host_minutes(start())
+        .unwrap();
     assert_eq!(
         minutes
             .iter()
@@ -378,7 +420,14 @@ fn concurrent_workers_store_one_host_row_per_minute() {
         .count();
     assert_eq!(stored, 1, "the first insert for a minute wins");
     assert_eq!(
-        fixture.store.host_resource_minutes(at(600)).unwrap().len(),
+        fixture
+            .store
+            .read()
+            .unwrap()
+            .resource_usage()
+            .host_minutes(at(600))
+            .unwrap()
+            .len(),
         1
     );
 }
@@ -387,14 +436,16 @@ fn offer(database: &Path, worker: u32, barrier: &Barrier) -> bool {
     let store = Store::open(database).unwrap();
     barrier.wait();
     store
-        .offer_host_resource_minute(&HostResourceMinute {
-            minute_at: at(600),
-            cpu_cores: f64::from(worker),
-            cpu_count: 4,
-            memory_bytes: GB,
-            memory_total_bytes: 32 * GB,
-            samples: 12,
-            recorded_by_run_id: Some(format!("jrun-{worker}")),
+        .write(|tx| {
+            tx.resource_usage().put_host_minute(&HostResourceMinute {
+                minute_at: at(600),
+                cpu_cores: f64::from(worker),
+                cpu_count: 4,
+                memory_bytes: GB,
+                memory_total_bytes: 32 * GB,
+                samples: 12,
+                recorded_by_run_id: Some(format!("jrun-{worker}")),
+            })
         })
         .unwrap()
 }

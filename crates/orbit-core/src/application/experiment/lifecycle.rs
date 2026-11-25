@@ -10,8 +10,8 @@ use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
 use orbit_common::security::token;
 use orbit_store::contracts::{
-    ExperimentArmRow, ExperimentEventRow, ExperimentRecord, ExperimentRow,
-    ExperimentStoreBackend as _, ExperimentWrite, ExperimentWriteOutcome,
+    ExperimentArmRow, ExperimentEventRow, ExperimentRecord, ExperimentRow, ExperimentWrite,
+    ExperimentWriteOutcome,
 };
 use serde_json::{Value, json};
 
@@ -21,6 +21,7 @@ use super::definition::{
     parse_population, require_lines_changed_guardrail, validate_handle, validate_metric,
 };
 use super::experiment_horizon_at;
+use super::records::{delete_experiment, write_experiment};
 use super::view::ExperimentView;
 use crate::OrbitRuntime;
 
@@ -308,7 +309,9 @@ impl OrbitRuntime {
         let store = self.sqlite_store()?;
         let workspace = self.workspace_id()?;
         let applied = store
-            .experiment_assignments(&workspace, &current.id)?
+            .read()?
+            .experiment_assignment()
+            .list_for_experiment(&workspace, &current.id)?
             .into_iter()
             .filter(|assignment| assignment.arm.is_some())
             .count();
@@ -318,7 +321,7 @@ impl OrbitRuntime {
                 current.name
             )));
         }
-        if !store.delete_experiment(&workspace, &current.id, current.revision)? {
+        if !store.write(|tx| delete_experiment(tx, &workspace, &current.id, current.revision))? {
             return Err(OrbitError::InvalidInput(format!(
                 "experiment `{}` changed while this delete was prepared; show it and retry",
                 current.name
@@ -362,7 +365,9 @@ impl OrbitRuntime {
             )));
         }
         self.sqlite_store()?
-            .experiment_records(&self.workspace_id()?, status)?
+            .read()?
+            .experiment()
+            .list(&self.workspace_id()?, status)?
             .into_iter()
             .map(ExperimentView::from_record)
             .collect()
@@ -392,7 +397,9 @@ impl OrbitRuntime {
 
     fn experiment_record(&self, id_or_name: &str) -> Result<ExperimentRecord, OrbitError> {
         self.sqlite_store()?
-            .experiment_record(&self.workspace_id()?, id_or_name)?
+            .read()?
+            .experiment()
+            .get(&self.workspace_id()?, id_or_name)?
             .ok_or_else(|| {
                 OrbitError::InvalidInput(format!("no experiment `{id_or_name}` in this workspace"))
             })
@@ -417,7 +424,10 @@ impl OrbitRuntime {
                 expected_revision: None,
                 running_limit: None,
             };
-            match self.sqlite_store()?.write_experiment(&write)? {
+            match self
+                .sqlite_store()?
+                .write(|tx| write_experiment(tx, &write))?
+            {
                 ExperimentWriteOutcome::Written => return self.experiment_view(&experiment.id),
                 ExperimentWriteOutcome::NameTaken => return Err(name_taken(&experiment.name)),
                 ExperimentWriteOutcome::Stale
@@ -457,7 +467,10 @@ impl OrbitRuntime {
             expected_revision: Some(current.revision),
             running_limit,
         };
-        match self.sqlite_store()?.write_experiment(&write)? {
+        match self
+            .sqlite_store()?
+            .write(|tx| write_experiment(tx, &write))?
+        {
             ExperimentWriteOutcome::Written => self.experiment_view(&current.id),
             ExperimentWriteOutcome::NameTaken => Err(name_taken(&write.experiment.name)),
             ExperimentWriteOutcome::Stale => Err(OrbitError::InvalidInput(format!(

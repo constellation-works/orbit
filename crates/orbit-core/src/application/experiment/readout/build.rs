@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
-use orbit_store::contracts::{ExperimentRecord, ExperimentStoreBackend as _};
+use orbit_store::contracts::ExperimentRecord;
 use orbit_types::workflow::TagInstructionRole;
 use serde_json::Value;
 
@@ -614,12 +614,17 @@ impl OrbitRuntime {
         }
         let workspace = self.workspace_id()?;
         let store = self.sqlite_store()?;
-        let record = store
-            .experiment_record(&workspace, id_or_name)?
+        let snapshot = store.read()?;
+        let record = snapshot
+            .experiment()
+            .get(&workspace, id_or_name)?
             .ok_or_else(|| {
                 OrbitError::InvalidInput(format!("no experiment `{id_or_name}` in this workspace"))
             })?;
-        let rows = store.experiment_assignments(&workspace, &record.experiment.id)?;
+        let rows = snapshot
+            .experiment_assignment()
+            .list_for_experiment(&workspace, &record.experiment.id)?;
+        drop(snapshot);
         let now = Utc::now();
         let enrolled: Vec<_> = rows
             .iter()

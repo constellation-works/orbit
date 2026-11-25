@@ -99,9 +99,15 @@ pub use repository::admission_load::AdmissionLoadRepository;
 pub use repository::application_consent::ApplicationConsentRepository;
 pub use repository::backlog_forecast::BacklogForecastRepository;
 pub use repository::codebase_fact::{AgentFactRepository, CodebaseFactRepository};
+pub use repository::crew_memory::CrewMemoryRepository;
 pub use repository::evolution::EvolutionRepository;
+pub use repository::experiment::{ExperimentAssignmentRepository, ExperimentRepository};
 pub use repository::landed_diff::LandedDiffRepository;
 pub use repository::notice::NoticeRepository;
+pub use repository::provider_limit::ProviderLimitRepository;
+pub use repository::reliability::ReliabilityRepository;
+pub use repository::resource_usage::{ResourceUsageRepository, WorkerResourceLimitRepository};
+pub use repository::retention::{RetentionRepository, visit_blob_reference_text};
 pub use repository::task::{TaskCommitBoundary, admission_refusal};
 pub use store::{Snapshot, Tx};
 

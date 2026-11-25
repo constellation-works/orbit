@@ -421,7 +421,7 @@ impl OrbitRuntime {
         let store = self.sqlite_store()?;
         let mut phase = PhaseClock::start();
 
-        let facts = store.list_job_run_outcome_facts(
+        let facts = store.read()?.reliability().list_job_run_outcome_facts(
             &workspace_id,
             window.since,
             window.until,
@@ -432,14 +432,17 @@ impl OrbitRuntime {
         let echoes_us = phase.lap();
         let job_runs = aggregate_job_runs(&facts.facts, window, facts.truncated, &echoes);
 
-        let counts =
-            store.count_invocations_by_activity(&workspace_id, window.since, window.until)?;
+        let counts = store.read()?.reliability().count_invocations_by_activity(
+            &workspace_id,
+            window.since,
+            window.until,
+        )?;
         let invocations_us = phase.lap();
         let roles = self.job_activity_roles(definition_reads)?;
         let roles_us = phase.lap();
         // Distinct counts do not sum across activities.
         let recovery_ids = roles.recovery_only().into_iter().collect::<Vec<_>>();
-        let coverage = store.count_invocation_job_runs(
+        let coverage = store.read()?.reliability().count_invocation_job_runs(
             &workspace_id,
             window.since,
             window.until,

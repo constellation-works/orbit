@@ -1,8 +1,7 @@
 use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
 use orbit_types::task::Task;
-use orbit_types::telemetry::{AuditEvent, ProviderLimitObservation};
-use orbit_types::workflow::ProviderCrewOutage;
+use orbit_types::telemetry::AuditEvent;
 use serde_json::Value;
 use std::collections::{BTreeMap, HashSet};
 
@@ -250,46 +249,6 @@ pub trait FrictionStoreBackend: Send + Sync {
     fn tags(&self) -> Result<Vec<String>, OrbitError>;
     fn tag_taxonomy(&self) -> Result<Vec<(String, String)>, OrbitError>;
     fn stats(&self, tasks: &[Task]) -> Result<Value, OrbitError>;
-}
-
-/// [ORB-14695] This host's provider usage limits, kept in the host-global
-/// database because a limit belongs to the provider login on this host.
-/// [ORB-16379] So does a crew outage: a crew this host's provider was
-/// unavailable for.
-pub trait ProviderLimitStoreBackend: Send + Sync {
-    /// Record `observation` as the latest for its provider, model scope and
-    /// window, unless a newer one is stored. Concurrent drains write the same
-    /// rows, so an older observation never replaces a newer one. Returns
-    /// whether `observation` was stored.
-    fn record_provider_limit(
-        &self,
-        observation: &ProviderLimitObservation,
-    ) -> Result<bool, OrbitError>;
-    /// [ORB-25967] Record a provider's complete usage reading, taken at one
-    /// instant for one provider account: store each observation as
-    /// `record_provider_limit` does, and in the same transaction retire the
-    /// account's `event` observations of that provider that an older reading
-    /// stored and this one no longer reports, so a window the provider stopped
-    /// reporting neither shows nor gates. `error` observations keep their own
-    /// expiry. An empty reading changes nothing, and neither does a reading
-    /// older than an `event` observation the account already has: the newer
-    /// reading is the authority, and writing the older one would restore a
-    /// window the newer one retired.
-    fn record_provider_usage_reading(
-        &self,
-        observations: &[ProviderLimitObservation],
-    ) -> Result<(), OrbitError>;
-    /// The latest observation per provider, model scope and window, newest
-    /// first.
-    fn provider_limits(&self) -> Result<Vec<ProviderLimitObservation>, OrbitError>;
-    /// [ORB-16379] Record `outage` for its provider and crew, unless the
-    /// stored one lasts at least as long. Returns whether it was stored.
-    fn record_provider_crew_outage(&self, outage: &ProviderCrewOutage) -> Result<bool, OrbitError>;
-    /// [ORB-16379] Every crew outage lasting past `now`.
-    fn provider_crew_outages(
-        &self,
-        now: DateTime<Utc>,
-    ) -> Result<Vec<ProviderCrewOutage>, OrbitError>;
 }
 
 pub trait InvocationStoreBackend: Send + Sync {

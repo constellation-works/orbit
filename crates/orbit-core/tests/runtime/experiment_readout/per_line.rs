@@ -10,8 +10,7 @@ use orbit_core::application::experiment::{
 use orbit_core::application::task::TaskAddParams;
 use orbit_core::{OrbitRuntime, TaskComplexity, TaskStatus, TaskType};
 use orbit_store::contracts::{
-    DiffClassCounts, ExperimentAssignment, ExperimentStoreBackend, LandedDiffSource,
-    LandedDiffStats, ReviewableLines,
+    DiffClassCounts, ExperimentAssignment, LandedDiffSource, LandedDiffStats, ReviewableLines,
 };
 use orbit_types::task::TaskHistoryEntry;
 use orbit_types::telemetry::{InvocationTrace, TokenUsage};
@@ -63,22 +62,31 @@ fn enroll(runtime: &OrbitRuntime, experiment_id: &str, arm_name: &str, done: boo
     let workspace_id = runtime.workspace_id().unwrap();
     let store = runtime.sqlite_store().unwrap();
     store
-        .assign_experiments(&workspace_id, &task.id, true, true, &|records, _, _| {
-            let record = records
-                .iter()
-                .find(|record| record.experiment.id == experiment_id)
-                .unwrap();
-            let arm = record.arms.iter().find(|arm| arm.name == arm_name).unwrap();
-            Ok(vec![ExperimentAssignment {
-                experiment: experiment_id.into(),
-                task_id: task.id.to_string(),
-                arm: Some(arm_name.into()),
-                segment: Some(1),
-                digest: Some(arm.overlay_digest.clone()),
-                assigned_at: Utc::now(),
-                forced: false,
-                exclusion_reason: None,
-            }])
+        .write(|tx| {
+            orbit_core::application::experiment::assign_experiments(
+                tx,
+                &workspace_id,
+                &task.id,
+                true,
+                true,
+                &|records, _, _| {
+                    let record = records
+                        .iter()
+                        .find(|record| record.experiment.id == experiment_id)
+                        .unwrap();
+                    let arm = record.arms.iter().find(|arm| arm.name == arm_name).unwrap();
+                    Ok(vec![ExperimentAssignment {
+                        experiment: experiment_id.into(),
+                        task_id: task.id.to_string(),
+                        arm: Some(arm_name.into()),
+                        segment: Some(1),
+                        digest: Some(arm.overlay_digest.clone()),
+                        assigned_at: Utc::now(),
+                        forced: false,
+                        exclusion_reason: None,
+                    }])
+                },
+            )
         })
         .unwrap();
     // A done task with no implementation run is interactive and left out of

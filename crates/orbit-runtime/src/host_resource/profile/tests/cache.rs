@@ -8,11 +8,10 @@ use std::sync::Arc;
 use chrono::{DateTime, Duration, TimeZone, Utc};
 use orbit_common::OrbitError;
 use orbit_store::contracts::{
-    AdmissionForecastRecord, CPU_ACCOUNTING_LINUX, DeliveryRunResources, DeliveryRunsFreshness,
-    HostResourceMinute, ResourceHistoryKeep, ResourceMinuteLoad, ResourceMinutesTable,
-    ResourceUsageStoreBackend, RunResourceMinute,
+    CPU_ACCOUNTING_LINUX, DeliveryRunResources, DeliveryRunsFreshness, ResourceMinuteLoad,
 };
 
+use super::super::cache::DeliveryRunSource;
 use super::super::{BaseClass, ProfileBounds, ProfileSet, ResourceProfileCache};
 
 /// A store whose sampled runs and freshness are fixed for the whole test.
@@ -21,23 +20,7 @@ struct FixedStore {
     freshness: DeliveryRunsFreshness,
 }
 
-impl ResourceUsageStoreBackend for FixedStore {
-    fn record_run_resource_minute(&self, _minute: &RunResourceMinute) -> Result<(), OrbitError> {
-        Ok(())
-    }
-
-    fn offer_host_resource_minute(&self, _minute: &HostResourceMinute) -> Result<bool, OrbitError> {
-        Ok(false)
-    }
-
-    fn run_resource_minutes(
-        &self,
-        _workspace_id: &str,
-        _run_id: &str,
-    ) -> Result<Vec<RunResourceMinute>, OrbitError> {
-        Ok(Vec::new())
-    }
-
+impl DeliveryRunSource for FixedStore {
     fn delivery_run_resources(
         &self,
         _since: DateTime<Utc>,
@@ -47,46 +30,6 @@ impl ResourceUsageStoreBackend for FixedStore {
 
     fn delivery_runs_freshness(&self) -> Result<DeliveryRunsFreshness, OrbitError> {
         Ok(self.freshness.clone())
-    }
-
-    fn host_resource_minutes(
-        &self,
-        _since: DateTime<Utc>,
-    ) -> Result<Vec<HostResourceMinute>, OrbitError> {
-        Ok(Vec::new())
-    }
-
-    fn record_admission_forecast(
-        &self,
-        _record: &AdmissionForecastRecord,
-    ) -> Result<(), OrbitError> {
-        Ok(())
-    }
-
-    fn admission_forecasts(
-        &self,
-        _since: DateTime<Utc>,
-    ) -> Result<Vec<AdmissionForecastRecord>, OrbitError> {
-        Ok(Vec::new())
-    }
-
-    fn resource_minutes_older_than(
-        &self,
-        _table: ResourceMinutesTable,
-        _cutoff: DateTime<Utc>,
-        _keep: ResourceHistoryKeep,
-    ) -> Result<u64, OrbitError> {
-        Ok(0)
-    }
-
-    fn prune_resource_minutes_batch(
-        &self,
-        _table: ResourceMinutesTable,
-        _cutoff: DateTime<Utc>,
-        _keep: ResourceHistoryKeep,
-        _limit: usize,
-    ) -> Result<usize, OrbitError> {
-        Ok(0)
     }
 }
 

@@ -159,8 +159,8 @@ impl OrbitRuntime {
                 continue;
             }
             let task = self.mint_dreaming_task(&key, &crew, &pack)?;
-            self.crew_memory_store()?
-                .append_crew_memory_event(&CrewMemoryEventRow {
+            self.sqlite_store()?.write(|tx| {
+                tx.crew_memory().put_event(&CrewMemoryEventRow {
                     workspace_id: self.workspace_id()?,
                     memory_key: key.to_string(),
                     at: now,
@@ -178,7 +178,8 @@ impl OrbitRuntime {
                         "dropped_occurrences": pack.dropped_occurrences,
                     })
                     .to_string(),
-                })?;
+                })
+            })?;
             minted.push(json!({
                 "key": key,
                 "task_id": task.id,
@@ -225,8 +226,8 @@ impl OrbitRuntime {
         reason: &str,
         task_id: Option<&str>,
     ) -> Result<(), OrbitError> {
-        self.crew_memory_store()?
-            .append_crew_memory_event(&CrewMemoryEventRow {
+        self.sqlite_store()?.write(|tx| {
+            tx.crew_memory().put_event(&CrewMemoryEventRow {
                 workspace_id: self.workspace_id()?,
                 memory_key: key.to_string(),
                 at: now,
@@ -236,6 +237,7 @@ impl OrbitRuntime {
                 detail_json: json!({ "week": week, "reason": reason, "task_id": task_id })
                     .to_string(),
             })
+        })
     }
 
     /// Record `no_revision` for each finished dreaming task whose run wrote
@@ -253,11 +255,14 @@ impl OrbitRuntime {
                 finished.entry(key).or_default().push(task);
             }
         }
-        let store = self.crew_memory_store()?;
+        let store = self.sqlite_store()?;
         let workspace_id = self.workspace_id()?;
         let mut recorded = Vec::new();
         for (key, tasks) in finished {
-            let events = store.crew_memory_events(&workspace_id, key.as_str())?;
+            let events = store
+                .read()?
+                .crew_memory()
+                .events(&workspace_id, key.as_str())?;
             let mut minted_week: BTreeMap<String, String> = BTreeMap::new();
             let mut settled: BTreeSet<String> = BTreeSet::new();
             for event in &events {
@@ -285,19 +290,21 @@ impl OrbitRuntime {
                 if settled.contains(task.id.as_str()) {
                     continue;
                 }
-                store.append_crew_memory_event(&CrewMemoryEventRow {
-                    workspace_id: workspace_id.clone(),
-                    memory_key: key.to_string(),
-                    at: now,
-                    action: NO_REVISION.to_string(),
-                    actor: ROUTINE_ACTOR.to_string(),
-                    revision: None,
-                    detail_json: json!({
-                        "task_id": task.id,
-                        "week": week,
-                        "status": task.status.to_string(),
+                store.write(|tx| {
+                    tx.crew_memory().put_event(&CrewMemoryEventRow {
+                        workspace_id: workspace_id.clone(),
+                        memory_key: key.to_string(),
+                        at: now,
+                        action: NO_REVISION.to_string(),
+                        actor: ROUTINE_ACTOR.to_string(),
+                        revision: None,
+                        detail_json: json!({
+                            "task_id": task.id,
+                            "week": week,
+                            "status": task.status.to_string(),
+                        })
+                        .to_string(),
                     })
-                    .to_string(),
                 })?;
                 recorded.push(json!({ "key": key, "task_id": task.id, "week": week }));
             }

@@ -29,10 +29,12 @@ impl OrbitRuntime {
             }));
         }
         let now = Utc::now();
-        let store = self.crew_memory_store()?;
+        let store = self.sqlite_store()?;
         let workspace_id = self.workspace_id()?;
         let (open, lapsed): (Vec<_>, Vec<_>) = store
-            .crew_memory_open_proposals(&workspace_id)?
+            .read()?
+            .crew_memory()
+            .open_proposals(&workspace_id)?
             .into_iter()
             .partition(|row| !proposal_lapsed(row, now));
         let mut closed = lapsed
@@ -50,7 +52,11 @@ impl OrbitRuntime {
                 })
             })
             .collect::<Result<Vec<_>, OrbitError>>()?;
-        for row in store.crew_memory_closed_proposals(&workspace_id, RECENTLY_CLOSED_LIMIT)? {
+        for row in store
+            .read()?
+            .crew_memory()
+            .closed_proposals(&workspace_id, RECENTLY_CLOSED_LIMIT)?
+        {
             let mut view = proposal_view(&row.proposal)?;
             view["decided_by"] = json!(row.decided_by);
             view["decided_at"] = json!(row.decided_at);
@@ -78,8 +84,10 @@ impl OrbitRuntime {
     ) -> Result<Vec<CrewMemoryProposalRow>, OrbitError> {
         let now = Utc::now();
         Ok(self
-            .crew_memory_store()?
-            .crew_memory_open_proposals(&self.workspace_id()?)?
+            .sqlite_store()?
+            .read()?
+            .crew_memory()
+            .open_proposals(&self.workspace_id()?)?
             .into_iter()
             .filter(|row| !proposal_lapsed(row, now))
             .collect())

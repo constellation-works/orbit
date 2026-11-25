@@ -71,7 +71,7 @@ Orbit has no way to express that trade today:
   | Conflict recovery failed, claimed leaf (`ClaimFailureClass::BaseConflict`) | Nowhere on the owner: the settlement carries the class only | As a conflict with no paths |
   | Conflict recovered by `pr_conflict_recovery` | The run's `PipelineState::rebase_recovery_checkpoints` (`RebaseRecoveryCheckpoint::conflicting_paths`), on the host that ran it | No |
   | Overlapping work that rebased cleanly | Nowhere directly; derivable from landed paths and in-flight intervals | No |
-  | Admission refused for a lock conflict | `orbit.task.locks.reserve` denials (`list_task_lock_denials`) | Yes, `LockDenial` |
+  | Admission refused for a lock conflict | `orbit.task.locks.reserve` denials (`snapshot.retention().task_lock_denials`) | Yes, `LockDenial` |
 
   The commonest and cheapest outcome — a recovered conflict — is the one the owner cannot see,
   and nothing records what a recovery cost.

@@ -7,7 +7,6 @@
 //! load that is not from tasks.
 
 use chrono::{DateTime, Utc};
-use orbit_common::OrbitError;
 use serde::{Deserialize, Serialize};
 
 /// CPU accounting from the Linux cgroup microsecond counter.
@@ -129,10 +128,10 @@ pub struct DeliveryRunResources {
 }
 
 /// What a store last read of every retained sampled run: the runs, as
-/// [`ResourceUsageStoreBackend::delivery_run_resources`] since the epoch
-/// returns them, and each sampled run's shape when they were read, so a later
-/// [`ResourceUsageStoreBackend::reload_delivery_runs`] re-reads only the runs
-/// whose shape moved.
+/// `ResourceUsageRepository::delivery_runs` since the epoch returns them, and
+/// each sampled run's shape when they were read, so a later
+/// `ResourceUsageRepository::reload_delivery_runs` re-reads only the runs whose
+/// shape moved.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct DeliveryRunsLoad {
     /// Ordered by workspace, then run id.
@@ -269,96 +268,6 @@ impl ResourceMinutesTable {
     }
 }
 
-pub trait ResourceUsageStoreBackend: Send + Sync {
-    /// Record one run minute. Writing the same minute again replaces it, so a
-    /// sampler that re-flushes a minute never duplicates it.
-    fn record_run_resource_minute(&self, minute: &RunResourceMinute) -> Result<(), OrbitError>;
-
-    /// Offer the host's row for one minute. The first offer of a minute wins;
-    /// returns whether this one was stored.
-    fn offer_host_resource_minute(&self, minute: &HostResourceMinute) -> Result<bool, OrbitError>;
-
-    /// One run's minutes, in minute order.
-    fn run_resource_minutes(
-        &self,
-        workspace_id: &str,
-        run_id: &str,
-    ) -> Result<Vec<RunResourceMinute>, OrbitError>;
-
-    /// Every sampled run of a delivery admitted at or after `since`, across
-    /// every workspace on the host, with its minutes and `job_runs` lifecycle.
-    fn delivery_run_resources(
-        &self,
-        since: DateTime<Utc>,
-    ) -> Result<Vec<DeliveryRunResources>, OrbitError>;
-
-    /// Every sampled run since the epoch, exactly as
-    /// [`Self::delivery_run_resources`] would return it now, reusing each run
-    /// of `previous` whose shape still holds. A store that keeps no shapes
-    /// reads every run.
-    fn reload_delivery_runs(
-        &self,
-        previous: Option<DeliveryRunsLoad>,
-    ) -> Result<DeliveryRunsLoad, OrbitError> {
-        let _ = previous;
-        Ok(DeliveryRunsLoad {
-            runs: self.delivery_run_resources(DateTime::UNIX_EPOCH)?,
-            shapes: Vec::new(),
-        })
-    }
-
-    /// The finished sampled runs on the host, as a cache freshness probe.
-    fn delivery_runs_freshness(&self) -> Result<DeliveryRunsFreshness, OrbitError>;
-
-    /// A counter that moves whenever [`Self::delivery_runs_freshness`] may
-    /// have changed, read without scanning: while it holds, the probe's
-    /// answer holds too. `None` when the store keeps no such counter, so a
-    /// caller always probes.
-    fn delivery_runs_stamp(&self) -> Result<Option<i64>, OrbitError> {
-        Ok(None)
-    }
-
-    /// Host minutes at or after `since`, oldest first.
-    fn host_resource_minutes(
-        &self,
-        since: DateTime<Utc>,
-    ) -> Result<Vec<HostResourceMinute>, OrbitError>;
-
-    /// Record one admission pass's forecast.
-    fn record_admission_forecast(&self, record: &AdmissionForecastRecord)
-    -> Result<(), OrbitError>;
-
-    /// Admission forecasts made at or after `since`, across every workspace,
-    /// oldest first.
-    fn admission_forecasts(
-        &self,
-        since: DateTime<Utc>,
-    ) -> Result<Vec<AdmissionForecastRecord>, OrbitError>;
-
-    /// Rows of `table` from before `cutoff` that `keep` does not hold,
-    /// across every workspace.
-    fn resource_minutes_older_than(
-        &self,
-        table: ResourceMinutesTable,
-        cutoff: DateTime<Utc>,
-        keep: ResourceHistoryKeep,
-    ) -> Result<u64, OrbitError>;
-
-    /// Delete at most `limit` of the rows [`Self::resource_minutes_older_than`]
-    /// counts. Selection takes no write lock; deletion uses row keys in one
-    /// short transaction. For a full sweep, select once with
-    /// [`super::StoreRetentionBackend::resource_retention_candidates`] and
-    /// delete those candidates in batches instead of ranking on every batch.
-    /// Returns how many went.
-    fn prune_resource_minutes_batch(
-        &self,
-        table: ResourceMinutesTable,
-        cutoff: DateTime<Utc>,
-        keep: ResourceHistoryKeep,
-        limit: usize,
-    ) -> Result<usize, OrbitError>;
-}
-
 /// Latest own resource usage of a process, bound to its kernel identity.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct WorkerProcessResources {
@@ -382,17 +291,4 @@ pub struct WorkerResourceLimitEvidence {
     pub tasks_max: u32,
     /// The eight largest physical footprints, descending; no argv or env.
     pub top_processes: Vec<WorkerProcessResources>,
-}
-
-/// Durable watchdog breach evidence, separate from profile minute rows.
-pub trait WorkerResourceLimitStoreBackend: Send + Sync {
-    fn record_worker_resource_limit_evidence(
-        &self,
-        evidence: &WorkerResourceLimitEvidence,
-    ) -> Result<(), OrbitError>;
-    fn worker_resource_limit_evidence(
-        &self,
-        workspace_id: &str,
-        run_id: &str,
-    ) -> Result<Option<WorkerResourceLimitEvidence>, OrbitError>;
 }

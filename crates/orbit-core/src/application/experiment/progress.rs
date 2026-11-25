@@ -4,7 +4,6 @@
 //! so it reads no outcome records; the readout counts settled outcomes.
 
 use orbit_common::OrbitError;
-use orbit_store::contracts::ExperimentStoreBackend as _;
 use serde::Serialize;
 
 use super::view::ExperimentView;
@@ -38,11 +37,15 @@ impl OrbitRuntime {
     pub fn experiment_progress(&self) -> Result<Vec<ExperimentProgress>, OrbitError> {
         let workspace = self.workspace_id()?;
         let store = self.sqlite_store()?;
-        store
-            .experiment_records(&workspace, None)?
+        let snapshot = store.read()?;
+        snapshot
+            .experiment()
+            .list(&workspace, None)?
             .into_iter()
             .map(|record| {
-                let rows = store.experiment_assignments(&workspace, &record.experiment.id)?;
+                let rows = snapshot
+                    .experiment_assignment()
+                    .list_for_experiment(&workspace, &record.experiment.id)?;
                 let segment = record.experiment.segment;
                 let enrollment = record
                     .arms

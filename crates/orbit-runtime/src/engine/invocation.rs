@@ -323,8 +323,8 @@ impl RuntimeKernel {
         self.stored()
             .stores()
             .host
-            .provider_limit
-            .record_provider_limit(observation)
+            .sqlite
+            .write(|tx| tx.provider_limit().put(observation))
     }
 
     /// [ORB-25967] Records a provider's complete usage reading and retires
@@ -337,14 +337,20 @@ impl RuntimeKernel {
         self.stored()
             .stores()
             .host
-            .provider_limit
-            .record_provider_usage_reading(observations)
+            .sqlite
+            .write(|tx| tx.provider_limit().put_reading(observations))
     }
 
     /// [ORB-14695] The latest provider usage limit per provider account,
     /// scope and window this host observed, newest first.
     pub fn provider_limits(&self) -> Result<Vec<ProviderLimitObservation>, OrbitError> {
-        self.stored().stores().host.provider_limit.provider_limits()
+        self.stored()
+            .stores()
+            .host
+            .sqlite
+            .read()?
+            .provider_limit()
+            .list()
     }
 
     /// [ORB-16379] Records a crew this host's provider was unavailable for,
@@ -357,8 +363,8 @@ impl RuntimeKernel {
         self.stored()
             .stores()
             .host
-            .provider_limit
-            .record_provider_crew_outage(outage)
+            .sqlite
+            .write(|tx| tx.provider_limit().put_outage(outage))
     }
 
     /// [ORB-16379] This host's crew outages lasting past `now`.
@@ -369,8 +375,10 @@ impl RuntimeKernel {
         self.stored()
             .stores()
             .host
-            .provider_limit
-            .provider_crew_outages(now)
+            .sqlite
+            .read()?
+            .provider_limit()
+            .list_outages(now)
     }
 
     /// [ORB-14699] The provider account's invocations since `since`, oldest

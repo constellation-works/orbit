@@ -23,11 +23,16 @@ impl OrbitRuntime {
         key: &MemoryKey,
         global: bool,
     ) -> Result<CrewMemoryDelivery, OrbitError> {
-        let store = self.crew_memory_store()?;
+        let store = self.sqlite_store()?;
         let workspace_id = self.workspace_id()?;
         let mut block = CrewMemoryBlock::default();
         let mut revised_at = None;
-        if let Some(row) = store.crew_memory_revision(&workspace_id, key.as_str(), None)? {
+        if let Some(row) =
+            store
+                .read()?
+                .crew_memory()
+                .revision(&workspace_id, key.as_str(), None)?
+        {
             block.model = operations::crew_memory_revision_files(&row)?
                 .into_iter()
                 .map(|file| CrewMemoryNote {
@@ -42,8 +47,11 @@ impl OrbitRuntime {
             revised_at = Some(row.created_at);
         }
         if global
-            && let Some(row) =
-                store.crew_memory_revision(&workspace_id, MemoryKey::global().as_str(), None)?
+            && let Some(row) = store.read()?.crew_memory().revision(
+                &workspace_id,
+                MemoryKey::global().as_str(),
+                None,
+            )?
         {
             block.global = operations::crew_memory_revision_files(&row)?
                 .into_iter()
