@@ -126,8 +126,8 @@ whole.
 | `ORBIT_TEST_FORECAST_COMPUTE_BUDGET_MS` | Test-support compute budget for backlog arrivals, in milliseconds. | 20 seconds. | — |
 | `ORBIT_TEST_FORECAST_MAX_GENERATED` | Test-support cap on generated backlog items. | `10000`. | — |
 | `ORBIT_TEST_HOSTS_PUBLISH_GATE` | Test-support rendezvous directory for host-list publication. | Unset. Publication proceeds without a gate. | — |
-| `ORBIT_TEST_HOST_FORWARD_ATTACH_TIMEOUT_MS` | Debug-build timeout in milliseconds for attaching to a remote dashboard. | 5 seconds. | — |
-| `ORBIT_TEST_MCP_LIFECYCLE_INTERVAL_MS` | Debug-build interval in milliseconds for stdio MCP lifecycle checks. | 2 seconds. | — |
+| `ORBIT_TEST_HOST_FORWARD_ATTACH_TIMEOUT_MS` | Timeout in milliseconds for attaching to a remote dashboard. Honored only in a debug build with the `test-support` feature or in a unit-test binary. | 5 seconds. | — |
+| `ORBIT_TEST_MCP_LIFECYCLE_INTERVAL_MS` | Interval in milliseconds for stdio MCP lifecycle checks. Honored only in a debug build with the `test-support` feature or in a unit-test binary. | 2 seconds. | — |
 | `ORBIT_TEST_MERGEABILITY_WAIT` | Set to `virtual` to exercise mergeability polling without real delays. Honored only in a debug build with the `test-support` feature or in a unit-test binary. | Real polling delays. A release build, or a debug build without `test-support` and outside a unit-test binary, always polls in real time. | — |
 | `ORBIT_TEST_PIPELINE_WAIT_VIRTUAL` | Set to `1` to use a virtual clock for pipeline wait fixtures. Honored only in a debug build with the `test-support` feature or in a unit-test binary. | Real clock. A release build, or a debug build without `test-support` and outside a unit-test binary, always uses the real clock. | — |
 | `ORBIT_TEST_RELAXED_DURABILITY` | Set to `1` in debug builds to skip durable syncs in tests. | Durable syncs enabled. Workspace Cargo config sets it to `1`. | — |
