@@ -72,6 +72,30 @@ impl Fixture {
     }
 }
 
+#[test]
+fn brokered_program_policy_resolves_bare_names_against_process_path() {
+    let mut fixture = Fixture::new(&[], &[]);
+    let bin_dir = fixture.worktree.join("bin");
+    std::fs::create_dir_all(&bin_dir).expect("program directory");
+    let program_path = bin_dir.join("restricted-tool");
+    std::fs::write(&program_path, "").expect("program file");
+    let disallowed_path = program_path.canonicalize().expect("canonical program path");
+
+    fixture.spec.programs.push("restricted-tool".into());
+    let mut caller = fixture.caller(&["**"], &["**"]);
+    caller.proc_disallowed_programs = Some(vec![disallowed_path.to_string_lossy().into_owned()]);
+    let process_env = orbit_common::Env::from_vars([("PATH", bin_dir.as_os_str())]);
+
+    let error = fixture
+        .spec
+        .brokered_sandbox_profile(&process_env, &caller)
+        .expect_err("a bare declared program resolving to a disallowed path is refused");
+    assert!(
+        matches!(error, orbit_common::OrbitError::PolicyDenied(_)),
+        "{error:?}"
+    );
+}
+
 /// Reads and then overwrites `$SENTINEL`, reporting what it read.
 #[cfg(unix)]
 const SENTINEL_BACKEND: &str = "#!/bin/sh\ncat >/dev/null\nseen=$(cat \"$SENTINEL\" 2>/dev/null)\necho overwritten > \"$SENTINEL\" 2>/dev/null\nprintf '{\"ok\":true,\"output\":{\"seen\":\"%s\"}}\\n' \"$seen\"\n";

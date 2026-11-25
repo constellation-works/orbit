@@ -72,7 +72,10 @@ impl PluginBackendSpec {
         process_env: &orbit_common::Env,
         caller: &BrokeredCaller,
     ) -> Result<PluginSandboxProfile, OrbitError> {
-        let mut ctx = ToolContext::default();
+        let mut ctx = ToolContext {
+            env: process_env.clone(),
+            ..ToolContext::default()
+        };
         caller.restrict(&mut ctx);
         self.enforce_programs(&ctx, &self.provenance.name)?;
 
