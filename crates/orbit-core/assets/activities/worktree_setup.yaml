@@ -12,10 +12,16 @@ spec:
     before admission, names branch/tip/base, and leaves retained work
     untouched. Retrying without recovering that leftover refuses again;
     inspect it, then move the branch aside or delete it only after confirming
-    no retained candidate is needed. A `base_sync: local` run first makes a
-    best-effort origin fetch; a clean owner base behind origin starts the run
-    at the fetched commit, and a dirty or diverged owner checkout refuses the
-    same way and is reconciled with origin instead of deleted.
+    no retained candidate is needed. A `base_sync: local` run uses the local
+    base when origin is absent or its best-effort fetch fails. After a
+    successful fetch, an owner base equal to or ahead of `origin/<base>` still
+    uses its local commit. If origin is ahead, a clean owner starts at the
+    fetched commit without moving the owner; tracked changes in that behind
+    owner refuse admission (untracked files do not count). A diverged owner
+    also refuses as `delivery_stale_branch`, independently of tracked changes.
+    Local-landing mode has a separate readiness check that can refuse tracked
+    changes in the landing checkout even when no owner-base freshness hold
+    applies.
   input_schema_json:
     type: object
     properties:
