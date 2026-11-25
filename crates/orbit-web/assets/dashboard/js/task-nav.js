@@ -1,6 +1,6 @@
 // Orbit dashboard task list navigation: row selection, the task page, pins, the hash, filters.
 
-import { captureWorkspaceVisit, getSelectedWorkspaces, getWorkspace, isWorkspaceListReady, onWorkspaceChange, onWorkspaceNamesChange, panelCanRender, persistScopeToUrl, rememberWorkspace, setSelectedWorkspaces, setWorkspace, el, fetchJson, isAggregateView, copyText, workspaceCatalogEntries, workspaceColor, workspaceDisplayName } from './common.js';
+import { ALL_WORKSPACES_TOKEN, captureWorkspaceVisit, getSelectedWorkspaces, getWorkspace, isWorkspaceListReady, onWorkspaceChange, onWorkspaceNamesChange, panelCanRender, persistScopeToUrl, rememberWorkspace, setSelectedWorkspaces, setWorkspace, el, fetchJson, isAggregateView, copyText, workspaceCatalogEntries, workspaceColor, workspaceDisplayName } from './common.js';
 import { $, taskState, onDecisionAnswered, rerender, taskList, activeStatusSet, setActiveStatuses, statusOrder, refreshTasks, defaultActiveStatuses, tasksMeta, aggregateRefusalTitle, taskMutationPath, taskWorkspacePath, taskDispatchIdentity, isSelectedTask, STATUS_LABELS } from './task-shared.js';
 import { applyUpdatedTask, forgetTaskDetailLoad, mergeTaskRecord, taskDetailSnapshot } from './task-data.js';
 import * as taskReadiness from './task-readiness.js';
@@ -372,13 +372,16 @@ async function pinOpenTask(taskId, context, tasks = []) {
   const generation = openTaskGeneration;
   const superseded = () => !visit.isCurrent() || taskState.openTaskId !== taskId || generation !== openTaskGeneration;
   try {
-    // Scope the read to the owner the list already names: an unscoped read in
-    // the aggregate view falls back to the default workspace and can pin a
-    // different task (or a false not-found) for this id.
+    // Scope the read to the owner the list already names. With no owner known
+    // the aggregate view asks the server to find it from the id: an unscoped
+    // read would fall back to the default workspace and can pin a different
+    // task (or a false not-found) for this id, and a task the loaded list does
+    // not hold (done, archived, another page) has no listed owner at all.
     const workspace = taskState.taskPageId === taskId ? taskState.selectedTaskWorkspace : null;
     const owner = (Array.isArray(tasks) ? tasks : []).find(task => task && task.id === taskId && (!workspace || task.workspace_id === workspace));
     const ownerTask = { id: taskId, workspace_id: workspace || owner?.workspace_id };
-    const task = await fetchJson(taskWorkspacePath(ownerTask, `/api/tasks/${encodeURIComponent(taskId)}`));
+    const readScope = !ownerTask.workspace_id && isAggregateView() ? { id: taskId, workspace_id: ALL_WORKSPACES_TOKEN } : ownerTask;
+    const task = await fetchJson(taskWorkspacePath(readScope, `/api/tasks/${encodeURIComponent(taskId)}`));
     if (superseded()) return;
     if (!task || task.id !== taskId) throw new Error(`${taskId} not found`);
     if (ownerTask.workspace_id && task.workspace_id && task.workspace_id !== ownerTask.workspace_id) throw new Error(`${taskId} not found`);
