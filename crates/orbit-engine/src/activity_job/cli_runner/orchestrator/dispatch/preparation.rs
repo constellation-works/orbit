@@ -201,7 +201,8 @@ pub(crate) fn dispatch_cli_invocation(
     let task_ids = task_ids_from_input(input);
     let task_id = task_id_from_input(input);
     require_conflict_recovery_target(activity_name, &task_ids, input, run_id)?;
-    let mut grant = resolve_activity_tool_grant(host, spec, activity_name, input, &task_ids)?;
+    let mut grant =
+        resolve_activity_tool_grant(host, spec, run_id, activity_name, input, &task_ids)?;
     // A live experiment arm's tool delta applies after the grant, so the
     // audit row below and the child's policy envelope carry the treatment.
     let experiment_overlays =

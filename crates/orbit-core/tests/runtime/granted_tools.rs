@@ -199,6 +199,7 @@ fn wildcard_covered_grant_refuses_admission_case() {
 
     let error = runtime
         .resolve_activity_tool_denials(
+            None,
             std::slice::from_ref(&task.id),
             "agent_implement",
             &["orbit.auto_task.*".into()],

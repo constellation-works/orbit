@@ -67,6 +67,9 @@ pub struct ResolvedActivityTools {
     /// exact disallow entries it lifted and grants already allowed by policy.
     /// The dispatcher removes lifted entries from the child deny list.
     pub granted_tools: Vec<String>,
+    /// Delivery families discovered from the dispatched resident's live grant.
+    /// Advertisement only. These names never lift the activity's denials.
+    pub resident_tools: Vec<String>,
     /// Tools a host switch removed from `effective_tools` that a deny-mode
     /// child must also deny. A deny-mode child ignores the legacy allowlist,
     /// so removing a name from `effective_tools` alone does not suppress it:

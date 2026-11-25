@@ -14,7 +14,7 @@ pub(super) fn cli_agent_envelope_json(
     input: &Value,
     task_ctx: Option<&Value>,
     requested_tools: &[String],
-    effective_tools: &[String],
+    visible_tools: &[&str],
     crew_memory: Option<&CrewMemoryBlock>,
 ) -> Result<Vec<u8>, DispatchError> {
     let mut envelope = serde_json::Map::new();
@@ -31,7 +31,7 @@ pub(super) fn cli_agent_envelope_json(
     envelope.insert("run_id".to_string(), Value::String(run_id.to_string()));
     envelope.insert(
         "tools".to_string(),
-        serde_json::to_value(agent_visible_tools(effective_tools))
+        serde_json::to_value(visible_tools)
             .map_err(|err| DispatchError::CliInvocationFailed(format!("serialize tools: {err}")))?,
     );
     envelope.insert(
@@ -73,7 +73,7 @@ pub(super) fn cli_agent_envelope_json(
 /// keys on, so resolve through [`tool_policy_operations`] first: a tool is
 /// hidden when any operation it covers is governed without the agent
 /// capability.
-fn agent_visible_tools(effective_tools: &[String]) -> Vec<&str> {
+pub(super) fn agent_visible_tools(effective_tools: &[String]) -> Vec<&str> {
     effective_tools
         .iter()
         .filter(|tool| {

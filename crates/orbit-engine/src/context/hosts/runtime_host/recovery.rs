@@ -11,9 +11,11 @@ macro_rules! recovery_methods {
         /// the other shipped non-implementers drop a covered requirement from
         /// `requested_tools` and record why on `omitted_requirement_notes`.
         /// A host without a tool registry cannot compute the set, so it refuses
-        /// rather than guessing.
+        /// rather than guessing. Pass the dispatched run's ID when resolving
+        /// a launch, so the host can include advisory resident discovery.
         fn resolve_activity_tool_denials(
             &self,
+            run_id: Option<&str>,
             task_ids: &[String],
             activity: &str,
             disallow_list: &[String],

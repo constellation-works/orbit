@@ -28,6 +28,8 @@ use orbit_types::workflow::tool_allowed;
 use serde_json::Value;
 
 use crate::OrbitRuntime;
+use crate::adapter::tool_host::{ToolHostRun, build_orbit_tool_host};
+use crate::runtime::authorization::is_resident_drain_status_call;
 use crate::runtime::plugin::broker::{
     BROKERED_RESIDENT_LAND_TOOL, BROKERED_RESIDENT_RAISE_TOOL, BROKERED_RESIDENT_REFRESH_TOOL,
     BROKERED_RESIDENT_REPILOT_TOOL, BROKERED_RESIDENT_REQUEUE_TOOL,
@@ -196,6 +198,18 @@ impl RunDispatch {
         Ok(())
     }
 
+    fn resident_run_id(&self, tool: &str) -> Result<&str, OrbitError> {
+        self.run
+            .job_run_id
+            .as_deref()
+            .filter(|run_id| self.runtime.is_resident_cycle_run(run_id))
+            .ok_or_else(|| {
+                OrbitError::CapabilityDenied(format!(
+                    "only a resident cycle's run may call '{tool}' through its broker"
+                ))
+            })
+    }
+
     fn tool_context(&self, cwd: &Path, session_context: ToolSessionContext) -> ToolContext {
         let run = &self.run;
         let agent = brokered_agent_identity(run.agent_name.as_deref(), run.model_name.as_deref());
@@ -327,27 +341,16 @@ impl BrokerDispatch for RunDispatch {
                         {
                             return Err(OrbitError::PolicyDenied(policy.denial_message(&tool)));
                         }
-                        let run_id = run
-                            .job_run_id
-                            .as_deref()
-                            .filter(|run_id| self.runtime.is_resident_cycle_run(run_id))
-                            .ok_or_else(|| {
-                                OrbitError::CapabilityDenied(format!(
-                                    "only a resident cycle's run may call '{tool}' through \
-                                         its broker"
-                                ))
-                            })?;
+                        let run_id = self.resident_run_id(&tool)?;
                         let target = if recovery {
                             self.runtime.resident_recovery_workspace(run_id, &input)?
                         } else {
                             self.runtime.clone()
                         };
-                        return crate::adapter::tool_host::build_orbit_tool_host(
+                        return build_orbit_tool_host(
                             &target,
                             run.task_id.clone(),
-                            crate::adapter::tool_host::ToolHostRun::BrokeredResident(
-                                run_id.to_string(),
-                            ),
+                            ToolHostRun::BrokeredResident(run_id.to_string()),
                             session_context,
                         )
                         .execute(
@@ -356,6 +359,34 @@ impl BrokerDispatch for RunDispatch {
                             run.agent_name.clone(),
                             run.model_name.clone(),
                             None,
+                        );
+                    }
+                    if is_resident_drain_status_call(&tool, &input) {
+                        self.runtime.ensure_tool_agent_facing(&tool)?;
+                        self.refuse_outside_activity_policy(&tool)?;
+                        let run_id = self.resident_run_id(&tool)?;
+                        // The broker serves the launch's workspace. The nested
+                        // client still reads other covered workspaces there.
+                        if let Some(selector) = input.get("workspace").and_then(Value::as_str)
+                            && !self.runtime.resident_workspace_is_local(selector)
+                        {
+                            return Err(OrbitError::PolicyDenied(format!(
+                                "resident_scope_refused: workspace '{selector}' is outside this broker's workspace"
+                            )));
+                        }
+                        let host = build_orbit_tool_host(
+                            &self.runtime,
+                            run.task_id.clone(),
+                            ToolHostRun::BrokeredResident(run_id.to_string()),
+                            session_context.clone(),
+                        );
+                        let mut context = self.tool_context(&cwd, session_context);
+                        context.orbit_host = Some(host);
+                        return self.runtime.run_tool_with_context_and_capability(
+                            &tool,
+                            input,
+                            context,
+                            CapabilityEnforcement::McpSessionOnly,
                         );
                     }
                     // A built-in tool is answered by the nested `orbit`

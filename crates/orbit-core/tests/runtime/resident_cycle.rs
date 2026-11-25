@@ -471,6 +471,58 @@ impl Fixture {
         self.runtime.begin_resident_cycle(run, at).unwrap()
     }
 
+    // Seed historical state in the isolated fixture through the coordinated store.
+    fn append_history(&self, id: &str, event: &str, note: String) {
+        let registry = orbit_store::maintenance::task_registry::TaskRegistryStore::open(
+            &orbit_store::maintenance::task_registry::task_registry_path(
+                &self.runtime.global_root(),
+            ),
+        )
+        .unwrap();
+        let backends = orbit_store::compose::workspace_coordinated_backends(
+            registry,
+            self.runtime.workspace_id().unwrap(),
+            self.runtime.sqlite_store().unwrap(),
+        )
+        .unwrap();
+        backends
+            .task
+            .history
+            .update_task_history(
+                id,
+                orbit_store::contracts::TaskHistoryUpdateParams {
+                    actor: "system".into(),
+                    append_history: vec![orbit_types::task::TaskHistoryEntry {
+                        at: Utc::now(),
+                        by: "system".into(),
+                        event: event.into(),
+                        note: Some(note),
+                        from_status: None,
+                        to_status: None,
+                        operation_id: None,
+                        decision: None,
+                        surface: None,
+                        caller: None,
+                    }],
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+    }
+
+    fn expire_cycle(&self, mandate: &str, run: &str, brief: &Value) {
+        let live = orbit_types::workflow::ResidentLiveCycle {
+            cycle: brief["cycle"].as_str().unwrap().into(),
+            run_id: run.into(),
+            expires_at: Utc::now() - Duration::hours(1),
+        };
+        self.append_history(
+            mandate,
+            "resident_cycle_changed",
+            serde_json::to_string(&live).unwrap(),
+        );
+    }
+
     fn finish_cycle(&self, run: &str) {
         self.runtime.finish_resident_cycle(run).unwrap();
         self.stop_run(run, JobRunState::Success);
@@ -1608,43 +1660,8 @@ fn restoring_lint_refuses_resident_cycles_without_partial_context_writes() {
     std::fs::write(fx.repo.join("pruned.rs"), "pub fn restored() {}\n").unwrap();
     // Seed the exact history produced by the retired pruning path, using the
     // coordinated store just as persisted old task records would carry it.
-    let registry = orbit_store::maintenance::task_registry::TaskRegistryStore::open(
-        &orbit_store::maintenance::task_registry::task_registry_path(&fx.runtime.global_root()),
-    )
-    .unwrap();
-    let backends = orbit_store::compose::workspace_coordinated_backends(
-        registry,
-        fx.runtime.workspace_id().unwrap(),
-        fx.runtime.sqlite_store().unwrap(),
-    )
-    .unwrap();
-    let append_history = |id: &str, event: &str, note: String| {
-        backends
-            .task
-            .history
-            .update_task_history(
-                id,
-                orbit_store::contracts::TaskHistoryUpdateParams {
-                    actor: "system".into(),
-                    append_history: vec![orbit_types::task::TaskHistoryEntry {
-                        at: Utc::now(),
-                        by: "system".into(),
-                        event: event.into(),
-                        note: Some(note),
-                        from_status: None,
-                        to_status: None,
-                        operation_id: None,
-                        decision: None,
-                        surface: None,
-                        caller: None,
-                    }],
-                    ..Default::default()
-                },
-            )
-            .unwrap();
-    };
     for id in [&named, &swept] {
-        append_history(
+        fx.append_history(
             id,
             "context_files_pruned",
             "dropped: file:pruned.rs (selector anchor not found in workspace)".into(),
@@ -1678,16 +1695,7 @@ fn restoring_lint_refuses_resident_cycles_without_partial_context_writes() {
     ] {
         if state == "expired" {
             // Advance only persisted lease time, never wall-clock sleeps.
-            let live = orbit_types::workflow::ResidentLiveCycle {
-                cycle: brief["cycle"].as_str().unwrap().into(),
-                run_id: run.clone(),
-                expires_at: Utc::now() - Duration::hours(1),
-            };
-            append_history(
-                &mandate,
-                "resident_cycle_changed",
-                serde_json::to_string(&live).unwrap(),
-            );
+            fx.expire_cycle(&mandate, &run, &brief);
         } else if state == "finished" {
             fx.runtime.finish_resident_cycle(&run).unwrap();
         }

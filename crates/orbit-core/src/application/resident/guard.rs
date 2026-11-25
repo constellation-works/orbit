@@ -356,6 +356,12 @@ impl OrbitRuntime {
         Ok(ids)
     }
 
+    #[cfg(unix)]
+    pub(crate) fn resident_workspace_is_local(&self, selector: &str) -> bool {
+        self.canonical_workspace_ids()
+            .is_ok_and(|ids| !ids.is_disjoint(&self.resident_workspace_ids(selector)))
+    }
+
     /// Canonical workspace IDs that `selector` resolves to: this runtime's
     /// canonical IDs when `selector` names one of them, otherwise the
     /// canonical workspace ID resolved by the catalog. Checkout directory
@@ -386,7 +392,7 @@ impl OrbitRuntime {
         ids
     }
 
-    fn live_cycle_home_grant_local(
+    pub(super) fn live_cycle_home_grant_local(
         &self,
         run_id: &str,
     ) -> Option<(BTreeSet<String>, ResidentCycleGrant)> {

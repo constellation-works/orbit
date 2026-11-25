@@ -355,12 +355,13 @@ impl orbit_engine::test_support::NullRuntimeHost for RecoveryHost<'_> {
     /// no copy of the owner's task.
     fn resolve_activity_tool_denials(
         &self,
+        _run_id: Option<&str>,
         _task_ids: &[String],
         activity: &str,
         disallow_list: &[String],
     ) -> Result<ResolvedActivityTools, DispatchError> {
         self.runtime
-            .resolve_activity_tool_denials(&[], activity, disallow_list)
+            .resolve_activity_tool_denials(None, &[], activity, disallow_list)
     }
 
     fn worker_invocation(&self) -> Option<WorkerInvocation> {

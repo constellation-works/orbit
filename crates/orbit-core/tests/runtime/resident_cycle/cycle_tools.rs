@@ -21,20 +21,6 @@ fn cycle_disallow_list() -> Vec<String> {
     }
 }
 
-/// The tools the host stamps for the cycle of `mandate`: its granted names
-/// (which the nested server advertises) and its callable set.
-fn cycle_tools(fx: &Fixture, mandate: &str) -> (Vec<String>, Vec<String>) {
-    let resolved = fx
-        .runtime
-        .resolve_activity_tool_denials(
-            &[mandate.to_string()],
-            "resident_cycle",
-            &cycle_disallow_list(),
-        )
-        .unwrap();
-    (resolved.granted_tools, resolved.effective_tools)
-}
-
 #[test]
 fn the_cycle_tool_list_follows_the_rights_its_grant_holds() {
     if !super::super::dispatch_admission::isolated(
@@ -61,13 +47,18 @@ fn the_cycle_tool_list_follows_the_rights_its_grant_holds() {
         fx.grant(&mandate, rights);
         let run = fx.cycle_run(&mandate, &format!("cycle-tools-{}", rights.join("-")));
         fx.begin_cycle(&run, Utc::now());
-        let (granted, effective) = cycle_tools(&fx, &mandate);
-        let resident_granted: Vec<&str> = granted
-            .iter()
-            .map(String::as_str)
-            .filter(|tool| matches!(*tool, "orbit.workflow" | "orbit.task.recover"))
-            .collect();
-        assert_eq!(resident_granted, expected, "rights {rights:?}: {granted:?}");
+        let resolved = fx
+            .runtime
+            .resolve_activity_tool_denials(
+                Some(&run),
+                &[],
+                "resident_cycle",
+                &cycle_disallow_list(),
+            )
+            .unwrap();
+        let granted = resolved.resident_tools;
+        let effective = resolved.effective_tools;
+        assert_eq!(granted, expected, "rights {rights:?}: {granted:?}");
         // The shipped disallow list still covers what no right reaches.
         assert!(
             !effective
@@ -97,28 +88,23 @@ fn a_cycle_without_a_live_grant_receives_neither_guarded_tool() {
     let mandate = fx.mandate(&task);
     fx.grant(&mandate, &["dispatch", "merge", "refresh", "recover"]);
 
-    // No cycle has begun: the grant alone puts nothing in the list.
-    let (granted, _) = cycle_tools(&fx, &mandate);
-    assert!(
-        granted
-            .iter()
-            .all(|tool| !tool.starts_with("orbit.workflow")
-                && !tool.starts_with("orbit.task.recover")),
-        "{granted:?}"
-    );
-
-    // A cycle that finished holds no live grant either.
     let run = fx.cycle_run(&mandate, "cycle-tools-finished");
+    let granted = |activity| {
+        fx.runtime
+            .resolve_activity_tool_denials(Some(&run), &[], activity, &cycle_disallow_list())
+            .unwrap()
+            .resident_tools
+    };
+    // No cycle has begun: the grant alone puts nothing in the list.
+    assert!(granted("resident_cycle").is_empty());
+
     fx.begin_cycle(&run, Utc::now());
-    fx.runtime.finish_resident_cycle(&run).unwrap();
-    let (granted, _) = cycle_tools(&fx, &mandate);
     assert!(
-        granted
-            .iter()
-            .all(|tool| !tool.starts_with("orbit.workflow")
-                && !tool.starts_with("orbit.task.recover")),
-        "{granted:?}"
+        granted("agent_implement").is_empty(),
+        "ordinary agent activities receive no resident tools"
     );
+    fx.runtime.finish_resident_cycle(&run).unwrap();
+    assert!(granted("resident_cycle").is_empty());
 }
 
 #[cfg(unix)]

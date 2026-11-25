@@ -59,7 +59,7 @@ fn activity_resolved_tools(
     };
     let denied = spec.tool_disallow_list.unwrap_or_default();
     runtime
-        .resolve_activity_tool_denials(&[], activity, &denied)
+        .resolve_activity_tool_denials(None, &[], activity, &denied)
         .unwrap()
 }
 

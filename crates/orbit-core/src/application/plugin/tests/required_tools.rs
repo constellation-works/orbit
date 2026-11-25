@@ -70,7 +70,7 @@ fn filing_requires_plugin_tools_an_agent_can_call() {
         let task = file(name).expect("agent-callable plugin requirement is accepted");
         assert_eq!(task.required_tools, [name]);
         let admitted = runtime
-            .resolve_activity_tool_denials(&[task.id], "agent_implement", &[])
+            .resolve_activity_tool_denials(None, &[task.id], "agent_implement", &[])
             .expect("dispatch admits the requirement");
         assert!(admitted.effective_tools.iter().any(|tool| tool == name));
     }

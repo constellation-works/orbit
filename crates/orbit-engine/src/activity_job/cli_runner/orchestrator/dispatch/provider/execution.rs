@@ -8,9 +8,9 @@ use std::time::Duration;
 use orbit_agent::AgentRequest;
 use orbit_common::security::redaction::{PatternRedactor, argv_redactor};
 use orbit_tools::plugin::BrokeredCaller;
-use orbit_types::workflow::ActivityToolDenyPolicy;
 use orbit_types::workflow::PR_CONFLICT_RECOVERY_ACTIVITY;
 use orbit_types::workflow::activity_job::{Provider, V2AuditEventKind};
+use orbit_types::workflow::{ActivityToolDenyPolicy, tool_allowed};
 
 use crate::activity_job::audit_writer::V2AuditWriter;
 use crate::activity_job::cli_runner::image_input::StagedImages;
@@ -23,7 +23,7 @@ use super::super::super::super::super::workspace::WorktreeBoundaryGuard;
 use super::super::super::super::argv::{
     apply_provider_runtime_arg_fixups, codex_mcp_server_launch_args, try_audit_argv_for_dispatch,
 };
-use super::super::super::super::envelope::cli_agent_envelope_json;
+use super::super::super::super::envelope::{agent_visible_tools, cli_agent_envelope_json};
 use super::super::super::super::launcher::{orbit_tool_env, resolve_provider_launcher};
 use super::super::super::super::plugin_broker::RunPluginBroker;
 use super::super::super::super::prompt_file::PromptFile;
@@ -180,7 +180,7 @@ pub(in super::super) fn dispatch_prepared_provider(
         task_ids,
         task_id,
         tool_disallow_list,
-        activity_tools,
+        mut activity_tools,
         task_ctx,
         notice_instruction: _,
         notice_posting_instruction: _,
@@ -249,13 +249,26 @@ pub(in super::super) fn dispatch_prepared_provider(
     let effective_envelope_input = normalized_continuity_input
         .as_ref()
         .unwrap_or(envelope_input);
+    // Advertise only what Core resolved for this run. These families contain
+    // operator actions, so the ordinary agent capability filter hides them.
+    // They travel separately from the activity's enforcement policy.
+    if inspection.is_some() {
+        activity_tools.resident_tools.clear();
+    }
+    if let Some(disallow_list) = &tool_disallow_list {
+        activity_tools
+            .resident_tools
+            .retain(|tool| !tool_allowed(tool, disallow_list));
+    }
+    let mut visible_tools = agent_visible_tools(&activity_tools.effective_tools);
+    visible_tools.extend(activity_tools.resident_tools.iter().map(String::as_str));
     let envelope_json = cli_agent_envelope_json(
         &envelope_spec,
         run_id,
         effective_envelope_input,
         inspection_task_ctx.as_ref().or(task_ctx.as_ref()),
         &activity_tools.requested_tools,
-        &activity_tools.effective_tools,
+        &visible_tools,
         crew_memory,
     )?;
 
@@ -554,7 +567,7 @@ pub(in super::super) fn dispatch_prepared_provider(
             &fallback_input,
             inspection_task_ctx.as_ref().or(task_ctx.as_ref()),
             &activity_tools.requested_tools,
-            &activity_tools.effective_tools,
+            &visible_tools,
             crew_memory,
         )?;
         let fallback_invocation = agent

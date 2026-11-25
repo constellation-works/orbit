@@ -45,6 +45,7 @@ pub(super) fn baseline_activity_tools(baseline_tools: &[String]) -> ResolvedActi
         effective_tools: baseline_tools.to_vec(),
         omitted_requirement_notes: Vec::new(),
         granted_tools: Vec::new(),
+        resident_tools: Vec::new(),
         suppressed_tools: Vec::new(),
     }
 }

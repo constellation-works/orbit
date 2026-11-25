@@ -80,6 +80,15 @@ pub fn is_resident_cycle_right_gated_operation(tool: &str) -> bool {
     RESIDENT_CYCLE_RIGHT_GATED_OPERATIONS.contains(&tool)
 }
 
+/// The read-only workflow status call a live resident may use in scope.
+pub fn is_resident_drain_status_call(tool: &str, input: &serde_json::Value) -> bool {
+    tool == "orbit.workflow.auto"
+        && input
+            .get("action")
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|action| action.trim() == "status")
+}
+
 /// Routing hint for a nested client. The resident broker authenticates the
 /// caller and resolves the target workspace against the live cycle's grant.
 pub fn route_resident_delivery_recovery_to_broker(tool: &str) -> bool {

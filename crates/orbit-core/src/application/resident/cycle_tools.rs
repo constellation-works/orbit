@@ -2,16 +2,12 @@
 //! list. Core still decides every call: the cycle guard checks the live
 //! grant, the workspace scope and the recovery gates when the call arrives.
 
-use chrono::Utc;
-use orbit_common::OrbitError;
 use orbit_types::workflow::ResidentRight;
 
-use super::cycle::live_cycle_from_history;
-use super::due::cycle_grant;
 use crate::OrbitRuntime;
 
 /// The shipped activity one resident cycle runs.
-pub(crate) const RESIDENT_CYCLE_ACTIVITY: &str = "resident_cycle";
+const RESIDENT_CYCLE_ACTIVITY: &str = "resident_cycle";
 
 const WORKFLOW_TOOL: &str = "orbit.workflow";
 const RECOVER_TOOL: &str = "orbit.task.recover";
@@ -30,7 +26,7 @@ fn tools_of_right(right: ResidentRight) -> &'static [&'static str] {
 }
 
 /// The guarded tool families these rights reach, deduplicated, in a stable order.
-pub(crate) fn tools_of_rights(rights: &[ResidentRight]) -> Vec<String> {
+fn tools_of_rights(rights: &[ResidentRight]) -> Vec<String> {
     let mut tools: Vec<String> = Vec::new();
     for tool in rights.iter().flat_map(|right| tools_of_right(*right)) {
         if !tools.iter().any(|existing| existing == tool) {
@@ -42,27 +38,14 @@ pub(crate) fn tools_of_rights(rights: &[ResidentRight]) -> Vec<String> {
 }
 
 impl OrbitRuntime {
-    /// The guarded tool families the live cycle of each mandate in `task_ids`
-    /// holds rights for. A mandate with no live, unexpired cycle, or whose
-    /// cycle is observe-only, contributes none.
-    pub(crate) fn resident_cycle_right_tools(
-        &self,
-        task_ids: &[String],
-    ) -> Result<Vec<String>, OrbitError> {
-        let mut rights = Vec::new();
-        for task_id in task_ids {
-            let history = self.get_task_history(task_id)?;
-            let Some(live) =
-                live_cycle_from_history(&history)?.filter(|live| live.expires_at > Utc::now())
-            else {
-                continue;
-            };
-            if let Some(grant) = cycle_grant(&history, &live.cycle)
-                && !grant.observe_only
-            {
-                rights.extend(grant.rights);
-            }
+    /// Discover the families reached by this launch's own live cycle.
+    /// The provider's input and its task selectors carry no grant authority.
+    pub(crate) fn resident_cycle_granted_tools(&self, run_id: &str, activity: &str) -> Vec<String> {
+        if activity != RESIDENT_CYCLE_ACTIVITY {
+            return Vec::new();
         }
-        Ok(tools_of_rights(&rights))
+        self.live_cycle_home_grant_local(run_id)
+            .filter(|(_, grant)| !grant.observe_only)
+            .map_or_else(Vec::new, |(_, grant)| tools_of_rights(&grant.rights))
     }
 }

@@ -209,7 +209,8 @@ pub(super) fn prepare_provider_environment(
         activity_tools
             .granted_tools
             .iter()
-            .chain(activity_tools.requested_tools.iter())
+            .chain(&activity_tools.requested_tools)
+            .chain(&activity_tools.resident_tools)
             .map(|tool| format!("tool:{tool}")),
     );
     // An allowlist activity explicitly grants its baseline tools. Deny-mode

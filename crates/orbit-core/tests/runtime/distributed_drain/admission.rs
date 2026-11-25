@@ -1100,7 +1100,7 @@ fn owner_only_required_tools_stay_in_backlog_for_the_owner() {
         "owner-local dispatch remains eligible: {local}"
     );
     let grant = owner
-        .resolve_activity_tool_denials(std::slice::from_ref(&held), "agent_implement", &[])
+        .resolve_activity_tool_denials(None, std::slice::from_ref(&held), "agent_implement", &[])
         .unwrap();
     assert!(
         orbit_types::workflow::tool_allowed("orbit.codebase:analytics", &grant.effective_tools),
@@ -1237,7 +1237,7 @@ fn unsatisfiable_claimed_requirements_stay_in_backlog_before_any_leaf() {
         assert!(mutation.is_err(), "requirements remain immutable");
         // The owner-local implementer keeps its existing activity admission.
         let grant = owner
-            .resolve_activity_tool_denials(std::slice::from_ref(task), "agent_implement", &[])
+            .resolve_activity_tool_denials(None, std::slice::from_ref(task), "agent_implement", &[])
             .unwrap();
         assert_eq!(grant.requested_tools, vec![tool.to_string()]);
         assert!(orbit_types::workflow::tool_allowed(
