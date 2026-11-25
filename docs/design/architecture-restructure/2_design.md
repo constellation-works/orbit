@@ -12,7 +12,7 @@ summary: The proposed target shape (surfaces hold an opaque Core, apps by subjec
 tags: [architecture-restructure, orbit-core, orbit-store, orbit-runtime, architecture]
 paths: ["crates/orbit-core/**", "crates/orbit-runtime/**", "crates/orbit-store/**", "crates/orbit-engine/src/context/hosts/**", "crates/orbit-cmd/**", "crates/orbit-common/src/env_vars.rs"]
 related_features: [orbit-core, operations-as-data]
-related_artifacts: [ORB-28318, ORB-27886, ORB-17906, ORB-15932, ORB-10358]
+related_artifacts: [ORB-28318, ORB-28362, ORB-28364, ORB-27886, ORB-17906, ORB-15932, ORB-10358]
 ---
 
 # Architecture Restructure — Design
@@ -118,7 +118,7 @@ pub fn exec(core: &Core, command: Command) -> Result<Outcome, Error> {
 
 - **The chokepoint** (`app/exec.rs`) is written once, as in the template: it authorizes the command against the operation's governance row, starts the audit guard for a mutating command, runs the flow, tells the guard the outcome, and maps the app's typed error into `orbit-core`'s `Error`. An app supplies only what differs. No surface authorizes or audits, and none can skip it (STD-02 §R24).
 - **A flow** is a function, not a method: `pub(super) fn add(rt: &Stored, new: NewTask) -> Result<Outcome, Error>`. Its first parameter is the lowest runtime layer it needs (§4). It follows load, decide, effect, commit (STD-02 §R41) where it can; one that cannot says why in its doc comment.
-- **`Command` and the registry.** For a noun in the operation registry, `Command` is the typed form of that noun's verb enum and parameters: the spec in `orbit-common` stays the cross-surface contract, and `Command` is what the handler builds from validated input. A noun becomes an app and a registry noun in the same piece of work (§11).
+- **`Command` and the registry.** For a noun in the operation registry, `Command` is the typed form of that noun's verb enum and parameters: the spec in `orbit-common` stays the cross-surface contract, and `Command` is what the handler builds from validated input. A noun that is not yet in the registry keeps its hand-written surface and changes only what it calls; moving it into the registry stays with operations-as-data [ORB-15932].
 - **Module privacy does the enforcing.** A flow file is a private child module, so a sibling app can call only what `mod.rs` exports. Today the same boundary needs a script that reads `impl` blocks.
 - **Which modules become apps.** The rule is STD-02 §R45: a subject a user can name is an app (`task`, `run`, `workspace`, `plugin`, `routine`, `auto_task`, `notice`, `review`, `config`, `skill`, `search`, `codebase`, `experiment`, `resident`, `friction`, `doctor`, `update`, `host`). Machinery several subjects use and that has its own identity (admission, the distributed and pull drains, crew pools, landing, the backlog forecast) is a subsystem unit beside the apps, called by them, with no `Command` of its own. Legacy readers (`tool_name_migration`, `task_bundle/migration.rs`) go to one `migrate` unit (STD-02 §R44). The complete table, one row per current module, is written into `docs/architecture/orbit-core.md` by the first task; `scripts/check-architecture-map.py` already fails when a module is missing from that page.
 - **`application/contracts/`** (18 files of shapes several modules share) dissolves as its users become apps: a shape goes to the app that owns it, or stays only if two apps truly share it (STD-02 §R42, §R43).
@@ -309,19 +309,38 @@ Each rule gets the strongest mechanism available (STD-02 §R6).
 
 ## 11. Order of work
 
-Each step lands on its own, leaves every check green and changes no behaviour. Steps 1 and 2 do not depend on the runtime question and are useful alone.
+Each task lands on its own, leaves every check green and changes no behaviour. The work is filed as 95 tasks in eight phases, each tagged `architecture-restructure` and `architecture-restructure:phase-N`. The decided order (ratchets, environment, store, the surface boundary, the inside of core, the engine host) is the order in which the gates close. The tasks' dependencies say what may run side by side.
 
-0. **Ratchets.** The ratchet check and its baseline land; `docs/architecture/orbit-core.md` gets the table of which module becomes which app or subsystem unit, and the declared order.
-1. **Environment.** `Env::capture`, the local constants folded into `env_vars.rs`, readers converted crate by crate, then the Clippy ban.
-2. **Store.** First `Store::read` and `Store::write` with the private writer. Then one record at a time: its SQL to `repository/<record>.rs`, its `Backend` trait to a concrete type, its operation-named methods split. The schema files are moved in one move-only change. The other three databases follow.
-3. **The surface boundary.** `Core` and `app/exec.rs` land with the first app. Surfaces switch one subject at a time. When a surface crate's count is zero its ratchet locks; when all are zero, `orbit-core` closes its exports.
-4. **Inside core.** First the runtime's fields are carved into the four layers inside `orbit-runtime` and the role checks folded into `Role` and the task access (§4), with `RuntimeKernel` still holding the layers. Then, one subject at a time, `impl OrbitRuntime` blocks become functions in `app/<subject>/` each taking the lowest layer it needs, and its ports are rebound in `app/port.rs`. When no block is left, `RuntimeKernel`, the wrapper and the `unsafe` cast are deleted, and `ApplicationPort` is emptied.
-5. **The engine host.** The five traits, `RunSettings`, then narrower bounds one engine module at a time.
+| Phase | What | Tasks | Waits for |
+|---|---|---|---|
+| 0 | Ratchets and the app table | ORB-28362, ORB-28364 | nothing |
+| 1 | Environment | ORB-28365 to ORB-28371 | the ratchet check, except the opening tasks |
+| 2 | Store | ORB-28372 to ORB-28386 | the ratchet check, except the opening tasks |
+| 3 | Runtime layers | ORB-28387 to ORB-28395 | the carve waits for nothing; the file layout waits for phases 1 and 2 |
+| 4 | The surface boundary | ORB-28396 to ORB-28407, ORB-28415 to ORB-28417 | the ratchet check and the app table |
+| 5 | Inside core | ORB-28418 to ORB-28454 | phases 2, 3 and 4 complete |
+| 6 | The engine host | ORB-28408 to ORB-28414 | the ratchet check, except the opening tasks |
+| 7 | Finish | ORB-28455 to ORB-28457 | phases 5 and 6 |
 
-- **Why the surface before the inside.** Step 3 freezes what the outside can call to the set of commands. After it, step 4 can move anything inside `orbit-core` without touching a surface.
-- **The unit of work is the subject.** A subject's registry spec, its app and its repositories are converted in the order operations-as-data already set [ORB-15932], starting with the nouns whose handlers are already single entry points (friction, auto-task, task, workflow run, search, codebase).
+0. **Ratchets.** The ratchet check and its baseline land [ORB-28362]. `docs/architecture/orbit-core.md` gets the table of which module becomes which app or subsystem unit, and the declared order [ORB-28364].
+1. **Environment.** `Env::capture`, the local constants folded into `env_vars.rs`, readers converted by crate tier, then the Clippy ban.
+2. **Store.** First `Store::read` and `Store::write` with the private writer, and the schema files moved in one move-only change. Then one family of records at a time: its SQL to `repository/<record>.rs`, its `Backend` trait to a concrete type, its operation-named methods split. Then the store is opened in composition only, the other databases take the same layout and ledger, and the backend traits are deleted.
+3. **Runtime layers.** The kernel's fields are carved into the four layers inside `orbit-runtime`, with `RuntimeKernel` still holding them, so no caller changes [ORB-28387]. The files move to the layout of §4 after the store and the environment are done, because those phases edit the same files at their old paths. Then the role is resolved once in `Base`, the role checks are folded into `Role` and the task access, and `ApplicationPort` is emptied.
+4. **The surface boundary.** `Core` and `app/exec.rs` land with the friction app [ORB-28396]. The other surface families switch side by side, then the generic tool and MCP entries, the CLI entry and the dashboard. When no surface names `OrbitRuntime`, `orbit-core` closes its exports [ORB-28417].
+5. **Inside core, in two passes.**
+   - **Pass A moves.** Each module's `impl OrbitRuntime` blocks become functions in `app/<subject>/` or `unit/<name>/` that still take `rt: &OrbitRuntime`, and its ports are rebound in `app/port.rs`. The eleven modules outside the declared chain move side by side. The chain then moves from the top down, one module at a time, with `task` last. The last task dissolves `contracts` and deletes `application/` [ORB-28450].
+   - **Pass B narrows.** A report script gives the lowest layer each function reaches. Four tasks change the parameter to that layer, lowest first: `&Base`, `&Stored`, `&Host`, `&Run` [ORB-28451] to [ORB-28454].
+6. **The engine host.** The five traits, `RunSettings`, an adapter struct, then narrower bounds one engine module at a time, and `NullRuntimeHost` deleted.
+7. **Finish.** `RuntimeKernel`, the wrapper and the `unsafe` cast are deleted and each process builds only the layers it needs [ORB-28455]. The remaining ratchets become gates, and these docs are marked built.
+
+- **Why the surface before the inside.** Phase 4 freezes what the outside can call to the set of commands. After it, phase 5 can move anything inside `orbit-core` without touching a surface.
+- **Why two passes.** A function can take `&Stored` only when everything it calls takes `&Stored` or lower, and modules call each other in both directions through ports. Moving and narrowing in one change would force each task to narrow functions in modules it does not own. Pass A needs no agreement between modules. Pass B goes lowest layer first because a function that reaches only `Base` calls only functions that reach only `Base`.
+- **Why top-down in pass A.** Nothing below a module in the declared order calls it except through a port, so moving the top module first changes the fewest call sites.
+- **Why the layers are carved early.** The carve changes only `orbit-runtime` and keeps every accessor. Folding the role checks is the one part that is not a move (§12), and it has to be done before pass B can sort flows into the four layers.
+- **The unit of work differs by phase:** a family of records in the store, a surface family at the boundary, a module inside core. A subject's repositories, its entry and its functions are therefore converted in three tasks, not one.
 - **A conversion is a move.** Function bodies do not change, only where they live and what they receive. Tests are not rewritten, and the frozen surface fixtures stay as they are.
-- **One writer per subject.** Two tasks never convert the same `app/<subject>/` or the same record at once; a conversion of a hot subject waits for a quiet moment or takes a path lease.
+- **One writer per set of files.** Tasks that may run side by side declare disjoint files, and the dependencies put the rest in a line.
+- **Decided at filing, not measured.** The app table in [ORB-28364] is a starting table that the task checks against the code. The two passes and the place of the runtime layout come from reading the code, not from a trial conversion.
 
 ## 12. Concerns & Honest Limitations
 
@@ -344,6 +363,15 @@ Each step lands on its own, leaves every check green and changes no behaviour. S
 ## Task References
 
 - [ORB-28318] — carried this proposal to Daniel's approval.
+- [ORB-28362] — adds the ratchet check; the first of the 95 filed tasks (`orbit task list --tag architecture-restructure`).
+- [ORB-28364] — writes the app and unit table.
+- [ORB-28387] — carves the kernel into the four layers.
+- [ORB-28396] — adds `Core`, `exec` and the first app.
+- [ORB-28417] — closes `orbit-core`'s exports.
+- [ORB-28450] — ends pass A: dissolves `contracts` and deletes `application/`.
+- [ORB-28451] — starts pass B: narrows flows to `&Base`.
+- [ORB-28454] — ends pass B: narrows the remaining flows to `&Run`.
+- [ORB-28455] — deletes the wrapper and builds layers on demand.
 - [ORB-27886] — recorded the STD-02 deviations this design is the restructure for.
 - [ORB-17906] — moved the runtime kernel into `orbit-runtime`.
 - [ORB-15932] — set the noun-by-noun order the conversions follow.

@@ -6,7 +6,7 @@ updated_date: 2026-11-25
 last_validated: 2026-11-25
 status: Accepted
 stage: designing
-next: "File the step 0 tasks: the ratchet check and the app table [ORB-28318]"
+next: "Approve and land the ratchet check [ORB-28362] and the app table [ORB-28364]"
 feature: architecture-restructure
 doc_role: overview
 type: design
@@ -14,7 +14,7 @@ summary: Approved design to put the runtime behind orbit-core and split it into 
 tags: [architecture-restructure, orbit-core, orbit-store, orbit-runtime, architecture]
 paths: ["crates/orbit-core/**", "crates/orbit-runtime/**", "crates/orbit-store/**", "crates/orbit-engine/src/context/hosts/**", "crates/orbit-cmd/**", "crates/orbit-common/src/env_vars.rs"]
 related_features: [orbit-core, operations-as-data]
-related_artifacts: [ORB-28318, ORB-27886, ORB-17906, ORB-15932, ORB-10358, ORB-10016]
+related_artifacts: [ORB-28318, ORB-28362, ORB-28364, ORB-27886, ORB-17906, ORB-15932, ORB-10358, ORB-10016]
 ---
 
 # Architecture Restructure — Overview
@@ -113,6 +113,8 @@ Nothing is built, so the Task column is empty. The File column is where each con
 ## Task References
 
 - [ORB-28318] — carried this proposal to Daniel's approval.
+- [ORB-28362] — adds the ratchet check; the first of the 95 filed tasks (`orbit task list --tag architecture-restructure`).
+- [ORB-28364] — writes the app and unit table.
 - [ORB-27886] — recorded Orbit's standing against STD-02@5 and the deviations deferred until a restructure.
 - [ORB-17906] — moved the runtime kernel into `orbit-runtime`.
 - [ORB-15932] — started the planned noun-by-noun migration to the operation registry.

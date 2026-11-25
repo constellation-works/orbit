@@ -58,7 +58,7 @@ About 1,000 operations are inherent methods on one type, so any function can cal
 
 ### Decision
 
-An operation is a function in `orbit-core/src/app/<subject>/`, reached through that app's one `exec`, which authorizes, audits and runs it. The `OrbitRuntime` wrapper and its `unsafe` cast are deleted when no method is left. A subject's registry spec, app and repositories are converted together, in the order operations-as-data set [ORB-15932] (decisions 2 and 10).
+An operation is a function in `orbit-core/src/app/<subject>/`, reached through that app's one `exec`, which authorizes, audits and runs it. The `OrbitRuntime` wrapper and its `unsafe` cast are deleted when no method is left. A subject's repositories, its entry and its functions are converted in separate tasks, with the store, the surface boundary and the inside of core; moving a noun into the registry stays with operations-as-data [ORB-15932] (decisions 2 and 10; amended at filing, 2_design.md §11).
 
 ### Consequences
 
@@ -184,7 +184,7 @@ Orbit lands many unrelated changes a day and cannot stop for a rewrite, so the o
 
 ### Decision
 
-The order is: ratchets, environment, store, the surface boundary, the inside of core, the engine host. A ratchet holds each old-shape count at or below its checked-in baseline. Each step lands on its own and changes no behaviour (decision 11).
+The order is: ratchets, environment, store, the surface boundary, the inside of core, the engine host. A ratchet holds each old-shape count at or below its checked-in baseline. Each step lands on its own and changes no behaviour (decision 11). That is the order in which the gates close: the filed tasks let the environment, the store, the surface boundary and the engine host proceed side by side once the ratchet check lands, and carve the runtime's layers before the inside of core moves (2_design.md §11).
 
 ### Consequences
 
