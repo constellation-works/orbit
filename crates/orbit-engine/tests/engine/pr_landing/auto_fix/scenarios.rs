@@ -6390,19 +6390,22 @@ fn moved_base_log_throttle_retains_its_deadline_and_exact_read_identity() {
     );
 }
 
-/// A required waiter should hand the repair the authenticated dependency's failure.
+/// A required waiter hands the repair authenticated leaf evidence or explains its absence.
 #[test]
 fn auto_fix_includes_authenticated_waiter_dependency_failure() {
     auto_fix_table(
         "auto_fix::auto_fix_includes_authenticated_waiter_dependency_failure",
-        "valid large malformed forged",
+        "valid large unreadable proof malformed forged ordinary",
         |case, row| {
             let (fx, host, _) = super::ci_rerun::fixture(row);
             let path = fx.forge.join("retry-config.json");
             let mut config: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
             config["required"] = json!(["lint"]);
-            if case == "forged" {
-                config["changed_helper"] = json!(true);
+            match case {
+                "unreadable" => config["log_404_jobs"] = json!([1000]),
+                "proof" => config["incomplete"] = json!(true),
+                "forged" => config["changed_helper"] = json!(true),
+                _ => {}
             }
             fs::write(path, serde_json::to_vec(&config).unwrap()).unwrap();
             let mut dependency_log =
@@ -6414,36 +6417,74 @@ fn auto_fix_includes_authenticated_waiter_dependency_failure() {
             if case == "malformed" {
                 fs::write(fx.forge.join("retry-log-1001"),
                     "lint\tWait\terror: waiter fallback\nlint\tWait\torbit-dependency-evidence:{invalid}\n").unwrap();
+            } else if case == "ordinary" {
+                fs::write(
+                    fx.forge.join("retry-log-1001"),
+                    "lint\tWait\terror: ordinary check failure\n",
+                )
+                .unwrap();
             }
-            let mut input = fx.complete_ungated_input();
-            input["auto_fix"] = json!(true);
-            input["completion"] = json!("review");
-            let error = super::complete_with_logical_clock(&host, &input)
+            let error = super::complete_with_logical_clock(&host, &auto_fix_input(&fx))
                 .unwrap_err()
                 .to_string();
             assert!(is_check_repair(&error), "{case}: {error}");
+            assert!(fx.forge_lines("retry-sends").is_empty(), "{case}");
+            assert!(
+                host.history(TASK_ID)
+                    .iter()
+                    .all(|entry| entry.event != orbit_types::workflow::CI_RERUN_RESERVED_EVENT),
+                "{case}"
+            );
+            assert_eq!(repair_attempts(&host).len(), 1, "{case}");
+            // Completion can append an independent CI rerun diagnostic.
+            let evidence = error
+                .split_once("; CI retry diagnostic:")
+                .map_or(error.as_str(), |(evidence, _)| evidence);
+            let (detail, excerpt) = evidence.split_once("log excerpt:\n").unwrap();
             if matches!(case, "valid" | "large") {
                 assert!(
-                    error.contains("distinctive dependency failure") && error.contains("CI / test"),
-                    "{error}"
-                );
-                let excerpt = error.split_once("log excerpt:\n").unwrap().1;
-                assert!(
-                    excerpt.len() <= 2048,
-                    "dependency excerpt exceeds the per-job limit: {}",
-                    excerpt.len()
+                    excerpt.contains("distinctive dependency failure")
+                        && excerpt.contains("CI / test (run 700, job 1000)")
+                        && !detail.contains("dependency evidence unavailable"),
+                    "{case}: {error}"
                 );
             } else {
-                assert!(!error.contains("distinctive dependency failure"), "{error}");
                 assert!(
-                    error.contains(if case == "malformed" {
-                        "waiter fallback"
-                    } else {
-                        "orbit-dependency-evidence"
-                    }),
-                    "{error}"
+                    !error.contains("distinctive dependency failure"),
+                    "{case}: {error}"
                 );
+                assert!(
+                    excerpt.contains(match case {
+                        "malformed" => "waiter fallback",
+                        "ordinary" => "ordinary check failure",
+                        _ => "orbit-dependency-evidence",
+                    }),
+                    "{case}: {error}"
+                );
+                match case {
+                    "unreadable" => assert!(
+                        detail.contains("could not read the log for failed job 1000 in run 700")
+                            && !detail.contains("HTTP 404"),
+                        "{case}: {error}"
+                    ),
+                    "proof" => assert!(
+                        detail.contains("complete-set proof is unavailable")
+                            && detail.contains("(run 700, job 1001)")
+                            && !detail.contains("(run 700, job 1000)"),
+                        "{case}: {error}"
+                    ),
+                    "malformed" | "ordinary" => assert!(
+                        !detail.contains("dependency evidence unavailable"),
+                        "{case}: {error}"
+                    ),
+                    _ => {}
+                }
             }
+            assert!(
+                excerpt.len() <= 2048,
+                "{case}: excerpt exceeds the per-job limit: {}",
+                excerpt.len()
+            );
             assert!(
                 error.len() < 12000,
                 "repair evidence remains bounded: {}",

@@ -15,8 +15,8 @@ use super::super::pr_answers::RequiredChecks;
 use super::annotations::source_annotations;
 use super::base_update::contains;
 use super::jobs::{
-    answers, commit_jobs, excerpt, exclusive_awaited_stop, failed_step, infrastructure_evidence,
-    job_label, same_job, unsuccessful,
+    answers, commit_jobs, dependency_only_log, excerpt, exclusive_awaited_stop, failed_step,
+    infrastructure_evidence, job_label, same_job, unsuccessful,
 };
 use super::log::job_log;
 use super::recovery::{CheckFailureClass, FailedJob};
@@ -273,32 +273,41 @@ pub(in crate::executor::automation::vcs) fn head_check_evidence<H: RuntimeHost +
                 Ok(None) => {}
             }
         }
-        let dependency = dependency_context.and_then(|(branch, accepted)| {
+        let dependency = log.contains("orbit-dependency-evidence:").then(|| {
+            let ((branch, accepted), base) = dependency_context
+                .zip(base_branch)
+                .ok_or("the PR and base context needed for dependency proof is unavailable")?;
             dependency_repair_excerpt(
                 host,
                 workspace,
                 pr,
                 head,
                 branch,
-                base_branch?,
+                base,
                 accepted,
                 &jobs,
                 job,
-                &log,
                 deadline_ms,
             )
         });
+        let (log_excerpt, dependency_note) = match dependency {
+            Some(Ok(leaf)) => (leaf, String::new()),
+            Some(Err(reason)) if dependency_only_log(&log) => (
+                excerpt(&log),
+                format!("; dependency evidence unavailable because {reason}"),
+            ),
+            _ => (excerpt(&log), String::new()),
+        };
         failures.push(PrAutoFixFailedCheck {
             check: job_label(job),
             step: failed_step(job).to_string(),
             signature: signature.text.clone(),
         });
         details.push(format!(
-            "'{}' failed in step `{}` on head {head} (run {run_id}, job {job_id}) with signature `{}`; log excerpt:\n{}",
+            "'{}' failed in step `{}` on head {head} (run {run_id}, job {job_id}) with signature `{}`{dependency_note}; log excerpt:\n{log_excerpt}",
             job_label(job),
             failed_step(job),
             signature.text,
-            dependency.unwrap_or_else(|| excerpt(&log))
         ));
     }
     if !waits.is_empty() {
@@ -318,7 +327,8 @@ pub(in crate::executor::automation::vcs) fn head_check_evidence<H: RuntimeHost +
 }
 
 /// Authenticate a waiter's record using the same complete-set proof as reruns.
-/// This is a read-only proof: no rerun is reserved or dispatched.
+/// This is a read-only proof: no rerun is reserved or dispatched. Report
+/// bounded reasons and use only provider job identities in those reasons.
 #[allow(
     clippy::too_many_arguments,
     reason = "bind the read to the same PR, job and deadline"
@@ -333,25 +343,29 @@ fn dependency_repair_excerpt<H: RuntimeHost + ?Sized>(
     accepted: &str,
     jobs: &[CiCommitJobEvidence],
     waiter: &CiCommitJobEvidence,
-    log: &str,
     deadline_ms: Option<u64>,
-) -> Option<String> {
-    if !log.contains("orbit-dependency-evidence:") {
-        return None;
-    }
-    let run = waiter.run_id.number()?;
-    let waiter_id = waiter.job_id.number()?;
+) -> Result<String, String> {
+    const PROOF_UNAVAILABLE: &str = "the complete-set proof is unavailable";
+    let run = waiter.run_id.number().ok_or(PROOF_UNAVAILABLE)?;
+    let waiter_id = waiter.job_id.number().ok_or(PROOF_UNAVAILABLE)?;
     let mut roots = Vec::new();
     for job in jobs.iter().filter(|job| {
         job.run_id.number() == Some(run)
             && job.job_id.number() != Some(waiter_id)
             && matches!(job.conclusion.value(), Some(CiJobConclusion::Failure))
     }) {
-        let id = job.job_id.number()?;
-        let text = job_log(host, workspace, run, id, job, deadline_ms).ok()?;
+        let id = job
+            .job_id
+            .number()
+            .ok_or("a failed job in the run has no provider job ID")?;
+        let text = job_log(host, workspace, run, id, job, deadline_ms).map_err(|_| {
+            format!("Orbit could not read the log for failed job {id} in run {run}")
+        })?;
         let signature = error_signature(&text, failed_step(job));
         if signature.step_fallback {
-            return None;
+            return Err(format!(
+                "the log for failed job {id} in run {run} has no emitted diagnostic"
+            ));
         }
         roots.push(CiRerunRoot {
             job_id: id,
@@ -361,13 +375,15 @@ fn dependency_repair_excerpt<H: RuntimeHost + ?Sized>(
         });
     }
     if roots.is_empty() {
-        return None;
+        return Err("the run listed no other failed jobs to authenticate".into());
     }
-    let deadline = deadline_ms.or_else(|| {
-        super::super::completion_deadline::now_ms()
-            .ok()?
-            .checked_add(15_000)
-    })?;
+    let deadline = deadline_ms
+        .or_else(|| {
+            super::super::completion_deadline::now_ms()
+                .ok()?
+                .checked_add(15_000)
+        })
+        .ok_or("the dependency proof deadline is unavailable")?;
     let request = super::rerun::RerunPlanRequest {
         workspace,
         pr: pr.to_string(),
@@ -381,32 +397,43 @@ fn dependency_repair_excerpt<H: RuntimeHost + ?Sized>(
     };
     let answer = host
         .run_private_vcs_operation(super::super::operations::CI_RERUN_PLAN, request.to_input())
-        .ok()?;
+        .map_err(|_| PROOF_UNAVAILABLE)?;
     let plan = &answer["plan"];
-    let records = plan["authentication"]["dependencies"].as_array()?;
+    let records = plan["authentication"]["dependencies"]
+        .as_array()
+        .ok_or(PROOF_UNAVAILABLE)?;
     let record = records
         .iter()
-        .find(|record| record["job_id"].as_u64() == Some(waiter_id))?;
-    let ids = record["dependency_ids"].as_array()?;
-    if ids.is_empty() {
-        return None;
-    }
-    let logs = plan["authentication"]["logs"].as_array()?;
-    let failed = plan["failed_jobs"].as_array()?;
+        .find(|record| record["job_id"].as_u64() == Some(waiter_id))
+        .ok_or(PROOF_UNAVAILABLE)?;
+    let ids = record["dependency_ids"]
+        .as_array()
+        .ok_or(PROOF_UNAVAILABLE)?;
+    let logs = plan["authentication"]["logs"]
+        .as_array()
+        .ok_or(PROOF_UNAVAILABLE)?;
+    let failed = plan["failed_jobs"].as_array().ok_or(PROOF_UNAVAILABLE)?;
     let mut result = String::new();
     // Share the same 2 KiB budget as a single failed-job excerpt.
-    let per_job = 2048usize.checked_div(ids.len())?;
+    let per_job = 2048usize.checked_div(ids.len()).ok_or(PROOF_UNAVAILABLE)?;
     for id in ids {
-        let id = id.as_u64()?;
-        let job = failed.iter().find(|job| job["id"].as_u64() == Some(id))?;
-        let log = logs.iter().find(|log| log["job_id"].as_u64() == Some(id))?["log"].as_str()?;
+        let id = id.as_u64().ok_or(PROOF_UNAVAILABLE)?;
+        let job = failed
+            .iter()
+            .find(|job| job["id"].as_u64() == Some(id))
+            .ok_or(PROOF_UNAVAILABLE)?;
+        let log = logs
+            .iter()
+            .find(|log| log["job_id"].as_u64() == Some(id))
+            .and_then(|log| log["log"].as_str())
+            .ok_or(PROOF_UNAVAILABLE)?;
         let label = format!(
             "{} / {} (run {run}, job {id}):\n",
-            waiter.workflow.text()?,
-            job["name"].as_str()?
+            waiter.workflow.text().ok_or(PROOF_UNAVAILABLE)?,
+            job["name"].as_str().ok_or(PROOF_UNAVAILABLE)?
         );
         if label.len() >= per_job {
-            return None;
+            return Err("the authenticated dependency labels exceed the excerpt limit".into());
         }
         let mut part = format!("{label}{}\n", excerpt(log));
         if part.len() > per_job {
@@ -418,7 +445,7 @@ fn dependency_repair_excerpt<H: RuntimeHost + ?Sized>(
         }
         result.push_str(&part);
     }
-    Some(result)
+    Ok(result)
 }
 
 /// The jobs on one commit, or why they could not be read; read once per
