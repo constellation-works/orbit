@@ -220,14 +220,20 @@ only after a real wrapper heartbeat proves the queue interval. This removes
 host-speed assumptions without extending timeout or cleanup budgets.
 
 A debug `orbit` or dashboard child does not see those thread-local hooks.
-Three deadlines in that child read an environment variable only when the
+Two deadlines in that child read an environment variable only when the
 binary is built with debug assertions, and a release build ignores it:
-`ORBIT_TEST_HOST_FORWARD_ATTACH_TIMEOUT_MS` (host-forward attach budget),
-`ORBIT_TEST_MCP_LIFECYCLE_INTERVAL_MS` (stdio lifecycle tick), and
+`ORBIT_TEST_HOST_FORWARD_ATTACH_TIMEOUT_MS` (host-forward attach budget) and
+`ORBIT_TEST_MCP_LIFECYCLE_INTERVAL_MS` (stdio lifecycle tick). The third,
 `ORBIT_TEST_PIPELINE_WAIT_VIRTUAL=1` (a pipeline wait adds each poll to its
-elapsed time instead of sleeping, and does not wake on a reaped worker).
-The quiet-deadline child fixture injects its bound through
-`run_child_test_within`. The real child and the real reap stay in place.
+elapsed time instead of sleeping, and does not wake on a reaped worker), also
+needs the `test-support` feature or a unit-test binary in a debug build; any
+other build sleeps in real time. The quiet-deadline child fixture injects its
+bound through `run_child_test_within`. The real child and the real reap stay
+in place.
+
+`ORBIT_TEST_MERGEABILITY_WAIT=virtual` has the same extra condition for landing's
+mergeability poll, which the external-merge fixtures run in-process rather than
+in a child; they set it with `test_env::scoped`.
 
 `make ci-test-affected` (`scripts/ci-test-affected.py`) reads Cargo metadata without compiling. It selects every crate with changed paths plus all transitive reverse workspace dependents (dev, build, renamed, optional and target-specific edges), then runs their library, binary and integration test targets with nextest (Cargo if nextest is missing), under the shared [build-budget admission](runbooks/build-budget.md). Doctests are disabled workspace-wide (`[lib] doctest = false`); `scripts/check-doctest-fences.sh` fails a runnable fence instead of running it. A change under `crates/orbit-core/` selects `orbit-core`, `orbit-cmd`, `orbit-web` and `orbit-cli`.
 
