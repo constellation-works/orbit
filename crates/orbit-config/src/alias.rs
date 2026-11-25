@@ -46,6 +46,7 @@ use crate::operation::{
     translate_legacy_review_minutes,
 };
 
+// compat-until: 2026-11-17 (fe505cbee017, ORB-16775)
 /// The consolidated final-recovery pool.
 pub(crate) const FINAL_RECOVERY_CREWS_KEY: &str = "workflow.purpose_crews.final_recovery";
 /// The deprecated spelling of [`FINAL_RECOVERY_CREWS_KEY`].
