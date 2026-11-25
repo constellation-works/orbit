@@ -718,7 +718,9 @@ export function renderMachine(body, payload, context, throttleNode) {
   for (const r of identity) idSec.body.appendChild(rowNode(r, context, { lockGlobal: true, readOnly: r.key !== 'machine.name', sectionTitle: 'Machine identity', usedIds: identityUsed }));
   nodes.push(idSec.section);
   nodes.push(keySection('Auto-concurrency', flatten(eff).filter((r) => r.key.startsWith('machine.auto_concurrency.')), context, { lockGlobal: true }));
-  nodes.push(keySection('Machine', flatten(eff).filter((r) => r.key.startsWith('machine.') && !r.key.startsWith('machine.auto_concurrency.') && !identity.includes(r)), context, { lockGlobal: true }));
+  nodes.push(keySection('Machine', flatten(eff).filter((r) => r.key.startsWith('machine.') && !r.key.startsWith('machine.auto_concurrency.') && !r.key.startsWith('machine.web.') && !identity.includes(r)), context, { lockGlobal: true }));
+  // Fleet › Remote access links here; it shows the keys but never writes them.
+  nodes.push(keySection('Remote access', flatten(eff).filter((r) => r.key.startsWith('machine.web.')), context, { lockGlobal: true }));
   if (throttleNode) nodes.push(throttleNode);
   // The throttle panel shows only the enabled flag and the per-resource
   // marks; any other throttle key (today cpu_source) still belongs on this

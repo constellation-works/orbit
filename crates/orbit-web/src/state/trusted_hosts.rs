@@ -48,6 +48,19 @@ impl TrustedHosts {
         self.logins.contains(login)
     }
 
+    pub(crate) fn logins(&self) -> impl Iterator<Item = &str> {
+        self.logins.iter().map(String::as_str)
+    }
+
+    /// Whether this policy holds exactly these resolved keys.
+    pub(crate) fn matches(&self, hosts: &[String], logins: &[String]) -> bool {
+        self.hosts.iter().eq(hosts.iter().collect::<BTreeSet<_>>())
+            && self
+                .logins
+                .iter()
+                .eq(logins.iter().collect::<BTreeSet<_>>())
+    }
+
     pub(crate) fn login_count(&self) -> usize {
         self.logins.len()
     }

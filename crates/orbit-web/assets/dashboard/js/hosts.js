@@ -1,7 +1,7 @@
 // Observe › Fleet: serving-host registry, probes and guarded registry mutations.
 import { captureFocus, el, escCloseButton, fetchJson, getHost, onWorkspaceChange, pinnedInfoHint, setRegisteredHosts, requestJson, requestPanel } from './common.js';
 import { fetchHostResourcePayloadFor } from './host-resources.js';
-import { fleetButton, fleetFacts, fleetHostCards, fleetDrainSection, fleetProviderSection } from './fleet-view.js';
+import { fleetButton, fleetFacts, fleetHostCards, fleetDrainSection, fleetProviderSection, fleetRemoteAccessSections } from './fleet-view.js';
 
 const $ = (id) => document.getElementById(id);
 
@@ -52,6 +52,10 @@ let epoch = 0;
 /// Bumped when the view is left or a newer health load starts, so an older
 /// health fan-out cannot paint over newer health readings.
 let healthEpoch = 0;
+/// The selected host's `/api/remote-access` reading: `{host, payload}` or
+/// `{host, error}`. Replaced by each refresh; dropped when the view is left.
+let remoteAccess = null;
+let remoteEpoch = 0;
 
 /// Forget everything when the view is left, so reopening it probes again.
 export function resetHostsView() {
@@ -60,6 +64,8 @@ export function resetHostsView() {
   clearTimeout(noticeTimer);
   epoch += 1;
   healthEpoch += 1;
+  remoteEpoch += 1;
+  remoteAccess = null;
   lastPayload = null;
   live = new Map();
   probeNext = true;
@@ -117,7 +123,23 @@ export async function fetchAndRenderHosts({ probe = probeNext } = {}) {
     // retargeted while the probe ran. Live fields match by id and SSH target.
     render();
   }
-  await loadHealth();
+  await Promise.all([loadHealth(), loadRemoteAccess()]);
+}
+
+/// Read Remote access for the selected host; `fetchJson` routes it through
+/// `/api/on/<host>/` when the host picker names another host.
+async function loadRemoteAccess() {
+  const token = ++remoteEpoch;
+  const host = getHost();
+  let next;
+  try {
+    next = { host, payload: await fetchJson("/api/remote-access") };
+  } catch (error) {
+    next = { host, error: error.status === 404 ? "This host's Orbit does not report remote access." : `Remote access unavailable: ${error.message}` };
+  }
+  if (token !== remoteEpoch) return;
+  remoteAccess = next;
+  render();
 }
 
 function remember(rows) {
@@ -183,6 +205,9 @@ function view(payload) {
   nodes.push(fleetHostCards(hosts, health, id => { selectedHost = id; renderDialog(); }));
   nodes.push(fleetDrainSection(hosts, health, selectScope));
   nodes.push(fleetProviderSection(hosts, health));
+  const local = hosts.find(row => row.local);
+  const selected = getHost() || local?.name || "the serving host";
+  nodes.push(...fleetRemoteAccessSections(remoteAccess?.host === getHost() ? remoteAccess : null, selected));
   return nodes;
 }
 

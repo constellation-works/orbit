@@ -102,9 +102,9 @@ pub(in crate::state) struct StateInner {
     /// grant: the server's TTY and `ORBIT_OPERATOR` are ignored [ORB-23047].
     operator: AtomicBool,
     /// Non-loopback Hosts the Host gate admits with a listed Tailscale login
-    /// (`machine.web.trusted_hosts`/`trusted_logins`). Set once at boot;
-    /// unset admits loopback Hosts only.
-    trusted_hosts: std::sync::OnceLock<Arc<crate::state::TrustedHosts>>,
+    /// (`machine.web.trusted_hosts`/`trusted_logins`) and the activity seen
+    /// through them. Set once at boot; unset admits loopback Hosts only.
+    remote_access: std::sync::OnceLock<Arc<crate::state::RemoteAccess>>,
     /// Server-instance identifier (`web-operator-<uuid>`), reported as the
     /// caller on web task mutations when `--operator` is enabled.
     session_id: String,
@@ -273,7 +273,7 @@ impl DashboardState {
                 agents: RuntimeMemo::new("agent scorecard scan"),
                 doctor_reports: DoctorReports::new(),
                 operator: AtomicBool::new(false),
-                trusted_hosts: std::sync::OnceLock::new(),
+                remote_access: std::sync::OnceLock::new(),
                 session_id: orbit_common::observability::audit_id::audit_execution_id(
                     "web-operator",
                 ),
@@ -447,20 +447,20 @@ impl DashboardState {
         self.inner.operator.store(enabled, Ordering::Relaxed);
     }
 
-    /// The Host gate's trusted-host policy; empty (loopback only) unless
-    /// [`Self::set_trusted_hosts`] ran.
-    pub(crate) fn trusted_hosts(&self) -> Arc<crate::state::TrustedHosts> {
+    /// The Host gate's trusted-host policy and remote-access activity;
+    /// loopback only unless [`Self::set_remote_access`] ran.
+    pub(crate) fn remote_access(&self) -> Arc<crate::state::RemoteAccess> {
         self.inner
-            .trusted_hosts
-            .get_or_init(|| Arc::new(crate::state::TrustedHosts::default()))
+            .remote_access
+            .get_or_init(|| Arc::new(crate::state::RemoteAccess::default()))
             .clone()
     }
 
-    /// Record the trusted-host policy. Set once at boot, before the app is
-    /// built; a later call, or one after [`Self::trusted_hosts`] was read,
-    /// keeps the first policy.
-    pub(crate) fn set_trusted_hosts(&self, trusted: crate::state::TrustedHosts) {
-        let _ = self.inner.trusted_hosts.set(Arc::new(trusted));
+    /// Record the remote-access policy. Set once at boot, before the app is
+    /// built; a later call, or one after [`Self::remote_access`] was read,
+    /// keeps the first.
+    pub(crate) fn set_remote_access(&self, access: crate::state::RemoteAccess) {
+        let _ = self.inner.remote_access.set(Arc::new(access));
     }
 
     /// Server-instance operator session identifier (`web-operator-<uuid>`) when

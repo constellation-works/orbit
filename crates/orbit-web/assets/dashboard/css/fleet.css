@@ -47,7 +47,16 @@
 .fleet-quota > span:first-child > .mono { white-space: nowrap; }
 .fleet-quota > .muted { min-width: 0; overflow-wrap: break-word; padding-bottom: var(--space-6); }
 .fleet-account-windows > .muted { grid-column: 1 / -1; }
-.fleet-work-list > p { margin: 0; padding: var(--space-14); }
+.fleet-work-list > p, .fleet-remote-list > p { margin: 0; padding: var(--space-14); }
+.fleet-section-summary { margin-left: auto; font: 400 var(--text-sm) var(--font-sans); white-space: nowrap; }
+.fleet-remote-card { display: grid; gap: var(--space-12); min-width: 0; }
+.fleet-remote-card > p { margin: 0; font: 400 var(--text-sm)/1.5 var(--font-sans); overflow-wrap: anywhere; }
+.fleet-remote-warning { color: var(--warn-fg); }
+.fleet-remote-list { overflow: clip; }
+.fleet-remote-row { display: grid; grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr) auto minmax(88px, auto); align-items: center; gap: var(--space-8) var(--space-16); padding: var(--space-14); font: 400 var(--text-sm)/1.5 var(--font-sans); min-width: 0; }
+.fleet-remote-row.fleet-remote-refusal { grid-template-columns: minmax(0, 1fr) auto minmax(88px, auto); }
+.fleet-remote-row + .fleet-remote-row { border-top: 1px solid var(--hair); }
+.fleet-remote-row > * { min-width: 0; overflow-wrap: anywhere; }
 .fleet-dialog { padding: 0; width: 520px; }
 .fleet-dialog-body pre, .fleet-dialog-body p { white-space: pre-wrap; overflow-wrap: anywhere; font-size: var(--text-sm); }
 .fleet-dialog-body details { font-size: var(--text-sm); }
@@ -73,6 +82,12 @@
   .fleet-work-row > .fleet-state { grid-column: 2; grid-row: 1; }
   .fleet-account { grid-template-columns: minmax(0, 1fr) auto; gap: var(--space-12); }
   .fleet-account-windows { grid-column: 1 / -1; grid-row: 2; }
+  .fleet-remote-row { grid-template-columns: minmax(0, 1fr) auto; gap: var(--space-4) var(--space-12); }
+  .fleet-remote-row > :nth-child(2) { grid-column: 1; grid-row: 2; color: var(--fg-mute); }
+  .fleet-remote-row > :nth-child(3) { grid-column: 2; grid-row: 1; }
+  .fleet-remote-row > :nth-child(4) { grid-column: 2; grid-row: 2; text-align: right; }
+  .fleet-remote-row.fleet-remote-refusal > :nth-child(2) { grid-column: 2; grid-row: 1; color: var(--fg); }
+  .fleet-remote-row.fleet-remote-refusal > :nth-child(3) { grid-column: 2; grid-row: 2; text-align: right; }
 }
 
 /* The serving registry remains reachable when the selected remote is down. */

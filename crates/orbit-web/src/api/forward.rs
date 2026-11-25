@@ -422,8 +422,10 @@ async fn answer_locally(
     // would extend, not replace, those params, so an inner `Path<_>` would
     // see the outer host/rest alongside its own capture. Rebuild with a
     // clean extension set; method, headers, query and body stay untouched
-    // and the inner router's origin guard still runs.
+    // and the inner router's origin guard still runs. The outer gate already
+    // recorded this request for Remote access, so the inner one does not.
     parts.extensions = Default::default();
+    parts.extensions.insert(crate::state::AlreadyRecorded);
     match format!("/{raw_rest}{query}").parse() {
         Ok(uri) => parts.uri = uri,
         Err(error) => {

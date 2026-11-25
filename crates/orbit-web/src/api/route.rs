@@ -23,10 +23,13 @@ pub(crate) fn request_shutdown() {
 }
 
 pub(crate) fn router(state: crate::state::DashboardState) -> Router<crate::state::DashboardState> {
-    let trusted_hosts = state.trusted_hosts();
+    let remote_access = state.remote_access();
     Router::new()
         .merge(leases::lease_router(leases::RuntimeLeaseBackend { state }).with_state(()))
         .route("/host/resources", get(host::resources))
+        // Observe › Fleet › Remote access: trusted hosts, the Tailscale Serve
+        // check, and what came through them since start. Read-only.
+        .route("/remote-access", get(remote_access::remote_access))
         .route("/dashboard/chrome", get(dashboard_chrome::dashboard_chrome))
         // Settings › Hosts [ORB-14451]: the serving host's host file, through
         // the same operations as `orbit host`.
@@ -374,7 +377,7 @@ pub(crate) fn router(state: crate::state::DashboardState) -> Router<crate::state
         )
         .layer(middleware::map_response(json_client_error))
         .layer(middleware::from_fn_with_state(
-            trusted_hosts,
+            remote_access,
             require_localhost_origin,
         ))
         // Outer so Host/Origin 403s and handler JSON both carry nosniff.
