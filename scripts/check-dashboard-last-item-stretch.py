@@ -146,11 +146,25 @@ def direct_child(selector, stack):
     if match is None:
         return False
     tail = selector[match.end():]
-    child_match = re.match(r"\s*>\s*([^\s>+~]+)", tail)
-    if child_match is None:
+    prefix = re.match(r"\s*>\s*", tail)
+    if prefix is None:
         return False
-    compound = child_match.group(1)
-    rest = tail[child_match.end():]
+    pos = prefix.end()
+    depth = 0
+    end = pos
+    while end < len(tail):
+        char = tail[end]
+        if char in "([":
+            depth += 1
+        elif char in ")]":
+            depth = max(0, depth - 1)
+        elif depth == 0 and (char.isspace() or char in ">+~"):
+            break
+        end += 1
+    compound = tail[pos:end].strip()
+    if not compound:
+        return False
+    rest = tail[end:]
     if rest.strip() == "":
         return compound_matches_item(compound, stack)
     # The selector continues past the direct child. Only a pure sibling
@@ -158,8 +172,14 @@ def direct_child(selector, stack):
     # a descendant (space) or nested child (>) styles something inside the
     # item instead.
     stripped = rest.strip()
-    if ">" in stripped:
-        return False
+    nested_depth = 0
+    for char in stripped:
+        if char in "([":
+            nested_depth += 1
+        elif char in ")]":
+            nested_depth = max(0, nested_depth - 1)
+        elif nested_depth == 0 and char == ">":
+            return False
     if not stripped.startswith(("+", "~")):
         return False
     parts = []

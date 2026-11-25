@@ -110,6 +110,41 @@ class DashboardLastItemStretchTests(unittest.TestCase):
         finally:
             self.task_detail.write_text(original, encoding="utf-8")
 
+    def test_rejects_n_plus_k_child_on_star_stack(self):
+        n_plus_k_rules = (
+            ".history-kv-list > :nth-last-child(n+1) { flex: 1; }\n",
+            ".history-kv-list > :nth-last-child(n + 1) { flex-grow: 1; }\n",
+        )
+        for rule in n_plus_k_rules:
+            with self.subTest(rule=rule):
+                original = self.task_detail.read_text(encoding="utf-8")
+                self.task_detail.write_text(original + rule, encoding="utf-8")
+                result = self.run_guard()
+                self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+                self.assertIn("lets a stacked item", result.stderr)
+                self.task_detail.write_text(original, encoding="utf-8")
+
+    def test_keeps_sibling_chain_for_stack_items(self):
+        original = self.task_detail.read_text(encoding="utf-8")
+        self.task_detail.write_text(
+            original + ".comments-panel .comment-thread > .comment-card + .comment-card:last-child { flex: 1; }\n",
+            encoding="utf-8",
+        )
+        try:
+            result = self.run_guard()
+            self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+            self.assertIn("lets a stacked item", result.stderr)
+        finally:
+            self.task_detail.write_text(original, encoding="utf-8")
+
+        sibling_non_item = ".comments-panel .comment-thread > .comment-card + .comment-actions { flex: 1; }\n"
+        self.task_detail.write_text(original + sibling_non_item, encoding="utf-8")
+        try:
+            result = self.run_guard()
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        finally:
+            self.task_detail.write_text(original, encoding="utf-8")
+
     def test_rejects_shared_card_growth_and_grid_row_stretch(self):
         components = self.root / "crates/orbit-web/assets/dashboard/css/components.css"
         components.write_text(".card { flex-grow: 1; }\n", encoding="utf-8")
