@@ -38,7 +38,7 @@ impl GithubRunLogsTool {
             ],
         )?;
         let requests = RunLogRequests::from_input(input)?
-            .with_log_cache(super::super::log_cache::LogCache::in_data_root());
+            .with_log_cache(super::super::log_cache::LogCache::in_data_root(&ctx.env));
         Ok(match super::super::tool_workspace_dir(ctx) {
             Some(dir) => requests.in_directory(&dir),
             None => requests,
@@ -118,8 +118,13 @@ impl crate::Tool for GithubRunLogsTool {
                 as usize;
         let scope = requests.scope;
         let admission = super::super::quota_admission(ctx);
-        let read =
-            read_run_log_guarded(&requests, LogReadBounds::new(max_bytes), None, &admission)?;
+        let read = read_run_log_guarded(
+            &ctx.env,
+            &requests,
+            LogReadBounds::new(max_bytes),
+            None,
+            &admission,
+        )?;
         if let Some(refusal) = read.throttle_refusal() {
             return Err(refusal);
         }

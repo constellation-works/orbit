@@ -69,7 +69,11 @@ fn pushes_recover_from_transient_remote_failures() {
                     fixture.write("remote", &format!("{PUSH_HEAD}\trefs/heads/another\n"));
                     let mut input = fixture.input(operation, false);
                     input["forge_retry"] = fast_retry(3);
-                    let output = match run_private_operation(operation, &input) {
+                    let output = match run_private_operation(
+                        &orbit_common::Env::capture(),
+                        operation,
+                        &input,
+                    ) {
                         Ok(output) => output,
                         Err(error) => {
                             failures.push(format!("{operation}: {message}: {error}"));
@@ -119,8 +123,9 @@ error: failed to push some refs to 'https://github.com/example/orbit.git'\n";
                 fixture.reset(MISSING_OBJECTS, 1, false);
                 let mut input = fixture.input(operation, lease);
                 input["forge_retry"] = fast_retry(3);
-                let output = run_private_operation(operation, &input)
-                    .expect("a missing-objects refusal must be retried");
+                let output =
+                    run_private_operation(&orbit_common::Env::capture(), operation, &input)
+                        .expect("a missing-objects refusal must be retried");
                 assert_eq!(output["stdout"], "pushed\n", "{operation} lease={lease}");
                 assert_eq!(
                     output["attempts"], 2,
@@ -150,8 +155,12 @@ error: failed to push some refs to 'https://github.com/example/orbit.git'\n";
                         "{message}\n! [remote rejected] branch -> branch (missing necessary objects)\n"
                     );
                     fixture.reset(&mixed, 9, false);
-                    let error = run_private_operation(operation, &fixture.input(operation, false))
-                        .expect_err("a permanent refusal beside missing objects stops immediately");
+                    let error = run_private_operation(
+                        &orbit_common::Env::capture(),
+                        operation,
+                        &fixture.input(operation, false),
+                    )
+                    .expect_err("a permanent refusal beside missing objects stops immediately");
                     assert!(error.to_string().contains(message), "{operation}: {error}");
                     assert_eq!(fixture.calls(), ["push"], "{operation}: {message}");
                     assert_eq!(fixture.push_count(), 1, "{operation}: {message}");
@@ -205,8 +214,12 @@ fn pushes_do_not_retry_permanent_refusals_even_with_transport_diagnostics() {
                         &mixed
                     };
                     fixture.reset(failure, 9, false);
-                    let error = run_private_operation(operation, &fixture.input(operation, true))
-                        .expect_err("permanent refusals must fail immediately");
+                    let error = run_private_operation(
+                        &orbit_common::Env::capture(),
+                        operation,
+                        &fixture.input(operation, true),
+                    )
+                    .expect_err("permanent refusals must fail immediately");
                     assert!(error.to_string().contains(message), "{operation}: {error}");
                     assert_eq!(fixture.calls(), ["push"], "{operation}: {message}");
                     assert_eq!(fixture.push_count(), 1);
@@ -235,10 +248,12 @@ fn pushes_confirm_lost_replies_without_reusing_a_consumed_lease() {
                     .chain(GITHUB_COMMIT_REFS_FAILURES)
                 {
                     fixture.reset(message, 1, true);
-                    let output = run_private_operation(operation, &fixture.input(operation, lease))
-                        .expect(
-                            "the exact remote head proves the failed reply hid a successful push",
-                        );
+                    let output = run_private_operation(
+                        &orbit_common::Env::capture(),
+                        operation,
+                        &fixture.input(operation, lease),
+                    )
+                    .expect("the exact remote head proves the failed reply hid a successful push");
                     assert!(output["stdout"].as_str().unwrap().starts_with(PUSH_HEAD));
                     assert_eq!(fixture.calls(), ["push", "ls-remote", "ls-remote"]);
                     assert_eq!(fixture.push_count(), 1, "{operation}: lease={lease}");
@@ -264,7 +279,7 @@ fn a_push_outlasts_a_forge_outage_that_fits_its_backoff_budget() {
                 fixture.reset(GITHUB_INTERNAL_SERVER_ERROR, refusals, false);
                 let mut input = fixture.input("push", false);
                 input["forge_retry"] = fast_retry(6);
-                let output = run_private_operation("push", &input)
+                let output = run_private_operation(&orbit_common::Env::capture(), "push", &input)
                     .expect("an outage inside the budget must not fail the push");
                 assert_eq!(output["stdout"], "pushed\n");
                 assert_eq!(output["attempts"], refusals as u64 + 1);
@@ -300,8 +315,9 @@ fn pushes_bound_retries_and_stop_when_remote_confirmation_fails() {
                     fixture.reset(message, 9, false);
                     let mut input = fixture.input(operation, true);
                     input["forge_retry"] = fast_retry(3);
-                    let error = run_private_operation(operation, &input)
-                        .expect_err("repeated transient failures must exhaust the push budget");
+                    let error =
+                        run_private_operation(&orbit_common::Env::capture(), operation, &input)
+                            .expect_err("repeated transient failures must exhaust the push budget");
                     assert!(
                         error.to_string().contains(message.trim()),
                         "{operation}: {error}"
@@ -364,8 +380,12 @@ fn pushes_bound_retries_and_stop_when_remote_confirmation_fails() {
 
                 fixture.reset("fatal: early EOF", 1, false);
                 fixture.write("lookup-failure", "fatal: unable to read remote ref");
-                let error = run_private_operation(operation, &fixture.input(operation, false))
-                    .expect_err("a failed remote read must not trigger another mutation");
+                let error = run_private_operation(
+                    &orbit_common::Env::capture(),
+                    operation,
+                    &fixture.input(operation, false),
+                )
+                .expect_err("a failed remote read must not trigger another mutation");
                 assert_eq!(error.forge_push_hold(), None, "{error}");
                 assert_eq!(ForgeUnavailableHold::from_text(&error.to_string()), None);
                 assert!(error.to_string().contains("unable to read remote ref"));

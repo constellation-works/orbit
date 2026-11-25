@@ -177,8 +177,9 @@ impl OrbitRuntime {
         }
         let repo_root = &self.paths().repo_root;
         let commit = &hold.candidate.commit;
-        let reachable = orbit_engine::review_gate::fetch_landed_commit(repo_root, commit)
-            .and_then(|()| orbit_engine::review_gate::revision(repo_root, commit));
+        let reachable =
+            orbit_engine::review_gate::fetch_landed_commit(self.env(), repo_root, commit)
+                .and_then(|()| orbit_engine::review_gate::revision(self.env(), repo_root, commit));
         match reachable {
             Ok(revision) if revision == hold.candidate => {}
             Ok(revision) => {

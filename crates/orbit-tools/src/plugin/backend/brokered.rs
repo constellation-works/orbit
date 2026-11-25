@@ -69,13 +69,14 @@ impl PluginBackendSpec {
     /// widens it.
     pub fn brokered_sandbox_profile(
         &self,
+        process_env: &orbit_common::Env,
         caller: &BrokeredCaller,
     ) -> Result<PluginSandboxProfile, OrbitError> {
         let mut ctx = ToolContext::default();
         caller.restrict(&mut ctx);
         self.enforce_programs(&ctx, &self.provenance.name)?;
 
-        let mut profile = self.sandbox_profile(Some(&caller.worktree))?;
+        let mut profile = self.sandbox_profile(process_env, Some(&caller.worktree))?;
         if profile.unsandboxed {
             return Err(OrbitError::PolicyDenied(format!(
                 "plugin '{}' runs unsandboxed (`backend.sandbox: none`), so the host cannot hold \
@@ -89,7 +90,7 @@ impl PluginBackendSpec {
         let state_dir = physical_with_missing_tail(&profile.state_dir);
         let own_state = |path: &Path| physical_with_missing_tail(path).starts_with(&state_dir);
 
-        let credentials = orbit_exec::default_credential_read_denies(&orbit_common::Env::capture());
+        let credentials = orbit_exec::default_credential_read_denies(process_env);
         profile.read.retain(|root| {
             if own_state(root) {
                 return true;

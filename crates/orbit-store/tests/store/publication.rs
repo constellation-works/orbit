@@ -52,8 +52,10 @@ fn inspect_and_restore_refuse_credentials_before_git_or_cache_writes() {
     {
         let cache = root.join(format!("refused-{case}"));
         let request = request(remote, &cache);
-        let inspect_error = inspect_publication(request.clone()).unwrap_err();
+        let inspect_error =
+            inspect_publication(&orbit_common::Env::capture(), request.clone()).unwrap_err();
         let restore_error = restore_publication(
+            &orbit_common::Env::capture(),
             &registry,
             PublicationRestoreRequest {
                 task_workspace_id: "ws_consumer".into(),
@@ -94,9 +96,12 @@ fn inspect_and_restore_refuse_credentials_before_git_or_cache_writes() {
     .into_iter()
     .enumerate()
     {
-        let error = inspect_publication(request(remote, &root.join(format!("allowed-{case}"))))
-            .unwrap_err()
-            .to_string();
+        let error = inspect_publication(
+            &orbit_common::Env::capture(),
+            request(remote, &root.join(format!("allowed-{case}"))),
+        )
+        .unwrap_err()
+        .to_string();
         assert!(marker.is_file(), "credential-free remote must reach Git");
         assert!(error.contains("transport diagnostics withheld"), "{error}");
     }

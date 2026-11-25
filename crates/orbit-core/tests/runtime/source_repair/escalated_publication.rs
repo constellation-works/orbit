@@ -177,7 +177,7 @@ fn escalated_publication_requeue_refuses_unreadable_required_flags() {
     f.runtime = f
         .runtime
         .clone()
-        .with_task_pr_forge(Arc::new(GhTaskPrForge));
+        .with_task_pr_forge(Arc::new(GhTaskPrForge::new(&orbit_common::Env::capture())));
     let answer = json!({"data":{"repository":{"pullRequest":{
         "number":17, "state":"OPEN", "headRefName":f.branch, "headRefOid":f.head,
         "baseRefName":"main", "baseRef":{"branchProtectionRule":null},
@@ -207,7 +207,9 @@ fn escalated_publication_requeue_refuses_unreadable_required_flags() {
             }
             std::fs::write(&rollup, malformed.to_string()).unwrap();
             assert!(
-                GhTaskPrForge.pull_request_blockers(&f.repo, 17).is_err(),
+                GhTaskPrForge::new(&orbit_common::Env::capture())
+                    .pull_request_blockers(&f.repo, 17)
+                    .is_err(),
                 "{case}: unreadable rollup was classified as readable"
             );
             let error = refused(&f, false, &case);
@@ -229,7 +231,7 @@ fn escalated_publication_requeue_refuses_unreadable_required_flags() {
             check["conclusion"] = json!("SUCCESS");
         }
         std::fs::write(&rollup, valid.to_string()).unwrap();
-        let blockers = GhTaskPrForge
+        let blockers = GhTaskPrForge::new(&orbit_common::Env::capture())
             .pull_request_blockers(&f.repo, 17)
             .unwrap()
             .unwrap();
@@ -727,7 +729,7 @@ fn repository_with_no_required_checks_allows_requeue_and_distinguishes_absent_ch
     f.runtime = f
         .runtime
         .clone()
-        .with_task_pr_forge(Arc::new(GhTaskPrForge));
+        .with_task_pr_forge(Arc::new(GhTaskPrForge::new(&orbit_common::Env::capture())));
 
     let rollup_graphql = |rule: Value, nodes: Value| {
         json!({"data":{"repository":{"pullRequest":{
@@ -753,7 +755,7 @@ fn repository_with_no_required_checks_allows_requeue_and_distinguishes_absent_ch
     .unwrap();
     std::fs::write(&rules, "[]").unwrap();
     assert_eq!(
-        GhTaskPrForge
+        GhTaskPrForge::new(&orbit_common::Env::capture())
             .pull_request_blockers(&f.repo, 17)
             .unwrap()
             .unwrap()
@@ -771,7 +773,7 @@ fn repository_with_no_required_checks_allows_requeue_and_distinguishes_absent_ch
     )
     .unwrap();
     assert_eq!(
-        GhTaskPrForge
+        GhTaskPrForge::new(&orbit_common::Env::capture())
             .pull_request_blockers(&f.repo, 17)
             .unwrap()
             .unwrap()
@@ -783,7 +785,7 @@ fn repository_with_no_required_checks_allows_requeue_and_distinguishes_absent_ch
 
     // Neither classic branch protection nor rulesets require checks -> allowed.
     std::fs::write(&rules, "[]").unwrap();
-    let blockers = GhTaskPrForge
+    let blockers = GhTaskPrForge::new(&orbit_common::Env::capture())
         .pull_request_blockers(&f.repo, 17)
         .unwrap()
         .unwrap();
@@ -812,7 +814,7 @@ fn partially_reported_required_checks_refuse_requeue_until_every_check_passes() 
     f.runtime = f
         .runtime
         .clone()
-        .with_task_pr_forge(Arc::new(GhTaskPrForge));
+        .with_task_pr_forge(Arc::new(GhTaskPrForge::new(&orbit_common::Env::capture())));
     let node = |name: &str| {
         json!({"__typename":"CheckRun", "name":name, "status":"COMPLETED",
             "conclusion":"SUCCESS", "isRequired":true})
@@ -836,7 +838,7 @@ fn partially_reported_required_checks_refuse_requeue_until_every_check_passes() 
     let classic = json!({"requiredStatusChecks":[{"context":"Build"},{"context":"Test"}]});
     std::fs::write(&rules, "[]").unwrap();
     std::fs::write(&graphql, graphql_with(classic.clone(), vec![node("Build")])).unwrap();
-    let blockers = GhTaskPrForge
+    let blockers = GhTaskPrForge::new(&orbit_common::Env::capture())
         .pull_request_blockers(&f.repo, 17)
         .unwrap()
         .unwrap();
@@ -860,7 +862,7 @@ fn partially_reported_required_checks_refuse_requeue_until_every_check_passes() 
         graphql_with(classic, vec![node("Build"), node("Test")]),
     )
     .unwrap();
-    let blockers = GhTaskPrForge
+    let blockers = GhTaskPrForge::new(&orbit_common::Env::capture())
         .pull_request_blockers(&f.repo, 17)
         .unwrap()
         .unwrap();
@@ -908,7 +910,7 @@ fn layered_classic_and_ruleset_checks_refuse_requeue_until_every_check_passes() 
     f.runtime = f
         .runtime
         .clone()
-        .with_task_pr_forge(Arc::new(GhTaskPrForge));
+        .with_task_pr_forge(Arc::new(GhTaskPrForge::new(&orbit_common::Env::capture())));
     let node = |name: &str| {
         json!({"__typename":"CheckRun", "name":name, "status":"COMPLETED",
             "conclusion":"SUCCESS", "isRequired":true})
@@ -930,7 +932,7 @@ fn layered_classic_and_ruleset_checks_refuse_requeue_until_every_check_passes() 
     // A failed ruleset read must not let the passing classic check stand
     // for the complete policy. The missing rules file makes the gh stub fail.
     std::fs::write(&graphql, graphql_with(vec![node("Build")])).unwrap();
-    let blockers = GhTaskPrForge
+    let blockers = GhTaskPrForge::new(&orbit_common::Env::capture())
         .pull_request_blockers(&f.repo, 17)
         .unwrap()
         .unwrap();
@@ -950,7 +952,7 @@ fn layered_classic_and_ruleset_checks_refuse_requeue_until_every_check_passes() 
     // The recorded head reports only classic Build; the layered ruleset Test
     // remains unreported and blocks requeue without preserving the candidate.
     std::fs::write(&graphql, graphql_with(vec![node("Build")])).unwrap();
-    let blockers = GhTaskPrForge
+    let blockers = GhTaskPrForge::new(&orbit_common::Env::capture())
         .pull_request_blockers(&f.repo, 17)
         .unwrap()
         .unwrap();
@@ -973,7 +975,7 @@ fn layered_classic_and_ruleset_checks_refuse_requeue_until_every_check_passes() 
 
     // The same head is eligible once both policy sources' checks pass.
     std::fs::write(&graphql, graphql_with(vec![node("Build"), node("Test")])).unwrap();
-    let blockers = GhTaskPrForge
+    let blockers = GhTaskPrForge::new(&orbit_common::Env::capture())
         .pull_request_blockers(&f.repo, 17)
         .unwrap()
         .unwrap();

@@ -109,7 +109,7 @@ pub(in crate::activity_job::job_executor) fn commit_recovery_repair_after_commit
             == Some(true),
         reviewed_heads: &reviewed_heads,
     };
-    match commit_recovery_repair(&request) {
+    match commit_recovery_repair(&ctx.host.process_env(), &request) {
         Ok(RecoveryCommit::Clean) => Ok(()),
         Ok(RecoveryCommit::Committed { commit_sha, paths }) => {
             tracing::info!(
@@ -142,19 +142,25 @@ pub(in crate::activity_job::job_executor) fn commit_recovery_repair_after_commit
 
 /// Whether `root` is inside a rebase stopped on unmerged entries, with HEAD
 /// detached as Git leaves it.
-fn stopped_rebase(root: &std::path::Path) -> Result<bool, orbit_common::OrbitError> {
-    if git_command_success(root, &["symbolic-ref", "--quiet", "HEAD"])? {
+fn stopped_rebase(
+    process_env: &orbit_common::Env,
+    root: &std::path::Path,
+) -> Result<bool, orbit_common::OrbitError> {
+    if git_command_success(process_env, root, &["symbolic-ref", "--quiet", "HEAD"])? {
         return Ok(false);
     }
     let mut in_progress = false;
     for backend in ["rebase-merge", "rebase-apply"] {
-        let path =
-            std::path::PathBuf::from(git_output(root, &["rev-parse", "--git-path", backend])?);
+        let path = std::path::PathBuf::from(git_output(
+            process_env,
+            root,
+            &["rev-parse", "--git-path", backend],
+        )?);
         if root.join(path).is_dir() {
             in_progress = true;
         }
     }
-    Ok(in_progress && !git_output(root, &["ls-files", "--unmerged"])?.is_empty())
+    Ok(in_progress && !git_output(process_env, root, &["ls-files", "--unmerged"])?.is_empty())
 }
 
 fn deterministic_action(step: &JobV2Step) -> Option<&str> {
@@ -193,7 +199,7 @@ pub(in crate::activity_job::job_executor) fn commit_final_recovery_repair(
     let refused = |detail: &str| RecoveryCommitRefusal::Uncommittable(detail.into());
     let root = std::path::Path::new(&worktree.workspace_path);
     let output = |args: &[&str]| {
-        git_output(root, args)
+        git_output(&ctx.host.process_env(), root, args)
             .map_err(|error| RecoveryCommitRefusal::Uncommittable(error.to_string()))
     };
     if output(&["status", "--porcelain"])?.is_empty() {
@@ -204,7 +210,7 @@ pub(in crate::activity_job::job_executor) fn commit_final_recovery_repair(
     // stop, and conflict recovery's authenticated host continuation adopts
     // the repaired files and continues it [F2026-11-277]. Every other
     // detached or moved checkout still needs its symbolic branch below.
-    if stopped_rebase(root).map_err(|error| refused(&error.to_string()))? {
+    if stopped_rebase(&ctx.host.process_env(), root).map_err(|error| refused(&error.to_string()))? {
         return Ok(());
     }
     let (root_before, head_before, branch_before) = source_before
@@ -227,7 +233,9 @@ pub(in crate::activity_job::job_executor) fn commit_final_recovery_repair(
         .base_sha
         .as_deref()
         .ok_or_else(|| refused("final recovery has no pinned base for its file repair"))?;
-    if !is_ancestor(root, base, head_before).map_err(|error| refused(&error.to_string()))? {
+    if !is_ancestor(&ctx.host.process_env(), root, base, head_before)
+        .map_err(|error| refused(&error.to_string()))?
+    {
         return Err(refused(
             "final recovery candidate does not descend from its pinned base",
         ));

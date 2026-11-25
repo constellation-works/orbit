@@ -40,7 +40,7 @@ pub(crate) fn quota_admission(
     ctx: &ToolContext,
 ) -> impl Fn(&ExecRequest) -> Result<ExecRequest, OrbitError> {
     let caller = quota_caller(ctx);
-    move |request| crate::github_quota::admit_gh_request_within_budget(caller, request)
+    move |request| crate::github_quota::admit_gh_request_within_budget(&ctx.env, caller, request)
 }
 
 pub(super) fn gh_schema(name: &str, description: &str, parameters: Vec<ToolParam>) -> ToolSchema {
@@ -90,7 +90,7 @@ macro_rules! gh_tool {
             ) -> Result<serde_json::Value, orbit_common::OrbitError> {
                 let req = self.exec_request(ctx, &input)?;
                 let exec_result = crate::github_quota::run_gh_request(
-                    crate::builtin::github::quota_caller(ctx),
+                    &ctx.env, crate::builtin::github::quota_caller(ctx),
                     &req,
                 )?;
                 let $response_ctx = ctx;

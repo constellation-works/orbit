@@ -77,7 +77,12 @@ impl Fixture {
     }
 
     fn publish(&self) -> Result<PublicationPublishOutcome, OrbitError> {
-        publish_task_snapshot(&self.registry, self.request(), &policy())
+        publish_task_snapshot(
+            &orbit_common::Env::capture(),
+            &self.registry,
+            self.request(),
+            &policy(),
+        )
     }
 
     fn request(&self) -> PublicationPublishRequest {
@@ -152,6 +157,7 @@ fn concurrent_losing_push_preserves_landed_evidence_across_failed_saves() {
         let (winner, losing_commit) = std::thread::scope(|scope| {
             let winner = scope.spawn(move || {
                 let outcome = publish_task_snapshot_inner(
+                    &orbit_common::Env::capture(),
                     &registry,
                     winner_request,
                     &policy(),
@@ -181,7 +187,7 @@ fn concurrent_losing_push_preserves_landed_evidence_across_failed_saves() {
             losing_request.published_at += chrono::Duration::seconds(1);
             let losing_commit = RefCell::new(String::new());
             let error = publish_task_snapshot_inner(
-                &fixture.registry, losing_request, &policy(),
+                &orbit_common::Env::capture(), &fixture.registry, losing_request, &policy(),
                 Some(&|stage, commit| {
                     if stage == PendingWriteStage::Before {
                         assert_ne!(commit, landed_commit, "attempts must stage distinct commits from the same parent");
@@ -231,6 +237,7 @@ fn concurrent_losing_push_preserves_landed_evidence_across_failed_saves() {
         // Model repeated interrupted/failed saves by keeping last_success stale.
         for _ in 0..3 {
             let retry = publish_task_snapshot_inner(
+                &orbit_common::Env::capture(),
                 &fixture.registry,
                 request.clone(),
                 &policy(),
@@ -251,8 +258,13 @@ fn concurrent_losing_push_preserves_landed_evidence_across_failed_saves() {
         for last in [request.last_success.clone(), None] {
             let mut foreign_request = request.clone();
             foreign_request.last_success = last;
-            let error = publish_task_snapshot(&fixture.registry, foreign_request, &policy())
-                .expect_err("unrelated remote history remains an authority conflict");
+            let error = publish_task_snapshot(
+                &orbit_common::Env::capture(),
+                &fixture.registry,
+                foreign_request,
+                &policy(),
+            )
+            .expect_err("unrelated remote history remains an authority conflict");
             assert!(
                 error
                     .to_string()

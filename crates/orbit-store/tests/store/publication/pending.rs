@@ -80,7 +80,12 @@ impl Fixture {
     }
 
     fn publish(&self) -> Result<PublicationPublishOutcome, OrbitError> {
-        publish_task_snapshot(&self.registry, self.request(), &policy())
+        publish_task_snapshot(
+            &orbit_common::Env::capture(),
+            &self.registry,
+            self.request(),
+            &policy(),
+        )
     }
 
     fn request(&self) -> PublicationPublishRequest {
@@ -270,8 +275,13 @@ fn legacy_landed_evidence_survives_failed_saves_until_acknowledged() {
     fixture.add_task();
     let mut request = fixture.request();
     request.last_success = Some(last_success(&landed));
-    let advanced = publish_task_snapshot(&fixture.registry, request.clone(), &policy())
-        .expect("advance acknowledged push");
+    let advanced = publish_task_snapshot(
+        &orbit_common::Env::capture(),
+        &fixture.registry,
+        request.clone(),
+        &policy(),
+    )
+    .expect("advance acknowledged push");
     assert!(
         !legacy.exists(),
         "durably acknowledged legacy evidence is pruned"
@@ -280,13 +290,23 @@ fn legacy_landed_evidence_survives_failed_saves_until_acknowledged() {
         fixture.pending_path(&advanced.commit_id).is_file(),
         "newer unacknowledged evidence survives cleanup"
     );
-    let retry = publish_task_snapshot(&fixture.registry, request.clone(), &policy())
-        .expect("recover newer failed save");
+    let retry = publish_task_snapshot(
+        &orbit_common::Env::capture(),
+        &fixture.registry,
+        request.clone(),
+        &policy(),
+    )
+    .expect("recover newer failed save");
     assert_eq!(retry.status, PublicationPublishStatus::Reconciled);
     assert_eq!(retry.commit_id, advanced.commit_id);
     request.last_success = Some(last_success(&advanced));
-    let unchanged = publish_task_snapshot(&fixture.registry, request, &policy())
-        .expect("acknowledge newer push");
+    let unchanged = publish_task_snapshot(
+        &orbit_common::Env::capture(),
+        &fixture.registry,
+        request,
+        &policy(),
+    )
+    .expect("acknowledge newer push");
     assert_eq!(unchanged.status, PublicationPublishStatus::Unchanged);
     assert!(
         !fixture.pending_path(&advanced.commit_id).exists(),

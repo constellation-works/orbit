@@ -11,6 +11,7 @@ use super::super::input::{reject_option_like, required_string};
 use super::super::process::execute_with_transient_retry;
 
 pub(in crate::executor::automation::vcs::operations) fn add_labels(
+    process_env: &orbit_common::Env,
     input: &Value,
 ) -> Result<Value, OrbitError> {
     let workspace_path = Path::new(required_string(input, "workspace_path")?);
@@ -45,6 +46,7 @@ pub(in crate::executor::automation::vcs::operations) fn add_labels(
     for label in labels {
         let args = vec!["label".into(), "create".into(), label.clone()];
         match execute_with_transient_retry(
+            process_env,
             "gh",
             &args,
             Some(workspace_path),
@@ -82,6 +84,7 @@ pub(in crate::executor::automation::vcs::operations) fn add_labels(
             });
         }
         match execute_with_transient_retry(
+            process_env,
             "gh",
             &args,
             Some(workspace_path),

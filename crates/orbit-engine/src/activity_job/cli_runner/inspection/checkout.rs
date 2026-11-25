@@ -44,6 +44,7 @@ pub(in crate::activity_job::cli_runner) struct SourceInspection {
 
 impl SourceInspection {
     pub(in crate::activity_job::cli_runner) fn from_input(
+        process_env: &orbit_common::Env,
         input: &Value,
         source: Option<&Path>,
         fs_profile: Option<&str>,
@@ -53,12 +54,8 @@ impl SourceInspection {
         };
         if value.is_null() || value.as_str() == Some("") {
             if let Some(source) = source {
-                let output = run_git(
-                    &orbit_common::Env::capture(),
-                    source,
-                    &["rev-parse", "--is-inside-work-tree"],
-                )
-                .map_err(|error| retryable(error.to_string()))?;
+                let output = run_git(process_env, source, &["rev-parse", "--is-inside-work-tree"])
+                    .map_err(|error| retryable(error.to_string()))?;
                 if output.success && output.stdout.trim() == "true" {
                     return Err(permanent(
                         "a Git workspace requires a pinned inspection_revision",
@@ -86,24 +83,26 @@ impl SourceInspection {
             ));
         }
         let source = source.ok_or_else(|| permanent("source inspection requires a workspace"))?;
-        Self::create(source, revision, GIT_BULK_COPY_TIMEOUT).map(Some)
+        Self::create(process_env, source, revision, GIT_BULK_COPY_TIMEOUT).map(Some)
     }
 
     /// Lease a slot and materialize `revision` in it. `copy_deadline` bounds
     /// the full-ancestry fetch; a copy that overruns it fails the lease and
     /// drops the half-built checkout, leaving the slot free for the next lease.
     pub(in crate::activity_job::cli_runner) fn create(
+        process_env: &orbit_common::Env,
         source: &Path,
         revision: &str,
         copy_deadline: Duration,
     ) -> Result<Self, DispatchError> {
-        require_commit(source, revision)?;
+        require_commit(process_env, source, revision)?;
         let common = git(
+            process_env,
             source,
             &["rev-parse", "--path-format=absolute", "--git-common-dir"],
         )?;
         let common = common.trim();
-        let format = git(source, &["rev-parse", "--show-object-format"])?;
+        let format = git(process_env, source, &["rev-parse", "--show-object-format"])?;
         let pool = prepare_pool(Path::new(common))?;
         for index in 0..SLOT_COUNT {
             let slot = pool.join(index.to_string());
@@ -147,6 +146,7 @@ impl SourceInspection {
             };
             directory(&inspection.root).map_err(io_failure)?;
             git(
+                process_env,
                 &inspection.root,
                 &[
                     "init",
@@ -170,6 +170,7 @@ impl SourceInspection {
             // object database. The copy is bulk work, so it runs under its
             // own deadline rather than the local one.
             git_within(
+                process_env,
                 &inspection.root,
                 copy_deadline,
                 &[
@@ -183,11 +184,12 @@ impl SourceInspection {
                 ],
             )?;
             git_within(
+                process_env,
                 &inspection.root,
                 GIT_CHECKOUT_TIMEOUT,
                 &["checkout", "--quiet", "--detach", revision],
             )?;
-            inspection.verify()?;
+            inspection.verify(process_env)?;
             return Ok(inspection);
         }
         Err(retryable(
@@ -207,9 +209,13 @@ impl SourceInspection {
         bound
     }
 
-    pub(in crate::activity_job::cli_runner) fn verify(&self) -> Result<(), DispatchError> {
-        if git(&self.root, &["rev-parse", "HEAD"])?.trim() != self.revision
+    pub(in crate::activity_job::cli_runner) fn verify(
+        &self,
+        process_env: &orbit_common::Env,
+    ) -> Result<(), DispatchError> {
+        if git(process_env, &self.root, &["rev-parse", "HEAD"])?.trim() != self.revision
             || !git(
+                process_env,
                 &self.root,
                 &["status", "--porcelain=v1", "--untracked-files=all"],
             )?
@@ -242,7 +248,11 @@ impl Drop for SourceInspection {
 /// marker, a private `.git` directory and a detached HEAD whose commit exists
 /// in `common`; a repository planted anywhere else, or a foreign one in a
 /// slot, does not qualify.
-pub fn is_source_inspection_checkout(common: &Path, checkout: &Path) -> bool {
+pub fn is_source_inspection_checkout(
+    process_env: &orbit_common::Env,
+    common: &Path,
+    checkout: &Path,
+) -> bool {
     let Some(pool) = common
         .parent()
         .map(|repo_root| repo_root.join(".orbit/state").join(POOL_DIR))
@@ -285,6 +295,7 @@ pub fn is_source_inspection_checkout(common: &Path, checkout: &Path) -> bool {
     }
     let git_dir_arg = format!("--git-dir={}", common.display());
     git(
+        process_env,
         common,
         &[
             &git_dir_arg,
@@ -364,14 +375,23 @@ fn reject_symlink(path: &Path) -> io::Result<()> {
     }
 }
 
-fn git(root: &Path, args: &[&str]) -> Result<String, DispatchError> {
-    git_within(root, GIT_LOCAL_TIMEOUT, args)
+fn git(
+    process_env: &orbit_common::Env,
+    root: &Path,
+    args: &[&str],
+) -> Result<String, DispatchError> {
+    git_within(process_env, root, GIT_LOCAL_TIMEOUT, args)
 }
 
 /// [`git`] under an explicit `deadline`, for a command that copies or
 /// materializes a whole checkout.
-fn git_within(root: &Path, deadline: Duration, args: &[&str]) -> Result<String, DispatchError> {
-    let output = git_output(root, deadline, args)?;
+fn git_within(
+    process_env: &orbit_common::Env,
+    root: &Path,
+    deadline: Duration,
+    args: &[&str],
+) -> Result<String, DispatchError> {
+    let output = git_output(process_env, root, deadline, args)?;
     if !output.success {
         return Err(retryable(format!(
             "git {}: {}",
@@ -385,9 +405,14 @@ fn git_within(root: &Path, deadline: Duration, args: &[&str]) -> Result<String, 
 /// Confirm `revision` names a commit. A name that does not resolve is
 /// permanent. Opening the repository or reading its objects can fail
 /// transiently, and those errors stay retryable.
-fn require_commit(source: &Path, revision: &str) -> Result<(), DispatchError> {
+fn require_commit(
+    process_env: &orbit_common::Env,
+    source: &Path,
+    revision: &str,
+) -> Result<(), DispatchError> {
     let spec = format!("{revision}^{{commit}}");
     let output = git_output(
+        process_env,
         source,
         GIT_LOCAL_TIMEOUT,
         &["rev-parse", "--verify", "-q", &spec],
@@ -435,6 +460,7 @@ fn missing_commit(output: &GitCommandOutput) -> bool {
 }
 
 fn git_output(
+    process_env: &orbit_common::Env,
     root: &Path,
     deadline: Duration,
     args: &[&str],
@@ -448,8 +474,7 @@ fn git_output(
         "gc.auto=0",
     ];
     argv.extend_from_slice(args);
-    run_git_within(&orbit_common::Env::capture(), root, &argv, deadline)
-        .map_err(|error| retryable(error.to_string()))
+    run_git_within(process_env, root, &argv, deadline).map_err(|error| retryable(error.to_string()))
 }
 
 fn permanent(message: impl std::fmt::Display) -> DispatchError {

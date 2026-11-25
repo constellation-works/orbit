@@ -21,7 +21,7 @@ pub(super) fn collect_dependabot_alerts<H: RuntimeHost + ?Sized>(
     host: &H,
     input: &Value,
 ) -> Result<Value, OrbitError> {
-    let queries = query::HostDependabotQueries::new(&query_root(host, input)?);
+    let queries = query::HostDependabotQueries::new(host.process_env(), &query_root(host, input)?);
     let snapshot = collect::collect(&queries, input)?;
     Ok(serde_json::json!({
         "phase": "collect_dependabot_alerts",

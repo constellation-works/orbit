@@ -75,6 +75,7 @@ impl Deadline {
     /// read killed at the per-read cap while budget remains keeps its error.
     pub(super) fn execute(
         self,
+        process_env: &orbit_common::Env,
         program: &str,
         args: Vec<String>,
         workspace: &Path,
@@ -82,6 +83,7 @@ impl Deadline {
     ) -> Result<orbit_exec::ExecutionResult, OrbitError> {
         let timeout = self.remaining()?;
         let result = process::run_vcs_process_within(
+            process_env,
             program,
             args,
             Some(workspace),

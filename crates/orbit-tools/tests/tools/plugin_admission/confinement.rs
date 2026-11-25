@@ -14,7 +14,9 @@ fn call_time_fs_write_refuses_protected_global_paths_but_allows_plugin_state() {
     let mut covering_spec = (*spec(root.join("bin"), &root, covering, &[PluginGrant::Fs])).clone();
     covering_spec.global_root.clone_from(&global_root);
     covering_spec.state_dir.clone_from(&state_dir);
-    let error = covering_spec.sandbox_profile(None).unwrap_err();
+    let error = covering_spec
+        .sandbox_profile(&orbit_common::Env::capture(), None)
+        .unwrap_err();
     // The sandbox boundary refusing a covering write is a policy refusal —
     // it must reach a caller as `PolicyDenied`, not `InvalidInput`, so an
     // agent can tell "your call was refused by policy" from "you sent
@@ -47,7 +49,10 @@ fn call_time_fs_write_refuses_protected_global_paths_but_allows_plugin_state() {
             (*spec(root.join("bin"), &root, permissions, &[PluginGrant::Fs])).clone();
         protected.global_root.clone_from(&global_root);
         protected.state_dir.clone_from(&state_dir);
-        let error = protected.sandbox_profile(None).unwrap_err().to_string();
+        let error = protected
+            .sandbox_profile(&orbit_common::Env::capture(), None)
+            .unwrap_err()
+            .to_string();
         assert!(
             error.contains("spec.permissions.fs.write[0]")
                 && error.contains("protected path beneath Orbit global root"),
@@ -67,7 +72,7 @@ fn call_time_fs_write_refuses_protected_global_paths_but_allows_plugin_state() {
     deferred.global_root.clone_from(&global_root);
     deferred.state_dir.clone_from(&state_dir);
     let error = deferred
-        .sandbox_profile(Some(&global_root))
+        .sandbox_profile(&orbit_common::Env::capture(), Some(&global_root))
         .expect_err("a deferred workspace path into the global root must be refused")
         .to_string();
     assert!(
@@ -86,7 +91,7 @@ fn call_time_fs_write_refuses_protected_global_paths_but_allows_plugin_state() {
     allowed.global_root = global_root;
     allowed.state_dir.clone_from(&state_dir);
     let profile = allowed
-        .sandbox_profile(None)
+        .sandbox_profile(&orbit_common::Env::capture(), None)
         .expect("the current plugin_state tree remains writable");
     assert_eq!(profile.write, vec![state_dir]);
 }
@@ -118,7 +123,7 @@ fn a_call_time_write_tail_below_a_state_symlink_is_refused_before_creation() {
     aliased.state_dir.clone_from(&state_dir);
 
     let error = aliased
-        .sandbox_profile(None)
+        .sandbox_profile(&orbit_common::Env::capture(), None)
         .expect_err("an alias into the install namespace must be refused")
         .to_string();
     assert!(
@@ -144,7 +149,7 @@ fn a_call_time_write_tail_below_a_state_symlink_is_refused_before_creation() {
     allowed.global_root.clone_from(&global_root);
     allowed.state_dir.clone_from(&state_dir);
     let profile = allowed
-        .sandbox_profile(None)
+        .sandbox_profile(&orbit_common::Env::capture(), None)
         .expect("an absent directory inside plugin state stays writable");
     assert_eq!(profile.write, vec![state_dir.join("cache/runs")]);
 }
@@ -339,8 +344,14 @@ fn an_orbit_tools_plugin_cannot_read_the_decision_channel_key_store() {
     };
 
     for (launch, profile) in [
-        ("direct", unrelated.sandbox_profile(None)),
-        ("brokered", unrelated.brokered_sandbox_profile(&caller)),
+        (
+            "direct",
+            unrelated.sandbox_profile(&orbit_common::Env::capture(), None),
+        ),
+        (
+            "brokered",
+            unrelated.brokered_sandbox_profile(&orbit_common::Env::capture(), &caller),
+        ),
     ] {
         let profile = profile.unwrap_or_else(|error| panic!("{launch} profile: {error}"));
         assert_store_carved_out(
@@ -459,8 +470,14 @@ fn an_orbit_tools_plugin_cannot_read_the_github_run_log_cache() {
     };
 
     for (launch, profile) in [
-        ("direct", unrelated.sandbox_profile(None)),
-        ("brokered", unrelated.brokered_sandbox_profile(&caller)),
+        (
+            "direct",
+            unrelated.sandbox_profile(&orbit_common::Env::capture(), None),
+        ),
+        (
+            "brokered",
+            unrelated.brokered_sandbox_profile(&orbit_common::Env::capture(), &caller),
+        ),
     ] {
         let profile = profile.unwrap_or_else(|error| panic!("{launch} profile: {error}"));
         assert_store_carved_out(

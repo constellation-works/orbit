@@ -273,7 +273,7 @@ pub(super) fn record_failed_handoff<H: RuntimeHost + ?Sized>(
         phase.label()
     );
     let head = input_string_field(input, "head")
-        .or_else(|| current_branch(&context.workspace_path))
+        .or_else(|| current_branch(&host.process_env(), &context.workspace_path))
         .unwrap_or_else(|| "unknown".to_string());
     let base = input_string_field(input, "base").unwrap_or_else(|| "main".to_string());
     let base_ref = input_string_field(input, "base_ref")
@@ -282,7 +282,7 @@ pub(super) fn record_failed_handoff<H: RuntimeHost + ?Sized>(
     let repair = review_repair_body(&error.to_string());
     let timed_out = error.is_timeout();
     let recovery = if matches!(phase, FailedHandoffPhase::Rebase)
-        && rebase_in_progress(&context.workspace_path).unwrap_or(false)
+        && rebase_in_progress(&host.process_env(), &context.workspace_path).unwrap_or(false)
     {
         if timed_out {
             "Worktree state: rebase interrupted by a Git timeout.\n\nRecovery:\n  Timeout recovery is not conflict repair. If this attempt started the rebase, Orbit aborts it and a retry can start clean. A pre-existing or foreign rebase is left intact — inspect rebase-merge/rebase-apply before retrying. Ordinary conflict recovery remains pr_conflict_recovery; failure-handoff remains pr_failure_handoff."
@@ -360,9 +360,13 @@ fn review_repair_prefix(body: &str) -> Option<&str> {
     (digits > 0).then_some(&line[..MARKER.len() + digits])
 }
 
-pub(super) fn rebase_in_progress(workspace_path: &Path) -> Result<bool, OrbitError> {
+pub(super) fn rebase_in_progress(
+    process_env: &orbit_common::Env,
+    workspace_path: &Path,
+) -> Result<bool, OrbitError> {
     for state_dir in ["rebase-merge", "rebase-apply"] {
         let path = PathBuf::from(super::git::git_output(
+            process_env,
             workspace_path,
             &["rev-parse", "--git-path", state_dir],
         )?);
@@ -378,9 +382,13 @@ pub(super) fn rebase_in_progress(workspace_path: &Path) -> Result<bool, OrbitErr
     Ok(false)
 }
 
-fn current_branch(workspace_path: &Path) -> Option<String> {
-    super::git::git_output(workspace_path, &["rev-parse", "--abbrev-ref", "HEAD"])
-        .ok()
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty())
+fn current_branch(process_env: &orbit_common::Env, workspace_path: &Path) -> Option<String> {
+    super::git::git_output(
+        process_env,
+        workspace_path,
+        &["rev-parse", "--abbrev-ref", "HEAD"],
+    )
+    .ok()
+    .map(|value| value.trim().to_string())
+    .filter(|value| !value.is_empty())
 }

@@ -147,7 +147,9 @@ fn preserved_worktrees_refuse_grant_changes_until_removed() {
                 json!({"task_ids": [task.id, "bundle-companion"]})
             };
             let run = recorded_run(&runtime, input, JobRunState::Failed);
-            let paths = orbit_engine::run_worktree_paths(&repo, &run).unwrap();
+            let paths =
+                orbit_engine::run_worktree_paths(&orbit_common::Env::capture(), &repo, &run)
+                    .unwrap();
             let worktree = if fallback {
                 paths.last().unwrap()
             } else {

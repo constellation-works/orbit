@@ -34,11 +34,16 @@ const ORIGIN_AVAILABILITY_PROBE_MIN_TIMEOUT_MS: u64 = 1_000;
 /// the smaller of the activity's fetch budget, [`GIT_REMOTE_TIMEOUT`] and
 /// what is left of that limit; a raised `git_timeouts.fetch` cannot lengthen
 /// the hold.
-pub fn fetch_remote_base(repo_root: &Path, base: &str) -> Result<(), OrbitError> {
-    fetch_remote_base_within(repo_root, base, GIT_FETCH_LOCK_HOLD_LIMIT)
+pub fn fetch_remote_base(
+    process_env: &orbit_common::Env,
+    repo_root: &Path,
+    base: &str,
+) -> Result<(), OrbitError> {
+    fetch_remote_base_within(process_env, repo_root, base, GIT_FETCH_LOCK_HOLD_LIMIT)
 }
 
 pub(crate) fn fetch_remote_base_within(
+    process_env: &orbit_common::Env,
     repo_root: &Path,
     base: &str,
     hold_limit: Duration,
@@ -46,6 +51,7 @@ pub(crate) fn fetch_remote_base_within(
     let branch = normalize_base_branch(base)?;
     if let Some(deadline) = GIT_DEADLINE.with(Cell::get) {
         let common = git_output(
+            process_env,
             repo_root,
             &["rev-parse", "--path-format=absolute", "--git-common-dir"],
         )?;
@@ -67,15 +73,16 @@ pub(crate) fn fetch_remote_base_within(
                 timeout: remaining.min(options.timeout),
                 ..options
             },
-            || fetch_remote_base_locked(repo_root, &branch, hold_limit.min(remaining)),
+            || fetch_remote_base_locked(process_env, repo_root, &branch, hold_limit.min(remaining)),
         );
     }
-    with_git_fetch_lock(&orbit_common::Env::capture(), repo_root, || {
-        fetch_remote_base_locked(repo_root, &branch, hold_limit)
+    with_git_fetch_lock(process_env, repo_root, || {
+        fetch_remote_base_locked(process_env, repo_root, &branch, hold_limit)
     })
 }
 
 fn fetch_remote_base_locked(
+    process_env: &orbit_common::Env,
     repo_root: &Path,
     branch: &str,
     hold_limit: Duration,
@@ -117,7 +124,7 @@ fn fetch_remote_base_locked(
                 fetch_ms: attempt_ms,
                 ..current
             });
-            git_run(repo_root, &["fetch", "origin", &spec])?
+            git_run(process_env, repo_root, &["fetch", "origin", &spec])?
         };
         if outcome.success && !outcome.timed_out {
             return Ok(());
@@ -222,16 +229,17 @@ fn is_git_transport_failure(stderr: &str) -> bool {
 }
 
 pub(in crate::executor::automation) fn resolve_worktree_start_point(
+    process_env: &orbit_common::Env,
     repo_root: &Path,
     base: &str,
     sync_mode: BaseSyncMode,
 ) -> Result<String, OrbitError> {
     let branch = normalize_base_branch(base)?;
     match sync_mode {
-        BaseSyncMode::Local => resolve_local_base_ref(repo_root, &branch),
+        BaseSyncMode::Local => resolve_local_base_ref(process_env, repo_root, &branch),
         BaseSyncMode::Remote => {
-            fetch_remote_base(repo_root, &branch)?;
-            resolve_remote_base_ref(repo_root, &branch)
+            fetch_remote_base(process_env, repo_root, &branch)?;
+            resolve_remote_base_ref(process_env, repo_root, &branch)
         }
     }
 }
@@ -240,16 +248,19 @@ pub(in crate::executor::automation) fn resolve_worktree_start_point(
 /// parks transport outages as held runs; landing and post-admission callers
 /// keep their existing failure and recovery behavior.
 pub(in crate::executor::automation) fn resolve_worktree_start_point_for_admission(
+    process_env: &orbit_common::Env,
     repo_root: &Path,
     base: &str,
     sync_mode: BaseSyncMode,
 ) -> Result<String, OrbitError> {
     match sync_mode {
-        BaseSyncMode::Local => resolve_worktree_start_point(repo_root, base, sync_mode),
+        BaseSyncMode::Local => {
+            resolve_worktree_start_point(process_env, repo_root, base, sync_mode)
+        }
         BaseSyncMode::Remote => {
             let branch = normalize_base_branch(base)?;
-            fetch_remote_base_for_worktree_setup(repo_root, &branch)?;
-            resolve_remote_base_ref(repo_root, &branch)
+            fetch_remote_base_for_worktree_setup(process_env, repo_root, &branch)?;
+            resolve_remote_base_ref(process_env, repo_root, &branch)
         }
     }
 }
@@ -307,8 +318,12 @@ fn worktree_setup_fetch_limits() -> (Duration, Duration) {
 
 /// Fetch origin for pre-admission setup while retaining enough lock-timeout
 /// detail to tell an origin outage from ordinary lock contention.
-fn fetch_remote_base_for_worktree_setup(repo_root: &Path, branch: &str) -> Result<(), OrbitError> {
-    let common_dir = git_common_dir(&orbit_common::Env::capture(), repo_root)?;
+fn fetch_remote_base_for_worktree_setup(
+    process_env: &orbit_common::Env,
+    repo_root: &Path,
+    branch: &str,
+) -> Result<(), OrbitError> {
+    let common_dir = git_common_dir(process_env, repo_root)?;
     let lock_target = git_fetch_lock_target(&common_dir);
     let (hold_limit, lock_wait) = worktree_setup_fetch_limits();
     let mut options = FileLockOptions::default();
@@ -317,7 +332,7 @@ fn fetch_remote_base_for_worktree_setup(repo_root: &Path, branch: &str) -> Resul
     // deadline. The production pair (30 s timeout, 3 s warning) is unchanged.
     options.warn_after = options.warn_after.min(lock_wait);
     let result = with_exclusive_file_lock_options(&lock_target, "git fetch", options, || {
-        fetch_remote_base_locked(repo_root, branch, hold_limit)
+        fetch_remote_base_locked(process_env, repo_root, branch, hold_limit)
             .map_err(WorktreeFetchLockError::Fetch)
     });
 
@@ -329,7 +344,7 @@ fn fetch_remote_base_for_worktree_setup(repo_root: &Path, branch: &str) -> Resul
         Err(WorktreeFetchLockError::Fetch(error)) => Err(error),
         Err(WorktreeFetchLockError::Lock(error))
             if is_git_fetch_lock_timeout(&error)
-                && origin_probe_confirms_transport_failure(repo_root, branch) =>
+                && origin_probe_confirms_transport_failure(process_env, repo_root, branch) =>
         {
             Err(origin_unavailable_refusal(error))
         }
@@ -356,7 +371,11 @@ fn is_git_fetch_lock_timeout(error: &io::Error) -> bool {
             .is_some_and(|timeout| timeout.label == "git fetch")
 }
 
-fn origin_probe_confirms_transport_failure(repo_root: &Path, branch: &str) -> bool {
+fn origin_probe_confirms_transport_failure(
+    process_env: &orbit_common::Env,
+    repo_root: &Path,
+    branch: &str,
+) -> bool {
     let mut budget = GitTimeoutBudget::current();
     let probe_timeout_ms = budget
         .fetch_ms
@@ -369,7 +388,11 @@ fn origin_probe_confirms_transport_failure(repo_root: &Path, branch: &str) -> bo
     budget.fetch_ms = probe_timeout_ms;
     let _budget = GitTimeoutBudgetGuard::install(budget);
     let ref_name = format!("refs/heads/{branch}");
-    match git_run(repo_root, &["ls-remote", "--heads", "origin", &ref_name]) {
+    match git_run(
+        process_env,
+        repo_root,
+        &["ls-remote", "--heads", "origin", &ref_name],
+    ) {
         Ok(outcome) if outcome.timed_out => true,
         Ok(outcome) if outcome.success => false,
         Ok(outcome) => is_git_transport_failure(&outcome.stderr),
@@ -414,11 +437,16 @@ pub(in crate::executor::automation) fn normalize_base_branch(
     Ok(branch.to_string())
 }
 
-fn resolve_local_base_ref(repo_root: &Path, branch: &str) -> Result<String, OrbitError> {
+fn resolve_local_base_ref(
+    process_env: &orbit_common::Env,
+    repo_root: &Path,
+    branch: &str,
+) -> Result<String, OrbitError> {
     // Fully qualified: an unqualified name resolves to a same-named tag
     // before the branch, so the returned ref must name the branch exactly.
     let local_base = format!("refs/heads/{branch}");
     if git_command_success(
+        process_env,
         repo_root,
         &["rev-parse", "--verify", &format!("{local_base}^{{commit}}")],
     )? {
@@ -430,11 +458,16 @@ fn resolve_local_base_ref(repo_root: &Path, branch: &str) -> Result<String, Orbi
     )))
 }
 
-fn resolve_remote_base_ref(repo_root: &Path, branch: &str) -> Result<String, OrbitError> {
+fn resolve_remote_base_ref(
+    process_env: &orbit_common::Env,
+    repo_root: &Path,
+    branch: &str,
+) -> Result<String, OrbitError> {
     // Fully qualified: the short `origin/<branch>` can resolve to a tag
     // named `origin/<branch>` before the remote-tracking branch.
     let remote_base = format!("refs/remotes/origin/{branch}");
     if git_command_success(
+        process_env,
         repo_root,
         &[
             "rev-parse",

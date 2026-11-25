@@ -49,6 +49,7 @@ impl WaitingOwner {
         git(repo, &["commit", "-q", "-m", "candidate"]);
         git(repo, &["checkout", "-q", "main"]);
         delivered.candidate = orbit_engine::observe_candidate(
+            &orbit_common::Env::capture(),
             repo,
             Some(&delivered.candidate.source_branch),
             "main",
@@ -442,6 +443,7 @@ fn two_approved_landings() -> (OwnerLocal, Vec<(String, String)>) {
         git(&repo, &["commit", "-q", "-m", "candidate"]);
         git(&repo, &["checkout", "-q", "main"]);
         delivered.candidate = orbit_engine::observe_candidate(
+            &orbit_common::Env::capture(),
             &repo,
             Some(&branch),
             "main",

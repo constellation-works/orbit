@@ -72,7 +72,7 @@ impl GrokUsageRequest {
 
     /// Read only the existing CLI credential. Never refresh it, log it, put
     /// it in argv, follow redirects, or let an unavailable reading fail a run.
-    pub(super) fn read(&self) -> Option<Vec<u8>> {
+    pub(super) fn read(&self, process_env: &orbit_common::Env) -> Option<Vec<u8>> {
         let path = self.home.join("auth.json");
         if !path.metadata().ok()?.is_file() {
             return None;
@@ -132,11 +132,8 @@ impl GrokUsageRequest {
             environment_mode: EnvironmentMode::ClearAndSet(self.environment.clone()),
             debug: false,
         };
-        let (result, mut body) = run_process_streaming_stdout(
-            &orbit_common::Env::capture(),
-            &request,
-            &NoSandbox,
-            |stdout| {
+        let (result, mut body) =
+            run_process_streaming_stdout(process_env, &request, &NoSandbox, |stdout| {
                 let mut body = Vec::new();
                 stdout
                     .take(MAX_BYTES + 1)
@@ -145,9 +142,8 @@ impl GrokUsageRequest {
                         orbit_common::OrbitError::Execution("read Grok billing".to_string())
                     })?;
                 Ok(body)
-            },
-        )
-        .ok()?;
+            })
+            .ok()?;
         if !result.success || body.len() as u64 > MAX_BYTES || !body.ends_with(b"\n200") {
             return None;
         }

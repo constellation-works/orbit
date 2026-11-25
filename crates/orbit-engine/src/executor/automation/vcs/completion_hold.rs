@@ -53,12 +53,14 @@ impl CompletionHoldCheck {
     /// when a `paths` rule is configured, mirroring the pre-drive check.
     pub(crate) fn evaluate(
         &self,
+        process_env: &orbit_common::Env,
         workspace: &Path,
         base: Option<&str>,
         base_sync_local: bool,
         candidate: Option<&str>,
     ) -> Result<Option<CompletionHold>, OrbitError> {
-        let changed = pull_request_changed_paths(workspace, base, base_sync_local, candidate);
+        let changed =
+            pull_request_changed_paths(process_env, workspace, base, base_sync_local, candidate);
         evaluate_completion_hold(&self.rules, &self.tasks, &changed, &self.run_id)
     }
 }
@@ -174,6 +176,7 @@ fn first_path_match(
 /// from their merge base, as the forge shows it. `base` is read as the
 /// remote-tracking branch, else the local one (`base_sync = local`).
 pub(crate) fn pull_request_changed_paths(
+    process_env: &orbit_common::Env,
     workspace: &Path,
     base: Option<&str>,
     base_sync_local: bool,
@@ -193,6 +196,7 @@ pub(crate) fn pull_request_changed_paths(
     refs.push(format!("refs/heads/{branch}"));
     let resolved = refs.into_iter().find(|reference| {
         git_command_success(
+            process_env,
             workspace,
             &[
                 "rev-parse",
@@ -207,6 +211,7 @@ pub(crate) fn pull_request_changed_paths(
         return ChangedPaths::Unreadable(format!("base '{branch}' does not resolve"));
     };
     match git_output_paths(
+        process_env,
         workspace,
         &[
             "diff",
@@ -227,6 +232,7 @@ pub(crate) fn pull_request_changed_paths(
 /// the local-delivery analogue of [`pull_request_changed_paths`], for a
 /// candidate a handoff pins by commit rather than by branch.
 pub(crate) fn candidate_commit_changed_paths(
+    process_env: &orbit_common::Env,
     workspace: &Path,
     base_commit: &str,
     candidate_commit: &str,
@@ -240,6 +246,7 @@ pub(crate) fn candidate_commit_changed_paths(
         return ChangedPaths::Unreadable("no base commit is pinned".to_string());
     }
     match git_output_paths(
+        process_env,
         workspace,
         &[
             "diff",
@@ -334,6 +341,7 @@ fn completion_hold_record<H: RuntimeHost + ?Sized>(
 
 /// Evaluate completion holds for an exact candidate, retaining unreadable-path holds.
 pub fn candidate_completion_hold(
+    process_env: &orbit_common::Env,
     rules: &[orbit_types::workflow::CompletionHoldRule],
     task: &orbit_types::task::Task,
     workspace: &std::path::Path,
@@ -341,13 +349,15 @@ pub fn candidate_completion_hold(
     candidate: &str,
     run_id: &str,
 ) -> Result<Option<orbit_types::workflow::CompletionHold>, orbit_common::OrbitError> {
-    let changed = pull_request_changed_paths(workspace, Some(base), false, Some(candidate));
+    let changed =
+        pull_request_changed_paths(process_env, workspace, Some(base), false, Some(candidate));
     evaluate_completion_hold(rules, std::slice::from_ref(task), &changed, run_id)
 }
 
 /// Evaluate completion holds against the base commit a published candidate
 /// was built on. The current base may already include the merged candidate.
 pub fn candidate_commit_completion_hold(
+    process_env: &orbit_common::Env,
     rules: &[CompletionHoldRule],
     task: &Task,
     workspace: &Path,
@@ -355,6 +365,7 @@ pub fn candidate_commit_completion_hold(
     candidate_commit: &str,
     run_id: &str,
 ) -> Result<Option<CompletionHold>, OrbitError> {
-    let changed = candidate_commit_changed_paths(workspace, base_commit, candidate_commit);
+    let changed =
+        candidate_commit_changed_paths(process_env, workspace, base_commit, candidate_commit);
     evaluate_completion_hold(rules, std::slice::from_ref(task), &changed, run_id)
 }

@@ -23,7 +23,10 @@ const EVIDENCE_AUTHOR_EMAIL: &str = "orbit-evidence@noreply.invalid";
 /// tree is chained onto the tip and pushed without force: earlier evidence
 /// commits stay reachable, so the images an earlier pull request links by
 /// sha keep resolving.
-pub(super) fn push_evidence_ref(input: &Value) -> Result<Value, OrbitError> {
+pub(super) fn push_evidence_ref(
+    process_env: &orbit_common::Env,
+    input: &Value,
+) -> Result<Value, OrbitError> {
     let repo_root = Path::new(required_string(input, "repo_root")?);
     let tree_sha = required_string(input, "tree_sha")?;
     let target_ref = required_string(input, "target_ref")?;
@@ -42,9 +45,10 @@ pub(super) fn push_evidence_ref(input: &Value) -> Result<Value, OrbitError> {
     }
     let backoff = PushBackoff::from_input(input)?;
 
-    let tip = remote_tip(repo_root, target_ref)?;
+    let tip = remote_tip(process_env, repo_root, target_ref)?;
     if let Some(tip) = &tip {
         execute(
+            process_env,
             "git",
             vec![
                 "fetch".into(),
@@ -59,6 +63,7 @@ pub(super) fn push_evidence_ref(input: &Value) -> Result<Value, OrbitError> {
             "evidence ref fetch",
         )?;
         let tip_tree = execute(
+            process_env,
             "git",
             vec![
                 "rev-parse".into(),
@@ -73,7 +78,7 @@ pub(super) fn push_evidence_ref(input: &Value) -> Result<Value, OrbitError> {
             return Ok(json!({
                 "commit_sha": tip,
                 "reused": true,
-                "repository_url": repository_url(repo_root)?,
+                "repository_url": repository_url(process_env, repo_root)?,
             }));
         }
     }
@@ -92,6 +97,7 @@ pub(super) fn push_evidence_ref(input: &Value) -> Result<Value, OrbitError> {
         commit_args.extend(["-p".to_string(), tip.clone()]);
     }
     let commit = execute(
+        process_env,
         "git",
         commit_args,
         Some(repo_root),
@@ -101,6 +107,7 @@ pub(super) fn push_evidence_ref(input: &Value) -> Result<Value, OrbitError> {
     let commit_sha = commit.stdout.trim().to_string();
     // No `+`: the push only creates the ref or fast-forwards it.
     execute_push_with_transient_retry(
+        process_env,
         &[
             "push".to_string(),
             "--".to_string(),
@@ -117,13 +124,18 @@ pub(super) fn push_evidence_ref(input: &Value) -> Result<Value, OrbitError> {
     Ok(json!({
         "commit_sha": commit_sha,
         "reused": false,
-        "repository_url": repository_url(repo_root)?,
+        "repository_url": repository_url(process_env, repo_root)?,
     }))
 }
 
 /// The commit `target_ref` names on `origin`, or `None` before its first push.
-fn remote_tip(repo_root: &Path, target_ref: &str) -> Result<Option<String>, OrbitError> {
+fn remote_tip(
+    process_env: &orbit_common::Env,
+    repo_root: &Path,
+    target_ref: &str,
+) -> Result<Option<String>, OrbitError> {
     let listed = execute(
+        process_env,
         "git",
         vec![
             "ls-remote".into(),
@@ -145,8 +157,9 @@ fn remote_tip(repo_root: &Path, target_ref: &str) -> Result<Option<String>, Orbi
 }
 
 /// The repository's web URL, which image links are built on.
-fn repository_url(repo_root: &Path) -> Result<String, OrbitError> {
+fn repository_url(process_env: &orbit_common::Env, repo_root: &Path) -> Result<String, OrbitError> {
     let response = execute_with_transient_retry(
+        process_env,
         "gh",
         &[
             "repo".to_string(),

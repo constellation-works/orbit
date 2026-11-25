@@ -98,7 +98,7 @@ fn candidate_carry<H: RuntimeHost + ?Sized>(
     else {
         return Ok(none("the leaf recorded no candidate branch"));
     };
-    let Some(mut head_sha) = branch_tip(workspace_path, &branch) else {
+    let Some(mut head_sha) = branch_tip(&host.process_env(), workspace_path, &branch) else {
         return Ok(none(&format!("branch '{branch}' no longer resolves")));
     };
     let partial = step("commit", "commit_sha").is_none();
@@ -108,7 +108,7 @@ fn candidate_carry<H: RuntimeHost + ?Sized>(
             "Partial implementation candidate [{task_id}]\n\nOrbit-Partial-Candidate-Run: {run_id}\n\
              Orbit-Failed-Step: {failed_step}"
         );
-        match commit_claimed_partial(workspace_path, &message) {
+        match commit_claimed_partial(&host.process_env(), workspace_path, &message) {
             Ok(Some(commit)) => head_sha = commit,
             Ok(None) => return Ok(none("the leaf left no uncommitted candidate")),
             Err(error) => {
@@ -172,7 +172,8 @@ fn carry_published<H: RuntimeHost + ?Sized>(
     let Some(workspace_path) = workspace_path else {
         return output;
     };
-    let Some(local_sha) = branch_tip(workspace_path, branch).filter(|tip| tip != published_sha)
+    let Some(local_sha) =
+        branch_tip(&host.process_env(), workspace_path, branch).filter(|tip| tip != published_sha)
     else {
         return output;
     };
@@ -200,8 +201,13 @@ fn carry_published<H: RuntimeHost + ?Sized>(
 }
 
 /// The commit `refs/heads/<branch>` names in `workspace_path`, if any.
-fn branch_tip(workspace_path: &Path, branch: &str) -> Option<String> {
+fn branch_tip(
+    process_env: &orbit_common::Env,
+    workspace_path: &Path,
+    branch: &str,
+) -> Option<String> {
     git_output(
+        process_env,
         workspace_path,
         &[
             "rev-parse",
@@ -241,7 +247,7 @@ pub(in crate::executor::automation::vcs) fn push_candidate_ref<H: RuntimeHost + 
     commit: &str,
     target_ref: &str,
 ) -> Result<(), String> {
-    ensure_origin_publishes_elsewhere(workspace_path, branch)
+    ensure_origin_publishes_elsewhere(&host.process_env(), workspace_path, branch)
         .and_then(|_| {
             host.run_private_vcs_operation(
                 CANDIDATE_REF_PUSH,

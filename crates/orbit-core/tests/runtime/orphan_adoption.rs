@@ -111,7 +111,8 @@ impl TaskPrForge for FakeForge {
         }
         if state.gh_blocker_reads.contains(&number) {
             drop(state);
-            return GhTaskPrForge.pull_request_blockers(_repo_root, number);
+            return GhTaskPrForge::new(&orbit_common::Env::capture())
+                .pull_request_blockers(_repo_root, number);
         }
         Ok(state.blockers.get(&number).cloned())
     }

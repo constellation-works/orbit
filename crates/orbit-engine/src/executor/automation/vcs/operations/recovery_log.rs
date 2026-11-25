@@ -21,6 +21,7 @@ pub(super) struct RetryJobLog {
 /// Display truncation never proves or disproves source/command completeness.
 /// The collector owns those proofs; this adapter adds provider/source binding.
 pub(super) fn complete_job_log(
+    process_env: &orbit_common::Env,
     deadline: Deadline,
     workspace: &Path,
     run_id: u64,
@@ -28,6 +29,7 @@ pub(super) fn complete_job_log(
     source: &str,
 ) -> Result<RetryJobLog, OrbitError> {
     let read = ci_job_log(
+        process_env,
         &json!({"workspace_path":workspace,"run_id":run_id.to_string(),"job_id":number(job,"id",unreadable)?.to_string(),"deadline_ms":deadline.0}),
     )?;
     if read.source_complete != Some(true) || read.fallback_error.is_some() {

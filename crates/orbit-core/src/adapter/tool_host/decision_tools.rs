@@ -142,7 +142,7 @@ fn submit_caller(
         return Ok(DecisionSubmitCaller::Agent);
     }
     if let CallbackResolution::Identified(identity) =
-        resolve_plugin_callback_session(&runtime.global_root())?
+        resolve_plugin_callback_session(runtime.env(), &runtime.global_root())?
     {
         return Ok(DecisionSubmitCaller::PluginCallback {
             plugin: identity.provenance.name,
@@ -151,7 +151,7 @@ fn submit_caller(
     if agent.is_some() || model.is_some() {
         return Ok(DecisionSubmitCaller::Agent);
     }
-    let capabilities = resolved_caller_capabilities(session_context);
+    let capabilities = resolved_caller_capabilities(runtime.env(), session_context);
     if capabilities.contains(&McpCapability::Operator) {
         return Ok(DecisionSubmitCaller::Operator);
     }

@@ -42,12 +42,14 @@ pub(super) trait DependabotQueries {
 }
 
 pub(super) struct HostDependabotQueries {
+    process_env: orbit_common::Env,
     repo_root: PathBuf,
 }
 
 impl HostDependabotQueries {
-    pub(super) fn new(repo_root: &Path) -> Self {
+    pub(super) fn new(process_env: orbit_common::Env, repo_root: &Path) -> Self {
         Self {
+            process_env,
             repo_root: repo_root.to_path_buf(),
         }
     }
@@ -58,7 +60,7 @@ impl HostDependabotQueries {
         family: &str,
         project: fn(&Value) -> Value,
     ) -> Result<AlertQuery, OrbitError> {
-        let result = run_gh_process(&self.repo_root, request)?;
+        let result = run_gh_process(&self.process_env, &self.repo_root, request)?;
         if !result.success {
             return Ok(AlertQuery::CapabilityUnavailable(classify_alert_failure(
                 family,
@@ -77,13 +79,18 @@ impl HostDependabotQueries {
 
 impl DependabotQueries for HostDependabotQueries {
     fn auth_status(&self) -> AuthStatus {
-        auth_status(&self.repo_root, "GitHub CLI is unavailable on this host: ")
+        auth_status(
+            &self.process_env,
+            &self.repo_root,
+            "GitHub CLI is unavailable on this host: ",
+        )
     }
 
     fn repo_view(&self, repo: Option<&str>) -> Result<Value, OrbitError> {
         let input = repo.map_or(Value::Null, |repo| json!({"repo": repo}));
         let request = github_cli::repo_view_request(&input)?;
         let stdout = run_gh(
+            &self.process_env,
             &self.repo_root,
             request,
             "gh repo view for Dependabot sweep",
@@ -136,6 +143,7 @@ impl DependabotQueries for HostDependabotQueries {
         let input = json!({"repo": repo, "alert_number": alert_number, "limit": limit});
         let request = github_cli::secret_scanning_locations_request(&input)?;
         let stdout = run_gh(
+            &self.process_env,
             &self.repo_root,
             request,
             "gh api secret scanning alert locations",
@@ -159,7 +167,12 @@ impl DependabotQueries for HostDependabotQueries {
     ) -> Result<Vec<Value>, OrbitError> {
         let input = json!({"repo": repo, "limit": limit});
         let request = github_cli::dependabot_pull_requests_request(&input)?;
-        let stdout = run_gh(&self.repo_root, request, "gh pr list for Dependabot sweep")?;
+        let stdout = run_gh(
+            &self.process_env,
+            &self.repo_root,
+            request,
+            "gh pr list for Dependabot sweep",
+        )?;
         let parsed = github_cli::parse_gh_json(&stdout, "gh pr list")?;
         let entries = parsed.as_array().ok_or_else(|| {
             OrbitError::Execution(

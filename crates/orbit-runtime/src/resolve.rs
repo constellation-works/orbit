@@ -20,9 +20,9 @@ use orbit_common::env_vars::ORBIT_REGISTRY_ROOT as ORBIT_REGISTRY_ROOT_ENV;
 ///
 /// Direct commands use `~/.orbit/`. A trusted managed child may instead carry
 /// the dispatching host's registry locator; this never selects its workspace.
-pub fn resolve_global_root() -> Result<PathBuf, OrbitError> {
-    if managed_dispatch_context_from_env()
-        && let Ok(value) = std::env::var(ORBIT_REGISTRY_ROOT_ENV)
+pub fn resolve_global_root(env: &orbit_common::Env) -> Result<PathBuf, OrbitError> {
+    if managed_dispatch_context_from_env(env)
+        && let Some(value) = env.orbit_registry_root().and_then(std::ffi::OsStr::to_str)
         && !value.trim().is_empty()
     {
         let root = PathBuf::from(value);
@@ -33,7 +33,7 @@ pub fn resolve_global_root() -> Result<PathBuf, OrbitError> {
         }
         return Ok(root);
     }
-    orbit_common::fs::path::global_orbit_dir(&orbit_common::Env::capture())
+    orbit_common::fs::path::home_dir_from(env).map(|home| home.join(".orbit"))
 }
 
 /// Authority used for executable-generation admission.
@@ -50,21 +50,24 @@ pub fn resolve_global_root() -> Result<PathBuf, OrbitError> {
 /// the authority of the store it uses. A git working tree that is neither is
 /// refused: pinning it would write generation files into the checkout and
 /// register the process where no other participant looks.
-pub fn resolve_generation_root(root_override: Option<&Path>) -> Result<PathBuf, OrbitError> {
+pub fn resolve_generation_root(
+    env: &orbit_common::Env,
+    root_override: Option<&Path>,
+) -> Result<PathBuf, OrbitError> {
     if let Some(root) = root_override {
         let cwd = std::env::current_dir()?;
-        let root = resolve_root_path_value(&root.to_string_lossy(), &cwd)?;
+        let root = resolve_root_path_value(env, &root.to_string_lossy(), &cwd)?;
         return explicit_generation_root(root, "--root");
     }
-    if let Ok(explicit) = std::env::var(env_vars::ORBIT_ROOT) {
+    if let Some(explicit) = env.orbit_root().and_then(std::ffi::OsStr::to_str) {
         let trimmed = explicit.trim();
         if !trimmed.is_empty() {
             let cwd = std::env::current_dir()?;
-            let root = resolve_root_path_value(trimmed, &cwd)?;
+            let root = resolve_root_path_value(env, trimmed, &cwd)?;
             return explicit_generation_root(root, env_vars::ORBIT_ROOT);
         }
     }
-    resolve_global_root()
+    resolve_global_root(env)
 }
 
 /// The generation authority an explicit root selects.
@@ -92,16 +95,20 @@ fn explicit_generation_root(root: PathBuf, source: &str) -> Result<PathBuf, Orbi
 /// workspace generation record may not exist and the sandbox cannot create it.
 /// Update admission still checks the explicit override and the host root.
 pub fn resolve_process_generation_root(
+    env: &orbit_common::Env,
     root_override: Option<&Path>,
 ) -> Result<PathBuf, OrbitError> {
     #[cfg(target_os = "macos")]
     if root_override.is_none()
-        && managed_dispatch_context_from_env()
-        && std::env::var(ORBIT_REGISTRY_ROOT_ENV).is_ok_and(|value| !value.trim().is_empty())
+        && managed_dispatch_context_from_env(env)
+        && env
+            .orbit_registry_root()
+            .and_then(std::ffi::OsStr::to_str)
+            .is_some_and(|value| !value.trim().is_empty())
     {
-        return resolve_global_root();
+        return resolve_global_root(env);
     }
-    resolve_generation_root(root_override)
+    resolve_generation_root(env, root_override)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -167,19 +174,22 @@ impl ResolvedOrbitRoots {
 /// local `.orbit/` is not that fixture, so ordinary commands there still use
 /// the main shared root.
 pub fn resolve_initialize_roots(
+    env: &orbit_common::Env,
     cwd: &Path,
     root_override: Option<&Path>,
 ) -> Result<ResolvedOrbitRoots, OrbitError> {
-    resolve_initialize_roots_with_hint(cwd, root_override, None)
+    resolve_initialize_roots_with_hint(env, cwd, root_override, None)
 }
 
 /// Resolve initialized roots using a caller-supplied workspace catalog hint.
 pub fn resolve_initialize_roots_with_hint(
+    env: &orbit_common::Env,
     cwd: &Path,
     root_override: Option<&Path>,
     hint: Option<&WorkspaceRootHint>,
 ) -> Result<ResolvedOrbitRoots, OrbitError> {
     resolve_roots(
+        env,
         cwd,
         root_override,
         ExplicitRootMode::RequireInitialized,
@@ -189,19 +199,22 @@ pub fn resolve_initialize_roots_with_hint(
 
 /// Resolves `.orbit` roots for commands that are allowed to create them.
 pub fn resolve_bootstrap_roots(
+    env: &orbit_common::Env,
     cwd: &Path,
     root_override: Option<&Path>,
 ) -> Result<ResolvedOrbitRoots, OrbitError> {
-    resolve_bootstrap_roots_with_hint(cwd, root_override, None)
+    resolve_bootstrap_roots_with_hint(env, cwd, root_override, None)
 }
 
 /// Resolve bootstrap roots using a caller-supplied workspace catalog hint.
 pub fn resolve_bootstrap_roots_with_hint(
+    env: &orbit_common::Env,
     cwd: &Path,
     root_override: Option<&Path>,
     hint: Option<&WorkspaceRootHint>,
 ) -> Result<ResolvedOrbitRoots, OrbitError> {
     resolve_roots(
+        env,
         cwd,
         root_override,
         ExplicitRootMode::AllowUninitialized,
@@ -219,14 +232,16 @@ pub fn resolve_bootstrap_roots_with_hint(
 /// mode refuses an uninitialized working-directory `.orbit/` that lost to
 /// one of those indirect roots.
 fn resolve_roots(
+    env: &orbit_common::Env,
     cwd: &Path,
     root_override: Option<&Path>,
     explicit_root_mode: ExplicitRootMode,
     hint: Option<&WorkspaceRootHint>,
 ) -> Result<ResolvedOrbitRoots, OrbitError> {
-    let roots = resolve_orbit_roots(cwd, root_override, explicit_root_mode, hint)?;
+    let roots = resolve_orbit_roots(env, cwd, root_override, explicit_root_mode, hint)?;
     if explicit_root_mode == ExplicitRootMode::AllowUninitialized {
         refuse_indirect_uninitialized_caller_orbit(
+            env,
             cwd,
             &roots.shared_root,
             root_override.is_some(),
@@ -236,6 +251,7 @@ fn resolve_roots(
 }
 
 fn resolve_orbit_roots(
+    env: &orbit_common::Env,
     cwd: &Path,
     root_override: Option<&Path>,
     explicit_root_mode: ExplicitRootMode,
@@ -243,8 +259,12 @@ fn resolve_orbit_roots(
 ) -> Result<ResolvedOrbitRoots, OrbitError> {
     // 1. --root flag (escape hatch)
     if let Some(root) = root_override {
-        let root =
-            resolve_explicit_root_path_value(&root.to_string_lossy(), cwd, explicit_root_mode)?;
+        let root = resolve_explicit_root_path_value(
+            env,
+            &root.to_string_lossy(),
+            cwd,
+            explicit_root_mode,
+        )?;
         return Ok(log_resolved_roots(
             cwd,
             "explicit_root",
@@ -253,10 +273,10 @@ fn resolve_orbit_roots(
     }
 
     // 2. ORBIT_ROOT env (escape hatch)
-    if let Ok(explicit) = std::env::var(env_vars::ORBIT_ROOT)
+    if let Some(explicit) = env.orbit_root().and_then(std::ffi::OsStr::to_str)
         && !explicit.trim().is_empty()
     {
-        let root = resolve_explicit_root_path_value(&explicit, cwd, explicit_root_mode)?;
+        let root = resolve_explicit_root_path_value(env, explicit, cwd, explicit_root_mode)?;
         return Ok(log_resolved_roots(
             cwd,
             "orbit_root_env",
@@ -269,7 +289,7 @@ fn resolve_orbit_roots(
     // state, not a second workspace, so ordinary commands keep the main
     // shared root. A nested fixture with `config.toml` resolves to itself
     // instead of inheriting the main checkout.
-    if let Some(root) = initialized_nested_caller_orbit(cwd)? {
+    if let Some(root) = initialized_nested_caller_orbit(env, cwd)? {
         return Ok(log_resolved_roots(
             cwd,
             "caller_orbit",
@@ -278,9 +298,9 @@ fn resolve_orbit_roots(
     }
 
     // 4. Linked git worktree's main checkout .orbit/ as shared_root
-    if let Some(orbit_dir) = find_main_worktree_orbit_dir(cwd) {
-        let shared_root = resolve_orbit_dir_candidate(&orbit_dir)?;
-        let local_root = local_worktree_orbit_dir(cwd);
+    if let Some(orbit_dir) = find_main_worktree_orbit_dir(env, cwd) {
+        let shared_root = resolve_orbit_dir_candidate(env, &orbit_dir)?;
+        let local_root = local_worktree_orbit_dir(env, cwd);
         return Ok(log_resolved_roots(
             cwd,
             "git_worktree_main",
@@ -300,9 +320,9 @@ fn resolve_orbit_roots(
     // 6. Walk up from cwd to find first workspace .orbit/ directory. Bootstrap
     // flows stop at the current git root, or cwd when there is no git root, so
     // unrelated parent directories with `.orbit/` cannot capture new workspaces.
-    let walk_up_boundaries = walk_up_boundaries(cwd, explicit_root_mode);
-    if let Some(orbit_dir) = find_orbit_dir_walk_up(cwd, &walk_up_boundaries) {
-        let root = resolve_orbit_dir_candidate(&orbit_dir)?;
+    let walk_up_boundaries = walk_up_boundaries(env, cwd, explicit_root_mode);
+    if let Some(orbit_dir) = find_orbit_dir_walk_up(env, cwd, &walk_up_boundaries) {
+        let root = resolve_orbit_dir_candidate(env, &orbit_dir)?;
         return Ok(log_resolved_roots(
             cwd,
             "walk_up",
@@ -317,7 +337,7 @@ fn resolve_orbit_roots(
     //    corrupt user state.
     if let Some(repo_root) = paths::find_git_repo_root(cwd) {
         let candidate = repo_root.join(".orbit");
-        if !is_global_orbit_root(&candidate) {
+        if !is_global_orbit_root(env, &candidate) {
             return Ok(log_resolved_roots(
                 cwd,
                 "git_repo_root",
@@ -328,7 +348,7 @@ fn resolve_orbit_roots(
 
     // 8. Fallback: <cwd>/.orbit, but never the global $HOME/.orbit.
     let cwd_root = paths::cwd_orbit_root(cwd);
-    if is_global_orbit_root(&cwd_root) {
+    if is_global_orbit_root(env, &cwd_root) {
         return Err(OrbitError::InvalidInput(format!(
             "{} is the global Orbit root, not a workspace; run `orbit workspace init` from inside a project directory or pass `--root <path/to/.orbit>`",
             cwd_root.display()
@@ -347,8 +367,10 @@ enum ExplicitRootMode {
     RequireInitialized,
 }
 
-fn orbit_root_env_is_set() -> bool {
-    std::env::var(env_vars::ORBIT_ROOT).is_ok_and(|value| !value.trim().is_empty())
+fn orbit_root_env_is_set(env: &orbit_common::Env) -> bool {
+    env.orbit_root()
+        .and_then(std::ffi::OsStr::to_str)
+        .is_some_and(|value| !value.trim().is_empty())
 }
 
 /// An initialized `.orbit/` in `cwd` that is not the linked checkout's own
@@ -356,15 +378,18 @@ fn orbit_root_env_is_set() -> bool {
 ///
 /// `Ok(None)` leaves the rest of resolution unchanged, including ordinary
 /// commands standing in the linked checkout itself.
-fn initialized_nested_caller_orbit(cwd: &Path) -> Result<Option<PathBuf>, OrbitError> {
+fn initialized_nested_caller_orbit(
+    env: &orbit_common::Env,
+    cwd: &Path,
+) -> Result<Option<PathBuf>, OrbitError> {
     let caller = paths::cwd_orbit_root(cwd);
-    if !is_initialized_orbit_root(&caller) || is_global_orbit_root(&caller) {
+    if !is_initialized_orbit_root(&caller) || is_global_orbit_root(env, &caller) {
         return Ok(None);
     }
-    if paths_equivalent(&caller, &local_worktree_orbit_dir(cwd)) {
+    if paths_equivalent(&caller, &local_worktree_orbit_dir(env, cwd)) {
         return Ok(None);
     }
-    Ok(Some(resolve_orbit_dir_candidate(&caller)?))
+    Ok(Some(resolve_orbit_dir_candidate(env, &caller)?))
 }
 
 /// Refuse a bootstrap or workspace config write that would adopt a root the
@@ -376,19 +401,21 @@ fn initialized_nested_caller_orbit(cwd: &Path) -> Result<Option<PathBuf>, OrbitE
 /// `.orbit/` is not this fixture. Pass `explicit_root` when `--root` was
 /// set; `ORBIT_ROOT` is detected here. Either one is the escape hatch.
 pub fn refuse_indirect_uninitialized_caller_orbit(
+    env: &orbit_common::Env,
     cwd: &Path,
     resolved_shared: &Path,
     explicit_root: bool,
 ) -> Result<(), OrbitError> {
-    if explicit_root || orbit_root_env_is_set() {
+    if explicit_root || orbit_root_env_is_set(env) {
         return Ok(());
     }
     let caller = paths::cwd_orbit_root(cwd);
-    if !caller.is_dir() || is_global_orbit_root(&caller) || is_initialized_orbit_root(&caller) {
+    if !caller.is_dir() || is_global_orbit_root(env, &caller) || is_initialized_orbit_root(&caller)
+    {
         return Ok(());
     }
     if paths_equivalent(&caller, resolved_shared)
-        || paths_equivalent(&caller, &local_worktree_orbit_dir(cwd))
+        || paths_equivalent(&caller, &local_worktree_orbit_dir(env, cwd))
     {
         return Ok(());
     }
@@ -400,12 +427,13 @@ pub fn refuse_indirect_uninitialized_caller_orbit(
     )))
 }
 
-fn find_main_worktree_orbit_dir(cwd: &Path) -> Option<PathBuf> {
-    Some(paths::find_git_main_worktree_root(cwd)?.join(".orbit"))
+fn find_main_worktree_orbit_dir(env: &orbit_common::Env, cwd: &Path) -> Option<PathBuf> {
+    Some(paths::find_git_main_worktree_root(env, cwd)?.join(".orbit"))
 }
 
-fn local_worktree_orbit_dir(cwd: &Path) -> PathBuf {
-    let worktree_root = paths::find_git_worktree_root(cwd).unwrap_or_else(|| cwd.to_path_buf());
+fn local_worktree_orbit_dir(env: &orbit_common::Env, cwd: &Path) -> PathBuf {
+    let worktree_root =
+        paths::find_git_worktree_root(env, cwd).unwrap_or_else(|| cwd.to_path_buf());
     paths::normalize_path_components(&worktree_root.join(".orbit"))
 }
 
@@ -416,11 +444,15 @@ fn local_worktree_orbit_dir(cwd: &Path) -> PathBuf {
 /// `orbit workspace init` in a repo under `$HOME` with no local `.orbit/` would
 /// discover the global root before the git-repo bootstrap fallback and then
 /// write workspace state into `$HOME/.orbit`.
-fn find_orbit_dir_walk_up(start: &Path, boundaries: &[PathBuf]) -> Option<PathBuf> {
+fn find_orbit_dir_walk_up(
+    env: &orbit_common::Env,
+    start: &Path,
+    boundaries: &[PathBuf],
+) -> Option<PathBuf> {
     let mut current = start;
     loop {
         let candidate = current.join(".orbit");
-        if candidate.is_dir() && !is_global_orbit_root(&candidate) {
+        if candidate.is_dir() && !is_global_orbit_root(env, &candidate) {
             return Some(candidate);
         }
         if boundaries
@@ -433,12 +465,17 @@ fn find_orbit_dir_walk_up(start: &Path, boundaries: &[PathBuf]) -> Option<PathBu
     }
 }
 
-fn walk_up_boundaries(cwd: &Path, explicit_root_mode: ExplicitRootMode) -> Vec<PathBuf> {
+fn walk_up_boundaries(
+    env: &orbit_common::Env,
+    cwd: &Path,
+    explicit_root_mode: ExplicitRootMode,
+) -> Vec<PathBuf> {
     let mut boundaries = Vec::new();
     if explicit_root_mode == ExplicitRootMode::AllowUninitialized {
-        boundaries.push(paths::find_git_worktree_root(cwd).unwrap_or_else(|| cwd.to_path_buf()));
+        boundaries
+            .push(paths::find_git_worktree_root(env, cwd).unwrap_or_else(|| cwd.to_path_buf()));
     }
-    if let Some(home) = home_dir_boundary()
+    if let Some(home) = home_dir_boundary(env)
         && !boundaries
             .iter()
             .any(|boundary| paths_equivalent(boundary, &home))
@@ -448,16 +485,16 @@ fn walk_up_boundaries(cwd: &Path, explicit_root_mode: ExplicitRootMode) -> Vec<P
     boundaries
 }
 
-fn home_dir_boundary() -> Option<PathBuf> {
-    paths::home_dir()
+fn home_dir_boundary(env: &orbit_common::Env) -> Option<PathBuf> {
+    paths::home_dir(env)
 }
 
 /// Whether `candidate` resolves to the default global Orbit root
 /// (`$HOME/.orbit`, or `%USERPROFILE%\.orbit`). Root resolution and path
 /// reporting use this distinction; skill discovery paths derive from the
 /// selected global root's parent.
-pub fn is_global_orbit_root(candidate: &Path) -> bool {
-    let Some(global) = paths::home_dir().map(|home| home.join(".orbit")) else {
+pub fn is_global_orbit_root(env: &orbit_common::Env, candidate: &Path) -> bool {
+    let Some(global) = paths::home_dir(env).map(|home| home.join(".orbit")) else {
         return false;
     };
     paths_equivalent(candidate, &global)
@@ -473,10 +510,13 @@ fn paths_equivalent(left: &Path, right: &Path) -> bool {
     left == right
 }
 
-fn resolve_orbit_dir_candidate(orbit_dir: &Path) -> Result<PathBuf, OrbitError> {
+fn resolve_orbit_dir_candidate(
+    env: &orbit_common::Env,
+    orbit_dir: &Path,
+) -> Result<PathBuf, OrbitError> {
     let config_path = orbit_dir.join("config.toml");
     if config_path.exists()
-        && let Some(configured_root) = configured_root_from_config(&config_path)?
+        && let Some(configured_root) = configured_root_from_config(env, &config_path)?
     {
         return Ok(configured_root);
     }
@@ -510,7 +550,10 @@ struct RootOnlyConfig {
     root: Option<RootField>,
 }
 
-fn configured_root_from_config(config_path: &Path) -> Result<Option<PathBuf>, OrbitError> {
+fn configured_root_from_config(
+    env: &orbit_common::Env,
+    config_path: &Path,
+) -> Result<Option<PathBuf>, OrbitError> {
     let raw = fs::read_to_string(config_path).map_err(|err| {
         let config_path =
             orbit_common::security::redaction::redact_home_dir(&config_path.display().to_string());
@@ -533,15 +576,16 @@ fn configured_root_from_config(config_path: &Path) -> Result<Option<PathBuf>, Or
             config_path.display()
         ))
     })?;
-    Ok(Some(resolve_root_path_value(&root_value, base)?))
+    Ok(Some(resolve_root_path_value(env, &root_value, base)?))
 }
 
 fn resolve_explicit_root_path_value(
+    env: &orbit_common::Env,
     raw: &str,
     base_dir: &Path,
     mode: ExplicitRootMode,
 ) -> Result<PathBuf, OrbitError> {
-    let root = resolve_root_path_value(raw, base_dir)?;
+    let root = resolve_root_path_value(env, raw, base_dir)?;
     match mode {
         ExplicitRootMode::AllowUninitialized => Ok(root),
         ExplicitRootMode::RequireInitialized => resolve_initialized_root(root),
@@ -564,10 +608,11 @@ fn resolve_initialized_root(root: PathBuf) -> Result<PathBuf, OrbitError> {
 /// its own contract: the same uninitialized explicit path remains a hard error
 /// there, because that caller asked to open the workspace.
 pub fn initialized_explicit_workspace_root(
+    env: &orbit_common::Env,
     raw: &str,
     cwd: &Path,
 ) -> Result<Option<PathBuf>, OrbitError> {
-    let root = resolve_root_path_value(raw, cwd)?;
+    let root = resolve_root_path_value(env, raw, cwd)?;
     Ok(initialized_root_or_child(&root))
 }
 
@@ -601,8 +646,12 @@ fn is_initialized_orbit_root(path: &Path) -> bool {
 ///
 /// Workspace discovery, generation admission and runtime-less surfaces share
 /// this path interpretation; it does not require the root to exist.
-pub fn resolve_root_path_value(raw: &str, base_dir: &Path) -> Result<PathBuf, OrbitError> {
-    let root = paths::resolve_path_value(raw, base_dir, "root path")?;
+pub fn resolve_root_path_value(
+    env: &orbit_common::Env,
+    raw: &str,
+    base_dir: &Path,
+) -> Result<PathBuf, OrbitError> {
+    let root = paths::resolve_path_value(env, raw, base_dir, "root path")?;
     if root
         .components()
         .any(|component| component == std::path::Component::ParentDir)
@@ -628,21 +677,24 @@ pub fn resolve_existing_root_traversal(root: PathBuf) -> PathBuf {
 /// semantics: pointing at an uninitialized path is still a hard error, since
 /// the user explicitly asked for that root.
 pub fn try_resolve_initialized_roots(
+    env: &orbit_common::Env,
     cwd: &Path,
     root_override: Option<&Path>,
 ) -> Result<Option<ResolvedOrbitRoots>, OrbitError> {
-    try_resolve_initialized_roots_with_hint(cwd, root_override, None)
+    try_resolve_initialized_roots_with_hint(env, cwd, root_override, None)
 }
 
 /// Resolve an existing workspace using a caller-supplied catalog hint without
 /// reading the legacy registry compatibility surface.
 pub fn try_resolve_initialized_roots_with_hint(
+    env: &orbit_common::Env,
     cwd: &Path,
     root_override: Option<&Path>,
     hint: Option<&WorkspaceRootHint>,
 ) -> Result<Option<ResolvedOrbitRoots>, OrbitError> {
     if let Some(root) = root_override {
         let root = resolve_explicit_root_path_value(
+            env,
             &root.to_string_lossy(),
             cwd,
             ExplicitRootMode::RequireInitialized,
@@ -654,11 +706,15 @@ pub fn try_resolve_initialized_roots_with_hint(
         )));
     }
 
-    if let Ok(explicit) = std::env::var(env_vars::ORBIT_ROOT)
+    if let Some(explicit) = env.orbit_root().and_then(std::ffi::OsStr::to_str)
         && !explicit.trim().is_empty()
     {
-        let root =
-            resolve_explicit_root_path_value(&explicit, cwd, ExplicitRootMode::RequireInitialized)?;
+        let root = resolve_explicit_root_path_value(
+            env,
+            explicit,
+            cwd,
+            ExplicitRootMode::RequireInitialized,
+        )?;
         return Ok(Some(log_resolved_roots(
             cwd,
             "orbit_root_env",
@@ -666,7 +722,7 @@ pub fn try_resolve_initialized_roots_with_hint(
         )));
     }
 
-    try_resolve_initialized_cwd_roots_with_hint(cwd, hint)
+    try_resolve_initialized_cwd_roots_with_hint(env, cwd, hint)
 }
 
 /// Discover an initialized workspace from the working directory.
@@ -677,10 +733,11 @@ pub fn try_resolve_initialized_roots_with_hint(
 /// initialized workspace is discovered from the worktree, catalog hint, or
 /// walk-up. A broken workspace config is still an error.
 pub fn try_resolve_initialized_cwd_roots_with_hint(
+    env: &orbit_common::Env,
     cwd: &Path,
     hint: Option<&WorkspaceRootHint>,
 ) -> Result<Option<ResolvedOrbitRoots>, OrbitError> {
-    if let Some(root) = initialized_nested_caller_orbit(cwd)? {
+    if let Some(root) = initialized_nested_caller_orbit(env, cwd)? {
         return Ok(Some(log_resolved_roots(
             cwd,
             "caller_orbit",
@@ -688,11 +745,11 @@ pub fn try_resolve_initialized_cwd_roots_with_hint(
         )));
     }
 
-    if let Some(orbit_dir) = find_main_worktree_orbit_dir(cwd)
+    if let Some(orbit_dir) = find_main_worktree_orbit_dir(env, cwd)
         && is_initialized_orbit_root(&orbit_dir)
     {
-        let shared_root = resolve_orbit_dir_candidate(&orbit_dir)?;
-        let local_root = local_worktree_orbit_dir(cwd);
+        let shared_root = resolve_orbit_dir_candidate(env, &orbit_dir)?;
+        let local_root = local_worktree_orbit_dir(env, cwd);
         return Ok(Some(log_resolved_roots(
             cwd,
             "git_worktree_main",
@@ -710,11 +767,11 @@ pub fn try_resolve_initialized_cwd_roots_with_hint(
         )));
     }
 
-    let walk_up_boundaries = walk_up_boundaries(cwd, ExplicitRootMode::RequireInitialized);
-    if let Some(orbit_dir) = find_orbit_dir_walk_up(cwd, &walk_up_boundaries)
+    let walk_up_boundaries = walk_up_boundaries(env, cwd, ExplicitRootMode::RequireInitialized);
+    if let Some(orbit_dir) = find_orbit_dir_walk_up(env, cwd, &walk_up_boundaries)
         && is_initialized_orbit_root(&orbit_dir)
     {
-        let root = resolve_orbit_dir_candidate(&orbit_dir)?;
+        let root = resolve_orbit_dir_candidate(env, &orbit_dir)?;
         return Ok(Some(log_resolved_roots(
             cwd,
             "walk_up",

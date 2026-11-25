@@ -138,7 +138,7 @@ fn a_replayed_write_wildcard_never_reaches_siblings_of_a_kept_root() {
     let caller = fixture.caller(&["**"], &["./**", "!.env", "build*", "build/out*"]);
     let profile = fixture
         .spec
-        .brokered_sandbox_profile(&caller)
+        .brokered_sandbox_profile(&orbit_common::Env::capture(), &caller)
         .expect("the caller may write the plugin's root");
     let root = fixture.worktree.join("build");
     let rules = profile.macos_fs_rules().modify;

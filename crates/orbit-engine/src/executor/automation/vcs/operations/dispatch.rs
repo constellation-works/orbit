@@ -19,36 +19,42 @@ use super::{CI_PREREQUISITE_EVIDENCE, CI_PREREQUISITE_OBSERVE};
 /// This boundary is deliberately separate from `ToolRegistry`: the operation
 /// labels are engine-private, are never advertised to agents, and do not pass
 /// through public tool authorization or activity allowlists.
-pub(crate) fn run(operation: &str, input: &Value) -> Result<Value, OrbitError> {
+pub(crate) fn run(
+    process_env: &orbit_common::Env,
+    operation: &str,
+    input: &Value,
+) -> Result<Value, OrbitError> {
     match operation {
-        super::CI_RERUN_PLAN => super::ci_rerun::ci_rerun_plan(input),
-        super::CI_CURRENT_GATES => super::emission::current_gates(input),
-        super::CI_EMISSION_EVIDENCE => super::emission::evidence(input),
-        super::CI_EMISSION_OBSERVE => super::emission::observe(input),
-        PUSH => push(input),
-        CANDIDATE_REF_PUSH => push_candidate_ref(input),
-        super::EVIDENCE_REF_PUSH => super::evidence::push_evidence_ref(input),
-        PR_LIST => pr_list(input),
-        super::PR_LIST_OPEN => pr_list_open(input),
-        PR_CREATE => pr_create(input),
-        super::PR_ADD_LABELS => super::pr::add_labels(input),
-        PR_VIEW => pr_view(input),
-        super::PR_EDIT_BODY => super::pr::edit_pr_body(input),
-        super::PR_READY => super::pr::mark_pr_ready(input),
-        PR_MERGE => pr_merge(input),
-        PR_MERGE_CAPABILITIES => pr_merge_capabilities(input),
-        PR_STATUS => pr_status(input),
-        PR_REQUIRED_CHECKS => pr_required_checks(input),
-        PR_CLOSE => pr_close(input),
-        PR_UPDATE_BRANCH => pr_update_branch(input),
-        super::PR_RETRIGGER_CHECKS => super::pr::pr_retrigger_checks(input),
-        CI_PREREQUISITE_EVIDENCE => super::prerequisite::evidence(input),
-        CI_PREREQUISITE_OBSERVE => super::prerequisite::observe(input),
-        CI_COMMIT_JOBS => ci_commit_jobs(input),
-        CI_JOB_LOG => serde_json::to_value(ci_job_log(input)?)
+        super::CI_RERUN_PLAN => super::ci_rerun::ci_rerun_plan(process_env, input),
+        super::CI_CURRENT_GATES => super::emission::current_gates(process_env, input),
+        super::CI_EMISSION_EVIDENCE => super::emission::evidence(process_env, input),
+        super::CI_EMISSION_OBSERVE => super::emission::observe(process_env, input),
+        PUSH => push(process_env, input),
+        CANDIDATE_REF_PUSH => push_candidate_ref(process_env, input),
+        super::EVIDENCE_REF_PUSH => super::evidence::push_evidence_ref(process_env, input),
+        PR_LIST => pr_list(process_env, input),
+        super::PR_LIST_OPEN => pr_list_open(process_env, input),
+        PR_CREATE => pr_create(process_env, input),
+        super::PR_ADD_LABELS => super::pr::add_labels(process_env, input),
+        PR_VIEW => pr_view(process_env, input),
+        super::PR_EDIT_BODY => super::pr::edit_pr_body(process_env, input),
+        super::PR_READY => super::pr::mark_pr_ready(process_env, input),
+        PR_MERGE => pr_merge(process_env, input),
+        PR_MERGE_CAPABILITIES => pr_merge_capabilities(process_env, input),
+        PR_STATUS => pr_status(process_env, input),
+        PR_REQUIRED_CHECKS => pr_required_checks(process_env, input),
+        PR_CLOSE => pr_close(process_env, input),
+        PR_UPDATE_BRANCH => pr_update_branch(process_env, input),
+        super::PR_RETRIGGER_CHECKS => super::pr::pr_retrigger_checks(process_env, input),
+        CI_PREREQUISITE_EVIDENCE => super::prerequisite::evidence(process_env, input),
+        CI_PREREQUISITE_OBSERVE => super::prerequisite::observe(process_env, input),
+        CI_COMMIT_JOBS => ci_commit_jobs(process_env, input),
+        CI_JOB_LOG => serde_json::to_value(ci_job_log(process_env, input)?)
             .map_err(|error| OrbitError::Execution(error.to_string())),
-        CI_RERUN_FAILED => ci_rerun_failed(input),
-        super::CI_CHECK_ANNOTATIONS => super::check_annotations::ci_check_annotations(input),
+        CI_RERUN_FAILED => ci_rerun_failed(process_env, input),
+        super::CI_CHECK_ANNOTATIONS => {
+            super::check_annotations::ci_check_annotations(process_env, input)
+        }
         other => Err(OrbitError::InvalidInput(format!(
             "unknown private automation VCS operation '{other}'"
         ))),

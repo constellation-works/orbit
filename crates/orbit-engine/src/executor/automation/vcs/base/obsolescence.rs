@@ -110,6 +110,7 @@ enum BaseStatus {
 /// from* has already landed. Only the landing branch is resolved live, because
 /// its current tip is exactly what the question is about.
 pub(in crate::executor::automation) fn ensure_base_can_still_land(
+    process_env: &orbit_common::Env,
     repo_root: &Path,
     phase: &str,
     base: &str,
@@ -123,6 +124,7 @@ pub(in crate::executor::automation) fn ensure_base_can_still_land(
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty());
     let status = classify_base(
+        process_env,
         repo_root,
         base,
         base_sha,
@@ -147,6 +149,7 @@ pub(in crate::executor::automation) fn ensure_base_can_still_land(
 }
 
 fn classify_base(
+    process_env: &orbit_common::Env,
     repo_root: &Path,
     base: &str,
     base_sha: &str,
@@ -154,7 +157,9 @@ fn classify_base(
     sync_mode: BaseSyncMode,
 ) -> Result<BaseStatus, OrbitError> {
     let base = normalize_base_branch(base)?;
-    if has_origin_remote(repo_root)? && remote_branch_sha(repo_root, &base)?.is_none() {
+    if has_origin_remote(process_env, repo_root)?
+        && remote_branch_sha(process_env, repo_root, &base)?.is_none()
+    {
         return Ok(BaseStatus::Deleted);
     }
 
@@ -166,19 +171,24 @@ fn classify_base(
         return Ok(BaseStatus::Live);
     }
 
-    let landing_ref = resolve_worktree_start_point(repo_root, &landing, sync_mode)?;
-    let landing_sha = commit_sha(repo_root, &landing_ref)?;
+    let landing_ref = resolve_worktree_start_point(process_env, repo_root, &landing, sync_mode)?;
+    let landing_sha = commit_sha(process_env, repo_root, &landing_ref)?;
     if base_sha == landing_sha {
         return Ok(BaseStatus::Live);
     }
-    if crate::executor::automation::vcs::git::is_ancestor(repo_root, base_sha, &landing_sha)? {
+    if crate::executor::automation::vcs::git::is_ancestor(
+        process_env,
+        repo_root,
+        base_sha,
+        &landing_sha,
+    )? {
         return Ok(BaseStatus::Landed(format!(
             "its tip '{base_sha}' is already an ancestor of '{landing_ref}' ('{landing_sha}')"
         )));
     }
 
     Ok(
-        match squash_landed_markers(repo_root, base_sha, &landing_sha)? {
+        match squash_landed_markers(process_env, repo_root, base_sha, &landing_sha)? {
             Some(markers) => BaseStatus::Landed(format!(
                 "every commit it carries beyond '{landing_ref}' is already delivered there under {}",
                 markers.join(", ")
@@ -196,11 +206,13 @@ fn classify_base(
 /// with no marker, or one marker that has not reached the landing branch, is
 /// enough to mean the base still carries undelivered work.
 fn squash_landed_markers(
+    process_env: &orbit_common::Env,
     repo_root: &Path,
     base_sha: &str,
     landing_sha: &str,
 ) -> Result<Option<Vec<String>>, OrbitError> {
     let raw = git_output_raw(
+        process_env,
         repo_root,
         &[
             "log",
@@ -227,7 +239,7 @@ fn squash_landed_markers(
             let is_reachable = match reachable.get(&marker) {
                 Some(known) => *known,
                 None => {
-                    let known = marker_reachable(repo_root, &marker, landing_sha)?;
+                    let known = marker_reachable(process_env, repo_root, &marker, landing_sha)?;
                     reachable.insert(marker.clone(), known);
                     known
                 }
@@ -249,8 +261,11 @@ fn squash_landed_markers(
     Ok(Some(landed))
 }
 
-fn has_origin_remote(repo_root: &Path) -> Result<bool, OrbitError> {
-    git_command_success(repo_root, &["remote", "get-url", "origin"])
+fn has_origin_remote(
+    process_env: &orbit_common::Env,
+    repo_root: &Path,
+) -> Result<bool, OrbitError> {
+    git_command_success(process_env, repo_root, &["remote", "get-url", "origin"])
 }
 
 fn obsolete_base_error(

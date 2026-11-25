@@ -722,15 +722,17 @@ fn authenticate_worktree_path(
         }
     }
     let derived_paths =
-        orbit_engine::run_worktree_paths(repo_root, &run_for_derivation).map_err(|error| {
-            DispatchError::action_failed(
-                action,
-                format!(
-                    "derive owned worktree paths for run '{}': {error}",
-                    owner_run.run_id
-                ),
-            )
-        })?;
+        orbit_engine::run_worktree_paths(runtime.env(), repo_root, &run_for_derivation).map_err(
+            |error| {
+                DispatchError::action_failed(
+                    action,
+                    format!(
+                        "derive owned worktree paths for run '{}': {error}",
+                        owner_run.run_id
+                    ),
+                )
+            },
+        )?;
     let matched_derived = derived_paths.iter().find(|candidate| {
         std::fs::canonicalize(candidate).is_ok_and(|canonical| canonical == canonical_requested)
     });

@@ -19,9 +19,10 @@ use super::super::git::git_output;
 /// whose directory has already been removed simply fails to canonicalize and
 /// does not match, which is the same answer the literal comparison gave.
 pub(in crate::executor::automation::vcs) fn registered_worktree_paths(
+    process_env: &orbit_common::Env,
     repo_root: &Path,
 ) -> Result<BTreeSet<PathBuf>, OrbitError> {
-    let list = git_output(repo_root, &["worktree", "list", "--porcelain"])?;
+    let list = git_output(process_env, repo_root, &["worktree", "list", "--porcelain"])?;
     let mut registered = BTreeSet::new();
     for line in list.lines() {
         let Some(recorded) = line.strip_prefix("worktree ") else {
@@ -52,11 +53,12 @@ pub(in crate::executor::automation::vcs) fn path_is_registered(
 /// form. Any other checkout that happens to live at `path` is not ours to
 /// clean or remove.
 pub(in crate::executor::automation::vcs) fn is_registered_worktree(
+    process_env: &orbit_common::Env,
     repo_root: &Path,
     path: &Path,
 ) -> Result<bool, OrbitError> {
     Ok(path_is_registered(
-        &registered_worktree_paths(repo_root)?,
+        &registered_worktree_paths(process_env, repo_root)?,
         path,
     ))
 }

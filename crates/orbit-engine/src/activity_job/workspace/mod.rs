@@ -44,6 +44,7 @@ pub(crate) struct DeclaredWorktreePair {
 /// may bypass the guard only when its cwd and registered root are the same
 /// checkout; distinct roots without the pair fail before spawn.
 pub(crate) struct WorktreeBoundaryGuard {
+    process_env: orbit_common::Env,
     task_id: String,
     run_id: String,
     provider: String,

@@ -12,27 +12,35 @@ use super::git_ops::{
 
 /// Stage every worktree change for a reviewer repair commit [ORB-11333].
 pub(in crate::executor::automation::vcs) fn stage_everything(
+    process_env: &orbit_common::Env,
     workspace_path: &Path,
 ) -> Result<(), OrbitError> {
-    ensure_named_branch(workspace_path)?;
-    ensure_no_unmerged_changes(workspace_path)?;
-    git_success(workspace_path, &["add", "--all", "--", "."])
+    ensure_named_branch(process_env, workspace_path)?;
+    ensure_no_unmerged_changes(process_env, workspace_path)?;
+    git_success(process_env, workspace_path, &["add", "--all", "--", "."])
 }
 
 /// The staged paths, relative to the worktree.
 pub(in crate::executor::automation::vcs) fn staged_paths(
+    process_env: &orbit_common::Env,
     workspace_path: &Path,
 ) -> Result<Vec<String>, OrbitError> {
-    staged_changed_files(workspace_path)
+    staged_changed_files(process_env, workspace_path)
 }
 
 /// Commit the staged reviewer repairs under the reviewer's own identity.
 pub(in crate::executor::automation::vcs) fn commit_reviewer_repairs_in(
+    process_env: &orbit_common::Env,
     workspace_path: &Path,
     reviewer_model: &str,
     message: &str,
 ) -> Result<(), OrbitError> {
-    git_commit_as(workspace_path, message, &reviewer_author(reviewer_model))
+    git_commit_as(
+        process_env,
+        workspace_path,
+        message,
+        &reviewer_author(reviewer_model),
+    )
 }
 
 /// The `name <email>` author and committer pairs Git may record on a

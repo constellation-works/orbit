@@ -50,6 +50,10 @@ use super::super::{
 use super::private_vcs;
 
 impl RuntimeHost for OrbitRuntime {
+    fn process_env(&self) -> orbit_common::Env {
+        self.env().clone()
+    }
+
     fn start_plugin_broker(
         &self,
         run: &PluginBrokerRun,
@@ -726,10 +730,9 @@ impl RuntimeHost for OrbitRuntime {
         #[cfg(target_os = "macos")] subprocess_cwd: Option<&Path>,
         #[cfg(not(target_os = "macos"))] _subprocess_cwd: Option<&Path>,
     ) -> Result<Option<ResolvedSandbox>, DispatchError> {
-        let env = crate::runtime::process_env();
         sandbox::resolve_executor_sandbox(
             self,
-            &env,
+            self.env(),
             provider,
             #[cfg(target_os = "macos")]
             fs_profile,

@@ -36,15 +36,20 @@ pub(super) fn prepared_base_sha(input: &Value) -> Option<String> {
         .map(ToOwned::to_owned)
 }
 
-pub(super) fn unmerged_paths(workspace_path: &Path) -> Result<Vec<String>, OrbitError> {
-    Ok(
-        git_output(workspace_path, &["diff", "--name-only", "--diff-filter=U"])?
-            .lines()
-            .map(str::trim)
-            .filter(|path| !path.is_empty())
-            .map(ToOwned::to_owned)
-            .collect(),
-    )
+pub(super) fn unmerged_paths(
+    process_env: &orbit_common::Env,
+    workspace_path: &Path,
+) -> Result<Vec<String>, OrbitError> {
+    Ok(git_output(
+        process_env,
+        workspace_path,
+        &["diff", "--name-only", "--diff-filter=U"],
+    )?
+    .lines()
+    .map(str::trim)
+    .filter(|path| !path.is_empty())
+    .map(ToOwned::to_owned)
+    .collect())
 }
 
 pub(super) fn conflicts_from_error(error: &str) -> Vec<String> {

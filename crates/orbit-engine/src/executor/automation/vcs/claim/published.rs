@@ -23,13 +23,15 @@ use super::slug;
 /// Both owner-side consumers — handoff acceptance here and the landing
 /// attempt — resolve accepted revisions through this one rule.
 pub(in crate::executor::automation::vcs) fn observe_accepted_revision(
+    process_env: &orbit_common::Env,
     workspace_path: &Path,
     accepted: &SourceRevision,
     label: &str,
     context: &str,
 ) -> Result<SourceRevision, OrbitError> {
-    if revision(workspace_path, &accepted.commit).is_err() {
+    if revision(process_env, workspace_path, &accepted.commit).is_err() {
         let _ = git_success(
+            process_env,
             workspace_path,
             &[
                 "fetch",
@@ -40,7 +42,7 @@ pub(in crate::executor::automation::vcs) fn observe_accepted_revision(
             ],
         );
     }
-    let observed = revision(workspace_path, &accepted.commit).map_err(|error| {
+    let observed = revision(process_env, workspace_path, &accepted.commit).map_err(|error| {
         OrbitError::Execution(format!(
             "{context}: {label} commit {} is not readable in the owner checkout: {error}",
             accepted.commit
@@ -101,18 +103,26 @@ pub fn observe_accepted_published_handoff<H: RuntimeHost + ?Sized>(
 /// immutable accepted candidate. Clean first-parent base updates are allowed;
 /// source edits, a stale landing ref and unreadable objects refuse settlement.
 pub fn verify_handoff_pull_request_head(
+    process_env: &orbit_common::Env,
     workspace: &Path,
     candidate: &HandoffCandidate,
     status: &PullRequestStatus,
 ) -> Result<(), OrbitError> {
-    super::super::checks::verify_published_base_update(workspace, candidate, status)?;
+    super::super::checks::verify_published_base_update(process_env, workspace, candidate, status)?;
     observe_accepted_revision(
+        process_env,
         workspace,
         &candidate.candidate,
         "candidate",
         "handoff verification",
     )?;
-    observe_accepted_revision(workspace, &candidate.base, "base", "handoff verification")?;
+    observe_accepted_revision(
+        process_env,
+        workspace,
+        &candidate.base,
+        "base",
+        "handoff verification",
+    )?;
     Ok(())
 }
 
@@ -160,7 +170,12 @@ fn observe_published<H: RuntimeHost + ?Sized>(
         &submitted.candidate.commit,
     );
     if accepted && status.head_sha.as_deref() != Some(&submitted.candidate.commit) {
-        super::super::checks::verify_published_base_update(workspace_path, submitted, &status)?;
+        super::super::checks::verify_published_base_update(
+            &host.process_env(),
+            workspace_path,
+            submitted,
+            &status,
+        )?;
         pin.adopt_refreshed_candidate(status.head_sha.as_deref());
     }
     pin.ensure_pinned_candidate(&status, &pr_number)?;
@@ -170,7 +185,12 @@ fn observe_published<H: RuntimeHost + ?Sized>(
     // reports is still worth doing when the owner's origin is a provider
     // remote whose slug is comparable: that catches a handoff pointing at a
     // fork's pull request.
-    let origin_url = git_output(workspace_path, &["remote", "get-url", "origin"]).ok();
+    let origin_url = git_output(
+        &host.process_env(),
+        workspace_path,
+        &["remote", "get-url", "origin"],
+    )
+    .ok();
     let repository = origin_url
         .as_deref()
         .and_then(slug)
@@ -188,10 +208,22 @@ fn observe_published<H: RuntimeHost + ?Sized>(
     }
 
     let context = format!("handoff acceptance for pull request #{pr_number}");
-    let candidate =
-        observe_accepted_revision(workspace_path, &submitted.candidate, "candidate", &context)?;
-    let base = observe_accepted_revision(workspace_path, &submitted.base, "base", &context)?;
+    let candidate = observe_accepted_revision(
+        &host.process_env(),
+        workspace_path,
+        &submitted.candidate,
+        "candidate",
+        &context,
+    )?;
+    let base = observe_accepted_revision(
+        &host.process_env(),
+        workspace_path,
+        &submitted.base,
+        "base",
+        &context,
+    )?;
     if !crate::executor::automation::vcs::git::is_ancestor(
+        &host.process_env(),
         workspace_path,
         &base.commit,
         &candidate.commit,

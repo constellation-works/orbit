@@ -23,10 +23,12 @@ fn background_read_at_the_background_reserve_runs_nothing() {
         current_dir: None,
         timeout_ms: Some(10_000),
         stdin_mode: StdinMode::Null,
-        environment_mode: EnvironmentMode::ClearAndSet(super::super::vcs::git::gh_environment()),
+        environment_mode: EnvironmentMode::ClearAndSet(super::super::vcs::git::gh_environment(
+            &orbit_common::Env::capture(),
+        )),
         debug: false,
     };
-    let account = github_quota::request_account_key(&request);
+    let account = github_quota::request_account_key(&orbit_common::Env::capture(), &request);
     let store = GithubQuotaStore::new(records.path().to_path_buf());
     let policy = GithubQuotaPolicy::default();
     let now = std::time::SystemTime::now()
@@ -47,7 +49,12 @@ fn background_read_at_the_background_reserve_runs_nothing() {
     });
 
     let error = github_quota::with_scoped_guard(store, policy, || {
-        run_gh(scratch.path(), request, "gh run list")
+        run_gh(
+            &orbit_common::Env::capture(),
+            scratch.path(),
+            request,
+            "gh run list",
+        )
     })
     .expect_err("the background reserve refuses the sweep's read");
     let throttle = error

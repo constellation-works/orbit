@@ -35,6 +35,7 @@ fn checkpoint<'a>(state: &'a PipelineState, id: &str) -> Option<&'a Value> {
 /// ancestry alone nor observing the current HEAD creates this authority. The
 /// run's final-recovery receipt and task ownership are checked by the caller.
 pub(crate) fn published_candidate_matches(
+    process_env: &orbit_common::Env,
     state: &PipelineState,
     owner: &str,
     task: &str,
@@ -51,11 +52,15 @@ pub(crate) fn published_candidate_matches(
         return Ok(false);
     };
     let canonical = workspace.canonicalize()?;
-    let git_root = git_output(workspace, &["rev-parse", "--show-toplevel"])?;
+    let git_root = git_output(process_env, workspace, &["rev-parse", "--show-toplevel"])?;
     if Path::new(&git_root) != canonical.as_path() {
         return Ok(false);
     }
-    let branch = git_output(workspace, &["symbolic-ref", "--quiet", "--short", "HEAD"])?;
+    let branch = git_output(
+        process_env,
+        workspace,
+        &["symbolic-ref", "--quiet", "--short", "HEAD"],
+    )?;
     let Some(committed) = text(commit, "commit_sha") else {
         return Ok(false);
     };
@@ -88,7 +93,7 @@ pub(crate) fn published_candidate_matches(
             return Ok(false);
         }
         if committed == head {
-            return head_descends_from_pin(workspace, pin, head);
+            return head_descends_from_pin(process_env, workspace, pin, head);
         }
     }
     let (Some(prepared), Some(sync)) = (
@@ -111,8 +116,8 @@ pub(crate) fn published_candidate_matches(
         || text(sync, "head_sha_before").as_deref() != Some(&committed)
         || text(sync, "head_sha").as_deref() != Some(head)
         || sync.get("rewritten").and_then(Value::as_bool) != Some(committed != head)
-        || !head_descends_from_pin(workspace, pin, &committed)?
-        || !head_descends_from_pin(workspace, &base, head)?
+        || !head_descends_from_pin(process_env, workspace, pin, &committed)?
+        || !head_descends_from_pin(process_env, workspace, &base, head)?
     {
         return Ok(false);
     }
@@ -151,7 +156,11 @@ pub(super) fn final_recovery_published_candidate<H: RuntimeHost + ?Sized>(
         return Ok(None);
     };
     let pin = pinned_object_id(&pin)?;
-    let head = git_output(workspace, &["rev-parse", "--verify", "HEAD^{commit}"])?;
+    let head = git_output(
+        &host.process_env(),
+        workspace,
+        &["rev-parse", "--verify", "HEAD^{commit}"],
+    )?;
     if pin == head {
         return Ok(None);
     }
@@ -180,10 +189,16 @@ pub(super) fn final_recovery_published_candidate<H: RuntimeHost + ?Sized>(
     {
         return Ok(None);
     }
-    Ok(
-        published_candidate_matches(&state, owner, task, workspace, &pin, &head)?
-            .then_some((pin, head)),
-    )
+    Ok(published_candidate_matches(
+        &host.process_env(),
+        &state,
+        owner,
+        task,
+        workspace,
+        &pin,
+        &head,
+    )?
+    .then_some((pin, head)))
 }
 
 /// A replay may rerun synchronization after an interrupted rebase and find

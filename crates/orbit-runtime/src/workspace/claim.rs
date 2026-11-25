@@ -242,7 +242,7 @@ impl RuntimeKernel {
     ) -> Result<(), OrbitError> {
         let presented = claim_token
             .map(str::to_string)
-            .or_else(claim_token_from_env)
+            .or_else(|| claim_token_from_env(self.env()))
             .map(|token| token.trim().to_string())
             .filter(|token| !token.is_empty());
         let result =
@@ -288,10 +288,11 @@ impl RuntimeKernel {
     }
 }
 
-fn claim_token_from_env() -> Option<String> {
-    std::env::var(CLAIM_TOKEN_ENV)
-        .ok()
+fn claim_token_from_env(env: &orbit_common::Env) -> Option<String> {
+    env.orbit_workspace_claim_token()
+        .and_then(std::ffi::OsStr::to_str)
         .filter(|value| !value.trim().is_empty())
+        .map(ToOwned::to_owned)
 }
 
 fn holder_json(claim: &WorkspaceClaimHolder) -> Value {

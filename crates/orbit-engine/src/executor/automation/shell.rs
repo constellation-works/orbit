@@ -167,7 +167,9 @@ fn execute_local_shell<H: RuntimeHost + Sync + ?Sized>(
     let prepared = prepare_sandbox_for_dispatch(sandbox.as_ref())
         .map_err(|error| OrbitError::Execution(error.to_string()))?;
 
+    let process_env = host.process_env();
     let spawned = spawn_child_with_optional_sandbox(
+        &process_env,
         &program,
         &args,
         &environment,
@@ -181,7 +183,7 @@ fn execute_local_shell<H: RuntimeHost + Sync + ?Sized>(
     // non-interactive, and a child left reading an open-but-silent stdin would
     // only ever end at the deadline.
     let outcome = spawn_owned_supervised_cancellable(
-        &orbit_common::Env::capture(),
+        &process_env,
         || Ok(spawned.child),
         Some(timeout_ms),
         Some(Vec::new()),

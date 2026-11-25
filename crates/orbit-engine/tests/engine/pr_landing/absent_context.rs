@@ -145,6 +145,7 @@ fn path_filtered_website_workflow_preserves_sibling_emission_recovery() {
             fs::write(fx.forge.join("website-workflow"), "registered").unwrap();
             fs::write(fx.forge.join("review-approved"), "approved").unwrap();
             let proof = orbit_engine::run_private_vcs_operation(
+                &orbit_common::Env::capture(),
                 "ci.emission_evidence",
                 &json!({
                     "workspace_path": fx.repo,

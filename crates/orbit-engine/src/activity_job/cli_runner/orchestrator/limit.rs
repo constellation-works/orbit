@@ -172,11 +172,14 @@ pub(super) fn record_usage_windows(
     account: Option<&str>,
 ) {
     let usage = match provider {
-        Provider::Grok => context.grok.as_ref().and_then(GrokUsageRequest::read),
+        Provider::Grok => context
+            .grok
+            .as_ref()
+            .and_then(|request| request.read(&host.process_env())),
         Provider::Antigravity => context
             .antigravity
             .as_ref()
-            .and_then(AntigravityUsageRequest::read),
+            .and_then(|request| request.read(&host.process_env())),
         Provider::Claude
         | Provider::Codex
         | Provider::Gemini

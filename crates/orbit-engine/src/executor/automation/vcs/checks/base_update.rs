@@ -8,8 +8,13 @@ use orbit_types::plugin::is_full_commit_id;
 use super::super::git::{git_command_success, git_output};
 use super::super::pr_answers::PullRequestStatus;
 
-pub(super) fn contains(workspace: &Path, ancestor: &str, descendant: &str) -> bool {
-    crate::executor::automation::vcs::git::is_ancestor(workspace, ancestor, descendant)
+pub(super) fn contains(
+    process_env: &orbit_common::Env,
+    workspace: &Path,
+    ancestor: &str,
+    descendant: &str,
+) -> bool {
+    crate::executor::automation::vcs::git::is_ancestor(process_env, workspace, ancestor, descendant)
         .unwrap_or(false)
 }
 
@@ -18,6 +23,7 @@ pub(super) fn contains(workspace: &Path, ancestor: &str, descendant: &str) -> bo
 /// landing ref contains and exactly the clean tree of its parents.
 /// Any answer this cannot read is a refusal.
 pub(in crate::executor::automation::vcs) fn verified_base_update(
+    process_env: &orbit_common::Env,
     workspace: &Path,
     candidate: &str,
     head: &str,
@@ -25,28 +31,37 @@ pub(in crate::executor::automation::vcs) fn verified_base_update(
 ) -> Result<(), String> {
     let mut current = head.to_string();
     while current != candidate {
-        let parents = git_output(workspace, &["rev-list", "--parents", "-n", "1", &current])
-            .map_err(|error| format!("head {current} cannot be read: {error}"))?;
+        let parents = git_output(
+            process_env,
+            workspace,
+            &["rev-list", "--parents", "-n", "1", &current],
+        )
+        .map_err(|error| format!("head {current} cannot be read: {error}"))?;
         let parents: Vec<&str> = parents.split_whitespace().skip(1).collect();
         let [previous, base_side] = parents.as_slice() else {
             return Err(format!(
                 "head {current} is not a two-parent base merge of candidate {candidate}"
             ));
         };
-        if !contains(workspace, base_side, landing_ref) {
+        if !contains(process_env, workspace, base_side, landing_ref) {
             return Err(format!(
                 "head {current} merges {base_side}, which landing ref '{landing_ref}' does not contain"
             ));
         }
         let merged = git_output(
+            process_env,
             workspace,
             &["merge-tree", "--write-tree", previous, base_side],
         )
         .map_err(|error| {
             format!("head {previous} does not merge cleanly with {base_side}: {error}")
         })?;
-        let tree = git_output(workspace, &["rev-parse", &format!("{current}^{{tree}}")])
-            .map_err(|error| format!("head {current} has no readable tree: {error}"))?;
+        let tree = git_output(
+            process_env,
+            workspace,
+            &["rev-parse", &format!("{current}^{{tree}}")],
+        )
+        .map_err(|error| format!("head {current} has no readable tree: {error}"))?;
         if merged.lines().next().map(str::trim) != Some(tree.trim()) {
             return Err(format!(
                 "head {current} changes more than the merge of {previous} with {base_side}"
@@ -65,6 +80,7 @@ pub(in crate::executor::automation::vcs) fn verified_base_update(
 /// commit contained in `base_branch` (including a regular edit commit, a
 /// conflict resolution, or merging a non-base branch) is refused.
 pub fn verify_refreshed_head_from_base(
+    process_env: &orbit_common::Env,
     workspace: &Path,
     reviewed_head: &str,
     head: &str,
@@ -78,26 +94,28 @@ pub fn verify_refreshed_head_from_base(
     if !is_full_commit_id(reviewed_head) || !is_full_commit_id(head) {
         return Err("refreshed head verification requires exact commit SHAs".to_string());
     }
-    let has_remote =
-        git_command_success(workspace, &["remote", "get-url", "origin"]).unwrap_or(false);
+    let has_remote = git_command_success(process_env, workspace, &["remote", "get-url", "origin"])
+        .unwrap_or(false);
     let landing_ref = if has_remote {
-        super::super::git::fetch_remote_base(workspace, base_branch)
+        super::super::git::fetch_remote_base(process_env, workspace, base_branch)
             .map_err(|error| format!("could not fetch base branch '{base_branch}': {error}"))?;
         format!("origin/{base_branch}")
     } else {
         base_branch.to_string()
     };
-    if has_remote && !contains(workspace, head, head) {
+    if has_remote && !contains(process_env, workspace, head, head) {
         if let Some(branch) = head_branch.filter(|b| !b.trim().is_empty()) {
             let _ = git_command_success(
+                process_env,
                 workspace,
                 &["fetch", "--no-tags", "--quiet", "origin", branch],
             );
         }
-        if !contains(workspace, head, head)
+        if !contains(process_env, workspace, head, head)
             && let Some(number) = pr_number
         {
             let _ = git_command_success(
+                process_env,
                 workspace,
                 &[
                     "fetch",
@@ -108,20 +126,23 @@ pub fn verify_refreshed_head_from_base(
                 ],
             );
         }
-        if !contains(workspace, head, head) {
+        if !contains(process_env, workspace, head, head) {
             let _ = git_command_success(
+                process_env,
                 workspace,
                 &["fetch", "--no-tags", "--quiet", "origin", head],
             );
         }
     }
-    if has_remote && !contains(workspace, reviewed_head, reviewed_head) {
+    if has_remote && !contains(process_env, workspace, reviewed_head, reviewed_head) {
         let _ = git_command_success(
+            process_env,
             workspace,
             &["fetch", "--no-tags", "--quiet", "origin", reviewed_head],
         );
     }
     if git_output(
+        process_env,
         workspace,
         &[
             "rev-parse",
@@ -133,18 +154,19 @@ pub fn verify_refreshed_head_from_base(
     {
         return Err(format!("base ref '{landing_ref}' cannot be resolved"));
     }
-    if !contains(workspace, reviewed_head, head) {
+    if !contains(process_env, workspace, reviewed_head, head) {
         return Err(format!(
             "head {head} does not descend from reviewed head {reviewed_head}"
         ));
     }
-    verified_base_update(workspace, reviewed_head, head, &landing_ref)
+    verified_base_update(process_env, workspace, reviewed_head, head, &landing_ref)
 }
 
 /// Shared owner retry/landing proof for a provider base-only update. A cached
 /// base never stands in for a successful fetch. Source and native evidence
 /// continue to describe the original immutable accepted candidate.
 pub(in crate::executor::automation::vcs) fn verify_published_base_update(
+    process_env: &orbit_common::Env,
     workspace: &Path,
     candidate: &orbit_types::workflow::handoff::HandoffCandidate,
     status: &PullRequestStatus,
@@ -180,29 +202,50 @@ pub(in crate::executor::automation::vcs) fn verify_published_base_update(
             "provider head is not an exact commit identity".into(),
         ));
     }
-    let remote = git_command_success(workspace, &["remote", "get-url", "origin"])?;
+    let remote = git_command_success(process_env, workspace, &["remote", "get-url", "origin"])?;
     let landing_ref = if remote {
-        super::super::git::fetch_remote_base(workspace, &candidate.landing_branch)?;
+        super::super::git::fetch_remote_base(process_env, workspace, &candidate.landing_branch)?;
         format!("origin/{}", candidate.landing_branch)
     } else {
         candidate.landing_branch.clone()
     };
-    if !contains(workspace, &candidate.base.commit, &landing_ref) {
+    if !contains(process_env, workspace, &candidate.base.commit, &landing_ref) {
         return Err(refuse("landing base rewound or unrelated".into()));
     }
     if remote {
-        fetch_provider_head(workspace, head, &candidate.source_branch, number);
+        fetch_provider_head(
+            process_env,
+            workspace,
+            head,
+            &candidate.source_branch,
+            number,
+        );
     }
-    verified_base_update(workspace, &candidate.candidate.commit, head, &landing_ref)
-        .map_err(refuse)?;
+    verified_base_update(
+        process_env,
+        workspace,
+        &candidate.candidate.commit,
+        head,
+        &landing_ref,
+    )
+    .map_err(refuse)?;
     if head != candidate.candidate.commit {
-        let parents = git_output(workspace, &["rev-list", "--parents", "-n", "1", head])?;
+        let parents = git_output(
+            process_env,
+            workspace,
+            &["rev-list", "--parents", "-n", "1", head],
+        )?;
         let base_side = parents
             .split_whitespace()
             .nth(2)
             .ok_or_else(|| refuse("base parent unavailable".into()))?;
-        if !contains(workspace, &candidate.base.commit, base_side)
-            || contains(workspace, base_side, &candidate.candidate.commit)
+        if !contains(process_env, workspace, &candidate.base.commit, base_side)
+            || contains(
+                process_env,
+                workspace,
+                base_side,
+                &candidate.candidate.commit,
+            )
         {
             return Err(refuse(
                 "provider base parent is rewound, unrelated or has not advanced".into(),
@@ -222,9 +265,10 @@ pub(in crate::executor::automation::vcs) fn verify_published_base_update(
                 "provider merge is not an exact commit identity".into(),
             ));
         }
-        merge_delivers_head(workspace, merge, head, &landing_ref).map_err(refuse)?;
+        merge_delivers_head(process_env, workspace, merge, head, &landing_ref).map_err(refuse)?;
     } else if remote {
         let actual = git_output(
+            process_env,
             workspace,
             &[
                 "ls-remote",
@@ -243,18 +287,26 @@ pub(in crate::executor::automation::vcs) fn verify_published_base_update(
 /// Fetch a provider head the checkout cannot read yet: first its source
 /// branch, then the pull request's retained ref. Fetch failures are not
 /// answers; the caller's later reads refuse an object still missing.
-fn fetch_provider_head(workspace: &Path, head: &str, source_branch: &str, number: u64) {
-    if contains(workspace, head, head) {
+fn fetch_provider_head(
+    process_env: &orbit_common::Env,
+    workspace: &Path,
+    head: &str,
+    source_branch: &str,
+    number: u64,
+) {
+    if contains(process_env, workspace, head, head) {
         return;
     }
     let _ = git_command_success(
+        process_env,
         workspace,
         &["fetch", "--no-tags", "--quiet", "origin", source_branch],
     );
-    if !contains(workspace, head, head) {
+    if !contains(process_env, workspace, head, head) {
         // GitHub retains this ref after deleting a merged source branch,
         // including when the landing branch received a squash commit.
         let _ = git_command_success(
+            process_env,
             workspace,
             &[
                 "fetch",
@@ -271,25 +323,38 @@ fn fetch_provider_head(workspace: &Path, head: &str, source_branch: &str, number
 /// the clean merge of `head` into the merge's first parent, the landing
 /// branch tip it merged onto. Returns that first parent.
 fn merge_delivers_head(
+    process_env: &orbit_common::Env,
     workspace: &Path,
     merge: &str,
     head: &str,
     landing_ref: &str,
 ) -> Result<String, String> {
-    if !contains(workspace, merge, landing_ref) {
+    if !contains(process_env, workspace, merge, landing_ref) {
         return Err("reported merge is absent from the fetched landing base".into());
     }
-    let parents = git_output(workspace, &["rev-list", "--parents", "-n", "1", merge])
-        .map_err(|error| format!("merge {merge} cannot be read: {error}"))?;
+    let parents = git_output(
+        process_env,
+        workspace,
+        &["rev-list", "--parents", "-n", "1", merge],
+    )
+    .map_err(|error| format!("merge {merge} cannot be read: {error}"))?;
     let parent = parents
         .split_whitespace()
         .nth(1)
         .ok_or_else(|| "merge parent unavailable".to_string())?
         .to_string();
-    let clean = git_output(workspace, &["merge-tree", "--write-tree", head, &parent])
-        .map_err(|error| format!("head {head} does not merge cleanly onto {parent}: {error}"))?;
-    let tree = git_output(workspace, &["rev-parse", &format!("{merge}^{{tree}}")])
-        .map_err(|error| format!("merge {merge} has no readable tree: {error}"))?;
+    let clean = git_output(
+        process_env,
+        workspace,
+        &["merge-tree", "--write-tree", head, &parent],
+    )
+    .map_err(|error| format!("head {head} does not merge cleanly onto {parent}: {error}"))?;
+    let tree = git_output(
+        process_env,
+        workspace,
+        &["rev-parse", &format!("{merge}^{{tree}}")],
+    )
+    .map_err(|error| format!("merge {merge} has no readable tree: {error}"))?;
     if clean.lines().next().map(str::trim) != Some(tree.trim()) {
         return Err("reported merge tree does not deliver this provider head".into());
     }
@@ -325,6 +390,7 @@ pub struct MergedBaseRefresh<'a> {
 /// Any commit outside the candidate plus base, an unreadable object or an
 /// unclean merge refuses.
 pub fn verify_merged_base_refresh(
+    process_env: &orbit_common::Env,
     workspace: &Path,
     refresh: &MergedBaseRefresh<'_>,
 ) -> Result<(), OrbitError> {
@@ -343,10 +409,11 @@ pub fn verify_merged_base_refresh(
             return Err(refuse(format!("{commit} is not an exact commit identity")));
         }
     }
-    let remote = git_command_success(workspace, &["remote", "get-url", "origin"])?;
+    let remote = git_command_success(process_env, workspace, &["remote", "get-url", "origin"])?;
     let landing_ref = if remote {
-        super::super::git::fetch_remote_base(workspace, refresh.landing_branch)?;
+        super::super::git::fetch_remote_base(process_env, workspace, refresh.landing_branch)?;
         fetch_provider_head(
+            process_env,
             workspace,
             refresh.merged_head,
             refresh.source_branch,
@@ -357,6 +424,7 @@ pub fn verify_merged_base_refresh(
         refresh.landing_branch.to_string()
     };
     let onto = merge_delivers_head(
+        process_env,
         workspace,
         refresh.merge_commit,
         refresh.merged_head,
@@ -364,6 +432,7 @@ pub fn verify_merged_base_refresh(
     )
     .map_err(refuse)?;
     verified_base_update(
+        process_env,
         workspace,
         refresh.published_head,
         refresh.merged_head,

@@ -13,29 +13,38 @@ pub(in crate::executor::automation::vcs) struct BranchFreshness {
 }
 
 pub(in crate::executor::automation::vcs) fn original_base_sha(
+    process_env: &orbit_common::Env,
     workspace_path: &Path,
     head_sha: &str,
     target_base_sha: &str,
 ) -> Result<String, OrbitError> {
-    match git_output(workspace_path, &["merge-base", head_sha, target_base_sha]) {
+    match git_output(
+        process_env,
+        workspace_path,
+        &["merge-base", head_sha, target_base_sha],
+    ) {
         Ok(sha) if !sha.trim().is_empty() => Ok(sha.trim().to_string()),
-        _ => Ok(
-            git_output(workspace_path, &["rev-parse", &format!("{head_sha}^")])?
-                .trim()
-                .to_string(),
-        ),
+        _ => Ok(git_output(
+            process_env,
+            workspace_path,
+            &["rev-parse", &format!("{head_sha}^")],
+        )?
+        .trim()
+        .to_string()),
     }
 }
 
 pub(in crate::executor::automation::vcs) fn ensure_branch_fresh_against_base(
+    process_env: &orbit_common::Env,
     repo_root: &Path,
     head: &str,
     base: &str,
     sync_mode: BaseSyncMode,
 ) -> Result<BranchFreshness, OrbitError> {
-    let base_ref = resolve_worktree_start_point(repo_root, base, sync_mode)?;
-    let base_sha = commit_sha(repo_root, &base_ref)?;
-    let freshness = branch_freshness_against_ref(repo_root, head, &base_ref, &base_sha)?;
+    let base_ref = resolve_worktree_start_point(process_env, repo_root, base, sync_mode)?;
+    let base_sha = commit_sha(process_env, repo_root, &base_ref)?;
+    let freshness =
+        branch_freshness_against_ref(process_env, repo_root, head, &base_ref, &base_sha)?;
 
     if freshness.commits_behind > 0 {
         return Err(OrbitError::Execution(format!(
@@ -47,12 +56,14 @@ pub(in crate::executor::automation::vcs) fn ensure_branch_fresh_against_base(
 }
 
 pub(in crate::executor::automation::vcs) fn branch_freshness_against_ref(
+    process_env: &orbit_common::Env,
     repo_root: &Path,
     head: &str,
     base_ref: &str,
     base_sha: &str,
 ) -> Result<BranchFreshness, OrbitError> {
     let divergence = git_output(
+        process_env,
         repo_root,
         &[
             "rev-list",
@@ -78,10 +89,12 @@ pub(in crate::executor::automation::vcs) fn branch_freshness_against_ref(
 }
 
 pub(in crate::executor::automation::vcs) fn commit_sha(
+    process_env: &orbit_common::Env,
     repo_root: &Path,
     reference: &str,
 ) -> Result<String, OrbitError> {
     Ok(git_output(
+        process_env,
         repo_root,
         &["rev-parse", "--verify", &format!("{reference}^{{commit}}")],
     )?
@@ -90,10 +103,12 @@ pub(in crate::executor::automation::vcs) fn commit_sha(
 }
 
 pub(in crate::executor::automation::vcs) fn remote_branch_sha(
+    process_env: &orbit_common::Env,
     repo_root: &Path,
     branch: &str,
 ) -> Result<Option<String>, OrbitError> {
     let probe = remote_ref_output(
+        process_env,
         repo_root,
         &[
             "ls-remote",

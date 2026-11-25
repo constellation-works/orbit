@@ -17,8 +17,10 @@ fn stationary_primary_generation_records_are_benign() {
     init_repo(&primary);
     init_repo(&assigned);
 
-    let primary_before = git_fingerprint(&primary).expect("primary before");
-    let assigned_before = git_fingerprint(&assigned).expect("assigned before");
+    let primary_before =
+        git_fingerprint(&orbit_common::Env::capture(), &primary).expect("primary before");
+    let assigned_before =
+        git_fingerprint(&orbit_common::Env::capture(), &assigned).expect("assigned before");
     let base_branch = primary_before.branch.clone().expect("primary has a branch");
     let head_before = primary_before.head.clone();
 
@@ -34,6 +36,7 @@ fn stationary_primary_generation_records_are_benign() {
     .expect("participant record");
 
     let guard = WorktreeBoundaryGuard {
+        process_env: orbit_common::Env::capture(),
         task_id: "ORB-23736".to_string(),
         run_id: "jrun-test".to_string(),
         provider: "test".to_string(),

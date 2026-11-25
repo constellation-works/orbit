@@ -99,6 +99,7 @@ pub(super) fn tool(spec: Arc<PluginBackendSpec>, output_schema: Option<Value>) -
 
 pub(super) fn context(cwd: &Path) -> ToolContext {
     ToolContext {
+        env: orbit_common::Env::capture(),
         cwd: Some(cwd.to_string_lossy().into_owned()),
         ..ToolContext::default()
     }

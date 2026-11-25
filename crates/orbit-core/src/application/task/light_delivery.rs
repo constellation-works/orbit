@@ -63,6 +63,7 @@ pub(crate) fn light_delivery_decision(
         return Ok(None);
     }
     let judgement = orbit_engine::judge_light_delivery(
+        runtime.env(),
         workspace,
         base,
         head,

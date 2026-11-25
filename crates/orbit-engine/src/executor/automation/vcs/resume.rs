@@ -144,9 +144,10 @@ pub(crate) fn reconcile_resumed_failure_handoff(
 
     let workspace_path = canonicalize_existing_dir(&workspace_path, "resume workspace_path")
         .map_err(resume_preservation_error)?;
-    let base_sha =
-        commit_sha(&workspace_path, &original_base_sha).map_err(resume_preservation_error)?;
-    let head_sha = commit_sha(&workspace_path, "HEAD").map_err(resume_preservation_error)?;
+    let base_sha = commit_sha(&host.process_env(), &workspace_path, &original_base_sha)
+        .map_err(resume_preservation_error)?;
+    let head_sha = commit_sha(&host.process_env(), &workspace_path, "HEAD")
+        .map_err(resume_preservation_error)?;
     if head_sha == base_sha {
         return if preparation_refresh.is_some() {
             Err(resume_preservation_error(OrbitError::Execution(
@@ -569,7 +570,7 @@ fn ensure_preservation_parent_owned<H: RuntimeHost + ?Sized>(
     head_sha: &str,
     handoff_state: &PipelineState,
 ) -> Result<(), OrbitError> {
-    let parent_sha = commit_sha(workspace_path, &format!("{head_sha}^"))?;
+    let parent_sha = commit_sha(&host.process_env(), workspace_path, &format!("{head_sha}^"))?;
     if parent_sha == base_sha
         || handoff_state.step_output_entries().any(|(_, output)| {
             output.get("commit_sha").and_then(Value::as_str) == Some(parent_sha.as_str())

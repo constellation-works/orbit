@@ -17,7 +17,6 @@
 //! [`AuditEventStatus::Denied`]; the two rows answer different questions
 //! ("what was refused" versus "what call failed").
 
-use orbit_common::env_vars;
 use std::collections::BTreeSet;
 
 use orbit_common::OrbitError;
@@ -91,10 +90,10 @@ pub fn is_resident_drain_status_call(tool: &str, input: &serde_json::Value) -> b
 
 /// Routing hint for a nested client. The resident broker authenticates the
 /// caller and resolves the target workspace against the live cycle's grant.
-pub fn route_resident_delivery_recovery_to_broker(tool: &str) -> bool {
+pub fn route_resident_delivery_recovery_to_broker(env: &orbit_common::Env, tool: &str) -> bool {
     tool == TASK_RESUME_DELIVERY_OPERATION_ID
-        && std::env::var_os(env_vars::ORBIT_PLUGIN_BROKER).is_some()
-        && crate::run_input::managed_run_context_run_id_from_env().is_some()
+        && env.orbit_plugin_broker().is_some()
+        && crate::run_input::managed_run_context_run_id_from_env(env).is_some()
 }
 
 /// Identity facts retained after operator admission.
@@ -151,7 +150,10 @@ impl RuntimeKernel {
         if (tool_name == DECISION_SUBMIT_OPERATION_ID || tool_name == DECISION_DIGEST_OPERATION_ID)
             && session_context.worker_invocation.is_none()
             && matches!(
-                orbit_tools::plugin::resolve_plugin_callback_session(&self.global_root())?,
+                orbit_tools::plugin::resolve_plugin_callback_session(
+                    self.env(),
+                    &self.global_root()
+                )?,
                 orbit_tools::plugin::CallbackResolution::Identified(_)
             )
         {
@@ -164,7 +166,7 @@ impl RuntimeKernel {
         };
         let envelope = match capability_enforcement {
             CapabilityEnforcement::Enforce => {
-                CallerEnvelope::from_process_env(&orbit_common::Env::capture(), session_context)
+                CallerEnvelope::from_process_env(self.env(), session_context)
             }
             CapabilityEnforcement::McpSessionOnly => CallerEnvelope::mcp_session(session_context),
         };
@@ -172,8 +174,8 @@ impl RuntimeKernel {
     }
 
     /// Routing hint for the nested client. Only the broker authenticates the run.
-    pub fn env_names_resident_cycle(&self) -> bool {
-        crate::run_input::managed_run_context_run_id_from_env()
+    pub fn env_names_resident_cycle(&self, env: &orbit_common::Env) -> bool {
+        crate::run_input::managed_run_context_run_id_from_env(env)
             .is_some_and(|run_id| self.is_resident_cycle_run(&run_id))
     }
 
@@ -199,8 +201,7 @@ impl RuntimeKernel {
                 "'{operation_id}' is missing from the governed operation registry"
             ))
         })?;
-        let envelope =
-            CallerEnvelope::from_process_env(&orbit_common::Env::capture(), session_context);
+        let envelope = CallerEnvelope::from_process_env(self.env(), session_context);
         let caller = CallerCapabilities::resolve(&envelope);
         self.decide_with_envelope(operation, envelope)?;
 
@@ -234,7 +235,7 @@ impl RuntimeKernel {
     ) -> Result<(), OrbitError> {
         self.decide_with_envelope(
             operation,
-            CallerEnvelope::from_process_env(&orbit_common::Env::capture(), session_context),
+            CallerEnvelope::from_process_env(self.env(), session_context),
         )
     }
 
@@ -293,9 +294,8 @@ impl RuntimeKernel {
                     "governed operation denied"
                 );
                 let message = if operation.id == TASK_REQUEUE_OPERATION_ID
-                    && orbit_common::governance::authorization::agent_context_declared(
-                        &orbit_common::Env::capture(),
-                    ) {
+                    && orbit_common::governance::authorization::agent_context_declared(self.env())
+                {
                     format!("{denial}: managed agents cannot requeue blocked tasks")
                 } else {
                     denial.to_string()
@@ -324,7 +324,7 @@ impl RuntimeKernel {
     ) {
         let envelope = match enforcement {
             CapabilityEnforcement::Enforce if session.worker_invocation.is_none() => {
-                CallerEnvelope::from_process_env(&orbit_common::Env::capture(), session)
+                CallerEnvelope::from_process_env(self.env(), session)
             }
             _ => CallerEnvelope::mcp_session(session),
         };
@@ -405,7 +405,11 @@ impl RuntimeKernel {
             stdout_truncated: None,
             stderr_truncated: None,
             error_message,
-            host: std::env::var(env_vars::HOSTNAME).ok(),
+            host: self
+                .env()
+                .hostname()
+                .and_then(std::ffi::OsStr::to_str)
+                .map(ToOwned::to_owned),
             pid: std::process::id(),
             session_id: None,
             workspace_id: None,
@@ -455,11 +459,11 @@ impl RuntimeKernel {
 /// widened by whatever process happens to host its server — and a session that
 /// asserts nothing does not reach a handler that calls this, because the
 /// governed floor on that handler's tool refused it first.
-pub fn resolved_caller_capabilities(session: &ToolSessionContext) -> BTreeSet<McpCapability> {
-    CallerCapabilities::resolve(&CallerEnvelope::from_process_env(
-        &orbit_common::Env::capture(),
-        session,
-    ))
-    .grants()
-    .clone()
+pub fn resolved_caller_capabilities(
+    env: &orbit_common::Env,
+    session: &ToolSessionContext,
+) -> BTreeSet<McpCapability> {
+    CallerCapabilities::resolve(&CallerEnvelope::from_process_env(env, session))
+        .grants()
+        .clone()
 }

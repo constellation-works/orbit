@@ -132,11 +132,13 @@ pub struct PublicationPublishOutcome {
 /// compare-and-swap creation already prevent adopting or overwriting anything
 /// Orbit did not create for this lineage.
 pub fn publish_task_snapshot(
+    env: &orbit_common::Env,
     registry: &TaskRegistryStore,
     request: PublicationPublishRequest,
     policy: &AttachmentPolicy,
 ) -> Result<PublicationPublishOutcome, OrbitError> {
     publish_task_snapshot_inner(
+        env,
         registry,
         request,
         policy,
@@ -157,6 +159,7 @@ pub(super) enum PendingWriteStage {
 type PendingHook<'a> = dyn Fn(PendingWriteStage, &str) + 'a;
 
 pub(super) fn publish_task_snapshot_inner(
+    env: &orbit_common::Env,
     registry: &TaskRegistryStore,
     request: PublicationPublishRequest,
     policy: &AttachmentPolicy,
@@ -164,7 +167,7 @@ pub(super) fn publish_task_snapshot_inner(
 ) -> Result<PublicationPublishOutcome, OrbitError> {
     let request = validate_request(request)?;
     assert_registered_workspace(registry, &request)?;
-    let cache = PublicationCache::open(registry, &request)?;
+    let cache = PublicationCache::open(env, registry, &request)?;
     let observed = cache.observe_remote(&request)?;
     let action = decide_action(&cache, &request, &observed)?;
     let (generation, previous) = match action {
@@ -340,15 +343,24 @@ fn assert_registered_workspace(
 }
 
 /// Orbit-owned private clone plus object cache for one publication lineage.
-struct PublicationCache {
+struct PublicationCache<'a> {
+    process_env: &'a orbit_common::Env,
     root: PathBuf,
     git_dir: PathBuf,
     pending_path: PathBuf,
     pending_dir: PathBuf,
 }
 
-impl PublicationCache {
-    fn open(registry: &TaskRegistryStore, request: &ValidatedRequest) -> Result<Self, OrbitError> {
+impl<'a> PublicationCache<'a> {
+    fn runner(&self) -> GitRunner<'a> {
+        GitRunner::new(self.process_env, PUBLISH_LABEL)
+    }
+
+    fn open(
+        env: &'a orbit_common::Env,
+        registry: &TaskRegistryStore,
+        request: &ValidatedRequest,
+    ) -> Result<Self, OrbitError> {
         assert_outside_source_checkout(registry, request)?;
         let root = request
             .cache_dir
@@ -356,6 +368,7 @@ impl PublicationCache {
             .join("publish");
         create_private_dir_all(&root).map_err(|error| OrbitError::from_write_io(&root, error))?;
         let cache = Self {
+            process_env: env,
             git_dir: root.join("origin.git"),
             pending_path: root.join(PENDING_FILE_NAME),
             pending_dir: root.join(PENDING_DIR_NAME),
@@ -369,7 +382,7 @@ impl PublicationCache {
                     .map_err(|error| OrbitError::from_write_io(&cache.git_dir, error))?;
             }
             let git_dir = cache.git_dir_str()?;
-            runner().run(&[
+            cache.runner().run(&[
                 "init",
                 "--bare",
                 "--quiet",
@@ -377,7 +390,7 @@ impl PublicationCache {
                 short_branch(&request.publication_branch),
                 git_dir,
             ])?;
-            runner().run(&[
+            cache.runner().run(&[
                 "--git-dir",
                 git_dir,
                 "remote",
@@ -394,7 +407,7 @@ impl PublicationCache {
     }
 
     fn assert_cache_origin(&self, expected_remote: &str) -> Result<(), OrbitError> {
-        let observed = runner().run(&[
+        let observed = self.runner().run(&[
             "--git-dir",
             self.git_dir_str()?,
             "remote",
@@ -426,8 +439,10 @@ impl PublicationCache {
             "{}:{}",
             request.publication_branch, request.publication_branch
         );
-        runner().run(&["--git-dir", git_dir, "fetch", "--force", "origin", &refspec])?;
-        let commit = runner()
+        self.runner()
+            .run(&["--git-dir", git_dir, "fetch", "--force", "origin", &refspec])?;
+        let commit = self
+            .runner()
             .run(&[
                 "--git-dir",
                 git_dir,
@@ -436,7 +451,7 @@ impl PublicationCache {
             ])?
             .to_ascii_lowercase();
         let envelope = self.read_envelope(&commit)?;
-        let parent = runner().single_parent(self.git_dir_str()?, &commit)?;
+        let parent = self.runner().single_parent(self.git_dir_str()?, &commit)?;
         assert_pairing(request, &envelope)?;
         assert_envelope_parent_lineage(&envelope, parent.as_deref(), PUBLISH_LABEL)?;
         Ok(RemoteState {
@@ -450,7 +465,9 @@ impl PublicationCache {
 
     fn read_envelope(&self, commit: &str) -> Result<PublicationEnvelope, OrbitError> {
         let spec = format!("{commit}:{PUBLICATION_ENVELOPE_FILE_NAME}");
-        let attempt = runner().try_run(&["--git-dir", self.git_dir_str()?, "show", &spec])?;
+        let attempt = self
+            .runner()
+            .try_run(&["--git-dir", self.git_dir_str()?, "show", &spec])?;
         if !attempt.success {
             return Err(publish_error(format!(
                 "publication branch tip {commit} does not carry {PUBLICATION_ENVELOPE_FILE_NAME}; refusing to adopt or overwrite it"
@@ -462,7 +479,7 @@ impl PublicationCache {
     /// Object id of the `tasks/` tree, or `None` when the snapshot has no tasks.
     fn read_tasks_tree(&self, tree_ish: &str) -> Result<Option<String>, OrbitError> {
         let spec = format!("{tree_ish}:{PUBLICATION_TASKS_DIR_NAME}");
-        let attempt = runner().try_run(&[
+        let attempt = self.runner().try_run(&[
             "--git-dir",
             self.git_dir_str()?,
             "rev-parse",
@@ -515,7 +532,7 @@ impl PublicationCache {
         )?;
 
         let index = temp.path().join("index");
-        let indexed = runner().with_env(vec![(
+        let indexed = self.runner().with_env(vec![(
             "GIT_INDEX_FILE",
             path_str(&index, PUBLISH_LABEL)?.to_string(),
         )]);
@@ -560,7 +577,7 @@ impl PublicationCache {
         // [ORB-25009] Orbit's one identity and commit-message standard; the
         // authority machine is named in the body.
         let (name, email) = orbit_identity(CommitRole::Orbit, None);
-        let commit_runner = runner().with_env(vec![
+        let commit_runner = self.runner().with_env(vec![
             ("GIT_AUTHOR_NAME", name.clone()),
             ("GIT_AUTHOR_EMAIL", email.clone()),
             ("GIT_AUTHOR_DATE", stamp.clone()),
@@ -615,7 +632,7 @@ impl PublicationCache {
         let git_dir = self.git_dir_str()?;
         let lease = compare_and_swap_lease(&request.publication_branch, observed_tip);
         let refspec = format!("{commit}:{}", request.publication_branch);
-        let attempt = runner().try_run(&[
+        let attempt = self.runner().try_run(&[
             "--git-dir",
             git_dir,
             "push",
@@ -651,7 +668,7 @@ impl PublicationCache {
     }
 
     fn remote_branch_tip(&self, request: &ValidatedRequest) -> Result<Option<String>, OrbitError> {
-        let listing = runner().run(&[
+        let listing = self.runner().run(&[
             "--git-dir",
             self.git_dir_str()?,
             "ls-remote",
@@ -789,7 +806,7 @@ enum PublishAction {
 /// Reconcile the observed branch tip with the owner-local last-success record
 /// and any pending push, or refuse the run.
 fn decide_action(
-    cache: &PublicationCache,
+    cache: &PublicationCache<'_>,
     request: &ValidatedRequest,
     observed: &RemoteState,
 ) -> Result<PublishAction, OrbitError> {
@@ -970,10 +987,6 @@ fn compare_and_swap_lease(branch: &str, observed_tip: Option<&str>) -> String {
         Some(oid) => format!("--force-with-lease={branch}:{oid}"),
         None => format!("--force-with-lease={branch}:"),
     }
-}
-
-fn runner() -> GitRunner<'static> {
-    GitRunner::new(PUBLISH_LABEL)
 }
 
 fn redact_remote(message: &str, remote: &str) -> String {

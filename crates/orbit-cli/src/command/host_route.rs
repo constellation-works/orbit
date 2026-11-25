@@ -46,7 +46,8 @@ pub(crate) fn preflight(cli: &mut Cli, env: &Env) -> Result<Preflight, OrbitErro
     if host.is_none() && !may_route(cli) {
         return Ok(Preflight::Local);
     }
-    let global_root = orbit_core::runtime::resolve_global_root()?;
+    let global_root =
+        orbit_core::runtime::resolve_global_root(&orbit_core::composition::composition_env())?;
     // Plugin callbacks cannot use the host's SSH credentials. Refuse before
     // discovery as well as delivery, using the same root that authenticates
     // local callback sessions. Resolving --host can itself attempt SSH.
@@ -64,8 +65,12 @@ pub(crate) fn preflight(cli: &mut Cli, env: &Env) -> Result<Preflight, OrbitErro
             None
         };
         if let Some(destination) = destination {
-            let callback_root = orbit_core::runtime::resolve_generation_root(cli.root.as_deref())?;
+            let callback_root = orbit_core::runtime::resolve_generation_root(
+                &orbit_core::composition::composition_env(),
+                cli.root.as_deref(),
+            )?;
             orbit_core::adapter::command::refuse_plugin_child_remote_callback(
+                &orbit_core::composition::composition_env(),
                 &callback_root,
                 &args.name,
                 &destination,
@@ -76,7 +81,10 @@ pub(crate) fn preflight(cli: &mut Cli, env: &Env) -> Result<Preflight, OrbitErro
         && let ToolSubcommand::Run(args) = &tool.command
         && let Some(selector) = workspace_value(cli)?
     {
-        let callback_root = orbit_core::runtime::resolve_generation_root(cli.root.as_deref())?;
+        let callback_root = orbit_core::runtime::resolve_generation_root(
+            &orbit_core::composition::composition_env(),
+            cli.root.as_deref(),
+        )?;
         orbit_cmd::registry_runtime::refuse_cli_callback_workspace(
             &callback_root,
             &args.name,
@@ -84,7 +92,12 @@ pub(crate) fn preflight(cli: &mut Cli, env: &Env) -> Result<Preflight, OrbitErro
         )?;
     }
     // A claimed worker's calls follow its owner binding, never a prefix.
-    if OrbitRuntime::current_worker_invocation(&global_root)?.is_some() {
+    if OrbitRuntime::current_worker_invocation(
+        &orbit_core::composition::composition_env(),
+        &global_root,
+    )?
+    .is_some()
+    {
         if host.is_some() {
             return Err(OrbitError::InvalidInput(
                 "--host is not available to a claimed worker; its calls follow the owner \
@@ -157,9 +170,12 @@ pub(crate) fn preflight(cli: &mut Cli, env: &Env) -> Result<Preflight, OrbitErro
             if let Commands::Tool(tool) = &cli.command
                 && let ToolSubcommand::Run(args) = &tool.command
             {
-                let callback_root =
-                    orbit_core::runtime::resolve_generation_root(cli.root.as_deref())?;
+                let callback_root = orbit_core::runtime::resolve_generation_root(
+                    &orbit_core::composition::composition_env(),
+                    cli.root.as_deref(),
+                )?;
                 orbit_core::adapter::command::refuse_plugin_child_remote_callback(
+                    &orbit_core::composition::composition_env(),
                     &callback_root,
                     &args.name,
                     &task_id,

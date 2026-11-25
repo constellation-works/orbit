@@ -64,6 +64,7 @@ struct ScratchOwner {
 /// The host validation targets directory `repo_root`'s runs build into, held
 /// open, when it exists.
 struct TargetsRoot {
+    process_env: orbit_common::Env,
     primary: PathBuf,
     path: PathBuf,
     held: HeldDirectory,
@@ -78,8 +79,11 @@ struct Target {
 /// Open the targets directory of `repo_root` from `/` without following any
 /// component: a redirect anywhere is refused rather than followed, and every
 /// later check and change goes through the descriptor, not the path.
-fn targets_root(repo_root: &Path) -> Result<Option<TargetsRoot>, OrbitError> {
-    let Some(primary) = targets_primary(repo_root) else {
+fn targets_root(
+    process_env: &orbit_common::Env,
+    repo_root: &Path,
+) -> Result<Option<TargetsRoot>, OrbitError> {
+    let Some(primary) = targets_primary(process_env, repo_root) else {
         return Ok(None);
     };
     let mut held = HeldDirectory::open(&primary)?;
@@ -99,6 +103,7 @@ fn targets_root(repo_root: &Path) -> Result<Option<TargetsRoot>, OrbitError> {
         };
     }
     Ok(Some(TargetsRoot {
+        process_env: process_env.clone(),
         primary,
         path,
         held,
@@ -111,12 +116,12 @@ fn targets_root(repo_root: &Path) -> Result<Option<TargetsRoot>, OrbitError> {
 /// (`build_output::host_validation_source`), so a workspace that is itself a
 /// linked worktree, as a replica checkout can be, has its runs' targets under
 /// that primary rather than its own root [ORB-16398].
-fn targets_primary(repo_root: &Path) -> Option<PathBuf> {
+fn targets_primary(process_env: &orbit_common::Env, repo_root: &Path) -> Option<PathBuf> {
     let checkout = fs::canonicalize(repo_root).ok()?;
     if fs::symlink_metadata(checkout.join(".git")).is_ok_and(|meta| meta.is_dir()) {
         return Some(checkout);
     }
-    let (primary, _) = host_validation_source(&checkout).ok()?;
+    let (primary, _) = host_validation_source(process_env, &checkout).ok()?;
     fs::canonicalize(primary).ok()
 }
 
@@ -194,8 +199,11 @@ fn attributions<'a>(
 }
 
 /// Base runs' scratch checkouts by the target key their path derives.
-fn base_run_owners(repo_root: &Path) -> BTreeMap<String, ScratchOwner> {
-    recorded_base_runs(repo_root)
+fn base_run_owners(
+    process_env: &orbit_common::Env,
+    repo_root: &Path,
+) -> BTreeMap<String, ScratchOwner> {
+    recorded_base_runs(process_env, repo_root)
         .into_iter()
         .filter_map(|run| {
             let source = canonical_source(&run.worktree)?;
@@ -231,11 +239,15 @@ fn scratch_owner(
 
 /// Whether a run's checkout has a host validation target. A prefilter only:
 /// collection still applies every run, worker and containment gate.
-pub(super) fn run_has_host_target(repo_root: &Path, run: &JobRun) -> bool {
-    let Ok(Some(root)) = targets_root(repo_root) else {
+pub(super) fn run_has_host_target(
+    process_env: &orbit_common::Env,
+    repo_root: &Path,
+    run: &JobRun,
+) -> bool {
+    let Ok(Some(root)) = targets_root(process_env, repo_root) else {
         return false;
     };
-    run_worktree_paths(repo_root, run)
+    run_worktree_paths(process_env, repo_root, run)
         .unwrap_or_default()
         .iter()
         .filter_map(|worktree| canonical_source(worktree))
@@ -261,12 +273,13 @@ enum TargetOwner<'i, 'r> {
 /// removed or would remove. A failure is reported, never returned, so the
 /// rest of the sweep's figures survive it.
 pub(super) fn collect_host_targets(
+    process_env: &orbit_common::Env,
     repo_root: &Path,
     run_paths: &[(&JobRun, Vec<PathBuf>)],
     options: &WorktreeGcOptions,
     removed_worktrees: &BTreeSet<PathBuf>,
 ) -> Vec<WorktreeGcReport> {
-    let root = match targets_root(repo_root) {
+    let root = match targets_root(process_env, repo_root) {
         Ok(Some(root)) => root,
         Ok(None) => return Vec::new(),
         Err(error) => {
@@ -288,7 +301,7 @@ pub(super) fn collect_host_targets(
         }
     };
     let index = attributions(run_paths, &names);
-    let mut base_runs = base_run_owners(repo_root);
+    let mut base_runs = base_run_owners(process_env, repo_root);
     let mut targets = Vec::new();
     for name in names {
         let target = Target {
@@ -563,7 +576,7 @@ fn reclaim(
     // Re-establish containment immediately before deletion: the same real
     // root still at its path, holding the directory that was classified,
     // never a substitute.
-    let unchanged = targets_root(repo_root)
+    let unchanged = targets_root(&root.process_env, repo_root)
         .ok()
         .flatten()
         .is_some_and(|current| {

@@ -56,7 +56,7 @@ fn bounded_dependency_failure_authenticates_and_reruns_once() {
                     let (fx, host, request) = fixture(row);
                     bounded_logs(&fx, raw);
                     for id in [1000, 1001] {
-                        let read = run_private_vcs_operation("ci.job_log", &json!({"workspace_path":fx.repo,"run_id":"700","job_id":id.to_string()})).unwrap();
+                        let read = run_private_vcs_operation(&orbit_common::Env::capture(), "ci.job_log", &json!({"workspace_path":fx.repo,"run_id":"700","job_id":id.to_string()})).unwrap();
                         assert_eq!(read["truncated"], true);
                         assert_eq!(read["source_complete"], true);
                         assert_eq!(read["source"], if raw { "job_api_log" } else { "run_log" });
@@ -67,9 +67,12 @@ fn bounded_dependency_failure_authenticates_and_reruns_once() {
                             assert!(read["diagnostic"].is_string());
                         }
                     }
-                    let plan = run_private_vcs_operation("ci.rerun_plan", &request).expect(
-                        "complete bounded evidence must cross the previously held boundary",
-                    );
+                    let plan = run_private_vcs_operation(
+                        &orbit_common::Env::capture(),
+                        "ci.rerun_plan",
+                        &request,
+                    )
+                    .expect("complete bounded evidence must cross the previously held boundary");
                     assert_eq!(plan["plan"]["failed_jobs"].as_array().unwrap().len(), 2);
                     let logs = plan["plan"]["authentication"]["logs"].as_array().unwrap();
                     assert_eq!(logs[0]["proof"]["kind"], "selected_failure_regions");
@@ -294,7 +297,11 @@ fn bounded_retry_keeps_refusal_boundaries() {
                             _ => unreachable!(),
                         }
                         fs::write(path, serde_json::to_vec(&config).unwrap()).unwrap();
-                        let result = run_private_vcs_operation("ci.rerun_plan", &request);
+                        let result = run_private_vcs_operation(
+                            &orbit_common::Env::capture(),
+                            "ci.rerun_plan",
+                            &request,
+                        );
                         assert!(
                             result.is_err(),
                             "raw={raw} case={case}: refusal was not enforced"
@@ -349,7 +356,12 @@ fn bounded_nextest_retry_observes_results_and_never_resends_unknown_replies() {
                         )
                         .text
                     );
-                    let plan = run_private_vcs_operation("ci.rerun_plan", &request).unwrap();
+                    let plan = run_private_vcs_operation(
+                        &orbit_common::Env::capture(),
+                        "ci.rerun_plan",
+                        &request,
+                    )
+                    .unwrap();
                     assert!(plan["plan"]["authentication"]["logs"][0]["proof"]["failure_regions"]["byte_ranges"].is_array());
                     fs::write(
                         fx.forge.join("retry-log-1010"),
@@ -474,8 +486,12 @@ fn bounded_dependency_cycle_cannot_cover_failed_siblings() {
                         {"name":"Own check","number":3,"status":"completed","conclusion":"success"}
                     ]);
                     fs::write(path, serde_json::to_vec(&config).unwrap()).unwrap();
-                    let error = run_private_vcs_operation("ci.rerun_plan", &request)
-                        .expect_err("cyclic waiters cannot reach the eligible root");
+                    let error = run_private_vcs_operation(
+                        &orbit_common::Env::capture(),
+                        "ci.rerun_plan",
+                        &request,
+                    )
+                    .expect_err("cyclic waiters cannot reach the eligible root");
                     assert!(
                         error
                             .to_string()
@@ -522,17 +538,23 @@ fn no_edit_repair_authenticates_waiter_and_ambiguous_raw_log() {
                         signature: "failed step Wait".into()
                     },
                 ]);
-                let raw_err = run_private_vcs_operation("ci.rerun_plan", &flaky_request)
-                    .expect_err(
-                        "ambiguous raw timestamps remain refused for classification reruns",
-                    );
+                let raw_err = run_private_vcs_operation(
+                    &orbit_common::Env::capture(),
+                    "ci.rerun_plan",
+                    &flaky_request,
+                )
+                .expect_err("ambiguous raw timestamps remain refused for classification reruns");
                 assert!(raw_err.to_string().contains("ambiguous"), "{raw_err}");
 
                 // Mixed classifications are rejected by the provider adapter.
                 let mut mixed_request = flaky_request.clone();
                 mixed_request["roots"][0]["classification"] = json!("no_edit_repair");
-                let mixed_err = run_private_vcs_operation("ci.rerun_plan", &mixed_request)
-                    .expect_err("mixed classifications are rejected");
+                let mixed_err = run_private_vcs_operation(
+                    &orbit_common::Env::capture(),
+                    "ci.rerun_plan",
+                    &mixed_request,
+                )
+                .expect_err("mixed classifications are rejected");
                 assert!(
                     mixed_err.to_string().contains("ineligible retry roots"),
                     "{mixed_err}"
@@ -556,8 +578,12 @@ fn no_edit_repair_authenticates_waiter_and_ambiguous_raw_log() {
                         signature: "failed step Wait".into()
                     },
                 ]);
-                let plan_val = run_private_vcs_operation("ci.rerun_plan", &no_edit_request)
-                    .expect("no_edit_repair authenticates waiter and raw fallback logs");
+                let plan_val = run_private_vcs_operation(
+                    &orbit_common::Env::capture(),
+                    "ci.rerun_plan",
+                    &no_edit_request,
+                )
+                .expect("no_edit_repair authenticates waiter and raw fallback logs");
                 let plan: CiRerunPlan = serde_json::from_value(plan_val["plan"].clone()).unwrap();
                 assert_eq!(plan.failed_jobs.len(), 2);
 

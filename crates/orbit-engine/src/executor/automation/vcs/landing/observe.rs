@@ -26,7 +26,7 @@ pub(super) fn observe_or_stop<H: RuntimeHost + ?Sized>(
     status: Option<&PullRequestStatus>,
     view: &LandingView,
 ) -> Result<HandoffCandidate, OrbitError> {
-    match observe_candidate(context, status, view) {
+    match observe_candidate(&host.process_env(), context, status, view) {
         Ok(observed) => Ok(observed),
         Err(error) => Err(stop(host, context, &error.to_string())?),
     }
@@ -42,19 +42,27 @@ pub(super) fn observe_or_stop<H: RuntimeHost + ?Sized>(
 /// `owner/name` when a pull request is involved, and is carried from the
 /// accepted candidate for a checkout with no remote.
 pub(super) fn observe_candidate(
+    process_env: &orbit_common::Env,
     context: &HandoffLandingContext,
     status: Option<&PullRequestStatus>,
     view: &LandingView,
 ) -> Result<HandoffCandidate, OrbitError> {
     let candidate = &context.candidate;
     let workspace = &context.workspace_path;
-    let observed_candidate = observe_revision(workspace, &candidate.candidate, "candidate")?;
-    let observed_base = observe_revision(workspace, &candidate.base, "base")?;
-    let landing = resolve_landing_ref(workspace, &candidate.landing_branch, &candidate.delivery)?;
+    let observed_candidate =
+        observe_revision(process_env, workspace, &candidate.candidate, "candidate")?;
+    let observed_base = observe_revision(process_env, workspace, &candidate.base, "base")?;
+    let landing = resolve_landing_ref(
+        process_env,
+        workspace,
+        &candidate.landing_branch,
+        &candidate.delivery,
+    )?;
     // The validated base must still be reachable from the branch this lands on;
     // a rewritten history is not the base the evidence was produced against.
     if !matches!(candidate.delivery, HandoffDelivery::AlreadyLanded { .. })
         && !crate::executor::automation::vcs::git::is_ancestor(
+            process_env,
             workspace,
             &observed_base.commit,
             &landing,
@@ -102,17 +110,25 @@ pub(super) fn observe_candidate(
 /// owner cannot read a candidate one way when it accepts the work and a
 /// different way when it lands it.
 fn observe_revision(
+    process_env: &orbit_common::Env,
     workspace: &Path,
     accepted: &SourceRevision,
     label: &str,
 ) -> Result<SourceRevision, OrbitError> {
-    super::super::claim::observe_accepted_revision(workspace, accepted, label, "handoff_land")
+    super::super::claim::observe_accepted_revision(
+        process_env,
+        workspace,
+        accepted,
+        label,
+        "handoff_land",
+    )
 }
 
 /// The ref a delivery actually lands on: `origin/<branch>` for published work
 /// when the checkout has one, the local branch for an owner-local candidate. A
 /// landing branch that resolves to neither cannot be verified.
 pub(super) fn resolve_landing_ref(
+    process_env: &orbit_common::Env,
     workspace: &Path,
     landing_branch: &str,
     delivery: &HandoffDelivery,
@@ -128,6 +144,7 @@ pub(super) fn resolve_landing_ref(
     };
     for candidate in refs {
         if git_command_success(
+            process_env,
             workspace,
             &["rev-parse", "--verify", &format!("{candidate}^{{commit}}")],
         )? {
@@ -150,6 +167,7 @@ pub(super) fn resolve_landing_ref(
 /// the head and base are cached [ORB-15976]. Without `origin`, verification
 /// intentionally uses the owner's local landing branch.
 pub(super) fn adopt_base_update(
+    process_env: &orbit_common::Env,
     pin: &mut DeliveryPin,
     context: &HandoffLandingContext,
     status: &PullRequestStatus,
@@ -164,7 +182,7 @@ pub(super) fn adopt_base_update(
     if pin.candidate_sha() == Some(head) {
         return Some(head.to_string());
     }
-    match verify_published_base_update(&context.workspace_path, candidate, status) {
+    match verify_published_base_update(process_env, &context.workspace_path, candidate, status) {
         Ok(()) => {
             if pin.candidate_sha() != Some(head) {
                 pin.adopt_refreshed_candidate(Some(head));
@@ -185,18 +203,28 @@ pub(super) fn adopt_base_update(
 
 /// The landing branch's current commit in the owner checkout, refreshed from
 /// `origin` when the landing reads published delivery.
-pub(super) fn landing_tip(context: &HandoffLandingContext, view: &LandingView) -> Option<String> {
+pub(super) fn landing_tip(
+    process_env: &orbit_common::Env,
+    context: &HandoffLandingContext,
+    view: &LandingView,
+) -> Option<String> {
     let candidate = &context.candidate;
     if view.refreshed {
-        let _ = fetch_remote_base(&context.workspace_path, &candidate.landing_branch);
+        let _ = fetch_remote_base(
+            process_env,
+            &context.workspace_path,
+            &candidate.landing_branch,
+        );
     }
     let landing = resolve_landing_ref(
+        process_env,
         &context.workspace_path,
         &candidate.landing_branch,
         &candidate.delivery,
     )
     .ok()?;
     git_output(
+        process_env,
         &context.workspace_path,
         &["rev-parse", &format!("{landing}^{{commit}}")],
     )

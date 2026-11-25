@@ -30,13 +30,14 @@ pub(crate) const SUPPORTED_SYSTEM_BIN_DIRS: &[&str] = &["/opt/homebrew/bin", "/u
 /// Every CLI-backed provider enters through this resolver so service, routine,
 /// dashboard, and interactive dispatches use the same lookup policy.
 pub(crate) fn resolve_provider_launcher(
+    env: &orbit_common::Env,
     provider: &str,
     program: &str,
     cwd: Option<&Path>,
 ) -> Result<String, SpawnError> {
-    let path = std::env::var_os(env_vars::PATH);
-    let home = std::env::var_os(env_vars::HOME).map(PathBuf::from);
-    resolve_provider_launcher_with(provider, program, path.as_deref(), home.as_deref(), cwd)
+    let path = env.path();
+    let home = env.home().map(PathBuf::from);
+    resolve_provider_launcher_with(provider, program, path, home.as_deref(), cwd, env.pathext())
 }
 
 /// Where dispatch would launch `program` from, or `None` when it would fail
@@ -44,8 +45,12 @@ pub(crate) fn resolve_provider_launcher(
 /// for `orbit doctor providers`, so the diagnostic and dispatch share one
 /// lookup policy. A final lookup path containing parent-directory traversal,
 /// including traversal supplied by `cwd`, is refused before probing it.
-pub fn locate_provider_launcher(program: &str, cwd: Option<&Path>) -> Option<PathBuf> {
-    let resolved = PathBuf::from(resolve_provider_launcher(program, program, cwd).ok()?);
+pub fn locate_provider_launcher(
+    env: &orbit_common::Env,
+    program: &str,
+    cwd: Option<&Path>,
+) -> Option<PathBuf> {
+    let resolved = PathBuf::from(resolve_provider_launcher(env, program, program, cwd).ok()?);
     let resolved = match cwd {
         Some(cwd) if resolved.is_relative() => cwd.join(resolved),
         _ => resolved,
@@ -64,6 +69,7 @@ pub fn locate_provider_launcher(program: &str, cwd: Option<&Path>) -> Option<Pat
 /// environment (`workflow.validation_env.path` first) survives; the
 /// process `PATH` stands in only when `child_env` has none. [ORB-15204]
 pub(crate) fn orbit_tool_env(
+    env: &orbit_common::Env,
     child_env: &[(String, String)],
 ) -> Result<Vec<(String, String)>, SpawnError> {
     let current_exe = std::env::current_exe().map_err(|error| {
@@ -71,20 +77,15 @@ pub(crate) fn orbit_tool_env(
             "resolve dispatching Orbit executable for agent tool environment: {error}"
         ))
     })?;
-    let configured = std::env::var_os(ORBIT_BIN_ENV);
+    let configured = env.orbit_bin();
     let inherited_path = child_env
         .iter()
         .rev()
         .find(|(name, _)| name == env_vars::PATH)
-        .map(|(_, value)| std::ffi::OsString::from(value))
-        .or_else(|| std::env::var_os(env_vars::PATH));
-    let home = std::env::var_os(env_vars::HOME).map(PathBuf::from);
-    orbit_tool_env_with(
-        configured.as_deref(),
-        &current_exe,
-        inherited_path.as_deref(),
-        home.as_deref(),
-    )
+        .map(|(_, value)| OsStr::new(value))
+        .or(env.path());
+    let home = env.home().map(PathBuf::from);
+    orbit_tool_env_with(configured, &current_exe, inherited_path, home.as_deref())
 }
 
 // pub(crate) widened for sibling tests under the repository's enforced test layout.
@@ -208,6 +209,7 @@ fn resolve_provider_launcher_with(
     path: Option<&OsStr>,
     home: Option<&Path>,
     cwd: Option<&Path>,
+    pathext: Option<&OsStr>,
 ) -> Result<String, SpawnError> {
     resolve_provider_launcher_with_extra_dirs(
         provider,
@@ -216,6 +218,7 @@ fn resolve_provider_launcher_with(
         home,
         cwd,
         supported_system_bin_dirs(),
+        pathext,
     )
 }
 
@@ -230,6 +233,7 @@ fn resolve_provider_launcher_with_extra_dirs(
     home: Option<&Path>,
     cwd: Option<&Path>,
     extra_bin_dirs: impl IntoIterator<Item = PathBuf>,
+    _pathext: Option<&OsStr>,
 ) -> Result<String, SpawnError> {
     if !launcher_program_is_plain(program) {
         return Err(SpawnError::permanent(format!(
@@ -277,7 +281,7 @@ fn resolve_provider_launcher_with_extra_dirs(
         }
         #[cfg(windows)]
         if configured.extension().is_none() {
-            for extension in windows_executable_extensions() {
+            for extension in windows_executable_extensions(_pathext) {
                 let candidate = dir.join(format!("{program}{extension}"));
                 searched.push(candidate.clone());
                 if is_launchable_file(&candidate) {
@@ -340,9 +344,10 @@ pub fn missing_launcher_in(text: &str) -> Option<MissingLauncher> {
 }
 
 #[cfg(windows)]
-fn windows_executable_extensions() -> Vec<String> {
-    std::env::var(env_vars::PATHEXT)
-        .unwrap_or_else(|_| ".COM;.EXE;.BAT;.CMD".to_string())
+fn windows_executable_extensions(pathext: Option<&OsStr>) -> Vec<String> {
+    pathext
+        .and_then(OsStr::to_str)
+        .unwrap_or(".COM;.EXE;.BAT;.CMD")
         .split(';')
         .filter(|extension| !extension.is_empty())
         .map(str::to_ascii_lowercase)

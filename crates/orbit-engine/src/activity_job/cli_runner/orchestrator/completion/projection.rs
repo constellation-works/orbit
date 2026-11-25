@@ -586,6 +586,7 @@ pub(in super::super) fn project_completion(
         declared_failure_evidence,
         observed_limit,
     } = failure::completion_failure(failure::CompletionFailureInput {
+        home: host.process_env().home(),
         provider: provider_enum,
         spec,
         input,

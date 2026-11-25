@@ -221,6 +221,7 @@ fn claimed_new_paths_outside_the_footprint_deliver_and_request_owner_widening() 
             git_success(workspace, &["commit", "-m", "candidate"]).unwrap();
             assert!(
                 orbit_engine::validate_claim_new_paths(
+                    &orbit_common::Env::capture(),
                     workspace,
                     &task.context_files,
                     &base,
@@ -240,9 +241,14 @@ fn claimed_new_paths_outside_the_footprint_deliver_and_request_owner_widening() 
             host.widenings(CLAIMED_TASK_ID).is_empty(),
             "a claimed leaf never writes the owner's selectors; the owner widens at handoff"
         );
-        let (_, widening) =
-            orbit_engine::validate_claim_new_paths(workspace, &task.context_files, &base, "HEAD")
-                .unwrap();
+        let (_, widening) = orbit_engine::validate_claim_new_paths(
+            &orbit_common::Env::capture(),
+            workspace,
+            &task.context_files,
+            &base,
+            "HEAD",
+        )
+        .unwrap();
         assert_eq!(
             widening,
             if widened {
@@ -388,6 +394,7 @@ fn owner_new_path_validation_refuses_symlinks_and_widens_rename_destinations() {
         git_success(workspace, &["add", "--", path]).unwrap();
         git_success(workspace, &["commit", "-m", "untrusted candidate"]).unwrap();
         let validated = orbit_engine::validate_claim_new_paths(
+            &orbit_common::Env::capture(),
             workspace,
             &["file:src/lib.rs".into()],
             &base,

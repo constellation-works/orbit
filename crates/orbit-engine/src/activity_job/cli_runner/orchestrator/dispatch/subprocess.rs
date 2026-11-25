@@ -190,7 +190,9 @@ pub(super) fn invoke_cli_provider(
     // mounts cannot cover while compiling those mounts; take that snapshot off
     // the spawned child rather than walking the worktree a second time.
     let mut linux_post_run_guard = None;
+    let process_env = host.process_env();
     let spawn_result = spawn_for_supervision(
+        &process_env,
         resolved_program,
         subprocess_args,
         child_env,
@@ -215,33 +217,36 @@ pub(super) fn invoke_cli_provider(
         }
         plugin_broker.bind_sandbox(spawned.child.pid());
         linux_post_run_guard = spawned.take_linux_post_run_guard();
-        spawn_with_timeout(SpawnWithTimeoutRequest {
-            program: resolved_program,
-            args: subprocess_args,
-            stdin_bytes,
-            env: child_env,
-            cwd: subprocess_cwd.as_deref(),
-            timeout: wall_clock_timeout,
-            sandbox,
-            trace: SpawnTraceContext {
-                provider,
-                job_run_id: run_id,
-                task_id: task_id_from_input(input),
-                cwd: subprocess_cwd_string.as_deref(),
+        spawn_with_timeout(
+            &process_env,
+            SpawnWithTimeoutRequest {
+                program: resolved_program,
+                args: subprocess_args,
+                stdin_bytes,
+                env: child_env,
+                cwd: subprocess_cwd.as_deref(),
+                timeout: wall_clock_timeout,
+                sandbox,
+                trace: SpawnTraceContext {
+                    provider,
+                    job_run_id: run_id,
+                    task_id: task_id_from_input(input),
+                    cwd: subprocess_cwd_string.as_deref(),
+                },
+                output_capture_limit: None,
+                on_spawn: Some(&on_spawn),
+                on_progress: Some(ProgressReporter {
+                    interval: PROVIDER_PROGRESS_INTERVAL,
+                    report: &report_progress,
+                }),
+                stopped_descendants: Some(StoppedDescendantReporter {
+                    threshold: stopped_descendant_threshold(&process_env),
+                    report: &report_stopped,
+                }),
+                spawned_child: Some(spawned),
+                stall_window,
             },
-            output_capture_limit: None,
-            on_spawn: Some(&on_spawn),
-            on_progress: Some(ProgressReporter {
-                interval: PROVIDER_PROGRESS_INTERVAL,
-                report: &report_progress,
-            }),
-            stopped_descendants: Some(StoppedDescendantReporter {
-                threshold: stopped_descendant_threshold(&orbit_common::Env::capture()),
-                report: &report_stopped,
-            }),
-            spawned_child: Some(spawned),
-            stall_window,
-        })
+        )
     });
     // The provider has exited, timed out, or failed to start: nothing in its
     // sandbox may reach the broker any longer.

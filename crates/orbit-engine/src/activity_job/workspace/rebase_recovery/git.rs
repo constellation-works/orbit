@@ -124,15 +124,23 @@ pub(super) fn completion_recovery_base_ref(prepared: &Value) -> Option<String> {
 /// Whether HEAD still has the shape a stopped rebase gives it: detached, on
 /// `onto` or a pick replayed onto it. Earlier repairs are adopted only from
 /// file edits; an actor that re-attached or moved HEAD is not continued.
-pub(super) fn stopped_head_on_pin(root: &Path, onto: &str) -> Result<bool, DispatchError> {
+pub(super) fn stopped_head_on_pin(
+    process_env: &orbit_common::Env,
+    root: &Path,
+    onto: &str,
+) -> Result<bool, DispatchError> {
     Ok(
-        !git_output_raw(root, &["symbolic-ref", "--quiet", "HEAD"])?.success
-            && git_is_ancestor(root, onto, "HEAD")?,
+        !git_output_raw(process_env, root, &["symbolic-ref", "--quiet", "HEAD"])?.success
+            && git_is_ancestor(process_env, root, onto, "HEAD")?,
     )
 }
 
-pub(super) fn unmerged_paths(root: &Path) -> Result<Vec<String>, DispatchError> {
+pub(super) fn unmerged_paths(
+    process_env: &orbit_common::Env,
+    root: &Path,
+) -> Result<Vec<String>, DispatchError> {
     let mut paths = nul_paths(&git_stdout_bytes(
+        process_env,
         root,
         &["diff", "--name-only", "-z", "--diff-filter=U", "--"],
     )?);
@@ -169,8 +177,12 @@ pub(super) fn recheck_recovery_owner(
     Ok(())
 }
 
-pub(super) fn git_mutation(root: &Path, args: &[&str]) -> Result<(), DispatchError> {
-    let output = git_mutation_output(root, args)?;
+pub(super) fn git_mutation(
+    process_env: &orbit_common::Env,
+    root: &Path,
+    args: &[&str],
+) -> Result<(), DispatchError> {
+    let output = git_mutation_output(process_env, root, args)?;
     if output.success {
         Ok(())
     } else {
@@ -179,10 +191,11 @@ pub(super) fn git_mutation(root: &Path, args: &[&str]) -> Result<(), DispatchErr
 }
 
 pub(in crate::activity_job::workspace) fn git_mutation_output(
+    process_env: &orbit_common::Env,
     root: &Path,
     args: &[&str],
 ) -> Result<GitBytesOutcome, DispatchError> {
-    let output = git_run_bytes(root, args, None).map_err(|error| {
+    let output = git_run_bytes(process_env, root, args, None).map_err(|error| {
         DispatchError::CliInvocationPermanent(format!(
             "mutate Git state in '{}' with `git {}`: {error}",
             root.display(),

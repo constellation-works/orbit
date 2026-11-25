@@ -41,7 +41,7 @@ pub(in crate::executor::automation::vcs::landing) fn land_pull_request<H: Runtim
         poll.decide_completion_hold(&state)?;
         // [ORB-15956] A branch update this landing (or an earlier attempt)
         // requested moved the head onto a verified merge with the base.
-        let updated_head = adopt_base_update(&mut poll.pin, context, &status);
+        let updated_head = adopt_base_update(&host.process_env(), &mut poll.pin, context, &status);
         let refresh = poll.refresh_base(&status, false)?;
         if matches!(refresh, RefreshStep::Changed) {
             continue;
@@ -51,7 +51,7 @@ pub(in crate::executor::automation::vcs::landing) fn land_pull_request<H: Runtim
             RefreshStep::Wait | RefreshStep::Adopted { waiting: true }
         );
         if let PrMergeState::Merged = state {
-            return poll.settle_merged(&status, updated_head);
+            return poll.settle_merged(&host.process_env(), &status, updated_head);
         }
         poll.ensure_pinned(&status)?;
         poll.refuse_draft(&status)?;
@@ -66,16 +66,20 @@ pub(in crate::executor::automation::vcs::landing) fn land_pull_request<H: Runtim
         // neutral result keeps waiting. Branch protection is separate.
         let owed = owed_hosted_checks(&status, &context.owed_hosted_checks);
         let mut waiting_on_recovery = refresh_wait;
-        if let Step::Continue =
-            poll.recover_failed_checks(&status, &state, &owed, &mut waiting_on_recovery)?
-        {
+        if let Step::Continue = poll.recover_failed_checks(
+            &host.process_env(),
+            &status,
+            &state,
+            &owed,
+            &mut waiting_on_recovery,
+        )? {
             continue;
         }
         if !waiting_on_recovery {
             let mergeable = matches!(state, PrMergeState::Mergeable);
             poll.stop_on_terminal_state(&status, state)?;
             if mergeable && poll.intent.is_none() && owed == OwedHostedChecks::Passed {
-                match poll.request_merge(&status, updated_head.is_some())? {
+                match poll.request_merge(&host.process_env(), &status, updated_head.is_some())? {
                     Step::Continue => continue,
                     Step::Done(completed) => return Ok(completed),
                     Step::Proceed => {}
@@ -304,10 +308,21 @@ impl<'a, H: RuntimeHost + ?Sized> LandingPoll<'a, H> {
             return Ok(());
         }
         let candidate = &context.candidate;
-        if git_command_success(&self.workspace, &["remote", "get-url", "origin"]).unwrap_or(false) {
-            let _ = fetch_remote_base(&self.workspace, &candidate.source_branch);
+        if git_command_success(
+            &self.host.process_env(),
+            &self.workspace,
+            &["remote", "get-url", "origin"],
+        )
+        .unwrap_or(false)
+        {
+            let _ = fetch_remote_base(
+                &self.host.process_env(),
+                &self.workspace,
+                &candidate.source_branch,
+            );
         }
         let changed = pull_request_changed_paths(
+            &self.host.process_env(),
             &self.workspace,
             Some(&candidate.base_branch),
             false,

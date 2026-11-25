@@ -26,7 +26,7 @@ impl OrbitRuntime {
             "baseRefName":landing.base_branch,"headRefOid":landing.head_sha,
             "mergeCommit":{"oid":landing.merge_commit},
         }}));
-        orbit_engine::verify_handoff_pull_request_head(&self.paths().repo_root, candidate, &status)
+        orbit_engine::verify_handoff_pull_request_head(self.env(), &self.paths().repo_root, candidate, &status)
             .map_err(|error| OrbitError::Execution(format!(
                 "external merge does not verify the accepted handoff: {error}; reconcile_review is required for a merged head with other changes"
             )))?;

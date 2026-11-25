@@ -12,11 +12,16 @@ mod host_targets {
     use std::collections::BTreeSet;
     use std::path::{Path, PathBuf};
 
-    pub(super) fn run_has_host_target(_repo_root: &Path, _run: &JobRun) -> bool {
+    pub(super) fn run_has_host_target(
+        _process_env: &orbit_common::Env,
+        _repo_root: &Path,
+        _run: &JobRun,
+    ) -> bool {
         false
     }
 
     pub(super) fn collect_host_targets(
+        _process_env: &orbit_common::Env,
         _repo_root: &Path,
         _run_paths: &[(&JobRun, Vec<PathBuf>)],
         _options: &WorktreeGcOptions,

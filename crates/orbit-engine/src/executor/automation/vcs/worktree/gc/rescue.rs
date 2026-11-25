@@ -14,6 +14,7 @@ use std::path::Path;
 /// patch. Whatever GC cannot capture, or a tree that changes under it, keeps
 /// the worktree as a rescue candidate with the reason in `detail`.
 pub(super) fn rescue_dirty_worktree(
+    process_env: &orbit_common::Env,
     repo_root: &Path,
     path: &Path,
     run: &JobRun,
@@ -31,15 +32,22 @@ pub(super) fn rescue_dirty_worktree(
         report.action = "skipped:worker_alive".to_string();
         return Ok(report);
     }
-    let snapshot = match rescue::candidate_snapshot(path) {
+    let snapshot = match rescue::candidate_snapshot(process_env, path) {
         Ok(snapshot) => snapshot,
         Err(reason) => return retain(report, reason),
     };
     let task_ids = attributed_task_ids(run);
-    let recovery = match rescue::published_recovery(path, branch, &task_ids, &run.run_id, &snapshot)
-    {
+    let recovery = match rescue::published_recovery(
+        process_env,
+        path,
+        branch,
+        &task_ids,
+        &run.run_id,
+        &snapshot,
+    ) {
         Some(recovery) => recovery,
         None => match rescue::write_rescue_patch(
+            process_env,
             repo_root,
             path,
             &run.run_id,
@@ -64,13 +72,15 @@ pub(super) fn rescue_dirty_worktree(
     }
     // Declared build output goes first, without a Git deadline, so the forced
     // removal below has only source left to delete.
-    if let Err(error) = super::super::reclaim::collect(path, reclaim_patterns(options), true) {
+    if let Err(error) =
+        super::super::reclaim::collect(process_env, path, reclaim_patterns(options), true)
+    {
         tracing::warn!(path = %path.display(), %error,
             "worktree GC could not reclaim declared output before removing a rescued worktree");
     }
     // The recovery covers the tree it was checked against. Content written
     // since then is not in it, so the worktree stays.
-    match rescue::candidate_snapshot(path) {
+    match rescue::candidate_snapshot(process_env, path) {
         Ok(current) if current == snapshot => {}
         _ => {
             report.bytes_reclaimed = 0;
@@ -83,8 +93,8 @@ pub(super) fn rescue_dirty_worktree(
     // `--force` is licensed only here: the candidate was just verified
     // recoverable and unchanged, and Git's dirty-tree refusal would otherwise
     // keep the checkout forever.
-    remove_worktree(repo_root, path, None, true)?;
-    report.action = delete_run_branch(repo_root, branch, None);
+    remove_worktree(process_env, repo_root, path, None, true)?;
+    report.action = delete_run_branch(process_env, repo_root, branch, None);
     Ok(report)
 }
 
@@ -96,18 +106,20 @@ pub(super) fn rescue_dirty_worktree(
 /// there, in one compare-and-delete, so a commit made after GC checked the
 /// branch's commits keeps it.
 pub(super) fn delete_run_branch(
+    process_env: &orbit_common::Env,
     repo_root: &Path,
     branch: &str,
     checked_tip: Option<&str>,
 ) -> String {
     let deleted = |branch: &str| match checked_tip {
         Some(tip) => git_success(
+            process_env,
             repo_root,
             &["update-ref", "-d", &format!("refs/heads/{branch}"), tip],
         ),
-        None => git_success(repo_root, &["branch", "-D", branch]),
+        None => git_success(process_env, repo_root, &["branch", "-D", branch]),
     };
-    if branch_exists(repo_root, branch) && deleted(branch).is_err() {
+    if branch_exists(process_env, repo_root, branch) && deleted(branch).is_err() {
         "removed:branch_retained".to_string()
     } else {
         "removed".to_string()

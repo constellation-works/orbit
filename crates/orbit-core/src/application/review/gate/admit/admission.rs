@@ -42,7 +42,8 @@ pub(super) fn admit(
                 "review_validation_contract_missing: this admitted run predates the captured host required-check list; dispatch a fresh delivery run after upgrading the workspace".into(),
             )
         })?;
-    let candidate = candidate_identity(&context.workspace_path, &context.base_sha()?)?;
+    let candidate =
+        candidate_identity(runtime.env(), &context.workspace_path, &context.base_sha()?)?;
     if let Some(rebase) = rebase
         && candidate.head.commit != rebase.head_sha
     {

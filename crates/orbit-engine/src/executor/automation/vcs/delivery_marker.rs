@@ -30,6 +30,7 @@ const MAX_MARKER_LEN: usize = 64;
 /// (`[ORB-1, ORB-2]`), or as an `Orbit-Task` trailer value. Quoted `Fixes:`
 /// attribution is excluded, and `max_count` limits only accepted deliveries.
 pub(super) fn commits_matching(
+    process_env: &orbit_common::Env,
     repo_root: &Path,
     marker: &str,
     scope: &[&str],
@@ -59,7 +60,7 @@ pub(super) fn commits_matching(
     // subjects. Keep messages paired with their SHAs using NUL separators,
     // then apply the shared ownership parser before counting matches. Passing
     // --max-count to Git would let newer quotes hide an older owned delivery.
-    let history = git_output(repo_root, &args)?;
+    let history = git_output(process_env, repo_root, &args)?;
     let mut fields = history.split('\0');
     Ok(
         std::iter::from_fn(|| Some((fields.next()?, fields.next()?)))
@@ -78,11 +79,12 @@ pub(super) fn commits_matching(
 
 /// Whether any commit reachable from `from` carries `marker`.
 pub(super) fn marker_reachable(
+    process_env: &orbit_common::Env,
     repo_root: &Path,
     marker: &str,
     from: &str,
 ) -> Result<bool, OrbitError> {
-    Ok(!commits_matching(repo_root, marker, &[from], Some(1))?.is_empty())
+    Ok(!commits_matching(process_env, repo_root, marker, &[from], Some(1))?.is_empty())
 }
 
 /// The bracketed delivery markers a commit message carries, in first-seen

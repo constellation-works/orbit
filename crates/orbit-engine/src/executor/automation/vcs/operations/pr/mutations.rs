@@ -11,6 +11,7 @@ use super::super::{DEFAULT_TIMEOUT_MS, SLOW_TIMEOUT_MS};
 /// comment saying why. Single-shot: a retry after an ambiguous failure could
 /// post the comment twice.
 pub(in crate::executor::automation::vcs::operations) fn pr_close(
+    process_env: &orbit_common::Env,
     input: &Value,
 ) -> Result<Value, OrbitError> {
     let number = required_string(input, "pr")?;
@@ -30,6 +31,7 @@ pub(in crate::executor::automation::vcs::operations) fn pr_close(
         comment.to_string(),
     ];
     let result = execute(
+        process_env,
         "gh",
         args,
         Some(Path::new(workspace_path)),
@@ -47,6 +49,7 @@ pub(in crate::executor::automation::vcs::operations) fn pr_close(
 /// the provider refuse a head that moved after the caller read it.
 /// Single-shot: a retry after an ambiguous failure could merge twice.
 pub(in crate::executor::automation::vcs::operations) fn pr_update_branch(
+    process_env: &orbit_common::Env,
     input: &Value,
 ) -> Result<Value, OrbitError> {
     let number = required_string(input, "pr")?;
@@ -64,6 +67,7 @@ pub(in crate::executor::automation::vcs::operations) fn pr_update_branch(
         ));
     }
     let result = execute(
+        process_env,
         "gh",
         vec![
             "api".to_string(),

@@ -18,7 +18,7 @@ const TEST_HOOK_PREFIX: &str = "ORBIT_TEST_";
 ///
 /// Cloning shares the snapshot. Nothing changes it after construction, so a
 /// variable set after capture is not seen.
-#[derive(Clone, Default)]
+#[derive(Clone, Default, PartialEq, Eq)]
 pub struct Env {
     vars: Arc<BTreeMap<OsString, OsString>>,
 }
@@ -52,7 +52,12 @@ impl Env {
     /// the secret a plugin manifest names. Fixed names use their accessor.
     /// A test hook is unset here outside tests and `test-support` builds.
     pub fn var(&self, name: &str) -> Option<&OsStr> {
-        if !cfg!(any(test, feature = "test-support")) && name.starts_with(TEST_HOOK_PREFIX) {
+        if !cfg!(any(test, feature = "test-support"))
+            && name.get(..TEST_HOOK_PREFIX.len()).is_some_and(|prefix| {
+                prefix == TEST_HOOK_PREFIX
+                    || cfg!(windows) && prefix.eq_ignore_ascii_case(TEST_HOOK_PREFIX)
+            })
+        {
             return None;
         }
         self.get(name)
@@ -74,7 +79,18 @@ impl Env {
     }
 
     pub(crate) fn get(&self, name: &str) -> Option<&OsStr> {
-        self.vars.get(OsStr::new(name)).map(OsString::as_os_str)
+        let value = self.vars.get(OsStr::new(name));
+        // Windows looks up environment names without regard to case. Keep
+        // captured spelling for child inheritance, including the usual Path.
+        #[cfg(windows)]
+        let value = value.or_else(|| {
+            self.vars.iter().find_map(|(key, value)| {
+                key.to_str()
+                    .is_some_and(|key| key.eq_ignore_ascii_case(name))
+                    .then_some(value)
+            })
+        });
+        value.map(OsString::as_os_str)
     }
 }
 

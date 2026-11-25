@@ -33,19 +33,21 @@ fn log_collector(
 /// Read one `gh` stdout stream up to the source cap, retaining only bounded
 /// display, command, and checkout evidence. No unbounded source copy is held.
 pub(super) fn stream_bounded_log(
+    env: &orbit_common::Env,
     request: &ExecRequest,
     bounds: LogReadBounds,
     shape: ExcerptShape,
     label: &str,
     selection: Option<LogSelection>,
 ) -> Result<StreamedLog, OrbitError> {
-    stream_log_source(request, bounds, shape, label, selection, false).map(|(log, _)| log)
+    stream_log_source(env, request, bounds, shape, label, selection, false).map(|(log, _)| log)
 }
 
 /// [`stream_bounded_log`], also returning the source bytes it read when
 /// `keep_source` is set. The copy is bounded by the same source read limit, and
 /// exists only for a read the caller is about to cache.
 pub(super) fn stream_log_source(
+    env: &orbit_common::Env,
     request: &ExecRequest,
     bounds: LogReadBounds,
     shape: ExcerptShape,
@@ -56,11 +58,8 @@ pub(super) fn stream_log_source(
     let deadline = crate::github_quota::gh_request_deadline(request, std::time::Instant::now());
     let limit_error =
         format!("{label} exceeded the 8 MiB source read limit; evidence is incomplete");
-    let (result, read) = run_process_streaming_stdout(
-        &orbit_common::Env::capture(),
-        request,
-        &NoSandbox,
-        move |mut stdout| {
+    let (result, read) =
+        run_process_streaming_stdout(env, request, &NoSandbox, move |mut stdout| {
             use std::io::Read;
 
             let mut collector = log_collector(bounds, shape, selection);
@@ -83,9 +82,8 @@ pub(super) fn stream_log_source(
                     source.extend_from_slice(&chunk[..read]);
                 }
             }
-        },
-    )?;
-    crate::github_quota::observe_gh_result_by_deadline(request, &result, deadline);
+        })?;
+    crate::github_quota::observe_gh_result_by_deadline(env, request, &result, deadline);
     // The supervisor's verdict, not the stderr note it appends, says the read
     // was killed; callers bounding the read by a deadline match this variant.
     if result.timed_out {
@@ -145,6 +143,7 @@ pub(super) fn store_completed_log(
 /// metadata failure falls back to the plain read: the cache can make a read
 /// cheaper, never fail it.
 pub(super) fn run_scoped_log(
+    env: &orbit_common::Env,
     requests: &RunLogRequests,
     bounds: LogReadBounds,
     guard: &dyn Fn(&ExecRequest) -> Result<ExecRequest, OrbitError>,
@@ -153,6 +152,7 @@ pub(super) fn run_scoped_log(
     let read_from =
         |request: &ExecRequest, keep_source: bool| -> Result<(StreamedLog, Vec<u8>), OrbitError> {
             stream_log_source(
+                env,
                 &guard(request)?,
                 bounds,
                 ExcerptShape::EvenSplit,
@@ -193,7 +193,7 @@ pub(super) fn run_scoped_log(
     // the checkout points at). A refused or unreadable status request is a
     // plain read, which reports the provider's own error.
     if let Some(job) = &requests.job {
-        let Some(source) = completed_job_source(requests, job, guard) else {
+        let Some(source) = completed_job_source(env, requests, job, guard) else {
             return read(false).map(|(log, _)| log);
         };
         let key = LogCacheKey::job(&source, &requests.run_id, job, scope);
@@ -205,7 +205,7 @@ pub(super) fn run_scoped_log(
 
     // A rerun keeps the run id and puts the run back in progress, so each read
     // first asks which attempt the run is at and whether it has completed.
-    let Some((source, attempt)) = completed_run_attempt(requests, guard) else {
+    let Some((source, attempt)) = completed_run_attempt(env, requests, guard) else {
         return read(false).map(|(log, _)| log);
     };
     let key = LogCacheKey::run_attempt(&source, &requests.run_id, attempt, scope);
@@ -218,7 +218,7 @@ pub(super) fn run_scoped_log(
     let attempt_request = attempt_bound_run_log_request(&requests.run_log, attempt);
     let (log, downloaded) = read_from(&attempt_request, true)?;
     if downloaded.is_empty()
-        || completed_run_attempt(requests, guard).as_ref() != Some(&(source, attempt))
+        || completed_run_attempt(env, requests, guard).as_ref() != Some(&(source, attempt))
     {
         return Ok(log);
     }
@@ -227,13 +227,14 @@ pub(super) fn run_scoped_log(
 
 /// One lightweight metadata read, or `None` when it cannot be made or parsed.
 fn read_api_json(
+    env: &orbit_common::Env,
     request: ExecRequest,
     guard: &dyn Fn(&ExecRequest) -> Result<ExecRequest, OrbitError>,
 ) -> Option<Value> {
     let request = guard(&request).ok()?;
     let deadline = crate::github_quota::gh_request_deadline(&request, std::time::Instant::now());
-    let result = run_process(&orbit_common::Env::capture(), &request, &NoSandbox).ok()?;
-    crate::github_quota::observe_gh_result_by_deadline(&request, &result, deadline);
+    let result = run_process(env, &request, &NoSandbox).ok()?;
+    crate::github_quota::observe_gh_result_by_deadline(env, &request, &result, deadline);
     if !result.success {
         return None;
     }
@@ -245,12 +246,13 @@ fn read_api_json(
 /// `None` when the job is not reported completed, is not this run's job, or
 /// the status request failed or named no source.
 pub(super) fn completed_job_source(
+    env: &orbit_common::Env,
     requests: &RunLogRequests,
     job: &str,
     guard: &dyn Fn(&ExecRequest) -> Result<ExecRequest, OrbitError>,
 ) -> Option<String> {
     let request = requests.api_request(format!("repos/{}/actions/jobs/{job}", requests.repository));
-    let view = read_api_json(request, guard)?;
+    let view = read_api_json(env, request, guard)?;
     let this_job = view.get("id").and_then(Value::as_u64)?.to_string() == job;
     let this_run = view
         .get("run_id")
@@ -266,6 +268,7 @@ pub(super) fn completed_job_source(
 /// The resolved source and attempt number of this run when GitHub reports it
 /// completed.
 fn completed_run_attempt(
+    env: &orbit_common::Env,
     requests: &RunLogRequests,
     guard: &dyn Fn(&ExecRequest) -> Result<ExecRequest, OrbitError>,
 ) -> Option<(String, u64)> {
@@ -273,7 +276,7 @@ fn completed_run_attempt(
         "repos/{}/actions/runs/{}",
         requests.repository, requests.run_id
     ));
-    let view = read_api_json(request, guard)?;
+    let view = read_api_json(env, request, guard)?;
     let this_run = view.get("id").and_then(Value::as_u64)?.to_string() == requests.run_id;
     let completed = view.get("status").and_then(Value::as_str) == Some("completed");
     if !(this_run && completed) {

@@ -254,7 +254,9 @@ pub(crate) fn dispatch_cli_invocation(
     // A shipment pipeline renders the assigned checkout twice: once as the
     // child cwd and once inside the agent contract. Validate that pair against
     // the registered primary before sandbox construction or provider spawn.
+    let process_env = host.process_env();
     let declared_worktree_pair = validate_declared_worktree_pair(
+        &process_env,
         input,
         task_ctx.as_ref(),
         run_id,
@@ -262,12 +264,14 @@ pub(crate) fn dispatch_cli_invocation(
         tool_ctx.workspace_root.as_deref(),
     )?;
     let source_checkout = prepare_source_checkout(
+        &process_env,
         input,
         task_ctx.as_ref(),
         tool_ctx.workspace_root.as_deref(),
         fs_profile,
     )?;
     super::provider::dispatch_prepared_provider(
+        &process_env,
         CliDispatchContext {
             host,
             spec,

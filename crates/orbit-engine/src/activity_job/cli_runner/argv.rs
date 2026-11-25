@@ -18,6 +18,7 @@ use super::spawn::linux_bwrap_mask;
 /// profile is passed inline at spawn time; a placeholder keeps its SBPL text
 /// out of the audit record.
 fn audit_argv_for_dispatch(
+    process_env: &orbit_common::Env,
     program: &str,
     args: &[String],
     sandbox: Option<&ResolvedSandbox>,
@@ -33,15 +34,17 @@ fn audit_argv_for_dispatch(
             out
         }
         Some(sb) if sb.kind == ExecutorSandboxKind::LinuxBwrap => {
-            try_audit_argv_for_dispatch(program, args, Some(sb), None).unwrap_or_else(|_| {
-                let mut out = vec![
-                    bwrap_program_for_audit().to_string(),
-                    "<invalid-linux-bwrap-plan>".to_string(),
-                    program.to_string(),
-                ];
-                out.extend(args.iter().cloned());
-                out
-            })
+            try_audit_argv_for_dispatch(process_env, program, args, Some(sb), None).unwrap_or_else(
+                |_| {
+                    let mut out = vec![
+                        bwrap_program_for_audit().to_string(),
+                        "<invalid-linux-bwrap-plan>".to_string(),
+                        program.to_string(),
+                    ];
+                    out.extend(args.iter().cloned());
+                    out
+                },
+            )
         }
         _ => {
             let mut out = Vec::with_capacity(args.len() + 1);
@@ -67,6 +70,7 @@ pub(super) fn codex_mcp_server_launch_args(
 }
 
 pub(super) fn try_audit_argv_for_dispatch(
+    process_env: &orbit_common::Env,
     program: &str,
     args: &[String],
     sandbox: Option<&ResolvedSandbox>,
@@ -76,7 +80,7 @@ pub(super) fn try_audit_argv_for_dispatch(
         Some(sb) if sb.kind == ExecutorSandboxKind::LinuxBwrap => {
             // The audited plan carries the same mask the launcher mounts.
             let plan = compile_linux_bwrap_argv_with_authority(
-                &orbit_common::Env::capture(),
+                process_env,
                 &sb.fs_profile,
                 program,
                 args,
@@ -90,7 +94,7 @@ pub(super) fn try_audit_argv_for_dispatch(
             out.extend(plan.args);
             Ok(out)
         }
-        _ => Ok(audit_argv_for_dispatch(program, args, sandbox)),
+        _ => Ok(audit_argv_for_dispatch(process_env, program, args, sandbox)),
     }
 }
 
@@ -129,9 +133,13 @@ pub(super) fn neutralize_inner_sandbox(
 /// Sandbox-orthogonal arg fixups the dispatcher applies before spawn. Today
 /// this only normalizes Claude's `--debug-file` path so the log lands at a
 /// sandbox-allowed location regardless of how the executor YAML spelled it.
-pub(super) fn apply_provider_static_arg_fixups(provider: &str, static_args: &mut [String]) {
+pub(super) fn apply_provider_static_arg_fixups(
+    process_env: &orbit_common::Env,
+    provider: &str,
+    static_args: &mut [String],
+) {
     if provider == "claude" {
-        rewrite_claude_debug_file_path(static_args);
+        rewrite_claude_debug_file_path(process_env, static_args);
     }
 }
 
@@ -155,8 +163,8 @@ pub(super) fn apply_provider_runtime_arg_fixups(
 /// `CLAUDE_CONFIG_DIR` both unset) — the original relative path still
 /// works in non-sandboxed runs, and the sandbox failure mode is what the
 /// caller is opting into.
-fn rewrite_claude_debug_file_path(static_args: &mut [String]) {
-    let Some(state_dir) = claude_state_dir_from_env(&orbit_common::Env::capture()) else {
+fn rewrite_claude_debug_file_path(process_env: &orbit_common::Env, static_args: &mut [String]) {
+    let Some(state_dir) = claude_state_dir_from_env(process_env) else {
         return;
     };
     rewrite_debug_file_value(static_args, &state_dir);

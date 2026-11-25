@@ -68,6 +68,7 @@ impl<H: RuntimeHost + ?Sized> PollDriver<'_, H> {
             };
             let workspace = Path::new(self.workspace_path);
             if let Err(why) = verify_refreshed_head_from_base(
+                &self.host.process_env(),
                 workspace,
                 candidate,
                 head,
@@ -81,7 +82,11 @@ impl<H: RuntimeHost + ?Sized> PollDriver<'_, H> {
             // The graph proof alone allows a chain of clean merges. Each
             // commit in that chain must also have its own successful audit.
             let range = format!("{candidate}..{head}");
-            match git_output(workspace, &["rev-list", "--first-parent", &range]) {
+            match git_output(
+                &self.host.process_env(),
+                workspace,
+                &["rev-list", "--first-parent", &range],
+            ) {
                 Ok(history) if history.lines().eq(audited.iter().map(String::as_str)) => {
                     self.pin.adopt_refreshed_candidate(Some(head));
                     self.base_adopted = true;
@@ -161,6 +166,7 @@ impl<H: RuntimeHost + ?Sized> PollDriver<'_, H> {
             return;
         }
         if let Err(why) = verify_refreshed_head_from_base(
+            &self.host.process_env(),
             Path::new(self.workspace_path),
             candidate,
             head,

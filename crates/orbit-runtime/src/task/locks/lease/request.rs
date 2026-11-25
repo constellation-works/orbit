@@ -54,7 +54,7 @@ pub fn request(
         input,
         LeaseRequester {
             principal,
-            principal_class: lease_principal_class(),
+            principal_class: lease_principal_class(runtime.env()),
             actor,
             token: None,
         },

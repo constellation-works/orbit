@@ -28,7 +28,7 @@ pub(super) fn readiness(
     let mut value =
         runtime.workspace_auto_readiness(&task_ids, concurrency, limit, &allowed_crews)?;
     value["controls_authorized"] = json!(
-        crate::runtime::authorization::resolved_caller_capabilities(session)
+        crate::runtime::authorization::resolved_caller_capabilities(runtime.env(), session)
             .contains(&McpCapability::Operator)
     );
     Ok(value)

@@ -144,7 +144,7 @@ pub(super) fn rebase_conflicting_pr_branch<H: RuntimeHost + ?Sized>(
         )));
     }
 
-    let observed_remote_sha = remote_branch_sha(workspace, &head)?;
+    let observed_remote_sha = remote_branch_sha(&host.process_env(), workspace, &head)?;
     if observed_remote_sha.as_deref() != Some(published_head_sha.as_str()) {
         return Err(OrbitError::Execution(format!(
             "pr_complete: published branch 'origin/{head}' moved away from completion checkpoint \
@@ -153,9 +153,13 @@ pub(super) fn rebase_conflicting_pr_branch<H: RuntimeHost + ?Sized>(
         )));
     }
 
-    let base_ref =
-        resolve_worktree_start_point(workspace, &base, base_sync_mode_from_input(input)?)?;
-    let observed_base_sha = commit_sha(workspace, &base_ref)?;
+    let base_ref = resolve_worktree_start_point(
+        &host.process_env(),
+        workspace,
+        &base,
+        base_sync_mode_from_input(input)?,
+    )?;
+    let observed_base_sha = commit_sha(&host.process_env(), workspace, &base_ref)?;
     if let Some(pinned) = input_string_field(input, "landed_repair_base_sha")
         && pinned != observed_base_sha
     {
@@ -165,8 +169,13 @@ pub(super) fn rebase_conflicting_pr_branch<H: RuntimeHost + ?Sized>(
         ));
     }
     let target_base_sha = observed_base_sha;
-    let published_freshness =
-        branch_freshness_against_ref(workspace, &published_head_sha, &base_ref, &target_base_sha)?;
+    let published_freshness = branch_freshness_against_ref(
+        &host.process_env(),
+        workspace,
+        &published_head_sha,
+        &base_ref,
+        &target_base_sha,
+    )?;
     if published_freshness.commits_ahead == 0 {
         return Err(OrbitError::Execution(format!(
             "pr_complete: published candidate '{published_head_sha}' is no longer ahead of \

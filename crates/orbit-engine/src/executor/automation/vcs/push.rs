@@ -200,10 +200,14 @@ pub(super) fn push_batch_changes_inner<H: RuntimeHost + ?Sized>(
     let branch = input_string_field(input, "branch")
         .filter(|value| !value.trim().is_empty())
         .unwrap_or_else(|| {
-            git_output(workspace_path, &["rev-parse", "--abbrev-ref", "HEAD"])
-                .unwrap_or_else(|_| "HEAD".to_string())
-                .trim()
-                .to_string()
+            git_output(
+                &host.process_env(),
+                workspace_path,
+                &["rev-parse", "--abbrev-ref", "HEAD"],
+            )
+            .unwrap_or_else(|_| "HEAD".to_string())
+            .trim()
+            .to_string()
         });
     if branch == "HEAD" {
         return Err(OrbitError::Execution(
@@ -211,10 +215,10 @@ pub(super) fn push_batch_changes_inner<H: RuntimeHost + ?Sized>(
         ));
     }
 
-    let push_url = ensure_origin_publishes_elsewhere(workspace_path, &branch)?;
+    let push_url = ensure_origin_publishes_elsewhere(&host.process_env(), workspace_path, &branch)?;
 
-    let local_sha = commit_sha(workspace_path, &branch)?;
-    let probe = pre_push_remote_branch(workspace_path, &branch, &push_url)?;
+    let local_sha = commit_sha(&host.process_env(), workspace_path, &branch)?;
+    let probe = pre_push_remote_branch(&host.process_env(), workspace_path, &branch, &push_url)?;
     let remote_sha = &probe.sha;
     let repair_admission =
         super::candidate_resume::source_repair::publication_admission(host, input)?;
@@ -228,8 +232,11 @@ pub(super) fn push_batch_changes_inner<H: RuntimeHost + ?Sized>(
         let binding = admission;
         let pr = read_pr_status(host, workspace_path, &binding.pull_request)?;
         if branch != binding.branch
-            || git_output(workspace_path, &["config", "--get", "remote.origin.url"])?
-                != binding.remote_url
+            || git_output(
+                &host.process_env(),
+                workspace_path,
+                &["config", "--get", "remote.origin.url"],
+            )? != binding.remote_url
             || !matches!(remote_sha.as_deref(), Some(sha) if Some(sha) == repair_lease.as_deref() || sha == local_sha)
             || !super::candidate_resume::source_repair::exact_open_pr(
                 binding,
@@ -296,6 +303,7 @@ pub(super) fn push_batch_changes_inner<H: RuntimeHost + ?Sized>(
         )));
     }
     let mut decision = push_decision(
+        &host.process_env(),
         workspace_path,
         &push_url,
         &branch,
@@ -313,10 +321,16 @@ pub(super) fn push_batch_changes_inner<H: RuntimeHost + ?Sized>(
         && let Some(observed) = remote_sha.as_deref()
     {
         let repo_root = canonicalize_existing_dir(&host.repo_root()?, "repo_root")?;
-        super::worktree::merge_remote_head_into_base(&repo_root, &branch, observed)?;
+        super::worktree::merge_remote_head_into_base(
+            &host.process_env(),
+            &repo_root,
+            &branch,
+            observed,
+        )?;
         integrated_remote = true;
-        local_sha = commit_sha(workspace_path, &branch)?;
+        local_sha = commit_sha(&host.process_env(), workspace_path, &branch)?;
         decision = push_decision(
+            &host.process_env(),
             workspace_path,
             &push_url,
             &branch,
@@ -396,9 +410,13 @@ pub(super) fn push_batch_changes_inner<H: RuntimeHost + ?Sized>(
 /// performs that resolution; reading `remote.origin.url` or probing
 /// `ls-remote origin` observes only the fetch destination, which can be
 /// a different repository [ORB-17671].
-fn effective_push_urls(workspace_path: &Path, branch: &str) -> Result<Vec<String>, OrbitError> {
+fn effective_push_urls(
+    process_env: &orbit_common::Env,
+    workspace_path: &Path,
+    branch: &str,
+) -> Result<Vec<String>, OrbitError> {
     let output = git_output(
-        workspace_path,
+        process_env, workspace_path,
         &["remote", "get-url", "--push", "--all", "origin"],
     )
     .map_err(|error| {
@@ -428,8 +446,12 @@ fn effective_push_urls(workspace_path: &Path, branch: &str) -> Result<Vec<String
 /// `reused_current` observation cannot name the one destination the
 /// candidate must reach, so publication is refused rather than reported
 /// from any single destination's state.
-fn single_effective_push_url(workspace_path: &Path, branch: &str) -> Result<String, OrbitError> {
-    let urls = effective_push_urls(workspace_path, branch)?;
+fn single_effective_push_url(
+    process_env: &orbit_common::Env,
+    workspace_path: &Path,
+    branch: &str,
+) -> Result<String, OrbitError> {
+    let urls = effective_push_urls(process_env, workspace_path, branch)?;
     if urls.len() > 1 {
         return Err(OrbitError::Execution(format!(
             "git_push: remote 'origin' has {} distinct effective push URLs, so pushing \
@@ -462,16 +484,17 @@ fn single_effective_push_url(workspace_path: &Path, branch: &str) -> Result<Stri
 /// self-pointing `pushurl` or `pushInsteadOf` rewrite is refused even
 /// when the fetch URL names a real remote [ORB-17671].
 pub(super) fn ensure_origin_publishes_elsewhere(
+    process_env: &orbit_common::Env,
     workspace_path: &Path,
     branch: &str,
 ) -> Result<String, OrbitError> {
-    let push_url = single_effective_push_url(workspace_path, branch)?;
+    let push_url = single_effective_push_url(process_env, workspace_path, branch)?;
     let Some(local_remote) = local_remote_path(workspace_path, &push_url) else {
         return Ok(push_url);
     };
     let (Some(remote_repository), Some(local_repository)) = (
-        repository_identity(&local_remote),
-        repository_identity(workspace_path),
+        repository_identity(process_env, &local_remote),
+        repository_identity(process_env, workspace_path),
     ) else {
         return Ok(push_url);
     };
@@ -495,8 +518,8 @@ fn local_remote_path(workspace_path: &Path, url: &str) -> Option<PathBuf> {
 
 /// The repository a path belongs to, identified by its common Git directory so
 /// that a linked worktree and its primary checkout compare equal.
-fn repository_identity(path: &Path) -> Option<PathBuf> {
-    let common_dir = git_output(path, &["rev-parse", "--git-common-dir"]).ok()?;
+fn repository_identity(process_env: &orbit_common::Env, path: &Path) -> Option<PathBuf> {
+    let common_dir = git_output(process_env, path, &["rev-parse", "--git-common-dir"]).ok()?;
     let resolved = path.join(common_dir);
     Some(std::fs::canonicalize(&resolved).unwrap_or(resolved))
 }
@@ -510,7 +533,11 @@ fn resolve_workspace_path<H: RuntimeHost + ?Sized>(
         None => {
             let batch_id = required_job_run_id(input, "git_push")?;
             let repo_root = host.repo_root()?;
-            super::worktree::resolve_shared_worktree_path(Path::new(&repo_root), batch_id)
+            super::worktree::resolve_shared_worktree_path(
+                &host.process_env(),
+                Path::new(&repo_root),
+                batch_id,
+            )
         }
     }
 }
@@ -525,6 +552,7 @@ enum PushDecision {
 }
 
 fn push_decision(
+    process_env: &orbit_common::Env,
     workspace_path: &Path,
     push_url: &str,
     branch: &str,
@@ -543,7 +571,7 @@ fn push_decision(
     // by the direct target so `insteadOf` is not applied to the resolved
     // push URL a second time [ORB-17686].
     let target = direct_remote_target(push_url);
-    verify_direct_remote_target(workspace_path, push_url, &target)?;
+    verify_direct_remote_target(process_env, workspace_path, push_url, &target)?;
     let mut fetch_args: Vec<String> = target.prefix_args();
     fetch_args.extend([
         "fetch".to_string(),
@@ -552,11 +580,21 @@ fn push_decision(
         format!("refs/heads/{branch}"),
     ]);
     let fetch_refs: Vec<&str> = fetch_args.iter().map(String::as_str).collect();
-    git_success(workspace_path, &fetch_refs)?;
-    if crate::executor::automation::vcs::git::is_ancestor(workspace_path, remote_sha, local_sha)? {
+    git_success(process_env, workspace_path, &fetch_refs)?;
+    if crate::executor::automation::vcs::git::is_ancestor(
+        process_env,
+        workspace_path,
+        remote_sha,
+        local_sha,
+    )? {
         return Ok(PushDecision::FastForward);
     }
-    if crate::executor::automation::vcs::git::is_ancestor(workspace_path, local_sha, remote_sha)? {
+    if crate::executor::automation::vcs::git::is_ancestor(
+        process_env,
+        workspace_path,
+        local_sha,
+        remote_sha,
+    )? {
         return Ok(PushDecision::RemoteAhead);
     }
     Ok(PushDecision::Diverged)
@@ -627,7 +665,8 @@ fn review_repair_after_merge<H: RuntimeHost + ?Sized>(
             return Ok(None);
         }
     };
-    let Some(repairs) = repair_commits(workspace_path, lease, local_sha)? else {
+    let Some(repairs) = repair_commits(&host.process_env(), workspace_path, lease, local_sha)?
+    else {
         return Ok(None);
     };
     let merged = match merged_at_lease(host, workspace_path, &pr_number, lease) {
@@ -643,7 +682,7 @@ fn review_repair_after_merge<H: RuntimeHost + ?Sized>(
             return Ok(None);
         }
     };
-    if !merge_commit_on_base(workspace_path, &base, &merged)? {
+    if !merge_commit_on_base(&host.process_env(), workspace_path, &base, &merged)? {
         return Ok(None);
     }
     let preserved = preserve_review_repair(host, input, workspace_path, branch, local_sha);
@@ -656,14 +695,21 @@ fn review_repair_after_merge<H: RuntimeHost + ?Sized>(
 /// `lease` is not an ancestor, or the range is empty: there is no repair to
 /// preserve, and the lost lease stands.
 fn repair_commits(
+    process_env: &orbit_common::Env,
     workspace_path: &Path,
     lease: &str,
     local_sha: &str,
 ) -> Result<Option<Vec<String>>, OrbitError> {
-    if !crate::executor::automation::vcs::git::is_ancestor(workspace_path, lease, local_sha)? {
+    if !crate::executor::automation::vcs::git::is_ancestor(
+        process_env,
+        workspace_path,
+        lease,
+        local_sha,
+    )? {
         return Ok(None);
     }
     let listed = git_output(
+        process_env,
         workspace_path,
         &[
             "rev-list",
@@ -705,11 +751,12 @@ fn merged_at_lease<H: RuntimeHost + ?Sized>(
 /// A timeout propagates. Any other fetch or ancestry failure means the merge
 /// is not confirmed, so the caller keeps `push_lease_lost`.
 fn merge_commit_on_base(
+    process_env: &orbit_common::Env,
     workspace_path: &Path,
     base: &str,
     merge_commit: &str,
 ) -> Result<bool, OrbitError> {
-    if let Err(error) = fetch_remote_base(workspace_path, base) {
+    if let Err(error) = fetch_remote_base(process_env, workspace_path, base) {
         if error.is_timeout() {
             return Err(error);
         }
@@ -721,7 +768,12 @@ fn merge_commit_on_base(
         return Ok(false);
     }
     let remote_base = format!("refs/remotes/origin/{base}");
-    crate::executor::automation::vcs::git::is_ancestor(workspace_path, merge_commit, &remote_base)
+    crate::executor::automation::vcs::git::is_ancestor(
+        process_env,
+        workspace_path,
+        merge_commit,
+        &remote_base,
+    )
 }
 
 /// Where the repair was pushed, or why neither ref accepted it.
@@ -743,6 +795,7 @@ fn preserve_review_repair<H: RuntimeHost + ?Sized>(
     let mut evidence_failure = None;
     if let Some(target) = evidence_ref(branch) {
         match git_success(
+            &host.process_env(),
             workspace_path,
             &[
                 "push",

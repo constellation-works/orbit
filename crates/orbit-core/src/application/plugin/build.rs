@@ -96,11 +96,13 @@ pub(super) fn prepare_build(
     }
     let global_root = runtime.global_root();
     let forbidden = vec![global_root.clone(), runtime.paths().repo_root.clone()];
+    let env = runtime.env();
     let plan = plan_plugin_build(
+        env,
         spec,
         source,
         commit,
-        &PluginBuildHostEnv::from_process(),
+        &PluginBuildHostEnv::from_env(env),
         &forbidden,
     )?;
     if !allow_build {
@@ -115,7 +117,6 @@ pub(super) fn prepare_build(
             plan.source
         )));
     }
-    let env = runtime.execution_env_policy().process_env();
     if let Some(reason) = unattended_reason(&global_root, env) {
         return Err(OrbitError::PluginBuildConsentUnavailable(format!(
             "{PLUGIN_BUILD_CONSENT_FLAG} was refused: {reason}. Only an operator at their own \
@@ -130,13 +131,16 @@ pub(super) fn prepare_build(
     }
     let log = build_log_path(&global_root, name);
     let home = env.home();
-    let result = run_plugin_build(&PluginBuildRun {
-        plan: &plan,
-        checkout: &commit.checkout,
-        namespace_dir: &plugin_namespace_dir(&global_root, name),
-        log_path: &log,
-        home,
-    })?;
+    let result = run_plugin_build(
+        env,
+        &PluginBuildRun {
+            plan: &plan,
+            checkout: &commit.checkout,
+            namespace_dir: &plugin_namespace_dir(&global_root, name),
+            log_path: &log,
+            home,
+        },
+    )?;
     Ok(Some(PreparedBuild { plan, result, log }))
 }
 
@@ -186,7 +190,7 @@ pub(super) fn finish_build(
         consent: PluginBuildConsent {
             at: chrono::Utc::now().to_rfc3339(),
             os_user: {
-                let env = runtime.execution_env_policy().process_env();
+                let env = runtime.env();
                 [env.user(), env.logname()]
                     .into_iter()
                     .flatten()

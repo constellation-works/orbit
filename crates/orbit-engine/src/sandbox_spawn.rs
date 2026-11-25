@@ -266,6 +266,7 @@ impl SpawnedChild {
 }
 
 pub(crate) fn spawn_child_with_optional_sandbox(
+    process_env: &orbit_common::Env,
     program: &str,
     args: &[String],
     env: &[(String, String)],
@@ -275,10 +276,10 @@ pub(crate) fn spawn_child_with_optional_sandbox(
 ) -> Result<SpawnedChild, SpawnError> {
     match sandbox {
         Some(sb) if sb.kind == ExecutorSandboxKind::MacosSandboxExec => {
-            spawn_macos_sandboxed(program, args, env, cwd, sb, provider)
+            spawn_macos_sandboxed(process_env, program, args, env, cwd, sb, provider)
         }
         Some(sb) if sb.kind == ExecutorSandboxKind::LinuxBwrap => {
-            spawn_linux_bwrap(program, args, env, cwd, sb)
+            spawn_linux_bwrap(process_env, program, args, env, cwd, sb)
         }
         Some(sb) => Err(SpawnError::permanent(format!(
             "unsupported sandbox backend `{}`",
@@ -301,6 +302,7 @@ pub(crate) fn spawn_child_with_optional_sandbox(
 /// disposable. Creating one grants nothing new: the effective profile already
 /// decided the path is writable.
 fn spawn_linux_bwrap(
+    process_env: &orbit_common::Env,
     program: &str,
     args: &[String],
     env: &[(String, String)],
@@ -322,7 +324,7 @@ fn spawn_linux_bwrap(
     let authority = linux_bwrap_mount_authority(sandbox);
     let mask = linux_bwrap_mask(sandbox);
     let plan = compile_linux_bwrap_argv_with_authority(
-        &orbit_common::Env::capture(),
+        process_env,
         &sandbox.fs_profile,
         program,
         args,
@@ -466,6 +468,7 @@ fn spawn_bare(
 }
 
 fn spawn_macos_sandboxed(
+    process_env: &orbit_common::Env,
     program: &str,
     args: &[String],
     env: &[(String, String)],
@@ -496,7 +499,7 @@ fn spawn_macos_sandboxed(
     // provider-scoped exception: the confined CLI's own credential store.
     // See `orbit_exec::macos_login_keychain_access`. [ORB-10929] [ORB-12261]
     let mut profile_text =
-        compile_macos_sandbox_profile(&orbit_common::Env::capture(), &sandbox.fs_profile, provider)
+        compile_macos_sandbox_profile(process_env, &sandbox.fs_profile, provider)
             .map_err(|err| SpawnError::permanent(err.to_string()))?;
     // Last, so the host's mask outranks every allow compiled above.
     if let Some(mask) = &sandbox.mask {

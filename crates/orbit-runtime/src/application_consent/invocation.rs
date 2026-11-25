@@ -80,7 +80,8 @@ impl RuntimeKernel {
         session: &mut ToolSessionContext,
         enforcement: CapabilityEnforcement,
     ) -> Result<bool, OrbitError> {
-        let callback = orbit_tools::plugin::resolve_plugin_callback(&self.global_root())?;
+        let callback =
+            orbit_tools::plugin::resolve_plugin_callback(self.env(), &self.global_root())?;
         let inherited = callback
             .as_ref()
             .and_then(|identity| identity.application.as_deref().cloned());
@@ -91,8 +92,7 @@ impl RuntimeKernel {
         };
         if invocation.is_none()
             && enforcement == CapabilityEnforcement::Enforce
-            && let Some(credential) =
-                ApplicationCredential::from_process_descriptor(&orbit_common::Env::capture())?
+            && let Some(credential) = ApplicationCredential::from_process_descriptor(self.env())?
         {
             let record = self
                 .sqlite_store()?
@@ -109,7 +109,7 @@ impl RuntimeKernel {
             return Ok(false);
         };
         APPLICATION_AUDIT.with(|state| *state.borrow_mut() = Some(invocation.clone()));
-        if agent_context_declared(&orbit_common::Env::capture())
+        if agent_context_declared(self.env())
             || session.worker_invocation.is_some()
             || !session.effective_capabilities.is_empty()
         {

@@ -414,7 +414,7 @@ fn handoff_landing_reads_draft_and_checks_from_the_real_forge_adapter() {
     for draft in [false, true] {
         document["data"]["repository"]["pullRequest"]["isDraft"] = json!(draft);
         std::fs::write(&response, document.to_string()).unwrap();
-        let read = GhTaskPrForge
+        let read = GhTaskPrForge::new(&orbit_common::Env::capture())
             .handoff_landing_pull_request(&f.repo, 17)
             .unwrap()
             .unwrap();
@@ -426,7 +426,7 @@ fn handoff_landing_reads_draft_and_checks_from_the_real_forge_adapter() {
     document["data"]["repository"]["pullRequest"]["state"] = json!("CLOSED");
     std::fs::write(&response, document.to_string()).unwrap();
     assert!(
-        GhTaskPrForge
+        GhTaskPrForge::new(&orbit_common::Env::capture())
             .handoff_landing_pull_request(&f.repo, 17)
             .unwrap()
             .is_none()

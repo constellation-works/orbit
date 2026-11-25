@@ -65,7 +65,7 @@ impl OrbitRuntime {
         let mut oldest = runs
             .iter()
             .filter(|run| run.state.is_terminal())
-            .filter(|run| run_worktree_has_reclaim_output(repo_root, run, &patterns))
+            .filter(|run| run_worktree_has_reclaim_output(self.env(), repo_root, run, &patterns))
             .collect::<Vec<_>>();
         oldest.sort_by_key(|run| (run.finished_at.unwrap_or(run.created_at), &run.run_id));
         for run in oldest {

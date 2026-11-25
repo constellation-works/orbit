@@ -26,6 +26,7 @@ impl WorktreeBoundaryGuard {
         reason = "capture distinguishes the subprocess cwd, the registered primary and the declared pair before choosing a boundary"
     )]
     pub(crate) fn capture(
+        process_env: &orbit_common::Env,
         input: &Value,
         task_ctx: Option<&Value>,
         run_id: &str,
@@ -75,20 +76,21 @@ impl WorktreeBoundaryGuard {
                 return Ok(None);
             }
 
-            let assigned_git_root = git_top_level(&assigned_path).map_err(|error| {
-                worktree_mismatch_error(
-                    input,
-                    task_ctx,
-                    run_id,
-                    provider,
-                    declared_workspace_path(input, task_ctx).as_deref(),
-                    None,
-                    Some(&assigned_path),
-                    Some(&primary_path),
-                    format!("cannot resolve subprocess Git checkout: {error}"),
-                )
-            })?;
-            let primary_git_root = git_top_level(&primary_path).map_err(|error| {
+            let assigned_git_root =
+                git_top_level(process_env, &assigned_path).map_err(|error| {
+                    worktree_mismatch_error(
+                        input,
+                        task_ctx,
+                        run_id,
+                        provider,
+                        declared_workspace_path(input, task_ctx).as_deref(),
+                        None,
+                        Some(&assigned_path),
+                        Some(&primary_path),
+                        format!("cannot resolve subprocess Git checkout: {error}"),
+                    )
+                })?;
+            let primary_git_root = git_top_level(process_env, &primary_path).map_err(|error| {
                 worktree_mismatch_error(
                     input,
                     task_ctx,
@@ -206,9 +208,13 @@ impl WorktreeBoundaryGuard {
         let requested_workspace_path = pair.requested_workspace_path.clone();
         let requested_repo_root = Some(pair.requested_repo_root.clone());
         let task_id = task_id(input, task_ctx);
-        let primary_before = cached_primary_before_fingerprint(run_id, &primary_root)?;
-        let primary_baseline =
-            PrimaryBaseline::capture(&primary_root, &primary_before, primary_base_branch)?;
+        let primary_before = cached_primary_before_fingerprint(process_env, run_id, &primary_root)?;
+        let primary_baseline = PrimaryBaseline::capture(
+            process_env,
+            &primary_root,
+            &primary_before,
+            primary_base_branch,
+        )?;
         if let Some(reason) = primary_baseline.off_base_reason(&primary_before) {
             // Admitted by design: the run's base is the base branch, so the
             // operator's side branch is neither the base nor drift until it
@@ -227,12 +233,13 @@ impl WorktreeBoundaryGuard {
         }
 
         Ok(Some(Self {
+            process_env: process_env.clone(),
             task_id,
             run_id: run_id.to_string(),
             provider: provider.to_string(),
             requested_workspace_path,
             requested_repo_root,
-            assigned_before: git_fingerprint(&assigned_root)?,
+            assigned_before: git_fingerprint(process_env, &assigned_root)?,
             primary_before,
             primary_baseline,
             assigned_root,
@@ -299,12 +306,12 @@ impl WorktreeBoundaryGuard {
             }
             // Certified like a completion; the retry settles it [ORB-14668].
             Some((step_id, RebaseContinuation::Absorbed(output))) => {
-                self.verify_checkouts(HostContinuation::Absorbed)?;
+                self.verify_checkouts(&self.process_env, HostContinuation::Absorbed)?;
                 host.checkpoint_rebase_recovery(&self.run_id, step_id, &output)?;
             }
             // Nothing is certified until a later round finishes the rebase.
             Some((_, RebaseContinuation::StoppedAgain)) => {
-                self.verify_checkouts(HostContinuation::StoppedAgain)?;
+                self.verify_checkouts(&self.process_env, HostContinuation::StoppedAgain)?;
             }
             None => {
                 self.verify()?;
@@ -328,18 +335,24 @@ impl WorktreeBoundaryGuard {
         let Some(step) = ContextWideningStep::for_activity(&self.activity) else {
             return Ok(());
         };
-        let after = git_fingerprint(&self.assigned_root)?;
-        let paths = changed_paths(&self.assigned_root, &self.assigned_before, &after)
-            .into_iter()
-            .filter(|path| !is_host_owned_path(path))
-            .filter(|path| {
-                // A pre-existing untracked file the agent removed leaves
-                // nothing to deliver; a removed tracked file is a change.
-                after.path_states.get(path).is_none_or(|state| {
-                    state.worktree_present || state.index_entry_sha256.is_some()
-                })
-            })
-            .collect::<Vec<_>>();
+        let after = git_fingerprint(&host.process_env(), &self.assigned_root)?;
+        let paths = changed_paths(
+            &host.process_env(),
+            &self.assigned_root,
+            &self.assigned_before,
+            &after,
+        )
+        .into_iter()
+        .filter(|path| !is_host_owned_path(path))
+        .filter(|path| {
+            // A pre-existing untracked file the agent removed leaves
+            // nothing to deliver; a removed tracked file is a change.
+            after
+                .path_states
+                .get(path)
+                .is_none_or(|state| state.worktree_present || state.index_entry_sha256.is_some())
+        })
+        .collect::<Vec<_>>();
         self.widen_task(host, task_ids, step, &paths);
         Ok(())
     }
@@ -386,22 +399,34 @@ impl WorktreeBoundaryGuard {
     }
 
     pub(crate) fn verify(&self) -> Result<(), DispatchError> {
-        self.verify_checkouts(HostContinuation::Finished)
+        self.verify_checkouts(&self.process_env, HostContinuation::Finished)
     }
 
     /// [`Self::verify`], where `continuation` also admits the HEAD the host's
     /// own continuation of the admitted rebase left: a later, conflicting
     /// pick of that same rebase, or the base itself for an absorbed
     /// candidate.
-    fn verify_checkouts(&self, continuation: HostContinuation) -> Result<(), DispatchError> {
-        let assigned_after = git_fingerprint(&self.assigned_root)?;
-        let primary_after = git_fingerprint(&self.primary_root)?;
+    fn verify_checkouts(
+        &self,
+        process_env: &orbit_common::Env,
+        continuation: HostContinuation,
+    ) -> Result<(), DispatchError> {
+        let assigned_after = git_fingerprint(process_env, &self.assigned_root)?;
+        let primary_after = git_fingerprint(process_env, &self.primary_root)?;
         let assigned_history_changed = assigned_after.head != self.assigned_before.head
             || assigned_after.branch != self.assigned_before.branch;
-        let run_changed_paths =
-            changed_paths(&self.assigned_root, &self.assigned_before, &assigned_after);
-        let primary_changed_paths =
-            changed_paths(&self.primary_root, &self.primary_before, &primary_after);
+        let run_changed_paths = changed_paths(
+            process_env,
+            &self.assigned_root,
+            &self.assigned_before,
+            &assigned_after,
+        );
+        let primary_changed_paths = changed_paths(
+            process_env,
+            &self.primary_root,
+            &self.primary_before,
+            &primary_after,
+        );
         // Interference is judged against the primary's *dirt*, not against the
         // commits a fast-forward brought in: a merged sibling PR that touched
         // the same file the run touched is base advance, which the shipment
@@ -417,6 +442,7 @@ impl WorktreeBoundaryGuard {
         if assigned_history_changed && !self.host_moved_head(continuation, &assigned_after)? {
             // Only the checkpointed conflict-recovery leaf may finish a rebase.
             return Err(self.integrity_error(
+                process_env,
                 "worktree_content_conflict",
                 &assigned_after,
                 &primary_after,
@@ -451,6 +477,7 @@ impl WorktreeBoundaryGuard {
         }
 
         if self.primary_baseline.admits_move(
+            process_env,
             &self.primary_root,
             &self.primary_before,
             &primary_after,
@@ -471,6 +498,7 @@ impl WorktreeBoundaryGuard {
         }
 
         Err(self.integrity_error(
+            process_env,
             "primary_checkout_drift",
             &assigned_after,
             &primary_after,
@@ -485,6 +513,7 @@ impl WorktreeBoundaryGuard {
     #[allow(clippy::too_many_arguments)]
     fn integrity_error(
         &self,
+        process_env: &orbit_common::Env,
         code: &'static str,
         assigned_after: &GitWorktreeFingerprint,
         primary_after: &GitWorktreeFingerprint,
@@ -528,7 +557,7 @@ impl WorktreeBoundaryGuard {
             "primary_base_branch": self.primary_baseline.base_branch,
             "primary_base_tip": self.primary_baseline.base_tip,
             "changed_paths": reported_paths,
-            "run_changed_paths": changed_paths(&self.assigned_root, &self.assigned_before, assigned_after),
+            "run_changed_paths": changed_paths(process_env, &self.assigned_root, &self.assigned_before, assigned_after),
             "primary_changed_paths": primary_changed_paths,
             "primary_dirt_paths": primary_dirt_paths,
             "conflicting_paths": conflicting_paths,
@@ -554,12 +583,12 @@ impl WorktreeBoundaryGuard {
         continuation: HostContinuation,
         after: &GitWorktreeFingerprint,
     ) -> Result<bool, DispatchError> {
-        if self.completed_authorized_rebase(after)? {
+        if self.completed_authorized_rebase(&self.process_env, after)? {
             return Ok(true);
         }
         match continuation {
             HostContinuation::Finished => Ok(false),
-            HostContinuation::StoppedAgain => self.stopped_authorized_rebase(),
+            HostContinuation::StoppedAgain => self.stopped_authorized_rebase(&self.process_env),
             HostContinuation::Absorbed => self.absorbed_authorized_rebase(after),
         }
     }
@@ -675,6 +704,7 @@ pub(super) struct PrimaryBaseline {
 
 impl PrimaryBaseline {
     fn capture(
+        process_env: &orbit_common::Env,
         root: &Path,
         before: &GitWorktreeFingerprint,
         base_branch: &str,
@@ -686,6 +716,7 @@ impl PrimaryBaseline {
             Some(before.head.clone())
         } else {
             let tip = git_output_raw(
+                process_env,
                 root,
                 &[
                     "rev-parse",
@@ -747,6 +778,7 @@ impl PrimaryBaseline {
     /// checkout carries its dirt across the switch.
     fn admits_move(
         &self,
+        process_env: &orbit_common::Env,
         root: &Path,
         before: &GitWorktreeFingerprint,
         after: &GitWorktreeFingerprint,
@@ -773,7 +805,7 @@ impl PrimaryBaseline {
         if after.head == tip {
             return Ok(true);
         }
-        git_is_ancestor(root, tip, &after.head)
+        git_is_ancestor(process_env, root, tip, &after.head)
     }
 
     fn drift_reason(&self, before: &GitWorktreeFingerprint) -> String {

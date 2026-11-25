@@ -110,7 +110,10 @@ fn a_cached_log_keeps_no_secret_the_redactor_removes() {
         registry
             .execute(
                 "github.run.logs",
-                &ToolContext::default(),
+                &ToolContext {
+                    env: orbit_common::Env::capture(),
+                    ..ToolContext::default()
+                },
                 json!({"run": "123", "job": "9", "scope": "all", "repo": "acme/orbit"}),
             )
             .unwrap()
@@ -207,7 +210,10 @@ fn a_rerun_between_metadata_and_download_never_crosses_attempt_keys() {
         registry
             .execute(
                 "github.run.logs",
-                &ToolContext::default(),
+                &ToolContext {
+                    env: orbit_common::Env::capture(),
+                    ..ToolContext::default()
+                },
                 json!({"run": run, "scope": "all", "repo": "acme/orbit"}),
             )
             .unwrap()

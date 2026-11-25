@@ -59,17 +59,19 @@ pub(super) fn diff_refused(
 /// Recheck the checkpoint on the leaf's live worktree: the task still carries
 /// the tag, HEAD is the pinned base, and nothing is pending.
 pub(super) fn verify_handoff(
+    process_env: &orbit_common::Env,
     task: &Task,
     workspace: &Path,
     checkpoint: &Value,
 ) -> Result<(), OrbitError> {
     verify_handoff_at_revision(task, checkpoint)?;
-    if git_output(workspace, &["rev-parse", "HEAD"])?
+    if git_output(process_env, workspace, &["rev-parse", "HEAD"])?
         != checkpoint["base_sha"].as_str().unwrap_or_default()
     {
         return Err(refused("HEAD is not the checkpoint's pinned base"));
     }
     if !git_output(
+        process_env,
         workspace,
         &["status", "--porcelain", "--untracked-files=all"],
     )?

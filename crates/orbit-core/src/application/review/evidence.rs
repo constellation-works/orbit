@@ -471,6 +471,7 @@ pub(super) fn evidence_carry(
         reason,
     };
     let Ok(from) = orbit_engine::review_gate::patch_id(
+        runtime.env(),
         workspace_path,
         &certificate.base.commit,
         &source.commit,
@@ -479,7 +480,12 @@ pub(super) fn evidence_carry(
             ReviewEvidenceRerequestReason::SourceUnavailable,
         ));
     };
-    let to = orbit_engine::review_gate::patch_id(workspace_path, &base.commit, &head.commit)?;
+    let to = orbit_engine::review_gate::patch_id(
+        runtime.env(),
+        workspace_path,
+        &base.commit,
+        &head.commit,
+    )?;
     Ok(match (from, to) {
         (Some(from), Some(to)) if from == to => EvidenceCarry::Carried(ReviewEvidenceCarried {
             from_tree: evidence_tree.clone(),

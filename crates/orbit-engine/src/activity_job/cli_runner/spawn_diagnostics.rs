@@ -1,7 +1,6 @@
 //! Operator-facing diagnostics for provider failures caused by the spawn
 //! sandbox or the provider's own configuration.
 
-use orbit_common::env_vars;
 use std::ffi::OsStr;
 use std::path::Path;
 
@@ -182,12 +181,12 @@ pub(super) fn copilot_model_unavailable_diagnostic(
 /// no amount of re-logging in outside the sandbox will clear. [ORB-10931]
 /// [ORB-12261]
 pub(super) fn macos_keychain_auth_diagnostic(
+    home: Option<&std::ffi::OsStr>,
     provider: &str,
     sandbox: Option<&ResolvedSandbox>,
     output: &str,
 ) -> Option<String> {
-    let home = std::env::var_os(env_vars::HOME);
-    macos_keychain_auth_diagnostic_with(provider, sandbox, output, home.as_deref())
+    macos_keychain_auth_diagnostic_with(provider, sandbox, output, home)
 }
 
 /// Test-friendly variant: callers pass HOME explicitly instead of reading

@@ -196,12 +196,14 @@ pub(super) trait CiQueries {
 
 /// The production implementation: `gh` and `git`, run on the host.
 pub(super) struct HostCiQueries {
+    process_env: orbit_common::Env,
     repo_root: PathBuf,
 }
 
 impl HostCiQueries {
-    pub(super) fn new(repo_root: &Path) -> Self {
+    pub(super) fn new(process_env: orbit_common::Env, repo_root: &Path) -> Self {
         Self {
+            process_env,
             repo_root: repo_root.to_path_buf(),
         }
     }
@@ -210,7 +212,7 @@ impl HostCiQueries {
 impl HostCiQueries {
     fn pull_requests(&self, state: &str, limit: u64) -> Result<Vec<Value>, OrbitError> {
         let request = github_cli::pr_list_request(&json!({"state": state, "limit": limit}))?;
-        let stdout = run_gh(&self.repo_root, request, "gh pr list")?;
+        let stdout = run_gh(&self.process_env, &self.repo_root, request, "gh pr list")?;
         let parsed = github_cli::parse_gh_json(&stdout, "gh pr list")?;
         Ok(parsed
             .as_array()
@@ -239,7 +241,7 @@ impl HostCiQueries {
             }
         };
         let label = format!("gh pr list {state} head");
-        let stdout = run_gh(&self.repo_root, request, &label)?;
+        let stdout = run_gh(&self.process_env, &self.repo_root, request, &label)?;
         let parsed = github_cli::parse_gh_json(&stdout, &label)?;
         Ok(parsed
             .as_array()
@@ -258,7 +260,14 @@ impl HostCiQueries {
     /// failure is still filed, untagged.
     fn with_runner_labels(&self, mut view: Value, run_id: &str) -> Value {
         let labels = github_cli::run_jobs_request(&json!({"run": run_id}))
-            .and_then(|request| run_gh(&self.repo_root, request, "gh api run jobs"))
+            .and_then(|request| {
+                run_gh(
+                    &self.process_env,
+                    &self.repo_root,
+                    request,
+                    "gh api run jobs",
+                )
+            })
             .and_then(|stdout| github_cli::parse_gh_json(&stdout, "gh api run jobs"))
             .map(|listing| github_cli::project_job_labels(&listing));
         let labels = match labels {
@@ -281,11 +290,12 @@ impl HostCiQueries {
 
 impl CiQueries for HostCiQueries {
     fn auth_status(&self) -> AuthStatus {
-        auth_status(&self.repo_root, "")
+        auth_status(&self.process_env, &self.repo_root, "")
     }
 
     fn repo_view(&self) -> Result<Value, OrbitError> {
         let stdout = run_gh(
+            &self.process_env,
             &self.repo_root,
             github_cli::repo_view_request(&json!({}))?,
             "gh repo view",
@@ -314,7 +324,7 @@ impl CiQueries for HostCiQueries {
 
     fn repository_runs(&self, limit: u64) -> Result<Vec<Value>, OrbitError> {
         let request = github_cli::run_list_request(&json!({"limit": limit}))?;
-        let stdout = run_gh(&self.repo_root, request, "gh run list")?;
+        let stdout = run_gh(&self.process_env, &self.repo_root, request, "gh run list")?;
         let parsed = github_cli::parse_gh_json(&stdout, "gh run list")?;
         Ok(parsed
             .as_array()
@@ -324,7 +334,7 @@ impl CiQueries for HostCiQueries {
 
     fn run_view(&self, run_id: &str) -> Result<Value, OrbitError> {
         let request = github_cli::run_view_request(&json!({"run": run_id}))?;
-        let stdout = run_gh(&self.repo_root, request, "gh run view")?;
+        let stdout = run_gh(&self.process_env, &self.repo_root, request, "gh run view")?;
         let view =
             github_cli::project_run_view(&github_cli::parse_gh_json(&stdout, "gh run view")?);
         if view
@@ -354,10 +364,17 @@ impl CiQueries for HostCiQueries {
         )?
         .in_directory(&self.repo_root.to_string_lossy());
         let read = github_cli::read_run_log_guarded(
+            &self.process_env,
             &requests,
             github_cli::LogReadBounds::new(max_bytes),
             cached_view,
-            &|request| clear_gh_environment(request, github_quota::GithubCaller::Background),
+            &|request| {
+                clear_gh_environment(
+                    &self.process_env,
+                    request,
+                    github_quota::GithubCaller::Background,
+                )
+            },
         )?;
 
         Ok(RunLog {
@@ -383,13 +400,19 @@ impl CiQueries for HostCiQueries {
 
     fn job_concurrency_cancellation(&self, job_id: u64) -> Result<Option<String>, OrbitError> {
         let request = github_cli::job_annotations_request(&json!({"job": job_id.to_string()}))?;
-        let stdout = run_gh(&self.repo_root, request, "gh api check-run annotations")?;
+        let stdout = run_gh(
+            &self.process_env,
+            &self.repo_root,
+            request,
+            "gh api check-run annotations",
+        )?;
         let listing = github_cli::parse_gh_json(&stdout, "gh api check-run annotations")?;
         Ok(github_cli::concurrency_cancellation(&listing).map(|message| redact_all(&message)))
     }
 
     fn remote_branch_heads(&self) -> Result<RemoteBranchHeads, OrbitError> {
         let output = super::super::vcs::git::git_output(
+            &self.process_env,
             &self.repo_root,
             &["ls-remote", "--heads", "origin"],
         )?;
@@ -413,16 +436,25 @@ impl CiQueries for HostCiQueries {
         let mut missing = Vec::new();
         for sha in [ancestor, descendant] {
             let object = format!("{sha}^{{commit}}");
-            if !git_command_success(&self.repo_root, &["cat-file", "-e", &object])? {
+            if !git_command_success(
+                &self.process_env,
+                &self.repo_root,
+                &["cat-file", "-e", &object],
+            )? {
                 missing.push(sha);
             }
         }
         if !missing.is_empty() {
             let mut args = vec!["fetch", "--no-tags", "--quiet", "origin"];
             args.extend(missing);
-            git_success(&self.repo_root, &args)?;
+            git_success(&self.process_env, &self.repo_root, &args)?;
         }
-        crate::executor::automation::vcs::git::is_ancestor(&self.repo_root, ancestor, descendant)
+        crate::executor::automation::vcs::git::is_ancestor(
+            &self.process_env,
+            &self.repo_root,
+            ancestor,
+            descendant,
+        )
     }
 }
 

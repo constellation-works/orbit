@@ -92,13 +92,15 @@ pub(super) struct SourceCheckout {
 /// sandbox's `denyModify .orbit/**` rule otherwise blocks every non-codex
 /// provider from writing inside its own jrun worktree. See T20260508-17.
 pub(super) fn prepare_source_checkout(
+    process_env: &orbit_common::Env,
     input: &Value,
     task_ctx: Option<&Value>,
     workspace_root: Option<&Path>,
     fs_profile: Option<&str>,
 ) -> Result<SourceCheckout, DispatchError> {
     let source_cwd = resolve_subprocess_cwd(input, task_ctx, workspace_root)?;
-    let inspection = SourceInspection::from_input(input, source_cwd.as_deref(), fs_profile)?;
+    let inspection =
+        SourceInspection::from_input(process_env, input, source_cwd.as_deref(), fs_profile)?;
     let inspection_input = inspection
         .as_ref()
         .map(|snapshot| snapshot.bind_input(input));

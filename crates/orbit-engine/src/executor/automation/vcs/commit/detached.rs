@@ -23,6 +23,7 @@ const SCRATCH_INDEX: &str = "orbit-detached-repair.index";
 /// files and branch are untouched; the commit is reachable only through the
 /// ref the caller points at it. `None` when nothing differs from `HEAD`.
 pub(in crate::executor::automation::vcs) fn commit_worktree_detached(
+    process_env: &orbit_common::Env,
     workspace_path: &Path,
     reviewer_model: Option<&str>,
     message: &str,
@@ -30,22 +31,24 @@ pub(in crate::executor::automation::vcs) fn commit_worktree_detached(
     let author = reviewer_model
         .map(reviewer_author)
         .unwrap_or_else(GitAuthor::orbit);
-    commit_detached(workspace_path, &author, message, None)
+    commit_detached(process_env, workspace_path, &author, message, None)
 }
 
 /// Preserve an unfinished claimed implementation without moving its branch,
 /// index or files. Refuse the entire snapshot before writing objects when a
 /// protected or irregular candidate path is present; scratch is never staged.
 pub(in crate::executor::automation::vcs) fn commit_claimed_partial(
+    process_env: &orbit_common::Env,
     workspace_path: &Path,
     message: &str,
 ) -> Result<Option<String>, OrbitError> {
-    super::git_ops::ensure_no_unmerged_changes(workspace_path)?;
-    let mut paths = task_candidate_paths(workspace_path, NewPathPolicy::Claimed)?;
+    super::git_ops::ensure_no_unmerged_changes(process_env, workspace_path)?;
+    let mut paths = task_candidate_paths(process_env, workspace_path, NewPathPolicy::Claimed)?;
     // Ordinary worktree diffs ignore submodules to avoid executing a nested
     // repository's config. Inspect staged changes without worktree traversal
     // as well, so a newly staged gitlink cannot disappear from the refusal.
     paths.extend(exact_delivery_paths(
+        process_env,
         workspace_path,
         &[
             "diff",
@@ -77,30 +80,55 @@ pub(in crate::executor::automation::vcs) fn commit_claimed_partial(
     if paths.is_empty() {
         return Ok(None);
     }
-    commit_detached(workspace_path, &GitAuthor::orbit(), message, Some(&paths))
+    commit_detached(
+        process_env,
+        workspace_path,
+        &GitAuthor::orbit(),
+        message,
+        Some(&paths),
+    )
 }
 
 fn commit_detached(
+    process_env: &orbit_common::Env,
     workspace_path: &Path,
     author: &GitAuthor,
     message: &str,
     paths: Option<&[String]>,
 ) -> Result<Option<String>, OrbitError> {
-    let head = git_output(workspace_path, &["rev-parse", "--verify", "HEAD^{commit}"])?;
-    let head_tree = git_output(workspace_path, &["rev-parse", "--verify", "HEAD^{tree}"])?;
-    let index = scratch_index(workspace_path)?;
+    let head = git_output(
+        process_env,
+        workspace_path,
+        &["rev-parse", "--verify", "HEAD^{commit}"],
+    )?;
+    let head_tree = git_output(
+        process_env,
+        workspace_path,
+        &["rev-parse", "--verify", "HEAD^{tree}"],
+    )?;
+    let index = scratch_index(process_env, workspace_path)?;
     let index_env = index.to_string_lossy().into_owned();
     let staged = (|| {
         let scratch = [("GIT_INDEX_FILE", index_env.as_str())];
-        git_output_with_env(workspace_path, &["read-tree", "HEAD"], &scratch)?;
+        git_output_with_env(
+            process_env,
+            workspace_path,
+            &["read-tree", "HEAD"],
+            &scratch,
+        )?;
         if let Some(paths) = paths {
             let mut args = vec!["--literal-pathspecs", "add", "--all", "--"];
             args.extend(paths.iter().map(String::as_str));
-            git_output_with_env(workspace_path, &args, &scratch)?;
+            git_output_with_env(process_env, workspace_path, &args, &scratch)?;
         } else {
-            git_output_with_env(workspace_path, &["add", "--all", "--", "."], &scratch)?;
+            git_output_with_env(
+                process_env,
+                workspace_path,
+                &["add", "--all", "--", "."],
+                &scratch,
+            )?;
         }
-        git_output_with_env(workspace_path, &["write-tree"], &scratch)
+        git_output_with_env(process_env, workspace_path, &["write-tree"], &scratch)
     })();
     if let Err(error) = std::fs::remove_file(&index)
         && error.kind() != std::io::ErrorKind::NotFound
@@ -114,10 +142,11 @@ fn commit_detached(
     if paths.is_some() {
         // Re-check the immutable snapshot: even a path that changed type
         // during staging must never publish a symlink or gitlink.
-        validate_claim_new_paths(workspace_path, &[], &head, &tree)?;
+        validate_claim_new_paths(process_env, workspace_path, &[], &head, &tree)?;
     }
     let committer = GitAuthor::orbit();
     let commit = git_output_with_env(
+        process_env,
         workspace_path,
         &["commit-tree", &tree, "-p", &head, "-m", message],
         &[
@@ -132,8 +161,12 @@ fn commit_detached(
 
 /// The scratch index path, absolute: `--git-path` answers relative to the
 /// worktree when its Git directory is inside it.
-fn scratch_index(workspace_path: &Path) -> Result<PathBuf, OrbitError> {
+fn scratch_index(
+    process_env: &orbit_common::Env,
+    workspace_path: &Path,
+) -> Result<PathBuf, OrbitError> {
     let path = PathBuf::from(git_output(
+        process_env,
         workspace_path,
         &["rev-parse", "--git-path", SCRATCH_INDEX],
     )?);

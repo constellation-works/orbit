@@ -151,7 +151,8 @@ pub(super) fn finish_cli_dispatch(
         timed_out,
     });
 
-    let inspection_error = inspection.and_then(|snapshot| snapshot.verify().err());
+    let inspection_error =
+        inspection.and_then(|snapshot| snapshot.verify(&host.process_env()).err());
     let guard_error =
         linux_post_run_guard
             .as_ref()

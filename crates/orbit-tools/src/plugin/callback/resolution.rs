@@ -4,9 +4,10 @@ use super::*;
 /// `None` is an ordinary caller. Token-only callers, live backend descendants
 /// without the descriptor, and unidentified confined children are refused.
 pub fn resolve_plugin_callback(
+    env: &orbit_common::Env,
     global_root: &Path,
 ) -> Result<Option<PluginCallbackIdentity>, OrbitError> {
-    match resolve_plugin_callback_session(global_root)? {
+    match resolve_plugin_callback_session(env, global_root)? {
         CallbackResolution::None => Ok(None),
         CallbackResolution::Identified(identity) => Ok(Some(identity)),
         CallbackResolution::RetiredCredential(identity) => Err(retired_callback_credential(
@@ -19,6 +20,7 @@ pub fn resolve_plugin_callback(
 /// Full resolution used by dispatch so a missing descriptor can still stamp
 /// plugin identity on the audit row when live ancestry names the backend.
 pub fn resolve_plugin_callback_session(
+    env: &orbit_common::Env,
     global_root: &Path,
 ) -> Result<CallbackResolution, OrbitError> {
     // The host answering a routed call resolves the session it minted for
@@ -29,11 +31,12 @@ pub fn resolve_plugin_callback_session(
     let dir = callback_dir(global_root);
     // Only the host-issued descriptor authorizes a callback. It survives
     // `setsid` and a cleared environment without relying on process ancestry.
-    if let Some(record) = credential_from_descriptor(&dir) {
+    if let Some(record) = credential_from_descriptor(env, &dir) {
         return Ok(CallbackResolution::Identified(identity_from(&record)));
     }
-    let has_retired_token = std::env::var(ORBIT_PLUGIN_CALLBACK_ENV)
-        .ok()
+    let has_retired_token = env
+        .orbit_plugin_callback()
+        .and_then(std::ffi::OsStr::to_str)
         .is_some_and(|value| !value.trim().is_empty());
     let ancestry = scan_ancestry_session(global_root, &CallerProcess::current());
     // Retain the default refusal for a backend that shed its descriptor,
@@ -163,9 +166,9 @@ pub(super) fn open_credential(path: &Path) -> Result<File, OrbitError> {
 /// The number the credential is expected on: [`PLUGIN_CALLBACK_FD`], or what
 /// [`ORBIT_PLUGIN_CALLBACK_FD_ENV`] names. The standard streams are never
 /// accepted — a caller with a redirected stdin is not presenting a credential.
-fn callback_descriptor() -> i32 {
-    std::env::var(ORBIT_PLUGIN_CALLBACK_FD_ENV)
-        .ok()
+fn callback_descriptor(env: &orbit_common::Env) -> i32 {
+    env.orbit_plugin_callback_fd()
+        .and_then(std::ffi::OsStr::to_str)
         .and_then(|value| value.trim().parse::<i32>().ok())
         .filter(|fd| *fd >= PLUGIN_CALLBACK_FD)
         .unwrap_or(PLUGIN_CALLBACK_FD)
@@ -179,11 +182,14 @@ fn callback_descriptor() -> i32 {
 /// is refused separately when its marker, live ancestry, or sandbox identifies
 /// it as a plugin child.
 #[cfg(unix)]
-pub(super) fn credential_from_descriptor(dir: &Path) -> Option<SessionRecord> {
+pub(super) fn credential_from_descriptor(
+    env: &orbit_common::Env,
+    dir: &Path,
+) -> Option<SessionRecord> {
     use std::os::fd::FromRawFd;
     use std::os::unix::fs::{FileExt, MetadataExt};
 
-    let fd = callback_descriptor();
+    let fd = callback_descriptor(env);
     // SAFETY: the descriptor is only borrowed. `ManuallyDrop` keeps the
     // wrapper from closing a number this process does not own, and a number
     // that is closed or was never opened fails every call below with `EBADF`,
@@ -211,7 +217,10 @@ pub(super) fn credential_from_descriptor(dir: &Path) -> Option<SessionRecord> {
 /// Descriptor inheritance is a Unix contract, and so is every sandbox Orbit
 /// runs a plugin under.
 #[cfg(not(unix))]
-pub(super) fn credential_from_descriptor(_dir: &Path) -> Option<SessionRecord> {
+pub(super) fn credential_from_descriptor(
+    _env: &orbit_common::Env,
+    _dir: &Path,
+) -> Option<SessionRecord> {
     None
 }
 

@@ -90,7 +90,13 @@ fn evaluate_red_base<H: RuntimeHost + ?Sized>(
     let base_name =
         input_string_field(input, "base").ok_or_else(|| "the input names no base".to_string())?;
     let workspace = Path::new(workspace_path);
-    let (base, branch, tip) = git::resolve_pr_base(workspace, input, &base_name, Some(head))?;
+    let (base, branch, tip) = git::resolve_pr_base(
+        &host.process_env(),
+        workspace,
+        input,
+        &base_name,
+        Some(head),
+    )?;
     unmoved_red_base(
         host,
         workspace,
@@ -139,8 +145,14 @@ pub(in crate::executor::automation::vcs::pr) fn recover_ci_rerun<H: RuntimeHost 
         Err(_) => return Ok(CiRerunRecovery::NotEligible),
     };
     let workspace = Path::new(workspace_path);
-    let (base, branch, tip) = git::resolve_pr_base(workspace, input, &base_name, Some(head))
-        .map_err(OrbitError::Execution)?;
+    let (base, branch, tip) = git::resolve_pr_base(
+        &host.process_env(),
+        workspace,
+        input,
+        &base_name,
+        Some(head),
+    )
+    .map_err(OrbitError::Execution)?;
     // A repair that made no edit already spent its auto-fix attempt for this
     // head. Rerun its failed checks once on the unchanged head instead of
     // admitting another repair. A recorded rerun send is not itself a rerun
@@ -252,7 +264,14 @@ pub(in crate::executor::automation::vcs::pr) fn failed_no_edit_rerun<H: RuntimeH
     }
     let (failed, _) = required_failures(host, workspace_path, pr_number, head, &failed).ok()?;
     let workspace = Path::new(workspace_path);
-    let (base, branch, _) = git::resolve_pr_base(workspace, input, &base_name, Some(head)).ok()?;
+    let (base, branch, _) = git::resolve_pr_base(
+        &host.process_env(),
+        workspace,
+        input,
+        &base_name,
+        Some(head),
+    )
+    .ok()?;
     match super::super::super::checks::request_no_edit_repair_rerun(
         host,
         workspace,
@@ -368,6 +387,7 @@ pub(in crate::executor::automation::vcs::pr) fn repair_failed_checks<H: RuntimeH
         };
     let dependency_base = status.base_branch.as_deref().and_then(|base| {
         git_output(
+            &host.process_env(),
             Path::new(workspace_path),
             &[
                 "merge-base",
@@ -479,7 +499,9 @@ pub(in crate::executor::automation::vcs::pr) fn base_tip_checks<H: RuntimeHost +
     let Some(base) = input_string_field(input, "base") else {
         return Ok(None);
     };
-    let Ok((_, branch, tip)) = git::resolve_pr_base(workspace, input, &base, None) else {
+    let Ok((_, branch, tip)) =
+        git::resolve_pr_base(&host.process_env(), workspace, input, &base, None)
+    else {
         return Ok(None);
     };
     super::super::super::checks::base_tip_check_evidence(

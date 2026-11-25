@@ -313,7 +313,7 @@ impl OrbitRuntime {
 
         let caller_worktree = std::env::current_dir()
             .ok()
-            .and_then(|cwd| find_linked_worktree_root(&cwd, &canonical_repo_root))
+            .and_then(|cwd| find_linked_worktree_root(self.env(), &cwd, &canonical_repo_root))
             .and_then(|worktree| worktree.canonicalize().ok())
             .filter(|worktree| worktree.is_dir());
 

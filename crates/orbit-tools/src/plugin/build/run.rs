@@ -58,7 +58,10 @@ pub struct PluginBuildRun<'a> {
 /// Create the build directory, run `fetch` (when declared) and `build`
 /// under the build profile, and keep the log. Refuses before creating
 /// anything when this host cannot apply the profile.
-pub fn run_plugin_build(run: &PluginBuildRun<'_>) -> Result<PluginBuildResult, OrbitError> {
+pub fn run_plugin_build(
+    process_env: &orbit_common::Env,
+    run: &PluginBuildRun<'_>,
+) -> Result<PluginBuildResult, OrbitError> {
     let plan = run.plan;
     let probe = probe_build_sandbox(plan.fetch.is_some()).map_err(|reason| {
         OrbitError::PolicyDenied(format!(
@@ -119,7 +122,7 @@ pub fn run_plugin_build(run: &PluginBuildRun<'_>) -> Result<PluginBuildResult, O
             timeout: Duration::from_millis(plan.timeout_ms),
             build_dir_cap_bytes: PLUGIN_BUILD_DIR_CAP_BYTES,
         };
-        let end = run_build_phase(&orbit_common::Env::capture(), &request, &mut log);
+        let end = run_build_phase(process_env, &request, &mut log);
         ran.push(rendered);
         match end {
             Ok(end) if end.succeeded() => log.note(&format!("phase {} succeeded", phase.name())),

@@ -300,11 +300,11 @@ pub trait TaskPrForge: Send + Sync {
 /// reach a real forge: a done or rejected fixture task must not touch a
 /// repository's PRs from whichever checkout the tests run in.
 #[must_use]
-pub fn default_task_pr_forge() -> Arc<dyn TaskPrForge> {
+pub fn default_task_pr_forge(env: &orbit_common::Env) -> Arc<dyn TaskPrForge> {
     if cfg!(test) {
         Arc::new(NoTaskPrForge)
     } else {
-        Arc::new(GhTaskPrForge)
+        Arc::new(GhTaskPrForge::new(env))
     }
 }
 
@@ -346,8 +346,16 @@ impl TaskPrForge for NoTaskPrForge {
 /// GitHub through the `gh` CLI, run in the workspace checkout so `gh`
 /// resolves the repository from its remotes. The argv lives in
 /// `orbit_tools::github_cli`.
-#[derive(Debug, Default, Clone, Copy)]
-pub struct GhTaskPrForge;
+#[derive(Debug, Clone)]
+pub struct GhTaskPrForge {
+    env: orbit_common::Env,
+}
+
+impl GhTaskPrForge {
+    pub fn new(env: &orbit_common::Env) -> Self {
+        Self { env: env.clone() }
+    }
+}
 
 impl TaskPrForge for GhTaskPrForge {
     fn lease_pull_request(
@@ -359,9 +367,10 @@ impl TaskPrForge for GhTaskPrForge {
             let number = number.parse::<u64>().map_err(|_| {
                 OrbitError::InvalidInput("lease PR binding must be #<number>".into())
             })?;
-            view_pull_request(repo_root, number)?
+            view_pull_request(&self.env, repo_root, number)?
         } else {
             let stdout = task_forge_gh_request(
+                &self.env,
                 orbit_tools::github_cli::bound_branch_pull_request_request(binding),
                 repo_root,
                 "gh pr list",
@@ -401,6 +410,7 @@ impl TaskPrForge for GhTaskPrForge {
 
     fn open_pull_requests(&self, repo_root: &Path) -> Result<Vec<ForgePullRequest>, OrbitError> {
         let stdout = task_forge_gh_request(
+            &self.env,
             orbit_tools::github_cli::open_pull_requests_request(),
             repo_root,
             "gh pr list",
@@ -417,7 +427,7 @@ impl TaskPrForge for GhTaskPrForge {
         repo_root: &Path,
         number: u64,
     ) -> Result<Option<ForgePullRequest>, OrbitError> {
-        let entry = view_pull_request(repo_root, number)?;
+        let entry = view_pull_request(&self.env, repo_root, number)?;
         if !has_state(&entry, "open") {
             return Ok(None);
         }
@@ -430,6 +440,7 @@ impl TaskPrForge for GhTaskPrForge {
 
     fn merged_pull_requests(&self, repo_root: &Path) -> Result<Vec<MergedPullRequest>, OrbitError> {
         let stdout = task_forge_gh_request(
+            &self.env,
             orbit_tools::github_cli::merged_pull_requests_request(),
             repo_root,
             "gh pr list",
@@ -449,7 +460,7 @@ impl TaskPrForge for GhTaskPrForge {
         repo_root: &Path,
         number: u64,
     ) -> Result<Option<MergedPullRequest>, OrbitError> {
-        let entry = view_pull_request(repo_root, number)?;
+        let entry = view_pull_request(&self.env, repo_root, number)?;
         if !has_state(&entry, "merged") {
             return Ok(None);
         }
@@ -468,7 +479,7 @@ impl TaskPrForge for GhTaskPrForge {
         repo_root: &Path,
         number: u64,
     ) -> Result<Option<PullRequestBlockers>, OrbitError> {
-        let Some(pull) = open_pull_request_document(repo_root, number)? else {
+        let Some(pull) = open_pull_request_document(&self.env, repo_root, number)? else {
             return Ok(None);
         };
         // Unknown mergeability is its own answer: callers that merge or defer
@@ -485,7 +496,7 @@ impl TaskPrForge for GhTaskPrForge {
         }
         let mut blockers = pull_request_blockers_from_json(number, &pull)
             .ok_or_else(|| unreadable_pull_request_blockers(number))?;
-        populate_requires_status_checks(repo_root, &pull, &mut blockers);
+        populate_requires_status_checks(&self.env, repo_root, &pull, &mut blockers);
         Ok(Some(blockers))
     }
 
@@ -494,7 +505,7 @@ impl TaskPrForge for GhTaskPrForge {
         repo_root: &Path,
         number: u64,
     ) -> Result<Option<HandoffLandingPullRequest>, OrbitError> {
-        let Some(pull) = open_pull_request_document(repo_root, number)? else {
+        let Some(pull) = open_pull_request_document(&self.env, repo_root, number)? else {
             return Ok(None);
         };
         if pull.get("mergeable").and_then(Value::as_str) == Some("UNKNOWN") {
@@ -508,7 +519,7 @@ impl TaskPrForge for GhTaskPrForge {
         }
         let mut blockers = pull_request_blockers_from_json(number, &pull)
             .ok_or_else(|| unreadable_pull_request_blockers(number))?;
-        populate_requires_status_checks(repo_root, &pull, &mut blockers);
+        populate_requires_status_checks(&self.env, repo_root, &pull, &mut blockers);
         let base_branch = pull
             .get("baseRefName")
             .and_then(Value::as_str)
@@ -531,7 +542,7 @@ impl TaskPrForge for GhTaskPrForge {
         repo_root: &Path,
         number: u64,
     ) -> Result<Option<PullRequestBlockers>, OrbitError> {
-        let Some(pull) = open_pull_request_document(repo_root, number)? else {
+        let Some(pull) = open_pull_request_document(&self.env, repo_root, number)? else {
             return Ok(None);
         };
         let mut blockers = pull_request_blockers_from_json(number, &pull).ok_or_else(|| {
@@ -540,7 +551,7 @@ impl TaskPrForge for GhTaskPrForge {
                  checks of pull request #{number}"
             ))
         })?;
-        populate_requires_status_checks(repo_root, &pull, &mut blockers);
+        populate_requires_status_checks(&self.env, repo_root, &pull, &mut blockers);
         Ok(Some(blockers))
     }
 
@@ -552,7 +563,7 @@ impl TaskPrForge for GhTaskPrForge {
         number: u64,
         head_sha: &str,
     ) -> Result<CheckRerunOutcome, OrbitError> {
-        super::pr_forge_rerun::rerun_failed_head_workflows(repo_root, number, head_sha)
+        super::pr_forge_rerun::rerun_failed_head_workflows(&self.env, repo_root, number, head_sha)
     }
 
     fn merge_pull_request(
@@ -568,6 +579,7 @@ impl TaskPrForge for GhTaskPrForge {
             )));
         }
         let stdout = task_forge_gh_request(
+            &self.env,
             orbit_tools::github_cli::repository_merge_methods_request(),
             repo_root,
             "gh repo view",
@@ -590,7 +602,8 @@ impl TaskPrForge for GhTaskPrForge {
             number, head_sha, method, message,
         );
         request.current_dir = Some(repo_root.to_string_lossy().into_owned());
-        let result = orbit_tools::github_quota::run_gh_request(FORGE_QUOTA_CALLER, &request)?;
+        let result =
+            orbit_tools::github_quota::run_gh_request(&self.env, FORGE_QUOTA_CALLER, &request)?;
         if !result.success {
             // This text is returned to an agent's call.
             let stderr =
@@ -624,6 +637,7 @@ impl TaskPrForge for GhTaskPrForge {
         expected_head_sha: &str,
     ) -> Result<PullRequestRefreshOutcome, OrbitError> {
         super::pr_forge_refresh::update_pull_request_branch_with_gh(
+            &self.env,
             repo_root,
             number,
             head_branch,
@@ -634,6 +648,7 @@ impl TaskPrForge for GhTaskPrForge {
 
     fn authenticated_login(&self, repo_root: &Path) -> Result<String, OrbitError> {
         let stdout = task_forge_gh_request(
+            &self.env,
             orbit_tools::github_cli::authenticated_login_request(),
             repo_root,
             "gh api user",
@@ -654,6 +669,7 @@ impl TaskPrForge for GhTaskPrForge {
         comment: &str,
     ) -> Result<(), OrbitError> {
         task_forge_gh_request(
+            &self.env,
             orbit_tools::github_cli::close_pull_request_request(number, comment),
             repo_root,
             "gh pr close",
@@ -662,8 +678,13 @@ impl TaskPrForge for GhTaskPrForge {
     }
 }
 
-pub(super) fn view_pull_request(repo_root: &Path, number: u64) -> Result<Value, OrbitError> {
+pub(super) fn view_pull_request(
+    env: &orbit_common::Env,
+    repo_root: &Path,
+    number: u64,
+) -> Result<Value, OrbitError> {
     let stdout = task_forge_gh_request(
+        env,
         orbit_tools::github_cli::view_pull_request_request(number),
         repo_root,
         "gh pr view",
@@ -699,12 +720,13 @@ pub(super) const FORGE_QUOTA_CALLER: orbit_tools::github_quota::GithubCaller =
 /// guard. A local refusal or GitHub's authenticated rate limit stays typed,
 /// so a caller can wait for the reset; nothing runs on a local refusal.
 pub(super) fn task_forge_gh_request(
+    env: &orbit_common::Env,
     mut request: ExecRequest,
     repo_root: &Path,
     label: &str,
 ) -> Result<String, OrbitError> {
     request.current_dir = Some(repo_root.to_string_lossy().into_owned());
-    let result = orbit_tools::github_quota::run_gh_request(FORGE_QUOTA_CALLER, &request)?;
+    let result = orbit_tools::github_quota::run_gh_request(env, FORGE_QUOTA_CALLER, &request)?;
     orbit_tools::github_cli::check_gh_read_result(&result, label)?;
     Ok(result.stdout)
 }
@@ -748,8 +770,13 @@ fn merged_pull_request_from_json(entry: &Value) -> Option<MergedPullRequest> {
     })
 }
 
-fn open_pull_request_document(repo_root: &Path, number: u64) -> Result<Option<Value>, OrbitError> {
+fn open_pull_request_document(
+    env: &orbit_common::Env,
+    repo_root: &Path,
+    number: u64,
+) -> Result<Option<Value>, OrbitError> {
     let stdout = task_forge_gh_request(
+        env,
         orbit_tools::github_cli::pull_request_blockers_request(number),
         repo_root,
         "gh api graphql",
@@ -893,6 +920,7 @@ fn classic_branch_protection_requires_checks(pull: &Value) -> Option<bool> {
 }
 
 fn populate_requires_status_checks(
+    env: &orbit_common::Env,
     repo_root: &Path,
     pull: &Value,
     blockers: &mut PullRequestBlockers,
@@ -914,6 +942,7 @@ fn populate_requires_status_checks(
         return;
     };
     let Ok(stdout) = task_forge_gh_request(
+        env,
         orbit_tools::github_cli::branch_protection_rules_request(base_branch),
         repo_root,
         "gh api rules/branches",

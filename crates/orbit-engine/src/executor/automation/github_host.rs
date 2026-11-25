@@ -39,12 +39,17 @@ pub(super) fn query_root<H: RuntimeHost + ?Sized>(
 /// are background spenders of the host's GitHub quota: a read the guard
 /// refuses returns its typed throttle and runs nothing.
 pub(super) fn run_gh_process(
+    process_env: &orbit_common::Env,
     repo_root: &Path,
     mut request: ExecRequest,
 ) -> Result<orbit_exec::ExecutionResult, OrbitError> {
     request.current_dir = Some(repo_root.to_string_lossy().into_owned());
-    request.environment_mode = EnvironmentMode::ClearAndSet(gh_environment());
-    github_quota::run_gh_request(github_quota::GithubCaller::Background, &request)
+    request.environment_mode = EnvironmentMode::ClearAndSet(gh_environment(process_env));
+    github_quota::run_gh_request(
+        process_env,
+        github_quota::GithubCaller::Background,
+        &request,
+    )
 }
 
 /// Guard for `orbit_tools::github_cli::read_run_log_guarded`: put one `gh`
@@ -53,27 +58,33 @@ pub(super) fn run_gh_process(
 /// only the timeout budget left after admission; an exhausted budget is the
 /// typed timeout and the read never starts.
 pub(super) fn clear_gh_environment(
+    process_env: &orbit_common::Env,
     request: &ExecRequest,
     caller: github_quota::GithubCaller,
 ) -> Result<ExecRequest, OrbitError> {
     let mut request = request.clone();
-    request.environment_mode = EnvironmentMode::ClearAndSet(gh_environment());
-    github_quota::admit_gh_request_within_budget(caller, &request)
+    request.environment_mode = EnvironmentMode::ClearAndSet(gh_environment(process_env));
+    github_quota::admit_gh_request_within_budget(process_env, caller, &request)
 }
 
 pub(super) fn run_gh(
+    process_env: &orbit_common::Env,
     repo_root: &Path,
     request: ExecRequest,
     label: &str,
 ) -> Result<String, OrbitError> {
-    let result = run_gh_process(repo_root, request).map_err(redact_all_error)?;
+    let result = run_gh_process(process_env, repo_root, request).map_err(redact_all_error)?;
     // A rate limit stays typed, so the sweep can wait for its reset.
     github_cli::check_gh_read_result(&result, label).map_err(redact_all_error)?;
     Ok(result.stdout)
 }
 
 /// Probe host authentication, preserving each sweep's unavailable-detail prefix.
-pub(super) fn auth_status(repo_root: &Path, unavailable_prefix: &str) -> AuthStatus {
+pub(super) fn auth_status(
+    process_env: &orbit_common::Env,
+    repo_root: &Path,
+    unavailable_prefix: &str,
+) -> AuthStatus {
     let request = match github_cli::auth_status_request(&Value::Null) {
         Ok(request) => request,
         Err(error) => {
@@ -86,7 +97,7 @@ pub(super) fn auth_status(repo_root: &Path, unavailable_prefix: &str) -> AuthSta
     };
     // A missing `gh`, or a host that refuses to execute it, surfaces as a
     // spawn error. That is a capability answer, not a fault.
-    match run_gh_process(repo_root, request) {
+    match run_gh_process(process_env, repo_root, request) {
         Ok(result) if result.success => AuthStatus {
             available: true,
             authenticated: true,

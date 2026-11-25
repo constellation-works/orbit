@@ -16,12 +16,13 @@ pub fn tool_suggestion_context(
     entry_point: ToolEntryPoint,
     session_context: ToolSessionContext,
 ) -> ToolContext {
-    let policy = if entry_point != ToolEntryPoint::Mcp || managed_run_context() {
+    let policy = if entry_point != ToolEntryPoint::Mcp || managed_run_context(env) {
         read_activity_tool_policy_from_env(env)
     } else {
         Default::default()
     };
     ToolContext {
+        env: env.clone(),
         session_context,
         allowed_tools: policy.allowed_tools,
         tool_deny_policy: policy.deny_policy,

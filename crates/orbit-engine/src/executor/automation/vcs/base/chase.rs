@@ -93,17 +93,18 @@ pub(in crate::executor::automation::vcs) fn chase_advanced_base<H: RuntimeHost +
     }
 
     let what = "a recovered HEAD the base advanced past";
-    ensure_clean_for_rewrite(workspace, head_sha_before, what)?;
-    let chased = git_run(workspace, &["rebase", base_sha])?;
+    ensure_clean_for_rewrite(&host.process_env(), workspace, head_sha_before, what)?;
+    let chased = git_run(&host.process_env(), workspace, &["rebase", base_sha])?;
     if chased.success {
-        let after = branch_freshness_against_ref(workspace, head, base_ref, base_sha)?;
+        let after =
+            branch_freshness_against_ref(&host.process_env(), workspace, head, base_ref, base_sha)?;
         if after.commits_behind != 0 || after.commits_ahead == 0 {
             return Err(OrbitError::Execution(format!(
                 "git_rebase: rebasing recovered HEAD '{recovered}' onto '{base_sha}' did not \
                  leave a candidate on that base"
             )));
         }
-        let head_sha = commit_sha(workspace, head)?;
+        let head_sha = commit_sha(&host.process_env(), workspace, head)?;
         certify_chase(host, input, context, checkpoint, recovered, &head_sha)?;
         return Ok(json!({
             "phase": "rebase",
@@ -122,12 +123,12 @@ pub(in crate::executor::automation::vcs) fn chase_advanced_base<H: RuntimeHost +
     let conflicting_paths = if chased.timed_out {
         Vec::new()
     } else {
-        unmerged_paths(workspace)?
+        unmerged_paths(&host.process_env(), workspace)?
     };
-    if rebase_in_progress(workspace)? {
-        abort_owned_rebase(workspace)?;
+    if rebase_in_progress(&host.process_env(), workspace)? {
+        abort_owned_rebase(&host.process_env(), workspace)?;
     }
-    if commit_sha(workspace, head)? != recovered {
+    if commit_sha(&host.process_env(), workspace, head)? != recovered {
         return Err(OrbitError::Execution(format!(
             "git_rebase: aborting the rebase of recovered HEAD '{recovered}' onto '{base_sha}' \
              did not restore it"
@@ -160,21 +161,26 @@ pub(in crate::executor::automation::vcs) fn chase_advanced_base<H: RuntimeHost +
     // The resolution the recovery certified does not carry onto the advanced
     // base. Recovery is only admitted on a rebase of the prepared HEAD, so
     // redo it from there; the earlier resolution stays reachable by its SHA.
-    discard_rewrite(workspace, head_sha_before, what)?;
-    let (decision, rewritten, head_sha) =
-        perform_rebase_onto_base(workspace, head, head_sha_before, base_ref, base_sha).map_err(
-            |error| match error {
-                OrbitError::RecoverableVcsConflict(mut conflict) => {
-                    conflict.diagnostic = format!(
-                        "{}; base '{base_ref}' advanced past the certified resolution \
+    discard_rewrite(&host.process_env(), workspace, head_sha_before, what)?;
+    let (decision, rewritten, head_sha) = perform_rebase_onto_base(
+        &host.process_env(),
+        workspace,
+        head,
+        head_sha_before,
+        base_ref,
+        base_sha,
+    )
+    .map_err(|error| match error {
+        OrbitError::RecoverableVcsConflict(mut conflict) => {
+            conflict.diagnostic = format!(
+                "{}; base '{base_ref}' advanced past the certified resolution \
                          '{recovered}' onto '{recovered_base}', which conflicts with it",
-                        conflict.diagnostic
-                    );
-                    OrbitError::RecoverableVcsConflict(conflict)
-                }
-                other => other,
-            },
-        )?;
+                conflict.diagnostic
+            );
+            OrbitError::RecoverableVcsConflict(conflict)
+        }
+        other => other,
+    })?;
     Ok(json!({
         "phase": "rebase",
         "decision": decision,
@@ -227,7 +233,7 @@ fn certify_chase<H: RuntimeHost + ?Sized>(
             "workspace_path": workspace_path,
             "head": input["head"],
             "head_sha_before": head_sha_before,
-            "original_base_sha": original_base_sha(workspace, head_sha_before, base_sha)?,
+            "original_base_sha": original_base_sha(&host.process_env(), workspace, head_sha_before, base_sha)?,
             "base_ref": input["base_ref"],
             "target_base_sha": base_sha,
             "base_sha": base_sha,

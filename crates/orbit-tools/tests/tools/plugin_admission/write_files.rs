@@ -56,7 +56,7 @@ fn exact_file_grants_do_not_open_parents_siblings_or_descendants() {
     write_owner_file(&file, "synthetic-id");
     let spec = fixture_spec(&root, &file);
     let profile = spec
-        .sandbox_profile(None)
+        .sandbox_profile(&orbit_common::Env::capture(), None)
         .expect("existing file capability");
     assert!(profile.write.is_empty());
     assert_eq!(profile.write_files.as_slice(), std::slice::from_ref(&file));
@@ -78,7 +78,9 @@ fn exact_file_grants_do_not_open_parents_siblings_or_descendants() {
             spec.permissions.clone(),
             grants,
         );
-        let profile = scoped.sandbox_profile(None).unwrap();
+        let profile = scoped
+            .sandbox_profile(&orbit_common::Env::capture(), None)
+            .unwrap();
         assert_eq!(
             !profile.write_files.is_empty(),
             kept,
@@ -92,7 +94,7 @@ fn exact_file_grants_do_not_open_parents_siblings_or_descendants() {
         vec![spec.plugin_root.join("backend").display().to_string()];
     assert!(
         protected
-            .sandbox_profile(None)
+            .sandbox_profile(&orbit_common::Env::capture(), None)
             .unwrap_err()
             .to_string()
             .contains("plugin install root")
@@ -121,7 +123,7 @@ fn exact_file_glob_metacharacters_are_refused_before_the_macos_compiler() {
     write_owner_file(&nested, "synthetic");
     for refused in [glob_file, star_file, nested] {
         let error = fixture_spec(&root, &refused)
-            .sandbox_profile(None)
+            .sandbox_profile(&orbit_common::Env::capture(), None)
             .unwrap_err();
         // Name the reason, so an unrelated ancestor refusal cannot pass this check.
         assert!(
@@ -135,7 +137,7 @@ fn exact_file_glob_metacharacters_are_refused_before_the_macos_compiler() {
     let ordinary = root.join("installation_id");
     write_owner_file(&ordinary, "synthetic-id");
     let profile = fixture_spec(&root, &ordinary)
-        .sandbox_profile(None)
+        .sandbox_profile(&orbit_common::Env::capture(), None)
         .unwrap();
     let sbpl = orbit_exec::compile_macos_sandbox_profile(
         &orbit_common::Env::capture(),
@@ -161,7 +163,9 @@ fn unsafe_exact_files_are_refused_and_changed_files_are_revalidated_before_spawn
     let file = root.join("runtime-file");
     write_owner_file(&file, "original");
     let mut spec = fixture_spec(&root, &file);
-    let profile = spec.sandbox_profile(None).unwrap();
+    let profile = spec
+        .sandbox_profile(&orbit_common::Env::capture(), None)
+        .unwrap();
     let alias = root.join("alias");
     symlink(&file, &alias).unwrap();
     let linked_parent = root.join("linked-parent");
@@ -177,7 +181,9 @@ fn unsafe_exact_files_are_refused_and_changed_files_are_revalidated_before_spawn
         root.clone(),
     ] {
         spec.permissions.fs.write_files = vec![unsafe_path.display().to_string()];
-        let error = spec.sandbox_profile(None).unwrap_err();
+        let error = spec
+            .sandbox_profile(&orbit_common::Env::capture(), None)
+            .unwrap_err();
         assert!(
             matches!(error, orbit_common::OrbitError::PolicyDenied(_)),
             "{unsafe_path:?}: {error}"
@@ -191,13 +197,19 @@ fn unsafe_exact_files_are_refused_and_changed_files_are_revalidated_before_spawn
         // SAFETY: geteuid has no preconditions.
         if metadata.uid() != unsafe { libc::geteuid() } {
             spec.permissions.fs.write_files = vec![foreign.display().to_string()];
-            assert!(spec.sandbox_profile(None).is_err());
+            assert!(
+                spec.sandbox_profile(&orbit_common::Env::capture(), None)
+                    .is_err()
+            );
         }
     }
     std::fs::remove_file(hardlink).unwrap();
     std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o666)).unwrap();
     spec.permissions.fs.write_files = vec![file.display().to_string()];
-    assert!(spec.sandbox_profile(None).is_err());
+    assert!(
+        spec.sandbox_profile(&orbit_common::Env::capture(), None)
+            .is_err()
+    );
     std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o600)).unwrap();
     let req = ExecRequest {
         program: "/bin/sh".into(),
@@ -263,7 +275,9 @@ fn a_native_exact_file_write_leaves_sibling_and_auth_sentinels_read_only() {
         write_owner_file(path, "sentinel");
     }
     let spec = fixture_spec(&root, &file);
-    let profile = spec.sandbox_profile(None).unwrap();
+    let profile = spec
+        .sandbox_profile(&orbit_common::Env::capture(), None)
+        .unwrap();
     let req = ExecRequest { program: "/bin/sh".into(), args: vec!["-c".into(), "printf changed > \"$1\" || exit 11; if printf forbidden > \"$2\" 2>/dev/null; then exit 12; fi; if printf forbidden > \"$3\" 2>/dev/null; then exit 13; fi".into(), "probe".into(), file.display().to_string(), sibling.display().to_string(), auth.display().to_string()], current_dir: None, timeout_ms: Some(10000), stdin_mode: StdinMode::Null, environment_mode: EnvironmentMode::ClearAndSet(vec![("PATH".into(), "/usr/bin:/bin".into())]), debug: false };
     let output =
         run_process(&orbit_common::Env::capture(), &req, &profile).expect("confined file probe");
@@ -328,7 +342,7 @@ fn a_workspace_agents_md_grant_writes_that_file_only_under_landlock() {
             std::fs::set_permissions(&agents, std::fs::Permissions::from_mode(0o664)).unwrap();
         }
         let profile = workspace_agents_spec(&root)
-            .sandbox_profile(Some(&workspace))
+            .sandbox_profile(&orbit_common::Env::capture(), Some(&workspace))
             .unwrap_or_else(|error| panic!("linked={linked}: {error}"));
         let granted = if linked {
             workspace.join("CLAUDE.md")
@@ -407,7 +421,9 @@ fn a_workspace_agents_md_link_leaving_the_worktree_or_into_metadata_is_refused()
         Path::new("missing.md").to_path_buf(),
     ] {
         symlink(&target, &agents).unwrap();
-        let error = spec.sandbox_profile(Some(&workspace)).unwrap_err();
+        let error = spec
+            .sandbox_profile(&orbit_common::Env::capture(), Some(&workspace))
+            .unwrap_err();
         assert!(
             matches!(error, orbit_common::OrbitError::PolicyDenied(_)),
             "{}: {error}",
@@ -419,9 +435,15 @@ fn a_workspace_agents_md_link_leaving_the_worktree_or_into_metadata_is_refused()
     symlink("CLAUDE.md", &agents).unwrap();
     let mut absolute = spec.clone();
     absolute.permissions.fs.write_files = vec![agents.display().to_string()];
-    assert!(absolute.sandbox_profile(None).is_err());
+    assert!(
+        absolute
+            .sandbox_profile(&orbit_common::Env::capture(), None)
+            .is_err()
+    );
 
-    let profile = spec.sandbox_profile(Some(&workspace)).unwrap();
+    let profile = spec
+        .sandbox_profile(&orbit_common::Env::capture(), Some(&workspace))
+        .unwrap();
     std::fs::remove_file(&agents).unwrap();
     symlink("README.md", &agents).unwrap();
     let req = ExecRequest {

@@ -23,23 +23,35 @@ fn launcher_lookup_refuses_parent_directory_traversal() {
 
     let explicit = launcher.to_string_lossy().into_owned();
     assert_eq!(
-        locate_provider_launcher(&explicit, None),
+        locate_provider_launcher(&orbit_common::Env::capture(), &explicit, None),
         Some(launcher.clone()),
         "an explicit launcher path still resolves"
     );
     assert_eq!(
-        locate_provider_launcher("bin/fake-agent", Some(root.path())),
+        locate_provider_launcher(
+            &orbit_common::Env::capture(),
+            "bin/fake-agent",
+            Some(root.path())
+        ),
         Some(launcher.clone()),
         "a relative explicit launcher still resolves against the dispatch cwd"
     );
     let traversing_cwd = bin.join("..");
     assert_eq!(
-        locate_provider_launcher("bin/fake-agent", Some(&traversing_cwd)),
+        locate_provider_launcher(
+            &orbit_common::Env::capture(),
+            "bin/fake-agent",
+            Some(&traversing_cwd)
+        ),
         None,
         "the final lookup must refuse traversal supplied by cwd"
     );
     assert_eq!(
-        locate_provider_launcher(&explicit, Some(&traversing_cwd)),
+        locate_provider_launcher(
+            &orbit_common::Env::capture(),
+            &explicit,
+            Some(&traversing_cwd)
+        ),
         Some(launcher.clone()),
         "an absolute launcher does not depend on cwd"
     );
@@ -48,7 +60,7 @@ fn launcher_lookup_refuses_parent_directory_traversal() {
     let traversal = traversal.to_string_lossy().into_owned();
     for program in [traversal.as_str(), "..", "../bin/fake-agent"] {
         assert_eq!(
-            locate_provider_launcher(program, Some(&bin)),
+            locate_provider_launcher(&orbit_common::Env::capture(), program, Some(&bin)),
             None,
             "lookup must not resolve {program:?}"
         );

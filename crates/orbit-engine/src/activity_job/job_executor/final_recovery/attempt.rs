@@ -519,6 +519,7 @@ pub(in crate::activity_job::job_executor) fn attempt_final_recovery(
     // A worktree without a resolvable HEAD may still settle a task, but cannot
     // authorize a moved HEAD in a later commit step.
     let head_before = git_output(
+        &ctx.host.process_env(),
         std::path::Path::new(&worktree.workspace_path),
         &["rev-parse", "--verify", "HEAD^{commit}"],
     )
@@ -527,6 +528,7 @@ pub(in crate::activity_job::job_executor) fn attempt_final_recovery(
         .canonicalize()
         .ok();
     let branch_before = git_output(
+        &ctx.host.process_env(),
         std::path::Path::new(&worktree.workspace_path),
         &["symbolic-ref", "--quiet", "HEAD"],
     )
@@ -641,7 +643,11 @@ pub(in crate::activity_job::job_executor) fn attempt_final_recovery(
         resume_index = None;
     }
     let repair_commit = resume_index.and_then(|_| {
-        settlement::observe_repair_commit(&worktree.workspace_path, head_before.as_deref())
+        settlement::observe_repair_commit(
+            &ctx.host.process_env(),
+            &worktree.workspace_path,
+            head_before.as_deref(),
+        )
     });
     if repair_commit.is_some()
         && let Some(commit_index) = commit_index

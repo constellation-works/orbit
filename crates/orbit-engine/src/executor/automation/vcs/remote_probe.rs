@@ -108,12 +108,13 @@ pub(super) struct RemoteBranchProbe {
 /// a direct remote target so `insteadOf` is not applied to the
 /// already-resolved URL a second time [ORB-17686].
 pub(super) fn pre_push_remote_branch(
+    process_env: &orbit_common::Env,
     repo_root: &Path,
     branch: &str,
     remote: &str,
 ) -> Result<RemoteBranchProbe, OrbitError> {
     let target = direct_remote_target(remote);
-    verify_direct_remote_target(repo_root, remote, &target)?;
+    verify_direct_remote_target(process_env, repo_root, remote, &target)?;
     let reference = format!("refs/heads/{branch}");
     let mut owned: Vec<String> = target.prefix_args();
     owned.extend([
@@ -123,7 +124,7 @@ pub(super) fn pre_push_remote_branch(
         reference,
     ]);
     let args: Vec<&str> = owned.iter().map(String::as_str).collect();
-    let probe = remote_ref_output(repo_root, &args, "git_push pre-push")?;
+    let probe = remote_ref_output(process_env, repo_root, &args, "git_push pre-push")?;
     Ok(RemoteBranchProbe {
         sha: exact_remote_branch_sha(&probe.stdout, branch),
         attempts: probe.attempts,
@@ -164,6 +165,7 @@ pub(super) struct RemoteRefProbe {
 /// supply only read-only `ls-remote` arguments and parse refs through
 /// [`exact_remote_ref_sha`].
 pub(super) fn remote_ref_output(
+    process_env: &orbit_common::Env,
     repo_root: &Path,
     args: &[&str],
     stage: &str,
@@ -173,7 +175,7 @@ pub(super) fn remote_ref_output(
     let mut lock_observed = false;
     let mut waited_ms = 0;
     for attempt in 1..=PROBE_ATTEMPTS {
-        let outcome = git_run(repo_root, args)?;
+        let outcome = git_run(process_env, repo_root, args)?;
         if !outcome.timed_out {
             if !outcome.success {
                 return Err(git_failure_error(
