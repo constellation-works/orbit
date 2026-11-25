@@ -8,6 +8,7 @@ rules themselves are in `STD-01.md`; this file explains them and adds none.
   knows `task list`, they can guess `friction list` and `task show`. A shared verb
   vocabulary means agents can guess commands correctly instead of reading help for each
   noun. The `list`/`show` pairing is also what makes truncation safe (R15).
+- **R1.** Cross-resource and tool-wide verbs belong at the top level, while resource-specific verbs remain grouped by resource; artificial single-verb nouns add needless indirection (scribe standard-5).
 - **R3 (flag spelling).** Every alternate spelling is something a user has to remember and
   an agent can get wrong. Colliding long flags only fail when clap builds the command, so
   Orbit asserts the whole tree once in a test (ORB-11765) instead of discovering the
@@ -173,6 +174,7 @@ rules themselves are in `STD-01.md`; this file explains them and adds none.
   struct is the single declaration and help comes from its doc comments. Orbit's
   `OperationSpec` registry is what R25 looks like once several surfaces (CLI and MCP) have
   to agree.
+The Rust CLI research (ORB-28029, proposal T3) found the template's variables spread across source files and documented by hand. TMPL_CLI_ROOT is in crates/tmpl-cli-core/src/composition.rs, TMPL_CLI_FORMAT in crates/tmpl-cli/src/output/sink.rs, TMPL_CLI_LOG in crates/tmpl-cli/src/output/mod.rs, and NO_COLOR and COLUMNS are literals in sink.rs. Their table in docs/usage.md is written by hand. A variable added in code and missed in the doc, or the reverse, is the drift this rule already forbids for flags (scribe standard-17).
 - **R35 (deprecation window).** A flag or key that vanishes between releases breaks every
   script and config file that used it, all at once. One that is silently ignored forever
   hides that the caller's intent no longer does anything. Orbit settled on the same

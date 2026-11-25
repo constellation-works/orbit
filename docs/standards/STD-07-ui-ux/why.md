@@ -71,6 +71,7 @@ the second.
   ORB-22628 and ORB-23530.
 - **R6 (peer controls).** ORB-23271 (a stepper like its sibling) and ORB-12889 (oversized
   selects).
+Changed in v18 (scribe standard-6): Daniel corrected inconsistent button heights: "no inconsistent button heights (width's should also aim for uniformity, but to a lesser scrutiny), especially when they are right next to each other or share the same underlying function. The more in proximity, the greater imperative." In Water Economy (constellation-works/water-economy@ba6cfbd), four economy-table buttons measured 26, 40, 26 and 40px at 375px and 1440px because two labels wrapped onto a second line; shortening "Euro area" to "Euro" and "Rest of world" to "Rest" kept all four at 26px at the same font size while preserving full labels at 768px where they fit.
 - **R7 (Close and Back top right).** ""Back" should be on the upper right corner"
   (ORB-22754); "share with the team toggle can be next to Close button, as just Share"
   (ORB-21656); also ORB-17511.
@@ -117,6 +118,8 @@ the second.
   the next id. Related to separated monospace ids with a bare sans space, so they read as
   run together. R1 covered gaps between siblings, but not separators inside one line or the
   space a tap target may add.
+- **R47.** Daniel's correction on the Orbit dashboard's Task detail comments (2026-11-21), recorded by agent fable as scribe standard-3 with his quote: "last comment container stretches all the way down. it should end where the comment end (with consistent padding)". The entry names R42 as nearest, but R42 covers a control's width only. R1 covers padding and sibling gaps, and P4 says sizes come from content without a height rule, so no rule today tells a reviewer that a stacked list's last item must not stretch.
+- **R48.** Analytics > Metrics in the Orbit dashboard showed the same four containers (implementation time by actor, slowest runs, Actors within a complexity, Outcome by complexity) below the tab strip under every tab, so each tab mixed its own content with panels that belong to none of them. R16 (each piece of information once) is the nearest rule, but it does not say where content shared by several tabs sits relative to the strip; this rule does (scribe standard-4, ORB-28134).
 
 ## Typography
 
@@ -189,6 +192,7 @@ The drill-down half was added because the Fleet host dialog repeated the host ca
   those that gets truncated" and "excess space in the hover-over container" (7995d040,
   ORB-24124). Every progress-strip step had a tooltip, and each bubble was a fixed 280px
   wide.
+Changed in v18 (scribe standard-6): aligned with R41's narrow full-name exception ("when word shrinkage leads to ambiguity, provide hover-over") so a tooltip revealing an ambiguously shortened button label is permitted while general button help tooltips remain forbidden.
 v13 replaced the closing sentence, which named a button's hover help (R41) as detail of this kind, when R41 was reversed (ORB-25398).
 - **R41 (no hover help on buttons; effect in the accessible description).** "let's add another ux convention - on
   every buttons, there should be a short hover-over help message on what it does"
@@ -197,7 +201,9 @@ v13 replaced the closing sentence, which named a button's hover help (R41) as de
   a cycle now, what Takeover hands over, or whether Stop can be undone. R32 limited
   tooltips to what the screen does not already show, which read as discouraging them on
   buttons. A button's effect is exactly that kind of off-screen detail.
+Changed in v18 (scribe standard-6): Daniel followed up on shortened labels with "when word shrinkage leads to ambiguity, provide hover-over". This carves out a narrow full-name-only exception—triggered only by ambiguous shortening, shown on hover, keyboard focus and touch, with the full accessible name preserved—distinct from general instructional button tooltips, which remain prohibited.
 Changed in v13: the owner reversed the hover help on buttons. On the Fleet page a button's help bubble stayed on screen after the pointer left: "blatant defect. that help text persists even after not hovering. but let's just get rid of all hover-over help texts on this page, except for the i symbols. I think they are redundant." He then asked for R41 itself to be amended (2026-11-17, session orbit-0-orc, ORB-25398). The effect text stays available to assistive technology, and explanations go behind info icons, as R13 already requires.
+- **R46.** Daniel prefers unambiguous abbreviations, including scaled large numbers, to reduce UI verbosity while preserving meaning (scribe standard-7).
 
 ## Data display
 
@@ -282,12 +288,14 @@ Changed in v13: the owner reversed the hover help on buttons. On the Fleet page 
   its original size. make them smaller only when there is no more space. and update ux rule"
   (f09993e5, ORB-25032, F2026-11-302). Version 7 keeps full size wherever the row fits, and
   names tab strips.
+Changed in v18 (scribe standard-6): when a row of buttons is constrained, shortening labels by content (such as "Euro area" to "Euro" and "Rest of world" to "Rest") preserves one line and uniform peer height without shrinking readable type, while full labels stay at widths where they fit (such as 768px in Water Economy).
 - **R42 (controls sized by content).** The owner asked for the drain card's target select
   to be wider (ORB-25031), and the fix gave it a fixed `width: 330px`. Looking at the result
   he asked: "and yes I asked for wider, but how should we determine an optimal width?"
   (f09993e5, ORB-25074, F2026-11-310). A fixed width is a guess: it leaves an empty box for
   short names and clips long ones. R39 said how a row shrinks but not how wide a member
   starts. The owner approved sizing it from its longest option, capped by the row.
+Changed in v18 (scribe standard-6): connects content-sized button widths to R6's height-first uniformity and R39/R41's content-based shortening so Water Economy's four buttons keep comparable single-line 26px heights at 375px and 1440px with "Euro" and "Rest" while keeping full labels at 768px.
 - **R43 (a collapse keeps the page you are on).** On the Orbit Tasks page, any click on a
   dock tab (Drain, Notices, Residents, Log) at two-column width marked the dock as the
   routed page, deliberately (ORB-19732). Narrowing the window then showed the Drain card in

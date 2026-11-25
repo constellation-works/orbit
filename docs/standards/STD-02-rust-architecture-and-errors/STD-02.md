@@ -3,9 +3,9 @@ id: STD-02-rust-architecture-and-errors
 title: Rust architecture and errors — layering, visibility, typed errors, failure semantics, idiom and naming, logging, and test layout for constellation Rust projects
 summary: Normative structure and failure rules for any constellation Rust repo (workspace or single-crate CLI) — dependency direction, crate splits, visibility, one definition per rule, typed thiserror errors translated at the boundary, errors that name verified causes, exhaustive matches, load-time config validation, unknown-never-reads-as-success, fail-closed vs fail-open, batch isolation, preconditions before side effects, no boolean mode parameters, Rust API naming, borrow-general signatures, reasoned and expiring lint suppressions, lossless persisted shapes, tracing, dead code, test layout — plus the copyable lint, dependency-direction and cargo-deny gates. Read before creating or restructuring a Rust project or designing how it fails.
 tags: [standard, rust, architecture, errors, failure-semantics, idioms, naming, testing, lints]
-version: 5
+version: 8
 created: 2026-09-26
-updated: 2026-11-24
+updated: 2026-11-25
 last_validated: 2026-09-26
 related: [STD-01-cli-surface, STD-03-concurrency-and-process-safety, STD-04-testing-and-verification, STD-05-security-boundaries]
 ---
@@ -15,7 +15,7 @@ related: [STD-01-cli-surface, STD-03-concurrency-and-process-safety, STD-04-test
 How a constellation Rust project is layered, what it exposes, how it fails, and where its
 tests live. Orbit (`codebases/orbit`) is the worked example; the rules are written for a
 repo that is not Orbit, including a small one. Several rules (R24–R34, and parts of R10 and
-R16) are language-neutral principles about failure, and R39–R44 are language-neutral
+R16) are language-neutral principles about failure, and R39–R47 are language-neutral
 principles about structure; they are stated portably, with the Rust specifics as notes.
 
 Neighbouring standards own the rest, and their rules are not repeated here:
@@ -68,24 +68,8 @@ same.
 - **R5.** *Contract types are I/O-free.* The foundation unit holding shared contract types
   (serde DTOs, IDs, pure constructors, narrow errors) MUST perform no I/O — no `std::fs`,
   `std::net`, `std::process`, database or HTTP — and depend on no crate that does.
-- **R6.** *Direction is machine-checked.* Dependency direction MUST be enforced by a CI
-  check, and a new edge changes that check and the architecture doc in the same change. The
-  check MUST also reject an import cycle between units and enforce the order declared inside
-  a layer (R39). A boundary is enforced by the strongest mechanism the project has: a crate
-  edge, then item visibility (`pub(crate)`, `pub(super)`), then a source grep. A boundary
-  that only a grep enforces and that takes more than a few grep rules to state is a candidate
-  for a crate edge (R7).
-- **R7.** *Crates follow build boundaries, not taxonomy.* A new crate MUST be justified by a
-  build or dependency need — compile-graph isolation, an independently consumed artifact, or
-  a dependency edge that must be enforceable — not by conceptual category. A new CLI SHOULD
-  start as two crates, because the domain/surface edge is exactly such an enforceable edge: a
-  domain library crate that depends on no argument parser, terminal, environment or
-  log-subscriber crate, and a CLI crate that holds parsing, composition, rendering and
-  `main`. A project that persists state through a database or another storage driver SHOULD
-  make persistence a third crate from the day it takes that dependency, so that `Cargo.toml`
-  confines the driver to it and R40's rule that persistence imports no operation is a crate
-  edge. Any other project starts as one crate. Split further only when another such need
-  appears.
+- **R6.** *Direction is machine-checked.* Dependency direction MUST be enforced by a CI check, and a new edge changes that check and the architecture doc in the same change. The check MUST also reject an import cycle between units and enforce the order declared inside a layer (R39). A boundary is enforced by the strongest mechanism the project has: a crate edge where one exists, else item visibility (`pub(crate)`, `pub(super)`), else a `clippy.toml` `disallowed-types` or `disallowed-methods` entry, and a source grep only for what none of those can state (`crate::` imports, module-to-module rules). Each `clippy.toml` entry names what to call instead; an allowed module carries a module-level `#![expect(clippy::disallowed_types, reason = "…")]` or `#![expect(clippy::disallowed_methods, reason = "…")]` (R35), and a project on the shared kit crates bans those paths with no exemption. Grep rules that Clippy covers are removed from the direction script. A boundary that only a grep or `clippy.toml` enforces and that takes more than a few rules to state is a candidate for a crate edge (R7).
+- **R7.** *Crates follow build boundaries, not taxonomy.* A new crate MUST be justified by a build or dependency need — compile-graph isolation, an independently consumed artifact, or a dependency edge that must be enforceable — not by conceptual category. A new CLI SHOULD start as two crates, because the library/surface edge is exactly such an enforceable edge: a library crate that holds the operations (R45), the composition unit (R2) and every adapter, and that depends on no argument parser, terminal or log-subscriber crate; and a CLI crate that holds argument declarations, the mapping from arguments to one operation, rendering and `main`, and depends on exactly one internal crate. Composition, adapters for external systems, process spawning and every read of the environment MUST NOT live in the CLI crate. A project that persists state through a database or another storage driver SHOULD make persistence a third crate from the day it takes that dependency, so that `Cargo.toml` confines the driver to it and R40's rule that persistence imports no operation is a crate edge. Any other project starts as one crate. Split further only when another such need appears.
 - **R24.** *One definition per rule, enforced at the chokepoint.* Every validation,
   authorization and classification rule MUST have exactly one implementation, enforced in
   the shared path that every entry point crosses — CLI, HTTP or MCP handler, dashboard,
@@ -132,23 +116,16 @@ same.
   shapes of unrelated features. A trait is introduced for an external effect or when a second
   implementation exists; the project's own storage is a concrete type until there is a second
   backend.
-- **R43.** *A unit says what it owns, and new code goes to the lowest unit that can own it.*
-  The architecture doc MUST map every unit (each crate, and each top-level module of a crate)
-  with one sentence stating what it owns and the units it may import; the unit's doc comment
-  states the same sentence. New code goes in the lowest unit whose sentence covers it and
-  that needs no new upward import to hold it. When no unit's sentence covers it, the same
-  change adds the unit and its row; code is not parked in the nearest file that compiles.
-  Outside the foundation layer a unit MUST NOT be named for no responsibility (`common`,
-  `utils`, `helpers`, `misc`, `shared`), and no unit collects the shapes of unrelated
-  features in one `types` or `models` file. The foundation's contract-types unit (R5) is the
-  one shared home, and it holds only what two or more units use. R37 says the same of type
-  names.
+- **R43.** *A unit says what it owns, and new code goes to the lowest unit that can own it.* The architecture doc MUST map every unit (each crate, and each top-level module of a crate) with one sentence stating what it owns and the units it may import; the unit's doc comment states the same sentence. The map MUST be machine-checked: a gate fails when a crate or a top-level module is missing from the doc, when a path the doc names does not exist, or when a unit has no doc comment. New code goes in the lowest unit whose sentence covers it and that needs no new upward import to hold it. When no unit's sentence covers it, the same change adds the unit and its row; code is not parked in the nearest file that compiles. Outside the foundation layer a unit MUST NOT be named for no responsibility (`common`, `utils`, `helpers`, `misc`, `shared`), and no unit collects the shapes of unrelated features in one `types` or `models` file. The foundation's contract-types unit (R5) is the one shared home, and it holds only what two or more units use. R37 says the same of type names.
 - **R44.** *Legacy and upgrade code is quarantined.* Readers of superseded formats, schema
   and format migrations, and one-time importers MUST live in one unit named for that purpose
   (`legacy`, `migrate`), which the live path calls only when it opens or upgrades stored
   state. The live path reads and writes the current shape only and imports nothing else from
   that unit. A superseded reader is deleted when no supported version can still produce its
   input (R17).
+- **R45.** *The application layer is sliced by subject.* Each subject a user can name (a command noun, a resource) MUST be one application unit that holds that subject's operations (R2), its rules and its input and outcome types, with one public entry point that every surface calls. A surface command maps to exactly one such unit. A project MUST NOT sort the same subjects a second time by kind, into a rules layer or crate that collects every subject's rules, or into one folder of use-case files across subjects: a change to one subject touches one application unit and one persistence repository. A domain unit exists only for a subsystem that several subjects use and that has an identity of its own (an engine, a store, a search index). Application units call each other only through their entry points, in an order declared under R39, and R18's directory clause binds here: the layer's files are grouped in one folder per subject. Persistence stays one repository per record (R40), because subjects and records do not line up, and the record shapes it stores MAY live in a module of the persistence unit that imports nothing else from it. What every application unit runs against (the context handed to an operation, id resolution, error mapping) is one named unit beside them and holds nothing else (R43).
+- **R46.** *A tool starts no model and no agent.* A project other than the orchestrator MUST NOT invoke a model or an agent provider itself, in process or by spawning a provider's CLI. Work that needs one runs as an orchestrator job (Orbit: a job with an agent activity) that reads and writes through the project's own commands; the project supplies the deterministic steps on either side, preparing the input and checking and storing the result (R25). Provider adapters, their credentials and the supervision of agent processes belong to the orchestrator alone. An existing in-process call is removed once an orchestrator job can replace it, and until then lives in one unit that only its callers import.
+- **R47.** *A subject stays whole.* Code for one subject MUST NOT be split across units only so that one of them stays free of I/O. A library unit MAY own the file access its subject needs, confined to one module of that unit, and MAY import the persistence unit: finding, reading and parsing one kind of input live together. R41's pure decision functions remain the default inside a unit; this rule limits how far a purity or layering rule may scatter one subject across units. Such a unit never imports the application layer (R1), reads no environment and discovers no root (R3), and a function of it that writes takes the caller's transaction instead of opening its own (R40).
 
 ### Visibility and dependencies
 
@@ -344,7 +321,7 @@ when the change touches it for another reason, not in a sweep of its own.
 
 - `rust`: every rule, in every constellation Rust project, whether a multi-crate workspace
   or a single-crate CLI; all gates in [Machine checks](checks.md).
-- `universal`: R24–R26, R29–R34, R36 and R39–R44, the classification clause of R10 and the
+- `universal`: R24–R26, R29–R34, R36 and R39–R47, the classification clause of R10 and the
   lossless clause of R16 are language-neutral and bind any project; R27 and R28 wherever the
   language offers exhaustiveness checking and checked conversions.
 - `cli`: R7's two-crate default, R11 and R12's downstream-surface form, and R15's stream
@@ -357,6 +334,13 @@ when the change touches it for another reason, not in a sweep of its own.
 any restructuring of an existing one. A repo that adopted an earlier version records where
 it stands against them as a deviation (below) until it restructures; it is not required to
 restructure in order to re-pin.
+
+**Adopting v6.** R45–R47 and the v6 form of R7 bind the same way: a new project, and any
+restructuring of an existing one.
+
+**Adopting v7.** R43's gate binds a new project from its first commit. An existing project
+adds the gate in the change that re-pins it to v7 or later and completes its map there; until
+then the missing gate is a deviation (below).
 
 Out of scope, and optional for adopters: Orbit's per-crate stability tiers
 (`[package.metadata.orbit] stability`, `codebases/orbit/scripts/check-stability.sh`) and its
@@ -389,5 +373,7 @@ foundation alone, which is what R1, R2, R7 and R40 ask at crate level. Orbit has
 foundation crates named `orbit-common` and `orbit-types`, which R43 permits only in the
 foundation. Orbit has not been measured inside its crates against R39, or at all against
 R41–R44. The repo these rules were drawn from is scribe (`codebases/scribe` at `1e1954d`),
-which is being restructured to them under ORB-27707; until that lands it breaks R39, R40
-and R44 and meets R41–R43 only in part.
+which was first restructured under ORB-27707 into four crates sorted by kind, the layout R45
+now rules out, and is being restructured again under ORB-27921 to its
+`docs/design/scribe/specs/architecture.md`; until that lands it breaks R7 and R45, keeps
+five in-process model calls against R46, and meets R41–R43 only in part.

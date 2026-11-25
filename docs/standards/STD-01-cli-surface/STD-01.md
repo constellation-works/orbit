@@ -3,9 +3,9 @@ id: STD-01-cli-surface
 title: CLI surface — command grammar, inputs and effects, output modes, errors, help, and golden-tested public surfaces
 summary: Normative rules for any constellation CLI's user-facing surface — noun-verb grammar, honoring every input or rejecting it, read-only commands that never write, human vs `--json` output, stdout/stderr split, tables, color/TTY, errors and exit codes, help, goldens, deprecation, no internal IDs; adopt at a pinned version in every new CLI.
 tags: [standard, cli, output, ux, help, errors, deprecation]
-version: 2
+version: 4
 created: 2026-09-26
-updated: 2026-09-26
+updated: 2026-11-25
 last_validated: 2026-09-26
 related: [STD-02-rust-architecture-and-errors, STD-03-concurrency-and-process-safety, STD-04-testing-and-verification, STD-05-security-boundaries]
 ---
@@ -36,9 +36,7 @@ examples in Orbit, and [`CHANGELOG.md`](CHANGELOG.md) what changed in each versi
 
 ### Command grammar
 
-- **R1.** Commands MUST follow `<tool> <noun> <verb> [args] [flags]`, where a noun (the
-  resource) groups its verbs as subcommands. A CLI with a single resource MAY drop the noun
-  level (`<tool> <verb>`), but one tool MUST NOT mix the two orders.
+- **R1.** Resource-specific verbs MUST use `<tool> <noun> <verb> [args] [flags]`, grouped by resource. A CLI with one resource MAY omit the noun. Verbs spanning all resources or acting on the tool itself MUST use `<tool> <verb>` and MAY coexist with noun-verb commands. Do not invent a single-verb noun or retain an alias for that noun form.
 - **R2.** A verb MUST mean the same thing on every noun, and verbs MUST come from one small
   shared vocabulary (`add`, `list`, `show`, `update`, `remove`/`archive`, …). `list`
   returns many records filtered by flags; `show` returns one record by its identifier.
@@ -225,10 +223,7 @@ examples in Orbit, and [`CHANGELOG.md`](CHANGELOG.md) what changed in each versi
   for byte in CI. They are regenerated only through an explicit update switch, and the
   diff is reviewed in the PR. Fixtures MUST be captured from the surface as it ships: the
   built binary, or the fully assembled parser including anything grafted on at startup.
-- **R25.** Each command, flag, and help string MUST be declared in exactly one place. The
-  parser, `--help`, and every other surface (JSON schema, MCP or tool definition, generated
-  docs) are derived from that declaration. No flag name or help string is copied by hand
-  into a second place.
+- **R25.** Each command, flag, help string, environment variable and configuration key MUST be declared in exactly one place. The parser, `--help`, and every other surface (JSON schema, MCP or tool definition, generated docs) are derived from that declaration. No flag name, help string, environment variable name or configuration key is copied by hand into a second place. Each environment variable a program reads is one documented constant that states its meaning, its default and the flag it overrides, if any. The environment is read only through those constants, and the table of environment variables in the usage doc is generated from that list.
 - **R35.** Command names, flag names, accepted values, and config keys are public surface.
   Renaming or removing one, or changing what it means, is a breaking change. A removed or
   renamed flag or config key MUST stay accepted for at least one release, either as an

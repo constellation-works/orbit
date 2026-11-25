@@ -59,3 +59,11 @@ removed or changed in meaning.
   (ORB-26273).
 - **v16 (2026-11-22):** adds R45 (a text colour follows the text's role: the strongest colour for titles, naming labels and scanned values, the step below it for prose; ids, code and links inside prose keep their own colour) (the owner's correction on a dashboard notice card, 2026-11-22).
 - **Editorial (2026-11-23, version unchanged):** the frontmatter drops `status`, which nothing read (ORB-27289).
+- **v17 (2026-11-25):** Prefer unambiguous abbreviations and scaled large values in screens (scribe standard-7).
+- **v18 (2026-11-25):** clarifies R6 (peer buttons MUST match in rendered height, strictest when adjacent or sharing a function, with width uniformity a softer goal subject to content; Water Economy 26/40/26/40px -> 26px example, scribe standard-6).
+  clarifies R32 (tooltips may reveal the full text of a shortened label as well as a truncated one, aligning the closing button note with R41's narrow full-name exception, scribe standard-6).
+  clarifies R39 (constrained control rows preserve full labels where they fit, shorten labels by content before reducing readable type to hold single-line peer heights, and reveal ambiguous shortened names under R41, scribe standard-6).
+  clarifies R41 (adds a narrow full-name-only hover, keyboard-focus and touch exception when label shortening introduces ambiguity, keeping general button help tooltips forbidden, scribe standard-6).
+  clarifies R42 (peer button widths aim for comparability subject to content without breaking R6 equal height, shorten labels by content before reducing readable type, and reveal ambiguous shortened names under R41, scribe standard-6).
+- **v19 (2026-11-25):** adds R47 (a container's height comes from its content: the last item of a stacked list does not stretch to fill its parent; a region that fills its parent is exempt). From the owner's correction on the Orbit dashboard's last comment card, scribe standard-3.
+- **v20 (2026-11-25):** R48 added: everything shown under a selected tab belongs to that tab; a panel that stays the same across tabs moves above the strip or into the one tab it serves (Analytics > Metrics) (scribe standard-4, ORB-28134)

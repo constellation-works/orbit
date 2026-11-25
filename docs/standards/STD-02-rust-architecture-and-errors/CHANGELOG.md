@@ -4,6 +4,12 @@ Version history of [STD-02](STD-02.md). Adopting repos pin the `version:` in its
 frontmatter as `STD-02@<version>`; a version changes only when a rule is added,
 removed or changed in meaning.
 
+- **8** (2026-11-25): R6 changed (adds `clippy.toml` `disallowed-types`/`disallowed-methods` as the rung between item visibility and source grep, removes superseded grep bans, and adds the baseline list in `checks.md`) (scribe standard-16)
+- **7** (2026-11-25): R43 changed (the architecture doc's unit map is machine-checked: a missing crate or top-level module, a documented path that does not exist, or a unit without a doc comment fails the structure gate; a copyable script follows once the template's has landed) (scribe standard-15, ORB-28029, ORB-28053)
+- **6** (2026-11-24): R45 added (the application layer is one unit per subject with one entry point; no second sort by kind; repositories stay per record) (scribe standard-12, ORB-27921, ORB-27911)
+  R46 added (a project other than the orchestrator invokes no model or agent; such work is an orchestrator job over the project's own commands) (scribe standard-13, ORB-27921, ORB-27911)
+  R47 added (one subject is not split across units for purity alone; a library unit may own its file access in one module and use persistence) (scribe standard-14, ORB-27921, ORB-27911)
+  R7 changed (composition, adapters and environment reads live in the library crate; the CLI crate is arguments, mapping, rendering and `main`) (scribe standard-11, ORB-27921, ORB-27911)
 - **5** (2026-11-24): Architecture rules drawn from the scribe-core analysis: R39 added (no
   import cycles between units; a layer of more than about ten units declares an order inside
   itself) (ORB-27707).

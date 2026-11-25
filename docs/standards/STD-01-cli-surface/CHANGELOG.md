@@ -4,6 +4,8 @@ Version history of [STD-01](STD-01.md). Adopting repos pin the `version:` in its
 frontmatter as `STD-01@<version>`; a version changes only when a rule is added,
 removed or changed in meaning.
 
+- **v4 (2026-11-25):** Clarify command grammar for top-level cross-resource and tool-wide verbs (scribe standard-5).
+- **v3 (2026-11-25):** v3 (2026-11-24): R25 also covers environment variables and configuration keys. Each environment variable a program reads is one documented constant, the environment is read only through those constants, and the usage doc's table is generated from that list (scribe standard-17, ORB-28029).
 - **Editorial (2026-09-26, version unchanged):** split into a directory. `STD-01.md`
   keeps the rules, *Applies to* and *Deviations*; *Why*, *Machine checks*,
   *Exemplars* and this changelog moved to `why.md`, `checks.md`, `exemplars.md` and

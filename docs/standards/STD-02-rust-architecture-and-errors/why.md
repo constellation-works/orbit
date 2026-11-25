@@ -49,6 +49,7 @@ contradict it were taken; its advice to use `anyhow` in application code was not
   forbid what someone thought to forbid. scribe's direction script had eleven module rules and
   all of them held while the domain layer had three cycles and the store imported 22 modules.
   Measured in scribe at 1e1954d (2026-11-24); the restructuring is ORB-27707.
+v7: grep and awk scripts miss re-exports and aliased imports such as `use std::env;` followed by `env::var(..)` (seen in `codebases/rust-cli-template/scripts/check-dependency-direction.sh`, 304 lines; scribe's is 530), whereas Clippy resolves the path however it is spelled; orbit, nebula and orbit-graph each already keep partial `clippy.toml` lists. From `operations/research/rust-cli-practices-2026-11-24.md` (commit 7342347, ORB-28029), proposal T2 (Daniel's correction: "let's go with this. first with template, then scribe and orbit.") (scribe standard-16).
 - **R7.** Splitting by category multiplies manifests, re-exports and orphan-rule walls
   without buying isolation. Orbit's north-star bearing 5 records that crate splits are
   justified by compile-graph and dependency-direction needs; `orbit-store` stays one crate
@@ -61,6 +62,7 @@ contradict it were taken; its advice to use `anyhow` in application code was not
   out whole"); by the time it had earned one, the module imported 22 others and could not move
   out whole. The driver dependency is the moment the edge becomes cheap to draw. Measured in
   scribe at 1e1954d (2026-11-24); the restructuring is ORB-27707.
+v6: v5 placed composition in the CLI crate, and scribe's binary then held composition, the model adapters, their process supervision and the port implementations, so it was not just a surface. Daniel: "composition does not belong in scribe. scribe-core/src/composition.rs". Orbit keeps composition in `orbit-cmd`, below its surfaces (scribe standard-11, ORB-27921, ORB-27911).
 - **R24.** A rule spelled twice drifts, and a guard placed on one surface is routed around
   by the next. Dashboard writes skipped `validate_for_set` (ORB-12744); a guard skipped the
   dashboard API (ORB-12199); a fix landed on the CLI while MCP still capped silently
@@ -113,12 +115,16 @@ contradict it were taken; its advice to use `anyhow` in application code was not
   test that can be applied mechanically (lowest unit, no new upward import, otherwise add a
   row) gives the agent a decision it can make and a reviewer one it can check. Measured in
   scribe at 1e1954d (2026-11-24); the restructuring is ORB-27707.
+Changed in v7: the map was review-only, and it drifted in every repository that kept one. Measured on 2026-11-24, scribe's map missed 2 modules, orbit-office's 7 and orbit's 179 of 223; rust-analyzer's architecture document, which nothing checks, names two crates that no longer exist. A map nobody checks stops being read as true, and the placement clause then has nothing to stand on. The gate checks presence only; whether a sentence is right stays a reviewer's call (scribe standard-15, ORB-28029, ORB-28053).
 - **R44.** Compatibility code that R16 requires accumulates beside the code it once was, and a
   reader of the live path cannot tell which branches still run. scribe's `store/format.rs` was
   3,108 lines holding every persisted shape and 31 format versions, and its document and
   session modules mixed current reads with the code that moved old files into the database. One
   named unit makes the live path short and makes R17's deletion a matter of removing a file.
   Measured in scribe at 1e1954d (2026-11-24); the restructuring is ORB-27707.
+- **R45.** A layout sorted by kind spreads one subject over every layer. Scribe's four-crate split (ORB-27707) put the rules of `group` in a domain module and a checks module, its flows in eleven flat use-case files among 50 siblings, its storage in a store file and its dispatch in a CLI handler, so a change to one subject touched four crates and no folder showed what the product does. Daniel replaced it with one app per subject, each with one `exec` ("each cli command maps to core/apps/<some_app>; invokes some_app.exec"). Orbit's `orbit-core/src/application/<subject>/` has the same shape (scribe standard-12, ORB-27921, ORB-27911).
+- **R46.** Scribe carried its own Claude and Codex adapters inside a CLI crate, with process supervision, environment scrubbing, budgets and output draining, which rebuilt what Orbit's agent activity already owns and made a records tool responsible for credentials and child processes. Daniel, on reading it: "scribe should just be a cli tool, exposing tools for agents to query/update", with agent work "executed as orbit jobs with agent_invoke activities". Removed under ORB-27911 (scribe standard-13, ORB-27921).
+- **R47.** The first draft of scribe's architecture spec put transcript parsing in a pure crate and transcript discovery and reads in the core, splitting one subject in two for purity alone. Daniel: "allow tools to have its own fs module or import from scribe-store as needed. instead of creating logics spread across multiple places" (scribe standard-14, ORB-27921, ORB-27911).
 - **R36.** `report(true)` cannot be read at the call site and cannot grow a third mode
   without breaking every caller; a two-variant enum names the choice and extends cleanly.
   Clippy's `fn_params_excessive_bools` cannot tell a mode from data, so the rule is mostly

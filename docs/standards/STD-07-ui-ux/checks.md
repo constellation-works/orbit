@@ -18,7 +18,7 @@ one lists and, for a case no rule covers, in review, citing `STD-07 §Pn`.
 | R3 | `ui.aligned-starts` |
 | R4 | `ui.text-overflow`, `ui.text-occlusion`, `ui.no-horizontal-overflow` (375px included) |
 | R5 | review-only: open, load and dismiss each transient element, and compare neighbour positions |
-| R6 | `ui.control-size` |
+| R6 | `ui.control-size`; review and browser check at narrow and wide widths (375px, 768px, 1440px): adjacent or shared-function buttons share one rendered height (`getBoundingClientRect().height`) on a single line at matching computed font size, with comparable widths where content permits |
 | R7 | review-only |
 | R8 | `ui.undersized-text`, `ui.heading-rhythm`, `ui.tight-leading`; sibling font size and weight are checked in review |
 | R9 | `ui.cramped-wrap` |
@@ -43,17 +43,20 @@ one lists and, for a case no rule covers, in review, citing `STD-07 §Pn`.
 | R28 | `ui.aligned-starts` covers left edges; right edges are review-only at 1440px. A candidate for extending `ui.even-row-panels` to compare the right edges of stacked siblings |
 | R30 | review-only: one CSS class or component per kind of element, never restyled per view; `ui.cramped-wrap` catches wrapped step labels |
 | R31 | `ui.nested-card` |
-| R32 | review-only: hover each step, chip and icon, and check the bubble says something not on screen and fits its text. A candidate for a `ui.redundant-tooltip` rule (fail when a tooltip's text is the visible label plus a state word) |
+| R32 | review-only: hover and focus each step, chip, icon and shortened button, and check the bubble adds unseen detail or the full name of an ambiguously shortened label (R41) and fits its text. A candidate for a `ui.redundant-tooltip` rule (fail when a tooltip's text is the visible label plus a state word) |
 | R33 | review-only |
 | R34 | `ui.text-occlusion` where it reaches SVG text; otherwise review-only, with the densest real dataset |
 | R35 | review-only at 768px and 1440px. A candidate for a `ui.chart-text-scale` rule (compare the computed size of SVG `text` with the page's body and muted text) |
 | R36 | review-only: read the ranked column down each tied group |
 | R37 | review-only: compare the control with the previous release in the PR's screenshots |
 | R38 | review-only at 768px and 1440px. A candidate for a `ui.early-wrap` rule (for a wrapping flex row of controls, fail when it has more than one line and its first line plus the next item would fit its column plus the empty space beside it; also fail when a row that fits its column sits in a row of its own above the neighbouring column) |
-| R39 | review-only at 375px, 768px and 1440px, and at a side panel's narrowest width. A candidate for a `ui.header-wrap` rule (fail when a panel header, a row of summary figures or a tab strip has more than one line box) and a `ui.premature-shrink` rule (at each width, fail when a row's members are below their full-size styles although the full-size row would fit its container) |
+| R39 | review-only at 375px, 768px and 1440px, and at a side panel's narrowest width: check peer button heights and computed font size stay equal without premature label shortening or unreadable type. Candidates for `ui.header-wrap` (more than one line box) and `ui.premature-shrink` (shrunk where full size fits) |
 | R40 | review-only: read each inline list with two or more items, with and without icons. A candidate for a `ui.separator-spacing` rule (in an inline list, fail when a separator's left edge is more than 2px from the preceding item's visible content, or the gap after it is under 4px) |
-| R41 | review-only: hover and focus each button, including disabled ones, and check that no bubble or native tooltip appears and that each one has an accessible description where its label does not say its effect. A candidate for a `ui.button-help` rule (fail when a `button` has a `title` or an attached hint bubble) |
-| R42 | review-only at 375px, 768px and 1440px: compare each select with its longest option. A candidate for a `ui.content-width` rule (fail when a `select` or `button` has a fixed CSS width, or a select's box is more than 24px wider than its longest option plus arrow while its row has no other member that needs the space) |
+| R47 | review-only: in each stacked list (a comment thread, a list of cards or panels), the last item ends where its content ends and no stacked item fills leftover height in its parent; scroll areas, editors and plots are exempt. |
+| R48 | review-only: a panel that repeats under every tab sits above the strip or in the one tab it serves |
+| R41 | review-only at narrow and wide widths (375px, 768px, 1440px): hover, keyboard-focus and touch each button (including disabled ones) to verify no general help bubble appears, ambiguously shortened labels reveal only their full name on hover/focus/touch with full accessible name, and unshortened buttons carry no tooltip. Candidate `ui.button-help` allows only this full-name reveal |
+| R46 | review-only |
+| R42 | review-only at 375px, 768px and 1440px: compare each select with its longest option, check peer buttons maintain equal height and comparable content-based widths, and verify computed font size is not shrunk where content-based label shortening preserves one line. Candidate `ui.content-width` rule |
 | R43 | review-only: on each multi-column page, select a tab or item in each secondary region at full width, then narrow to one column and reload there. A candidate for a `ui.collapse-keeps-primary` rule (after a secondary-region interaction at 1440px, resize to 375px and fail when the primary region is not visible) |
 | R44 | review-only: open each dismissible surface, press Esc and confirm it closes; confirm its close button reads "esc" and its accessible name names what it closes |
 | R45 | review-only: in each view, prose (descriptions, comment bodies, reasons, messages) uses the step below the strongest text colour, and no title shares a colour with the prose under it |
