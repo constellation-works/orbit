@@ -1,3 +1,5 @@
+//! Managed-worker owner-coordinator RPC retries and test wait seams on `RuntimeKernel`; imports `orbit_runtime`, `orbit-common`, `orbit-tools`, and `orbit-types`.
+
 use orbit_common::env_vars;
 use std::sync::Arc;
 use std::time::Duration;

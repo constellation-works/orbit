@@ -1,3 +1,5 @@
+//! Embedded dashboard HTML, CSS, JS, and font asset routes with gzip compression; imports `state` and `orbit-core`.
+
 use std::io::Write;
 use std::sync::Arc;
 

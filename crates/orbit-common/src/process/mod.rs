@@ -1,3 +1,5 @@
+//! Bounded child-process execution, process-group supervision, build-budget admission, and signal helpers; imports `error`, `fs`, `security`, and `text`.
+
 pub mod ancestry;
 pub mod bounded;
 pub mod build;

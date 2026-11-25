@@ -1,4 +1,4 @@
-//! Domain contracts for this Orbit types module.
+//! Stable identity contracts (`OrbitId`, `ActorIdentity`, machine/workspace/agent/human crew identifiers); imports `task` and `workflow` within `orbit-types` only (I/O-free).
 
 mod actor;
 mod agent_family;

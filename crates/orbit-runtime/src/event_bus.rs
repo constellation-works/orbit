@@ -1,3 +1,5 @@
+//! Bounded in-process session `EventLog` ring buffer; imports `orbit-types` only.
+
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 

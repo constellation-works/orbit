@@ -1,3 +1,5 @@
+//! Composition constructors that assemble driver, repository, and workflow store backends; imports `contracts`, `driver`, `repository`, `workflow`, and `orbit-common`.
+
 use std::path::PathBuf;
 use std::sync::Arc;
 

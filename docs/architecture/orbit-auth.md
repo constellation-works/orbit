@@ -1,7 +1,7 @@
 ---
 type: context
 summary: Architecture map for orbit-auth: what it owns, main modules, dependencies and entry points.
-last_validated: 2026-11-24
+last_validated: 2026-11-25
 tags: [architecture, orbit-auth]
 ---
 
@@ -30,9 +30,9 @@ Design intent: [docs/design/policy-sandbox/](../../docs/design/policy-sandbox/) 
 
 ## Ownership by module
 
-- `token`: the token format (`orbl_` + 256 random bits from `getrandom`), generation, SHA-256 hashing and lease-token checks using the shared `orbit_common::security::token` minting and constant-time comparison primitives.
-- `scope`: principals, classes, verbs, workspace scope, priority ceilings, `hard` permission and the allow-or-deny decision with typed refusals.
-- `store`: the listener user's own SQLite store `lease-tokens.db`, its schema, forward-only migrations and audit rows, including the listener's refusals.
-- `environment`: the execution-environment check every listener-user command and the listener run first.
-- `client_address`: the listener's client-address rule, the only reader of forwarding headers.
-- `limiter`: the bounded keyed request limiter and coalesced rejection audits.
+- `client_address`: The listener's client-address rule, the only reader of forwarding headers; imports `orbit-common` only.
+- `environment`: The execution-environment check every listener-user command and the listener run first; imports `orbit-common` only.
+- `limiter`: The bounded keyed request limiter and coalesced rejection audits; imports `std` only.
+- `scope`: Principals, classes, verbs, workspace scope, priority ceilings, `hard` permission, and the allow-or-deny decision with typed refusals; imports `orbit-common` and `orbit-types` only.
+- `store`: The listener user's own SQLite store `lease-tokens.db`, its schema, forward-only migrations, and audit rows including refusals; imports `environment`, `limiter`, `scope`, `token`, and `orbit-common`.
+- `token`: The token format (`orbl_` + 256 random bits), generation, SHA-256 hashing, and constant-time comparison; imports `orbit-common` only.

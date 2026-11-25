@@ -1,3 +1,5 @@
+//! Low-level child-process spawn and pre-exec inherited file-descriptor mapping (`InheritedFd`); imports `runner` and `orbit-common`.
+
 use std::process::{Child, Command, Stdio};
 
 use orbit_common::OrbitError;

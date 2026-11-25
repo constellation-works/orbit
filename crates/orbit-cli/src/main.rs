@@ -1,11 +1,3 @@
-// Legacy CLI binary surfaces still need a focused documentation pass.
-#![allow(missing_docs)]
-// The CLI binary prints genuine user-facing command output.
-#![allow(clippy::print_stderr, clippy::print_stdout)]
-// Unit tests use unwrap/expect for fixture setup; production call sites remain linted.
-#![cfg_attr(test, allow(clippy::expect_used, clippy::unwrap_used))]
-#![cfg_attr(not(test), deny(clippy::disallowed_methods))]
-
 //! CLI entry point for Orbit: command parsing, dispatch, and output formatting.
 //!
 //! Parses command-line arguments with `clap`, initializes the [`OrbitRuntime`](orbit_core::OrbitRuntime),
@@ -27,6 +19,14 @@
 //!
 //! # Dependency direction
 //! orbit-core, orbit-types → `orbit-cli` (binary crate, no dependents)
+
+// Legacy CLI binary surfaces still need a focused documentation pass.
+#![allow(missing_docs)]
+// The CLI binary prints genuine user-facing command output.
+#![allow(clippy::print_stderr, clippy::print_stdout)]
+// Unit tests use unwrap/expect for fixture setup; production call sites remain linted.
+#![cfg_attr(test, allow(clippy::expect_used, clippy::unwrap_used))]
+#![cfg_attr(not(test), deny(clippy::disallowed_methods))]
 
 mod audit_middleware;
 mod command;

@@ -1,7 +1,3 @@
-#![deny(clippy::print_stderr, clippy::print_stdout)]
-// Unit tests use unwrap/expect for fixture setup; production call sites remain linted.
-#![cfg_attr(test, allow(clippy::expect_used, clippy::unwrap_used))]
-#![cfg_attr(not(test), deny(clippy::disallowed_methods))]
 //! OS clock integration [ORB-10021, ORB-12237]: the OS owns the wake-up,
 //! Orbit owns everything else. `orbit routine init --install-clock` renders
 //! the platform unit from the templates in `assets/clock/` and installs it
@@ -16,6 +12,11 @@
 //! [ORB-22688]. `orbit-core` re-exports it as `application::routines::clock`
 //! and its settings through `application::contracts`; the sweep pass that the
 //! clock wakes stays in `orbit-core`.
+
+#![deny(clippy::print_stderr, clippy::print_stdout)]
+// Unit tests use unwrap/expect for fixture setup; production call sites remain linted.
+#![cfg_attr(test, allow(clippy::expect_used, clippy::unwrap_used))]
+#![cfg_attr(not(test), deny(clippy::disallowed_methods))]
 
 mod clock_settings;
 mod converge;

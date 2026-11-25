@@ -1,4 +1,4 @@
-//! Domain contracts for this Orbit types module.
+//! Tool schema, family, invocation, MCP toolset/rules, and application-consent contracts; imports `identity` and `task` within `orbit-types` only (I/O-free).
 
 mod application;
 mod definition;

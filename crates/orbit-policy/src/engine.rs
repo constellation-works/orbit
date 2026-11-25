@@ -1,3 +1,5 @@
+//! `PolicyEngine` facade and symlink-resolved filesystem policy checks (`FsPolicyEvaluation`); imports `evaluator`, `orbit-common`, and `orbit-types`.
+
 use std::path::Path;
 
 use orbit_common::OrbitError;

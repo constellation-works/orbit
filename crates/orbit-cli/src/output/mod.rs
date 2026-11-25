@@ -1,3 +1,5 @@
+//! CLI output formatting, color, table, JSON, pipe, and sink rendering; imports `orbit-cmd`, `orbit-common`, and `orbit-core`.
+
 pub mod color;
 pub mod json;
 pub mod payload;

@@ -1,3 +1,5 @@
+//! Dashboard query duration and timestamp parsers; imports `orbit-common` and `orbit-core` (never `api` or `serve`).
+
 use chrono::{DateTime, Utc};
 
 /// Parses a duration-relative string like "1h", "90d", "30m", "2w"

@@ -1,3 +1,5 @@
+//! Shared operation registries, capability authorization, tool schemas, and governance specs; imports `error`, `protocol`, and `orbit-types`.
+
 pub mod agents;
 pub mod authorization;
 pub mod auto_task;

@@ -1,12 +1,3 @@
-#![deny(clippy::print_stderr, clippy::print_stdout)]
-// Legacy process-execution surfaces still need a focused documentation pass.
-#![allow(missing_docs)]
-// Unit tests use unwrap/expect for fixture setup; production call sites remain linted.
-#![cfg_attr(test, allow(clippy::expect_used, clippy::unwrap_used))]
-#![cfg_attr(
-    not(any(test, feature = "test-support")),
-    deny(clippy::disallowed_methods)
-)]
 //! Process spawning, sandboxing, and timeout handling for Orbit tool execution.
 //!
 //! Provides the low-level primitives for launching child processes with
@@ -54,6 +45,16 @@
 //!
 //! # Dependency direction
 //! `orbit-types` → `orbit-exec` → orbit-tools
+
+#![deny(clippy::print_stderr, clippy::print_stdout)]
+// Legacy process-execution surfaces still need a focused documentation pass.
+#![allow(missing_docs)]
+// Unit tests use unwrap/expect for fixture setup; production call sites remain linted.
+#![cfg_attr(test, allow(clippy::expect_used, clippy::unwrap_used))]
+#![cfg_attr(
+    not(any(test, feature = "test-support")),
+    deny(clippy::disallowed_methods)
+)]
 
 pub mod browser_kit;
 mod build_sandbox;

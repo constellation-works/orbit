@@ -1,9 +1,3 @@
-#![deny(clippy::print_stderr, clippy::print_stdout)]
-// Legacy policy surfaces still need a focused documentation pass.
-#![allow(missing_docs)]
-// Unit tests use unwrap/expect for fixture setup; production call sites remain linted.
-#![cfg_attr(test, allow(clippy::expect_used, clippy::unwrap_used))]
-#![cfg_attr(not(test), deny(clippy::disallowed_methods))]
 //! Filesystem-profile policy evaluation for Orbit runtime activities.
 //!
 //! # Role
@@ -16,6 +10,13 @@
 //!
 //! # Dependency direction
 //! `orbit-types` → `orbit-policy` → orbit-runtime and orbit-tools
+
+#![deny(clippy::print_stderr, clippy::print_stdout)]
+// Legacy policy surfaces still need a focused documentation pass.
+#![allow(missing_docs)]
+// Unit tests use unwrap/expect for fixture setup; production call sites remain linted.
+#![cfg_attr(test, allow(clippy::expect_used, clippy::unwrap_used))]
+#![cfg_attr(not(test), deny(clippy::disallowed_methods))]
 
 mod engine;
 mod evaluator;

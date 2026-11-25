@@ -1,3 +1,5 @@
+//! JSON Schema draft validation and compilation helper for stored skill/tool schemas; imports `orbit-common` only.
+
 use jsonschema::JSONSchema;
 use orbit_common::OrbitError;
 use serde_json::Value;

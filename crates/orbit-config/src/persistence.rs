@@ -1,3 +1,5 @@
+//! Resolved persistent artifact store paths derived from explicit roots; imports `orbit-types` only.
+
 use std::path::{Path, PathBuf};
 
 use orbit_types::workspace::WorkspacePaths;

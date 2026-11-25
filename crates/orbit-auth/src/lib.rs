@@ -1,4 +1,3 @@
-#![cfg_attr(not(test), deny(clippy::disallowed_methods))]
 //! Orbit's credential code: lease tokens for the lease listener user.
 //!
 //! One crate owns every credential mechanism so one place carries the
@@ -10,6 +9,8 @@
 //! ([`client_address`]); and its keyed request limiter and coalesced rejection audits
 //! ([`limiter`]). It has no HTTP framework, runtime handle or Orbit store;
 //! surfaces wrap it.
+
+#![cfg_attr(not(test), deny(clippy::disallowed_methods))]
 
 pub mod client_address;
 pub mod environment;

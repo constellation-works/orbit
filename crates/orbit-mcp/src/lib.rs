@@ -1,3 +1,12 @@
+//! Orbit's Model Context Protocol framing, tool surface, and transports.
+//!
+//! This crate owns protocol framing, advertised-name translation, structured
+//! responses, canonical tool discovery, server identity presentation, the TCP
+//! listener transport, the direct SSH stdio proxy, and the federated mux over
+//! operator-configured destinations. Workspace resolution, domain validation,
+//! auditing, and authorization remain behind the injected [`McpHost`]
+//! boundary.
+
 #![deny(clippy::print_stderr, clippy::print_stdout)]
 // Internal MCP kernel surfaces still need a focused documentation pass.
 #![allow(missing_docs)]
@@ -7,14 +16,6 @@
     not(any(test, feature = "test-support")),
     deny(clippy::disallowed_methods)
 )]
-//! Orbit's Model Context Protocol framing, tool surface, and transports.
-//!
-//! This crate owns protocol framing, advertised-name translation, structured
-//! responses, canonical tool discovery, server identity presentation, the TCP
-//! listener transport, the direct SSH stdio proxy, and the federated mux over
-//! operator-configured destinations. Workspace resolution, domain validation,
-//! auditing, and authorization remain behind the injected [`McpHost`]
-//! boundary.
 
 mod adapter;
 mod error;

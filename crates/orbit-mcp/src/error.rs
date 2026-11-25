@@ -1,3 +1,5 @@
+//! Translation of `OrbitError` values into structured MCP tool error payloads; imports `orbit-common` only.
+
 use orbit_common::OrbitError;
 use rmcp::model::CallToolResult;
 use serde_json::{Value, json};

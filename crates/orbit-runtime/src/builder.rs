@@ -1,3 +1,5 @@
+//! `RuntimeKernel` assembly wiring stores, policy, tools, plugins, and workspace bindings; imports `context`, `plugin`, `task`, and lower workspace crates.
+
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 

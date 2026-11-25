@@ -1,3 +1,5 @@
+//! Subprocess execution request (`ExecRequest`), environment/stdin modes, and `run_process` entry points; imports `process`, `sandbox`, `supervision`, `orbit-common`, and `orbit-types`.
+
 use std::io::PipeWriter;
 #[cfg(unix)]
 use std::os::fd::OwnedFd;

@@ -1,4 +1,4 @@
-//! Domain contracts for this Orbit types module.
+//! Generic resource envelope, header, and executor/policy resource contracts; imports `policy`, `task`, `timestamp`, and `workflow` within `orbit-types` only (I/O-free).
 
 mod data;
 mod error;

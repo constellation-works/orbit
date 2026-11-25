@@ -1,3 +1,5 @@
+//! User-defined external executable tool adapter (`ExternalTool`); imports `program_policy`, `timeouts`, `tool`, `context`, `orbit-common`, `orbit-exec`, and `orbit-types`.
+
 use std::env;
 
 use orbit_common::OrbitError;

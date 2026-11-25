@@ -1,3 +1,5 @@
+//! Canonical JSON ordering, YAML codecs, and shared tool-input parsing; imports `error` and `orbit-types`.
+
 pub mod tool_input;
 pub mod yaml;
 

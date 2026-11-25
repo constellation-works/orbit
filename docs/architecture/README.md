@@ -1,7 +1,7 @@
 ---
 type: context
 summary: Orbit code map: end-to-end data flow, store and federation, MCP and dashboard surfaces, crate dependency diagram and per-crate pages.
-last_validated: 2026-11-24
+last_validated: 2026-11-25
 tags: [architecture, code-map]
 ---
 
@@ -11,7 +11,8 @@ This is a map of the code as it is today. Design intent lives in
 `docs/design/`; this folder describes the current structure and links
 there instead of repeating it. Layering rules and the authoritative crate table
 live in `ARCHITECTURE.md`; `scripts/check-dependency-direction.sh` enforces
-every edge below.
+every edge below and `scripts/check-architecture-map.py` enforces STD-02 §R43
+unit coverage, path existence, and first-line `//!` doc comments.
 
 ## End-to-end data flow
 
@@ -21,15 +22,14 @@ every edge below.
    (`TaskStoreBackend` in `crates/orbit-store/src/contracts/traits/task.rs`)
    as a canonical bundle plus registry rows; task and reservation changes
    commit through one boundary (see `docs/design-patterns/task_commit_boundary.md`).
-2. **Pilot.** `orbit-core`'s `application/task/pilot` prepares and applies the
+2. **Pilot.** `orbit-core`'s `crates/orbit-core/src/application/task/pilot/` prepares and applies the
    task-pilot assessment; an authorized `--approve-proposed` drain can
-   promote an eligible task from `proposed` to `backlog`
-   (`crates/orbit-core/src/application/task/pilot/`).
-3. **Dispatch.** `application/admission` decides which backlog tasks automatic
-   dispatch may admit; `application/workspace_auto` runs the auto-drain
-   (classify, approval, window, readiness); `application/pull_drain` runs a
+   promote an eligible task from `proposed` to `backlog`.
+3. **Dispatch.** `crates/orbit-core/src/application/admission/` decides which backlog tasks automatic
+   dispatch may admit; `crates/orbit-core/src/application/workspace_auto/` runs the auto-drain
+   (classify, approval, window, readiness); `crates/orbit-core/src/application/pull_drain/` runs a
    follower's pull drain. Jobs are validated and reserved by
-   `application/job/pipeline_actions`.
+   `crates/orbit-core/src/application/job/pipeline_actions/`.
 4. **Activity-job runs.** `orbit-engine` (`crates/orbit-engine/src/activity_job/dispatcher.rs`)
    renders templates, dispatches through `RuntimeHost`
    (`crates/orbit-engine/src/lib.rs`), prepares provider invocations through
@@ -40,18 +40,18 @@ every edge below.
    `crates/orbit-policy/src/engine.rs`). `orbit-runtime` (`RuntimeKernel`)
    supplies stores, event bus, audit, claims and reservations.
 5. **PR, review and landing.** The engine owns candidate identity and
-   `pr_open`/`pr_complete` rechecks; `application/review` runs the before-PR
-   review gate (admit, settle, certificates); `application/landing` (above
-   `application/distributed`) consumes the authorized handoff outbox and lands.
+   `pr_open`/`pr_complete` rechecks; `crates/orbit-core/src/application/review/` runs the before-PR
+   review gate (admit, settle, certificates); `crates/orbit-core/src/application/landing/` (above
+   `crates/orbit-core/src/application/distributed/`) consumes the authorized handoff outbox and lands.
 6. **Done.** Task state transitions close linked notices
-   (`application/notice` via `task::TaskNoticePort`) and project costs
-   (`application/evolution`); terminal tasks close their Orbit-authored PRs.
+   (`crates/orbit-core/src/application/notice/` via `task::TaskNoticePort`) and project costs
+   (`crates/orbit-core/src/application/evolution/`); terminal tasks close their Orbit-authored PRs.
 
 Scheduling alongside the flow: `orbit-automation` evaluates routines and
 auto-tasks (due, overlap, retry, CEL condition triggers in
 `crates/orbit-automation/src/condition/`); `orbit-clock` owns the host sweep
 clock (`TICK_DEADLINE` in `crates/orbit-clock/src/lib.rs`) that wakes the sweep
-pass in `orbit-core`'s `application/routines`.
+pass in `orbit-core`'s `crates/orbit-core/src/application/routines/`.
 
 ## The store, and federation between owner and follower hosts
 
@@ -64,7 +64,7 @@ pass in `orbit-core`'s `application/routines`.
   (`LexicalIndex`); `orbit-registry` persists machine identity and the
   workspace catalog as files (`hosts.toml`) with no shared database.
 - **Federation.** One owner host holds the authoritative store. Follower hosts
-  pull work: `application/pull_drain` refills and settles claims over the
+  pull work: `crates/orbit-core/src/application/pull_drain/` refills and settles claims over the
   routed owner peer (`PullTransportPort`), with owner-only landing — followers
   never merge (see `docs/design/distributed-drain/` and
   `docs/runbooks/distributed-drain.md`). The MCP federated mux

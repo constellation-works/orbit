@@ -1,4 +1,4 @@
-//! Domain contracts for this Orbit types module.
+//! Workspace registry, checkout role, path layout, and task-publication binding contracts; imports `identity` and `plugin` within `orbit-types` only (I/O-free).
 
 mod error;
 mod publication;

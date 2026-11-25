@@ -1,3 +1,5 @@
+//! Central `ToolRegistry`, availability state, and canonical MCP tool definition catalog; imports `builtin`, `family`, `mcp`, `plugin`, `tool_suggestions`, `orbit-common`, and `orbit-types`.
+
 use std::collections::HashMap;
 use std::sync::{Arc, OnceLock};
 

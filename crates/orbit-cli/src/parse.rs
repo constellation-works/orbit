@@ -1,3 +1,5 @@
+//! Shared CLI argument parsers (CSV lists, positive limits, durations, and timestamps); imports `orbit-common` and `orbit-core`.
+
 use chrono::{DateTime, Utc};
 pub use orbit_common::protocol::tool_input::parse_duration_seconds;
 

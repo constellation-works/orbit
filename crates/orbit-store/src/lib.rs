@@ -1,3 +1,7 @@
+//! Persistence contracts and storage composition for Orbit.
+//!
+//! File and SQLite drivers stay behind repositories and composition boundaries.
+
 #![deny(clippy::print_stderr, clippy::print_stdout)]
 // Existing persistence APIs lack caller-facing docs, so this crate opts out of `missing_docs`.
 #![allow(missing_docs)]
@@ -7,9 +11,6 @@
     not(any(test, feature = "test-support")),
     deny(clippy::disallowed_methods)
 )]
-//! Persistence contracts and storage composition for Orbit.
-//!
-//! File and SQLite drivers stay behind repositories and composition boundaries.
 
 #[cfg(test)]
 #[path = "../tests/store/support/git.rs"]

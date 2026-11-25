@@ -1,3 +1,5 @@
+//! Shared filesystem, locking, path-safety, atomic I/O, Git, glob, and selector primitives; imports `error`, `process`, and `orbit-types`.
+
 pub mod archive;
 pub mod cwd;
 pub mod directory_lock;

@@ -1,3 +1,5 @@
+//! Safe resolution of routine and auto-task definition directories under a workspace root; imports `std` only.
+
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};

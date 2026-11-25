@@ -1,3 +1,5 @@
+//! Consumer-facing persistence traits, parameter types, and pure store projections; imports `orbit-common` and `orbit-types` only.
+
 mod admission_load;
 mod audit;
 mod backlog_forecast;

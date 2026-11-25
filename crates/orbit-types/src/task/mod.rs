@@ -1,4 +1,4 @@
-//! Domain contracts for this Orbit types module.
+//! Task model, lifecycle status, plan, decision, artifact, readiness, and regression contracts; imports `identity` and `workflow` within `orbit-types` only (I/O-free).
 
 mod artifacts;
 mod context;

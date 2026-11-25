@@ -1,12 +1,3 @@
-#![deny(clippy::print_stderr, clippy::print_stdout)]
-// Legacy runtime command surfaces still need a focused documentation pass.
-#![allow(missing_docs)]
-// Unit tests use unwrap/expect for fixture setup; production call sites remain linted.
-#![cfg_attr(test, allow(clippy::expect_used, clippy::unwrap_used))]
-#![cfg_attr(
-    not(any(test, feature = "test-support")),
-    deny(clippy::disallowed_methods)
-)]
 //! Orbit's runtime kernel: [`RuntimeKernel`], the mechanisms it owns, the
 //! actor context, root paths and the cost summaries its engine records.
 //!
@@ -37,6 +28,16 @@
 //! lifecycle signals, such as a scheduled reboot, that hold new admissions;
 //! `task::pr_forge` is the forge a task's terminal decision closes its
 //! Orbit-authored PRs through.
+
+#![deny(clippy::print_stderr, clippy::print_stdout)]
+// Legacy runtime command surfaces still need a focused documentation pass.
+#![allow(missing_docs)]
+// Unit tests use unwrap/expect for fixture setup; production call sites remain linted.
+#![cfg_attr(test, allow(clippy::expect_used, clippy::unwrap_used))]
+#![cfg_attr(
+    not(any(test, feature = "test-support")),
+    deny(clippy::disallowed_methods)
+)]
 
 // A bare `cargo test` from a managed-run shell must match one from a clean shell.
 #[cfg(test)]

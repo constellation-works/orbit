@@ -1,3 +1,5 @@
+//! Pure policy-definition path evaluator invoked by `engine`; imports `orbit-common` and `orbit-types` only.
+
 use orbit_common::OrbitError;
 use orbit_types::policy::{FsCheckResult, FsOperation, PolicyDef};
 

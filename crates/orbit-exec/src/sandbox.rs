@@ -1,3 +1,5 @@
+//! `Sandbox` strategy trait and `NoSandbox` default implementation; imports `process`, `runner`, and `orbit-common`.
+
 use std::process::Child;
 
 use orbit_common::OrbitError;

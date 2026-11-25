@@ -1,3 +1,5 @@
+//! Canonical MCP annotations, workspace-echo rules, and toolset membership for tools; imports `task_guarded_selectors`, `tool`, and `orbit-types` (never `registry`).
+
 mod annotations;
 mod rules;
 mod toolsets;

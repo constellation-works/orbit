@@ -1,3 +1,5 @@
+//! Engine execution helpers, crew projections, environment host, and invocation metrics on `RuntimeKernel`; imports `orbit_runtime`, `cost`, `run_input`, and lower crates.
+
 mod cost;
 pub mod crew;
 pub mod environment_host;

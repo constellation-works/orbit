@@ -1,3 +1,5 @@
+//! RAII SQLite CLI-invocation audit guard (`AuditGuard`); imports `command`, `orbit-common`, and `orbit-core`.
+
 use orbit_common::env_vars;
 use std::time::Instant;
 

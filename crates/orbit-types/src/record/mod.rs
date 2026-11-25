@@ -1,4 +1,4 @@
-//! Domain contracts for this Orbit types module.
+//! Durable record contracts (`OrbitEvent`, `Audit`, friction, notice, evolution, and crew discovery); imports `identity`, `telemetry`, and `workflow` within `orbit-types` only (I/O-free).
 
 mod audit;
 mod crew_discovery;
