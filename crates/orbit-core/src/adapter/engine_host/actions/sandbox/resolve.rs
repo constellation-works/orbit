@@ -63,6 +63,9 @@ fn resolve_executor_sandbox_on_with_env(
     subprocess_cwd: Option<&Path>,
     host_os: &str,
 ) -> Result<Option<ResolvedSandbox>, DispatchError> {
+    // Only the Linux sandbox reads provider state roots from the environment.
+    #[cfg(not(target_os = "linux"))]
+    let _ = env;
     let executor = runtime.get_executor_def(provider).map_err(|err| {
         DispatchError::CliInvocationFailed(format!(
             "load executor `{provider}` for sandbox resolution: {err}"
