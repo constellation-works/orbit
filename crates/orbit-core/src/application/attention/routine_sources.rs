@@ -20,7 +20,7 @@ pub(super) fn routine_tripped_items(
     host: &AttentionHost,
     now: DateTime<Utc>,
 ) -> Result<Vec<AttentionItem>, OrbitError> {
-    let breakers = crate::application::routines::host_routine_breakers(&runtime.global_root())?;
+    let breakers = crate::application::routines::host_routine_breakers(&runtime.sqlite_store()?)?;
     let mut items = Vec::new();
     for breaker in breakers.into_values() {
         if breaker.state != RoutineBreakerState::Open || breaker.source_workspace != workspace.name

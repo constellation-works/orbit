@@ -240,8 +240,14 @@ pub(super) fn doctor_check_config(runtime: &OrbitRuntime) -> Vec<WorkspaceDoctor
 }
 
 /// Cheap database/header and schema-ledger checks; full page integrity is opt-in.
+///
+/// Probes the configured database path with a fresh read-only handle, not the
+/// runtime's cached one: diagnostics must observe a missing or replaced file
+/// and must not repair or migrate it as a side effect.
 pub(super) fn doctor_check_database(runtime: &OrbitRuntime, deep: bool) -> WorkspaceDoctorResult {
-    let store = match runtime.sqlite_store_for_diagnostics() {
+    let store = match orbit_core::composition::store_opener()
+        .open_read_only(&runtime.persistence().audit_db)
+    {
         Ok(store) => store,
         Err(error) => {
             return check(

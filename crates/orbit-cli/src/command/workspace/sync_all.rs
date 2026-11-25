@@ -171,7 +171,11 @@ fn sync_registered_checkout(
     // `--check` writes nothing, so it can read a workspace mid-run. A sync
     // must not rewrite the managed definitions a drain or run is executing.
     if !check {
-        match workspace_live_run_ids(global_root, &checkout.orbit_dir) {
+        match workspace_live_run_ids(
+            orbit_core::composition::store_opener(),
+            global_root,
+            &checkout.orbit_dir,
+        ) {
             Ok(run_ids) if !run_ids.is_empty() => {
                 return WorkspaceSyncRecord::skipped(
                     &workspace.name,

@@ -17,7 +17,6 @@ use orbit_common::fs::generation::{
     CompatibilityIdentity, LedgerCompatibility, authority_root,
     installed_executable_other_than_this_process, reported_compatibility,
 };
-use orbit_store::Store;
 use orbit_store::compose::compiled_compatibility;
 use orbit_store::workflow::layout::current_layout_version;
 
@@ -63,8 +62,8 @@ pub(crate) fn verify_installed_binary_keeps_state(
     // or a symlinked root spelling.
     let database = authority_root(global_root)?.join("orbit.db");
     if database.is_file()
-        && let Ok(schema) =
-            Store::open_read_only(&database).and_then(|store| store.schema_version())
+        && let Ok(schema) = crate::composition::open_store_read_only(&database)
+            .and_then(|store| store.schema_version())
         && let Some(breaking) = breaking_advance(schema, compiled.store_schema)
     {
         advances.push(Advance {

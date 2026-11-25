@@ -9,13 +9,18 @@ use serde_json::Value;
 
 use crate::adapter::command::ToolEntryPoint;
 use crate::application::plugin::{self, PluginMigrateRequest};
+use crate::application::store_opener::StoreOpener;
 use crate::runtime::plugin::discovery::{self, PluginCliGroup};
 
 /// The `orbit <ns>` groups this host serves, read without a workspace
 /// runtime (design §4.6).
-pub fn host_plugin_cli_groups(global_root: &Path) -> Result<Vec<PluginCliGroup>, OrbitError> {
+pub fn host_plugin_cli_groups(
+    opener: StoreOpener,
+    global_root: &Path,
+) -> Result<Vec<PluginCliGroup>, OrbitError> {
     let config = global_only_config(global_root)?;
-    discovery::host_plugin_cli_groups(global_root, &config.persistence.audit_db, &config.plugins)
+    let store = opener.open_read_only(&config.persistence.audit_db)?;
+    discovery::host_plugin_cli_groups(global_root, &store, &config.plugins)
 }
 
 /// Write a v2 manifest from a set of v1 `*.orbit-tool.yaml` sidecars. No
@@ -32,22 +37,24 @@ pub fn migrate_plugin_sidecars(
 /// is what the MCP server merges into `tools/list` alongside the canonical
 /// built-in surface.
 pub fn host_plugin_mcp_definitions(
+    opener: StoreOpener,
     global_root: &Path,
 ) -> Result<Vec<McpToolDefinition>, OrbitError> {
     let config = global_only_config(global_root)?;
-    discovery::host_plugin_mcp_definitions(
-        global_root,
-        &config.persistence.audit_db,
-        &config.plugins,
-    )
+    let store = opener.open_read_only(&config.persistence.audit_db)?;
+    discovery::host_plugin_mcp_definitions(global_root, &store, &config.plugins)
 }
 
 /// This host's plugin rows as stored now, for a long-lived host that keys a
 /// cached runtime on them: a host enable or disable changes the rows, so the
 /// cached runtime is rebuilt on the next call.
-pub fn host_plugin_rows(global_root: &Path) -> Result<Vec<InstalledPlugin>, OrbitError> {
+pub fn host_plugin_rows(
+    opener: StoreOpener,
+    global_root: &Path,
+) -> Result<Vec<InstalledPlugin>, OrbitError> {
     let config = global_only_config(global_root)?;
-    orbit_store::Store::open_read_only(&config.persistence.audit_db)?
+    opener
+        .open_read_only(&config.persistence.audit_db)?
         .read()
         .and_then(|snapshot| snapshot.plugin().list())
 }
@@ -57,6 +64,7 @@ pub fn host_plugin_rows(global_root: &Path) -> Result<Vec<InstalledPlugin>, Orbi
 /// provenance on the row.
 pub fn execute_global_plugin_tool(
     env: &orbit_common::Env,
+    opener: StoreOpener,
     global_root: &Path,
     name: &str,
     input: Value,
@@ -64,13 +72,12 @@ pub fn execute_global_plugin_tool(
     session_context: ToolSessionContext,
 ) -> Result<Value, OrbitError> {
     let config = global_only_config_with_env(env, global_root)?;
-    let (registry, _load) = discovery::host_plugin_registry(
-        global_root,
-        &config.persistence.audit_db,
-        &config.plugins,
-    )?;
+    let store = opener.open_read_only(&config.persistence.audit_db)?;
+    let (registry, _load) = discovery::host_plugin_registry(global_root, &store, &config.plugins)?;
+    drop(store);
     crate::adapter::command::dispatch::execute_global_plugin_dispatch(
         env,
+        opener,
         global_root,
         name,
         input,

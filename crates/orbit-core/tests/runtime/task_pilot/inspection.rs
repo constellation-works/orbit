@@ -47,6 +47,7 @@ fn machine() -> RoutineMachineIdentity {
 
 fn automation(workspace: &Workspace, now: chrono::DateTime<Utc>) -> Value {
     let report = routine_statuses_with_providers(
+        orbit_core::composition::store_opener(),
         &workspace.runtime.global_root(),
         machine(),
         &SingleWorkspace(workspace.runtime.clone()),
@@ -421,6 +422,7 @@ fn status_reports_the_duplicate_skip_the_sweep_records_for_a_state_routine() {
     }
 
     let report = routine_statuses_with_providers(
+        orbit_core::composition::store_opener(),
         &workspace.runtime.global_root(),
         machine(),
         &SingleWorkspace(workspace.runtime.clone()),

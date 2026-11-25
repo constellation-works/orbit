@@ -11,9 +11,11 @@ use super::loader::{
     RoutineWorkspaceProvider, apply_peer_name_collisions, collect_host_routines,
 };
 use crate::OrbitRuntime;
+use crate::application::store_opener::StoreOpener;
 use chrono::{DateTime, Local, Utc};
 use orbit_automation::routines::sweep::duplicate_ownership_skipped;
 use orbit_common::OrbitError;
+use orbit_store::Store;
 use orbit_store::contracts::{
     JobRunQuery, RoutineBreakerRecord, RoutineBreakerState, RoutineFireRecord, RoutineFireState,
 };
@@ -40,6 +42,7 @@ pub use display::{
 };
 pub use fires::recent_fires;
 pub use orbit_automation::routines::breaker::{BreakerTrialPhase, breaker_trial_status};
+use report::routine_statuses_from_store;
 pub use report::{RoutineStatusReport, routine_statuses_with_providers};
 pub use toggle::{
     RoutineBreakerAction, RoutineBreakerOutcome, control_listed_routine_breaker, pause_routine,

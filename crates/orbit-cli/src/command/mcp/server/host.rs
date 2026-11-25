@@ -81,11 +81,11 @@ impl ServerMcpHost {
             process_machine_name,
             host_facts,
             workspace_runtimes: WorkspaceRuntimeCache::default(),
-            plugin_surface: HostPluginMcpCache::default(),
+            plugin_surface: HostPluginMcpCache::new(orbit_core::composition::store_opener()),
             definitions: Mutex::new(None),
             owner_route_sessions: federated::RoutedSessionPool::default(),
             task_owners: TaskOwnerLookup::default(),
-            audit_store: GlobalAuditStoreCache::default(),
+            audit_store: GlobalAuditStoreCache::new(orbit_core::composition::store_opener()),
             env: orbit_core::composition::composition_env(),
         }
     }
@@ -370,6 +370,7 @@ impl ServerMcpHost {
     ) -> Result<Value, OrbitError> {
         execute_global_in_process_tool_dispatch_with_audit_writer(
             &self.env,
+            orbit_core::composition::store_opener(),
             &self.global_root,
             name,
             input,
@@ -404,6 +405,7 @@ impl ServerMcpHost {
     ) -> Result<Value, OrbitError> {
         execute_global_plugin_tool(
             &self.env,
+            orbit_core::composition::store_opener(),
             &self.global_root,
             name,
             input,
@@ -625,6 +627,7 @@ impl ServerMcpHost {
     ) -> Result<Value, OrbitError> {
         execute_global_in_process_tool_dispatch_with_audit_writer(
             &self.env,
+            orbit_core::composition::store_opener(),
             &self.global_root,
             name,
             input,

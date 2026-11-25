@@ -10,6 +10,7 @@ Assemble the lower subsystems into `OrbitRuntime` and own the coordinated use ca
 - Put application and adapter methods on the wrapper, never in the kernel. `adapter/` translates and delegates — a decision in an adapter is in the wrong place; `bootstrap/` runs once at open.
 - Every `pub use` in `lib.rs` must match a real import in a consumer crate; remove the re-export when the consumer goes.
 - Operation handlers match exhaustively on the verb enum from `orbit_common::governance` — no default arm.
+- Only `composition/store.rs` opens the SQLite store; `clippy.toml` disallows `Store::open` and `Store::open_read_only` elsewhere. Use the runtime's handle; code that must open another database receives a `StoreOpener` from its caller.
 - Redaction is shared (`scripts/check-artifact-redaction-guardrail.sh`); no local `fn redact_*`.
 - Two roots, always: global `~/.orbit/` plus nearest workspace `.orbit/`. Scoping per [`ARCHITECTURE.md`](../../ARCHITECTURE.md); never a third root.
 - Test a use case through the public runtime API in crate-root `tests/` by default, whichever adapter calls it. A unit test under `src/**/tests/` is admitted only under the [unit-test admission criteria](../../docs/design-patterns/test_strategy.md#unit-test-admission-criteria); [test_layout.md](../../docs/design-patterns/test_layout.md) says where an admitted test lives.

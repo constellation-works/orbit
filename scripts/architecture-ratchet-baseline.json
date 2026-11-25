@@ -14,7 +14,6 @@
     "runtime_host_required_methods": 153,
     "runtime_top_level_modules_outside_layers": 32,
     "store_backend_traits": 6,
-    "store_open_outside_store": 7,
     "worker_or_owner_reads": 219
   }
 }

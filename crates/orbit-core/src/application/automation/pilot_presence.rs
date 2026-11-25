@@ -62,14 +62,7 @@ impl OrbitRuntime {
     /// the warning is advisory and must not invent a pause.
     fn paused_routines(&self) -> Vec<String> {
         let read = || {
-            let database = orbit_config::resolved_audit_db_path(
-                &orbit_common::Env::capture(),
-                &orbit_config::ConfigRoots::global_only(self.global_root()),
-            )?;
-            if !database.exists() {
-                return Ok(Vec::new());
-            }
-            let store = orbit_store::Store::open_read_only(&database)?;
+            let store = self.sqlite_store()?;
             Ok::<_, orbit_common::OrbitError>(
                 store.read()?.routine().pauses()?.into_keys().collect(),
             )

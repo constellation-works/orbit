@@ -141,13 +141,6 @@ impl RuntimeKernel {
         }
     }
 
-    /// Probe the configured database path independently of cached runtime
-    /// handles. Diagnostics must observe missing or replaced files and must
-    /// not repair or migrate them as a side effect.
-    pub fn sqlite_store_for_diagnostics(&self) -> Result<Store, OrbitError> {
-        Store::open_read_only(&self.base().persistence().audit_db)
-    }
-
     /// Check write readiness at the configured path without recreating or
     /// migrating the database, independently of cached runtime connections.
     pub fn check_sqlite_store_writable(&self) -> Result<(), OrbitError> {

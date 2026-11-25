@@ -2,8 +2,8 @@
 
 use std::path::Path;
 
+use crate::application::store_opener::StoreOpener;
 use orbit_common::OrbitError;
-use orbit_store::Store;
 use orbit_store::compose::workspace_job_run_store;
 use orbit_store::contracts::JobRunQuery;
 use orbit_store::maintenance::task_registry::read_workspace_config_optional;
@@ -24,6 +24,7 @@ use crate::application::job::running_run_owner_is_stale;
 /// disturb the workspace (convergence) can ask before it writes. A host with
 /// no store, or a workspace never bound to one, has no runs.
 pub fn workspace_live_run_ids(
+    opener: StoreOpener,
     global_root: &Path,
     workspace_orbit_root: &Path,
 ) -> Result<Vec<String>, OrbitError> {
@@ -35,7 +36,7 @@ pub fn workspace_live_run_ids(
         return Ok(Vec::new());
     };
     let workspace_id = config.workspace_id;
-    let store = Store::open_read_only(&database)?;
+    let store = opener.open_read_only(&database)?;
     let jobs = workspace_job_run_store(store, workspace_id);
     let runs = jobs.list_job_runs_filtered(&JobRunQuery {
         states: vec![

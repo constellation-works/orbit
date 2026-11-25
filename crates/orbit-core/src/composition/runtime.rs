@@ -10,7 +10,6 @@ use orbit_common::fs::generation::{
 };
 use orbit_common::{Env, OrbitError};
 use orbit_config::{ConfigRoots, ResolvedConfig};
-use orbit_store::Store;
 use orbit_store::compose::compiled_compatibility;
 use orbit_store::compose::global_policy_def_store;
 
@@ -255,6 +254,7 @@ impl OrbitRuntime {
             &ConfigRoots::new(&roots.global_root, &roots.shared_root),
         )?;
         let config_loader = runtime_config_loader(env, &roots.global_root, &roots.shared_root);
+        let store = super::open_store_read_only(&config.persistence.audit_db)?;
         RuntimeKernel::build_from_resolved_config_write_free(
             &roots,
             binding,
@@ -263,6 +263,7 @@ impl OrbitRuntime {
             HostLifetime::ShortLived,
             config_loader,
             &APPLICATION_PORT,
+            store,
         )
         .map(Self::from_kernel)
     }
@@ -276,6 +277,7 @@ impl OrbitRuntime {
         let workspace_root = data_root.join(".orbit");
         let env = super::process_env();
         let runtime_config = prepare_resolved_config(&env, &data_root, &workspace_root)?;
+        let store = super::open_store(&runtime_config.persistence.audit_db)?;
         RuntimeKernel::build_in_memory_from_resolved_config(
             &data_root,
             &workspace_root,
@@ -283,6 +285,7 @@ impl OrbitRuntime {
             temp_dir,
             runtime_config_loader(env, &data_root, &workspace_root),
             &APPLICATION_PORT,
+            store,
         )
         .map(Self::from_kernel)
     }
@@ -329,7 +332,7 @@ pub fn pin_executable_generation_as(
         handover,
         access,
         crate::runtime::run_input::managed_run_context_from_env(&env),
-        || Store::open_read_only(&root.join("orbit.db"))?.schema_version(),
+        || super::open_store_read_only(&root.join("orbit.db"))?.schema_version(),
     )
 }
 
@@ -374,6 +377,7 @@ fn build_runtime(
             host_lifetime,
             config_loader,
             &APPLICATION_PORT,
+            super::open_store_read_only(&runtime_config.persistence.audit_db)?,
         )?
     } else {
         RuntimeKernel::build_from_resolved_config(
@@ -386,6 +390,7 @@ fn build_runtime(
             config_loader,
             &APPLICATION_PORT,
             if read_only { None } else { task_prefix },
+            super::open_store(&runtime_config.persistence.audit_db)?,
         )?
     };
     let runtime = OrbitRuntime::from_kernel(kernel);

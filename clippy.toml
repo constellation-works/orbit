@@ -19,6 +19,8 @@ disallowed-methods = [
     { path = "std::env::vars_os", reason = "Use the process Env snapshot captured at startup instead of accessing ambient state" },
     { path = "std::env::set_var", reason = "Use the process Env snapshot captured at startup instead of accessing ambient state" },
     { path = "std::env::remove_var", reason = "Use the process Env snapshot captured at startup instead of accessing ambient state" },
+    { path = "orbit_store::Store::open", reason = "composition opens the store once; receive the handle, or open another database through orbit_core::composition::store_opener" },
+    { path = "orbit_store::Store::open_read_only", reason = "composition opens the store once; receive the handle, or open another database through orbit_core::composition::store_opener" },
 ]
 
 # A file-lock guard must be released before suspension. ScopedEnv already

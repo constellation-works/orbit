@@ -27,10 +27,10 @@ use super::host::{self, PluginHostLoad};
 /// here even though the workspace runtime loads it fine.
 pub fn host_plugin_mcp_definitions(
     global_root: &Path,
-    audit_db: &Path,
+    store: &Store,
     plugin_config: &BTreeMap<String, Value>,
 ) -> Result<Vec<McpToolDefinition>, OrbitError> {
-    let registry = host_plugin_registry(global_root, audit_db, plugin_config)?.0;
+    let registry = host_plugin_registry(global_root, store, plugin_config)?.0;
     registry
         .mcp_tool_definitions()
         .map_err(|error| OrbitError::InvalidInput(error.to_string()))
@@ -78,10 +78,9 @@ pub struct PluginCliVerb {
 /// here even though the workspace runtime loads it fine.
 pub fn host_plugin_cli_groups(
     global_root: &Path,
-    audit_db: &Path,
+    store: &Store,
     plugin_config: &BTreeMap<String, Value>,
 ) -> Result<Vec<PluginCliGroup>, OrbitError> {
-    let store = Store::open_read_only(audit_db)?;
     if !store
         .read()
         .and_then(|snapshot| snapshot.plugin().list())?
@@ -94,7 +93,7 @@ pub fn host_plugin_cli_groups(
     let load = host::load_workspace_plugins_without_refusal_audit(
         global_root,
         global_root,
-        &store,
+        store,
         &mut registry,
         plugin_config,
         &BTreeMap::new(),
@@ -162,7 +161,7 @@ pub fn plugin_cli_groups(load: &PluginHostLoad) -> Vec<PluginCliGroup> {
 /// `{{config.<key>}}` from manifest defaults only.
 pub fn host_plugin_registry(
     global_root: &Path,
-    audit_db: &Path,
+    store: &Store,
     plugin_config: &BTreeMap<String, Value>,
 ) -> Result<(ToolRegistry, PluginHostLoad), OrbitError> {
     // No workspace here, so no pin file: the global root holds none, and an
@@ -170,7 +169,7 @@ pub fn host_plugin_registry(
     workspace_plugin_registry(
         global_root,
         global_root,
-        audit_db,
+        store,
         plugin_config,
         &BTreeMap::new(),
     )
@@ -185,16 +184,15 @@ pub fn host_plugin_registry(
 pub fn workspace_plugin_registry(
     global_root: &Path,
     workspace_orbit_root: &Path,
-    audit_db: &Path,
+    store: &Store,
     plugin_config: &BTreeMap<String, Value>,
     workspace_toggles: &BTreeMap<String, bool>,
 ) -> Result<(ToolRegistry, PluginHostLoad), OrbitError> {
-    let store = Store::open_read_only(audit_db)?;
     let mut registry = ToolRegistry::new();
     let load = host::load_workspace_plugins_without_refusal_audit(
         global_root,
         workspace_orbit_root,
-        &store,
+        store,
         &mut registry,
         plugin_config,
         workspace_toggles,

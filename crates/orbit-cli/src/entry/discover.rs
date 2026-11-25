@@ -94,7 +94,10 @@ fn plugin_cli_groups() -> Vec<orbit_core::adapter::command::PluginCliGroup> {
     if !root.join("plugins").is_dir() {
         return Vec::new();
     }
-    match orbit_core::adapter::command::host_plugin_cli_groups(&root) {
+    match orbit_core::adapter::command::host_plugin_cli_groups(
+        orbit_core::composition::store_opener(),
+        &root,
+    ) {
         Ok(groups) => groups,
         Err(error) => {
             tracing::warn!(

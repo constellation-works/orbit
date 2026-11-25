@@ -95,6 +95,7 @@ impl RoutineStatusReport {
 /// Collect routine status from a caller-supplied workspace provider. Registry
 /// ownership remains outside Core.
 pub fn routine_statuses_with_providers(
+    opener: StoreOpener,
     global_root: &Path,
     local_machine: RoutineMachineIdentity,
     workspace_provider: &dyn RoutineWorkspaceProvider,
@@ -103,11 +104,30 @@ pub fn routine_statuses_with_providers(
     let started = std::time::Instant::now();
     // Status is observation: it opens the existing store read-only and fails
     // with the setup remedy when the store is absent (STD-01 R31).
-    let store = super::super::open_existing_routine_store(global_root)?;
+    let store = super::super::open_existing_routine_store(opener, global_root)?;
     tracing::debug!(
         elapsed_ms = started.elapsed().as_millis(),
         "routine status store opened"
     );
+    routine_statuses_from_store(
+        &store,
+        global_root,
+        local_machine,
+        workspace_provider,
+        now_utc,
+    )
+}
+
+/// [`routine_statuses_with_providers`] over a scheduler store the caller
+/// already holds.
+pub(super) fn routine_statuses_from_store(
+    store: &Store,
+    global_root: &Path,
+    local_machine: RoutineMachineIdentity,
+    workspace_provider: &dyn RoutineWorkspaceProvider,
+    now_utc: DateTime<Utc>,
+) -> Result<RoutineStatusReport, OrbitError> {
+    let started = std::time::Instant::now();
 
     let discovered = workspace_provider.discover_workspaces(global_root)?;
     tracing::debug!(

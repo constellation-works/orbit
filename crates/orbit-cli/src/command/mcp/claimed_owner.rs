@@ -96,6 +96,7 @@ impl McpHost for ClaimedOwnerBridge {
                     let (operation, input) = tool_family_operation_call(name, input);
                     execute_global_in_process_tool_dispatch(
                         &self.env,
+                        orbit_core::composition::store_opener(),
                         &self.global_root,
                         &operation,
                         input,
