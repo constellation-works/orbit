@@ -60,12 +60,12 @@ Design intent: [docs/design/granted-tools/](../../docs/design/granted-tools/) â€
 - `github_cli`: Direct GitHub CLI surface re-exported without wrapping `ToolRegistry`; imports `builtin` and `orbit-exec`.
 - `github_quota`: Host-shared GitHub REST API quota guard and reserve accounting; imports `gh_request`, `orbit-common`, `orbit-exec`, and `orbit-types` (never `builtin`).
 - `github_run_log_cache`: GitHub run-log cache directory path and legacy unredacted cache cleanup; imports `std` only (never `builtin`).
-- `host`: `OrbitToolHost` and `ReservationOwnerContext` trait surface builtins call instead of respawning the CLI; imports `orbit-common` and `orbit-types` only (never `builtin`).
+- `host`: `OrbitToolHost` and `ReservationOwnerContext` trait surface builtins call instead of respawning the CLI; imports `orbit-common`, `orbit-types`, and `serde_json` only (never `builtin`).
 - `mcp`: Canonical MCP annotations, workspace-echo rules, and toolset membership for tools; imports `task_guarded_selectors`, `tool`, and `orbit-types` (never `registry` or `builtin`).
 - `plugin`: Plugin manifest v2 loading, schema resolution, namespace checks, and exec/MCP tool execution; imports `context`, `github_run_log_cache`, `host`, `program_policy`, `timeouts`, `orbit-common`, `orbit-exec`, and `orbit-types` (never `registry` or `builtin`).
 - `program_policy`: Activity program allowlist enforcement shared by `proc.spawn`, external tools, and plugins; imports `context` and `orbit-common` (never `builtin`).
 - `registry`: Central `ToolRegistry`, availability state, and canonical MCP tool definition catalog; imports `builtin`, `family`, `mcp`, `plugin`, `tool_suggestions`, `orbit-common`, and `orbit-types`.
 - `task_guarded_selectors`: Guarded-write selector keys shared by task tools and MCP workspace-echo rules; imports no internal modules.
 - `timeouts`: Shared network and subprocess timeout constants for builtin, external, and plugin tools; imports no internal modules.
-- `tool`: `Tool` trait contract and JSON input-extraction helpers shared by builtins; imports `orbit-common` and `orbit-types` only (never `builtin`).
+- `tool`: `Tool` trait contract and JSON input-extraction helpers shared by builtins; imports `orbit-common`, `orbit-types`, and `serde_json` only (never `builtin`).
 - `tool_suggestions`: Conservative recovery hints for refused tool names; imports `context`, `orbit-common`, and `orbit-types` (never `builtin`).

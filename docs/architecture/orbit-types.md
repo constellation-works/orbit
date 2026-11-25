@@ -34,7 +34,7 @@ The domain modules are `desktop`, `identity`, `plugin`, `policy`, `record`, `res
 
 ## Ownership by module
 
-- `desktop`: Guarded desktop task contracts where caller JSON never supplies actor authority; imports `task` within `orbit-types` only (I/O-free).
+- `desktop`: Guarded desktop task contracts where caller JSON never supplies actor authority; imports `task` within `orbit-types` and `serde` only (I/O-free).
 - `identity`: Stable identity contracts (`OrbitId`, `ActorIdentity`, machine/workspace/agent/human crew identifiers); imports `task` and `workflow` within `orbit-types` only (I/O-free).
 - `plugin`: Plugin standard contracts (`plugin.yaml` v2 manifest, `.orbit/plugins.yaml` pin file, install record, and namespace rules); imports no sibling modules (I/O-free).
 - `policy`: Filesystem policy profile, glob matching, role, and policy-definition contracts; imports `resource` and `timestamp` within `orbit-types` only (I/O-free).
