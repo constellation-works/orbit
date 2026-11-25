@@ -129,8 +129,9 @@ impl OrbitRuntime {
 
             let stored_disabled = self
                 .stores()
-                .tools()
-                .get_tool(&name)?
+                .host_store()
+                .read()
+                .and_then(|snapshot| snapshot.tool().get(&name))?
                 .is_some_and(|tool| !tool.enabled);
             if stored_disabled {
                 warnings.push(format!(

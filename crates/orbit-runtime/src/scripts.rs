@@ -399,7 +399,10 @@ impl RuntimeKernel {
         let workspace_id = self.workspace_id()?;
         let global_root = self.global_root();
         let catalog = self.v2_script_catalog()?;
-        let grants = self.sqlite_store()?.list_script_grants(&workspace_id)?;
+        let grants = self
+            .sqlite_store()?
+            .read()
+            .and_then(|snapshot| snapshot.script_grant().list(&workspace_id))?;
         let mut statuses: Vec<ScriptStatus> = Vec::new();
         for asset in catalog.iter() {
             let grant = grants
@@ -514,7 +517,11 @@ impl RuntimeKernel {
     /// returned as authority, including grants stored by older versions.
     pub fn verified_script_grant(&self, name: &str) -> Result<Option<ScriptGrant>, OrbitError> {
         let workspace_id = self.workspace_id()?;
-        let Some(grant) = self.sqlite_store()?.get_script_grant(&workspace_id, name)? else {
+        let Some(grant) = self
+            .sqlite_store()?
+            .read()
+            .and_then(|snapshot| snapshot.script_grant().get(&workspace_id, name))?
+        else {
             return Ok(None);
         };
         verify_script_grant_witness(&self.global_root(), &grant).map_err(OrbitError::Execution)?;
@@ -664,7 +671,8 @@ impl RuntimeKernel {
                 .unwrap_or_else(|| "cli".to_string()),
             expires_at: None,
         };
-        self.sqlite_store()?.upsert_script_grant(&grant)?;
+        self.sqlite_store()?
+            .write(|tx| tx.script_grant().put(&grant))?;
         record_script_grant_witness(&self.global_root(), &grant, &manifest_bytes, &entry_bytes)?;
         Ok(grant)
     }
@@ -680,7 +688,7 @@ impl RuntimeKernel {
         let workspace_id = self.workspace_id()?;
         let deleted = self
             .sqlite_store()?
-            .delete_script_grant(&workspace_id, name)?;
+            .write(|tx| tx.script_grant().delete(&workspace_id, name))?;
         forget_script_grant_witness(&self.global_root(), &workspace_id, name);
         Ok(deleted)
     }

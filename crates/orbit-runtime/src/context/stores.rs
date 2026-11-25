@@ -2,15 +2,13 @@ use crate::plugin::host::PluginHostLoad;
 use orbit_config::{CodexExecutionPolicy, ExecutionEnvPolicy};
 use orbit_policy::PolicyEngine;
 use orbit_search::LexicalIndex;
-use orbit_store::Store;
 use orbit_store::contracts::{
-    AuditEventStoreBackend, AutomationStoreBackend, ExecutorDefStoreBackend,
-    InvocationStoreBackend, JobRunStoreBackend, PluginStoreBackend, PolicyDefStoreBackend,
+    AuditEventStoreBackend, AutomationStoreBackend, InvocationStoreBackend, JobRunStoreBackend,
     ReviewStoreBackend, TaskArtifactStoreBackend, TaskDocumentStoreBackend,
-    TaskHistoryStoreBackend, TaskReservationStoreBackend, TaskStoreBackend, ToolStoreBackend,
-    V2AuditStoreBackend,
+    TaskHistoryStoreBackend, TaskReservationStoreBackend, TaskStoreBackend, V2AuditStoreBackend,
 };
-use orbit_store::skill_store::SkillCatalog;
+use orbit_store::skill_store::SkillDirs;
+use orbit_store::{ExecutorDefDir, FileStore, PolicyDefDirs, Store};
 use orbit_tools::ToolRegistry;
 use std::sync::Arc;
 
@@ -36,11 +34,9 @@ pub struct OrbitStores {
     pub(crate) lexical_index: LexicalIndex,
     pub(crate) task_reservation: Arc<dyn TaskReservationStoreBackend>,
     pub job_run: Arc<dyn JobRunStoreBackend>,
-    pub(crate) tool: Arc<dyn ToolStoreBackend>,
-    pub(crate) plugin: Arc<dyn PluginStoreBackend>,
     pub audit_event: Arc<dyn AuditEventStoreBackend>,
-    pub(crate) executor_def: Arc<dyn ExecutorDefStoreBackend>,
-    pub(crate) policy_def: Arc<dyn PolicyDefStoreBackend>,
+    pub(crate) executor_def: FileStore<ExecutorDefDir>,
+    pub(crate) policy_def: FileStore<PolicyDefDirs>,
     pub(crate) host: OrbitHostStore,
 }
 
@@ -54,11 +50,9 @@ impl OrbitStores {
         lexical_index: LexicalIndex,
         task_reservation: Arc<dyn TaskReservationStoreBackend>,
         job_run: Arc<dyn JobRunStoreBackend>,
-        tool: Arc<dyn ToolStoreBackend>,
-        plugin: Arc<dyn PluginStoreBackend>,
         audit_event: Arc<dyn AuditEventStoreBackend>,
-        executor_def: Arc<dyn ExecutorDefStoreBackend>,
-        policy_def: Arc<dyn PolicyDefStoreBackend>,
+        executor_def: FileStore<ExecutorDefDir>,
+        policy_def: FileStore<PolicyDefDirs>,
         host: OrbitHostStore,
     ) -> Self {
         Self {
@@ -69,8 +63,6 @@ impl OrbitStores {
             lexical_index,
             task_reservation,
             job_run,
-            tool,
-            plugin,
             audit_event,
             executor_def,
             policy_def,
@@ -108,31 +100,31 @@ impl OrbitStores {
         self.job_run.as_ref()
     }
 
-    pub fn tools(&self) -> &dyn ToolStoreBackend {
-        self.tool.as_ref()
-    }
-
-    pub fn plugins(&self) -> &dyn PluginStoreBackend {
-        self.plugin.as_ref()
-    }
-
     pub fn audit_events(&self) -> &dyn AuditEventStoreBackend {
         self.audit_event.as_ref()
     }
 
-    pub fn executors(&self) -> &dyn ExecutorDefStoreBackend {
-        self.executor_def.as_ref()
+    /// The host SQLite store: tool, plugin and script grant records, among
+    /// others, reached as `read()?.<record>()` and `write(|tx| tx.<record>())`.
+    pub fn host_store(&self) -> &Store {
+        &self.host.sqlite
     }
 
-    pub(crate) fn policies(&self) -> &dyn PolicyDefStoreBackend {
-        self.policy_def.as_ref()
+    /// The global executor definitions.
+    pub fn executors(&self) -> &FileStore<ExecutorDefDir> {
+        &self.executor_def
+    }
+
+    /// The workspace policy definitions layered over the global ones.
+    pub(crate) fn policies(&self) -> &FileStore<PolicyDefDirs> {
+        &self.policy_def
     }
 }
 
 #[derive(Clone)]
 pub(crate) struct OrbitExecutionAssets {
     pub(crate) registry: Arc<ToolRegistry>,
-    pub(crate) skill_catalog: SkillCatalog,
+    pub(crate) skill_catalog: FileStore<SkillDirs>,
     /// What the host plugin load pass registered and refused, kept so
     /// `orbit plugin list`/`show`/`doctor` report the same facts the tool
     /// surface was built from rather than re-deriving them.
@@ -142,7 +134,7 @@ pub(crate) struct OrbitExecutionAssets {
 impl OrbitExecutionAssets {
     pub(crate) fn new(
         registry: Arc<ToolRegistry>,
-        skill_catalog: SkillCatalog,
+        skill_catalog: FileStore<SkillDirs>,
         plugins: PluginHostLoad,
     ) -> Self {
         Self {

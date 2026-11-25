@@ -21,20 +21,22 @@ fn record_callback_plugin(runtime: &OrbitRuntime, orbit_tools: &[&str]) {
     let root = plugin_install_path(&runtime.global_root(), "callback", "1.0.0");
     record_callback_plugin_tree(&root, orbit_tools);
     crate::admission_audit::store_support::plugins(runtime)
-        .upsert_plugin(&InstalledPlugin {
-            name: "callback".to_string(),
-            version: "1.0.0".to_string(),
-            source: "fixture".to_string(),
-            install_path: root.to_string_lossy().into_owned(),
-            archive_digest: None,
-            manifest_digest: "0".repeat(64),
-            enabled: true,
-            grants: vec!["orbit_tools".to_string()],
-            first_party: false,
-            certified_orbit_version: None,
-            build: None,
-            installed_at: String::new(),
-            updated_at: String::new(),
+        .write(|tx| {
+            tx.plugin().put(&InstalledPlugin {
+                name: "callback".to_string(),
+                version: "1.0.0".to_string(),
+                source: "fixture".to_string(),
+                install_path: root.to_string_lossy().into_owned(),
+                archive_digest: None,
+                manifest_digest: "0".repeat(64),
+                enabled: true,
+                grants: vec!["orbit_tools".to_string()],
+                first_party: false,
+                certified_orbit_version: None,
+                build: None,
+                installed_at: String::new(),
+                updated_at: String::new(),
+            })
         })
         .expect("record the install");
 }
@@ -93,7 +95,8 @@ fn bind_live_callback_session_with_ceiling(
     effective_tools: &[String],
 ) -> PluginCallbackSession {
     let installed = crate::admission_audit::store_support::plugins(runtime)
-        .get_plugin("callback")
+        .read()
+        .and_then(|snapshot| snapshot.plugin().get("callback"))
         .expect("read plugin")
         .expect("callback plugin is recorded");
     let mut session = PluginCallbackSession::mint(
@@ -138,7 +141,8 @@ fn present_callback_descriptor(session: &PluginCallbackSession) -> std::fs::File
 /// What the recorded manifest asks for under `permissions.orbit_tools`.
 fn recorded_orbit_tools_request(runtime: &OrbitRuntime) -> Vec<String> {
     let installed = crate::admission_audit::store_support::plugins(runtime)
-        .get_plugin("callback")
+        .read()
+        .and_then(|snapshot| snapshot.plugin().get("callback"))
         .expect("read plugin")
         .expect("callback plugin is recorded");
     orbit_tools::plugin::load_plugin_dir(std::path::Path::new(&installed.install_path))

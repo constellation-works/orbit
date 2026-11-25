@@ -5,22 +5,19 @@ use std::sync::Arc;
 
 use crate::Store;
 use crate::contracts::{
-    AuditEventStoreBackend, ExecutorDefStoreBackend, FrictionStoreBackend, InvocationStoreBackend,
-    JobRunStoreBackend, PluginStoreBackend, PolicyDefStoreBackend, RoutineStoreBackend,
-    SessionLogStoreBackend, TaskArtifactStoreBackend, TaskDocumentStoreBackend,
-    TaskHistoryStoreBackend, TaskReservationStoreBackend, TaskStoreBackend, ToolStoreBackend,
-    V2AuditStoreBackend,
+    AuditEventStoreBackend, FrictionStoreBackend, InvocationStoreBackend, JobRunStoreBackend,
+    RoutineStoreBackend, TaskArtifactStoreBackend, TaskDocumentStoreBackend,
+    TaskHistoryStoreBackend, TaskReservationStoreBackend, TaskStoreBackend, V2AuditStoreBackend,
 };
-use crate::driver::file::executor_def_store::ExecutorDefFileStore;
-use crate::driver::file::policy_def_store::PolicyDefFileStore;
-use crate::driver::file::session_log_store::SessionLogStore;
+use crate::driver::file::executor_def_store::ExecutorDefDir;
+use crate::driver::file::policy_def_store::PolicyDefDirs;
+use crate::driver::file::session_log_store::SessionLogDir;
 use crate::driver::sqlite::job_run_store::SqliteJobRunStore;
 use crate::driver::sqlite::task_registry::TaskRegistryStore;
+use crate::file_store::FileStore;
 use crate::repository::friction::FrictionStore;
-use crate::repository::layered_policy::LayeredPolicyDefStore;
 use crate::repository::sqlite_backends::{
-    SqliteAuditEventStoreBackend, SqlitePluginStoreBackend, SqliteTaskReservationStoreBackend,
-    SqliteToolStoreBackend,
+    SqliteAuditEventStoreBackend, SqliteTaskReservationStoreBackend,
 };
 use crate::repository::task::{TaskCommitBoundary, TaskV2Store};
 use crate::workflow::friction::import_workspace_frictions;
@@ -115,12 +112,14 @@ pub fn ensure_sqlite_store_ready(
     store.check_writable()
 }
 
-pub fn global_executor_def_store(root: PathBuf) -> Arc<dyn ExecutorDefStoreBackend> {
-    Arc::new(ExecutorDefFileStore::new(root))
+/// The executor definitions under `root` (the global `executors/` directory).
+pub fn global_executor_def_store(root: PathBuf) -> FileStore<ExecutorDefDir> {
+    FileStore::new(ExecutorDefDir::new(root))
 }
 
-pub fn workspace_session_log_store(orbit_dir: PathBuf) -> Arc<dyn SessionLogStoreBackend> {
-    Arc::new(SessionLogStore::new(orbit_dir))
+/// The session log of the workspace whose `.orbit` directory is `orbit_dir`.
+pub fn workspace_session_log_store(orbit_dir: PathBuf) -> FileStore<SessionLogDir> {
+    FileStore::new(SessionLogDir::new(orbit_dir))
 }
 
 pub fn routine_store(
@@ -149,14 +148,6 @@ pub fn v2_audit_store(
 /// Compose the v2 audit contract over an already-opened host store.
 pub fn v2_audit_store_from_store(store: Store) -> Arc<dyn V2AuditStoreBackend> {
     Arc::new(store)
-}
-
-pub fn tool_store_sqlite(store: Store) -> Arc<dyn ToolStoreBackend> {
-    Arc::new(SqliteToolStoreBackend { store })
-}
-
-pub fn plugin_store_sqlite(store: Store) -> Arc<dyn PluginStoreBackend> {
-    Arc::new(SqlitePluginStoreBackend { store })
 }
 
 pub fn audit_event_store_sqlite(store: Store) -> Arc<dyn AuditEventStoreBackend> {
@@ -267,19 +258,28 @@ pub fn workspace_coordinated_backends(
     })
 }
 
-pub fn global_policy_def_store(root: PathBuf) -> Arc<dyn PolicyDefStoreBackend> {
-    Arc::new(PolicyDefFileStore::new(root))
+/// The policy definitions under the global `policies/` directory `root`.
+pub fn global_policy_def_store(root: PathBuf) -> FileStore<PolicyDefDirs> {
+    FileStore::new(PolicyDefDirs::single(root))
 }
 
-pub fn workspace_policy_def_store(root: PathBuf) -> Arc<dyn PolicyDefStoreBackend> {
-    Arc::new(PolicyDefFileStore::new(root))
+/// The policy definitions under a workspace's `policies/` directory `root`
+/// alone.
+pub fn workspace_policy_def_store(root: PathBuf) -> FileStore<PolicyDefDirs> {
+    FileStore::new(PolicyDefDirs::single(root))
 }
 
+/// The policy definitions of `workspace`, layered over those of `global`;
+/// writes go to the workspace directory. Each side contributes its own
+/// (primary) directory.
 pub fn layered_policy_def_store(
-    workspace: Arc<dyn PolicyDefStoreBackend>,
-    global: Arc<dyn PolicyDefStoreBackend>,
-) -> Arc<dyn PolicyDefStoreBackend> {
-    Arc::new(LayeredPolicyDefStore::new(workspace, global))
+    workspace: FileStore<PolicyDefDirs>,
+    global: FileStore<PolicyDefDirs>,
+) -> FileStore<PolicyDefDirs> {
+    FileStore::new(PolicyDefDirs::layered(
+        workspace.layout().primary.clone(),
+        global.layout().primary.clone(),
+    ))
 }
 
 mod compatibility;

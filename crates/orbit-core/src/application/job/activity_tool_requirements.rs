@@ -230,8 +230,9 @@ pub(crate) fn granted_tool_refusal(
         "tool is not agent-facing"
     } else if runtime
         .stores()
-        .tools()
-        .get_tool(tool_name)?
+        .host_store()
+        .read()
+        .and_then(|snapshot| snapshot.tool().get(tool_name))?
         .is_some_and(|tool| !tool.enabled)
     {
         "tool is inactive"

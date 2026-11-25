@@ -229,8 +229,9 @@ pub fn list_plugins(runtime: &OrbitRuntime) -> Result<Vec<PluginSummary>, OrbitE
     let pinned = pinned_names(runtime);
     let mut summaries: Vec<PluginSummary> = runtime
         .stores()
-        .plugins()
-        .list_plugins()?
+        .host_store()
+        .read()
+        .and_then(|snapshot| snapshot.plugin().list())?
         .iter()
         .map(|installed| {
             let mut summary = summary_from_runtime(runtime, installed);

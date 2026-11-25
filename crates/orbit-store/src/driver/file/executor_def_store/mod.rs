@@ -1,128 +1,56 @@
+//! Directory layout of executor definitions: one `<name>.yaml` per
+//! definition directly under one root.
+
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use orbit_common::OrbitError;
-use orbit_types::resource::{
-    EXECUTOR_RESOURCE_SCHEMA_VERSION, ExecutorResource, ExecutorResourceSpec, ResourceKind,
-    ResourceMetadata, validate_resource_name,
-};
-use orbit_types::workflow::ExecutorDef;
+use orbit_types::resource::validate_resource_name;
 
-use crate::fs::yaml::{parse_yaml_with, write_yaml_atomic_with};
-
-pub struct ExecutorDefFileStore {
+/// The directory that holds executor definitions.
+#[derive(Debug, Clone)]
+pub struct ExecutorDefDir {
     root: PathBuf,
 }
 
-impl ExecutorDefFileStore {
+impl ExecutorDefDir {
+    /// Executor definitions directly under `root`.
     pub fn new(root: PathBuf) -> Self {
         Self { root }
     }
 
-    fn executors_dir(&self) -> PathBuf {
-        self.root.clone()
-    }
-
-    fn executor_path(&self, name: &str) -> Result<PathBuf, OrbitError> {
+    /// The file that holds the definition named `name`, after checking the
+    /// name is a safe resource name.
+    pub(crate) fn path(&self, name: &str) -> Result<PathBuf, OrbitError> {
         validate_resource_name(name)?;
-        Ok(self.executors_dir().join(format!("{name}.yaml")))
+        Ok(self.root.join(format!("{name}.yaml")))
     }
 
-    pub fn list_executor_defs(&self) -> Result<Vec<ExecutorDef>, OrbitError> {
-        let dir = self.executors_dir();
-        if !dir.exists() {
-            return Ok(vec![]);
-        }
-        let mut defs = Vec::new();
-        let entries = fs::read_dir(&dir).map_err(|e| OrbitError::Io(e.to_string()))?;
-        for entry in entries {
-            let entry = entry.map_err(|e| OrbitError::Io(e.to_string()))?;
-            let path = entry.path();
-            if path.extension().and_then(|e| e.to_str()) == Some("yaml") {
-                let content =
-                    fs::read_to_string(&path).map_err(|e| OrbitError::Io(e.to_string()))?;
-                let def = parse_executor_def(&content, path.display().to_string())?;
-                defs.push(def);
-            }
-        }
-        defs.sort_by(|a, b| a.name.cmp(&b.name));
-        Ok(defs)
+    /// Create the directory, private to the user, before a write.
+    pub(crate) fn ensure(&self) -> Result<(), OrbitError> {
+        orbit_common::fs::io::create_private_dir_all(&self.root)?;
+        Ok(())
     }
 
-    pub fn get_executor_def(&self, name: &str) -> Result<Option<ExecutorDef>, OrbitError> {
-        let path = self.executor_path(name)?;
-        if !path.exists() {
-            return Ok(None);
-        }
-        let content = fs::read_to_string(&path).map_err(|e| OrbitError::Io(e.to_string()))?;
-        let def = parse_executor_def(&content, path.display().to_string())?;
-        Ok(Some(def))
-    }
-
-    pub fn delete_executor_def(&self, name: &str) -> Result<bool, OrbitError> {
-        let path = self.executor_path(name)?;
-        match fs::remove_file(&path) {
-            Ok(()) => Ok(true),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
-            Err(error) => Err(OrbitError::Io(error.to_string())),
-        }
-    }
-
-    pub fn upsert_executor_def(&self, def: &ExecutorDef) -> Result<(), OrbitError> {
-        let path = self.executor_path(&def.name)?;
-        let dir = self.executors_dir();
-        orbit_common::fs::io::create_private_dir_all(&dir)?;
-        write_yaml_atomic_with(
-            &path,
-            &ExecutorResource {
-                schema_version: EXECUTOR_RESOURCE_SCHEMA_VERSION,
-                kind: ResourceKind::Executor,
-                metadata: ResourceMetadata::named(def.name.clone()),
-                spec: ExecutorResourceSpec {
-                    executor_type: def.executor_type,
-                    command: def.command.clone(),
-                    args: def.args.clone(),
-                    inspection_args: def.inspection_args.clone(),
-                    image_input: def.image_input.clone(),
-                    stdout_format: def.stdout_format,
-                    model_pair_override: def.model_pair_override.clone(),
-                    model_flag: def.model_flag.clone(),
-                    timeout_seconds: def.timeout_seconds,
-                    auth_probe: def.auth_probe.clone(),
-                    env: def.env.clone(),
-                    sandbox: def.sandbox,
-                    allow_fallback: def.allow_fallback,
-                    host_os: def.host_os.clone(),
-                    created_at: def.created_at,
-                    updated_at: def.updated_at,
-                },
-            },
-            |e| OrbitError::Execution(format!("failed to serialize executor def: {e}")),
-        )
+    /// Every `*.yaml` file under the root, in directory order. An absent
+    /// root has none.
+    pub(crate) fn yaml_files(&self) -> Result<Vec<PathBuf>, OrbitError> {
+        yaml_files(&self.root)
     }
 }
 
-fn parse_executor_def(content: &str, label: String) -> Result<ExecutorDef, OrbitError> {
-    let doc: ExecutorResource = parse_yaml_with(content, std::path::Path::new(&label), |_, e| {
-        OrbitError::InvalidInput(format!("invalid executor def at {}: {e}", label))
-    })?;
-    if doc.kind != ResourceKind::Executor {
-        return Err(OrbitError::InvalidInput(format!(
-            "invalid executor def at {}: expected kind Executor, found {}",
-            label, doc.kind
-        )));
+fn yaml_files(dir: &Path) -> Result<Vec<PathBuf>, OrbitError> {
+    if !dir.exists() {
+        return Ok(vec![]);
     }
-    if doc.schema_version != EXECUTOR_RESOURCE_SCHEMA_VERSION {
-        return Err(OrbitError::InvalidInput(format!(
-            "invalid executor def at {}: unsupported schemaVersion {}",
-            label, doc.schema_version
-        )));
+    let mut files = Vec::new();
+    let entries = fs::read_dir(dir).map_err(|e| OrbitError::Io(e.to_string()))?;
+    for entry in entries {
+        let entry = entry.map_err(|e| OrbitError::Io(e.to_string()))?;
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) == Some("yaml") {
+            files.push(path);
+        }
     }
-    doc.metadata.validate_name()?;
-    Ok(ExecutorDef::from_resource_spec(
-        doc.metadata.name,
-        doc.spec,
-        None,
-        None,
-    ))
+    Ok(files)
 }

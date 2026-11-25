@@ -140,7 +140,8 @@ esac
 fn assert_nothing_installed(fixture: &PluginFixture) {
     assert!(
         crate::admission_audit::store_support::plugins(&fixture.runtime)
-            .list_plugins()
+            .read()
+            .and_then(|snapshot| snapshot.plugin().list())
             .expect("list plugin rows")
             .is_empty(),
         "a refused build must leave no plugin row"
@@ -755,7 +756,8 @@ fn a_drifted_pin_still_applies_enabled_false() {
         Some(&false)
     );
     let installed = crate::admission_audit::store_support::plugins(&fixture.runtime)
-        .get_plugin("demo")
+        .read()
+        .and_then(|snapshot| snapshot.plugin().get("demo"))
         .expect("read the row")
         .expect("still installed");
     assert!(installed.enabled, "the host row is never touched by a pin");
@@ -803,7 +805,8 @@ fn a_fresh_install_that_does_not_satisfy_its_pin_is_not_enabled() {
         "{outcomes:?}"
     );
     let installed = crate::admission_audit::store_support::plugins(&fixture.runtime)
-        .get_plugin("demo")
+        .read()
+        .and_then(|snapshot| snapshot.plugin().get("demo"))
         .expect("read the row")
         .expect("the source installed");
     assert!(!installed.enabled, "an unsatisfied pin never enables");
@@ -891,7 +894,8 @@ pub(super) fn build_record(outputs: Vec<PluginBuildOutputRecord>) -> PluginBuild
 
 fn stored_build(fixture: &PluginFixture) -> Option<PluginBuildRecord> {
     crate::admission_audit::store_support::plugins(&fixture.runtime)
-        .get_plugin("demo")
+        .read()
+        .and_then(|snapshot| snapshot.plugin().get("demo"))
         .expect("read the row")
         .and_then(|installed| installed.build)
 }
@@ -899,13 +903,14 @@ fn stored_build(fixture: &PluginFixture) -> Option<PluginBuildRecord> {
 /// Record `build` on the row and in its witness, as a consented install does.
 pub(super) fn attach_build(fixture: &PluginFixture, build: &PluginBuildRecord) {
     let mut installed = crate::admission_audit::store_support::plugins(&fixture.runtime)
-        .get_plugin("demo")
+        .read()
+        .and_then(|snapshot| snapshot.plugin().get("demo"))
         .expect("read the row")
         .expect("the plugin is installed");
     installed.build = Some(build.clone());
     record_build_witness(&fixture.global_root, "demo", Some(build)).expect("write the witness");
     crate::admission_audit::store_support::plugins(&fixture.runtime)
-        .upsert_plugin(&installed)
+        .write(|tx| tx.plugin().put(&installed))
         .expect("record the build");
 }
 

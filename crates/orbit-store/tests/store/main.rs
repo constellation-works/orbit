@@ -24,7 +24,6 @@ use orbit_store::compose::CoordinatedWorkspaceBackends;
 use orbit_store::compose::WorkspaceTaskBackends;
 use orbit_store::compose::ensure_sqlite_store_ready;
 use orbit_store::compose::review_store;
-use orbit_store::compose::tool_store_sqlite;
 use orbit_store::compose::workspace_coordinated_backends;
 use orbit_store::compose::workspace_job_run_store;
 use orbit_store::compose::workspace_session_log_store;

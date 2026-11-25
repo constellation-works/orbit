@@ -118,7 +118,12 @@ impl OrbitRuntime {
     /// too, since they live in that file; for them the row comparison is
     /// the complete invalidation check for host plugin rows.
     pub fn plugin_installed_changed(&self) -> Result<bool, OrbitError> {
-        Ok(self.stores().plugins().list_plugins()? != self.plugin_load().installed)
+        Ok(self
+            .stores()
+            .host_store()
+            .read()
+            .and_then(|snapshot| snapshot.plugin().list())?
+            != self.plugin_load().installed)
     }
 
     pub fn show_plugin(&self, name: &str) -> Result<PluginSummary, OrbitError> {

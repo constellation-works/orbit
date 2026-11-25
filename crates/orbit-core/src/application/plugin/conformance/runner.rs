@@ -34,7 +34,12 @@ pub fn test_plugin_dir(
     options: &PluginTestOptions,
 ) -> Result<PluginTestReport, OrbitError> {
     let mut plugin = load_plugin_dir(&resolve_plugin_root(dir)?)?;
-    let first_party_verified = match runtime.stores().plugins().get_plugin(plugin.namespace())? {
+    let first_party_verified = match runtime
+        .stores()
+        .host_store()
+        .read()
+        .and_then(|snapshot| snapshot.plugin().get(plugin.namespace()))?
+    {
         Some(installed) if installed.manifest_digest == plugin.manifest_digest => {
             installed.first_party
         }
@@ -704,7 +709,12 @@ fn record_certification(
             ),
         );
     }
-    let installed = match runtime.stores().plugins().get_plugin(plugin.namespace()) {
+    let installed = match runtime
+        .stores()
+        .host_store()
+        .read()
+        .and_then(|snapshot| snapshot.plugin().get(plugin.namespace()))
+    {
         Ok(Some(installed)) => installed,
         Ok(None) => {
             return (
@@ -730,11 +740,10 @@ fn record_certification(
             ),
         );
     }
-    match runtime
-        .stores()
-        .plugins()
-        .set_plugin_certification(plugin.namespace(), Some(&report.orbit_version))
-    {
+    match runtime.stores().host_store().write(|tx| {
+        tx.plugin()
+            .set_certification(plugin.namespace(), Some(&report.orbit_version))
+    }) {
         Ok(true) => (
             true,
             format!(

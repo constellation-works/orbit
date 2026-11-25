@@ -1,7 +1,5 @@
-use std::sync::Mutex;
-
 use orbit_common::OrbitError;
-use orbit_store::contracts::ExecutorDefStoreBackend;
+use orbit_store::{ExecutorDefDir, FileStore};
 use orbit_types::timestamp::UtcTimestamp;
 use orbit_types::workflow::{ExecutorDef, ExecutorSandboxKind, ExecutorType};
 
@@ -32,50 +30,47 @@ fn base_def(name: &str, executor_type: ExecutorType) -> ExecutorDef {
     }
 }
 
-/// Minimal in-memory store so the seed path can be exercised without touching
-/// the filesystem or the host platform.
-#[derive(Default)]
-struct InMemoryExecutorStore {
-    defs: Mutex<Vec<ExecutorDef>>,
+/// Executor store over a temporary directory, so the seed path runs against
+/// the real file repository without touching the host's executors.
+struct TempExecutorStore {
+    _dir: tempfile::TempDir,
+    store: FileStore<ExecutorDefDir>,
 }
 
-impl ExecutorDefStoreBackend for InMemoryExecutorStore {
+impl Default for TempExecutorStore {
+    fn default() -> Self {
+        let dir = tempfile::tempdir().expect("executor tempdir");
+        let store = FileStore::new(ExecutorDefDir::new(dir.path().join("executors")));
+        Self { _dir: dir, store }
+    }
+}
+
+impl std::ops::Deref for TempExecutorStore {
+    type Target = FileStore<ExecutorDefDir>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.store
+    }
+}
+
+impl TempExecutorStore {
     fn list_executor_defs(&self) -> Result<Vec<ExecutorDef>, OrbitError> {
-        Ok(self.defs.lock().expect("lock").clone())
+        self.store.read().executor_def().list()
     }
 
     fn get_executor_def(&self, name: &str) -> Result<Option<ExecutorDef>, OrbitError> {
-        Ok(self
-            .defs
-            .lock()
-            .expect("lock")
-            .iter()
-            .find(|def| def.name == name)
-            .cloned())
+        self.store.read().executor_def().get(name)
     }
 
     fn upsert_executor_def(&self, def: &ExecutorDef) -> Result<(), OrbitError> {
-        let mut defs = self.defs.lock().expect("lock");
-        if let Some(existing) = defs.iter_mut().find(|d| d.name == def.name) {
-            *existing = def.clone();
-        } else {
-            defs.push(def.clone());
-        }
-        Ok(())
-    }
-
-    fn delete_executor_def(&self, name: &str) -> Result<bool, OrbitError> {
-        let mut defs = self.defs.lock().expect("lock");
-        let before = defs.len();
-        defs.retain(|def| def.name != name);
-        Ok(defs.len() != before)
+        self.store.write(|tx| tx.executor_def().put(def))
     }
 }
 
 /// A pre-ORB-10552 Linux install is upgraded to the native backend.
 #[test]
 fn seed_default_executors_heals_leftover_macos_sandbox_on_linux() {
-    let store = InMemoryExecutorStore::default();
+    let store = TempExecutorStore::default();
     let mut stale = base_def("claude", ExecutorType::DirectAgent);
     stale.sandbox = Some(ExecutorSandboxKind::MacosSandboxExec);
     store.upsert_executor_def(&stale).expect("seed stale def");
@@ -105,7 +100,7 @@ fn seed_default_executors_preserves_local_shell_sandbox_on_mismatched_platform()
         ("windows", ExecutorSandboxKind::MacosSandboxExec),
         ("windows", ExecutorSandboxKind::LinuxBwrap),
     ] {
-        let store = InMemoryExecutorStore::default();
+        let store = TempExecutorStore::default();
         let mut installed = base_def("local-shell", ExecutorType::LocalShell);
         installed.sandbox = Some(sandbox);
         store
@@ -128,7 +123,7 @@ fn seed_default_executors_preserves_local_shell_sandbox_on_mismatched_platform()
 
 #[test]
 fn seed_default_executors_upgrades_old_unsandboxed_linux_default() {
-    let store = InMemoryExecutorStore::default();
+    let store = TempExecutorStore::default();
     let stale = base_def("claude", ExecutorType::DirectAgent);
     store
         .upsert_executor_def(&stale)
@@ -148,7 +143,7 @@ fn seed_default_executors_upgrades_old_unsandboxed_linux_default() {
 
 #[test]
 fn custom_executor_sandbox_choice_is_not_rewritten_by_seed_migration() {
-    let store = InMemoryExecutorStore::default();
+    let store = TempExecutorStore::default();
     let mut custom = base_def("custom", ExecutorType::DirectAgent);
     custom.sandbox = Some(ExecutorSandboxKind::MacosSandboxExec);
     store.upsert_executor_def(&custom).expect("seed custom");
@@ -171,7 +166,7 @@ fn custom_executor_sandbox_choice_is_not_rewritten_by_seed_migration() {
 /// `off` and `local-shell` are left as they are.
 #[test]
 fn seed_without_a_host_backend_keeps_the_declared_sandbox() {
-    let store = InMemoryExecutorStore::default();
+    let store = TempExecutorStore::default();
     store
         .upsert_executor_def(&base_def("claude", ExecutorType::DirectAgent))
         .expect("seed dropped-sandbox install");
@@ -200,7 +195,7 @@ fn seed_shipped_muse_is_unrestricted_with_platform_sandbox() {
         (LINUX, ExecutorSandboxKind::LinuxBwrap),
         ("macos", ExecutorSandboxKind::MacosSandboxExec),
     ] {
-        let store = InMemoryExecutorStore::default();
+        let store = TempExecutorStore::default();
         seed_default_executors_for_platform(&store, false, target_os).expect("seed defaults");
         let muse = store
             .get_executor_def("muse")
@@ -215,7 +210,7 @@ fn seed_shipped_muse_is_unrestricted_with_platform_sandbox() {
 /// not rewrite an installed default that carries no sandbox.
 #[test]
 fn seed_on_macos_keeps_sandbox_exec_and_existing_choices() {
-    let store = InMemoryExecutorStore::default();
+    let store = TempExecutorStore::default();
     store
         .upsert_executor_def(&base_def("claude", ExecutorType::DirectAgent))
         .expect("seed installed default");
@@ -234,7 +229,7 @@ fn seed_on_macos_keeps_sandbox_exec_and_existing_choices() {
 /// [ORB-18096] Re-seeding retires stale shipped executors for removed lanes.
 #[test]
 fn seed_retires_stale_retired_provider_executors() {
-    let store = InMemoryExecutorStore::default();
+    let store = TempExecutorStore::default();
     for name in ["cursor", "pi", "opencode"] {
         store
             .upsert_executor_def(&base_def(name, ExecutorType::DirectAgent))

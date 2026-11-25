@@ -1,5 +1,5 @@
 use orbit_core::OrbitRuntime;
-use orbit_store::contracts::{JobRunStoreBackend, PluginStoreBackend, TaskStoreBackend};
+use orbit_store::contracts::{JobRunStoreBackend, TaskStoreBackend};
 use std::sync::Arc;
 
 pub(super) fn jobs(runtime: &OrbitRuntime) -> Arc<dyn JobRunStoreBackend> {
@@ -8,8 +8,8 @@ pub(super) fn jobs(runtime: &OrbitRuntime) -> Arc<dyn JobRunStoreBackend> {
         runtime.workspace_id().unwrap(),
     )
 }
-pub(super) fn plugins(runtime: &OrbitRuntime) -> Arc<dyn PluginStoreBackend> {
-    orbit_store::compose::plugin_store_sqlite(runtime.sqlite_store().unwrap())
+pub(super) fn plugins(runtime: &OrbitRuntime) -> orbit_store::Store {
+    runtime.sqlite_store().unwrap()
 }
 pub(super) fn tasks(runtime: &OrbitRuntime) -> Arc<dyn TaskStoreBackend> {
     use orbit_store::maintenance::task_registry::{TaskRegistryStore, task_registry_path};

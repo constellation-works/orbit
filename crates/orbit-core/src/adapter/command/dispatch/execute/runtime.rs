@@ -566,7 +566,7 @@ impl OrbitRuntime {
                 )?;
                 enforce_plugin_callback_allowlist(
                     &self.global_root(),
-                    self.stores().plugins(),
+                    self.stores().host_store(),
                     name,
                 )?;
                 dispatch(input)

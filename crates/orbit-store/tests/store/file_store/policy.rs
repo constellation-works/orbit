@@ -56,13 +56,13 @@ fn rejects_traversal_policy_name_without_external_write() {
     let store = global_policy_def_store(dir.path().join("policies"));
 
     let err = store
-        .upsert_policy_def(&baseline_def("../x"))
+        .write(|tx| tx.policy_def().put(&baseline_def("../x")))
         .expect_err("traversal name must fail");
     assert!(matches!(err, OrbitError::InvalidInput(_)));
     assert!(!dir.path().join("x.yaml").exists());
 
     let err = store
-        .get_policy_def("../x")
+        .read().policy_def().get("../x")
         .expect_err("traversal lookup must fail");
     assert!(matches!(err, OrbitError::InvalidInput(_)));
 }
@@ -83,7 +83,7 @@ fn rejects_traversal_policy_metadata_name_when_loading() {
 
     let store = global_policy_def_store(policies_dir);
     let err = store
-        .list_policy_defs()
+        .read().policy_def().list()
         .expect_err("traversal metadata name must fail");
     assert!(matches!(err, OrbitError::InvalidInput(_)));
     assert!(!dir.path().join("x.yaml").exists());
@@ -340,7 +340,7 @@ fn policy_timestamps_preserve_legacy_records_offsets_precision_merges_and_reject
 
     let global_store = global_policy_def_store(global_dir.clone());
     let loaded_global = global_store
-        .get_policy_def("default")
+        .read().policy_def().get("default")
         .expect("get global")
         .expect("default exists");
     assert_eq!(
@@ -359,7 +359,7 @@ fn policy_timestamps_preserve_legacy_records_offsets_precision_merges_and_reject
     workspace_def.created_at = Some("2026-11-18T03:00:00Z".parse().unwrap());
     workspace_def.updated_at = Some("2026-11-18T04:30:00.789Z".parse().unwrap());
     workspace_store
-        .upsert_policy_def(&workspace_def)
+        .write(|tx| tx.policy_def().put(&workspace_def))
         .expect("upsert workspace policy");
 
     let written_yaml =
@@ -377,7 +377,7 @@ fn policy_timestamps_preserve_legacy_records_offsets_precision_merges_and_reject
 
     let layered = layered_policy_def_store(workspace_store, global_store);
     let merged = layered
-        .get_policy_def("default")
+        .read().policy_def().get("default")
         .expect("get layered")
         .expect("merged default");
     // PolicyDef::merged keeps global.created_at.or(workspace.created_at) and workspace.updated_at.max(global.updated_at).
@@ -385,7 +385,7 @@ fn policy_timestamps_preserve_legacy_records_offsets_precision_merges_and_reject
     assert_eq!(merged.updated_at, workspace_def.updated_at);
     assert_eq!(merged.description.as_deref(), Some("workspace override"));
     assert_eq!(
-        layered.list_policy_defs().expect("list layered"),
+        layered.read().policy_def().list().expect("list layered"),
         vec![merged]
     );
 

@@ -2,7 +2,7 @@ use std::time::SystemTime;
 
 use orbit_common::OrbitError;
 use orbit_common::protocol::yaml::parse_policy_resource;
-use orbit_store::contracts::PolicyDefStoreBackend;
+use orbit_store::{FileStore, PolicyDefDirs};
 use orbit_types::policy::{DEFAULT_POLICY_NAME, PolicyDef, PolicyTimestamp};
 use orbit_types::resource::ResourceKind;
 
@@ -12,22 +12,32 @@ pub(crate) const DEFAULT_POLICY_FILES: &[(&str, &str)] = &[(
 )];
 
 pub(crate) fn seed_default_policies(
-    store: &dyn PolicyDefStoreBackend,
+    store: &FileStore<PolicyDefDirs>,
+    overwrite: bool,
+) -> Result<usize, OrbitError> {
+    store.write(|tx| {
+        let store = tx.policy_def();
+        seed_in(&store, overwrite)
+    })
+}
+
+fn seed_in(
+    store: &orbit_store::PolicyDefRepository<'_, orbit_store::FileTx<'_, PolicyDefDirs>>,
     overwrite: bool,
 ) -> Result<usize, OrbitError> {
     let now = PolicyTimestamp::try_from(SystemTime::now())?;
     let mut count = 0;
     for (name, raw) in DEFAULT_POLICY_FILES {
         let shipped = parse_default_policy(name, raw, now)?;
-        match store.get_policy_def(name)? {
+        match store.get(name)? {
             Some(existing) if !overwrite => {
                 if let Some(merged) = merge_shipped_policy_defaults(existing, &shipped, now) {
-                    store.upsert_policy_def(&merged)?;
+                    store.put(&merged)?;
                     count += 1;
                 }
             }
             _ => {
-                store.upsert_policy_def(&shipped)?;
+                store.put(&shipped)?;
                 count += 1;
             }
         }

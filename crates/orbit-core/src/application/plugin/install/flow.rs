@@ -101,9 +101,7 @@ pub fn upgrade_plugin(
     options: &PluginUpgradeOptions,
 ) -> Result<PluginUpgradeResult, OrbitError> {
     runtime
-        .stores()
-        .plugins()
-        .get_plugin(name)?
+        .stores().host_store().read().and_then(|snapshot| snapshot.plugin().get(name))?
         .ok_or_else(|| {
             OrbitError::InvalidInput(format!(
                 "plugin '{name}' is not installed on this host; run `orbit plugin add <source>` first"
@@ -225,7 +223,11 @@ fn install_plugin_inner(
     // namespace transition. Declared before `staged`, so a rollback in its
     // `Drop` also runs under the lock.
     let _namespace_lock = lock_plugin_namespace(&global_root, &name)?;
-    let existing = runtime.stores().plugins().get_plugin(&name)?;
+    let existing = runtime
+        .stores()
+        .host_store()
+        .read()
+        .and_then(|snapshot| snapshot.plugin().get(&name))?;
     if requires_installed && existing.is_none() {
         return Err(OrbitError::InvalidInput(format!(
             "plugin '{name}' is not installed on this host; run `orbit plugin add <source>` first"
@@ -341,7 +343,10 @@ fn install_plugin_inner(
     // the old row disagreeing with it and refused at load.
     record_build_witness(&global_root, &name, record.build.as_ref())?;
     runtime.with_mutation(|| {
-        runtime.stores().plugins().upsert_plugin(&record)?;
+        runtime
+            .stores()
+            .host_store()
+            .write(|tx| tx.plugin().put(&record))?;
         Ok((
             (),
             OrbitEvent::PluginInstalled {
@@ -421,8 +426,9 @@ fn install_plugin_inner(
     // --enable` on an incompatible host says so now rather than at first use.
     let stored = runtime
         .stores()
-        .plugins()
-        .get_plugin(&name)?
+        .host_store()
+        .read()
+        .and_then(|snapshot| snapshot.plugin().get(&name))?
         .unwrap_or(record);
     let projection = if enabled {
         let config = orbit_config::ResolvedConfig::load(

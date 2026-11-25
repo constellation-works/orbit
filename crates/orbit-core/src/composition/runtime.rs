@@ -461,7 +461,7 @@ fn prepare_resolved_config(
     // reconciled by this binary carries the policy.
     if !global_defaults_are_current(global_root) {
         let global_policy_store = global_policy_def_store(resolved.persistence.policy_dir.clone());
-        if let Err(error) = seed_default_policies(global_policy_store.as_ref(), false) {
+        if let Err(error) = seed_default_policies(&global_policy_store, false) {
             if error.is_readonly_or_access_failure() {
                 tracing::warn!(
                     target: "orbit.core.bootstrap",

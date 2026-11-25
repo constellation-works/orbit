@@ -46,8 +46,9 @@ pub(in crate::application::plugin) fn installed_plugin(
 ) -> Result<InstalledPlugin, OrbitError> {
     runtime
         .stores()
-        .plugins()
-        .get_plugin(name)?
+        .host_store()
+        .read()
+        .and_then(|snapshot| snapshot.plugin().get(name))?
         .ok_or_else(|| missing_install(runtime, name))
 }
 
@@ -63,8 +64,9 @@ pub(super) fn set_enabled(
 ) -> Result<PluginSummary, OrbitError> {
     let mut existing = runtime
         .stores()
-        .plugins()
-        .get_plugin(name)?
+        .host_store()
+        .read()
+        .and_then(|snapshot| snapshot.plugin().get(name))?
         .ok_or_else(|| missing_install(runtime, name))?;
     // `None` (no `--grant` flag, or a disable/remove that never authorizes
     // grants) preserves the recorded set; `Some` — including an explicit
@@ -91,8 +93,8 @@ pub(super) fn set_enabled(
     runtime.with_mutation(|| {
         runtime
             .stores()
-            .plugins()
-            .set_plugin_enabled(name, enabled, &grants)?;
+            .host_store()
+            .write(|tx| tx.plugin().set_enabled(name, enabled, &grants))?;
         let event = if enabled {
             OrbitEvent::PluginEnabled {
                 name: name.to_string(),

@@ -1,5 +1,5 @@
 use orbit_common::OrbitError;
-use orbit_store::contracts::ExecutorDefStoreBackend;
+use orbit_store::{ExecutorDefDir, FileStore};
 use orbit_types::resource::{
     EXECUTOR_RESOURCE_SCHEMA_VERSION, ExecutorResource, ExecutorResourceSpec, ResourceKind,
 };
@@ -27,7 +27,7 @@ pub(crate) const DEFAULT_EXECUTOR_FILES: &[(&str, &str)] = &[
 ];
 
 pub(crate) fn seed_default_executors(
-    store: &dyn ExecutorDefStoreBackend,
+    store: &FileStore<ExecutorDefDir>,
     overwrite: bool,
 ) -> Result<usize, OrbitError> {
     seed_default_executors_for_platform(store, overwrite, std::env::consts::OS)
@@ -38,33 +38,41 @@ pub(crate) fn seed_default_executors(
 /// and Linux seeding paths can be exercised deterministically in tests on a
 /// single CI host. See [ORB-10112].
 pub(crate) fn seed_default_executors_for_platform(
-    store: &dyn ExecutorDefStoreBackend,
+    store: &FileStore<ExecutorDefDir>,
+    overwrite: bool,
+    target_os: &str,
+) -> Result<usize, OrbitError> {
+    store.write(|tx| seed_in(tx.executor_def(), overwrite, target_os))
+}
+
+fn seed_in(
+    store: orbit_store::ExecutorDefRepository<'_, orbit_store::FileTx<'_, ExecutorDefDir>>,
     overwrite: bool,
     target_os: &str,
 ) -> Result<usize, OrbitError> {
     // Retire stale shipped executors for removed provider lanes (ORB-18096)
     // so an upgraded host does not keep listing them as available or broken.
     for retired in RETIRED_PROVIDER_IDS {
-        store.delete_executor_def(retired)?;
+        store.delete(retired)?;
     }
     let mut created = 0usize;
     for (name, yaml) in DEFAULT_EXECUTOR_FILES {
         let def = parse_default_executor_for_platform(name, yaml, target_os)?;
-        let existing = store.get_executor_def(&def.name)?;
+        let existing = store.get(&def.name)?;
         match existing {
             None => {
-                store.upsert_executor_def(&def)?;
+                store.put(&def)?;
                 created += 1;
             }
             Some(_) if overwrite => {
-                store.upsert_executor_def(&def)?;
+                store.put(&def)?;
                 created += 1;
             }
             Some(existing) => {
                 if let Some(migrated) =
                     migrated_default_executor_for_platform(&existing, &def, target_os)
                 {
-                    store.upsert_executor_def(&migrated)?;
+                    store.put(&migrated)?;
                     created += 1;
                 }
             }

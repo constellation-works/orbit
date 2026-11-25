@@ -9,9 +9,9 @@ use orbit_store::Store;
 use orbit_store::compose::{
     CoordinatedWorkspaceBackends, audit_event_store_sqlite, automation_store,
     global_executor_def_store, global_policy_def_store, invocation_store_from_store,
-    layered_policy_def_store, plugin_store_sqlite, review_store, tool_store_sqlite,
-    v2_audit_store_from_store, workspace_coordinated_backends, workspace_job_run_store,
-    workspace_observational_backends, workspace_policy_def_store,
+    layered_policy_def_store, review_store, v2_audit_store_from_store,
+    workspace_coordinated_backends, workspace_job_run_store, workspace_observational_backends,
+    workspace_policy_def_store,
 };
 use orbit_store::maintenance::task_registry::{
     BindWorkspaceParams, RegisterWorkspaceParams, TaskRegistryStore, WorkspaceConfig,
@@ -32,7 +32,8 @@ use crate::context::{
     OrbitStores,
 };
 use crate::{HostLifetime, OrbitRuntimeRoots, WorkspaceRuntimeBinding};
-use orbit_store::skill_store::SkillCatalog;
+use orbit_store::FileStore;
+use orbit_store::skill_store::SkillDirs;
 
 /// Job-run partition used when an explicit `--root` data directory is opened
 /// without a selected checkout. Never written to `config.yaml` and never
@@ -150,8 +151,6 @@ pub(crate) fn build_context_from_roots(
 
     // Executors and policies are global-only. Jobs always persist run state
     // under the workspace state directory.
-    let tool_store = tool_store_sqlite(store.clone());
-    let plugin_store = plugin_store_sqlite(store.clone());
     let audit_event_store = audit_event_store_sqlite(store.clone());
     let host_store = if write_free {
         OrbitHostStore {
@@ -175,16 +174,17 @@ pub(crate) fn build_context_from_roots(
     let workspace_policy_store = workspace_policy_def_store(paths.policies_dir.clone());
     let policy_def_store = layered_policy_def_store(workspace_policy_store, global_policy_store);
     let active_policy = policy_def_store
-        .get_policy_def(DEFAULT_POLICY_NAME)?
+        .read()
+        .policy_def()
+        .get(DEFAULT_POLICY_NAME)?
         .ok_or_else(|| {
             OrbitError::Execution(format!(
                 "default policy `{DEFAULT_POLICY_NAME}` was not found after seeding"
             ))
         })?;
 
-    let skill_catalog =
-        SkillCatalog::layered(persistence.skill_dir.clone(), global_root.join("skills"));
-    if !write_free && let Err(error) = skill_catalog.ensure_layout() {
+    let skill_dirs = SkillDirs::layered(persistence.skill_dir.clone(), global_root.join("skills"));
+    if !write_free && let Err(error) = skill_dirs.ensure_layout() {
         if error.is_readonly_or_access_failure() {
             tracing::warn!(
                 target: "orbit.core.bootstrap",
@@ -196,6 +196,8 @@ pub(crate) fn build_context_from_roots(
             return Err(error);
         }
     }
+
+    let skill_catalog = FileStore::new(skill_dirs);
 
     let mut registry = ToolRegistry::new();
     registry.register_builtins();
@@ -305,8 +307,6 @@ pub(crate) fn build_context_from_roots(
             lexical_index,
             task_reservation_store,
             job_run_store,
-            tool_store,
-            plugin_store,
             audit_event_store,
             executor_def_store,
             policy_def_store,
@@ -727,7 +727,7 @@ fn workspace_slug(repo_root: &Path) -> String {
 pub(crate) type TempDir = tempfile::TempDir;
 
 fn load_external_tools(store: &Store, registry: &mut ToolRegistry) -> Result<(), OrbitError> {
-    let stored_tools = store.list_tools()?;
+    let stored_tools = store.read().and_then(|snapshot| snapshot.tool().list())?;
     for tool in stored_tools {
         if !tool.builtin && tool.enabled && !registry.has(&tool.name) {
             registry.register(ExternalTool {

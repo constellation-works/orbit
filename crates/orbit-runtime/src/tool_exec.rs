@@ -279,7 +279,11 @@ impl RuntimeKernel {
     pub fn check_tool_enabled(&self, name: &str) -> Result<(), OrbitError> {
         let tool = orbit_types::tool::tool_family_of_operation(name)
             .map_or(name, |(family, _)| family.name);
-        if let Some(stored) = self.stores().tools().get_tool(tool)?
+        if let Some(stored) = self
+            .stores()
+            .host_store()
+            .read()
+            .and_then(|snapshot| snapshot.tool().get(tool))?
             && !stored.enabled
         {
             return Err(OrbitError::Execution(format!(

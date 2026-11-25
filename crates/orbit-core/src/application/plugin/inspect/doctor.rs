@@ -280,7 +280,12 @@ fn scoped_out_fs_root_rows(runtime: &OrbitRuntime) -> Result<Vec<PluginDoctorRes
         let Some(plugin) = entry.loaded.as_deref() else {
             continue;
         };
-        let Some(installed) = runtime.stores().plugins().get_plugin(&entry.name)? else {
+        let Some(installed) = runtime
+            .stores()
+            .host_store()
+            .read()
+            .and_then(|snapshot| snapshot.plugin().get(&entry.name))?
+        else {
             continue;
         };
         let backend = plugin_backend(&runtime.global_root(), &installed, plugin, &config.plugins);
@@ -338,7 +343,12 @@ fn archive_digest_drift_rows(
         else {
             continue;
         };
-        let Some(installed) = runtime.stores().plugins().get_plugin(&pin.name)? else {
+        let Some(installed) = runtime
+            .stores()
+            .host_store()
+            .read()
+            .and_then(|snapshot| snapshot.plugin().get(&pin.name))?
+        else {
             continue;
         };
         let name = &pin.name;
@@ -441,7 +451,12 @@ fn build_rows(
                 ));
             }
         }
-        if let Some(installed) = runtime.stores().plugins().get_plugin(name)? {
+        if let Some(installed) = runtime
+            .stores()
+            .host_store()
+            .read()
+            .and_then(|snapshot| snapshot.plugin().get(name))?
+        {
             if let Err(message) = verify_build_record(&runtime.global_root(), &installed) {
                 rows.push(row(false, message));
             }

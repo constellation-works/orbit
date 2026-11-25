@@ -81,7 +81,7 @@ fn a_tampered_manifest_claiming_another_plugins_namespace_cannot_displace_its_ac
     let store = Store::open(&global_root.join("orbit.db")).expect("open store");
     for name in ["a", "b"] {
         store
-            .with_transaction(|tx| tx.upsert_plugin(&record(&global_root, name)))
+            .write(|tx| tx.plugin().put(&record(&global_root, name)))
             .expect("record the install");
     }
 
@@ -165,7 +165,7 @@ fn fs_write_covering_the_plugin_root_is_refused_at_registration() {
     let mut installed = record(&global_root, "wide");
     installed.grants = vec!["fs".to_string()];
     store
-        .with_transaction(|tx| tx.upsert_plugin(&installed))
+        .write(|tx| tx.plugin().put(&installed))
         .expect("record the install");
     record_authorized_grants(&global_root, "wide", true, &["fs".to_string()])
         .expect("authorize fs");
@@ -212,7 +212,7 @@ fn fs_write_traversal_to_a_protected_global_path_is_refused_at_registration() {
     let mut installed = record(&global_root, "traversal");
     installed.grants = vec!["fs".to_string()];
     store
-        .with_transaction(|tx| tx.upsert_plugin(&installed))
+        .write(|tx| tx.plugin().put(&installed))
         .expect("record the install");
     record_authorized_grants(&global_root, "traversal", true, &["fs".to_string()])
         .expect("authorize fs");

@@ -39,7 +39,12 @@ impl OrbitRuntime {
     ) -> Result<Vec<ToolNameRewrite>, OrbitError> {
         let global_root = self.global_root();
         let mut rewrites = Vec::new();
-        for mut installed in self.stores().plugins().list_plugins()? {
+        for mut installed in self
+            .stores()
+            .host_store()
+            .read()
+            .and_then(|snapshot| snapshot.plugin().list())?
+        {
             if crate::runtime::plugin::grants::verify_install_path(&global_root, &installed)
                 .is_err()
             {
@@ -63,7 +68,9 @@ impl OrbitRuntime {
                     &installed.manifest_digest,
                 ) {
                     installed.manifest_digest = file_digest;
-                    self.stores().plugins().upsert_plugin(&installed)?;
+                    self.stores()
+                        .host_store()
+                        .write(|tx| tx.plugin().put(&installed))?;
                     rewrites.push(rewrite);
                     continue;
                 }
@@ -111,10 +118,15 @@ impl OrbitRuntime {
                     "injected plugin digest write failure".to_string(),
                 ))
             } else {
-                self.stores().plugins().upsert_plugin(&installed)
+                self.stores()
+                    .host_store()
+                    .write(|tx| tx.plugin().put(&installed))
             };
             #[cfg(not(any(test, feature = "test-support")))]
-            let recorded = self.stores().plugins().upsert_plugin(&installed);
+            let recorded = self
+                .stores()
+                .host_store()
+                .write(|tx| tx.plugin().put(&installed));
             if let Err(error) = recorded {
                 // The manifest and the stored digest have to stay a pair.
                 // Restoring the consented bytes leaves the plugin loadable
@@ -158,7 +170,12 @@ impl OrbitRuntime {
             consented_digest,
             error,
         } = record;
-        let recorded = match self.stores().plugins().get_plugin(plugin_name) {
+        let recorded = match self
+            .stores()
+            .host_store()
+            .read()
+            .and_then(|snapshot| snapshot.plugin().get(plugin_name))
+        {
             Ok(plugin) => plugin.map(|plugin| plugin.manifest_digest),
             Err(read_error) => {
                 tracing::warn!(

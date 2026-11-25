@@ -29,15 +29,15 @@ pub struct SkillDoctorResult {
 
 impl OrbitRuntime {
     pub fn list_file_skills(&self) -> Result<Vec<LoadedSkill>, OrbitError> {
-        self.skill_catalog().list()
+        self.skill_catalog().read().skill().list()
     }
 
     pub fn show_file_skill(&self, name: &str) -> Result<LoadedSkill, OrbitError> {
-        self.skill_catalog().load(name)
+        self.skill_catalog().read().skill().get(name)
     }
 
     pub fn doctor_file_skills(&self) -> Result<Vec<SkillDoctorResult>, OrbitError> {
-        let rows = self.skill_catalog().doctor()?;
+        let rows = self.skill_catalog().read().skill().doctor()?;
         let mut results: Vec<SkillDoctorResult> = rows
             .into_iter()
             .map(|row| SkillDoctorResult {

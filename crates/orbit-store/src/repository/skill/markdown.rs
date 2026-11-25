@@ -6,7 +6,7 @@ use std::path::Path;
 use orbit_common::OrbitError;
 use serde::Deserialize;
 
-use super::types::SkillSections;
+use crate::contracts::SkillSections;
 use crate::fs::yaml::parse_yaml_with;
 
 const PURPOSE_SECTION: &str = "Purpose";

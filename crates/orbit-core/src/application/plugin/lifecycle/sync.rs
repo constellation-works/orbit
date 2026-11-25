@@ -107,7 +107,11 @@ pub fn sync_plugins(
     // must keep that visible rather than report the host row as `Active`.
     let mut unsatisfied = std::collections::HashSet::new();
     for pin in &pins.plugins {
-        let installed = runtime.stores().plugins().get_plugin(&pin.name)?;
+        let installed = runtime
+            .stores()
+            .host_store()
+            .read()
+            .and_then(|snapshot| snapshot.plugin().get(&pin.name))?;
         let drift = installed
             .as_ref()
             .and_then(|installed| build_pin_drift(pin, installed));
@@ -332,8 +336,9 @@ pub fn sync_plugins(
                         // check as an existing one before anything enables it.
                         let drift = runtime
                             .stores()
-                            .plugins()
-                            .get_plugin(&pin.name)?
+                            .host_store()
+                            .read()
+                            .and_then(|snapshot| snapshot.plugin().get(&pin.name))?
                             .and_then(|installed| build_pin_drift(pin, &installed));
                         if let Some(drift) = drift {
                             unsatisfied.insert(pin.name.clone());
@@ -437,7 +442,12 @@ pub fn sync_plugins(
     // host row and workspace config, using the loader's eligibility decision
     // rather than the success of seeding or a pre-toggle enable summary.
     for outcome in &mut outcomes {
-        let Some(installed) = runtime.stores().plugins().get_plugin(&outcome.name)? else {
+        let Some(installed) = runtime
+            .stores()
+            .host_store()
+            .read()
+            .and_then(|snapshot| snapshot.plugin().get(&outcome.name))?
+        else {
             continue;
         };
         let (mut status, diagnostic) = sync_effective_status(runtime, &installed)?;

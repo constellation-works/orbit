@@ -40,13 +40,13 @@ fn rejects_traversal_executor_name_without_external_write() {
     let store = global_executor_def_store(dir.path().join("executors"));
 
     let err = store
-        .upsert_executor_def(&baseline_def("../x"))
+        .write(|tx| tx.executor_def().put(&baseline_def("../x")))
         .expect_err("traversal name must fail");
     assert!(matches!(err, OrbitError::InvalidInput(_)));
     assert!(!dir.path().join("x.yaml").exists());
 
     let err = store
-        .get_executor_def("../x")
+        .read().executor_def().get("../x")
         .expect_err("traversal lookup must fail");
     assert!(matches!(err, OrbitError::InvalidInput(_)));
 }
@@ -68,7 +68,7 @@ fn rejects_traversal_executor_metadata_name_when_loading() {
 
     let store = global_executor_def_store(executors_dir);
     let err = store
-        .list_executor_defs()
+        .read().executor_def().list()
         .expect_err("traversal metadata name must fail");
     assert!(matches!(err, OrbitError::InvalidInput(_)));
     assert!(!dir.path().join("x.yaml").exists());
@@ -85,13 +85,13 @@ fn omitted_host_os_is_not_serialized_and_a_declared_set_round_trips() {
     let dir = tempdir().expect("tempdir");
     let store = global_executor_def_store(dir.path().join("executors"));
     store
-        .upsert_executor_def(&baseline_def("codex"))
+        .write(|tx| tx.executor_def().put(&baseline_def("codex")))
         .expect("unrestricted executor");
     let yaml = std::fs::read_to_string(dir.path().join("executors/codex.yaml")).expect("yaml");
     assert!(!yaml.contains("host_os"), "omission stays omitted: {yaml}");
     assert!(
         store
-            .get_executor_def("codex")
+            .read().executor_def().get("codex")
             .expect("get")
             .expect("codex")
             .host_os
@@ -100,10 +100,10 @@ fn omitted_host_os_is_not_serialized_and_a_declared_set_round_trips() {
 
     let mut muse = baseline_def("muse");
     muse.host_os = Some(BTreeSet::from([HostOs::Macos]));
-    store.upsert_executor_def(&muse).expect("macos executor");
+    store.write(|tx| tx.executor_def().put(&muse)).expect("macos executor");
     assert_eq!(
         store
-            .get_executor_def("muse")
+            .read().executor_def().get("muse")
             .expect("get")
             .expect("muse")
             .host_os,
@@ -135,7 +135,7 @@ fn empty_or_unknown_host_os_is_refused_at_load_and_names_the_asset() {
         )
         .expect("seed");
         let error = global_executor_def_store(executors)
-            .list_executor_defs()
+            .read().executor_def().list()
             .expect_err("bad host_os must fail the load");
         let message = error.to_string();
         assert!(message.contains(&path.display().to_string()), "{message}");

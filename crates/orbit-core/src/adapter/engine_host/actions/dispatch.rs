@@ -486,8 +486,9 @@ fn plugin_tool_call(
         let plugin = binding.provenance.name.clone();
         let installed = runtime
             .stores()
-            .plugins()
-            .get_plugin(&plugin)
+            .host_store()
+            .read()
+            .and_then(|snapshot| snapshot.plugin().get(&plugin))
             .map_err(|error| format!("cannot read the plugin record: {error}"));
         let programs = installed.and_then(|installed| {
             crate::runtime::plugin::grants::call_time_program_grants(

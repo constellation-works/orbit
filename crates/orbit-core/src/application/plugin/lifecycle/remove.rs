@@ -161,7 +161,10 @@ pub fn remove_plugin(
     }
 
     runtime.with_mutation(|| {
-        runtime.stores().plugins().delete_plugin(name)?;
+        runtime
+            .stores()
+            .host_store()
+            .write(|tx| tx.plugin().delete(name))?;
         Ok((
             (),
             OrbitEvent::PluginRemoved {

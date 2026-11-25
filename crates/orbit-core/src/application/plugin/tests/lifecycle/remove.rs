@@ -62,8 +62,9 @@ fn a_failed_tree_delete_keeps_the_row_for_a_retry_that_finishes_it() {
             fixture
                 .runtime
                 .stores()
-                .plugins()
-                .get_plugin("demo")
+                .host_store()
+                .read()
+                .and_then(|snapshot| snapshot.plugin().get("demo"))
                 .expect("read the row")
                 .is_some(),
             "a failed tree delete must leave the row for a retry"
@@ -88,8 +89,9 @@ fn a_failed_tree_delete_keeps_the_row_for_a_retry_that_finishes_it() {
             fixture
                 .runtime
                 .stores()
-                .plugins()
-                .get_plugin("demo")
+                .host_store()
+                .read()
+                .and_then(|snapshot| snapshot.plugin().get("demo"))
                 .expect("read the row")
                 .is_none(),
             "the retry must delete the row last"

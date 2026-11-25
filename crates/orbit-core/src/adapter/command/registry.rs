@@ -43,7 +43,11 @@ pub struct DoctorResult {
 impl OrbitRuntime {
     /// Return runtime-enabled MCP definitions with their workspace scope.
     pub fn list_mcp_tool_definitions(&self) -> Result<Vec<McpToolDefinition>, OrbitError> {
-        let stored_tools = self.stores().tools().list_tools()?;
+        let stored_tools = self
+            .stores()
+            .host_store()
+            .read()
+            .and_then(|snapshot| snapshot.tool().list())?;
         let mut definitions = self
             .tool_registry()
             .mcp_tool_definitions()
@@ -74,7 +78,11 @@ impl OrbitRuntime {
         } else {
             self.tool_registry().schemas()
         };
-        let stored_tools = self.stores().tools().list_tools()?;
+        let stored_tools = self
+            .stores()
+            .host_store()
+            .read()
+            .and_then(|snapshot| snapshot.tool().list())?;
 
         let mut tools: Vec<ToolInfo> = registry_schemas
             .into_iter()
@@ -119,7 +127,11 @@ impl OrbitRuntime {
             // Disabled external tools are deliberately absent from the executable
             // registry. Their persisted catalog entry remains inspectable, using
             // the same active/enabled distinction as list_all_tools.
-            if let Some(stored) = self.stores().tools().get_tool(name)?
+            if let Some(stored) = self
+                .stores()
+                .host_store()
+                .read()
+                .and_then(|snapshot| snapshot.tool().get(name))?
                 && !stored.builtin
                 && !stored.enabled
                 && !stored.path.is_empty()
@@ -129,7 +141,11 @@ impl OrbitRuntime {
             return Err(OrbitError::not_found(NotFoundKind::Tool, name.to_string()));
         };
 
-        let stored = self.stores().tools().get_tool(name)?;
+        let stored = self
+            .stores()
+            .host_store()
+            .read()
+            .and_then(|snapshot| snapshot.tool().get(name))?;
         let enabled = stored.is_none_or(|s| s.enabled);
         let active = self.tool_registry().is_active(&schema.name);
 
@@ -177,7 +193,9 @@ impl OrbitRuntime {
         };
 
         self.with_mutation(|| {
-            self.stores().tools().insert_tool(&tool)?;
+            self.stores()
+                .host_store()
+                .write(|tx| tx.tool().put(&tool))?;
             Ok((
                 (),
                 OrbitEvent::ToolAdded {
@@ -197,7 +215,10 @@ impl OrbitRuntime {
         }
 
         self.with_mutation(|| {
-            let deleted = self.stores().tools().delete_tool(name)?;
+            let deleted = self
+                .stores()
+                .host_store()
+                .write(|tx| tx.tool().delete(name))?;
             if !deleted {
                 return Err(OrbitError::not_found(NotFoundKind::Tool, name.to_string()));
             }
@@ -234,7 +255,11 @@ impl OrbitRuntime {
             }
 
             if !tool.builtin
-                && let Some(stored) = self.stores().tools().get_tool(&tool.name)?
+                && let Some(stored) = self
+                    .stores()
+                    .host_store()
+                    .read()
+                    .and_then(|snapshot| snapshot.tool().get(&tool.name))?
                 && !stored.path.is_empty()
             {
                 let path = std::path::Path::new(&stored.path);
@@ -323,7 +348,11 @@ impl OrbitRuntime {
 
     fn set_tool_enabled_state(&self, name: &str, enabled: bool) -> Result<(), OrbitError> {
         self.tool_registry().refuse_family_operation_name(name)?;
-        let existing = self.stores().tools().get_tool(name)?;
+        let existing = self
+            .stores()
+            .host_store()
+            .read()
+            .and_then(|snapshot| snapshot.tool().get(name))?;
         let registered = self.tool_registry().has(name);
         let disabled_external = existing
             .as_ref()
@@ -362,7 +391,9 @@ impl OrbitRuntime {
                 parameters: schema.parameters.clone(),
             };
             return self.with_mutation(|| {
-                self.stores().tools().insert_tool(&tool)?;
+                self.stores()
+                    .host_store()
+                    .write(|tx| tx.tool().put(&tool))?;
                 let event = if enabled {
                     OrbitEvent::ToolEnabled {
                         name: name.to_string(),
@@ -377,7 +408,9 @@ impl OrbitRuntime {
         }
 
         self.with_mutation(|| {
-            self.stores().tools().set_tool_enabled(name, enabled)?;
+            self.stores()
+                .host_store()
+                .write(|tx| tx.tool().set_enabled(name, enabled))?;
             let event = if enabled {
                 OrbitEvent::ToolEnabled {
                     name: name.to_string(),

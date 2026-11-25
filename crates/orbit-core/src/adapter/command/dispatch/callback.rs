@@ -7,7 +7,6 @@ use std::path::Path;
 
 use orbit_common::{Env, OrbitError};
 use orbit_store::Store;
-use orbit_store::contracts::PluginStoreBackend;
 use orbit_tools::ProcSpawnBudget;
 use orbit_tools::plugin::{
     CallbackResolution, PluginCallbackIdentity, resolve_plugin_callback_session,
@@ -43,13 +42,17 @@ pub(crate) struct ActivityToolPolicyEnv {
 /// installed refuses everything.
 pub(super) fn enforce_plugin_callback_allowlist(
     global_root: &Path,
-    plugins: &dyn PluginStoreBackend,
+    plugins: &Store,
     name: &str,
 ) -> Result<(), OrbitError> {
     apply_callback_resolution(
         resolve_plugin_callback_session(global_root)?,
         global_root,
-        |plugin| plugins.get_plugin(plugin),
+        |plugin| {
+            plugins
+                .read()
+                .and_then(|snapshot| snapshot.plugin().get(plugin))
+        },
         name,
     )
 }
@@ -70,7 +73,11 @@ pub(super) fn enforce_plugin_callback_allowlist_from_root(
     apply_callback_resolution(
         resolution,
         global_root,
-        |plugin| store.get_plugin(plugin),
+        |plugin| {
+            store
+                .read()
+                .and_then(|snapshot| snapshot.plugin().get(plugin))
+        },
         name,
     )
 }
