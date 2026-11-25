@@ -2,7 +2,7 @@
 title: Crew Memory — Overview
 owner: claude
 created_date: 2026-11-08
-updated_date: 2026-11-21
+updated_date: 2026-11-25
 last_validated: 2026-11-10
 status: Accepted
 stage: parked
@@ -19,7 +19,7 @@ related_artifacts: [ORB-23105, ORB-23113, ORB-23114, ORB-23115, ORB-23116, ORB-1
 
 # Crew Memory — Overview
 
-Crew memory lets each model learn from its own recent work. Each model has a **memory space**: a few short Markdown files. M1 builds the store and operator write surfaces; M2 adds an experiment overlay that captures the drawn model's memory, and delivers it in the agent envelope only for a live memory arm. Shadow arms capture what they would have delivered for the readout. M3's weekly, score-blind **dreaming run** rewrites model spaces, and M4 let operators review **global-memory** proposals. The memory-on versus memory-off [experiment](../experiments/1_scope.md) ended on 2026-11-21 with no difference, so the feature is **parked**: its operator- and agent-facing surface is removed and the machinery is kept dormant, switched on only while an experiment has a memory arm, so that variants can still be tested ([decision](./4_decisions.md#keep-the-machinery-dormant-after-the-no-difference-readout)).
+The retained crew-memory machinery is dormant. It stores per-model **memory spaces** and one shared global memory in the owner store. It has no operator-facing surface or independent switch: writing, delivery, capture and dreaming run only while a running experiment has a `memory` arm. M1 added the store and write rules; M2 added the experiment overlay, which captures memory and delivers it in the agent envelope for live arms while shadow arms capture what they would have delivered for readout. M3 added the weekly, score-blind **dreaming run** and its run-bound tool admission; M4 added global-note proposals and their four-week expiry. The memory-on versus memory-off [experiment](../experiments/1_scope.md) ended on 2026-11-21 with no difference, so the feature is **parked**: its operator CLI, config key, dashboard tab and proposal-review surface were removed, while the run-bound operations remain for dreaming and memory-arm runs ([decision](./4_decisions.md#keep-the-machinery-dormant-after-the-no-difference-readout)).
 
 ## 1. Motivation
 
@@ -35,10 +35,10 @@ Orbit has tried durable learnings before. The native project-learning subsystem 
 
 - **Memory key.** The model a space belongs to, as the scorecards report it (`row model`). Crews of one model share a space: `opus` and `opus@medium` read and write the same memory. This matches how the weekly ranking pools crews by model.
 - **Memory space.** A model's memory: up to 8 Markdown files, together at most 6 KiB. The model decides what the files hold and how they are organised. Orbit enforces only the caps, the provenance rule and the content lint.
-- **Global memory.** One space shared by every model in the workspace, at most 3 KiB. Operators list proposals with evidence and display-only similarity, accept (optionally editing the whole global text) or reject with a reason. Open proposals expire after four weeks.
+- **Global memory.** One space shared by every model in the workspace, at most 3 KiB. Before the proposal-review surface was removed, operators could list proposals with evidence and display-only similarity, accept (optionally editing the whole global text) or reject with a reason. The retained store keeps proposals, and open ones expire after four weeks.
 - **Revision.** Every write replaces a space's files whole and appends an immutable revision, which records the files' content digest, the evidence task ids the write cited, the run that wrote it and the time.
 - **Dreaming run (M3).** A weekly auto-task per memory key, run by a crew of that model. It receives a frozen, score-blind **evidence pack** and writes its own space, plus at most two promotion proposals.
-- **Promotion proposal (M4).** A dreaming run's request to add a note to the global memory, with supporting evidence and the proposing model, for an operator to accept or reject.
+- **Promotion proposal (M4).** A dreaming run's request to add a note to the global memory, with supporting evidence and the proposing model. Before the proposal-review surface was removed, operators could accept or reject it; the retained proposal records still expire after four weeks.
 - **Memory overlay (built in M2).** An experiment overlay surface. In arms that enable it, the owner resolves the drawn crew's space plus the global memory at admission. It renders them as a framed data block and captures the block, with its digest, in the admission receipt. A live arm delivers the block; a shadow arm records what it would have delivered.
 
 ## 3. At a Glance
