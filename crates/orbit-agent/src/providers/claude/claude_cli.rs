@@ -101,7 +101,10 @@ impl ClaudeCliTransport {
             args.push("--effort".to_string());
             args.push(effort.to_string());
         }
-        if let Some(conversation_ref) = conversation_ref.map(str::trim).filter(|s| !s.is_empty()) {
+        if let Some(conversation_ref) = conversation_ref
+            .map(str::trim)
+            .filter(|trimmed| !trimmed.is_empty())
+        {
             args.push("--resume".to_string());
             args.push(conversation_ref.to_string());
         }

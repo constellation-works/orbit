@@ -61,6 +61,7 @@ harness = false
 await_holding_lock = "deny"
 dbg_macro = "deny"
 expect_used = "warn"
+min_ident_chars = "warn"
 print_stderr = "warn"
 print_stdout = "warn"
 unwrap_used = "warn"

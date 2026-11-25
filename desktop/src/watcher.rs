@@ -492,7 +492,7 @@ impl Watcher {
             drains: sum_optional(
                 reads
                     .iter()
-                    .map(|read| read.drains.as_ref().map(|d| d.count)),
+                    .map(|read| read.drains.as_ref().map(|drain_counts| drain_counts.count)),
             ),
             failed: sum_optional(
                 reads

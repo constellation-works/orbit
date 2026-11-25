@@ -241,7 +241,7 @@ fn run_until_shutdown(shell: &dyn Shell, sidecar: &Arc<Sidecar>, control: &Recei
 fn backoff(failures: u32) -> Duration {
     match failures {
         0 => Duration::from_secs(1),
-        n => Duration::from_secs(1u64 << n.min(5)).min(MAX_BACKOFF),
+        retries => Duration::from_secs(1u64 << retries.min(5)).min(MAX_BACKOFF),
     }
 }
 

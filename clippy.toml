@@ -22,3 +22,8 @@ disallowed-methods = [
 await-holding-invalid-types = [
     { path = "orbit_common::fs::file_lock::FileLockGuard", reason = "release the advisory file lock before awaiting" },
 ]
+
+# min_ident_chars (STD-12 R2/R14): no one-letter binding is exempt; generic type
+# parameters and lifetimes are outside the lint. The desktop workspace enables
+# the lint; the main workspace enables it once its remaining bindings are renamed.
+allowed-idents-below-min-chars = []

@@ -610,7 +610,9 @@ fn remote_drain_and_hold_transitions_are_scoped_by_host_and_capped() {
     dashboard.readiness(
         "api/on/remote%20host",
         "workspace-a",
-        (0..4).map(|i| held_task(&format!("private-{i}"))).collect(),
+        (0..4)
+            .map(|index| held_task(&format!("private-{index}")))
+            .collect(),
     );
     let notes = dashboard.poll(&mut watcher);
     assert_eq!(

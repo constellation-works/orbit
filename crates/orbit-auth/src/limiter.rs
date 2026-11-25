@@ -177,7 +177,7 @@ impl KeyedLimiter {
             && state
                 .budgets
                 .get(limit)
-                .is_none_or(|b| now.saturating_duration_since(b.started) >= b.period)
+                .is_none_or(|budget| now.saturating_duration_since(budget.started) >= budget.period)
         {
             state.budgets.remove(limit);
             return Ok(());
@@ -221,8 +221,8 @@ impl KeyedLimiter {
         let state = self.keys.entry(key).or_default();
         let acquire = |counter: &AtomicUsize, max| {
             counter
-                .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |n| {
-                    (n < max).then(|| n + 1)
+                .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |count| {
+                    (count < max).then(|| count + 1)
                 })
                 .is_ok()
         };
@@ -272,20 +272,20 @@ impl KeyedLimiter {
         });
         let started = budget.map_or_else(
             || {
-                state.audits.get(limit).map_or(now, |a| {
-                    if now.saturating_duration_since(a.started) < a.period {
-                        a.started
+                state.audits.get(limit).map_or(now, |window| {
+                    if now.saturating_duration_since(window.started) < window.period {
+                        window.started
                     } else {
                         now
                     }
                 })
             },
-            |b| b.started,
+            |budget| budget.started,
         );
         if state
             .audits
             .get(limit)
-            .is_some_and(|a| a.started != started)
+            .is_some_and(|window| window.started != started)
             && self.completed.len() < self.capacity * MAX_SLOTS_PER_KEY
             && let Some(old) = state.audits.remove(limit)
             && old.dirty
@@ -325,7 +325,7 @@ impl KeyedLimiter {
         self.urgent_flush = false;
         let mut rows = std::mem::take(&mut self.completed);
         for state in self.keys.values_mut() {
-            for audit in state.audits.values_mut().filter(|a| a.dirty) {
+            for audit in state.audits.values_mut().filter(|audit| audit.dirty) {
                 rows.push(audit.row.clone());
                 audit.dirty = false;
             }
@@ -340,11 +340,11 @@ impl KeyedLimiter {
                 || state
                     .budgets
                     .values()
-                    .any(|b| now.saturating_duration_since(b.started) < b.period)
+                    .any(|budget| now.saturating_duration_since(budget.started) < budget.period)
                 || state
                     .audits
                     .values()
-                    .any(|a| now.saturating_duration_since(a.started) < a.period)
+                    .any(|window| now.saturating_duration_since(window.started) < window.period)
         });
         rows
     }
