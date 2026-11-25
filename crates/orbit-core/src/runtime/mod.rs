@@ -25,7 +25,9 @@ mod tests;
 static CAPTURED_ENV: OnceLock<Env> = OnceLock::new();
 
 /// Keep the environment `main` captured with [`Env::capture`] for
-/// composition. The first value stays: a later call changes nothing.
+/// composition. The first snapshot is retained. A repeated call fails a
+/// debug assertion in debug builds; in release builds, it returns without
+/// replacing that snapshot.
 pub fn install_captured_env(env: Env) {
     let installed = CAPTURED_ENV.set(env).is_ok();
     debug_assert!(
