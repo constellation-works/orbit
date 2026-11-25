@@ -136,25 +136,7 @@ pub fn execute_job_with_resume(
     // from state that recorded it never dispatches it again, and replays a
     // recorded decision other than `resume`.
     let mut final_recovery = FinalRecoveryBudget::from_resume(resume);
-    // After a final-recovery `resume`, every step from the resume point runs
-    // again, whatever the seeding checkpoint recorded.
-    let replay_from = resume
-        .filter(|state| {
-            crate::executor::automation::vcs::PUBLISHED_REPLAY_STEPS
-                .iter()
-                .all(|(id, _)| {
-                    state.pipeline.get(*id).is_some_and(|output| {
-                        state.step_outputs.iter().any(|(index, recorded)| {
-                            recorded == output
-                                && state.step_states.get(index) == Some(&JobRunState::Success)
-                        })
-                    })
-                })
-        })
-        .and_then(|state| state.final_recovery.as_ref())
-        .filter(|checkpoint| checkpoint.repair_commit.is_none())
-        .and_then(|checkpoint| checkpoint.resume_context.as_ref())
-        .and_then(|context| job.steps.iter().position(|step| step.id == context.step_id));
+    let replay_from = resume.and_then(|state| final_recovery_replay_from(job, state));
     let mut rerunning = false;
     let mut resume_context = resume
         .and_then(|state| state.final_recovery.as_ref())
