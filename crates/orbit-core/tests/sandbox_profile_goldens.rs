@@ -331,6 +331,7 @@ fn bwrap_lines(sandbox: &ResolvedSandbox, cwd: &Path) -> Vec<String> {
         files: mask.files.clone(),
     });
     let plan = compile_linux_bwrap_argv_with_authority(
+        &orbit_common::Env::capture(),
         &sandbox.fs_profile,
         "/usr/bin/true",
         &[],

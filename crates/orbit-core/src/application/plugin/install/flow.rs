@@ -421,9 +421,10 @@ fn install_plugin_inner(
         .get_plugin(&name)?
         .unwrap_or(record);
     let projection = if enabled {
-        let config = orbit_config::ResolvedConfig::load(&orbit_config::ConfigRoots::global_only(
-            &global_root,
-        ))?;
+        let config = orbit_config::ResolvedConfig::load(
+            runtime.execution_env_policy().process_env(),
+            &orbit_config::ConfigRoots::global_only(&global_root),
+        )?;
         Some(projected_status(
             &stored,
             &plugin,

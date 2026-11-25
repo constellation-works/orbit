@@ -74,6 +74,7 @@ pub(super) fn consent(
 #[test]
 fn application_consent_preserves_agent_boundaries_and_audits_refusals() {
     let backend_available = orbit_exec::macos_sandbox_test_guard(
+        &orbit_common::Env::capture(),
         "application_consent_preserves_agent_boundaries_and_audits_refusals",
     );
     let fixture = Fixture::new();
@@ -223,8 +224,10 @@ fn application_consent_refuses_stale_manifest_and_expiry() {
 
 #[test]
 fn application_consent_bounds_host_completion_callbacks() {
-    if !orbit_exec::macos_sandbox_test_guard("application_consent_bounds_host_completion_callbacks")
-    {
+    if !orbit_exec::macos_sandbox_test_guard(
+        &orbit_common::Env::capture(),
+        "application_consent_bounds_host_completion_callbacks",
+    ) {
         return;
     }
     let fixture = Fixture::new();
@@ -313,6 +316,7 @@ spec:
 #[test]
 fn unbound_plugin_completion_callbacks_run_in_the_backend_sandbox() {
     if !orbit_exec::macos_sandbox_test_guard(
+        &orbit_common::Env::capture(),
         "unbound_plugin_completion_callbacks_run_in_the_backend_sandbox",
     ) {
         return;
@@ -327,6 +331,7 @@ fn unbound_plugin_completion_callbacks_run_in_the_backend_sandbox() {
 #[test]
 fn plugin_callbacks_run_for_an_orbit_root_nested_under_a_marked_ancestor() {
     if !orbit_exec::macos_sandbox_test_guard(
+        &orbit_common::Env::capture(),
         "plugin_callbacks_run_for_an_orbit_root_nested_under_a_marked_ancestor",
     ) {
         return;

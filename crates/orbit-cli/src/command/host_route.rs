@@ -241,6 +241,7 @@ fn attention_preflight(
     // is a way around that: it is refused here as the local read refuses a
     // bare call. A shell waits only through a grant its session minted.
     let caller = CallerCapabilities::resolve(&CallerEnvelope::from_process_env(
+        &orbit_core::composition::composition_env(),
         &ToolSessionContext::default(),
     ));
     if !caller.grants().contains(&McpCapability::Agent)
@@ -494,7 +495,10 @@ fn set_workspace_value(cli: &mut Cli, selector: String) -> Result<(), OrbitError
 /// resolves as one and declares no agent. An agent never propagates
 /// `--operator`; the destination's own rules decide the rest.
 pub(crate) fn caller_authority() -> McpSessionAuthority {
-    let envelope = CallerEnvelope::from_process_env(&ToolSessionContext::default());
+    let envelope = CallerEnvelope::from_process_env(
+        &orbit_core::composition::composition_env(),
+        &ToolSessionContext::default(),
+    );
     let caller = CallerCapabilities::resolve(&envelope);
     if caller.grants().contains(&McpCapability::Operator) && !envelope.agent_declared {
         McpSessionAuthority::Operator

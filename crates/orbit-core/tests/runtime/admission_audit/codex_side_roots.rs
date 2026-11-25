@@ -156,6 +156,7 @@ fn linux_codex_side_roots_from_a_managed_checkout_reach_only_runtime_stores() {
         );
         prepare_linux_bwrap_write_grants(&resolved.fs_profile, cwd).expect("prepare grants");
         let plan = compile_linux_bwrap_argv(
+            &orbit_common::Env::capture(),
             &resolved.fs_profile,
             "/bin/true",
             &[],
@@ -237,6 +238,7 @@ fn linux_reviewer_profile_grants_only_the_lexical_index_in_workspace_state() {
     prepare_linux_bwrap_write_grants(&resolved.fs_profile, &fixture.worktree)
         .expect("prepare grants");
     let plan = compile_linux_bwrap_argv(
+        &orbit_common::Env::capture(),
         &resolved.fs_profile,
         "/bin/true",
         &[],
@@ -295,8 +297,12 @@ fn macos_codex_side_roots_from_a_managed_checkout_reach_only_runtime_stores() {
             .resolve_executor_sandbox("codex", None, Some(cwd))
             .expect("resolve Codex sandbox")
             .expect("descriptor");
-        let sbpl = orbit_exec::compile_macos_sandbox_profile(&resolved.fs_profile, "codex")
-            .expect("compile Codex profile");
+        let sbpl = orbit_exec::compile_macos_sandbox_profile(
+            &orbit_common::Env::capture(),
+            &resolved.fs_profile,
+            "codex",
+        )
+        .expect("compile Codex profile");
         for path in &fixture.protected {
             let physical = orbit_exec::physical_with_missing_tail(path);
             assert!(
@@ -344,8 +350,12 @@ fn macos_reviewer_profile_grants_only_the_lexical_index_in_workspace_state() {
         .resolve_executor_sandbox("claude", Some("reviewer"), Some(&fixture.worktree))
         .expect("resolve reviewer sandbox")
         .expect("descriptor");
-    let sbpl = orbit_exec::compile_macos_sandbox_profile(&resolved.fs_profile, "claude")
-        .expect("compile reviewer profile");
+    let sbpl = orbit_exec::compile_macos_sandbox_profile(
+        &orbit_common::Env::capture(),
+        &resolved.fs_profile,
+        "claude",
+    )
+    .expect("compile reviewer profile");
 
     for suffix in ["", "-wal", "-shm"] {
         let path = std::path::PathBuf::from(format!("{}{suffix}", semantic_db.display()));

@@ -36,7 +36,7 @@ pub fn set_clock_cadence(
         &orbit_bin,
         ClockPlatform::current(),
         &NativeClockCommandRunner,
-        &home_dir()?,
+        &home_dir(&orbit_common::Env::capture())?,
     )
 }
 

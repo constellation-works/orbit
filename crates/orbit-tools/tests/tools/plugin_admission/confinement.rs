@@ -232,8 +232,12 @@ fn assert_store_carved_out(
         "{launch}: nothing inside {what} is granted back"
     );
 
-    let mut sbpl = orbit_exec::compile_macos_sandbox_profile(&profile.macos_fs_rules(), "plugin")
-        .expect("compile SBPL");
+    let mut sbpl = orbit_exec::compile_macos_sandbox_profile(
+        &orbit_common::Env::capture(),
+        &profile.macos_fs_rules(),
+        "plugin",
+    )
+    .expect("compile SBPL");
     orbit_exec::append_macos_read_boundary(
         &mut sbpl,
         &profile.read_denies,

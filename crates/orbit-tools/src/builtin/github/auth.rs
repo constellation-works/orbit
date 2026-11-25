@@ -48,7 +48,7 @@ super::gh_tool! {
         let req = build_exec_request(&input)?;
         // A missing `gh`, or a sandbox that denies executing it, surfaces here
         // as a spawn error. That is a capability answer, not a tool fault.
-        let result = match orbit_exec::run_process(&req, &orbit_exec::NoSandbox) {
+        let result = match orbit_exec::run_process(&orbit_common::Env::capture(), &req, &orbit_exec::NoSandbox) {
             Ok(result) => result,
             Err(error) => {
                 return Ok(unavailable(redact_all(&error.to_string())));

@@ -434,8 +434,12 @@ fn assert_muse_state_roots_are_granted(harness: &Harness, roots: [&Path; 2]) {
 
     #[cfg(target_os = "macos")]
     {
-        let profile = orbit_exec::compile_macos_sandbox_profile(&sandbox.fs_profile, "muse")
-            .expect("compile Muse sandbox profile");
+        let profile = orbit_exec::compile_macos_sandbox_profile(
+            &orbit_common::Env::capture(),
+            &sandbox.fs_profile,
+            "muse",
+        )
+        .expect("compile Muse sandbox profile");
         for root in roots {
             assert!(
                 profile.contains(&root.display().to_string()),

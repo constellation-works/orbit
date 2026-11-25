@@ -611,6 +611,7 @@ fn a_confined_callback_to_another_local_workspace_is_refused_before_store_open()
         serde_json::json!({"workspace": "child-fixture-ws"}).to_string();
     let descriptor = fixture.credential.as_raw_fd();
     let same = orbit_exec::spawn_under_linux_landlock_boundary(
+        &orbit_common::Env::capture(),
         &request,
         &boundary,
         &[orbit_exec::InheritedFd {
@@ -635,6 +636,7 @@ fn a_confined_callback_to_another_local_workspace_is_refused_before_store_open()
     for cwd in [&fixture.base.work, &other] {
         request.current_dir = Some(cwd.to_string_lossy().into_owned());
         let child = orbit_exec::spawn_under_linux_landlock_boundary(
+            &orbit_common::Env::capture(),
             &request,
             &boundary,
             &[orbit_exec::InheritedFd {

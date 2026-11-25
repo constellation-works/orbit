@@ -59,8 +59,10 @@ fn load_workspace(body: &str) -> (ResolvedConfig, String) {
         .with_writer(Capture(buffer.clone()))
         .with_ansi(false)
         .finish();
-    let config = tracing::subscriber::with_default(subscriber, || ResolvedConfig::load(&roots))
-        .expect("config loads");
+    let config = tracing::subscriber::with_default(subscriber, || {
+        ResolvedConfig::load(&orbit_common::Env::capture(), &roots)
+    })
+    .expect("config loads");
     let logs = String::from_utf8(buffer.lock().expect("capture").clone()).expect("utf-8 logs");
     (config, logs)
 }

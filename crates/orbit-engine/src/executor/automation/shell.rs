@@ -181,6 +181,7 @@ fn execute_local_shell<H: RuntimeHost + Sync + ?Sized>(
     // non-interactive, and a child left reading an open-but-silent stdin would
     // only ever end at the deadline.
     let outcome = spawn_owned_supervised_cancellable(
+        &orbit_common::Env::capture(),
         || Ok(spawned.child),
         Some(timeout_ms),
         Some(Vec::new()),

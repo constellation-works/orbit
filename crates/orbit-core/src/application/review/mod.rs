@@ -153,7 +153,9 @@ pub(crate) fn reset_review(
 ) -> Result<serde_json::Value, OrbitError> {
     use orbit_common::protocol::tool_input::required_string;
     use orbit_store::contracts::ReviewResetRequest;
-    if orbit_common::governance::authorization::agent_context_declared() {
+    if orbit_common::governance::authorization::agent_context_declared(
+        runtime.execution_env_policy().process_env(),
+    ) {
         return Err(OrbitError::CapabilityDenied(
             "managed agents cannot reset review budgets".into(),
         ));

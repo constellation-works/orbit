@@ -198,7 +198,7 @@ impl ClockUnitInspection {
 
 /// Inspect the installed clock unit on this host against the running binary.
 pub fn inspect_clock_unit() -> Result<ClockUnitInspection, OrbitError> {
-    let home = orbit_common::fs::path::home_dir()?;
+    let home = orbit_common::fs::path::home_dir(&orbit_common::Env::capture())?;
     let running = RunningBinary::current()?;
     Ok(inspect_clock_unit_at(
         &home,

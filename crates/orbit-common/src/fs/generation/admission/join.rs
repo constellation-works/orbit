@@ -136,6 +136,7 @@ impl GenerationGuard {
         let recorded = read_generation(&mut generation.file)?;
         let Some(envelope) = read_compat(root, &recorded) else {
             return Self::join_legacy(
+                quiesce,
                 root,
                 admission,
                 generation,
@@ -198,6 +199,7 @@ impl GenerationGuard {
     /// record is empty or owned by `executable-generation-v1` processes,
     /// which never yield, so a mismatch refuses at once instead of waiting.
     fn join_legacy<F>(
+        bound: Duration,
         root: &Path,
         admission: Record,
         generation: Record,
@@ -238,6 +240,7 @@ impl GenerationGuard {
             ));
         }
         GenerationUpdate {
+            bound,
             root: validated_generation_root(root)?,
             admission,
             generation,
@@ -298,6 +301,7 @@ impl GenerationGuard {
             if let Some(held) = held {
                 if FileExt::try_lock_exclusive(&generation.file).is_ok() {
                     let pinned = GenerationUpdate {
+                        bound,
                         root: validated_generation_root(root)?,
                         admission: held,
                         generation,

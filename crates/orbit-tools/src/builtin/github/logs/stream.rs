@@ -56,30 +56,35 @@ pub(super) fn stream_log_source(
     let deadline = crate::github_quota::gh_request_deadline(request, std::time::Instant::now());
     let limit_error =
         format!("{label} exceeded the 8 MiB source read limit; evidence is incomplete");
-    let (result, read) = run_process_streaming_stdout(request, &NoSandbox, move |mut stdout| {
-        use std::io::Read;
+    let (result, read) = run_process_streaming_stdout(
+        &orbit_common::Env::capture(),
+        request,
+        &NoSandbox,
+        move |mut stdout| {
+            use std::io::Read;
 
-        let mut collector = log_collector(bounds, shape, selection);
-        let mut source = Vec::new();
-        let mut chunk = [0_u8; 4096];
-        let mut source_bytes = 0usize;
-        loop {
-            let read = stdout.read(&mut chunk).map_err(|error| {
-                OrbitError::Execution(format!("failed reading gh log stream: {error}"))
-            })?;
-            if read == 0 {
-                return Ok((collector.finish(), source));
+            let mut collector = log_collector(bounds, shape, selection);
+            let mut source = Vec::new();
+            let mut chunk = [0_u8; 4096];
+            let mut source_bytes = 0usize;
+            loop {
+                let read = stdout.read(&mut chunk).map_err(|error| {
+                    OrbitError::Execution(format!("failed reading gh log stream: {error}"))
+                })?;
+                if read == 0 {
+                    return Ok((collector.finish(), source));
+                }
+                source_bytes += read;
+                if source_bytes > super::super::MAX_CHECKOUT_LOG_SCAN_BYTES {
+                    return Err(OrbitError::Execution(limit_error));
+                }
+                collector.push(&chunk[..read]);
+                if keep_source {
+                    source.extend_from_slice(&chunk[..read]);
+                }
             }
-            source_bytes += read;
-            if source_bytes > super::super::MAX_CHECKOUT_LOG_SCAN_BYTES {
-                return Err(OrbitError::Execution(limit_error));
-            }
-            collector.push(&chunk[..read]);
-            if keep_source {
-                source.extend_from_slice(&chunk[..read]);
-            }
-        }
-    })?;
+        },
+    )?;
     crate::github_quota::observe_gh_result_by_deadline(request, &result, deadline);
     // The supervisor's verdict, not the stderr note it appends, says the read
     // was killed; callers bounding the read by a deadline match this variant.
@@ -227,7 +232,7 @@ fn read_api_json(
 ) -> Option<Value> {
     let request = guard(&request).ok()?;
     let deadline = crate::github_quota::gh_request_deadline(&request, std::time::Instant::now());
-    let result = run_process(&request, &NoSandbox).ok()?;
+    let result = run_process(&orbit_common::Env::capture(), &request, &NoSandbox).ok()?;
     crate::github_quota::observe_gh_result_by_deadline(&request, &result, deadline);
     if !result.success {
         return None;

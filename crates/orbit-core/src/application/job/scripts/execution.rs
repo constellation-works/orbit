@@ -183,26 +183,29 @@ pub(super) fn run_in_scratch(plan: RunPlan<'_>) -> Result<ScriptStepRan, Refusal
         .min(grant.limits.timeout_max_seconds)
         .max(1);
 
-    let run = orbit_exec::run_script_sandboxed(ScriptSandboxRequest {
-        sandbox: ScriptSandboxSpec {
-            cwd,
-            cwd_writable,
-            scratch,
-            readable: &readable,
-            writable: &grant.write_roots,
-            masked,
-            home: home.as_deref(),
-            inputs,
-            network,
+    let run = orbit_exec::run_script_sandboxed(
+        &orbit_common::Env::capture(),
+        ScriptSandboxRequest {
+            sandbox: ScriptSandboxSpec {
+                cwd,
+                cwd_writable,
+                scratch,
+                readable: &readable,
+                writable: &grant.write_roots,
+                masked,
+                home: home.as_deref(),
+                inputs,
+                network,
+            },
+            argv: &argv,
+            env: &env,
+            launcher,
+            launcher_env,
+            stdin,
+            timeout: Duration::from_secs(timeout_seconds),
+            scratch_cap_bytes: grant.limits.scratch_max_bytes,
         },
-        argv: &argv,
-        env: &env,
-        launcher,
-        launcher_env,
-        stdin,
-        timeout: Duration::from_secs(timeout_seconds),
-        scratch_cap_bytes: grant.limits.scratch_max_bytes,
-    })
+    )
     .map_err(|error| {
         refuse(
             script_refusal::SANDBOX_UNAVAILABLE,
@@ -252,7 +255,11 @@ pub(super) fn run_in_scratch(plan: RunPlan<'_>) -> Result<ScriptStepRan, Refusal
 /// whose environment is exactly [`script_env`]; the wrapper clears its
 /// environment and sets only that inside the sandbox.
 pub(super) fn script_launcher_env() -> Vec<(String, String)> {
-    orbit_common::security::child_env::allowlisted_child_env(&[], &USER_BUS_LOCATOR_ENV_VARS)
+    orbit_common::security::child_env::allowlisted_child_env(
+        &orbit_common::Env::capture(),
+        &[],
+        &USER_BUS_LOCATOR_ENV_VARS,
+    )
 }
 
 /// Snapshot-driven form of [`script_launcher_env`], so a test states the
@@ -260,6 +267,7 @@ pub(super) fn script_launcher_env() -> Vec<(String, String)> {
 #[cfg(test)]
 pub(crate) fn script_launcher_env_from(parent: &[(String, String)]) -> Vec<(String, String)> {
     orbit_common::security::child_env::allowlisted_child_env_from(
+        &orbit_common::Env::capture(),
         parent,
         &[],
         &USER_BUS_LOCATOR_ENV_VARS,

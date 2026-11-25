@@ -12,8 +12,8 @@ use serde_json::{Value as JsonValue, json};
 
 use super::super::allowed::{PERCENT, each_of, format, integers, integers_from, one_of};
 use super::super::{
-    CODEX_APPROVAL_POLICIES, CONSTELLATION_DEFAULT_PROVIDER_ENV, ConfigAllowedValues,
-    ConfigKeyDescriptor, ConfigKeyTier, ConfigSection, DEFAULT_WORKFLOW_BASE_BRANCH,
+    CODEX_APPROVAL_POLICIES, ConfigAllowedValues, ConfigKeyDescriptor, ConfigKeyTier,
+    ConfigSection, DEFAULT_WORKFLOW_BASE_BRANCH,
 };
 use super::resolve;
 use super::resolve::{
@@ -110,27 +110,27 @@ macro_rules! define_config_settings {
             }
 
             pub(crate) fn admit(
+                env_default: Option<&str>,
                 document: &toml::Value,
                 config_path: &Path,
                 crews: &BTreeMap<String, Crew>,
             ) -> Result<Self, OrbitError> {
-                let env_default = std::env::var(CONSTELLATION_DEFAULT_PROVIDER_ENV).ok();
-                Self::admit_with_env(document, config_path, crews, env_default.as_deref(), true)
+                Self::admit_with_env(document, config_path, crews, env_default, true)
             }
 
             /// A file view validates explicit references without requiring a
             /// runtime default-crew selection from this single layer.
             pub(crate) fn admit_scoped(
+                env_default: Option<&str>,
                 document: &toml::Value,
                 config_path: &Path,
                 crews: &BTreeMap<String, Crew>,
             ) -> Result<Self, OrbitError> {
-                let env_default = std::env::var(CONSTELLATION_DEFAULT_PROVIDER_ENV).ok();
                 Self::admit_internal(
                     document,
                     config_path,
                     crews,
-                    env_default.as_deref(),
+                    env_default,
                     false,
                     false,
                     None,
@@ -160,17 +160,17 @@ macro_rules! define_config_settings {
             /// Admit a merged layer using the global resource-throttle memory
             /// high-water mark for the host-wide auto-concurrency check.
             pub(crate) fn admit_with_global_memory_high(
+                env_default: Option<&str>,
                 document: &toml::Value,
                 config_path: &Path,
                 crews: &BTreeMap<String, Crew>,
                 global_memory_high_percent: u8,
             ) -> Result<Self, OrbitError> {
-                let env_default = std::env::var(CONSTELLATION_DEFAULT_PROVIDER_ENV).ok();
                 Self::admit_internal(
                     document,
                     config_path,
                     crews,
-                    env_default.as_deref(),
+                    env_default,
                     true,
                     true,
                     Some(global_memory_high_percent),
@@ -182,16 +182,16 @@ macro_rules! define_config_settings {
             /// table is refused separately, so there is no host-wide memory
             /// threshold in this scoped view to compare against.
             pub(crate) fn admit_workspace(
+                env_default: Option<&str>,
                 document: &toml::Value,
                 config_path: &Path,
                 crews: &BTreeMap<String, Crew>,
             ) -> Result<Self, OrbitError> {
-                let env_default = std::env::var(CONSTELLATION_DEFAULT_PROVIDER_ENV).ok();
                 Self::admit_internal(
                     document,
                     config_path,
                     crews,
-                    env_default.as_deref(),
+                    env_default,
                     true,
                     false,
                     None,

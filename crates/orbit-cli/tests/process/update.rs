@@ -338,7 +338,8 @@ fn update_and_preflight_admit_against_the_same_overridden_root(executable: &Path
     initialize_root(&repo, &home, mirror.path(), &scratch, "scratch");
 
     let digest = executable_generation(executable).expect("installed digest");
-    let _client = GenerationGuard::acquire(&scratch, &digest).expect("live pin on override");
+    let _client = GenerationGuard::acquire(&orbit_common::Env::capture(), &scratch, &digest)
+        .expect("live pin on override");
     let before = fs::read(executable).expect("installed bytes");
     let scratch_arg = scratch.to_string_lossy();
 
@@ -472,7 +473,8 @@ fn a_live_host_global_pin_refuses_an_overridden_root_update_in_either_spelling(e
     );
 
     let digest = executable_generation(executable).expect("installed digest");
-    let _client = GenerationGuard::acquire(&host_global, &digest).expect("live host-global pin");
+    let _client = GenerationGuard::acquire(&orbit_common::Env::capture(), &host_global, &digest)
+        .expect("live host-global pin");
     let before = fs::read(executable).expect("installed bytes");
 
     // Request the installed version: the update downloads nothing and goes

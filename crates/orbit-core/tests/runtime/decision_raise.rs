@@ -207,6 +207,7 @@ fn managed_raise_keeps_shared_root_read_only() -> crate::scenarios::Outcome {
         })
         .collect();
     let mut plan = orbit_exec::compile_linux_bwrap_argv_with_authority(
+        &orbit_common::Env::capture(),
         &resolved.fs_profile,
         binary.to_str().unwrap(),
         &[
@@ -259,6 +260,7 @@ fn managed_raise_keeps_shared_root_read_only() -> crate::scenarios::Outcome {
             ..Default::default()
         };
         orbit_exec::spawn_under_linux_landlock_boundary(
+            &orbit_common::Env::capture(),
             &orbit_exec::ExecRequest {
                 program: binary.display().to_string(),
                 args: vec![
@@ -277,7 +279,9 @@ fn managed_raise_keeps_shared_root_read_only() -> crate::scenarios::Outcome {
         )
         .expect("Landlock must enforce the resolved runtime write roots")
     };
-    let outcome = orbit_exec::supervise_child(child, Some(60_000), None).unwrap();
+    let outcome =
+        orbit_exec::supervise_child(&orbit_common::Env::capture(), child, Some(60_000), None)
+            .unwrap();
     assert!(!outcome.timed_out, "sandboxed raise timed out");
     assert_eq!(outcome.result.exit_code, Some(0), "{:?}", outcome.result);
     if let Some(guard) = guard {

@@ -28,8 +28,11 @@ effort = "bogus"
     );
     ignored_crew_write_config(workspace.path(), "[decision_channel]\nenabled = true\n");
 
-    let config = ResolvedConfig::load(&ConfigRoots::new(global.path(), workspace.path()))
-        .expect("layered config with an ignored effort loads");
+    let config = ResolvedConfig::load(
+        &orbit_common::Env::capture(),
+        &ConfigRoots::new(global.path(), workspace.path()),
+    )
+    .expect("layered config with an ignored effort loads");
 
     assert_eq!(config.ignored_crew_properties.len(), 1);
     let ignored = config
@@ -72,8 +75,11 @@ effort = "bogus"
 "#,
     );
 
-    let config = ResolvedConfig::load(&ConfigRoots::new(global.path(), workspace.path()))
-        .expect("layered config with an ignored effort loads");
+    let config = ResolvedConfig::load(
+        &orbit_common::Env::capture(),
+        &ConfigRoots::new(global.path(), workspace.path()),
+    )
+    .expect("layered config with an ignored effort loads");
 
     assert_eq!(config.ignored_crew_properties.len(), 1);
     let ignored = config

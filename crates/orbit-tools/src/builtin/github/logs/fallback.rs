@@ -206,7 +206,7 @@ fn fallback_jobs(
             })?;
             let deadline =
                 crate::github_quota::gh_request_deadline(&request, std::time::Instant::now());
-            let result = run_process(&request, &NoSandbox)
+            let result = run_process(&orbit_common::Env::capture(), &request, &NoSandbox)
                 .map_err(|error| format!("gh run view could not run: {error}"))?;
             crate::github_quota::observe_gh_result_by_deadline(&request, &result, deadline);
             check_read_result(&result, "gh run view").map_err(|error| FallbackGap {

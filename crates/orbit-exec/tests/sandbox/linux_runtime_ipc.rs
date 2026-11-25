@@ -126,8 +126,15 @@ print('runtime sockets hidden; control connected; descendant and manager query r
         runtime.display().to_string(),
         control.display().to_string(),
     ];
-    let plan = compile_linux_bwrap_argv(&profile, "/usr/bin/python3", &args, Some(&root), false)
-        .expect("runtime mask plan");
+    let plan = compile_linux_bwrap_argv(
+        &orbit_common::Env::capture(),
+        &profile,
+        "/usr/bin/python3",
+        &args,
+        Some(&root),
+        false,
+    )
+    .expect("runtime mask plan");
     assert!(
         plan.args
             .windows(2)
@@ -152,7 +159,14 @@ print('runtime sockets hidden; control connected; descendant and manager query r
         };
         assert!(
             matches!(
-                compile_linux_bwrap_argv(&granted, "/bin/true", &[], None, false),
+                compile_linux_bwrap_argv(
+                    &orbit_common::Env::capture(),
+                    &granted,
+                    "/bin/true",
+                    &[],
+                    None,
+                    false
+                ),
                 Err(OrbitError::PolicyDenied(_))
             ),
             "a policy grant cannot reopen runtime sockets"
@@ -164,6 +178,7 @@ print('runtime sockets hidden; control connected; descendant and manager query r
     assert!(
         matches!(
             compile_linux_bwrap_argv_with_authority(
+                &orbit_common::Env::capture(),
                 &profile,
                 "/bin/true",
                 &[],

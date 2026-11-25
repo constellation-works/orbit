@@ -76,6 +76,7 @@ pub(super) fn try_audit_argv_for_dispatch(
         Some(sb) if sb.kind == ExecutorSandboxKind::LinuxBwrap => {
             // The audited plan carries the same mask the launcher mounts.
             let plan = compile_linux_bwrap_argv_with_authority(
+                &orbit_common::Env::capture(),
                 &sb.fs_profile,
                 program,
                 args,
@@ -155,7 +156,7 @@ pub(super) fn apply_provider_runtime_arg_fixups(
 /// works in non-sandboxed runs, and the sandbox failure mode is what the
 /// caller is opting into.
 fn rewrite_claude_debug_file_path(static_args: &mut [String]) {
-    let Some(state_dir) = claude_state_dir_from_env() else {
+    let Some(state_dir) = claude_state_dir_from_env(&orbit_common::Env::capture()) else {
         return;
     };
     rewrite_debug_file_value(static_args, &state_dir);

@@ -1784,10 +1784,10 @@ fn effective_review(fixture: &WorkCheckout) -> (Value, Value) {
 }
 /// The review host rules a resolved load gives effect to, with the layer that set them.
 fn effective_host_evidence(fixture: &WorkCheckout) -> (OperationLayerSource, Vec<String>) {
-    let config = ResolvedConfig::load(&ConfigRoots::new(
-        fixture.home.join(".orbit"),
-        fixture.work.join(".orbit"),
-    ))
+    let config = ResolvedConfig::load(
+        &orbit_common::Env::capture(),
+        &ConfigRoots::new(fixture.home.join(".orbit"), fixture.work.join(".orbit")),
+    )
     .expect("resolved config");
     let rules = config.operation.review_host_evidence;
     (

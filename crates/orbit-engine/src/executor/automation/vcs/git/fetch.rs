@@ -70,7 +70,7 @@ pub(crate) fn fetch_remote_base_within(
             || fetch_remote_base_locked(repo_root, &branch, hold_limit.min(remaining)),
         );
     }
-    with_git_fetch_lock(repo_root, || {
+    with_git_fetch_lock(&orbit_common::Env::capture(), repo_root, || {
         fetch_remote_base_locked(repo_root, &branch, hold_limit)
     })
 }
@@ -308,7 +308,7 @@ fn worktree_setup_fetch_limits() -> (Duration, Duration) {
 /// Fetch origin for pre-admission setup while retaining enough lock-timeout
 /// detail to tell an origin outage from ordinary lock contention.
 fn fetch_remote_base_for_worktree_setup(repo_root: &Path, branch: &str) -> Result<(), OrbitError> {
-    let common_dir = git_common_dir(repo_root)?;
+    let common_dir = git_common_dir(&orbit_common::Env::capture(), repo_root)?;
     let lock_target = git_fetch_lock_target(&common_dir);
     let (hold_limit, lock_wait) = worktree_setup_fetch_limits();
     let mut options = FileLockOptions::default();

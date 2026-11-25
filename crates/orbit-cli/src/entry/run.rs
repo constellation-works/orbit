@@ -18,11 +18,12 @@ use crate::root_check;
 pub(crate) fn run(env: orbit_common::Env) {
     // This is the production entry point for CLI, MCP, sweep clock, and the
     // dashboard (`orbit web serve`). Test harnesses never execute this main.
-    orbit_core::composition::install_captured_env(env);
+    orbit_core::composition::install_captured_env(env.clone());
     orbit_core::mark_process_as_pipeline_worker_binary();
     // Provider lines are retained for `run logs --follow`, while diagnostics
     // stay quiet on stderr. An explicit RUST_LOG still overrides both defaults.
     orbit_common::observability::logging::init_subscriber_with_file_filter(
+        &env,
         "warn",
         "warn,orbit_engine::activity_job::cli_runner::supervisor=info,orbit::mcp_config=info",
     );
@@ -30,7 +31,7 @@ pub(crate) fn run(env: orbit_common::Env) {
 
     let (mut cli, requested_format, legacy_json, header) = parse_cli();
     if command_rotates_jsonl_on_start(&cli.command) {
-        orbit_common::observability::logging::rotate_global_jsonl_best_effort();
+        orbit_common::observability::logging::rotate_global_jsonl_best_effort(&env);
     }
     // Resolved once per invocation, before dispatch, and passed to the one
     // renderer that consumes it. Nothing downstream re-derives these answers.
@@ -170,7 +171,7 @@ pub(crate) fn run(env: orbit_common::Env) {
         ) {
             Ok(guard) => {
                 if clock_tick
-                    && let Ok(digest) = orbit_common::fs::generation::process_generation()
+                    && let Ok(digest) = orbit_common::fs::generation::process_generation(&env)
                     && let Ok(Some(summary)) =
                         orbit_common::fs::generation::finish_clock_generation_hold(
                             &root,
@@ -187,7 +188,7 @@ pub(crate) fn run(env: orbit_common::Env) {
                     report_refused_clock_tick(&root, &error);
                 } else if clock_tick
                     && orbit_common::fs::generation::is_clock_generation_hold(&error)
-                    && let Ok(digest) = orbit_common::fs::generation::process_generation()
+                    && let Ok(digest) = orbit_common::fs::generation::process_generation(&env)
                     && orbit_common::fs::generation::record_clock_generation_hold(
                         &root,
                         digest,

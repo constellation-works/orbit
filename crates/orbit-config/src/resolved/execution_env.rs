@@ -1,9 +1,8 @@
 //! Codex execution settings and agent subprocess environment projection.
 
 use orbit_common::security::child_env::{
-    allowlisted_child_env, allowlisted_child_env_from, apply_crew_env_from, inherited_child_env,
-    inherited_child_env_from, login_auth_credential_names, unset_crew_env_from,
-    unset_pass_names_from,
+    allowlisted_child_env_from, apply_crew_env_from, inherited_child_env_from,
+    login_auth_credential_names, unset_crew_env_from, unset_pass_names_from,
 };
 use orbit_types::identity::CrewEnvVar;
 use std::sync::Arc;
@@ -54,6 +53,7 @@ impl CodexExecutionPolicy {
 /// `[execution.env]`.
 #[derive(Clone)]
 pub struct ExecutionEnvPolicy {
+    env: orbit_common::Env,
     /// Whether a child inherits the parent environment wholesale.
     ///
     /// `ConfigSnapshot::execution_env_inherit` is a derived invariant pinned to
@@ -70,7 +70,7 @@ pub struct ExecutionEnvPolicy {
     /// login. Their credential variables are not reported when unset.
     pub(crate) login_auth: Vec<String>,
     /// Immutable parent snapshot for a runtime supplied with credential defaults.
-    parent: Option<Arc<Vec<(String, String)>>>,
+    parent: Arc<Vec<(String, String)>>,
     /// The source variable names the configured crews' `[crews.<name>] env`
     /// entries read (a `file:` source is read from disk, not the environment),
     /// so runtime defaults (`clock.env`) and a detached worker's launch
@@ -85,31 +85,33 @@ impl std::fmt::Debug for ExecutionEnvPolicy {
             .field("inherit", &self.inherit)
             .field("pass", &self.pass)
             .field("login_auth", &self.login_auth)
-            .field("has_parent_snapshot", &self.parent.is_some())
             .field("crew_sources", &self.crew_sources)
             .finish()
     }
 }
 
-impl Default for ExecutionEnvPolicy {
-    fn default() -> Self {
+impl ExecutionEnvPolicy {
+    /// The default allowlist applied to the supplied parent environment.
+    pub fn new(env: &orbit_common::Env) -> Self {
         Self {
             inherit: false,
             pass: default_pass_list(),
             login_auth: Vec::new(),
-            parent: None,
+            parent: Arc::new(parent_vars(env)),
+            env: env.clone(),
             crew_sources: Vec::new(),
         }
     }
 }
 
 impl ExecutionEnvPolicy {
-    pub(super) fn from_snapshot(snapshot: &ConfigSnapshot) -> Self {
+    pub(super) fn from_snapshot(env: &orbit_common::Env, snapshot: &ConfigSnapshot) -> Self {
         Self {
             inherit: snapshot.execution_env_inherit,
             pass: snapshot.execution_env_pass.clone(),
             login_auth: snapshot.execution_env_login_auth.clone(),
-            parent: None,
+            parent: Arc::new(parent_vars(env)),
+            env: env.clone(),
             crew_sources: Vec::new(),
         }
     }
@@ -129,6 +131,11 @@ impl ExecutionEnvPolicy {
             }
         }
         self
+    }
+
+    /// The parent process snapshot before runtime-supplied child defaults.
+    pub fn process_env(&self) -> &orbit_common::Env {
+        &self.env
     }
 
     /// Whether the full process environment is inherited rather than
@@ -160,7 +167,7 @@ impl ExecutionEnvPolicy {
     /// those names as extras. The process environment is never changed.
     #[must_use]
     pub fn with_defaults(mut self, defaults: &[(String, String)]) -> Self {
-        let mut parent = std::env::vars().collect::<Vec<_>>();
+        let mut parent = parent_vars(&self.env);
         for (name, value) in defaults {
             if !(self.pass.contains(name) || self.crew_sources.contains(name))
                 || parent
@@ -172,7 +179,7 @@ impl ExecutionEnvPolicy {
             parent.retain(|(key, _)| key != name);
             parent.push((name.clone(), value.clone()));
         }
-        self.parent = Some(Arc::new(parent));
+        self.parent = Arc::new(parent);
         self
     }
 
@@ -187,15 +194,9 @@ impl ExecutionEnvPolicy {
     /// `allowlisted_child_env_from` refuses.
     pub fn agent_subprocess_env(&self, extras: &[&str]) -> Vec<(String, String)> {
         if self.inherit {
-            return match &self.parent {
-                Some(parent) => inherited_child_env_from(parent),
-                None => inherited_child_env(),
-            };
+            return inherited_child_env_from(&self.parent);
         }
-        if let Some(parent) = &self.parent {
-            return allowlisted_child_env_from(parent, &self.pass, extras);
-        }
-        allowlisted_child_env(&self.pass, extras)
+        allowlisted_child_env_from(&self.env, &self.parent, &self.pass, extras)
     }
 
     /// [`Self::agent_subprocess_env`] for an agent of a crew with
@@ -210,7 +211,7 @@ impl ExecutionEnvPolicy {
     ) -> Vec<(String, String)> {
         let mut env = self.agent_subprocess_env(extras);
         if !crew_env.is_empty() {
-            apply_crew_env_from(&mut env, &self.parent_env(), crew_env);
+            apply_crew_env_from(&self.env, &mut env, &self.parent, crew_env);
         }
         env
     }
@@ -222,7 +223,7 @@ impl ExecutionEnvPolicy {
         if crew_env.is_empty() {
             return Vec::new();
         }
-        unset_crew_env_from(&self.parent_env(), crew_env)
+        unset_crew_env_from(&self.env, &self.parent, crew_env)
     }
 
     /// The values the effective parent environment holds for the crews' `env`
@@ -232,17 +233,11 @@ impl ExecutionEnvPolicy {
         if self.crew_sources.is_empty() {
             return Vec::new();
         }
-        self.parent_env()
-            .into_iter()
+        self.parent
+            .iter()
             .filter(|(name, value)| self.crew_sources.contains(name) && !value.is_empty())
+            .cloned()
             .collect()
-    }
-
-    fn parent_env(&self) -> Vec<(String, String)> {
-        match &self.parent {
-            Some(parent) => parent.as_ref().clone(),
-            None => std::env::vars().collect(),
-        }
     }
 }
 
@@ -259,10 +254,7 @@ impl ExecutionEnvPolicy {
     /// `execution.env.login_auth` are not reported either. Empty when the
     /// policy inherits the whole environment.
     pub fn unset_pass_names(&self) -> Vec<String> {
-        if let Some(parent) = &self.parent {
-            return self.unset_pass_names_in(parent);
-        }
-        self.unset_pass_names_in(&std::env::vars().collect::<Vec<_>>())
+        self.unset_pass_names_in(&self.parent)
     }
 
     /// [`Self::unset_pass_names`] over an explicit parent environment.
@@ -294,6 +286,12 @@ impl ExecutionEnvPolicy {
             .iter()
             .any(|provider| login_auth_credential_names(provider).contains(&name))
     }
+}
+
+fn parent_vars(env: &orbit_common::Env) -> Vec<(String, String)> {
+    env.utf8_vars()
+        .map(|(name, value)| (name.to_owned(), value.to_owned()))
+        .collect()
 }
 
 fn default_pass_list() -> Vec<String> {

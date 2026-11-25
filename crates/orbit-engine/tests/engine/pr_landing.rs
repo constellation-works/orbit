@@ -2553,6 +2553,7 @@ fn validation_from_a_minimal_launcher_path_uses_the_login_shell_toolchain(sandbo
     let (fx, host) = fx_host(sandbox);
     let (launcher, shell, tools) = login_shell_toolchain(sandbox);
     host.resolve_validation_env(ValidationEnvironment::resolve(
+        &orbit_common::Env::capture(),
         launcher,
         &ValidationEnvPolicy::default(),
         &LoginShell::new(shell, Duration::from_secs(10)),

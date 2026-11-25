@@ -11,6 +11,7 @@ use std::process::Stdio;
 #[test]
 fn spawn_under_macos_sandbox_ignores_fake_sandbox_exec_on_path() {
     if !orbit_exec::macos_sandbox_test_guard(
+        &orbit_common::Env::capture(),
         "spawn_under_macos_sandbox_ignores_fake_sandbox_exec_on_path",
     ) {
         return;
@@ -78,6 +79,7 @@ fn spawn_under_macos_sandbox_ignores_fake_sandbox_exec_on_path() {
 #[test]
 fn spawn_under_macos_sandbox_gives_the_child_only_the_supplied_environment() {
     if !orbit_exec::macos_sandbox_test_guard(
+        &orbit_common::Env::capture(),
         "spawn_under_macos_sandbox_gives_the_child_only_the_supplied_environment",
     ) {
         return;
@@ -168,7 +170,10 @@ fn pty_probe_process() {
 #[cfg(target_os = "macos")]
 #[test]
 fn pty_allocation_is_allowed_under_compiled_profile() {
-    if !orbit_exec::macos_sandbox_test_guard("pty_allocation_is_allowed_under_compiled_profile") {
+    if !orbit_exec::macos_sandbox_test_guard(
+        &orbit_common::Env::capture(),
+        "pty_allocation_is_allowed_under_compiled_profile",
+    ) {
         return;
     }
     if super::audit_support::run_isolated(

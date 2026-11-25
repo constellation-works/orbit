@@ -203,7 +203,7 @@ impl OrbitRuntime {
     /// of the doubt and only a remote set that cannot reach a forge is refused.
     fn missing_forge_remote(&self) -> Option<String> {
         let repo_root = &self.paths().repo_root;
-        let listed = match run_git(repo_root, &["remote", "-v"]) {
+        let listed = match run_git(&orbit_common::Env::capture(), repo_root, &["remote", "-v"]) {
             Ok(output) if output.success => output.stdout,
             Ok(output) => {
                 tracing::warn!(

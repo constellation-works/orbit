@@ -5,7 +5,6 @@
 //! clock's launch agent or the binary it runs), not to the terminal that
 //! granted.
 
-use orbit_common::env_vars;
 use std::ffi::OsStr;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
@@ -34,6 +33,7 @@ impl ScriptRootAccess {
 /// in it. Returns the physical path. The error names the path and, on
 /// macOS, the privacy pane in which to allow the process that runs the job.
 pub fn probe_script_root(
+    env: &orbit_common::Env,
     root: &Path,
     access: ScriptRootAccess,
     home: Option<&OsStr>,
@@ -47,9 +47,9 @@ pub fn probe_script_root(
     }
     let physical = root.canonicalize().map_err(|error| match error.kind() {
         ErrorKind::NotFound => format!("granted {label} {} does not exist", root.display()),
-        _ => denied(label, root, &error),
+        _ => denied(env, label, root, &error),
     })?;
-    if let Some(credential) = super::credential_denies(home)
+    if let Some(credential) = super::credential_denies(env, home)
         .into_iter()
         .map(|(path, _)| path.canonicalize().unwrap_or(path))
         .find(|credential| physical.starts_with(credential))
@@ -61,12 +61,14 @@ pub fn probe_script_root(
             credential.display()
         ));
     }
-    let metadata = std::fs::metadata(&physical).map_err(|error| denied(label, root, &error))?;
+    let metadata =
+        std::fs::metadata(&physical).map_err(|error| denied(env, label, root, &error))?;
     if metadata.is_dir() {
-        let handle = open_root_probe(&physical).map_err(|error| denied(label, root, &error))?;
+        let handle =
+            open_root_probe(&physical).map_err(|error| denied(env, label, root, &error))?;
         let opened = handle
             .metadata()
-            .map_err(|error| denied(label, root, &error))?;
+            .map_err(|error| denied(env, label, root, &error))?;
         if !opened.is_dir() {
             return Err(format!(
                 "granted {label} {} is not a directory",
@@ -76,7 +78,7 @@ pub fn probe_script_root(
         drop(handle);
         std::fs::read_dir(&physical)
             .and_then(|mut entries| entries.next().transpose().map(|_| ()))
-            .map_err(|error| denied(label, root, &error))?;
+            .map_err(|error| denied(env, label, root, &error))?;
     } else if access == ScriptRootAccess::Write {
         return Err(format!(
             "granted {label} {} is not a directory",
@@ -87,10 +89,11 @@ pub fn probe_script_root(
         // file replaced by a FIFO (or another non-regular kind) between
         // the two must be refused from the opened handle, and the
         // non-blocking open must not wait for a FIFO writer.
-        let handle = open_root_probe(&physical).map_err(|error| denied(label, root, &error))?;
+        let handle =
+            open_root_probe(&physical).map_err(|error| denied(env, label, root, &error))?;
         let opened = handle
             .metadata()
-            .map_err(|error| denied(label, root, &error))?;
+            .map_err(|error| denied(env, label, root, &error))?;
         if opened.is_dir() {
             return Err(format!(
                 "granted {label} {} changed type while it was probed",
@@ -105,7 +108,7 @@ pub fn probe_script_root(
         }
     }
     if access == ScriptRootAccess::Write {
-        write_probe(&physical).map_err(|error| denied(label, root, &error))?;
+        write_probe(&physical).map_err(|error| denied(env, label, root, &error))?;
     }
     Ok(physical)
 }
@@ -146,7 +149,7 @@ fn write_probe(dir: &Path) -> std::io::Result<()> {
     std::fs::remove_file(&probe)
 }
 
-fn denied(label: &str, root: &Path, error: &std::io::Error) -> String {
+fn denied(env: &orbit_common::Env, label: &str, root: &Path, error: &std::io::Error) -> String {
     let mut message = format!(
         "granted {label} {} is not accessible to this process: {error}",
         root.display()
@@ -156,15 +159,15 @@ fn denied(label: &str, root: &Path, error: &std::io::Error) -> String {
             "; if macOS privacy permissions block it, allow the process that runs the job (the \
              Orbit clock's launch agent, or the `orbit` binary it runs) in System Settings > \
              Privacy & Security > {}",
-            privacy_pane(root)
+            privacy_pane(env, root)
         ));
     }
     message
 }
 
 /// The System Settings privacy pane that governs `root` for a process.
-fn privacy_pane(root: &Path) -> &'static str {
-    let home = std::env::var_os(env_vars::HOME).map(PathBuf::from);
+fn privacy_pane(env: &orbit_common::Env, root: &Path) -> &'static str {
+    let home = env.home().map(PathBuf::from);
     let under_home = |folder: &str| {
         home.as_ref()
             .is_some_and(|home| root.starts_with(home.join(folder)))

@@ -43,7 +43,7 @@ fn agent_feed_keeps_lines_while_its_writer_is_stalled() {
 #[ignore = "re-executed by agent_feed_keeps_lines_while_its_writer_is_stalled"]
 fn agent_feed_keeps_lines_while_its_writer_is_stalled_child() {
     let lines = logging::JSONL_QUEUE_LINES + 2;
-    logging::init_subscriber_with_file_filter("error", "info");
+    logging::init_subscriber_with_file_filter(&orbit_common::Env::capture(), "error", "info");
 
     let completed = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let attempted = Arc::new(std::sync::atomic::AtomicUsize::new(0));
@@ -113,7 +113,8 @@ fn agent_feed_keeps_lines_while_its_writer_is_stalled_child() {
     logging::shutdown_jsonl_writer();
     drop(release);
 
-    let operational = logging::global_jsonl_log_path().expect("operational log path");
+    let operational = logging::global_jsonl_log_path(&orbit_common::Env::capture())
+        .expect("operational log path");
     let agent = logging::agent_jsonl_log_path(&operational).expect("agent log path");
     let raw = std::fs::read_to_string(&agent).unwrap_or_default();
     let mut seqs = Vec::new();

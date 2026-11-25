@@ -30,8 +30,10 @@ const CHILD_DEADLINE: Duration = Duration::from_secs(30);
 
 #[test]
 fn sandbox_exec_build_budget_self_test_passes_under_worker_profile() {
-    if !macos_sandbox_test_guard("sandbox_exec_build_budget_self_test_passes_under_worker_profile")
-    {
+    if !macos_sandbox_test_guard(
+        &orbit_common::Env::capture(),
+        "sandbox_exec_build_budget_self_test_passes_under_worker_profile",
+    ) {
         return;
     }
     let root = tempfile::tempdir_in(env!("CARGO_TARGET_TMPDIR")).expect("fixture root");
@@ -44,7 +46,9 @@ fn sandbox_exec_build_budget_self_test_passes_under_worker_profile() {
         read: vec![format!("{}/**", checkout.display())],
         modify: vec![format!("{}/**", root.path().display())],
     };
-    let profile_text = compile_macos_sandbox_profile(&profile, "codex").expect("compile");
+    let profile_text =
+        compile_macos_sandbox_profile(&orbit_common::Env::capture(), &profile, "codex")
+            .expect("compile");
     let env = [
         (
             "PATH".to_string(),
@@ -142,7 +146,7 @@ fn sandbox_exec_scheduling_changes_are_self_only_and_unprivileged() {
         );
         return;
     }
-    if !macos_sandbox_test_guard(TEST_NAME) {
+    if !macos_sandbox_test_guard(&orbit_common::Env::capture(), TEST_NAME) {
         return;
     }
     let root = tempfile::tempdir_in(env!("CARGO_TARGET_TMPDIR")).expect("fixture root");
@@ -151,7 +155,9 @@ fn sandbox_exec_scheduling_changes_are_self_only_and_unprivileged() {
         read: vec![format!("{}/**", root.path().display())],
         modify: vec![format!("{}/**", root.path().display())],
     };
-    let profile_text = compile_macos_sandbox_profile(&profile, "codex").expect("compile");
+    let profile_text =
+        compile_macos_sandbox_profile(&orbit_common::Env::capture(), &profile, "codex")
+            .expect("compile");
     let program = std::env::current_exe().expect("test binary");
     let env = [(PROBE_ENV.to_string(), std::process::id().to_string())];
     let start = unsafe { libc::getpriority(libc::PRIO_PROCESS, 0) };
@@ -231,6 +237,7 @@ pub(super) fn fixture_root_outside_profile_write_grants() -> tempfile::TempDir {
 #[test]
 fn sandbox_exec_denies_masked_trees_and_allows_only_the_granted_write_root() {
     if !macos_sandbox_test_guard(
+        &orbit_common::Env::capture(),
         "sandbox_exec_denies_masked_trees_and_allows_only_the_granted_write_root",
     ) {
         return;
@@ -256,7 +263,9 @@ fn sandbox_exec_denies_masked_trees_and_allows_only_the_granted_write_root() {
         read: vec![format!("{}/**", root.display())],
         modify: vec![format!("{}/**", write_root.display())],
     };
-    let mut profile_text = compile_macos_sandbox_profile(&profile, "codex").expect("compile");
+    let mut profile_text =
+        compile_macos_sandbox_profile(&orbit_common::Env::capture(), &profile, "codex")
+            .expect("compile");
     append_macos_subpath_mask(&mut profile_text, &[masked.clone(), secrets.clone()]);
 
     let script = r#"
@@ -332,6 +341,7 @@ fn sandbox_exec_denies_listing_and_connecting_to_ssh_control_sockets() {
     use std::os::unix::net::{UnixListener, UnixStream};
 
     if !macos_sandbox_test_guard(
+        &orbit_common::Env::capture(),
         "sandbox_exec_denies_listing_and_connecting_to_ssh_control_sockets",
     ) {
         return;
@@ -350,7 +360,9 @@ fn sandbox_exec_denies_listing_and_connecting_to_ssh_control_sockets() {
         read: vec![format!("{}/**", root.display())],
         modify: vec![format!("{}/**", write_root.display())],
     };
-    let mut profile_text = compile_macos_sandbox_profile(&profile, "codex").expect("compile");
+    let mut profile_text =
+        compile_macos_sandbox_profile(&orbit_common::Env::capture(), &profile, "codex")
+            .expect("compile");
     let binary = std::env::current_exe().expect("test binary");
     let args = [
         "--exact".to_string(),
@@ -428,7 +440,10 @@ fn ssh_socket_probe_process() {
 /// original absent-root deny dynamically, rather than silently dropping it.
 #[test]
 fn sandbox_exec_denies_absent_and_prepared_recovery_orbit_roots() {
-    if !macos_sandbox_test_guard("sandbox_exec_denies_absent_and_prepared_recovery_orbit_roots") {
+    if !macos_sandbox_test_guard(
+        &orbit_common::Env::capture(),
+        "sandbox_exec_denies_absent_and_prepared_recovery_orbit_roots",
+    ) {
         return;
     }
 
@@ -453,7 +468,9 @@ fn sandbox_exec_denies_absent_and_prepared_recovery_orbit_roots() {
                 format!("!{}/**/*.env", checkout.display()),
             ],
         };
-        let profile_text = compile_macos_sandbox_profile(&profile, "codex").expect("compile");
+        let profile_text =
+            compile_macos_sandbox_profile(&orbit_common::Env::capture(), &profile, "codex")
+                .expect("compile");
         let script = r#"
 set -eu
 deny() { if "$@"; then echo "unexpected write: $*" >&2; exit 91; fi; }
@@ -523,6 +540,7 @@ deny sh -c 'printf created > "$1/created.txt"' sh "$DENIED"
 #[test]
 fn sandbox_exec_keeps_existing_glob_deny_matches_inside_the_workspace() {
     if !macos_sandbox_test_guard(
+        &orbit_common::Env::capture(),
         "sandbox_exec_keeps_existing_glob_deny_matches_inside_the_workspace",
     ) {
         return;
@@ -549,7 +567,9 @@ fn sandbox_exec_keeps_existing_glob_deny_matches_inside_the_workspace() {
         read: vec![format!("{ws}/**"), format!("!{ws}/**/*.secret")],
         modify: vec![format!("{ws}/**"), format!("!{ws}/**/.env")],
     };
-    let profile_text = compile_macos_sandbox_profile(&profile, "codex").expect("compile");
+    let profile_text =
+        compile_macos_sandbox_profile(&orbit_common::Env::capture(), &profile, "codex")
+            .expect("compile");
 
     let script = r#"
 probe() { if (eval "$2") >/dev/null 2>&1; then echo "$1:allowed"; else echo "$1:denied"; fi; }
@@ -616,7 +636,10 @@ probe move-unmatched 'mv "$WS/plain" "$WS/plain-moved"'
 /// so other tests and concurrent runs cannot affect the no-file assertion.
 #[test]
 fn sandbox_exec_passes_profiles_inline_without_a_writable_cache() {
-    if !macos_sandbox_test_guard("sandbox_exec_passes_profiles_inline_without_a_writable_cache") {
+    if !macos_sandbox_test_guard(
+        &orbit_common::Env::capture(),
+        "sandbox_exec_passes_profiles_inline_without_a_writable_cache",
+    ) {
         return;
     }
     const PROBE: &str = "macos_sandbox::inline_profile_probe_process";
@@ -655,7 +678,9 @@ fn inline_profile_probe_process() {
         read: vec![],
         modify: vec![],
     };
-    let mut profile_text = compile_macos_sandbox_profile(&profile, "codex").expect("compile");
+    let mut profile_text =
+        compile_macos_sandbox_profile(&orbit_common::Env::capture(), &profile, "codex")
+            .expect("compile");
     append_macos_subpath_mask(&mut profile_text, std::slice::from_ref(&denied));
     let script = r#"
 set -eu

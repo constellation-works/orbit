@@ -11,7 +11,7 @@ use super::super::paths::{ADMISSION_LOCK, GENERATION_LOCK};
 use super::super::records::{Record, open};
 use super::super::refusal::{self, SWITCH_PENDING, switch_pending, upgrade_holds_admission};
 use super::super::registry::pending_switch;
-use super::super::{DEFAULT_QUIESCE_TIMEOUT, MAX_QUIESCE_TIMEOUT, QUIESCE_TIMEOUT_ENV};
+use super::super::{DEFAULT_QUIESCE_TIMEOUT, MAX_QUIESCE_TIMEOUT};
 use super::guard::Participant;
 use super::waiters::{self as admission_waiters, ExclusiveWaiter};
 use crate::{OrbitError, UpgradeAdmissionRefusalKind};
@@ -30,11 +30,11 @@ pub(in super::super) const PROBE_SETTLE: Duration = Duration::from_millis(20);
 const EXCLUSIVE_SETTLE: Duration = Duration::from_millis(250);
 
 /// The configured wait for a breaking upgrade, and for an updater waiting
-/// on short-lived participants (see [`QUIESCE_TIMEOUT_ENV`]), at most
+/// on short-lived participants (see [`super::super::QUIESCE_TIMEOUT_ENV`]), at most
 /// [`MAX_QUIESCE_TIMEOUT`].
-pub fn quiesce_bound() -> Duration {
-    std::env::var(QUIESCE_TIMEOUT_ENV)
-        .ok()
+pub fn quiesce_bound(env: &crate::Env) -> Duration {
+    env.orbit_upgrade_quiesce_secs()
+        .and_then(std::ffi::OsStr::to_str)
         .and_then(|value| value.trim().parse::<u64>().ok())
         .map_or(DEFAULT_QUIESCE_TIMEOUT, Duration::from_secs)
         .min(MAX_QUIESCE_TIMEOUT)

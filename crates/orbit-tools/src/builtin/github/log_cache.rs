@@ -201,7 +201,7 @@ impl LogCache {
     pub(crate) fn in_data_root() -> Option<Self> {
         let root = match std::env::var(env_vars::ORBIT_ROOT) {
             Ok(root) if !root.trim().is_empty() => PathBuf::from(root),
-            _ => orbit_common::fs::path::global_orbit_dir().ok()?,
+            _ => orbit_common::fs::path::global_orbit_dir(&orbit_common::Env::capture()).ok()?,
         };
         Some(Self::in_root(&root))
     }

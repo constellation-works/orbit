@@ -99,6 +99,7 @@ pub(crate) fn abi_version() -> i64 {
 }
 
 pub(super) fn spawn_restricted(
+    env: &orbit_common::Env,
     req: &ExecRequest,
     grants: &[LandlockPathGrant],
     scope: RulesetScope,
@@ -108,7 +109,7 @@ pub(super) fn spawn_restricted(
     for grant in grants {
         ruleset.add_path(grant)?;
     }
-    spawn_with_ruleset(req, ruleset, inherited_fds)
+    spawn_with_ruleset(env, req, ruleset, inherited_fds)
 }
 
 /// Register both `pre_exec` hooks and start the child.
@@ -116,6 +117,7 @@ pub(super) fn spawn_restricted(
 /// Split from [`spawn_restricted`] so the descriptor contract between the two
 /// hooks can be exercised against a ruleset whose number is known to collide.
 fn spawn_with_ruleset(
+    env: &orbit_common::Env,
     req: &ExecRequest,
     ruleset: Ruleset,
     inherited_fds: &[crate::process::InheritedFd],
@@ -130,6 +132,12 @@ fn spawn_with_ruleset(
     let ruleset = ruleset.clear_of_targets(inherited_fds)?;
 
     let mut command = crate::process::command(req);
+    if matches!(
+        req.environment_mode,
+        crate::runner::EnvironmentMode::Inherit
+    ) {
+        command.env_clear().envs(env.vars());
+    }
     // Before the ruleset, so a credential descriptor is in place whatever the
     // restriction does. `dup2` is not a filesystem access, so the order is a
     // readability choice rather than a requirement.

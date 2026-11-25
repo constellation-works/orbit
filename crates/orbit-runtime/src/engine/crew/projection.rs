@@ -156,7 +156,7 @@ impl RuntimeKernel {
             .collect::<Vec<_>>();
         let viewer_human_crew = match human_crews.as_slice() {
             [only] => Some(only.name.clone()),
-            _ => orbit_config::os_user_human_crew_name()
+            _ => orbit_config::os_user_human_crew_name(&orbit_common::Env::capture())
                 .filter(|name| human_crews.iter().any(|human| human.name == *name)),
         };
         ConfiguredCrewRegistryProjection {

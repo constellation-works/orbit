@@ -6,9 +6,12 @@ fn final_recovery_pool(body: &str) -> Result<Vec<String>, String> {
     let global = tempfile::tempdir().expect("global tempdir");
     let workspace = tempfile::tempdir().expect("workspace tempdir");
     default_crew_write_config(workspace.path(), body);
-    orbit_config::ResolvedConfig::load(&ConfigRoots::new(global.path(), workspace.path()))
-        .map(|config| config.snapshot.final_recovery_crews().to_vec())
-        .map_err(|error| error.to_string())
+    orbit_config::ResolvedConfig::load(
+        &orbit_common::Env::capture(),
+        &ConfigRoots::new(global.path(), workspace.path()),
+    )
+    .map(|config| config.snapshot.final_recovery_crews().to_vec())
+    .map_err(|error| error.to_string())
 }
 
 #[test]
@@ -89,9 +92,11 @@ fn user_authored_terra_crew_still_loads_and_resolves_in_complexity_pool() {
          [crews.terra]\nmodel = \"gpt-5.6-terra\"\nprovider = \"codex\"\n",
     );
 
-    let config =
-        orbit_config::ResolvedConfig::load(&ConfigRoots::new(global.path(), workspace.path()))
-            .expect("user-authored Terra crew remains an ordinary configured crew");
+    let config = orbit_config::ResolvedConfig::load(
+        &orbit_common::Env::capture(),
+        &ConfigRoots::new(global.path(), workspace.path()),
+    )
+    .expect("user-authored Terra crew remains an ordinary configured crew");
 
     assert_eq!(config.crews["terra"].assignment.model, "gpt-5.6-terra");
     assert_eq!(config.crews["terra"].assignment.provider, "codex");

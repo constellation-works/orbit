@@ -51,13 +51,16 @@ pub const SCRIPT_MACOS_PROFILE_GAPS: &str = "no memory or task limits (only RLIM
 /// the grant's roots and the cwd tree's Git directories, and refuses what
 /// the Linux profile refuses (a root or input overlapping protected state)
 /// plus any network.
-pub fn compile_macos_script_profile(spec: &ScriptSandboxSpec<'_>) -> Result<String, OrbitError> {
+pub fn compile_macos_script_profile(
+    env: &orbit_common::Env,
+    spec: &ScriptSandboxSpec<'_>,
+) -> Result<String, OrbitError> {
     if spec.network != ScriptSandboxNetwork::None {
         return Err(OrbitError::PolicyDenied(format!(
             "{NETWORK_REFUSED}; nothing was run"
         )));
     }
-    let writable_roots = admitted_profile_roots(spec)?;
+    let writable_roots = admitted_profile_roots(env, spec)?;
     let scratch = |name: &str| subpath(&spec.scratch.join(name));
     let git_dirs = super::script::cwd_git_dirs(spec.cwd);
 
@@ -131,7 +134,7 @@ pub fn compile_macos_script_profile(spec: &ScriptSandboxSpec<'_>) -> Result<Stri
     }
     profile.push_str(&format!("(deny file-write* {})\n", read_only.join(" ")));
 
-    push_credential_denies(&mut profile, spec.home);
+    push_credential_denies(env, &mut profile, spec.home);
     profile.push_str("(deny network*)\n");
     Ok(profile)
 }
@@ -168,10 +171,11 @@ pub(super) fn probe() -> Result<&'static str, String> {
 /// `sandbox-exec` reads it).
 #[cfg(target_os = "macos")]
 pub(super) fn script_sandbox_command(
+    env: &orbit_common::Env,
     request: &super::script::ScriptSandboxRequest<'_>,
 ) -> Result<std::process::Command, OrbitError> {
     let spec = &request.sandbox;
-    let profile = compile_macos_script_profile(spec)?;
+    let profile = compile_macos_script_profile(env, spec)?;
     super::script_macos_inputs::copy_script_inputs(request)?;
     let sandbox_exec = crate::sandbox_exec_path()
         .ok_or_else(|| OrbitError::PolicyDenied(crate::sandbox_exec_unavailable_message()))?;

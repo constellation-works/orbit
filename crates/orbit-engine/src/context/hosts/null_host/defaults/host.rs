@@ -641,7 +641,7 @@ pub trait NullRuntimeHost: Send + Sync {
         ))
     }
     fn agent_subprocess_environment(&self, required_env_vars: &[&str]) -> Vec<(String, String)> {
-        allowlisted_child_env(&[], required_env_vars)
+        allowlisted_child_env(&orbit_common::Env::capture(), &[], required_env_vars)
     }
     /// This host's own agent environment, overlaid with the crew's entries
     /// from the process environment.

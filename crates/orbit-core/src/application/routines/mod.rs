@@ -77,8 +77,10 @@ pub struct RoutineMachineIdentity {
 /// Open the config-resolved machine-local scheduler store for a mutating route.
 /// Creates and migrates it on first use.
 fn open_routine_store(global_root: &Path) -> Result<Arc<dyn RoutineStoreBackend>, OrbitError> {
-    let database =
-        orbit_config::resolved_audit_db_path(&orbit_config::ConfigRoots::global_only(global_root))?;
+    let database = orbit_config::resolved_audit_db_path(
+        &orbit_common::Env::capture(),
+        &orbit_config::ConfigRoots::global_only(global_root),
+    )?;
     orbit_store::compose::routine_store(&database)
 }
 
@@ -90,8 +92,10 @@ pub(crate) fn host_routine_breakers(
     std::collections::BTreeMap<String, orbit_store::contracts::RoutineBreakerRecord>,
     OrbitError,
 > {
-    let database =
-        orbit_config::resolved_audit_db_path(&orbit_config::ConfigRoots::global_only(global_root))?;
+    let database = orbit_config::resolved_audit_db_path(
+        &orbit_common::Env::capture(),
+        &orbit_config::ConfigRoots::global_only(global_root),
+    )?;
     if !database.exists() {
         return Ok(std::collections::BTreeMap::new());
     }
@@ -111,8 +115,10 @@ pub fn ensure_routine_store(global_root: &Path) -> Result<(), OrbitError> {
 fn open_existing_routine_store(
     global_root: &Path,
 ) -> Result<Arc<dyn RoutineStoreBackend>, OrbitError> {
-    let database =
-        orbit_config::resolved_audit_db_path(&orbit_config::ConfigRoots::global_only(global_root))?;
+    let database = orbit_config::resolved_audit_db_path(
+        &orbit_common::Env::capture(),
+        &orbit_config::ConfigRoots::global_only(global_root),
+    )?;
     if !database.exists() {
         return Err(OrbitError::InvalidInput(format!(
             "routine scheduler store {} does not exist; run `orbit init` on this machine to create it",

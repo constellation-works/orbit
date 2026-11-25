@@ -97,10 +97,11 @@ const WRITABLE_DEVICES: &[&str] = &["/dev/null", "/dev/tty", "/dev/zero", "/dev/
 /// then the boundary's roots. The read denies and read exclusions are carved
 /// out of the host grants as well as the roots.
 pub fn linux_landlock_boundary_grants(
+    env: &orbit_common::Env,
     req: &ExecRequest,
     boundary: &LandlockBoundary,
 ) -> Result<Vec<LandlockPathGrant>, OrbitError> {
-    let environment = child_environment(req);
+    let environment = child_environment(env, req);
     // A denied tree that does not exist yet is still carved out: its
     // ancestors get no grant, so a directory created there after spawn — a
     // second plugin's first `state/plugins/<ns>` while a long-lived backend

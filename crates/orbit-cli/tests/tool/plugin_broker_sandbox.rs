@@ -224,9 +224,10 @@ fn sandbox_fixture() {
         .bind_sandbox(child.id())
         .expect("authenticate sandbox namespace");
     // supervise_child bounds the test and tears down the provider's descendants.
-    let output = orbit_exec::supervise_child(child, Some(60_000), None)
-        .expect("supervise sandbox")
-        .result;
+    let output =
+        orbit_exec::supervise_child(&orbit_common::Env::capture(), child, Some(60_000), None)
+            .expect("supervise sandbox")
+            .result;
     assert!(
         output.success,
         "sandbox provider: {}\n{}",
@@ -846,7 +847,10 @@ printf '{{"ok":true,"output":{{"result":"%s"}}}}\n' "$result"
     /// the real backend sandbox.
     #[test]
     fn each_plugin_backend_sees_only_its_own_state() {
-        if !orbit_exec::macos_sandbox_test_guard("each_plugin_backend_sees_only_its_own_state") {
+        if !orbit_exec::macos_sandbox_test_guard(
+            &orbit_common::Env::capture(),
+            "each_plugin_backend_sees_only_its_own_state",
+        ) {
             return;
         }
         let host = Host::new();

@@ -153,6 +153,7 @@ fn application_rows(fixture: &Fixture, tool: &str) -> Vec<(String, Value)> {
 #[test]
 fn application_bound_accept_runs_callbacks_and_refuses_another_task_or_unlisted_call() {
     if !orbit_exec::macos_sandbox_test_guard(
+        &orbit_common::Env::capture(),
         "application_bound_accept_runs_callbacks_and_refuses_another_task_or_unlisted_call",
     ) {
         return;
@@ -546,6 +547,7 @@ fn copy_callback_row(
 #[test]
 fn audit_show_marks_callback_list_incomplete_past_display_limit() {
     if !orbit_exec::macos_sandbox_test_guard(
+        &orbit_common::Env::capture(),
         "audit_show_marks_callback_list_incomplete_past_display_limit",
     ) {
         return;

@@ -166,7 +166,7 @@ pub fn install_clock(global_root: &Path) -> Result<ClockInstallReport, OrbitErro
         settings,
         ClockPlatform::current(),
         &NativeClockCommandRunner,
-        &home_dir()?,
+        &home_dir(&orbit_common::Env::capture())?,
     )
 }
 

@@ -22,7 +22,6 @@ pub use orbit_common::process::supervisor::{
     INTERRUPTED_SIGNAL_NOTE, OUTPUT_CAPTURE_LIMIT_NOTE, ProcessStopCause, TERMINATION_STATUS_NOTE,
 };
 
-use orbit_common::env_vars::ORBIT_EXEC_OUTPUT_CAPTURE_LIMIT_BYTES as ORBIT_EXEC_OUTPUT_CAPTURE_LIMIT_ENV;
 const DEFAULT_OUTPUT_CAPTURE_LIMIT_BYTES: usize = 1024 * 1024;
 
 /// How long pipe workers may keep running after the supervised child is gone,
@@ -46,11 +45,12 @@ pub(crate) struct ExecSupervision<'a> {
 /// Supervise `child` under exec's policy. The outcome's stderr carries the
 /// supervision diagnostics after the child's own output.
 pub(crate) fn supervise(
+    env: &orbit_common::Env,
     child: SupervisedChild,
     run: ExecSupervision<'_>,
 ) -> Result<Outcome, OrbitError> {
     let limit = capture_limit_from_env(
-        ORBIT_EXEC_OUTPUT_CAPTURE_LIMIT_ENV,
+        env.orbit_exec_output_capture_limit_bytes(),
         DEFAULT_OUTPUT_CAPTURE_LIMIT_BYTES,
     );
     let stdout: Box<dyn OutputSink> = match run.stdout_relay {
@@ -76,7 +76,7 @@ pub(crate) fn supervise(
         drain_budget: DRAIN_BUDGET,
         cap_drain_at_deadline: false,
         require_eof: false,
-        stopped_descendants: Some(stopped_descendant_threshold()),
+        stopped_descendants: Some(stopped_descendant_threshold(env)),
         on_stopped_descendant: None,
         on_spawn: None,
         every: None,

@@ -419,8 +419,10 @@ fn a_consented_build_installs_its_output_with_a_record() {
         return;
     }
 
-    if !orbit_exec::macos_sandbox_test_guard("a_consented_build_installs_its_output_with_a_record")
-    {
+    if !orbit_exec::macos_sandbox_test_guard(
+        &orbit_common::Env::capture(),
+        "a_consented_build_installs_its_output_with_a_record",
+    ) {
         assert_ne!(
             std::env::var("ORBIT_REQUIRE_PLUGIN_BUILD_SANDBOX").as_deref(),
             Ok("1"),
@@ -505,6 +507,7 @@ fn a_consented_build_with_a_different_pinned_digest_is_not_installed() {
     }
 
     if !orbit_exec::macos_sandbox_test_guard(
+        &orbit_common::Env::capture(),
         "a_consented_build_with_a_different_pinned_digest_is_not_installed",
     ) {
         assert_ne!(

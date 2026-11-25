@@ -23,7 +23,7 @@ fn build_sandbox_available(test: &str) -> bool {
         }
     }
     #[cfg(target_os = "macos")]
-    if !orbit_exec::macos_sandbox_test_guard(test) {
+    if !orbit_exec::macos_sandbox_test_guard(&orbit_common::Env::capture(), test) {
         return false;
     }
     true
@@ -104,7 +104,7 @@ fn a_phase_gets_only_its_environment_and_no_core_dumps() {
         timeout: Duration::from_secs(20),
         build_dir_cap_bytes: u64::MAX,
     };
-    let end = run_build_phase(&request, &mut log).expect("run");
+    let end = run_build_phase(&orbit_common::Env::capture(), &request, &mut log).expect("run");
     assert_eq!(end, BuildPhaseEnd::Exited(0));
     let output = String::from_utf8_lossy(&log.render()).into_owned();
     assert_eq!(
@@ -172,6 +172,7 @@ mod macos {
         let env = Vec::new();
 
         let error = run_build_phase(
+            &orbit_common::Env::capture(),
             &request(&build_dir, BuildPhaseNetwork::Https, &argv, &env),
             &mut BuildLog::default(),
         )
@@ -189,6 +190,7 @@ mod macos {
     #[test]
     fn an_offline_phase_reaches_only_its_build_directory() {
         if !orbit_exec::macos_sandbox_test_guard(
+            &orbit_common::Env::capture(),
             "an_offline_phase_reaches_only_its_build_directory",
         ) {
             return;
@@ -216,6 +218,7 @@ mod macos {
         let mut log = BuildLog::default();
 
         let end = run_build_phase(
+            &orbit_common::Env::capture(),
             &request(&build_dir, BuildPhaseNetwork::None, &argv, &env),
             &mut log,
         )
@@ -271,7 +274,12 @@ fn build_directory_size_does_not_follow_symlinks() {
         timeout: Duration::from_secs(20),
         build_dir_cap_bytes: 0,
     };
-    let end = run_build_phase(&request, &mut BuildLog::default()).expect("run the phase");
+    let end = run_build_phase(
+        &orbit_common::Env::capture(),
+        &request,
+        &mut BuildLog::default(),
+    )
+    .expect("run the phase");
     assert_eq!(
         end,
         BuildPhaseEnd::Exited(0),
@@ -307,8 +315,13 @@ fn script_grants_cannot_override_state_or_git_protections() {
         inputs: &[],
         network: orbit_exec::ScriptSandboxNetwork::None,
     };
-    let args =
-        compile_linux_script_argv(&spec, &[], &["/bin/true".into()]).expect("compile profile");
+    let args = compile_linux_script_argv(
+        &orbit_common::Env::capture(),
+        &spec,
+        &[],
+        &["/bin/true".into()],
+    )
+    .expect("compile profile");
     let bind = |flag: &str, path: &std::path::Path| {
         let path = path.to_str().expect("path");
         args.windows(2)
@@ -335,7 +348,13 @@ fn script_grants_cannot_override_state_or_git_protections() {
         ..spec
     };
     assert!(
-        compile_linux_script_argv(&spec, &[], &["/bin/true".into()]).is_err(),
+        compile_linux_script_argv(
+            &orbit_common::Env::capture(),
+            &spec,
+            &[],
+            &["/bin/true".into()]
+        )
+        .is_err(),
         "a grant must not expose an enclosing state tree"
     );
 }
@@ -371,7 +390,12 @@ fn script_read_grants_cannot_expose_enclosing_state() {
             inputs: &[],
             network: orbit_exec::ScriptSandboxNetwork::None,
         };
-        compile_linux_script_argv(&spec, &[], &["/bin/true".into()])
+        compile_linux_script_argv(
+            &orbit_common::Env::capture(),
+            &spec,
+            &[],
+            &["/bin/true".into()],
+        )
     };
     for root in [&workspace, &alias, &state, &sibling] {
         assert!(
@@ -423,26 +447,29 @@ fn script_profile_preserves_masks_with_overlapping_grant() {
         output.display()
     );
     let argv = vec!["/bin/sh".into(), "-c".into(), script];
-    let run = run_script_sandboxed(ScriptSandboxRequest {
-        sandbox: ScriptSandboxSpec {
-            cwd: &cwd,
-            cwd_writable: true,
-            scratch: &scratch,
-            readable: &[],
-            writable: &writable,
-            masked: &masked,
-            home: None,
-            inputs: &[],
-            network: orbit_exec::ScriptSandboxNetwork::None,
+    let run = run_script_sandboxed(
+        &orbit_common::Env::capture(),
+        ScriptSandboxRequest {
+            sandbox: ScriptSandboxSpec {
+                cwd: &cwd,
+                cwd_writable: true,
+                scratch: &scratch,
+                readable: &[],
+                writable: &writable,
+                masked: &masked,
+                home: None,
+                inputs: &[],
+                network: orbit_exec::ScriptSandboxNetwork::None,
+            },
+            argv: &argv,
+            env: &[],
+            launcher: &[],
+            launcher_env: &[],
+            stdin: vec![],
+            timeout: Duration::from_secs(20),
+            scratch_cap_bytes: u64::MAX,
         },
-        argv: &argv,
-        env: &[],
-        launcher: &[],
-        launcher_env: &[],
-        stdin: vec![],
-        timeout: Duration::from_secs(20),
-        scratch_cap_bytes: u64::MAX,
-    })
+    )
     .expect("run script");
     assert_eq!(
         run.end,
@@ -566,8 +593,13 @@ mod script_linked_worktree {
             inputs: &[],
             network: orbit_exec::ScriptSandboxNetwork::None,
         };
-        let argv = compile_linux_script_argv(&spec, &[], &["/usr/bin/true".to_string()])
-            .expect("compile profile");
+        let argv = compile_linux_script_argv(
+            &orbit_common::Env::capture(),
+            &spec,
+            &[],
+            &["/usr/bin/true".to_string()],
+        )
+        .expect("compile profile");
         let pointer_at = ro_bind_at(&argv, &fixture.worktree.join(".git"))
             .expect("the worktree Git pointer is bound read-only");
         let cwd = fixture.worktree.display().to_string();
@@ -654,7 +686,8 @@ mod script_linked_worktree {
             timeout: Duration::from_secs(60),
             scratch_cap_bytes: 64 * 1024 * 1024,
         };
-        let run = run_script_sandboxed(request).expect("run the script");
+        let run =
+            run_script_sandboxed(&orbit_common::Env::capture(), request).expect("run the script");
         assert_eq!(
             run.end,
             ScriptRunEnd::Exited(0),
@@ -759,16 +792,19 @@ fn script_read_root_under_masked_global_root_starts_and_keeps_state_hidden() {
         global.display()
     );
     let argv = vec!["/bin/sh".into(), "-c".into(), script];
-    let run = run_script_sandboxed(ScriptSandboxRequest {
-        sandbox: spec,
-        argv: &argv,
-        env: &[],
-        launcher: &[],
-        launcher_env: &[],
-        stdin: vec![],
-        timeout: Duration::from_secs(20),
-        scratch_cap_bytes: u64::MAX,
-    })
+    let run = run_script_sandboxed(
+        &orbit_common::Env::capture(),
+        ScriptSandboxRequest {
+            sandbox: spec,
+            argv: &argv,
+            env: &[],
+            launcher: &[],
+            launcher_env: &[],
+            stdin: vec![],
+            timeout: Duration::from_secs(20),
+            scratch_cap_bytes: u64::MAX,
+        },
+    )
     .expect("run script");
     assert_eq!(
         run.end,
@@ -779,8 +815,13 @@ fn script_read_root_under_masked_global_root_starts_and_keeps_state_hidden() {
     assert_eq!(String::from_utf8_lossy(&run.stdout), "tool-ran\n");
 
     fn compile_args(spec: &ScriptSandboxSpec<'_>) -> Vec<String> {
-        orbit_exec::compile_linux_script_argv(spec, &[], &["/bin/true".into()])
-            .expect("compile profile")
+        orbit_exec::compile_linux_script_argv(
+            &orbit_common::Env::capture(),
+            spec,
+            &[],
+            &["/bin/true".into()],
+        )
+        .expect("compile profile")
     }
 }
 
@@ -829,7 +870,13 @@ fn script_inputs_are_read_only_at_in_and_never_expose_masked_state() {
         inputs: &inputs,
         network: orbit_exec::ScriptSandboxNetwork::None,
     };
-    let argv = compile_linux_script_argv(&spec, &[], &["/bin/true".into()]).expect("compile");
+    let argv = compile_linux_script_argv(
+        &orbit_common::Env::capture(),
+        &spec,
+        &[],
+        &["/bin/true".into()],
+    )
+    .expect("compile");
     let bound = argv.windows(3).any(|w| {
         w[0] == "--ro-bind"
             && w[1] == cwd.join("dist").display().to_string()
@@ -846,7 +893,13 @@ fn script_inputs_are_read_only_at_in_and_never_expose_masked_state() {
             ..spec
         };
         assert!(
-            compile_linux_script_argv(&spec, &[], &["/bin/true".into()]).is_err(),
+            compile_linux_script_argv(
+                &orbit_common::Env::capture(),
+                &spec,
+                &[],
+                &["/bin/true".into()]
+            )
+            .is_err(),
             "input {} overlaps the masked state tree",
             exposing.display()
         );
@@ -861,16 +914,19 @@ fn script_inputs_are_read_only_at_in_and_never_expose_masked_state() {
                   && ! sh -c ': > /orbit-script/in/extra' 2>/dev/null \
                   && echo writes-refused";
     let argv = vec!["/bin/sh".into(), "-c".into(), script.to_string()];
-    let run = run_script_sandboxed(ScriptSandboxRequest {
-        sandbox: spec,
-        argv: &argv,
-        env: &path_env(),
-        launcher: &[],
-        launcher_env: &[],
-        stdin: vec![],
-        timeout: Duration::from_secs(20),
-        scratch_cap_bytes: u64::MAX,
-    })
+    let run = run_script_sandboxed(
+        &orbit_common::Env::capture(),
+        ScriptSandboxRequest {
+            sandbox: spec,
+            argv: &argv,
+            env: &path_env(),
+            launcher: &[],
+            launcher_env: &[],
+            stdin: vec![],
+            timeout: Duration::from_secs(20),
+            scratch_cap_bytes: u64::MAX,
+        },
+    )
     .expect("run script");
     assert_eq!(
         run.end,
@@ -926,6 +982,7 @@ fn script_network_grants_reach_only_what_they_allow() {
     };
     let compiled = |network| {
         orbit_exec::compile_linux_script_argv(
+            &orbit_common::Env::capture(),
             &ScriptSandboxSpec { network, ..spec },
             &[],
             &["/bin/true".into()],
@@ -1002,16 +1059,19 @@ fn script_network_grants_reach_only_what_they_allow() {
     );
     let argv = vec!["/bin/bash".to_string(), "-c".to_string(), script];
     let run = |network| {
-        let run = run_script_sandboxed(ScriptSandboxRequest {
-            sandbox: ScriptSandboxSpec { network, ..spec },
-            argv: &argv,
-            env: &path_env(),
-            launcher: &[],
-            launcher_env: &[],
-            stdin: vec![],
-            timeout: Duration::from_secs(30),
-            scratch_cap_bytes: u64::MAX,
-        })
+        let run = run_script_sandboxed(
+            &orbit_common::Env::capture(),
+            ScriptSandboxRequest {
+                sandbox: ScriptSandboxSpec { network, ..spec },
+                argv: &argv,
+                env: &path_env(),
+                launcher: &[],
+                launcher_env: &[],
+                stdin: vec![],
+                timeout: Duration::from_secs(30),
+                scratch_cap_bytes: u64::MAX,
+            },
+        )
         .expect("run script");
         assert_eq!(
             run.end,

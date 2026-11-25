@@ -126,6 +126,7 @@ pub struct ScriptSandboxInput {
 /// physical paths. A bind at `in/<name>` is not covered by the masks and
 /// denies, which apply at host paths, so such a source is refused instead.
 pub fn script_input_conflict(
+    env: &orbit_common::Env,
     source: &Path,
     cwd: &Path,
     masked: &[PathBuf],
@@ -144,7 +145,7 @@ pub fn script_input_conflict(
             return Some(mask);
         }
     }
-    super::credential_denies(home)
+    super::credential_denies(env, home)
         .into_iter()
         .map(|(path, _)| path.canonicalize().unwrap_or(path))
         .find(|path| overlaps(path))
@@ -205,11 +206,12 @@ pub struct ScriptSandboxRun {
 /// Reads the host filesystem to decide which runtime paths exist, and to
 /// find the cwd tree's Git directories.
 pub fn compile_linux_script_argv(
+    host_env: &orbit_common::Env,
     spec: &ScriptSandboxSpec<'_>,
     env: &[(String, String)],
     argv: &[String],
 ) -> Result<Vec<String>, OrbitError> {
-    let writable = admitted_profile_roots(spec)?;
+    let writable = admitted_profile_roots(host_env, spec)?;
     // `--unshare-all` includes the network namespace: with no
     // `--share-net`, the only interface is the namespace's own loopback. A
     // networked grant shares the host's; `TcpPort` is confined by the
@@ -288,7 +290,7 @@ pub fn compile_linux_script_argv(
         }
         sealed.push(masked);
     }
-    push_credential_denies(&mut args, spec.home);
+    push_credential_denies(host_env, &mut args, spec.home);
     for masked in &sealed {
         args.extend(["--remount-ro".into(), display(masked)]);
     }
@@ -314,6 +316,7 @@ pub fn compile_linux_script_argv(
 /// macOS, so it cannot be masked), as is an input that is not a plain name
 /// over an absolute source or that overlaps protected state.
 pub(super) fn admitted_profile_roots(
+    env: &orbit_common::Env,
     spec: &ScriptSandboxSpec<'_>,
 ) -> Result<Vec<PathBuf>, OrbitError> {
     // An enclosing mask cannot be mounted without hiding the cwd. Reject a
@@ -370,7 +373,7 @@ pub(super) fn admitted_profile_roots(
             ))
         })?;
         let cwd = cwd_physical.as_deref().unwrap_or(spec.cwd);
-        if let Some(protected) = script_input_conflict(&source, cwd, spec.masked, spec.home) {
+        if let Some(protected) = script_input_conflict(env, &source, cwd, spec.masked, spec.home) {
             return Err(OrbitError::PolicyDenied(format!(
                 "script input `{}` overlaps protected state at {}",
                 input.name,
@@ -601,6 +604,7 @@ pub fn script_scratch_path_in_sandbox(scratch: &Path) -> PathBuf {
 /// ([`probe_script_sandbox`], [`probe_script_sandbox_network`]); a profile
 /// that cannot be applied here is an error, never a weaker run.
 pub fn run_script_sandboxed(
+    env: &orbit_common::Env,
     request: ScriptSandboxRequest<'_>,
 ) -> Result<ScriptSandboxRun, OrbitError> {
     let spec = &request.sandbox;
@@ -636,7 +640,7 @@ pub fn run_script_sandboxed(
             ))
         })?;
         create_input_mountpoints(spec)?;
-        let wrapper_args = compile_linux_script_argv(spec, request.env, request.argv)?;
+        let wrapper_args = compile_linux_script_argv(env, spec, request.env, request.argv)?;
         let mut command = match request.launcher.split_first() {
             Some((launcher, launcher_args)) => {
                 let mut command = std::process::Command::new(launcher);
@@ -664,7 +668,7 @@ pub fn run_script_sandboxed(
                 "a macOS script run takes no launcher; macOS has no per-script scope".to_string(),
             ));
         }
-        let command = super::script_macos::script_sandbox_command(&request)?;
+        let command = super::script_macos::script_sandbox_command(env, &request)?;
         // Admission and bounded preparation run without starting a child.
         // Seatbelt still cannot nest: probe before spawning the wrapper,
         // so an unavailable profile never runs the script more weakly.
@@ -675,7 +679,7 @@ pub fn run_script_sandboxed(
     }
     #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     {
-        let _ = request;
+        let _ = (env, request);
         Err(OrbitError::PolicyDenied(
             "script steps run only on Linux and macOS".to_string(),
         ))

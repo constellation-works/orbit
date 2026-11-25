@@ -205,6 +205,7 @@ impl PluginTool {
         // `bind_pid`: a SIGTERM there would otherwise exit the host on its
         // default disposition and orphan the backend's process group.
         let output = spawn_owned_supervised_cancellable(
+            &orbit_common::Env::capture(),
             || {
                 let child = OwnedChild::from_spawned(sandbox.spawn(&request)?);
                 callback.bind_pid(child.pid())?;

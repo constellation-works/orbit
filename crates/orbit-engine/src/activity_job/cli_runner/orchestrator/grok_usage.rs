@@ -132,16 +132,21 @@ impl GrokUsageRequest {
             environment_mode: EnvironmentMode::ClearAndSet(self.environment.clone()),
             debug: false,
         };
-        let (result, mut body) = run_process_streaming_stdout(&request, &NoSandbox, |stdout| {
-            let mut body = Vec::new();
-            stdout
-                .take(MAX_BYTES + 1)
-                .read_to_end(&mut body)
-                .map_err(|_| {
-                    orbit_common::OrbitError::Execution("read Grok billing".to_string())
-                })?;
-            Ok(body)
-        })
+        let (result, mut body) = run_process_streaming_stdout(
+            &orbit_common::Env::capture(),
+            &request,
+            &NoSandbox,
+            |stdout| {
+                let mut body = Vec::new();
+                stdout
+                    .take(MAX_BYTES + 1)
+                    .read_to_end(&mut body)
+                    .map_err(|_| {
+                        orbit_common::OrbitError::Execution("read Grok billing".to_string())
+                    })?;
+                Ok(body)
+            },
+        )
         .ok()?;
         if !result.success || body.len() as u64 > MAX_BYTES || !body.ends_with(b"\n200") {
             return None;

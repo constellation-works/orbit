@@ -13,7 +13,7 @@ pub use crate::env_vars::ORBIT_TEST_ENV_SCRUBBED as SCRUBBED_MARKER_ENV;
 /// re-executes inherits [`SCRUBBED_MARKER_ENV`] and is left alone, so a
 /// variable the parent exported for the child on purpose reaches its body.
 pub fn scrub_inherited_authority() {
-    if std::env::var_os(SCRUBBED_MARKER_ENV).is_some() {
+    if crate::Env::capture().get(SCRUBBED_MARKER_ENV).is_some() {
         return;
     }
     // SAFETY: runs from a pre-`main` initializer, before any thread exists.

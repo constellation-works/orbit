@@ -183,7 +183,10 @@ pub fn unset_key_preserving_effective(
                     scope.label()
                 )));
             }
-            let effective = load_effective_config(&config_roots(runtime))?;
+            let effective = load_effective_config(
+                runtime.execution_env_policy().process_env(),
+                &config_roots(runtime),
+            )?;
             let Some(entry) = effective.values().iter().find(|entry| entry.key == key) else {
                 return Ok(ConditionalEdit::Abort(ConfigUnsetRefusal {
                     code: "unknown_fallback",
@@ -328,7 +331,10 @@ pub fn delete_crew(
 ) -> Result<ConfigWriteOutcome, OrbitError> {
     let (store, old_value) =
         write_store(runtime, scope, ConfigWriteInit::RequireExisting, |store| {
-            let effective = load_effective_config(&config_roots(runtime))?;
+            let effective = load_effective_config(
+                runtime.execution_env_policy().process_env(),
+                &config_roots(runtime),
+            )?;
             let referenced_by = CREW_REFERENCE_KEYS
                 .iter()
                 .filter(|key| {
@@ -446,8 +452,13 @@ fn write_store_conditional<T, R>(
     let transaction = || {
         ConfigStore::with_write_lock(&path, || {
             let mut store = match scope {
-                ConfigScope::Global => ConfigStore::open(ConfigScope::Global, path.clone())?,
+                ConfigScope::Global => ConfigStore::open(
+                    runtime.execution_env_policy().process_env(),
+                    ConfigScope::Global,
+                    path.clone(),
+                )?,
                 ConfigScope::Workspace => ConfigStore::open_for_workspace_set(
+                    runtime.execution_env_policy().process_env(),
                     path.clone(),
                     &global_config_path(runtime),
                     init.mode(),
@@ -528,7 +539,10 @@ fn write_outcome(
     old_value: JsonValue,
     keys: &[String],
 ) -> Result<ConfigWriteOutcome, OrbitError> {
-    let effective = load_effective_config(&config_roots(runtime))?;
+    let effective = load_effective_config(
+        runtime.execution_env_policy().process_env(),
+        &config_roots(runtime),
+    )?;
     let values = effective.values();
     let rows = keys
         .iter()

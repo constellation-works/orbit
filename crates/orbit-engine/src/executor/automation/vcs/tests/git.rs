@@ -126,7 +126,8 @@ fn stalled_delivery_fetch_releases_the_lock_before_a_waiter_times_out() {
     );
     let hold_limit = Duration::from_millis(1500);
     let waiter_wait = Duration::from_secs(4);
-    let lock_target = git_fetch_lock_target(&git_common_dir(&repo).unwrap());
+    let lock_target =
+        git_fetch_lock_target(&git_common_dir(&orbit_common::Env::capture(), &repo).unwrap());
 
     thread::scope(|scope| {
         let (done, holder_done) = mpsc::sync_channel(1);
@@ -280,7 +281,8 @@ fn real_ssh_fetch_starts_under_lock_and_reaps_before_release() {
             release_path.display(),
         ),
     );
-    let lock_target = git_fetch_lock_target(&git_common_dir(&repo).unwrap());
+    let lock_target =
+        git_fetch_lock_target(&git_common_dir(&orbit_common::Env::capture(), &repo).unwrap());
     let lock_path = lock_target.with_file_name(".orbit-git-fetch.lock");
     let startup_limit = Duration::from_secs(20);
     let cleanup_limit = Duration::from_secs(4);

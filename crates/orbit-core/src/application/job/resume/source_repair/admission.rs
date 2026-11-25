@@ -359,8 +359,9 @@ impl OrbitRuntime {
         session: &ToolSessionContext,
         input: &Value,
     ) -> Result<Value, OrbitError> {
-        if orbit_common::governance::authorization::agent_context_declared()
-            || self.worker_invocation().is_some()
+        if orbit_common::governance::authorization::agent_context_declared(
+            &orbit_common::Env::capture(),
+        ) || self.worker_invocation().is_some()
         {
             return Err(OrbitError::CapabilityDenied(
                 "source repair requires an operator on the owning host".into(),

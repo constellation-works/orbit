@@ -261,7 +261,11 @@ fn write_machine_identity(
 ) -> Result<(), OrbitError> {
     let path = config_path(global_root);
     ConfigStore::with_write_lock(&path, || {
-        let mut store = ConfigStore::open(ConfigScope::Global, path.clone())?;
+        let mut store = ConfigStore::open(
+            &orbit_common::Env::capture(),
+            ConfigScope::Global,
+            path.clone(),
+        )?;
         store.set_machine_identity(&identity.id, &identity.name, &identity.task_prefix)?;
         orbit_config::seed_new_machine_defaults(&mut store)?;
         store.save()

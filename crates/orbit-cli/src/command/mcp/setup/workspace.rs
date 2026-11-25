@@ -114,7 +114,7 @@ pub(super) fn embedded_launch_root(candidate: &Path) -> Option<PathBuf> {
         return None;
     }
     let candidate = canonical_or_original(candidate);
-    match workspace_registry::global_orbit_dir() {
+    match workspace_registry::global_orbit_dir(&orbit_core::composition::composition_env()) {
         Ok(default_root) if paths_equivalent(&candidate, &default_root) => None,
         _ => Some(candidate),
     }
@@ -286,7 +286,9 @@ fn registered_workspace_id(global_root: &Path, repo_root: &Path) -> Option<Strin
 }
 
 fn is_global_orbit_dir(candidate: &Path) -> bool {
-    let Ok(global) = workspace_registry::global_orbit_dir() else {
+    let Ok(global) =
+        workspace_registry::global_orbit_dir(&orbit_core::composition::composition_env())
+    else {
         return false;
     };
     paths_equivalent(candidate, &global)

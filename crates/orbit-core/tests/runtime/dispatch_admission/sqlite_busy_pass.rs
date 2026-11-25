@@ -272,10 +272,13 @@ fn a_drain_defers_an_admission_pass_held_out_by_a_sqlite_writer() {
         let (root, runtime, _repo) = runtime();
         seed(&runtime, Seed::default());
         let drain = running_run(&runtime, "workspace_auto_pipeline", json!({}));
-        let database = orbit_config::resolved_audit_db_path(&orbit_config::ConfigRoots::new(
-            root.path().join("home/.orbit"),
-            root.path().join("repo/.orbit"),
-        ))
+        let database = orbit_config::resolved_audit_db_path(
+            &orbit_common::Env::capture(),
+            &orbit_config::ConfigRoots::new(
+                root.path().join("home/.orbit"),
+                root.path().join("repo/.orbit"),
+            ),
+        )
         .expect("host database path");
         let busy_timeout = Duration::from_millis(500);
         let (held, held_rx) = std::sync::mpsc::channel();

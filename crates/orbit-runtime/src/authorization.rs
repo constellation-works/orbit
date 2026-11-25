@@ -154,7 +154,9 @@ impl RuntimeKernel {
             capability_enforcement
         };
         let envelope = match capability_enforcement {
-            CapabilityEnforcement::Enforce => CallerEnvelope::from_process_env(session_context),
+            CapabilityEnforcement::Enforce => {
+                CallerEnvelope::from_process_env(&orbit_common::Env::capture(), session_context)
+            }
             CapabilityEnforcement::McpSessionOnly => CallerEnvelope::mcp_session(session_context),
         };
         self.decide_with_envelope(operation, envelope)
@@ -188,7 +190,8 @@ impl RuntimeKernel {
                 "'{operation_id}' is missing from the governed operation registry"
             ))
         })?;
-        let envelope = CallerEnvelope::from_process_env(session_context);
+        let envelope =
+            CallerEnvelope::from_process_env(&orbit_common::Env::capture(), session_context);
         let caller = CallerCapabilities::resolve(&envelope);
         self.decide_with_envelope(operation, envelope)?;
 
@@ -220,7 +223,10 @@ impl RuntimeKernel {
         operation: &'static GovernedOperation,
         session_context: &ToolSessionContext,
     ) -> Result<(), OrbitError> {
-        self.decide_with_envelope(operation, CallerEnvelope::from_process_env(session_context))
+        self.decide_with_envelope(
+            operation,
+            CallerEnvelope::from_process_env(&orbit_common::Env::capture(), session_context),
+        )
     }
 
     fn decide_with_envelope(
@@ -278,8 +284,9 @@ impl RuntimeKernel {
                     "governed operation denied"
                 );
                 let message = if operation.id == TASK_REQUEUE_OPERATION_ID
-                    && orbit_common::governance::authorization::agent_context_declared()
-                {
+                    && orbit_common::governance::authorization::agent_context_declared(
+                        &orbit_common::Env::capture(),
+                    ) {
                     format!("{denial}: managed agents cannot requeue blocked tasks")
                 } else {
                     denial.to_string()
@@ -308,7 +315,7 @@ impl RuntimeKernel {
     ) {
         let envelope = match enforcement {
             CapabilityEnforcement::Enforce if session.worker_invocation.is_none() => {
-                CallerEnvelope::from_process_env(session)
+                CallerEnvelope::from_process_env(&orbit_common::Env::capture(), session)
             }
             _ => CallerEnvelope::mcp_session(session),
         };
@@ -440,7 +447,10 @@ impl RuntimeKernel {
 /// asserts nothing does not reach a handler that calls this, because the
 /// governed floor on that handler's tool refused it first.
 pub fn resolved_caller_capabilities(session: &ToolSessionContext) -> BTreeSet<McpCapability> {
-    CallerCapabilities::resolve(&CallerEnvelope::from_process_env(session))
-        .grants()
-        .clone()
+    CallerCapabilities::resolve(&CallerEnvelope::from_process_env(
+        &orbit_common::Env::capture(),
+        session,
+    ))
+    .grants()
+    .clone()
 }

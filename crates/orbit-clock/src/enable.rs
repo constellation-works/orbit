@@ -63,7 +63,7 @@ pub fn set_clock_enabled(global_root: &Path, enabled: bool) -> Result<ClockStatu
         enabled,
         ClockPlatform::current(),
         &NativeClockCommandRunner,
-        &home_dir()?,
+        &home_dir(&orbit_common::Env::capture())?,
     )
 }
 

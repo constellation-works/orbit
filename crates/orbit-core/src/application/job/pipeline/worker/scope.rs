@@ -314,10 +314,11 @@ pub(crate) fn scoped_worker_command(base: &Command, unit: &str, limits: &WorkerL
     // locators and operator-configured provider credentials); agent and
     // validation subprocesses still clear their environments at dispatch.
     // Deliberate worker edits take precedence over the ambient allowlist.
-    let mut environment: BTreeMap<OsString, OsString> = allowlisted_child_env(&[], &[])
-        .into_iter()
-        .map(|(key, value)| (key.into(), value.into()))
-        .collect();
+    let mut environment: BTreeMap<OsString, OsString> =
+        allowlisted_child_env(&orbit_common::Env::capture(), &[], &[])
+            .into_iter()
+            .map(|(key, value)| (key.into(), value.into()))
+            .collect();
     for (key, value) in base.get_envs() {
         match value {
             Some(value) => {

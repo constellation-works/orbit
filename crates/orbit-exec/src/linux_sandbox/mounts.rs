@@ -1,5 +1,4 @@
 use super::*;
-use orbit_common::env_vars;
 
 pub(super) fn cwd_is_writable_root(cwd: &Path, writable_roots: &[PathBuf]) -> bool {
     // A writable descendant cannot justify binding the entire cwd writable
@@ -85,14 +84,8 @@ pub(super) fn profile_grants_write(profile: &ResolvedFsProfile) -> bool {
 
 /// Resolve Cargo's home directory the way cargo itself does: `$CARGO_HOME`
 /// when set, otherwise the documented `$HOME/.cargo` default.
-pub(super) fn cargo_home_dir() -> Option<PathBuf> {
-    fn non_empty(name: &str) -> Option<PathBuf> {
-        std::env::var_os(name)
-            .filter(|value| !value.is_empty())
-            .map(PathBuf::from)
-    }
-    non_empty(env_vars::CARGO_HOME)
-        .or_else(|| non_empty(env_vars::HOME).map(|home| home.join(".cargo")))
+pub(super) fn cargo_home_dir(env: &orbit_common::Env) -> Option<PathBuf> {
+    crate::credential_paths::cargo_home_dir(env.home(), env.cargo_home())
 }
 
 /// Bind Cargo's shared download caches writable inside the namespace.

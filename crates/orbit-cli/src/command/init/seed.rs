@@ -68,7 +68,7 @@ fn collect_interactive_crew_choices(
 fn resolve_config_path(root_override: Option<&Path>) -> Result<PathBuf, OrbitError> {
     let root = match root_override {
         Some(root) => root.to_path_buf(),
-        None => global_orbit_dir()?,
+        None => global_orbit_dir(&orbit_core::composition::composition_env())?,
     };
     Ok(root.join("config.toml"))
 }

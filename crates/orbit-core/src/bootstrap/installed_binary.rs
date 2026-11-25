@@ -41,7 +41,9 @@ pub(crate) fn verify_installed_binary_keeps_state(
     global_root: &Path,
     shared_root: &Path,
 ) -> Result<(), OrbitError> {
-    let Some(installed) = installed_executable_other_than_this_process() else {
+    let Some(installed) =
+        installed_executable_other_than_this_process(&orbit_common::Env::capture())
+    else {
         return Ok(());
     };
     let compiled = compiled_compatibility();

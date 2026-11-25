@@ -10,7 +10,7 @@ const IDENTITY: [&str; 4] = [
 ];
 
 fn git_ok(repo: &Path, args: &[&str]) -> String {
-    let output = run_git(repo, args).expect("admitted argv");
+    let output = run_git(&orbit_common::Env::capture(), repo, args).expect("admitted argv");
     assert!(output.success, "git {args:?}: {}", output.stderr);
     output.stdout.trim().to_string()
 }
@@ -92,7 +92,7 @@ fn program_running_argv_is_refused_before_git_runs() {
         vec!["--git-dir", ""],
     ];
     for args in refused {
-        match run_git(repo.path(), &args) {
+        match run_git(&orbit_common::Env::capture(), repo.path(), &args) {
             Err(OrbitError::InvalidInput(message)) => {
                 assert!(message.starts_with("refusing to run git"), "{message}");
             }

@@ -103,6 +103,7 @@ fn held_and_unsuccessful_runs_finalize_despite_summary_store_faults() {
                     events_emitted: 0,
                 };
                 let database = orbit_config::resolved_audit_db_path(
+                    &orbit_common::Env::capture(),
                     &orbit_config::ConfigRoots::new(&global, &workspace),
                 )
                 .unwrap();

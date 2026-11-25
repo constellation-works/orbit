@@ -214,8 +214,11 @@ pub fn load_machine_settings(global_root: &Path) -> Result<MachineSettings, Orbi
 /// Store-database path resolved from the layered config. Used by the
 /// runtime-less `orbit migrate --dry-run` inspection in `orbit-cmd`
 /// [ORB-10016].
-pub fn resolved_audit_db_path(roots: &ConfigRoots) -> Result<PathBuf, OrbitError> {
-    Ok(ResolvedConfig::load(roots)?.persistence.audit_db)
+pub fn resolved_audit_db_path(
+    env: &orbit_common::Env,
+    roots: &ConfigRoots,
+) -> Result<PathBuf, OrbitError> {
+    Ok(ResolvedConfig::load(env, roots)?.persistence.audit_db)
 }
 
 #[cfg(test)]

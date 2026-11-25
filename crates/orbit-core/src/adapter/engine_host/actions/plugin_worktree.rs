@@ -830,7 +830,12 @@ fn verify_registered_linked_worktree(
     canonical_repo_root: &Path,
     canonical_worktree: &Path,
 ) -> Result<(), DispatchError> {
-    let output = run_git(repo_root, &["worktree", "list", "--porcelain"]).map_err(|error| {
+    let output = run_git(
+        &orbit_common::Env::capture(),
+        repo_root,
+        &["worktree", "list", "--porcelain"],
+    )
+    .map_err(|error| {
         DispatchError::action_failed(
             action,
             format!(

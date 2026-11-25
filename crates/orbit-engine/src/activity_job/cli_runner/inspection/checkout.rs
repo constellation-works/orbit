@@ -53,8 +53,12 @@ impl SourceInspection {
         };
         if value.is_null() || value.as_str() == Some("") {
             if let Some(source) = source {
-                let output = run_git(source, &["rev-parse", "--is-inside-work-tree"])
-                    .map_err(|error| retryable(error.to_string()))?;
+                let output = run_git(
+                    &orbit_common::Env::capture(),
+                    source,
+                    &["rev-parse", "--is-inside-work-tree"],
+                )
+                .map_err(|error| retryable(error.to_string()))?;
                 if output.success && output.stdout.trim() == "true" {
                     return Err(permanent(
                         "a Git workspace requires a pinned inspection_revision",
@@ -444,7 +448,8 @@ fn git_output(
         "gc.auto=0",
     ];
     argv.extend_from_slice(args);
-    run_git_within(root, &argv, deadline).map_err(|error| retryable(error.to_string()))
+    run_git_within(&orbit_common::Env::capture(), root, &argv, deadline)
+        .map_err(|error| retryable(error.to_string()))
 }
 
 fn permanent(message: impl std::fmt::Display) -> DispatchError {

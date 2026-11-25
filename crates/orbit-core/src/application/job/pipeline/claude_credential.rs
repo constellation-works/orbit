@@ -66,7 +66,8 @@ impl OrbitRuntime {
             let file_problems = unset
                 .iter()
                 .filter_map(|entry| {
-                    crew_env_file_problem(entry).map(|problem| (entry.name.clone(), problem))
+                    crew_env_file_problem(&orbit_common::Env::capture(), entry)
+                        .map(|problem| (entry.name.clone(), problem))
                 })
                 .collect();
             return Some(Unrunnable::UnsetEnv(CrewEnvUnset {

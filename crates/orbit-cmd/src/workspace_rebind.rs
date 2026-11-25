@@ -310,7 +310,11 @@ pub fn rebind_checkout_directory(
 }
 
 fn validate_target_git(target: &Path, remote: Option<&str>) -> Result<(), OrbitError> {
-    let root = run_git(target, &["rev-parse", "--show-toplevel"])?;
+    let root = run_git(
+        &orbit_core::composition::composition_env(),
+        target,
+        &["rev-parse", "--show-toplevel"],
+    )?;
     if !root.success
         || Path::new(root.stdout.trim()).canonicalize()? != target
         || !target.join(".git").is_dir()
@@ -320,7 +324,11 @@ fn validate_target_git(target: &Path, remote: Option<&str>) -> Result<(), OrbitE
             target.display()
         )));
     }
-    let origin = run_git(target, &["remote", "get-url", "origin"])?;
+    let origin = run_git(
+        &orbit_core::composition::composition_env(),
+        target,
+        &["remote", "get-url", "origin"],
+    )?;
     let Some(remote) = remote else {
         return Err(refused(
             "workspace has no registered source remote; bind its source identity before moving it",
@@ -338,7 +346,11 @@ fn validate_target_git(target: &Path, remote: Option<&str>) -> Result<(), OrbitE
 }
 
 fn reject_managed_worktrees(target: &Path, old: &WorkspaceCheckout) -> Result<(), OrbitError> {
-    let listing = run_git(target, &["worktree", "list", "--porcelain", "-z"])?;
+    let listing = run_git(
+        &orbit_core::composition::composition_env(),
+        target,
+        &["worktree", "list", "--porcelain", "-z"],
+    )?;
     if !listing.success {
         return Err(refused(
             "cannot inspect Git worktrees; resolve the Git error before rebinding",

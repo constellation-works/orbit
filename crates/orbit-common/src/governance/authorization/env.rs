@@ -1,4 +1,3 @@
-use crate::env_vars;
 /// Environment variable that grants [`orbit_types::tool::McpCapability::Operator`] to a caller the
 /// envelope would otherwise leave unprivileged.
 ///
@@ -16,12 +15,9 @@ pub use crate::env_vars::ORBIT_OPERATOR as OPERATOR_OVERRIDE_ENV;
 /// particular — can tell "an operator deliberately raised this" apart from
 /// "nothing identified the caller" without re-deriving the truthy spellings
 /// this module already owns.
-pub fn operator_override_active() -> bool {
-    env_truthy(OPERATOR_OVERRIDE_ENV)
+pub fn operator_override_active(env: &crate::Env) -> bool {
+    env_truthy(env.orbit_operator())
 }
-
-/// Process-envelope variables that declare the caller to be an agent.
-const AGENT_ENVELOPE_ENV: &[&str] = &[env_vars::ORBIT_AGENT_NAME, env_vars::ORBIT_AGENT_MODEL];
 
 /// Whether this process's environment declares it to be an agent or a step of
 /// a managed run.
@@ -32,41 +28,44 @@ const AGENT_ENVELOPE_ENV: &[&str] = &[env_vars::ORBIT_AGENT_NAME, env_vars::ORBI
 /// operator authority onward to another machine [ORB-12564]. It is the same
 /// observation [`super::CallerEnvelope::from_process_env`] makes, named once so the
 /// two cannot disagree about what an agent looks like.
-pub fn agent_context_declared() -> bool {
-    agent_declared_in_env()
+pub fn agent_context_declared(env: &crate::Env) -> bool {
+    agent_declared_in_env(env)
 }
-
-/// Set to `agent` by the activity runner for agent-backed steps.
-use crate::env_vars::ORBIT_TASK_ACTOR_KIND as ACTOR_KIND_ENV;
-
-/// Set by the engine for any process it spawns as part of a managed run.
-use crate::env_vars::ORBIT_MANAGED_RUN_CONTEXT as MANAGED_RUN_ENV;
 
 /// Whether an environment variable is set to a truthy value.
 ///
 /// Accepts the same spellings as the engine's managed-run flag so a caller does
 /// not have to remember which Orbit variable takes which vocabulary.
-pub(super) fn env_truthy(name: &str) -> bool {
-    std::env::var(name).is_ok_and(|value| {
-        matches!(
-            value.trim().to_ascii_lowercase().as_str(),
-            "1" | "true" | "yes" | "on"
-        )
-    })
+fn env_truthy(value: Option<&std::ffi::OsStr>) -> bool {
+    value
+        .and_then(std::ffi::OsStr::to_str)
+        .is_some_and(|value| {
+            matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes" | "on"
+            )
+        })
 }
 
-fn env_present(name: &str) -> bool {
-    std::env::var(name).is_ok_and(|value| !value.trim().is_empty())
+fn env_present(value: Option<&std::ffi::OsStr>) -> bool {
+    value
+        .and_then(std::ffi::OsStr::to_str)
+        .is_some_and(|value| !value.trim().is_empty())
 }
 
-pub(super) fn agent_declared_in_env() -> bool {
-    if AGENT_ENVELOPE_ENV.iter().copied().any(env_present) {
+pub(super) fn agent_declared_in_env(env: &crate::Env) -> bool {
+    if [env.orbit_agent_name(), env.orbit_agent_model()]
+        .into_iter()
+        .any(env_present)
+    {
         return true;
     }
-    if env_truthy(MANAGED_RUN_ENV) {
+    if env_truthy(env.orbit_managed_run_context()) {
         return true;
     }
-    std::env::var(ACTOR_KIND_ENV).is_ok_and(|value| value.trim().eq_ignore_ascii_case("agent"))
+    env.orbit_task_actor_kind()
+        .and_then(std::ffi::OsStr::to_str)
+        .is_some_and(|value| value.trim().eq_ignore_ascii_case("agent"))
 }
 
 /// Whether a person is plausibly present at this process.

@@ -110,6 +110,7 @@ fn take_a_side(root: &Path, path: &str) -> Result<(), String> {
 
 fn run_generator(host: &dyn RuntimeHost, root: &Path, command: &str) -> Result<(), String> {
     let supervised = run_process_supervised(
+        &orbit_common::Env::capture(),
         &ExecRequest {
             program: "/bin/sh".to_string(),
             args: vec!["-c".to_string(), command.to_string()],

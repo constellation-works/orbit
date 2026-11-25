@@ -26,8 +26,12 @@ pub(super) fn verify_on_base(
     }
     let resolve = |rev: &str, what: &str| -> Result<String, String> {
         let spec = format!("{rev}^{{commit}}");
-        let output = run_git(repo_root, &["rev-parse", "--verify", "--quiet", &spec])
-            .map_err(|error| error.to_string())?;
+        let output = run_git(
+            &orbit_common::Env::capture(),
+            repo_root,
+            &["rev-parse", "--verify", "--quiet", &spec],
+        )
+        .map_err(|error| error.to_string())?;
         let sha = output.stdout.trim();
         if output.success && !sha.is_empty() {
             Ok(sha.to_string())
@@ -39,7 +43,7 @@ pub(super) fn verify_on_base(
         .map_err(|error| format!("{error}; no refresh fetch was performed"))?;
     let base = resolve(base_ref, "base ref")
         .map_err(|error| format!("{error}; no refresh fetch was performed"))?;
-    let ancestor = git_ancestry(repo_root, &commit, &base)
+    let ancestor = git_ancestry(&orbit_common::Env::capture(), repo_root, &commit, &base)
         .map_err(|error| format!("{error}; no refresh fetch was performed"))?;
     if ancestor == GitAncestry::Ancestor {
         Ok(commit)
@@ -69,7 +73,7 @@ pub(super) fn verify_on_base(
                 unreachable()
             )
         })?;
-        let retried = git_ancestry(repo_root, &commit, &refreshed_base).map_err(|error| {
+        let retried = git_ancestry(&orbit_common::Env::capture(), repo_root, &commit, &refreshed_base).map_err(|error| {
             format!(
                 "{}; one refresh fetch was attempted for '{base_ref}' but the ancestry retry failed: {error}",
                 unreachable()
@@ -98,7 +102,8 @@ fn remote_tracking_target(
     base_ref: &str,
 ) -> Result<Option<(String, String)>, String> {
     let ref_name = base_ref.strip_prefix("refs/remotes/").unwrap_or(base_ref);
-    let remotes = run_git(repo_root, &["remote"]).map_err(|error| error.to_string())?;
+    let remotes = run_git(&orbit_common::Env::capture(), repo_root, &["remote"])
+        .map_err(|error| error.to_string())?;
     if !remotes.success {
         return Ok(None);
     }
@@ -118,6 +123,7 @@ fn remote_tracking_target(
         if branch == "HEAD" {
             let full_ref = format!("refs/remotes/{remote}/HEAD");
             let symbolic = run_git(
+                &orbit_common::Env::capture(),
                 repo_root,
                 &["symbolic-ref", "--quiet", "--short", &full_ref],
             )
@@ -155,7 +161,7 @@ fn is_fetchable_remote_branch(branch: &str) -> bool {
 /// lock. The process runner bounds both the wait and captured output.
 fn refresh_remote_tracking_ref(repo_root: &Path, remote: &str, branch: &str) -> Result<(), String> {
     let refspec = format!("+refs/heads/{branch}:refs/remotes/{remote}/{branch}");
-    with_git_fetch_lock(repo_root, || {
+    with_git_fetch_lock(&orbit_common::Env::capture(), repo_root, || {
         let mut command = Command::new("git");
         command
             .current_dir(repo_root)

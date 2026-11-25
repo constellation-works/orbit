@@ -156,7 +156,9 @@ pub(crate) fn remote_serve_command(
 /// One chokepoint for both client paths — the v1 proxy and the federated mux —
 /// so neither can forget the agent downgrade.
 fn propagated_authority(requested: McpSessionAuthority) -> McpSessionAuthority {
-    if requested == McpSessionAuthority::Operator && agent_context_declared() {
+    if requested == McpSessionAuthority::Operator
+        && agent_context_declared(&orbit_common::Env::capture())
+    {
         tracing::warn!(
             target: "orbit.mcp.remote",
             "this MCP client runs as an agent, so its operator authority is not propagated to \
@@ -186,6 +188,6 @@ pub(super) fn caller_machine_id_at(global_root: Option<&Path>) -> String {
 }
 
 fn local_caller_machine_id() -> String {
-    let global_root = orbit_common::fs::path::global_orbit_dir().ok();
+    let global_root = orbit_common::fs::path::global_orbit_dir(&orbit_common::Env::capture()).ok();
     caller_machine_id_at(global_root.as_deref())
 }

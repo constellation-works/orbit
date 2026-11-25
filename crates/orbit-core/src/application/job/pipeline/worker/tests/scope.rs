@@ -160,16 +160,18 @@ fn admitted_credentials_reach_the_scoped_worker_environment_and_stay_off_argv() 
         ("CLAUDE_CODE_OAUTH_TOKEN", None),
         ("ANTHROPIC_API_KEY", None),
     ]);
-    let policy =
-        orbit_config::ResolvedConfig::load(&orbit_config::ConfigRoots::global_only(root.path()))
-            .expect("policy loads")
-            .execution_env
-            .with_defaults(&[
-                ("CLAUDE_CODE_OAUTH_TOKEN".to_string(), OAUTH.to_string()),
-                ("ANTHROPIC_API_KEY".to_string(), API_KEY.to_string()),
-                ("GH_TOKEN".to_string(), CLOCK_GH.to_string()),
-                ("DATABASE_URL".to_string(), CLOCK_DATABASE.to_string()),
-            ]);
+    let policy = orbit_config::ResolvedConfig::load(
+        &orbit_common::Env::capture(),
+        &orbit_config::ConfigRoots::global_only(root.path()),
+    )
+    .expect("policy loads")
+    .execution_env
+    .with_defaults(&[
+        ("CLAUDE_CODE_OAUTH_TOKEN".to_string(), OAUTH.to_string()),
+        ("ANTHROPIC_API_KEY".to_string(), API_KEY.to_string()),
+        ("GH_TOKEN".to_string(), CLOCK_GH.to_string()),
+        ("DATABASE_URL".to_string(), CLOCK_DATABASE.to_string()),
+    ]);
     let limits =
         WorkerLimits::from_settings(&settings(MemoryLimit::Infinity, MemoryLimit::Infinity))
             .expect("enabled containment yields limits");

@@ -30,16 +30,21 @@ impl AntigravityUsageRequest {
             environment_mode: EnvironmentMode::ClearAndSet(self.environment.clone()),
             debug: false,
         };
-        let (result, body) = run_process_streaming_stdout(&request, &NoSandbox, |stdout| {
-            let mut body = Vec::new();
-            stdout
-                .take(MAX_BYTES + 1)
-                .read_to_end(&mut body)
-                .map_err(|_| {
-                    orbit_common::OrbitError::Execution("read Antigravity usage".to_string())
-                })?;
-            Ok(body)
-        })
+        let (result, body) = run_process_streaming_stdout(
+            &orbit_common::Env::capture(),
+            &request,
+            &NoSandbox,
+            |stdout| {
+                let mut body = Vec::new();
+                stdout
+                    .take(MAX_BYTES + 1)
+                    .read_to_end(&mut body)
+                    .map_err(|_| {
+                        orbit_common::OrbitError::Execution("read Antigravity usage".to_string())
+                    })?;
+                Ok(body)
+            },
+        )
         .ok()?;
         (result.success && body.len() as u64 <= MAX_BYTES).then_some(body)
     }

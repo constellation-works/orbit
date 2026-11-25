@@ -27,8 +27,8 @@ mod values;
 pub use values::{redact_secret_values_json, redact_secret_values_text};
 
 pub use env::{
-    is_sensitive_env_name, redact_sensitive_env_bytes, redact_sensitive_env_json,
-    redact_sensitive_env_text,
+    init_process_redaction, is_sensitive_env_name, redact_sensitive_env_bytes,
+    redact_sensitive_env_json, redact_sensitive_env_text,
 };
 pub use error::{
     credential_safe_location, redact_all_and_home, redact_all_and_home_error, redact_all_error,

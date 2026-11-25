@@ -126,7 +126,8 @@ fn boundary_grants_mark_shared_tmpdir_siblings_enumerated_and_keep_the_store_den
         read_denies: vec![store.clone()],
         ..LandlockBoundary::default()
     };
-    let grants = linux_landlock_boundary_grants(&request, &boundary).expect("compile boundary");
+    let grants = linux_landlock_boundary_grants(&orbit_common::Env::capture(), &request, &boundary)
+        .expect("compile boundary");
 
     let sibling_grant = grants
         .iter()

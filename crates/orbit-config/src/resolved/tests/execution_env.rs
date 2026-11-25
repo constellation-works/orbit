@@ -71,12 +71,12 @@ fn inherit_mode_omits_privilege_bearing_orbit_names() {
         ("HOME", Some("/home/inherit-fixture")),
     ]);
 
-    let mut snapshotted = ExecutionEnvPolicy::default();
+    let mut snapshotted = ExecutionEnvPolicy::new(&orbit_common::Env::capture());
     snapshotted.inherit = true;
     let snapshotted = snapshotted.with_defaults(&[]);
     assert_privilege_names_omitted(&snapshotted.agent_subprocess_env(&[]), "parent snapshot");
 
-    let mut live = ExecutionEnvPolicy::default();
+    let mut live = ExecutionEnvPolicy::new(&orbit_common::Env::capture());
     live.inherit = true;
     assert_privilege_names_omitted(&live.agent_subprocess_env(&[]), "live parent");
 }

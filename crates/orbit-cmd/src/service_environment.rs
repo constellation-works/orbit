@@ -68,7 +68,9 @@ pub fn crew_source_environment_warnings(
                     }
                 }
                 CrewEnvSource::File(_) => {
-                    if let Some(problem) = crew_env_file_problem(entry) {
+                    if let Some(problem) =
+                        crew_env_file_problem(&orbit_core::composition::composition_env(), entry)
+                    {
                         warnings.push(format!(
                             "crew `{crew}` env source {} (for {}) is unusable: {problem}; the \
                              crew is unavailable until the file is fixed",

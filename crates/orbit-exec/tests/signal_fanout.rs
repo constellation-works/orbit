@@ -89,13 +89,18 @@ fn signals_in_the_spawn_window_are_pending_until_cleanup_and_reraised() {
                 let (result, forwarded_while_paused, peer_status) = thread::scope(|scope| {
                     let runner = scope.spawn(|| {
                         if streaming {
-                            run_process_streaming_stdout(&req, &sandbox, |mut stdout| {
-                                std::io::copy(&mut stdout, &mut std::io::sink())?;
-                                Ok(())
-                            })
+                            run_process_streaming_stdout(
+                                &orbit_common::Env::capture(),
+                                &req,
+                                &sandbox,
+                                |mut stdout| {
+                                    std::io::copy(&mut stdout, &mut std::io::sink())?;
+                                    Ok(())
+                                },
+                            )
                             .map(|(result, ())| result)
                         } else {
-                            run_process(&req, &sandbox)
+                            run_process(&orbit_common::Env::capture(), &req, &sandbox)
                         }
                     });
                     ready_rx
@@ -201,6 +206,7 @@ fn signals_after_the_callers_spawn_are_deferred_until_the_group_is_reaped() {
             let runner = scope.spawn(move || {
                 let mut pid = 0;
                 let outcome = spawn_supervised_cancellable(
+                    &orbit_common::Env::capture(),
                     || {
                         let child = NoSandbox.spawn(req)?;
                         pid = child.id();
@@ -542,7 +548,7 @@ fn supervise_script(script: &str) -> orbit_exec::ExecutionResult {
         environment_mode: EnvironmentMode::Inherit,
         debug: false,
     };
-    run_process(&req, &NoSandbox).expect("run_process")
+    run_process(&orbit_common::Env::capture(), &req, &NoSandbox).expect("run_process")
 }
 
 fn wait_for_supervisor_handler(signal: libc::c_int) {

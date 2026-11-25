@@ -108,7 +108,9 @@ pub(in crate::application::task) fn task_field_writer(
     canonical_model: Option<&str>,
     actor_label: &str,
 ) -> TaskFieldWriter {
-    if agent_context_declared() || attributed_agent_identity(canonical_agent, canonical_model) {
+    if agent_context_declared(&orbit_common::Env::capture())
+        || attributed_agent_identity(canonical_agent, canonical_model)
+    {
         TaskFieldWriter::Agent
     } else if operator_decision_authority
         && !super::super::helpers::is_automation_actor(actor_label)

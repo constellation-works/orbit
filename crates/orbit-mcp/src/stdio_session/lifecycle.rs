@@ -91,7 +91,10 @@ fn lifecycle() -> Lifecycle {
     if generation::process_participation().is_none() {
         return Lifecycle::Continue;
     }
-    if let Some(executable) = generation::handover_target(Some(generation::RESUME_MCP_STDIO)) {
+    if let Some(executable) = generation::handover_target(
+        &orbit_common::Env::capture(),
+        Some(generation::RESUME_MCP_STDIO),
+    ) {
         return Lifecycle::HandOver(executable);
     }
     if generation::pending_switch_for_this_process().is_some() {

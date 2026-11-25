@@ -46,7 +46,7 @@ fn default_policy_excludes_benignly_named_ambient_credentials() {
         return;
     }
     let _ambient = ambient_env_with_credentials();
-    let policy = ExecutionEnvPolicy::default();
+    let policy = ExecutionEnvPolicy::new(&orbit_common::Env::capture());
 
     let env = policy.agent_subprocess_env(&[]);
 
@@ -70,8 +70,11 @@ fn config_admission_pins_inherit_off() {
         "[execution.env]\ninherit = true\npass = [\"HOME\"]\n",
     );
 
-    let resolved = ResolvedConfig::load(&ConfigRoots::new(global.path(), workspace.path()))
-        .expect("config loads");
+    let resolved = ResolvedConfig::load(
+        &orbit_common::Env::capture(),
+        &ConfigRoots::new(global.path(), workspace.path()),
+    )
+    .expect("config loads");
 
     assert!(
         !resolved.execution_env.inherit(),

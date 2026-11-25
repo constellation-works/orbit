@@ -21,7 +21,6 @@
 //! for stdout and stderr, a wall-clock bound and a build-directory size bound,
 //! either of which kills the whole process group.
 
-use orbit_common::env_vars;
 mod linux;
 mod macos;
 mod script;
@@ -155,6 +154,7 @@ pub fn probe_build_sandbox(fetch: bool) -> Result<BuildSandboxProbe, String> {
 /// The caller probes first; a profile that cannot be applied here is an
 /// error, never a weaker run.
 pub fn run_build_phase(
+    env: &orbit_common::Env,
     request: &BuildPhaseRequest<'_>,
     log: &mut BuildLog,
 ) -> Result<BuildPhaseEnd, OrbitError> {
@@ -175,17 +175,17 @@ pub fn run_build_phase(
     }
     #[cfg(target_os = "linux")]
     {
-        let (command, guard) = linux::command(request)?;
+        let (command, guard) = linux::command(env, request)?;
         supervise::run(command, guard, request, log)
     }
     #[cfg(target_os = "macos")]
     {
-        let command = macos::command(request)?;
+        let command = macos::command(env, request)?;
         supervise::run(command, (), request, log)
     }
     #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     {
-        let _ = log;
+        let _ = (env, log);
         Err(OrbitError::PolicyDenied(
             "plugin builds run only on Linux and macOS".to_string(),
         ))
@@ -194,9 +194,9 @@ pub fn run_build_phase(
 
 /// Credential denies apply even when a credential lives under the fixed
 /// system runtime rather than one of the declared toolchain roots.
-fn credential_denies(home: Option<&OsStr>) -> Vec<(PathBuf, bool)> {
-    let cargo_home = std::env::var_os(env_vars::CARGO_HOME);
-    crate::credential_paths::credential_read_denies(home, cargo_home.as_deref())
+fn credential_denies(env: &orbit_common::Env, home: Option<&OsStr>) -> Vec<(PathBuf, bool)> {
+    let cargo_home = env.cargo_home();
+    crate::credential_paths::credential_read_denies(home, cargo_home)
         .into_iter()
         .map(|deny| (deny.path, deny.file))
         .collect()

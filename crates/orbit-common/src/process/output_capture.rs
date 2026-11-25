@@ -1,5 +1,3 @@
-use std::env;
-
 /// Suffix appended once to captured output when the byte budget is exceeded.
 pub const OUTPUT_TRUNCATED_MARKER: &[u8] = b"\n[orbit: output truncated after capture limit]\n";
 
@@ -61,9 +59,9 @@ impl BoundedOutputCapture {
 
 /// Read a positive byte limit from the environment, falling back for absent, zero or invalid
 /// values.
-pub fn capture_limit_from_env(name: &str, default: usize) -> usize {
-    env::var(name)
-        .ok()
+pub fn capture_limit_from_env(value: Option<&std::ffi::OsStr>, default: usize) -> usize {
+    value
+        .and_then(std::ffi::OsStr::to_str)
         .and_then(|value| value.parse::<usize>().ok())
         .filter(|limit| *limit > 0)
         .unwrap_or(default)

@@ -6,8 +6,11 @@ fn auto_effort_load(body: &str) -> Result<ResolvedConfig, String> {
     let global = tempfile::tempdir().expect("global tempdir");
     let workspace = tempfile::tempdir().expect("workspace tempdir");
     fs::write(global.path().join("config.toml"), body).expect("global config");
-    ResolvedConfig::load(&ConfigRoots::new(global.path(), workspace.path()))
-        .map_err(|error| error.to_string())
+    ResolvedConfig::load(
+        &orbit_common::Env::capture(),
+        &ConfigRoots::new(global.path(), workspace.path()),
+    )
+    .map_err(|error| error.to_string())
 }
 
 const AUTO_EFFORT_CREW: &str = "[crews.sol]\nmodel = \"gpt-5.5\"\nprovider = \"codex\"\n";

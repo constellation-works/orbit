@@ -57,7 +57,11 @@ pub(crate) fn git_failure_error(
 /// captured stderr.
 pub(crate) fn git_run(current_dir: &Path, args: &[&str]) -> Result<GitOutcome, OrbitError> {
     let timeout_ms = command_timeout(args)?;
-    let result = run_process(&git_request(current_dir, args, timeout_ms), &NoSandbox)?;
+    let result = run_process(
+        &orbit_common::Env::capture(),
+        &git_request(current_dir, args, timeout_ms),
+        &NoSandbox,
+    )?;
     Ok(GitOutcome {
         stdout: result.stdout,
         stderr: result.stderr,
@@ -112,12 +116,17 @@ pub(crate) fn git_run_bytes_with_env(
     if let Some(bytes) = stdin {
         request.stdin_mode = StdinMode::Bytes(bytes.to_vec());
     }
-    let (result, stdout) = run_process_streaming_stdout(&request, &NoSandbox, |mut pipe| {
-        let mut bytes = Vec::new();
-        pipe.read_to_end(&mut bytes)
-            .map_err(|error| OrbitError::Execution(format!("read Git stdout: {error}")))?;
-        Ok(bytes)
-    })?;
+    let (result, stdout) = run_process_streaming_stdout(
+        &orbit_common::Env::capture(),
+        &request,
+        &NoSandbox,
+        |mut pipe| {
+            let mut bytes = Vec::new();
+            pipe.read_to_end(&mut bytes)
+                .map_err(|error| OrbitError::Execution(format!("read Git stdout: {error}")))?;
+            Ok(bytes)
+        },
+    )?;
     Ok(GitBytesOutcome {
         stdout,
         stderr: result.stderr,
@@ -424,7 +433,7 @@ pub(crate) fn git_output_raw_with_env(
                 .map(|(key, value)| ((*key).to_string(), (*value).to_string())),
         );
     }
-    let result = run_process(&request, &NoSandbox)?;
+    let result = run_process(&orbit_common::Env::capture(), &request, &NoSandbox)?;
     if result.timed_out {
         return Err(git_timeout_error(
             current_dir,

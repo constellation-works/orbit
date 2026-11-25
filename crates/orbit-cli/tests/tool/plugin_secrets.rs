@@ -381,8 +381,10 @@ fn remove_deletes_the_plugins_secrets_unless_record_only() {
 #[cfg(unix)]
 #[test]
 fn a_set_secret_reaches_its_exec_backend_on_stdin_only() {
-    if !orbit_exec::macos_sandbox_test_guard("a_set_secret_reaches_its_exec_backend_on_stdin_only")
-    {
+    if !orbit_exec::macos_sandbox_test_guard(
+        &orbit_common::Env::capture(),
+        "a_set_secret_reaches_its_exec_backend_on_stdin_only",
+    ) {
         return;
     }
     let fixture = Fixture::new();

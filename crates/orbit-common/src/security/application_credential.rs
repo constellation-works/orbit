@@ -68,8 +68,8 @@ impl ApplicationCredential {
 
     /// Read a bounded regular file through an inherited descriptor without
     /// changing its shared offset. Pipes and invalid descriptors fail closed.
-    pub fn from_process_descriptor() -> Result<Option<Self>, OrbitError> {
-        let Some(raw) = std::env::var_os(APPLICATION_CREDENTIAL_FD_ENV) else {
+    pub fn from_process_descriptor(env: &crate::Env) -> Result<Option<Self>, OrbitError> {
+        let Some(raw) = env.orbit_application_credential_fd() else {
             return Ok(None);
         };
         let refused =

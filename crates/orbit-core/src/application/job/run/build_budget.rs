@@ -18,7 +18,7 @@ impl OrbitRuntime {
     pub fn build_budget_capacity_warnings(&self) -> Result<Vec<Value>, OrbitError> {
         // Read settings before the participation check, so an invalid setting
         // is still reported as an advisory error in every checkout.
-        let budget = BuildBudgetCapacity::read()?;
+        let budget = BuildBudgetCapacity::read(&orbit_common::Env::capture())?;
         // The wrapper counts only as a regular file inside the checkout, so a
         // link that resolves elsewhere is not a shipped wrapper. `Path::starts_with`
         // after canonicalize is a CodeQL rust/path-injection barrier when kept

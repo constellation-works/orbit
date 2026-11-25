@@ -37,13 +37,13 @@ impl GenerationUpdate {
     /// does, unless this process inherited exactly that fence from the
     /// process that started it (see the module docs). A pending switch still
     /// refuses an adopted fence.
-    pub fn acquire_fence(root: &Path) -> Result<Self, OrbitError> {
-        match lent::adopt(root) {
+    pub fn acquire_fence(env: &crate::Env, root: &Path) -> Result<Self, OrbitError> {
+        match lent::adopt(env, root) {
             Some(update) => {
                 update.refuse_pending_switch()?;
                 Ok(update)
             }
-            None => Self::acquire(root),
+            None => Self::acquire(env, root),
         }
     }
 
@@ -116,8 +116,8 @@ mod lent {
         true
     }
 
-    pub(super) fn adopt(root: &Path) -> Option<GenerationUpdate> {
-        let lent = std::env::var(LENT_FENCE_ENV).ok()?;
+    pub(super) fn adopt(env: &crate::Env, root: &Path) -> Option<GenerationUpdate> {
+        let lent = env.orbit_lent_generation_fence()?.to_str()?;
         let validated = validated_generation_root(root).ok()?;
         lent.lines().find_map(|line| {
             let mut parts = line.splitn(3, ':');
@@ -129,6 +129,7 @@ mod lent {
             let admission = borrow(admission, &validated, ADMISSION_LOCK)?;
             let generation = borrow(generation, &validated, GENERATION_LOCK)?;
             Some(GenerationUpdate {
+                bound: super::super::quiesce_bound(env),
                 root: validated.clone(),
                 admission,
                 generation,
@@ -191,7 +192,7 @@ mod lent {
         false
     }
 
-    pub(super) fn adopt(_root: &Path) -> Option<GenerationUpdate> {
+    pub(super) fn adopt(_env: &crate::Env, _root: &Path) -> Option<GenerationUpdate> {
         None
     }
 }

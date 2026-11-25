@@ -259,7 +259,8 @@ pub fn resolve_log_path(override_path: Option<&Path>) -> Result<PathBuf, OrbitEr
     {
         return Ok(PathBuf::from(env));
     }
-    orbit_common::observability::logging::global_jsonl_log_path().map_err(|err| {
-        OrbitError::InvalidInput(format!("cannot resolve global JSONL log path: {err}"))
-    })
+    orbit_common::observability::logging::global_jsonl_log_path(
+        &orbit_core::composition::composition_env(),
+    )
+    .map_err(|err| OrbitError::InvalidInput(format!("cannot resolve global JSONL log path: {err}")))
 }

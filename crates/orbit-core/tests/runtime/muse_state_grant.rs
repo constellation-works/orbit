@@ -43,7 +43,7 @@ fn only_the_muse_lane_may_write_muse_state_roots() {
         );
         return;
     }
-    let home = orbit_common::fs::path::home_dir()
+    let home = orbit_common::fs::path::home_dir(&orbit_common::Env::capture())
         .expect("home")
         .canonicalize()
         .expect("canonical home");

@@ -49,9 +49,9 @@ const COMMAND_LIMIT_BYTES: usize = 256;
 
 /// The threshold supervisors use: [`STOPPED_DESCENDANT_THRESHOLD_ENV`] when it
 /// holds a positive number of milliseconds, otherwise the default.
-pub fn stopped_descendant_threshold() -> Duration {
-    std::env::var(STOPPED_DESCENDANT_THRESHOLD_ENV)
-        .ok()
+pub fn stopped_descendant_threshold(env: &crate::Env) -> Duration {
+    env.orbit_stopped_descendant_threshold_ms()
+        .and_then(std::ffi::OsStr::to_str)
         .and_then(|value| value.trim().parse::<u64>().ok())
         .filter(|millis| *millis > 0)
         .map(Duration::from_millis)

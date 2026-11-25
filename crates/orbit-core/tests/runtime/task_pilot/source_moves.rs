@@ -240,7 +240,7 @@ fn a_pilot_prepare_pins_fresh_origin_while_another_fetch_holds_the_lock() {
     let (release, released) = mpsc::channel::<()>();
     let repo = workspace.repo.clone();
     let holder = std::thread::spawn(move || {
-        orbit_common::fs::git::with_git_fetch_lock(&repo, || {
+        orbit_common::fs::git::with_git_fetch_lock(&orbit_common::Env::capture(), &repo, || {
             held.send(()).unwrap();
             // A prepare that queues on the lock is still waiting here, so
             // the holder gives up and the case fails instead of hanging.

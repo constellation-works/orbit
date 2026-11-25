@@ -47,8 +47,15 @@ fn a_symlinked_credential_dir_masks_its_real_location() {
     fs::remove_dir_all(home.join(".ssh")).expect("remove .ssh");
     #[cfg(unix)]
     std::os::unix::fs::symlink(&dotfiles, home.join(".ssh")).expect("symlink");
-    let plan =
-        compile_linux_bwrap_argv(&profile(vec![]), "/bin/true", &[], None, false).expect("masks");
+    let plan = compile_linux_bwrap_argv(
+        &orbit_common::Env::capture(),
+        &profile(vec![]),
+        "/bin/true",
+        &[],
+        None,
+        false,
+    )
+    .expect("masks");
     let out = plan.args;
 
     #[cfg(unix)]
@@ -72,6 +79,7 @@ fn a_grant_inside_a_credential_dir_refuses_the_plan_instead_of_hiding_it() {
     let granted = home.join(".config/gh/workdir");
     fs::create_dir_all(&granted).expect("granted dir");
     let error = compile_linux_bwrap_argv(
+        &orbit_common::Env::capture(),
         &profile(vec![granted.display().to_string()]),
         "/bin/true",
         &[],
@@ -115,8 +123,9 @@ fn linux_browser_profile_roots_are_masked_beside_a_readable_file() {
     let _environment =
         orbit_common::test_env::scoped([("HOME", home.to_str()), ("CARGO_HOME", None)]);
 
-    let denies = orbit_exec::default_credential_read_denies();
+    let denies = orbit_exec::default_credential_read_denies(&orbit_common::Env::capture());
     let plan = compile_linux_bwrap_argv(
+        &orbit_common::Env::capture(),
         &profile(vec![]),
         "/bin/cat",
         &[readable.display().to_string()],

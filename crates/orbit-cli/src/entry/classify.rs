@@ -79,7 +79,10 @@ pub(super) fn is_clock_tick(command: &command::Commands) -> bool {
 /// exit. Say so on every refused tick, and keep the run of refusals for
 /// `orbit doctor` [ORB-15260].
 pub(super) fn report_refused_clock_tick(root: &std::path::Path, error: &orbit_core::OrbitError) {
-    let recorded = orbit_common::fs::generation::process_generation().and_then(|digest| {
+    let recorded = orbit_common::fs::generation::process_generation(
+        &orbit_core::composition::composition_env(),
+    )
+    .and_then(|digest| {
         orbit_common::fs::generation::record_clock_upgrade_refusal(
             root,
             digest,

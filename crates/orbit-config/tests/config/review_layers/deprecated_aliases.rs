@@ -32,7 +32,8 @@ fn effective(
     review_layers_write_config(global.path(), layers.global);
     review_layers_write_config(workspace.path(), layers.workspace);
     let roots = ConfigRoots::new(global.path(), workspace.path());
-    let (config, logs) = capture_logs(|| load_effective_config(&roots));
+    let (config, logs) =
+        capture_logs(|| load_effective_config(&orbit_common::Env::capture(), &roots));
     let rows = config
         .unwrap_or_else(|error| panic!("{} / {} loads: {error}", layers.global, layers.workspace))
         .values()
@@ -47,9 +48,12 @@ fn load_error(global_body: &str, workspace_body: &str) -> String {
     let workspace = tempdir().expect("workspace tempdir");
     review_layers_write_config(global.path(), global_body);
     review_layers_write_config(workspace.path(), workspace_body);
-    ResolvedConfig::load(&ConfigRoots::new(global.path(), workspace.path()))
-        .expect_err("the load is refused")
-        .to_string()
+    ResolvedConfig::load(
+        &orbit_common::Env::capture(),
+        &ConfigRoots::new(global.path(), workspace.path()),
+    )
+    .expect_err("the load is refused")
+    .to_string()
 }
 
 #[test]
@@ -223,9 +227,12 @@ fn a_workspace_stating_only_an_undeciding_half_keeps_the_lower_layer() {
         let workspace = tempdir().expect("workspace tempdir");
         review_layers_write_config(global.path(), global_body);
         review_layers_write_config(workspace.path(), workspace_body);
-        ResolvedConfig::load(&ConfigRoots::new(global.path(), workspace.path()))
-            .expect("config loads")
-            .operation
+        ResolvedConfig::load(
+            &orbit_common::Env::capture(),
+            &ConfigRoots::new(global.path(), workspace.path()),
+        )
+        .expect("config loads")
+        .operation
     };
 
     let built_in = load("", "[review]\nbefore_landing = false\n");
@@ -283,7 +290,10 @@ fn deprecated_spellings_that_cannot_merge_are_refused_with_the_keys_named() {
         workspace.path(),
         "[operation]\nreview_crew = \"grok\"\n\n[workflow.purpose_crews]\nreview = \"sol\"\n",
     );
-    let config = ResolvedConfig::load(&ConfigRoots::new(global.path(), workspace.path()))
-        .expect("config loads");
+    let config = ResolvedConfig::load(
+        &orbit_common::Env::capture(),
+        &ConfigRoots::new(global.path(), workspace.path()),
+    )
+    .expect("config loads");
     assert_eq!(config.operation.review_crew.value, ["sol"]);
 }

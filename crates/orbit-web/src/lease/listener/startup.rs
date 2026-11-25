@@ -17,7 +17,8 @@ use std::path::Path;
 /// the unconfigured [`LeaseListenerSettings::default`] it validates names no
 /// bind address, so it refuses to start.
 pub fn run_lease_listener() -> Result<(), OrbitError> {
-    let orbit_home = orbit_common::fs::path::global_orbit_dir()?;
+    let orbit_home =
+        orbit_common::fs::path::global_orbit_dir(&orbit_core::composition::composition_env())?;
     check_listener_execution_environment(&orbit_home)?;
     let config = LeaseListenerConfig::from_settings(&LeaseListenerSettings::default())?;
     refuse_intake_socket_owner(&config.intake_socket)?;

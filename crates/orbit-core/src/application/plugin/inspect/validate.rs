@@ -57,10 +57,10 @@ pub fn validate_plugin_dir_for_workspace(
         PluginValidationPolicy::host_default().with_first_party_verified(first_party_verified);
     validate_loaded_plugin(&plugin, &policy).map_err(manifest_refusal)?;
     let global_root = runtime.global_root();
-    let config = orbit_config::ResolvedConfig::load(&orbit_config::ConfigRoots::new(
-        &global_root,
-        runtime.shared_root(),
-    ))?;
+    let config = orbit_config::ResolvedConfig::load(
+        runtime.execution_env_policy().process_env(),
+        &orbit_config::ConfigRoots::new(&global_root, runtime.shared_root()),
+    )?;
     // Validation reports on the manifest, which has no operator behind it
     // yet: every grant is the unscoped form of what it requests.
     let grants = PluginGrantSet::from_grants(plugin.manifest.required_grants());

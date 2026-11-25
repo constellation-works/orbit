@@ -20,7 +20,7 @@ pub(super) fn read_git_observation(
     } else {
         GIT_LOCAL_TIMEOUT
     };
-    let output = run_git_within(repo, args, timeout)?;
+    let output = run_git_within(&orbit_common::Env::capture(), repo, args, timeout)?;
     if !output.success {
         return Err(if completion {
             refuse("completion Git observation failed")
@@ -38,7 +38,12 @@ pub(super) fn is_git_ancestor(
     descendant: &str,
 ) -> Result<bool, OrbitError> {
     Ok(matches!(
-        orbit_common::fs::git::git_ancestry(repo, ancestor, descendant)?,
+        orbit_common::fs::git::git_ancestry(
+            &orbit_common::Env::capture(),
+            repo,
+            ancestor,
+            descendant
+        )?,
         orbit_common::fs::git::GitAncestry::Ancestor
     ))
 }

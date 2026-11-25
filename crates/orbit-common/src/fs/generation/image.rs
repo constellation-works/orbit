@@ -44,8 +44,8 @@ fn hash_executable(mut file: File) -> Result<String, OrbitError> {
 }
 
 /// Digest the running inode, even after its installed path has been replaced.
-pub fn process_generation() -> Result<&'static str, OrbitError> {
-    process_digest(None, false)
+pub fn process_generation(env: &crate::Env) -> Result<&'static str, OrbitError> {
+    process_digest(env, None, false)
 }
 
 /// The digest [`process_digest`] hashed to record under a generation root
@@ -59,6 +59,7 @@ static UNREMEMBERED: Mutex<Option<(PathBuf, image_digest::Unremembered)>> = Mute
 /// root defers the write to [`remember_process_digest`]. Whichever call runs
 /// first fixes the process's digest; later calls return it.
 pub(super) fn process_digest(
+    env: &crate::Env,
     cache_root: Option<&Path>,
     record: bool,
 ) -> Result<&'static str, OrbitError> {
@@ -91,6 +92,7 @@ pub(super) fn process_digest(
                     |file| {
                         image_digest::shared_test_digest(
                             image_name.as_deref(),
+                            shared_test_digest_dir(env),
                             file,
                             hash_executable,
                         )
@@ -209,4 +211,15 @@ fn macho_uuid(mut commands: &[u8]) -> Result<[u8; 16], OrbitError> {
         UpgradeAdmissionRefusalKind::Other,
         "missing or invalid Mach-O image UUID",
     ))
+}
+
+fn shared_test_digest_dir(_env: &crate::Env) -> Option<&std::ffi::OsStr> {
+    #[cfg(debug_assertions)]
+    {
+        _env.orbit_test_shared_image_digests()
+    }
+    #[cfg(not(debug_assertions))]
+    {
+        None
+    }
 }

@@ -52,8 +52,10 @@ fn stale_routine_message(global_root: &std::path::Path) -> Result<Option<String>
 
     // A missing scheduler store has no fires to judge; doctor must not reach the
     // status read, which now refuses to create it (STD-01 R31).
-    let database =
-        orbit_config::resolved_audit_db_path(&orbit_config::ConfigRoots::global_only(global_root))?;
+    let database = orbit_config::resolved_audit_db_path(
+        &orbit_core::composition::composition_env(),
+        &orbit_config::ConfigRoots::global_only(global_root),
+    )?;
     if !database.exists() {
         return Ok(None);
     }

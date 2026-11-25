@@ -33,7 +33,7 @@ fn unreadable_glob_subtree_does_not_abort_profile_and_sibling_match_stays_pinned
         read: Vec::new(),
         modify: vec![workspace_text.clone(), format!("!{workspace_text}/**/.env")],
     };
-    let result = compile_macos_sandbox_profile(&rules, "codex");
+    let result = compile_macos_sandbox_profile(&orbit_common::Env::capture(), &rules, "codex");
 
     // Restore access before asserting so TempDir can remove the fixture even
     // when compilation fails.

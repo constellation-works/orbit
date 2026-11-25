@@ -360,8 +360,8 @@ fn read_only_tool_run_persists_audit_while_joining_a_foreign_generation() {
     // read-only runtime handles, reproducing the lost-audit path.
     let identity = orbit_core::composition::compiled_compatibility();
     let digest = "a".repeat(64);
-    let _record =
-        GenerationGuard::acquire(&global_root, &digest).expect("record distinct executable digest");
+    let _record = GenerationGuard::acquire(&orbit_common::Env::capture(), &global_root, &digest)
+        .expect("record distinct executable digest");
     let _generation = GenerationGuard::join(
         &global_root,
         &Participant {

@@ -38,7 +38,12 @@ const REPORT_PROBES: &[DoctorProbe] = &[
     DoctorProbe::many("provider-auth", |runtime, _| provider_auth_rows(runtime)),
     DoctorProbe::many("provider-limits", |runtime, _| provider_limit_rows(runtime)),
     DoctorProbe::one("mcp-registration", |runtime, _| {
-        mcp_registration_row(runtime, orbit_common::fs::path::home_dir().ok().as_deref())
+        mcp_registration_row(
+            runtime,
+            orbit_common::fs::path::home_dir(&orbit_core::composition::composition_env())
+                .ok()
+                .as_deref(),
+        )
     }),
     // Machine-global checks: they read the operator's home, not the workspace.
     DoctorProbe::one("clock-unit", |runtime, _| {
@@ -253,10 +258,10 @@ pub fn doctor_row_json(row: &WorkspaceDoctorResult) -> Value {
 /// may refresh credentials or call the network, while `doctor` must stay fast
 /// and read-only.
 fn routed_provider_rows(runtime: &OrbitRuntime) -> Vec<WorkspaceDoctorResult> {
-    let config = match ResolvedConfig::load(&ConfigRoots::new(
-        runtime.global_root(),
-        runtime.shared_root(),
-    )) {
+    let config = match ResolvedConfig::load(
+        &orbit_core::composition::composition_env(),
+        &ConfigRoots::new(runtime.global_root(), runtime.shared_root()),
+    ) {
         Ok(config) => config,
         Err(error) => {
             return vec![WorkspaceDoctorResult {

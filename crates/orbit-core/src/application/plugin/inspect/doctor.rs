@@ -266,10 +266,10 @@ fn scoped_out_fs_root_rows(runtime: &OrbitRuntime) -> Result<Vec<PluginDoctorRes
     // The effective `[plugins.<ns>]` section, because an fs root may be
     // written `{{config.<key>}}` and would otherwise fail to render here and
     // report nothing.
-    let config = orbit_config::ResolvedConfig::load(&orbit_config::ConfigRoots::new(
-        runtime.global_root(),
-        runtime.shared_root(),
-    ))?;
+    let config = orbit_config::ResolvedConfig::load(
+        runtime.execution_env_policy().process_env(),
+        &orbit_config::ConfigRoots::new(runtime.global_root(), runtime.shared_root()),
+    )?;
     for entry in &runtime.plugin_load().registered {
         // A row whose grants did not verify granted nothing at all, and is
         // already its own finding; reading its scope would repeat an

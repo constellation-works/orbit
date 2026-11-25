@@ -455,8 +455,10 @@ impl PluginBackendSpec {
             &[]
         };
         let mut env_pairs = match ctx.proc_spawn_environment.as_deref() {
-            Some(parent) => allowlisted_child_env_from(parent, env_pass, &[]),
-            None => allowlisted_child_env(env_pass, &[]),
+            Some(parent) => {
+                allowlisted_child_env_from(&orbit_common::Env::capture(), parent, env_pass, &[])
+            }
+            None => allowlisted_child_env(&orbit_common::Env::capture(), env_pass, &[]),
         };
         // Granted declared programs are discoverable by name whatever the
         // caller's `PATH`: prepend the host's program link directory, which

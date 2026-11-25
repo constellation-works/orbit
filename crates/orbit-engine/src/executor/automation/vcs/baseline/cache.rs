@@ -62,7 +62,7 @@ pub(in super::super) fn cache_paths(
     identity.push('\0');
     identity.push_str(&serde_json::json!(build_output_env).to_string());
     let key = sha256_hex(identity.as_bytes());
-    let dir = git_common_dir(repo)?.join(CACHE_DIR);
+    let dir = git_common_dir(&orbit_common::Env::capture(), repo)?.join(CACHE_DIR);
     Ok(CachePaths {
         result: dir.join(format!("{key}.json")),
         lock: dir.join(format!("{key}.lock")),
@@ -86,7 +86,9 @@ pub(in super::super) struct RecordedBaseRun {
 /// lock proves no base run is using either.
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub(in super::super) fn recorded_base_runs(repo: &Path) -> Vec<RecordedBaseRun> {
-    let Ok(dir) = git_common_dir(repo).map(|common| common.join(CACHE_DIR)) else {
+    let Ok(dir) =
+        git_common_dir(&orbit_common::Env::capture(), repo).map(|common| common.join(CACHE_DIR))
+    else {
         return Vec::new();
     };
     let Ok(entries) = std::fs::read_dir(&dir) else {

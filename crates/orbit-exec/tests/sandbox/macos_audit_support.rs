@@ -50,7 +50,8 @@ pub(super) fn compile_with_env(
         ("XDG_STATE_HOME", env.xdg_state_home),
         ("CARGO_HOME", env.cargo_home),
     ]);
-    compile_macos_sandbox_profile(resolved, provider).expect("compile")
+    compile_macos_sandbox_profile(&orbit_common::Env::capture(), resolved, provider)
+        .expect("compile")
 }
 
 #[cfg(target_os = "macos")]

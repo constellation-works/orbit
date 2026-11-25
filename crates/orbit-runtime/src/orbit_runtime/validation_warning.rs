@@ -48,8 +48,13 @@ impl RuntimeKernel {
         if let Some(cached) = read_warning(&path, &key) {
             return cached.warning;
         }
-        let warning =
-            orbit_exec::ValidationEnvironment::resolve(base, policy, &shell).preflight_warning();
+        let warning = orbit_exec::ValidationEnvironment::resolve(
+            self.execution_env_policy().process_env(),
+            base,
+            policy,
+            &shell,
+        )
+        .preflight_warning();
         let cached = CachedWarning {
             key,
             warning: warning.clone(),

@@ -58,6 +58,7 @@ pub(super) fn overlay_crew_env(
     crew_env: &[orbit_types::identity::CrewEnvVar],
 ) -> Vec<(String, String)> {
     orbit_common::security::child_env::apply_crew_env_from(
+        &orbit_common::Env::capture(),
         &mut env,
         &std::env::vars().collect::<Vec<_>>(),
         crew_env,

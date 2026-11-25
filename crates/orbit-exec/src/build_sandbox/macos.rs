@@ -95,7 +95,7 @@ pub(super) fn runtime_read_filters() -> Vec<String> {
 
 /// The SBPL profile for an offline phase. `spec.network` is not rendered:
 /// `command` refuses a networked phase before compiling.
-pub fn compile_macos_build_profile(spec: &BuildSandboxSpec<'_>) -> String {
+pub fn compile_macos_build_profile(env: &orbit_common::Env, spec: &BuildSandboxSpec<'_>) -> String {
     let mut profile = deny_default_preamble();
     let mut readable = runtime_read_filters();
     readable.extend(spec.readable.iter().map(|path| subpath(path)));
@@ -108,7 +108,7 @@ pub fn compile_macos_build_profile(spec: &BuildSandboxSpec<'_>) -> String {
     profile.push_str(DEV_WRITE_ALLOW);
 
     // Last-match-wins: the credential denies sit after every allow.
-    push_credential_denies(&mut profile, spec.home);
+    push_credential_denies(env, &mut profile, spec.home);
 
     profile.push_str("(deny network*)\n");
     profile
@@ -116,8 +116,12 @@ pub fn compile_macos_build_profile(spec: &BuildSandboxSpec<'_>) -> String {
 
 /// The credential denies, read and write. They must follow every allow:
 /// SBPL's last match wins.
-pub(super) fn push_credential_denies(profile: &mut String, home: Option<&std::ffi::OsStr>) {
-    for (path, file) in super::credential_denies(home) {
+pub(super) fn push_credential_denies(
+    env: &orbit_common::Env,
+    profile: &mut String,
+    home: Option<&std::ffi::OsStr>,
+) {
+    for (path, file) in super::credential_denies(env, home) {
         let filter = if file {
             format!("(literal \"{}\")", sbpl_escape(&physical(&path)))
         } else {
@@ -165,6 +169,7 @@ const FETCH_UNSUPPORTED: &str = "macOS runs no network `fetch` phase for a plugi
 /// confined process before `sandbox-exec` reads it.
 #[cfg(target_os = "macos")]
 pub(super) fn command(
+    env: &orbit_common::Env,
     request: &super::BuildPhaseRequest<'_>,
 ) -> Result<std::process::Command, orbit_common::OrbitError> {
     use orbit_common::OrbitError;
@@ -179,7 +184,7 @@ pub(super) fn command(
     let mut command = std::process::Command::new(sandbox_exec);
     command
         .arg("-p")
-        .arg(compile_macos_build_profile(&request.sandbox))
+        .arg(compile_macos_build_profile(env, &request.sandbox))
         .args(request.argv)
         .current_dir(request.cwd);
     Ok(command)

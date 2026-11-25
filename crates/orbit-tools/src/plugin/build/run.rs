@@ -119,7 +119,7 @@ pub fn run_plugin_build(run: &PluginBuildRun<'_>) -> Result<PluginBuildResult, O
             timeout: Duration::from_millis(plan.timeout_ms),
             build_dir_cap_bytes: PLUGIN_BUILD_DIR_CAP_BYTES,
         };
-        let end = run_build_phase(&request, &mut log);
+        let end = run_build_phase(&orbit_common::Env::capture(), &request, &mut log);
         ran.push(rendered);
         match end {
             Ok(end) if end.succeeded() => log.note(&format!("phase {} succeeded", phase.name())),

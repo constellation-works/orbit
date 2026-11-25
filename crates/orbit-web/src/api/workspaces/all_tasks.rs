@@ -278,7 +278,7 @@ fn all_tasks_json(
     resume_index: usize,
     selections: Vec<WorkspaceSelection>,
 ) -> Result<Value, orbit_core::OrbitError> {
-    let home = orbit_common::fs::path::home_dir().ok();
+    let home = orbit_common::fs::path::home_dir(&orbit_core::composition::composition_env()).ok();
     let mut candidates = Vec::new();
     let mut total = 0;
     let mut remaining = 0;

@@ -72,7 +72,7 @@ impl ResidentGrantCaller {
             && self.session.transport.is_none()
             && self.session.origin_session_id.is_none()
             && self.session.worker_invocation.is_none()
-            && !agent_context_declared()
+            && !agent_context_declared(&orbit_common::Env::capture())
             && resolved_caller_capabilities(&self.session).contains(&McpCapability::Operator)
     }
 }

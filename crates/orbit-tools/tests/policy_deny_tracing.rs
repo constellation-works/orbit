@@ -25,7 +25,7 @@ fn policy_denials_emit_redacted_jsonl_tracing_events() {
         std::env::set_var("HOME", home.path());
         std::env::set_var("RUST_LOG", "warn");
     }
-    init_default_subscriber("warn");
+    init_default_subscriber(&orbit_common::Env::capture(), "warn");
 
     let mut registry = ToolRegistry::new();
     registry.register_builtins();

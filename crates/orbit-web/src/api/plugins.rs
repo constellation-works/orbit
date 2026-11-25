@@ -39,7 +39,8 @@ pub(super) async fn list_plugins(State(state): State<DashboardState>, Ws(runtime
     let operator = state.operator_session();
     match blocking("list plugins", move || runtime.list_plugins()).await {
         Ok(plugins) => Json(Value::Array({
-            let home = orbit_common::fs::path::home_dir().ok();
+            let home =
+                orbit_common::fs::path::home_dir(&orbit_core::composition::composition_env()).ok();
             plugins
                 .iter()
                 .map(|plugin| {
@@ -153,7 +154,8 @@ async fn mutate_plugin(
     match result {
         Ok(Some(summary)) => {
             audit.succeeded(&caller, started).await;
-            let home = orbit_common::fs::path::home_dir().ok();
+            let home =
+                orbit_common::fs::path::home_dir(&orbit_core::composition::composition_env()).ok();
             Json(json!({"plugin": plugin_to_json(&summary, home.as_deref())})).into_response()
         }
         Ok(None) => {

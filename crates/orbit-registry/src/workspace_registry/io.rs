@@ -93,7 +93,9 @@ fn load_validated_registry_with_context(
 
 /// Return the path to the machine-global workspace registry.
 pub fn registry_path() -> Result<PathBuf, OrbitError> {
-    Ok(registry_path_for(&global_orbit_dir()?))
+    Ok(registry_path_for(&global_orbit_dir(
+        &orbit_common::Env::capture(),
+    )?))
 }
 
 /// Return the workspace registry path under an already-resolved global root.

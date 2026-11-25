@@ -138,7 +138,7 @@ fn ssh_transports_reuse_private_bounded_sockets_and_respect_native_config() {
 }
 
 fn exercise_child(case: &str) {
-    let home = orbit_common::fs::path::home_dir().unwrap();
+    let home = orbit_common::fs::path::home_dir(&orbit_common::Env::capture()).unwrap();
     let sockets = home.join(".orbit/ssh");
     fs::create_dir(home.join(".ssh")).unwrap();
     match case {

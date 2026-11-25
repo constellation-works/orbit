@@ -205,7 +205,7 @@ fn assert_refused_with(output: &std::process::Output, needle: &str) {
 
 /// Whether some participant of `authority` is live: an update cannot take it.
 fn has_live_participant(authority: &Path) -> bool {
-    GenerationUpdate::acquire(authority).is_err()
+    GenerationUpdate::acquire(&orbit_common::Env::capture(), authority).is_err()
 }
 
 /// [ORB-20272] Neither the workspace data directory as an explicit `--root`

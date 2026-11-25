@@ -89,7 +89,7 @@ impl PluginBackendSpec {
         let state_dir = physical_with_missing_tail(&profile.state_dir);
         let own_state = |path: &Path| physical_with_missing_tail(path).starts_with(&state_dir);
 
-        let credentials = orbit_exec::default_credential_read_denies();
+        let credentials = orbit_exec::default_credential_read_denies(&orbit_common::Env::capture());
         profile.read.retain(|root| {
             if own_state(root) {
                 return true;

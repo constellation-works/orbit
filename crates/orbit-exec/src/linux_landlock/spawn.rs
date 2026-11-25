@@ -27,14 +27,15 @@ use crate::runner::{EnvironmentMode, ExecRequest};
 /// numbers — the plugin callback credential — mapped between `fork` and
 /// `exec` alongside the ruleset.
 pub fn spawn_under_linux_landlock_boundary(
+    env: &orbit_common::Env,
     req: &ExecRequest,
     boundary: &LandlockBoundary,
     inherited_fds: &[crate::process::InheritedFd],
 ) -> Result<Child, OrbitError> {
     let probe = probe_landlock();
     let scope = plugin_scope(&probe, boundary)?;
-    let grants = linux_landlock_boundary_grants(req, boundary)?;
-    spawn_restricted(req, &grants, scope, inherited_fds)
+    let grants = linux_landlock_boundary_grants(env, req, boundary)?;
+    spawn_restricted(env, req, &grants, scope, inherited_fds)
 }
 
 /// Spawn `req` with the child restricted to the compiled ruleset.
@@ -42,6 +43,7 @@ pub fn spawn_under_linux_landlock_boundary(
 /// Fails closed: a host that cannot apply Landlock gets a capability error,
 /// never an unconfined child.
 pub fn spawn_under_linux_landlock(
+    env: &orbit_common::Env,
     req: &ExecRequest,
     workspace_root: &Path,
     profile: &ResolvedFsProfile,
@@ -53,13 +55,13 @@ pub fn spawn_under_linux_landlock(
         )));
     }
 
-    let environment = child_environment(req);
+    let environment = child_environment(env, req);
     let boundary = linux_landlock_read_boundary(workspace_root, profile, &environment)?;
     report_unenforced_exclusions(profile, &boundary);
 
     let mut grants = boundary.grants;
     grants.extend(host::program_grants(&req.program, &environment));
-    spawn_restricted(req, &dedupe(grants), RulesetScope::default(), &[])
+    spawn_restricted(env, req, &dedupe(grants), RulesetScope::default(), &[])
 }
 
 /// Record the part of the profile the kernel is not holding for this child.
@@ -83,25 +85,33 @@ fn report_unenforced_exclusions(profile: &ResolvedFsProfile, boundary: &Landlock
 /// The environment the child will actually run with, which decides the tool
 /// state grants. `Inherit` means the parent's own environment reaches the
 /// child, so it is what the grants must be read from.
-pub(super) fn child_environment(req: &ExecRequest) -> Vec<(String, String)> {
+pub(super) fn child_environment(
+    env: &orbit_common::Env,
+    req: &ExecRequest,
+) -> Vec<(String, String)> {
     match &req.environment_mode {
         EnvironmentMode::ClearAndSet(pairs) => pairs.clone(),
-        EnvironmentMode::Inherit => std::env::vars().collect(),
+        EnvironmentMode::Inherit => env
+            .utf8_vars()
+            .map(|(name, value)| (name.to_owned(), value.to_owned()))
+            .collect(),
     }
 }
 
 #[cfg(target_os = "linux")]
 fn spawn_restricted(
+    env: &orbit_common::Env,
     req: &ExecRequest,
     grants: &[LandlockPathGrant],
     scope: RulesetScope,
     inherited_fds: &[crate::process::InheritedFd],
 ) -> Result<Child, OrbitError> {
-    super::ruleset::spawn_restricted(req, grants, scope, inherited_fds)
+    super::ruleset::spawn_restricted(env, req, grants, scope, inherited_fds)
 }
 
 #[cfg(not(target_os = "linux"))]
 fn spawn_restricted(
+    _env: &orbit_common::Env,
     _req: &ExecRequest,
     _grants: &[LandlockPathGrant],
     _scope: RulesetScope,

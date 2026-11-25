@@ -210,7 +210,7 @@ pub fn converge_clock_unit(global_root: &Path) -> Result<ClockUnitConvergence, O
         &running.path,
         ClockPlatform::current(),
         &NativeClockCommandRunner,
-        &orbit_common::fs::path::home_dir()?,
+        &orbit_common::fs::path::home_dir(&orbit_common::Env::capture())?,
     )
 }
 
@@ -405,7 +405,7 @@ pub(super) fn installed_clock_unit_at(
 /// resolvable executable gets no warning rather than a failed sweep.
 pub fn clock_unit_drift_warning() -> Option<String> {
     let running = RunningBinary::current().ok()?;
-    let home = orbit_common::fs::path::home_dir().ok()?;
+    let home = orbit_common::fs::path::home_dir(&orbit_common::Env::capture()).ok()?;
     clock_unit_drift_warning_at(&home, ClockPlatform::current(), &running.path)
 }
 

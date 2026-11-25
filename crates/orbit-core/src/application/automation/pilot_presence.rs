@@ -63,6 +63,7 @@ impl OrbitRuntime {
     fn paused_routines(&self) -> Vec<String> {
         let read = || {
             let database = orbit_config::resolved_audit_db_path(
+                &orbit_common::Env::capture(),
                 &orbit_config::ConfigRoots::global_only(self.global_root()),
             )?;
             if !database.exists() {

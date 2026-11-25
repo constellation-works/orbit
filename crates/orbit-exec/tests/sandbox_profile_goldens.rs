@@ -467,11 +467,15 @@ impl Fixture {
             inputs: &[],
             network: orbit_exec::ScriptSandboxNetwork::None,
         };
-        self.normalize(&orbit_exec::compile_macos_script_profile(&spec).expect("script profile"))
+        self.normalize(
+            &orbit_exec::compile_macos_script_profile(&orbit_common::Env::capture(), &spec)
+                .expect("script profile"),
+        )
     }
 
     fn render_build_macos(&self, network: BuildPhaseNetwork) -> String {
         self.normalize(&orbit_exec::compile_macos_build_profile(
+            &orbit_common::Env::capture(),
             &self.build_spec(network),
         ))
     }
@@ -487,6 +491,7 @@ impl Fixture {
             "build".to_string(),
         ];
         let args = orbit_exec::compile_linux_build_argv(
+            &orbit_common::Env::capture(),
             &self.build_spec(network),
             &argv,
             &self.build_dir.join("src"),
@@ -665,8 +670,12 @@ impl Fixture {
 
     fn render_macos(&self, case: &Case) -> String {
         let compile = |provider: &str| {
-            let mut text =
-                compile_macos_sandbox_profile(&case.profile, provider).expect("compile SBPL");
+            let mut text = compile_macos_sandbox_profile(
+                &orbit_common::Env::capture(),
+                &case.profile,
+                provider,
+            )
+            .expect("compile SBPL");
             match case.kind {
                 CaseKind::Agent | CaseKind::ProviderPair(_) => {
                     let mut targets = self.mask_targets();
@@ -707,6 +716,7 @@ impl Fixture {
             files: self.mask_files(),
         };
         let plan = orbit_exec::compile_linux_bwrap_argv_with_authority(
+            &orbit_common::Env::capture(),
             &case.profile,
             "/usr/bin/true",
             &[],
@@ -778,8 +788,12 @@ impl Fixture {
             environment_mode: orbit_exec::EnvironmentMode::ClearAndSet(Vec::new()),
             debug: false,
         };
-        let grants = orbit_exec::linux_landlock_boundary_grants(&request, &boundary)
-            .expect("compile Landlock grants");
+        let grants = orbit_exec::linux_landlock_boundary_grants(
+            &orbit_common::Env::capture(),
+            &request,
+            &boundary,
+        )
+        .expect("compile Landlock grants");
         let mut lines = vec![format!("deny_tcp: {}", boundary.deny_tcp)];
         lines.extend(
             grants

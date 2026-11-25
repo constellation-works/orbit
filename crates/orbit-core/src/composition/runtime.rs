@@ -52,6 +52,12 @@ pub fn captured_env() -> Option<&'static Env> {
     CAPTURED_ENV.get()
 }
 
+/// Supply the startup environment to a composition entry point. Library
+/// hosts without Orbit's main capture at their own composition boundary.
+pub fn composition_env() -> Env {
+    captured_env().cloned().unwrap_or_else(Env::capture)
+}
+
 impl OrbitRuntime {
     pub fn initialize() -> Result<Self, OrbitError> {
         let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
@@ -260,9 +266,12 @@ impl OrbitRuntime {
         ])?;
         let _generation = pin_executable_generation(&roots.global_root, true)?;
         let layout_report = observe_or_upgrade_layout(&roots.shared_root, true)?;
-        let config =
-            ResolvedConfig::load(&ConfigRoots::new(&roots.global_root, &roots.shared_root))?;
-        let config_loader = runtime_config_loader(&roots.global_root, &roots.shared_root);
+        let env = composition_env();
+        let config = ResolvedConfig::load(
+            &env,
+            &ConfigRoots::new(&roots.global_root, &roots.shared_root),
+        )?;
+        let config_loader = runtime_config_loader(env, &roots.global_root, &roots.shared_root);
         RuntimeKernel::build_from_resolved_config_write_free(
             &roots,
             binding,
@@ -282,13 +291,14 @@ impl OrbitRuntime {
             .map_err(|error| OrbitError::Io(error.to_string()))?;
         let data_root = temp_dir.path().to_path_buf();
         let workspace_root = data_root.join(".orbit");
-        let runtime_config = prepare_resolved_config(&data_root, &workspace_root)?;
+        let env = composition_env();
+        let runtime_config = prepare_resolved_config(&env, &data_root, &workspace_root)?;
         RuntimeKernel::build_in_memory_from_resolved_config(
             &data_root,
             &workspace_root,
             &runtime_config,
             temp_dir,
-            runtime_config_loader(&data_root, &workspace_root),
+            runtime_config_loader(env, &data_root, &workspace_root),
             &APPLICATION_PORT,
         )
         .map(Self::from_kernel)
@@ -328,6 +338,7 @@ pub fn pin_executable_generation_as(
         Access::Write
     };
     GenerationGuard::for_process(
+        &composition_env(),
         root,
         &compiled_compatibility(),
         role,
@@ -360,12 +371,13 @@ fn build_runtime(
     // The admission recorded the authority before the layout changed and
     // fenced other first adoptions until now.
     drop(authority);
+    let env = composition_env();
     let runtime_config = if write_free {
-        ResolvedConfig::load(&ConfigRoots::new(global_root, shared_root))?
+        ResolvedConfig::load(&env, &ConfigRoots::new(global_root, shared_root))?
     } else {
-        prepare_resolved_config(global_root, shared_root)?
+        prepare_resolved_config(&env, global_root, shared_root)?
     };
-    let config_loader = runtime_config_loader(global_root, shared_root);
+    let config_loader = runtime_config_loader(env, global_root, shared_root);
     if !write_free && !read_only {
         init::refresh_workspace_catalog_copies_on_open(global_root, shared_root);
     }
@@ -405,10 +417,10 @@ fn build_runtime(
     Ok(runtime)
 }
 
-fn runtime_config_loader(global_root: &Path, shared_root: &Path) -> RuntimeConfigLoader {
+fn runtime_config_loader(env: Env, global_root: &Path, shared_root: &Path) -> RuntimeConfigLoader {
     let global_root = global_root.to_path_buf();
     let shared_root = shared_root.to_path_buf();
-    Arc::new(move || ResolvedConfig::load(&ConfigRoots::new(&global_root, &shared_root)))
+    Arc::new(move || ResolvedConfig::load(&env, &ConfigRoots::new(&global_root, &shared_root)))
 }
 
 fn observe_or_upgrade_layout(
@@ -442,10 +454,11 @@ fn observe_or_upgrade_layout(
 }
 
 fn prepare_resolved_config(
+    env: &Env,
     global_root: &Path,
     workspace_root: &Path,
 ) -> Result<ResolvedConfig, OrbitError> {
-    let resolved = ResolvedConfig::load(&ConfigRoots::new(global_root, workspace_root))?;
+    let resolved = ResolvedConfig::load(env, &ConfigRoots::new(global_root, workspace_root))?;
     if let Some(start) = resolved.tasks_id_start
         && let Err(error) = apply_configured_id_start(global_root, start)
     {

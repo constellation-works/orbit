@@ -1,4 +1,3 @@
-use crate::env_vars;
 use std::collections::HashMap;
 use std::path::{Component, Path};
 
@@ -23,7 +22,7 @@ pub fn redact_all_json(value: Value) -> Value {
 /// user-identifiable paths from leaking into logs. Addresses CodeQL
 /// `rust/cleartext-logging`.
 pub fn redact_home_dir(text: &str) -> String {
-    if let Some(home) = home_dir_string() {
+    if let Some(home) = super::env::redaction_home() {
         redact_path_prefix(text, &home)
     } else {
         text.to_string()
@@ -659,10 +658,10 @@ fn credential_safe_location_with(raw: &str, redact: fn(&str) -> String) -> Strin
     }
 }
 
-fn home_dir_string() -> Option<String> {
-    std::env::var(env_vars::HOME)
-        .ok()
-        .or_else(|| std::env::var(env_vars::USERPROFILE).ok())
+pub(super) fn home_dir_string(env: &crate::Env) -> Option<&str> {
+    env.home()
+        .and_then(std::ffi::OsStr::to_str)
+        .or_else(|| env.userprofile().and_then(std::ffi::OsStr::to_str))
         .filter(|home| {
             let path = Path::new(home);
             path.is_absolute()

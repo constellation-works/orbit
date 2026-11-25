@@ -156,10 +156,10 @@ impl OrbitRuntime {
 
         // Standalone workspaces can explicitly configure integration identity.
         // The built-in "main" fallback is not evidence of that identity.
-        let config = orbit_config::load_effective_config(&orbit_config::ConfigRoots::new(
-            self.global_root(),
-            self.shared_root(),
-        ))?;
+        let config = orbit_config::load_effective_config(
+            &orbit_common::Env::capture(),
+            &orbit_config::ConfigRoots::new(self.global_root(), self.shared_root()),
+        )?;
         config
             .values()
             .iter()

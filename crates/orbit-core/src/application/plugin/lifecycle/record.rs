@@ -77,9 +77,10 @@ pub(super) fn set_enabled(
         let plugin = load_plugin_dir(Path::new(&existing.install_path))?;
         existing.enabled = true;
         existing.grants.clone_from(&grants);
-        let config = orbit_config::ResolvedConfig::load(&orbit_config::ConfigRoots::global_only(
-            runtime.global_root(),
-        ))?;
+        let config = orbit_config::ResolvedConfig::load(
+            runtime.execution_env_policy().process_env(),
+            &orbit_config::ConfigRoots::global_only(runtime.global_root()),
+        )?;
         Some((
             projected_status(&existing, &plugin, &runtime.global_root(), &config.plugins),
             plugin,

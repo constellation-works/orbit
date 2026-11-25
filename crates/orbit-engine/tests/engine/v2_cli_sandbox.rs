@@ -192,7 +192,8 @@ fn platform_sandbox(test: &str) -> Option<ExecutorSandboxKind> {
     }
     #[cfg(not(target_os = "linux"))]
     {
-        orbit_exec::macos_sandbox_test_guard(test).then_some(ExecutorSandboxKind::MacosSandboxExec)
+        orbit_exec::macos_sandbox_test_guard(&orbit_common::Env::capture(), test)
+            .then_some(ExecutorSandboxKind::MacosSandboxExec)
     }
 }
 

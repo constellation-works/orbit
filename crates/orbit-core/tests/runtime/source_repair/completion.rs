@@ -1218,9 +1218,12 @@ pub(super) fn timing_alias_rewrites_preserve_published_completion_authentication
         // Authenticate both the historical spelling and its canonical save.
         for save in [false, true] {
             if save {
-                let mut store =
-                    orbit_config::ConfigStore::open(orbit_config::ConfigScope::Workspace, &config)
-                        .unwrap();
+                let mut store = orbit_config::ConfigStore::open(
+                    &orbit_common::Env::capture(),
+                    orbit_config::ConfigScope::Workspace,
+                    &config,
+                )
+                .unwrap();
                 store.validate().unwrap();
                 store.save().unwrap();
             }

@@ -803,6 +803,7 @@ fn clock_credentials_reach_workers_with_ambient_precedence_and_dry_run_loads_not
     // nested agent sandbox refuses to apply [ORB-15409]. Guard here, not in
     // the child, so the deferrable notice reaches this run's output.
     if !orbit_exec::macos_sandbox_test_guard(
+        &orbit_common::Env::capture(),
         "clock_credentials_reach_workers_with_ambient_precedence_and_dry_run_loads_nothing",
     ) {
         return;
@@ -942,6 +943,7 @@ fn clock_credential_loader_child() {
         });
         started.recv().unwrap();
         let entries = orbit_common::security::operator_env::load_clock_env(
+            &orbit_common::Env::capture(),
             &root,
             &[UNSET.to_string(), SET.to_string(), EMPTY.to_string()],
         )
@@ -953,11 +955,13 @@ fn clock_credential_loader_child() {
                 (EMPTY.to_string(), SECRET.to_string())
             ]
         );
-        let policy =
-            orbit_config::ResolvedConfig::load(&orbit_config::ConfigRoots::global_only(&root))
-                .unwrap()
-                .execution_env
-                .with_defaults(&entries);
+        let policy = orbit_config::ResolvedConfig::load(
+            &orbit_common::Env::capture(),
+            &orbit_config::ConfigRoots::global_only(&root),
+        )
+        .unwrap()
+        .execution_env
+        .with_defaults(&entries);
         let environment: std::collections::BTreeMap<_, _> =
             policy.agent_subprocess_env(&[EMPTY]).into_iter().collect();
         assert_eq!(environment.get(UNSET).map(String::as_str), Some(SECRET));

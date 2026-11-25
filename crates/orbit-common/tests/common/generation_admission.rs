@@ -723,7 +723,8 @@ fn contended_admission_waits_for_the_bound_then_names_contention() {
 fn an_update_holding_admission_refuses_joins_promptly_as_an_upgrade_in_progress() {
     let root = tempfile::tempdir().expect("authority");
     let root = root.path();
-    let update = GenerationUpdate::acquire(root).expect("updater takes the authority");
+    let update = GenerationUpdate::acquire(&orbit_common::Env::capture(), root)
+        .expect("updater takes the authority");
 
     let began = Instant::now();
     let refused = match join_within(
@@ -799,7 +800,7 @@ fn a_breaking_upgrade_refuses_ordinary_joins_until_live_participants_yield() {
     );
     assert!(!refused.contains("contended"), "{refused}");
     assert!(
-        GenerationUpdate::acquire(&root).is_err(),
+        GenerationUpdate::acquire(&orbit_common::Env::capture(), &root).is_err(),
         "an update is refused while a switch is pending"
     );
 
@@ -940,8 +941,9 @@ fn a_candidate_admission_admits_beside_a_server_that_hands_over_to_it() {
     let pid = std::process::id();
 
     let candidate = HandoverCandidate::reporting([RESUME_MCP_STDIO]);
-    let admitted = GenerationUpdate::acquire_for_candidate(root, &candidate)
-        .expect("the server hands over to this candidate after the rename");
+    let admitted =
+        GenerationUpdate::acquire_for_candidate(&orbit_common::Env::capture(), root, &candidate)
+            .expect("the server hands over to this candidate after the rename");
     let handover = admitted.handover();
     assert_eq!(handover.len(), 1, "{handover:?}");
     assert_eq!(handover[0].pid, pid);
@@ -951,7 +953,10 @@ fn a_candidate_admission_admits_beside_a_server_that_hands_over_to_it() {
 
     // Without a candidate nothing will hand the session over; the remedy
     // names the updates that rename one in, not an observation.
-    let plain = refusal(GenerationUpdate::acquire(root));
+    let plain = refusal(GenerationUpdate::acquire(
+        &orbit_common::Env::capture(),
+        root,
+    ));
     assert!(plain.contains(&format!("pid {pid} (mcp serve")), "{plain}");
     assert!(
         plain.contains("`orbit update --local-candidate`"),
@@ -961,6 +966,7 @@ fn a_candidate_admission_admits_beside_a_server_that_hands_over_to_it() {
 
     // A candidate that cannot resume the session cannot take it over either.
     let unable = refusal(GenerationUpdate::acquire_for_candidate(
+        &orbit_common::Env::capture(),
         root,
         &HandoverCandidate::reporting(Vec::<String>::new()),
     ));
@@ -973,7 +979,7 @@ fn a_candidate_admission_admits_beside_a_server_that_hands_over_to_it() {
         "{unable}"
     );
     drop(server);
-    drop(GenerationUpdate::acquire(root).expect("nothing is live"));
+    drop(GenerationUpdate::acquire(&orbit_common::Env::capture(), root).expect("nothing is live"));
 }
 
 #[test]
@@ -982,8 +988,9 @@ fn a_candidate_admission_pins_once_the_server_has_handed_over() {
     let root = root.path().to_path_buf();
     let server = holding_as(&root, ParticipantRole::McpServe, Some(RESUME_MCP_STDIO));
     let candidate = HandoverCandidate::reporting([RESUME_MCP_STDIO]);
-    let admitted = GenerationUpdate::acquire_for_candidate(&root, &candidate)
-        .expect("the server hands over to this candidate after the rename");
+    let admitted =
+        GenerationUpdate::acquire_for_candidate(&orbit_common::Env::capture(), &root, &candidate)
+            .expect("the server hands over to this candidate after the rename");
     assert_eq!(admitted.handover().len(), 1);
 
     // The exec that hands over releases the server's generation lock.
@@ -1059,7 +1066,11 @@ fn a_candidate_admission_refuses_holders_that_cannot_hand_over() {
         // The server that does hand over is named too, but does not block.
         let server = holding_as(root, ParticipantRole::McpServe, Some(RESUME_MCP_STDIO));
         let began = Instant::now();
-        let refused = refusal(GenerationUpdate::acquire_for_candidate(root, &candidate));
+        let refused = refusal(GenerationUpdate::acquire_for_candidate(
+            &orbit_common::Env::capture(),
+            root,
+            &candidate,
+        ));
         assert!(
             began.elapsed() < Duration::from_secs(10),
             "a long-lived holder refuses at once"
@@ -1085,7 +1096,11 @@ fn a_candidate_admission_refuses_holders_that_cannot_hand_over() {
         .open(root.join(".generation.lock"))
         .expect("generation lock");
     v1.lock_shared().expect("hold the generation as v1 does");
-    let refused = refusal(GenerationUpdate::acquire_for_candidate(root, &candidate));
+    let refused = refusal(GenerationUpdate::acquire_for_candidate(
+        &orbit_common::Env::capture(),
+        root,
+        &candidate,
+    ));
     assert!(refused.contains("did not register"), "{refused}");
     assert!(refused.contains("executable-generation-v1"), "{refused}");
 }
@@ -1101,7 +1116,8 @@ fn an_update_waits_for_a_short_lived_participant_instead_of_refusing() {
         std::thread::sleep(hold);
         drop(tick);
     });
-    let update = GenerationUpdate::acquire(&root).expect("the tick finishes within the bound");
+    let update = GenerationUpdate::acquire(&orbit_common::Env::capture(), &root)
+        .expect("the tick finishes within the bound");
     assert!(began.elapsed() >= hold, "the update waited for the tick");
     finishing.join().expect("tick thread");
     drop(update);

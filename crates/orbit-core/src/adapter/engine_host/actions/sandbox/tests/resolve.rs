@@ -245,6 +245,7 @@ fn linux_worktree_sandbox_preparation_revalidates_disappearing_git_entries() {
             prepared.unsatisfied
         );
         let plan = compile_linux_bwrap_argv(
+            &orbit_common::Env::capture(),
             &sandbox.fs_profile,
             "/bin/true",
             &[],
@@ -499,7 +500,12 @@ fn codex_side_roots_compile_to_store_subpaths_only() {
         resolve_fs_profile_absolute(&runtime, None, Some(&fixture.worktree)).expect("profile");
     append_codex_side_write_roots(&runtime, "codex", &mut resolved).expect("side roots");
 
-    let sbpl = orbit_exec::compile_macos_sandbox_profile(&resolved, "codex").expect("compile");
+    let sbpl = orbit_exec::compile_macos_sandbox_profile(
+        &orbit_common::Env::capture(),
+        &resolved,
+        "codex",
+    )
+    .expect("compile");
     for path in &fixture.protected {
         let physical = orbit_exec::physical_with_missing_tail(path);
         assert!(

@@ -30,8 +30,8 @@ Design intent: [docs/design/orbit-core/](../../docs/design/orbit-core/) — this
 
 ## Ownership by module
 
-- `env`: `Env`, the immutable snapshot each binary's `main` takes once with `Env::capture()` and passes to composition; run-time names and the full list for child environments; imports no internal modules.
-- `env_vars`: Names and reference entries for the fixed environment variables Orbit reads, and each name's typed accessor on `Env` (test hooks only in tests and `test-support` builds); imports `env`.
+- `env`: `Env`, the immutable snapshot each binary's `main` takes once with `Env::capture()` and passes to composition. The snapshot supplies run-time names and the full list for child environments. Common path, authorization, logging and child-process helpers receive it from their callers.
+- `env_vars`: Names and reference entries for the fixed environment variables Orbit reads, with typed accessors on `Env`. Test hooks are available in tests and `test-support` builds. Debug CLI builds also expose the durability, image digest and JSONL fixture hooks.
 - `error`: Workspace surface error type (`OrbitError`), structured refusal payloads, and error classification helpers; imports `fs` and `orbit-types`.
 - `fs`: Shared filesystem, locking, path-safety, atomic I/O, Git, glob, and selector primitives; imports `error`, `process`, and `orbit-types`.
 - `governance`: Shared operation registries, capability authorization, tool schemas, and governance specs; imports `error`, `protocol`, and `orbit-types`.

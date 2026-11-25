@@ -22,7 +22,8 @@ fn unknown_config_keys_warn_once_per_file_and_suggest_known_keys() {
         .finish();
     tracing::subscriber::with_default(subscriber, || {
         for _ in 0..3 {
-            ResolvedConfig::load(&roots).expect("unknown keys do not prevent loading");
+            ResolvedConfig::load(&orbit_common::Env::capture(), &roots)
+                .expect("unknown keys do not prevent loading");
         }
     });
     let logs = String::from_utf8(buffer.lock().expect("logs").clone()).expect("utf8");
@@ -85,8 +86,11 @@ future = true
 review_minutes = 7
 "#;
     fs::write(&path, body).expect("config");
-    ResolvedConfig::load(&ConfigRoots::new(directory.path(), directory.path()))
-        .expect("unknown review fields load");
+    ResolvedConfig::load(
+        &orbit_common::Env::capture(),
+        &ConfigRoots::new(directory.path(), directory.path()),
+    )
+    .expect("unknown review fields load");
     let keys = orbit_config::unknown_config_keys_at(&path).expect("diagnosis");
     assert_eq!(
         keys.iter().map(|key| key.key.as_str()).collect::<Vec<_>>(),
@@ -97,7 +101,8 @@ review_minutes = 7
         ]
     );
     assert_eq!(keys[0].suggestion.as_deref(), Some("crews.fixture.effort"));
-    let mut store = ConfigStore::open(ConfigScope::Global, &path).expect("store");
+    let mut store = ConfigStore::open(&orbit_common::Env::capture(), ConfigScope::Global, &path)
+        .expect("store");
     for key in &keys {
         assert!(store.remove_unknown_key(key).expect("remove unknown"));
         assert!(
@@ -137,15 +142,19 @@ fn unknown_literal_dotted_key_cleanup_never_removes_a_known_path() {
     let keys = orbit_config::unknown_config_keys_at(&path).expect("diagnosis");
     assert_eq!(keys.len(), 1);
     assert_eq!(keys[0].key, "\"workflow.base_branch\"");
-    let mut store = ConfigStore::open(ConfigScope::Global, &path).expect("store");
+    let mut store = ConfigStore::open(&orbit_common::Env::capture(), ConfigScope::Global, &path)
+        .expect("store");
     assert!(
         store
             .remove_unknown_key(&keys[0])
             .expect("remove literal key")
     );
     store.save().expect("save");
-    let config =
-        ResolvedConfig::load(&ConfigRoots::new(directory.path(), directory.path())).expect("load");
+    let config = ResolvedConfig::load(
+        &orbit_common::Env::capture(),
+        &ConfigRoots::new(directory.path(), directory.path()),
+    )
+    .expect("load");
     assert_eq!(config.snapshot.workflow_base_branch, "agent-main");
 }
 
@@ -186,14 +195,20 @@ fn review_host_evidence_is_a_known_setting_and_its_neighbours_stay_unknown() {
         ["review.reviewers"],
         "only the neighbouring key is unknown"
     );
-    let config = ResolvedConfig::load(&roots).expect("host evidence loads");
+    let config =
+        ResolvedConfig::load(&orbit_common::Env::capture(), &roots).expect("host evidence loads");
     let rules = &config.operation.review_host_evidence;
     assert_eq!(rules.source, OperationLayerSource::Workspace);
     assert!(
         rules.value.is_empty(),
         "an explicit empty list clears the global rule: {rules:?}"
     );
-    let mut store = ConfigStore::open(ConfigScope::Workspace, &workspace).expect("store");
+    let mut store = ConfigStore::open(
+        &orbit_common::Env::capture(),
+        ConfigScope::Workspace,
+        &workspace,
+    )
+    .expect("store");
     for key in &keys {
         assert!(store.remove_unknown_key(key).expect("remove neighbour"));
         assert!(

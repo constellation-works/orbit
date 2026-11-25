@@ -184,7 +184,7 @@ fn cli_registry_adapters_deliver_stdin_flags_and_safe_environment() {
                     ];
                     let mut extras = spec.required_env_vars.to_vec();
                     extras.push("ORBIT_WORKSPACE_CLAIM_TOKEN");
-                    let env = allowlisted_child_env(&pass, &extras);
+                    let env = allowlisted_child_env(&orbit_common::Env::capture(), &pass, &extras);
                     // A provider that cannot read stdin names a prompt-file
                     // flag; deliver the prompt the way the runner does.
                     let mut args = spec.args.clone();
@@ -316,8 +316,12 @@ fn cli_registry_adapters_deliver_stdin_flags_and_safe_environment() {
                         ("HOME".to_string(), "/synthetic-home".to_string()),
                         ("PATH".to_string(), "/usr/bin".to_string()),
                     ];
-                    let absent_env =
-                        allowlisted_child_env_from(&absent_parent, &[], spec.required_env_vars);
+                    let absent_env = allowlisted_child_env_from(
+                        &orbit_common::Env::capture(),
+                        &absent_parent,
+                        &[],
+                        spec.required_env_vars,
+                    );
                     for (name, _) in STATE_ROOT_OVERRIDES {
                         assert!(
                             !absent_env.iter().any(|(key, _)| key == name),

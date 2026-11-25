@@ -2,7 +2,6 @@
 //! cases rather than spawn a backend where the apply is refused; production
 //! dispatch keeps its fail-closed spawn path.
 
-use orbit_common::env_vars;
 use std::io::Write;
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -31,8 +30,8 @@ impl SandboxExecApplyProbe {
     ///
     /// Panics for missing binaries, unexpected failures, or a refusal when
     /// `ORBIT_REQUIRE_SANDBOX_EXEC=1`. A skipped run is never host evidence.
-    pub fn test_guard(&self, test: &str) -> bool {
-        let required = std::env::var(env_vars::ORBIT_REQUIRE_SANDBOX_EXEC).as_deref() == Ok("1");
+    pub fn test_guard(&self, env: &orbit_common::Env, test: &str) -> bool {
+        let required = env.orbit_require_sandbox_exec() == Some(std::ffi::OsStr::new("1"));
         match self.guard_with_writer(test, required, &mut std::io::stderr()) {
             Ok(run) => run,
             Err(reason) => panic!("sandbox-exec test prerequisite failed: {test}: {reason}"),
@@ -117,8 +116,8 @@ pub fn force_seatbelt_refusal_for_test() {
 
 /// Shared guard for tests that actually launch a Seatbelt-confined backend.
 /// On other platforms this returns true without spawning a child.
-pub fn macos_sandbox_test_guard(test: &str) -> bool {
-    probe_sandbox_exec_apply().test_guard(test)
+pub fn macos_sandbox_test_guard(env: &orbit_common::Env, test: &str) -> bool {
+    probe_sandbox_exec_apply().test_guard(env, test)
 }
 
 #[cfg(any(target_os = "macos", test))]

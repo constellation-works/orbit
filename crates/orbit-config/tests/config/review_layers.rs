@@ -12,9 +12,12 @@ fn review_timing_resolves_built_in_then_global_then_workspace_with_its_layer() {
     let global = tempfile::tempdir().expect("global tempdir");
     let workspace = tempfile::tempdir().expect("workspace tempdir");
     let load = || {
-        ResolvedConfig::load(&ConfigRoots::new(global.path(), workspace.path()))
-            .expect("config loads")
-            .operation
+        ResolvedConfig::load(
+            &orbit_common::Env::capture(),
+            &ConfigRoots::new(global.path(), workspace.path()),
+        )
+        .expect("config loads")
+        .operation
     };
 
     review_layers_write_config(workspace.path(), "[decision_channel]\nenabled = true\n");
@@ -56,14 +59,14 @@ fn deprecated_review_booleans_layer_per_key_and_both_on_fail_the_load() {
 
     review_layers_write_config(global.path(), "[review]\nbefore_landing = true\n");
     review_layers_write_config(workspace.path(), "[review]\nbefore_pr = false\n");
-    let policy = ResolvedConfig::load(&roots)
+    let policy = ResolvedConfig::load(&orbit_common::Env::capture(), &roots)
         .expect("config loads")
         .operation;
     assert!(policy.review_before_landing.value && !policy.review_before_pr.value);
 
     review_layers_write_config(global.path(), "[review]\nbefore_pr = true\n");
     review_layers_write_config(workspace.path(), "[review]\nbefore_landing = true\n");
-    let error = ResolvedConfig::load(&roots)
+    let error = ResolvedConfig::load(&orbit_common::Env::capture(), &roots)
         .expect_err("two review layers before landing are refused")
         .to_string();
     assert!(
@@ -79,7 +82,7 @@ fn deprecated_review_booleans_layer_per_key_and_both_on_fail_the_load() {
         workspace.path(),
         "[review]\nbefore_pr = true\nbefore_landing = true\n",
     );
-    let error = ResolvedConfig::load(&roots)
+    let error = ResolvedConfig::load(&orbit_common::Env::capture(), &roots)
         .expect_err("refused in one file too")
         .to_string();
     assert!(
@@ -102,7 +105,7 @@ fn before_landing_hosts_resolve_validated_and_are_refused_beside_before_pr() {
         workspace.path(),
         "[review]\nbefore_landing_hosts = [\" hm_mac \", \"hm_mac\", \"hm_linux-2\"]\n",
     );
-    let policy = ResolvedConfig::load(&roots)
+    let policy = ResolvedConfig::load(&orbit_common::Env::capture(), &roots)
         .expect("config loads")
         .operation;
     let hosts = &policy.review_before_landing_hosts;
@@ -117,7 +120,7 @@ fn before_landing_hosts_resolve_validated_and_are_refused_beside_before_pr() {
         workspace.path(),
         "[review]\nbefore_landing_hosts = [\"mac\"]\n",
     );
-    let error = ResolvedConfig::load(&roots)
+    let error = ResolvedConfig::load(&orbit_common::Env::capture(), &roots)
         .expect_err("a label that is not a machine id is refused")
         .to_string();
     assert!(error.contains("review.before_landing_hosts[0]"), "{error}");
@@ -127,7 +130,7 @@ fn before_landing_hosts_resolve_validated_and_are_refused_beside_before_pr() {
         workspace.path(),
         "[review]\nbefore_landing_hosts = [\"hm_mac\"]\n",
     );
-    let error = ResolvedConfig::load(&roots)
+    let error = ResolvedConfig::load(&orbit_common::Env::capture(), &roots)
         .expect_err("before-PR review beside listed hosts is refused")
         .to_string();
     assert!(
@@ -138,7 +141,8 @@ fn before_landing_hosts_resolve_validated_and_are_refused_beside_before_pr() {
 
     // An empty list states nothing to conflict with.
     review_layers_write_config(workspace.path(), "[review]\nbefore_landing_hosts = []\n");
-    ResolvedConfig::load(&roots).expect("before-PR review with no listed hosts loads");
+    ResolvedConfig::load(&orbit_common::Env::capture(), &roots)
+        .expect("before-PR review with no listed hosts loads");
 }
 
 /// A global `review.timing` edit that a workspace's deprecated boolean would
@@ -163,8 +167,12 @@ fn global_set_that_would_turn_on_both_review_layers_is_refused_before_saving() {
         );
         review_layers_write_config(global.path(), "");
 
-        let mut store =
-            ConfigStore::open(ConfigScope::Global, global_path.clone()).expect("open global store");
+        let mut store = ConfigStore::open(
+            &orbit_common::Env::capture(),
+            ConfigScope::Global,
+            global_path.clone(),
+        )
+        .expect("open global store");
         store
             .set_value("review.timing", global_timing)
             .expect("stage global set");
@@ -182,7 +190,8 @@ fn global_set_that_would_turn_on_both_review_layers_is_refused_before_saving() {
             std::fs::read_to_string(&global_path).expect("read global"),
             ""
         );
-        ResolvedConfig::load(&roots).expect("workspace config stays loadable");
+        ResolvedConfig::load(&orbit_common::Env::capture(), &roots)
+            .expect("workspace config stays loadable");
 
         // A workspace that states the other switch off is not a conflict.
         review_layers_write_config(
@@ -207,12 +216,17 @@ fn global_set_that_breaks_a_cross_layer_throttle_rule_is_refused_before_saving()
         workspace.path(),
         "[workflow.resource_throttle]\ncpu_high_percent = 80\n",
     );
-    ResolvedConfig::load(&roots).expect("the layers load before the edit");
+    ResolvedConfig::load(&orbit_common::Env::capture(), &roots)
+        .expect("the layers load before the edit");
 
     // Valid in the global file alone, but not beside the workspace's high.
     let key = "workflow.resource_throttle.cpu_resume_percent";
-    let mut store =
-        ConfigStore::open(ConfigScope::Global, global_path.clone()).expect("open global store");
+    let mut store = ConfigStore::open(
+        &orbit_common::Env::capture(),
+        ConfigScope::Global,
+        global_path.clone(),
+    )
+    .expect("open global store");
     store.set_value(key, "85").expect("stage global set");
     store
         .validate_for_set(key)
@@ -234,7 +248,8 @@ fn global_set_that_breaks_a_cross_layer_throttle_rule_is_refused_before_saving()
         std::fs::read_to_string(&global_path).expect("read global"),
         original
     );
-    ResolvedConfig::load(&roots).expect("workspace config stays loadable");
+    ResolvedConfig::load(&orbit_common::Env::capture(), &roots)
+        .expect("workspace config stays loadable");
 
     // A value below the workspace's high is admitted and saves.
     store.set_value(key, "60").expect("stage a lower value");
@@ -242,7 +257,8 @@ fn global_set_that_breaks_a_cross_layer_throttle_rule_is_refused_before_saving()
         .validate_global_for_set(key, workspace.path())
         .expect("resume below the workspace high is admitted");
     store.save().expect("save");
-    ResolvedConfig::load(&roots).expect("still loadable after the admitted write");
+    ResolvedConfig::load(&orbit_common::Env::capture(), &roots)
+        .expect("still loadable after the admitted write");
 }
 
 #[test]
@@ -257,10 +273,15 @@ fn global_edit_that_removes_a_crew_a_workspace_names_is_refused_before_saving() 
         workspace.path(),
         "[workflow]\ndefault_crew = \"layered-custom\"\n",
     );
-    ResolvedConfig::load(&roots).expect("the workspace names a global crew");
+    ResolvedConfig::load(&orbit_common::Env::capture(), &roots)
+        .expect("the workspace names a global crew");
 
-    let mut store =
-        ConfigStore::open(ConfigScope::Global, global_path.clone()).expect("open global store");
+    let mut store = ConfigStore::open(
+        &orbit_common::Env::capture(),
+        ConfigScope::Global,
+        global_path.clone(),
+    )
+    .expect("open global store");
     assert!(
         store
             .remove_crew_table("layered-custom")
@@ -277,7 +298,8 @@ fn global_edit_that_removes_a_crew_a_workspace_names_is_refused_before_saving() 
         std::fs::read_to_string(&global_path).expect("read global"),
         original
     );
-    ResolvedConfig::load(&roots).expect("workspace config stays loadable");
+    ResolvedConfig::load(&orbit_common::Env::capture(), &roots)
+        .expect("workspace config stays loadable");
 }
 
 #[test]
@@ -285,7 +307,12 @@ fn global_validation_with_one_pinned_root_has_no_workspace_layer_to_check() {
     let root = tempfile::tempdir().expect("root tempdir");
     let global_path = root.path().join("config.toml");
     review_layers_write_config(root.path(), "");
-    let mut store = ConfigStore::open(ConfigScope::Global, global_path).expect("open global store");
+    let mut store = ConfigStore::open(
+        &orbit_common::Env::capture(),
+        ConfigScope::Global,
+        global_path,
+    )
+    .expect("open global store");
     store
         .set_value("workflow.resource_throttle.cpu_resume_percent", "85")
         .expect("stage global set");
@@ -303,7 +330,7 @@ fn review_crew_loads_a_crew_or_a_pool_and_fails_on_an_unknown_member() {
     let global = tempfile::tempdir().expect("global tempdir");
     let workspace = tempfile::tempdir().expect("workspace tempdir");
     let roots = ConfigRoots::new(global.path(), workspace.path());
-    let load = || ResolvedConfig::load(&roots);
+    let load = || ResolvedConfig::load(&orbit_common::Env::capture(), &roots);
 
     review_layers_write_config(workspace.path(), "[operation]\nreview_crew = \"grok\"\n");
     let single = load().expect("a single crew still loads");
@@ -388,7 +415,7 @@ fn pre_landing_review_pool_resolves_on_its_own_and_falls_back_to_review() {
     let global = tempfile::tempdir().expect("global tempdir");
     let workspace = tempfile::tempdir().expect("workspace tempdir");
     let roots = ConfigRoots::new(global.path(), workspace.path());
-    let load = || ResolvedConfig::load(&roots);
+    let load = || ResolvedConfig::load(&orbit_common::Env::capture(), &roots);
 
     review_layers_write_config(
         global.path(),
@@ -471,7 +498,7 @@ fn machine_auto_concurrency_global_values_are_admitted() {
         "[workflow.resource_throttle]\ncpu_high_percent = 2\ncpu_resume_percent = 1\nmemory_high_percent = 80\nmemory_resume_percent = 70\n\
          [machine.auto_concurrency]\nmode = \"shadow\"\nadmit_cpu_percent = 100\nmin_profile_deliveries = 10\n",
     );
-    let configured = ResolvedConfig::load(&roots)
+    let configured = ResolvedConfig::load(&orbit_common::Env::capture(), &roots)
         .expect("global settings load with CPU utilization independent of load-based throttle");
     assert_eq!(
         configured.auto_concurrency,
@@ -508,7 +535,7 @@ fn machine_auto_concurrency_rejects_invalid_values_with_the_key_named() {
         ),
     ] {
         review_layers_write_config(global.path(), config);
-        let error = ResolvedConfig::load(&roots)
+        let error = ResolvedConfig::load(&orbit_common::Env::capture(), &roots)
             .expect_err("invalid host auto-concurrency settings are refused")
             .to_string();
         assert!(error.contains(expected_key), "{expected_key}: {error}");
@@ -529,7 +556,7 @@ fn machine_auto_concurrency_compares_memory_with_global_throttle_threshold() {
         workspace.path(),
         "[workflow.resource_throttle]\nmemory_high_percent = 70\nmemory_resume_percent = 60\n",
     );
-    ResolvedConfig::load(&roots)
+    ResolvedConfig::load(&orbit_common::Env::capture(), &roots)
         .expect("a workspace throttle override does not replace the host threshold");
 
     review_layers_write_config(
@@ -540,7 +567,7 @@ fn machine_auto_concurrency_compares_memory_with_global_throttle_threshold() {
         workspace.path(),
         "[workflow.resource_throttle]\nmemory_high_percent = 90\nmemory_resume_percent = 80\n",
     );
-    let error = ResolvedConfig::load(&roots)
+    let error = ResolvedConfig::load(&orbit_common::Env::capture(), &roots)
         .expect_err("a workspace cannot raise the global memory admission ceiling")
         .to_string();
     assert!(
@@ -564,7 +591,7 @@ fn build_output_bindings_default_empty_and_workspace_replaces_global() {
     let workspace = tempfile::tempdir().expect("workspace");
     let roots = ConfigRoots::new(global.path(), workspace.path());
     let load = || {
-        ResolvedConfig::load(&roots)
+        ResolvedConfig::load(&orbit_common::Env::capture(), &roots)
             .expect("config loads")
             .snapshot
             .workflow_validation_env_build_output_env
@@ -600,7 +627,7 @@ fn build_output_bindings_default_empty_and_workspace_replaces_global() {
             &format!("[workflow.validation_env]\nbuild_output_env = ['{name}']\n"),
         );
         assert!(
-            ResolvedConfig::load(&roots).is_err(),
+            ResolvedConfig::load(&orbit_common::Env::capture(), &roots).is_err(),
             "invalid locator {name}"
         );
     }

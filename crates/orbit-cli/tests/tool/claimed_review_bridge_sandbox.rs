@@ -75,6 +75,7 @@ const PRIVATE_KEY_SECRET: &str =
 #[test]
 fn claimed_review_artifacts_cross_the_broker_from_a_confined_reviewer() {
     if !orbit_exec::macos_sandbox_test_guard(
+        &orbit_common::Env::capture(),
         "claimed_review_artifacts_cross_the_broker_from_a_confined_reviewer",
     ) {
         return;
@@ -1729,6 +1730,7 @@ impl Confined {
             files: Vec::new(),
         };
         let plan = orbit_exec::compile_linux_bwrap_argv_with_authority(
+            &orbit_common::Env::capture(),
             profile,
             "/usr/bin/python3",
             argv,
@@ -1760,8 +1762,12 @@ impl Confined {
         cwd: &Path,
         prepared: orbit_core::runtime::plugin::sandbox_mask::PreparedPluginMask,
     ) -> Self {
-        let mut profile_text =
-            orbit_exec::compile_macos_sandbox_profile(profile, "codex").expect("compile profile");
+        let mut profile_text = orbit_exec::compile_macos_sandbox_profile(
+            &orbit_common::Env::capture(),
+            profile,
+            "codex",
+        )
+        .expect("compile profile");
         orbit_exec::append_macos_subpath_mask(&mut profile_text, &prepared.trees);
         let child = orbit_exec::spawn_under_macos_sandbox(orbit_exec::MacosSandboxSpawnRequest {
             profile_text: &profile_text,

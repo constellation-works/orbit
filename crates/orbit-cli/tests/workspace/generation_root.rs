@@ -303,7 +303,8 @@ fn clock_ticks_during_generation_hold_emit_one_dated_summary_on_resume() {
         .expect("init root");
     assert!(init.status.success(), "{init:?}");
 
-    let foreign = GenerationGuard::acquire(&root, FOREIGN_DIGEST).expect("foreign pin");
+    let foreign = GenerationGuard::acquire(&orbit_common::Env::capture(), &root, FOREIGN_DIGEST)
+        .expect("foreign pin");
     for _ in 0..4 {
         let refused = orbit(&work, &home)
             .args(["--root", root_arg, "clock", "tick"])
@@ -626,7 +627,8 @@ fn preflight_on_isolated_home_is_blocked_by_a_live_exclusive_holder() {
     let home_orbit = home.join(".orbit");
     fs::create_dir_all(&home_orbit).expect("create home orbit");
     let digest = executable_generation(Path::new(env!("CARGO_BIN_EXE_orbit"))).expect("digest");
-    let _holder = GenerationGuard::acquire(&home_orbit, &digest).expect("live same-digest pin");
+    let _holder = GenerationGuard::acquire(&orbit_common::Env::capture(), &home_orbit, &digest)
+        .expect("live same-digest pin");
 
     let output = orbit(&work, &home)
         .args(["update", "--preflight", "--json"])
@@ -648,7 +650,8 @@ fn isolated_home_refuses_a_different_executable_digest_while_a_pin_is_held() {
     fs::create_dir_all(&work).expect("create work");
     let home_orbit = home.join(".orbit");
     fs::create_dir_all(&home_orbit).expect("create home orbit");
-    let _pin = GenerationGuard::acquire(&home_orbit, FOREIGN_DIGEST).expect("foreign pin");
+    let _pin = GenerationGuard::acquire(&orbit_common::Env::capture(), &home_orbit, FOREIGN_DIGEST)
+        .expect("foreign pin");
 
     let output = orbit(&work, &home)
         .args([
@@ -678,7 +681,8 @@ fn init_with_root_ignores_a_foreign_pin_on_home_orbit() {
     fs::create_dir_all(&work).expect("create work");
     let home_orbit = home.join(".orbit");
     fs::create_dir_all(&home_orbit).expect("create home orbit");
-    let _pin = GenerationGuard::acquire(&home_orbit, FOREIGN_DIGEST).expect("foreign pin");
+    let _pin = GenerationGuard::acquire(&orbit_common::Env::capture(), &home_orbit, FOREIGN_DIGEST)
+        .expect("foreign pin");
 
     let output = orbit(&work, &home)
         .args([
@@ -821,8 +825,12 @@ fn preflight_with_root_admits_uninitialized_override_cwd_and_host_global() {
 fn preflight_refuses_a_live_cwd_client_for_root_and_orbit_root() {
     let trees = PreflightTrees::new(true);
     let digest = executable_generation(Path::new(env!("CARGO_BIN_EXE_orbit"))).expect("digest");
-    let _holder =
-        GenerationGuard::acquire(&trees.workspace_orbit, &digest).expect("live workspace pin");
+    let _holder = GenerationGuard::acquire(
+        &orbit_common::Env::capture(),
+        &trees.workspace_orbit,
+        &digest,
+    )
+    .expect("live workspace pin");
 
     for output in [
         preflight_output(&trees, Some(&trees.scratch), None),

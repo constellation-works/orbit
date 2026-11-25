@@ -224,9 +224,18 @@ pub fn scoped<'a>(vars: impl IntoIterator<Item = (&'a str, Option<&'a str>)>) ->
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
     let requested = vars.into_iter().collect::<Vec<_>>();
+    let current = crate::Env::capture();
     let saved = requested
         .iter()
-        .map(|(name, _)| ((*name).to_string(), std::env::var(name).ok()))
+        .map(|(name, _)| {
+            (
+                (*name).to_string(),
+                current
+                    .get(name)
+                    .and_then(std::ffi::OsStr::to_str)
+                    .map(str::to_owned),
+            )
+        })
         .collect::<Vec<_>>();
     // SAFETY: the guard holds the process-wide lock for the whole mutation
     // window, so no other guarded reader/writer runs concurrently.

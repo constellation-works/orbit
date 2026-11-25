@@ -63,9 +63,14 @@ fn seeded_secrets_stay_out_of_persistence_logs_and_children() {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .process_group(0);
-        let output = orbit_exec::supervise_child(command.spawn().unwrap(), Some(120_000), None)
-            .expect("bounded isolated fixture")
-            .result;
+        let output = orbit_exec::supervise_child(
+            &orbit_common::Env::capture(),
+            command.spawn().unwrap(),
+            Some(120_000),
+            None,
+        )
+        .expect("bounded isolated fixture")
+        .result;
         assert!(
             output.success,
             "isolated secret-sink fixture: {}\n{}",

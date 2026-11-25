@@ -673,9 +673,12 @@ fn wrong_provenance_digest_target_or_ownership_refuses_before_replacement() {
 
     // A live host-global client refuses an update whose --root names the
     // workspace instead: the override does not move the replaced executable.
-    let _client =
-        GenerationGuard::acquire(&install.home.join(".orbit"), &sha256(&install.installed))
-            .expect("live host-global pin");
+    let _client = GenerationGuard::acquire(
+        &orbit_common::Env::capture(),
+        &install.home.join(".orbit"),
+        &sha256(&install.installed),
+    )
+    .expect("live host-global pin");
     let record = install.generation_record();
     let mut overridden = args(&["--root".as_ref(), install.repo.join(".orbit").as_os_str()]);
     overridden.extend(install.install_args(&candidate, &manifest, COMMIT_B));
@@ -692,8 +695,12 @@ fn a_live_discovered_workspace_client_blocks_a_local_candidate_update() {
     let (candidate, manifest) = install.candidate("orbit-b");
     let workspace_root = install.repo.join(".orbit");
     let workspace_record = workspace_root.join(".generation.lock");
-    let workspace_client = GenerationGuard::acquire(&workspace_root, &sha256(&install.installed))
-        .expect("pin the discovered workspace authority");
+    let workspace_client = GenerationGuard::acquire(
+        &orbit_common::Env::capture(),
+        &workspace_root,
+        &sha256(&install.installed),
+    )
+    .expect("pin the discovered workspace authority");
     let record = fs::read(&workspace_record).expect("workspace generation record");
 
     let output = install.run(
@@ -1034,8 +1041,9 @@ fn a_pending_layout_migration_converges_and_same_generation_clients_survive_reco
     }
 
     // A holder that never registered is unknown, so it refuses too.
-    let unregistered = GenerationGuard::acquire(&workspace_root, &installed)
-        .expect("an unregistered holder pins the workspace authority");
+    let unregistered =
+        GenerationGuard::acquire(&orbit_common::Env::capture(), &workspace_root, &installed)
+            .expect("an unregistered holder pins the workspace authority");
     let refused = install.run(
         &install.installed,
         &install.install_args(&candidate, &manifest, COMMIT_B),
@@ -1108,7 +1116,10 @@ fn the_fenced_alternate_authority_stays_pinned_after_its_layout_migration() {
         current.to_string(),
         "the migration ran before sync"
     );
-    let takeover = orbit_common::fs::generation::GenerationUpdate::acquire(&workspace_root);
+    let takeover = orbit_common::fs::generation::GenerationUpdate::acquire(
+        &orbit_common::Env::capture(),
+        &workspace_root,
+    );
     let unprotected = takeover.is_ok();
     drop(takeover);
     drop(sync_gate);

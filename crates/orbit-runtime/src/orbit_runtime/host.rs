@@ -203,7 +203,7 @@ impl RuntimeKernel {
         use orbit_exec::browser_kit::{KitInspection, KitLayout};
         let layout = match &self.host().browser_kit_home {
             Some(home) => KitLayout::for_home(home),
-            None => match KitLayout::current_user() {
+            None => match KitLayout::current_user(self.execution_env_policy().process_env()) {
                 Ok(layout) => layout,
                 Err(_) => return false,
             },

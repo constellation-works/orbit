@@ -9,7 +9,8 @@ fn delivery_templates_refuse_unknown_placeholders_and_missing_markers_at_load() 
     let roots = ConfigRoots::new(global.path(), workspace.path());
     let load_workspace = |body: &str| {
         fs::write(workspace.path().join("config.toml"), body).expect("write workspace config");
-        ResolvedConfig::load(&roots).map_err(|error| error.to_string())
+        ResolvedConfig::load(&orbit_common::Env::capture(), &roots)
+            .map_err(|error| error.to_string())
     };
 
     let refusals = [
@@ -100,7 +101,8 @@ fn non_reviewable_paths_default_empty_and_refuse_an_invalid_glob() {
     let roots = ConfigRoots::new(global.path(), workspace.path());
     let load_workspace = |body: &str| {
         fs::write(workspace.path().join("config.toml"), body).expect("write workspace config");
-        ResolvedConfig::load(&roots).map_err(|error| error.to_string())
+        ResolvedConfig::load(&orbit_common::Env::capture(), &roots)
+            .map_err(|error| error.to_string())
     };
 
     let defaults = load_workspace("").expect("defaults load");

@@ -67,7 +67,12 @@ impl RuntimeKernel {
     pub fn validation_environment(&self) -> orbit_exec::ValidationEnvironment {
         let base = self.execution_env_policy().agent_subprocess_env(&[]);
         let shell = orbit_exec::LoginShell::for_current_user(&base);
-        orbit_exec::ValidationEnvironment::resolve(base, self.validation_env_policy(), &shell)
+        orbit_exec::ValidationEnvironment::resolve(
+            self.execution_env_policy().process_env(),
+            base,
+            self.validation_env_policy(),
+            &shell,
+        )
     }
 
     /// The environment `proc.spawn` runs a command with: the

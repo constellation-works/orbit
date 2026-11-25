@@ -144,6 +144,7 @@ impl Sandbox for EvidenceCodeqlSandbox {
             StdinMode::Bytes(_) => Stdio::piped(),
         };
         let mut plan = orbit_exec::compile_linux_bwrap_argv(
+            &orbit_common::Env::capture(),
             &self.profile,
             &request.program,
             &request.args,
@@ -229,7 +230,7 @@ impl OrbitRuntime {
                 GIT_CHECKOUT_TIMEOUT,
             ),
         ] {
-            let output = run_git_within(&path, &args, deadline)?;
+            let output = run_git_within(&orbit_common::Env::capture(), &path, &args, deadline)?;
             if !output.success {
                 return Err(OrbitError::Execution(format!(
                     "prepare evidence checkout {} at {commit}: git {}: {}",
@@ -298,7 +299,11 @@ impl OrbitRuntime {
                 environment_mode: EnvironmentMode::ClearAndSet(env),
                 debug: false,
             };
-            run_process(&request, &EvidenceCodeqlSandbox::new(checkout))
+            run_process(
+                &orbit_common::Env::capture(),
+                &request,
+                &EvidenceCodeqlSandbox::new(checkout),
+            )
         };
         #[cfg(not(target_os = "linux"))]
         let outcome: Result<orbit_types::tool::ExecutionResult, OrbitError> = {

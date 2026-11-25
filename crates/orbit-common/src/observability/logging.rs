@@ -43,7 +43,7 @@
 //! [`redact_event_text`] remains available for non-tracing surfaces that must
 //! scrub text before writing it elsewhere.
 
-use crate::env_vars;
+use std::ffi::OsStr;
 use std::{
     collections::BTreeMap,
     fmt as std_fmt,
@@ -90,11 +90,6 @@ pub fn agent_jsonl_log_path(operational: &Path) -> Option<PathBuf> {
     (operational.file_name()? == "orbit.jsonl")
         .then(|| operational.with_file_name("orbit-agent.jsonl"))
 }
-
-use crate::env_vars::ORBIT_MANAGED_RUN_CONTEXT as ORBIT_MANAGED_RUN_CONTEXT_ENV;
-use crate::env_vars::ORBIT_REGISTRY_ROOT as ORBIT_REGISTRY_ROOT_ENV;
-use crate::env_vars::ORBIT_ROOT as ORBIT_ROOT_ENV;
-use crate::env_vars::ORBIT_RUN_ID as ORBIT_RUN_ID_ENV;
 
 /// Field formatter that redacts string-valued and `Debug`-formatted tracing
 /// event fields before they are written to stderr or the JSONL tracing feed.
@@ -389,27 +384,31 @@ fn json_field_name(field: &Field) -> &str {
 /// The JSONL layer is installed immediately but opens the file only on the
 /// first event. Path resolution reads environment variables only; it does
 /// not walk the log directory or parse `config.toml`.
-pub fn init_default_subscriber(default_filter: &str) {
-    init_subscriber_with_file_filter(default_filter, default_filter);
+pub fn init_default_subscriber(env: &crate::Env, default_filter: &str) {
+    init_subscriber_with_file_filter(env, default_filter, default_filter);
 }
 
 /// Install stderr and JSONL layers with independent defaults. `RUST_LOG`, when
 /// set and valid, overrides both; otherwise callers can retain additional file
 /// evidence without also printing it as a terminal diagnostic.
-pub fn init_subscriber_with_file_filter(stderr_default: &str, file_default: &str) {
+pub fn init_subscriber_with_file_filter(
+    env: &crate::Env,
+    stderr_default: &str,
+    file_default: &str,
+) {
     let stderr_layer = fmt::layer()
         .with_writer(io::stderr)
-        .with_ansi(stderr_ansi_enabled())
+        .with_ansi(stderr_ansi_enabled(env))
         .fmt_fields(RedactingFields::default())
-        .with_filter(env_filter(stderr_default));
+        .with_filter(env_filter(env, stderr_default));
 
-    match global_jsonl_log_path() {
+    match global_jsonl_log_path(env) {
         Ok(path) => {
-            let (file_layer, guards) = split_jsonl_layer_at_path(&path);
+            let (file_layer, guards) = split_jsonl_layer_at_path(&path, agent_write_gate(env));
             if FILE_GUARD.set(Mutex::new(Some(guards))).is_ok() {
                 let _ = Registry::default()
                     .with(stderr_layer)
-                    .with(file_layer.with_filter(env_filter(file_default)))
+                    .with(file_layer.with_filter(env_filter(env, file_default)))
                     .try_init();
             } else {
                 let _ = Registry::default().with(stderr_layer).try_init();
@@ -474,13 +473,12 @@ pub fn ansi_allowed(
 }
 
 /// [`ansi_allowed`] for stderr, reading the color environment from the process.
-fn stderr_ansi_enabled() -> bool {
-    let var = |key: &str| std::env::var_os(key).map(|value| value.to_string_lossy().into_owned());
+fn stderr_ansi_enabled(env: &crate::Env) -> bool {
     ansi_allowed(
         io::stderr().is_terminal(),
-        var(env_vars::TERM).as_deref(),
-        var(env_vars::NO_COLOR).as_deref(),
-        var(env_vars::CLICOLOR_FORCE).as_deref(),
+        env.term().map(OsStr::to_string_lossy).as_deref(),
+        env.no_color().map(OsStr::to_string_lossy).as_deref(),
+        env.clicolor_force().map(OsStr::to_string_lossy).as_deref(),
     )
 }
 
@@ -491,8 +489,8 @@ fn stderr_ansi_enabled() -> bool {
 /// the active file is within budget. Short-lived commands skip this and
 /// only rotate on first JSONL write when a single `metadata()` check shows
 /// the active file is oversized.
-pub fn rotate_global_jsonl_best_effort() {
-    let Ok(path) = global_jsonl_log_path() else {
+pub fn rotate_global_jsonl_best_effort(env: &crate::Env) {
+    let Ok(path) = global_jsonl_log_path(env) else {
         return;
     };
     let config = super::log_rotation::LogRotationConfig::default();
@@ -516,8 +514,11 @@ pub fn redact_event_text(message: &str) -> String {
 
 // Visible to sibling-layout logging tests; the filter construction is a
 // focused seam for subscriber behavior.
-pub(super) fn env_filter(default_filter: &str) -> EnvFilter {
-    EnvFilter::try_from_env(env_vars::RUST_LOG).unwrap_or_else(|_| EnvFilter::new(default_filter))
+pub(super) fn env_filter(env: &crate::Env, default_filter: &str) -> EnvFilter {
+    env.rust_log()
+        .and_then(OsStr::to_str)
+        .and_then(|value| EnvFilter::try_new(value).ok())
+        .unwrap_or_else(|| EnvFilter::new(default_filter))
 }
 
 /// Resolve the canonical path to the global JSONL tracing feed
@@ -533,17 +534,18 @@ pub(super) fn env_filter(default_filter: &str) -> EnvFilter {
 ///
 /// Producers and readers MUST agree on this path — `init_default_subscriber`
 /// writes here, and `orbit log tail` reads here by default.
-pub fn global_jsonl_log_path() -> io::Result<PathBuf> {
-    let orbit_root = match managed_registry_root()? {
-        Some(managed_root) => match explicit_log_root()? {
+pub fn global_jsonl_log_path(env: &crate::Env) -> io::Result<PathBuf> {
+    let orbit_root = match managed_registry_root(env)? {
+        Some(managed_root) => match explicit_log_root(env)? {
             Some(explicit_root) if !log_paths_equivalent(&explicit_root, &managed_root) => {
                 explicit_root
             }
             _ => managed_root,
         },
         None => {
-            let home = std::env::var_os(env_vars::HOME)
-                .or_else(|| std::env::var_os(env_vars::USERPROFILE))
+            let home = env
+                .home()
+                .or_else(|| env.userprofile())
                 .filter(|value| !value.is_empty())
                 .ok_or_else(|| {
                     io::Error::new(
@@ -561,20 +563,21 @@ pub fn global_jsonl_log_path() -> io::Result<PathBuf> {
 /// Resolve the registry root carried by an Orbit-managed child. The run ID is
 /// part of the trust boundary: an inherited locator without it must not
 /// redirect ordinary commands' logs.
-fn managed_registry_root() -> io::Result<Option<PathBuf>> {
-    let managed = std::env::var(ORBIT_MANAGED_RUN_CONTEXT_ENV)
-        .ok()
+fn managed_registry_root(env: &crate::Env) -> io::Result<Option<PathBuf>> {
+    let managed = env
+        .orbit_managed_run_context()
+        .and_then(std::ffi::OsStr::to_str)
         .is_some_and(|value| matches!(value.trim(), "1" | "true" | "TRUE"));
     if !managed
-        || std::env::var(ORBIT_RUN_ID_ENV)
-            .ok()
+        || env
+            .orbit_run_id()
+            .and_then(std::ffi::OsStr::to_str)
             .is_none_or(|value| value.trim().is_empty())
     {
         return Ok(None);
     }
 
-    let Some(value) = std::env::var_os(ORBIT_REGISTRY_ROOT_ENV).filter(|value| !value.is_empty())
-    else {
+    let Some(value) = env.orbit_registry_root().filter(|value| !value.is_empty()) else {
         return Ok(None);
     };
     let root = PathBuf::from(value);
@@ -595,18 +598,18 @@ fn managed_registry_root() -> io::Result<Option<PathBuf>> {
 /// `orbit sweep --root …`), so the whole argv is scanned for its first
 /// occurrence, mirroring `plugin_root_override` in `orbit-cli`; scanning
 /// stops at `--`, after which `--root` belongs to a child command.
-fn explicit_log_root() -> io::Result<Option<PathBuf>> {
+fn explicit_log_root(env: &crate::Env) -> io::Result<Option<PathBuf>> {
     if let Some(raw) = explicit_root_arg_value() {
-        return resolve_explicit_log_root(&raw).map(Some);
+        return resolve_explicit_log_root(env, &raw).map(Some);
     }
-    let Some(value) = std::env::var_os(ORBIT_ROOT_ENV).filter(|value| !value.is_empty()) else {
+    let Some(value) = env.orbit_root().filter(|value| !value.is_empty()) else {
         return Ok(None);
     };
     let raw = value.to_string_lossy();
     if raw.trim().is_empty() {
         return Ok(None);
     }
-    resolve_explicit_log_root(&raw).map(Some)
+    resolve_explicit_log_root(env, &raw).map(Some)
 }
 
 fn explicit_root_arg_value() -> Option<String> {
@@ -632,11 +635,12 @@ fn explicit_root_arg_value() -> Option<String> {
 /// Expand `~` and anchor a relative explicit root at the cwd, matching
 /// `resolve_generation_root` in `orbit-runtime`. No existence requirement:
 /// `orbit --root <new> init` logs before the root is created.
-fn resolve_explicit_log_root(raw: &str) -> io::Result<PathBuf> {
+fn resolve_explicit_log_root(env: &crate::Env, raw: &str) -> io::Result<PathBuf> {
     let value = raw.trim();
     let path = if value == "~" || value.starts_with("~/") {
-        let home = std::env::var_os(env_vars::HOME)
-            .or_else(|| std::env::var_os(env_vars::USERPROFILE))
+        let home = env
+            .home()
+            .or_else(|| env.userprofile())
             .filter(|home| !home.is_empty())
             .ok_or_else(|| {
                 io::Error::new(
@@ -689,11 +693,6 @@ fn log_paths_equivalent(left: &Path, right: &Path) -> bool {
 /// every line.
 pub const JSONL_QUEUE_LINES: usize = 4_096;
 
-/// Debug builds stall the agent writer's first disk write on this FIFO so a
-/// test can fill [`JSONL_QUEUE_LINES`] before any relay byte is stored.
-/// Release builds ignore it. Unset for ordinary runs.
-use crate::env_vars::ORBIT_TEST_AGENT_JSONL_GATE as AGENT_JSONL_GATE_ENV;
-
 struct SplitJsonlWriter {
     operational: NonBlocking,
     agent: NonBlocking,
@@ -717,6 +716,7 @@ impl<'a> MakeWriter<'a> for SplitJsonlWriter {
 
 fn split_jsonl_layer_at_path<S>(
     path: &Path,
+    write_gate: Option<PathBuf>,
 ) -> (
     impl Layer<S> + Send + Sync + 'static + use<S>,
     Vec<WorkerGuard>,
@@ -737,7 +737,7 @@ where
         .buffered_lines_limit(JSONL_QUEUE_LINES)
         .lossy(false)
         .thread_name("orbit-agent-log")
-        .finish(LazyJsonlWriter::agent(agent_path));
+        .finish(LazyJsonlWriter::agent(agent_path, write_gate));
     let layer = fmt::layer()
         .event_format(RedactingJsonEventFormat)
         .fmt_fields(RedactingFields::json())
@@ -759,7 +759,7 @@ struct LazyJsonlWriter {
     file: JsonlFile,
     bytes_since_check: usize,
     /// Taken on the first write. Only the agent feed arms it, and only when
-    /// [`AGENT_JSONL_GATE_ENV`] names a FIFO in a debug build.
+    /// [`crate::env_vars::ORBIT_TEST_AGENT_JSONL_GATE`] names a FIFO in a debug build.
     write_gate: Option<PathBuf>,
 }
 
@@ -773,9 +773,9 @@ impl LazyJsonlWriter {
         }
     }
 
-    fn agent(path: PathBuf) -> Self {
+    fn agent(path: PathBuf, write_gate: Option<PathBuf>) -> Self {
         Self {
-            write_gate: agent_write_gate(),
+            write_gate,
             ..Self::new(path)
         }
     }
@@ -805,10 +805,12 @@ impl LazyJsonlWriter {
     }
 }
 
-fn agent_write_gate() -> Option<PathBuf> {
+/// Debug builds can stall the agent writer's first disk write on a fixture
+/// FIFO until the queue fills.
+fn agent_write_gate(_env: &crate::Env) -> Option<PathBuf> {
     #[cfg(debug_assertions)]
     {
-        std::env::var_os(AGENT_JSONL_GATE_ENV)
+        _env.orbit_test_agent_jsonl_gate()
             .filter(|value| !value.is_empty())
             .map(PathBuf::from)
     }

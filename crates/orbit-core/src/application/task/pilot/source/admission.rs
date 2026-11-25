@@ -14,6 +14,7 @@ impl OrbitRuntime {
         let branch = base_branch.trim();
         let branch = branch.strip_prefix("origin/").unwrap_or(branch).trim();
         let revision = run_git(
+            &orbit_common::Env::capture(),
             workspace,
             &[
                 "rev-parse",
@@ -29,13 +30,14 @@ impl OrbitRuntime {
             return Ok(());
         }
         let branch_ref = format!("refs/heads/{branch}");
-        let remotes = run_git(workspace, &["remote"])?;
+        let remotes = run_git(&orbit_common::Env::capture(), workspace, &["remote"])?;
         let has_origin = remotes
             .stdout
             .lines()
             .any(|remote| remote.trim() == "origin");
         let branch_exists = if has_origin {
             let remote = run_git_within(
+                &orbit_common::Env::capture(),
                 workspace,
                 &["ls-remote", "--exit-code", "--heads", "origin", &branch_ref],
                 GIT_REMOTE_TIMEOUT,
@@ -52,6 +54,7 @@ impl OrbitRuntime {
             })
         } else {
             run_git(
+                &orbit_common::Env::capture(),
                 workspace,
                 &[
                     "rev-parse",

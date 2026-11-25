@@ -67,7 +67,9 @@ fn follow_logs_payload(
     let steps = runtime.collect_run_audit_steps(&run.run_id)?;
     let step_filter = resolve_step_filter(&run, &steps, step_id)?;
     let runtime = runtime.clone();
-    let log_path = orbit_common::observability::logging::global_jsonl_log_path()?;
+    let log_path = orbit_common::observability::logging::global_jsonl_log_path(
+        &orbit_core::composition::composition_env(),
+    )?;
     Ok(Payload::stream(
         json!({"run_id": run.run_id, "follow": true}),
         Box::new(move |sink, writer| {

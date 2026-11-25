@@ -164,8 +164,12 @@ fn delivery(
 /// raw appended table header would be a duplicate.
 fn set_global_config(fixture: &Fixture, values: &[(&str, &str)]) {
     let path = fixture.global.join("config.toml");
-    let mut store =
-        orbit_config::ConfigStore::open(orbit_config::ConfigScope::Global, &path).unwrap();
+    let mut store = orbit_config::ConfigStore::open(
+        &orbit_common::Env::capture(),
+        orbit_config::ConfigScope::Global,
+        &path,
+    )
+    .unwrap();
     for (key, value) in values {
         store.set_value(key, value).unwrap();
     }

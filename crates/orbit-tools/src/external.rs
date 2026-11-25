@@ -55,6 +55,7 @@ impl Tool for ExternalTool {
         // sandbox. This call adds no second filesystem boundary; its program
         // policy and cleared child environment are handled above.
         let output = run_process(
+            &orbit_common::Env::capture(),
             &ExecRequest {
                 program: self.path.clone(),
                 args: vec![],
@@ -117,7 +118,7 @@ fn runtime_environment(ctx: &ToolContext, tool_name: &str, cwd: &str) -> Vec<(St
     let mut env_pairs = ctx
         .proc_spawn_environment
         .clone()
-        .unwrap_or_else(|| allowlisted_child_env(&[], &[]));
+        .unwrap_or_else(|| allowlisted_child_env(&orbit_common::Env::capture(), &[], &[]));
     upsert_env(&mut env_pairs, ORBIT_TOOL_NAME_ENV, tool_name.to_string());
     upsert_env(&mut env_pairs, ORBIT_TOOL_CWD_ENV, cwd.to_string());
     if let Some(workspace_root) = ctx.workspace_root.as_ref() {

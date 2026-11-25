@@ -106,7 +106,7 @@ impl UpdateEnvironment {
             })?);
         let install_channel = InstallChannel::detect_with_homebrew_ownership(
             &executable,
-            channel::managed_install_dir().as_deref(),
+            channel::managed_install_dir(&orbit_core::composition::composition_env()).as_deref(),
             &channel::SystemHomebrewInventory::system(),
         );
         Self::assemble(
@@ -133,8 +133,10 @@ impl UpdateEnvironment {
                 .map_err(|error| OrbitError::Io(error.to_string()))?
                 .join(install_target)
         };
-        let install_channel =
-            InstallChannel::detect(&executable, channel::managed_install_dir().as_deref());
+        let install_channel = InstallChannel::detect(
+            &executable,
+            channel::managed_install_dir(&orbit_core::composition::composition_env()).as_deref(),
+        );
         Self::assemble(root_override, executable, install_channel, &[])
     }
 

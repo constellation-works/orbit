@@ -167,7 +167,11 @@ pub(super) fn observe(runtime: &OrbitRuntime, task_id: &str) -> Result<Observati
 }
 
 fn merge_base(repo: &std::path::Path, head: &str, landed_on: &str) -> Result<String, OrbitError> {
-    let output = run_git(repo, &["merge-base", "--end-of-options", head, landed_on])?;
+    let output = run_git(
+        &orbit_common::Env::capture(),
+        repo,
+        &["merge-base", "--end-of-options", head, landed_on],
+    )?;
     let commit = output.stdout.trim();
     if !output.success || commit.is_empty() {
         return Err(refused(format!(

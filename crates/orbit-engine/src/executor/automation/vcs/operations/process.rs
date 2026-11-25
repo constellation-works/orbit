@@ -223,7 +223,7 @@ pub(in crate::executor::automation::vcs) fn run_vcs_process(
 ) -> Result<orbit_exec::ExecutionResult, OrbitError> {
     let request = build_vcs_request(program, args, current_dir, timeout_ms)?;
     if program == "git" {
-        return run_process(&request, &NoSandbox);
+        return run_process(&orbit_common::Env::capture(), &request, &NoSandbox);
     }
     orbit_tools::github_quota::run_gh_request(
         orbit_tools::github_quota::GithubCaller::Delivery,
@@ -244,7 +244,7 @@ pub(in crate::executor::automation::vcs) fn run_vcs_process_within(
 ) -> Result<orbit_exec::ExecutionResult, OrbitError> {
     let mut request = build_vcs_request(program, args, current_dir, timeout_ms)?;
     if program == "git" {
-        return run_process(&request, &NoSandbox);
+        return run_process(&orbit_common::Env::capture(), &request, &NoSandbox);
     }
     let admit_started = std::time::Instant::now();
     // The instant the original budget runs out; the post-child accounting
@@ -268,7 +268,7 @@ pub(in crate::executor::automation::vcs) fn run_vcs_process_within(
         Err(refusal) => return Err(refusal),
     };
     request.timeout_ms = Some(remaining_ms);
-    let result = run_process(&request, &NoSandbox)?;
+    let result = run_process(&orbit_common::Env::capture(), &request, &NoSandbox)?;
     orbit_tools::github_quota::observe_gh_result_by_deadline(&request, &result, deadline);
     Ok(result)
 }

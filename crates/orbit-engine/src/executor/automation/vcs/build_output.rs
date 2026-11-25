@@ -21,7 +21,7 @@ pub(super) fn host_validation_target_key(source: &Path) -> String {
 /// canonical source path that keys it.
 pub(super) fn host_validation_source(checkout: &Path) -> Result<(PathBuf, PathBuf), OrbitError> {
     let source = checkout.canonicalize()?;
-    let common = orbit_common::fs::git::git_common_dir(&source)?;
+    let common = orbit_common::fs::git::git_common_dir(&orbit_common::Env::capture(), &source)?;
     let primary = common
         .parent()
         .filter(|_| common.file_name().is_some_and(|name| name == ".git"))

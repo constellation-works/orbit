@@ -46,7 +46,9 @@ pub(crate) fn reconcile_review(
     session_context: &ToolSessionContext,
     input: &Value,
 ) -> Result<Value, OrbitError> {
-    if orbit_common::governance::authorization::agent_context_declared() {
+    if orbit_common::governance::authorization::agent_context_declared(
+        runtime.execution_env_policy().process_env(),
+    ) {
         return Err(OrbitError::CapabilityDenied(
             "managed agents cannot reconcile reviews; an operator must".into(),
         ));

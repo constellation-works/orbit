@@ -32,7 +32,8 @@ impl Roots {
     }
 
     fn load(&self) -> ResolvedConfig {
-        ResolvedConfig::load(&self.config_roots()).expect("final config loads")
+        ResolvedConfig::load(&orbit_common::Env::capture(), &self.config_roots())
+            .expect("final config loads")
     }
 
     fn toggles(&self) -> std::collections::BTreeMap<String, bool> {
@@ -41,7 +42,8 @@ impl Roots {
 }
 
 fn open(path: &Path) -> ConfigStore {
-    ConfigStore::open(ConfigScope::Workspace, path).expect("open workspace store")
+    ConfigStore::open(&orbit_common::Env::capture(), ConfigScope::Workspace, path)
+        .expect("open workspace store")
 }
 
 fn set_key(store: &mut ConfigStore, global_root: &Path, key: &str, value: &str) {
@@ -67,6 +69,7 @@ fn global_only_workspace_key_refusal_points_to_global_config_and_leaves_workspac
     let global_path = roots.global.path().join("config.toml");
     let before = std::fs::read(&workspace_path).expect("read initial workspace config");
     let mut store = ConfigStore::open_for_workspace_set(
+        &orbit_common::Env::capture(),
         &workspace_path,
         &global_path,
         WorkspaceInitMode::RequireExisting,
@@ -269,7 +272,9 @@ mod admission {
         let original = "[execution.codex]\nsandbox = \"workspace-write\"\n";
         fs::write(&path, original).expect("write config");
 
-        let mut store = ConfigStore::open(ConfigScope::Workspace, &path).expect("open store");
+        let mut store =
+            ConfigStore::open(&orbit_common::Env::capture(), ConfigScope::Workspace, &path)
+                .expect("open store");
         store
             .set_value("execution.codex.sandbox", "not-a-real-mode")
             .expect("set_value only mutates the in-memory document");
@@ -295,10 +300,11 @@ mod admission {
         let link = config_path(dir.path());
         std::os::unix::fs::symlink(&real, &link).expect("symlink config leaf");
 
-        let error = match ConfigStore::open(ConfigScope::Workspace, &link) {
-            Err(error) => error,
-            Ok(_) => panic!("a symlinked config file must be refused"),
-        };
+        let error =
+            match ConfigStore::open(&orbit_common::Env::capture(), ConfigScope::Workspace, &link) {
+                Err(error) => error,
+                Ok(_) => panic!("a symlinked config file must be refused"),
+            };
         assert!(
             error
                 .to_string()

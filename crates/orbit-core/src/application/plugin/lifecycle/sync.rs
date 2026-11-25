@@ -496,10 +496,10 @@ fn sync_effective_status(
             ));
         }
     };
-    let config = orbit_config::ResolvedConfig::load(&orbit_config::ConfigRoots::new(
-        global_root,
-        runtime.shared_root(),
-    ))?;
+    let config = orbit_config::ResolvedConfig::load(
+        runtime.execution_env_policy().process_env(),
+        &orbit_config::ConfigRoots::new(global_root, runtime.shared_root()),
+    )?;
     let projection = projected_status(installed, &plugin, &runtime.global_root(), &config.plugins);
     Ok((projection.status, projection.diagnostic))
 }

@@ -65,8 +65,10 @@ pub(super) fn enforce_plugin_callback_allowlist_from_root(
     if matches!(resolution, CallbackResolution::None) {
         return Ok(());
     }
-    let db =
-        orbit_config::resolved_audit_db_path(&orbit_config::ConfigRoots::global_only(global_root))?;
+    let db = orbit_config::resolved_audit_db_path(
+        &orbit_common::Env::capture(),
+        &orbit_config::ConfigRoots::global_only(global_root),
+    )?;
     let store = Store::open(&db)?;
     apply_callback_resolution(
         resolution,

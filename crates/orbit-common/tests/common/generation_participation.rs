@@ -26,7 +26,16 @@ fn process_join(
     role: ParticipantRole,
     access: Access,
 ) -> Result<GenerationGuard, orbit_common::OrbitError> {
-    GenerationGuard::for_process(root, identity, role, None, access, false, || Ok(10))
+    GenerationGuard::for_process(
+        &orbit_common::Env::capture(),
+        root,
+        identity,
+        role,
+        None,
+        access,
+        false,
+        || Ok(10),
+    )
 }
 
 /// Participant records under `root`, live or not yet collected.

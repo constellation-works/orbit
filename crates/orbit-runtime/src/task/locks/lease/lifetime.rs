@@ -82,7 +82,7 @@ fn lease_landing(
     }
     let branch = format!("refs/heads/{binding}");
     let base_ref = format!("refs/heads/{base}");
-    match git_ancestry(repo, &branch, &base_ref)? {
+    match git_ancestry(&orbit_common::Env::capture(), repo, &branch, &base_ref)? {
         GitAncestry::Ancestor => Ok(Some(json!({"branch": binding, "base": base}))),
         GitAncestry::NotAncestor => Ok(None),
         GitAncestry::Unanswered { stderr, .. } => Err(OrbitError::Execution(format!(
