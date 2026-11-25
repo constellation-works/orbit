@@ -2,7 +2,9 @@ use super::support::{isolated, json_ok, spawn_server};
 use chrono::Utc;
 use orbit_core::application::task::TaskAddParams;
 use orbit_core::{ActorIdentity, JobRun, JobRunState, OrbitRuntime, TaskStatus};
-use orbit_types::workspace::{Workspace, WorkspaceCheckout, WorkspaceRegistry, WorkspaceStatus};
+use orbit_types::workspace::{
+    Workspace, WorkspaceCheckout, WorkspaceCheckoutRole, WorkspaceRegistry, WorkspaceStatus,
+};
 use std::path::{Path, PathBuf};
 fn seed_workspace(global_root: &Path, base: &Path, name: &str) -> (PathBuf, PathBuf) {
     let repo_root = base.join(name);
@@ -1184,6 +1186,197 @@ fn task_detail_under_all_resolves_the_owning_workspace() {
                 plain.get("workspace_id").is_none(),
                 "a scoped read keeps its body: {plain}"
             );
+        },
+    );
+}
+
+#[test]
+fn task_detail_under_all_never_resolves_replica_checkouts() {
+    isolated(
+        "aggregate_pages::task_detail_under_all_never_resolves_replica_checkouts",
+        || {
+            let tmp = tempfile::tempdir().expect("tempdir");
+            let global = tmp.path().join("global");
+            std::fs::create_dir_all(&global).unwrap();
+            // Replica validation needs a local machine identity, and every
+            // workspace then needs a logical owner. Create the identity before
+            // any task is minted so the owned and replica stores agree with
+            // the host's task prefix.
+            orbit_registry::ensure_machine_identity(&global, || {
+                Ok(orbit_registry::NewMachineIdentity {
+                    name: "http-fixture".into(),
+                    task_prefix: "HF".into(),
+                })
+            })
+            .expect("ensure machine identity");
+            let local_machine_id = orbit_registry::machine_identity::load_machine_identity(&global)
+                .expect("load machine identity")
+                .id;
+            let remote_machine_id = "hm_remoteowner00000001".to_string();
+            assert_ne!(local_machine_id, remote_machine_id);
+            // A follower host's replica checkout of a workspace another
+            // machine owns: task content stays on disk and stays openable, but
+            // the aggregate must never offer it. Build the checkout dirs
+            // without minting tasks first (`seed_workspace` mints through
+            // `from_roots`, which ignores the host task prefix and would
+            // disagree with the registered open below); tasks are minted
+            // through the registered runtimes so their ids agree with the
+            // host identity.
+            let make_empty_workspace = |name: &str| {
+                let repo_root = tmp.path().join(name);
+                let orbit_dir = repo_root.join(".orbit");
+                std::fs::create_dir_all(&orbit_dir).expect("create .orbit");
+                std::fs::write(orbit_dir.join("config.toml"), "").expect("write config");
+                std::fs::write(
+                    orbit_dir.join("config.yaml"),
+                    format!("schema_version: 1\nworkspace_id: ws_{name}\n"),
+                )
+                .expect("write workspace identity");
+                (orbit_dir, repo_root)
+            };
+            let (_alpha_orbit, alpha_repo) = make_empty_workspace("alpha");
+            let (_bravo_orbit, bravo_repo) = make_empty_workspace("bravo");
+            let now = Utc::now();
+            // Mint both tasks while `bravo` is still an owned checkout —
+            // coordination writes are refused in a replica — then rebind it
+            // as the follower's replica. The task files stay on disk, as a
+            // real replica's would after the owner minted them.
+            let mut registry = WorkspaceRegistry {
+                workspaces: vec![
+                    Workspace {
+                        id: "alpha".to_string(),
+                        name: "alpha".to_string(),
+                        owner_machine_id: Some(local_machine_id.clone()),
+                        git_remote: None,
+                        ship_mode: None,
+                        base_branch: "main".to_string(),
+                        status: WorkspaceStatus::Active,
+                        created_at: now,
+                        updated_at: now,
+                    },
+                    Workspace {
+                        id: "bravo".to_string(),
+                        name: "bravo".to_string(),
+                        owner_machine_id: Some(local_machine_id.clone()),
+                        git_remote: None,
+                        ship_mode: None,
+                        base_branch: "main".to_string(),
+                        status: WorkspaceStatus::Active,
+                        created_at: now,
+                        updated_at: now,
+                    },
+                ],
+                checkouts: vec![
+                    WorkspaceCheckout::owner(
+                        "alpha".to_string(),
+                        alpha_repo.clone(),
+                        alpha_repo.join(".orbit"),
+                    ),
+                    WorkspaceCheckout::owner(
+                        "bravo".to_string(),
+                        bravo_repo.clone(),
+                        bravo_repo.join(".orbit"),
+                    ),
+                ],
+                ..Default::default()
+            };
+            let registry_path = global.join("workspaces.json");
+            orbit_registry::workspace_registry::save_registry_to(&registry, &registry_path)
+                .expect("save owned registry");
+            let add = |registry: &WorkspaceRegistry, workspace_id: &str, title: &str| {
+                let workspace = registry
+                    .workspaces
+                    .iter()
+                    .find(|workspace| workspace.id == workspace_id)
+                    .expect("workspace");
+                let checkout = registry
+                    .checkouts
+                    .iter()
+                    .find(|checkout| checkout.workspace_id == workspace_id)
+                    .expect("checkout");
+                orbit_cmd::registry_runtime::RegisteredRuntimeFactory::open_registered_checkout(
+                    &global, workspace, checkout,
+                )
+                .expect("open registered checkout")
+                .with_actor(ActorIdentity::human("human"))
+                .add_task(TaskAddParams {
+                    title: title.into(),
+                    description: "owned by one workspace".into(),
+                    status: Some(TaskStatus::Backlog),
+                    ..Default::default()
+                })
+                .expect("add task")
+                .id
+            };
+            let alpha_id = add(&registry, "alpha", "alpha backlog");
+            let replica_id = add(&registry, "bravo", "replica only");
+            assert_ne!(alpha_id, replica_id, "task ids are unique on the host");
+            registry
+                .workspaces
+                .iter_mut()
+                .find(|workspace| workspace.id == "bravo")
+                .expect("replica workspace")
+                .owner_machine_id = Some(remote_machine_id.clone());
+            let bravo_checkout = registry
+                .checkouts
+                .iter_mut()
+                .find(|checkout| checkout.workspace_id == "bravo")
+                .expect("replica checkout");
+            bravo_checkout.role = Some(WorkspaceCheckoutRole::Replica);
+            bravo_checkout.owner_machine_id = Some(remote_machine_id.clone());
+            orbit_registry::workspace_registry::save_registry_to(&registry, &registry_path)
+                .expect("save replica registry");
+            let server = spawn_server(
+                tmp.path(),
+                true,
+                false,
+                false,
+                &tmp.path().join("process.log"),
+                None,
+                &[],
+            );
+
+            // The owned workspace still resolves through the aggregate.
+            let detail = json_ok(server.get(&format!("/api/tasks/{alpha_id}?workspace=all")));
+            assert_eq!(detail["id"], alpha_id);
+            assert_eq!(detail["workspace_id"], "alpha");
+
+            // An id held only by the replica is the same 404 as an unknown id.
+            let replica = server.get(&format!("/api/tasks/{replica_id}?workspace=all"));
+            assert_eq!(replica.status(), reqwest::StatusCode::NOT_FOUND);
+            let replica: serde_json::Value = replica.json().expect("json");
+            assert_eq!(
+                replica,
+                serde_json::json!({"error": format!("task not found: {replica_id}")}),
+                "a replica-only id reads as an unknown id"
+            );
+            let missing = server.get("/api/tasks/ORB-99999?workspace=all");
+            assert_eq!(missing.status(), reqwest::StatusCode::NOT_FOUND);
+            let missing: serde_json::Value = missing.json().expect("json");
+            assert_eq!(
+                missing,
+                serde_json::json!({"error": "task not found: ORB-99999"}),
+                "the unknown-id shape the replica read must match"
+            );
+
+            // The merged list never exposes the replica's rows either.
+            let all = json_ok(server.get("/api/tasks/all"));
+            let items = all["items"].as_array().expect("items");
+            assert!(
+                items
+                    .iter()
+                    .any(|item| item["id"] == alpha_id && item["workspace_id"] == "alpha"),
+                "the owned task stays listed: {all}"
+            );
+            assert!(
+                items.iter().all(|item| item["workspace_id"] != "bravo"),
+                "no replica row is listed: {all}"
+            );
+
+            // A read scoped to the replica checkout itself still reaches it;
+            // only the aggregate skips replicas.
+            let scoped = json_ok(server.get(&format!("/api/tasks/{replica_id}?workspace=bravo")));
+            assert_eq!(scoped["id"], replica_id);
         },
     );
 }

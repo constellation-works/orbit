@@ -360,16 +360,24 @@ fn workspace_is_all(query: Option<&str>) -> bool {
     })
 }
 
-/// Find the active workspace that owns task `id`, in registry order.
+/// Find the owned workspace that owns task `id`, in registry order.
 ///
-/// A workspace that cannot be opened or read is skipped with a warning; if no
-/// owner is found and one was skipped, its error is returned instead of a
-/// not-found, because the id may live in the workspace that could not be read.
+/// Replica checkouts are never owners: the All workspaces aggregate covers
+/// only owned workspaces, so a replica is skipped the same way an inactive
+/// entry is. A workspace that cannot be opened or read is skipped with a
+/// warning; if no owner is found and one was skipped, its error is returned
+/// instead of a not-found, because the id may live in the workspace that
+/// could not be read.
 fn find_task_owner(state: &DashboardState, id: &str) -> Result<TaskOwner, orbit_core::OrbitError> {
     let pinned = state.pin();
     let home = orbit_common::fs::path::home_dir(&orbit_core::composition::composition_env()).ok();
     let mut skipped: Option<orbit_core::OrbitError> = None;
-    for entry in pinned.entries().iter().filter(|entry| entry.active) {
+    for entry in pinned
+        .entries()
+        .iter()
+        .filter(|entry| entry.active)
+        .filter(|entry| crate::api::workspaces::entry_is_owned(entry))
+    {
         let runtime = match pinned.runtime_for(&entry.id) {
             Ok(runtime) => runtime,
             Err(_) => {
