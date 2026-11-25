@@ -177,7 +177,7 @@ fn admission_pass(runtime: &OrbitRuntime, action: &str, input: &Value) -> Result
     // Between iterations nothing of this drain is in flight in-process: a
     // drain worker yields to a pending generation switch or hands itself over
     // to a replaced installation here.
-    runtime.drain_upgrade_boundary();
+    runtime.drain_upgrade_boundary(|| std::env::args_os().skip(1).collect());
     let unthrottled_slots = if admissions_stopped || host_shutdown_holding.is_some() {
         0
     } else {

@@ -286,7 +286,8 @@ pub(in crate::executor::automation::vcs) fn recover_failed_checks<H: RuntimeHost
         CheckFailureClass::Inherited
             if (recovery.updated || head != context.candidate.candidate.commit)
                 && onto_passing_tip(&jobs)
-                && landing_tip.is_some_and(|tip| contains(workspace, tip, head)) =>
+                && landing_tip
+                    .is_some_and(|tip| contains(&host.process_env(), workspace, tip, head)) =>
         {
             // An update already landed the candidate on a base tip where
             // the same job passes, so the failure that remains is the
@@ -302,7 +303,9 @@ pub(in crate::executor::automation::vcs) fn recover_failed_checks<H: RuntimeHost
             }
         }
         CheckFailureClass::Inherited => {
-            let Some(tip) = moved_tip.filter(|tip| !contains(workspace, tip, head)) else {
+            let Some(tip) =
+                moved_tip.filter(|tip| !contains(&host.process_env(), workspace, tip, head))
+            else {
                 return Ok(CheckRecoveryStep::WaitForBase(evidence(
                     "waiting for a newer passing base commit within the landing deadline; the base is still red",
                 )));

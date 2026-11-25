@@ -500,11 +500,14 @@ fn install_zip(members: &[ZipMember<'_>]) -> (tempfile::TempDir, Result<(), Stri
     let archive = staging.path().join("plugin.zip");
     std::fs::write(&archive, bytes).expect("write zip");
     let source = archive.to_str().expect("utf-8 path").to_string();
-    let result = resolve_plugin_source(&PluginSourceRequest {
-        source: &source,
-        expected_digest: None,
-        digest_origin: "the test source",
-    })
+    let result = resolve_plugin_source(
+        &orbit_common::Env::capture(),
+        &PluginSourceRequest {
+            source: &source,
+            expected_digest: None,
+            digest_origin: "the test source",
+        },
+    )
     .map(|_| ())
     .map_err(|error| error.to_string());
     (staging, result)

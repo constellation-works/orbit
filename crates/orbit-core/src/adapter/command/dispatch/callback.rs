@@ -41,12 +41,13 @@ pub(crate) struct ActivityToolPolicyEnv {
 /// unloadable manifest, or a row whose install path is not one this host
 /// installed refuses everything.
 pub(super) fn enforce_plugin_callback_allowlist(
+    process_env: &orbit_common::Env,
     global_root: &Path,
     plugins: &Store,
     name: &str,
 ) -> Result<(), OrbitError> {
     apply_callback_resolution(
-        resolve_plugin_callback_session(global_root)?,
+        resolve_plugin_callback_session(process_env, global_root)?,
         global_root,
         |plugin| {
             plugins
@@ -58,10 +59,11 @@ pub(super) fn enforce_plugin_callback_allowlist(
 }
 
 pub(super) fn enforce_plugin_callback_allowlist_from_root(
+    process_env: &orbit_common::Env,
     global_root: &Path,
     name: &str,
 ) -> Result<(), OrbitError> {
-    let resolution = resolve_plugin_callback_session(global_root)?;
+    let resolution = resolve_plugin_callback_session(process_env, global_root)?;
     if matches!(resolution, CallbackResolution::None) {
         return Ok(());
     }
@@ -106,10 +108,11 @@ pub(super) fn enforce_plugin_callback_allowlist_from_root(
 /// pinning and runtime bootstrap, so a refused plugin child performs no part
 /// of the command it asked for.
 pub fn refuse_plugin_child_cli_command(
+    process_env: &orbit_common::Env,
     global_root: &Path,
     invocation: Option<&str>,
 ) -> Result<(), OrbitError> {
-    match resolve_plugin_callback_session(global_root)? {
+    match resolve_plugin_callback_session(process_env, global_root)? {
         CallbackResolution::None => Ok(()),
         CallbackResolution::Identified(identity) => Err(plugin_cli_surface_refused(
             Some(&identity.provenance.name),
@@ -139,11 +142,12 @@ pub fn refuse_plugin_child_cli_command(
 /// Preflight has no runtime audit guard, so retain the refusal in the
 /// operational log with plugin attribution as well as returning it to the child.
 pub fn refuse_plugin_child_remote_callback(
+    process_env: &orbit_common::Env,
     global_root: &Path,
     tool: &str,
     destination: &str,
 ) -> Result<(), OrbitError> {
-    let plugin = match resolve_plugin_callback_session(global_root)? {
+    let plugin = match resolve_plugin_callback_session(process_env, global_root)? {
         CallbackResolution::None => return Ok(()),
         CallbackResolution::Identified(identity) => Some(identity.provenance.name),
         CallbackResolution::RetiredCredential(identity) => {

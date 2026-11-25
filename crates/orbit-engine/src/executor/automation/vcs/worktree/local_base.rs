@@ -15,17 +15,18 @@ use super::merge::checkout_holding_branch;
 
 /// Select the fetched commit when it safely fast-forwards the owner base.
 pub(super) fn advance_local_base_for_admission(
+    process_env: &orbit_common::Env,
     repo_root: &Path,
     base: &str,
 ) -> Result<Option<String>, OrbitError> {
     let branch = normalize_base_branch(base)?;
-    if !git_command_success(repo_root, &["remote", "get-url", "origin"])? {
+    if !git_command_success(process_env, repo_root, &["remote", "get-url", "origin"])? {
         return Ok(None);
     }
     // Keep the selected spelling here: fetch_remote_base normalizes once
     // itself, and passing `branch` would strip a second `origin/` from a
     // literal branch such as `origin/train`.
-    if let Err(error) = fetch_remote_base(repo_root, base) {
+    if let Err(error) = fetch_remote_base(process_env, repo_root, base) {
         tracing::warn!(
             branch,
             %error,
@@ -33,15 +34,19 @@ pub(super) fn advance_local_base_for_admission(
         );
         return Ok(None);
     }
-    fast_forward_owner_base(repo_root, &branch)
+    fast_forward_owner_base(process_env, repo_root, &branch)
 }
 
-fn fast_forward_owner_base(repo_root: &Path, branch: &str) -> Result<Option<String>, OrbitError> {
+fn fast_forward_owner_base(
+    process_env: &orbit_common::Env,
+    repo_root: &Path,
+    branch: &str,
+) -> Result<Option<String>, OrbitError> {
     let local_ref = format!("refs/heads/{branch}");
     let remote_ref = format!("refs/remotes/origin/{branch}");
     let (Some(owner), Some(origin)) = (
-        commit_of(repo_root, &local_ref)?,
-        commit_of(repo_root, &remote_ref)?,
+        commit_of(process_env, repo_root, &local_ref)?,
+        commit_of(process_env, repo_root, &remote_ref)?,
     ) else {
         // A missing owner branch is reported by the start-point resolution,
         // and an origin without the branch has nothing to advance to.
@@ -49,12 +54,12 @@ fn fast_forward_owner_base(repo_root: &Path, branch: &str) -> Result<Option<Stri
     };
     // Level with origin, or ahead of it (commits origin does not have yet):
     // the owner's branch is already the newest base this run can use.
-    if owner == origin || is_ancestor(repo_root, &origin, &owner)? {
+    if owner == origin || is_ancestor(process_env, repo_root, &origin, &owner)? {
         return Ok(None);
     }
 
-    let holder = checkout_holding_branch(repo_root, branch)?;
-    if !is_ancestor(repo_root, &owner, &origin)? {
+    let holder = checkout_holding_branch(process_env, repo_root, branch)?;
+    if !is_ancestor(process_env, repo_root, &owner, &origin)? {
         return Err(match &holder {
             Some(checkout) => stale_base_refusal(
                 checkout,
@@ -69,6 +74,7 @@ fn fast_forward_owner_base(repo_root: &Path, branch: &str) -> Result<Option<Stri
 
     if let Some(checkout) = holder {
         let tracked = git_output_raw(
+            process_env,
             &checkout,
             &["status", "--porcelain", "--untracked-files=no"],
         )?;
@@ -88,12 +94,20 @@ fn fast_forward_owner_base(repo_root: &Path, branch: &str) -> Result<Option<Stri
 }
 
 /// The commit `reference` names, or `None` when the reference does not exist.
-fn commit_of(repo_root: &Path, reference: &str) -> Result<Option<String>, OrbitError> {
+fn commit_of(
+    process_env: &orbit_common::Env,
+    repo_root: &Path,
+    reference: &str,
+) -> Result<Option<String>, OrbitError> {
     let spec = format!("{reference}^{{commit}}");
-    if !git_command_success(repo_root, &["rev-parse", "--verify", "--quiet", &spec])? {
+    if !git_command_success(
+        process_env,
+        repo_root,
+        &["rev-parse", "--verify", "--quiet", &spec],
+    )? {
         return Ok(None);
     }
-    git_output(repo_root, &["rev-parse", "--verify", &spec]).map(Some)
+    git_output(process_env, repo_root, &["rev-parse", "--verify", &spec]).map(Some)
 }
 
 fn stale_base_refusal(

@@ -39,6 +39,7 @@ fn check_annotations_return_only_complete_bound_unchanged_provider_answers() {
                     )
                     .unwrap();
                     let answer = orbit_engine::run_private_vcs_operation(
+                        &orbit_common::Env::capture(),
                         "ci.check_annotations",
                         &json!({
                             "workspace_path": path_str(row), "pr": "42",

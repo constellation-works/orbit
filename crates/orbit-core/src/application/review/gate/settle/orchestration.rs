@@ -261,12 +261,13 @@ fn settle(
         return candidate::reconcile_settled(runtime, context, certificate);
     }
 
-    let head = orbit_engine::review_gate::revision(&context.workspace_path, "HEAD")?;
+    let head = orbit_engine::review_gate::revision(runtime.env(), &context.workspace_path, "HEAD")?;
     let committed_repair = if head.commit == attempt.candidate.commit {
         None
     } else {
         // Only this attempt's own repair commit may sit on the candidate.
         let repair = orbit_engine::review_gate::review_repair_at_head(
+            runtime.env(),
             &context.workspace_path,
             &attempt.candidate.commit,
             attempt_id,
@@ -283,7 +284,7 @@ fn settle(
     };
     let resumed = committed_repair.is_some() || recorded.is_some();
     if resumed {
-        let dirty = uncommitted_paths(&context.workspace_path)?;
+        let dirty = uncommitted_paths(runtime.env(), &context.workspace_path)?;
         if !dirty.is_empty() {
             return Err(OrbitError::Execution(format!(
                 "review_gate_stale: candidate_changed: attempt {attempt_id} already committed \
@@ -293,6 +294,7 @@ fn settle(
         }
     }
     let reviewed = candidate_identity_at(
+        runtime.env(),
         &context.workspace_path,
         &context.base_sha()?,
         &attempt.candidate.commit,
@@ -302,7 +304,7 @@ fn settle(
     // on exactly the clean candidate its admission pinned.
     let held = if admitted.decision == ReviewGateDecision::EvidenceReceived {
         if head.commit != attempt.candidate.commit
-            || !uncommitted_paths(&context.workspace_path)?.is_empty()
+            || !uncommitted_paths(runtime.env(), &context.workspace_path)?.is_empty()
         {
             return Err(OrbitError::Execution(format!(
                 "review_gate_stale: candidate_changed: attempt {attempt_id} settles a held \
@@ -342,7 +344,7 @@ fn settle(
         && recorded.is_none()
         && committed_repair.is_none()
         && judgement.abandoned_placeholder()
-        && uncommitted_paths(&context.workspace_path)?.is_empty()
+        && uncommitted_paths(runtime.env(), &context.workspace_path)?.is_empty()
     {
         release_review_attempt(
             runtime,
@@ -356,7 +358,7 @@ fn settle(
     }
     let repair = match committed_repair {
         Some(commit) => {
-            let paths = committed_paths(&context.workspace_path, &commit.commit)?;
+            let paths = committed_paths(runtime.env(), &context.workspace_path, &commit.commit)?;
             judgement.adopt_repairs(runtime, context, &paths, admitted_selectors)?;
             Some(commit)
         }
@@ -402,6 +404,7 @@ fn settle(
             // unless the candidate cannot reach the deferred test.
             let reach = if judgement.has_bubblewrap_deferral() {
                 BubblewrapReach::of_candidate(
+                    &context.env,
                     &context.workspace_path,
                     &reviewed.base.commit,
                     &final_candidate.commit,
@@ -472,6 +475,7 @@ fn settle(
     // in the final candidate. [ORB-16447] One this attempt's own repair
     // changed comes back to the repaired blob its record declares.
     let unrestored = judgement.unrestored_mutation(
+        &context.env,
         &context.workspace_path,
         &reviewed.head.commit,
         &final_candidate.commit,

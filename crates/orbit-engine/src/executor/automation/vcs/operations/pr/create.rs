@@ -10,6 +10,7 @@ use super::super::process::execute;
 /// One create attempt. `pr_open` owns retries so it can reconcile an ambiguous
 /// response with a head lookup before sending another mutation.
 pub(in crate::executor::automation::vcs::operations) fn pr_create(
+    process_env: &orbit_common::Env,
     input: &Value,
 ) -> Result<Value, OrbitError> {
     let title = required_string(input, "title")?;
@@ -40,6 +41,7 @@ pub(in crate::executor::automation::vcs::operations) fn pr_create(
         }
     }
     let result = execute(
+        process_env,
         "gh",
         args,
         Some(Path::new(workspace_path)),

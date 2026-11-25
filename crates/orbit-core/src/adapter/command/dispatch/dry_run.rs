@@ -40,6 +40,7 @@ impl OrbitRuntime {
         let name = operation;
         let admission = (|| {
             let callback = enforce_plugin_callback_allowlist(
+                self.env(),
                 &self.global_root(),
                 self.stores().host_store(),
                 name,

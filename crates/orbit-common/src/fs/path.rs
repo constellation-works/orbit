@@ -55,6 +55,17 @@ pub fn ssh_socket_dir(env: &crate::Env) -> Result<PathBuf, OrbitError> {
     Ok(global_orbit_dir(env)?.join("ssh"))
 }
 
+/// Resolve the invoking user's home from a captured environment.
+pub fn home_dir_from(env: &crate::Env) -> Result<PathBuf, OrbitError> {
+    [env.home(), env.userprofile()]
+        .into_iter()
+        .flatten()
+        .filter_map(std::ffi::OsStr::to_str)
+        .find(|value| !value.trim().is_empty())
+        .map(PathBuf::from)
+        .ok_or_else(|| OrbitError::WorkspaceError("cannot determine home directory".to_string()))
+}
+
 /// The invoking user's home directory.
 ///
 /// Machine-global Orbit state hangs off this, and so do the SSH files a

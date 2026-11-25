@@ -279,6 +279,7 @@ impl OrbitRuntime {
             ));
         }
         orbit_engine::verify_merged_base_refresh(
+            self.env(),
             &self.paths().repo_root,
             &orbit_engine::MergedBaseRefresh {
                 published_head: &proof.head,

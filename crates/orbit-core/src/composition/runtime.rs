@@ -96,7 +96,8 @@ impl OrbitRuntime {
     ) -> Result<OrbitRuntimeRoots, OrbitError> {
         let env = super::process_env();
         roots_from_resolved(
-            resolve_initialize_roots(cwd, root_override)?,
+            &env,
+            resolve_initialize_roots(&env, cwd, root_override)?,
             has_explicit_root_override(root_override, &env),
         )
     }
@@ -108,7 +109,8 @@ impl OrbitRuntime {
     ) -> Result<OrbitRuntimeRoots, OrbitError> {
         let env = super::process_env();
         roots_from_resolved(
-            resolve_initialize_roots_with_hint(cwd, root_override, hint)?,
+            &env,
+            resolve_initialize_roots_with_hint(&env, cwd, root_override, hint)?,
             has_explicit_root_override(root_override, &env),
         )
     }
@@ -119,7 +121,8 @@ impl OrbitRuntime {
     ) -> Result<OrbitRuntimeRoots, OrbitError> {
         let env = super::process_env();
         roots_from_resolved(
-            resolve_bootstrap_roots(cwd, root_override)?,
+            &env,
+            resolve_bootstrap_roots(&env, cwd, root_override)?,
             has_explicit_root_override(root_override, &env),
         )
     }
@@ -131,7 +134,8 @@ impl OrbitRuntime {
     ) -> Result<OrbitRuntimeRoots, OrbitError> {
         let env = super::process_env();
         roots_from_resolved(
-            resolve_bootstrap_roots_with_hint(cwd, root_override, hint)?,
+            &env,
+            resolve_bootstrap_roots_with_hint(&env, cwd, root_override, hint)?,
             has_explicit_root_override(root_override, &env),
         )
     }
@@ -324,7 +328,7 @@ pub fn pin_executable_generation_as(
         role,
         handover,
         access,
-        crate::runtime::run_input::managed_run_context_from_env(),
+        crate::runtime::run_input::managed_run_context_from_env(&env),
         || Store::open_read_only(&root.join("orbit.db"))?.schema_version(),
     )
 }
@@ -357,7 +361,7 @@ fn build_runtime(
     } else {
         prepare_resolved_config(&env, global_root, shared_root)?
     };
-    let config_loader = runtime_config_loader(env, global_root, shared_root);
+    let config_loader = runtime_config_loader(env.clone(), global_root, shared_root);
     if !write_free && !read_only {
         init::refresh_workspace_catalog_copies_on_open(global_root, shared_root);
     }
@@ -386,10 +390,10 @@ fn build_runtime(
     };
     let runtime = OrbitRuntime::from_kernel(kernel);
     let _generation = generation;
-    if !read_only && !write_free && !managed_run_context_from_env() {
+    if !read_only && !write_free && !managed_run_context_from_env(&env) {
         runtime.reconcile_stale_job_runs_on_open();
     }
-    if !write_free && !read_only && !managed_run_context_from_env() {
+    if !write_free && !read_only && !managed_run_context_from_env(&env) {
         // Records an earlier release wrote with pre-family tool names
         // converge once per root, with no manual step [ORB-23552].
         runtime.migrate_pre_family_tool_names_on_open();
@@ -478,13 +482,14 @@ fn prepare_resolved_config(
 }
 
 fn roots_from_resolved(
+    env: &Env,
     resolved: ResolvedOrbitRoots,
     pin_global_to_shared: bool,
 ) -> Result<OrbitRuntimeRoots, OrbitError> {
     let global_root = if pin_global_to_shared {
         resolved.shared_root.clone()
     } else {
-        resolve_global_root()?
+        resolve_global_root(env)?
     };
     Ok(OrbitRuntimeRoots {
         global_root,
@@ -503,7 +508,7 @@ fn has_explicit_root_override(root_override: Option<&Path>, env: &Env) -> bool {
         .is_some_and(|value| !value.trim().is_empty());
     #[cfg(target_os = "macos")]
     if env_override
-        && managed_dispatch_context_from_env()
+        && managed_dispatch_context_from_env(env)
         && env
             .orbit_registry_root()
             .and_then(OsStr::to_str)

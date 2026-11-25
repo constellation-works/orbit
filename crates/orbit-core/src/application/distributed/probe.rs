@@ -170,7 +170,7 @@ impl crate::OrbitRuntime {
             binary_version: owner_binary_version().to_string(),
             workspace_id: self.workspace_id()?,
             owner_machine_id: self.distributed_owner_machine_id(),
-            session: probe_session(session),
+            session: probe_session(self.env(), session),
             review: review_switches(self, Utc::now())?,
             validation_gates: self.owner_validation_gates(),
             ship,
@@ -225,7 +225,8 @@ impl crate::OrbitRuntime {
                 // Input-dependent, so it cannot be a tool-name-keyed governed
                 // row; it asks the shared resolution instead of the session so
                 // the answer matches the chokepoint's on every surface.
-                if !resolved_caller_capabilities(session).contains(&McpCapability::Operator)
+                if !resolved_caller_capabilities(self.env(), session)
+                    .contains(&McpCapability::Operator)
                     && session_machine.as_deref() != Some(requested)
                 {
                     return Err(OrbitError::CapabilityRefused(
@@ -285,9 +286,9 @@ impl crate::OrbitRuntime {
     }
 }
 
-fn probe_session(session: &ToolSessionContext) -> DrainProbeSession {
+fn probe_session(env: &orbit_common::Env, session: &ToolSessionContext) -> DrainProbeSession {
     DrainProbeSession {
-        capabilities: resolved_caller_capabilities(session)
+        capabilities: resolved_caller_capabilities(env, session)
             .iter()
             .map(ToString::to_string)
             .collect(),

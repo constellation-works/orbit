@@ -127,18 +127,27 @@ const RESCUE_SNAPSHOT_INDEX: &str = "orbit-rescue-snapshot.index";
 /// that is only unstaged, and a staged change that matches the working tree
 /// still keep the single documented commit (or `HEAD` when nothing differs).
 pub fn preserve_rescue_candidate(
+    process_env: &orbit_common::Env,
     workspace_path: &Path,
     run_id: &str,
 ) -> Result<PreservedRescueCandidate, OrbitError> {
     let rescue_ref = rescue_candidate_ref(run_id)?;
-    let head = git_output(workspace_path, &["rev-parse", "--verify", "HEAD^{commit}"])?;
-    refuse_distinct_staged_candidate(workspace_path, &head)?;
+    let head = git_output(
+        process_env,
+        workspace_path,
+        &["rev-parse", "--verify", "HEAD^{commit}"],
+    )?;
+    refuse_distinct_staged_candidate(process_env, workspace_path, &head)?;
     let message = format!(
         "rescue: candidate preserved when its worker stopped\n\nOrbit-Rescue-Run: {run_id}"
     );
-    let partial_commit = commit_worktree_detached(workspace_path, None, &message)?;
+    let partial_commit = commit_worktree_detached(process_env, workspace_path, None, &message)?;
     let commit = partial_commit.clone().unwrap_or(head);
-    git_output(workspace_path, &["update-ref", &rescue_ref, &commit])?;
+    git_output(
+        process_env,
+        workspace_path,
+        &["update-ref", &rescue_ref, &commit],
+    )?;
     Ok(PreservedRescueCandidate {
         rescue_ref,
         commit,
@@ -150,15 +159,19 @@ pub fn preserve_rescue_candidate(
 /// snapshot does not. Worktree GC refuses this same ambiguity: one tree
 /// cannot be the recovery of both versions, and a ref that named only the
 /// working tree would drop the staged one.
-fn refuse_distinct_staged_candidate(workspace_path: &Path, head: &str) -> Result<(), OrbitError> {
+fn refuse_distinct_staged_candidate(
+    process_env: &orbit_common::Env,
+    workspace_path: &Path,
+    head: &str,
+) -> Result<(), OrbitError> {
     // The same comparison worktree GC uses. Skip the snapshot when the index
     // matches HEAD: an ordinary unstaged edit has no unique staged state.
-    let staged = super::worktree::index_changed_paths(workspace_path, head)?;
+    let staged = super::worktree::index_changed_paths(process_env, workspace_path, head)?;
     if staged.is_empty() {
         return Ok(());
     }
-    let tree = working_candidate_tree(workspace_path)?;
-    if !super::worktree::snapshot_drops_staged(workspace_path, &staged, &tree)? {
+    let tree = working_candidate_tree(process_env, workspace_path)?;
+    if !super::worktree::snapshot_drops_staged(process_env, workspace_path, &staged, &tree)? {
         return Ok(());
     }
     Err(OrbitError::Execution(
@@ -171,14 +184,27 @@ fn refuse_distinct_staged_candidate(workspace_path: &Path, head: &str) -> Result
 /// The tree `commit_worktree_detached` would commit: `HEAD` with the
 /// working tree overlaid in a scratch index. The real index is not read or
 /// written.
-fn working_candidate_tree(workspace_path: &Path) -> Result<String, OrbitError> {
-    let index = rescue_snapshot_index(workspace_path)?;
+fn working_candidate_tree(
+    process_env: &orbit_common::Env,
+    workspace_path: &Path,
+) -> Result<String, OrbitError> {
+    let index = rescue_snapshot_index(process_env, workspace_path)?;
     let index_env = index.to_string_lossy().into_owned();
     let staged = (|| {
         let scratch = [("GIT_INDEX_FILE", index_env.as_str())];
-        git_output_with_env(workspace_path, &["read-tree", "HEAD"], &scratch)?;
-        git_output_with_env(workspace_path, &["add", "--all", "--", "."], &scratch)?;
-        git_output_with_env(workspace_path, &["write-tree"], &scratch)
+        git_output_with_env(
+            process_env,
+            workspace_path,
+            &["read-tree", "HEAD"],
+            &scratch,
+        )?;
+        git_output_with_env(
+            process_env,
+            workspace_path,
+            &["add", "--all", "--", "."],
+            &scratch,
+        )?;
+        git_output_with_env(process_env, workspace_path, &["write-tree"], &scratch)
     })();
     if let Err(error) = std::fs::remove_file(&index)
         && error.kind() != std::io::ErrorKind::NotFound
@@ -190,8 +216,12 @@ fn working_candidate_tree(workspace_path: &Path) -> Result<String, OrbitError> {
 
 /// Absolute: `--git-path` answers relative to the worktree when its Git
 /// directory is inside it.
-fn rescue_snapshot_index(workspace_path: &Path) -> Result<PathBuf, OrbitError> {
+fn rescue_snapshot_index(
+    process_env: &orbit_common::Env,
+    workspace_path: &Path,
+) -> Result<PathBuf, OrbitError> {
     let path = PathBuf::from(git_output(
+        process_env,
         workspace_path,
         &["rev-parse", "--git-path", RESCUE_SNAPSHOT_INDEX],
     )?);
@@ -235,6 +265,7 @@ pub fn interrupted_review_ref(task_id: &str, run_id: &str) -> String {
 /// repair of `review`, detached from the candidate branch, and point
 /// [`interrupted_review_ref`] at it in the local repository.
 pub fn preserve_interrupted_review(
+    process_env: &orbit_common::Env,
     workspace_path: &Path,
     task_id: &str,
     commit_type: orbit_types::workflow::CommitType,
@@ -254,10 +285,18 @@ pub fn preserve_interrupted_review(
         &review.step_id,
         Some(&review.attempt_id),
     );
-    let commit =
-        commit_worktree_detached(workspace_path, review.reviewer_model.as_deref(), &message)?;
+    let commit = commit_worktree_detached(
+        process_env,
+        workspace_path,
+        review.reviewer_model.as_deref(),
+        &message,
+    )?;
     if let Some(commit) = &commit {
-        git_output(workspace_path, &["update-ref", &repair_ref, commit])?;
+        git_output(
+            process_env,
+            workspace_path,
+            &["update-ref", &repair_ref, commit],
+        )?;
     }
     Ok(PreservedReviewRepair { repair_ref, commit })
 }
@@ -272,8 +311,12 @@ pub fn carry_interrupted_review<H: RuntimeHost + ?Sized>(
     let Some(commit) = &preserved.commit else {
         return Ok(());
     };
-    let branch = git_output(workspace_path, &["rev-parse", "--abbrev-ref", "HEAD"])
-        .map_err(|error| error.to_string())?;
+    let branch = git_output(
+        &host.process_env(),
+        workspace_path,
+        &["rev-parse", "--abbrev-ref", "HEAD"],
+    )
+    .map_err(|error| error.to_string())?;
     push_candidate_ref(host, workspace_path, &branch, commit, &preserved.repair_ref)
 }
 
@@ -283,6 +326,7 @@ pub fn carry_interrupted_review<H: RuntimeHost + ?Sized>(
 /// to apply: it is missing, or it is not that run's partial repair whose
 /// sole parent is the candidate head.
 pub(in crate::executor::automation::vcs) fn locate_review_repair(
+    process_env: &orbit_common::Env,
     workspace_path: &Path,
     candidate_head: &str,
     source_run_id: &str,
@@ -294,10 +338,11 @@ pub(in crate::executor::automation::vcs) fn locate_review_repair(
     }
     let resolve = |spec: &str| -> Result<Option<String>, OrbitError> {
         let object = format!("{spec}^{{commit}}");
-        if !git_command_success(workspace_path, &["cat-file", "-e", &object])? {
+        if !git_command_success(process_env, workspace_path, &["cat-file", "-e", &object])? {
             return Ok(None);
         }
         Ok(Some(git_output(
+            process_env,
             workspace_path,
             &["rev-parse", "--verify", &object],
         )?))
@@ -310,7 +355,11 @@ pub(in crate::executor::automation::vcs) fn locate_review_repair(
         Some(commit) => commit,
         None => {
             let refspec = format!("+{repair_ref}:{repair_ref}");
-            let _ = git_run(workspace_path, &["fetch", "--no-tags", "origin", &refspec])?;
+            let _ = git_run(
+                process_env,
+                workspace_path,
+                &["fetch", "--no-tags", "origin", &refspec],
+            )?;
             match resolve(repair_commit.unwrap_or(repair_ref))? {
                 Some(commit) => commit,
                 None => {
@@ -323,6 +372,7 @@ pub(in crate::executor::automation::vcs) fn locate_review_repair(
         }
     };
     let lineage = git_output(
+        process_env,
         workspace_path,
         &["rev-list", "--parents", "-n", "1", &commit],
     )?;
@@ -334,6 +384,7 @@ pub(in crate::executor::automation::vcs) fn locate_review_repair(
         )));
     }
     let message = git_output_raw(
+        process_env,
         workspace_path,
         &["log", "-1", "--format=%B", "--end-of-options", &commit],
     )?;

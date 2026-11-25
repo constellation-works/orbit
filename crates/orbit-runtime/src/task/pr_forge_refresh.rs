@@ -46,6 +46,7 @@ const REFRESH_HEAD_POLL_BACKOFF_SECS: [u64; 5] = [1, 2, 3, 4, 5];
 /// Inspect a merge of `base_sha` into `head_sha` purely in the Git object
 /// store, without modifying the working tree, index or any ref.
 pub fn inspect_base_merge(
+    env: &orbit_common::Env,
     repo_root: &Path,
     head_sha: &str,
     base_sha: &str,
@@ -55,7 +56,7 @@ pub fn inspect_base_merge(
             "inspecting a base merge requires full commit SHAs".to_string(),
         ));
     }
-    match git_ancestry(&orbit_common::Env::capture(), repo_root, base_sha, head_sha)? {
+    match git_ancestry(env, repo_root, base_sha, head_sha)? {
         GitAncestry::Ancestor => {
             return Ok(BaseMergeInspection::AlreadyUpToDate);
         }
@@ -68,6 +69,7 @@ pub fn inspect_base_merge(
         }
     }
     let common = run_git(
+        env,
         repo_root,
         &["merge-base", "--end-of-options", head_sha, base_sha],
     )?;
@@ -81,6 +83,7 @@ pub fn inspect_base_merge(
         )));
     }
     let merged = run_git(
+        env,
         repo_root,
         &[
             "merge-tree",
@@ -132,6 +135,7 @@ fn parse_merge_tree_conflicting_paths(stdout: &str) -> Vec<String> {
 }
 
 pub(super) fn update_pull_request_branch_with_gh(
+    env: &orbit_common::Env,
     repo_root: &Path,
     number: u64,
     head_branch: &str,
@@ -151,7 +155,11 @@ pub(super) fn update_pull_request_branch_with_gh(
     // Check remote head lease before fetching/merging so a concurrent move is
     // refused cleanly without modifying anything.
     let head_ref = format!("refs/heads/{head_branch}");
-    let ls_remote = run_git(repo_root, &["ls-remote", "--heads", "origin", &head_ref])?;
+    let ls_remote = run_git(
+        env,
+        repo_root,
+        &["ls-remote", "--heads", "origin", &head_ref],
+    )?;
     if !ls_remote.success {
         return Err(OrbitError::Execution(format!(
             "git ls-remote for pull request #{number} branch `{head_branch}` failed: {}",
@@ -169,6 +177,7 @@ pub(super) fn update_pull_request_branch_with_gh(
     }
     let base_refspec = format!("refs/heads/{base_branch}:refs/remotes/origin/{base_branch}");
     let fetch_base = run_git(
+        env,
         repo_root,
         &["fetch", "--no-tags", "--quiet", "origin", &base_refspec],
     )?;
@@ -179,6 +188,7 @@ pub(super) fn update_pull_request_branch_with_gh(
         )));
     }
     let base_rev = run_git(
+        env,
         repo_root,
         &[
             "rev-parse",
@@ -194,6 +204,7 @@ pub(super) fn update_pull_request_branch_with_gh(
     }
     let base_sha = base_rev.stdout.trim().to_string();
     let head_present = run_git(
+        env,
         repo_root,
         &[
             "rev-parse",
@@ -203,6 +214,7 @@ pub(super) fn update_pull_request_branch_with_gh(
     )?;
     if !head_present.success {
         let fetch_head = run_git(
+            env,
             repo_root,
             &["fetch", "--no-tags", "--quiet", "origin", &head_ref],
         )?;
@@ -213,7 +225,7 @@ pub(super) fn update_pull_request_branch_with_gh(
             )));
         }
     }
-    match inspect_base_merge(repo_root, expected_head_sha, &base_sha)? {
+    match inspect_base_merge(env, repo_root, expected_head_sha, &base_sha)? {
         BaseMergeInspection::AlreadyUpToDate => {
             return Ok(PullRequestRefreshOutcome::AlreadyUpToDate {
                 head_sha: expected_head_sha.to_string(),
@@ -240,7 +252,7 @@ pub(super) fn update_pull_request_branch_with_gh(
     let mut request =
         orbit_tools::github_cli::update_pull_request_branch_request(number, expected_head_sha);
     request.current_dir = Some(repo_root.to_string_lossy().into_owned());
-    let result = orbit_tools::github_quota::run_gh_request(FORGE_QUOTA_CALLER, &request)?;
+    let result = orbit_tools::github_quota::run_gh_request(env, FORGE_QUOTA_CALLER, &request)?;
     if !result.success {
         let stderr = orbit_common::security::redaction::redact_all_and_home(result.stderr.trim());
         if !result.timed_out && forge_refused_request(&stderr) {
@@ -254,7 +266,7 @@ pub(super) fn update_pull_request_branch_with_gh(
     // GitHub's update-branch endpoint returns HTTP 202 and creates the merge
     // commit asynchronously; observe the new head SHA before returning.
     for delay_secs in REFRESH_HEAD_POLL_BACKOFF_SECS {
-        if let Ok(entry) = view_pull_request(repo_root, number)
+        if let Ok(entry) = view_pull_request(env, repo_root, number)
             && let Some(new_head) = entry
                 .get("headRefOid")
                 .and_then(Value::as_str)
@@ -266,7 +278,7 @@ pub(super) fn update_pull_request_branch_with_gh(
         }
         std::thread::sleep(Duration::from_secs(delay_secs));
     }
-    if let Ok(entry) = view_pull_request(repo_root, number)
+    if let Ok(entry) = view_pull_request(env, repo_root, number)
         && let Some(new_head) = entry
             .get("headRefOid")
             .and_then(Value::as_str)
@@ -281,7 +293,11 @@ pub(super) fn update_pull_request_branch_with_gh(
     )))
 }
 
-fn run_git(repo_root: &Path, args: &[&str]) -> Result<ExecutionResult, OrbitError> {
+fn run_git(
+    env: &orbit_common::Env,
+    repo_root: &Path,
+    args: &[&str],
+) -> Result<ExecutionResult, OrbitError> {
     let request = ExecRequest {
         program: "git".to_string(),
         args: args.iter().map(|arg| (*arg).to_string()).collect(),
@@ -291,5 +307,5 @@ fn run_git(repo_root: &Path, args: &[&str]) -> Result<ExecutionResult, OrbitErro
         environment_mode: EnvironmentMode::Inherit,
         debug: false,
     };
-    run_process(&orbit_common::Env::capture(), &request, &NoSandbox)
+    run_process(env, &request, &NoSandbox)
 }

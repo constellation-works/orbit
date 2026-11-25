@@ -65,7 +65,8 @@ pub(super) fn dispatch(
         NoticeVerb::List => to_json(&runtime.list_notices(&list_filter(&input)?)?),
         NoticeVerb::Show => {
             let operator = session_context.worker_invocation.is_none()
-                && resolved_caller_capabilities(session_context).contains(&McpCapability::Operator);
+                && resolved_caller_capabilities(runtime.env(), session_context)
+                    .contains(&McpCapability::Operator);
             to_json(&runtime.show_notice(&input.required_string("id")?, operator)?)
         }
     }

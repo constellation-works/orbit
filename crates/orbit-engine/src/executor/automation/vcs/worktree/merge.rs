@@ -36,12 +36,20 @@ pub(in crate::executor::automation) fn merge_batch_worktree_into_base<H: Runtime
     let repo_root = canonicalize_existing_dir(&repo_root_str, "repo_root")?;
     let workspace_path = match input_string_field(input, "workspace_path") {
         Some(path) => canonicalize_existing_dir(&path, "workspace_path")?,
-        None => resolve_shared_worktree_path(&repo_root, run_id)?,
+        None => resolve_shared_worktree_path(&host.process_env(), &repo_root, run_id)?,
     };
 
-    ensure_clean_checkout(&workspace_path, "shared batch worktree")?;
+    ensure_clean_checkout(
+        &host.process_env(),
+        &workspace_path,
+        "shared batch worktree",
+    )?;
 
-    let workspace_branch = git_output(&workspace_path, &["rev-parse", "--abbrev-ref", "HEAD"])?;
+    let workspace_branch = git_output(
+        &host.process_env(),
+        &workspace_path,
+        &["rev-parse", "--abbrev-ref", "HEAD"],
+    )?;
     let workspace_branch = workspace_branch.trim().to_string();
     if workspace_branch == "HEAD" {
         return Err(OrbitError::Execution(
@@ -55,8 +63,9 @@ pub(in crate::executor::automation) fn merge_batch_worktree_into_base<H: Runtime
         &input_string_field(input, "base").unwrap_or_else(|| DEFAULT_BASE.to_string()),
     )?;
     let base_sync_mode = base_sync_mode_from_input(input)?;
-    let base_checkout = checkout_holding_branch(&repo_root, &base)?.unwrap_or(repo_root.clone());
-    ensure_base_checkout_ready(&base_checkout, None)?;
+    let base_checkout = checkout_holding_branch(&host.process_env(), &repo_root, &base)?
+        .unwrap_or(repo_root.clone());
+    ensure_base_checkout_ready(&host.process_env(), &base_checkout, None)?;
     let request = |before, after| orbit_types::workflow::automation::DirectLandingRequest {
         run_id: run_id.into(),
         branch: base.clone(),
@@ -66,6 +75,7 @@ pub(in crate::executor::automation) fn merge_batch_worktree_into_base<H: Runtime
         handoff_id: None,
     };
     let landed = merge_with_rebase_retry(
+        &host.process_env(),
         &|before, after| host.record_direct_landing_intent(&request(before, after)),
         &repo_root,
         &base_checkout,
@@ -98,27 +108,35 @@ pub(in crate::executor::automation) fn merge_batch_worktree_into_base<H: Runtime
 }
 
 fn checkout_base_branch(
+    process_env: &orbit_common::Env,
     repo_root: &Path,
     base: &str,
     start_point: &str,
     base_sync_mode: BaseSyncMode,
 ) -> Result<(), OrbitError> {
     if git_command_success(
+        process_env,
         repo_root,
         &["rev-parse", "--verify", &format!("{base}^{{commit}}")],
     )? {
-        git_success(repo_root, &["checkout", base])?;
+        git_success(process_env, repo_root, &["checkout", base])?;
         if base_sync_mode == BaseSyncMode::Remote {
-            fast_forward_local_base_to_remote(repo_root, base, start_point)?;
+            fast_forward_local_base_to_remote(process_env, repo_root, base, start_point)?;
         }
         return Ok(());
     }
 
-    git_success(repo_root, &["checkout", "-B", base, start_point])?;
+    git_success(
+        process_env,
+        repo_root,
+        &["checkout", "-B", base, start_point],
+    )?;
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn merge_with_rebase_retry(
+    process_env: &orbit_common::Env,
     record_intent: &dyn Fn(String, String) -> Result<(), OrbitError>,
     repo_root: &Path,
     base_checkout: &Path,
@@ -128,11 +146,16 @@ fn merge_with_rebase_retry(
     base_sync_mode: BaseSyncMode,
 ) -> Result<FastForwardLanding, OrbitError> {
     for attempt in 0..=MAX_REBASE_RETRY_ATTEMPTS {
-        let start_point = resolve_worktree_start_point(repo_root, base, base_sync_mode)?;
+        let start_point =
+            resolve_worktree_start_point(process_env, repo_root, base, base_sync_mode)?;
         if base_checkout == repo_root {
-            checkout_base_branch(repo_root, base, &start_point, base_sync_mode)?;
+            checkout_base_branch(process_env, repo_root, base, &start_point, base_sync_mode)?;
         } else {
-            let checked_out = git_output(base_checkout, &["rev-parse", "--abbrev-ref", "HEAD"])?;
+            let checked_out = git_output(
+                process_env,
+                base_checkout,
+                &["rev-parse", "--abbrev-ref", "HEAD"],
+            )?;
             if checked_out.trim() != base {
                 return Err(OrbitError::Execution(format!(
                     "linked base worktree '{}' moved from branch '{base}' to '{}'",
@@ -141,13 +164,14 @@ fn merge_with_rebase_retry(
                 )));
             }
             if base_sync_mode == BaseSyncMode::Remote {
-                fast_forward_local_base_to_remote(base_checkout, base, &start_point)?;
+                fast_forward_local_base_to_remote(process_env, base_checkout, base, &start_point)?;
             }
         }
-        let before = git_output(base_checkout, &["rev-parse", "HEAD"])?;
-        let after = git_output(workspace_path, &["rev-parse", "HEAD"])?;
+        let before = git_output(process_env, base_checkout, &["rev-parse", "HEAD"])?;
+        let after = git_output(process_env, workspace_path, &["rev-parse", "HEAD"])?;
         if before.trim() != after.trim()
             && crate::executor::automation::vcs::git::is_ancestor(
+                process_env,
                 repo_root,
                 before.trim(),
                 after.trim(),
@@ -157,12 +181,13 @@ fn merge_with_rebase_retry(
         }
         // Recheck on every attempt, after base synchronization and intent
         // recording: operator files can appear while the candidate is built.
-        ensure_base_checkout_ready(base_checkout, Some(after.trim()))?;
+        ensure_base_checkout_ready(process_env, base_checkout, Some(after.trim()))?;
         if git_command_success(
+            process_env,
             base_checkout,
             &["merge", "--ff-only", "--no-overwrite-ignore", after.trim()],
         )? {
-            let actual = git_output(base_checkout, &["rev-parse", "HEAD"])?;
+            let actual = git_output(process_env, base_checkout, &["rev-parse", "HEAD"])?;
             let actual = actual.trim();
             if actual != before.trim() && actual != after.trim() {
                 return Err(OrbitError::Execution(
@@ -181,12 +206,13 @@ fn merge_with_rebase_retry(
             )));
         }
 
-        let updated_base = resolve_worktree_start_point(repo_root, base, base_sync_mode)?;
-        let rebase_already = rebase_in_progress(workspace_path)?;
-        let rebase_outcome = git_run(workspace_path, &["rebase", &updated_base])?;
+        let updated_base =
+            resolve_worktree_start_point(process_env, repo_root, base, base_sync_mode)?;
+        let rebase_already = rebase_in_progress(process_env, workspace_path)?;
+        let rebase_outcome = git_run(process_env, workspace_path, &["rebase", &updated_base])?;
         if rebase_outcome.timed_out || !rebase_outcome.success {
             if !rebase_already {
-                let _ = git_success(workspace_path, &["rebase", "--abort"]);
+                let _ = git_success(process_env, workspace_path, &["rebase", "--abort"]);
             }
             if rebase_outcome.timed_out {
                 return Err(timeout_recovery_error(
@@ -225,7 +251,7 @@ fn merge_with_rebase_retry(
                 &rebase_outcome.stderr,
             ));
         }
-        ensure_clean_checkout(workspace_path, "shared batch worktree")?;
+        ensure_clean_checkout(process_env, workspace_path, "shared batch worktree")?;
     }
 
     Err(OrbitError::Execution(
@@ -237,10 +263,15 @@ fn merge_with_rebase_retry(
 /// to check the same branch out in the primary checkout, so stacked local
 /// pipelines must merge directly in the owning worktree.
 pub(in crate::executor::automation::vcs) fn checkout_holding_branch(
+    process_env: &orbit_common::Env,
     repo_root: &Path,
     base: &str,
 ) -> Result<Option<PathBuf>, OrbitError> {
-    let listing = git_output_bytes(repo_root, &["worktree", "list", "--porcelain", "-z"])?;
+    let listing = git_output_bytes(
+        process_env,
+        repo_root,
+        &["worktree", "list", "--porcelain", "-z"],
+    )?;
     let expected_branch = format!("refs/heads/{base}");
     let mut current_path = None;
     for record in listing.split(|byte| *byte == 0) {
@@ -272,11 +303,13 @@ fn worktree_path_from_bytes(path: &[u8]) -> Result<PathBuf, OrbitError> {
 }
 
 fn fast_forward_local_base_to_remote(
+    process_env: &orbit_common::Env,
     repo_root: &Path,
     base: &str,
     remote_base: &str,
 ) -> Result<(), OrbitError> {
     let divergence = git_output(
+        process_env,
         repo_root,
         &[
             "rev-list",
@@ -301,8 +334,9 @@ fn fast_forward_local_base_to_remote(
     }
 
     if remote_only > 0 {
-        ensure_base_checkout_ready(repo_root, Some(remote_base))?;
+        ensure_base_checkout_ready(process_env, repo_root, Some(remote_base))?;
         git_success(
+            process_env,
             repo_root,
             &["merge", "--ff-only", "--no-overwrite-ignore", remote_base],
         )?;
@@ -333,10 +367,15 @@ fn parse_divergence_count(
 /// whole output, which would misalign the index/worktree columns of a
 /// single-line result by one byte (see `git_output`'s doc comment).
 pub(in crate::executor::automation::vcs) fn ensure_clean_checkout(
+    process_env: &orbit_common::Env,
     path: &Path,
     label: &str,
 ) -> Result<(), OrbitError> {
-    let status = git_output_raw(path, &["status", "--porcelain", "--untracked-files=all"])?;
+    let status = git_output_raw(
+        process_env,
+        path,
+        &["status", "--porcelain", "--untracked-files=all"],
+    )?;
     ensure_clean_status(path, label, &status)
 }
 
@@ -344,15 +383,21 @@ pub(in crate::executor::automation::vcs) fn ensure_clean_checkout(
 /// checks untracked paths against the incoming tree's changes, without
 /// requiring the operator to remove unrelated notes from the base checkout.
 pub(in crate::executor::automation::vcs) fn ensure_base_checkout_ready(
+    process_env: &orbit_common::Env,
     path: &Path,
     incoming: Option<&str>,
 ) -> Result<(), OrbitError> {
-    let status = git_output_raw(path, &["status", "--porcelain", "--untracked-files=no"])?;
+    let status = git_output_raw(
+        process_env,
+        path,
+        &["status", "--porcelain", "--untracked-files=no"],
+    )?;
     ensure_clean_status(path, "base branch checkout", &status)?;
     let Some(incoming) = incoming else {
         return Ok(());
     };
     let changed = git_output_paths(
+        process_env,
         path,
         &[
             "diff",
@@ -386,7 +431,7 @@ pub(in crate::executor::automation::vcs) fn ensure_base_checkout_ready(
     for chunk in selectors.into_iter().collect::<Vec<_>>().chunks(100) {
         let mut args = vec!["ls-files", "--others", "-z", "--"];
         args.extend(chunk.iter().map(String::as_str));
-        untracked.extend(git_output_paths(path, &args)?);
+        untracked.extend(git_output_paths(process_env, path, &args)?);
     }
     untracked.sort();
     untracked.dedup();

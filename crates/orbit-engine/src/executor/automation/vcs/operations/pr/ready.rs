@@ -10,6 +10,7 @@ use super::super::input::required_string;
 use super::super::process::execute;
 
 pub(in crate::executor::automation::vcs::operations) fn mark_pr_ready(
+    process_env: &orbit_common::Env,
     input: &Value,
 ) -> Result<Value, OrbitError> {
     let pr = required_string(input, "pr")?;
@@ -20,6 +21,7 @@ pub(in crate::executor::automation::vcs::operations) fn mark_pr_ready(
         ));
     }
     let result = execute(
+        process_env,
         "gh",
         vec!["pr".into(), "ready".into(), pr.into()],
         Some(workspace),

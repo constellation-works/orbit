@@ -49,7 +49,7 @@ fn main() {
     orbit_common::process::build::register_orbit_build(compiled_orbit_build());
     // Every `gh` read this process makes spends the host's shared GitHub
     // quota. Test binaries never enter `main`, so they run `gh` unguarded.
-    orbit_core::runtime::enable_github_quota_guard();
+    orbit_core::runtime::enable_github_quota_guard(&env);
     entry::run::run(env);
     // Statics are never dropped, so returning from `main` would not flush the
     // JSONL feed either.

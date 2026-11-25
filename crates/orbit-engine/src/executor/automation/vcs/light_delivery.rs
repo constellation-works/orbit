@@ -39,12 +39,20 @@ const GUARD_WORKTREE_DIR: &str = "orbit-review-skip-guard";
 /// Returns an error when `allow` holds an invalid glob or Git cannot diff the
 /// two commits.
 pub fn judge_light_delivery(
+    process_env: &orbit_common::Env,
     workspace: &Path,
     base: &str,
     head: &str,
     allow: &[String],
 ) -> Result<LightDeliveryJudgement, OrbitError> {
-    judge_light_delivery_with_key(workspace, base, head, allow, LIGHT_DELIVERY_PATHS_KEY)
+    judge_light_delivery_with_key(
+        process_env,
+        workspace,
+        base,
+        head,
+        allow,
+        LIGHT_DELIVERY_PATHS_KEY,
+    )
 }
 
 /// [`judge_light_delivery`] against `allow`, naming `key` in a refusal.
@@ -53,6 +61,7 @@ pub fn judge_light_delivery(
 /// Returns an error when `allow` holds an invalid glob or Git cannot diff the
 /// two commits.
 pub fn judge_light_delivery_with_key(
+    process_env: &orbit_common::Env,
     workspace: &Path,
     base: &str,
     head: &str,
@@ -61,6 +70,7 @@ pub fn judge_light_delivery_with_key(
 ) -> Result<LightDeliveryJudgement, OrbitError> {
     let filter = PathFilter::new(key, allow)?;
     let changed = git_output_paths(
+        process_env,
         workspace,
         &[
             "diff",
@@ -104,6 +114,7 @@ pub(super) fn light_delivery_decision<H: RuntimeHost + ?Sized>(
         return Ok(None);
     }
     let judgement = judge_light_delivery(
+        &host.process_env(),
         workspace,
         base,
         head,
@@ -143,8 +154,14 @@ pub fn review_skip_decision<H: RuntimeHost + ?Sized>(
         return Ok(None);
     }
     let profile_key = ReviewSkipProfile::paths_key(tag);
-    let judgement =
-        judge_light_delivery_with_key(workspace, base, head, &profile.paths, &profile_key)?;
+    let judgement = judge_light_delivery_with_key(
+        &host.process_env(),
+        workspace,
+        base,
+        head,
+        &profile.paths,
+        &profile_key,
+    )?;
     let all_tagged = tagged
         .iter()
         .all(|(_, tags)| tags.iter().any(|carried| carried == tag));
@@ -186,6 +203,7 @@ pub fn run_review_skip_guard<H: RuntimeHost + ?Sized>(
 ) -> Result<GuardOutcome, OrbitError> {
     let spec = format!("{base}:{guard}");
     let outcome = git_run_bytes(
+        &host.process_env(),
         workspace,
         &["cat-file", "-p", "--end-of-options", &spec],
         None,
@@ -230,25 +248,35 @@ pub fn run_review_skip_guard<H: RuntimeHost + ?Sized>(
     let key = orbit_common::security::release::sha256_hex(
         format!("{}\0{head}\0{tag}", std::process::id()).as_bytes(),
     );
-    let worktree =
-        scratch_checkout_path(workspace, &format!("{GUARD_WORKTREE_DIR}-{}", &key[..16]))?;
-    let run = in_detached_worktree(workspace, &worktree, head, |checkout| {
-        // Held until the run ends, so worktree GC cannot reclaim the host
-        // target underneath it and can once the checkout is gone.
-        let _lease = if host
-            .validation_subprocess_environment()
-            .build_output_env
-            .is_empty()
-        {
-            None
-        } else {
-            Some(lease_scratch_host_target(
-                checkout,
-                ScratchHostTarget::HostEvidence,
-            )?)
-        };
-        run_required_command(host, checkout, &command, None, GUARD_TIMEOUT_MS)
-    })??;
+    let worktree = scratch_checkout_path(
+        &host.process_env(),
+        workspace,
+        &format!("{GUARD_WORKTREE_DIR}-{}", &key[..16]),
+    )?;
+    let run = in_detached_worktree(
+        &host.process_env(),
+        workspace,
+        &worktree,
+        head,
+        |checkout| {
+            // Held until the run ends, so worktree GC cannot reclaim the host
+            // target underneath it and can once the checkout is gone.
+            let _lease = if host
+                .validation_subprocess_environment()
+                .build_output_env
+                .is_empty()
+            {
+                None
+            } else {
+                Some(lease_scratch_host_target(
+                    &host.process_env(),
+                    checkout,
+                    ScratchHostTarget::HostEvidence,
+                )?)
+            };
+            run_required_command(host, checkout, &command, None, GUARD_TIMEOUT_MS)
+        },
+    )??;
     if run.passed {
         Ok(GuardOutcome::Passed)
     } else if run.timed_out {

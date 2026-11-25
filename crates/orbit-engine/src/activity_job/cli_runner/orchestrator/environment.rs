@@ -86,6 +86,7 @@ pub(super) fn require_claude_worker_credential(
 /// provider falls back to, which is exactly what the crew's entry exists to
 /// avoid. Names only, never values.
 pub(super) fn require_crew_env(
+    process_env: &orbit_common::Env,
     crew_env: &[CrewEnvVar],
     child_env: &[(String, String)],
 ) -> Result<(), DispatchError> {
@@ -96,13 +97,11 @@ pub(super) fn require_crew_env(
                 .iter()
                 .any(|(key, value)| key == &entry.name && !value.is_empty())
         })
-        .map(
-            |entry| match crew_env_file_problem(&orbit_common::Env::capture(), entry) {
-                Some(problem) => format!("{} (from {}: {problem})", entry.name, entry.source),
-                None if entry.is_mapped() => format!("{} (from {})", entry.name, entry.source),
-                None => entry.name.clone(),
-            },
-        )
+        .map(|entry| match crew_env_file_problem(process_env, entry) {
+            Some(problem) => format!("{} (from {}: {problem})", entry.name, entry.source),
+            None if entry.is_mapped() => format!("{} (from {})", entry.name, entry.source),
+            None => entry.name.clone(),
+        })
         .collect();
     if missing.is_empty() {
         return Ok(());

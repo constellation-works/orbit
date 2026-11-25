@@ -22,7 +22,7 @@ fn held_forge_read_is_refused_typed_and_runs_nothing() {
         environment_mode: EnvironmentMode::Inherit,
         debug: false,
     };
-    let account = github_quota::request_account_key(&request);
+    let account = github_quota::request_account_key(&orbit_common::Env::capture(), &request);
     let store = GithubQuotaStore::new(records.path().to_path_buf());
     let policy = GithubQuotaPolicy::default();
     let now = std::time::SystemTime::now()
@@ -43,7 +43,12 @@ fn held_forge_read_is_refused_typed_and_runs_nothing() {
     );
 
     let error = github_quota::with_scoped_guard(store, policy, || {
-        task_forge_gh_request(request, scratch.path(), "gh pr list")
+        task_forge_gh_request(
+            &orbit_common::Env::capture(),
+            request,
+            scratch.path(),
+            "gh pr list",
+        )
     })
     .expect_err("a held forge read must be refused");
     let throttle = error

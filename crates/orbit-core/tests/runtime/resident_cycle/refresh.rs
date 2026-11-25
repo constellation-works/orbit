@@ -182,7 +182,12 @@ impl TaskPrForge for RefreshForge {
             repo_root,
             &["rev-parse", &format!("{base_branch}^{{commit}}")],
         );
-        match inspect_base_merge(repo_root, expected_head_sha, &base_sha)? {
+        match inspect_base_merge(
+            &orbit_common::Env::capture(),
+            repo_root,
+            expected_head_sha,
+            &base_sha,
+        )? {
             BaseMergeInspection::AlreadyUpToDate => {
                 Ok(PullRequestRefreshOutcome::AlreadyUpToDate {
                     head_sha: expected_head_sha.to_string(),
@@ -921,7 +926,14 @@ fn landing_accepts_conflict_free_refreshed_head_with_passing_checks_and_refuses_
 
     // Advance base twice and perform two conflict-free refresh merges onto the PR.
     let base1 = commit_file(&fx.repo, "main", "base_fix_1.txt", "fix 1\n", "fix: base 1");
-    let tree1 = match inspect_base_merge(&fx.repo, &reviewed_head, &base1).unwrap() {
+    let tree1 = match inspect_base_merge(
+        &orbit_common::Env::capture(),
+        &fx.repo,
+        &reviewed_head,
+        &base1,
+    )
+    .unwrap()
+    {
         BaseMergeInspection::Clean { merged_tree } => merged_tree,
         other => panic!("expected clean merge 1, got {other:?}"),
     };
@@ -939,7 +951,9 @@ fn landing_accepts_conflict_free_refreshed_head_with_passing_checks_and_refuses_
         ],
     );
     let base2 = commit_file(&fx.repo, "main", "base_fix_2.txt", "fix 2\n", "fix: base 2");
-    let tree2 = match inspect_base_merge(&fx.repo, &refresh1, &base2).unwrap() {
+    let tree2 = match inspect_base_merge(&orbit_common::Env::capture(), &fx.repo, &refresh1, &base2)
+        .unwrap()
+    {
         BaseMergeInspection::Clean { merged_tree } => merged_tree,
         other => panic!("expected clean merge 2, got {other:?}"),
     };
@@ -1062,7 +1076,14 @@ fn landing_accepts_conflict_free_refreshed_head_with_passing_checks_and_refuses_
     // B3: A merge commit merging a non-base branch commit.
     git_out(&fx.repo, &["checkout", "-qb", "side-branch", &base0]);
     let side_commit = commit_file(&fx.repo, "side-branch", "side.txt", "side\n", "side commit");
-    let side_tree = match inspect_base_merge(&fx.repo, &reviewed_bad, &side_commit).unwrap() {
+    let side_tree = match inspect_base_merge(
+        &orbit_common::Env::capture(),
+        &fx.repo,
+        &reviewed_bad,
+        &side_commit,
+    )
+    .unwrap()
+    {
         BaseMergeInspection::Clean { merged_tree } => merged_tree,
         other => panic!("expected clean side merge, got {other:?}"),
     };

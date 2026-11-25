@@ -102,6 +102,7 @@ impl OrbitRuntime {
         let rules = crate::runtime::RuntimeKernel::completion_hold_rules(self);
         if !rules.is_empty()
             && let Some(hold) = orbit_engine::candidate_commit_completion_hold(
+                self.env(),
                 rules,
                 task,
                 &self.paths().repo_root,

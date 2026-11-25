@@ -27,7 +27,7 @@ pub(in crate::executor::automation) fn claim_handoff<H: RuntimeHost + ?Sized>(
 ) -> Result<Value, OrbitError> {
     let context = host.claim_execution_context()?;
     let workspace_path = required_workspace(input)?;
-    let candidate = observe(&workspace_path, &context, input)?;
+    let candidate = observe(&host.process_env(), &workspace_path, &context, input)?;
     let no_diff_expected = match &candidate.delivery {
         HandoffDelivery::NoDiff { evidence } => {
             no_diff::verify_leaf(host, &context, &workspace_path, evidence)?
@@ -51,7 +51,7 @@ pub(in crate::executor::automation) fn claim_handoff<H: RuntimeHost + ?Sized>(
              evidence pins the candidate that is still checked out",
         ));
     }
-    require_clean_candidate(&workspace_path, &candidate)?;
+    require_clean_candidate(&host.process_env(), &workspace_path, &candidate)?;
     let validation: Vec<HandoffArtifactRef> = input
         .get("validation")
         .cloned()
@@ -169,6 +169,7 @@ pub(in crate::executor::automation) fn claim_handoff<H: RuntimeHost + ?Sized>(
         execution_summary,
         validation,
         footprint_widening: super::super::commit::validate_claim_new_paths(
+            &host.process_env(),
             &workspace_path,
             &context.footprint,
             &candidate.base.commit,
@@ -465,18 +466,23 @@ fn bounded_summary(text: &str) -> String {
 /// the named branch still points there and no tracked or untracked input
 /// differs from it. Ignored build output is intentionally outside this check.
 pub(in crate::executor::automation::vcs) fn require_clean_checkout(
+    process_env: &orbit_common::Env,
     workspace_path: &Path,
     branch: &str,
     commit: &str,
     subject: &str,
 ) -> Result<(), OrbitError> {
-    let observed = git_output(workspace_path, &["rev-parse", "--abbrev-ref", "HEAD"])?;
+    let observed = git_output(
+        process_env,
+        workspace_path,
+        &["rev-parse", "--abbrev-ref", "HEAD"],
+    )?;
     if observed != branch {
         return Err(OrbitError::PolicyDenied(format!(
             "the checked-out source branch moved from '{branch}' to '{observed}'; rerun validation"
         )));
     }
-    let head = git_output(workspace_path, &["rev-parse", "HEAD"])?;
+    let head = git_output(process_env, workspace_path, &["rev-parse", "HEAD"])?;
     if head != commit {
         return Err(OrbitError::PolicyDenied(format!(
             "the checked-out HEAD moved from validated candidate {commit} to {head}; rerun \
@@ -484,6 +490,7 @@ pub(in crate::executor::automation::vcs) fn require_clean_checkout(
         )));
     }
     if !git_output_raw(
+        process_env,
         workspace_path,
         &["status", "--porcelain=v1", "--untracked-files=all", "-z"],
     )?

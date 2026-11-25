@@ -138,6 +138,7 @@ impl<H: RuntimeHost + ?Sized> PollDriver<'_, H> {
             return Ok(None);
         }
         let hold = check.evaluate(
+            &self.host.process_env(),
             Path::new(self.workspace_path),
             super::super::super::super::input::input_string_field(self.input, "base").as_deref(),
             super::super::super::super::input::input_string_field(self.input, "base_sync")
@@ -331,6 +332,7 @@ impl<H: RuntimeHost + ?Sized> PollDriver<'_, H> {
             }
             if self.base_candidate.is_none() {
                 self.base_candidate = super::super::super::base::refresh::owner_candidate(
+                    &self.host.process_env(),
                     Path::new(workspace_path),
                     input,
                     &self.pin,

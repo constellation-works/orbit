@@ -468,6 +468,7 @@ fn compare_base<H: RuntimeHost + ?Sized>(
         exact_replay: selection.is_some_and(|selection| selection.get(FAILING_TESTS_KEY).is_some()),
     };
     let cache = match cache_paths(
+        &host.process_env(),
         workspace_path,
         base_sha,
         command,

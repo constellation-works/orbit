@@ -123,14 +123,16 @@ pub struct PluginSourceRequest<'a> {
 /// Fetch or locate `request.source`. Network and filesystem work only; the
 /// manifest is read by the caller.
 pub fn resolve_plugin_source(
+    env: &orbit_common::Env,
     request: &PluginSourceRequest<'_>,
 ) -> Result<ResolvedSource, OrbitError> {
-    let resolved = resolve_plugin_source_unverified(request)?;
+    let resolved = resolve_plugin_source_unverified(env, request)?;
     refuse_plugin_tree_symlinks(&resolved.root)?;
     Ok(resolved)
 }
 
 fn resolve_plugin_source_unverified(
+    env: &orbit_common::Env,
     request: &PluginSourceRequest<'_>,
 ) -> Result<ResolvedSource, OrbitError> {
     let source = request.source;
@@ -144,10 +146,10 @@ fn resolve_plugin_source_unverified(
         )));
     }
     if let Some(spec) = source.strip_prefix("git+") {
-        return clone_git_source(spec);
+        return clone_git_source(env, spec);
     }
     if let Some(url) = remote_archive_source(source) {
-        return fetch_remote_archive(url, request);
+        return fetch_remote_archive(env, url, request);
     }
     if source.starts_with("https://") {
         return Err(OrbitError::InvalidInput(format!(
@@ -173,7 +175,7 @@ fn resolve_plugin_source_unverified(
     )))
 }
 
-fn clone_git_source(spec: &str) -> Result<ResolvedSource, OrbitError> {
+fn clone_git_source(env: &orbit_common::Env, spec: &str) -> Result<ResolvedSource, OrbitError> {
     let (url, reference) = match spec.split_once('#') {
         Some((url, reference)) => (url, Some(reference)),
         None => (spec, None),
@@ -199,7 +201,7 @@ fn clone_git_source(spec: &str) -> Result<ResolvedSource, OrbitError> {
     let checkout_arg = checkout.to_string_lossy().into_owned();
 
     if let Some(commit) = reference.filter(|value| is_full_commit_id(value)) {
-        return fetch_git_commit(url, &commit.to_ascii_lowercase(), scratch, checkout);
+        return fetch_git_commit(env, url, &commit.to_ascii_lowercase(), scratch, checkout);
     }
 
     let mut args = vec!["clone".to_string(), "--depth".to_string(), "1".to_string()];
@@ -210,7 +212,7 @@ fn clone_git_source(spec: &str) -> Result<ResolvedSource, OrbitError> {
     args.push("--".to_string());
     args.push(url.to_string());
     args.push(checkout_arg);
-    run_git(args, None)?;
+    run_git(env, args, None)?;
     drop_clone_metadata(&checkout)?;
 
     Ok(ResolvedSource {
@@ -226,6 +228,7 @@ fn clone_git_source(spec: &str) -> Result<ResolvedSource, OrbitError> {
 /// cannot name a commit, and a ref resolved by the server could be moved
 /// between the operator reading the plan and the fetch.
 fn fetch_git_commit(
+    env: &orbit_common::Env,
     url: &str,
     commit: &str,
     scratch: tempfile::TempDir,
@@ -233,6 +236,7 @@ fn fetch_git_commit(
 ) -> Result<ResolvedSource, OrbitError> {
     let checkout_arg = checkout.to_string_lossy().into_owned();
     run_git(
+        env,
         vec![
             "init".to_string(),
             "--quiet".to_string(),
@@ -243,6 +247,7 @@ fn fetch_git_commit(
     )?;
     let inside = Some(checkout_arg);
     run_git(
+        env,
         vec![
             "fetch".to_string(),
             "--quiet".to_string(),
@@ -256,6 +261,7 @@ fn fetch_git_commit(
         inside.clone(),
     )?;
     run_git(
+        env,
         vec![
             "-c".to_string(),
             "advice.detachedHead=false".to_string(),
@@ -267,6 +273,7 @@ fn fetch_git_commit(
         inside.clone(),
     )?;
     let head = run_git(
+        env,
         vec!["rev-parse".to_string(), "HEAD".to_string()],
         inside.clone(),
     )?;
@@ -278,6 +285,7 @@ fn fetch_git_commit(
         )));
     }
     let committed_at = run_git(
+        env,
         vec![
             "show".to_string(),
             "--no-patch".to_string(),
@@ -337,7 +345,11 @@ fn allowed_git_url(url: &str) -> bool {
         && !host.chars().any(char::is_whitespace)
 }
 
-fn run_git(args: Vec<String>, current_dir: Option<String>) -> Result<String, OrbitError> {
+fn run_git(
+    env: &orbit_common::Env,
+    args: Vec<String>,
+    current_dir: Option<String>,
+) -> Result<String, OrbitError> {
     let mut args_with_protocol_policy = vec![
         // No hook from the operator's configuration runs on a checkout of
         // code nobody has reviewed yet.
@@ -351,13 +363,13 @@ fn run_git(args: Vec<String>, current_dir: Option<String>) -> Result<String, Orb
         "protocol.ssh.allow=always".to_string(),
     ];
     args_with_protocol_policy.extend(args);
-    let mut environment = allowlisted_child_env(&orbit_common::Env::capture(), &[], &[]);
+    let mut environment = allowlisted_child_env(env, &[], &[]);
     environment.extend([
         ("GIT_PROTOCOL_FROM_USER".to_string(), "0".to_string()),
         ("GIT_TERMINAL_PROMPT".to_string(), "0".to_string()),
     ]);
     let result = run_process(
-        &orbit_common::Env::capture(),
+        env,
         &ExecRequest {
             program: "git".to_string(),
             args: args_with_protocol_policy,
@@ -384,6 +396,7 @@ fn run_git(args: Vec<String>, current_dir: Option<String>) -> Result<String, Orb
 /// and hashes to what the pin says, so a tampered archive never reaches the
 /// extraction code at all.
 fn fetch_remote_archive(
+    env: &orbit_common::Env,
     url: &str,
     request: &PluginSourceRequest<'_>,
 ) -> Result<ResolvedSource, OrbitError> {
@@ -406,7 +419,7 @@ fn fetch_remote_archive(
 
     let scratch = new_scratch()?;
     let download = scratch.path().join("download");
-    run_curl(url, &download)?;
+    run_curl(env, url, &download)?;
     refuse_oversize_archive(&download, url)?;
     let bytes = std::fs::read(&download)
         .map_err(|error| OrbitError::Io(format!("read the fetched archive: {error}")))?;
@@ -463,7 +476,7 @@ fn validate_archive_url(url: &str) -> Result<(), OrbitError> {
 /// only the first: `--proto =https` admits no other scheme, `--proto-redir
 /// =https` refuses a redirect that changes scheme, and `--disable` stops a
 /// host `.curlrc` from re-enabling either.
-fn run_curl(url: &str, destination: &Path) -> Result<(), OrbitError> {
+fn run_curl(env: &orbit_common::Env, url: &str, destination: &Path) -> Result<(), OrbitError> {
     // `-` sends the body to stdout, where the bounded copy below reads it.
     let args = vec![
         "--disable".to_string(),
@@ -486,15 +499,11 @@ fn run_curl(url: &str, destination: &Path) -> Result<(), OrbitError> {
     ];
     // A custom trust store belongs to the operator, and is the only thing
     // beyond the baseline environment this fetch is allowed to read.
-    let environment = allowlisted_child_env(
-        &orbit_common::Env::capture(),
-        &[],
-        &["SSL_CERT_FILE", "SSL_CERT_DIR"],
-    );
+    let environment = allowlisted_child_env(env, &[], &["SSL_CERT_FILE", "SSL_CERT_DIR"]);
     let target = destination.to_path_buf();
     let source_name = url.to_string();
     let (result, _written) = run_process_streaming_stdout(
-        &orbit_common::Env::capture(),
+        env,
         &ExecRequest {
             program: "curl".to_string(),
             args,

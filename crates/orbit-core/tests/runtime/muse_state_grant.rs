@@ -103,6 +103,11 @@ fn only_the_muse_lane_may_write_muse_state_roots() {
             ("XDG_CONFIG_HOME", Some(config.to_str().expect("utf-8"))),
             ("XDG_DATA_HOME", Some(data.to_str().expect("utf-8"))),
         ]);
+        // The runtime resolves provider roots from the Env it is built with.
+        let runtime = orbit_core::test_support::with_runtime_env(
+            runtime.clone(),
+            orbit_common::Env::capture(),
+        );
         resolved_modify(&runtime, "muse", &worktree)
     };
     for root in [config.join("muse"), data.join("muse")] {
@@ -117,6 +122,10 @@ fn only_the_muse_lane_may_write_muse_state_roots() {
             ("XDG_CONFIG_HOME", Some("")),
             ("XDG_DATA_HOME", Some("")),
         ]);
+        let runtime = orbit_core::test_support::with_runtime_env(
+            runtime.clone(),
+            orbit_common::Env::capture(),
+        );
         resolved_modify(&runtime, "muse", &worktree)
     };
     for root in &default_roots {

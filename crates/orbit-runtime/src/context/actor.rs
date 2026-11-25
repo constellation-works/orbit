@@ -1,11 +1,5 @@
 use orbit_common::OrbitError;
-use orbit_common::env_vars;
 use orbit_types::identity::require_canonical_agent_family;
-
-use orbit_common::env_vars::ORBIT_ACTOR;
-use orbit_common::env_vars::ORBIT_AGENT_MODEL;
-use orbit_common::env_vars::ORBIT_AGENT_NAME;
-const OS_USER_ENV: &[&str] = &[env_vars::USER, env_vars::USERNAME, env_vars::LOGNAME];
 
 /// Actor label recorded when [`OPERATOR_OVERRIDE_ENV`](orbit_common::governance::authorization::OPERATOR_OVERRIDE_ENV)
 /// is the only signal identifying the caller.
@@ -61,15 +55,17 @@ impl ActorIdentity {
     /// otherwise records the OS user (`human:<username>`). A caller with
     /// no remaining signal is also recorded as `unknown`, and then only with a
     /// warning: write paths must not construct that literal themselves.
-    pub fn from_env() -> Self {
-        let agent = std::env::var(ORBIT_AGENT_NAME)
-            .ok()
+    pub fn from_env(env: &orbit_common::Env) -> Self {
+        let agent = env
+            .orbit_agent_name()
+            .and_then(std::ffi::OsStr::to_str)
             .filter(|value| !value.trim().is_empty());
-        let model = std::env::var(ORBIT_AGENT_MODEL)
-            .ok()
+        let model = env
+            .orbit_agent_model()
+            .and_then(std::ffi::OsStr::to_str)
             .filter(|value| !value.trim().is_empty());
 
-        match require_canonical_agent_family(agent.as_deref(), model.as_deref()) {
+        match require_canonical_agent_family(agent, model) {
             Ok(Some(family)) => return Self::agent(family),
             Err(error) => {
                 tracing::warn!(
@@ -83,9 +79,7 @@ impl ActorIdentity {
             Ok(None) => {}
         }
 
-        if orbit_common::governance::authorization::agent_context_declared(
-            &orbit_common::Env::capture(),
-        ) {
+        if orbit_common::governance::authorization::agent_context_declared(env) {
             tracing::warn!(
                 target: "orbit.core.actor",
                 actor = UNKNOWN_ACTOR_LABEL,
@@ -94,21 +88,20 @@ impl ActorIdentity {
             return Self::unknown();
         }
 
-        if let Some(label) = std::env::var(ORBIT_ACTOR)
-            .ok()
+        if let Some(label) = env
+            .orbit_actor()
+            .and_then(std::ffi::OsStr::to_str)
             .map(|value| value.trim().to_string())
             .filter(|value| !value.is_empty())
         {
             return Self::human(label);
         }
 
-        if orbit_common::governance::authorization::operator_override_active(
-            &orbit_common::Env::capture(),
-        ) {
+        if orbit_common::governance::authorization::operator_override_active(env) {
             return Self::human(OPERATOR_ACTOR_LABEL);
         }
 
-        if let Some(user) = os_user_name() {
+        if let Some(user) = os_user_name(env) {
             return Self::human(format!("human:{user}"));
         }
 
@@ -176,13 +169,14 @@ pub fn trusted_write_identity(
     (trim(agent), trim(model))
 }
 
-fn os_user_name() -> Option<String> {
-    OS_USER_ENV.iter().find_map(|key| {
-        std::env::var(key).ok().and_then(|value| {
-            let trimmed = value.trim();
-            (!trimmed.is_empty()).then(|| trimmed.to_string())
-        })
-    })
+fn os_user_name(env: &orbit_common::Env) -> Option<String> {
+    [env.user(), env.username(), env.logname()]
+        .into_iter()
+        .flatten()
+        .filter_map(std::ffi::OsStr::to_str)
+        .map(str::trim)
+        .find(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
 }
 
 impl Default for ActorIdentity {

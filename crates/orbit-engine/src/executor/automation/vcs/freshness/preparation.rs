@@ -162,8 +162,8 @@ pub(super) fn synchronize<H: RuntimeHost + ?Sized>(
     let (mut effective, mut latest) = effective_input(host, input, context)?;
     loop {
         validate_owner(host, recovery_run_id(input, context), context)?;
-        if !rebase_in_progress(&context.workspace_path)? {
-            let current = commit_sha(&context.workspace_path, "HEAD")?;
+        if !rebase_in_progress(&host.process_env(), &context.workspace_path)? {
+            let current = commit_sha(&host.process_env(), &context.workspace_path, "HEAD")?;
             if let Some(latest) = &latest
                 && latest["source_preparation"]
                     == *preparation(input).ok_or_else(|| refusal("missing preparation"))?
@@ -192,6 +192,7 @@ pub(super) fn synchronize<H: RuntimeHost + ?Sized>(
             }
         }
         if remote_branch_sha(
+            &host.process_env(),
             &context.workspace_path,
             required_input_string(&effective, "head")?,
         )? != effective["remote_sha"].as_str().map(ToOwned::to_owned)
@@ -276,7 +277,7 @@ fn refresh<H: RuntimeHost + ?Sized>(
     // Conflict recovery may have rewritten the prepared candidate before the
     // base moved again. Pin that exact authenticated HEAD for this refresh;
     // the initial preparation still records the pre-recovery identity.
-    let head_sha = commit_sha(workspace, "HEAD")?;
+    let head_sha = commit_sha(&host.process_env(), workspace, "HEAD")?;
     if head_sha != required_input_string(effective, "head_sha")?
         && !matches!(
             recovered_rewrite(host, effective, context, &head_sha)?,
@@ -291,27 +292,43 @@ fn refresh<H: RuntimeHost + ?Sized>(
     let old_base = required_input_string(effective, "base_sha")?;
     let unchanged = || -> Result<(), OrbitError> {
         validate_owner(host, run_id, context)?;
-        if rebase_in_progress(workspace)?
-            || git_output(workspace, &["rev-parse", "--abbrev-ref", "HEAD"])?.trim() != head
-            || commit_sha(workspace, "HEAD")? != head_sha
-            || remote_branch_sha(workspace, head)?
+        if rebase_in_progress(&host.process_env(), workspace)?
+            || git_output(
+                &host.process_env(),
+                workspace,
+                &["rev-parse", "--abbrev-ref", "HEAD"],
+            )?
+            .trim()
+                != head
+            || commit_sha(&host.process_env(), workspace, "HEAD")? != head_sha
+            || remote_branch_sha(&host.process_env(), workspace, head)?
                 != effective["remote_sha"].as_str().map(ToOwned::to_owned)
         {
             return Err(refusal(
                 "candidate, branch, remote lease or rebase state changed",
             ));
         }
-        ensure_clean_for_rewrite(workspace, &head_sha, "a stale prepared base")
+        ensure_clean_for_rewrite(
+            &host.process_env(),
+            workspace,
+            &head_sha,
+            "a stale prepared base",
+        )
     };
     unchanged()?;
     let mut prepare_input = input.clone();
     prepare_input["base_sync"] = input["preparation"]["preparation"]["base_sync"].clone();
-    let mut next =
-        prepare_pr_handoff_inner(&prepare_input, context).map_err(|failure| failure.1)?;
+    let mut next = prepare_pr_handoff_inner(&host.process_env(), &prepare_input, context)
+        .map_err(|failure| failure.1)?;
     let new_base = required_input_string(&next, "base_sha")?;
     if next["base_ref"] != base_ref
         || new_base == old_base
-        || !crate::executor::automation::vcs::git::is_ancestor(workspace, old_base, new_base)?
+        || !crate::executor::automation::vcs::git::is_ancestor(
+            &host.process_env(),
+            workspace,
+            old_base,
+            new_base,
+        )?
     {
         return Err(refusal(
             "base did not strictly advance along its prepared ancestry",

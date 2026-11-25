@@ -154,7 +154,10 @@ fn refused(reason: &str) -> OrbitError {
 }
 
 /// Read one required check run's annotations on a pull request's head.
-pub(super) fn ci_check_annotations(input: &Value) -> Result<Value, OrbitError> {
+pub(super) fn ci_check_annotations(
+    process_env: &orbit_common::Env,
+    input: &Value,
+) -> Result<Value, OrbitError> {
     let workspace = Path::new(required_string(input, "workspace_path")?);
     let pr = required_string(input, "pr")?;
     let head = required_string(input, "head_sha")?;
@@ -175,8 +178,11 @@ pub(super) fn ci_check_annotations(input: &Value) -> Result<Value, OrbitError> {
     let read = |endpoint: String| -> Result<Value, OrbitError> {
         let args = vec!["api".to_string(), endpoint];
         let result = match deadline {
-            Some(deadline) => deadline.execute("gh", args, workspace, "check annotations")?,
+            Some(deadline) => {
+                deadline.execute(process_env, "gh", args, workspace, "check annotations")?
+            }
             None => execute_with_transient_retry(
+                process_env,
                 "gh",
                 &args,
                 Some(workspace),

@@ -42,11 +42,16 @@ pub(super) fn continue_source<H: RuntimeHost + ?Sized>(
     if !reserved {
         return Err(refused("durable operator reservation missing"));
     }
-    let origin = git_output(workspace, &["config", "--get", "remote.origin.url"])?;
+    let origin = git_output(
+        &host.process_env(),
+        workspace,
+        &["config", "--get", "remote.origin.url"],
+    )?;
     if origin != binding.remote_url {
         return Err(refused("repository remote changed"));
     }
     let remote = git_output(
+        &host.process_env(),
         workspace,
         &[
             "ls-remote",
@@ -91,7 +96,13 @@ pub(super) fn continue_source<H: RuntimeHost + ?Sized>(
         evidence_findings: None,
     };
     // A refusal never falls back to a new branch/PR or a fresh implementation.
-    match adopt_published_branch(workspace, &task.id, &candidate, &binding.head_sha)? {
+    match adopt_published_branch(
+        &host.process_env(),
+        workspace,
+        &task.id,
+        &candidate,
+        &binding.head_sha,
+    )? {
         Adoption::Adopted => {}
         Adoption::Refused(reason) => return Err(refused(&reason)),
     }
@@ -99,7 +110,13 @@ pub(super) fn continue_source<H: RuntimeHost + ?Sized>(
     if admission.resident_repair_deadline().is_some() {
         repair["failed_step_id"] = json!("resident_source_repair");
     }
-    match apply(&candidate, &candidate.head_sha, workspace, base)? {
+    match apply(
+        &host.process_env(),
+        &candidate,
+        &candidate.head_sha,
+        workspace,
+        base,
+    )? {
         Applied::Refused(reason) => return Err(refused(&reason)),
         Applied::Conflict { paths, output } => {
             repair["trigger"] = json!("conflict");
@@ -150,7 +167,12 @@ pub(super) fn continue_published_owner<H: RuntimeHost + ?Sized>(
     {
         return Err(refused("admitting execution binding changed"));
     }
-    if git_output(workspace, &["config", "--get", "remote.origin.url"])? != binding.remote_url {
+    if git_output(
+        &host.process_env(),
+        workspace,
+        &["config", "--get", "remote.origin.url"],
+    )? != binding.remote_url
+    {
         return Err(refused("repository changed"));
     }
     let pr = read_pr_status(host, workspace, &binding.pull_request)?;
@@ -175,7 +197,13 @@ pub(super) fn continue_published_owner<H: RuntimeHost + ?Sized>(
         landing_stop: None,
         evidence_findings: None,
     };
-    let outcome = match apply(&candidate, &candidate.head_sha, workspace, base)? {
+    let outcome = match apply(
+        &host.process_env(),
+        &candidate,
+        &candidate.head_sha,
+        workspace,
+        base,
+    )? {
         Applied::Clean => Outcome::Carried,
         Applied::Conflict { paths, output } => {
             Outcome::Repair(json!({"trigger":"conflict","conflicting_paths":paths,"output":output}))
@@ -187,7 +215,13 @@ pub(super) fn continue_published_owner<H: RuntimeHost + ?Sized>(
         }
         Applied::Refused(reason) => return Err(refused(&reason)),
     };
-    match adopt_published_branch(workspace, &task.id, &candidate, &binding.head_sha)? {
+    match adopt_published_branch(
+        &host.process_env(),
+        workspace,
+        &task.id,
+        &candidate,
+        &binding.head_sha,
+    )? {
         Adoption::Adopted => {}
         Adoption::Refused(reason) => return Err(refused(&reason)),
     }

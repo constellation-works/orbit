@@ -181,17 +181,28 @@ impl DeliveryPin {
     /// diagnosis was unavailable.
     pub(in crate::executor::automation::vcs) fn base_advance_note(
         &self,
+        process_env: &orbit_common::Env,
         input: &Value,
         workspace_path: &str,
     ) -> Option<String> {
         let (candidate_sha, base) = (self.candidate_sha.as_deref()?, self.base.as_deref()?);
         let workspace = Path::new(workspace_path);
-        let base_ref =
-            resolve_worktree_start_point(workspace, base, base_sync_mode_from_input(input).ok()?)
-                .ok()?;
-        let base_sha = commit_sha(workspace, &base_ref).ok()?;
-        let freshness =
-            branch_freshness_against_ref(workspace, candidate_sha, &base_ref, &base_sha).ok()?;
+        let base_ref = resolve_worktree_start_point(
+            process_env,
+            workspace,
+            base,
+            base_sync_mode_from_input(input).ok()?,
+        )
+        .ok()?;
+        let base_sha = commit_sha(process_env, workspace, &base_ref).ok()?;
+        let freshness = branch_freshness_against_ref(
+            process_env,
+            workspace,
+            candidate_sha,
+            &base_ref,
+            &base_sha,
+        )
+        .ok()?;
 
         Some(if freshness.commits_behind == 0 {
             format!(

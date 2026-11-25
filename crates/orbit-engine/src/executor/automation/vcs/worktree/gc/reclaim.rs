@@ -7,6 +7,7 @@ use std::path::Path;
 
 /// Reclaim only declared output, keeping committed and unmatched work.
 pub(super) fn collect_build_output(
+    process_env: &orbit_common::Env,
     worktree: &Path,
     run: &JobRun,
     options: &WorktreeGcOptions,
@@ -16,8 +17,12 @@ pub(super) fn collect_build_output(
         report.action = "skipped:worker_alive".to_string();
         return Ok(report);
     }
-    report.reclaim =
-        super::super::reclaim::collect(worktree, reclaim_patterns(options), options.delete)?;
+    report.reclaim = super::super::reclaim::collect(
+        process_env,
+        worktree,
+        reclaim_patterns(options),
+        options.delete,
+    )?;
     report.bytes_reclaimed = report.reclaim.iter().map(|path| path.bytes_reclaimed).sum();
     report.action = if report
         .reclaim
@@ -50,13 +55,14 @@ pub(super) fn reclaim_patterns(options: &WorktreeGcOptions) -> &[String] {
 /// has host validation output. A prefilter only: collection still enforces
 /// registration, worker, containment and Git gates.
 pub fn run_worktree_has_reclaim_output(
+    process_env: &orbit_common::Env,
     repo_root: &Path,
     run: &JobRun,
     patterns: &[String],
 ) -> bool {
-    run_worktree_paths(repo_root, run).is_ok_and(|paths| {
+    run_worktree_paths(process_env, repo_root, run).is_ok_and(|paths| {
         paths
             .iter()
             .any(|path| super::super::reclaim::has_matches(path, patterns))
-    }) || super::host_targets::run_has_host_target(repo_root, run)
+    }) || super::host_targets::run_has_host_target(process_env, repo_root, run)
 }

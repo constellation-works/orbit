@@ -72,6 +72,7 @@ fn open_or_reuse_pr<H: RuntimeHost + ?Sized>(
     let base_ref = required_input_string(input, "base_ref").map_err(invalid_prepare)?;
     let base_sha = required_input_string(input, "base_sha").map_err(invalid_prepare)?;
     let current_branch = git_output(
+        &host.process_env(),
         &context.workspace_path,
         &["rev-parse", "--abbrev-ref", "HEAD"],
     )
@@ -89,14 +90,32 @@ fn open_or_reuse_pr<H: RuntimeHost + ?Sized>(
     // that base is still a branch work can land through. A base that merged and
     // was deleted (or restored to its pre-merge tip) still resolves, so every
     // later step would report success against a PR nobody merges again.
-    ensure_base_can_still_land(&context.workspace_path, "pr_open", base, base_sha, input)
-        .map_err(|error| Box::new((FailedHandoffPhase::ObsoleteBase, error)))?;
+    ensure_base_can_still_land(
+        &host.process_env(),
+        &context.workspace_path,
+        "pr_open",
+        base,
+        base_sha,
+        input,
+    )
+    .map_err(|error| Box::new((FailedHandoffPhase::ObsoleteBase, error)))?;
     // [ORB-11333] A before-PR gate binds to exact head and base commits. The
     // PR is only opened for the candidate the reviewer actually settled.
-    evidence::ensure_reviewed_candidate(&context.workspace_path, input, base_sha)
-        .map_err(|error| Box::new((FailedHandoffPhase::StaleReviewGate, error)))?;
-    let freshness = branch_freshness_against_ref(&context.workspace_path, head, base_ref, base_sha)
-        .map_err(invalid_prepare)?;
+    evidence::ensure_reviewed_candidate(
+        &host.process_env(),
+        &context.workspace_path,
+        input,
+        base_sha,
+    )
+    .map_err(|error| Box::new((FailedHandoffPhase::StaleReviewGate, error)))?;
+    let freshness = branch_freshness_against_ref(
+        &host.process_env(),
+        &context.workspace_path,
+        head,
+        base_ref,
+        base_sha,
+    )
+    .map_err(invalid_prepare)?;
     if freshness.commits_behind != 0 || freshness.commits_ahead == 0 {
         return Err(Box::new((
             FailedHandoffPhase::EmptyBranch,
@@ -106,6 +125,7 @@ fn open_or_reuse_pr<H: RuntimeHost + ?Sized>(
         )));
     }
     let diff_output = git_output(
+        &host.process_env(),
         &context.workspace_path,
         &["diff", "--name-only", &format!("{base_sha}...{head}")],
     )
@@ -141,6 +161,7 @@ fn open_or_reuse_pr<H: RuntimeHost + ?Sized>(
             Some(body) => (body, Vec::new()),
             None => {
                 let template = template::body_template_text(
+                    &host.process_env(),
                     &context.workspace_path,
                     &context.tasks,
                     &pr_config,

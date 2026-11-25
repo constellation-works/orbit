@@ -24,6 +24,7 @@ pub struct WorktreeReclaimReport {
 }
 
 pub(super) fn collect(
+    process_env: &orbit_common::Env,
     worktree: &Path,
     patterns: &[String],
     delete: bool,
@@ -57,6 +58,7 @@ pub(super) fn collect(
                 // Literal pathspecs and NUL records keep agent-chosen names from
                 // becoming Git patterns or splitting a filename into records.
                 let tracked = git_output_paths(
+                    process_env,
                     worktree,
                     &[
                         "--literal-pathspecs",
@@ -68,6 +70,7 @@ pub(super) fn collect(
                     ],
                 )?;
                 let others = git_output_paths(
+                    process_env,
                     worktree,
                     &[
                         "--literal-pathspecs",

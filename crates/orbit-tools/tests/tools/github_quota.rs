@@ -146,7 +146,7 @@ impl FakeGh {
         if let Some(ms) = timeout_ms {
             req.timeout_ms = Some(ms);
         }
-        let account = github_quota::request_account_key(&req);
+        let account = github_quota::request_account_key(&orbit_common::Env::capture(), &req);
         (req, account)
     }
 
@@ -224,17 +224,19 @@ impl QuotaFixture {
         github_quota::with_scoped_guard(self.store(), self.policy, body)
     }
     fn run_gh(&self, c: GithubCaller, req: &ExecRequest) -> Result<ExecutionResult, OrbitError> {
-        self.scoped(|| github_quota::run_gh_request(c, req))
+        self.scoped(|| github_quota::run_gh_request(&orbit_common::Env::capture(), c, req))
     }
     fn admit_gh(&self, c: GithubCaller, req: &ExecRequest) -> Result<(), OrbitError> {
-        self.scoped(|| github_quota::admit_gh_request(c, req))
+        self.scoped(|| github_quota::admit_gh_request(&orbit_common::Env::capture(), c, req))
     }
     fn admit_gh_budget(
         &self,
         c: GithubCaller,
         req: &ExecRequest,
     ) -> Result<ExecRequest, OrbitError> {
-        self.scoped(|| github_quota::admit_gh_request_within_budget(c, req))
+        self.scoped(|| {
+            github_quota::admit_gh_request_within_budget(&orbit_common::Env::capture(), c, req)
+        })
     }
     fn spawn_refresh(
         &self,
@@ -386,7 +388,7 @@ fn run_with_simulated_clipped_probe<T>(expected_ms: u64, body: impl FnOnce() -> 
 fn agent_run_reads_are_refused_at_the_agent_reserve_while_delivery_runs() {
     let f = QuotaFixture::new();
     let (now, reset) = (now(), now() + 1800);
-    let acct = github_quota::inherited_account_key();
+    let acct = github_quota::inherited_account_key(&orbit_common::Env::capture());
     // 1,000 of 5,000 left is exactly the 20% agent reserve.
     f.seed(&acct, now, 1000, reset);
 
@@ -400,7 +402,14 @@ fn agent_run_reads_are_refused_at_the_agent_reserve_while_delivery_runs() {
         ]
         .map(|(tool, input)| {
             let err = registry
-                .execute(tool, &ToolContext::default(), input)
+                .execute(
+                    tool,
+                    &ToolContext {
+                        env: orbit_common::Env::capture(),
+                        ..ToolContext::default()
+                    },
+                    input,
+                )
                 .expect_err(tool);
             (tool, refused_throttle(&err), err.to_string())
         })
@@ -824,7 +833,11 @@ fn admission_returns_only_the_budget_left_and_never_a_request_past_it() {
     zero.timeout_ms = Some(0);
     let _ = std::fs::remove_file(gh.dir.path().join("calls"));
     assert_timeout(
-        github_quota::admit_gh_request_within_budget(Delivery, &zero),
+        github_quota::admit_gh_request_within_budget(
+            &orbit_common::Env::capture(),
+            Delivery,
+            &zero,
+        ),
         None,
         "zero budget",
     );
@@ -874,8 +887,12 @@ fn expired_admission_over_a_readable_hold_returns_the_timeout() {
     (expired.timeout_ms, expired_spawn.timeout_ms) = (Some(40), Some(40));
     let (run, admitted) = f.scoped(|| {
         (
-            github_quota::run_gh_request(Delivery, &expired),
-            github_quota::admit_gh_request_within_budget(Delivery, &expired_spawn),
+            github_quota::run_gh_request(&orbit_common::Env::capture(), Delivery, &expired),
+            github_quota::admit_gh_request_within_budget(
+                &orbit_common::Env::capture(),
+                Delivery,
+                &expired_spawn,
+            ),
         )
     });
     lock.release();
@@ -900,7 +917,7 @@ fn expired_refusal_over_a_writable_hold_leaves_the_refusal_count() {
     let (exp_f, exp_gh) = (QuotaFixture::new(), FakeGh::new("hang", "ok"));
     let mut expired = exp_gh.request(&["run", "view", "456"]);
     expired.timeout_ms = Some(60);
-    let exp_acct = github_quota::request_account_key(&expired);
+    let exp_acct = github_quota::request_account_key(&orbit_common::Env::capture(), &expired);
     exp_f.seed(&exp_acct, now - 600, 4000, reset);
     exp_f.record_hold(&exp_acct, now, reset);
     let (probes, run) = run_with_simulated_clipped_probe(60, || exp_f.run_gh(Delivery, &expired));
@@ -1003,7 +1020,14 @@ fn post_child_throttle_accounting_waits_only_for_the_remaining_budget() {
 
     let lock = ContendedRecordLock::hold(f.record_path(&acct));
     let started = Instant::now();
-    f.scoped(|| github_quota::observe_gh_result_by_deadline(&req, &throttled, deadline));
+    f.scoped(|| {
+        github_quota::observe_gh_result_by_deadline(
+            &orbit_common::Env::capture(),
+            &req,
+            &throttled,
+            deadline,
+        )
+    });
     let elapsed = started.elapsed();
     lock.release();
     assert!(
@@ -1013,7 +1037,14 @@ fn post_child_throttle_accounting_waits_only_for_the_remaining_budget() {
 
     // An available record takes the hold even with the budget nearly spent.
     let near = Instant::now() + Duration::from_millis(500);
-    f.scoped(|| github_quota::observe_gh_result_by_deadline(&req, &throttled, Some(near)));
+    f.scoped(|| {
+        github_quota::observe_gh_result_by_deadline(
+            &orbit_common::Env::capture(),
+            &req,
+            &throttled,
+            Some(near),
+        )
+    });
     let held = f
         .admit(&acct, Delivery, now + 1, &unknown_not_due)
         .expect_err("must hold core");
@@ -1094,7 +1125,13 @@ fn clipped_probe_does_not_leak_its_deadline_into_a_later_short_read() {
             assert_eq!(probes, 1);
 
             // The long probe's scope returned, so the enclosing real-clock deadline must run `short`'s probe.
-            let reset = f.scoped(|| github_quota::shared_exhausted_reset(&short, &[RESOURCE_CORE]));
+            let reset = f.scoped(|| {
+                github_quota::shared_exhausted_reset(
+                    &orbit_common::Env::capture(),
+                    &short,
+                    &[RESOURCE_CORE],
+                )
+            });
             assert_eq!(reset, github_quota::SharedReset::Guarded(None), "{reset:?}");
             assert_eq!(
                 enclosing.get(),
@@ -1134,10 +1171,16 @@ fn refused_log_fallback_is_a_typed_throttle_for_unscoped_and_scoped_reads() {
         }
         let _ = std::fs::remove_file(gh.dir.path().join("calls"));
         let res = f.scoped(|| {
-            read_run_log_guarded(&requests, LogReadBounds::new(4096), None, &|req| {
-                github_quota::admit_gh_request(Agent, req)?;
-                Ok(req.clone())
-            })
+            read_run_log_guarded(
+                &orbit_common::Env::capture(),
+                &requests,
+                LogReadBounds::new(4096),
+                None,
+                &|req| {
+                    github_quota::admit_gh_request(&orbit_common::Env::capture(), Agent, req)?;
+                    Ok(req.clone())
+                },
+            )
         });
         (res, gh.calls())
     };
@@ -1559,21 +1602,31 @@ fn run_log_readers_bound_post_child_throttle_recording_by_remaining_deadline() {
                 .then(|| ContendedRecordLock::spawn(f.record_path(&acct), Some(admitted_rx), None));
 
             let res = f.scoped(|| {
-                read_run_log_guarded(&requests, LogReadBounds::new(4096), None, &|req| {
-                    let index = call_index.fetch_add(1, Ordering::SeqCst);
-                    if contended && reader == Reader::Metadata && index > target_call {
-                        return Err(OrbitError::Execution("stop after metadata read".into()));
-                    }
-                    let admitted = github_quota::admit_gh_request_within_budget(Delivery, req)?;
-                    if let Some((_, ref lock_held_rx)) = lock_state
-                        && index == target_call
-                    {
-                        admitted_tx.send(()).unwrap();
-                        recv_ready(lock_held_rx, "holder never acquired lock");
-                        *target_started.lock().unwrap() = Some(Instant::now());
-                    }
-                    Ok(admitted)
-                })
+                read_run_log_guarded(
+                    &orbit_common::Env::capture(),
+                    &requests,
+                    LogReadBounds::new(4096),
+                    None,
+                    &|req| {
+                        let index = call_index.fetch_add(1, Ordering::SeqCst);
+                        if contended && reader == Reader::Metadata && index > target_call {
+                            return Err(OrbitError::Execution("stop after metadata read".into()));
+                        }
+                        let admitted = github_quota::admit_gh_request_within_budget(
+                            &orbit_common::Env::capture(),
+                            Delivery,
+                            req,
+                        )?;
+                        if let Some((_, ref lock_held_rx)) = lock_state
+                            && index == target_call
+                        {
+                            admitted_tx.send(()).unwrap();
+                            recv_ready(lock_held_rx, "holder never acquired lock");
+                            *target_started.lock().unwrap() = Some(Instant::now());
+                        }
+                        Ok(admitted)
+                    },
+                )
             });
 
             let elapsed = target_started.lock().unwrap().map(|t| t.elapsed());

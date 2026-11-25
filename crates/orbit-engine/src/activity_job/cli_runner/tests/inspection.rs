@@ -30,6 +30,7 @@ fn missing_commit_and_slot_ownership_are_permanent() {
     let missing = "0123456789abcdef0123456789abcdef01234567";
     assert_permanent(
         SourceInspection::from_input(
+            &orbit_common::Env::capture(),
             &json!({"inspection_revision": missing, "source_revision": missing}),
             Some(&repo),
             Some("reviewer"),
@@ -40,6 +41,7 @@ fn missing_commit_and_slot_ownership_are_permanent() {
     let blob = git(&repo, &["rev-parse", "HEAD:README"]);
     assert_permanent(
         SourceInspection::from_input(
+            &orbit_common::Env::capture(),
             &json!({"inspection_revision": blob}),
             Some(&repo),
             Some("reviewer"),
@@ -48,6 +50,7 @@ fn missing_commit_and_slot_ownership_are_permanent() {
     );
 
     let held = SourceInspection::from_input(
+        &orbit_common::Env::capture(),
         &json!({"inspection_revision": revision, "source_revision": revision}),
         Some(&repo),
         Some("reviewer"),
@@ -60,6 +63,7 @@ fn missing_commit_and_slot_ownership_are_permanent() {
     fs::write(slot.join("owner"), "not-orbit\n").expect("poison owner");
     assert_permanent(
         SourceInspection::from_input(
+            &orbit_common::Env::capture(),
             &json!({"inspection_revision": revision, "source_revision": revision}),
             Some(&repo),
             Some("reviewer"),
@@ -71,6 +75,7 @@ fn missing_commit_and_slot_ownership_are_permanent() {
     fs::create_dir_all(slot.join("checkout")).expect("unowned checkout");
     assert_permanent(
         SourceInspection::from_input(
+            &orbit_common::Env::capture(),
             &json!({"inspection_revision": revision, "source_revision": revision}),
             Some(&repo),
             Some("reviewer"),
@@ -94,6 +99,7 @@ fn slot_exhaustion_and_git_io_stay_retryable() {
     // repository"), while the retryable variant is what this case guards.
     assert_retryable(
         SourceInspection::from_input(
+            &orbit_common::Env::capture(),
             &json!({"inspection_revision": missing}),
             Some(&bare),
             Some("reviewer"),
@@ -106,6 +112,7 @@ fn slot_exhaustion_and_git_io_stay_retryable() {
     fs::write(repo.join(".orbit"), "not a directory").expect("block the pool");
     assert_retryable(
         SourceInspection::from_input(
+            &orbit_common::Env::capture(),
             &json!({"inspection_revision": revision, "source_revision": revision}),
             Some(&repo),
             Some("reviewer"),
@@ -122,7 +129,12 @@ fn slot_exhaustion_and_git_io_stay_retryable() {
     let mut held = Vec::new();
     let mut exhausted = None;
     for _ in 0..64 {
-        match SourceInspection::from_input(&input, Some(&pooled), Some("reviewer")) {
+        match SourceInspection::from_input(
+            &orbit_common::Env::capture(),
+            &input,
+            Some(&pooled),
+            Some("reviewer"),
+        ) {
             Ok(Some(inspection)) => held.push(inspection),
             Ok(None) => panic!("a pinned revision must open an inspection"),
             Err(error) => {
@@ -154,16 +166,28 @@ fn stalled_full_ancestry_copy_leaves_a_reusable_slot() {
         let input = json!({"inspection_revision": revision, "source_revision": revision});
 
         set_fetch_delay(stub_dir, 600);
-        let error = SourceInspection::create(&repo, &revision, Duration::from_millis(500))
-            .err()
-            .expect("a copy that outlasts its deadline fails the lease");
+        let error = SourceInspection::create(
+            &orbit_common::Env::capture(),
+            &repo,
+            &revision,
+            Duration::from_millis(500),
+        )
+        .err()
+        .expect("a copy that outlasts its deadline fails the lease");
         assert_retryable_error(&error, "process timed out");
 
         set_fetch_delay(stub_dir, 0);
-        let inspection = SourceInspection::from_input(&input, Some(&repo), Some("reviewer"))
-            .expect("the next lease reuses the slot")
-            .expect("inspection checkout");
-        inspection.verify().expect("the reused slot verifies");
+        let inspection = SourceInspection::from_input(
+            &orbit_common::Env::capture(),
+            &input,
+            Some(&repo),
+            Some("reviewer"),
+        )
+        .expect("the next lease reuses the slot")
+        .expect("inspection checkout");
+        inspection
+            .verify(&orbit_common::Env::capture())
+            .expect("the reused slot verifies");
         return;
     }
     run_child_with_stub_git(STALLED_COPY_CHILD);
@@ -296,6 +320,7 @@ fn inspection_git_ignores_parent_locale_and_config() {
         let blob = std::env::var("ORBIT_TEST_INSPECTION_POLICY_BLOB").unwrap();
         assert_permanent(
             SourceInspection::from_input(
+                &orbit_common::Env::capture(),
                 &json!({"inspection_revision": blob}),
                 Some(repo),
                 Some("reviewer"),
@@ -303,13 +328,14 @@ fn inspection_git_ignores_parent_locale_and_config() {
             "does not name a commit",
         );
         let inspection = SourceInspection::from_input(
+            &orbit_common::Env::capture(),
             &json!({"inspection_revision": revision}),
             Some(repo),
             Some("reviewer"),
         )
         .unwrap()
         .unwrap();
-        inspection.verify().unwrap();
+        inspection.verify(&orbit_common::Env::capture()).unwrap();
         return;
     }
     let temp = tempdir().unwrap();

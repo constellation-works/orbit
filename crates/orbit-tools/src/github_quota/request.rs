@@ -53,10 +53,13 @@ fn is_endpoint(arg: &str, endpoint: &str) -> bool {
 /// the host name and a truncated SHA-256 of the token from the request's
 /// environment, or of the config location `gh` reads its stored login from.
 /// The credential itself never reaches the record.
-pub(crate) fn request_account(request: &ExecRequest) -> String {
+pub(crate) fn request_account(env: &orbit_common::Env, request: &ExecRequest) -> String {
     let lookup = |name: &str| -> Option<String> {
         let value = match &request.environment_mode {
-            EnvironmentMode::Inherit => std::env::var(name).ok(),
+            EnvironmentMode::Inherit => env
+                .var(name)
+                .and_then(std::ffi::OsStr::to_str)
+                .map(ToOwned::to_owned),
             EnvironmentMode::ClearAndSet(pairs) => pairs
                 .iter()
                 .find(|(key, _)| key == name)
@@ -135,7 +138,11 @@ pub(crate) fn rate_limit_probe_request(request: &ExecRequest) -> Option<ExecRequ
 ///
 /// With a `deadline`, the probe gets what is left of it when the read starts,
 /// not `request`'s original budget; an expired deadline skips the read.
-pub(crate) fn read_rate_limit(request: &ExecRequest, deadline: Option<Instant>) -> RateLimitAnswer {
+pub(crate) fn read_rate_limit(
+    env: &orbit_common::Env,
+    request: &ExecRequest,
+    deadline: Option<Instant>,
+) -> RateLimitAnswer {
     let remaining;
     let request = match deadline {
         Some(deadline) => {
@@ -165,10 +172,10 @@ pub(crate) fn read_rate_limit(request: &ExecRequest, deadline: Option<Instant>) 
             }
             Ok(timed_out)
         }
-        None => run_process(&orbit_common::Env::capture(), &probe, &NoSandbox),
+        None => run_process(env, &probe, &NoSandbox),
     };
     #[cfg(not(any(test, feature = "test-support")))]
-    let run = run_process(&orbit_common::Env::capture(), &probe, &NoSandbox);
+    let run = run_process(env, &probe, &NoSandbox);
     match run {
         Ok(result) if result.success => parse_rate_limit(&result.stdout),
         // The caller's deadline, not the endpoint, ended the read.

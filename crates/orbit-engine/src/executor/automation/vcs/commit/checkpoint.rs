@@ -141,13 +141,23 @@ pub(in crate::executor::automation::vcs) fn verify_clean_tree_handoff<H: Runtime
             NoDiff::verify_handoff(host, tasks, workspace_path, run_id, checkpoint)
         }
         Some(tagged_no_diff::DECISION) => match tasks {
-            [task] => tagged_no_diff::verify_handoff(task, workspace_path, checkpoint),
+            [task] => tagged_no_diff::verify_handoff(
+                &host.process_env(),
+                task,
+                workspace_path,
+                checkpoint,
+            ),
             _ => Err(OrbitError::PolicyDenied(
                 "a no-diff-expected checkpoint covers exactly one task".into(),
             )),
         },
         Some(already_resolved::DECISION) => match tasks {
-            [task] => already_resolved::verify_handoff(task, workspace_path, checkpoint),
+            [task] => already_resolved::verify_handoff(
+                &host.process_env(),
+                task,
+                workspace_path,
+                checkpoint,
+            ),
             _ => Err(OrbitError::PolicyDenied(
                 "an already-resolved checkpoint covers exactly one task".into(),
             )),
@@ -229,6 +239,7 @@ pub(super) enum PinnedHead {
 /// commit step that re-resolved the name failed every older in-flight run by
 /// construction. Nothing here resolves a ref.
 pub(super) fn validate_pinned_head(
+    process_env: &orbit_common::Env,
     workspace_path: &Path,
     input: &Value,
 ) -> Result<PinnedHead, OrbitError> {
@@ -238,6 +249,7 @@ pub(super) fn validate_pinned_head(
     let pinned = pinned_object_id(&pinned)?;
 
     let base_sha = git_output(
+        process_env,
         workspace_path,
         &["rev-parse", "--verify", &format!("{pinned}^{{commit}}")],
     )
@@ -248,7 +260,11 @@ pub(super) fn validate_pinned_head(
             workspace_path.display()
         ))
     })?;
-    let head_sha = git_output(workspace_path, &["rev-parse", "--verify", "HEAD^{commit}"])?;
+    let head_sha = git_output(
+        process_env,
+        workspace_path,
+        &["rev-parse", "--verify", "HEAD^{commit}"],
+    )?;
 
     if base_sha == head_sha {
         return Ok(PinnedHead::Matched(base_sha));
@@ -264,11 +280,17 @@ pub(super) fn validate_pinned_head(
 /// HEAD sits on the pin (the run's own commits — ORB-12683). A non-descendant
 /// HEAD, including an orphan/unrelated root, still fails closed (ORB-12690).
 pub(super) fn head_descends_from_pin(
+    process_env: &orbit_common::Env,
     workspace_path: &Path,
     base_sha: &str,
     head_sha: &str,
 ) -> Result<bool, OrbitError> {
-    crate::executor::automation::vcs::git::is_ancestor(workspace_path, base_sha, head_sha)
+    crate::executor::automation::vcs::git::is_ancestor(
+        process_env,
+        workspace_path,
+        base_sha,
+        head_sha,
+    )
 }
 
 /// Accept only the exact repair HEAD observed during final recovery, after its
@@ -316,8 +338,18 @@ pub(super) fn head_matches_final_recovery<H: RuntimeHost + ?Sized>(
     if repair.head_sha != head_sha
         || repair.head_sha_before == head_sha
         || repair.workspace_path != workspace_path.canonicalize()?
-        || !head_descends_from_pin(workspace_path, base_sha, &repair.head_sha_before)?
-        || !head_descends_from_pin(workspace_path, &repair.head_sha_before, head_sha)?
+        || !head_descends_from_pin(
+            &host.process_env(),
+            workspace_path,
+            base_sha,
+            &repair.head_sha_before,
+        )?
+        || !head_descends_from_pin(
+            &host.process_env(),
+            workspace_path,
+            &repair.head_sha_before,
+            head_sha,
+        )?
     {
         return Ok(false);
     }
@@ -362,7 +394,7 @@ pub(super) fn head_matches_settled_review<H: RuntimeHost + ?Sized>(
     base_sha: &str,
     head_sha: &str,
 ) -> Result<bool, OrbitError> {
-    if !head_descends_from_pin(workspace_path, base_sha, head_sha)? {
+    if !head_descends_from_pin(&host.process_env(), workspace_path, base_sha, head_sha)? {
         return Ok(false);
     }
     let history = host.get_task_history(task_id)?;
@@ -393,6 +425,7 @@ pub(super) fn head_matches_settled_review<H: RuntimeHost + ?Sized>(
             continue;
         }
         if let Ok(resolved) = git_output(
+            &host.process_env(),
             workspace_path,
             &[
                 "rev-parse",

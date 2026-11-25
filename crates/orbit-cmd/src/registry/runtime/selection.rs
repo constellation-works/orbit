@@ -53,7 +53,9 @@ pub fn global_root_for(root_override: Option<&Path>) -> Result<PathBuf, OrbitErr
         Some(root) => std::env::current_dir()
             .map(|cwd| cwd.join(root))
             .map_err(|error| OrbitError::Io(error.to_string())),
-        None => orbit_core::runtime::resolve_global_root(),
+        None => {
+            orbit_core::runtime::resolve_global_root(&orbit_core::composition::composition_env())
+        }
     }?;
     Ok(orbit_core::runtime::resolve_existing_root_traversal(root))
 }

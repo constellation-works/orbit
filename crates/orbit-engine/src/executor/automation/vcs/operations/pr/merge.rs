@@ -20,6 +20,7 @@ const BASE_MODIFIED_REASON: &str = "Base branch was modified. Review and try the
 const MERGE_CONFLICT_REASON: &str = "Pull Request has merge conflicts";
 
 pub(in crate::executor::automation::vcs::operations) fn pr_merge(
+    process_env: &orbit_common::Env,
     input: &Value,
 ) -> Result<Value, OrbitError> {
     let selector = required_string(input, "pr")?;
@@ -50,6 +51,7 @@ pub(in crate::executor::automation::vcs::operations) fn pr_merge(
         }
         let flag = |name| input.get(name).and_then(Value::as_bool).unwrap_or(false);
         return pr_merge_reviewed(
+            process_env,
             selector,
             workspace_path,
             strategy,
@@ -80,6 +82,7 @@ pub(in crate::executor::automation::vcs::operations) fn pr_merge(
         args.push("--auto".to_string());
     }
     let result = execute(
+        process_env,
         "gh",
         args,
         Some(Path::new(workspace_path)),
@@ -116,6 +119,7 @@ struct ReviewedMergeReports {
 /// `report_ambiguous` opts into reporting an uncertain server response. That
 /// outcome permits the completion caller one read, never a second mutation.
 fn pr_merge_reviewed(
+    process_env: &orbit_common::Env,
     selector: &str,
     workspace_path: &str,
     strategy: &str,
@@ -154,7 +158,13 @@ fn pr_merge_reviewed(
             format!("commit_message={}", message.body),
         ]);
     }
-    let result = run_vcs_process("gh", args, Some(Path::new(workspace_path)), SLOW_TIMEOUT_MS)?;
+    let result = run_vcs_process(
+        process_env,
+        "gh",
+        args,
+        Some(Path::new(workspace_path)),
+        SLOW_TIMEOUT_MS,
+    )?;
     if reports.base_modified && is_base_modified_refusal(&result) {
         return Ok(json!({
             "merged": false,

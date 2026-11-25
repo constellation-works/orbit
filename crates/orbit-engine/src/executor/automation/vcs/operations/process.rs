@@ -29,6 +29,7 @@ pub(in crate::executor::automation::vcs) const GITHUB_TRANSIENT_RETRY_DELAY: Dur
 /// GitHub's authenticated rate limit typed ([`succeeded_read`]), so the
 /// caller's policy can wait for the reset.
 pub(super) fn execute_with_transient_retry(
+    process_env: &orbit_common::Env,
     program: &str,
     args: &[String],
     current_dir: Option<&Path>,
@@ -37,7 +38,7 @@ pub(super) fn execute_with_transient_retry(
 ) -> Result<orbit_exec::ExecutionResult, OrbitError> {
     let mut attempt = 1;
     loop {
-        let result = run_vcs_process(program, args.to_vec(), current_dir, timeout_ms)
+        let result = run_vcs_process(process_env, program, args.to_vec(), current_dir, timeout_ms)
             .and_then(|result| succeeded_read(result, operation));
         match result {
             Ok(result) => return Ok(result),
@@ -172,6 +173,7 @@ fn transient_http_499(text: &str) -> bool {
 }
 
 pub(in crate::executor::automation::vcs) fn execute(
+    process_env: &orbit_common::Env,
     program: &str,
     args: Vec<String>,
     current_dir: Option<&Path>,
@@ -179,12 +181,13 @@ pub(in crate::executor::automation::vcs) fn execute(
     operation: &str,
 ) -> Result<orbit_exec::ExecutionResult, OrbitError> {
     succeeded(
-        run_vcs_process(program, args, current_dir, timeout_ms)?,
+        run_vcs_process(process_env, program, args, current_dir, timeout_ms)?,
         operation,
     )
 }
 
 fn build_vcs_request(
+    process_env: &orbit_common::Env,
     program: &str,
     args: Vec<String>,
     current_dir: Option<&Path>,
@@ -195,7 +198,12 @@ fn build_vcs_request(
             OrbitError::InvalidInput("Git operation requires a working directory".to_string())
         })?;
         let args = args.iter().map(String::as_str).collect::<Vec<_>>();
-        Ok(super::super::git::git_request(root, &args, timeout_ms))
+        Ok(super::super::git::git_request(
+            process_env,
+            root,
+            &args,
+            timeout_ms,
+        ))
     } else {
         Ok(ExecRequest {
             program: program.to_string(),
@@ -203,7 +211,9 @@ fn build_vcs_request(
             current_dir: current_dir.map(|path| path.to_string_lossy().into_owned()),
             timeout_ms: Some(timeout_ms),
             stdin_mode: StdinMode::Null,
-            environment_mode: EnvironmentMode::ClearAndSet(super::super::git::gh_environment()),
+            environment_mode: EnvironmentMode::ClearAndSet(super::super::git::gh_environment(
+                process_env,
+            )),
             debug: false,
         })
     }
@@ -216,16 +226,18 @@ fn build_vcs_request(
 /// it locally with a typed throttle and nothing runs, and its result is
 /// recorded so a rate-limit answer holds every other reader on the host.
 pub(in crate::executor::automation::vcs) fn run_vcs_process(
+    process_env: &orbit_common::Env,
     program: &str,
     args: Vec<String>,
     current_dir: Option<&Path>,
     timeout_ms: u64,
 ) -> Result<orbit_exec::ExecutionResult, OrbitError> {
-    let request = build_vcs_request(program, args, current_dir, timeout_ms)?;
+    let request = build_vcs_request(process_env, program, args, current_dir, timeout_ms)?;
     if program == "git" {
-        return run_process(&orbit_common::Env::capture(), &request, &NoSandbox);
+        return run_process(process_env, &request, &NoSandbox);
     }
     orbit_tools::github_quota::run_gh_request(
+        process_env,
         orbit_tools::github_quota::GithubCaller::Delivery,
         &request,
     )
@@ -236,21 +248,23 @@ pub(in crate::executor::automation::vcs) fn run_vcs_process(
 /// remaining budget (both elapsed wall clock and any caller clock) before the
 /// original `gh` process may spawn.
 pub(in crate::executor::automation::vcs) fn run_vcs_process_within(
+    process_env: &orbit_common::Env,
     program: &str,
     args: Vec<String>,
     current_dir: Option<&Path>,
     timeout_ms: u64,
     remaining_after_admission: impl FnOnce(u64) -> Result<u64, OrbitError>,
 ) -> Result<orbit_exec::ExecutionResult, OrbitError> {
-    let mut request = build_vcs_request(program, args, current_dir, timeout_ms)?;
+    let mut request = build_vcs_request(process_env, program, args, current_dir, timeout_ms)?;
     if program == "git" {
-        return run_process(&orbit_common::Env::capture(), &request, &NoSandbox);
+        return run_process(process_env, &request, &NoSandbox);
     }
     let admit_started = std::time::Instant::now();
     // The instant the original budget runs out; the post-child accounting
     // waits for the quota record only until then.
     let deadline = orbit_tools::github_quota::gh_request_deadline(&request, admit_started);
     let admission = orbit_tools::github_quota::admit_gh_request(
+        process_env,
         orbit_tools::github_quota::GithubCaller::Delivery,
         &request,
     );
@@ -268,8 +282,13 @@ pub(in crate::executor::automation::vcs) fn run_vcs_process_within(
         Err(refusal) => return Err(refusal),
     };
     request.timeout_ms = Some(remaining_ms);
-    let result = run_process(&orbit_common::Env::capture(), &request, &NoSandbox)?;
-    orbit_tools::github_quota::observe_gh_result_by_deadline(&request, &result, deadline);
+    let result = run_process(process_env, &request, &NoSandbox)?;
+    orbit_tools::github_quota::observe_gh_result_by_deadline(
+        process_env,
+        &request,
+        &result,
+        deadline,
+    );
     Ok(result)
 }
 
@@ -278,18 +297,22 @@ pub(in crate::executor::automation::vcs) fn run_vcs_process_within(
 /// within the refresh interval. [`orbit_tools::github_quota::SharedReset::Unguarded`]
 /// while the guard is off.
 pub(in crate::executor::automation::vcs) fn shared_exhausted_reset(
+    process_env: &orbit_common::Env,
     workspace: &Path,
     timeout_ms: u64,
     resources: &[&str],
 ) -> Result<orbit_tools::github_quota::SharedReset, OrbitError> {
     let request = build_vcs_request(
+        process_env,
         "gh",
         vec!["api".into(), "rate_limit".into()],
         Some(workspace),
         timeout_ms,
     )?;
     Ok(orbit_tools::github_quota::shared_exhausted_reset(
-        &request, resources,
+        process_env,
+        &request,
+        resources,
     ))
 }
 

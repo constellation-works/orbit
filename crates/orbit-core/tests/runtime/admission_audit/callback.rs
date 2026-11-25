@@ -166,7 +166,7 @@ fn dispatch_entry(
         "orbit.task.list" => json!({ "limit": 10 }),
         other => panic!("dispatch fixture does not cover {other}"),
     };
-    runtime
+    orbit_core::test_support::with_runtime_env(runtime.clone(), orbit_common::Env::capture())
         .execute_tool_command_dispatch(tool, input, None, None, entry_point)
         .map(|outcome| outcome.value)
 }

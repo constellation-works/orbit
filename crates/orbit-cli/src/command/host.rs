@@ -114,7 +114,10 @@ pub struct HostRemoveArgs {
 
 impl HostCommand {
     pub fn execute_without_runtime(self, root_override: Option<&Path>) -> CommandOut {
-        let global_root = orbit_core::runtime::resolve_generation_root(root_override)?;
+        let global_root = orbit_core::runtime::resolve_generation_root(
+            &orbit_core::composition::composition_env(),
+            root_override,
+        )?;
         match self.command {
             HostSubcommand::Add(args) => change_payload(hosts::add_host(
                 &global_root,

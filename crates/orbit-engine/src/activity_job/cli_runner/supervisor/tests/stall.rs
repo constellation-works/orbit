@@ -23,8 +23,9 @@ struct Ran {
 fn run(program: &str, args: &[String], stall: Option<Duration>, timeout: Duration) -> Ran {
     let pid = Cell::new(0u32);
     let on_spawn = |spawned: u32| pid.set(spawned);
-    let (_stdout, _stderr, exit_code, duration, timed_out, stalled) =
-        spawn_with_timeout(SpawnWithTimeoutRequest {
+    let (_stdout, _stderr, exit_code, duration, timed_out, stalled) = spawn_with_timeout(
+        &orbit_common::Env::capture(),
+        SpawnWithTimeoutRequest {
             stall_window: stall,
             on_spawn: Some(&on_spawn),
             ..spawn_test_request(
@@ -39,8 +40,9 @@ fn run(program: &str, args: &[String], stall: Option<Duration>, timeout: Duratio
                     cwd: None,
                 },
             )
-        })
-        .expect("spawn the stall fixture");
+        },
+    )
+    .expect("spawn the stall fixture");
     Ran {
         stalled,
         timed_out,

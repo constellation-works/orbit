@@ -54,6 +54,7 @@ pub(super) fn preserve_review_gate_candidate<H: RuntimeHost + ?Sized>(
         .filter(|attempt_id| !attempt_id.is_empty());
     let partial_repair = match &reviewer_model {
         Some(model) => super::super::review_gate::commit_reviewer_repairs(
+            &host.process_env(),
             workspace_path,
             model,
             &partial_repair_message(
@@ -66,21 +67,40 @@ pub(super) fn preserve_review_gate_candidate<H: RuntimeHost + ?Sized>(
         )?,
         None => None,
     };
-    let leftover = super::super::review_gate::uncommitted_paths(workspace_path)?;
-    let head = git_output(workspace_path, &["rev-parse", "--abbrev-ref", "HEAD"])?
-        .trim()
-        .to_string();
+    let leftover =
+        super::super::review_gate::uncommitted_paths(&host.process_env(), workspace_path)?;
+    let head = git_output(
+        &host.process_env(),
+        workspace_path,
+        &["rev-parse", "--abbrev-ref", "HEAD"],
+    )?
+    .trim()
+    .to_string();
     if head == "HEAD" {
         return Err(OrbitError::Execution(
             "pr_failure_handoff: review-gate candidate is detached".to_string(),
         ));
     }
-    let head_sha = git_output(workspace_path, &["rev-parse", "--verify", "HEAD^{commit}"])?;
-    let candidate_tree = git_output(workspace_path, &["rev-parse", "--verify", "HEAD^{tree}"])?;
-    let implementation_tree = implementation_tree(workspace_path)?;
+    let head_sha = git_output(
+        &host.process_env(),
+        workspace_path,
+        &["rev-parse", "--verify", "HEAD^{commit}"],
+    )?;
+    let candidate_tree = git_output(
+        &host.process_env(),
+        workspace_path,
+        &["rev-parse", "--verify", "HEAD^{tree}"],
+    )?;
+    let implementation_tree = implementation_tree(&host.process_env(), workspace_path)?;
     let pushed = push_batch_changes_inner(
         host,
-        &review_gate_preservation_push_input(input, &head, workspace_path, &head_sha)?,
+        &review_gate_preservation_push_input(
+            &host.process_env(),
+            input,
+            &head,
+            workspace_path,
+            &head_sha,
+        )?,
         workspace_path,
     )?;
 
@@ -278,10 +298,18 @@ pub(super) fn preserve_review_gate_candidate<H: RuntimeHost + ?Sized>(
 /// requeued run builds on a preserved candidate and times out again. The
 /// timeout bound is keyed on this tree: the reviewer's partial work changes
 /// the candidate tree on every timeout and must not renew the allowance.
-fn implementation_tree(workspace_path: &Path) -> Result<String, OrbitError> {
-    let mut commit = git_output(workspace_path, &["rev-parse", "--verify", "HEAD^{commit}"])?;
+fn implementation_tree(
+    process_env: &orbit_common::Env,
+    workspace_path: &Path,
+) -> Result<String, OrbitError> {
+    let mut commit = git_output(
+        process_env,
+        workspace_path,
+        &["rev-parse", "--verify", "HEAD^{commit}"],
+    )?;
     loop {
         let message = git_output_raw(
+            process_env,
             workspace_path,
             &["log", "-1", "--format=%B", "--end-of-options", &commit],
         )?;
@@ -290,6 +318,7 @@ fn implementation_tree(workspace_path: &Path) -> Result<String, OrbitError> {
             break;
         }
         let lineage = git_output(
+            process_env,
             workspace_path,
             &["rev-list", "--parents", "-n", "1", &commit],
         )?;
@@ -299,6 +328,7 @@ fn implementation_tree(workspace_path: &Path) -> Result<String, OrbitError> {
         }
     }
     git_output(
+        process_env,
         workspace_path,
         &["rev-parse", "--verify", &format!("{commit}^{{tree}}")],
     )
@@ -313,6 +343,7 @@ fn implementation_tree(workspace_path: &Path) -> Result<String, OrbitError> {
 /// preservation (or re-implementation onto the same head) still has to replace
 /// the published candidate.
 fn review_gate_preservation_push_input(
+    process_env: &orbit_common::Env,
     input: &Value,
     branch: &str,
     workspace_path: &Path,
@@ -323,7 +354,7 @@ fn review_gate_preservation_push_input(
         "workspace_path": workspace_path,
     });
     if let Some((head_before, expected_remote_sha)) =
-        review_gate_rewrite_lease(input, branch, workspace_path, local_sha)?
+        review_gate_rewrite_lease(process_env, input, branch, workspace_path, local_sha)?
     {
         push_input["rewrite_performed"] = json!(true);
         push_input["rewrite_head_before"] = json!(head_before);
@@ -333,6 +364,7 @@ fn review_gate_preservation_push_input(
 }
 
 fn review_gate_rewrite_lease(
+    process_env: &orbit_common::Env,
     input: &Value,
     branch: &str,
     workspace_path: &Path,
@@ -342,7 +374,7 @@ fn review_gate_rewrite_lease(
         .or_else(|| pipeline_checkpoint_string(input, "prepare_branch", "remote_sha"));
     let expected_remote_sha = match checkpointed_remote {
         Some(sha) => sha,
-        None => match remote_branch_sha(workspace_path, branch)? {
+        None => match remote_branch_sha(process_env, workspace_path, branch)? {
             Some(sha) => sha,
             None => return Ok(None),
         },

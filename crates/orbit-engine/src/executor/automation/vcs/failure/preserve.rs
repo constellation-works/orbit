@@ -14,11 +14,22 @@ use super::super::git::git_output;
 use super::{MAX_VALIDATION_ENVIRONMENT_DIAGNOSTIC_BYTES, VALIDATION_ENVIRONMENT_EVENT};
 
 /// Read the branch and committed head kept by a failure handoff.
-fn candidate_head(workspace_path: &Path) -> Result<(String, String), OrbitError> {
-    let branch = git_output(workspace_path, &["rev-parse", "--abbrev-ref", "HEAD"])?
-        .trim()
-        .to_string();
-    let head_sha = git_output(workspace_path, &["rev-parse", "--verify", "HEAD^{commit}"])?;
+fn candidate_head(
+    process_env: &orbit_common::Env,
+    workspace_path: &Path,
+) -> Result<(String, String), OrbitError> {
+    let branch = git_output(
+        process_env,
+        workspace_path,
+        &["rev-parse", "--abbrev-ref", "HEAD"],
+    )?
+    .trim()
+    .to_string();
+    let head_sha = git_output(
+        process_env,
+        workspace_path,
+        &["rev-parse", "--verify", "HEAD^{commit}"],
+    )?;
     Ok((branch, head_sha))
 }
 
@@ -150,7 +161,7 @@ pub(super) fn preserve_agent_blocked_candidate<H: RuntimeHost + ?Sized>(
     error_message: &str,
     workspace_path: &Path,
 ) -> Result<Value, OrbitError> {
-    let (branch, head_sha) = candidate_head(workspace_path)?;
+    let (branch, head_sha) = candidate_head(&host.process_env(), workspace_path)?;
     // The step failure carries the blocker as text; parse it once here and
     // record it typed beside the note, which keeps its kind for older readers.
     let blocker = orbit_types::workflow::AgentBlocker::from_step_failure_message(error_message)
@@ -234,9 +245,13 @@ pub(super) fn preserve_owner_signoff_candidate<H: RuntimeHost + ?Sized>(
     workspace_path: &Path,
 ) -> Result<Value, OrbitError> {
     let (head_sha, committed_files) = commit_failure_candidate(host, run_id, workspace_path, task)?;
-    let branch = git_output(workspace_path, &["rev-parse", "--abbrev-ref", "HEAD"])?
-        .trim()
-        .to_string();
+    let branch = git_output(
+        &host.process_env(),
+        workspace_path,
+        &["rev-parse", "--abbrev-ref", "HEAD"],
+    )?
+    .trim()
+    .to_string();
     let held = carry_held_candidate(
         host,
         task,
@@ -310,7 +325,7 @@ pub(super) fn preserve_validation_environment_candidate<H: RuntimeHost + ?Sized>
     error_message: &str,
     workspace_path: &Path,
 ) -> Result<Value, OrbitError> {
-    let (branch, head_sha) = candidate_head(workspace_path)?;
+    let (branch, head_sha) = candidate_head(&host.process_env(), workspace_path)?;
     let diagnostic = bounded_diagnostic(error_message);
     let held = carry_held_candidate(
         host,
@@ -397,9 +412,13 @@ pub(super) fn hold_provider_failure_candidate<H: RuntimeHost + ?Sized>(
     workspace_path: &Path,
 ) -> Result<Value, OrbitError> {
     let (head_sha, committed_files) = commit_failure_candidate(host, run_id, workspace_path, task)?;
-    let branch = git_output(workspace_path, &["rev-parse", "--abbrev-ref", "HEAD"])?
-        .trim()
-        .to_string();
+    let branch = git_output(
+        &host.process_env(),
+        workspace_path,
+        &["rev-parse", "--abbrev-ref", "HEAD"],
+    )?
+    .trim()
+    .to_string();
     let class = orbit_types::workflow::ProviderFailureClass::of(None, Some(error_message))
         .map_or("provider_failure", |class| class.as_str());
     let held = carry_held_candidate(
@@ -471,9 +490,13 @@ pub(super) fn hold_upgrade_pending_candidate<H: RuntimeHost + ?Sized>(
     workspace_path: &Path,
 ) -> Result<Value, OrbitError> {
     let (head_sha, committed_files) = commit_failure_candidate(host, run_id, workspace_path, task)?;
-    let branch = git_output(workspace_path, &["rev-parse", "--abbrev-ref", "HEAD"])?
-        .trim()
-        .to_string();
+    let branch = git_output(
+        &host.process_env(),
+        workspace_path,
+        &["rev-parse", "--abbrev-ref", "HEAD"],
+    )?
+    .trim()
+    .to_string();
     let kind = orbit_types::workflow::upgrade_pending_kind(error_message)
         .unwrap_or(orbit_types::workflow::UPGRADE_PENDING_ERROR_CODE)
         .to_string();
@@ -546,14 +569,22 @@ pub(super) fn hold_child_timeout_candidate<H: RuntimeHost + ?Sized>(
     workspace_path: &Path,
 ) -> Result<Value, OrbitError> {
     let (head_sha, committed_files) = if review_stopped {
-        let head = git_output(workspace_path, &["rev-parse", "--verify", "HEAD^{commit}"])?;
+        let head = git_output(
+            &host.process_env(),
+            workspace_path,
+            &["rev-parse", "--verify", "HEAD^{commit}"],
+        )?;
         (head.trim().to_string(), Vec::new())
     } else {
         commit_failure_candidate(host, run_id, workspace_path, task)?
     };
-    let branch = git_output(workspace_path, &["rev-parse", "--abbrev-ref", "HEAD"])?
-        .trim()
-        .to_string();
+    let branch = git_output(
+        &host.process_env(),
+        workspace_path,
+        &["rev-parse", "--abbrev-ref", "HEAD"],
+    )?
+    .trim()
+    .to_string();
     let held = carry_held_candidate(
         host,
         task,
@@ -652,7 +683,7 @@ pub(super) fn hold_baseline_red_candidate<H: RuntimeHost + ?Sized>(
     hold: &orbit_types::workflow::BaselineRedHold,
     workspace_path: &Path,
 ) -> Result<Value, OrbitError> {
-    let (branch, head_sha) = candidate_head(workspace_path)?;
+    let (branch, head_sha) = candidate_head(&host.process_env(), workspace_path)?;
     let diagnostic = bounded_diagnostic(error_message);
     let held = carry_held_candidate(
         host,

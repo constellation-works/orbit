@@ -51,8 +51,11 @@ impl TaskWriteScreen {
     /// A caller running in this process, bound to the managed run Orbit
     /// stamped into its environment when it spawned it (the same envelope
     /// `orbit tool run` trusts). Outside a managed run it is unbound.
-    pub fn from_process(allow_missing_context: bool) -> Self {
-        Self::bound(allow_missing_context, managed_run_context_run_id_from_env())
+    pub fn from_process(env: &orbit_common::Env, allow_missing_context: bool) -> Self {
+        Self::bound(
+            allow_missing_context,
+            managed_run_context_run_id_from_env(env),
+        )
     }
 
     /// A caller bound to `owner_run_id` by the tool host's dispatch.

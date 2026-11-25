@@ -347,8 +347,9 @@ pub(super) fn agent_sandbox_mask(
     runtime: &OrbitRuntime,
 ) -> Result<orbit_engine::SandboxMask, DispatchError> {
     let global_root = runtime.global_root();
-    let prepared = crate::runtime::plugin::sandbox_mask::prepare_agent_mask(&global_root)
-        .map_err(|error| DispatchError::CliInvocationPermanent(error.to_string()))?;
+    let prepared =
+        crate::runtime::plugin::sandbox_mask::prepare_agent_mask(runtime.env(), &global_root)
+            .map_err(|error| DispatchError::CliInvocationPermanent(error.to_string()))?;
     let global_root = global_root.canonicalize().map_err(|error| {
         DispatchError::CliInvocationPermanent(format!(
             "resolve the global root `{}` for the agent sandbox mask: {error}",

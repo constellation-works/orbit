@@ -59,14 +59,13 @@ impl RuntimeKernel {
         }
         // An agent cannot turn a trusted API or an operator environment into
         // application authority. Plugin callbacks cannot administer consent.
-        let caller = CallerCapabilities::resolve(&CallerEnvelope::from_process_env(
-            &orbit_common::Env::capture(),
-            session,
-        ));
-        if agent_context_declared(&orbit_common::Env::capture())
+        let caller =
+            CallerCapabilities::resolve(&CallerEnvelope::from_process_env(self.env(), session));
+        if agent_context_declared(self.env())
             || session.application.is_some()
             || !caller.grants().contains(&McpCapability::Operator)
-            || orbit_tools::plugin::resolve_plugin_callback(&self.global_root())?.is_some()
+            || orbit_tools::plugin::resolve_plugin_callback(self.env(), &self.global_root())?
+                .is_some()
         {
             return Err(OrbitError::CapabilityDenied(
                 "application consent requires a host operator".into(),
@@ -188,14 +187,13 @@ impl RuntimeKernel {
         id: &str,
         session: &ToolSessionContext,
     ) -> Result<(), OrbitError> {
-        let caller = CallerCapabilities::resolve(&CallerEnvelope::from_process_env(
-            &orbit_common::Env::capture(),
-            session,
-        ));
-        if agent_context_declared(&orbit_common::Env::capture())
+        let caller =
+            CallerCapabilities::resolve(&CallerEnvelope::from_process_env(self.env(), session));
+        if agent_context_declared(self.env())
             || session.application.is_some()
             || !caller.grants().contains(&McpCapability::Operator)
-            || orbit_tools::plugin::resolve_plugin_callback(&self.global_root())?.is_some()
+            || orbit_tools::plugin::resolve_plugin_callback(self.env(), &self.global_root())?
+                .is_some()
         {
             return Err(OrbitError::CapabilityDenied(
                 "application revocation requires a host operator".into(),

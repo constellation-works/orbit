@@ -67,7 +67,8 @@ pub(in crate::executor::automation::vcs) fn base_inherited_failure<H: RuntimeHos
             "the fork point has no conclusive failing job for every required failure".to_string(),
         ));
     }
-    let Ok(fork_point) = git_output(workspace, &["merge-base", head, tip]) else {
+    let Ok(fork_point) = git_output(&host.process_env(), workspace, &["merge-base", head, tip])
+    else {
         return Ok(InheritedFailure::NotInherited(
             "the head's fork point on the base branch cannot be read".to_string(),
         ));
@@ -106,7 +107,7 @@ pub(in crate::executor::automation::vcs) fn base_inherited_failure<H: RuntimeHos
                 return Ok(InheritedFailure::NotInherited(reason));
             }
         };
-        match cites_changed_candidate(workspace, head, &fork_point, &log) {
+        match cites_changed_candidate(&host.process_env(), workspace, head, &fork_point, &log) {
             Ok(false) => {}
             Ok(true) => {
                 return Ok(InheritedFailure::NotInherited(format!(

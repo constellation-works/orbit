@@ -116,7 +116,7 @@ pub(super) fn observe(runtime: &OrbitRuntime, task_id: &str) -> Result<Observati
     }
     let repo = &runtime.paths().repo_root;
     let readable = |commit: &str| {
-        review_gate::fetch_landed_commit(repo, commit).map_err(|error| {
+        review_gate::fetch_landed_commit(runtime.env(), repo, commit).map_err(|error| {
             refused(format!(
                 "commit {commit} of pull request #{number} is not readable in the owner checkout \
                  ({error}); fetch origin there and retry"
@@ -124,7 +124,7 @@ pub(super) fn observe(runtime: &OrbitRuntime, task_id: &str) -> Result<Observati
         })
     };
     readable(&pull_request.head)?;
-    let merged_head = review_gate::revision(repo, &pull_request.head)?;
+    let merged_head = review_gate::revision(runtime.env(), repo, &pull_request.head)?;
     let merge_commit = pull_request.merge_commit.as_deref().ok_or_else(|| {
         refused(format!(
             "the provider reported pull request #{number} as merged without its merge commit; \
@@ -133,10 +133,10 @@ pub(super) fn observe(runtime: &OrbitRuntime, task_id: &str) -> Result<Observati
         ))
     })?;
     readable(merge_commit)?;
-    let landed = review_gate::revision(repo, merge_commit)?;
+    let landed = review_gate::revision(runtime.env(), repo, merge_commit)?;
     let landed_on = format!("{}^1", landed.commit);
     let base_commit = merge_base(repo, &merged_head.commit, &landed_on)?;
-    let base = review_gate::revision(repo, &base_commit)?;
+    let base = review_gate::revision(runtime.env(), repo, &base_commit)?;
     let binding = ReconciliationBinding {
         workspace_id: runtime.workspace_id()?,
         task_id: task.id.to_string(),

@@ -94,18 +94,18 @@ pub(in crate::executor::automation::vcs) fn base_tip_check_evidence<H: RuntimeHo
         };
         // Ambiguous workflow names, pending jobs and a history with no
         // result prove neither a passing base nor an inherited failure.
-        let Some((base_commit, base_job)) = history.decisive(tip, job) else {
+        let Some((base_commit, base_job)) = history.decisive(&host.process_env(), tip, job) else {
             return Ok(None);
         };
         if base_job.conclusion.value() == Some(&CiJobConclusion::Success) {
             let fork_point = fork_point.get_or_insert_with(|| {
-                git_output(workspace, &["merge-base", head, tip])
+                git_output(&host.process_env(), workspace, &["merge-base", head, tip])
                     .ok()
                     .map(|fork_point| fork_point.trim().to_string())
             });
             let fork_job = fork_point
                 .clone()
-                .and_then(|fork_point| history.decisive(&fork_point, job));
+                .and_then(|fork_point| history.decisive(&host.process_env(), &fork_point, job));
             if fork_job.as_ref().is_some_and(|(_, fork_point_job)| {
                 fork_point_job.conclusion.value() == Some(&CiJobConclusion::Success)
             }) {
@@ -158,7 +158,9 @@ pub(in crate::executor::automation::vcs) fn base_tip_check_evidence<H: RuntimeHo
     // No known-red check, and either nothing to refresh or a candidate-owned
     // failure that must keep the ordinary repair. A green-base sibling alone
     // would be a base refresh; beside a candidate-owned check it is not.
-    if evidence.is_empty() || (!red && (candidate_owned || contains(workspace, tip, head))) {
+    if evidence.is_empty()
+        || (!red && (candidate_owned || contains(&host.process_env(), workspace, tip, head)))
+    {
         return Ok(None);
     }
     Ok(Some(
@@ -183,11 +185,13 @@ impl<H: RuntimeHost + ?Sized> BaseHistory<'_, H> {
     /// cannot be read, or no commit in the bound ran it to a result.
     fn decisive(
         &mut self,
+        process_env: &orbit_common::Env,
         start: &str,
         job: &CiCommitJobEvidence,
     ) -> Option<(String, CiCommitJobEvidence)> {
         let limit = format!("--max-count={BASE_WALK_LIMIT}");
         let commits = git_output(
+            process_env,
             self.workspace,
             &["rev-list", "--first-parent", &limit, start],
         )

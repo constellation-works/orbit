@@ -214,6 +214,7 @@ impl RunDispatch {
         let run = &self.run;
         let agent = brokered_agent_identity(run.agent_name.as_deref(), run.model_name.as_deref());
         let mut tool_context = ToolContext {
+            env: self.runtime.env().clone(),
             cwd: Some(cwd.to_string_lossy().into_owned()),
             session_context,
             allowed_tools: run.allowed_tools.clone(),

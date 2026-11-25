@@ -20,10 +20,18 @@ pub(super) struct RecoveryMetadata {
 }
 
 impl RecoveryMetadata {
-    pub(super) fn capture(root: &Path, rebase_root: &Path) -> Result<Self, DispatchError> {
+    pub(super) fn capture(
+        process_env: &orbit_common::Env,
+        root: &Path,
+        rebase_root: &Path,
+    ) -> Result<Self, DispatchError> {
         let mut directories = Vec::new();
         for flag in ["--absolute-git-dir", "--git-common-dir"] {
-            let raw = git_stdout(root, &["rev-parse", "--path-format=absolute", flag])?;
+            let raw = git_stdout(
+                process_env,
+                root,
+                &["rev-parse", "--path-format=absolute", flag],
+            )?;
             let path = PathBuf::from(raw).canonicalize().map_err(metadata_error)?;
             let handle = fs::File::open(&path).map_err(metadata_error)?;
             directories.push((path, handle));
@@ -34,11 +42,15 @@ impl RecoveryMetadata {
             directories,
             rebase_root: rebase_root.to_path_buf(),
             rebase_files: recovery_metadata_files(rebase_root)?,
-            auto_merge_tree: auto_merge_tree(root)?,
+            auto_merge_tree: auto_merge_tree(process_env, root)?,
         })
     }
 
-    pub(super) fn verify(&self, root: &Path) -> Result<(), DispatchError> {
+    pub(super) fn verify(
+        &self,
+        process_env: &orbit_common::Env,
+        root: &Path,
+    ) -> Result<(), DispatchError> {
         let invalid = || {
             DispatchError::CliInvocationPermanent(
                 "conflict recovery refused changed Git metadata identity or recovery instructions"
@@ -55,7 +67,11 @@ impl RecoveryMetadata {
             .iter()
             .zip(["--absolute-git-dir", "--git-common-dir"])
         {
-            let raw = git_stdout(root, &["rev-parse", "--path-format=absolute", flag])?;
+            let raw = git_stdout(
+                process_env,
+                root,
+                &["rev-parse", "--path-format=absolute", flag],
+            )?;
             let path = PathBuf::from(raw).canonicalize().map_err(metadata_error)?;
             if &path != expected {
                 return Err(invalid());
@@ -65,7 +81,7 @@ impl RecoveryMetadata {
             }
         }
         if recovery_metadata_files(&self.rebase_root)? != self.rebase_files
-            || auto_merge_tree(root)? != self.auto_merge_tree
+            || auto_merge_tree(process_env, root)? != self.auto_merge_tree
         {
             return Err(invalid());
         }

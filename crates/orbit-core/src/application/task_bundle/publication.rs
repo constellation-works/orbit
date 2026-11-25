@@ -153,7 +153,7 @@ impl OrbitRuntime {
         policy: &AttachmentPolicy,
     ) -> Result<PublicationPublishOutcome, OrbitError> {
         let registry = self.open_publication_task_registry()?;
-        publish_task_snapshot(&registry, request, policy)
+        publish_task_snapshot(self.env(), &registry, request, policy)
     }
 
     /// Fetch, validate, and render a publication without mutating task state.
@@ -161,7 +161,7 @@ impl OrbitRuntime {
         &self,
         request: PublicationInspectRequest,
     ) -> Result<PublicationInspection, OrbitError> {
-        inspect_publication(request)
+        inspect_publication(self.env(), request)
     }
 
     /// Restore a validated publication into the selected task registry.
@@ -170,7 +170,7 @@ impl OrbitRuntime {
         request: PublicationRestoreRequest,
     ) -> Result<PublicationRestoreOutcome, OrbitError> {
         let registry = self.open_publication_task_registry()?;
-        restore_publication(&registry, request)
+        restore_publication(self.env(), &registry, request)
     }
 }
 

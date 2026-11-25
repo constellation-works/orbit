@@ -511,12 +511,17 @@ fn explicit_repilot_tool_and_update_submit_once_with_live_dedup() {
             assert!(message.contains("`operator` capability"), "{message}");
             assert!(message.contains("orbit task repilot"), "{message}");
         }
-        let human = runtime_at(
-            &workspace.runtime.global_root(),
-            &workspace.repo.join(".orbit"),
+        // The runtime resolves the caller from the Env it is built with, so
+        // the operator grant must be in that Env.
+        let _operator = orbit_common::test_env::scoped([("ORBIT_OPERATOR", Some("1"))]);
+        let human = orbit_core::test_support::with_runtime_env(
+            runtime_at(
+                &workspace.runtime.global_root(),
+                &workspace.repo.join(".orbit"),
+            ),
+            orbit_common::Env::capture(),
         )
         .with_actor(orbit_core::ActorIdentity::human("human:operator"));
-        let _operator = orbit_common::test_env::scoped([("ORBIT_OPERATOR", Some("1"))]);
         if update {
             let mut unsupported = input.clone();
             unsupported["status"] = json!("someday");

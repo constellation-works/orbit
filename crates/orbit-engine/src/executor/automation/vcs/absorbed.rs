@@ -153,12 +153,14 @@ pub(crate) fn task_scope_digest(task: &Task) -> String {
 /// already landed. A base commit that merely touched the same paths, as the
 /// commit a rebase conflicted on always did, is no evidence.
 pub(crate) fn covering_commit(
+    process_env: &orbit_common::Env,
     root: &Path,
     original_base: &str,
     original_head: &str,
     landed_base: &str,
 ) -> Result<Option<(String, Vec<String>)>, OrbitError> {
     let candidate_paths = git_output_paths(
+        process_env,
         root,
         &[
             "--literal-pathspecs",
@@ -188,7 +190,7 @@ pub(crate) fn covering_commit(
             "--",
         ];
         args.extend(candidate_paths.iter().map(String::as_str));
-        git_command_success(root, &args)
+        git_command_success(process_env, root, &args)
     };
     if !holds_candidate(landed_base)? {
         return Ok(None);
@@ -202,7 +204,10 @@ pub(crate) fn covering_commit(
         "--",
     ];
     args.extend(candidate_paths.iter().map(String::as_str));
-    for commit in git_output_raw(root, &args)?.lines().map(str::trim) {
+    for commit in git_output_raw(process_env, root, &args)?
+        .lines()
+        .map(str::trim)
+    {
         if !commit.is_empty() && holds_candidate(commit)? {
             return Ok(Some((commit.to_string(), candidate_paths)));
         }
@@ -274,23 +279,36 @@ pub(crate) fn verify_absorbed_candidate<H: RuntimeHost + ?Sized>(
     let recorded_scope = field(absorbed, "task_scope_digest")?;
 
     // A stopped rebase detaches HEAD, so it is named before the branch.
-    if rebase_in_progress(workspace)? {
+    if rebase_in_progress(&host.process_env(), workspace)? {
         return Err(AbsorbedRefusal::new(
             Reason::RebaseInProgress,
             "rebase-merge or rebase-apply state is present",
         ));
     }
-    let checked_out = git_output(workspace, &["rev-parse", "--abbrev-ref", "HEAD"])?;
+    let checked_out = git_output(
+        &host.process_env(),
+        workspace,
+        &["rev-parse", "--abbrev-ref", "HEAD"],
+    )?;
     if checked_out != branch {
         return Err(AbsorbedRefusal::new(
             Reason::WrongBranch,
             format!("'{checked_out}' is checked out, not '{branch}'"),
         ));
     }
-    let head = git_output(workspace, &["rev-parse", "--verify", "HEAD^{commit}"])?;
+    let head = git_output(
+        &host.process_env(),
+        workspace,
+        &["rev-parse", "--verify", "HEAD^{commit}"],
+    )?;
     if head != landed
         || head_sha != landed
-        || !crate::executor::automation::vcs::git::is_ancestor(workspace, &pinned, &landed)?
+        || !crate::executor::automation::vcs::git::is_ancestor(
+            &host.process_env(),
+            workspace,
+            &pinned,
+            &landed,
+        )?
     {
         return Err(AbsorbedRefusal::new(
             Reason::NotOnPinnedBase,
@@ -298,6 +316,7 @@ pub(crate) fn verify_absorbed_candidate<H: RuntimeHost + ?Sized>(
         ));
     }
     if !git_output_raw(
+        &host.process_env(),
         workspace,
         &["status", "--porcelain", "--untracked-files=all"],
     )?
@@ -308,7 +327,13 @@ pub(crate) fn verify_absorbed_candidate<H: RuntimeHost + ?Sized>(
             "the checkout has uncommitted or untracked changes",
         ));
     }
-    match covering_commit(workspace, &original_base, &original_head, &landed)? {
+    match covering_commit(
+        &host.process_env(),
+        workspace,
+        &original_base,
+        &original_head,
+        &landed,
+    )? {
         Some((found, _)) if found == covering => {}
         _ => {
             return Err(AbsorbedRefusal::new(
@@ -321,10 +346,16 @@ pub(crate) fn verify_absorbed_candidate<H: RuntimeHost + ?Sized>(
         }
     }
     let live = git_output(
+        &host.process_env(),
         workspace,
         &["rev-parse", "--verify", &format!("{base_ref}^{{commit}}")],
     )?;
-    if !crate::executor::automation::vcs::git::is_ancestor(workspace, &covering, &live)? {
+    if !crate::executor::automation::vcs::git::is_ancestor(
+        &host.process_env(),
+        workspace,
+        &covering,
+        &live,
+    )? {
         return Err(AbsorbedRefusal::new(
             Reason::CoveringUnreachable,
             format!("{covering} is not reachable from '{base_ref}' ({live})"),

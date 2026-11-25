@@ -167,6 +167,7 @@ pub use self::unix::forward_host_routed_callback;
 /// No other platform inherits descriptors, so no call is forwarded.
 #[cfg(not(unix))]
 pub fn forward_host_routed_callback(
+    _env: &orbit_common::Env,
     _global_root: &Path,
     _tool: &str,
     _input: &Value,
@@ -662,6 +663,7 @@ mod unix {
     /// is not host-routed, this process holds no route, or it is the host
     /// answering a routed call already.
     pub fn forward_host_routed_callback(
+        env: &orbit_common::Env,
         global_root: &Path,
         tool: &str,
         input: &Value,
@@ -678,6 +680,7 @@ mod unix {
         // otherwise it runs in the backend's own sandbox like any granted
         // callback.
         let record = crate::plugin::callback::resolution::credential_from_descriptor(
+            env,
             &crate::plugin::callback::resolution::callback_dir(global_root),
         )?;
         if !super::routes_on_host(&record, tool) {

@@ -16,5 +16,5 @@ pub(super) fn run_private_vcs_operation(
     if operation == orbit_engine::PRIVATE_VCS_PR_MERGE {
         return crate::application::task::audited_private_vcs_merge(runtime, &input);
     }
-    orbit_engine::run_private_vcs_operation(operation, &input)
+    orbit_engine::run_private_vcs_operation(runtime.env(), operation, &input)
 }

@@ -169,6 +169,7 @@ impl HostOutput {
             ],
         );
         let lease = orbit_engine::review_gate::lease_scratch_host_target(
+            &orbit_common::Env::capture(),
             &leased_source,
             orbit_engine::review_gate::ScratchHostTarget::Recovery,
         )
@@ -268,9 +269,10 @@ impl HostOutput {
 
 fn attach_run(runtime: &OrbitRuntime, workspace: &Workspace, run_id: &str) -> PathBuf {
     let run = runtime.show_job_run(run_id).unwrap();
-    let source = orbit_engine::run_worktree_paths(&workspace.repo, &run)
-        .unwrap()
-        .remove(0);
+    let source =
+        orbit_engine::run_worktree_paths(&orbit_common::Env::capture(), &workspace.repo, &run)
+            .unwrap()
+            .remove(0);
     crate::git_repo::run(
         &workspace.repo,
         &[

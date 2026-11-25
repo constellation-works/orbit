@@ -105,7 +105,7 @@ impl RuntimeKernel {
             .chain(args.clone())
             .collect();
 
-        let env_pairs = command_exec_child_env();
+        let env_pairs = command_exec_child_env(self.env());
 
         let timeout_ms = params
             .timeout_ms
@@ -201,12 +201,12 @@ impl RuntimeKernel {
 }
 
 /// The environment an `orbit.command.exec` child is launched with.
-fn command_exec_child_env() -> Vec<(String, String)> {
+fn command_exec_child_env(env: &orbit_common::Env) -> Vec<(String, String)> {
     let pass = COMMAND_EXEC_PASS
         .iter()
         .map(|name| (*name).to_string())
         .collect::<Vec<_>>();
-    allowlisted_child_env(&orbit_common::Env::capture(), &pass, &[])
+    allowlisted_child_env(env, &pass, &[])
 }
 
 /// True when `error` is the OS argument/environment size refusal (E2BIG).

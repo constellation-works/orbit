@@ -59,17 +59,19 @@ pub struct PluginBuildHostEnv {
 }
 
 impl PluginBuildHostEnv {
-    pub fn from_process() -> Self {
+    pub fn from_env(env: &orbit_common::Env) -> Self {
         Self {
-            path: std::env::var_os(env_vars::PATH),
-            home: std::env::var_os(env_vars::HOME)
+            path: env.path().map(ToOwned::to_owned),
+            home: env
+                .home()
                 .filter(|home| !home.is_empty())
                 .map(PathBuf::from),
             locators: PLUGIN_BUILD_TOOLCHAIN_LOCATORS
                 .iter()
                 .filter_map(|name| {
-                    std::env::var(name)
-                        .ok()
+                    env.var(name)
+                        .and_then(OsStr::to_str)
+                        .map(ToOwned::to_owned)
                         .filter(|value| !value.is_empty())
                         .map(|value| ((*name).to_string(), value))
                 })

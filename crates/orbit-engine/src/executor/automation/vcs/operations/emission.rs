@@ -18,9 +18,15 @@ use super::{
     input::{number, required_string, same, text},
 };
 
-fn git(deadline: Deadline, workspace: &Path, args: &[&str]) -> Result<String, OrbitError> {
+fn git(
+    process_env: &orbit_common::Env,
+    deadline: Deadline,
+    workspace: &Path,
+    args: &[&str],
+) -> Result<String, OrbitError> {
     Ok(deadline
         .execute(
+            process_env,
             "git",
             args.iter().map(|s| (*s).into()).collect(),
             workspace,
@@ -137,12 +143,14 @@ fn emitted(source: &str, branch: &str) -> Result<Vec<String>, OrbitError> {
 }
 
 fn sources(
+    process_env: &orbit_common::Env,
     deadline: Deadline,
     workspace: &Path,
     commit: &str,
     branch: &str,
 ) -> Result<BTreeMap<String, Value>, OrbitError> {
     let listing = git(
+        process_env,
         deadline,
         workspace,
         &["ls-tree", "-r", commit, "--", ".github/workflows"],
@@ -162,7 +170,8 @@ fn sources(
         if fields.len() != 3 || !matches!(fields[0], "100644" | "100755") || fields[1] != "blob" {
             return Err(unreadable("workflow source mode"));
         }
-        let contents = super::read_cache::contents_at_commit(deadline, workspace, path, commit)?;
+        let contents =
+            super::read_cache::contents_at_commit(process_env, deadline, workspace, path, commit)?;
         same(
             &contents["type"],
             &json!("file"),
@@ -183,6 +192,7 @@ fn sources(
         )?;
         let source = deadline
             .execute(
+                process_env,
                 "git",
                 vec!["show".into(), format!("{commit}:{path}")],
                 workspace,
@@ -205,7 +215,10 @@ fn sources(
 
 /// Derive evidence exclusively from authenticated provider reads and freshly
 /// fetched Git. The operation is private to deterministic owner automation.
-pub(super) fn evidence(input: &Value) -> Result<Value, OrbitError> {
+pub(super) fn evidence(
+    process_env: &orbit_common::Env,
+    input: &Value,
+) -> Result<Value, OrbitError> {
     let workspace = Path::new(required_string(input, "workspace_path")?);
     let pr = required_string(input, "pr")?;
     let head = required_string(input, "head_sha")?;
@@ -213,6 +226,7 @@ pub(super) fn evidence(input: &Value) -> Result<Value, OrbitError> {
     let base = required_string(input, "base_branch")?;
     let deadline = Deadline::from_input(input)?;
     let current = snapshot(
+        process_env,
         deadline,
         workspace,
         PullRequestSelector {
@@ -266,11 +280,17 @@ pub(super) fn evidence(input: &Value) -> Result<Value, OrbitError> {
             return Ok(json!({"evidence":null}));
         }
     }
-    let origin = git(deadline, workspace, &["remote", "get-url", "origin"])?;
+    let origin = git(
+        process_env,
+        deadline,
+        workspace,
+        &["remote", "get-url", "origin"],
+    )?;
     if super::super::claim::slug(&origin).as_deref() != Some(current.repository.as_str()) {
         return Err(unreadable("workflow repository differs from Git origin"));
     }
     let lease = git(
+        process_env,
         deadline,
         workspace,
         &[
@@ -283,8 +303,9 @@ pub(super) fn evidence(input: &Value) -> Result<Value, OrbitError> {
     if lease.split_whitespace().next() != Some(head) {
         return Err(unreadable("emission remote head lease"));
     }
-    super::super::git::fetch_remote_base(workspace, base)?;
+    super::super::git::fetch_remote_base(process_env, workspace, base)?;
     let base_sha = git(
+        process_env,
         deadline,
         workspace,
         &["rev-parse", &format!("origin/{base}^{{commit}}")],
@@ -296,13 +317,26 @@ pub(super) fn evidence(input: &Value) -> Result<Value, OrbitError> {
         unreadable,
     )?;
     let old_base = required_string(input, "accepted_base")?;
-    if !crate::executor::automation::vcs::git::is_ancestor(workspace, old_base, &base_sha)?
-        || !crate::executor::automation::vcs::git::is_ancestor(workspace, old_base, head)?
-        || crate::executor::automation::vcs::git::is_ancestor(workspace, &base_sha, head)?
-    {
+    if !crate::executor::automation::vcs::git::is_ancestor(
+        process_env,
+        workspace,
+        old_base,
+        &base_sha,
+    )? || !crate::executor::automation::vcs::git::is_ancestor(
+        process_env,
+        workspace,
+        old_base,
+        head,
+    )? || crate::executor::automation::vcs::git::is_ancestor(
+        process_env,
+        workspace,
+        &base_sha,
+        head,
+    )? {
         return Err(unreadable("base is not a fresh descendant advance"));
     }
     let merged = git(
+        process_env,
         deadline,
         workspace,
         &["merge-tree", "--write-tree", head, &base_sha],
@@ -318,9 +352,10 @@ pub(super) fn evidence(input: &Value) -> Result<Value, OrbitError> {
             return Err(unreadable("legacy status is not absent workflow emission"));
         }
     }
-    let old = sources(deadline, workspace, head, base)?;
-    let new = sources(deadline, workspace, &base_sha, base)?;
+    let old = sources(process_env, deadline, workspace, head, base)?;
+    let new = sources(process_env, deadline, workspace, &base_sha, base)?;
     let workflows = api(
+        process_env,
         deadline,
         workspace,
         "repos/{owner}/{repo}/actions/workflows?per_page=100",
@@ -339,7 +374,7 @@ pub(super) fn evidence(input: &Value) -> Result<Value, OrbitError> {
     if paths.len() != new.len() {
         return Err(unreadable("incomplete current-base workflows"));
     }
-    let app = api(deadline, workspace, "apps/github-actions")?;
+    let app = api(process_env, deadline, workspace, "apps/github-actions")?;
     same(
         &app["slug"],
         &json!("github-actions"),
@@ -349,7 +384,8 @@ pub(super) fn evidence(input: &Value) -> Result<Value, OrbitError> {
     let app_id = number(&app, "id", unreadable)?;
     let mut bound_runs = Vec::new();
     for listed in runs {
-        let run = super::prerequisite::checked_run(deadline, workspace, &current, listed)?;
+        let run =
+            super::prerequisite::checked_run(process_env, deadline, workspace, &current, listed)?;
         if run["status"] != "completed" || run["conclusion"] != "success" {
             return Err(unreadable("prior PR run changed since observation"));
         }
@@ -360,7 +396,8 @@ pub(super) fn evidence(input: &Value) -> Result<Value, OrbitError> {
             "prior PR event base",
             unreadable,
         )?;
-        let (path, blob, source) = super::prerequisite::workflow(deadline, workspace, &run)?;
+        let (path, blob, source) =
+            super::prerequisite::workflow(process_env, deadline, workspace, &run)?;
         same(
             &old.get(&path)
                 .ok_or_else(|| unreadable("foreign prior workflow"))?["blob"],
@@ -370,6 +407,7 @@ pub(super) fn evidence(input: &Value) -> Result<Value, OrbitError> {
         )?;
         emitted(&source, base)?;
         let suite = api(
+            process_env,
             deadline,
             workspace,
             &format!(
@@ -415,7 +453,7 @@ pub(super) fn evidence(input: &Value) -> Result<Value, OrbitError> {
         }
         bound_runs.push(json!({"run":run,"suite":suite}));
     }
-    let revisions = policy_revisions(deadline, workspace, &current.policy)?;
+    let revisions = policy_revisions(process_env, deadline, workspace, &current.policy)?;
     for gate in &missing {
         if gate.app_id.is_some_and(|id| id != app_id) {
             return Err(unreadable("foreign required integration"));
@@ -439,6 +477,7 @@ pub(super) fn evidence(input: &Value) -> Result<Value, OrbitError> {
     // The predicted provider merge must execute exactly the proven base
     // sources. Candidate workflow edits cannot borrow base emission evidence.
     let merged_paths = git(
+        process_env,
         deadline,
         workspace,
         &[
@@ -459,6 +498,7 @@ pub(super) fn evidence(input: &Value) -> Result<Value, OrbitError> {
     }
     for (path, source) in &new {
         if git(
+            process_env,
             deadline,
             workspace,
             &["rev-parse", &format!("{tree}:{path}")],
@@ -475,11 +515,12 @@ pub(super) fn evidence(input: &Value) -> Result<Value, OrbitError> {
 
 /// All exact current-policy contexts must actually succeed on the new head.
 /// This is observation, never permission to repeat a provider mutation.
-pub(super) fn observe(input: &Value) -> Result<Value, OrbitError> {
+pub(super) fn observe(process_env: &orbit_common::Env, input: &Value) -> Result<Value, OrbitError> {
     let proof = &input["evidence"];
     let workspace = Path::new(required_string(input, "workspace_path")?);
     let deadline = Deadline::from_input(input)?;
     let current = snapshot(
+        process_env,
         deadline,
         workspace,
         PullRequestSelector {
@@ -504,6 +545,7 @@ pub(super) fn observe(input: &Value) -> Result<Value, OrbitError> {
         unreadable,
     )?;
     let workflows = api(
+        process_env,
         deadline,
         workspace,
         "repos/{owner}/{repo}/actions/workflows?per_page=100",
@@ -516,12 +558,12 @@ pub(super) fn observe(input: &Value) -> Result<Value, OrbitError> {
         unreadable,
     )?;
     same(
-        &api(deadline, workspace, "apps/github-actions")?,
+        &api(process_env, deadline, workspace, "apps/github-actions")?,
         &proof["app"],
         "current workflow integration",
         unreadable,
     )?;
-    let revisions = policy_revisions(deadline, workspace, &current.policy)?;
+    let revisions = policy_revisions(process_env, deadline, workspace, &current.policy)?;
     same(
         &revisions,
         &proof["policy_revisions"],
@@ -577,6 +619,7 @@ pub(super) fn observe(input: &Value) -> Result<Value, OrbitError> {
 
 /// Identity and revision of each active policy source, not just its names.
 fn policy_revisions(
+    process_env: &orbit_common::Env,
     deadline: Deadline,
     workspace: &Path,
     policy: &Value,
@@ -596,6 +639,7 @@ fn policy_revisions(
                 continue;
             }
             let revision = api(
+                process_env,
                 deadline,
                 workspace,
                 &format!("repos/{{owner}}/{{repo}}/rulesets/{id}"),
@@ -616,10 +660,14 @@ fn policy_revisions(
 
 /// A verified base-only head still owes today's exact effective policy gates.
 /// This read also covers externally requested updates without our reservation.
-pub(super) fn current_gates(input: &Value) -> Result<Value, OrbitError> {
+pub(super) fn current_gates(
+    process_env: &orbit_common::Env,
+    input: &Value,
+) -> Result<Value, OrbitError> {
     let workspace = Path::new(required_string(input, "workspace_path")?);
     let deadline = Deadline::from_input(input)?;
     let current = snapshot(
+        process_env,
         deadline,
         workspace,
         PullRequestSelector {
@@ -631,7 +679,7 @@ pub(super) fn current_gates(input: &Value) -> Result<Value, OrbitError> {
         poll_interval_ms(input),
         &super::read_reset::SnapshotWaits::default(),
     )?;
-    let revisions = policy_revisions(deadline, workspace, &current.policy)?;
+    let revisions = policy_revisions(process_env, deadline, workspace, &current.policy)?;
     let checks = complete_list(&current.checks, "check_runs")?;
     let statuses = complete_list(&current.statuses, "statuses")?;
     let passed = current
@@ -645,8 +693,12 @@ pub(super) fn current_gates(input: &Value) -> Result<Value, OrbitError> {
         .iter()
         .filter(|gate| !gate_present(gate, checks, statuses))
         .collect();
-    let failed_workflow_runs =
-        super::failed_workflow::failed_workflow_evidence(deadline, workspace, &current)?;
+    let failed_workflow_runs = super::failed_workflow::failed_workflow_evidence(
+        process_env,
+        deadline,
+        workspace,
+        &current,
+    )?;
     // [ORB-24457] Whether this head has a workflow run, and whether any of
     // those runs is still waiting for or on a runner. The engine treats any
     // present run as checks still pending; only `present: false` is the

@@ -594,7 +594,7 @@ fn prerequisite_expiry_stops_next_read_and_preserves_single_shot() {
                         },
                     );
                     if case == "observation" {
-                        let response = orbit_engine::run_private_vcs_operation("ci.prerequisite_evidence",&json!({"workspace_path":fx.repo,"pr":PR_NUMBER,"head_sha":fx.candidate,"head_branch":BRANCH,"base_branch":BASE,"deadline_ms":std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as u64+60000})).unwrap();
+                        let response = orbit_engine::run_private_vcs_operation(&orbit_common::Env::capture(), "ci.prerequisite_evidence",&json!({"workspace_path":fx.repo,"pr":PR_NUMBER,"head_sha":fx.candidate,"head_branch":BRANCH,"base_branch":BASE,"deadline_ms":std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as u64+60000})).unwrap();
                         let evidence =
                             serde_json::from_value(response["evidence"].clone()).unwrap();
                         auto_fix::seed_auto_fix_history(
@@ -831,7 +831,11 @@ fn infrastructure_deadline_refusal_keeps_type_and_unreadable_forge_holds() {
                             },
                         )));
                     }
-                    orbit_engine::run_private_vcs_operation(operation, &input)
+                    orbit_engine::run_private_vcs_operation(
+                        &orbit_common::Env::capture(),
+                        operation,
+                        &input,
+                    )
                 }
                 _ => panic!("unexpected private VCS operation: {operation}"),
             }
@@ -1121,6 +1125,7 @@ fn slow_quota_probe_exhausting_budget_prevents_spawn_and_preserves_deadline() {
                             || {
                                 github_quota::with_scoped_guard(store_log, policy, || {
                                     orbit_engine::run_private_vcs_operation(
+                                        &orbit_common::Env::capture(),
                                         "ci.job_log",
                                         &json!({
                                             "workspace_path": fx.repo,

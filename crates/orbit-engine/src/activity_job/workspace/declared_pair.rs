@@ -17,6 +17,7 @@ use super::{DeclaredWorktreePair, DispatchError, canonicalize_dir};
 /// registered repository. Every failure is the same typed, non-retryable
 /// boundary error used for a post-spawn escape.
 pub(crate) fn validate_declared_worktree_pair(
+    process_env: &orbit_common::Env,
     input: &Value,
     task_ctx: Option<&Value>,
     run_id: &str,
@@ -78,9 +79,9 @@ pub(crate) fn validate_declared_worktree_pair(
         .map_err(|reason| mismatch(reason, None, registered_primary_root))?;
     let repo_root = exact_canonical_dir(Path::new(repo_root), "repo_root")
         .map_err(|reason| mismatch(reason, Some(&workspace_path), registered_primary_root))?;
-    let assigned_root = required_git_top_level(&workspace_path, "workspace_path")
+    let assigned_root = required_git_top_level(process_env, &workspace_path, "workspace_path")
         .map_err(|reason| mismatch(reason, Some(&workspace_path), registered_primary_root))?;
-    let repo_git_root = required_git_top_level(&repo_root, "repo_root")
+    let repo_git_root = required_git_top_level(process_env, &repo_root, "repo_root")
         .map_err(|reason| mismatch(reason, Some(&assigned_root), registered_primary_root))?;
 
     if workspace_path != assigned_root {
@@ -122,8 +123,9 @@ pub(crate) fn validate_declared_worktree_pair(
     })?;
     let primary_path = exact_canonical_dir(primary_path, "registered primary root")
         .map_err(|reason| mismatch(reason, Some(&assigned_root), Some(primary_path)))?;
-    let primary_root = required_git_top_level(&primary_path, "registered primary root")
-        .map_err(|reason| mismatch(reason, Some(&assigned_root), Some(&primary_path)))?;
+    let primary_root =
+        required_git_top_level(process_env, &primary_path, "registered primary root")
+            .map_err(|reason| mismatch(reason, Some(&assigned_root), Some(&primary_path)))?;
     if primary_path != primary_root {
         return Err(mismatch(
             format!(
@@ -143,10 +145,12 @@ pub(crate) fn validate_declared_worktree_pair(
         ));
     }
 
-    let assigned_common_dir = required_git_common_dir(&assigned_root, "assigned checkout")
-        .map_err(|reason| mismatch(reason, Some(&assigned_root), Some(&primary_root)))?;
-    let primary_common_dir = required_git_common_dir(&primary_root, "registered primary checkout")
-        .map_err(|reason| mismatch(reason, Some(&assigned_root), Some(&primary_root)))?;
+    let assigned_common_dir =
+        required_git_common_dir(process_env, &assigned_root, "assigned checkout")
+            .map_err(|reason| mismatch(reason, Some(&assigned_root), Some(&primary_root)))?;
+    let primary_common_dir =
+        required_git_common_dir(process_env, &primary_root, "registered primary checkout")
+            .map_err(|reason| mismatch(reason, Some(&assigned_root), Some(&primary_root)))?;
     if assigned_common_dir != primary_common_dir {
         return Err(mismatch(
             format!(
@@ -183,14 +187,22 @@ pub(super) fn exact_canonical_dir(path: &Path, label: &str) -> Result<PathBuf, S
         .map_err(|error| format!("cannot canonicalize {label} '{}': {error}", path.display()))
 }
 
-fn required_git_top_level(path: &Path, label: &str) -> Result<PathBuf, String> {
-    git_top_level(path)
+fn required_git_top_level(
+    process_env: &orbit_common::Env,
+    path: &Path,
+    label: &str,
+) -> Result<PathBuf, String> {
+    git_top_level(process_env, path)
         .map_err(|error| format!("cannot resolve Git top level for {label}: {error}"))?
         .ok_or_else(|| format!("{label} '{}' is not a Git checkout", path.display()))
 }
 
-fn required_git_common_dir(path: &Path, label: &str) -> Result<PathBuf, String> {
-    canonical_git_common_dir(path)
+fn required_git_common_dir(
+    process_env: &orbit_common::Env,
+    path: &Path,
+    label: &str,
+) -> Result<PathBuf, String> {
+    canonical_git_common_dir(process_env, path)
         .map_err(|error| format!("cannot resolve Git common dir for {label}: {error}"))
 }
 
@@ -251,8 +263,11 @@ pub(super) fn task_id(input: &Value, task_ctx: Option<&Value>) -> String {
         .to_string()
 }
 
-pub(super) fn git_top_level(path: &Path) -> Result<Option<PathBuf>, DispatchError> {
-    let output = git_output_raw(path, &["rev-parse", "--show-toplevel"])?;
+pub(super) fn git_top_level(
+    process_env: &orbit_common::Env,
+    path: &Path,
+) -> Result<Option<PathBuf>, DispatchError> {
+    let output = git_output_raw(process_env, path, &["rev-parse", "--show-toplevel"])?;
     if !output.success {
         return Ok(None);
     }
@@ -265,8 +280,11 @@ pub(super) fn git_top_level(path: &Path) -> Result<Option<PathBuf>, DispatchErro
 
 /// The canonical Git common dir of `path`. A timeout stays
 /// [`DispatchError::GitTimeout`]; any other failure is permanent.
-pub(super) fn canonical_git_common_dir(path: &Path) -> Result<PathBuf, DispatchError> {
-    match git_common_dir(&orbit_common::Env::capture(), path) {
+pub(super) fn canonical_git_common_dir(
+    process_env: &orbit_common::Env,
+    path: &Path,
+) -> Result<PathBuf, DispatchError> {
+    match git_common_dir(process_env, path) {
         Ok(common) => Ok(canonicalize_dir(&common)),
         Err(OrbitError::ProcessTimeout { timeout_ms, detail }) => Err(DispatchError::GitTimeout {
             operation: "rev-parse --path-format=absolute --git-common-dir".to_string(),

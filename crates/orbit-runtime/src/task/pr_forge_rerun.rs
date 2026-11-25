@@ -29,6 +29,7 @@ fn workflow_rerun_now() -> Instant {
 }
 
 pub(super) fn rerun_failed_head_workflows(
+    env: &orbit_common::Env,
     repo_root: &Path,
     number: u64,
     head_sha: &str,
@@ -45,7 +46,7 @@ pub(super) fn rerun_failed_head_workflows(
         let mut request = orbit_tools::github_cli::commit_workflow_runs_request(head_sha);
         let remaining_ms = remaining.as_millis().max(1) as u64;
         request.timeout_ms = Some(request.timeout_ms.unwrap_or(remaining_ms).min(remaining_ms));
-        let stdout = match gh::task_forge_gh_request(request, repo_root, "gh run list") {
+        let stdout = match gh::task_forge_gh_request(env, request, repo_root, "gh run list") {
             Ok(stdout) => stdout,
             Err(_)
                 if !in_progress.is_empty()
@@ -110,6 +111,7 @@ pub(super) fn rerun_failed_head_workflows(
     let mut rerun = Vec::new();
     for (run_id, name) in failed {
         if let Err(error) = gh::task_forge_gh_request(
+            env,
             orbit_tools::github_cli::rerun_failed_jobs_request(run_id),
             repo_root,
             "gh run rerun",

@@ -81,12 +81,13 @@ static PRIMARY_BEFORE_IN_FLIGHT: LazyLock<
 /// starts after another finished always reads Git again. If the index cannot be
 /// identified, fall back to an unshared fingerprint.
 pub(crate) fn cached_primary_before_fingerprint(
+    process_env: &orbit_common::Env,
     run_id: &str,
     root: &Path,
 ) -> Result<GitWorktreeFingerprint, DispatchError> {
-    let head = git_stdout(root, &["rev-parse", "--verify", "HEAD"])?;
+    let head = git_stdout(process_env, root, &["rev-parse", "--verify", "HEAD"])?;
     let Some(index_mtime) = git_index_mtime(root) else {
-        return git_fingerprint_with_head(root, head);
+        return git_fingerprint_with_head(process_env, root, head);
     };
     let key = PrimaryBeforeKey {
         run_id: run_id.to_string(),
@@ -101,7 +102,7 @@ pub(crate) fn cached_primary_before_fingerprint(
         Arc::clone(in_flight.entry(key.clone()).or_default())
     };
     let outcome = cell
-        .get_or_init(|| git_fingerprint_with_head(root, head))
+        .get_or_init(|| git_fingerprint_with_head(process_env, root, head))
         .clone();
     let mut in_flight = PRIMARY_BEFORE_IN_FLIGHT
         .lock()
@@ -132,16 +133,24 @@ fn git_index_mtime(root: &Path) -> Option<SystemTime> {
     fs::metadata(git_dir.join("index")).ok()?.modified().ok()
 }
 
-pub(crate) fn git_fingerprint(root: &Path) -> Result<GitWorktreeFingerprint, DispatchError> {
-    let head = git_stdout(root, &["rev-parse", "--verify", "HEAD"])?;
-    git_fingerprint_with_head(root, head)
+pub(crate) fn git_fingerprint(
+    process_env: &orbit_common::Env,
+    root: &Path,
+) -> Result<GitWorktreeFingerprint, DispatchError> {
+    let head = git_stdout(process_env, root, &["rev-parse", "--verify", "HEAD"])?;
+    git_fingerprint_with_head(process_env, root, head)
 }
 
 fn git_fingerprint_with_head(
+    process_env: &orbit_common::Env,
     root: &Path,
     head: String,
 ) -> Result<GitWorktreeFingerprint, DispatchError> {
-    let branch_output = git_output_raw(root, &["symbolic-ref", "--quiet", "--short", "HEAD"])?;
+    let branch_output = git_output_raw(
+        process_env,
+        root,
+        &["symbolic-ref", "--quiet", "--short", "HEAD"],
+    )?;
     let branch = branch_output
         .success
         .then(|| {
@@ -152,6 +161,7 @@ fn git_fingerprint_with_head(
         .filter(|branch| !branch.is_empty());
 
     let status = git_stdout_bytes(
+        process_env,
         root,
         &[
             "status",
@@ -165,7 +175,7 @@ fn git_fingerprint_with_head(
     let (mut tracked_dirty_paths, untracked_paths) = parse_porcelain_v2(&status)?;
     tracked_dirty_paths.sort();
     tracked_dirty_paths.dedup();
-    let untracked_content = untracked_content_identities(root, &untracked_paths)?;
+    let untracked_content = untracked_content_identities(process_env, root, &untracked_paths)?;
 
     let mut dirty_paths = tracked_dirty_paths.clone();
     dirty_paths.extend(untracked_content.keys().cloned());
@@ -177,12 +187,18 @@ fn git_fingerprint_with_head(
     let index = if tracked_dirty_paths.is_empty() {
         Vec::new()
     } else {
-        git_stdout_bytes_for_paths(root, &["ls-files", "--stage", "-z"], &tracked_dirty_paths)?
+        git_stdout_bytes_for_paths(
+            process_env,
+            root,
+            &["ls-files", "--stage", "-z"],
+            &tracked_dirty_paths,
+        )?
     };
     let index_entries = index_entries_by_path(&index);
     let has_tracked_dirty = !tracked_dirty_paths.is_empty();
-    let git_diff_bytes =
-        |root: &Path, extra: &[&str]| git_diff_bytes_for_paths(root, extra, &tracked_dirty_paths);
+    let git_diff_bytes = |root: &Path, extra: &[&str]| {
+        git_diff_bytes_for_paths(process_env, root, extra, &tracked_dirty_paths)
+    };
     let staged_patches = if has_tracked_dirty {
         split_combined_diff(&git_diff_bytes(root, &["--cached", "HEAD"])?)
     } else {
@@ -228,16 +244,21 @@ fn git_fingerprint_with_head(
     })
 }
 
-fn untracked_file_identity(root: &Path, path: &str) -> Result<Option<String>, DispatchError> {
+fn untracked_file_identity(
+    process_env: &orbit_common::Env,
+    root: &Path,
+    path: &str,
+) -> Result<Option<String>, DispatchError> {
     match untracked_path_kind(root, path)? {
         UntrackedPathKind::Missing => Ok(None),
-        UntrackedPathKind::Symlink => untracked_symlink_identity(root, path),
-        UntrackedPathKind::Directory => untracked_directory_identity(root, path),
-        UntrackedPathKind::File => untracked_regular_file_identity(root, path),
+        UntrackedPathKind::Symlink => untracked_symlink_identity(process_env, root, path),
+        UntrackedPathKind::Directory => untracked_directory_identity(process_env, root, path),
+        UntrackedPathKind::File => untracked_regular_file_identity(process_env, root, path),
     }
 }
 
 pub(crate) fn changed_paths(
+    process_env: &orbit_common::Env,
     root: &Path,
     before: &GitWorktreeFingerprint,
     after: &GitWorktreeFingerprint,
@@ -257,6 +278,7 @@ pub(crate) fn changed_paths(
 
     if before.head != after.head
         && let Ok(bytes) = git_stdout_bytes(
+            process_env,
             root,
             &[
                 "diff",
@@ -289,6 +311,7 @@ pub(crate) fn changed_paths(
 }
 
 fn git_diff_bytes_for_paths(
+    process_env: &orbit_common::Env,
     root: &Path,
     extra: &[&str],
     paths: &[String],
@@ -299,10 +322,11 @@ fn git_diff_bytes_for_paths(
     args.extend(extra.iter().copied());
     args.push("--");
     args.extend(paths.iter().map(String::as_str));
-    git_stdout_bytes(root, &args)
+    git_stdout_bytes(process_env, root, &args)
 }
 
 fn git_stdout_bytes_for_paths(
+    process_env: &orbit_common::Env,
     root: &Path,
     prefix: &[&str],
     paths: &[String],
@@ -311,7 +335,7 @@ fn git_stdout_bytes_for_paths(
     args.extend(prefix.iter().copied());
     args.push("--");
     args.extend(paths.iter().map(String::as_str));
-    git_stdout_bytes(root, &args)
+    git_stdout_bytes(process_env, root, &args)
 }
 
 fn tracked_patch_identity(
@@ -619,16 +643,20 @@ fn untracked_inspect_error(root: &Path, path: &str, error: &std::io::Error) -> D
 /// No resolved HEAD — an unborn repository, dubious ownership, or a directory
 /// that is not a repository — is [`OPAQUE_DIRECTORY_IDENTITY`]. A path that
 /// disappears between status and this read is omitted, matching files.
-fn untracked_directory_identity(root: &Path, path: &str) -> Result<Option<String>, DispatchError> {
+fn untracked_directory_identity(
+    process_env: &orbit_common::Env,
+    root: &Path,
+    path: &str,
+) -> Result<Option<String>, DispatchError> {
     let directory = root.join(path);
     match fs::symlink_metadata(&directory) {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(error) => return Err(untracked_inspect_error(root, path, &error)),
         Ok(metadata) if metadata.file_type().is_symlink() => {
-            return untracked_symlink_identity(root, path);
+            return untracked_symlink_identity(process_env, root, path);
         }
         Ok(metadata) if !metadata.file_type().is_dir() => {
-            return untracked_regular_file_identity(root, path);
+            return untracked_regular_file_identity(process_env, root, path);
         }
         Ok(_) => {}
     }
@@ -640,13 +668,21 @@ fn untracked_directory_identity(root: &Path, path: &str) -> Result<Option<String
     } else {
         path.to_string()
     };
-    let toplevel = git_output_raw(root, &["-C", &cd, "rev-parse", "--show-toplevel"])?;
+    let toplevel = git_output_raw(
+        process_env,
+        root,
+        &["-C", &cd, "rev-parse", "--show-toplevel"],
+    )?;
     let nested_root =
         toplevel.success && directory_is_reported_toplevel(&directory, &toplevel.stdout);
     if !nested_root {
         return missing_or_opaque(root, path, &directory);
     }
-    let head = git_output_raw(root, &["-C", &cd, "rev-parse", "--verify", "HEAD"])?;
+    let head = git_output_raw(
+        process_env,
+        root,
+        &["-C", &cd, "rev-parse", "--verify", "HEAD"],
+    )?;
     if head.success
         && let Some(oid) = git_oid(&head.stdout)
     {
@@ -689,11 +725,12 @@ fn missing_or_opaque(
 }
 
 fn untracked_regular_file_identity(
+    process_env: &orbit_common::Env,
     root: &Path,
     path: &str,
 ) -> Result<Option<String>, DispatchError> {
     let args = ["hash-object", "--no-filters", "--", path];
-    let output = git_output_raw(root, &args)?;
+    let output = git_output_raw(process_env, root, &args)?;
     if output.success {
         return Ok(Some(git_blob_label(&output.stdout)));
     }
@@ -704,7 +741,11 @@ fn untracked_regular_file_identity(
     }
 }
 
-fn untracked_symlink_identity(root: &Path, path: &str) -> Result<Option<String>, DispatchError> {
+fn untracked_symlink_identity(
+    process_env: &orbit_common::Env,
+    root: &Path,
+    path: &str,
+) -> Result<Option<String>, DispatchError> {
     let target = match fs::read_link(root.join(path)) {
         Ok(target) => target,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
@@ -716,12 +757,16 @@ fn untracked_symlink_identity(root: &Path, path: &str) -> Result<Option<String>,
             )));
         }
     };
-    git_blob_identity(root, &os_path_bytes(&target)).map(Some)
+    git_blob_identity(process_env, root, &os_path_bytes(&target)).map(Some)
 }
 
-fn git_blob_identity(root: &Path, bytes: &[u8]) -> Result<String, DispatchError> {
+fn git_blob_identity(
+    process_env: &orbit_common::Env,
+    root: &Path,
+    bytes: &[u8],
+) -> Result<String, DispatchError> {
     let args = ["hash-object", "--stdin"];
-    let output = git_output_with_stdin(root, &args, bytes)?;
+    let output = git_output_with_stdin(process_env, root, &args, bytes)?;
     if output.success {
         return Ok(git_blob_label(&output.stdout));
     }
@@ -745,13 +790,14 @@ fn os_path_bytes(path: &Path) -> Vec<u8> {
 }
 
 fn untracked_content_identities(
+    process_env: &orbit_common::Env,
     root: &Path,
     paths: &[String],
 ) -> Result<BTreeMap<String, String>, DispatchError> {
     let mut identities = BTreeMap::new();
     let mut batch_paths = Vec::new();
     let mut record_per_path = |path: &String| -> Result<(), DispatchError> {
-        if let Some(identity) = untracked_file_identity(root, path)? {
+        if let Some(identity) = untracked_file_identity(process_env, root, path)? {
             identities.insert(path.clone(), identity);
         }
         Ok(())
@@ -778,7 +824,7 @@ fn untracked_content_identities(
         let args = ["hash-object", "--no-filters", "--stdin-paths"];
         let stdin = remaining.join("\n");
         let stdin = format!("{stdin}\n");
-        let output = git_output_with_stdin(root, &args, stdin.as_bytes())?;
+        let output = git_output_with_stdin(process_env, root, &args, stdin.as_bytes())?;
         if output.success {
             let hashes = String::from_utf8_lossy(&output.stdout)
                 .lines()
@@ -840,29 +886,43 @@ fn optional_sha256_identity(domain: &str, bytes: &[u8]) -> Option<String> {
     (!bytes.is_empty()).then(|| sha256_identity(domain, bytes))
 }
 
-pub(crate) fn git_stdout(root: &Path, args: &[&str]) -> Result<String, DispatchError> {
-    let bytes = git_stdout_bytes(root, args)?;
+pub(crate) fn git_stdout(
+    process_env: &orbit_common::Env,
+    root: &Path,
+    args: &[&str],
+) -> Result<String, DispatchError> {
+    let bytes = git_stdout_bytes(process_env, root, args)?;
     Ok(String::from_utf8_lossy(&bytes).trim().to_string())
 }
 
-pub(crate) fn git_stdout_bytes(root: &Path, args: &[&str]) -> Result<Vec<u8>, DispatchError> {
-    let output = git_output_raw(root, args)?;
+pub(crate) fn git_stdout_bytes(
+    process_env: &orbit_common::Env,
+    root: &Path,
+    args: &[&str],
+) -> Result<Vec<u8>, DispatchError> {
+    let output = git_output_raw(process_env, root, args)?;
     if output.success {
         return Ok(output.stdout);
     }
     Err(git_command_error(root, args, &output))
 }
 
-pub(crate) fn git_output_raw(root: &Path, args: &[&str]) -> Result<GitBytesOutcome, DispatchError> {
-    git_output_with_optional_stdin(root, args, None)
+pub(crate) fn git_output_raw(
+    process_env: &orbit_common::Env,
+    root: &Path,
+    args: &[&str],
+) -> Result<GitBytesOutcome, DispatchError> {
+    git_output_with_optional_stdin(process_env, root, args, None)
 }
 
 pub(crate) fn git_is_ancestor(
+    process_env: &orbit_common::Env,
     root: &Path,
     ancestor: &str,
     descendant: &str,
 ) -> Result<bool, DispatchError> {
     Ok(git_output_raw(
+        process_env,
         root,
         &[
             "merge-base",
@@ -876,14 +936,16 @@ pub(crate) fn git_is_ancestor(
 }
 
 fn git_output_with_stdin(
+    process_env: &orbit_common::Env,
     root: &Path,
     args: &[&str],
     stdin_bytes: &[u8],
 ) -> Result<GitBytesOutcome, DispatchError> {
-    git_output_with_optional_stdin(root, args, Some(stdin_bytes))
+    git_output_with_optional_stdin(process_env, root, args, Some(stdin_bytes))
 }
 
 fn git_output_with_optional_stdin(
+    process_env: &orbit_common::Env,
     root: &Path,
     args: &[&str],
     stdin: Option<&[u8]>,
@@ -893,7 +955,7 @@ fn git_output_with_optional_stdin(
     if !root.is_dir() {
         return Err(missing_worktree_error(root));
     }
-    let output = git_run_bytes(root, args, stdin).map_err(|error| {
+    let output = git_run_bytes(process_env, root, args, stdin).map_err(|error| {
         DispatchError::CliInvocationPermanent(format!(
             "snapshot Git state in '{}': {error}",
             root.display()

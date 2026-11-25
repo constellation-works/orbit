@@ -466,7 +466,10 @@ impl Fixture {
         Self {
             _root: root,
             repo,
-            runtime,
+            runtime: orbit_core::test_support::with_runtime_env(
+                runtime,
+                orbit_common::Env::capture(),
+            ),
             task,
             source,
             state,

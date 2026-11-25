@@ -117,7 +117,12 @@ pub(super) fn recovery_checkpoint_lookup<H: RuntimeHost + ?Sized>(
             )?;
         }
         let target = required_input_string(checkpoint, "base_sha")?;
-        if !crate::executor::automation::vcs::git::is_ancestor(workspace, target, head_sha)? {
+        if !crate::executor::automation::vcs::git::is_ancestor(
+            &host.process_env(),
+            workspace,
+            target,
+            head_sha,
+        )? {
             return Err(OrbitError::Execution(
                 "recovered candidate does not descend from its pinned base".to_string(),
             ));

@@ -115,6 +115,11 @@ impl RuntimeKernel {
         self.base().policy()
     }
 
+    /// The immutable environment supplied by composition.
+    pub fn env(&self) -> &orbit_common::Env {
+        self.base().execution_env_policy().process_env()
+    }
+
     pub fn tool_registry(&self) -> &orbit_tools::ToolRegistry {
         self.host().registry()
     }
@@ -186,6 +191,7 @@ impl RuntimeKernel {
     /// lookup as dispatch (`PATH`, conventional home bins, system prefixes).
     pub fn locate_provider_launcher(&self, program: &str) -> Option<std::path::PathBuf> {
         orbit_engine::activity_job::cli_runner::locate_provider_launcher(
+            self.env(),
             program,
             Some(&self.paths().repo_root),
         )

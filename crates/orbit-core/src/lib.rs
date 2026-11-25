@@ -83,6 +83,14 @@ pub fn mark_process_as_pipeline_worker_binary() {
 /// `test-support` feature. Enable it only from `[dev-dependencies]`.
 #[cfg(feature = "test-support")]
 pub mod test_support {
+    /// Supply a different caller snapshot while keeping the fixture's runtime state.
+    pub fn with_runtime_env(
+        runtime: crate::OrbitRuntime,
+        env: orbit_common::Env,
+    ) -> crate::OrbitRuntime {
+        crate::OrbitRuntime::from_kernel(runtime.into_kernel().with_test_env(env))
+    }
+
     /// Serve the production broker dispatch in an isolated test whose peer is the test process.
     #[cfg(unix)]
     pub fn start_test_run_broker(

@@ -75,7 +75,13 @@ fn claimed_candidate_protected_names_ignore_ascii_case_on_every_host() {
         );
         for selector in [format!("file:{path}"), "file:other.md".into()] {
             let covered = selector == format!("file:{path}");
-            let validated = validate_claim_new_paths(repo, &[selector], &base, &candidate);
+            let validated = validate_claim_new_paths(
+                &orbit_common::Env::capture(),
+                repo,
+                &[selector],
+                &base,
+                &candidate,
+            );
             if accepted {
                 let (added, widening) = validated.unwrap_or_else(|error| {
                     panic!("ordinary path {path} must be accepted: {error}")
@@ -156,7 +162,13 @@ fn claimed_candidate_type_changes_refuse_non_regular_files_without_widening_exis
         // Validate while the checkout holds the base, as on the accepting
         // owner. Both an exact selector and an uncovered path must be safe.
         for selector in ["file:doc.md", "file:other.md"] {
-            let validated = validate_claim_new_paths(repo, &[selector.into()], &base, &candidate);
+            let validated = validate_claim_new_paths(
+                &orbit_common::Env::capture(),
+                repo,
+                &[selector.into()],
+                &base,
+                &candidate,
+            );
             if accepted {
                 assert_eq!(
                     validated.unwrap(),

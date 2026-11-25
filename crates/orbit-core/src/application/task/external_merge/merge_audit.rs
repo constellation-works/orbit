@@ -133,8 +133,11 @@ pub(crate) fn audited_private_vcs_merge(
         AuditEventStatus::Success,
         request.clone(),
     )?;
-    let outcome =
-        orbit_engine::run_private_vcs_operation(orbit_engine::PRIVATE_VCS_PR_MERGE, input);
+    let outcome = orbit_engine::run_private_vcs_operation(
+        runtime.env(),
+        orbit_engine::PRIVATE_VCS_PR_MERGE,
+        input,
+    );
     let (phase, status, detail) = match &outcome {
         Ok(response) => {
             let (phase, status) = if response.get("ambiguous_merge").is_some() {

@@ -78,7 +78,7 @@ pub fn run_host_sandbox_test<H: RuntimeHost + ?Sized>(
     command: &HostSandboxCommand,
     run_id: &str,
 ) -> Result<HostEvidenceRun, OrbitError> {
-    match super::review_gate::revision(workspace_path, &candidate.commit) {
+    match super::review_gate::revision(&host.process_env(), workspace_path, &candidate.commit) {
         Ok(found) if found == *candidate => {}
         Ok(found) => {
             return Ok(HostEvidenceRun::refused(
@@ -98,11 +98,18 @@ pub fn run_host_sandbox_test<H: RuntimeHost + ?Sized>(
     }
     let host_command = command.host_command();
     let key = sha256_hex(format!("{run_id}\0{}\0{host_command}", candidate.commit).as_bytes());
-    let worktree =
-        scratch_checkout_path(workspace_path, &format!("{WORKTREE_DIR}-{}", &key[..16]))?;
-    let ran = in_detached_worktree(workspace_path, &worktree, &candidate.commit, |checkout| {
-        execute(host, checkout, command, &host_command)
-    });
+    let worktree = scratch_checkout_path(
+        &host.process_env(),
+        workspace_path,
+        &format!("{WORKTREE_DIR}-{}", &key[..16]),
+    )?;
+    let ran = in_detached_worktree(
+        &host.process_env(),
+        workspace_path,
+        &worktree,
+        &candidate.commit,
+        |checkout| execute(host, checkout, command, &host_command),
+    );
     Ok(match ran {
         Ok(run) => run,
         Err(error) => HostEvidenceRun::refused(
@@ -118,6 +125,7 @@ fn execute<H: RuntimeHost + ?Sized>(
     command: &HostSandboxCommand,
     host_command: &str,
 ) -> HostEvidenceRun {
+    let process_env = host.process_env();
     let mut environment = host.validation_subprocess_environment();
     // Held until the run ends, so worktree GC cannot reclaim the target
     // underneath it; once the checkout is gone the lease's record is what
@@ -125,14 +133,14 @@ fn execute<H: RuntimeHost + ?Sized>(
     let _lease = if environment.build_output_env.is_empty() {
         None
     } else {
-        match lease_scratch_host_target(checkout, ScratchHostTarget::HostEvidence) {
+        match lease_scratch_host_target(&process_env, checkout, ScratchHostTarget::HostEvidence) {
             Ok(lease) => Some(lease),
             Err(error) => {
                 return HostEvidenceRun::refused(HostEvidenceReason::RunFailed, error.to_string());
             }
         }
     };
-    if let Err(error) = bind_host_output(&mut environment, checkout) {
+    if let Err(error) = bind_host_output(&process_env, &mut environment, checkout) {
         return HostEvidenceRun::refused(HostEvidenceReason::RunFailed, error.to_string());
     }
     if cfg!(target_os = "macos") {
@@ -147,7 +155,7 @@ fn execute<H: RuntimeHost + ?Sized>(
     // Every word is admitted from a set with no shell meaning, so the shell
     // only resolves the program on the validation PATH.
     let outcome = run_process(
-        &orbit_common::Env::capture(),
+        &process_env,
         &ExecRequest {
             program: "/bin/sh".to_string(),
             args: vec!["-c".to_string(), host_command.to_string()],

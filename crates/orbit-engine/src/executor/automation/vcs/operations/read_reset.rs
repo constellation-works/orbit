@@ -60,6 +60,7 @@ impl SnapshotWaits {
 /// a snapshot that already spent its waits ([`SnapshotWaits`]) return the
 /// read's original error unchanged.
 pub(super) fn read_through_throttles<T>(
+    process_env: &orbit_common::Env,
     deadline: Deadline,
     workspace: &Path,
     mut read: impl FnMut(&SnapshotWaits) -> Result<T, OrbitError>,
@@ -70,7 +71,9 @@ pub(super) fn read_through_throttles<T>(
         match read(&snapshot) {
             Ok(value) => return Ok(value),
             Err(error) => {
-                if snapshot.spent() || !wait_for_reset(deadline, workspace, &error, &mut waits) {
+                if snapshot.spent()
+                    || !wait_for_reset(process_env, deadline, workspace, &error, &mut waits)
+                {
                     return Err(error);
                 }
             }
@@ -89,6 +92,7 @@ pub(super) fn is_rate_limited(error: &OrbitError) -> bool {
 /// `deadline`, wait for it, count the wait in `waits` and return `true`, so
 /// the caller reads again. Otherwise return `false` without waiting.
 pub(super) fn wait_for_reset(
+    process_env: &orbit_common::Env,
     deadline: Deadline,
     workspace: &Path,
     error: &OrbitError,
@@ -104,7 +108,7 @@ pub(super) fn wait_for_reset(
         return false;
     }
     if throttle.retry_after_seconds.is_none() && throttle.reset_epoch_seconds.is_none() {
-        throttle.reset_epoch_seconds = exhausted_reset(deadline, workspace, &throttle);
+        throttle.reset_epoch_seconds = exhausted_reset(process_env, deadline, workspace, &throttle);
     }
     let Ok(now) = now_ms() else {
         return false;
@@ -143,6 +147,7 @@ pub(super) fn wait_for_reset(
 /// does not count against the quota. `None` when the read fails or no such
 /// resource is exhausted, which leaves the unknown-reset backoff.
 fn exhausted_reset(
+    process_env: &orbit_common::Env,
     deadline: Deadline,
     workspace: &Path,
     throttle: &ProviderReadThrottle,
@@ -151,14 +156,20 @@ fn exhausted_reset(
         .into_iter()
         .chain(throttle.resource.as_deref())
         .collect::<Vec<_>>();
-    match super::process::shared_exhausted_reset(workspace, deadline.remaining().ok()?, &resources)
-        .ok()?
+    match super::process::shared_exhausted_reset(
+        process_env,
+        workspace,
+        deadline.remaining().ok()?,
+        &resources,
+    )
+    .ok()?
     {
         SharedReset::Guarded(reset) => return reset,
         SharedReset::Unguarded => {}
     }
     let response = deadline
         .execute(
+            process_env,
             "gh",
             vec!["api".into(), "rate_limit".into()],
             workspace,

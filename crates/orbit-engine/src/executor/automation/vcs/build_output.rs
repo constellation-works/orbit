@@ -19,9 +19,12 @@ pub(super) fn host_validation_target_key(source: &Path) -> String {
 
 /// The primary checkout holding `checkout`'s host validation target, and the
 /// canonical source path that keys it.
-pub(super) fn host_validation_source(checkout: &Path) -> Result<(PathBuf, PathBuf), OrbitError> {
+pub(super) fn host_validation_source(
+    process_env: &orbit_common::Env,
+    checkout: &Path,
+) -> Result<(PathBuf, PathBuf), OrbitError> {
     let source = checkout.canonicalize()?;
-    let common = orbit_common::fs::git::git_common_dir(&orbit_common::Env::capture(), &source)?;
+    let common = orbit_common::fs::git::git_common_dir(process_env, &source)?;
     let primary = common
         .parent()
         .filter(|_| common.file_name().is_some_and(|name| name == ".git"))
@@ -92,6 +95,7 @@ const CARGO_INCREMENTAL: &str = "CARGO_INCREMENTAL";
 /// [`ValidationEnvironment::cargo_incremental`] is set, the child receives
 /// `CARGO_INCREMENTAL=0`, replacing any inherited value.
 pub(super) fn bind_host_output(
+    process_env: &orbit_common::Env,
     environment: &mut ValidationEnvironment,
     checkout: &Path,
 ) -> Result<(), OrbitError> {
@@ -100,7 +104,7 @@ pub(super) fn bind_host_output(
     if environment.build_output_env.is_empty() {
         return Ok(());
     }
-    let (primary, source) = host_validation_source(checkout)?;
+    let (primary, source) = host_validation_source(process_env, checkout)?;
     let directory = host_validation_target(primary, &source)?;
     let value = directory.to_string_lossy().into_owned();
     environment

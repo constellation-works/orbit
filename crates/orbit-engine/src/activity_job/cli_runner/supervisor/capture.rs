@@ -186,9 +186,9 @@ pub(super) fn finish_captured_output(
         })
 }
 
-pub(super) fn default_output_capture_limit() -> usize {
+pub(super) fn default_output_capture_limit(process_env: &orbit_common::Env) -> usize {
     capture_limit_from_env(
-        orbit_common::Env::capture().orbit_cli_runner_output_capture_limit_bytes(),
+        process_env.orbit_cli_runner_output_capture_limit_bytes(),
         DEFAULT_CLI_RUNNER_OUTPUT_CAPTURE_LIMIT_BYTES,
     )
 }

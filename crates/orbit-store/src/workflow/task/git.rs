@@ -54,13 +54,15 @@ pub(super) struct GitAttempt {
 /// Runs `git` with publication-safe defaults and a caller-supplied error label.
 pub(super) struct GitRunner<'a> {
     label: &'a str,
+    process_env: &'a orbit_common::Env,
     env: Vec<(&'a str, String)>,
 }
 
 impl<'a> GitRunner<'a> {
-    pub(super) fn new(label: &'a str) -> Self {
+    pub(super) fn new(process_env: &'a orbit_common::Env, label: &'a str) -> Self {
         Self {
             label,
+            process_env,
             env: Vec::new(),
         }
     }
@@ -91,6 +93,8 @@ impl<'a> GitRunner<'a> {
         }
         let mut command = Command::new("git");
         command
+            .env_clear()
+            .envs(self.process_env.vars())
             .args([
                 "-c",
                 "core.hooksPath=/dev/null",
@@ -128,15 +132,15 @@ impl<'a> GitRunner<'a> {
         // Git tracing can write directly to ambient file targets, outside our
         // captured stderr, and curl traces can include Authorization headers.
         // Strip every trace family (including future Git trace variables).
-        let trace_keys: Vec<_> = std::env::vars_os()
-            .map(|(key, _)| key)
-            .chain(self.env.iter().map(|(key, _)| (*key).into()))
-            .filter(|key| {
+        for key in command
+            .get_envs()
+            .filter(|(key, _)| {
                 let key = key.to_string_lossy();
                 key.starts_with("GIT_TRACE") || key == "GIT_CURL_VERBOSE"
             })
-            .collect();
-        for key in trace_keys {
+            .map(|(key, _)| key.to_owned())
+            .collect::<Vec<_>>()
+        {
             command.env_remove(key);
         }
         let output = match run_bounded(&mut command, PUBLICATION_GIT_DEADLINE) {

@@ -78,8 +78,12 @@ pub(super) enum CheckScopeBind {
 /// result (` M x` becomes `M x`), misaligning the path offset and hiding
 /// a one-character path. A rename or copy record carries its source as
 /// the following NUL field; both sides count as delivery paths.
-fn worktree_has_delivery_edit(root: &Path) -> Result<bool, RecoveryCommitRefusal> {
+fn worktree_has_delivery_edit(
+    process_env: &orbit_common::Env,
+    root: &Path,
+) -> Result<bool, RecoveryCommitRefusal> {
     let fields = git_output_paths(
+        process_env,
         root,
         &["status", "--porcelain=v1", "-z", "--untracked-files=all"],
     )
@@ -135,7 +139,12 @@ fn bind_preflight<'a>(
             .and_then(Value::as_str)
             .unwrap_or_default(),
     );
-    let head = git_output(root, &["rev-parse", "--verify", "HEAD^{commit}"]).map_err(refused)?;
+    let head = git_output(
+        &ctx.host.process_env(),
+        root,
+        &["rev-parse", "--verify", "HEAD^{commit}"],
+    )
+    .map_err(refused)?;
     let ids = bound
         .get("task_ids")
         .and_then(Value::as_array)
@@ -212,7 +221,7 @@ pub(super) fn bind_no_edit_only(
 ) -> Result<bool, RecoveryCommitRefusal> {
     let preflight = bind_preflight(ctx, step, failure, bound)?;
     if scope_record_presence(preflight.root, &preflight.relative)?
-        || worktree_has_delivery_edit(preflight.root)?
+        || worktree_has_delivery_edit(&ctx.host.process_env(), preflight.root)?
     {
         return Ok(false);
     }
@@ -252,7 +261,7 @@ pub(super) fn bind(
     // An absent record is a repair outcome, not an OS error: with no edit
     // it hands the head to the one rerun; with edits it refuses in words.
     if !scope_record_presence(root, &relative)? {
-        if worktree_has_delivery_edit(root)? {
+        if worktree_has_delivery_edit(&ctx.host.process_env(), root)? {
             return Err(refused(
                 "the CI repair changed files but wrote no scope record; \
                  no scope record was written, so no edit is explained",

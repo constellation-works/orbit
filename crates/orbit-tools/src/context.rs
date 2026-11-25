@@ -93,6 +93,8 @@ pub struct ProcSpawnBudget {
 
 #[derive(Clone, Default)]
 pub struct ToolContext {
+    /// Environment captured by the host before dispatch.
+    pub env: orbit_common::Env,
     pub cwd: Option<String>,
     /// Ambient metadata asserted by the transport/session, not by tool input.
     pub session_context: orbit_types::tool::ToolSessionContext,

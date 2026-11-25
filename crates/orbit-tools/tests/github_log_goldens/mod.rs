@@ -607,6 +607,7 @@ fn fallback_fixture_goldens() {
             registry.execute(
                 tool,
                 &ToolContext {
+                    env: orbit_common::Env::capture(),
                     workspace_root: selected.then(|| workspace.clone()),
                     ..ToolContext::default()
                 },
@@ -618,7 +619,7 @@ fn fallback_fixture_goldens() {
                 let program = PathBuf::from(std::env::var_os("HOME").unwrap()).join("bin/gh").to_string_lossy().into_owned();
                 requests.run_log.program.clone_from(&program);
                 requests.run_view.program = program;
-                gh::read_run_log(&requests, gh::LogReadBounds::new(case["max_bytes"].as_u64().unwrap() as usize), None).map(|read| {
+                gh::read_run_log(&orbit_common::Env::capture(), &requests, gh::LogReadBounds::new(case["max_bytes"].as_u64().unwrap() as usize), None).map(|read| {
                     json!({"source": read.source, "source_jobs": read.source_jobs, "fallback_error": read.fallback_error, "parsed": streamed(read.log)})
                 })
             })
@@ -748,8 +749,14 @@ impl CachedLogRead {
         for (key, value) in window.as_object().unwrap() {
             input[key] = value.clone();
         }
-        self.registry
-            .execute("github.run.logs", &ToolContext::default(), input)
+        self.registry.execute(
+            "github.run.logs",
+            &ToolContext {
+                env: orbit_common::Env::capture(),
+                ..ToolContext::default()
+            },
+            input,
+        )
     }
 
     fn calls(&self) -> Vec<String> {
@@ -811,8 +818,14 @@ impl CachedLogRead {
         for (key, value) in window.as_object().unwrap() {
             input[key] = value.clone();
         }
-        self.registry
-            .execute("github.run.logs", &ToolContext::default(), input)
+        self.registry.execute(
+            "github.run.logs",
+            &ToolContext {
+                env: orbit_common::Env::capture(),
+                ..ToolContext::default()
+            },
+            input,
+        )
     }
 
     /// Whole-log downloads of the fallback job's own log API, as opposed to
@@ -1074,7 +1087,13 @@ fn two_windows_of_a_completed_fallback_job_download_its_log_once() {
         let mut input = window.clone();
         input["run"] = json!("123");
         let requests = gh::RunLogRequests::from_input(&input).unwrap();
-        let uncached = gh::read_run_log(&requests, gh::LogReadBounds::new(262_144), None).unwrap();
+        let uncached = gh::read_run_log(
+            &orbit_common::Env::capture(),
+            &requests,
+            gh::LogReadBounds::new(262_144),
+            None,
+        )
+        .unwrap();
         assert_eq!(log_text(read), uncached.log.text, "{window}");
     }
 }

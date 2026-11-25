@@ -17,11 +17,14 @@ use super::workflow::{gate_present, workflow};
 /// A rate-limited read anywhere in the pass, after the snapshot included,
 /// waits for the provider's reset within the deadline and reads the evidence
 /// again; nothing here mutates.
-pub(in super::super) fn evidence(input: &Value) -> Result<Value, OrbitError> {
+pub(in super::super) fn evidence(
+    process_env: &orbit_common::Env,
+    input: &Value,
+) -> Result<Value, OrbitError> {
     let workspace = Path::new(required_string(input, "workspace_path")?);
     let deadline = Deadline::from_input(input)?;
-    super::super::read_reset::read_through_throttles(deadline, workspace, |pass| {
-        evidence_once(input, pass)
+    super::super::read_reset::read_through_throttles(process_env, deadline, workspace, |pass| {
+        evidence_once(process_env, input, pass)
     })
 }
 
@@ -39,6 +42,7 @@ fn throttled_prerequisite_log(diagnostic: &str, throttle: &ProviderReadThrottle)
 }
 
 fn evidence_once(
+    process_env: &orbit_common::Env,
     input: &Value,
     pass: &super::super::read_reset::SnapshotWaits,
 ) -> Result<Value, OrbitError> {
@@ -49,6 +53,7 @@ fn evidence_once(
     let base = required_string(input, "base_branch")?;
     let deadline = Deadline::from_input(input)?;
     let snapshot = snapshot(
+        process_env,
         deadline,
         workspace,
         PullRequestSelector {
@@ -79,7 +84,10 @@ fn evidence_once(
             .any(|run| run["pull_requests"].as_array().is_some_and(Vec::is_empty))
     {
         let failures = super::super::failed_workflow::failed_workflow_evidence(
-            deadline, workspace, &snapshot,
+            process_env,
+            deadline,
+            workspace,
+            &snapshot,
         )?;
         if let Some(evidence) = failures.into_iter().find(|evidence| {
             evidence
@@ -108,7 +116,7 @@ fn evidence_once(
         if listed["status"] == "completed" && listed["conclusion"] == "success" {
             continue;
         }
-        let run = checked_run(deadline, workspace, &snapshot, listed)?;
+        let run = checked_run(process_env, deadline, workspace, &snapshot, listed)?;
         if run["status"] != "completed"
             || !run["conclusion"]
                 .as_str()
@@ -119,6 +127,7 @@ fn evidence_once(
         let run_id = number(&run, "id", unreadable)?;
         let attempt = number(&run, "run_attempt", unreadable)?;
         let jobs = api(
+            process_env,
             deadline,
             workspace,
             &format!(
@@ -128,7 +137,10 @@ fn evidence_once(
         let job_list = complete_list(&jobs, "jobs")?;
         if job_list.is_empty() {
             let failures = super::super::failed_workflow::failed_workflow_evidence(
-                deadline, workspace, &snapshot,
+                process_env,
+                deadline,
+                workspace,
+                &snapshot,
             )?;
             if let Some(evidence) = failures.into_iter().find(|evidence| {
                 evidence.run_id == run_id
@@ -173,7 +185,7 @@ fn evidence_once(
         let [failed] = failed.as_slice() else {
             continue;
         };
-        let (path, blob, source) = workflow(deadline, workspace, &run)?;
+        let (path, blob, source) = workflow(process_env, deadline, workspace, &run)?;
         for gate in &missing {
             let Ok(dependency) =
                 dependency(&source, &gate.context, text(failed, "name", unreadable)?)
@@ -195,6 +207,7 @@ fn evidence_once(
                 text(failed_step, "name", unreadable)?,
             )?;
             let suite = api(
+                process_env,
                 deadline,
                 workspace,
                 &format!(
@@ -245,6 +258,7 @@ fn evidence_once(
                 return Err(unreadable("prerequisite check integration"));
             }
             let log = ci_job_log(
+                process_env,
                 &json!({"workspace_path":workspace,"run_id":run_id.to_string(),"job_id":job_id.to_string(),"deadline_ms":deadline.0}),
             )?;
             if log.truncated != Some(false) || log.fallback_error.is_some() {

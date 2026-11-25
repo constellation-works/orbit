@@ -88,7 +88,7 @@ pub(super) fn validation_scope<H: RuntimeHost + ?Sized>(
         // since: that validation is not this one's.
         return full_scope("validated_tree_out_of_scope", compared);
     }
-    let changed = match changed_paths(workspace_path, &validated.tree, tree) {
+    let changed = match changed_paths(&host.process_env(), workspace_path, &validated.tree, tree) {
         Ok(changed) => changed,
         Err(detail) => {
             let mut extra = compared;
@@ -160,8 +160,14 @@ fn describes(
 
 /// Every path whose content differs between the two trees, renames as a
 /// deletion and an addition, so both sides are judged.
-fn changed_paths(workspace_path: &Path, from: &str, to: &str) -> Result<Vec<String>, String> {
+fn changed_paths(
+    process_env: &orbit_common::Env,
+    workspace_path: &Path,
+    from: &str,
+    to: &str,
+) -> Result<Vec<String>, String> {
     let output = git_output_raw(
+        process_env,
         workspace_path,
         &[
             "diff",

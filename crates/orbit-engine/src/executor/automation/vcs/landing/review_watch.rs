@@ -425,7 +425,7 @@ fn failed_observation<H: RuntimeHost + ?Sized>(
         .collect::<Vec<_>>();
     let classified = match (
         status.head_sha.as_deref(),
-        fork_point(input, workspace, status),
+        fork_point(&host.process_env(), input, workspace, status),
     ) {
         (None, _) => (
             "inconclusive",
@@ -461,6 +461,7 @@ fn failed_observation<H: RuntimeHost + ?Sized>(
 /// The pull request's fork point from its base branch, that branch's name,
 /// and the branch's current tip in the owner checkout.
 fn fork_point(
+    process_env: &orbit_common::Env,
     input: &Value,
     workspace: &Path,
     status: &PullRequestStatus,
@@ -474,7 +475,8 @@ fn fork_point(
         .head_sha
         .as_deref()
         .ok_or_else(|| "the pull request reported no head".to_string())?;
-    let (fork, branch, tip) = git::resolve_pr_base(workspace, input, &base_name, Some(head))?;
+    let (fork, branch, tip) =
+        git::resolve_pr_base(process_env, workspace, input, &base_name, Some(head))?;
     Ok((fork.unwrap_or_default(), branch, tip))
 }
 

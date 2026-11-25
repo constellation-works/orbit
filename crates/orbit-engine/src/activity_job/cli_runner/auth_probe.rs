@@ -75,8 +75,9 @@ pub fn run_auth_probe(
         ));
     }
     let executor = host.resolve_cli_executor(provider)?;
-    let program = resolve_provider_launcher(provider, &executor.command, Some(cwd))
-        .map_err(|error| DispatchError::CliInvocationPermanent(error.message))?;
+    let program =
+        resolve_provider_launcher(&host.process_env(), provider, &executor.command, Some(cwd))
+            .map_err(|error| DispatchError::CliInvocationPermanent(error.message))?;
     let resolved = host.resolve_executor_sandbox(provider, None, Some(cwd))?;
     let prepared = prepare_sandbox_for_dispatch(resolved.as_ref())
         .map_err(|error| DispatchError::CliInvocationPermanent(error.message))?;
@@ -121,10 +122,12 @@ pub fn run_auth_probe(
             .iter()
             .map(|(key, value)| ((*key).into(), (*value).into())),
     );
-    let tool_env = orbit_tool_env(&env)
+    let process_env = host.process_env();
+    let tool_env = orbit_tool_env(&process_env, &env)
         .map_err(|error| DispatchError::CliInvocationPermanent(error.message))?;
     env.extend(tool_env);
     let mut spawned = spawn_for_supervision(
+        &process_env,
         &program,
         &probe.args,
         &env,
@@ -149,27 +152,30 @@ pub fn run_auth_probe(
         return Err(DispatchError::CliInvocationPermanent(error.to_string()));
     }
     let cwd_text = cwd.display().to_string();
-    let (stdout, _, exit, _, timed_out, _) = spawn_with_timeout(SpawnWithTimeoutRequest {
-        program: &program,
-        args: &probe.args,
-        stdin_bytes: probe.stdin.as_bytes(),
-        env: &env,
-        cwd: Some(cwd),
-        timeout: Duration::from_secs(probe.timeout_seconds),
-        sandbox: prepared.effective,
-        trace: SpawnTraceContext {
-            provider,
-            job_run_id: run_id,
-            task_id: None,
-            cwd: Some(&cwd_text),
+    let (stdout, _, exit, _, timed_out, _) = spawn_with_timeout(
+        &process_env,
+        SpawnWithTimeoutRequest {
+            program: &program,
+            args: &probe.args,
+            stdin_bytes: probe.stdin.as_bytes(),
+            env: &env,
+            cwd: Some(cwd),
+            timeout: Duration::from_secs(probe.timeout_seconds),
+            sandbox: prepared.effective,
+            trace: SpawnTraceContext {
+                provider,
+                job_run_id: run_id,
+                task_id: None,
+                cwd: Some(&cwd_text),
+            },
+            output_capture_limit: Some(16 * 1024),
+            on_spawn: None,
+            on_progress: None,
+            stopped_descendants: None,
+            spawned_child: Some(spawned),
+            stall_window: host.agent_stall_window(),
         },
-        output_capture_limit: Some(16 * 1024),
-        on_spawn: None,
-        on_progress: None,
-        stopped_descendants: None,
-        spawned_child: Some(spawned),
-        stall_window: host.agent_stall_window(),
-    })
+    )
     .map_err(|SpawnError { message, .. }| DispatchError::CliInvocationPermanent(message))?;
     if let Some(guard) = guard {
         // The probe is given no scratch directory, so nothing is exempt.

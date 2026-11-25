@@ -51,8 +51,13 @@ pub struct CandidateIdentity {
 }
 
 /// Resolve a commit-ish to its commit and tree ids.
-pub fn revision(workspace_path: &Path, spec: &str) -> Result<SourceRevision, OrbitError> {
+pub fn revision(
+    process_env: &orbit_common::Env,
+    workspace_path: &Path,
+    spec: &str,
+) -> Result<SourceRevision, OrbitError> {
     let commit = git_output(
+        process_env,
         workspace_path,
         &[
             "rev-parse",
@@ -62,6 +67,7 @@ pub fn revision(workspace_path: &Path, spec: &str) -> Result<SourceRevision, Orb
         ],
     )?;
     let tree = git_output(
+        process_env,
         workspace_path,
         &[
             "rev-parse",
@@ -77,32 +83,39 @@ pub fn revision(workspace_path: &Path, spec: &str) -> Result<SourceRevision, Orb
 /// of HEAD and the configured base ref under the run's sync mode. After the
 /// pipeline's rebase step this is the base tip the candidate sits on.
 pub fn synchronized_base(
+    process_env: &orbit_common::Env,
     workspace_path: &Path,
     base: &str,
     base_sync: BaseSyncMode,
 ) -> Result<SourceRevision, OrbitError> {
-    let base_ref = resolve_worktree_start_point(workspace_path, base, base_sync)?;
-    let merge_base = git_output(workspace_path, &["merge-base", "HEAD", &base_ref])?;
-    revision(workspace_path, &merge_base)
+    let base_ref = resolve_worktree_start_point(process_env, workspace_path, base, base_sync)?;
+    let merge_base = git_output(
+        process_env,
+        workspace_path,
+        &["merge-base", "HEAD", &base_ref],
+    )?;
+    revision(process_env, workspace_path, &merge_base)
 }
 
 /// The candidate currently checked out, pinned against `base_sha`.
 pub fn candidate_identity(
+    process_env: &orbit_common::Env,
     workspace_path: &Path,
     base_sha: &str,
 ) -> Result<CandidateIdentity, OrbitError> {
-    candidate_identity_at(workspace_path, base_sha, "HEAD")
+    candidate_identity_at(process_env, workspace_path, base_sha, "HEAD")
 }
 
 /// The candidate at commit-ish `head`, pinned against `base_sha`.
 pub fn candidate_identity_at(
+    process_env: &orbit_common::Env,
     workspace_path: &Path,
     base_sha: &str,
     head: &str,
 ) -> Result<CandidateIdentity, OrbitError> {
-    let base = revision(workspace_path, base_sha)?;
-    let head = revision(workspace_path, head)?;
-    let commits = commits_between(workspace_path, &base.commit, &head.commit)?;
+    let base = revision(process_env, workspace_path, base_sha)?;
+    let head = revision(process_env, workspace_path, head)?;
+    let commits = commits_between(process_env, workspace_path, &base.commit, &head.commit)?;
     Ok(CandidateIdentity {
         base,
         head,
@@ -112,11 +125,13 @@ pub fn candidate_identity_at(
 
 /// Commits in `base..head` with the attribution Git recorded, oldest first.
 pub fn commits_between(
+    process_env: &orbit_common::Env,
     workspace_path: &Path,
     base: &str,
     head: &str,
 ) -> Result<Vec<CommitIdentity>, OrbitError> {
     let raw = git_output_raw(
+        process_env,
         workspace_path,
         &[
             "log",
@@ -151,8 +166,12 @@ pub fn commits_between(
 
 /// Paths the reviewer changed in the worktree and has not committed,
 /// including new files.
-pub fn uncommitted_paths(workspace_path: &Path) -> Result<Vec<String>, OrbitError> {
+pub fn uncommitted_paths(
+    process_env: &orbit_common::Env,
+    workspace_path: &Path,
+) -> Result<Vec<String>, OrbitError> {
     let status = git_output_raw(
+        process_env,
         workspace_path,
         &["status", "--porcelain=v1", "-z", "--untracked-files=all"],
     )?;
@@ -195,17 +214,23 @@ pub fn uncommitted_paths(workspace_path: &Path) -> Result<Vec<String>, OrbitErro
 /// Commit every uncommitted change as one reviewer-attributed repair commit.
 /// Returns `None` when the worktree was clean.
 pub fn commit_reviewer_repairs(
+    process_env: &orbit_common::Env,
     workspace_path: &Path,
     reviewer_model: &str,
     message: &str,
 ) -> Result<Option<CommitIdentity>, OrbitError> {
-    stage_everything(workspace_path)?;
-    if staged_paths(workspace_path)?.is_empty() {
+    stage_everything(process_env, workspace_path)?;
+    if staged_paths(process_env, workspace_path)?.is_empty() {
         return Ok(None);
     }
-    commit_reviewer_repairs_in(workspace_path, reviewer_model, message)?;
-    let head = revision(workspace_path, "HEAD")?;
-    let mut commits = commits_between(workspace_path, &format!("{}^", head.commit), &head.commit)?;
+    commit_reviewer_repairs_in(process_env, workspace_path, reviewer_model, message)?;
+    let head = revision(process_env, workspace_path, "HEAD")?;
+    let mut commits = commits_between(
+        process_env,
+        workspace_path,
+        &format!("{}^", head.commit),
+        &head.commit,
+    )?;
     commits
         .pop()
         .map(Some)
@@ -222,13 +247,15 @@ pub fn commit_reviewer_repairs(
 /// author and Orbit's committer. Anything else is someone else's change and
 /// yields `None`.
 pub fn review_repair_at_head(
+    process_env: &orbit_common::Env,
     workspace_path: &Path,
     candidate_commit: &str,
     attempt_id: &str,
     reviewer_model: &str,
 ) -> Result<Option<CommitIdentity>, OrbitError> {
-    let head = revision(workspace_path, "HEAD")?;
+    let head = revision(process_env, workspace_path, "HEAD")?;
     let lineage = git_output(
+        process_env,
         workspace_path,
         &["rev-list", "--parents", "-n", "1", &head.commit],
     )?;
@@ -237,6 +264,7 @@ pub fn review_repair_at_head(
         return Ok(None);
     }
     let message = git_output_raw(
+        process_env,
         workspace_path,
         &["log", "-1", "--format=%B", "--end-of-options", &head.commit],
     )?;
@@ -244,7 +272,8 @@ pub fn review_repair_at_head(
     if !message.lines().any(|line| line.trim() == trailer) {
         return Ok(None);
     }
-    let Some(commit) = commits_between(workspace_path, candidate_commit, &head.commit)?.pop()
+    let Some(commit) =
+        commits_between(process_env, workspace_path, candidate_commit, &head.commit)?.pop()
     else {
         return Ok(None);
     };
@@ -257,8 +286,13 @@ pub fn review_repair_at_head(
 /// Paths `commit` changed against its first parent, reported the way
 /// [`uncommitted_paths`] reports them before the commit: a rename or copy
 /// by both its source and destination.
-pub fn committed_paths(workspace_path: &Path, commit: &str) -> Result<Vec<String>, OrbitError> {
+pub fn committed_paths(
+    process_env: &orbit_common::Env,
+    workspace_path: &Path,
+    commit: &str,
+) -> Result<Vec<String>, OrbitError> {
     let raw = git_output_raw(
+        process_env,
         workspace_path,
         &[
             "diff-tree",
@@ -295,12 +329,14 @@ pub fn committed_paths(workspace_path: &Path, commit: &str) -> Result<Vec<String
 /// deleted. Rename detection stays off, so a file moved away reads as deleted
 /// at `path`, and `path` is a literal pathspec, never a pattern.
 pub fn path_changed_between(
+    process_env: &orbit_common::Env,
     workspace_path: &Path,
     from: &str,
     to: &str,
     path: &str,
 ) -> Result<bool, OrbitError> {
     let raw = git_output_raw(
+        process_env,
         workspace_path,
         &[
             "--literal-pathspecs",
@@ -322,11 +358,13 @@ pub fn path_changed_between(
 /// or `None` when `commit` holds no file there. `path` is a literal
 /// pathspec, never a pattern, and a directory is no file.
 pub fn path_blob_at(
+    process_env: &orbit_common::Env,
     workspace_path: &Path,
     commit: &str,
     path: &str,
 ) -> Result<Option<String>, OrbitError> {
     let raw = git_output_raw(
+        process_env,
         workspace_path,
         &[
             "--literal-pathspecs",
@@ -352,15 +390,16 @@ pub fn path_blob_at(
 /// decoded lossily as UTF-8, or `None` when `commit` holds no file there.
 /// `path` is a literal pathspec, never a pattern.
 pub fn path_text_at(
+    process_env: &orbit_common::Env,
     workspace_path: &Path,
     commit: &str,
     path: &str,
 ) -> Result<Option<String>, OrbitError> {
-    let Some(blob) = path_blob_at(workspace_path, commit, path)? else {
+    let Some(blob) = path_blob_at(process_env, workspace_path, commit, path)? else {
         return Ok(None);
     };
     let args = ["cat-file", "blob", blob.as_str()];
-    let outcome = git_run_bytes(workspace_path, &args, None)?;
+    let outcome = git_run_bytes(process_env, workspace_path, &args, None)?;
     if outcome.timed_out {
         return Err(git_timeout_error(
             workspace_path,
@@ -393,11 +432,17 @@ pub struct LandedFacts {
 /// Whether `ancestor` is `descendant` or in its history. An object the
 /// checkout does not hold is not contained.
 pub fn contains_commit(
+    process_env: &orbit_common::Env,
     workspace_path: &Path,
     ancestor: &str,
     descendant: &str,
 ) -> Result<bool, OrbitError> {
-    crate::executor::automation::vcs::git::is_ancestor(workspace_path, ancestor, descendant)
+    crate::executor::automation::vcs::git::is_ancestor(
+        process_env,
+        workspace_path,
+        ancestor,
+        descendant,
+    )
 }
 
 /// Publish a held candidate `commit` on `origin` as
@@ -407,8 +452,13 @@ pub fn contains_commit(
 /// at it. The ref is apart from the delivery branch, so a later delivery of
 /// the task pushes its own history unhindered, and the task's next hold
 /// replaces it.
-pub fn publish_held_candidate(workspace_path: &Path, commit: &str) -> Result<String, OrbitError> {
+pub fn publish_held_candidate(
+    process_env: &orbit_common::Env,
+    workspace_path: &Path,
+    commit: &str,
+) -> Result<String, OrbitError> {
     let branch = git_output(
+        process_env,
         workspace_path,
         &["symbolic-ref", "--quiet", "--short", "HEAD"],
     )?
@@ -421,6 +471,7 @@ pub fn publish_held_candidate(workspace_path: &Path, commit: &str) -> Result<Str
     }
     let target = format!("refs/heads/orbit-evidence/{branch}");
     git_success(
+        process_env,
         workspace_path,
         &["push", "--quiet", "origin", &format!("+{commit}:{target}")],
     )?;
@@ -438,6 +489,7 @@ pub fn carry_evidence_candidate<H: crate::context::RuntimeHost + ?Sized>(
     published_sha: Option<String>,
 ) -> Result<orbit_types::workflow::ReviewEvidenceCandidateCarry, OrbitError> {
     let branch = git_output(
+        &host.process_env(),
         workspace_path,
         &["symbolic-ref", "--quiet", "--short", "HEAD"],
     )?;
@@ -455,12 +507,13 @@ pub fn carry_evidence_candidate<H: crate::context::RuntimeHost + ?Sized>(
 /// `head`, taken as one diff so a squash or a rebase of the same change
 /// yields the same id; `None` when the range changes nothing.
 pub fn patch_id(
+    process_env: &orbit_common::Env,
     workspace_path: &Path,
     base: &str,
     head: &str,
 ) -> Result<Option<String>, OrbitError> {
     let run = |args: &[&str], stdin: Option<&[u8]>| {
-        let outcome = git_run_bytes(workspace_path, args, stdin)?;
+        let outcome = git_run_bytes(process_env, workspace_path, args, stdin)?;
         if outcome.timed_out {
             return Err(git_timeout_error(
                 workspace_path,
@@ -505,11 +558,16 @@ pub fn patch_id(
 
 /// Fetch the landed commit from `origin` so it can be read locally. A
 /// failure is reported, never masked: an unreadable landing is uncovered.
-pub fn fetch_landed_commit(workspace_path: &Path, landed_commit: &str) -> Result<(), OrbitError> {
-    if revision(workspace_path, landed_commit).is_ok() {
+pub fn fetch_landed_commit(
+    process_env: &orbit_common::Env,
+    workspace_path: &Path,
+    landed_commit: &str,
+) -> Result<(), OrbitError> {
+    if revision(process_env, workspace_path, landed_commit).is_ok() {
         return Ok(());
     }
     git_success(
+        process_env,
         workspace_path,
         &[
             "fetch",
@@ -526,6 +584,7 @@ pub fn fetch_landed_commit(workspace_path: &Path, landed_commit: &str) -> Result
 /// two parents, replayed commits sit on the reviewed base tree, and anything
 /// else is one squash commit on its first parent.
 pub fn landed_candidate_facts(
+    process_env: &orbit_common::Env,
     workspace_path: &Path,
     landed: &SourceRevision,
     candidate_commit: &str,
@@ -533,6 +592,7 @@ pub fn landed_candidate_facts(
     candidate_commit_count: usize,
 ) -> Result<LandedFacts, OrbitError> {
     let parents = git_output(
+        process_env,
         workspace_path,
         &["rev-list", "--parents", "-n", "1", &landed.commit],
     )?
@@ -542,7 +602,7 @@ pub fn landed_candidate_facts(
     let is_candidate_commit = landed.commit == candidate_commit;
     let replayed = candidate_commit_count.max(1);
     let base_after_span = format!("{}~{replayed}", landed.commit);
-    let span_base = revision(workspace_path, &base_after_span).ok();
+    let span_base = revision(process_env, workspace_path, &base_after_span).ok();
     let replayed_on_reviewed_base = (is_candidate_commit || (parents <= 1 && replayed > 1))
         && span_base
             .as_ref()
@@ -556,7 +616,7 @@ pub fn landed_candidate_facts(
         )
     } else {
         (
-            revision(workspace_path, &format!("{}^1", landed.commit))?,
+            revision(process_env, workspace_path, &format!("{}^1", landed.commit))?,
             1,
         )
     };

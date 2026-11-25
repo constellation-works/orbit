@@ -9,6 +9,7 @@ use super::author::GitAuthor;
 use super::scope::exact_delivery_paths;
 
 pub(super) fn git_commit_with_identity(
+    process_env: &orbit_common::Env,
     workspace_path: &Path,
     message: &str,
     resolved_model: Option<&str>,
@@ -27,12 +28,13 @@ pub(super) fn git_commit_with_identity(
         "-m".to_string(),
         forge_text::neutralize_commit_message(message),
     ]);
-    git_success_dynamic_with_identity(workspace_path, &args, &author, &committer)
+    git_success_dynamic_with_identity(process_env, workspace_path, &args, &author, &committer)
 }
 
 /// Commit only the explicitly supplied paths while preserving other staged
 /// candidates for their owning task.
 pub(super) fn git_commit_paths_with_identity(
+    process_env: &orbit_common::Env,
     workspace_path: &Path,
     message: &str,
     resolved_model: Option<&str>,
@@ -52,11 +54,12 @@ pub(super) fn git_commit_paths_with_identity(
         "--".to_string(),
     ];
     args.extend(paths.iter().map(|path| literal_pathspec(path)));
-    git_success_dynamic_with_identity(workspace_path, &args, &author, &committer)
+    git_success_dynamic_with_identity(process_env, workspace_path, &args, &author, &committer)
 }
 
 /// Commit with an explicit author; the workflow committer stays Orbit.
 pub(super) fn git_commit_as(
+    process_env: &orbit_common::Env,
     workspace_path: &Path,
     message: &str,
     author: &GitAuthor,
@@ -69,10 +72,14 @@ pub(super) fn git_commit_as(
         "-m".to_string(),
         forge_text::neutralize_commit_message(message),
     ];
-    git_success_dynamic_with_identity(workspace_path, &args, author, &committer)
+    git_success_dynamic_with_identity(process_env, workspace_path, &args, author, &committer)
 }
 
-pub(super) fn stage_paths(workspace_path: &Path, files: &[String]) -> Result<(), OrbitError> {
+pub(super) fn stage_paths(
+    process_env: &orbit_common::Env,
+    workspace_path: &Path,
+    files: &[String],
+) -> Result<(), OrbitError> {
     if files.is_empty() {
         return Ok(());
     }
@@ -95,14 +102,14 @@ pub(super) fn stage_paths(workspace_path: &Path, files: &[String]) -> Result<(),
     list_args.extend(literal_files.iter().map(String::as_str));
     // Exact names: a lossy one would make `ls-files` omit the native path
     // while the rest of the delivery still stages and commits.
-    let stageable = exact_delivery_paths(workspace_path, &list_args)?;
+    let stageable = exact_delivery_paths(process_env, workspace_path, &list_args)?;
     if stageable.is_empty() {
         return Ok(());
     }
 
     let mut args = vec!["add".to_string(), "-A".to_string(), "--".to_string()];
     args.extend(stageable.iter().map(|path| literal_pathspec(path)));
-    git_success_dynamic(workspace_path, &args)
+    git_success_dynamic(process_env, workspace_path, &args)
 }
 
 /// Candidate paths are concrete names. Without this, Git treats `*`, `?`, and
@@ -116,19 +123,28 @@ pub(super) fn literal_pathspec(path: &str) -> String {
     format!(":(literal){path}")
 }
 
-pub(super) fn staged_changed_files(workspace_path: &Path) -> Result<Vec<String>, OrbitError> {
+pub(super) fn staged_changed_files(
+    process_env: &orbit_common::Env,
+    workspace_path: &Path,
+) -> Result<Vec<String>, OrbitError> {
     exact_delivery_paths(
+        process_env,
         workspace_path,
         &["diff", "--cached", "--name-only", "-z", "--relative"],
     )
 }
 
-fn git_success_dynamic(current_dir: &Path, args: &[String]) -> Result<(), OrbitError> {
+fn git_success_dynamic(
+    process_env: &orbit_common::Env,
+    current_dir: &Path,
+    args: &[String],
+) -> Result<(), OrbitError> {
     let args = args.iter().map(String::as_str).collect::<Vec<_>>();
-    git_success(current_dir, &args)
+    git_success(process_env, current_dir, &args)
 }
 
 fn git_success_dynamic_with_identity(
+    process_env: &orbit_common::Env,
     current_dir: &Path,
     args: &[String],
     author: &GitAuthor,
@@ -142,7 +158,7 @@ fn git_success_dynamic_with_identity(
     ];
     let args_ref = args.iter().map(String::as_str).collect::<Vec<_>>();
     let timeout_ms = super::super::git::GitTimeoutBudget::current().timeout_for(&args_ref);
-    let mut request = git_request(current_dir, &args_ref, timeout_ms);
+    let mut request = git_request(process_env, current_dir, &args_ref, timeout_ms);
     if let EnvironmentMode::ClearAndSet(environment) = &mut request.environment_mode {
         environment.extend(
             env_overrides
@@ -150,7 +166,7 @@ fn git_success_dynamic_with_identity(
                 .map(|(key, value)| ((*key).to_string(), (*value).to_string())),
         );
     }
-    let result = run_process(&orbit_common::Env::capture(), &request, &NoSandbox)?;
+    let result = run_process(process_env, &request, &NoSandbox)?;
 
     if !result.success {
         return Err(OrbitError::Execution(format!(
@@ -164,8 +180,15 @@ fn git_success_dynamic_with_identity(
     Ok(())
 }
 
-pub(super) fn ensure_named_branch(workspace_path: &Path) -> Result<(), OrbitError> {
-    let actual_branch = git_output(workspace_path, &["rev-parse", "--abbrev-ref", "HEAD"])?;
+pub(super) fn ensure_named_branch(
+    process_env: &orbit_common::Env,
+    workspace_path: &Path,
+) -> Result<(), OrbitError> {
+    let actual_branch = git_output(
+        process_env,
+        workspace_path,
+        &["rev-parse", "--abbrev-ref", "HEAD"],
+    )?;
     let actual_branch = actual_branch.trim();
     if actual_branch == "HEAD" {
         return Err(OrbitError::Execution(format!(
@@ -179,8 +202,11 @@ pub(super) fn ensure_named_branch(workspace_path: &Path) -> Result<(), OrbitErro
 /// Uses [`git_output_raw`] rather than [`git_output`]: the latter trims the
 /// whole output, which would misalign the index/worktree columns of a
 /// single-line result by one byte (see `git_output`'s doc comment).
-pub(super) fn ensure_no_unmerged_changes(workspace_path: &Path) -> Result<(), OrbitError> {
-    let status = git_output_raw(workspace_path, &["status", "--porcelain"])?;
+pub(super) fn ensure_no_unmerged_changes(
+    process_env: &orbit_common::Env,
+    workspace_path: &Path,
+) -> Result<(), OrbitError> {
+    let status = git_output_raw(process_env, workspace_path, &["status", "--porcelain"])?;
     for line in status.lines() {
         if line.len() < 2 {
             continue;

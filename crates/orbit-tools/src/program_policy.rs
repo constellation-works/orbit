@@ -33,7 +33,7 @@ pub(crate) fn enforce_program_allowlist(
             });
             let path = child_path
                 .map(std::ffi::OsString::from)
-                .or_else(|| std::env::var_os(env_vars::PATH));
+                .or_else(|| ctx.env.path().map(ToOwned::to_owned));
             path.and_then(|path| {
                 std::env::split_paths(&path)
                     .find_map(|dir| std::fs::canonicalize(dir.join(requested)).ok())

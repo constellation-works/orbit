@@ -14,15 +14,19 @@ use super::workflow::gate_passed;
 /// A missing gate is never inferred to pass from the PR's CLEAN state.
 /// Observation only reads: a rate-limited read waits for the reset within the
 /// deadline and observes again, and never resends the reserved mutation.
-pub(in super::super) fn observe(input: &Value) -> Result<Value, OrbitError> {
+pub(in super::super) fn observe(
+    process_env: &orbit_common::Env,
+    input: &Value,
+) -> Result<Value, OrbitError> {
     let workspace = Path::new(required_string(input, "workspace_path")?);
     let deadline = Deadline::from_input(input)?;
-    super::super::read_reset::read_through_throttles(deadline, workspace, |pass| {
-        observe_once(input, pass)
+    super::super::read_reset::read_through_throttles(process_env, deadline, workspace, |pass| {
+        observe_once(process_env, input, pass)
     })
 }
 
 fn observe_once(
+    process_env: &orbit_common::Env,
     input: &Value,
     pass: &super::super::read_reset::SnapshotWaits,
 ) -> Result<Value, OrbitError> {
@@ -37,6 +41,7 @@ fn observe_once(
             ));
         }
         return super::super::failed_workflow::observe_failed_workflow(
+            process_env,
             deadline,
             workspace,
             &evidence,
@@ -48,6 +53,7 @@ fn observe_once(
         return Err(unreadable("reserved protected contexts"));
     }
     let snapshot = snapshot(
+        process_env,
         deadline,
         workspace,
         PullRequestSelector {
@@ -79,7 +85,7 @@ fn observe_once(
         .iter()
         .find(|run| run["id"].as_u64() == Some(evidence.run_id))
         .ok_or_else(|| unreadable("reserved run disappeared"))?;
-    let run = checked_run(deadline, workspace, &snapshot, listed)?;
+    let run = checked_run(process_env, deadline, workspace, &snapshot, listed)?;
     if number(&run, "workflow_id", unreadable)? != evidence.workflow_id
         || text(&run, "path", unreadable)? != evidence.workflow_path
         || text(&run, "event", unreadable)? != evidence.event

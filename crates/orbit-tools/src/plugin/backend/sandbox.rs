@@ -3,6 +3,8 @@ use super::*;
 /// The granted boundary one plugin backend runs under.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PluginSandboxProfile {
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    pub(crate) process_env: orbit_common::Env,
     /// Readable (and executable) roots: the plugin root plus granted reads,
     /// each declared program at the path recorded when the operator enabled
     /// the plugin, and — for `orbit_tools` — Orbit's global root and the
@@ -378,7 +380,7 @@ fn spawn_confined(
     // Landlock has no such base, so the boundary carries them, which also
     // carves them out of the host tool state grants (`~/.config/gh`).
     let mut read_denies = profile.read_denies.clone();
-    for credential in orbit_exec::default_credential_read_denies(&orbit_common::Env::capture()) {
+    for credential in orbit_exec::default_credential_read_denies(&profile.process_env) {
         if !read_denies.contains(&credential) {
             read_denies.push(credential);
         }
@@ -394,7 +396,7 @@ fn spawn_confined(
         deny_tcp: profile.network == PluginNetworkPermission::None,
     };
     orbit_exec::spawn_under_linux_landlock_boundary(
-        &orbit_common::Env::capture(),
+        &profile.process_env,
         req,
         &boundary,
         inherited_fds,
@@ -417,8 +419,7 @@ fn spawn_confined(
     let rules = profile.macos_fs_rules();
     // "plugin" is not a provider name, so the compiler keeps every default
     // credential deny (it fails closed on an unknown provider).
-    let mut profile_text =
-        compile_macos_sandbox_profile(&orbit_common::Env::capture(), &rules, "plugin")?;
+    let mut profile_text = compile_macos_sandbox_profile(&profile.process_env, &rules, "plugin")?;
     // The compiler allows reads broadly, so the plugin's read carve-outs are
     // denials appended after it; the child's own state tree, callback record
     // and witness are re-allowed last. SBPL is last-match-wins.
@@ -438,7 +439,11 @@ fn spawn_confined(
     );
     let env = match &req.environment_mode {
         EnvironmentMode::ClearAndSet(pairs) => pairs.clone(),
-        EnvironmentMode::Inherit => std::env::vars().collect(),
+        EnvironmentMode::Inherit => profile
+            .process_env
+            .utf8_vars()
+            .map(|(name, value)| (name.to_owned(), value.to_owned()))
+            .collect(),
     };
     let stdin = match req.stdin_mode {
         StdinMode::Inherit => Stdio::inherit(),

@@ -159,6 +159,7 @@ fn invalid_evidence_ref_and_head_are_refused_before_push() {
             let tree = empty_tree(&fixture.client);
             let bad_tree = with_stall_clock(&fixture.marker, || {
                 super::super::dispatch::run(
+                    &orbit_common::Env::capture(),
                     EVIDENCE_REF_PUSH,
                     &json!({
                         "repo_root": fixture.client,
@@ -179,6 +180,7 @@ fn invalid_evidence_ref_and_head_are_refused_before_push() {
 
             let bad_ref = with_stall_clock(&fixture.marker, || {
                 super::super::dispatch::run(
+                    &orbit_common::Env::capture(),
                     EVIDENCE_REF_PUSH,
                     &json!({
                         "repo_root": fixture.client,
@@ -199,6 +201,7 @@ fn invalid_evidence_ref_and_head_are_refused_before_push() {
 
             let bad_head = with_stall_clock(&fixture.marker, || {
                 super::super::dispatch::run(
+                    &orbit_common::Env::capture(),
                     CANDIDATE_REF_PUSH,
                     &json!({
                         "repo_root": fixture.client,
@@ -433,6 +436,7 @@ sleep 120
 
     fn run_evidence(&self, tree: &str) -> Result<Value, OrbitError> {
         super::super::dispatch::run(
+            &orbit_common::Env::capture(),
             EVIDENCE_REF_PUSH,
             &json!({
                 "repo_root": self.client,

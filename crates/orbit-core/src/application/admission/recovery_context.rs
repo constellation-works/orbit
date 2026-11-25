@@ -288,7 +288,8 @@ fn reconcile_task(runtime: &OrbitRuntime, metadata: &Task) -> Result<Option<Task
     // Uncommitted work still protects paths unless explicitly discarded.
     let mut found_local = false;
     if !all_discarded {
-        let mut candidates = orbit_engine::run_worktree_paths(&runtime.paths().repo_root, current)?;
+        let mut candidates =
+            orbit_engine::run_worktree_paths(runtime.env(), &runtime.paths().repo_root, current)?;
         // Source-repair adoption can continue in a checkout that predates
         // this run; prefer neither spelling over the host's actual checkpoint.
         if let Some(path) = state.pipeline["worktree"]["workspace_path"].as_str() {

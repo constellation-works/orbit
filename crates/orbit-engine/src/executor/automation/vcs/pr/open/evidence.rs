@@ -33,7 +33,11 @@ pub(super) fn collect_validation_records<H: RuntimeHost + ?Sized, T: Deserialize
     fields: impl Fn(&T) -> ValidationRecord<'_>,
 ) -> Vec<T> {
     let kind = key.replace('_', "-");
-    let head = match git_output(&context.workspace_path, &["rev-parse", "HEAD"]) {
+    let head = match git_output(
+        &host.process_env(),
+        &context.workspace_path,
+        &["rev-parse", "HEAD"],
+    ) {
         Ok(head) => head,
         Err(error) => {
             tracing::warn!("pr_open could not read HEAD for {kind} validation: {error}");
@@ -112,6 +116,7 @@ pub(super) fn with_review_fixes(body: String, input: &Value) -> String {
 /// the candidate the review gate settled. An empty `reviewed_head_sha` means
 /// no gate applied to this run.
 pub(in crate::executor::automation::vcs) fn ensure_reviewed_candidate(
+    process_env: &orbit_common::Env,
     workspace_path: &std::path::Path,
     input: &Value,
     base_sha: &str,
@@ -122,7 +127,11 @@ pub(in crate::executor::automation::vcs) fn ensure_reviewed_candidate(
     else {
         return Ok(());
     };
-    let head_sha = git_output(workspace_path, &["rev-parse", "--verify", "HEAD^{commit}"])?;
+    let head_sha = git_output(
+        process_env,
+        workspace_path,
+        &["rev-parse", "--verify", "HEAD^{commit}"],
+    )?;
     if head_sha != reviewed_head {
         return Err(OrbitError::Execution(format!(
             "review_gate_stale: checked-out head {head_sha} is not the reviewed candidate \

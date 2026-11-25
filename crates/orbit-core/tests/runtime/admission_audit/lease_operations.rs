@@ -489,8 +489,13 @@ fn principal_class_policy_downgrades_hard_and_caps_priority() {
 
     {
         let _agent = caller_env(Some("claude"));
+        // The runtime classifies the caller from the Env it is built with.
+        let agent = orbit_core::test_support::with_runtime_env(
+            runtime.clone(),
+            orbit_common::Env::capture(),
+        );
         let downgraded = request(
-            &runtime,
+            &agent,
             json!({"principal": "alice/claude-code", "selectors": ["file:src/lib.rs"], "mode": "hard"}),
         );
         assert_eq!(downgraded["granted"], true, "{downgraded}");
@@ -510,7 +515,7 @@ fn principal_class_policy_downgrades_hard_and_caps_priority() {
         );
 
         let message = invalid_input_message(lease::request(
-            &runtime,
+            &agent,
             json!({"principal": "alice/claude-code", "selectors": ["file:src/lib.rs"], "priority": "high"}),
             None,
             Some("codex".into()),

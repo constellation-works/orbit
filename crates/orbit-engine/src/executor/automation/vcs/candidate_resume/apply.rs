@@ -32,12 +32,13 @@ pub(super) enum Applied {
 /// kept review repair on it — onto the clean checkout of `base_sha`, leaving
 /// the result as plain uncommitted edits — conflict markers included.
 pub(super) fn apply(
+    process_env: &orbit_common::Env,
     candidate: &Candidate,
     target: &str,
     workspace_path: &Path,
     base_sha: &str,
 ) -> Result<Applied, OrbitError> {
-    if !candidate_available(workspace_path, candidate)? {
+    if !candidate_available(process_env, workspace_path, candidate)? {
         let source = match &candidate.durable_ref {
             Some(reference) => format!("durable ref '{reference}'"),
             None => format!("branch '{}'", candidate.branch),
@@ -47,8 +48,9 @@ pub(super) fn apply(
             candidate.head_sha
         )));
     }
-    let head = git_output(workspace_path, &["rev-parse", "HEAD"])?;
+    let head = git_output(process_env, workspace_path, &["rev-parse", "HEAD"])?;
     let status = git_output(
+        process_env,
         workspace_path,
         &["status", "--porcelain=v1", "--untracked-files=all"],
     )?;
@@ -64,6 +66,7 @@ pub(super) fn apply(
     // The squash merge is a three-way merge of the candidate's changes since
     // its own base onto this base; HEAD does not move.
     let merge = git_run(
+        process_env,
         workspace_path,
         &["merge", "--squash", "--no-commit", target],
     )?;
@@ -76,20 +79,31 @@ pub(super) fn apply(
             ),
         ));
     }
-    let conflicting_paths =
-        git_output(workspace_path, &["diff", "--name-only", "--diff-filter=U"])?
-            .lines()
-            .map(str::to_string)
-            .collect::<Vec<_>>();
-    let applied = !git_command_success(workspace_path, &["diff", "--cached", "--quiet"])?;
+    let conflicting_paths = git_output(
+        process_env,
+        workspace_path,
+        &["diff", "--name-only", "--diff-filter=U"],
+    )?
+    .lines()
+    .map(str::to_string)
+    .collect::<Vec<_>>();
+    let applied = !git_command_success(
+        process_env,
+        workspace_path,
+        &["diff", "--cached", "--quiet"],
+    )?;
     // Leave the result as ordinary uncommitted edits — conflict markers
     // included — and drop the merge state, so the implementer and the commit
     // step see a plain dirty checkout.
-    git_success(workspace_path, &["reset", "--quiet"])?;
+    git_success(process_env, workspace_path, &["reset", "--quiet"])?;
     if !merge.success && conflicting_paths.is_empty() {
         // Refused before touching the checkout; put back exactly what was
         // verified clean above.
-        git_success(workspace_path, &["reset", "--quiet", "--hard", base_sha])?;
+        git_success(
+            process_env,
+            workspace_path,
+            &["reset", "--quiet", "--hard", base_sha],
+        )?;
         return Ok(Applied::Refused(format!(
             "candidate {target} could not be merged onto base {base_sha}: {}",
             merge.stderr.trim()
@@ -112,6 +126,7 @@ pub(super) fn apply(
 /// the owner's own run
 /// [ORB-14603].
 pub(super) fn resume(
+    process_env: &orbit_common::Env,
     task_id: &str,
     candidate: &Candidate,
     workspace_path: &Path,
@@ -125,6 +140,7 @@ pub(super) fn resume(
             review,
             match &review.repair_ref {
                 Some(repair_ref) => locate_review_repair(
+                    process_env,
                     workspace_path,
                     &candidate.head_sha,
                     &candidate.run_id,
@@ -144,7 +160,7 @@ pub(super) fn resume(
         Some((review, located)) => with_interrupted_review(repair, candidate, review, located),
         None => repair,
     };
-    match apply(candidate, target, workspace_path, base_sha)? {
+    match apply(process_env, candidate, target, workspace_path, base_sha)? {
         Applied::Refused(reason) => {
             return Ok(Outcome::Fresh(Fresh::new("candidate_missing", reason)));
         }
@@ -319,9 +335,13 @@ fn implementation_completed(failed_step_id: &str) -> bool {
 /// `origin` once when it is not: from the durable ref a claimed leaf carried
 /// it to on another host [ORB-14338], else its branch (worktree GC may have
 /// pruned the local branch after the handoff pushed it).
-fn candidate_available(workspace_path: &Path, candidate: &Candidate) -> Result<bool, OrbitError> {
+fn candidate_available(
+    process_env: &orbit_common::Env,
+    workspace_path: &Path,
+    candidate: &Candidate,
+) -> Result<bool, OrbitError> {
     let object = format!("{}^{{commit}}", candidate.head_sha);
-    if git_command_success(workspace_path, &["cat-file", "-e", &object])? {
+    if git_command_success(process_env, workspace_path, &["cat-file", "-e", &object])? {
         return Ok(true);
     }
     let refspec = match (&candidate.durable_ref, candidate.branch.as_str()) {
@@ -330,8 +350,12 @@ fn candidate_available(workspace_path: &Path, candidate: &Candidate) -> Result<b
         (None, "") => return Ok(false),
         (None, branch) => format!("refs/heads/{branch}"),
     };
-    let _ = git_run(workspace_path, &["fetch", "--no-tags", "origin", &refspec])?;
-    git_command_success(workspace_path, &["cat-file", "-e", &object])
+    let _ = git_run(
+        process_env,
+        workspace_path,
+        &["fetch", "--no-tags", "origin", &refspec],
+    )?;
+    git_command_success(process_env, workspace_path, &["cat-file", "-e", &object])
 }
 
 /// Write the outcome to the task's history.

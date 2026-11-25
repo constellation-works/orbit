@@ -1,6 +1,5 @@
 //! The activity catalog a runtime resolves `target: activity:<name>` against.
 
-use orbit_common::env_vars;
 use std::path::{Path, PathBuf};
 
 use orbit_engine::activity_job::{CatalogDirectory, CatalogDirectoryList};
@@ -140,9 +139,15 @@ impl RuntimeKernel {
     fn v2_activity_catalog_dirs(&self) -> Vec<CatalogDirectory<V2ActivityCatalogDirKind>> {
         let mut dirs = CatalogDirectoryList::default();
 
-        let env_dirs = std::env::var(env_vars::ORBIT_ACTIVITY_DIR)
-            .ok()
-            .or_else(|| std::env::var(env_vars::ORBIT_V2_CATALOG_DIR).ok());
+        let env_dirs = self
+            .env()
+            .orbit_activity_dir()
+            .and_then(std::ffi::OsStr::to_str)
+            .or_else(|| {
+                self.env()
+                    .orbit_v2_catalog_dir()
+                    .and_then(std::ffi::OsStr::to_str)
+            });
         if let Some(raw) = env_dirs {
             for entry in raw.split(':').filter(|value| !value.is_empty()) {
                 dirs.push(

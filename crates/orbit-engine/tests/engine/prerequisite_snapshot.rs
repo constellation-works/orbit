@@ -212,7 +212,13 @@ esac
                         wait_log.borrow_mut().push(ms);
                         wait_clock.set(wait_clock.get() + ms);
                     },
-                    || run_private_vcs_operation(CI_CURRENT_GATES, &input),
+                    || {
+                        run_private_vcs_operation(
+                            &orbit_common::Env::capture(),
+                            CI_CURRENT_GATES,
+                            &input,
+                        )
+                    },
                 )
             },
         );

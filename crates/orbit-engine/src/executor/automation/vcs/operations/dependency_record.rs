@@ -14,6 +14,7 @@ use std::{collections::BTreeSet, path::Path};
     reason = "authentication binds the deadline, snapshot, failed jobs and workflow source to one log"
 )]
 pub(super) fn authenticate_dependency_record(
+    process_env: &orbit_common::Env,
     deadline: Deadline,
     workspace: &Path,
     snapshot: &Snapshot,
@@ -247,6 +248,7 @@ pub(super) fn authenticate_dependency_record(
         unreadable,
     )?;
     deadline.execute(
+        process_env,
         "git",
         vec![
             "merge-base".into(),
@@ -258,6 +260,7 @@ pub(super) fn authenticate_dependency_record(
         "trusted producer base ancestry",
     )?;
     let execution_commit = api(
+        process_env,
         deadline,
         workspace,
         &format!("repos/{{owner}}/{{repo}}/git/commits/{execution}"),
@@ -293,6 +296,7 @@ pub(super) fn authenticate_dependency_record(
         execution,
     ] {
         let contents = api(
+            process_env,
             deadline,
             workspace,
             &format!("repos/{{owner}}/{{repo}}/contents/{helper}?ref={revision}"),
@@ -305,11 +309,13 @@ pub(super) fn authenticate_dependency_record(
         }
         helper_blob = Some(blob.to_string());
         let workflow_contents = api(
+            process_env,
             deadline,
             workspace,
             &format!("repos/{{owner}}/{{repo}}/contents/{workflow_path}?ref={revision}"),
         )?;
         let original = api(
+            process_env,
             deadline,
             workspace,
             &format!("repos/{{owner}}/{{repo}}/contents/{workflow_path}?ref={accepted}"),
@@ -335,6 +341,7 @@ pub(super) fn authenticate_dependency_record(
     }
     let helper_source = deadline
         .execute(
+            process_env,
             "git",
             vec!["show".into(), format!("{accepted}:{helper}")],
             workspace,
@@ -343,6 +350,7 @@ pub(super) fn authenticate_dependency_record(
         .stdout;
     let local_blob = deadline
         .execute(
+            process_env,
             "git",
             vec!["rev-parse".into(), format!("{accepted}:{helper}")],
             workspace,

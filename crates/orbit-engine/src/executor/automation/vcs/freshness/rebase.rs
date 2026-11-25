@@ -33,7 +33,7 @@ pub(in crate::executor::automation) fn prepare_pr_handoff<H: RuntimeHost + ?Size
     {
         super::preparation::validate_owner(host, recovery_run_id(input, &context), &context)?;
     }
-    match prepare_pr_handoff_inner(input, &context) {
+    match prepare_pr_handoff_inner(&host.process_env(), input, &context) {
         Ok(mut output) => {
             if input
                 .get("authenticate_preparation")
@@ -54,10 +54,12 @@ pub(in crate::executor::automation) fn prepare_pr_handoff<H: RuntimeHost + ?Size
 }
 
 pub(super) fn prepare_pr_handoff_inner(
+    process_env: &orbit_common::Env,
     input: &Value,
     context: &HandoffContext,
 ) -> Result<Value, Box<(FailedHandoffPhase, OrbitError)>> {
     let head = git_output(
+        process_env,
         &context.workspace_path,
         &["rev-parse", "--abbrev-ref", "HEAD"],
     )
@@ -70,15 +72,23 @@ pub(super) fn prepare_pr_handoff_inner(
             OrbitError::Execution("pr_prepare: workspace is in detached HEAD state".to_string()),
         )));
     }
-    let head_sha = commit_sha(&context.workspace_path, &head).map_err(prepare_error)?;
+    let head_sha =
+        commit_sha(process_env, &context.workspace_path, &head).map_err(prepare_error)?;
     let base = input_string_field(input, "base").unwrap_or_else(|| "main".to_string());
     let sync_mode = super::super::git::base_sync_mode_from_input(input).map_err(prepare_error)?;
-    let base_ref = resolve_worktree_start_point(&context.workspace_path, &base, sync_mode)
-        .map_err(prepare_error)?;
-    let base_sha = commit_sha(&context.workspace_path, &base_ref).map_err(prepare_error)?;
-    let freshness =
-        branch_freshness_against_ref(&context.workspace_path, &head, &base_ref, &base_sha)
+    let base_ref =
+        resolve_worktree_start_point(process_env, &context.workspace_path, &base, sync_mode)
             .map_err(prepare_error)?;
+    let base_sha =
+        commit_sha(process_env, &context.workspace_path, &base_ref).map_err(prepare_error)?;
+    let freshness = branch_freshness_against_ref(
+        process_env,
+        &context.workspace_path,
+        &head,
+        &base_ref,
+        &base_sha,
+    )
+    .map_err(prepare_error)?;
     if freshness.commits_ahead == 0 {
         return Err(Box::new((
             FailedHandoffPhase::EmptyBranch,
@@ -87,7 +97,8 @@ pub(super) fn prepare_pr_handoff_inner(
             )),
         )));
     }
-    let remote_sha = remote_branch_sha(&context.workspace_path, &head).map_err(prepare_error)?;
+    let remote_sha =
+        remote_branch_sha(process_env, &context.workspace_path, &head).map_err(prepare_error)?;
     let sync_required = freshness.commits_behind > 0;
     Ok(json!({
         "phase": "prepare",
@@ -189,11 +200,13 @@ fn rebase_pr_branch_inner<H: RuntimeHost + ?Sized>(
         ));
     }
     let current_branch = git_output(
+        &host.process_env(),
         &context.workspace_path,
         &["rev-parse", "--abbrev-ref", "HEAD"],
     )?;
-    if rebase_in_progress(&context.workspace_path)? {
+    if rebase_in_progress(&host.process_env(), &context.workspace_path)? {
         return refuse_or_recover_existing_rebase(
+            &host.process_env(),
             &context.workspace_path,
             head,
             head_sha_before,
@@ -207,19 +220,21 @@ fn rebase_pr_branch_inner<H: RuntimeHost + ?Sized>(
         )));
     }
     if !git_command_success(
+        &host.process_env(),
         &context.workspace_path,
         &["diff", "--quiet", "--diff-filter=U"],
     )? {
         return Err(rebase_conflict_error(
+            &host.process_env(),
             &context.workspace_path,
             head_sha_before,
             base_sha,
-            unmerged_paths(&context.workspace_path)?,
+            unmerged_paths(&host.process_env(), &context.workspace_path)?,
             "unresolved merge conflicts remain",
         )?);
     }
 
-    let current_sha = commit_sha(&context.workspace_path, head)?;
+    let current_sha = commit_sha(&host.process_env(), &context.workspace_path, head)?;
     // A rewritten HEAD is judged by its host-certified recovery checkpoint,
     // looked up once here. That checkpoint also names the base the host
     // actually landed the candidate on: conflict recovery continues the
@@ -246,7 +261,7 @@ fn rebase_pr_branch_inner<H: RuntimeHost + ?Sized>(
         | RecoveredRewrite::Absent => base_sha,
     };
 
-    let observed_base_sha = commit_sha(&context.workspace_path, base_ref)?;
+    let observed_base_sha = commit_sha(&host.process_env(), &context.workspace_path, base_ref)?;
     if observed_base_sha != base_sha {
         *stale = true;
         return Err(OrbitError::Execution(format!(
@@ -263,7 +278,13 @@ fn rebase_pr_branch_inner<H: RuntimeHost + ?Sized>(
         );
     }
 
-    let current = branch_freshness_against_ref(&context.workspace_path, head, base_ref, base_sha)?;
+    let current = branch_freshness_against_ref(
+        &host.process_env(),
+        &context.workspace_path,
+        head,
+        base_ref,
+        base_sha,
+    )?;
     if current.commits_ahead == 0 {
         return Err(OrbitError::Execution(format!(
             "git_rebase: recovered branch '{head}' no longer contains a candidate ahead of target base '{base_sha}'"
@@ -292,11 +313,13 @@ fn rebase_pr_branch_inner<H: RuntimeHost + ?Sized>(
                     // conflict-recovery path, which certifies fresh evidence
                     // on completion.
                     discard_rewrite(
+                        &host.process_env(),
                         &context.workspace_path,
                         head_sha_before,
                         "an unauthenticated rewritten HEAD",
                     )?;
                     perform_rebase_onto_base(
+                        &host.process_env(),
                         &context.workspace_path,
                         head,
                         head_sha_before,
@@ -325,6 +348,7 @@ fn rebase_pr_branch_inner<H: RuntimeHost + ?Sized>(
             ));
         }
         perform_rebase_onto_base(
+            &host.process_env(),
             &context.workspace_path,
             head,
             head_sha_before,
@@ -403,15 +427,17 @@ fn absorbed_outcome<H: RuntimeHost + ?Sized>(
 /// routes into the existing supported conflict-recovery path via
 /// [`rebase_conflict_error`].
 pub(in crate::executor::automation::vcs) fn perform_rebase_onto_base(
+    process_env: &orbit_common::Env,
     workspace_path: &Path,
     head: &str,
     head_sha_before: &str,
     base_ref: &str,
     base_sha: &str,
 ) -> Result<(&'static str, bool, String), OrbitError> {
-    let rebase_outcome = git_run(workspace_path, &["rebase", base_sha])?;
+    let rebase_outcome = git_run(process_env, workspace_path, &["rebase", base_sha])?;
     if rebase_outcome.timed_out {
         return recover_started_rebase_timeout(
+            process_env,
             workspace_path,
             head,
             head_sha_before,
@@ -420,7 +446,7 @@ pub(in crate::executor::automation::vcs) fn perform_rebase_onto_base(
         );
     }
     if !rebase_outcome.success {
-        let conflicting_paths = unmerged_paths(workspace_path)?;
+        let conflicting_paths = unmerged_paths(process_env, workspace_path)?;
         if conflicting_paths.is_empty() {
             return Err(git_failure_error(
                 workspace_path,
@@ -430,6 +456,7 @@ pub(in crate::executor::automation::vcs) fn perform_rebase_onto_base(
             ));
         }
         return Err(rebase_conflict_error(
+            process_env,
             workspace_path,
             head_sha_before,
             base_sha,
@@ -437,13 +464,18 @@ pub(in crate::executor::automation::vcs) fn perform_rebase_onto_base(
             &format!("rebase of '{head}' onto checkpoint '{base_sha}' stopped with conflicts"),
         )?);
     }
-    let after = branch_freshness_against_ref(workspace_path, head, base_ref, base_sha)?;
+    let after =
+        branch_freshness_against_ref(process_env, workspace_path, head, base_ref, base_sha)?;
     if after.commits_behind != 0 {
         return Err(OrbitError::Execution(
             "git_rebase: branch remains behind the recorded base after rebase".to_string(),
         ));
     }
-    Ok(("performed", true, commit_sha(workspace_path, head)?))
+    Ok((
+        "performed",
+        true,
+        commit_sha(process_env, workspace_path, head)?,
+    ))
 }
 
 /// Discard a changed HEAD (`what` names it in errors), restoring the worktree
@@ -456,12 +488,18 @@ pub(in crate::executor::automation::vcs) fn perform_rebase_onto_base(
 /// whenever the worktree is not already clean, naming every dirty path so an
 /// operator can recover the state themselves before retrying.
 pub(in crate::executor::automation::vcs) fn discard_rewrite(
+    process_env: &orbit_common::Env,
     workspace_path: &Path,
     head_sha_before: &str,
     what: &str,
 ) -> Result<(), OrbitError> {
-    ensure_clean_for_rewrite(workspace_path, head_sha_before, what)?;
-    git_success(workspace_path, &["reset", "--hard", head_sha_before]).map_err(|error| {
+    ensure_clean_for_rewrite(process_env, workspace_path, head_sha_before, what)?;
+    git_success(
+        process_env,
+        workspace_path,
+        &["reset", "--hard", head_sha_before],
+    )
+    .map_err(|error| {
         OrbitError::Execution(format!(
             "git_rebase: failed to discard {what} before redoing the rebase from checkpoint \
              '{head_sha_before}': {error}"

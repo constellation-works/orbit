@@ -96,9 +96,10 @@ impl WorktreeIdentity {
     /// The worktree directory this identity resolves to.
     pub(in crate::executor::automation) fn path(
         &self,
+        process_env: &orbit_common::Env,
         repo_root: &Path,
     ) -> Result<std::path::PathBuf, OrbitError> {
-        resolve_worktree_path_from_prefix(repo_root, &self.branch_prefix, &self.run_id)
+        resolve_worktree_path_from_prefix(process_env, repo_root, &self.branch_prefix, &self.run_id)
     }
 
     /// The directory setup would have chosen had no `run_id` reached it, when
@@ -110,13 +111,15 @@ impl WorktreeIdentity {
     /// cannot tell after the fact which branch setup took.
     pub(in crate::executor::automation) fn fallback_path(
         &self,
+        process_env: &orbit_common::Env,
         repo_root: &Path,
     ) -> Result<Option<std::path::PathBuf>, OrbitError> {
         let fallback = fallback_run_id_for_tasks(&self.task_ids);
         if fallback == self.run_id {
             return Ok(None);
         }
-        resolve_worktree_path_from_prefix(repo_root, &self.branch_prefix, &fallback).map(Some)
+        resolve_worktree_path_from_prefix(process_env, repo_root, &self.branch_prefix, &fallback)
+            .map(Some)
     }
 }
 

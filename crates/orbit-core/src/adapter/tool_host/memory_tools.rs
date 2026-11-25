@@ -17,6 +17,7 @@ use serde_json::Value;
 /// binding, or the run this tool context names with the task its managed
 /// environment names. Never from input.
 fn memory_tool_caller(
+    process_env: &orbit_common::Env,
     task_scope: &OrbitTaskScope,
     session: &ToolSessionContext,
     model: Option<&str>,
@@ -26,7 +27,7 @@ fn memory_tool_caller(
     let scope_task_id = task_scope.task_id.clone().or_else(|| {
         scope_run_id
             .as_ref()
-            .and_then(|_| managed_run_context_task_id_from_env())
+            .and_then(|_| managed_run_context_task_id_from_env(process_env))
     });
     MemoryToolCaller {
         worker_task_id: worker.map(|binding| binding.task_id.clone()),
@@ -47,7 +48,7 @@ pub(super) fn dispatch(
 ) -> Result<Value, OrbitError> {
     let input = verb.spec().parse_input(input)?;
     let reason = || input.optional_string("reason");
-    let caller = || memory_tool_caller(task_scope, session, model);
+    let caller = || memory_tool_caller(runtime.env(), task_scope, session, model);
     match verb {
         MemoryVerb::Show => {
             let revision = input

@@ -1088,7 +1088,9 @@ fn the_backstop_offers_only_its_decisions_and_names_the_retained_candidate() {
         .expect("read failed run")
         .expect("failed run");
     let worktree =
-        orbit_engine::run_worktree_paths(&repo, &failed_run).expect("worktree")[0].clone();
+        orbit_engine::run_worktree_paths(&orbit_common::Env::capture(), &repo, &failed_run)
+            .expect("worktree")[0]
+            .clone();
     let target = worktree.to_string_lossy().to_string();
     let added = run_git(
         &repo,

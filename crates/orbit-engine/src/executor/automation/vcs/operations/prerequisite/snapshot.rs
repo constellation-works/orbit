@@ -136,6 +136,7 @@ pub(in super::super) fn poll_interval_ms(input: &Value) -> u64 {
 /// wait that starts at 5 s and doubles up to `poll_interval_ms`, until the
 /// deadline ends the wait with the last unreadable cause.
 pub(in super::super) fn snapshot(
+    process_env: &orbit_common::Env,
     deadline: Deadline,
     workspace: &Path,
     selector: PullRequestSelector<'_>,
@@ -159,13 +160,14 @@ pub(in super::super) fn snapshot(
     let wait_cap = poll_interval_ms.max(1);
     let mut next_wait = FIRST_RETRY_WAIT_MS.min(wait_cap);
     loop {
-        let error = match snapshot_once(deadline, workspace, pr, head, branch, base) {
+        let error = match snapshot_once(process_env, deadline, workspace, pr, head, branch, base) {
             Ok(snapshot) => return Ok(snapshot),
             Err(error) => error,
         };
         // [ORB-25864] A rate-limited read waits for the provider's reset
         // within the deadline and reads the whole snapshot again.
         if super::super::read_reset::wait_for_reset(
+            process_env,
             deadline,
             workspace,
             &error,
@@ -218,6 +220,7 @@ pub(in super::super) fn snapshot(
 }
 
 pub(in super::super) fn snapshot_once(
+    process_env: &orbit_common::Env,
     deadline: Deadline,
     workspace: &Path,
     pr: &str,
@@ -225,10 +228,11 @@ pub(in super::super) fn snapshot_once(
     branch: &str,
     base: &str,
 ) -> Result<Snapshot, OrbitError> {
-    let repo = super::super::read_cache::repository_identity(deadline, workspace)?;
+    let repo = super::super::read_cache::repository_identity(process_env, deadline, workspace)?;
     let repository = text(&repo, "full_name", unreadable)?.to_string();
     let repository_id = number(&repo, "id", unreadable)?;
     let pull = api(
+        process_env,
         deadline,
         workspace,
         &format!("repos/{{owner}}/{{repo}}/pulls/{pr}"),
@@ -262,6 +266,7 @@ pub(in super::super) fn snapshot_once(
     // active branch-rules endpoint adds organization/repository rulesets.
     let query = "query($pr:Int!,$owner:String!,$repo:String!){repository(owner:$owner,name:$repo){pullRequest(number:$pr){headRefOid baseRefName reviewDecision baseRef{branchProtectionRule{id requiredStatusChecks{context app{databaseId slug}}}}}}}";
     let response = deadline.execute(
+        process_env,
         "gh",
         vec![
             "api".into(),
@@ -327,6 +332,7 @@ pub(in super::super) fn snapshot_once(
         }
     }
     let rules = api(
+        process_env,
         deadline,
         workspace,
         &format!(
@@ -387,6 +393,7 @@ pub(in super::super) fn snapshot_once(
     // A successfully read empty policy is valid for current-gate observation.
     // Recovery callers must still prove an actual missing workflow context.
     let checks = api(
+        process_env,
         deadline,
         workspace,
         &format!("repos/{{owner}}/{{repo}}/commits/{head}/check-runs?per_page=100&filter=latest"),
@@ -400,6 +407,7 @@ pub(in super::super) fn snapshot_once(
     // Combined status pins the latest legacy contexts to this repository and
     // commit. A context has no app identity and cannot satisfy an app-bound gate.
     let statuses = api(
+        process_env,
         deadline,
         workspace,
         &format!("repos/{{owner}}/{{repo}}/commits/{head}/status?per_page=100"),
@@ -432,6 +440,7 @@ pub(in super::super) fn snapshot_once(
         )?;
     }
     let runs = api(
+        process_env,
         deadline,
         workspace,
         &format!("repos/{{owner}}/{{repo}}/actions/runs?head_sha={head}&per_page=100"),
@@ -450,6 +459,7 @@ pub(in super::super) fn snapshot_once(
 }
 
 pub(in super::super) fn checked_run(
+    process_env: &orbit_common::Env,
     deadline: Deadline,
     workspace: &Path,
     snapshot: &Snapshot,
@@ -461,6 +471,7 @@ pub(in super::super) fn checked_run(
     let base = text(&snapshot.pr["base"], "ref", unreadable)?;
     let run_id = number(run, "id", unreadable)?;
     let current = api(
+        process_env,
         deadline,
         workspace,
         &format!("repos/{{owner}}/{{repo}}/actions/runs/{run_id}"),

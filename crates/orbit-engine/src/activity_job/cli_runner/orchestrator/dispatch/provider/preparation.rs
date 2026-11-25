@@ -254,7 +254,11 @@ pub(super) fn prepare_provider_agent(
     // value to an absolute path under the writable claude state dir, so the
     // log lands somewhere `denyModify: .orbit/**` does not block. See
     // T20260505-22.
-    apply_provider_static_arg_fixups(provider, &mut cli_executor.args);
+    apply_provider_static_arg_fixups(
+        &context.host.process_env(),
+        provider,
+        &mut cli_executor.args,
+    );
 
     // Inner-sandbox neutralization. When orbit-exec wraps the CLI we are the
     // single source of truth for filesystem enforcement; the agent's own

@@ -20,7 +20,7 @@ pub(super) struct AntigravityUsageRequest {
 impl AntigravityUsageRequest {
     /// A fixed built-in command, never a model prompt. agy handles its existing
     /// login itself; Orbit neither extracts credentials nor adds new secrets.
-    pub(super) fn read(&self) -> Option<Vec<u8>> {
+    pub(super) fn read(&self, process_env: &orbit_common::Env) -> Option<Vec<u8>> {
         let request = ExecRequest {
             program: self.program.clone(),
             args: quota_command_args(&self.args),
@@ -30,11 +30,8 @@ impl AntigravityUsageRequest {
             environment_mode: EnvironmentMode::ClearAndSet(self.environment.clone()),
             debug: false,
         };
-        let (result, body) = run_process_streaming_stdout(
-            &orbit_common::Env::capture(),
-            &request,
-            &NoSandbox,
-            |stdout| {
+        let (result, body) =
+            run_process_streaming_stdout(process_env, &request, &NoSandbox, |stdout| {
                 let mut body = Vec::new();
                 stdout
                     .take(MAX_BYTES + 1)
@@ -43,9 +40,8 @@ impl AntigravityUsageRequest {
                         orbit_common::OrbitError::Execution("read Antigravity usage".to_string())
                     })?;
                 Ok(body)
-            },
-        )
-        .ok()?;
+            })
+            .ok()?;
         (result.success && body.len() as u64 <= MAX_BYTES).then_some(body)
     }
 }

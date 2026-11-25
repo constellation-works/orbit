@@ -77,7 +77,7 @@ fn publish<H: RuntimeHost + ?Sized>(
             )
         })
         .collect::<Vec<_>>();
-    let tree_sha = write_tree(workspace_path, &files)?;
+    let tree_sha = write_tree(&host.process_env(), workspace_path, &files)?;
     let published = host.run_private_vcs_operation(
         operations::EVIDENCE_REF_PUSH,
         json!({
@@ -226,7 +226,11 @@ fn parse_name(file: &str) -> Option<(&str, &str, u32, Phase)> {
 
 /// Write `files` as blobs and return the tree holding exactly each at its
 /// relative path (`screenshots/<file>`).
-fn write_tree(workspace_path: &Path, files: &[(String, &[u8])]) -> Result<String, OrbitError> {
+fn write_tree(
+    process_env: &orbit_common::Env,
+    workspace_path: &Path,
+    files: &[(String, &[u8])],
+) -> Result<String, OrbitError> {
     let mut entries: BTreeMap<String, Vec<(String, &[u8])>> = BTreeMap::new();
     let mut blobs = String::new();
     for (path, content) in files {
@@ -236,21 +240,31 @@ fn write_tree(workspace_path: &Path, files: &[(String, &[u8])]) -> Result<String
                 .or_default()
                 .push((rest.to_string(), content)),
             None => {
-                let blob = git_stdin(workspace_path, &["hash-object", "-w", "--stdin"], content)?;
+                let blob = git_stdin(
+                    process_env,
+                    workspace_path,
+                    &["hash-object", "-w", "--stdin"],
+                    content,
+                )?;
                 blobs.push_str(&format!("100644 blob {blob}\t{path}\n"));
             }
         }
     }
     for (directory, children) in entries {
-        let tree = write_tree(workspace_path, &children)?;
+        let tree = write_tree(process_env, workspace_path, &children)?;
         blobs.push_str(&format!("040000 tree {tree}\t{directory}\n"));
     }
-    git_stdin(workspace_path, &["mktree"], blobs.as_bytes())
+    git_stdin(process_env, workspace_path, &["mktree"], blobs.as_bytes())
 }
 
 /// Run a local object-writing Git command over `stdin`; its trimmed output.
-fn git_stdin(workspace_path: &Path, args: &[&str], stdin: &[u8]) -> Result<String, OrbitError> {
-    let outcome = git_run_bytes(workspace_path, args, Some(stdin))?;
+fn git_stdin(
+    process_env: &orbit_common::Env,
+    workspace_path: &Path,
+    args: &[&str],
+    stdin: &[u8],
+) -> Result<String, OrbitError> {
+    let outcome = git_run_bytes(process_env, workspace_path, args, Some(stdin))?;
     if !outcome.success || outcome.timed_out {
         return Err(OrbitError::Execution(format!(
             "pr_open: git {} failed writing the screenshot evidence tree: {}",
