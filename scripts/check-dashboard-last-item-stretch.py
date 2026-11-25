@@ -124,6 +124,32 @@ def class_names(selector):
     return {match.group(1) for match in CLASS_TOKEN.finditer(selector)}
 
 
+def strip_not_blocks(selector):
+    """Remove :not(...) blocks so excluded classes read as exclusions."""
+    out = []
+    index = 0
+    total = len(selector)
+    while index < total:
+        if selector[index] == ":" and selector[index:index + 5].lower() == ":not(":
+            depth = 1
+            index += 5
+            while index < total and depth > 0:
+                if selector[index] == "(":
+                    depth += 1
+                elif selector[index] == ")":
+                    depth -= 1
+                index += 1
+            out.append(" ")
+        else:
+            out.append(selector[index])
+            index += 1
+    return "".join(out)
+
+
+def positive_class_names(selector):
+    return class_names(strip_not_blocks(selector))
+
+
 def parent_pattern(parent):
     return re.compile(r"(?<![\w-])" + r"\s+".join(re.escape(part) for part in parent.split()))
 
@@ -138,7 +164,7 @@ def compound_matches_item(compound, stack):
     if stack.child == "li":
         return compound == "*" or compound.startswith("li") or ":last-child" in compound
     child_class = stack.child.removeprefix(".")
-    names = class_names(compound)
+    names = positive_class_names(compound)
     aliases = {child_class, *(name.removeprefix(".") for name in stack.child_aliases)}
     return compound == "*" or bool(names & aliases) or ":last-child" in compound
 
@@ -241,8 +267,9 @@ def matches_item(selector, stack):
     if stack.child == "*":
         # A `*` stack has no class of its own, so only its declared item
         # aliases identify an item reached through a descendant combinator.
-        return bool(class_names(compound) & aliases) and "::" not in compound
-    return bool(class_names(compound) & aliases)
+        # Classes inside :not() are exclusions, not item references.
+        return bool(positive_class_names(compound) & aliases) and "::" not in compound
+    return bool(positive_class_names(compound) & aliases)
 
 
 def matches_container(selector, stack):

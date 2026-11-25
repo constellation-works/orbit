@@ -116,6 +116,8 @@ class DashboardLastItemStretchTests(unittest.TestCase):
         descendant_rules = (
             ".history-kv-list > .history-kv-item .history-kv-value { flex: 1; }\n",
             ".history-kv-list .history-kv-value { flex-grow: 1; }\n",
+            ".history-kv-list strong:not(.history-kv-item) { flex: 1; }\n",
+            ".history-kv-list strong:not(.history-kv-item) { flex-grow: 1; }\n",
         )
         for rule in descendant_rules:
             with self.subTest(rule=rule):
@@ -124,6 +126,18 @@ class DashboardLastItemStretchTests(unittest.TestCase):
                 result = self.run_guard()
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
                 self.task_detail.write_text(original, encoding="utf-8")
+
+        original = self.task_detail.read_text(encoding="utf-8")
+        self.task_detail.write_text(
+            original + ".history-kv-list .history-kv-item { flex: 1; }\n",
+            encoding="utf-8",
+        )
+        try:
+            result = self.run_guard()
+            self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+            self.assertIn("lets a stacked item", result.stderr)
+        finally:
+            self.task_detail.write_text(original, encoding="utf-8")
 
     def test_rejects_n_plus_k_child_on_star_stack(self):
         n_plus_k_rules = (
