@@ -5,7 +5,7 @@ title: "Policy & Sandboxing — Overview"
 owner: claude
 created_date: 2026-04-26
 updated_date: 2026-11-08
-last_validated: 2026-11-08
+last_validated: 2026-11-25
 status: Draft
 stage: shipped
 next: "—"

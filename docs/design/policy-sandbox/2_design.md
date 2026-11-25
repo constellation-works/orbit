@@ -4,8 +4,8 @@ type: design
 title: "Policy & Sandboxing — Design"
 owner: claude
 created_date: 2026-04-26
-updated_date: 2026-11-18
-last_validated: 2026-11-18
+updated_date: 2026-11-25
+last_validated: 2026-11-25
 status: Draft
 feature: policy-sandbox
 doc_role: design
@@ -620,8 +620,8 @@ database/lock and asserts 100 collision-free dense IDs per artifact kind ([ORB-1
 - [ORB-14538] — Restrict Codex side-write roots to validated runtime stores.
 - [ORB-15117] — Apply worktree-anchored macOS modify rules and retain terminal host-clock denies.
 - [ORB-19224] — Defer `orbit plugin test` inside a macOS worker to the claim host's replay instead of failing every case on the nested Seatbelt refusal, and type the refusal `validation_route_unavailable`.
-- [ORB-20133] — Allowed a read-only exploration fallback when the OS sandbox backend was unavailable (retired with the explorer in [ORB-20383]; a missing backend now fails closed unless `allow_fallback: true`, then uses bare exec).
 - [ORB-20350] — Keep nested Landlock write grants from reopening caller read exclusions.
+- [ORB-24077] — Keep file-scoped workspace `state/semantic.db*` grants with the global task-store grants so read-only profiles index resident task writes, and degrade read-only fallback opens to an open-time warning.
 - [T20260427-51] — wrap cli-backend agent invocations in `sandbox-exec` on macOS with inner-flag neutralization for codex/gemini.
 - [T20260508-13] — add `$HOME/.claude.json{,.lock,.tmp.<pid>.<ms_ts>}` sibling allows to the macOS sandbox profile so Claude can persist its main settings file.
 - [T20260509-27] — Reject parent traversal through the public policy-check boundary.

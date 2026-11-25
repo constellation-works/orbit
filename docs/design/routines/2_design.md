@@ -2,9 +2,9 @@
 title: Routines — Design
 owner: claude
 created_date: 2026-07-03
-updated_date: 2026-11-22
-last_validated: 2026-10-19
-status: Accepted
+updated_date: 2026-11-25
+last_validated: 2026-11-25
+status: Implemented
 feature: routines
 doc_role: design
 type: design
@@ -107,7 +107,7 @@ Job runs (the fire record of state-, delivery- and condition-triggered routines,
 sampled over the newest 256 rows) and the task registry database plus its WAL
 are a churn stamp, not part of the key: a live drain moves them with every run
 it starts or finishes, so keying on them made most polls wait out a 0.8-1.9 s
-recompute (p95 1788 ms on the live dashboard). A fresh payload computed under a
+recompute (p95 1788 ms on the live dashboard) ([ORB-24220]). A fresh payload computed under a
 different churn stamp is served as it stands while one background recompute
 replaces it, so a run's state reaches `last_fire` within the five-second
 freshness bound (the next poll after the recompute lands) and the `Age` header
@@ -246,13 +246,13 @@ policy:
 
 Field semantics:
 
-- **`name`** — unique across all routine sources on a host; collision is a load-time error, including for a `--workspace`-scoped sweep or status read, which also checks the other registered workspaces.
+- **`name`** — unique across all routine sources on a host; collision is a load-time error, including for a `--workspace`-scoped sweep or status read, which also inspects the other registered workspaces observationally ([ORB-27908], [ORB-28162], [ORB-28185]).
 - **`orbit_default`** — true when the definition is a seeded file (`is_seeded_routine_file`):
   directly under `routines/` and named after one of `orbit_config::SHIPPED_DEFAULT_ROUTINES`, on each
   `GET /api/routines` row and each `owner_only` row. The identity is the file stem, not `name`:
   seeding qualifies a default's `name` with its workspace (`ci-failure-sweep-<workspace>`), so an
   operator's edit to the file keeps the flag. The dashboard shows it as the "Orbit default" badge
-  that auto-tasks use ([auto-tasks](../auto-tasks/2_design.md)).
+  that auto-tasks use ([auto-tasks](../auto-tasks/2_design.md)) ([ORB-27817]).
 - **`enabled`** — the definition toggle. Every registered owner checkout with an
   enabled clock evaluates its cron definitions against its own store;
   delivery/state consumers additionally require their resolved owner machine (§1.1–1.2)
@@ -623,8 +623,8 @@ the base branch by construction. A target with no recorded delivery names no com
 delivery definition that cannot be read or parsed, and a recorded landing that merged without a
 commit that resolves in this repository, are not that case: the proof is refused and the
 finding stays proposed, so a citation of the culprit itself or of an older same-path change
-cannot close it. A local fast-forward records the commit the base is at after the merge,
-including a fast-forward that follows a rebase. An older local checkpoint that omits that
+cannot close it ([ORB-25729]). A local fast-forward records the commit the base is at after the merge,
+including a fast-forward that follows a rebase ([ORB-26939]). An older local checkpoint that omits that
 commit is a merged landing without a resolvable commit. When one is known,
 a covering commit must descend from all of them, and when the task declared path selectors it
 must touch one of those paths. Human- and orchestrator-filed findings are never archived this
@@ -1068,7 +1068,7 @@ logs every transition to `routine_breaker_events` (`tripped`, `trial`,
   Other trigger kinds are evaluated at once. The dashboard routine details offer the
   same two actions through the governed `routine.breaker` operation. Both are
   recorded as breaker events; the dashboard action is also audited.
-  Both select the routine through the selection every routine edit uses, so a
+  Both select the routine through the selection every routine edit uses ([ORB-25827]), so a
   routine a replica lists as owner-only is refused naming its owner, and the
   dashboard refuses a routine of another source workspace (`workspace_mismatch`).
 - **Status.** `orbit routine list`, `orbit routine show` and the dashboard show a
@@ -1087,7 +1087,7 @@ logs every transition to `routine_breaker_events` (`tripped`, `trial`,
   scheduled admission, or current time for a bypass — and `null` when
   `trial_phase` is not `armed` or the routine waits for an event). The
   dashboard Next hour timeline renders breaker trials solely from
-  `trial_phase` and `trial_expected_at`.
+  `trial_phase` and `trial_expected_at` ([ORB-26124]).
 
 ---
 
@@ -1206,11 +1206,6 @@ on each owner; delivery/state admission still requires the consumer's owner mach
 - [DANI-10502] refined retirement advice for seeded and operator-authored routine definitions.
 - [ORB-00374] removed the shell activity variant and run_shell dispatch.
 - [ORB-00422] made synchronous routine dispatch failures retryable under the fire policy.
-- [ORB-10001] authored the routines design proposal (historical citation).
-- [ORB-10021] implemented routines v1 and its OS clock integration.
-- [ORB-10207] seeded disabled defaults and the workspace-local shipment wrapper.
-- [ORB-10270] implemented historical fleet-aware routine pin diagnostics and reassignment baselines.
-- [ORB-10319] extracted historical registry/MCP composition boundaries, later replaced by the local registry composition.
 - [ORB-10395] retired the v1 executor stack and External Executor Protocol.
 - [ORB-10800] added managed-artifact diagnostics and stale-artifact repair.
 - [ORB-10875] added dashboard routine and clock status and controls.
@@ -1218,7 +1213,6 @@ on each owner; delivery/state admission still requires the consumer's owner mach
 - [ORB-11082] made clock enable repair stale installed Linux timer units.
 - [ORB-11107] added host-owned CI evidence collection and failure filing.
 - [ORB-11154] corrected routine reconciliation without a prior managed manifest.
-- [ORB-11315] specified shared state and delivery triggers with durable coverage.
 - [ORB-11330] implemented shared delivery evaluation, frozen batches and receipt-based coverage.
 - [ORB-11331] implemented state-driven preparation and failure triage.
 - [ORB-12108] made the workspace selector constrain the scheduler pass.
@@ -1226,7 +1220,6 @@ on each owner; delivery/state admission still requires the consumer's owner mach
 - [ORB-12237] combined routine and auto-task evaluation under orbit clock and retired the scheduler wrapper.
 - [ORB-12255] recorded actual run provenance and consistent workflow outcomes.
 - [ORB-12491] retired epic execution while retaining task hierarchy and historical GC discovery.
-- [ORB-12725] moved local machine identity into global config and removed owner display-name projections.
 - [ORB-12745] replaced task-pilot cron scheduling with owner-bound preparation eligibility.
 - [ORB-13016] corrected dashboard and state-triggered run provenance.
 - [ORB-13638] made task-pilot material freshness inputs configurable.
@@ -1241,7 +1234,17 @@ on each owner; delivery/state admission still requires the consumer's owner mach
 - [ORB-22804] retired that routine and its job with crew-performance weighting.
 - [ORB-17918] allowed distinct state-trigger kinds to share a job while retaining duplicate-ownership guards.
 - [ORB-18378] seeded disabled weekly task publication and shared owner-bound publishing.
+- [ORB-22802] seeded `task_pilot` and `worktree_gc` enabled in newly initialized workspaces.
 - [ORB-23115] added the seeded `crew_memory_dream` routine, targeting the crew-memory dream job.
+- [ORB-24220] served `GET /api/routines` from the memo using a routine-store change token while job-run and task-registry churn refreshes in the background.
+- [ORB-25729] kept a verified-no-diff finding held when its culprit delivery definition is unreadable or unparseable.
+- [ORB-25827] routed routine breaker reset and bypass through the shared routine-edit selection across CLI and dashboard.
+- [ORB-26124] served routine breaker `trial_phase` and `trial_expected_at` from the status payload instead of deriving them in the dashboard.
+- [ORB-26939] recorded `landed_commit` on local fast-forward merges so relation-only findings can verify covering commits.
 - [ORB-27813] retired `crew_memory_dream` as a shipped default; its job and activity still ship.
+- [ORB-27817] computed `orbit_default` from seeded filenames on `GET /api/routines` and `owner_only` rows and marked default routines on the dashboard.
+- [ORB-27908] kept Residents routine rows in sync with host-wide routine name collisions.
+- [ORB-28162] rejected host routine name collisions during workspace-scoped clock ticks.
+- [ORB-28185] kept workspace-scoped tick peer collision discovery observational and write-free.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.
