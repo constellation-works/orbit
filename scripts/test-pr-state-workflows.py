@@ -1170,6 +1170,85 @@ class NextestShardWorkflowTests(unittest.TestCase):
         self.assertEqual(sorted(awaited), sorted(required),
                          "the Check job's elapsed time must cover the test build, every shard and the guardrails")
 
+    def test_shard_toolchain_installs_beside_the_checkout_and_download(self):
+        # [ORB-28514] The pinned toolchain install runs in the background from
+        # the first step after the build gate; the step that joins it precedes
+        # every step that needs cargo, and a failed install fails the job there.
+        channel = re.search(r'channel\s*=\s*"([^"]+)"', (ROOT / "rust-toolchain.toml").read_text()).group(1)
+        for job_id in ("test-1", "test-partition-11"):
+            job = self.document["jobs"][job_id]
+            names = [step.get("name") or step.get("uses") for step in job["steps"]]
+            self.assertFalse([step for step in job["steps"]
+                              if str(step.get("uses", "")).startswith("dtolnay/rust-toolchain@")],
+                             "the shard installs its toolchain through the background steps")
+            start = names.index("Start the pinned toolchain install")
+            finish = names.index("Finish the pinned toolchain install")
+            self.assertEqual(start, 1, "the install starts right after the build gate")
+            for overlapped in ("Download nextest archive", "Download nextest archive attempt 3"):
+                self.assertLess(start, names.index(overlapped))
+                self.assertLess(names.index(overlapped), finish)
+            for needs_cargo in ("Install cargo-nextest", "Extract nextest archive", "Run nextest shard",
+                                "Linux sandbox/policy enforcement gate"):
+                self.assertLess(finish, names.index(needs_cargo), needs_cargo)
+            steps = {step.get("name"): step for step in job["steps"]}
+            self.assertIn(f"rustup toolchain install {channel} ", steps["Start the pinned toolchain install"]["run"])
+            self.assertIn(f"rustup default {channel}", steps["Start the pinned toolchain install"]["run"])
+
+    @unittest.skipUnless(shutil.which("flock"), "requires flock")
+    def test_shard_toolchain_finish_waits_for_the_install_and_propagates_its_status(self):
+        job = self.document["jobs"]["test-1"]
+        steps = {step.get("name"): step for step in job["steps"]}
+        start, finish = (steps[f"{verb} the pinned toolchain install"]["run"] for verb in ("Start", "Finish"))
+        for outcome in ("0", "7"):
+            with self.subTest(outcome=outcome):
+                root = self.root / f"toolchain-{outcome}"
+                (root / "bin").mkdir(parents=True)
+                # The stub records its argv, then holds the install open until released.
+                rustup = root / "bin/rustup"
+                rustup.write_text(
+                    '#!/bin/bash\necho "rustup $*"\n'
+                    'if [[ "$1" == toolchain ]]; then\n'
+                    '  touch "$RUNNER_TEMP/installing"\n'
+                    '  for _ in $(seq 1000); do [[ -e "$RUNNER_TEMP/release" ]] && break; sleep 0.01; done\n'
+                    f'  exit {outcome}\nfi\n')
+                rustup.chmod(0o755)
+                rustc = root / "bin/rustc"
+                rustc.write_text('#!/bin/bash\necho "rustc $*"\n')
+                rustc.chmod(0o755)
+                env = dict(os.environ, RUNNER_TEMP=str(root), PATH=f"{root / 'bin'}:{os.environ['PATH']}")
+                started = subprocess.run(["bash", "-e", "-c", start], cwd=root, env=env, text=True,
+                                         capture_output=True, timeout=10)
+                self.assertEqual(started.returncode, 0, started.stdout + started.stderr)
+                deadline = time.monotonic() + 10
+                while not (root / "installing").exists() and time.monotonic() < deadline:
+                    time.sleep(0.01)
+                self.assertTrue((root / "installing").exists(), "the install runs after the step returns")
+                self.assertFalse((root / "toolchain-install/status").exists())
+                waiting = subprocess.Popen(["bash", "-e", "-c", finish], cwd=root, env=env, text=True,
+                                           stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                try:
+                    with self.assertRaises(subprocess.TimeoutExpired):
+                        waiting.wait(timeout=0.3)
+                finally:
+                    (root / "release").touch()
+                stdout, stderr = waiting.communicate(timeout=10)
+                self.assertEqual(waiting.returncode, int(outcome), stdout + stderr)
+                self.assertIn("rustup toolchain install 1.98.1 --profile minimal --no-self-update", stdout)
+                if outcome == "0":
+                    self.assertIn("rustup default 1.98.1", stdout)
+                    self.assertIn("rustc --version --verbose", stdout)
+                else:
+                    self.assertNotIn("rustup default", stdout, "a failed install never becomes the default")
+        # A start that died before recording a status fails the join.
+        lost = self.root / "toolchain-lost"
+        (lost / "toolchain-install").mkdir(parents=True)
+        (lost / "toolchain-install/lock").touch()
+        (lost / "toolchain-install/output").touch()
+        completed = subprocess.run(["bash", "-e", "-c", finish], cwd=lost, text=True, capture_output=True,
+                                   timeout=10, env=dict(os.environ, RUNNER_TEMP=str(lost)))
+        self.assertEqual(completed.returncode, 1)
+        self.assertIn("without an exit status", completed.stderr)
+
     def test_repack_and_shard_failures_remain_failed_workflow_steps(self):
         for job, step in (("test-build", "Pack nextest archive for transfer"),
                           ("test-partition-2", "Run nextest shard"),
