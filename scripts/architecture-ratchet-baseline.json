@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "counts": {
+    "application_port_methods": 20,
+    "driver_writer_outside_transaction_files": 13,
+    "from_kernel_ref_uses": 21,
+    "impl_orbit_runtime_files": 337,
+    "orbit_runtime_naming_files.orbit-cli": 131,
+    "orbit_runtime_naming_files.orbit-cmd": 30,
+    "orbit_runtime_naming_files.orbit-web": 53,
+    "orbit_runtime_ref_param_fns": 1375,
+    "runtime_host_required_methods": 153,
+    "runtime_top_level_modules_outside_layers": 32,
+    "std_env_reads": 256,
+    "store_backend_traits": 32,
+    "store_open_outside_store": 7,
+    "worker_or_owner_reads": 219
+  }
+}
