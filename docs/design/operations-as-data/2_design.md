@@ -505,14 +505,15 @@ flag; `list` is not advertised over MCP, where agents list frictions with
 `orbit.search`). Omitting it preserves the legacy record-array response. The
 explicit `with_notes` mode has one stable object shape, `{records, notes}`.
 
-**Decided (phase 1):** an `Enum` parameter keeps its allowed values, and any
-default, in its MCP description, and the spec-derived schema emits no `enum` or
-`default` keyword. A legacy overlay in `tool_parameter_enum_values` still adds
-`enum` for `model` and for task `type`, `status` and `complexity`.
-`ParamType::Enum` maps to the `string` tool type and a `default`
-affects only the CLI. Auto-task's migration is therefore wire-identical: the MCP
-snapshot did not move. Emitting the keywords stays possible later as an
-additive change that re-blesses the snapshot.
+**Decided (phase 1, amended by ORB-28222):** an `Enum` parameter's allowed
+values come from its declaration alone. The spec-derived schema emits them as
+the JSON Schema `enum` keyword, on `items` for an `EnumList`, so MCP
+`tools/list` and `orbit tool show` advertise the set the handler accepts, and no
+second per-tool table can drift from it. A value's wire spelling is its
+`wire_name` when one is set (`skip_if_open` on the wire, `skip-if-open` on the
+CLI). The schema emits no `default` keyword: a `default` affects only the CLI,
+as before. `ParamType::Enum` maps to the `string` tool type. This change
+re-blesses the MCP `tools/list` snapshot.
 
 ## 7. CLI adapter
 
