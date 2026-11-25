@@ -190,9 +190,11 @@ or inactive registration; preserve the previous kind. MCP-scoped verbs still
 use `register_mcp`.
 
 If a verb overrode `input_schema()`, move the override into the noun's exhaustive
-`schema_extension(verb)` table in `orbit-tools`. Allowed values and defaults stay
-in the parameter's MCP description; the schema emits no `enum` or `default`
-keyword ([2_design.md §6](../2_design.md#6-mcp-adapter)).
+`schema_extension(verb)` table in `orbit-tools`. An `Enum`/`EnumList`
+parameter's allowed values come from its declaration alone; the spec-derived
+schema emits them as the JSON Schema `enum` keyword (on `items` for a list).
+The schema emits no `default` keyword: a `default` affects only the CLI
+([2_design.md §6](../2_design.md#6-mcp-adapter)).
 
 If a tool already refused unknown fields, declare `unknown_fields: Refuse` so
 the migration keeps refusing them; every other verb starts in `Warn`. Declare
