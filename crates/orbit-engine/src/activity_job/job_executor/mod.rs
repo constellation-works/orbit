@@ -85,6 +85,7 @@ pub use self::execute::{
 };
 pub use self::templating::{
     evaluate_job_step_when_at_admission, render_job_step_input_at_admission,
+    render_job_step_input_from_state,
 };
 pub use self::validate::{validate_job, validate_job_deterministic_actions};
 

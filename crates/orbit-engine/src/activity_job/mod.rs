@@ -24,9 +24,9 @@ pub use dispatcher::{
 };
 pub use job_executor::{
     JobOutcome, evaluate_job_step_when_at_admission, execute_job_with_resume,
-    render_job_step_input_at_admission, resolve_job_catalog_refs_for_execution,
-    resolve_job_catalog_refs_with_scripts_for_execution, validate_job,
-    validate_job_deterministic_actions,
+    render_job_step_input_at_admission, render_job_step_input_from_state,
+    resolve_job_catalog_refs_for_execution, resolve_job_catalog_refs_with_scripts_for_execution,
+    validate_job, validate_job_deterministic_actions,
 };
 pub use sqlite_sink::V2SqliteSink;
 

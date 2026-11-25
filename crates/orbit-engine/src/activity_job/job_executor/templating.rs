@@ -1,3 +1,6 @@
+use orbit_types::workflow::PipelineState;
+
+use super::execute::seed_pipeline_before_step;
 use super::*;
 
 /// Render a step's `default_input` against the merged job input before
@@ -12,12 +15,50 @@ pub fn render_job_step_input_at_admission(
     step_default_input: Option<&Value>,
     input_schema: Option<&Value>,
 ) -> Result<Value, DispatchError> {
+    render_job_step_input_with_steps(
+        job_default_input,
+        caller_input,
+        step_default_input,
+        input_schema,
+        Arc::new(HashMap::new()),
+    )
+}
+
+/// Render a step's `default_input` against the merged job input and the
+/// authenticated prior step outputs recorded in `state` before `step_index`,
+/// using the executor's own job-input merge, optional-string normalization, and
+/// JSON-parsing rules.
+pub fn render_job_step_input_from_state(
+    job: &JobV2,
+    caller_input: &Value,
+    state: &PipelineState,
+    step_index: usize,
+    step_default_input: Option<&Value>,
+    input_schema: Option<&Value>,
+) -> Result<Value, DispatchError> {
+    let steps = seed_pipeline_before_step(job, state, step_index)?;
+    render_job_step_input_with_steps(
+        job.default_input.as_ref(),
+        caller_input,
+        step_default_input,
+        input_schema,
+        steps,
+    )
+}
+
+fn render_job_step_input_with_steps(
+    job_default_input: Option<&Value>,
+    caller_input: &Value,
+    step_default_input: Option<&Value>,
+    input_schema: Option<&Value>,
+    steps: PipelineSteps,
+) -> Result<Value, DispatchError> {
     let base_input = merge_job_input(job_default_input, caller_input);
     let tctx = TemplateContext {
         input: base_input.clone(),
         item: None,
         iteration: None,
-        steps: Arc::new(HashMap::new()),
+        steps,
     };
     render_input(step_default_input, &base_input, &tctx, input_schema)
 }
