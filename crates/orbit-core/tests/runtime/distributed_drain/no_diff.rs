@@ -1996,6 +1996,54 @@ fn a_claimed_already_resolved_base_replays_its_named_tests_and_completes_without
     }
 }
 
+/// Missing replay evidence cannot settle, even when other required checks pass.
+#[cfg(unix)]
+fn a_report_free_already_resolved_checkpoint_requires_its_replay_log() {
+    for empty_required in [false, true] {
+        let replay = Replay::new();
+        let fixture = if empty_required {
+            CleanLeaf::resolved_without_required_commands(&replay, &[Replay::SELECTOR])
+        } else {
+            CleanLeaf::resolved_without_report(&replay, &[Replay::SELECTOR])
+        };
+        let handoff = fixture.prepare_handoff();
+        let mut missing = handoff.clone();
+        missing.validation.retain(|reference| {
+            let artifact = fixture
+                .pair
+                .wire
+                .owner
+                .get_task_artifact(&fixture.task, &reference.path)
+                .unwrap()
+                .unwrap();
+            let log: HandoffValidationLog = serde_json::from_slice(&artifact.content).unwrap();
+            log.command != Replay::host_command()
+        });
+        let error = fixture
+            .settle(&missing)
+            .expect_err("missing replay must be refused");
+        assert!(
+            error
+                .to_string()
+                .contains("already-resolved selector replay validation missing or failed"),
+            "{error}"
+        );
+        fixture.assert_status("in-progress");
+        assert!(
+            fixture
+                .pair
+                .wire
+                .owner
+                .accepted_task_handoff(&handoff.claim_id)
+                .is_err()
+        );
+        fixture.assert_no_blocked();
+        assert_settles_to_review(&fixture, &handoff, "passing replay");
+        fixture.land(&handoff);
+        fixture.assert_status("done");
+    }
+}
+
 /// The owner still binds report-free already-resolved checkpoints to the
 /// claimed task and run and accepts only verifier decisions it understands.
 #[cfg(unix)]
@@ -2235,5 +2283,6 @@ crate::scenario_table!(
     a_claimed_already_resolved_base_replays_its_named_tests_and_completes_without_a_pr_scenarios,
     a_claimed_already_resolved_base_replays_its_named_tests_and_completes_without_a_pr,
     a_report_free_already_resolved_checkpoint_keeps_owner_identity_guards,
+    a_report_free_already_resolved_checkpoint_requires_its_replay_log,
     a_failing_already_resolved_replay_blocks_the_task_with_its_output
 );

@@ -186,7 +186,8 @@ verifier rechecks it at that revision — and only with digest-pinned validation
 evidence for each command the owner requires. Two cases need none: a
 `no-diff-expected` skip checkpoint, which carries no validation (the owner's
 copy of the task must still carry the tag), and an empty required command list,
-which accepts the verified checkpoint with no validation logs. An accepted
+which accepts a verified checkpoint with no validation logs except that
+`verified_already_resolved` still requires a passing replay log for each selector. An accepted
 handoff moves the task to `review`, which awaits owner
 approval — it does not merge. A failure records its evidence and blocks the
 task. A release (a cancelled drain giving back work it will not finish) returns
