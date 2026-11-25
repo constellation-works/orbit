@@ -8,9 +8,9 @@ use crate::executor::automation::input::{canonicalize_existing_dir, input_string
 
 use super::super::git::{
     BaseSyncMode, GitTimeoutBudget, GitTimeoutBudgetGuard, base_sync_mode_from_input,
-    git_command_success, git_failure_error, git_output, git_output_paths, git_output_raw, git_run,
-    git_success, git_timeout_error, normalize_base_branch, resolve_worktree_start_point,
-    timeout_recovery_error,
+    git_command_success, git_failure_error, git_output, git_output_bytes, git_output_paths,
+    git_output_raw, git_run, git_success, git_timeout_error, normalize_base_branch,
+    resolve_worktree_start_point, timeout_recovery_error,
 };
 use super::super::handoff::rebase_in_progress;
 use super::resolve_shared_worktree_path;
@@ -240,21 +240,35 @@ pub(in crate::executor::automation::vcs) fn checkout_holding_branch(
     repo_root: &Path,
     base: &str,
 ) -> Result<Option<PathBuf>, OrbitError> {
-    let listing = git_output(repo_root, &["worktree", "list", "--porcelain"])?;
+    let listing = git_output_bytes(repo_root, &["worktree", "list", "--porcelain", "-z"])?;
     let expected_branch = format!("refs/heads/{base}");
     let mut current_path = None;
-    for line in listing.lines().chain(std::iter::once("")) {
-        if let Some(path) = line.strip_prefix("worktree ") {
-            current_path = Some(PathBuf::from(path));
-        } else if let Some(branch) = line.strip_prefix("branch ")
-            && branch == expected_branch
+    for record in listing.split(|byte| *byte == 0) {
+        if let Some(path) = record.strip_prefix(b"worktree ") {
+            current_path = Some(path);
+        } else if let Some(branch) = record.strip_prefix(b"branch ")
+            && branch == expected_branch.as_bytes()
         {
-            return Ok(current_path);
-        } else if line.is_empty() {
+            return current_path.map(worktree_path_from_bytes).transpose();
+        } else if record.is_empty() {
             current_path = None;
         }
     }
     Ok(None)
+}
+
+#[cfg(unix)]
+fn worktree_path_from_bytes(path: &[u8]) -> Result<PathBuf, OrbitError> {
+    use std::os::unix::ffi::OsStringExt;
+    Ok(PathBuf::from(std::ffi::OsString::from_vec(path.to_vec())))
+}
+
+#[cfg(not(unix))]
+fn worktree_path_from_bytes(path: &[u8]) -> Result<PathBuf, OrbitError> {
+    let path = std::str::from_utf8(path).map_err(|error| {
+        OrbitError::Execution(format!("invalid worktree path from Git: {error}"))
+    })?;
+    Ok(PathBuf::from(path))
 }
 
 fn fast_forward_local_base_to_remote(
