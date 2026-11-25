@@ -512,6 +512,36 @@ impl OrbitRuntime {
         Ok(None)
     }
 
+    /// The current native-host hold in `audit`, ignoring the operator's
+    /// `no-pilot` skip.
+    ///
+    /// Resident `promote_held` requires a current pilot free of unresolved
+    /// holds, while ordinary dispatch honors the `no-pilot` skip for routine
+    /// findings. The workflow-admission projection above respects that skip,
+    /// so this keeps native holds for the resident held-approval path only:
+    /// satisfaction through the matching `os:` tag, a criteria re-scope and
+    /// trusted resolutions still release the hold, exactly as the projection
+    /// judges them. Ordinary admission keeps its documented `no-pilot`
+    /// bypass; only the resident held-approval path calls this.
+    pub(crate) fn pilot_native_hold_ignoring_pilot_skip(
+        &self,
+        task: &Task,
+        audit: &Value,
+        history: &dyn Fn() -> Result<Vec<TaskHistoryEntry>, OrbitError>,
+    ) -> Result<Option<PilotAdmissionHold>, OrbitError> {
+        let Some(hold) = audit.get("native_os_hold").filter(|hold| !hold.is_null()) else {
+            return Ok(None);
+        };
+        let hold: NativeOsHold = serde_json::from_value(hold.clone())
+            .map_err(|error| OrbitError::Execution(format!("decode native OS hold: {error}")))?;
+        let tags = TaskOsRequirement::from_tags(&task.tags);
+        let current = hold.criteria == criteria_digest(task) && hold.outstanding(&tags);
+        if current && !native_os_resolved(&history()?, &hold) {
+            return Ok(Some(PilotAdmissionHold::NativeOs(hold)));
+        }
+        Ok(None)
+    }
+
     /// [`Self::pilot_admission_hold_in`] with the artifact manifest of a row
     /// the caller already read. `None` resolves a receipt through the
     /// canonical bundle read.
