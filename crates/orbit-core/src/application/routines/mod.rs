@@ -45,7 +45,7 @@ pub use edit_contract::{RoutineEditOutcome, RoutineEditRefusal};
 pub use loader::{
     DiscoveredWorkspaces, HostRoutines, LoadedRoutine, OwnerOnlyRoutine, REPLICA_LOCAL_ROUTINE_JOB,
     RetiredRoutine, RoutineCollection, RoutineLoadError, RoutineOrigin, RoutineWorkspaceProvider,
-    collect_host_routines, runs_in_replica,
+    collect_host_routines, declares_any_routine_name, runs_in_replica,
 };
 pub(crate) use status::rewrite_enabled_line;
 pub use status::{

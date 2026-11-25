@@ -164,9 +164,10 @@ fn non_blank(value: Option<&str>) -> Option<String> {
 
 /// The workspace's resident cycle routine row, as Routines lists it.
 ///
-/// Reads routine status for this workspace alone: a host-wide read loads
-/// every registered workspace's definitions, configuration and store rows,
-/// which this one row never needs.
+/// Reads routine status for this workspace (checking only peer workspaces
+/// whose definitions declare a colliding routine name): a full host-wide read
+/// loads every registered workspace's definitions, configuration and store
+/// rows, which this one row never needs.
 fn resident_cycle_routine(state: &DashboardState, runtime: &OrbitRuntime) -> Value {
     // The selector is the logical catalog ID the dashboard addressed. The
     // runtime's `workspace_id()` is the persisted partition ID, which an
