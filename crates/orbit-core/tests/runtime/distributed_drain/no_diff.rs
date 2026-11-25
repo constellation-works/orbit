@@ -1996,6 +1996,72 @@ fn a_claimed_already_resolved_base_replays_its_named_tests_and_completes_without
     }
 }
 
+/// An overlapping required command and native replay retain separate evidence.
+#[cfg(unix)]
+fn overlapping_required_command_and_replay_settle_with_separate_valid_evidence() {
+    for job in NO_DIFF_ROUTES {
+        let replay = Replay::new();
+        let mut fixture = CleanLeaf::build_requiring(
+            false,
+            "done",
+            &[],
+            false.into(),
+            None,
+            &Replay::host_command(),
+            &replay.config(),
+            None,
+            None,
+        );
+        fixture.input["implementation"]["already_resolved"] =
+            json!({"selectors": [Replay::SELECTOR]});
+        let handoff = fixture.run_clean_pipeline(job);
+        assert_eq!(
+            fixture.owner_validated_commands(&handoff),
+            vec![Replay::host_command(), Replay::host_command()]
+        );
+        assert_ne!(handoff.validation[0].path, handoff.validation[1].path);
+        assert_eq!(replay.runs().len(), 2);
+
+        let mut missing = handoff.clone();
+        missing.validation.pop();
+        assert!(
+            fixture.settle(&missing).is_err(),
+            "{job}: required check alone is not replay evidence"
+        );
+        let mut repeated = handoff.clone();
+        repeated.validation[1] = repeated.validation[0].clone();
+        assert!(
+            fixture.settle(&repeated).is_err(),
+            "{job}: one artifact cannot stand in for both runs"
+        );
+
+        let reference = &handoff.validation[1];
+        let artifact = fixture
+            .pair
+            .wire
+            .owner
+            .get_task_artifact(&fixture.task, &reference.path)
+            .unwrap()
+            .unwrap();
+        let original: Value = serde_json::from_slice(&artifact.content).unwrap();
+        let mut invalid = original.clone();
+        invalid["run_id"] = json!("another-run");
+        let content = serde_json::to_vec(&invalid).unwrap();
+        let invalid_path = format!("{}.wrong-run", reference.path);
+        fixture.attach(&invalid_path, invalid);
+        let mut wrong_run = handoff.clone();
+        wrong_run.validation[1].path = invalid_path;
+        wrong_run.validation[1].sha256 = sha256_hex(&content);
+        assert!(
+            fixture.settle(&wrong_run).is_err(),
+            "{job}: replay must match the claim run"
+        );
+        assert_settles_to_review(&fixture, &handoff, job);
+        fixture.land(&handoff);
+        fixture.assert_status("done");
+    }
+}
+
 /// Missing replay evidence cannot settle, even when other required checks pass.
 #[cfg(unix)]
 fn a_report_free_already_resolved_checkpoint_requires_its_replay_log() {
@@ -2282,6 +2348,7 @@ crate::scenario_table!(
 crate::scenario_table!(
     a_claimed_already_resolved_base_replays_its_named_tests_and_completes_without_a_pr_scenarios,
     a_claimed_already_resolved_base_replays_its_named_tests_and_completes_without_a_pr,
+    overlapping_required_command_and_replay_settle_with_separate_valid_evidence,
     a_report_free_already_resolved_checkpoint_keeps_owner_identity_guards,
     a_report_free_already_resolved_checkpoint_requires_its_replay_log,
     a_failing_already_resolved_replay_blocks_the_task_with_its_output
