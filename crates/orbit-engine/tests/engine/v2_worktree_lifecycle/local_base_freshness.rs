@@ -336,6 +336,83 @@ fn a_diverged_owner_base_is_refused_and_left_unmoved() {
     assert!(host.admitted().is_empty(), "a refused setup admits no task");
 }
 
+/// Diverged and checked out nowhere: the repository's own checkout sits on
+/// another branch. The refusal names the selected branch and both commits, says
+/// no checkout holds it, and never names the unrelated checkout.
+fn a_diverged_base_checked_out_nowhere_names_the_branch_not_a_checkout() {
+    let (fixture, host) = Fixture::hosted();
+    let owner = commit_file(&fixture.repo, "owner-only.txt", "owner commit\n");
+    git(&fixture.repo, &["switch", "-c", "other"]);
+    let origin = push_to_origin_from_elsewhere(&fixture, "from-elsewhere.txt");
+    let checkouts = registered_worktrees(&fixture.repo);
+    host.add_task("T-UNATTACHED", TaskStatus::Backlog);
+    let error = action(
+        &host,
+        "worktree_setup",
+        &setup_input(&["T-UNATTACHED"], "jrun-unattached"),
+    )
+    .expect_err("a diverged base that no checkout holds is refused");
+    assert!(
+        matches!(
+            error,
+            OrbitError::DeliveryRefused {
+                refusal: orbit_types::workflow::DeliveryRefusal::StaleBranch,
+                ..
+            }
+        ),
+        "expected a stale-branch delivery refusal, got {error:?}"
+    );
+    let message = error.to_string();
+    for fragment in [BASE, owner.as_str(), origin.as_str(), "no checkout holds"] {
+        assert!(
+            message.contains(fragment),
+            "the refusal must name {fragment}: {message}"
+        );
+    }
+    let unrelated = fixture.repo.display().to_string();
+    assert!(
+        !message.contains(&unrelated),
+        "the unrelated checkout must not be named as the holder: {message}"
+    );
+    assert_eq!(
+        git(&fixture.repo, &["rev-parse", BASE]),
+        owner,
+        "the diverged base is not moved"
+    );
+    assert_eq!(git(&fixture.repo, &["branch", "--show-current"]), "other");
+    assert_eq!(git(&fixture.repo, &["status", "--porcelain"]), "");
+    assert_eq!(
+        registered_worktrees(&fixture.repo),
+        checkouts,
+        "a refused setup creates no worktree"
+    );
+    assert!(host.admitted().is_empty(), "a refused setup admits no task");
+}
+
+/// Diverged and attached to a linked checkout while the repository's own
+/// checkout sits on another branch: the refusal names that linked checkout.
+fn a_diverged_base_attached_elsewhere_names_its_real_worktree() {
+    let (fixture, host) = Fixture::hosted();
+    let owner = commit_file(&fixture.repo, "owner-only.txt", "owner commit\n");
+    git(&fixture.repo, &["switch", "-c", "other"]);
+    let linked = fixture.root.path().join("linked-base");
+    git(&fixture.repo, &["worktree", "add", path_str(&linked), BASE]);
+    let linked = canonical(&linked);
+    let origin = push_to_origin_from_elsewhere(&fixture, "from-elsewhere.txt");
+    host.add_task("T-ATTACHED-ELSEWHERE", TaskStatus::Backlog);
+    let error = action(
+        &host,
+        "worktree_setup",
+        &setup_input(&["T-ATTACHED-ELSEWHERE"], "jrun-attached-elsewhere"),
+    )
+    .expect_err("a diverged base attached to a linked checkout is refused");
+    assert_owner_base_refusal(&error, &linked, &owner, &origin);
+    assert_eq!(head(&linked), owner, "the linked checkout is not moved");
+    assert_eq!(git(&fixture.repo, &["branch", "--show-current"]), "other");
+    assert_eq!(git(&fixture.repo, &["status", "--porcelain"]), "");
+    assert!(host.admitted().is_empty(), "a refused setup admits no task");
+}
+
 /// Ignore `file` in the owner without committing a `.gitignore` change, and
 /// give it unpublished bytes.
 fn ignore_owner_file(fixture: &Fixture, file: &str, contents: &str) {
@@ -663,6 +740,14 @@ fn local_base_freshness_contracts() {
             (
                 "a_diverged_owner_base_is_refused_and_left_unmoved",
                 a_diverged_owner_base_is_refused_and_left_unmoved,
+            ),
+            (
+                "a_diverged_base_checked_out_nowhere_names_the_branch_not_a_checkout",
+                a_diverged_base_checked_out_nowhere_names_the_branch_not_a_checkout,
+            ),
+            (
+                "a_diverged_base_attached_elsewhere_names_its_real_worktree",
+                a_diverged_base_attached_elsewhere_names_its_real_worktree,
             ),
             (
                 "an_ignored_owner_file_at_a_new_origin_path_is_preserved",

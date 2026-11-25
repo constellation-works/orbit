@@ -54,15 +54,17 @@ fn fast_forward_owner_base(repo_root: &Path, branch: &str) -> Result<Option<Stri
     }
 
     let holder = checkout_holding_branch(repo_root, branch)?;
-    let location = holder.clone().unwrap_or_else(|| repo_root.to_path_buf());
     if !is_ancestor(repo_root, &owner, &origin)? {
-        return Err(stale_base_refusal(
-            &location,
-            branch,
-            &owner,
-            &origin,
-            "has diverged from origin, so it was not moved",
-        ));
+        return Err(match &holder {
+            Some(checkout) => stale_base_refusal(
+                checkout,
+                branch,
+                &owner,
+                &origin,
+                "has diverged from origin, so it was not moved",
+            ),
+            None => unattached_stale_base_refusal(branch, &owner, &origin),
+        });
     }
 
     if let Some(checkout) = holder {
@@ -106,6 +108,17 @@ fn stale_base_refusal(
         message: format!(
             "worktree setup refusing stale base: owner checkout '{}' holds '{branch}' at {owner}, and origin/{branch} is at {origin}; the checkout {reason}. Left it untouched for operator inspection. Reconcile the checkout with origin, then retry.",
             checkout.display()
+        ),
+    }
+}
+
+/// A diverged base that no checkout holds. Naming a checkout here would point
+/// the operator at an unrelated one, so the refusal names the branch itself.
+fn unattached_stale_base_refusal(branch: &str, owner: &str, origin: &str) -> OrbitError {
+    OrbitError::DeliveryRefused {
+        refusal: DeliveryRefusal::StaleBranch,
+        message: format!(
+            "worktree setup refusing stale base: no checkout holds '{branch}', which is at {owner}, and origin/{branch} is at {origin}; the branch has diverged from origin, so it was not moved. Left it untouched for operator inspection. Reconcile '{branch}' with origin/{branch}, then retry."
         ),
     }
 }
