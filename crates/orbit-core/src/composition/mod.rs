@@ -3,11 +3,14 @@
 mod application_port;
 mod runtime;
 mod services;
+mod store;
 
 pub use orbit_store::compose::compiled_compatibility;
 
 pub use self::runtime::{pin_executable_generation, pin_executable_generation_as};
 pub use self::services::host_resource_monitor;
+pub use self::store::store_opener;
+pub(crate) use self::store::{open_store, open_store_read_only};
 pub use crate::bootstrap::workspace_authority::{
     AuthorityAdoptionEvidence, WorkspaceAuthorityAdoption, adopt_workspace_layout_authority,
     layout_migration_fenced_authorities, verify_workspace_layout_authority,

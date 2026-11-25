@@ -12,6 +12,7 @@ use orbit_types::tool::ToolSessionContext;
 use serde_json::Value;
 
 use crate::adapter::command::plugin::mcp_surface::{FileIdentity, FileStamp};
+use crate::application::store_opener::StoreOpener;
 use crate::runtime::tool_exec::{check_activity_tool_policy, check_tool_active};
 
 use super::super::audit::{activity_binding_from_env, managed_run_context};
@@ -32,8 +33,10 @@ use super::entry::{broker_entry_point, mark_tool_audit_recorded};
 /// The callback owns its server-local projection. Core opens only the global
 /// audit store, records the supplied invocation context, and preserves the
 /// same fail-closed success semantics as runtime-backed tool dispatch.
+#[allow(clippy::too_many_arguments)]
 pub fn execute_global_in_process_tool_dispatch<F>(
     env: &orbit_common::Env,
+    opener: StoreOpener,
     global_root: &Path,
     name: &str,
     input: Value,
@@ -46,6 +49,7 @@ where
 {
     execute_global_in_process_tool_dispatch_with_audit_writer(
         env,
+        opener,
         global_root,
         name,
         input,
@@ -56,7 +60,8 @@ where
                 env,
                 &orbit_config::ConfigRoots::global_only(global_root),
             )?;
-            Store::open(&audit_db)?
+            opener
+                .open(&audit_db)?
                 .write(|tx| tx.audit_event().insert_with_invocation(params, invocation))
         },
         dispatch,
@@ -74,6 +79,7 @@ where
 )]
 pub fn execute_global_in_process_tool_dispatch_with_audit_writer<F, S>(
     env: &orbit_common::Env,
+    opener: StoreOpener,
     global_root: &Path,
     name: &str,
     input: Value,
@@ -102,7 +108,7 @@ where
         },
         audit_writer,
         |input| {
-            enforce_plugin_callback_allowlist_from_root(env, global_root, name)?;
+            enforce_plugin_callback_allowlist_from_root(env, opener, global_root, name)?;
             if session_context.application.is_some()
                 || (entry_point == ToolEntryPoint::Cli
                     && env.orbit_application_credential_fd().is_some())
@@ -119,10 +125,12 @@ where
 /// One writable audit store shared across global dispatches on a long-lived
 /// host. Reopened when the `config.toml` stamp or the database file identity
 /// changes, as [`crate::adapter::command::HostPluginMcpCache`] does for its
-/// read-only store. A warm cache performs neither `ResolvedConfig::load` nor
-/// `Store::open`.
-#[derive(Default)]
-pub struct GlobalAuditStoreCache(Mutex<Option<CachedGlobalAuditStore>>);
+/// read-only store. A warm cache neither runs `ResolvedConfig::load` nor opens
+/// the store.
+pub struct GlobalAuditStoreCache {
+    opener: StoreOpener,
+    cached: Mutex<Option<CachedGlobalAuditStore>>,
+}
 
 struct CachedGlobalAuditStore {
     global_root: PathBuf,
@@ -133,6 +141,14 @@ struct CachedGlobalAuditStore {
 }
 
 impl GlobalAuditStoreCache {
+    /// An empty cache that opens the global audit store through `opener`.
+    pub fn new(opener: StoreOpener) -> Self {
+        Self {
+            opener,
+            cached: Mutex::new(None),
+        }
+    }
+
     /// Insert one audit row through the shared store, opening or reopening
     /// it only when the stamps above say the cached handle is stale.
     pub fn insert_audit_event_record(
@@ -147,7 +163,7 @@ impl GlobalAuditStoreCache {
     }
 
     fn store(&self, env: &orbit_common::Env, global_root: &Path) -> Result<Store, OrbitError> {
-        let mut cached = self.0.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut cached = self.cached.lock().unwrap_or_else(PoisonError::into_inner);
         let config_stamp = FileStamp::read(&global_root.join("config.toml"));
         if cached
             .as_ref()
@@ -158,7 +174,7 @@ impl GlobalAuditStoreCache {
                 env,
                 &orbit_config::ConfigRoots::global_only(global_root),
             )?;
-            let store = Store::open(&audit_db)?;
+            let store = self.opener.open(&audit_db)?;
             let database_identity = FileIdentity::read(&audit_db).ok();
             *cached = Some(CachedGlobalAuditStore {
                 global_root: global_root.to_path_buf(),
@@ -173,13 +189,13 @@ impl GlobalAuditStoreCache {
         };
         match FileIdentity::read(&host.audit_db) {
             Ok(current) if host.database_identity.as_ref() != Some(&current) => {
-                host.store = Store::open(&host.audit_db)?;
+                host.store = self.opener.open(&host.audit_db)?;
                 host.database_identity = Some(current);
             }
             Ok(_) => {}
             Err(_) => {
                 let audit_db = host.audit_db.clone();
-                host.store = Store::open(&audit_db)?;
+                host.store = self.opener.open(&audit_db)?;
                 host.database_identity = FileIdentity::read(&audit_db).ok();
             }
         }
@@ -193,8 +209,10 @@ impl GlobalAuditStoreCache {
 /// global` plugin tool has no workspace to open, so its execution context is
 /// this process's cwd and the registry the caller composed from the host's
 /// installed plugins.
+#[allow(clippy::too_many_arguments)]
 pub(in crate::adapter::command) fn execute_global_plugin_dispatch(
     env: &orbit_common::Env,
+    opener: StoreOpener,
     global_root: &Path,
     name: &str,
     input: Value,
@@ -285,7 +303,8 @@ pub(in crate::adapter::command) fn execute_global_plugin_dispatch(
                 env,
                 &orbit_config::ConfigRoots::global_only(&global_root),
             )?;
-            Store::open(&audit_db)?
+            opener
+                .open(&audit_db)?
                 .write(|tx| tx.audit_event().insert_with_invocation(params, invocation))
         },
         |input| {
@@ -299,7 +318,7 @@ pub(in crate::adapter::command) fn execute_global_plugin_dispatch(
             // this one has no runtime, so the same generic plugin row is
             // resolved here — inside the audited closure, so a refusal lands
             // on the row for this call.
-            enforce_plugin_callback_allowlist_from_root(env, &global_root, name)?;
+            enforce_plugin_callback_allowlist_from_root(env, opener, &global_root, name)?;
             if orbit_common::security::application_credential::ApplicationCredential::from_process_descriptor(env)?.is_some() || tool_context.session_context.application.is_some() {
                 return Err(OrbitError::CapabilityDenied("application calls require an explicitly resolved workspace runtime".into()));
             }

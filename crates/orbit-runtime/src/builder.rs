@@ -63,8 +63,9 @@ pub(crate) enum StateAccess {
 }
 
 /// Runtime builder. Global root provides activities, jobs, executors, policies,
-/// config, global skills, and SQLite. Shared root provides existing workspace
-/// state. Local root is carried for per-worktree artifact phases.
+/// config and global skills; `store` is the SQLite handle composition opened.
+/// Shared root provides existing workspace state. Local root is carried for
+/// per-worktree artifact phases.
 pub(crate) fn build_context_from_roots(
     roots: &OrbitRuntimeRoots,
     binding: Option<&WorkspaceRuntimeBinding>,
@@ -72,6 +73,7 @@ pub(crate) fn build_context_from_roots(
     _host_lifetime: HostLifetime,
     access: StateAccess,
     task_prefix: Option<&str>,
+    store: Store,
 ) -> Result<OrbitContext, OrbitError> {
     let env = runtime_config.execution_env.process_env();
     let global_root = roots.global_root.as_path();
@@ -101,12 +103,7 @@ pub(crate) fn build_context_from_roots(
     // Every footprint-overlap check this handle makes (reservations, claims,
     // owner admission) applies the owner's `workflow.lock_modes`.
     let footprint_lock_modes = runtime_config.snapshot.footprint_lock_modes()?;
-    let store = if write_free {
-        Store::open_read_only(&persistence.audit_db)?
-    } else {
-        Store::open(&persistence.audit_db)?
-    }
-    .with_footprint_lock_modes(footprint_lock_modes.clone());
+    let store = store.with_footprint_lock_modes(footprint_lock_modes.clone());
 
     // workspace_root IS the .orbit dir. A cwd checkout binding is authoritative.
     // Without one, an explicit data dir must not mint parent(orbit-dir) as a

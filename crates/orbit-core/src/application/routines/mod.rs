@@ -15,6 +15,8 @@ use std::path::Path;
 use orbit_common::OrbitError;
 use orbit_store::Store;
 
+use crate::application::store_opener::StoreOpener;
+
 /// The host's OS clock, owned by the `orbit-clock` crate [ORB-22688]; this
 /// path is kept for existing consumers.
 pub use orbit_clock as clock;
@@ -83,25 +85,15 @@ fn open_routine_store(global_root: &Path) -> Result<Store, OrbitError> {
     orbit_store::compose::routine_store(&database)
 }
 
-/// This host's routine circuit breakers, keyed by routine name. Read-only;
-/// a host without a scheduler store has none.
+/// This host's routine circuit breakers in its scheduler store, keyed by
+/// routine name.
 pub(crate) fn host_routine_breakers(
-    global_root: &Path,
+    store: &Store,
 ) -> Result<
     std::collections::BTreeMap<String, orbit_store::contracts::RoutineBreakerRecord>,
     OrbitError,
 > {
-    let database = orbit_config::resolved_audit_db_path(
-        &orbit_common::Env::capture(),
-        &orbit_config::ConfigRoots::global_only(global_root),
-    )?;
-    if !database.exists() {
-        return Ok(std::collections::BTreeMap::new());
-    }
-    open_existing_routine_store(global_root)?
-        .read()?
-        .routine()
-        .breakers()
+    store.read()?.routine().breakers()
 }
 
 /// Create and migrate the machine's scheduler store when it is absent. `orbit
@@ -114,7 +106,10 @@ pub fn ensure_routine_store(global_root: &Path) -> Result<(), OrbitError> {
 /// Open the existing scheduler store for a read-only projection. A read never
 /// creates or migrates it (STD-01 R31): a missing store is setup that has not
 /// been done, and the error names `orbit init`, which owns first-run creation.
-fn open_existing_routine_store(global_root: &Path) -> Result<Store, OrbitError> {
+fn open_existing_routine_store(
+    opener: StoreOpener,
+    global_root: &Path,
+) -> Result<Store, OrbitError> {
     let database = orbit_config::resolved_audit_db_path(
         &orbit_common::Env::capture(),
         &orbit_config::ConfigRoots::global_only(global_root),
@@ -125,7 +120,7 @@ fn open_existing_routine_store(global_root: &Path) -> Result<Store, OrbitError> 
             database.display()
         )));
     }
-    orbit_store::Store::open_read_only(&database)
+    opener.open_read_only(&database)
 }
 
 #[cfg(test)]

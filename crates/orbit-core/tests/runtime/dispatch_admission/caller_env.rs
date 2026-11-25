@@ -127,6 +127,7 @@ fn execute_global_plugin_tool_honors_composed_env_over_ambient() {
 
     let result = execute_global_plugin_tool(
         &composed_env,
+        orbit_core::composition::store_opener(),
         &global_root,
         "globalprobe.ping",
         json!({}),
@@ -162,6 +163,7 @@ fn execute_global_plugin_tool_honors_composed_env_over_ambient() {
     let rejected_env = Env::from_vars([("PATH", path_var.as_str()), ("ORBIT_BACKEND", "http")]);
     let error = execute_global_plugin_tool(
         &rejected_env,
+        orbit_core::composition::store_opener(),
         &global_root,
         "globalprobe.ping",
         json!({}),
@@ -225,7 +227,7 @@ fn global_audit_store_cache_honors_composed_env_over_ambient() {
     };
 
     let ambient = orbit_common::test_env::scoped([("ORBIT_BACKEND", Some("http"))]);
-    let cache = GlobalAuditStoreCache::default();
+    let cache = GlobalAuditStoreCache::new(orbit_core::composition::store_opener());
     cache
         .insert_audit_event_record(
             &Env::default(),
@@ -238,7 +240,7 @@ fn global_audit_store_cache_honors_composed_env_over_ambient() {
 
     let _clean_ambient = orbit_common::test_env::scoped([("ORBIT_BACKEND", None)]);
     let rejected_env = Env::from_vars([("ORBIT_BACKEND", "http")]);
-    let fresh_cache = GlobalAuditStoreCache::default();
+    let fresh_cache = GlobalAuditStoreCache::new(orbit_core::composition::store_opener());
     let error = fresh_cache
         .insert_audit_event_record(
             &rejected_env,
@@ -330,10 +332,20 @@ fn workspace_preset_validate_for_workspace_honors_composed_env_over_ambient() {
     ]);
 
     config_preset
-        .validate_for_workspace(&composed_env, &global_root, &workspace_root)
+        .validate_for_workspace(
+            &composed_env,
+            orbit_core::composition::store_opener(),
+            &global_root,
+            &workspace_root,
+        )
         .expect("config + plugin schema preset must honor composed env over ambient");
     enable_only_preset
-        .validate_for_workspace(&composed_env, &global_root, &workspace_root)
+        .validate_for_workspace(
+            &composed_env,
+            orbit_core::composition::store_opener(),
+            &global_root,
+            &workspace_root,
+        )
         .expect("enable-only preset must honor composed env over ambient");
 
     drop(ambient);
@@ -349,7 +361,12 @@ fn workspace_preset_validate_for_workspace_honors_composed_env_over_ambient() {
         ("enable-only", &enable_only_preset),
     ] {
         let error = preset
-            .validate_for_workspace(&rejected_env, &global_root, &workspace_root)
+            .validate_for_workspace(
+                &rejected_env,
+                orbit_core::composition::store_opener(),
+                &global_root,
+                &workspace_root,
+            )
             .expect_err("retired ORBIT_BACKEND in composed env must be rejected");
         assert!(
             error.to_string().contains("ORBIT_BACKEND"),

@@ -102,7 +102,8 @@ impl RegisteredRuntimeStamp {
     /// shared_root)` in Core's composition, where a registered checkout's
     /// shared root is its own `.orbit` directory.
     pub fn read(global_root: &Path, checkout: &WorkspaceCheckout) -> Self {
-        let host_plugins = host_plugin_rows(global_root).unwrap_or_default();
+        let host_plugins = host_plugin_rows(orbit_core::composition::store_opener(), global_root)
+            .unwrap_or_default();
         Self::read_with_host_plugins(global_root, checkout, host_plugins)
     }
 

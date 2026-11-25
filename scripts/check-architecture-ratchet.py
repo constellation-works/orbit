@@ -3,7 +3,7 @@
 
 The restructure (docs/design/architecture-restructure/2_design.md §10) moves
 about a thousand operations over many weeks while unrelated work lands daily,
-so the old shape can regrow. This check holds fifteen counts of that shape at
+so the old shape can regrow. This check holds fourteen counts of that shape at
 or below scripts/architecture-ratchet-baseline.json, the pattern of
 scripts/check-dashboard-css-literals.py:
 
@@ -66,8 +66,6 @@ DEFINITIONS = {
         "calls of `from_kernel_ref` (its definition is not counted)",
     "store_backend_traits":
         "`*Backend` traits in orbit-store",
-    "store_open_outside_store":
-        "`Store::open` calls outside orbit-store",
     "driver_writer_outside_transaction_files":
         "driver files that lock the writer connection outside `with_transaction`",
     "env_global_accessor_calls":
@@ -104,7 +102,6 @@ ORBIT_RUNTIME_NAME = re.compile(r"\bOrbitRuntime\b")
 RUNTIME_PARAM = re.compile(r"&\s*(?:'\w+\s+)?(?:mut\s+)?(?:\w+\s*::\s*)*OrbitRuntime\b")
 FROM_KERNEL_REF = re.compile(r"\bfrom_kernel_ref\s*\(")
 BACKEND_TRAIT = re.compile(r"\btrait\s+(\w*Backend)\b")
-STORE_OPEN = re.compile(r"\bStore\s*::\s*open\s*\(")
 # The writer is `Store.conn: Arc<Mutex<Connection>>` (connection.rs). A driver
 # file takes it by `lock_wait::mutex(&…conn)`, by `….conn.lock()`, or through a
 # clone from `Store::connection()`. Only `with_transaction` and
@@ -403,10 +400,6 @@ def measure(root):
         source.location(match.start(), match.group(1))
         for source in sources if source.crate == STORE_CRATE
         for match in BACKEND_TRAIT.finditer(source.masked)]
-    counts["store_open_outside_store"] = [
-        source.location(match.start())
-        for source in sources if source.crate != STORE_CRATE
-        for match in STORE_OPEN.finditer(source.masked)]
     counts["driver_writer_outside_transaction_files"] = writer_files(sources)
     counts["env_global_accessor_calls"] = [
         source.location(match.start(), match.group(1))

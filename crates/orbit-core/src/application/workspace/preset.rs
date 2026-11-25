@@ -40,6 +40,7 @@ use crate::application::job::DEFAULT_JOB_FILES;
 use crate::application::plugin::seed::plugin_seeded_definitions;
 use crate::application::routines::set_routine_enabled;
 use crate::application::routines::status::checkout_edit_report;
+use crate::application::store_opener::StoreOpener;
 
 /// Largest preset file Orbit reads.
 const MAX_PRESET_BYTES: u64 = 256 * 1024;
@@ -189,6 +190,7 @@ impl WorkspacePreset {
     pub fn validate_for_workspace(
         &self,
         env: &orbit_common::Env,
+        opener: StoreOpener,
         global_root: &Path,
         workspace_orbit_root: &Path,
     ) -> Result<(), OrbitError> {
@@ -209,12 +211,19 @@ impl WorkspacePreset {
             None
         };
         if let Some(sections) = &staged_plugin_sections {
-            self.validate_staged_plugin_sections(env, global_root, workspace_orbit_root, sections)?;
+            self.validate_staged_plugin_sections(
+                env,
+                opener,
+                global_root,
+                workspace_orbit_root,
+                sections,
+            )?;
         }
         // Loadability is decided from that staged view, so a missing or
         // unloadable definition refuses the preset with no write.
         self.require_seeded_definitions_load(
             env,
+            opener,
             global_root,
             workspace_orbit_root,
             staged_plugin_sections.as_ref(),
@@ -229,6 +238,7 @@ impl WorkspacePreset {
     fn validate_staged_plugin_sections(
         &self,
         env: &orbit_common::Env,
+        opener: StoreOpener,
         global_root: &Path,
         workspace_orbit_root: &Path,
         sections: &std::collections::BTreeMap<String, serde_json::Value>,
@@ -252,11 +262,9 @@ impl WorkspacePreset {
         if !config.persistence.audit_db.is_file() {
             return Ok(());
         }
-        let (_registry, load) = crate::runtime::plugin::discovery::host_plugin_registry(
-            global_root,
-            &config.persistence.audit_db,
-            sections,
-        )?;
+        let store = opener.open_read_only(&config.persistence.audit_db)?;
+        let (_registry, load) =
+            crate::runtime::plugin::discovery::host_plugin_registry(global_root, &store, sections)?;
         for (namespace, key) in touched {
             let Some(plugin) = load
                 .registered
@@ -380,12 +388,14 @@ impl WorkspacePreset {
     fn require_seeded_definitions_load(
         &self,
         env: &orbit_common::Env,
+        opener: StoreOpener,
         global_root: &Path,
         workspace_orbit_root: &Path,
         staged_plugin_sections: Option<&std::collections::BTreeMap<String, serde_json::Value>>,
     ) -> Result<(), OrbitError> {
         self.require_routines_load(
             env,
+            opener,
             global_root,
             workspace_orbit_root,
             staged_plugin_sections,
@@ -396,6 +406,7 @@ impl WorkspacePreset {
     fn require_routines_load(
         &self,
         env: &orbit_common::Env,
+        opener: StoreOpener,
         global_root: &Path,
         workspace_orbit_root: &Path,
         staged_plugin_sections: Option<&std::collections::BTreeMap<String, serde_json::Value>>,
@@ -409,6 +420,7 @@ impl WorkspacePreset {
         };
         let catalog_lookup = effective_routine_catalog_lookup(
             env,
+            opener,
             global_root,
             workspace_orbit_root,
             staged_plugin_sections,
@@ -555,6 +567,7 @@ fn seeded_file_matches(dir: &Path, name: &str, loaded_path: &Path, loaded_name: 
 /// runtime before enabling anything.
 fn effective_routine_catalog_lookup(
     env: &Env,
+    opener: StoreOpener,
     global_root: &Path,
     workspace_orbit_root: &Path,
     staged_plugin_sections: Option<&std::collections::BTreeMap<String, serde_json::Value>>,
@@ -597,6 +610,7 @@ fn effective_routine_catalog_lookup(
     }
     for (namespace, files) in active_plugin_job_files(
         env,
+        opener,
         global_root,
         workspace_orbit_root,
         staged_plugin_sections,
@@ -635,6 +649,7 @@ fn effective_routine_catalog_lookup(
 /// with no plugin store has no active plugin.
 fn active_plugin_job_files(
     env: &Env,
+    opener: StoreOpener,
     global_root: &Path,
     workspace_orbit_root: &Path,
     staged_plugin_sections: Option<&std::collections::BTreeMap<String, serde_json::Value>>,
@@ -649,10 +664,11 @@ fn active_plugin_job_files(
     // When the preset stages config, plugin eligibility is judged against
     // the staged effective sections; otherwise the on-disk sections apply.
     let plugin_sections = staged_plugin_sections.unwrap_or(&config.plugins);
+    let store = opener.open_read_only(&config.persistence.audit_db)?;
     let (_registry, load) = crate::runtime::plugin::discovery::workspace_plugin_registry(
         global_root,
         workspace_orbit_root,
-        &config.persistence.audit_db,
+        &store,
         plugin_sections,
         &config.plugin_enablement,
     )?;

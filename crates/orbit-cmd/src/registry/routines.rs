@@ -334,7 +334,8 @@ pub fn routine_status_store_fingerprint(global_root: &Path) -> Option<RoutineSto
     if !database.exists() {
         return None;
     }
-    orbit_store::Store::open_read_only(&database)
+    orbit_core::composition::store_opener()
+        .open_read_only(&database)
         .and_then(|store| store.read()?.routine().state_fingerprint())
         .ok()
         .map(|(routines, job_runs)| RoutineStoreFingerprint { routines, job_runs })
@@ -360,6 +361,7 @@ fn routine_statuses_with_workspace_filter(
         "routine status environment loaded"
     );
     orbit_core::application::routines::routine_statuses_with_providers(
+        orbit_core::composition::store_opener(),
         global_root,
         environment.local_machine(),
         &environment,

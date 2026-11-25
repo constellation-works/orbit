@@ -241,6 +241,8 @@ impl Store {
             // timeout even though the shared writer would safely wait for it.
             let mut current = orbit_common::fs::lock_wait::mutex(&self.conn)
                 .map_err(|e| OrbitError::Store(format!("mutex poisoned: {e}")))?;
+            // The store reopens its own file to replace the writer.
+            #[allow(clippy::disallowed_methods)]
             let fresh = Self::open(path)?;
             fresh.check_writable()?;
             let mut replacement = fresh

@@ -34,7 +34,8 @@ impl RoutineWorkspaceProvider for SelectedCheckout<'_> {
 pub(crate) fn checkout_routine_statuses(
     runtime: &OrbitRuntime,
 ) -> Result<RoutineStatusReport, OrbitError> {
-    routine_statuses_with_providers(
+    routine_statuses_from_store(
+        &runtime.sqlite_store()?,
         &runtime.global_root(),
         RoutineMachineIdentity {
             machine_id: runtime

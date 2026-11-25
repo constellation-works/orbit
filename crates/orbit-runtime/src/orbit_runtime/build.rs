@@ -75,6 +75,7 @@ impl RuntimeKernel {
         config_loader: RuntimeConfigLoader,
         application: &'static dyn ApplicationPort,
         task_prefix: Option<&str>,
+        store: orbit_store::Store,
     ) -> Result<Self, OrbitError> {
         let access = if read_only {
             builder::StateAccess::ReadOnly
@@ -89,6 +90,7 @@ impl RuntimeKernel {
                 host_lifetime,
                 access,
                 task_prefix,
+                store,
             )?,
             binding,
             &roots.global_root,
@@ -98,6 +100,7 @@ impl RuntimeKernel {
         )
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn build_from_resolved_config_write_free(
         roots: &OrbitRuntimeRoots,
         binding: Option<WorkspaceRuntimeBinding>,
@@ -106,6 +109,7 @@ impl RuntimeKernel {
         host_lifetime: HostLifetime,
         config_loader: RuntimeConfigLoader,
         application: &'static dyn ApplicationPort,
+        store: orbit_store::Store,
     ) -> Result<Self, OrbitError> {
         let mut runtime = Self::finish_from_context(
             builder::build_context_from_roots(
@@ -115,6 +119,7 @@ impl RuntimeKernel {
                 host_lifetime,
                 builder::StateAccess::WriteFree,
                 None,
+                store,
             )?,
             binding,
             &roots.global_root,
@@ -219,6 +224,7 @@ impl RuntimeKernel {
         temp_dir: builder::TempDir,
         config_loader: RuntimeConfigLoader,
         application: &'static dyn ApplicationPort,
+        store: orbit_store::Store,
     ) -> Result<Self, OrbitError> {
         // Use a distinct checkout root so the normal workspace builder creates
         // its identity and task partition. A shared explicit data root assumes
@@ -244,6 +250,7 @@ impl RuntimeKernel {
             HostLifetime::ShortLived,
             builder::StateAccess::Write,
             None,
+            store,
         )?;
         let host_resources = Arc::new(
             HostResourceMonitor::new(
