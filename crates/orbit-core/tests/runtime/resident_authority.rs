@@ -916,6 +916,181 @@ fn relay_returns_comment_and_answer_matching_the_advertised_output() {
     assert_eq!(stored, relayed["answer"], "answer is the record as written");
 }
 
+fn resident_tagged_feature_tasks_warn_without_mandate_and_stay_out_of_resident_lists() {
+    let root = tempfile::tempdir_in(orbit_common::test_env::bulk_write_temp_dir()).unwrap();
+    let runtime = runtime_at(root.path());
+    let workspace = runtime.workspace_id().unwrap();
+    let repo_root = root.path().join("repo");
+
+    // Step 1: filing a feature task tagged `resident` warns about the missing
+    // mandate and leaves it out of resident membership and card lists.
+    let added = call(
+        &runtime,
+        "orbit.task.add",
+        json!({
+            "title": "Resident feature task without a mandate",
+            "description": "Track work about residents rather than a resident mandate.",
+            "complexity": "low",
+            "type": "feature",
+            "tags": ["resident"],
+            "workspace": workspace,
+        }),
+        &operator(),
+    )
+    .unwrap();
+    let feature_id = added["id"].as_str().unwrap().to_string();
+    let add_warnings = added["warnings"].as_array().expect("warnings on task.add");
+    assert!(
+        add_warnings.iter().any(|warning| {
+            warning.as_str().is_some_and(|text| {
+                text.contains("resident/mandate.json") && text.contains("not a resident")
+            })
+        }),
+        "expected missing-mandate warning on task.add, got {added}"
+    );
+
+    // Step 2: adding the `resident` tag on an update also warns once, while an
+    // unrelated update afterward does not repeat it.
+    let updated_base = call(
+        &runtime,
+        "orbit.task.add",
+        json!({
+            "title": "Ordinary feature task",
+            "description": "Tagged later with resident.",
+            "complexity": "low",
+            "type": "feature",
+            "workspace": workspace,
+        }),
+        &operator(),
+    )
+    .unwrap();
+    let has_mandate_warning = |response: &Value| {
+        response["warnings"].as_array().is_some_and(|warnings| {
+            warnings.iter().any(|warning| {
+                warning.as_str().is_some_and(|text| {
+                    text.contains("resident/mandate.json") && text.contains("not a resident")
+                })
+            })
+        })
+    };
+    let updated_id = updated_base["id"].as_str().unwrap().to_string();
+    assert!(
+        !has_mandate_warning(&updated_base),
+        "ordinary task.add should not emit missing-mandate warning: {updated_base}"
+    );
+    let tagged = call(
+        &runtime,
+        "orbit.task.update",
+        json!({"id": updated_id, "tags": ["resident"]}),
+        &operator(),
+    )
+    .unwrap();
+    assert!(
+        has_mandate_warning(&tagged),
+        "expected missing-mandate warning on task.update, got {tagged}"
+    );
+    let unrelated = call(
+        &runtime,
+        "orbit.task.update",
+        json!({"id": updated_id, "title": "Ordinary feature task (edited)"}),
+        &operator(),
+    )
+    .unwrap();
+    assert!(
+        !has_mandate_warning(&unrelated),
+        "unrelated edit after tag is already present should not repeat warning: {unrelated}"
+    );
+
+    // A task tagged `resident` with an invalid mandate artifact is also excluded.
+    let invalid_artifact_id = runtime
+        .add_task(TaskAddParams {
+            title: "Broken mandate task".into(),
+            tags: vec!["resident".into()],
+            ..Default::default()
+        })
+        .unwrap()
+        .id;
+    runtime
+        .update_task_as_human(
+            &invalid_artifact_id,
+            TaskUpdateParams {
+                upsert_artifacts: vec![TaskArtifact::from_text(
+                    "resident/mandate.json",
+                    "{\"schema\": \"resident.mandate/v1\"}",
+                )],
+                ..Default::default()
+            },
+            "human:daniel".into(),
+        )
+        .unwrap();
+
+    // Neither feature task nor the invalid-mandate task appears in resident
+    // membership (`orbit.resident.list`), card reads, or the digest.
+    for include_ended in [false, true] {
+        let listed = call(
+            &runtime,
+            "orbit.resident.list",
+            json!({"include_ended": include_ended}),
+            &operator(),
+        )
+        .unwrap();
+        assert_eq!(
+            listed["count"], 0,
+            "include_ended={include_ended}: {listed}"
+        );
+        assert_eq!(listed["mandates"], json!([]));
+    }
+    assert!(
+        runtime
+            .list_resident_mandate_cards(true)
+            .unwrap()
+            .is_empty(),
+        "resident cards must exclude tagged tasks without a valid mandate"
+    );
+    let digested = call(&runtime, "orbit.resident.digest", json!({}), &operator()).unwrap();
+    assert_eq!(digested["residents"], json!([]));
+
+    // Completing the two-write creation route (task.add, then artifact put of
+    // `resident/mandate.json`) turns `feature_id` into an active resident.
+    let mandate_path = repo_root.join(".orbit/tmp/mandate.json");
+    std::fs::create_dir_all(mandate_path.parent().unwrap()).unwrap();
+    std::fs::write(
+        &mandate_path,
+        json!({
+            "schema": "resident.mandate/v1",
+            "goal": "Deliver the two-write creation route",
+            "exit_criteria": ["Everything is green"],
+            "workspaces": [workspace],
+            "crew": "sol",
+            "cadence": {"floor_minutes": 10, "heartbeat_minutes": 120}
+        })
+        .to_string(),
+    )
+    .unwrap();
+    call(
+        &runtime,
+        "orbit.task.artifact",
+        json!({
+            "action": "put",
+            "id": feature_id,
+            "path": "resident/mandate.json",
+            "source_path": mandate_path,
+        }),
+        &operator(),
+    )
+    .unwrap();
+
+    let listed = call(&runtime, "orbit.resident.list", json!({}), &operator()).unwrap();
+    assert_eq!(listed["count"], 1, "{listed}");
+    assert_eq!(listed["mandates"][0]["task_id"], feature_id);
+    assert_eq!(listed["mandates"][0]["state"], "active");
+
+    let cards = runtime.list_resident_mandate_cards(true).unwrap();
+    assert_eq!(cards.len(), 1, "{cards:?}");
+    assert_eq!(cards[0]["task_id"], feature_id);
+    assert_eq!(cards[0]["state"], "active");
+}
+
 crate::scenario_table!(
     resident_authority,
     relay_returns_comment_and_answer_matching_the_advertised_output,
@@ -928,6 +1103,7 @@ crate::scenario_table!(
     rejected_or_superseded_requests_change_nothing,
     any_task_writer_narrows_and_is_recorded,
     losing_the_resident_tag_clears_effective_authority_but_keeps_history,
+    resident_tagged_feature_tasks_warn_without_mandate_and_stay_out_of_resident_lists,
 );
 
 fn evolution_corroboration_and_suppression(

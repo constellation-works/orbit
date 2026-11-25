@@ -906,3 +906,82 @@ fn resident_list_routine_ignores_unrelated_registered_workspaces() {
         },
     );
 }
+
+#[test]
+fn resident_panel_excludes_resident_tagged_tasks_without_valid_mandate() {
+    isolated(
+        "residents::resident_panel_excludes_resident_tagged_tasks_without_valid_mandate",
+        || {
+            let fixture = Fixture::new();
+            resident_fixture(&fixture);
+            let server = fixture.server(true);
+
+            let real_id = create(&server, "Monitor real resident work.");
+
+            let feature = json_ok(server.send(
+                "POST",
+                &format!("/api/tasks{WS}"),
+                json!({
+                    "title": "Feature about residents",
+                    "description": "Topic-labelled resident without a mandate.",
+                    "complexity": "low",
+                    "task_type": "feature",
+                    "tags": ["resident"],
+                }),
+            ));
+            let feature_id = feature["id"].as_str().unwrap().to_string();
+            assert!(
+                feature["warnings"]
+                    .as_array()
+                    .is_some_and(|warnings| warnings.iter().any(|w| {
+                        w.as_str()
+                            .is_some_and(|text| text.contains("resident/mandate.json"))
+                    })),
+                "POST /api/tasks should warn about missing mandate: {feature}"
+            );
+
+            let plain = json_ok(server.send(
+                "POST",
+                &format!("/api/tasks{WS}"),
+                json!({
+                    "title": "Feature tagged later",
+                    "description": "Updated to add the resident tag without a mandate.",
+                    "complexity": "low",
+                    "task_type": "feature",
+                }),
+            ));
+            let plain_id = plain["id"].as_str().unwrap().to_string();
+            let patched = json_ok(server.send(
+                "PATCH",
+                &format!("/api/tasks/{plain_id}{WS}"),
+                json!({"tags": ["resident"]}),
+            ));
+            assert!(
+                patched["warnings"]
+                    .as_array()
+                    .is_some_and(|warnings| warnings.iter().any(|w| {
+                        w.as_str()
+                            .is_some_and(|text| text.contains("resident/mandate.json"))
+                    })),
+                "PATCH /api/tasks/:id should warn about missing mandate: {patched}"
+            );
+
+            for path in [
+                format!("/api/residents{WS}"),
+                format!("/api/residents{WS}&all=true"),
+            ] {
+                let listed = json_ok(server.get(&path));
+                assert_eq!(listed["count"], 1, "{path}: {listed}");
+                let mandates = listed["mandates"].as_array().unwrap();
+                assert_eq!(mandates.len(), 1, "{path}: {listed}");
+                assert_eq!(mandates[0]["task_id"], real_id);
+                assert!(
+                    !mandates
+                        .iter()
+                        .any(|m| m["task_id"] == feature_id || m["task_id"] == plain_id),
+                    "feature tasks without mandates must not appear in Residents panel: {listed}"
+                );
+            }
+        },
+    );
+}

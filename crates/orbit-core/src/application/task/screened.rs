@@ -15,9 +15,10 @@ use orbit_types::task::{
     backlog_footprint_warning, canonical_artifact_path,
 };
 use orbit_types::workflow::automation::COVERAGE_ARTIFACT;
+use orbit_types::workflow::{RESIDENT_MANDATE_ARTIFACT, RESIDENT_TAG};
 
 use crate::OrbitRuntime;
-use crate::application::task::TaskAutomationPort;
+use crate::application::task::{TaskAutomationPort, TaskResidentPort};
 use crate::runtime::run_input::managed_run_context_run_id_from_env;
 
 use super::TaskRow;
@@ -155,6 +156,7 @@ impl OrbitRuntime {
         warnings.extend(parent_warning);
         warnings.extend(dependency_warnings);
         warnings.extend(compute_task_add_warnings(&requested_context_files, &task));
+        warnings.extend(self.missing_resident_mandate_warning(&task));
         // [ORB-15191] Filed straight into the backlog with no footprint, a
         // live drain admits it before a pilot can prepare one.
         warnings.extend(backlog_footprint_warning(&task));
@@ -317,6 +319,7 @@ impl OrbitRuntime {
         });
         let needs_prior_task = params.relations.is_some()
             || params.status == Some(TaskStatus::InProgress)
+            || params.tags.is_some()
             || writes_coverage;
         let stored = if needs_prior_task {
             Some(self.get_task(id)?)
@@ -383,6 +386,12 @@ impl OrbitRuntime {
                 .as_ref()
                 .is_some_and(|task| task.status != TaskStatus::InProgress);
         let (task, row) = write(params)?;
+        if stored
+            .as_ref()
+            .is_some_and(|prior| !prior.tags.iter().any(|tag| tag == RESIDENT_TAG))
+        {
+            warnings.extend(self.missing_resident_mandate_warning(&task));
+        }
         if updates_readiness {
             warnings.extend(backlog_footprint_warning(&task));
         }
@@ -488,6 +497,28 @@ impl OrbitRuntime {
             row: None,
             warnings,
             context_files_unverified: Vec::new(),
+        }
+    }
+
+    fn missing_resident_mandate_warning(&self, task: &Task) -> Option<String> {
+        if !task.tags.iter().any(|tag| tag == RESIDENT_TAG) {
+            return None;
+        }
+        match self.resident_mandate_error(&task.id) {
+            Ok(Some(reason)) => Some(format!(
+                "task '{}' has the `{RESIDENT_TAG}` tag without a valid `{RESIDENT_MANDATE_ARTIFACT}` \
+                 ({reason}); it is not a resident until its mandate is attached",
+                task.id
+            )),
+            Ok(None) => None,
+            Err(error) => {
+                tracing::warn!(
+                    task_id = %task.id,
+                    %error,
+                    "failed to check resident mandate artifact for task write warning"
+                );
+                None
+            }
         }
     }
 }
