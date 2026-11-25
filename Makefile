@@ -201,6 +201,7 @@ ci-test-affected:
 ci-lint:
 	./scripts/require-python.sh
 	./scripts/check-dependency-direction.sh
+	./scripts/check-architecture-ratchet.py
 	$(BUILD_BUDGET) -- $(CARGO) clippy $(WORKSPACE) --lib --bins -- -D warnings -A clippy::disallowed_methods
 	$(BUILD_BUDGET) -- $(CARGO) clippy $(WORKSPACE) --all-targets -- -D warnings -A clippy::disallowed_methods
 	RUSTDOCFLAGS="-D warnings" ./scripts/with-test-build-lint.sh $(BUILD_BUDGET) -- $(CARGO) doc --no-deps $(WORKSPACE)
