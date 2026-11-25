@@ -85,7 +85,9 @@ impl HostFileState {
                 self.reload();
             }
         }
+        #[cfg(feature = "test-support")]
         gate_wait("pin-after-reload");
+        #[cfg(feature = "test-support")]
         gate_signal("pin-read-attempted");
         let published = lock(&self.published);
         PinnedHosts {
@@ -130,6 +132,7 @@ impl HostFileState {
                     // Held under the publication lock: a gated reader blocks
                     // here instead of seeing the new snapshot beside the
                     // error it replaces.
+                    #[cfg(feature = "test-support")]
                     gate_wait("publish-before-clear");
                     published.load_error = None;
                 }
@@ -154,12 +157,17 @@ impl HostFileState {
 /// active only when `<point>.armed` exists there. A waiting point records
 /// `<point>.reached` and blocks until `<point>.release` appears; a signal
 /// point only records `<point>.reached`. Inert unless the file test arms it.
+/// Only builds with `test-support` compile it, so production builds ignore the
+/// variable.
+#[cfg(feature = "test-support")]
 use orbit_common::env_vars::ORBIT_TEST_HOSTS_PUBLISH_GATE as PUBLISH_GATE_ENV;
 
+#[cfg(feature = "test-support")]
 fn gate_dir() -> Option<PathBuf> {
     std::env::var_os(PUBLISH_GATE_ENV).map(PathBuf::from)
 }
 
+#[cfg(feature = "test-support")]
 #[allow(
     clippy::disallowed_methods,
     reason = "test-gate marker file in a scratch directory; durability is irrelevant"
@@ -177,6 +185,7 @@ fn gate_wait(point: &str) {
     }
 }
 
+#[cfg(feature = "test-support")]
 #[allow(
     clippy::disallowed_methods,
     reason = "test-gate marker file in a scratch directory; durability is irrelevant"

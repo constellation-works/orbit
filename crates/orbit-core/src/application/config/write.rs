@@ -455,6 +455,7 @@ fn write_store_conditional<T, R>(
             };
             match edit(&mut store)? {
                 ConditionalEdit::Save(edited) => {
+                    #[cfg(feature = "test-support")]
                     write_gate::wait(match scope {
                         ConfigScope::Global => "global-before-save",
                         ConfigScope::Workspace => "workspace-before-save",
@@ -470,6 +471,7 @@ fn write_store_conditional<T, R>(
         // Global before workspace, the order every multi-file config writer
         // takes, so two such writers never wait on each other. The lock is
         // reentrant when both scopes name one file.
+        #[cfg(feature = "test-support")]
         write_gate::signal("workspace-fallback-lock");
         ConfigStore::with_write_lock(&global_config_path(runtime), transaction)
     } else {
@@ -481,7 +483,9 @@ fn write_store_conditional<T, R>(
 /// concurrent config writes deterministically: a point is active only when
 /// `<point>.armed` exists there. A waiting point records `<point>.reached`
 /// and blocks until `<point>.release` appears; a signal point only records
-/// `<point>.reached`. Inert unless a test arms it.
+/// `<point>.reached`. Inert unless a test arms it. Only builds with
+/// `test-support` compile it, so production builds ignore the variable.
+#[cfg(feature = "test-support")]
 mod write_gate {
     use std::path::PathBuf;
 
