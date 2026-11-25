@@ -167,12 +167,12 @@ export default defineConfig({
         './src/styles/home.css',
       ],
       components: {
-        Header: './src/components/Header.astro',
-        SiteTitle: './src/components/SiteTitle.astro',
-        ThemeProvider: './src/components/ThemeProvider.astro',
-        ThemeSelect: './src/components/ThemeSelect.astro',
-        Footer: './src/components/Footer.astro',
-        PageTitle: './src/components/PageTitle.astro',
+        Header: './src/component/Header.astro',
+        SiteTitle: './src/component/SiteTitle.astro',
+        ThemeProvider: './src/component/ThemeProvider.astro',
+        ThemeSelect: './src/component/ThemeSelect.astro',
+        Footer: './src/component/Footer.astro',
+        PageTitle: './src/component/PageTitle.astro',
       },
       pagefind: true,
       sidebar: [
