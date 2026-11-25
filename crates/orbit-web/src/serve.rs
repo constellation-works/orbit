@@ -116,7 +116,7 @@ pub fn serve_from_env(
             "dashboard admits trusted hosts with a listed Tailscale-User-Login"
         );
     }
-    state.set_trusted_hosts(trusted);
+    state.set_remote_access(state::RemoteAccess::from_config(trusted));
     run_server(&args, state, env)
 }
 
@@ -203,7 +203,7 @@ pub(crate) fn health_router(state: &state::DashboardState) -> Router<state::Dash
     Router::new()
         .route("/healthz", get(health::healthz))
         .layer(middleware::from_fn_with_state(
-            state.trusted_hosts(),
+            state.remote_access(),
             api::require_localhost_origin,
         ))
         // Outer so Host/Origin 403s and handler bodies both carry nosniff.
@@ -218,7 +218,7 @@ pub(crate) fn health_router(state: &state::DashboardState) -> Router<state::Dash
 pub(crate) fn build_app(state: state::DashboardState) -> Result<Router, OrbitError> {
     Ok(assets::dashboard_file_router()?
         .layer(middleware::from_fn_with_state(
-            state.trusted_hosts(),
+            state.remote_access(),
             api::require_localhost_host,
         ))
         .merge(health_router(&state))
@@ -275,6 +275,7 @@ fn run_server(args: &ServeArgs, state: state::DashboardState, env: &Env) -> Resu
     let handover_target = Arc::clone(&handover);
     let host_tunnels = Arc::clone(state.host_tunnels());
     let close_host_streams = Arc::clone(&host_tunnels);
+    let remote_access = state.remote_access();
     let app = build_app(state)?;
 
     let tokio_runtime = tokio::runtime::Builder::new_multi_thread()
@@ -294,6 +295,7 @@ fn run_server(args: &ServeArgs, state: state::DashboardState, env: &Env) -> Resu
         // `--port 0` asks the OS for a free port, so report the address that
         // was actually bound rather than the one requested.
         let bound = listener.local_addr().unwrap_or(addr);
+        remote_access.set_bound_port(bound.port());
         let url = format!("http://{bound}");
 
         #[allow(clippy::print_stdout)]

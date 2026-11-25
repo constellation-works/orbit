@@ -1,3 +1,4 @@
+use std::net::IpAddr;
 use std::str::FromStr;
 use std::sync::Arc;
 
@@ -10,7 +11,7 @@ use axum::response::{IntoResponse, Json, Response};
 use serde_json::json;
 use url::Url;
 
-use crate::state::TrustedHosts;
+use crate::state::{AlreadyRecorded, RefusalReason, RemoteAccess, TrustedHosts};
 
 /// The identity header Tailscale Serve sets for a tailnet user. Serve strips
 /// any client-supplied copy; Funnel and tagged-device requests carry none.
@@ -23,7 +24,7 @@ enum AdmittedHost {
     Loopback(Authority),
     /// A trusted host (lowercase name) whose request carried one listed
     /// `Tailscale-User-Login`; Origin must be exactly `https://<name>`.
-    Trusted(String),
+    Trusted { name: String, login: String },
 }
 
 /// Browser CSRF and DNS-rebinding mitigation on the loopback path, and the
@@ -58,16 +59,16 @@ enum AdmittedHost {
 ///    The header is absent for direct CLI/curl requests and some older
 ///    browsers; those requests retain the Host and Origin checks above.
 pub(crate) async fn require_localhost_origin(
-    State(trusted): State<Arc<TrustedHosts>>,
+    State(access): State<Arc<RemoteAccess>>,
     request: Request<Body>,
     next: Next,
 ) -> Response {
-    if request.headers().get_all(header::ORIGIN).iter().count() > 1 {
-        return forbidden_cross_origin();
-    }
-    let Some(host) = admitted_host(request.headers(), &trusted) else {
+    let Some(gate) = Gate::open(&request, &access) else {
         return forbidden_cross_origin();
     };
+    if request.headers().get_all(header::ORIGIN).iter().count() > 1 {
+        return gate.refuse(RefusalReason::OriginMismatch);
+    }
 
     if request
         .headers()
@@ -79,7 +80,7 @@ pub(crate) async fn require_localhost_origin(
                 .is_ok_and(|site| matches!(site, "same-origin" | "none"))
         })
     {
-        return forbidden_cross_origin();
+        return gate.refuse(RefusalReason::SecFetchSite);
     }
 
     let unsafe_method = matches!(
@@ -90,11 +91,11 @@ pub(crate) async fn require_localhost_origin(
     let allowed = origin
         .and_then(|origin| origin.to_str().ok())
         .and_then(|origin| Url::parse(origin).ok())
-        .is_some_and(|origin| origin_matches_host(&origin, &host));
+        .is_some_and(|origin| origin_matches_host(&origin, &gate.host));
     if !allowed && (unsafe_method || origin.is_some()) {
-        return forbidden_cross_origin();
+        return gate.refuse(RefusalReason::OriginMismatch);
     }
-    next.run(request).await
+    gate.admit(request, next).await
 }
 
 /// Require an admitted `Host` (gate 1 of [`require_localhost_origin`],
@@ -103,28 +104,108 @@ pub(crate) async fn require_localhost_origin(
 /// dashboard shell and embedded assets use this gate so a rebound Host or an
 /// untrusted Origin cannot read them.
 pub(crate) async fn require_localhost_host(
-    State(trusted): State<Arc<TrustedHosts>>,
+    State(access): State<Arc<RemoteAccess>>,
     request: Request<Body>,
     next: Next,
 ) -> Response {
-    let origins = request.headers().get_all(header::ORIGIN);
-    if origins.iter().count() > 1 {
-        return forbidden_cross_origin();
-    }
-    let Some(host) = admitted_host(request.headers(), &trusted) else {
+    let Some(gate) = Gate::open(&request, &access) else {
         return forbidden_cross_origin();
     };
+    let origins = request.headers().get_all(header::ORIGIN);
+    if origins.iter().count() > 1 {
+        return gate.refuse(RefusalReason::OriginMismatch);
+    }
     if let Some(origin) = request.headers().get(header::ORIGIN) {
         let allowed = origin
             .to_str()
             .ok()
             .and_then(|origin| Url::parse(origin).ok())
-            .is_some_and(|origin| origin_matches_host(&origin, &host));
+            .is_some_and(|origin| origin_matches_host(&origin, &gate.host));
         if !allowed {
-            return forbidden_cross_origin();
+            return gate.refuse(RefusalReason::OriginMismatch);
         }
     }
-    next.run(request).await
+    gate.admit(request, next).await
+}
+
+/// One request through either gate after Host admission: records what a
+/// trusted-host request did on [`RemoteAccess`] (Fleet › Remote access).
+/// Loopback requests, and a request the router dispatches to itself
+/// ([`AlreadyRecorded`]), are never recorded.
+struct Gate<'a> {
+    host: AdmittedHost,
+    access: &'a Arc<RemoteAccess>,
+    record: bool,
+}
+
+impl<'a> Gate<'a> {
+    /// Admit the Host, or record a trusted-path refusal and return `None`
+    /// (the caller answers 403).
+    fn open(request: &Request<Body>, access: &'a Arc<RemoteAccess>) -> Option<Self> {
+        let record = request.extensions().get::<AlreadyRecorded>().is_none();
+        match admitted_host(request.headers(), access.trusted_hosts()) {
+            Ok(host) => Some(Self {
+                record: record && matches!(host, AdmittedHost::Trusted { .. }),
+                host,
+                access,
+            }),
+            Err(refusal) => {
+                if let Some((reason, login)) = refusal
+                    && record
+                {
+                    access.record_refused(reason, login.as_deref());
+                }
+                None
+            }
+        }
+    }
+
+    fn refuse(&self, reason: RefusalReason) -> Response {
+        if self.record {
+            self.access.record_refused(reason, None);
+        }
+        forbidden_cross_origin()
+    }
+
+    /// Run the request; count it, and hold an open event stream's count
+    /// until its body ends.
+    async fn admit(self, request: Request<Body>, next: Next) -> Response {
+        let AdmittedHost::Trusted { login, .. } = &self.host else {
+            return next.run(request).await;
+        };
+        if !self.record {
+            return next.run(request).await;
+        }
+        let device = forwarded_for(request.headers());
+        self.access.record_admitted(device, login);
+        let response = next.run(request).await;
+        let stream = response
+            .headers()
+            .get(header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .is_some_and(|value| value.starts_with("text/event-stream"));
+        if !stream {
+            return response;
+        }
+        let guard = self.access.open_stream(device);
+        crate::lease::listener::retain_response_allowance(response, guard)
+    }
+}
+
+/// The tailnet IP Serve forwarded for: the last `X-Forwarded-For` entry,
+/// which Serve appends. Anything unparsable counts as an unknown device.
+fn forwarded_for(headers: &HeaderMap) -> Option<IpAddr> {
+    headers
+        .get_all("x-forwarded-for")
+        .iter()
+        .next_back()?
+        .to_str()
+        .ok()?
+        .rsplit(',')
+        .next()?
+        .trim()
+        .parse()
+        .ok()
 }
 
 fn forbidden_cross_origin() -> Response {
@@ -135,27 +216,42 @@ fn forbidden_cross_origin() -> Response {
         .into_response()
 }
 
+/// A trusted-path refusal worth recording: its reason and, for an unlisted
+/// login, the login attempted. `None` for a refusal off that path.
+type Refusal = Option<(RefusalReason, Option<String>)>;
+
 /// Gate 1 for the request's `Host`: exactly one header, naming an approved
 /// loopback authority, or a trusted host on its default HTTPS port with
 /// exactly one listed `Tailscale-User-Login`.
-fn admitted_host(headers: &HeaderMap, trusted: &TrustedHosts) -> Option<AdmittedHost> {
+fn admitted_host(headers: &HeaderMap, trusted: &TrustedHosts) -> Result<AdmittedHost, Refusal> {
     if headers.get_all(header::HOST).iter().count() != 1 {
-        return None;
+        return Err(None);
     }
-    let authority = parse_host_authority(headers.get(header::HOST))?;
+    let authority = parse_host_authority(headers.get(header::HOST)).ok_or(None)?;
     if is_approved_loopback_host(authority.host()) {
-        return Some(AdmittedHost::Loopback(authority));
+        return Ok(AdmittedHost::Loopback(authority));
     }
     let name = authority.host().to_ascii_lowercase();
     if !trusted.admits_host(&name) || authority.port_u16().is_some_and(|port| port != 443) {
-        return None;
+        return Err(None);
     }
     let mut logins = headers.get_all(TAILSCALE_USER_LOGIN).iter();
-    let login = logins.next()?.to_str().ok()?;
-    if logins.next().is_some() || !trusted.admits_login(login) {
-        return None;
+    let Some(login) = logins.next() else {
+        return Err(Some((RefusalReason::NoIdentity, None)));
+    };
+    let Some(login) = login.to_str().ok().filter(|_| logins.next().is_none()) else {
+        return Err(Some((RefusalReason::InvalidIdentity, None)));
+    };
+    if !trusted.admits_login(login) {
+        return Err(Some((
+            RefusalReason::UnlistedLogin,
+            Some(login.to_string()),
+        )));
     }
-    Some(AdmittedHost::Trusted(name))
+    Ok(AdmittedHost::Trusted {
+        name,
+        login: login.to_string(),
+    })
 }
 
 fn parse_host_authority(host: Option<&HeaderValue>) -> Option<Authority> {
@@ -198,7 +294,7 @@ fn origin_matches_host(origin: &Url, host: &AdmittedHost) -> bool {
         && origin.fragment().is_none();
     bare && match host {
         AdmittedHost::Loopback(authority) => localhost_origin_matches_authority(origin, authority),
-        AdmittedHost::Trusted(name) => {
+        AdmittedHost::Trusted { name, .. } => {
             origin.scheme() == "https"
                 && origin.port().is_none()
                 && origin

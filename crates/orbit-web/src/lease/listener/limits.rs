@@ -92,7 +92,7 @@ impl Default for LeaseListenerLimits {
     }
 }
 
-pub(super) fn retain_response_allowance<G: Send + 'static>(
+pub(crate) fn retain_response_allowance<G: Send + 'static>(
     response: Response,
     guard: G,
 ) -> Response {

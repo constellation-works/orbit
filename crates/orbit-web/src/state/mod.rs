@@ -63,6 +63,7 @@ use crate::host_tunnels::{HostTunnels, TunnelConfig};
 mod dashboard;
 mod hosts;
 mod registry;
+mod remote_access;
 mod request;
 mod trusted_hosts;
 
@@ -73,6 +74,10 @@ pub(crate) use hosts::{PinnedHosts, host_error_code};
 
 pub(crate) use registry::RegistrySource;
 use registry::{CheckoutFingerprint, RegistryFingerprint, checkout_fingerprints};
+pub(crate) use remote_access::{
+    ACTIVE_WINDOW_MINUTES, AlreadyRecorded, REFUSAL_WINDOW_HOURS, RefusalReason, RemoteAccess,
+    TailscaleReading,
+};
 pub(crate) use request::{ConfigFileWs, Pinned, RefreshFailure, Ws, WsRejection};
 pub(crate) use trusted_hosts::TrustedHosts;
 

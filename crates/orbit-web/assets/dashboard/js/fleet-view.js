@@ -1,5 +1,5 @@
 // Observe › Fleet presentation. Registry mutation and probe state stay in hosts.js.
-import { el, formatDateTime, pinnedInfoHint } from './common.js';
+import { el, formatDateTime, pinnedInfoHint, relativeTime } from './common.js';
 import { describeResource, hostVerdict } from './host-resources.js';
 import { describeProviderReading } from './provider-usage.js';
 
@@ -29,7 +29,7 @@ export function fleetFacts(rows) {
 const readingPending = reading => !reading || reading.kind === 'checking';
 
 const expandedLists = new Set();
-function section(title, content, help = null) {
+function section(title, content, help = null, summary = null) {
   let more = null;
   if (content.children.length > 7) {
     const rest = content.cloneNode(false);
@@ -39,7 +39,7 @@ function section(title, content, help = null) {
     more.addEventListener('toggle', () => { if (more.open) expandedLists.add(title); else expandedLists.delete(title); });
   }
   return el('section', { class: 'fleet-section' }, [
-    el('header', { class: 'fleet-section-head' }, [el('h2', { text: title }), help ? pinnedInfoHint(help) : null]), content, more,
+    el('header', { class: 'fleet-section-head' }, [el('h2', { text: title }), help ? pinnedInfoHint(help) : null, summary ? el('span', { class: 'fleet-section-summary muted', text: summary }) : null]), content, more,
   ]);
 }
 
@@ -168,4 +168,105 @@ export function fleetProviderSection(hosts, health) {
     }
   }
   return section('Provider capacity', list, 'Usage windows are per account, not per machine capacity. Explicitly shared logins count once within a host. Cross-host account identity is unknown; matching crew names do not prove a shared account. Availability reflects reported windows only.');
+}
+
+const SETTINGS_LINK = '#config/machine?key=machine.web.trusted_hosts';
+const REFUSAL_LABELS = {
+  no_identity: 'No Tailscale login',
+  invalid_identity: 'Unreadable login',
+  unlisted_login: 'Login not listed',
+  origin_mismatch: 'Origin mismatch',
+  sec_fetch_site: 'Cross-site request',
+};
+
+function remoteWarning(warning) {
+  const url = `https://${warning.host}`;
+  if (warning.code === 'serve_host_not_trusted') return `Serve sends ${url} here, but it is not a trusted host: every request is refused.`;
+  if (warning.code === 'trusted_host_not_served') return `No Serve handler sends ${url} to this dashboard.`;
+  if (warning.code === 'funnel_enabled') return `Funnel is on for ${url}. Funnel requests carry no login and are refused.`;
+  return `${warning.code}: ${warning.host}`;
+}
+
+function serveFact(tailscale, port) {
+  if (tailscale?.state === 'missing') return 'tailscale not on PATH';
+  if (tailscale?.state !== 'ok') return tailscale?.error || 'Unknown';
+  const here = (tailscale.handlers || []).filter(handler => handler.to_dashboard);
+  if (!here.length) return port ? `No handler for :${port}` : 'No handler for this dashboard';
+  return el('div', {}, here.map(handler => el('div', { text: `${handler.url} → :${port}${handler.funnel ? ' · Funnel on' : ''}` })));
+}
+
+/// Observe › Fleet › Remote access for the selected host: the trusted-host
+/// policy, the Tailscale Serve check and what came through since start.
+/// `reading` is `{payload}` or `{error}`; null while the first read is out.
+export function fleetRemoteAccessSections(reading, hostName) {
+  const help = `Requests to ${hostName} through Tailscale Serve. Trusted hosts and logins are read when orbit web serve starts; connections and refusals are kept in memory and reset on restart. Loopback requests are not counted.`;
+  const card = el('div', { class: 'card fleet-remote-card' });
+  if (!reading) {
+    card.append(el('p', { class: 'muted', text: 'Checking remote access…' }));
+    return [section('Remote access', card, help)];
+  }
+  if (reading.error) {
+    card.append(el('p', { class: 'muted', text: reading.error }));
+    return [section('Remote access', card, help)];
+  }
+  const body = reading.payload;
+  const warnings = (body.warnings || []).map(remoteWarning);
+  if (body.restart_required) warnings.push('Config changed since start. Restart orbit web serve to apply it.');
+  if (body.config_error) warnings.push(`Config unreadable: ${body.config_error}`);
+  const status = (body.warnings || []).length ? 'Misconfigured' : body.enabled ? 'On' : 'Off';
+  const settings = el('a', { text: 'Settings › Machine' });
+  settings.href = SETTINGS_LINK;
+  const facts = [['Status', el('span', { class: `fleet-state ${status === 'On' ? 'ok' : status === 'Off' ? 'unknown' : 'held'}`, text: status })]];
+  if (body.enabled) {
+    facts.push(['Trusted', el('div', {}, (body.trusted_hosts || []).map(host => {
+      const link = el('a', { text: host.url, target: '_blank', rel: 'noopener noreferrer' });
+      link.href = host.url;
+      return el('div', {}, [link]);
+    }))]);
+    facts.push(['Logins', (body.trusted_logins || []).join(', ')]);
+  } else {
+    facts.push(['Set up', el('span', {}, ['Trusted hosts and logins in ', settings])]);
+  }
+  facts.push(['Serve', serveFact(body.tailscale, body.dashboard_port)]);
+  card.append(fleetFacts(facts));
+  for (const text of warnings) card.append(el('p', { class: 'fleet-remote-warning', text }));
+  if (body.enabled) {
+    const edit = el('a', { text: 'Edit in Settings › Machine' });
+    edit.href = SETTINGS_LINK;
+    card.append(el('p', { class: 'fleet-remote-edit' }, [edit]));
+  }
+  const nodes = [section('Remote access', card, help)];
+  const connections = body.connections || {};
+  const devices = connections.devices || [];
+  const refusals = body.refusals?.items || [];
+  if (!body.enabled && !devices.length && !refusals.length) return nodes;
+
+  const since = connections.tracking_since ? `since ${formatDateTime(connections.tracking_since)}` : 'since start';
+  const list = el('div', { class: 'card card-flush fleet-remote-list' });
+  for (const device of devices) {
+    list.append(el('div', { class: 'fleet-remote-row' }, [
+      el('span', { class: 'fleet-primary' }, [el('span', { text: device.device || device.ip || 'Unknown device' }), el('span', { class: 'muted mono', text: device.device ? device.ip : '' })]),
+      el('span', { text: device.login }),
+      el('span', { class: 'mono', text: `${device.open_streams} live · ${device.requests_15m} req` }),
+      el('span', { class: 'muted', text: relativeTime(device.last_seen) || formatDateTime(device.last_seen) }),
+    ]));
+  }
+  if (!devices.length) list.append(el('p', { class: 'muted', text: `No connections ${since}.` }));
+  nodes.push(section('Remote connections', list,
+    `Devices by the tailnet IP Serve forwards for, named by tailscale whois. "live" counts open event streams; "req" counts requests in the last ${connections.window_minutes ?? 15} min. In memory ${since}.`,
+    `${connections.open_streams ?? 0} live · ${connections.active_devices ?? 0} active`));
+
+  const refused = el('div', { class: 'card card-flush fleet-remote-list' });
+  for (const item of refusals) {
+    refused.append(el('div', { class: 'fleet-remote-row fleet-remote-refusal' }, [
+      el('span', { class: 'fleet-primary' }, [el('span', { text: REFUSAL_LABELS[item.reason] || item.reason }), el('span', { class: 'muted', text: item.login || '' })]),
+      el('span', { class: 'mono', text: `${item.count_24h}` }),
+      el('span', { class: 'muted', text: relativeTime(item.last_at) || formatDateTime(item.last_at) }),
+    ]));
+  }
+  if (!refusals.length) refused.append(el('p', { class: 'muted', text: `No refusals in ${body.refusals?.window_hours ?? 24} h.` }));
+  nodes.push(section('Remote refusals', refused,
+    'Requests to a trusted host that were refused, by reason, over the last 24 h. Only an unlisted login keeps the login attempted.',
+    `${body.refusals?.total ?? 0} in ${body.refusals?.window_hours ?? 24} h`));
+  return nodes;
 }

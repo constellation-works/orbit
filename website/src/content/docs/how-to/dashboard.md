@@ -78,6 +78,13 @@ they are refused. Operator capability still comes only from
 `orbit web serve --operator`. `orbit web serve` refuses to start when hosts
 are set without logins.
 
+**Observe › Fleet** has a **Remote access** panel. It shows whether remote
+access is on and whether Serve points at this dashboard, and it lists the
+devices that connected through it and the requests it refused in the last
+24 hours. It warns when Serve routes an untrusted name here, when a trusted
+name is not served, or when Funnel is on. Change the keys in
+**Settings › Machine**, under **Remote access**, then restart.
+
 ## Switch hosts
 
 When the serving machine has registered other hosts (see

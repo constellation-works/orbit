@@ -21,6 +21,7 @@ mod admission;
 mod backend;
 mod config;
 mod limits;
+pub(crate) use limits::retain_response_allowance;
 mod router;
 mod startup;
 mod tls;
