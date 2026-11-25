@@ -92,9 +92,15 @@ File access and read errors still fail the
 request. The snapshot reads only the active file. The Errors tab also reads
 rotated archives that reach into its window, reading each only back to its first
 record older than the window (a 60 s margin allows for out-of-order stamps) and not
-opening an archive last written before the window. When retention has already pruned
-the start of the window, the Errors panel body shows "covers since" with the
-oldest retained instant, repeated in the count summary tooltip; the
+opening an archive last written before the window. The Errors `coverage_since`
+is the start of complete coverage across both sources: the latest of the
+requested window start, the process-log boundary, and the stderr boundary.
+Either boundary moves later than the window start when its source stopped
+short — retention pruned the start of the window, the process-log scan hit
+its match cap, or the stderr audit-event scan or the 256-blob stderr read cap
+stopped early — so coverage can start inside the last hour even while older
+process logs remain. The Errors panel body shows "covers since" with that
+instant, repeated in the count summary tooltip; the
 single-line header itself does not show it.
 
 The Tasks dock's **Log** view (`#tasks?dock=log`) and the bottom status bar put the message before
