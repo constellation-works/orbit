@@ -75,7 +75,7 @@ def patch_marked_list_setext_tabs(blob):
     # and let a zero-padded ordered marker whose numeric start is 1 interrupt
     # a paragraph (CommonMark allows leading zeroes in the 1-9 digit marker).
     # Require the exact upstream bundle so the patch is reviewed on upgrade.
-    upstream_sha256 = "392f4df89533b50f1dadff3f6dc0952350bd39c9f17def50a0374ef47d6147ef"
+    upstream_sha256 = "bb95d4c15f1289f78486eaacebf3bb18688475ed58a040ef762ed49337090542"
     guard = rb"/^ {0,3}(?:=+|-+) *$/"
     interrupt = rb"|1[.)]"
     if (
@@ -165,7 +165,7 @@ try:
             if "patch" in asset:
                 if asset["patch"] != "marked-list-setext-tabs":
                     raise SystemExit(f"refresh-dashboard-vendor: unknown patch for {spec}")
-                if spec != "marked@18.2.0" or asset["npm_file"] != "lib/marked.umd.js":
+                if spec != "marked@18.2.1" or asset["npm_file"] != "lib/marked.umd.js":
                     raise SystemExit("refresh-dashboard-vendor: recheck the Marked list patches for this pin")
                 blob = patch_marked_list_setext_tabs(blob)
             staged_path.write_bytes(blob)
