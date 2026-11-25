@@ -1,17 +1,12 @@
-pub(crate) mod admission_load_store;
 pub(crate) mod audit_event_store;
 pub(crate) mod authority;
-pub(crate) mod backlog_forecast_store;
-pub(crate) mod codebase_facts_store;
 mod crew_memory_store;
 mod delivery_run_load;
-mod evolution_store;
 mod experiment_assignments;
 pub(crate) mod experiment_store;
 pub mod host;
 pub(crate) mod invocation_store;
 pub(crate) mod job_run_store;
-pub(crate) mod landed_diff_store;
 pub(crate) mod plugin_store;
 pub(crate) mod provider_limit_store;
 pub(crate) mod reliability_store;
@@ -45,17 +40,17 @@ pub(crate) mod codec {
     }
 
     /// Clamp negative SQLite integers to zero.
-    pub(super) fn unsigned(value: i64) -> u64 {
+    pub(crate) fn unsigned(value: i64) -> u64 {
         u64::try_from(value).unwrap_or(0)
     }
 
     /// Column order consumed by `run_minute_from_row`.
-    pub(super) const RUN_MINUTE_COLUMNS: &str =
+    pub(crate) const RUN_MINUTE_COLUMNS: &str =
         "workspace_id, run_id, minute_index, minute_started_at, task_id,
             work_class, complexity, resumed, delivery_admitted_at,
             cpu_cores, memory_bytes, samples, cpu_accounting, crew_model, orbit_version";
 
-    pub(super) fn run_minute_from_row(row: &Row<'_>) -> rusqlite::Result<RunResourceMinute> {
+    pub(crate) fn run_minute_from_row(row: &Row<'_>) -> rusqlite::Result<RunResourceMinute> {
         Ok(RunResourceMinute {
             workspace_id: row.get(0)?,
             run_id: row.get(1)?,
@@ -79,7 +74,7 @@ pub(crate) mod codec {
     }
 
     /// The host's minutes starting at or after `since`, oldest first.
-    pub(super) fn host_minutes(
+    pub(crate) fn host_minutes(
         conn: &Connection,
         since: DateTime<Utc>,
     ) -> Result<Vec<HostResourceMinute>, OrbitError> {
@@ -110,6 +105,5 @@ pub(crate) mod codec {
     }
 }
 
-mod application_consent;
 #[cfg(test)]
 mod tests;

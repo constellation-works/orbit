@@ -1,77 +1,104 @@
-//! Landed-delivery diff stats in `landed_diff_stats`.
+//! Concrete repository for landed-delivery diff stats (`landed_diff_stats`).
 //!
-//! Timestamps are stored as fixed-width UTC RFC3339 text (microseconds,
-//! `Z`), so `landed_at` compares lexically.
+//! Reached only through [`Snapshot::landed_diff`] (read-only) and
+//! [`Tx::landed_diff`] (read-write inside [`crate::Store::write`]). Timestamps
+//! are stored as fixed-width UTC RFC3339 text (microseconds, `Z`), so
+//! `landed_at` compares lexically.
 
 use std::collections::BTreeSet;
+use std::marker::PhantomData;
 
 use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
 use orbit_common::storage::sqlite::sqlite_store_error;
-use rusqlite::{Row, TransactionBehavior, params};
+use rusqlite::{Connection, Row, params};
 
-use crate::Store;
-use crate::contracts::{
-    DiffClassCounts, LandedDiffSource, LandedDiffStats, LandedDiffStoreBackend, ReviewableLines,
-};
-
-use super::codec::stamp;
+use crate::contracts::{DiffClassCounts, LandedDiffSource, LandedDiffStats, ReviewableLines};
+use crate::driver::sqlite::codec::stamp;
+use crate::store::{Snapshot, Tx};
 
 const COLUMNS: &str = "workspace_id, task_id, landed_commit, base_commit, job_run_id, \
      landed_at, recorded_at, source, crew, model, complexity, task_type, \
      code_added, code_deleted, code_files, tests_added, tests_deleted, tests_files, \
      other_added, other_deleted, other_files, reviewable_added, reviewable_deleted";
 
-impl LandedDiffStoreBackend for Store {
-    fn record_landed_diff_stats(&self, row: &LandedDiffStats) -> Result<bool, OrbitError> {
-        self.with_transaction_behavior(TransactionBehavior::Immediate, |tx| {
-            let written = tx
-                .connection()
-                .execute(
-                    &format!(
-                        "INSERT OR IGNORE INTO landed_diff_stats ({COLUMNS}) VALUES \
-                     (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, \
-                      ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23)"
-                    ),
-                    params![
-                        row.workspace_id,
-                        row.task_id,
-                        row.landed_commit,
-                        row.base_commit,
-                        row.job_run_id,
-                        stamp(row.landed_at),
-                        stamp(row.recorded_at),
-                        row.source.as_str(),
-                        row.crew,
-                        row.model,
-                        row.complexity,
-                        row.task_type,
-                        row.code.added,
-                        row.code.deleted,
-                        row.code.files,
-                        row.tests.added,
-                        row.tests.deleted,
-                        row.tests.files,
-                        row.other.added,
-                        row.other.deleted,
-                        row.other.files,
-                        row.reviewable.map(|lines| lines.added),
-                        row.reviewable.map(|lines| lines.deleted),
-                    ],
-                )
-                .map_err(sqlite_store_error)?;
-            Ok(written > 0)
-        })
+/// Concrete landed-diff repository scoped to a [`Snapshot`] (read-only) or a
+/// [`Tx`] (read-write).
+pub struct LandedDiffRepository<'a, Access> {
+    conn: &'a Connection,
+    _access: PhantomData<&'a Access>,
+}
+
+impl<'a, 's> LandedDiffRepository<'a, Snapshot<'s>> {
+    pub(crate) fn for_snapshot(snapshot: &'a Snapshot<'s>) -> Self {
+        Self {
+            conn: snapshot.connection(),
+            _access: PhantomData,
+        }
+    }
+}
+
+impl<'a, 'tx> LandedDiffRepository<'a, Tx<'tx>> {
+    pub(crate) fn for_tx(tx: &'a Tx<'tx>) -> Self {
+        Self {
+            conn: tx.connection(),
+            _access: PhantomData,
+        }
     }
 
-    fn landed_diff_stats_since(
+    /// Insert `row` unless the workspace already holds one for its task and
+    /// landed commit. Returns `true` when this call wrote it.
+    pub fn put(&self, row: &LandedDiffStats) -> Result<bool, OrbitError> {
+        let written = self
+            .conn
+            .execute(
+                &format!(
+                    "INSERT OR IGNORE INTO landed_diff_stats ({COLUMNS}) VALUES \
+                     (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, \
+                      ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23)"
+                ),
+                params![
+                    row.workspace_id,
+                    row.task_id,
+                    row.landed_commit,
+                    row.base_commit,
+                    row.job_run_id,
+                    stamp(row.landed_at),
+                    stamp(row.recorded_at),
+                    row.source.as_str(),
+                    row.crew,
+                    row.model,
+                    row.complexity,
+                    row.task_type,
+                    row.code.added,
+                    row.code.deleted,
+                    row.code.files,
+                    row.tests.added,
+                    row.tests.deleted,
+                    row.tests.files,
+                    row.other.added,
+                    row.other.deleted,
+                    row.other.files,
+                    row.reviewable.map(|lines| lines.added),
+                    row.reviewable.map(|lines| lines.deleted),
+                ],
+            )
+            .map_err(sqlite_store_error)?;
+        Ok(written > 0)
+    }
+}
+
+impl<Access> LandedDiffRepository<'_, Access> {
+    /// The workspace's rows that landed at or after `since` (every row when
+    /// `None`), oldest first.
+    pub fn list_since(
         &self,
         workspace_id: &str,
         since: Option<DateTime<Utc>>,
     ) -> Result<Vec<LandedDiffStats>, OrbitError> {
-        let conn = self.read_connection()?;
         let since = since.map_or_else(String::new, stamp);
-        let mut statement = conn
+        let mut statement = self
+            .conn
             .prepare(&format!(
                 "SELECT {COLUMNS} FROM landed_diff_stats \
                  WHERE workspace_id = ?1 AND landed_at >= ?2 \
@@ -85,9 +112,10 @@ impl LandedDiffStoreBackend for Store {
             .map_err(sqlite_store_error)
     }
 
-    fn landed_diff_task_ids(&self, workspace_id: &str) -> Result<BTreeSet<String>, OrbitError> {
-        let conn = self.read_connection()?;
-        let mut statement = conn
+    /// The tasks that already have a row in the workspace.
+    pub fn task_ids(&self, workspace_id: &str) -> Result<BTreeSet<String>, OrbitError> {
+        let mut statement = self
+            .conn
             .prepare("SELECT DISTINCT task_id FROM landed_diff_stats WHERE workspace_id = ?1")
             .map_err(sqlite_store_error)?;
         let rows = statement

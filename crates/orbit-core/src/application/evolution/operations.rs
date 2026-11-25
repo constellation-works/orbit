@@ -4,7 +4,6 @@ use crate::OrbitRuntime;
 use crate::application::task::TaskEvolutionPort;
 use chrono::{DateTime, Duration, Utc};
 use orbit_common::OrbitError;
-use orbit_store::contracts::EvolutionStoreBackend;
 use orbit_types::record::{EvolutionOccurrence, EvolutionRecord, EvolutionState};
 use orbit_types::task::{TaskComment, TaskStatus};
 use orbit_types::workflow::{ResidentComment, ResidentCostEvent};
@@ -52,9 +51,72 @@ impl TaskEvolutionPort for OrbitRuntime {
 }
 
 impl OrbitRuntime {
-    fn evolution_store(&self) -> Result<std::sync::Arc<dyn EvolutionStoreBackend>, OrbitError> {
-        Ok(orbit_store::compose::evolution_store(self.sqlite_store()?))
+    /// Atomically validate, deduplicate by source key, corroborate signatures,
+    /// and persist evolution cost occurrences inside one write transaction.
+    fn record_evolution_costs(
+        &self,
+        workspace: &str,
+        events: &[EvolutionOccurrence],
+    ) -> Result<Vec<EvolutionRecord>, OrbitError> {
+        self.sqlite_store()?.write(|tx| {
+            let repo = tx.evolution();
+            let mut records = Vec::new();
+            for event in events {
+                event
+                    .cost
+                    .validate_cost_event()
+                    .map_err(|error| invalid(error.to_string()))?;
+                if repo.cost_exists(workspace, &event.source_key)? {
+                    continue;
+                }
+                let record = if let Some(signature) = &event.cost.signature {
+                    let mut record = repo
+                        .get_active_by_signature(workspace, signature)?
+                        .unwrap_or_else(|| EvolutionRecord {
+                            id: orbit_common::observability::audit_id::audit_execution_id("EV"),
+                            workspace: workspace.into(),
+                            signature: signature.clone(),
+                            title: event.cost.what.clone(),
+                            wished: event.cost.wished.clone(),
+                            state: EvolutionState::Open,
+                            occurrences: Vec::new(),
+                            proposal_task: None,
+                            declined_until: None,
+                            cost_at_decline: 0,
+                            window_days: 14,
+                        });
+                    record.occurrences.push(event.clone());
+                    repo.put_record(&record)?;
+                    Some(record)
+                } else {
+                    None
+                };
+                repo.put_cost(workspace, record.as_ref().map(|row| row.id.as_str()), event)?;
+                if let Some(record) = record {
+                    records.push(record);
+                }
+            }
+            Ok(records)
+        })
     }
+
+    fn mutate_evolution_record(
+        &self,
+        workspace: &str,
+        id: &str,
+        decide: impl FnOnce(&mut EvolutionRecord) -> Result<(), OrbitError>,
+    ) -> Result<EvolutionRecord, OrbitError> {
+        self.sqlite_store()?.write(|tx| {
+            let repo = tx.evolution();
+            let mut record = repo
+                .get_record(workspace, id)?
+                .ok_or_else(|| invalid("evolution record not found in this workspace"))?;
+            decide(&mut record)?;
+            repo.put_record(&record)?;
+            Ok(record)
+        })
+    }
+
     /// Persist checkpoint costs after the assignment comment commits. The source
     /// key makes replay safe; the comment remains the canonical recovery source.
     pub(crate) fn ingest_checkpoint_costs(
@@ -83,8 +145,7 @@ impl OrbitRuntime {
         if !events.is_empty() {
             self.ensure_coordination_task_write_permitted()?;
             self.refresh_evolution_proposals()?;
-            self.evolution_store()?
-                .record_evolution_costs(&self.workspace_id()?, &events)?;
+            self.record_evolution_costs(&self.workspace_id()?, &events)?;
         }
         Ok(())
     }
@@ -125,9 +186,8 @@ impl OrbitRuntime {
             ),
             cost,
         };
-        let records = self
-            .sqlite_store()?
-            .record_evolution_costs(&self.workspace_id()?, std::slice::from_ref(&event))?;
+        let records =
+            self.record_evolution_costs(&self.workspace_id()?, std::slice::from_ref(&event))?;
         let record = records
             .into_iter()
             .next()
@@ -136,12 +196,16 @@ impl OrbitRuntime {
         Ok(json!({"event": event, "record": record}))
     }
     fn refresh_evolution_proposals(&self) -> Result<(), OrbitError> {
-        let store = self.evolution_store()?;
         let workspace = self.workspace_id()?;
-        for record in store.evolution_records(&workspace)? {
+        let records = self
+            .sqlite_store()?
+            .read()?
+            .evolution()
+            .list_records(&workspace)?;
+        for record in records {
             let effective = self.evolution_proposal_state(record.clone())?;
             if effective != record {
-                store.mutate_evolution(&workspace, &record.id, &|current| {
+                self.mutate_evolution_record(&workspace, &record.id, |current| {
                     *current = self.evolution_proposal_state(current.clone())?;
                     Ok(())
                 })?;
@@ -158,7 +222,9 @@ impl OrbitRuntime {
         let mut rows = Vec::new();
         for record in self
             .sqlite_store()?
-            .evolution_records(&self.workspace_id()?)?
+            .read()?
+            .evolution()
+            .list_records(&self.workspace_id()?)?
         {
             let row = view(self.evolution_proposal_state(record)?, since)?;
             if state.is_none_or(|state| {
@@ -184,9 +250,9 @@ impl OrbitRuntime {
     pub(crate) fn show_evolution_record(&self, id: &str) -> Result<Value, OrbitError> {
         let record = self
             .sqlite_store()?
-            .evolution_records(&self.workspace_id()?)?
-            .into_iter()
-            .find(|record| record.id == id)
+            .read()?
+            .evolution()
+            .get_record(&self.workspace_id()?, id)?
             .ok_or_else(|| invalid("evolution record not found in this workspace"))?;
         view(self.evolution_proposal_state(record)?, None)
     }
@@ -233,15 +299,14 @@ impl OrbitRuntime {
         if days == 0 || days > 3650 {
             return Err(invalid("suppression days must be between 1 and 3650"));
         }
-        self.evolution_store()?
-            .mutate_evolution(&self.workspace_id()?, id, &|record| {
-                *record = self.evolution_proposal_state(record.clone())?;
-                if record.state == EvolutionState::Resolved {
-                    return Err(invalid("resolved evolution records cannot be declined"));
-                }
-                record.window_days = super::EVOLUTION_WINDOW_DAYS;
-                decline(record, Utc::now(), days);
-                Ok(())
-            })
+        self.mutate_evolution_record(&self.workspace_id()?, id, |record| {
+            *record = self.evolution_proposal_state(record.clone())?;
+            if record.state == EvolutionState::Resolved {
+                return Err(invalid("resolved evolution records cannot be declined"));
+            }
+            record.window_days = super::EVOLUTION_WINDOW_DAYS;
+            decline(record, Utc::now(), days);
+            Ok(())
+        })
     }
 }

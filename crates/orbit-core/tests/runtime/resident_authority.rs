@@ -734,12 +734,14 @@ fn resident_stale_comment_is_refused_without_writes() {
         "checkpoint costs must reach the capability-gap ledger"
     );
     assert_eq!(ledger["records"][0]["minutes"], 1);
-    use orbit_store::contracts::EvolutionStoreBackend;
     assert_eq!(
         runtime
             .sqlite_store()
             .unwrap()
-            .evolution_costs(&runtime.workspace_id().unwrap())
+            .read()
+            .unwrap()
+            .evolution()
+            .list_costs(&runtime.workspace_id().unwrap())
             .unwrap()
             .len(),
         2,

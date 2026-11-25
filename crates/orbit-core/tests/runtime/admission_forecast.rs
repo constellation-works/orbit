@@ -18,8 +18,7 @@ use orbit_core::runtime::host_resource::forecast::{
 use orbit_core::runtime::host_resource::profile::{ProfileLookup, ProfileSource};
 use orbit_store::Store;
 use orbit_store::contracts::{
-    AdmissionLoadQuery, AdmissionLoadStoreBackend, HostResourceMinute, NewAdmissionReservation,
-    ResourceUsageStoreBackend, RunResourceMinute,
+    HostResourceMinute, NewAdmissionReservation, ResourceUsageStoreBackend, RunResourceMinute,
 };
 use orbit_types::workflow::{JobRun, JobRunState};
 use serde_json::{Value, json};
@@ -845,23 +844,22 @@ fn every_call_reads_running_reservations_and_baseline_fresh() {
     // Another drain's own connection to the same database.
     let other = Store::open(&fixture.runtime.global_root().join("orbit.db")).unwrap();
     other
-        .admit_under_host_lock(
-            &AdmissionLoadQuery {
-                now,
-                delivery_jobs: &["task_pr_pipeline"],
-                reservations_expire_before: now - Duration::minutes(5),
-                resource_minutes_since: None,
-            },
-            &mut |_| {
-                Ok(vec![NewAdmissionReservation {
+        .write(|tx| {
+            let repo = tx.admission_load();
+            repo.delete_expired_reservations(now - Duration::minutes(5))?;
+            repo.delete_task_reservations(OTHER_WORKSPACE, "ORB-elsewhere")?;
+            repo.put_reservation(
+                &NewAdmissionReservation {
                     workspace_id: OTHER_WORKSPACE.to_string(),
                     task_id: "ORB-elsewhere".to_string(),
                     work_class: "change".to_string(),
                     complexity: Some("small".to_string()),
                     base_class: "change".to_string(),
-                }])
-            },
-        )
+                },
+                now,
+            )?;
+            Ok(())
+        })
         .unwrap();
     fixture.write_proc(10_000, 90_000, 10 * GIB);
 

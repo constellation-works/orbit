@@ -10,7 +10,7 @@ use chrono::Utc;
 use orbit_common::OrbitError;
 use orbit_common::governance::authorization::agent_context_declared;
 use orbit_common::security::application_credential::ApplicationCredential;
-use orbit_store::contracts::{ApplicationConsentRecord, ApplicationConsentStoreBackend};
+use orbit_store::contracts::ApplicationConsentRecord;
 use orbit_types::tool::{
     ApplicationAdmissionMatch, ApplicationAuditRefusal, ApplicationInvocation, ToolSessionContext,
 };
@@ -96,7 +96,9 @@ impl RuntimeKernel {
         {
             let record = self
                 .sqlite_store()?
-                .get_application_consent(credential.consent_id())?
+                .read()?
+                .application_consent()
+                .get(credential.consent_id())?
                 .filter(|record| credential.matches_fingerprint(&record.fingerprint))
                 .ok_or_else(|| {
                     OrbitError::CapabilityDenied("unrecognized application credential".into())
@@ -117,7 +119,9 @@ impl RuntimeKernel {
         }
         let record = self
             .sqlite_store()?
-            .get_application_consent(&invocation.consent.consent_id)?
+            .read()?
+            .application_consent()
+            .get(&invocation.consent.consent_id)?
             .ok_or_else(|| OrbitError::CapabilityDenied("unknown application consent".into()))?;
         self.verify_application_witness(&record)?;
         if !matches!(

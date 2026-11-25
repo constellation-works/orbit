@@ -563,6 +563,10 @@ fn legacy_db_adopts_versioned_ledger() {
                 "job_run_crew_model_backfill".to_string()
             ),
             ("migration.v0095".to_string(), "drain_intents".to_string()),
+            (
+                "migration.v0096".to_string(),
+                "codebase_task_facts".to_string()
+            ),
         ]
     );
 }

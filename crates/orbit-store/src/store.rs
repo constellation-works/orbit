@@ -7,6 +7,12 @@ use rusqlite::{Connection, TransactionBehavior};
 
 use crate::Store;
 use crate::driver::sqlite::host::read_pool::ReadGuard;
+use crate::repository::admission_load::AdmissionLoadRepository;
+use crate::repository::application_consent::ApplicationConsentRepository;
+use crate::repository::backlog_forecast::BacklogForecastRepository;
+use crate::repository::codebase_fact::{AgentFactRepository, CodebaseFactRepository};
+use crate::repository::evolution::EvolutionRepository;
+use crate::repository::landed_diff::LandedDiffRepository;
 use crate::repository::notice::NoticeRepository;
 
 /// One consistent read view of the host store.
@@ -22,6 +28,41 @@ pub struct Snapshot<'a> {
 impl Snapshot<'_> {
     pub(crate) fn connection(&self) -> &Connection {
         &self.conn
+    }
+
+    /// Read-only access to host admission-load records in this snapshot.
+    pub fn admission_load(&self) -> AdmissionLoadRepository<'_, Self> {
+        AdmissionLoadRepository::for_snapshot(self)
+    }
+
+    /// Read-only access to stored agent task-fact cache rows in this snapshot.
+    pub fn agent_fact(&self) -> AgentFactRepository<'_, Self> {
+        AgentFactRepository::for_snapshot(self)
+    }
+
+    /// Read-only access to application consent records in this snapshot.
+    pub fn application_consent(&self) -> ApplicationConsentRepository<'_, Self> {
+        ApplicationConsentRepository::for_snapshot(self)
+    }
+
+    /// Read-only access to stored backlog forecast records in this snapshot.
+    pub fn backlog_forecast(&self) -> BacklogForecastRepository<'_, Self> {
+        BacklogForecastRepository::for_snapshot(self)
+    }
+
+    /// Read-only access to stored codebase task-fact cache rows in this snapshot.
+    pub fn codebase_fact(&self) -> CodebaseFactRepository<'_, Self> {
+        CodebaseFactRepository::for_snapshot(self)
+    }
+
+    /// Read-only access to evolution ledger records in this snapshot.
+    pub fn evolution(&self) -> EvolutionRepository<'_, Self> {
+        EvolutionRepository::for_snapshot(self)
+    }
+
+    /// Read-only access to landed-delivery diff stat records in this snapshot.
+    pub fn landed_diff(&self) -> LandedDiffRepository<'_, Self> {
+        LandedDiffRepository::for_snapshot(self)
     }
 
     /// Read-only access to fleet notice records in this snapshot.
@@ -48,6 +89,45 @@ pub struct Tx<'a> {
 impl Tx<'_> {
     pub(crate) fn connection(&self) -> &Connection {
         self.conn
+    }
+
+    /// Read-write access to host admission-load records inside this transaction.
+    pub fn admission_load(&self) -> AdmissionLoadRepository<'_, Self> {
+        AdmissionLoadRepository::for_tx(self)
+    }
+
+    /// Read-write access to stored agent task-fact cache rows inside this
+    /// transaction.
+    pub fn agent_fact(&self) -> AgentFactRepository<'_, Self> {
+        AgentFactRepository::for_tx(self)
+    }
+
+    /// Read-write access to application consent records inside this transaction.
+    pub fn application_consent(&self) -> ApplicationConsentRepository<'_, Self> {
+        ApplicationConsentRepository::for_tx(self)
+    }
+
+    /// Read-write access to stored backlog forecast records inside this
+    /// transaction.
+    pub fn backlog_forecast(&self) -> BacklogForecastRepository<'_, Self> {
+        BacklogForecastRepository::for_tx(self)
+    }
+
+    /// Read-write access to stored codebase task-fact cache rows inside this
+    /// transaction.
+    pub fn codebase_fact(&self) -> CodebaseFactRepository<'_, Self> {
+        CodebaseFactRepository::for_tx(self)
+    }
+
+    /// Read-write access to evolution ledger records inside this transaction.
+    pub fn evolution(&self) -> EvolutionRepository<'_, Self> {
+        EvolutionRepository::for_tx(self)
+    }
+
+    /// Read-write access to landed-delivery diff stat records inside this
+    /// transaction.
+    pub fn landed_diff(&self) -> LandedDiffRepository<'_, Self> {
+        LandedDiffRepository::for_tx(self)
     }
 
     /// Read-write access to fleet notice records inside this transaction.

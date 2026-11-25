@@ -18,8 +18,8 @@ use orbit_core::runtime::host_resource::accuracy::AccuracySelection;
 use orbit_core::runtime::host_resource::forecast::{AdmissionReservationRequest, ForecastDecision};
 use orbit_core::runtime::host_resource::profile::ProfileLookup;
 use orbit_store::contracts::{
-    AdmissionForecastRecord, AdmissionLoadQuery, AdmissionLoadStoreBackend, AdmissionReservation,
-    HostResourceMinute, ResourceUsageStoreBackend, RunResourceMinute,
+    AdmissionForecastRecord, AdmissionReservation, HostResourceMinute, ResourceUsageStoreBackend,
+    RunResourceMinute,
 };
 use orbit_types::workflow::{DrainPassOutcome, JobRun, PullAdmissionFit};
 
@@ -179,24 +179,15 @@ fn admission_fit(pair: &Pair, drain: &str) -> Option<PullAdmissionFit> {
 /// Every reservation on the follower's host, superseded or not.
 fn reservations(follower: &OrbitRuntime) -> Vec<AdmissionReservation> {
     let now = Utc::now();
-    let mut seen = Vec::new();
     follower
         .sqlite_store()
         .unwrap()
-        .admit_under_host_lock(
-            &AdmissionLoadQuery {
-                now,
-                delivery_jobs: &[],
-                reservations_expire_before: now - ChronoDuration::minutes(5),
-                resource_minutes_since: None,
-            },
-            &mut |load| {
-                seen = load.reservations.clone();
-                Ok(Vec::new())
-            },
-        )
-        .unwrap();
-    seen
+        .write(|tx| {
+            let repo = tx.admission_load();
+            repo.delete_expired_reservations(now - ChronoDuration::minutes(5))?;
+            repo.reservations()
+        })
+        .unwrap()
 }
 
 /// Forecast records on the follower, in request order.
@@ -771,16 +762,11 @@ fn pending_pull_capacity_serializes_other_host_admitters_and_recovers_lost_repli
                 pair.follower
                     .sqlite_store()
                     .unwrap()
-                    .admit_under_host_lock_replacing(
-                        &AdmissionLoadQuery {
-                            now,
-                            delivery_jobs: &[],
-                            reservations_expire_before: now - ChronoDuration::minutes(5),
-                            resource_minutes_since: None,
-                        },
-                        &[("ws-local", "local-after-expiry")],
-                        &mut |_| Ok(vec![]),
-                    )
+                    .write(|tx| {
+                        let repo = tx.admission_load();
+                        repo.delete_expired_reservations(now - ChronoDuration::minutes(5))?;
+                        repo.delete_task_reservations("ws-local", "local-after-expiry")
+                    })
                     .unwrap();
                 let follower = pair.follower.clone();
                 *pair.wire.before_pull.lock().unwrap() = Some(Box::new(move || {

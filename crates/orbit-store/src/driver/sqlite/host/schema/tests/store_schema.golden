@@ -581,3 +581,6 @@ v95 drain_intents
 + ["index","sqlite_autoindex_drain_intents_1","drain_intents",null]
 + ["table","drain_intents","drain_intents","CREATE TABLE drain_intents (\n                workspace_id TEXT PRIMARY KEY,\n                intent TEXT NOT NULL,\n                actor TEXT NOT NULL,\n                source TEXT NOT NULL,\n                reason TEXT,\n                updated_at TEXT NOT NULL\n            )"]
 
+v96 codebase_task_facts
++ ["table","codebase_task_facts","codebase_task_facts","CREATE TABLE codebase_task_facts (\n            workspace_id TEXT NOT NULL,\n            task_id TEXT NOT NULL,\n            format_version INTEGER NOT NULL,\n            source TEXT NOT NULL,\n            facts_json TEXT NOT NULL,\n            PRIMARY KEY (workspace_id, task_id)\n        ) WITHOUT ROWID"]
+

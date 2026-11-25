@@ -3,7 +3,6 @@
 //! Analytics › Metrics diff trend.
 
 use chrono::{DateTime, Utc};
-use orbit_common::OrbitError;
 
 /// Lines and files one path class of a landed diff changed.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -83,24 +82,4 @@ pub struct LandedDiffStats {
     /// `None` when the row predates the denominator, or attribution could
     /// not be recovered without borrowing another task's range.
     pub reviewable: Option<ReviewableLines>,
-}
-
-pub trait LandedDiffStoreBackend: Send + Sync {
-    /// Insert `row` unless the workspace already holds one for its task and
-    /// landed commit. `true` when this call wrote it.
-    fn record_landed_diff_stats(&self, row: &LandedDiffStats) -> Result<bool, OrbitError>;
-
-    /// The workspace's rows that landed at or after `since` (every row when
-    /// `None`), oldest first.
-    fn landed_diff_stats_since(
-        &self,
-        workspace_id: &str,
-        since: Option<DateTime<Utc>>,
-    ) -> Result<Vec<LandedDiffStats>, OrbitError>;
-
-    /// The tasks that already have a row in the workspace.
-    fn landed_diff_task_ids(
-        &self,
-        workspace_id: &str,
-    ) -> Result<std::collections::BTreeSet<String>, OrbitError>;
 }

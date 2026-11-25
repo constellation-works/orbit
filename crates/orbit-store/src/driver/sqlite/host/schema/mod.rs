@@ -22,6 +22,7 @@ mod audit_events;
 mod automation_condition_states;
 mod backlog_forecasts;
 mod baseline;
+mod codebase_task_facts;
 mod crew_memory_revisions;
 mod crew_performance_snapshot;
 mod delivery_runs_stamp;
@@ -896,12 +897,21 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
         compat: MigrationCompatibility::Additive,
         apply: drain_intents::apply_drain_intents,
     },
+    // Per-task codebase analytics facts kept between scans. A new derived-cache
+    // table only, which an older binary either ignores or already created
+    // lazily with the same schema.
+    Migration {
+        version: 96,
+        name: "codebase_task_facts",
+        compat: MigrationCompatibility::Additive,
+        apply: codebase_task_facts::apply_codebase_task_facts,
+    },
 ];
 
 /// Highest schema version this binary knows how to produce. Public for
 /// the future `orbit migrate` surface (P3.4), alongside
 /// [`AppliedMigration`] and the `Store` version accessors.
-pub const SUPPORTED_SCHEMA_VERSION: u32 = 95;
+pub const SUPPORTED_SCHEMA_VERSION: u32 = 96;
 
 /// Bring the store database up to the newest supported schema version,
 /// applying any pending versioned migrations (each transactional and
