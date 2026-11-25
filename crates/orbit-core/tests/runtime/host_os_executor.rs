@@ -145,7 +145,7 @@ fn excluded<'a>(output: &'a Value, task: &str) -> Option<&'a Value> {
 }
 
 fn running_run(runtime: &OrbitRuntime) -> String {
-    let jobs = orbit_store::compose::workspace_job_run_store(
+    let jobs = orbit_core::runtime::JobRuns::shared(
         runtime.sqlite_store().unwrap(),
         runtime.workspace_id().unwrap(),
     );
@@ -259,7 +259,7 @@ fn a_linux_host_waits_on_a_muse_crew_and_a_macos_host_admits_it() {
         matches!(&refused, OrbitError::PolicyDenied(message) if message.contains(WAIT)),
         "{refused}"
     );
-    let jobs = orbit_store::compose::workspace_job_run_store(
+    let jobs = orbit_core::runtime::JobRuns::shared(
         linux.sqlite_store().unwrap(),
         linux.workspace_id().unwrap(),
     );
@@ -336,7 +336,7 @@ fn select_task_crew(runtime: &OrbitRuntime, task: &str) -> Result<Value, OrbitEr
         jobs_dir.join("task_auto_pipeline.yaml"),
         "schemaVersion: 2\nkind: Job\nmetadata:\n  name: task_auto_pipeline\nspec:\n  state: enabled\n  steps: []\n",
     ).unwrap();
-    let jobs = orbit_store::compose::workspace_job_run_store(
+    let jobs = orbit_core::runtime::JobRuns::shared(
         runtime.sqlite_store().unwrap(),
         runtime.workspace_id().unwrap(),
     );
@@ -457,7 +457,7 @@ fn a_supported_explicit_run_crew_survives_discovery_and_replay() {
         "schemaVersion: 2\nkind: Job\nmetadata:\n  name: task_gate_pipeline\nspec:\n  state: enabled\n  steps: []\n",
     ).unwrap();
     install_discovery_worker(&linux);
-    let jobs = orbit_store::compose::workspace_job_run_store(
+    let jobs = orbit_core::runtime::JobRuns::shared(
         linux.sqlite_store().unwrap(),
         linux.workspace_id().unwrap(),
     );

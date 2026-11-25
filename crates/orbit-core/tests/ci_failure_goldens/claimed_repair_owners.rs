@@ -255,7 +255,10 @@ fn record_verified_repair(
     runtime
         .sqlite_store()
         .unwrap()
-        .upsert_job_run_for_workspace(&runtime.workspace_id().unwrap(), &job, None)
+        .write(|tx| {
+            tx.job_run()
+                .put(&runtime.workspace_id().unwrap(), &job, None)
+        })
         .unwrap();
     let mut state = PipelineState::new(
         job.run_id.clone(),

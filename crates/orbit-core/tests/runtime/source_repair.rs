@@ -315,11 +315,10 @@ fn cancelled_admission_refuses_identity_liveness_lease_and_evidence_drift() {
                 f.runtime
                     .sqlite_store()
                     .unwrap()
-                    .upsert_job_run_for_workspace(
-                        &f.runtime.workspace_id().unwrap(),
-                        &f.source,
-                        None,
-                    )
+                    .write(|tx| {
+                        tx.job_run()
+                            .put(&f.runtime.workspace_id().unwrap(), &f.source, None)
+                    })
                     .unwrap();
             }
             "host_action" => {
@@ -408,11 +407,10 @@ fn cancelled_admission_refuses_identity_liveness_lease_and_evidence_drift() {
                 f.runtime
                     .sqlite_store()
                     .unwrap()
-                    .upsert_job_run_for_workspace(
-                        &f.runtime.workspace_id().unwrap(),
-                        &f.source,
-                        None,
-                    )
+                    .write(|tx| {
+                        tx.job_run()
+                            .put(&f.runtime.workspace_id().unwrap(), &f.source, None)
+                    })
                     .unwrap();
             }
             "local_head" => {
@@ -721,7 +719,10 @@ fn concurrent_replay_and_cancelled_attempt_keep_one_durable_reservation() {
     f.runtime
         .sqlite_store()
         .unwrap()
-        .upsert_job_run_for_workspace(&f.runtime.workspace_id().unwrap(), &run, None)
+        .write(|tx| {
+            tx.job_run()
+                .put(&f.runtime.workspace_id().unwrap(), &run, None)
+        })
         .unwrap();
     let replay = f
         .runtime
@@ -850,7 +851,10 @@ fn scope_and_cancellation_are_rechecked_before_source_effects() {
             f.runtime
                 .sqlite_store()
                 .unwrap()
-                .upsert_job_run_for_workspace(&f.runtime.workspace_id().unwrap(), &run, None)
+                .write(|tx| {
+                    tx.job_run()
+                        .put(&f.runtime.workspace_id().unwrap(), &run, None)
+                })
                 .unwrap();
         } else if case == "association" {
             f.replace_refs(Vec::new());

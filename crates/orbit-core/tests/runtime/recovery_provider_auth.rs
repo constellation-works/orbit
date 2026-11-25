@@ -95,7 +95,10 @@ fn success(
     fx.runtime
         .sqlite_store()
         .unwrap()
-        .upsert_job_run_for_workspace(&fx.runtime.workspace_id().unwrap(), &stored, None)
+        .write(|tx| {
+            tx.job_run()
+                .put(&fx.runtime.workspace_id().unwrap(), &stored, None)
+        })
         .unwrap();
     audit(fx, &stored.run_id)
         .emit(V2AuditEventKind::ProviderInvocationObserved {
@@ -209,7 +212,10 @@ fn recovery_failure_is_observed_and_cleared_only_by_its_account_and_host() {
         fx.runtime
             .sqlite_store()
             .unwrap()
-            .upsert_job_run_for_workspace(&fx.runtime.workspace_id().unwrap(), &parent, None)
+            .write(|tx| {
+                tx.job_run()
+                    .put(&fx.runtime.workspace_id().unwrap(), &parent, None)
+            })
             .unwrap();
         assert_eq!(auth_card(&fx), card, "{state:?}");
         assert_eq!(purpose_draw(&fx, false), "sol");

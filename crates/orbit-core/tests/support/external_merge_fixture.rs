@@ -448,7 +448,7 @@ impl Fixture {
 
     /// Bind `task_id` to a running run of this process.
     pub(crate) fn bind_live_run(&self, task_id: &str) {
-        let jobs = orbit_store::compose::workspace_job_run_store(
+        let jobs = orbit_core::runtime::JobRuns::shared(
             self.runtime.sqlite_store().unwrap(),
             self.runtime.workspace_id().unwrap(),
         );

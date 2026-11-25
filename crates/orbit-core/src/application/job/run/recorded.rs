@@ -10,7 +10,7 @@
 //! run-detail surface find such a run and say where an absent one is held.
 
 use orbit_common::OrbitError;
-use orbit_store::compose::workspace_job_run_store;
+use orbit_runtime::JobRuns;
 use orbit_types::task::ExecutionLocation;
 use orbit_types::workflow::{JobRun, PipelineState};
 
@@ -40,7 +40,10 @@ impl OrbitRuntime {
     /// Every workspace id this host's store records `run_id` under,
     /// ascending, registered on this host or not.
     pub fn job_run_recording_workspaces(&self, run_id: &str) -> Result<Vec<String>, OrbitError> {
-        self.sqlite_store()?.job_run_workspace_ids(run_id)
+        self.sqlite_store()?
+            .read()?
+            .job_run()
+            .list_workspace_ids(run_id)
     }
 
     /// `run_id` as this host's store records it under `workspace_id`, which
@@ -52,7 +55,7 @@ impl OrbitRuntime {
         workspace_id: &str,
         run_id: &str,
     ) -> Result<Option<RecordedJobRun>, OrbitError> {
-        let jobs = workspace_job_run_store(self.sqlite_store()?, workspace_id);
+        let jobs = JobRuns::shared(self.sqlite_store()?, workspace_id);
         let Some(run) = jobs.get_job_run(run_id)? else {
             return Ok(None);
         };

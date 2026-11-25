@@ -20,14 +20,13 @@ use std::sync::Arc;
 
 use chrono::DateTime;
 use orbit_store::Store;
-use orbit_store::contracts::JobRunStoreBackend;
 
 use super::command::WorkerCommandConfig;
 use super::exit::note_exit_after_reconciliation;
 use super::scope::WORKER_RESOURCE_LIMIT_ERROR_CODE;
 use super::*;
 use crate::application::job::pipeline::wait::announce_worker_exit;
-use crate::application::job::run::audit_record::{self, PipelineAuditRow};
+use crate::application::job::run::audit_record::{self, PipelineAuditRow, SupervisedRuns};
 use crate::application::job::run::worker_exit::{
     WORKER_CLAIM_AUDIT, WORKER_EXIT_AUDIT, WorkerExit,
 };
@@ -180,7 +179,7 @@ impl PipelineRunHost for OrbitRuntime {
 /// thread: it outlives the spawning call and must carry its own handles.
 #[derive(Clone)]
 pub(crate) struct PipelineWorkerSupervisor {
-    runs: Arc<dyn JobRunStoreBackend>,
+    runs: Arc<dyn SupervisedRuns>,
     store: Store,
     paths: WorkspacePaths,
     event_log: EventLog,
@@ -190,7 +189,7 @@ pub(crate) struct PipelineWorkerSupervisor {
 
 impl PipelineWorkerSupervisor {
     pub(crate) fn new(
-        runs: Arc<dyn JobRunStoreBackend>,
+        runs: Arc<dyn SupervisedRuns>,
         store: Store,
         paths: WorkspacePaths,
         event_log: EventLog,

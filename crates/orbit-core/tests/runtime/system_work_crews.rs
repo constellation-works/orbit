@@ -6,11 +6,11 @@
 //! Pool and crew names are fixture policy.
 
 use chrono::{Duration, Utc};
+use orbit_core::runtime::JobRuns;
 use orbit_core::{
     AutoTaskAddParams, OrbitRuntime, TaskComplexity, TaskPriority, TaskStatus, TaskType,
 };
 use orbit_engine::RuntimeHost;
-use orbit_store::contracts::JobRunStoreBackend;
 use orbit_types::telemetry::{ProviderLimitObservation, ProviderLimitSource};
 use orbit_types::workflow::{
     ActivityCrewDraw, AutoTaskSchedule, AutoTaskTemplate, DedupePolicy, FINAL_RECOVERY_CREWS_KEY,
@@ -56,7 +56,7 @@ model = "fixture-hard"
 struct Fixture {
     _root: TempDir,
     runtime: OrbitRuntime,
-    jobs: Arc<dyn JobRunStoreBackend>,
+    jobs: Arc<JobRuns>,
 }
 
 fn fixture() -> Fixture {
@@ -71,7 +71,7 @@ fn fixture_with(config: &str) -> Fixture {
     std::fs::create_dir_all(repo.join(".orbit")).unwrap();
     std::fs::write(repo.join(".orbit/config.toml"), config).unwrap();
     let runtime = OrbitRuntime::from_roots(&global, &repo.join(".orbit")).unwrap();
-    let jobs = orbit_store::compose::workspace_job_run_store(
+    let jobs = orbit_core::runtime::JobRuns::shared(
         runtime.sqlite_store().unwrap(),
         runtime.workspace_id().unwrap(),
     );

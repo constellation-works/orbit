@@ -13,9 +13,10 @@ use orbit_core::application::automation::{
     consumer_key, evaluate_routine, pin_attempt_source, release_unreferenced_attempt_pins,
 };
 use orbit_core::application::task::TaskAddParams;
+use orbit_core::runtime::JobRuns;
 use orbit_core::{OrbitRuntime, Task, TaskStatus};
 use orbit_engine::RuntimeHost;
-use orbit_store::contracts::{JobRunStoreBackend, KeyedJobRunAdmission};
+use orbit_store::contracts::KeyedJobRunAdmission;
 use orbit_tools::ToolContext;
 use orbit_types::workflow::automation::AutomationState;
 use orbit_types::workflow::automation::members::{MemberAttempt, StateTriggerKind};
@@ -82,7 +83,7 @@ struct Workspace {
     root: TempDir,
     runtime: OrbitRuntime,
     repo: PathBuf,
-    jobs: Arc<dyn JobRunStoreBackend>,
+    jobs: Arc<JobRuns>,
 }
 
 impl Workspace {
@@ -130,7 +131,7 @@ impl Workspace {
             .unwrap();
         }
         let runtime = runtime_at(&global, &repo.join(".orbit"));
-        let jobs = orbit_store::compose::workspace_job_run_store(
+        let jobs = orbit_core::runtime::JobRuns::shared(
             runtime.sqlite_store().unwrap(),
             runtime.workspace_id().unwrap(),
         );

@@ -37,7 +37,7 @@ fn delivery_run(
     state: JobRunState,
     code: Option<&str>,
 ) -> String {
-    let jobs = orbit_store::compose::workspace_job_run_store(
+    let jobs = orbit_core::runtime::JobRuns::shared(
         fx.runtime.sqlite_store().unwrap(),
         fx.runtime.workspace_id().unwrap(),
     );

@@ -3,6 +3,7 @@ use std::collections::BTreeMap;
 
 use chrono::Utc;
 use orbit_common::OrbitError;
+use orbit_runtime::JobRuns;
 use orbit_store::contracts::*;
 use orbit_types::workflow::{
     PipelineState, ReviewBudget, ReviewConsumption, ReviewLedger, ReviewResetDecision,
@@ -280,7 +281,7 @@ fn a_launch_failure_adopts_a_concurrent_settlement_and_retries_queued_cancellati
         return;
     }
     struct InterleavedLauncher<'a> {
-        jobs: &'a dyn JobRunStoreBackend,
+        jobs: &'a JobRuns,
         cancellations: Cell<usize>,
         settlement: RefCell<Option<ClaimMutation>>,
     }
@@ -355,7 +356,7 @@ fn a_launch_failure_adopts_a_concurrent_settlement_and_retries_queued_cancellati
         orbit_types::workflow::JobRunState::Cancelled
     );
 }
-fn request(jobs: &dyn JobRunStoreBackend) -> (PullDestination, AdmissionRequest) {
+fn request(jobs: &JobRuns) -> (PullDestination, AdmissionRequest) {
     let parent = jobs
         .insert_job_run("workspace_auto_pipeline", 1, Utc::now(), None, None)
         .expect("parent");

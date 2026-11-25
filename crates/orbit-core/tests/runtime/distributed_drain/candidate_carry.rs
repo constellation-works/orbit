@@ -26,6 +26,7 @@
 //! rejected review never pushed, the failure hook carries the reviewer-fixed
 //! tip to the durable ref, and the next claim on another host resumes it.
 
+use orbit_core::runtime::JobRuns;
 use orbit_engine::TaskAutomationUpdate;
 use orbit_types::task::{CANDIDATE_RESUME_EVENT, TaskDecision, TaskStatus};
 use orbit_types::workflow::{BaselineRedHold, CANDIDATE_HELD_EVENT};
@@ -365,8 +366,8 @@ fn returned_to_backlog(pair: &Pair, task: &str) {
         .expect("back to the backlog");
 }
 
-fn owner_jobs(pair: &Pair) -> Arc<dyn JobRunStoreBackend> {
-    orbit_store::compose::workspace_job_run_store(
+fn owner_jobs(pair: &Pair) -> Arc<JobRuns> {
+    orbit_core::runtime::JobRuns::shared(
         pair.wire.owner.sqlite_store().unwrap(),
         pair.wire.owner.workspace_id().unwrap(),
     )

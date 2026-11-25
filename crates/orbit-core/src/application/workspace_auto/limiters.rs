@@ -59,10 +59,12 @@ impl OrbitRuntime {
             }
         }
         let store = self.sqlite_store()?;
+        let snapshot = store.read()?;
         let mut limiters = Vec::new();
         for (workspace_id, run_id) in drains {
-            let counters = store
-                .read_job_run_state_for_workspace(&workspace_id, &run_id)?
+            let counters = snapshot
+                .job_run()
+                .get_pipeline_state(&workspace_id, &run_id)?
                 .and_then(|state| state.pull_drain.drain_pass_counters);
             if let Some(counters) = counters {
                 limiters.push(DrainLimiters::new(workspace_id, run_id, counters));

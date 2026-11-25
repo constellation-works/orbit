@@ -7,10 +7,10 @@ use orbit_types::workflow::{
     JobRun, PipelineState, RunIdRole, run_id_candidate, run_id_minute_stem,
 };
 
-use super::super::state::write_state_json_conn;
 use super::rows::optional_json;
+use super::state::write_state_json_conn;
 
-pub(in crate::driver::sqlite::job_run_store) fn upsert_job_run_for_workspace_conn(
+pub(super) fn upsert_job_run_for_workspace_conn(
     conn: &rusqlite::Connection,
     workspace_id: &str,
     run: &JobRun,
@@ -104,7 +104,7 @@ const MAX_RUN_ID_SEQUENCE: u32 = 1023;
 /// thousand runs of one role on one host inside one minute is already
 /// pathological, and any id returned without a free-slot probe behind it would
 /// upsert over the live run already holding it.
-pub(in crate::driver::sqlite::job_run_store) fn next_run_id_conn(
+pub(super) fn next_run_id_conn(
     conn: &rusqlite::Connection,
     role: RunIdRole,
     submitted_at: DateTime<Utc>,

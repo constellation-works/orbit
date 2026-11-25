@@ -216,7 +216,7 @@ fn a_claimed_leaf_records_steering_on_its_owner_and_settlement_keeps_it() {
     // latest claim's watermark: the delivered comment stays delivered, and
     // one no leaf carried is outstanding.
     let gap = operator_comment(&owner, &task, "GAP: written after the leaf's last prompt.");
-    let jobs = orbit_store::compose::workspace_job_run_store(
+    let jobs = orbit_core::runtime::JobRuns::shared(
         owner.sqlite_store().unwrap(),
         owner.workspace_id().unwrap(),
     );

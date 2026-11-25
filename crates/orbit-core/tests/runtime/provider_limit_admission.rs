@@ -234,7 +234,7 @@ impl Fixture {
         )
         .unwrap();
         let runtime = self.runtime();
-        let jobs = orbit_store::compose::workspace_job_run_store(
+        let jobs = orbit_core::runtime::JobRuns::shared(
             runtime.sqlite_store().unwrap(),
             runtime.workspace_id().unwrap(),
         );
@@ -622,7 +622,7 @@ fn live_provider_policy_reloads_and_keeps_the_last_good_config() {
     let task = fx.task(Some("opus"));
     fx.read_claude(93.0, false, Utc::now() + Duration::hours(2));
     let runtime = fx.runtime();
-    let jobs = orbit_store::compose::workspace_job_run_store(
+    let jobs = orbit_core::runtime::JobRuns::shared(
         runtime.sqlite_store().unwrap(),
         runtime.workspace_id().unwrap(),
     );

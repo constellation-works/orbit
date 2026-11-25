@@ -755,7 +755,7 @@ fn a_requeue_while_the_tasks_run_is_live_closes_nothing() {
     fx.seed_forge(&task_id, &other);
     fx.record_prs(&task_id, &[11]);
     fx.move_to_review(&task_id);
-    let jobs = orbit_store::compose::workspace_job_run_store(
+    let jobs = orbit_core::runtime::JobRuns::shared(
         fx.runtime.sqlite_store().unwrap(),
         fx.runtime.workspace_id().unwrap(),
     );
@@ -833,7 +833,7 @@ fn a_requeue_while_a_resumed_retry_is_live_closes_nothing() {
     fx.seed_forge(&task_id, &other);
     fx.record_prs(&task_id, &[11]);
     fx.move_to_review(&task_id);
-    let jobs = orbit_store::compose::workspace_job_run_store(
+    let jobs = orbit_core::runtime::JobRuns::shared(
         fx.runtime.sqlite_store().unwrap(),
         fx.runtime.workspace_id().unwrap(),
     );

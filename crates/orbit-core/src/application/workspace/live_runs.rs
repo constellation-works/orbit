@@ -3,8 +3,8 @@
 use std::path::Path;
 
 use orbit_common::OrbitError;
+use orbit_runtime::JobRuns;
 use orbit_store::Store;
-use orbit_store::compose::workspace_job_run_store;
 use orbit_store::contracts::JobRunQuery;
 use orbit_store::maintenance::task_registry::read_workspace_config_optional;
 use orbit_types::workflow::JobRunState;
@@ -36,7 +36,7 @@ pub fn workspace_live_run_ids(
     };
     let workspace_id = config.workspace_id;
     let store = Store::open_read_only(&database)?;
-    let jobs = workspace_job_run_store(store, workspace_id);
+    let jobs = JobRuns::shared(store, workspace_id);
     let runs = jobs.list_job_runs_filtered(&JobRunQuery {
         states: vec![
             JobRunState::Pending,

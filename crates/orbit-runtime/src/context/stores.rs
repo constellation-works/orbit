@@ -1,10 +1,11 @@
 use crate::plugin::host::PluginHostLoad;
+use crate::stored::job_runs::JobRuns;
 use orbit_config::{CodexExecutionPolicy, ExecutionEnvPolicy};
 use orbit_policy::PolicyEngine;
 use orbit_search::LexicalIndex;
 use orbit_store::contracts::{
-    JobRunStoreBackend, TaskArtifactStoreBackend, TaskDocumentStoreBackend,
-    TaskHistoryStoreBackend, TaskReservationStoreBackend, TaskStoreBackend,
+    TaskArtifactStoreBackend, TaskDocumentStoreBackend, TaskHistoryStoreBackend,
+    TaskReservationStoreBackend, TaskStoreBackend,
 };
 use orbit_store::skill_store::SkillDirs;
 use orbit_store::{ExecutorDefDir, FileStore, PolicyDefDirs, Store};
@@ -27,7 +28,7 @@ pub struct OrbitStores {
     pub(crate) task_artifact: Arc<dyn TaskArtifactStoreBackend>,
     pub(crate) lexical_index: LexicalIndex,
     pub(crate) task_reservation: Arc<dyn TaskReservationStoreBackend>,
-    pub job_run: Arc<dyn JobRunStoreBackend>,
+    pub job_run: Arc<JobRuns>,
     pub(crate) executor_def: FileStore<ExecutorDefDir>,
     pub(crate) policy_def: FileStore<PolicyDefDirs>,
     pub(crate) host: OrbitHostStore,
@@ -42,7 +43,7 @@ impl OrbitStores {
         task_artifact: Arc<dyn TaskArtifactStoreBackend>,
         lexical_index: LexicalIndex,
         task_reservation: Arc<dyn TaskReservationStoreBackend>,
-        job_run: Arc<dyn JobRunStoreBackend>,
+        job_run: Arc<JobRuns>,
         executor_def: FileStore<ExecutorDefDir>,
         policy_def: FileStore<PolicyDefDirs>,
         host: OrbitHostStore,
@@ -87,7 +88,8 @@ impl OrbitStores {
         self.task_reservation.as_ref()
     }
 
-    pub fn jobs(&self) -> &dyn JobRunStoreBackend {
+    /// This workspace's job runs, local pull admissions and drain intent.
+    pub fn jobs(&self) -> &JobRuns {
         self.job_run.as_ref()
     }
 

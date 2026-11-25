@@ -511,7 +511,7 @@ reads the owner's admitted task instead of re-admitting; generic workers and gen
 these leaves.
 
 **One capacity ceiling** ([ORB-12617]). The legacy classifier and the pull allocator read one
-occupancy, `JobRunStoreBackend::drain_leaf_occupancy`, which the allocator commits against inside
+occupancy, `JobRuns::drain_leaf_occupancy`, which the allocator commits against inside
 its transaction:
 
 - a wrapper is replaced by the descendant carrying its work (a live run of any of the four leaf
@@ -1714,7 +1714,7 @@ reading stands a caller down; it reads and reports:
 
 - **Destination authority.** A replica serves no owner coordination from any entry point.
   Followers execute through pull.
-- **One capacity reading.** `JobRunStoreBackend::drain_leaf_occupancy`, as in §3. It is reported,
+- **One capacity reading.** `JobRuns::drain_leaf_occupancy`, as in §3. It is reported,
   not enforced here: an operator's explicit invocation is bounded by its own leaf definition.
 - **The claim ledger.** A claimed task is never admitted again: `submit_ship_run` and explicit
   overrides in `list_backlog_tasks` consult the ledger. Automatic discovery need not, since a

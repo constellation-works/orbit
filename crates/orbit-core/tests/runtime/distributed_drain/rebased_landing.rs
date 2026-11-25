@@ -377,7 +377,7 @@ fn retry_native_handoff(base_update: bool, already_merged: bool, stop: bool) {
         .unwrap();
     }
     let stopped = owner.landing_attempts().unwrap().remove(0);
-    orbit_store::compose::workspace_job_run_store(
+    orbit_core::runtime::JobRuns::shared(
         owner.sqlite_store().unwrap(),
         owner.workspace_id().unwrap(),
     )

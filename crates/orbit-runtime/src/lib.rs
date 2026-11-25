@@ -116,6 +116,7 @@ pub use orbit_runtime::{
 };
 pub use run::Run;
 pub use stored::Stored;
+pub use stored::job_runs::JobRuns;
 pub use workspace::binding::{WorkspaceRuntimeBinding, workspace_runtime_binding};
 
 pub use resolve::{resolve_bootstrap_roots, resolve_initialize_roots};

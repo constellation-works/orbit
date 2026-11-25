@@ -120,7 +120,7 @@ impl Fixture {
             steps: Vec::new(),
         };
         self.store
-            .upsert_job_run_for_workspace(workspace, &run, None)
+            .write(|tx| tx.job_run().put(workspace, &run, None))
             .unwrap();
         run.run_id
     }

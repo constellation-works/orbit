@@ -1,6 +1,8 @@
 //! [`Stored`]: [`Base`] plus the opened stores — what an operation that reads
 //! or writes a record needs.
 
+pub mod job_runs;
+
 use std::sync::Arc;
 
 use crate::base::Base;

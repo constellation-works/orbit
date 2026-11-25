@@ -941,7 +941,7 @@ fn hydration_observes_stored_runs_without_reconciliation() {
                 run.pid_start_time = None;
             }
             store
-                .upsert_job_run_for_workspace(&workspace, &run, None)
+                .write(|tx| tx.job_run().put(&workspace, &run, None))
                 .unwrap();
         };
         unfinish(&leaf, orphan);

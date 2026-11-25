@@ -1,9 +1,10 @@
 use orbit_core::OrbitRuntime;
-use orbit_store::contracts::{JobRunStoreBackend, TaskStoreBackend};
+use orbit_core::runtime::JobRuns;
+use orbit_store::contracts::TaskStoreBackend;
 use std::sync::Arc;
 
-pub(super) fn jobs(runtime: &OrbitRuntime) -> Arc<dyn JobRunStoreBackend> {
-    orbit_store::compose::workspace_job_run_store(
+pub(super) fn jobs(runtime: &OrbitRuntime) -> Arc<JobRuns> {
+    orbit_core::runtime::JobRuns::shared(
         runtime.sqlite_store().unwrap(),
         runtime.workspace_id().unwrap(),
     )

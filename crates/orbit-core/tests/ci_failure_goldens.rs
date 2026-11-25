@@ -2691,7 +2691,10 @@ fn record_landing(runtime: &OrbitRuntime, task_id: &str, base: &str, landed: &st
     runtime
         .sqlite_store()
         .unwrap()
-        .upsert_job_run_for_workspace(&runtime.workspace_id().unwrap(), &run, None)
+        .write(|tx| {
+            tx.job_run()
+                .put(&runtime.workspace_id().unwrap(), &run, None)
+        })
         .unwrap();
     let mut state = PipelineState::new(run.run_id.clone(), run.job_id.clone(), json!({}));
     for (index, step_id, output) in [

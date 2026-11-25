@@ -36,7 +36,7 @@ fn cancel_without_effort(pair: &Pair, leaf: String) -> (String, String) {
     pair.follower
         .sqlite_store()
         .unwrap()
-        .upsert_job_run_for_workspace(&workspace, &run, None)
+        .write(|tx| tx.job_run().put(&workspace, &run, None))
         .unwrap();
     pair.follower
         .cancel_job_run_with_options_and_policy(&leaf, "operator", "cli", None, false, false)
@@ -632,7 +632,7 @@ fn set_follower_run_crew(pair: &Pair, leaf: &str, crew: &str) {
     pair.follower
         .sqlite_store()
         .unwrap()
-        .upsert_job_run_for_workspace(&workspace, &run, None)
+        .write(|tx| tx.job_run().put(&workspace, &run, None))
         .unwrap();
 }
 

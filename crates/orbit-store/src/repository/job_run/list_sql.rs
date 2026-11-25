@@ -6,7 +6,7 @@ use crate::contracts::{JobRunOrder, JobRunQuery};
 
 /// The run-row `SELECT` and its bound parameters for a [`JobRunQuery`]:
 /// filter, order, and `LIMIT`. Steps are read separately.
-pub(in crate::driver::sqlite::job_run_store) fn job_run_list_sql(
+pub(super) fn job_run_list_sql(
     workspace_id: &str,
     query: &JobRunQuery,
 ) -> (String, Vec<Box<dyn rusqlite::types::ToSql>>) {
@@ -154,7 +154,7 @@ fn names_success(query: &JobRunQuery) -> bool {
 /// an unbounded payload in the stored record: SQLite reaches a column only by
 /// walking the overflow-page chain of every large value stored before it.
 /// Pipeline state lives in `job_run_states` for that reason.
-pub(in crate::driver::sqlite::job_run_store) const JOB_RUN_COLUMNS: &str = "run_id, job_id, attempt, state, scheduled_at, \
+pub(super) const JOB_RUN_COLUMNS: &str = "run_id, job_id, attempt, state, scheduled_at, \
      started_at, finished_at, duration_ms, created_at, pid, pid_start_time, input_json, \
      retry_source_run_id, knowledge_metrics_json, resolved_crew, \
      crew_model, executed_on_json, build_json";

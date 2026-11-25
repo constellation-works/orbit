@@ -36,11 +36,13 @@ fn historical_task_deliveries_remain_visible_after_upgrade_and_rebinding() {
     }
     drop(conn);
     let store = Store::open(&path).expect("upgrade backfills historical ownership");
-    let jobs = workspace_job_run_store(store.clone(), "ws_a");
     let mut requested = ids.clone();
     requested.extend(ids.clone());
-    let found = jobs
-        .recent_job_runs_for_tasks("task_pr_pipeline", &requested, 8)
+    let found = store
+        .read()
+        .unwrap()
+        .job_run()
+        .list_recent_for_tasks("ws_a", "task_pr_pipeline", &requested, 8)
         .expect("bounded batches");
     assert_eq!(
         found.len(),
@@ -52,8 +54,11 @@ fn historical_task_deliveries_remain_visible_after_upgrade_and_rebinding() {
         "duplicate bindings do not duplicate evidence"
     );
     assert!(
-        workspace_job_run_store(store.clone(), "ws_b")
-            .recent_job_runs_for_tasks("task_pr_pipeline", &ids, 8)
+        store
+            .read()
+            .unwrap()
+            .job_run()
+            .list_recent_for_tasks("ws_b", "task_pr_pipeline", &ids, 8)
             .expect("other workspace")
             .is_empty()
     );
@@ -61,23 +66,25 @@ fn historical_task_deliveries_remain_visible_after_upgrade_and_rebinding() {
     run.input = Some(json!({"task_id": "T-rebound", "nested": {"task_id": ids[0]}}));
     run.finished_at = Some(chrono::Utc::now());
     store
-        .upsert_job_run_for_workspace("ws_a", &run, None)
+        .write(|tx| tx.job_run().put("ws_a", &run, None))
         .expect("rebind");
     assert!(
-        jobs.recent_job_runs_for_tasks("task_pr_pipeline", std::slice::from_ref(&ids[0]), 8)
+        store.read().unwrap().job_run().list_recent_for_tasks("ws_a", "task_pr_pipeline", std::slice::from_ref(&ids[0]), 8)
             .expect("old binding")
             .is_empty()
     );
     let rebound = ["T-rebound".to_string()];
     assert_eq!(
-        jobs.recent_job_runs_for_tasks("task_pr_pipeline", &rebound, 8)
+        store.read().unwrap().job_run().list_recent_for_tasks("ws_a", "task_pr_pipeline", &rebound, 8)
             .expect("new binding")["T-rebound"][0]
             .finished_at,
         run.finished_at
     );
-    jobs.delete_job_run(&run.run_id).expect("delete delivery");
+    store
+        .write(|tx| tx.job_run().delete("ws_a", &run.run_id))
+        .expect("delete delivery");
     assert!(
-        jobs.recent_job_runs_for_tasks("task_pr_pipeline", &rebound, 8)
+        store.read().unwrap().job_run().list_recent_for_tasks("ws_a", "task_pr_pipeline", &rebound, 8)
             .expect("deleted binding")
             .is_empty()
     );

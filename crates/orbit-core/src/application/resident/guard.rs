@@ -333,14 +333,11 @@ impl OrbitRuntime {
             .into_iter()
             .filter(|target| !current_ids.contains(&target.workspace_id))
             .find(|target| {
-                orbit_store::compose::workspace_job_run_store(
-                    store.clone(),
-                    target.workspace_id.clone(),
-                )
-                .get_job_run(run_id)
-                .ok()
-                .flatten()
-                .is_some_and(|run| run.job_id == RESIDENT_CYCLE_JOB)
+                orbit_runtime::JobRuns::shared(store.clone(), target.workspace_id.clone())
+                    .get_job_run(run_id)
+                    .ok()
+                    .flatten()
+                    .is_some_and(|run| run.job_id == RESIDENT_CYCLE_JOB)
             })
     }
 

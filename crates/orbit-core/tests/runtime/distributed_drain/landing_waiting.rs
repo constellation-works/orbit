@@ -103,7 +103,7 @@ impl WaitingOwner {
                 .unwrap();
             runtime.dispatch_landing_requests().unwrap();
         }
-        pair.follower_jobs = orbit_store::compose::workspace_job_run_store(
+        pair.follower_jobs = orbit_core::runtime::JobRuns::shared(
             runtime.sqlite_store().unwrap(),
             runtime.workspace_id().unwrap(),
         );
@@ -484,7 +484,7 @@ fn two_approved_landings() -> (OwnerLocal, Vec<(String, String)>) {
     }
     // Dispatch as the authorized-handoff path does, opening each landing job.
     pair.wire.owner.dispatch_landing_requests().unwrap();
-    pair.follower_jobs = orbit_store::compose::workspace_job_run_store(
+    pair.follower_jobs = orbit_core::runtime::JobRuns::shared(
         pair.wire.owner.sqlite_store().unwrap(),
         pair.wire.owner.workspace_id().unwrap(),
     );

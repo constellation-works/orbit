@@ -621,7 +621,7 @@ impl OwnerLocal {
         // refuses a host whose crews have no launchable provider.
         launchable_providers(&owner);
         let wire = to_itself(&owner);
-        let jobs = orbit_store::compose::workspace_job_run_store(
+        let jobs = orbit_core::runtime::JobRuns::shared(
             owner.sqlite_store().unwrap(),
             workspace_id.clone(),
         );

@@ -14,6 +14,7 @@
 
 use super::*;
 use chrono::{Duration as ChronoDuration, DurationRound};
+use orbit_core::runtime::JobRuns;
 use orbit_core::runtime::host_resource::accuracy::AccuracySelection;
 use orbit_core::runtime::host_resource::forecast::{AdmissionReservationRequest, ForecastDecision};
 use orbit_core::runtime::host_resource::profile::ProfileLookup;
@@ -92,7 +93,7 @@ fn finished_delivery_of(
         steps: Vec::new(),
     };
     store
-        .upsert_job_run_for_workspace(&workspace, &run, None)
+        .write(|tx| tx.job_run().put(&workspace, &run, None))
         .unwrap();
     for minute in 0..31 {
         store
@@ -123,8 +124,8 @@ fn finished_delivery_of(
 /// minutes ago and still running: past its borrowed 31-minute profile,
 /// with nothing measured, it adds no load, but the forecast is not idle.
 /// Returns the store that ends it.
-fn neighbour_delivery(follower: &OrbitRuntime) -> (Arc<dyn JobRunStoreBackend>, String) {
-    let jobs = orbit_store::compose::workspace_job_run_store(
+fn neighbour_delivery(follower: &OrbitRuntime) -> (Arc<JobRuns>, String) {
+    let jobs = orbit_core::runtime::JobRuns::shared(
         follower.sqlite_store().unwrap(),
         "ws-neighbour".to_string(),
     );
@@ -543,7 +544,7 @@ fn another_workspace(pair: &Pair, proc_root: &Path) -> Pair {
     .with_coordination_write_owner(Some(OWNER.into()))
     .with_drain_owner_transport(pair.wire.clone())
     .with_host_load_proc_root(proc_root.to_path_buf());
-    let jobs = orbit_store::compose::workspace_job_run_store(
+    let jobs = orbit_core::runtime::JobRuns::shared(
         follower.sqlite_store().unwrap(),
         follower.workspace_id().unwrap(),
     );

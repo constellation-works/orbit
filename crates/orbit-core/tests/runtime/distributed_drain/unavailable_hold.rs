@@ -31,7 +31,7 @@ model = \"claude-opus\"
 /// way its worker records the step and finalizes the run.
 fn owner_run_fails(pair: &Pair, task: &str, crew: &str, class: ProviderFailureClass) {
     let owner = &pair.wire.owner;
-    let jobs = orbit_store::compose::workspace_job_run_store(
+    let jobs = orbit_core::runtime::JobRuns::shared(
         owner.sqlite_store().unwrap(),
         owner.workspace_id().unwrap(),
     );

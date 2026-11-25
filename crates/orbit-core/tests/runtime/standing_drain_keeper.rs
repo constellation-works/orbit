@@ -6,7 +6,8 @@
 use chrono::{DateTime, Duration, Utc};
 use orbit_core::OrbitRuntime;
 use orbit_core::adapter::command::ToolEntryPoint;
-use orbit_store::contracts::{DrainIntentRecord, DrainIntentState, JobRunStoreBackend};
+use orbit_core::runtime::JobRuns;
+use orbit_store::contracts::{DrainIntentRecord, DrainIntentState};
 use orbit_types::tool::{McpCapability, ToolSessionContext};
 use orbit_types::workflow::{
     JobRunState, JobRunTrigger, PipelineState, WORKSPACE_AUTO_PIPELINE_JOB,
@@ -20,7 +21,7 @@ const KEEPER: &str = "standing-drain-keeper";
 struct Fixture {
     _root: TempDir,
     runtime: OrbitRuntime,
-    jobs: Arc<dyn JobRunStoreBackend>,
+    jobs: Arc<JobRuns>,
 }
 
 impl Fixture {
@@ -36,7 +37,7 @@ impl Fixture {
         )
         .unwrap();
         let runtime = OrbitRuntime::from_roots(&global, &orbit).unwrap();
-        let jobs = orbit_store::compose::workspace_job_run_store(
+        let jobs = orbit_core::runtime::JobRuns::shared(
             runtime.sqlite_store().unwrap(),
             runtime.workspace_id().unwrap(),
         );

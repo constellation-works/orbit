@@ -394,11 +394,13 @@ fn routine_last_fire_reports_the_newer_state_triggered_run() {
                 .runtime
                 .sqlite_store()
                 .unwrap()
-                .upsert_job_run_for_workspace(
-                    &fixture.runtime.workspace_id().unwrap(),
-                    &run,
-                    Some(&pipeline),
-                )
+                .write(|tx| {
+                    tx.job_run().put(
+                        &fixture.runtime.workspace_id().unwrap(),
+                        &run,
+                        Some(&pipeline),
+                    )
+                })
                 .unwrap();
             // An unrelated routine's run in the same job never becomes this routine's fire.
             let other = fixture.seed_run(
@@ -416,11 +418,13 @@ fn routine_last_fire_reports_the_newer_state_triggered_run() {
                 .runtime
                 .sqlite_store()
                 .unwrap()
-                .upsert_job_run_for_workspace(
-                    &fixture.runtime.workspace_id().unwrap(),
-                    &other,
-                    Some(&other_pipeline),
-                )
+                .write(|tx| {
+                    tx.job_run().put(
+                        &fixture.runtime.workspace_id().unwrap(),
+                        &other,
+                        Some(&other_pipeline),
+                    )
+                })
                 .unwrap();
 
             let fire =
@@ -473,11 +477,13 @@ fn routine_last_fire_reports_condition_triggered_runs() {
                 .runtime
                 .sqlite_store()
                 .unwrap()
-                .upsert_job_run_for_workspace(
-                    &fixture.runtime.workspace_id().unwrap(),
-                    &failed,
-                    Some(&pipeline),
-                )
+                .write(|tx| {
+                    tx.job_run().put(
+                        &fixture.runtime.workspace_id().unwrap(),
+                        &failed,
+                        Some(&pipeline),
+                    )
+                })
                 .unwrap();
             // Same job, different routine: never this routine's fire.
             let other = fixture.seed_run("jrun-cond-other", "cond_pipeline", JobRunState::Failed);
@@ -492,11 +498,13 @@ fn routine_last_fire_reports_condition_triggered_runs() {
                 .runtime
                 .sqlite_store()
                 .unwrap()
-                .upsert_job_run_for_workspace(
-                    &fixture.runtime.workspace_id().unwrap(),
-                    &other,
-                    Some(&other_pipeline),
-                )
+                .write(|tx| {
+                    tx.job_run().put(
+                        &fixture.runtime.workspace_id().unwrap(),
+                        &other,
+                        Some(&other_pipeline),
+                    )
+                })
                 .unwrap();
 
             let server = fixture.server(false);
@@ -550,11 +558,13 @@ fn routine_last_fire_reports_condition_triggered_runs() {
                 .runtime
                 .sqlite_store()
                 .unwrap()
-                .upsert_job_run_for_workspace(
-                    &fixture.runtime.workspace_id().unwrap(),
-                    &succeeded,
-                    Some(&ok_pipeline),
-                )
+                .write(|tx| {
+                    tx.job_run().put(
+                        &fixture.runtime.workspace_id().unwrap(),
+                        &succeeded,
+                        Some(&ok_pipeline),
+                    )
+                })
                 .unwrap();
             let row = within_routine_freshness(status, |row| {
                 row["last_fire"]["run_id"] == "jrun-cond-ok"
@@ -784,11 +794,13 @@ fn routine_streak_merges_automation_history_and_marks_bounded_history() {
                     .runtime
                     .sqlite_store()
                     .unwrap()
-                    .upsert_job_run_for_workspace(
-                        &fixture.runtime.workspace_id().unwrap(),
-                        &run,
-                        Some(&pipeline),
-                    )
+                    .write(|tx| {
+                        tx.job_run().put(
+                            &fixture.runtime.workspace_id().unwrap(),
+                            &run,
+                            Some(&pipeline),
+                        )
+                    })
                     .unwrap();
             }
             for i in 1..4 {
@@ -808,11 +820,13 @@ fn routine_streak_merges_automation_history_and_marks_bounded_history() {
                     .runtime
                     .sqlite_store()
                     .unwrap()
-                    .upsert_job_run_for_workspace(
-                        &fixture.runtime.workspace_id().unwrap(),
-                        &run,
-                        Some(&pipeline),
-                    )
+                    .write(|tx| {
+                        tx.job_run().put(
+                            &fixture.runtime.workspace_id().unwrap(),
+                            &run,
+                            Some(&pipeline),
+                        )
+                    })
                     .unwrap();
             }
             // Same job, different routine: must never break this routine's streak.
@@ -828,11 +842,13 @@ fn routine_streak_merges_automation_history_and_marks_bounded_history() {
                 .runtime
                 .sqlite_store()
                 .unwrap()
-                .upsert_job_run_for_workspace(
-                    &fixture.runtime.workspace_id().unwrap(),
-                    &other,
-                    Some(&pipeline),
-                )
+                .write(|tx| {
+                    tx.job_run().put(
+                        &fixture.runtime.workspace_id().unwrap(),
+                        &other,
+                        Some(&pipeline),
+                    )
+                })
                 .unwrap();
             let server = fixture.server(false);
             let status = || {
@@ -1314,7 +1330,7 @@ fn routine_breaker_status_reports_server_computed_trial_phase_and_expected_time(
                     .runtime
                     .sqlite_store()
                     .unwrap()
-                    .upsert_job_run_for_workspace(&workspace_id, &run, Some(&pipeline))
+                    .write(|tx| tx.job_run().put(&workspace_id, &run, Some(&pipeline)))
                     .unwrap();
 
                 let running = within_routine_freshness(

@@ -6,9 +6,10 @@
 
 use chrono::{DateTime, Duration, SecondsFormat, Utc};
 use orbit_core::application::job::{DrainWindowExtensionOutcome, DrainWorkerLimitOutcome};
+use orbit_core::runtime::JobRuns;
 use orbit_core::{DrainWindowExtensionRequest, DrainWorkerLimitRequest, OrbitError, OrbitRuntime};
 use orbit_engine::RuntimeHost;
-use orbit_store::contracts::{AuditEventFilter, JobRunStoreBackend};
+use orbit_store::contracts::AuditEventFilter;
 use orbit_tools::ToolContext;
 use orbit_types::telemetry::AuditEventStatus;
 use orbit_types::workflow::{ChildDispatch, JobRunState, PipelineState};
@@ -26,7 +27,7 @@ const WORKERS_COMPLETED_AUDIT: &str = "pipeline.run.workers.completed";
 struct Drains {
     _root: TempDir,
     runtime: OrbitRuntime,
-    jobs: Arc<dyn JobRunStoreBackend>,
+    jobs: Arc<JobRuns>,
 }
 
 impl Drains {
@@ -37,7 +38,7 @@ impl Drains {
         std::fs::create_dir_all(&global).unwrap();
         std::fs::create_dir_all(&workspace).unwrap();
         let runtime = OrbitRuntime::from_roots(&global, &workspace).unwrap();
-        let jobs = orbit_store::compose::workspace_job_run_store(
+        let jobs = orbit_core::runtime::JobRuns::shared(
             runtime.sqlite_store().unwrap(),
             runtime.workspace_id().unwrap(),
         );

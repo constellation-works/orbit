@@ -155,7 +155,7 @@ impl LocalDrainFixture {
                 },
             )
             .unwrap();
-        let jobs = orbit_store::compose::workspace_job_run_store(
+        let jobs = orbit_core::runtime::JobRuns::shared(
             self.runtime.sqlite_store().unwrap(),
             self.runtime.workspace_id().unwrap(),
         );

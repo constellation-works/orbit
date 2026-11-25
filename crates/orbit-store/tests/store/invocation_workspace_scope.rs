@@ -5,11 +5,33 @@
 /// Replay a historical collision through the public import/upsert boundary.
 fn colliding_runs() -> (Store, String) {
     let store = Store::open_in_memory().expect("memory store");
-    let run = workspace_job_run_store(store.clone(), "ws_a")
-        .insert_job_run("job", 1, Utc::now(), None, None)
+    let now = Utc::now();
+    let run = orbit_types::workflow::JobRun {
+        build: None,
+        executed_on: None,
+        run_id: "jrun-collision".into(),
+        job_id: "job".into(),
+        attempt: 1,
+        state: JobRunState::Pending,
+        scheduled_at: now,
+        started_at: None,
+        finished_at: None,
+        duration_ms: None,
+        created_at: now,
+        pid: None,
+        pid_start_time: None,
+        input: None,
+        retry_source_run_id: None,
+        knowledge_metrics: None,
+        resolved_crew: None,
+        crew_model: None,
+        steps: Vec::new(),
+    };
+    store
+        .write(|tx| tx.job_run().put("ws_a", &run, None))
         .expect("insert run");
     store
-        .upsert_job_run_for_workspace("ws_b", &run, None)
+        .write(|tx| tx.job_run().put("ws_b", &run, None))
         .expect("import legacy colliding run");
     (store, run.run_id)
 }

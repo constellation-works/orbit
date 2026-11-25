@@ -35,7 +35,10 @@ impl Fixture {
         self.runtime
             .sqlite_store()
             .unwrap()
-            .upsert_job_run_for_workspace(&self.runtime.workspace_id().unwrap(), run, None)
+            .write(|tx| {
+                tx.job_run()
+                    .put(&self.runtime.workspace_id().unwrap(), run, None)
+            })
             .unwrap();
     }
 
@@ -372,13 +375,13 @@ pub(super) fn inherited_commit_refuses_invalid_parent_evidence() {
             "foreign_workspace" => {
                 let store = fixture.runtime.sqlite_store().unwrap();
                 store
-                    .delete_job_run_for_workspace(
-                        &fixture.runtime.workspace_id().unwrap(),
-                        &source.run_id,
-                    )
+                    .write(|tx| {
+                        tx.job_run()
+                            .delete(&fixture.runtime.workspace_id().unwrap(), &source.run_id)
+                    })
                     .unwrap();
                 store
-                    .upsert_job_run_for_workspace("foreign", &source, None)
+                    .write(|tx| tx.job_run().put("foreign", &source, None))
                     .unwrap();
             }
             "cross_job" => {

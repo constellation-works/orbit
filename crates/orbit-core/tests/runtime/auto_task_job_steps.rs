@@ -354,7 +354,7 @@ fn receipts_respect_step_expiry_after_downtime() {
         let job = orbit_engine::activity_job::load_job_asset(&yaml)
             .unwrap()
             .spec;
-        let jobs = orbit_store::compose::workspace_job_run_store(
+        let jobs = orbit_core::runtime::JobRuns::shared(
             runtime.sqlite_store().unwrap(),
             runtime.workspace_id().unwrap(),
         );
@@ -449,7 +449,7 @@ fn nested_parallel_branch_waits_observe_durable_outcomes() {
         let yaml = format!(
             "schemaVersion: 3\nkind: Job\nmetadata: {{ name: nested-wait }}\nspec:\n  state: enabled\n  expire_when: \"now >= job.started_at + duration('24h')\"\n  steps:\n    - id: checks\n      parallel:\n        join: {{ mode: all }}\n        branches:\n          - id: lint\n            target: activity:agent_assess_diff\n{lint_when}    - id: qa\n      target: auto-task:full-qa-sweep\n      wait_until: \"steps['lint'].status == '{expected_status}'\"\n"
         );
-        let jobs = orbit_store::compose::workspace_job_run_store(
+        let jobs = orbit_core::runtime::JobRuns::shared(
             runtime.sqlite_store().unwrap(),
             runtime.workspace_id().unwrap(),
         );
@@ -596,7 +596,7 @@ fn resumed_children_keep_their_invocation_and_admit_on_both_routes() {
         std::fs::create_dir_all(&runtime.paths().jobs_dir).unwrap();
         std::fs::write(runtime.paths().jobs_dir.join("continuation.yaml"), yaml).unwrap();
         add_auto_task(&runtime, "full-qa-sweep");
-        let jobs = orbit_store::compose::workspace_job_run_store(
+        let jobs = orbit_core::runtime::JobRuns::shared(
             runtime.sqlite_store().unwrap(),
             runtime.workspace_id().unwrap(),
         );

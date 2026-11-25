@@ -8,12 +8,12 @@ use orbit_common::OrbitError;
 use orbit_common::storage::sqlite::sqlite_store_error;
 use orbit_types::workflow::{JobRun, JobRunState, JobRunStep, JobTargetType};
 
-use super::super::input_keys::parse_input_keys;
 use super::STEP_RUN_ID_CHUNK;
+use super::input_keys::parse_input_keys;
 use super::list_sql::JOB_RUN_COLUMNS;
 use crate::parse_timestamp;
 
-pub(in crate::driver::sqlite::job_run_store) fn get_job_run_for_workspace_conn(
+pub(super) fn get_job_run_for_workspace_conn(
     conn: &rusqlite::Connection,
     workspace_id: &str,
     run_id: &str,
@@ -32,9 +32,7 @@ pub(in crate::driver::sqlite::job_run_store) fn get_job_run_for_workspace_conn(
     Ok(Some(run))
 }
 
-pub(in crate::driver::sqlite::job_run_store) fn row_to_job_run(
-    row: &rusqlite::Row<'_>,
-) -> rusqlite::Result<JobRun> {
+pub(super) fn row_to_job_run(row: &rusqlite::Row<'_>) -> rusqlite::Result<JobRun> {
     row_to_job_run_with_input_keys(row, None)
 }
 
@@ -83,7 +81,7 @@ pub(super) fn row_to_job_run_with_input_keys(
 }
 
 /// Steps for a page of runs in one query per chunk instead of one per run.
-pub(in crate::driver::sqlite::job_run_store) fn read_steps_for_runs(
+pub(super) fn read_steps_for_runs(
     conn: &rusqlite::Connection,
     workspace_id: &str,
     run_ids: &[String],

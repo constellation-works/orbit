@@ -196,28 +196,30 @@ fn outcome(fixture: &Fixture, name: &str, at: DateTime<Utc>, state: JobRunState,
     let store = fixture.runtime.sqlite_store().unwrap();
     let workspace = fixture.runtime.workspace_id().unwrap();
     store
-        .upsert_job_run_for_workspace(&workspace, &run, Some(&pipeline))
+        .write(|tx| tx.job_run().put(&workspace, &run, Some(&pipeline)))
         .unwrap();
     store
-        .upsert_job_run_step_for_workspace(
-            &workspace,
-            &run.run_id,
-            &JobRunStep {
-                step_index: 0,
-                target_type: JobTargetType::Activity,
-                target_id: "implement_one".into(),
-                started_at: Some(at - Duration::hours(1)),
-                finished_at: Some(at + Duration::seconds(1)),
-                duration_ms: None,
-                exit_code: Some(0),
-                agent_response_json: None,
-                state,
-                error_code: None,
-                failure_code: None,
-                error_message: None,
-                lock_wait_ms: None,
-            },
-        )
+        .write(|tx| {
+            tx.job_run().put_step(
+                &workspace,
+                &run.run_id,
+                &JobRunStep {
+                    step_index: 0,
+                    target_type: JobTargetType::Activity,
+                    target_id: "implement_one".into(),
+                    started_at: Some(at - Duration::hours(1)),
+                    finished_at: Some(at + Duration::seconds(1)),
+                    duration_ms: None,
+                    exit_code: Some(0),
+                    agent_response_json: None,
+                    state,
+                    error_code: None,
+                    failure_code: None,
+                    error_message: None,
+                    lock_wait_ms: None,
+                },
+            )
+        })
         .unwrap();
 }
 
@@ -289,7 +291,10 @@ fn implement_one_outcome_filters_every_aggregation_and_retry_attempt() {
                 .runtime
                 .sqlite_store()
                 .unwrap()
-                .upsert_job_run_for_workspace("foreign", &foreign, Some(&foreign_pipeline))
+                .write(|tx| {
+                    tx.job_run()
+                        .put("foreign", &foreign, Some(&foreign_pipeline))
+                })
                 .unwrap();
             fixture.runtime.sqlite_store().unwrap().with_transaction(|tx| {
             tx.connection().execute("DELETE FROM job_run_states WHERE workspace_id = 'ws_http_fixture' AND run_id = 'unknown'", [])
@@ -865,14 +870,10 @@ fn succeeded_durations_survive_run_gc_and_upgrade_backfill() {
                 if name == "not-committed" {
                     let store = fixture.runtime.sqlite_store().unwrap();
                     let workspace = fixture.runtime.workspace_id().unwrap();
-                    let mut state = store
-                        .read_job_run_state_for_workspace(&workspace, name)
-                        .unwrap()
-                        .unwrap();
+                    let jobs = orbit_core::runtime::JobRuns::new(store, workspace);
+                    let mut state = jobs.read_run_state(name).unwrap().unwrap();
                     state.pipeline["commit"]["committed"] = json!(false);
-                    store
-                        .write_job_run_state_for_workspace(&workspace, name, &state)
-                        .unwrap();
+                    jobs.write_run_state(name, &state).unwrap();
                 }
             }
             fixture

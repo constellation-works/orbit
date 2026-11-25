@@ -62,7 +62,10 @@ fn child_stop_refusal_preserves_owner_candidate_reservation_and_lineage() {
                 runtime
                     .sqlite_store()
                     .unwrap()
-                    .upsert_job_run_for_workspace(&runtime.workspace_id().unwrap(), &run, None)
+                    .write(|tx| {
+                        tx.job_run()
+                            .put(&runtime.workspace_id().unwrap(), &run, None)
+                    })
                     .unwrap();
                 fixture
                     .jobs

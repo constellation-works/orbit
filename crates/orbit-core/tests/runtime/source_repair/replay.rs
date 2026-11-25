@@ -24,7 +24,10 @@ pub(super) fn lost_spawn_reply_reconciles_the_reserved_run_after_older_retries()
         f.runtime
             .sqlite_store()
             .unwrap()
-            .upsert_job_run_for_workspace(&f.runtime.workspace_id().unwrap(), &run, None)
+            .write(|tx| {
+                tx.job_run()
+                    .put(&f.runtime.workspace_id().unwrap(), &run, None)
+            })
             .unwrap();
     }
     let request = f.submit(f.inspect());

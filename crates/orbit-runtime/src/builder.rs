@@ -8,8 +8,8 @@ use orbit_search::LexicalIndex;
 use orbit_store::Store;
 use orbit_store::compose::{
     CoordinatedWorkspaceBackends, global_executor_def_store, global_policy_def_store,
-    layered_policy_def_store, workspace_coordinated_backends, workspace_job_run_store,
-    workspace_observational_backends, workspace_policy_def_store,
+    layered_policy_def_store, workspace_coordinated_backends, workspace_observational_backends,
+    workspace_policy_def_store,
 };
 use orbit_store::maintenance::task_registry::{
     BindWorkspaceParams, RegisterWorkspaceParams, TaskRegistryStore, WorkspaceConfig,
@@ -146,7 +146,7 @@ pub(crate) fn build_context_from_roots(
     } else {
         LexicalIndex::open(&persistence.semantic_db)?
     };
-    let job_run_store = workspace_job_run_store(store.clone(), workspace_id);
+    let job_runs = crate::stored::job_runs::JobRuns::shared(store.clone(), workspace_id);
 
     // Executors and policies are global-only. Jobs always persist run state
     // under the workspace state directory.
@@ -291,7 +291,7 @@ pub(crate) fn build_context_from_roots(
             task_backends.artifact,
             lexical_index,
             task_reservation_store,
-            job_run_store,
+            job_runs,
             executor_def_store,
             policy_def_store,
             host_store,

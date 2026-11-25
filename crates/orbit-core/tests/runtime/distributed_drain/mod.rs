@@ -32,10 +32,11 @@ use orbit_core::application::routines::{
     DiscoveredWorkspaces, RoutineMachineIdentity, RoutineWorkspaceProvider, SweepOptions,
     run_sweep_at_with_providers,
 };
+use orbit_core::runtime::JobRuns;
 use orbit_engine::RuntimeHost;
 use orbit_store::contracts::{
     ClaimEvidence, ClaimInvocation, ClaimMutation, ClaimRun, HandoffObservation, JobRunStepParams,
-    JobRunStoreBackend, LocalPullAdmission, LocalPullMutation, LocalPullPhase, SettlementRefusal,
+    LocalPullAdmission, LocalPullMutation, LocalPullPhase, SettlementRefusal,
 };
 use orbit_tools::{DrainOwnerTransport, OwnerCoordinator, ToolContext};
 use orbit_types::task::TaskArtifact;
@@ -533,7 +534,7 @@ struct Pair {
     owner_repo: PathBuf,
     follower: OrbitRuntime,
     follower_repo: PathBuf,
-    follower_jobs: Arc<dyn JobRunStoreBackend>,
+    follower_jobs: Arc<JobRuns>,
     destination: Value,
     tasks: Vec<String>,
 }
@@ -784,7 +785,7 @@ impl Pair {
         let follower = follower
             .with_coordination_write_owner(Some(OWNER.into()))
             .with_drain_owner_transport(wire.clone());
-        let follower_jobs = orbit_store::compose::workspace_job_run_store(
+        let follower_jobs = orbit_core::runtime::JobRuns::shared(
             follower.sqlite_store().unwrap(),
             follower.workspace_id().unwrap(),
         );

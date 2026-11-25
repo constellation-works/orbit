@@ -785,11 +785,10 @@ fn publication_lag_rechecks_identity_authority_and_remote_on_convergence() {
                         runtime
                             .sqlite_store()
                             .unwrap()
-                            .upsert_job_run_for_workspace(
-                                &runtime.workspace_id().unwrap(),
-                                &run,
-                                None,
-                            )
+                            .write(|tx| {
+                                tx.job_run()
+                                    .put(&runtime.workspace_id().unwrap(), &run, None)
+                            })
                             .unwrap();
                         let raw = runtime
                             .source_repair_admission(&id)

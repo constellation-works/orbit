@@ -81,7 +81,7 @@ fn excluded<'a>(output: &'a Value, task: &str) -> Option<&'a Value> {
 
 /// A running `job` run, as its worker leaves it, with `input`.
 fn running_run(runtime: &OrbitRuntime, job: &str, input: Value) -> String {
-    let jobs = orbit_store::compose::workspace_job_run_store(
+    let jobs = orbit_core::runtime::JobRuns::shared(
         runtime.sqlite_store().unwrap(),
         runtime.workspace_id().unwrap(),
     );
@@ -193,7 +193,7 @@ fn a_linux_host_withholds_and_refuses_a_macos_task_and_names_the_wait() {
         matches!(&refused, OrbitError::PolicyDenied(message) if message.contains(wait)),
         "{refused}"
     );
-    let jobs = orbit_store::compose::workspace_job_run_store(
+    let jobs = orbit_core::runtime::JobRuns::shared(
         linux.sqlite_store().unwrap(),
         linux.workspace_id().unwrap(),
     );
@@ -248,7 +248,7 @@ fn retagging_applies_at_the_next_admission_and_never_moves_running_work() {
         linux.get_task(&running.id).unwrap().status,
         TaskStatus::InProgress
     );
-    let jobs = orbit_store::compose::workspace_job_run_store(
+    let jobs = orbit_core::runtime::JobRuns::shared(
         linux.sqlite_store().unwrap(),
         linux.workspace_id().unwrap(),
     );

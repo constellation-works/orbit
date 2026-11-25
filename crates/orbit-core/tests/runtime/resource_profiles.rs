@@ -137,7 +137,7 @@ impl Fixture {
             run.state = JobRunState::Running;
         }
         self.store
-            .upsert_job_run_for_workspace(workspace, &run, None)
+            .write(|tx| tx.job_run().put(workspace, &run, None))
             .unwrap();
         for (index, (cpu, memory)) in seed.cpu.iter().zip(&seed.memory).enumerate() {
             self.store
@@ -171,7 +171,7 @@ impl Fixture {
         run.state = JobRunState::Success;
         run.finished_at = Some(run.created_at + Duration::minutes(minutes));
         self.store
-            .upsert_job_run_for_workspace(workspace, &run, None)
+            .write(|tx| tx.job_run().put(workspace, &run, None))
             .unwrap();
     }
 

@@ -30,7 +30,7 @@ fn pull(pair: &Pair, request_id: &str, os: HostOs) -> Value {
 /// A running local drain on the owner, whose admission pass declares the
 /// owner's census row.
 fn owner_drain(owner: &OrbitRuntime) -> String {
-    let jobs = orbit_store::compose::workspace_job_run_store(
+    let jobs = orbit_core::runtime::JobRuns::shared(
         owner.sqlite_store().unwrap(),
         owner.workspace_id().unwrap(),
     );

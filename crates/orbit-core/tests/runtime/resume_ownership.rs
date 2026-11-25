@@ -11,9 +11,9 @@ use std::sync::Arc;
 use chrono::Utc;
 use orbit_core::application::job::JobRunCancelOutcome;
 use orbit_core::application::task::TaskAddParams;
+use orbit_core::runtime::JobRuns;
 use orbit_core::{OrbitError, OrbitRuntime, TaskComplexity, TaskStatus, TaskType};
 use orbit_engine::RuntimeHost;
-use orbit_store::contracts::JobRunStoreBackend;
 use orbit_types::task::ExecutionLocation;
 use orbit_types::workflow::{JobRunState, PipelineState};
 use serde_json::{Value, json};
@@ -54,7 +54,7 @@ fn run_isolated_test(test_name: &str) -> bool {
 struct Fixture {
     _root: TempDir,
     runtime: OrbitRuntime,
-    jobs: Arc<dyn JobRunStoreBackend>,
+    jobs: Arc<JobRuns>,
     local: ExecutionLocation,
 }
 
@@ -86,7 +86,7 @@ impl Fixture {
         )
         .unwrap();
         let runtime = OrbitRuntime::from_roots(&global, &repo.join(".orbit")).unwrap();
-        let jobs = orbit_store::compose::workspace_job_run_store(
+        let jobs = orbit_core::runtime::JobRuns::shared(
             runtime.sqlite_store().unwrap(),
             runtime.workspace_id().unwrap(),
         );
@@ -102,7 +102,7 @@ impl Fixture {
         }
     }
 
-    fn located(&self, location: ExecutionLocation) -> Arc<dyn JobRunStoreBackend> {
+    fn located(&self, location: ExecutionLocation) -> Arc<JobRuns> {
         self.jobs.with_execution_location(Some(location))
     }
 
@@ -136,13 +136,7 @@ impl Fixture {
     }
 
     /// A failed run whose reused worktree checkpoint and stored input name `batch`.
-    fn failed_run(
-        &self,
-        jobs: &dyn JobRunStoreBackend,
-        task: &str,
-        batch: &str,
-        parent: Option<&str>,
-    ) -> String {
+    fn failed_run(&self, jobs: &JobRuns, task: &str, batch: &str, parent: Option<&str>) -> String {
         let input = json!({
             "task_ids": [task],
             "job_run_id": batch,
@@ -429,7 +423,7 @@ fn resume_refuses_a_task_bound_to_another_machines_run_before_any_step() {
     let fx = Fixture::new();
     let task = fx.task();
     let local_jobs = fx.located(fx.local.clone());
-    let source = fx.failed_run(&*local_jobs, &task, "placeholder", None);
+    let source = fx.failed_run(&local_jobs, &task, "placeholder", None);
     let source_input = json!({
         "task_ids": [task],
         "job_run_id": source,
@@ -450,7 +444,7 @@ fn resume_refuses_a_task_bound_to_another_machines_run_before_any_step() {
         machine_id: FOREIGN_MACHINE.into(),
         machine_name: Some(FOREIGN_NAME.into()),
     };
-    let foreign_run = fx.failed_run(&*fx.located(foreign.clone()), &task, "foreign-batch", None);
+    let foreign_run = fx.failed_run(&fx.located(foreign.clone()), &task, "foreign-batch", None);
     fx.bind(&task, &foreign_run);
     let bound = fx.runtime.get_task(&task).unwrap();
     assert_eq!(bound.job_run_id.as_deref(), Some(foreign_run.as_str()));
@@ -524,7 +518,7 @@ fn resume_of_a_lineage_binding_keeps_the_checkpoint_batch_id() {
     // Still bound to the source run: admit, and do not rewrite ownership ids
     // onto the new run.
     let source_task = fx.task();
-    let source = fx.failed_run(&*local_jobs, &source_task, "placeholder", None);
+    let source = fx.failed_run(&local_jobs, &source_task, "placeholder", None);
     let source_input = json!({
         "task_ids": [source_task],
         "job_run_id": source,
@@ -597,7 +591,7 @@ fn resume_of_a_lineage_binding_keeps_the_checkpoint_batch_id() {
     // ancestor batch, and reconcile restamps onto that batch without rewriting
     // the checkpoint ownership id onto the new run.
     let batch_task = fx.task();
-    let ancestor = fx.failed_run(&*local_jobs, &batch_task, "placeholder", None);
+    let ancestor = fx.failed_run(&local_jobs, &batch_task, "placeholder", None);
     let ancestor_input = json!({
         "task_ids": [batch_task],
         "job_run_id": ancestor,
@@ -614,7 +608,7 @@ fn resume_of_a_lineage_binding_keeps_the_checkpoint_batch_id() {
     ancestor_state.record_pipeline_output("worktree", ancestor_output);
     fx.jobs.write_run_state(&ancestor, &ancestor_state).unwrap();
     let descendant = fx.failed_run(
-        &*local_jobs,
+        &local_jobs,
         &batch_task,
         ancestor.as_str(),
         Some(ancestor.as_str()),
@@ -660,7 +654,7 @@ fn resume_handoff_admission_cases() {
     ] {
         let fx = Fixture::new();
         let task = fx.task();
-        let source = fx.failed_run(&*fx.located(fx.local.clone()), &task, "placeholder", None);
+        let source = fx.failed_run(&fx.located(fx.local.clone()), &task, "placeholder", None);
         let input = json!({"task_ids": [task], "job_run_id": source, "completion": "done"});
         fx.stamp_input(&source, &input);
         // Resolve the same host actions used by the CLI completion fixture:
@@ -832,7 +826,7 @@ fn a_run_that_does_not_own_the_task_cannot_attach_validation_evidence() {
     }
     let fx = Fixture::new();
     let task = fx.task();
-    let owner = fx.failed_run(&*fx.located(fx.local.clone()), &task, "owner", None);
+    let owner = fx.failed_run(&fx.located(fx.local.clone()), &task, "owner", None);
     fx.bind(&task, &owner);
     let path = "validation-log.json";
     fx.runtime

@@ -54,7 +54,9 @@ fn page_work(
             }),
         )
         .unwrap();
-    let runs = store.list_job_runs_for_workspace("ws_http_fixture", query);
+    let runs = store
+        .read()
+        .and_then(|snapshot| snapshot.job_run().list("ws_http_fixture", query));
     store
         .connection()
         .lock()
@@ -100,7 +102,7 @@ fn multi_state_pages_do_not_scan_unrelated_success_history() {
                     run.started_at = Some(run.created_at);
                     run.finished_at = state.is_terminal().then_some(run.created_at);
                     store
-                        .upsert_job_run_for_workspace("ws_http_fixture", &run, None)
+                        .write(|tx| tx.job_run().put("ws_http_fixture", &run, None))
                         .unwrap();
                 }
                 let mut work = Vec::new();

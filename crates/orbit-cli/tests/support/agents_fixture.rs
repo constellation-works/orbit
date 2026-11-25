@@ -125,31 +125,33 @@ impl AgentsFixture {
         self.runtime
             .sqlite_store()
             .unwrap()
-            .upsert_job_run_for_workspace(
-                &self.workspace,
-                &JobRun {
-                    build: None,
-                    run_id: run_id.into(),
-                    job_id: "task_pr_pipeline".into(),
-                    attempt: 1,
-                    state,
-                    scheduled_at: started,
-                    created_at: started,
-                    started_at: Some(started),
-                    finished_at: Some(finished),
-                    duration_ms: None,
-                    pid: None,
-                    pid_start_time: None,
-                    input: Some(json!({ "task_ids": [task_id] })),
-                    retry_source_run_id: None,
-                    knowledge_metrics: None,
-                    resolved_crew: Some(crew.into()),
-                    crew_model: Some(model.into()),
-                    steps: Vec::new(),
-                    executed_on: None,
-                },
-                None,
-            )
+            .write(|tx| {
+                tx.job_run().put(
+                    &self.workspace,
+                    &JobRun {
+                        build: None,
+                        run_id: run_id.into(),
+                        job_id: "task_pr_pipeline".into(),
+                        attempt: 1,
+                        state,
+                        scheduled_at: started,
+                        created_at: started,
+                        started_at: Some(started),
+                        finished_at: Some(finished),
+                        duration_ms: None,
+                        pid: None,
+                        pid_start_time: None,
+                        input: Some(json!({ "task_ids": [task_id] })),
+                        retry_source_run_id: None,
+                        knowledge_metrics: None,
+                        resolved_crew: Some(crew.into()),
+                        crew_model: Some(model.into()),
+                        steps: Vec::new(),
+                        executed_on: None,
+                    },
+                    None,
+                )
+            })
             .unwrap();
     }
 

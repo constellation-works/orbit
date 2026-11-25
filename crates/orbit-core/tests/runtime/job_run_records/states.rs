@@ -1,3 +1,11 @@
+use chrono::Utc;
+use orbit_common::OrbitError;
+use orbit_core::runtime::JobRuns;
+use orbit_store::Store;
+use orbit_store::contracts::{ChildJobRunAdmissionOutcome, ChildJobRunAdmissionParams};
+use orbit_types::workflow::{JobRunState, PipelineState};
+use serde_json::json;
+
 //  A run's pipeline state lives beside its listing row, never in it. Every
 //  run listing reads `job_runs` alone, so a multi-megabyte checkpoint must
 //  leave that table without a single overflow page, whichever path wrote it.
@@ -14,7 +22,7 @@ fn count_job_rows(store: &Store, sql: &str) -> i64 {
 #[test]
 fn large_pipeline_state_never_overflows_the_listing_row() {
     let store = Store::open_in_memory().expect("memory store");
-    let jobs = workspace_job_run_store(store.clone(), "ws_a");
+    let jobs = JobRuns::shared(store.clone(), "ws_a");
     let payload = "x".repeat(2 * 1024 * 1024);
 
     // Initialize, overwrite, and read-modify-write a parent's state.
@@ -132,7 +140,7 @@ fn large_pipeline_state_never_overflows_the_listing_row() {
         assert!(jobs.job_run_task_ids(&query).unwrap().is_empty());
     }
     assert!(
-        workspace_job_run_store(store.clone(), "foreign")
+        JobRuns::shared(store.clone(), "foreign")
             .job_run_task_ids(&Default::default())
             .unwrap()
             .is_empty()
@@ -179,7 +187,7 @@ fn checkpointed_state(run_id: &str, job_id: &str) -> PipelineState {
 #[test]
 fn only_runs_that_cannot_resume_drop_their_resume_state() {
     let store = Store::open_in_memory().expect("memory store");
-    let jobs = workspace_job_run_store(store.clone(), "ws_a");
+    let jobs = JobRuns::shared(store.clone(), "ws_a");
     let stored_json = |run_id: &str| -> serde_json::Value {
         let raw: String = store
             .connection()
@@ -262,7 +270,7 @@ fn stored_step_wait_is_updated_and_hydrated_by_single_and_batched_reads() {
     use orbit_store::JobRunStepParams;
     use orbit_types::workflow::JobTargetType;
     let store = Store::open_in_memory().unwrap();
-    let jobs = workspace_job_run_store(store, "timing");
+    let jobs = JobRuns::shared(store, "timing");
     let run = jobs
         .insert_job_run("leaf", 1, Utc::now(), None, None)
         .unwrap();
@@ -302,7 +310,7 @@ fn pending_only_cancel_and_start_never_both_win() {
     use orbit_types::workflow::JobRunStartOutcome;
 
     let store = Store::open_in_memory().expect("memory store");
-    let jobs = workspace_job_run_store(store, "ws_a");
+    let jobs = JobRuns::shared(store, "ws_a");
     let owner = std::process::id();
 
     let started = jobs
@@ -355,7 +363,7 @@ fn pending_only_cancel_and_start_never_both_win() {
 #[test]
 fn job_run_build_tracks_first_start_and_preserves_unknown_history() {
     let store = Store::open_in_memory().unwrap();
-    let jobs = workspace_job_run_store(store.clone(), "ws_build");
+    let jobs = JobRuns::shared(store.clone(), "ws_build");
     let run = jobs
         .insert_job_run("build", 1, Utc::now(), None, None)
         .unwrap();
@@ -391,7 +399,7 @@ fn job_run_build_tracks_first_start_and_preserves_unknown_history() {
     stale.as_object_mut().unwrap().remove("build");
     let stale = serde_json::from_value(stale).unwrap();
     store
-        .upsert_job_run_for_workspace("ws_build", &stale, None)
+        .write(|tx| tx.job_run().put("ws_build", &stale, None))
         .unwrap();
     assert_eq!(
         build_of(&jobs.get_job_run(&run.run_id).unwrap().unwrap()),
@@ -422,7 +430,7 @@ fn job_run_build_tracks_first_start_and_preserves_unknown_history() {
     historical["build"] = current;
     let historical = serde_json::from_value(historical).unwrap();
     store
-        .upsert_job_run_for_workspace("ws_build", &historical, None)
+        .write(|tx| tx.job_run().put("ws_build", &historical, None))
         .unwrap();
     assert!(build_of(&jobs.get_job_run(&run.run_id).unwrap().unwrap()).is_null());
 }

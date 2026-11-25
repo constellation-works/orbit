@@ -235,7 +235,7 @@ fn approval_drain_runs_a_pilot_with_a_disallowed_implementer_requirement() {
         }),
         "the omitted pilot requirement is recorded: {notes:?}"
     );
-    let jobs = orbit_store::compose::workspace_job_run_store(
+    let jobs = orbit_core::runtime::JobRuns::shared(
         workspace.runtime.sqlite_store().unwrap(),
         workspace.runtime.workspace_id().unwrap(),
     );

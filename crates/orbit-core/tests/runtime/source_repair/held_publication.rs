@@ -16,7 +16,10 @@ fn held_completion_fixture_with_policy(code: DeliveryRefusal, timing: &str) -> F
     f.runtime
         .sqlite_store()
         .unwrap()
-        .upsert_job_run_for_workspace(&f.runtime.workspace_id().unwrap(), &f.source, None)
+        .write(|tx| {
+            tx.job_run()
+                .put(&f.runtime.workspace_id().unwrap(), &f.source, None)
+        })
         .unwrap();
     // Completion failed after publication. The worker leaves the last
     // successful checkpoints intact and appends a run-level diagnostic.
@@ -188,7 +191,10 @@ fn execute_pending_repair_worker(f: &Fixture, run_id: &str) {
     f.runtime
         .sqlite_store()
         .unwrap()
-        .upsert_job_run_for_workspace(&f.runtime.workspace_id().unwrap(), &run, None)
+        .write(|tx| {
+            tx.job_run()
+                .put(&f.runtime.workspace_id().unwrap(), &run, None)
+        })
         .unwrap();
     f.runtime
         .execute_pipeline_run_worker(run_id)
@@ -396,7 +402,10 @@ fn insert_held_retry(f: &Fixture, input: Value, code: DeliveryRefusal) -> JobRun
     f.runtime
         .sqlite_store()
         .unwrap()
-        .upsert_job_run_for_workspace(&f.runtime.workspace_id().unwrap(), &retry, None)
+        .write(|tx| {
+            tx.job_run()
+                .put(&f.runtime.workspace_id().unwrap(), &retry, None)
+        })
         .unwrap();
     let mut retry_state = f.state.clone();
     retry_state.run_id = retry.run_id.clone();
@@ -739,7 +748,10 @@ fn held_run_outside_the_task_lineage_is_still_refused_as_unbound() {
     f.runtime
         .sqlite_store()
         .unwrap()
-        .upsert_job_run_for_workspace(&f.runtime.workspace_id().unwrap(), &stray, None)
+        .write(|tx| {
+            tx.job_run()
+                .put(&f.runtime.workspace_id().unwrap(), &stray, None)
+        })
         .unwrap();
     let error = f
         .runtime

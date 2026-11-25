@@ -49,10 +49,7 @@ fn store_gc_allows_task_updates_and_dispatch_during_history_selection() {
         &store.connection(),
         &writer.sqlite_store().unwrap().connection()
     ));
-    let jobs = orbit_store::compose::workspace_job_run_store(
-        store.clone(),
-        runtime.workspace_id().unwrap(),
-    );
+    let jobs = orbit_core::runtime::JobRuns::shared(store.clone(), runtime.workspace_id().unwrap());
     let at = chrono::Utc::now() - chrono::Duration::days(40);
     let run = jobs
         .insert_job_run("task_auto_pipeline", 1, at, None, None)
@@ -117,7 +114,7 @@ fn store_gc_allows_task_updates_and_dispatch_during_history_selection() {
          WHERE j.run_id LIKE 'gc-history-%' AND m.run_id = ?1",
         [&run.run_id],
     ).unwrap();
-    let writer_jobs = orbit_store::compose::workspace_job_run_store(
+    let writer_jobs = orbit_core::runtime::JobRuns::shared(
         writer.sqlite_store().unwrap(),
         runtime.workspace_id().unwrap(),
     );

@@ -143,7 +143,7 @@ impl OrbitRuntime {
             scope::WorkerLimits::from_settings(settings)
         };
         PipelineWorkerSupervisor::new(
-            Arc::clone(&self.stores().job_run),
+            self.stores().job_run.clone(),
             self.stores().host_store().clone(),
             self.paths().clone(),
             self.event_log().clone(),

@@ -220,25 +220,26 @@ pub(in crate::application::codebase) fn scan(
         if let (Some(landed), Some(scanner)) = (&landed, &landed_scan) {
             for base in &notice_bases {
                 if scanner.base_contains(base, &landed.commit) {
-                    runtime.sqlite_store()?.record_landed_lease_notices(
-                        &orbit_store::contracts::LeaseLandedNoticeParams {
-                            workspace_id: runtime.workspace_id()?,
-                            workspace_orbit_dir: runtime
-                                .paths()
-                                .orbit_dir
-                                .to_string_lossy()
-                                .into_owned(),
-                            commit: landed.commit.clone(),
-                            task_id: id.clone(),
-                            base_branch: base.clone(),
-                            landed_at: landed.at.to_rfc3339(),
-                            paths: landed
-                                .paths
-                                .iter()
-                                .map(|path| format!("file:{path}"))
-                                .collect(),
-                        },
-                    )?;
+                    let landing = orbit_store::contracts::LeaseLandedNoticeParams {
+                        workspace_id: runtime.workspace_id()?,
+                        workspace_orbit_dir: runtime
+                            .paths()
+                            .orbit_dir
+                            .to_string_lossy()
+                            .into_owned(),
+                        commit: landed.commit.clone(),
+                        task_id: id.clone(),
+                        base_branch: base.clone(),
+                        landed_at: landed.at.to_rfc3339(),
+                        paths: landed
+                            .paths
+                            .iter()
+                            .map(|path| format!("file:{path}"))
+                            .collect(),
+                    };
+                    runtime
+                        .sqlite_store()?
+                        .write(|tx| tx.lease_notice().put_landed(&landing))?;
                 }
             }
         }

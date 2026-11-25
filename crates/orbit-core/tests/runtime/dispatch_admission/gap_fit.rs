@@ -125,7 +125,7 @@ impl Fixture {
         let store = self.runtime.sqlite_store().unwrap();
         let workspace = self.workspace_id();
         store
-            .upsert_job_run_for_workspace(&workspace, &run, None)
+            .write(|tx| tx.job_run().put(&workspace, &run, None))
             .unwrap();
         for (minute, cores) in cpu.iter().enumerate() {
             store
@@ -186,7 +186,7 @@ impl Fixture {
 
     /// `run` ends, starting first if it had not.
     fn ended(&self, run: &str) {
-        let jobs = orbit_store::compose::workspace_job_run_store(
+        let jobs = orbit_core::runtime::JobRuns::shared(
             self.runtime.sqlite_store().unwrap(),
             self.workspace_id(),
         );
@@ -203,7 +203,7 @@ impl Fixture {
     /// the host reading is all baseline. Returns its run.
     fn running_hard_delivery(&self) -> String {
         let task = self.task("running", TaskPriority::Low, TaskComplexity::Hard);
-        orbit_store::compose::workspace_job_run_store(
+        orbit_core::runtime::JobRuns::shared(
             self.runtime.sqlite_store().unwrap(),
             self.workspace_id(),
         )

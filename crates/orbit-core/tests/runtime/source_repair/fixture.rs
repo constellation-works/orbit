@@ -419,7 +419,10 @@ impl Fixture {
         runtime
             .sqlite_store()
             .unwrap()
-            .upsert_job_run_for_workspace(&runtime.workspace_id().unwrap(), &source, None)
+            .write(|tx| {
+                tx.job_run()
+                    .put(&runtime.workspace_id().unwrap(), &source, None)
+            })
             .unwrap();
         runtime.write_run_state(&source.run_id, &state).unwrap();
         runtime
@@ -662,7 +665,10 @@ impl Fixture {
         self.runtime
             .sqlite_store()
             .unwrap()
-            .upsert_job_run_for_workspace(&self.runtime.workspace_id().unwrap(), &run, None)
+            .write(|tx| {
+                tx.job_run()
+                    .put(&self.runtime.workspace_id().unwrap(), &run, None)
+            })
             .unwrap();
     }
     pub(super) fn action(&self, name: &str, input: Value) -> Value {

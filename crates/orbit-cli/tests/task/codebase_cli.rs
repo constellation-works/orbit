@@ -875,7 +875,10 @@ fn pilot_cli_ranks_task_pilot_crews_against_the_landed_diff() {
         runtime
             .sqlite_store()
             .unwrap()
-            .upsert_job_run_for_workspace(&runtime.workspace_id().unwrap(), &run, None)
+            .write(|tx| {
+                tx.job_run()
+                    .put(&runtime.workspace_id().unwrap(), &run, None)
+            })
             .unwrap();
         // The piloted task's crew is distinct from the pilot activity's draw.
         let key = orbit_types::workflow::CrewPurpose::TaskPilot.config_key();

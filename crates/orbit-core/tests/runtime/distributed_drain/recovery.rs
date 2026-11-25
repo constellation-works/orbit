@@ -87,7 +87,7 @@ model = "fixture-b"
             .with_automation_machine_identity(Some(OWNER.into())),
     );
     assert!(owner.read_run_state(&leaf).unwrap().is_none());
-    let jobs = orbit_store::compose::workspace_job_run_store(
+    let jobs = orbit_core::runtime::JobRuns::shared(
         owner.sqlite_store().unwrap(),
         owner.workspace_id().unwrap(),
     );
@@ -383,7 +383,7 @@ fn a_foreign_run_cannot_supply_or_veto_completion_evidence() {
     pair.leaf_fails_with(&leaf, "follower stopped");
     pair.pass(&drain);
     let owner = &pair.wire.owner;
-    let jobs = orbit_store::compose::workspace_job_run_store(
+    let jobs = orbit_core::runtime::JobRuns::shared(
         owner.sqlite_store().unwrap(),
         owner.workspace_id().unwrap(),
     );

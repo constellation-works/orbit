@@ -1508,7 +1508,7 @@ impl HostResourceProbe for PressureProbe {
 
 /// A running `job` run, as its worker leaves it, with `input`.
 fn running_run(runtime: &OrbitRuntime, job: &str, input: Value) -> String {
-    let jobs = orbit_store::compose::workspace_job_run_store(
+    let jobs = orbit_core::runtime::JobRuns::shared(
         runtime.sqlite_store().unwrap(),
         runtime.workspace_id().unwrap(),
     );
@@ -1618,7 +1618,7 @@ fn fresh_runtime_discovery_recovers_host_pressure_without_a_drain() {
         .unwrap();
     assert_eq!(decision.refusal.unwrap().code(), "resource_throttled");
     for runtime in [&runtime, &other] {
-        let jobs = orbit_store::compose::workspace_job_run_store(
+        let jobs = orbit_core::runtime::JobRuns::shared(
             runtime.sqlite_store().unwrap(),
             runtime.workspace_id().unwrap(),
         );
@@ -1888,7 +1888,7 @@ fn sustained_host_pressure(kind: HostPressure) {
     assert_eq!(band["loose_task_ids"], json!([]), "{resource}: {band}");
 
     // Running work was never touched.
-    let jobs = orbit_store::compose::workspace_job_run_store(
+    let jobs = orbit_core::runtime::JobRuns::shared(
         runtime.sqlite_store().unwrap(),
         runtime.workspace_id().unwrap(),
     );

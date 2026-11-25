@@ -10,7 +10,10 @@ pub(super) fn save_run(f: &Fixture, run: &JobRun) {
     f.runtime
         .sqlite_store()
         .unwrap()
-        .upsert_job_run_for_workspace(&f.runtime.workspace_id().unwrap(), run, None)
+        .write(|tx| {
+            tx.job_run()
+                .put(&f.runtime.workspace_id().unwrap(), run, None)
+        })
         .unwrap();
 }
 

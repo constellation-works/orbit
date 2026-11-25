@@ -6,7 +6,6 @@ fn per_job_recency_reads_do_not_scan_unrelated_runs() {
     use rusqlite::trace::{TraceEvent, TraceEventCodes};
 
     let store = Store::open_in_memory().unwrap();
-    let jobs = workspace_job_run_store(store.clone(), "ws_recency");
     let connection = store.connection();
     // A fixed cohort, rather than concurrent traffic or a wall-clock bound,
     // makes the repeated workspace scan reproducible on any host.
@@ -38,8 +37,11 @@ fn per_job_recency_reads_do_not_scan_unrelated_runs() {
             }),
         )
         .unwrap();
-    let runs = jobs
-        .list_job_runs_filtered(&JobRunQuery {
+    let runs = store
+        .read()
+        .unwrap()
+        .job_run()
+        .list("ws_recency", &JobRunQuery {
             job_id: Some("job-without-runs".into()),
             states: vec![
                 JobRunState::Success,

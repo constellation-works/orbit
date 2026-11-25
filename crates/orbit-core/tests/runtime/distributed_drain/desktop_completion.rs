@@ -2224,7 +2224,7 @@ fn a_same_named_owner_run_never_stands_in_for_a_follower_run() {
         .expect("recover");
 
     // The owner's own job store gains a successful run with the leaf's id.
-    let jobs = orbit_store::compose::workspace_job_run_store(
+    let jobs = orbit_core::runtime::JobRuns::shared(
         owner.sqlite_store().unwrap(),
         owner.workspace_id().unwrap(),
     );
@@ -2325,7 +2325,7 @@ fn a_settled_follower_release_completes_on_current_review_evidence() {
     assert_eq!(settlement.leaf_run_id.as_deref(), Some(leaf.as_str()));
     assert_eq!(settlement.machine_id, FOLLOWER, "release");
     assert_eq!(pair.run_state(&leaf), JobRunState::Held, "release");
-    let owner_jobs = orbit_store::compose::workspace_job_run_store(
+    let owner_jobs = orbit_core::runtime::JobRuns::shared(
         owner.sqlite_store().unwrap(),
         owner.workspace_id().unwrap(),
     );

@@ -330,11 +330,13 @@ fn readiness_counts_recorded_draws_instead_of_the_task_crew() {
                         .runtime
                         .sqlite_store()
                         .unwrap()
-                        .upsert_job_run_for_workspace(
-                            &fixture.runtime.workspace_id().unwrap(),
-                            &run,
-                            Some(&state),
-                        )
+                        .write(|tx| {
+                            tx.job_run().put(
+                                &fixture.runtime.workspace_id().unwrap(),
+                                &run,
+                                Some(&state),
+                            )
+                        })
                         .unwrap();
                     let readiness = json_ok(server.get(&uri));
                     let standing = readiness["provider_auth_failures"]
@@ -463,7 +465,10 @@ fn save_failed(
         .runtime
         .sqlite_store()
         .unwrap()
-        .upsert_job_run_step_for_workspace(&fixture.runtime.workspace_id().unwrap(), run_id, &step)
+        .write(|tx| {
+            tx.job_run()
+                .put_step(&fixture.runtime.workspace_id().unwrap(), run_id, &step)
+        })
         .unwrap();
 }
 

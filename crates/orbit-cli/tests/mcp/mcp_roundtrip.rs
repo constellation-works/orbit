@@ -2282,7 +2282,7 @@ fn an_unprivileged_session_reads_bounded_delivery_evidence_but_not_the_run() {
     runtime
         .sqlite_store()
         .unwrap()
-        .upsert_job_run_for_workspace(&workspace_id, &source, None)
+        .write(|tx| tx.job_run().put(&workspace_id, &source, None))
         .unwrap();
     let landing_index = shipped_step_index("task_pr_pipeline", "complete_pr");
     state.step_states.remove(&landing_index);
@@ -2297,25 +2297,27 @@ fn an_unprivileged_session_reads_bounded_delivery_evidence_but_not_the_run() {
         runtime
             .sqlite_store()
             .unwrap()
-            .upsert_job_run_step_for_workspace(
-                &workspace_id,
-                run_id,
-                &JobRunStep {
-                    lock_wait_ms: None,
-                    step_index: index,
-                    target_type: JobTargetType::Activity,
-                    target_id: id.into(),
-                    started_at: Some(at),
-                    finished_at: Some(at),
-                    duration_ms: Some(0),
-                    exit_code: Some(0),
-                    agent_response_json: None,
-                    state: JobRunState::Success,
-                    error_code: None,
-                    failure_code: None,
-                    error_message: None,
-                },
-            )
+            .write(|tx| {
+                tx.job_run().put_step(
+                    &workspace_id,
+                    run_id,
+                    &JobRunStep {
+                        lock_wait_ms: None,
+                        step_index: index,
+                        target_type: JobTargetType::Activity,
+                        target_id: id.into(),
+                        started_at: Some(at),
+                        finished_at: Some(at),
+                        duration_ms: Some(0),
+                        exit_code: Some(0),
+                        agent_response_json: None,
+                        state: JobRunState::Success,
+                        error_code: None,
+                        failure_code: None,
+                        error_message: None,
+                    },
+                )
+            })
             .unwrap();
     };
     record(
@@ -2361,7 +2363,7 @@ fn an_unprivileged_session_reads_bounded_delivery_evidence_but_not_the_run() {
     runtime
         .sqlite_store()
         .unwrap()
-        .upsert_job_run_for_workspace(&workspace_id, &resumed, None)
+        .write(|tx| tx.job_run().put(&workspace_id, &resumed, None))
         .unwrap();
 
     let mut client = workspace.serve();

@@ -6,6 +6,7 @@
 //! agent pilot's output is supplied as fixture data.
 use chrono::{DateTime, Utc};
 use orbit_core::application::task::{TaskAddParams, TaskUpdateParams, TaskWriteScreen};
+use orbit_core::runtime::JobRuns;
 use orbit_core::{OrbitError, OrbitRuntime, Task, TaskComplexity, TaskStatus};
 use orbit_engine::RuntimeHost;
 use orbit_store::contracts::JobRunStepParams;
@@ -180,8 +181,8 @@ impl Workspace {
     fn drain(&self) -> String {
         self.running("workspace_auto_pipeline", json!({"approve_proposed": true}))
     }
-    fn jobs(&self) -> std::sync::Arc<dyn orbit_store::contracts::JobRunStoreBackend> {
-        orbit_store::compose::workspace_job_run_store(
+    fn jobs(&self) -> std::sync::Arc<JobRuns> {
+        orbit_core::runtime::JobRuns::shared(
             self.runtime.sqlite_store().unwrap(),
             self.runtime.workspace_id().unwrap(),
         )
@@ -288,7 +289,10 @@ impl Workspace {
         self.runtime
             .sqlite_store()
             .unwrap()
-            .upsert_job_run_for_workspace(&self.runtime.workspace_id().unwrap(), &run, None)
+            .write(|tx| {
+                tx.job_run()
+                    .put(&self.runtime.workspace_id().unwrap(), &run, None)
+            })
             .unwrap();
         let mut state = PipelineState::new(run.run_id.clone(), run.job_id.clone(), json!({}));
         for (index, step_id, output) in [
@@ -384,7 +388,10 @@ impl Workspace {
         self.runtime
             .sqlite_store()
             .unwrap()
-            .upsert_job_run_for_workspace(&self.runtime.workspace_id().unwrap(), &run, None)
+            .write(|tx| {
+                tx.job_run()
+                    .put(&self.runtime.workspace_id().unwrap(), &run, None)
+            })
             .unwrap();
         let mut merge = json!({
             "merged": merged,
