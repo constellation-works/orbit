@@ -932,6 +932,17 @@ Every watched path takes part in admission, but `GET /api/host/resources` report
 
 **Dashboard.** The rail foot's host block shows the selected host's `load` (CPU as a multiple of online cores, or `cpu` as a busy percentage when `cpu_source = "utilization"`), `mem` and `disk` readings, and an `io` row on hosts that report disk I/O pressure, with severity and held resources ([UI design §6](design/user-interface/2_design.md#6-top-level-navigation)); they poll every five seconds and mark aging data unknown even while a request is pending. The top bar shows one warning chip only while a reading is elevated or worse. **Settings › Machine** shows the enable switch and each resource's high and resume marks, with source, live reading, severity and verdict: six marks for CPU, memory and disk, and, on hosts that report disk I/O pressure (Linux only), an `io` row with its fixed 20% / 10% marks, which cannot be edited. Its edits share the topic pages' `PUT /api/config/keys/{key}` validation but write the **global** file by default, because this host's readings and admission read global settings; a workspace override is marked and wins for that workspace's runtimes.
 
+### `[workflow.task_pilot]` — skipping the task pilot when `context_files` is filled
+
+```toml
+[workflow.task_pilot]
+skip_when_context_filled = true
+```
+
+| Key | Default | What it does |
+|---|---|---|
+| `workflow.task_pilot.skip_when_context_filled` | `true` | Skip the task pilot when a never-piloted `low` or `medium` task already has non-empty, resolving `context_files` and passes proposed-stage readiness (`readiness_gaps`). Under `true`, the `task_pilot` routine and automatic pilot discovery withhold such tasks as `context_files_filled`, and an `--approve-proposed` drain approves qualifying `proposed` tasks on readiness alone, recording `"approved without pilot (context_files filled)"` and this config key in task history (`proposal_approved` note and `TaskDecision::DrainApproved::pilot_skipped_config_key`). Tasks tagged `design`, `breaking-change`, or `no-auto-approve`, `hard`/`xhard` tasks, tasks failing readiness (empty `context_files`, missing/unassessed complexity, or any unresolved selector), and tasks with an existing pilot receipt are still piloted as before; explicit `orbit run task-pilot <id>` runs always force a pilot. Set to `false` to restore piloting every eligible task. |
+
 ### `[workflow.task_pilot_freshness]` — when a task is piloted again
 
 ```toml

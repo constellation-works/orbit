@@ -28,8 +28,14 @@ spec:
     change and never hides a hold.
     At most ten candidates are returned per pass, oldest first, all sharing
     the first candidate's resolved crew (or all lacking a crew); candidates
-    for other crews are deferred to later passes. Selection is
-    a cost filter, not the gate: approval happens only in
+    for other crews are deferred to later passes. When
+    `workflow.task_pilot.skip_when_context_filled` is true (the default), a
+    never-piloted `low` or `medium` proposed task with non-empty, resolving
+    `context_files`, no blocking readiness gap, and none of the `design`,
+    `breaking-change`, or `no-auto-approve` tags is approved directly under
+    the light gate (`approved_without_pilot`) without dispatching a pilot,
+    recording `"approved without pilot (context_files filled)"` and the config
+    key in task history. Every other approval happens in
     `apply_task_pilot_results` under the returned `drain_promotion` record,
     which that step verifies against this drain. Without `approve_proposed`
     the step is a no-op, and a drain whose admissions were stopped selects
@@ -90,6 +96,12 @@ spec:
         type: array
         items:
           type: string
+      approved_without_pilot:
+        type: array
+        items:
+          type: string
+      approved_without_pilot_count:
+        type: number
       pilot_active:
         type: boolean
       pilot_live:

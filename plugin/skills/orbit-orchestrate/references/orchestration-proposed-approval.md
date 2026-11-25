@@ -7,8 +7,20 @@
 `proposed` work, independent of `--complete`. Default-off and never enabled by
 configuration.
 
+- When `workflow.task_pilot.skip_when_context_filled` is `true` (the default), a
+  never-piloted `low` or `medium` proposed task whose `context_files` is
+  non-empty and resolves against the repository, with no blocking readiness gap
+  and none of the `design`, `breaking-change`, or `no-auto-approve` tags, is
+  approved directly on readiness without dispatching `task_pilot_pipeline`. The
+  `proposal_approved` history entry records `"approved without pilot
+  (context_files filled)"` and the config key. Tasks tagged `design`,
+  `breaking-change` or `no-auto-approve`, `hard`/`xhard` tasks, tasks failing
+  readiness (including unresolved selectors), and tasks with an existing pilot
+  receipt or hold are still piloted. Setting
+  `workflow.task_pilot.skip_when_context_filled = false` pilots every eligible
+  task.
 - When none of its pilots is running, a pass selects up to ten qualifying
-  proposed tasks, including ones filed mid-window. A task qualifies with the
+  proposed tasks that still need a pilot, including ones filed mid-window. A task qualifies with the
   `no-diff-expected` tag, or with non-empty `context_files` and an assessed
   complexity. A fresh assessment from an explicit request or a routine pilot
   is approved on that pass without another pilot.

@@ -38,6 +38,8 @@ pub(super) struct AdmissionPolicy {
     mid_run_steering: MidRunSteeringSettings,
     /// `experiments.enabled`.
     experiments_enabled: bool,
+    /// `workflow.task_pilot.skip_when_context_filled`.
+    task_pilot_skip_when_context_filled: bool,
     /// `workflow.standing_drain.*`.
     standing_drain: StandingDrainSettings,
     crew_settings: Arc<AdmissionCrewSettings>,
@@ -48,6 +50,8 @@ impl AdmissionPolicy {
         let provider_limit = config.snapshot.provider_limit_policy();
         let mid_run_steering = config.snapshot.mid_run_steering();
         let experiments_enabled = config.snapshot.experiments().enabled;
+        let task_pilot_skip_when_context_filled =
+            config.snapshot.task_pilot_skip_when_context_filled();
         let standing_drain = config.snapshot.standing_drain();
         let auto_effort = config.snapshot.auto_effort();
         let purpose_crews = config.snapshot.purpose_crews();
@@ -58,6 +62,7 @@ impl AdmissionPolicy {
             provider_limit,
             mid_run_steering,
             experiments_enabled,
+            task_pilot_skip_when_context_filled,
             standing_drain,
             auto_concurrency: config.auto_concurrency,
             crew_settings: Arc::new(AdmissionCrewSettings {
@@ -111,6 +116,7 @@ impl RuntimeKernel {
                 provider_limit: settings.provider_limit().clone(),
                 mid_run_steering: settings.mid_run_steering(),
                 experiments_enabled: settings.experiments().enabled,
+                task_pilot_skip_when_context_filled: settings.task_pilot_skip_when_context_filled(),
                 // Fail closed: the keeper stays off until a config load says
                 // otherwise.
                 standing_drain: StandingDrainSettings::default(),
@@ -180,6 +186,14 @@ impl RuntimeKernel {
     /// keeper at its next tick. Off until a config load succeeds.
     pub fn current_standing_drain(&self) -> StandingDrainSettings {
         self.refresh_workflow_policy().standing_drain
+    }
+
+    /// `workflow.task_pilot.skip_when_context_filled` from the current config
+    /// (default `true`): live drains and routines pick up toggles without
+    /// restarting.
+    pub fn task_pilot_skip_when_context_filled(&self) -> bool {
+        self.refresh_workflow_policy()
+            .task_pilot_skip_when_context_filled
     }
 
     /// Pin both policies for this pass so all decisions use one config version.

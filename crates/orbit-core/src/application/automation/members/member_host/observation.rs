@@ -140,6 +140,11 @@ impl Host<'_> {
                         withheld.insert(task.id, reason);
                         continue;
                     }
+                    if pilot::context_filled_pilot_skip(self.runtime, &task, Some(&source.commit))?
+                    {
+                        withheld.insert(task.id, pilot::CONTEXT_FILES_FILLED_SKIP_REASON.into());
+                        continue;
+                    }
                     if let Some(run_ids) = active_preparations.get(&task.id) {
                         withheld.insert(task.id, already_preparing(run_ids));
                         continue;

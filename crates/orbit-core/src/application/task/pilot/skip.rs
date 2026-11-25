@@ -14,8 +14,16 @@
 //! history entry naming the actor and the requirements digest it dispatches
 //! without assessment. Filing a task with the tag stays open to every caller.
 
+use std::path::{Component, Path};
+
 use orbit_common::OrbitError;
-use orbit_types::task::{Task, TaskHistoryEntry};
+use orbit_common::fs::selector::{
+    Selector, anchor_path, canonical_selector_in_workspace, exists_in_workspace,
+};
+use orbit_types::task::{
+    NO_AUTO_APPROVE_TAG, ReadinessGap, ReadinessStage, Task, TaskComplexity, TaskHistoryEntry,
+    readiness_gaps,
+};
 use serde_json::{Value, json};
 
 use super::super::TaskUpdateParams;
@@ -29,9 +37,197 @@ const NO_PILOT_TAG: &str = "no-pilot";
 /// History event an operator's pilot skip records.
 const PILOT_SKIPPED_EVENT: &str = "pilot_skipped";
 
+/// Withhold/exclusion reason recorded when a task skips the pilot under
+/// `workflow.task_pilot.skip_when_context_filled`.
+pub(crate) const CONTEXT_FILES_FILLED_SKIP_REASON: &str = "context_files_filled";
+
+/// Tags that always require the task pilot even when `context_files` is filled
+/// and `workflow.task_pilot.skip_when_context_filled` is `true`.
+const CONTEXT_FILLED_SKIP_EXCLUDED_TAGS: [&str; 3] =
+    ["design", "breaking-change", NO_AUTO_APPROVE_TAG];
+
 /// Whether `tags` carry the operator's pilot skip.
 pub(super) fn skips_pilot(tags: &[String]) -> bool {
     tags.iter().any(|tag| tag == NO_PILOT_TAG)
+}
+
+/// Whether a task's metadata qualifies for the default filled-context
+/// task-pilot skip (`workflow.task_pilot.skip_when_context_filled`):
+/// non-empty `context_files`, `low` or `medium` complexity, none of the
+/// exclusion tags (`design`, `breaking-change`, `no-auto-approve`), and no
+/// blocking proposed-stage readiness gap.
+pub(crate) fn task_qualifies_for_context_filled_pilot_skip(
+    tags: &[String],
+    context_files: &[String],
+    complexity: Option<TaskComplexity>,
+) -> bool {
+    !context_files.is_empty()
+        && matches!(
+            complexity,
+            Some(TaskComplexity::Low | TaskComplexity::Medium)
+        )
+        && !tags
+            .iter()
+            .any(|tag| CONTEXT_FILLED_SKIP_EXCLUDED_TAGS.contains(&tag.as_str()))
+        && readiness_gaps(ReadinessStage::Proposed, tags, context_files, complexity)
+            .iter()
+            .all(|gap| !ReadinessGap::is_blocking(gap))
+}
+
+/// Whether every selector in `selectors` parses as a filesystem-anchored
+/// selector (`file:`, `dir:`, or `symbol:`) and resolves to an existing target
+/// of matching file/directory kind.
+///
+/// Checked against the Git tree at `revision` (or the workspace's local base
+/// ref when `revision` is `None`) when the workspace is a Git repository,
+/// falling back to the workspace filesystem only when it is not. Any parse
+/// failure, traversal, symlink, missing target, or kind mismatch returns
+/// `false` so the task pilot runs.
+pub(crate) fn all_context_selectors_resolve(
+    runtime: &OrbitRuntime,
+    selectors: &[String],
+    revision: Option<&str>,
+) -> bool {
+    if selectors.is_empty() {
+        return false;
+    }
+    let mut parsed = Vec::with_capacity(selectors.len());
+    for raw in selectors {
+        let trimmed = raw.trim_start();
+        let Ok(selector) = trimmed.parse::<Selector>() else {
+            return false;
+        };
+        match selector {
+            Selector::Dir { path } => parsed.push((path, true)),
+            Selector::File { path } | Selector::Symbol { path, .. } => {
+                parsed.push((path, false));
+            }
+            Selector::Module { .. } | Selector::Command { .. } => return false,
+        }
+    }
+
+    let repo_root = &runtime.paths().repo_root;
+    if let Ok(repo) = git2::Repository::open(repo_root) {
+        let Some(tree) = resolve_git_tree(&repo, runtime.workspace_base_branch(), revision) else {
+            return false;
+        };
+        return parsed
+            .iter()
+            .all(|(path, is_dir)| git_tree_selector_resolves(&tree, path, *is_dir));
+    }
+
+    let Ok(canonical_workspace) = repo_root.canonicalize() else {
+        return false;
+    };
+    selectors.iter().all(|raw| {
+        let trimmed = raw.trim_start();
+        let Ok(canonical) = canonical_selector_in_workspace(trimmed, &canonical_workspace) else {
+            return false;
+        };
+        if !exists_in_workspace(&canonical, &canonical_workspace) {
+            return false;
+        }
+        let Ok(anchor) = anchor_path(&canonical) else {
+            return false;
+        };
+        let resolved = canonical_workspace.join(anchor);
+        if canonical.starts_with("dir:") {
+            resolved.is_dir()
+        } else {
+            resolved.is_file()
+        }
+    })
+}
+
+fn resolve_git_tree<'r>(
+    repo: &'r git2::Repository,
+    base_branch: &str,
+    revision: Option<&str>,
+) -> Option<git2::Tree<'r>> {
+    if let Some(revision) = revision {
+        return repo
+            .revparse_single(revision)
+            .and_then(|object| object.peel_to_tree())
+            .ok();
+    }
+    let local = repo
+        .find_reference(&format!("refs/heads/{base_branch}"))
+        .and_then(|reference| reference.peel_to_commit())
+        .ok();
+    let origin = repo
+        .find_reference(&format!("refs/remotes/origin/{base_branch}"))
+        .and_then(|reference| reference.peel_to_commit())
+        .ok();
+    let commit = match (local, origin) {
+        (Some(local), Some(origin)) => {
+            if local.id() == origin.id()
+                || repo
+                    .graph_descendant_of(local.id(), origin.id())
+                    .unwrap_or(false)
+            {
+                local
+            } else {
+                origin
+            }
+        }
+        (Some(local), None) => local,
+        (None, Some(origin)) => origin,
+        (None, None) => repo.head().and_then(|head| head.peel_to_commit()).ok()?,
+    };
+    commit.tree().ok()
+}
+
+fn git_tree_selector_resolves(tree: &git2::Tree<'_>, path: &str, is_dir: bool) -> bool {
+    if path == "." {
+        return is_dir;
+    }
+    if path.is_empty() || path.starts_with('/') {
+        return false;
+    }
+    let candidate = Path::new(path);
+    if candidate
+        .components()
+        .any(|component| !matches!(component, Component::Normal(_)))
+    {
+        return false;
+    }
+    let Ok(entry) = tree.get_path(candidate) else {
+        return false;
+    };
+    if is_dir {
+        entry.kind() == Some(git2::ObjectType::Tree)
+    } else {
+        entry.kind() == Some(git2::ObjectType::Blob)
+            && matches!(entry.filemode(), 0o100644 | 0o100755)
+    }
+}
+
+/// Whether the default filled-context skip
+/// (`workflow.task_pilot.skip_when_context_filled`) skips piloting `task` at
+/// `revision`: config is enabled, the task has never been piloted, its
+/// metadata qualifies, and all `context_files` selectors resolve.
+pub(crate) fn context_filled_pilot_skip(
+    runtime: &OrbitRuntime,
+    task: &Task,
+    revision: Option<&str>,
+) -> Result<bool, OrbitError> {
+    if !runtime.task_pilot_skip_when_context_filled()
+        || !task_qualifies_for_context_filled_pilot_skip(
+            &task.tags,
+            &task.context_files,
+            task.complexity,
+        )
+    {
+        return Ok(false);
+    }
+    if runtime.task_pilot_assessed(&task.id)? {
+        return Ok(false);
+    }
+    Ok(all_context_selectors_resolve(
+        runtime,
+        &task.context_files,
+        revision,
+    ))
 }
 
 /// The remedy text naming both ways past a pilot hold on `task`: a new

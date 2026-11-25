@@ -2,7 +2,7 @@
 title: "Task pilot — assessment persistence"
 owner: orbit
 created_date: 2026-11-09
-updated_date: 2026-11-22
+updated_date: 2026-11-25
 status: Draft
 feature: task-pilot
 doc_role: scope
@@ -108,6 +108,24 @@ tag in place. A person can remove the tag to opt out of the no-diff disposition.
 resident grant can approve eligible held proposals with a current clean pilot.
 [Mandate and authority](../resident-orchestrator/specs/mandate-and-authority.md#rights--tools)
 
+## Default skip when context_files is filled
+
+[ORB-27821] By default (`workflow.task_pilot.skip_when_context_filled = true`), the `task_pilot`
+routine and automatic pilot discovery skip a never-piloted `low` or `medium` task whose
+`context_files` is non-empty, whose selectors all resolve against the repository, and which has no
+blocking proposed-stage readiness gap (`readiness_gaps`). Under the same conditions, an
+`--approve-proposed` drain approves a qualifying `proposed` task on readiness alone without
+dispatching `task_pilot_pipeline`, recording `"approved without pilot (context_files filled)"` and
+`workflow.task_pilot.skip_when_context_filled` in task history (`proposal_approved` note and
+`TaskDecision::DrainApproved::pilot_skipped_config_key`).
+
+Tasks tagged `design`, `breaking-change`, or `no-auto-approve`, `hard` or `xhard` tasks, tasks
+failing readiness (empty `context_files`, missing/unassessed complexity, or any unresolved
+selector), and tasks that already carry a prior pilot receipt are still piloted as before. Explicit
+`orbit run task-pilot <id>` runs always force a pilot. Setting
+`workflow.task_pilot.skip_when_context_filled = false` restores piloting every eligible task. See
+[Decisions](./4_decisions.md#skip-the-task-pilot-by-default-when-context_files-is-filled).
+
 ## Compatibility
 
 No persisted type, task bundle layout, tool schema, receipt identity or assessment
@@ -132,5 +150,6 @@ the release, consumer and remaining-record retirement checks in
 - [ORB-25120] — projects a readable summary while preserving the raw receipt.
 - [ORB-23750] — degrades task show when pilot evidence is unreadable or invalid.
 - [ORB-23760] — degrades task show for dangling or corrupt pilot blobs.
+- [ORB-27821] — skips the task pilot by default when `context_files` is filled and passes readiness, with a light drain-approval gate and `workflow.task_pilot.skip_when_context_filled`.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

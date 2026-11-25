@@ -60,9 +60,9 @@ use crate::runtime::engine::crew::normalized_task_crew;
 use super::drains::{drain_run_id, live_admissions_stop};
 use crate::application::task::pilot::{
     ExplicitAssessmentReuse, FOOTPRINT_UNRESOLVED, UNRESOLVED_PILOT_EVENT,
-    approval_disqualification, classify_explicit_assessment_reuse, held_classification,
-    live_execution_claim_tasks, promote_reusable_assessment, task_pilot_warnings,
-    unresolved_pilot_run_id,
+    approval_disqualification, classify_explicit_assessment_reuse, context_filled_pilot_skip,
+    held_classification, live_execution_claim_tasks, promote_reusable_assessment,
+    promote_without_pilot, task_pilot_warnings, unresolved_pilot_run_id,
 };
 
 /// Most proposed tasks one pass pilots; the rest wait for the next pass.
@@ -91,6 +91,10 @@ pub(super) struct ApprovalSnapshot {
     /// Fresh explicit or routine assessments this pass can approve without
     /// another pilot. Not candidates: a drain child must not assess them again.
     pub(super) reusable: Vec<String>,
+    /// Never-piloted `low`/`medium` proposals with filled, resolving
+    /// `context_files` that qualify for light approval under
+    /// `workflow.task_pilot.skip_when_context_filled`.
+    pub(super) light_approvable: Vec<String>,
 }
 
 impl ApprovalSnapshot {
@@ -139,6 +143,7 @@ pub(super) fn approval_snapshot(
         held: Vec::new(),
         closed: Vec::new(),
         reusable: Vec::new(),
+        light_approvable: Vec::new(),
     };
     let holders = runtime.pilot_preparation_holders()?;
     // A stale assessment on a claimed task keeps holding: the claim is still
@@ -363,6 +368,10 @@ pub(super) fn approval_snapshot(
             ));
             continue;
         }
+        if context_filled_pilot_skip(runtime, &task, None)? {
+            snapshot.light_approvable.push(task.id);
+            continue;
+        }
         snapshot.candidates.push(ApprovalCandidate {
             id: task.id,
             crew: normalized_task_crew(task.crew.as_deref()),
@@ -443,13 +452,34 @@ pub(crate) fn select_proposed_approvals(
                 reused.push(task_id.clone());
             }
         }
+    }
+    let mut light_approved = Vec::new();
+    if !admissions_stopped && !snapshot.light_approvable.is_empty() {
+        for task_id in &snapshot.light_approvable {
+            if promote_without_pilot(runtime, run_id, task_id).map_err(|error| {
+                DispatchError::action_failed(
+                    action,
+                    format!("approve {task_id} without pilot: {error}"),
+                )
+            })? {
+                light_approved.push(task_id.clone());
+            }
+        }
+    }
+    if !reused.is_empty() || !light_approved.is_empty() {
         snapshot = proposed_tasks(runtime)
             .and_then(|proposed| approval_snapshot(runtime, proposed, &pilots, !admissions_stopped))
             .map_err(|error| {
                 DispatchError::action_failed(action, format!("read proposed tasks: {error}"))
             })?;
     }
-    record_report(runtime, run_id, &snapshot, &[], &reused);
+    let mut direct_approved = reused.clone();
+    for task_id in &light_approved {
+        if !direct_approved.contains(task_id) {
+            direct_approved.push(task_id.clone());
+        }
+    }
+    record_report(runtime, run_id, &snapshot, &[], &direct_approved);
     let task_ids = if admissions_stopped || pilot_live {
         Vec::new()
     } else {
@@ -479,6 +509,8 @@ pub(crate) fn select_proposed_approvals(
     output["task_ids"] = json!(task_ids);
     output["reused"] = json!(reused);
     output["reused_count"] = json!(reused.len());
+    output["approved_without_pilot"] = json!(light_approved);
+    output["approved_without_pilot_count"] = json!(light_approved.len());
     output["drain_promotion"] = json!({ "run_id": run_id });
     Ok(output)
 }

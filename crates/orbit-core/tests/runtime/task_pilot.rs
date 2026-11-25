@@ -1327,10 +1327,282 @@ fn a_retrying_pilot_run_refuses_a_duplicate_explicit_pilot() {
     }
 }
 
+fn filled_context_default_skips_routine_and_prepare_with_exclusions_and_opt_out() {
+    use orbit_core::TaskComplexity;
+    use orbit_core::application::task::TaskUpdateParams;
+
+    // Default config: workflow.task_pilot.skip_when_context_filled = true.
+    let ws = Workspace::new();
+    assert!(ws.runtime.task_pilot_skip_when_context_filled());
+    ws.commit_file("src/lib.rs", "pub fn demo() {}\n", "add src/lib.rs");
+
+    let add = |ws: &Workspace,
+               title: &str,
+               status: TaskStatus,
+               tags: &[&str],
+               context_files: &[&str],
+               complexity: TaskComplexity| {
+        ws.runtime
+            .add_task(TaskAddParams {
+                title: title.into(),
+                description: format!("Implement {title}."),
+                acceptance_criteria: vec!["Behavior verified.".into()],
+                plan: "Edit targeted files.".into(),
+                status: Some(status),
+                tags: tags.iter().map(|tag| (*tag).to_string()).collect(),
+                context_files: context_files.iter().map(|s| (*s).to_string()).collect(),
+                complexity,
+                ..Default::default()
+            })
+            .unwrap()
+    };
+
+    // Qualifying low/medium tasks with resolving selectors are skipped by default.
+    let low_proposed = add(
+        &ws,
+        "low proposed filled",
+        TaskStatus::Proposed,
+        &[],
+        &["file:README.md"],
+        TaskComplexity::Low,
+    );
+    let medium_backlog = add(
+        &ws,
+        "medium backlog filled",
+        TaskStatus::Backlog,
+        &[],
+        &["dir:src", "symbol:src/lib.rs#demo:function"],
+        TaskComplexity::Medium,
+    );
+
+    // Exclusions that must still be piloted under the default.
+    let design_task = add(
+        &ws,
+        "design excluded",
+        TaskStatus::Proposed,
+        &["design"],
+        &["file:README.md"],
+        TaskComplexity::Low,
+    );
+    let breaking_task = add(
+        &ws,
+        "breaking excluded",
+        TaskStatus::Proposed,
+        &["breaking-change"],
+        &["file:README.md"],
+        TaskComplexity::Medium,
+    );
+    let no_auto_task = add(
+        &ws,
+        "no-auto-approve excluded",
+        TaskStatus::Proposed,
+        &["no-auto-approve"],
+        &["file:README.md"],
+        TaskComplexity::Low,
+    );
+    let hard_task = add(
+        &ws,
+        "hard excluded",
+        TaskStatus::Proposed,
+        &[],
+        &["file:README.md"],
+        TaskComplexity::Hard,
+    );
+    let xhard_task = add(
+        &ws,
+        "xhard excluded",
+        TaskStatus::Backlog,
+        &[],
+        &["file:README.md"],
+        TaskComplexity::XHard,
+    );
+    let unassessed_task = add(
+        &ws,
+        "missing complexity",
+        TaskStatus::Proposed,
+        &[],
+        &["file:README.md"],
+        TaskComplexity::Unassessed,
+    );
+    let empty_context_task = add(
+        &ws,
+        "empty context",
+        TaskStatus::Proposed,
+        &[],
+        &[],
+        TaskComplexity::Low,
+    );
+    let missing_file_task = add(
+        &ws,
+        "unresolved file selector",
+        TaskStatus::Proposed,
+        &[],
+        &["file:does-not-exist.md"],
+        TaskComplexity::Low,
+    );
+    let wrong_kind_task = add(
+        &ws,
+        "file as dir selector",
+        TaskStatus::Proposed,
+        &[],
+        &["dir:README.md"],
+        TaskComplexity::Low,
+    );
+
+    // 1. State routine observation withholds qualifying filled tasks as `context_files_filled`
+    // and admits every exclusion.
+    let routine = pilot_routine();
+    let now = Utc::now();
+    let observed = evaluate_routine(&ws.runtime, &routine, false, now).unwrap();
+    let members = observed.state.unwrap().members.unwrap();
+    for skipped in [&low_proposed, &medium_backlog] {
+        assert!(
+            !members.pending.contains_key(&skipped.id),
+            "{} should not be pending: {members:?}",
+            skipped.title
+        );
+        assert_eq!(
+            members.withheld.get(&skipped.id).map(String::as_str),
+            Some("context_files_filled"),
+            "{} should be withheld as context_files_filled: {members:?}",
+            skipped.title
+        );
+    }
+    for piloted in [
+        &design_task,
+        &breaking_task,
+        &no_auto_task,
+        &hard_task,
+        &xhard_task,
+        &unassessed_task,
+        &empty_context_task,
+        &missing_file_task,
+        &wrong_kind_task,
+    ] {
+        assert!(
+            members.pending.contains_key(&piloted.id),
+            "{} must stay pending for task_pilot: {members:?}",
+            piloted.title
+        );
+    }
+
+    // 2. Automatic prepare_task_pilot applies the same skip and exclusions.
+    let auto_prepared = ws.prepare(&[]);
+    let auto_ids = auto_prepared["task_ids"].as_array().unwrap();
+    for skipped in [&low_proposed, &medium_backlog] {
+        assert!(
+            !auto_ids.contains(&json!(skipped.id)),
+            "{} must be excluded from automatic prepare: {auto_prepared}",
+            skipped.title
+        );
+    }
+    assert_eq!(
+        auto_prepared["excluded_by_reason"]["context_files_filled"], 2,
+        "{auto_prepared}"
+    );
+    for piloted in [
+        &design_task,
+        &breaking_task,
+        &no_auto_task,
+        &hard_task,
+        &xhard_task,
+        &unassessed_task,
+        &empty_context_task,
+        &missing_file_task,
+        &wrong_kind_task,
+    ] {
+        assert!(
+            auto_ids.contains(&json!(piloted.id)),
+            "{} must remain selected in automatic prepare: {auto_prepared}",
+            piloted.title
+        );
+    }
+
+    // 3. Explicit prepare_task_pilot always forces a pilot even for skipped tasks.
+    let explicit_prepared = ws.prepare(&[&low_proposed.id]);
+    assert_eq!(
+        explicit_prepared["task_ids"],
+        json!([low_proposed.id]),
+        "explicit selection must bypass the default skip: {explicit_prepared}"
+    );
+
+    // 4. A pending member whose context_files become filled and resolving before
+    // admission is retired by `admission_for` instead of admitted.
+    ws.runtime
+        .update_task_with_identity(
+            &empty_context_task.id,
+            TaskUpdateParams {
+                context_files: Some(vec!["file:README.md".into()]),
+                ..Default::default()
+            },
+            None,
+            None,
+        )
+        .unwrap();
+    let after_fill =
+        evaluate_routine(&ws.runtime, &routine, true, now + Duration::minutes(3)).unwrap();
+    assert!(
+        after_fill
+            .batch
+            .iter()
+            .all(|member| !member.task_ids.contains(&empty_context_task.id)),
+        "a task that became filled before admission must not be admitted: {after_fill:?}"
+    );
+    let after_members = after_fill.state.unwrap().members.unwrap();
+    assert_eq!(
+        after_members
+            .withheld
+            .get(&empty_context_task.id)
+            .map(String::as_str),
+        Some("context_files_filled")
+    );
+
+    // 5. Setting workflow.task_pilot.skip_when_context_filled = false restores
+    // piloting every eligible task in both the routine and automatic prepare.
+    let opt_out = Workspace::with_config(
+        "[crews.fixture]\nmodel = \"fixture-model\"\nprovider = \"codex\"\nbackend = \"cli\"\n\
+         [workflow]\ndefault_crew = \"fixture\"\n\
+         [workflow.task_pilot]\nskip_when_context_filled = false\n",
+    );
+    assert!(!opt_out.runtime.task_pilot_skip_when_context_filled());
+    let low_opt_out = add(
+        &opt_out,
+        "low filled opt out",
+        TaskStatus::Proposed,
+        &[],
+        &["file:README.md"],
+        TaskComplexity::Low,
+    );
+    let medium_opt_out = add(
+        &opt_out,
+        "medium filled opt out",
+        TaskStatus::Backlog,
+        &[],
+        &["file:README.md"],
+        TaskComplexity::Medium,
+    );
+    let observed_off = evaluate_routine(&opt_out.runtime, &routine, false, now).unwrap();
+    let members_off = observed_off.state.unwrap().members.unwrap();
+    for task in [&low_opt_out, &medium_opt_out] {
+        assert!(
+            members_off.pending.contains_key(&task.id),
+            "false opt-out must admit {} into task_pilot routine: {members_off:?}",
+            task.title
+        );
+    }
+    let prepared_off = opt_out.prepare(&[]);
+    assert_eq!(
+        prepared_off["task_ids"],
+        json!([low_opt_out.id, medium_opt_out.id]),
+        "false opt-out must select filled tasks in automatic prepare: {prepared_off}"
+    );
+}
+
 // Related boundary scenarios share the isolated table fixture.
 crate::scenario_table!(
     a_retrying_pilot_run_refuses_a_duplicate_explicit_pilot_scenarios,
     a_retrying_pilot_run_refuses_a_duplicate_explicit_pilot,
+    filled_context_default_skips_routine_and_prepare_with_exclusions_and_opt_out,
 );
 
 // Related boundary scenarios share the isolated table fixture.

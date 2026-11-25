@@ -33,6 +33,9 @@ pub struct OrbitRuntimeSettings {
     /// `[workflow.task_pilot_freshness]`: the global layer a task-pilot
     /// routine's `trigger.state.freshness` overrides [ORB-13638].
     task_pilot_freshness: orbit_types::workflow::automation::members::PreparationFreshness,
+    /// `workflow.task_pilot.skip_when_context_filled`: skip the task pilot by
+    /// default for ready low/medium tasks with filled, resolving `context_files`.
+    task_pilot_skip_when_context_filled: bool,
     crews: std::collections::BTreeMap<String, Crew>,
     /// Operator crews (`[crews.<name>] kind = "human"`), apart from `crews`.
     human_crews: std::collections::BTreeMap<String, orbit_types::identity::HumanCrew>,
@@ -141,6 +144,7 @@ impl OrbitRuntimeSettings {
         validation_env: orbit_exec::ValidationEnvPolicy,
         workflow_distributed_completion: String,
         task_pilot_freshness: orbit_types::workflow::automation::members::PreparationFreshness,
+        task_pilot_skip_when_context_filled: bool,
         crews: std::collections::BTreeMap<String, Crew>,
         human_crews: std::collections::BTreeMap<String, orbit_types::identity::HumanCrew>,
         default_crew: Option<String>,
@@ -191,6 +195,7 @@ impl OrbitRuntimeSettings {
             validation_env,
             workflow_distributed_completion,
             task_pilot_freshness,
+            task_pilot_skip_when_context_filled,
             crews,
             human_crews,
             default_crew,
@@ -404,6 +409,10 @@ impl OrbitRuntimeSettings {
         &self,
     ) -> &orbit_types::workflow::automation::members::PreparationFreshness {
         &self.task_pilot_freshness
+    }
+
+    pub(crate) fn task_pilot_skip_when_context_filled(&self) -> bool {
+        self.task_pilot_skip_when_context_filled
     }
 
     pub fn crews(&self) -> &std::collections::BTreeMap<String, Crew> {

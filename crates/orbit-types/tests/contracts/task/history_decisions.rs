@@ -500,6 +500,7 @@ fn legacy_history_and_event_rows_without_surface_or_caller_load_and_omit_unset_f
         decision: Some(TaskDecision::DrainApproved {
             drain_run_id: "jrun-drain-1".into(),
             operation_id: None,
+            pilot_skipped_config_key: None,
         }),
         surface: None,
         caller: None,
@@ -514,4 +515,36 @@ fn legacy_history_and_event_rows_without_surface_or_caller_load_and_omit_unset_f
         "auto-drain promotion must not stamp operator CLI provenance"
     );
     assert_eq!(drain_event.caller, None);
+
+    // Legacy DrainApproved JSON without `pilot_skipped_config_key` still decodes,
+    // and unpiloted approvals serialize/deserialize `pilot_skipped_config_key`.
+    let legacy_drain: TaskDecision = serde_json::from_value(json!({
+        "kind": "drain_approved",
+        "drain_run_id": "jrun-drain-legacy"
+    }))
+    .expect("legacy DrainApproved without pilot_skipped_config_key decodes");
+    assert_eq!(
+        legacy_drain,
+        TaskDecision::DrainApproved {
+            drain_run_id: "jrun-drain-legacy".into(),
+            operation_id: None,
+            pilot_skipped_config_key: None,
+        }
+    );
+    let legacy_json = serde_json::to_value(&legacy_drain).expect("serialize legacy DrainApproved");
+    assert!(legacy_json.get("pilot_skipped_config_key").is_none());
+
+    let light_drain = TaskDecision::DrainApproved {
+        drain_run_id: "jrun-drain-light".into(),
+        operation_id: None,
+        pilot_skipped_config_key: Some("workflow.task_pilot.skip_when_context_filled".into()),
+    };
+    let light_json = serde_json::to_value(&light_drain).expect("serialize light DrainApproved");
+    assert_eq!(
+        light_json["pilot_skipped_config_key"],
+        json!("workflow.task_pilot.skip_when_context_filled")
+    );
+    let decoded: TaskDecision =
+        serde_json::from_value(light_json).expect("deserialize light DrainApproved");
+    assert_eq!(decoded, light_drain);
 }

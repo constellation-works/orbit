@@ -58,6 +58,11 @@ impl Host<'_> {
                         );
                     return Ok(MemberAdmission::Retire(reason));
                 }
+                if pilot::context_filled_pilot_skip(self.runtime, &task, Some(&source.commit))? {
+                    return Ok(MemberAdmission::Retire(
+                        pilot::CONTEXT_FILES_FILLED_SKIP_REASON.into(),
+                    ));
+                }
                 if let Some(run_ids) = active_preparations.get(id) {
                     return Ok(MemberAdmission::Withhold(already_preparing(run_ids)));
                 }

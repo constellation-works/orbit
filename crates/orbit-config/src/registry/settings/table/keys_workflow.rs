@@ -298,6 +298,13 @@ macro_rules! with_workflow_keys {
         allowed: PERCENT,
         resolve: |raw: Option<u8>| resolve_bounded_range(raw,85, "workflow.resource_throttle.memory_resume_percent"),
     },
+    workflow_task_pilot_skip_when_context_filled: bool => bool {
+        key: "workflow.task_pilot.skip_when_context_filled", value_type: "bool",
+        description: "Skip the task pilot for ready low/medium tasks whose context_files are filled and resolve.",
+        section: ConfigSection::Delivery, order: 109,
+        detail: "When true, the task-pilot routine skips qualifying low/medium tasks and an `--approve-proposed` drain approves them on readiness alone. Tasks tagged `design`, `breaking-change`, or `no-auto-approve`, `hard`/`xhard` tasks, and tasks failing readiness are still piloted. Set false to pilot every eligible task.",
+        resolve: |raw: Option<bool>| Ok::<_, OrbitError>(raw.unwrap_or(true)),
+    },
     workflow_task_pilot_freshness_material_fields: Vec<MaterialField> => Vec<MaterialField> {
         key: "workflow.task_pilot_freshness.material_fields", value_type: "array<string>",
         description: "Task fields checked for drift between task-pilot preparation and apply.",

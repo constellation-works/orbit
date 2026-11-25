@@ -22,12 +22,13 @@ use std::collections::BTreeSet;
 
 use orbit_common::{NotFoundKind, OrbitError};
 use orbit_engine::DispatchError;
+use orbit_store::contracts::JobRunQuery;
 use orbit_types::task::{
     NO_DIFF_EXPECTED_TAG, ReadinessGap, ReadinessStage, Task, TaskComplexity, TaskDecision,
     TaskHistoryEntry, TaskStatus, readiness_gaps,
 };
 use orbit_types::workflow::automation::members::PreparationPolicy;
-use orbit_types::workflow::{JobRunTriggerKind, TASK_PILOT_PIPELINE_JOB};
+use orbit_types::workflow::{JobRunState, JobRunTriggerKind, TASK_PILOT_PIPELINE_JOB};
 use serde::Serialize;
 use serde_json::{Value, json};
 
@@ -77,6 +78,15 @@ pub(crate) fn approval_note(run_id: &str) -> String {
     format!("approved by auto drain {run_id} after task-pilot verification")
 }
 
+/// The approve-transition note when an auto drain approves a task under
+/// `workflow.task_pilot.skip_when_context_filled` without running the pilot.
+fn approval_note_without_pilot(run_id: &str) -> String {
+    format!(
+        "approved without pilot (context_files filled) by auto drain {run_id} ({})",
+        orbit_config::WORKFLOW_TASK_PILOT_SKIP_WHEN_CONTEXT_FILLED_KEY,
+    )
+}
+
 /// Approve `task_id` as drain `drain_run_id`, recording the approving drain
 /// (and the reused pilot receipt's `operation_id`) as a typed decision on the
 /// `proposal_approved` event. The note text history views show is unchanged.
@@ -96,6 +106,29 @@ fn approve_as_drain(
         Some(TaskDecision::DrainApproved {
             drain_run_id: drain_run_id.to_string(),
             operation_id: operation_id.map(str::to_string),
+            pilot_skipped_config_key: None,
+        }),
+    )?;
+    Ok(())
+}
+
+/// Approve `task_id` as drain `drain_run_id` without a task pilot under
+/// `workflow.task_pilot.skip_when_context_filled`, recording both the skip
+/// reason and config key in the history note and typed decision.
+fn approve_as_drain_without_pilot(
+    runtime: &OrbitRuntime,
+    task_id: &str,
+    drain_run_id: &str,
+) -> Result<(), OrbitError> {
+    runtime.approve_task_with_decision(
+        task_id,
+        Some(approval_note_without_pilot(drain_run_id)),
+        Some(TaskDecision::DrainApproved {
+            drain_run_id: drain_run_id.to_string(),
+            operation_id: None,
+            pilot_skipped_config_key: Some(
+                orbit_config::WORKFLOW_TASK_PILOT_SKIP_WHEN_CONTEXT_FILLED_KEY.to_string(),
+            ),
         }),
     )?;
     Ok(())
@@ -688,6 +721,100 @@ pub(crate) fn promote_reusable_assessment(
         Ok(())
     })?;
     Ok(promoted)
+}
+
+/// Approve one proposed task without a task pilot under the light drain gate
+/// (`workflow.task_pilot.skip_when_context_filled`), re-verifying drain
+/// authority, config, readiness, exclusions, selector resolution, and absence
+/// of any live or prior pilot under the task write lock.
+pub(crate) fn promote_without_pilot(
+    runtime: &OrbitRuntime,
+    drain_run_id: &str,
+    task_id: &str,
+) -> Result<bool, OrbitError> {
+    let mut promoted = false;
+    with_task_locks(runtime, task_id, &[task_id.to_string()], 0, &mut || {
+        let Some(drain) = runtime.stores().jobs().get_job_run(drain_run_id)? else {
+            return Ok(());
+        };
+        if drain.job_id != DRAIN_JOB
+            || drain.state.is_terminal()
+            || drain
+                .input
+                .as_ref()
+                .and_then(|input| input.get("approve_proposed"))
+                .and_then(Value::as_bool)
+                != Some(true)
+        {
+            return Ok(());
+        }
+        if !runtime.task_pilot_skip_when_context_filled() {
+            return Ok(());
+        }
+        let task = runtime.get_task(task_id)?;
+        if task.status != TaskStatus::Proposed
+            || runtime.human_crew(task.crew.as_deref()).is_some()
+            || approval_disqualification(&task.tags, &task.context_files, task.complexity).is_some()
+            || has_stored_live_pilot_run(runtime, &task.id)?
+        {
+            return Ok(());
+        }
+        let history = runtime.get_task_history(task_id)?;
+        if history
+            .iter()
+            .any(|entry| entry.event == "task_pilot_applied")
+        {
+            return Ok(());
+        }
+        let latest_non_neutral = history
+            .iter()
+            .rev()
+            .find(|entry| {
+                entry.event != orbit_types::task::CONTEXT_CREATION_AUTHORIZED_EVENT
+                    && entry.event != crate::application::task::PILOT_WARNING_TRIAGED_EVENT
+                    && entry.event != super::UNRESOLVED_PILOT_EVENT
+            })
+            .map(|entry| entry.at);
+        if history.iter().any(|entry| {
+            entry.event == super::UNRESOLVED_PILOT_EVENT
+                && latest_non_neutral.is_none_or(|at| entry.at > at)
+        }) {
+            return Ok(());
+        }
+        if !super::skip::context_filled_pilot_skip(runtime, &task, None)? {
+            return Ok(());
+        }
+        approve_as_drain_without_pilot(runtime, task_id, drain_run_id)?;
+        promoted = true;
+        Ok(())
+    })?;
+    Ok(promoted)
+}
+
+/// Whether stored job runs or active pilot reservations hold a live
+/// `task_pilot_pipeline` run for `task_id`. Reads stored rows only so light
+/// approval neither reconciles unrelated runs nor requires the pilot job
+/// definition to be installed in the catalog.
+fn has_stored_live_pilot_run(runtime: &OrbitRuntime, task_id: &str) -> Result<bool, OrbitError> {
+    let named = runtime
+        .stores()
+        .jobs()
+        .list_job_runs_filtered(&JobRunQuery {
+            job_id: Some(TASK_PILOT_PIPELINE_JOB.to_string()),
+            task_id: Some(task_id.to_string()),
+            states: vec![
+                JobRunState::Pending,
+                JobRunState::Running,
+                JobRunState::Retrying,
+            ],
+            limit: Some(1),
+            include_steps: false,
+            ..JobRunQuery::default()
+        })?;
+    if !named.is_empty() {
+        return Ok(true);
+    }
+    Ok(runtime.pilot_preparation_holders()?.contains_key(task_id))
 }
 
 /// Classify the latest task-pilot receipt for drain reuse.

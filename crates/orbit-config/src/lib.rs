@@ -194,6 +194,11 @@ pub use seeding::{
 pub use store::{ConfigScope, ConfigStore, WorkspaceInitMode};
 pub use tag_instructions::{TagInstructionSetting, TagInstructionSettings};
 
+/// Config key governing the default filled-context task-pilot skip and light
+/// drain-approval gate (`true` by default).
+pub const WORKFLOW_TASK_PILOT_SKIP_WHEN_CONTEXT_FILLED_KEY: &str =
+    "workflow.task_pilot.skip_when_context_filled";
+
 /// Read the `[machine]` table from the global `config.toml` at `global_root`.
 ///
 /// Deliberately narrower than [`ResolvedConfig::load`]: this machine's identity

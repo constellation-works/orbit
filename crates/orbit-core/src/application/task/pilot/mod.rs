@@ -81,7 +81,7 @@ pub(crate) use blockers::{normalize_pilot_self_blockers, pilot_blocker_task_ids}
 pub(crate) use drain_promotion::{
     ExplicitAssessmentReuse, approval_disqualification, approval_note, approved_by_drain,
     classify_explicit_assessment_reuse, held_classification, live_execution_claim_tasks,
-    promote_reusable_assessment,
+    promote_reusable_assessment, promote_without_pilot,
 };
 use input::{requested_workspace_root, required_string, required_string_array};
 pub(crate) use no_diff::{NoDiffClosure, PILOT_VERIFIED_NO_DIFF, VerifiedNoDiff};
@@ -93,6 +93,10 @@ pub(crate) use promotion::{
     FOOTPRINT_UNRESOLVED, HeldPilotWarnings, PILOT_HOLD_CLEARANCE_SUMMARY, PromotionFindings,
     auto_approval_hold_classification, auto_approval_opted_out, held_pilot_warnings,
     promotion_findings, recommendation_has_evidence, warning_hold_findings,
+};
+pub(crate) use skip::{
+    CONTEXT_FILES_FILLED_SKIP_REASON, all_context_selectors_resolve, context_filled_pilot_skip,
+    task_qualifies_for_context_filled_pilot_skip,
 };
 pub(crate) use source::requested_base_branch;
 

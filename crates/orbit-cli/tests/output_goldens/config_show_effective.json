@@ -757,6 +757,13 @@
       "path": null,
       "shadowed_by": []
     },
+    "workflow.task_pilot.skip_when_context_filled": {
+      "scope": "built-in",
+      "state": "default",
+      "tier": "standard",
+      "path": null,
+      "shadowed_by": []
+    },
     "workflow.task_pilot_freshness.material_fields": {
       "scope": "built-in",
       "state": "default",

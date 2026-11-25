@@ -66,16 +66,20 @@ pub(super) fn pilot_run_id(input: &Value) -> Option<&str> {
 /// writer moved out of automatic selection after its envelope was read, or
 /// `None` while hydration still selects it.
 pub(super) fn left_automatic_selection(
+    runtime: &OrbitRuntime,
     selected: &Value,
     task: &Task,
     stale_repilot: bool,
     pr_route_lacks_forge: bool,
+    source_revision: Option<&str>,
 ) -> Option<Value> {
     let exclusion = exclusion::automatic_exclusion_reason(
+        runtime,
         task.status,
         &task.context_files,
         task.complexity,
         &task.tags,
+        source_revision,
     )?;
     // A stale-repilot selection keeps its assessed selectors and complexity:
     // they are the stale assessment's output, not a move out of selection.
@@ -83,7 +87,7 @@ pub(super) fn left_automatic_selection(
     // forge) still mark a move out of selection; active preparations are
     // re-checked at reservation below.
     if stale_repilot
-        && exclusion == "context_files_not_empty"
+        && exclusion == super::super::CONTEXT_FILES_FILLED_SKIP_REASON
         && exclusion::no_diff_exclusion_reason(&task.tags).is_none()
         && !pr_route_lacks_forge
     {

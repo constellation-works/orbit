@@ -27,6 +27,7 @@ use tempfile::TempDir;
 use crate::git_test_support;
 
 const HUMAN_CREW_CONFIG: &str = "[workflow]\ndefault_crew = \"sol\"\n\n\
+     [workflow.task_pilot]\nskip_when_context_filled = false\n\n\
      [crews.sol]\nprovider = \"codex\"\nmodel = \"test\"\n\n\
      [crews.luna]\nprovider = \"codex\"\nmodel = \"luna-model\"\n\n\
      [crews.dk]\nkind = \"human\"\ndescription = \"Daniel's own work\"\n\n\

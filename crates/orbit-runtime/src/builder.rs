@@ -333,6 +333,9 @@ pub(crate) fn build_context_from_roots(
             validation_env,
             workflow_distributed_completion,
             runtime_config.snapshot.task_pilot_freshness(),
+            runtime_config
+                .snapshot
+                .task_pilot_skip_when_context_filled(),
             crews,
             runtime_config.human_crews.clone(),
             default_crew,

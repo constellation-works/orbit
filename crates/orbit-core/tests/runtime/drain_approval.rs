@@ -40,7 +40,14 @@ struct Workspace {
     repo: PathBuf,
 }
 impl Workspace {
+    /// Pilot-driven drain-approval fixture: opts out of the default
+    /// filled-context skip so the scenarios exercising pilot verdicts, holds
+    /// and retries drive `task_pilot_pipeline`.
     fn new() -> Self {
+        Self::with_config("[workflow.task_pilot]\nskip_when_context_filled = false\n")
+    }
+    /// Workspace with built-in defaults (`workflow.task_pilot.skip_when_context_filled = true`).
+    fn with_default_config() -> Self {
         Self::with_config("")
     }
     fn with_config(extra_config: &str) -> Self {
@@ -905,6 +912,7 @@ fn assert_approved_by_drain(ws: &Workspace, tasks: &[&Task], drain: &str) {
             Some(TaskDecision::DrainApproved {
                 drain_run_id: drain.to_string(),
                 operation_id: None,
+                pilot_skipped_config_key: None,
             }),
             "the approval records the drain as a typed decision"
         );
@@ -1802,8 +1810,11 @@ fn explicit_assessment_is_promoted_once_while_the_drain_child_stands_down() {
     assert!(
         matches!(
             &approval.decision,
-            Some(TaskDecision::DrainApproved { drain_run_id, operation_id: Some(_) })
-                if drain_run_id == &drain
+            Some(TaskDecision::DrainApproved {
+                drain_run_id,
+                operation_id: Some(_),
+                pilot_skipped_config_key: None,
+            }) if drain_run_id == &drain
         ),
         "the reuse approval records the drain and the reused receipt: {approval:?}"
     );
@@ -1964,9 +1975,238 @@ crate::scenario_table!(
     a_local_fast_forward_with_a_malformed_landed_commit_holds_a_relation_only_finding_scenarios,
     a_local_fast_forward_with_a_malformed_landed_commit_holds_a_relation_only_finding
 );
+fn filled_context_default_skips_pilot_and_light_approves_with_history_and_exclusions() {
+    let ws =
+        Workspace::with_config("[crews.dk]\nkind = \"human\"\ndescription = \"Operator work\"\n");
+    assert!(
+        ws.runtime.task_pilot_skip_when_context_filled(),
+        "default config enables filled-context pilot skip"
+    );
+    std::fs::create_dir_all(ws.repo.join("src")).unwrap();
+    ws.commit_file("src/lib.rs", "pub fn demo() {}\n", "add src/lib.rs");
+
+    // Qualifying low/medium tasks with resolving file:, dir:, and symbol: selectors.
+    let low_file = ws.task("low file", &[], &["file:README.md"], TaskComplexity::Low);
+    let medium_dir_symbol = ws.task(
+        "medium dir and symbol",
+        &[],
+        &["dir:src", "symbol:src/lib.rs#demo:function"],
+        TaskComplexity::Medium,
+    );
+
+    // Exclusions that must still be piloted (or held by readiness/opt-out), never light-approved.
+    let design_tagged = ws.task(
+        "design tagged",
+        &["design"],
+        &["file:README.md"],
+        TaskComplexity::Low,
+    );
+    let breaking_tagged = ws.task(
+        "breaking tagged",
+        &["breaking-change"],
+        &["file:README.md"],
+        TaskComplexity::Medium,
+    );
+    let no_auto = ws.task(
+        "no auto approve",
+        &["no-auto-approve"],
+        &["file:README.md"],
+        TaskComplexity::Low,
+    );
+    let hard_task = ws.task("hard task", &[], &["file:README.md"], TaskComplexity::Hard);
+    let xhard_task = ws.task(
+        "xhard task",
+        &[],
+        &["file:README.md"],
+        TaskComplexity::XHard,
+    );
+    let unassessed = ws.task(
+        "unassessed complexity",
+        &[],
+        &["file:README.md"],
+        TaskComplexity::Unassessed,
+    );
+    let empty_context = ws.task("empty context", &[], &[], TaskComplexity::Low);
+    let missing_selector = ws.task(
+        "unresolved selector",
+        &[],
+        &["file:does-not-exist.md"],
+        TaskComplexity::Low,
+    );
+    let wrong_kind_selector = ws.task(
+        "dir selector on file",
+        &[],
+        &["dir:README.md"],
+        TaskComplexity::Low,
+    );
+    let human_task = ws.task_with_crew(
+        "human crew task",
+        &[],
+        &["file:README.md"],
+        TaskComplexity::Low,
+        Some("dk"),
+    );
+
+    // A task with a live pilot run must stay held as `pilot_running`, never light-approved.
+    let live_piloted = ws.task(
+        "live piloted",
+        &[],
+        &["file:README.md"],
+        TaskComplexity::Low,
+    );
+    let live_pilot = ws.running(
+        "task_pilot_pipeline",
+        json!({"task_ids": [live_piloted.id]}),
+    );
+
+    // A task that already has a prior pilot hold must never be bypassed by the light gate.
+    let held_by_pilot = ws.task(
+        "prior pilot hold",
+        &[],
+        &["file:README.md"],
+        TaskComplexity::Low,
+    );
+    let (explicit_run, explicit_prepared) = explicit_pilot(&ws, &held_by_pilot);
+    let mut warned = assessment(&held_by_pilot);
+    warned["utility_warnings"] =
+        json!([{"text": "A holding finding remains unresolved.", "holds_promotion": true}]);
+    let applied = ws.apply_unpromoted_assessment(&explicit_run, &explicit_prepared, warned);
+    assert_eq!(applied["status"], "succeeded", "{applied}");
+    ws.finish(&explicit_run, JobRunState::Success);
+
+    // An unauthorized drain (no `approve_proposed: true` on its stored run
+    // record) must not light-approve anything even if `select_proposed_approvals`
+    // is invoked with `approve_proposed: true`.
+    let unauthorized = ws.running("workspace_auto_pipeline", json!({}));
+    let no_auth = ws.select(&unauthorized);
+    assert_eq!(no_auth["approved_without_pilot"], json!([]), "{no_auth}");
+    assert_eq!(no_auth["approved_without_pilot_count"], 0, "{no_auth}");
+    assert_status(&ws, &low_file, TaskStatus::Proposed);
+    assert_status(&ws, &medium_dir_symbol, TaskStatus::Proposed);
+
+    // Run an authorized `--approve-proposed` drain pass.
+    let drain = ws.drain();
+    let selection = ws.select(&drain);
+    assert_eq!(selection["approved_without_pilot_count"], 2, "{selection}");
+    assert_eq!(
+        selection["approved_without_pilot"],
+        json!([low_file.id, medium_dir_symbol.id]),
+        "{selection}"
+    );
+    // Qualifying tasks moved directly to backlog with skip note + config key in history.
+    let key = orbit_config::WORKFLOW_TASK_PILOT_SKIP_WHEN_CONTEXT_FILLED_KEY;
+    for approved in [&low_file, &medium_dir_symbol] {
+        assert_status(&ws, approved, TaskStatus::Backlog);
+        assert_eq!(ws.pilot_applications(approved), 0);
+        let entry = ws.approval_entry(approved);
+        let note = entry.note.as_deref().unwrap_or_default();
+        assert!(
+            note.contains("approved without pilot (context_files filled)"),
+            "history note must record unpiloted approval: {entry:?}"
+        );
+        assert!(
+            note.contains(key) && note.contains(&drain),
+            "history note must name config key and drain: {entry:?}"
+        );
+        assert_eq!(
+            entry.decision,
+            Some(TaskDecision::DrainApproved {
+                drain_run_id: drain.clone(),
+                operation_id: None,
+                pilot_skipped_config_key: Some(key.to_string()),
+            }),
+            "typed decision must record drain and config key: {entry:?}"
+        );
+    }
+    let report = ws.drain_report(&drain);
+    assert_eq!(report.approved_total, 2, "{report:?}");
+    assert_eq!(
+        report.approved,
+        vec![low_file.id.clone(), medium_dir_symbol.id.clone()]
+    );
+
+    // Excluded tasks that pass drain readiness are queued for the pilot, never light-approved.
+    assert_task_ids(
+        &selection,
+        &[
+            &design_tagged,
+            &breaking_tagged,
+            &hard_task,
+            &xhard_task,
+            &missing_selector,
+            &wrong_kind_selector,
+        ],
+    );
+    for still_proposed in [
+        &design_tagged,
+        &breaking_tagged,
+        &no_auto,
+        &hard_task,
+        &xhard_task,
+        &unassessed,
+        &empty_context,
+        &missing_selector,
+        &wrong_kind_selector,
+        &human_task,
+        &live_piloted,
+        &held_by_pilot,
+    ] {
+        assert_status(&ws, still_proposed, TaskStatus::Proposed);
+    }
+    assert_held(&selection, &no_auto, "no-auto-approve");
+    assert_held(&selection, &unassessed, "unassessed_complexity");
+    assert_held(&selection, &empty_context, "missing_context_files");
+    assert_held(&selection, &human_task, "human_crew");
+    assert_held(&selection, &live_piloted, "pilot_running");
+    assert_held(&selection, &held_by_pilot, "warnings");
+    ws.finish(&live_pilot, JobRunState::Success);
+
+    // A stopped drain approves nothing under the light gate either.
+    let stopped_task = ws.task("after stop", &[], &["file:README.md"], TaskComplexity::Low);
+    ws.runtime
+        .stop_workspace_auto_admissions(orbit_core::DrainAdmissionsStopRequest {
+            actor: "operator",
+            source: "fixture",
+            reason: None,
+            claim_token: None,
+            force: false,
+        })
+        .unwrap();
+    let stopped_selection = ws.select(&drain);
+    assert_eq!(stopped_selection["admissions_stopped"], json!(true));
+    assert_eq!(stopped_selection["approved_without_pilot_count"], 0);
+    assert_status(&ws, &stopped_task, TaskStatus::Proposed);
+}
+
+fn skip_when_context_filled_false_restores_piloting_for_drain_approval() {
+    let ws = Workspace::with_default_config();
+    assert!(ws.runtime.task_pilot_skip_when_context_filled());
+
+    let opt_out_ws = Workspace::new();
+    assert!(!opt_out_ws.runtime.task_pilot_skip_when_context_filled());
+    let low = opt_out_ws.task("low filled", &[], &["file:README.md"], TaskComplexity::Low);
+    let medium = opt_out_ws.task(
+        "medium filled",
+        &[],
+        &["file:README.md"],
+        TaskComplexity::Medium,
+    );
+    let drain = opt_out_ws.drain();
+    let selection = opt_out_ws.select(&drain);
+    assert_eq!(
+        selection["approved_without_pilot_count"], 0,
+        "false opt-out must not light-approve: {selection}"
+    );
+    assert_task_ids(&selection, &[&low, &medium]);
+    assert_status(&opt_out_ws, &low, TaskStatus::Proposed);
+    assert_status(&opt_out_ws, &medium, TaskStatus::Proposed);
+}
+
 crate::scenario_table!(
     a_culprit_named_by_an_all_digit_abbreviation_still_does_not_count_scenarios,
     a_culprit_named_by_an_all_digit_abbreviation_still_does_not_count,
     an_orchestrator_filed_verified_no_diff_is_held_with_its_evidence_and_never_closed,
-    the_ci_sweep_closes_a_verified_no_diff_by_the_same_proof
+    the_ci_sweep_closes_a_verified_no_diff_by_the_same_proof,
+    filled_context_default_skips_pilot_and_light_approves_with_history_and_exclusions,
+    skip_when_context_filled_false_restores_piloting_for_drain_approval
 );

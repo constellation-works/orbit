@@ -264,6 +264,7 @@ pub(crate) fn prepare(
 
         let claimed_tasks = super::super::drain_promotion::live_execution_claim_tasks(runtime)
             .map_err(|error| DispatchError::action_failed(action, error.to_string()))?;
+        let source_revision = source.as_ref().map(|s| s.source_revision.as_str());
         let mut selected = Vec::new();
         let mut excluded = ExcludedEvidence::default();
         for envelope in &envelopes {
@@ -272,10 +273,12 @@ pub(crate) fn prepare(
                 .then_some(HUMAN_CREW_EXCLUSION)
                 .or_else(|| {
                     exclusion::automatic_exclusion_reason(
+                        runtime,
                         envelope.status,
                         &envelope.context_files,
                         envelope.complexity,
                         &envelope.tags,
+                        source_revision,
                     )
                 })
                 .or_else(|| {
@@ -293,7 +296,10 @@ pub(crate) fn prepare(
             // above: recompute the independent gates in chain order.
             // One task's unresolvable assessment artifact excludes that
             // task alone; the rest of the pass still runs.
-            let stale_repilot = if matches!(reason, None | Some("context_files_not_empty")) {
+            let stale_repilot = if matches!(
+                reason,
+                None | Some(super::super::CONTEXT_FILES_FILLED_SKIP_REASON)
+            ) {
                 match repilot::stale_repilot_candidate(
                     runtime,
                     action,
@@ -313,7 +319,9 @@ pub(crate) fn prepare(
             } else {
                 false
             };
-            let reason = if stale_repilot && reason == Some("context_files_not_empty") {
+            let reason = if stale_repilot
+                && reason == Some(super::super::CONTEXT_FILES_FILLED_SKIP_REASON)
+            {
                 exclusion::no_diff_exclusion_reason(&envelope.tags)
                     .or_else(|| {
                         active_preparations
@@ -403,10 +411,12 @@ pub(crate) fn prepare(
             .map_err(|error| DispatchError::action_failed(action, error.to_string()))?;
         if !explicit_mode {
             if let Some(outcome) = repilot::left_automatic_selection(
+                runtime,
                 &snapshot,
                 &task,
                 stale_repilot_ids.contains(&task_id),
                 forge_refused(&task.tags),
+                source.as_ref().map(|s| s.source_revision.as_str()),
             ) {
                 superseded_during_preparation.push(outcome);
                 continue;

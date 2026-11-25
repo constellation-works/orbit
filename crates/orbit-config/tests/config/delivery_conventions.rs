@@ -132,3 +132,47 @@ fn non_reviewable_paths_default_empty_and_refuse_an_invalid_glob() {
         "{refused}"
     );
 }
+
+/// `workflow.task_pilot.skip_when_context_filled` defaults to `true`, layers
+/// workspace over global, and refuses non-boolean values naming the key.
+#[test]
+fn task_pilot_skip_when_context_filled_defaults_true_and_layers() {
+    let global = tempfile::tempdir().expect("global tempdir");
+    let workspace = tempfile::tempdir().expect("workspace tempdir");
+    let roots = ConfigRoots::new(global.path(), workspace.path());
+
+    let defaults = ResolvedConfig::load(&roots).expect("defaults load");
+    assert!(
+        defaults.snapshot.task_pilot_skip_when_context_filled(),
+        "skip_when_context_filled must default to true"
+    );
+
+    fs::write(
+        global.path().join("config.toml"),
+        "[workflow.task_pilot]\nskip_when_context_filled = false\n",
+    )
+    .expect("write global config");
+    let global_off = ResolvedConfig::load(&roots).expect("global false loads");
+    assert!(!global_off.snapshot.task_pilot_skip_when_context_filled());
+
+    fs::write(
+        workspace.path().join("config.toml"),
+        "[workflow.task_pilot]\nskip_when_context_filled = true\n",
+    )
+    .expect("write workspace config");
+    let workspace_on = ResolvedConfig::load(&roots).expect("workspace override loads");
+    assert!(workspace_on.snapshot.task_pilot_skip_when_context_filled());
+
+    fs::write(
+        workspace.path().join("config.toml"),
+        "[workflow.task_pilot]\nskip_when_context_filled = \"no\"\n",
+    )
+    .expect("write invalid workspace config");
+    let refused = ResolvedConfig::load(&roots)
+        .expect_err("non-boolean value must fail closed")
+        .to_string();
+    assert!(
+        refused.contains(orbit_config::WORKFLOW_TASK_PILOT_SKIP_WHEN_CONTEXT_FILLED_KEY),
+        "{refused}"
+    );
+}

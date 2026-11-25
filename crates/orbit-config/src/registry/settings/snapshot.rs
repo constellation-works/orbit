@@ -303,6 +303,13 @@ impl ConfigSnapshot {
         .normalized()
     }
 
+    /// The admitted `workflow.task_pilot.skip_when_context_filled` switch
+    /// (default `true`): skip the task pilot for ready low/medium tasks with
+    /// filled, resolving `context_files`.
+    pub fn task_pilot_skip_when_context_filled(&self) -> bool {
+        self.workflow_task_pilot_skip_when_context_filled
+    }
+
     /// The admitted `machine.worker_*` limits.
     pub fn worker_containment(&self) -> WorkerContainmentSettings {
         let mode = crate::aliases::WorkerContainmentMode::parse(&self.machine_worker_containment)

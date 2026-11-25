@@ -83,6 +83,10 @@ pub enum TaskDecision {
         /// approved on an explicit pilot's assessment rather than its own.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         operation_id: Option<String>,
+        /// Config key that allowed approval without a task pilot, when the
+        /// drain approved on readiness alone (default filled-context skip).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pilot_skipped_config_key: Option<String>,
     },
     /// The run whose automation wrote this status transition: a delivery or
     /// final-recovery run shelving the task in `blocked` or `backlog`, or

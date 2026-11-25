@@ -46,11 +46,19 @@ scheduled pilot off proposals a human has not looked at yet. Unknown keys and
 an empty `statuses` fail the definition closed.
 
 The predicate selects eligible
-never-assessed tasks for their first automatic assessment. It is also part of
+never-assessed tasks for their first automatic assessment. By default
+(`workflow.task_pilot.skip_when_context_filled = true`), never-piloted `low` or
+`medium` tasks whose `context_files` is non-empty and resolves against the
+repository, with no blocking readiness gap and none of the `design`,
+`breaking-change`, or `no-auto-approve` tags, are withheld as
+`context_files_filled` instead of piloted, and an `--approve-proposed` drain
+approves them on readiness alone. Set
+`workflow.task_pilot.skip_when_context_filled = false` to pilot every eligible
+task. The predicate is also part of
 the material fingerprint checked during preparation and apply, but changing it
 does not queue another assessment for a task with an applied assessment. The
 default predicate keeps fingerprints accepted before the block existed. Explicit
-runs (`orbit run task-pilot <id>`) ignore the block.
+runs (`orbit run task-pilot <id>`) ignore the block and the default skip.
 
 An active pilot temporarily holds its tasks across routines, drains, manual
 runs and targeted CI-sweep pilots, from the reservation its prepare step writes

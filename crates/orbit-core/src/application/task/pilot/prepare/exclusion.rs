@@ -2,6 +2,8 @@ use orbit_types::task::{TaskComplexity, TaskStatus};
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
 
+use crate::OrbitRuntime;
+
 use super::run::{MAX_EXCLUDED_SAMPLE, NO_DIFF_TAGS};
 
 /// Bounded evidence for routine (non-explicit) discovery exclusions: every
@@ -40,16 +42,25 @@ impl ExcludedEvidence {
 }
 
 pub(super) fn automatic_exclusion_reason(
+    runtime: &OrbitRuntime,
     status: TaskStatus,
     context_files: &[String],
     complexity: Option<TaskComplexity>,
     tags: &[String],
+    source_revision: Option<&str>,
 ) -> Option<&'static str> {
     if !matches!(status, TaskStatus::Proposed | TaskStatus::Backlog) {
         return Some("status_not_eligible");
     }
-    if !context_files.is_empty() && complexity.is_some_and(TaskComplexity::is_assessed) {
-        return Some("context_files_not_empty");
+    if runtime.task_pilot_skip_when_context_filled()
+        && super::super::task_qualifies_for_context_filled_pilot_skip(
+            tags,
+            context_files,
+            complexity,
+        )
+        && super::super::all_context_selectors_resolve(runtime, context_files, source_revision)
+    {
+        return Some(super::super::CONTEXT_FILES_FILLED_SKIP_REASON);
     }
     // No-diff work produces its durable result outside the repository, so
     // there are no modification selectors to assess. Automatically minted
