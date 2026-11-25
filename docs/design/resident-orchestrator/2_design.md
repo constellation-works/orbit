@@ -89,8 +89,11 @@ not the prompt.
   `proposed` task to `backlog`, where the drain can admit it), `merge` (land a reviewed PR),
   `plugin_upgrade` (install or upgrade a workspace plugin), `refresh` (merge the base tip into
   a held or review delivery PR and start its required checks, when the merge is conflict-free),
-  `recover` (start a recovery leaf that may make the needed source changes to a stopped
-  delivery's preserved candidate, runs validation and fresh review, and hands off at review), and
+  `recover` (when the workspace requires before-PR or before-landing review, start a recovery
+  leaf that may make the needed source changes to a stopped delivery's preserved candidate and
+  submits it to the normal PR pipeline with review as the completion target; fresh validation
+  and review run where their gates apply, subject to normal light-delivery exemptions; handoff
+  remains at review), and
   `promote_held` (move an eligible `no-auto-approve` proposal to `backlog` with a current clean
   pilot). Task-pilot assessment
   is a separate gate: it can assess
@@ -133,12 +136,15 @@ not the prompt.
 
 With `recover`, the cycle calls `orbit.task.recover` action `resume_delivery` for a blocked
 task and its exact stopped, failed or held delivery run. The host authenticates the published
-candidate, records the cycle's action key, and admits a separate recovery leaf. The leaf
-continues the preserved changes on the current base and updates the same PR through Orbit's
-ordinary publication gates. It runs current candidate validation and review, and returns the
-task for handoff. The cycle acts through Orbit tools from a read-only checkout. The recovery
-leaf makes all source changes. Landing a changed head still requires `land` under `merge`,
-with review evidence and branch protection checks current on that head.
+candidate, records the cycle's action key, and admits a separate recovery leaf when the
+workspace requires before-PR or before-landing review. The leaf continues the preserved
+changes on the current base, makes all source changes it needs, and updates the same PR through
+Orbit's ordinary publication pipeline with review as the completion target. That pipeline
+runs fresh candidate validation and review where their gates apply; normal light-delivery
+exemptions may make either gate not applicable. The task still returns at review for handoff.
+The cycle acts through Orbit tools from a read-only checkout. Landing a changed head remains a
+separate `land` action under `merge`; applicable landing gates and branch protection still
+govern it.
 
 The operator retains decision answers, claim recovery, review resets and reconciliation, handoff
 retry and revocation, and general source-repair submission and reconciliation. An open
