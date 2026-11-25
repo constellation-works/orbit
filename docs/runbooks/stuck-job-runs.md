@@ -221,11 +221,11 @@ including a credential or permission refusal, holds as
 it admits neither a repair agent nor a merge. Permanent forge-read failures at
 other boundaries, including non-transport subprocess timeouts, remain failures;
 eligible transient transport failures may use the read-only recovery below.
-Transport failures that outlast it, or that it cannot take, hold as
+Completion's transport failures that outlast it, or that it cannot take, hold as
 `delivery_forge_observation_unavailable` only before a completion mutation
-starts. After completion mutation provenance, a transient auto-fix required-check
+starts. In completion's primary observation, after completion mutation provenance, a transient auto-fix required-check
 read holds as `delivery_check_evidence_inconclusive`; failures at other
-post-mutation observation boundaries remain failures. Resolve the decision
+post-mutation observation boundaries remain failures. The auto-fix base-tip comparison and repair-admission recheck of required checks is a separate route: a read that persists through the provider's bounded retries holds as `delivery_check_evidence_inconclusive` with or without mutation provenance; no in-run observation retry follows, and the next auto-fix pass hands it back to completion. Resolve the decision
 before a new delivery attempt; apart from
 `delivery_forge_observation_unavailable`, which `orbit job resume` continues
 once the forge answers, these holds do not add a generic checkpoint-resume path.
@@ -768,11 +768,11 @@ forge changed, and `orbit job resume <run>` reads the forge again and continues
 completion from its checkpoints once it answers. The same hold ends a run whose
 job has no final recovery, a read after the completion budget expired, and a
 read that repair, reservation or source-repair provenance kept from the
-authenticated retry. A transient required-check read in auto-fix after a
+authenticated retry. In auto-fix, a transient required-check read in completion's primary observation after a
 completion mutation in this run or recorded in task history instead holds as
 `delivery_check_evidence_inconclusive`, allowing the next auto-fix pass to
 reread PR status and reconcile the mutation. Transport failures at other
-observation boundaries after a merge, auto-merge or rebase request still fail.
+observation boundaries after a merge, auto-merge or rebase request still fail. The auto-fix base-tip comparison and repair-admission recheck of required checks is the exception: a read that persists through the provider's bounded retries holds as `delivery_check_evidence_inconclusive` with or without mutation provenance; no in-run observation retry follows, and the next auto-fix pass hands it back to completion.
 A permanent required-check evidence read failure in auto-fix, including a
 credential or permission refusal, also holds as
 `delivery_check_evidence_inconclusive` before or after mutation; it admits
