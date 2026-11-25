@@ -635,6 +635,35 @@ impl PipelineState {
         compacted
     }
 
+    /// Put back the step outputs [`Self::compact_for_terminal`] replaced by
+    /// pointers, so a resumed copy of a finished run reads each one from
+    /// `step_outputs` as a checkpoint again. Resume readers, the executor's
+    /// `steps.*` seeding among them, read only `step_outputs`. An output
+    /// still held there wins over its pointer.
+    ///
+    /// Compaction also dropped `compound_outputs` and `skipped_steps`, and
+    /// they cannot be restored. A step skipped by its `when:` keeps its null
+    /// output, as checkpoints from before the skip marker did. Refuses a
+    /// pointer `pipeline` no longer resolves, naming the step index; nothing
+    /// is changed then.
+    pub fn restore_compacted_outputs(&mut self) -> Result<(), String> {
+        let mut restored = Vec::with_capacity(self.step_output_pointers.len());
+        for (index, pointer) in &self.step_output_pointers {
+            if self.step_outputs.contains_key(index) {
+                continue;
+            }
+            let output = self.pipeline.pointer(pointer).ok_or_else(|| {
+                format!(
+                    "step {index}'s compacted output pointer `{pointer}` names no pipeline entry"
+                )
+            })?;
+            restored.push((*index, output.clone()));
+        }
+        self.step_outputs.extend(restored);
+        self.step_output_pointers.clear();
+        Ok(())
+    }
+
     /// Replace the nested pipeline entries recorded for `step_index`; an
     /// empty map clears them so a re-checkpointed step never keeps entries
     /// from an earlier attempt.

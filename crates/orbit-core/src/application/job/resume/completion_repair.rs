@@ -75,6 +75,15 @@ pub(super) fn rewind_to_completion(
     let state = state.ok_or_else(|| {
         OrbitError::JobValidation("the run kept no checkpoints for an auto-fix to resume".into())
     })?;
+    // A delivery that ended `success` (a review delivery Fix PR hands back)
+    // was compacted at finalization: its outputs sit behind pointers into
+    // `pipeline`, and the resumed run's `steps.*` seeding would find none of
+    // them, failing the first `when:` that reads one [ORB-28628].
+    state.restore_compacted_outputs().map_err(|error| {
+        OrbitError::JobValidation(format!(
+            "the run's finished checkpoint cannot be resumed for an auto-fix: {error}"
+        ))
+    })?;
     // A push whose `when:` was false checkpoints as Success with null output,
     // so only a recorded output marks a publication.
     let published = positions_of(PUBLICATION_ACTION)
