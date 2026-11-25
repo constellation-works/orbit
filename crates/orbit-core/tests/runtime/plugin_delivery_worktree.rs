@@ -429,7 +429,10 @@ spec:
       mcp_scope: workspace
       input_schema:
         type: object
-        properties: {}
+        properties:
+          prefix:
+            type: string
+            description: Optional branch prefix echoed in output.
   definitions:
     activities: [definitions/activities/*.yaml]
     jobs: [definitions/jobs/*.yaml]
@@ -468,8 +471,9 @@ if [ "$ORBIT_TOOL_NAME" = "syncproof.sync" ]; then
   exit 0
 fi
 
-printf '{{"ok":true,"output":{{"workspace_root":"%s","env_workspace_root":"%s","pwd":"%s","task_id":"%s","job_run_id":"%s"}}}}\n' \
-  "$WS_ROOT" "$ORBIT_WORKSPACE_ROOT" "$PWD_PHYS" "$TASK_ID" "$JOB_RUN_ID"
+PREFIX="$(printf '%s' "$ENVELOPE" | sed -n 's/.*"prefix":"\([^"]*\)".*/\1/p')"
+printf '{{"ok":true,"output":{{"workspace_root":"%s","env_workspace_root":"%s","pwd":"%s","task_id":"%s","job_run_id":"%s","prefix":"%s"}}}}\n' \
+  "$WS_ROOT" "$ORBIT_WORKSPACE_ROOT" "$PWD_PHYS" "$TASK_ID" "$JOB_RUN_ID" "$PREFIX"
 "#,
         primary = primary_repo.display()
     );
@@ -703,6 +707,50 @@ spec:
             .replace("        base: \"{{ input.base_branch }}\"", &format!("        branch_prefix: \"{prefix}\"\n        base: \"{{{{ input.base_branch }}}}\""));
         std::fs::write(jobs.join(format!("{name}.yaml")), yaml).unwrap();
     }
+
+    // Delivery job whose `worktree_setup` `branch_prefix` renders from an
+    // earlier step's output before invoking the mutating plugin step.
+    std::fs::write(
+        jobs.join("syncproof_step_prefix_delivery.yaml"),
+        r#"schemaVersion: 2
+kind: Job
+metadata:
+  name: syncproof_step_prefix_delivery
+spec:
+  state: enabled
+  owns_task_worktree: true
+  task_delivery:
+    modes: [local]
+  kind: workflow
+  default_input:
+    task_ids: []
+    base_branch: main
+    base_sync: remote
+    prepared_prefix: step-out-prefix
+  steps:
+    - id: prepare
+      target: activity:syncproof_probe
+      default_input:
+        input:
+          prefix: "{{ input.prepared_prefix }}"
+    - id: worktree
+      target: activity:worktree_setup
+      default_input:
+        task_ids: "{{ input.task_ids }}"
+        branch_prefix: "{{ steps.prepare.output.prefix }}"
+        base: "{{ input.base_branch }}"
+        base_sync: "{{ input.base_sync }}"
+    - id: sync
+      target: activity:syncproof_sync
+      default_input:
+        job_run_id: "{{ steps.worktree.output.job_run_id }}"
+        task_ids: "{{ input.task_ids }}"
+        workspace_path: "{{ steps.worktree.output.workspace_path }}"
+        input:
+          canon_commit: "step-prefix-commit"
+"#,
+    )
+    .unwrap();
 
     // Delivery job with no worktree_setup step at all: mutating call must fail
     // closed while a read-only call without workspace_path keeps existing routing.
@@ -1210,10 +1258,261 @@ fn setup_prefix_defaults_and_step_overrides_bind_plugin_worktree() {
     }
 }
 
+fn setup_prefix_from_prior_step_output_binds_and_rejects_mismatches() {
+    let fixture = PluginDeliveryFixture::new(&[]);
+    for prepared_prefix in ["step-out-prefix", "orbit"] {
+        let task = fixture.seed_task(
+            &format!("step-prefix-{prepared_prefix}"),
+            &["delivery:syncproof_step_prefix_delivery"],
+        );
+        let result = fixture
+            .runtime
+            .run_job_v2_from_yaml(
+                &fixture.plugin_job_path("syncproof_step_prefix_delivery"),
+                json!({
+                    "task_ids": [&task],
+                    "prepared_prefix": prepared_prefix,
+                }),
+            )
+            .expect("prior-step branch_prefix must bind the setup worktree");
+        assert!(result.success, "{result:?}");
+        let path = result.pipeline["worktree"]["workspace_path"]
+            .as_str()
+            .unwrap();
+        assert!(
+            Path::new(path)
+                .file_name()
+                .unwrap()
+                .to_string_lossy()
+                .starts_with(&format!("{prepared_prefix}-")),
+            "{path}"
+        );
+        assert_eq!(result.pipeline["sync"]["workspace_root"], path);
+        assert_eq!(result.pipeline["sync"]["task_id"], task);
+        assert_eq!(result.pipeline["sync"]["primary_write_denied"], true);
+        assert_eq!(
+            std::fs::read_to_string(Path::new(path).join("docs/standards/STD-01.md")).unwrap(),
+            "synced:step-prefix-commit\n"
+        );
+        assert_eq!(
+            std::fs::read_to_string(fixture.repo.join("docs/standards/STD-01.md")).unwrap(),
+            "base-standard\n"
+        );
+    }
+
+    // Mismatched paths and inconsistent prior-step checkpoints fail closed
+    // before spawning the plugin backend.
+    let task_step = fixture.seed_task(
+        "Prior step mismatch target",
+        &["delivery:syncproof_step_prefix_delivery"],
+    );
+    let task_other = fixture.seed_task(
+        "Other default worktree",
+        &["delivery:syncproof_pr_delivery"],
+    );
+    let (_run_other, wt_orbit) = fixture.start_delivery_run_with_worktree(
+        "syncproof_pr_delivery",
+        std::slice::from_ref(&task_other),
+    );
+
+    let job_yaml =
+        std::fs::read_to_string(fixture.plugin_job_path("syncproof_step_prefix_delivery")).unwrap();
+    let run_input = json!({
+        "task_ids": [&task_step],
+        "base_branch": "main",
+        "base_sync": "remote",
+    });
+    let run_step = fixture
+        .runtime
+        .insert_job_run(
+            "syncproof_step_prefix_delivery",
+            1,
+            Utc::now(),
+            Some(run_input.clone()),
+            None,
+        )
+        .unwrap();
+    fixture
+        .runtime
+        .write_run_state(
+            &run_step.run_id,
+            &PipelineState::new(run_step.run_id.clone(), run_step.job_id.clone(), run_input),
+        )
+        .unwrap();
+    let snapshot_path = fixture
+        .repo
+        .join(".orbit/state/job-runs")
+        .join(format!("{}.job.yaml", run_step.run_id));
+    std::fs::create_dir_all(snapshot_path.parent().unwrap()).unwrap();
+    std::fs::write(&snapshot_path, job_yaml).unwrap();
+    orbit_store::compose::workspace_job_run_store(
+        fixture.runtime.sqlite_store().unwrap(),
+        fixture.runtime.workspace_id().unwrap(),
+    )
+    .mark_job_run_running(&run_step.run_id, Utc::now(), std::process::id())
+    .unwrap();
+
+    let prepare_output = json!({"prefix": "step-out-prefix"});
+    let setup_output = orbit_engine::execute_deterministic_action(
+        &fixture.runtime,
+        "worktree_setup",
+        &json!({}),
+        &json!({
+            "run_id": run_step.run_id,
+            "job_run_id": run_step.run_id,
+            "task_ids": [&task_step],
+            "branch_prefix": "step-out-prefix",
+            "base": "main",
+            "base_sync": "remote",
+        }),
+        false,
+        &std::collections::HashMap::new(),
+        None,
+    )
+    .expect("worktree_setup");
+    let wt_step = PathBuf::from(setup_output["workspace_path"].as_str().unwrap());
+
+    let mut state = fixture
+        .runtime
+        .read_run_state(&run_step.run_id)
+        .unwrap()
+        .unwrap();
+    state.record_step(0, JobRunState::Success, Some(prepare_output.clone()), None);
+    state.record_pipeline_output("prepare", prepare_output.clone());
+    state.record_step(1, JobRunState::Success, Some(setup_output.clone()), None);
+    state.record_pipeline_output("worktree", setup_output.clone());
+    fixture
+        .runtime
+        .write_run_state(&run_step.run_id, &state)
+        .unwrap();
+
+    let sync_config = json!({"tool": "syncproof.sync", "input": {}});
+    let sync_calls_before = std::fs::read_to_string(fixture.invocation_marker())
+        .unwrap()
+        .lines()
+        .filter(|line| *line == "syncproof.sync")
+        .count();
+
+    let mismatch_err = fixture
+        .runtime
+        .run_deterministic(
+            "plugin.tool_call",
+            &sync_config,
+            &json!({
+                "job_run_id": &run_step.run_id,
+                "task_ids": [&task_step],
+                "workspace_path": &wt_orbit,
+                "input": {"canon_commit": "should-fail"},
+            }),
+            fixture.deterministic_context(&run_step.run_id),
+        )
+        .expect_err("mismatched worktree path must be rejected");
+    assert!(
+        mismatch_err
+            .to_string()
+            .contains("does not match the authenticated worktree"),
+        "{mismatch_err}"
+    );
+
+    // Even if the checkpoint workspace_path were rewritten to another registered
+    // worktree, the prior-step-rendered prefix still rejects unowned paths.
+    let mut forged_wt = state.clone();
+    let mut forged_setup = setup_output.clone();
+    forged_setup["workspace_path"] = json!(wt_orbit.to_string_lossy().as_ref());
+    forged_wt.record_step(1, JobRunState::Success, Some(forged_setup.clone()), None);
+    forged_wt.record_pipeline_output("worktree", forged_setup);
+    fixture
+        .runtime
+        .write_run_state(&run_step.run_id, &forged_wt)
+        .unwrap();
+    let unowned_err = fixture
+        .runtime
+        .run_deterministic(
+            "plugin.tool_call",
+            &sync_config,
+            &json!({
+                "job_run_id": &run_step.run_id,
+                "task_ids": [&task_step],
+                "workspace_path": &wt_orbit,
+                "input": {"canon_commit": "should-fail"},
+            }),
+            fixture.deterministic_context(&run_step.run_id),
+        )
+        .expect_err("wrong-prefix registered worktree must be rejected");
+    assert!(
+        unowned_err
+            .to_string()
+            .contains("is not owned by delivery run"),
+        "{unowned_err}"
+    );
+
+    // An inconsistent prior-step checkpoint must also fail closed.
+    let mut tampered_prepare = state.clone();
+    tampered_prepare.record_pipeline_output("prepare", json!({"prefix": "orbit"}));
+    fixture
+        .runtime
+        .write_run_state(&run_step.run_id, &tampered_prepare)
+        .unwrap();
+    let inconsistent_err = fixture
+        .runtime
+        .run_deterministic(
+            "plugin.tool_call",
+            &sync_config,
+            &json!({
+                "job_run_id": &run_step.run_id,
+                "task_ids": [&task_step],
+                "workspace_path": &wt_step,
+                "input": {"canon_commit": "should-fail"},
+            }),
+            fixture.deterministic_context(&run_step.run_id),
+        )
+        .expect_err("inconsistent prior step checkpoint must be rejected");
+    assert!(
+        inconsistent_err
+            .to_string()
+            .contains("inconsistent between step output and pipeline state"),
+        "{inconsistent_err}"
+    );
+
+    let sync_calls_after = std::fs::read_to_string(fixture.invocation_marker())
+        .unwrap()
+        .lines()
+        .filter(|line| *line == "syncproof.sync")
+        .count();
+    assert_eq!(
+        sync_calls_after, sync_calls_before,
+        "rejected calls must fail before invoking the plugin backend"
+    );
+
+    // Restoring consistent state accepts the matching setup worktree.
+    fixture
+        .runtime
+        .write_run_state(&run_step.run_id, &state)
+        .unwrap();
+    let ok = fixture
+        .runtime
+        .run_deterministic(
+            "plugin.tool_call",
+            &sync_config,
+            &json!({
+                "job_run_id": &run_step.run_id,
+                "task_ids": [&task_step],
+                "workspace_path": &wt_step,
+                "input": {"canon_commit": "step-mismatch-recovered"},
+            }),
+            fixture.deterministic_context(&run_step.run_id),
+        )
+        .expect("consistent prior-step worktree binding must succeed");
+    assert_eq!(ok["workspace_root"], wt_step.to_string_lossy().as_ref());
+    assert_eq!(ok["task_id"], task_step);
+    assert_eq!(ok["primary_write_denied"], true);
+}
+
 crate::scenario_table!(
     plugin_delivery_worktree_scenarios,
     pr_mode_plugin_delivery_binds_worktree_and_completes_pr_ci_route_without_agent,
     missing_mismatched_unowned_invalid_and_multi_task_bindings_fail_closed_before_dispatch,
     non_delivery_and_unbound_read_only_plugin_calls_keep_existing_routing,
-    setup_prefix_defaults_and_step_overrides_bind_plugin_worktree
+    setup_prefix_defaults_and_step_overrides_bind_plugin_worktree,
+    setup_prefix_from_prior_step_output_binds_and_rejects_mismatches
 );

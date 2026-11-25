@@ -207,9 +207,9 @@ pub(super) fn resolve_plugin_delivery_worktree(
         action,
         &owner_run,
         &job_spec,
+        &state,
         &checkpoint,
         &requested_workspace_path,
-        &checkpoint.workspace_path,
     )?;
 
     verify_admitted_singleton_task(runtime, action, &owner_run.run_id, &step_task_id)?;
@@ -224,6 +224,7 @@ pub(super) fn resolve_plugin_delivery_worktree(
 struct AuthenticatedWorktreeCheckpoint {
     workspace_path: String,
     job_run_id: String,
+    step_index: usize,
     step_input: Option<Value>,
     input_schema: Option<Value>,
 }
@@ -516,6 +517,7 @@ fn authenticated_worktree_checkpoint(
                 found.push(AuthenticatedWorktreeCheckpoint {
                     workspace_path,
                     job_run_id,
+                    step_index: index,
                     step_input: target.default_input.clone(),
                     input_schema: target.input_schema_json.clone(),
                 });
@@ -638,16 +640,16 @@ fn authenticate_worktree_path(
     action: &str,
     owner_run: &JobRun,
     job_spec: &JobV2,
+    state: &PipelineState,
     checkpoint: &AuthenticatedWorktreeCheckpoint,
     requested_workspace_path: &str,
-    checkpoint_workspace_path: &str,
 ) -> Result<PathBuf, DispatchError> {
     let canonical_requested =
         canonicalize_non_symlink_worktree_dir(action, "workspace_path", requested_workspace_path)?;
     let canonical_checkpoint = canonicalize_non_symlink_worktree_dir(
         action,
         "worktree_setup checkpoint workspace_path",
-        checkpoint_workspace_path,
+        &checkpoint.workspace_path,
     )?;
     if canonical_requested != canonical_checkpoint {
         return Err(DispatchError::action_failed(
@@ -683,17 +685,20 @@ fn authenticate_worktree_path(
         ));
     }
 
-    // Render only the identity field: other setup inputs can reference prior
-    // step outputs which are unnecessary for deriving the owned path.
+    // Render only the identity field: other setup inputs can reference runtime
+    // fields which are unnecessary for deriving the owned path, while
+    // `branch_prefix` itself may depend on prior step outputs.
     let prefix_input = checkpoint.step_input.as_ref().map(|input| match input {
         Value::Object(fields) => serde_json::json!({
             "branch_prefix": fields.get("branch_prefix").cloned().unwrap_or(Value::Null)
         }),
         other => other.clone(),
     });
-    let rendered = orbit_engine::activity_job::render_job_step_input_at_admission(
-        job_spec.default_input.as_ref(),
+    let rendered = orbit_engine::activity_job::render_job_step_input_from_state(
+        job_spec,
         owner_run.input.as_ref().unwrap_or(&Value::Null),
+        state,
+        checkpoint.step_index,
         prefix_input.as_ref(),
         checkpoint.input_schema.as_ref(),
     )

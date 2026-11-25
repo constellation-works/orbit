@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 
 use crate::activity_job::{V2ActivityCatalog, resolve_job_target_refs};
 use orbit_types::workflow::activity_job::{ScriptOutputSet, script_failure};
-use orbit_types::workflow::{JobRunState, PipelineState};
+use orbit_types::workflow::{JobRunState, PipelineState, SuccessfulCheckpoint};
 
 use super::*;
 
@@ -487,35 +487,94 @@ fn seed_pipeline_from_resume(
         let Some(output) = state.step_outputs.get(&step_index) else {
             continue;
         };
-        // A guarded fan-out checkpoints null when skipped. It did not
-        // publish its collect alias; restoring that null can overwrite a
-        // sibling's real collection (notably the empty verification path).
-        let mut written: Vec<&str> = Vec::new();
-        if let Some(alias) = fan_in_alias(step)
-            && output.is_array()
-        {
-            seeded.insert(alias.to_string(), output.clone());
-            written.push(alias);
-        }
-        seeded.insert(step.id.clone(), output.clone());
-        written.push(&step.id);
-        if let Some(nested) = state.compound_outputs.get(&step_index) {
-            seeded.extend(
-                nested
-                    .iter()
-                    .map(|(key, value)| (key.clone(), value.clone())),
-            );
-            written.extend(nested.keys().map(String::as_str));
-        }
-        let recorded = state.script_output_sets.get(&step_index);
-        for key in written {
-            match recorded.and_then(|recorded| recorded.get(key)) {
-                Some(set) => sets.insert(key.to_string(), set.clone()),
-                None => sets.remove(key),
-            };
-        }
+        insert_checkpointed_step_outputs(step, step_index, output, state, &mut seeded, &mut sets);
     }
     (seeded, sets)
+}
+
+/// Reconstruct the `steps.*` template map visible immediately before top-level
+/// `step_index`, rejecting any checkpoint whose step output and pipeline entry
+/// disagree.
+pub(super) fn seed_pipeline_before_step(
+    job: &JobV2,
+    state: &PipelineState,
+    step_index: usize,
+) -> Result<PipelineSteps, DispatchError> {
+    let Some(prior_steps) = job.steps.get(..step_index) else {
+        return Err(DispatchError::JobExecution(format!(
+            "step index {step_index} is out of bounds for job with {} steps",
+            job.steps.len()
+        )));
+    };
+
+    let mut seeded = HashMap::new();
+    let mut sets: HashMap<String, ScriptOutputSet> = HashMap::new();
+    for (index, step) in prior_steps.iter().enumerate() {
+        let Ok(prior_index) = u32::try_from(index) else {
+            continue;
+        };
+        if state.skipped_steps.contains(&prior_index) {
+            continue;
+        }
+        match state.successful_checkpoint(prior_index, &step.id) {
+            SuccessfulCheckpoint::Recorded(output) => {
+                insert_checkpointed_step_outputs(
+                    step,
+                    prior_index,
+                    output,
+                    state,
+                    &mut seeded,
+                    &mut sets,
+                );
+            }
+            SuccessfulCheckpoint::Inconsistent => {
+                return Err(DispatchError::JobExecution(format!(
+                    "step checkpoint '{}' (index {prior_index}) is inconsistent between step \
+                     output and pipeline state",
+                    step.id
+                )));
+            }
+            SuccessfulCheckpoint::Absent => {}
+        }
+    }
+    Ok(pipeline_steps_from_raw(seeded, sets))
+}
+
+fn insert_checkpointed_step_outputs(
+    step: &JobV2Step,
+    step_index: u32,
+    output: &Value,
+    state: &PipelineState,
+    seeded: &mut HashMap<String, Value>,
+    sets: &mut HashMap<String, ScriptOutputSet>,
+) {
+    // A guarded fan-out checkpoints null when skipped. It did not
+    // publish its collect alias; restoring that null can overwrite a
+    // sibling's real collection (notably the empty verification path).
+    let mut written: Vec<&str> = Vec::new();
+    if let Some(alias) = fan_in_alias(step)
+        && output.is_array()
+    {
+        seeded.insert(alias.to_string(), output.clone());
+        written.push(alias);
+    }
+    seeded.insert(step.id.clone(), output.clone());
+    written.push(&step.id);
+    if let Some(nested) = state.compound_outputs.get(&step_index) {
+        seeded.extend(
+            nested
+                .iter()
+                .map(|(key, value)| (key.clone(), value.clone())),
+        );
+        written.extend(nested.keys().map(String::as_str));
+    }
+    let recorded = state.script_output_sets.get(&step_index);
+    for key in written {
+        match recorded.and_then(|recorded| recorded.get(key)) {
+            Some(set) => sets.insert(key.to_string(), set.clone()),
+            None => sets.remove(key),
+        };
+    }
 }
 
 /// Refuse a resume whose recorded output sets are not the ones their
