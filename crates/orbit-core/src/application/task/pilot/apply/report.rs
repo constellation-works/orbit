@@ -11,7 +11,8 @@ use super::super::auto_effort::{AUTO_EFFORT_ESCALATION, PILOT_ROUND, REPAIR_ROUN
 use super::super::recheck::{RECHECK, RECHECKS};
 use super::super::source::SourceSnapshot;
 use super::super::{
-    COMMENT_HYGIENE_BATCH, COMMENT_HYGIENE_BATCHES, OPERATOR_TOOL_CANDIDATES, member_ready,
+    COMMENT_HYGIENE_BATCH, COMMENT_HYGIENE_BATCHES, CONTEXT_CREATION_SELECTORS,
+    OPERATOR_TOOL_CANDIDATES, member_ready,
 };
 use super::input::{PreparedEcho, PreparedTask, Record};
 use super::{Applied, detail, settled};
@@ -203,33 +204,35 @@ impl Report<'_> {
                 if let Some(escalation) = escalation {
                     partition[AUTO_EFFORT_ESCALATION] = escalation.clone();
                 }
-                // A re-check is repaired as a re-check, against the same input.
-                if let Some(recheck) = self
+                let prepared_task = self
                     .tasks
                     .iter()
-                    .find(|task| task.fields.task_id.get() == Some(task_id))
+                    .find(|task| task.fields.task_id.get() == Some(task_id));
+                // A re-check is repaired as a re-check, against the same input.
+                if let Some(recheck) = prepared_task
                     .and_then(|task| task.raw.get(RECHECK))
                     .filter(|recheck| recheck.is_object())
                 {
                     partition[RECHECKS] = json!({ task_id.as_str(): recheck });
                 }
                 // The repair pilot classifies the same detected mentions.
-                if let Some(candidates) = self
-                    .tasks
-                    .iter()
-                    .find(|task| task.fields.task_id.get() == Some(task_id))
-                    .and_then(|task| task.raw.get(OPERATOR_TOOL_CANDIDATES))
+                if let Some(candidates) =
+                    prepared_task.and_then(|task| task.raw.get(OPERATOR_TOOL_CANDIDATES))
                 {
                     partition[OPERATOR_TOOL_CANDIDATES] = json!({ task_id.as_str(): candidates });
                 }
                 // The repair pilot keeps the same deterministic comment-hygiene batch.
-                if let Some(batch) = self
-                    .tasks
-                    .iter()
-                    .find(|task| task.fields.task_id.get() == Some(task_id))
-                    .and_then(|task| task.raw.get(COMMENT_HYGIENE_BATCH))
+                if let Some(batch) =
+                    prepared_task.and_then(|task| task.raw.get(COMMENT_HYGIENE_BATCH))
                 {
                     partition[COMMENT_HYGIENE_BATCHES] = json!({ task_id.as_str(): batch });
+                }
+                // The repair pilot keeps the task's resolved creation selectors.
+                if let Some(selectors) = prepared_task
+                    .and_then(|task| task.raw.get(CONTEXT_CREATION_SELECTORS))
+                    .filter(|selectors| selectors.as_array().is_some_and(|items| !items.is_empty()))
+                {
+                    partition[CONTEXT_CREATION_SELECTORS] = json!({ task_id.as_str(): selectors });
                 }
                 partition
             })

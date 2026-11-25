@@ -649,6 +649,219 @@ fn benign_comment_and_artifact_writes_preserve_preparation() {
     assert_eq!(outcome(&applied)["outcome"], "applied", "{applied}");
 }
 
+#[cfg(unix)]
+fn verify_pipeline_delivers_current_creation_selectors(
+    workspace: &Workspace,
+    task: &Task,
+    expected_selectors: &[String],
+) {
+    use std::os::unix::fs::PermissionsExt;
+
+    use chrono::Utc;
+    use orbit_types::resource::ExecutorResource;
+    use orbit_types::workflow::{ExecutorDef, ExecutorSandboxKind, JobRunState, PipelineState};
+
+    let assets = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("assets");
+    let provider = workspace.root.path().join("codex");
+    let seen = workspace.root.path().join("seen-creation-selectors.json");
+    std::fs::write(
+        &provider,
+        format!(
+            r#"#!/usr/bin/env python3
+import json, subprocess, sys
+raw = sys.stdin.read()
+marker = "Execution envelope:\n"
+idx = raw.rfind(marker)
+if idx == -1:
+    sys.stderr.write("missing execution envelope\n")
+    sys.exit(1)
+envelope = json.loads(raw[idx + len(marker):].strip())
+partition = envelope["input"]["partition"]
+task_id = partition["task_ids"][0]
+creation = partition.get("context_creation_selectors", {{}})
+with open({seen:?}, "w", encoding="utf-8") as handle:
+    json.dump(creation, handle)
+granted = creation.get(task_id)
+if not granted:
+    sys.stderr.write(f"missing partition.context_creation_selectors for {{task_id}}\n")
+    sys.exit(1)
+head = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
+tree = subprocess.check_output(["git", "rev-parse", "HEAD^{{tree}}"], text=True).strip()
+sys.stdout.write(json.dumps({{
+    "schemaVersion": 1,
+    "status": "success",
+    "error": None,
+    "result": {{
+        "partition_index": partition["partition_index"],
+        "observed_revision": head,
+        "observed_tree": tree,
+        "task_ids": [task_id],
+        "tasks": [{{
+            "task_id": task_id,
+            "context_files_after": ["file:README.md"] + granted,
+            "disposition": "selectors",
+            "recommended_complexity": "low",
+            "confidence": "high",
+            "assessment_rationale": "Kept current creation selectors from partition.context_creation_selectors.",
+            "validation_approach": "Inspect the persisted scope.",
+            "evidence_gaps": [],
+            "reassessment_triggers": [],
+            "blocked_by": [],
+            "adr_conflicts": [],
+            "utility_warnings": [],
+            "surface_warnings": [],
+            "duplicate_of": None,
+            "already_landed": None,
+        }}],
+    }},
+}}))
+"#
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(&provider, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let mut executor: ExecutorResource = serde_yaml::from_str(
+        &std::fs::read_to_string(assets.join("executors/codex.yaml")).unwrap(),
+    )
+    .unwrap();
+    executor.spec.command = Some(provider.display().to_string());
+    executor.spec.sandbox = Some(ExecutorSandboxKind::Off);
+    workspace
+        .runtime
+        .upsert_executor_def(&ExecutorDef::from_resource_spec(
+            executor.metadata.name,
+            executor.spec,
+            None,
+            None,
+        ))
+        .unwrap();
+    workspace.install_pilot_job();
+    let run = workspace
+        .jobs
+        .insert_job_run(
+            "task_pilot_pipeline",
+            1,
+            Utc::now(),
+            Some(json!({
+                "task_ids": [task.id],
+                "workspace_path": workspace.repo,
+                "base_branch": "main",
+            })),
+            None,
+        )
+        .unwrap();
+    workspace
+        .runtime
+        .write_run_state(
+            &run.run_id,
+            &PipelineState::new(run.run_id.clone(), "task_pilot_pipeline".into(), json!({})),
+        )
+        .unwrap();
+    workspace
+        .runtime
+        .execute_pipeline_run_worker(&run.run_id)
+        .unwrap_or_else(|error| panic!("pilot pipeline must finish: {error}"));
+    let finished = workspace.runtime.show_job_run(&run.run_id).unwrap();
+    assert_eq!(finished.state, JobRunState::Success, "{finished:?}");
+    let observed: Value =
+        serde_json::from_str(&std::fs::read_to_string(&seen).unwrap()).expect("seen json");
+    assert_eq!(observed[&task.id], json!(expected_selectors));
+    assert_eq!(
+        sorted(workspace.runtime.get_task(&task.id).unwrap().context_files),
+        sorted(owned(&[EXISTING, NEW_MODULE, NEW_TEST]))
+    );
+}
+
+#[cfg(not(unix))]
+fn verify_pipeline_delivers_current_creation_selectors(
+    _workspace: &Workspace,
+    _task: &Task,
+    _expected_selectors: &[String],
+) {
+}
+
+fn newer_creation_grant_reaches_partition_and_ungranted_missing_path_stays_gap() {
+    let workspace = Workspace::new();
+    // Older grant names only the module; newer grant adds the test target.
+    let task = workspace.scoped_task("multi-grant", &[EXISTING, NEW_MODULE], true);
+    let updated = workspace.rescope(&task.id, &[EXISTING, NEW_MODULE, NEW_TEST], true);
+    let expected = sorted(owned(&[NEW_MODULE, NEW_TEST]));
+
+    let prepared = workspace.prepare(&[&task.id]);
+    assert_eq!(
+        prepared["tasks"][0]["context_creation_selectors"],
+        json!(expected),
+        "{prepared}"
+    );
+    assert_eq!(
+        prepared["partitions"][0]["context_creation_selectors"][&task.id],
+        json!(expected),
+        "partition must carry current creation selectors for the pilot agent: {prepared}"
+    );
+
+    // An ungranted missing path is absent from the partition grant and refused
+    // if proposed; repair_partitions keeps the task's current creation selectors.
+    let ungranted = "file:src/ungranted.rs";
+    let refused = workspace.apply_one(
+        &prepared,
+        &updated.context_files,
+        &[EXISTING, NEW_MODULE, NEW_TEST, ungranted],
+    );
+    assert_eq!(outcome(&refused)["outcome"], "invalid", "{refused}");
+    assert_eq!(refused["repair_count"], 1, "{refused}");
+    assert_eq!(
+        refused["repair_partitions"][0]["context_creation_selectors"][&task.id],
+        json!(expected),
+        "repair partition must retain current creation selectors: {refused}"
+    );
+
+    // Reporting the ungranted missing path as an evidence gap while keeping
+    // the granted targets succeeds and records the gap.
+    let gap = format!("{ungranted} is absent at source_revision and has no current grant.");
+    let applied = workspace.action(
+        "apply_task_pilot_results",
+        json!({
+            "workspace_path": workspace.repo,
+            "prepared": prepared,
+            "results": [{
+                "partition_index": 0, "task_ids": [task.id],
+                "tasks": [{
+                    "task_id": task.id,
+                    "context_files_after": [EXISTING, NEW_MODULE, NEW_TEST],
+                    "disposition": "selectors", "recommended_crew": "fixture",
+                    "recommended_complexity": "low", "confidence": "medium",
+                    "assessment_rationale": "Granted targets kept; ungranted missing path reported.",
+                    "validation_approach": "Inspect the persisted scope and evidence_gaps.",
+                    "evidence_gaps": [gap],
+                    "reassessment_triggers": [], "blocked_by": [],
+                    "adr_conflicts": [], "utility_warnings": [], "surface_warnings": [],
+                    "duplicate_of": null, "already_landed": null,
+                }],
+            }],
+        }),
+    );
+    assert_eq!(outcome(&applied)["outcome"], "applied", "{applied}");
+    assert_eq!(applied["tasks"][0]["evidence_gaps"], json!([gap]));
+
+    // A task whose grant was revoked carries no partition creation selectors.
+    let revoked = workspace.scoped_task("revoked", &[EXISTING, NEW_MODULE], true);
+    workspace.rescope(&revoked.id, &[EXISTING], false);
+    let revoked_prepared = workspace.prepare(&[&revoked.id]);
+    assert!(
+        revoked_prepared["partitions"][0]
+            .get("context_creation_selectors")
+            .is_none(),
+        "revoked grant must not appear on partition: {revoked_prepared}"
+    );
+
+    // Full pipeline delivery: the pilot worker receives the latest grant's
+    // selectors on `partition.context_creation_selectors` and keeps all of them.
+    let pipeline_task =
+        workspace.scoped_task("pipeline multi-grant", &[EXISTING, NEW_MODULE], true);
+    workspace.rescope(&pipeline_task.id, &[EXISTING, NEW_MODULE, NEW_TEST], true);
+    verify_pipeline_delivers_current_creation_selectors(&workspace, &pipeline_task, &expected);
+}
+
 // Related boundary scenarios share the isolated table fixture.
 crate::scenario_table!(
     declared_creation_targets_survive_prepare_apply_restart_and_replay_scenarios,
@@ -659,5 +872,6 @@ crate::scenario_table!(
     legacy_missing_target_is_reported_and_reauthorized_through_task_update,
     creation_grant_changed_after_preparation_supersedes_the_write,
     revoke_and_same_scope_reauthorization_supersedes_an_older_preparation,
-    benign_comment_and_artifact_writes_preserve_preparation
+    benign_comment_and_artifact_writes_preserve_preparation,
+    newer_creation_grant_reaches_partition_and_ungranted_missing_path_stays_gap
 );

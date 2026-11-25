@@ -587,31 +587,20 @@ pub(crate) fn prepare(
             if let Some(signal) = signal {
                 partition[super::super::auto_effort::AUTO_EFFORT_SIGNAL] = signal.clone();
             }
-            let operator_tools = ids
-                .iter()
-                .filter_map(|id| {
-                    task_snapshots
-                        .iter()
-                        .find(|snapshot| snapshot["task_id"].as_str() == Some(id.as_str()))
-                        .and_then(|snapshot| snapshot.get(OPERATOR_TOOL_CANDIDATES))
-                        .map(|candidates| (id.clone(), candidates.clone()))
-                })
-                .collect::<serde_json::Map<_, _>>();
-            if !operator_tools.is_empty() {
+            if let Some(operator_tools) =
+                partition_task_entries(ids, &task_snapshots, OPERATOR_TOOL_CANDIDATES, false)
+            {
                 partition[OPERATOR_TOOL_CANDIDATES] = Value::Object(operator_tools);
             }
-            let comment_hygiene_batches = ids
-                .iter()
-                .filter_map(|id| {
-                    task_snapshots
-                        .iter()
-                        .find(|snapshot| snapshot["task_id"].as_str() == Some(id.as_str()))
-                        .and_then(|snapshot| snapshot.get(COMMENT_HYGIENE_BATCH))
-                        .map(|batch| (id.clone(), batch.clone()))
-                })
-                .collect::<serde_json::Map<_, _>>();
-            if !comment_hygiene_batches.is_empty() {
+            if let Some(comment_hygiene_batches) =
+                partition_task_entries(ids, &task_snapshots, COMMENT_HYGIENE_BATCH, false)
+            {
                 partition[COMMENT_HYGIENE_BATCHES] = Value::Object(comment_hygiene_batches);
+            }
+            if let Some(creation_selectors) =
+                partition_task_entries(ids, &task_snapshots, CONTEXT_CREATION_SELECTORS, true)
+            {
+                partition[CONTEXT_CREATION_SELECTORS] = Value::Object(creation_selectors);
             }
             if let Some(rechecks) =
                 super::super::recheck::partition_rechecks(ids.iter(), &task_snapshots)
@@ -669,6 +658,30 @@ pub(crate) fn prepare(
             .then(|| forge.require(runtime).err().map(|error| error.to_string()))
             .flatten(),
     }))
+}
+
+/// Collect per-task snapshot field `key` into a partition map, skipping tasks
+/// that omit it (and empty arrays when `skip_empty_array` is true).
+fn partition_task_entries(
+    ids: &[String],
+    snapshots: &[Value],
+    key: &str,
+    skip_empty_array: bool,
+) -> Option<serde_json::Map<String, Value>> {
+    let entries = ids
+        .iter()
+        .filter_map(|id| {
+            snapshots
+                .iter()
+                .find(|snapshot| snapshot["task_id"].as_str() == Some(id.as_str()))
+                .and_then(|snapshot| snapshot.get(key))
+                .filter(|value| {
+                    !skip_empty_array || value.as_array().is_some_and(|items| !items.is_empty())
+                })
+                .map(|value| (id.clone(), value.clone()))
+        })
+        .collect::<serde_json::Map<_, _>>();
+    (!entries.is_empty()).then_some(entries)
 }
 
 /// Runs once between the selection read and hydration, so a test can land a

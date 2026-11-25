@@ -96,6 +96,17 @@ spec:
             type: object
             additionalProperties:
               type: object
+          context_creation_selectors:
+            description: >
+              Maps each task in the partition holding a current creation grant
+              (resolved by `ContextCreationState::resolve`) to its exact
+              authorized creation selectors. Absent when no task in the
+              partition holds one.
+            type: object
+            additionalProperties:
+              type: array
+              items:
+                type: string
           rechecks:
             type: object
             additionalProperties:
@@ -732,10 +743,15 @@ spec:
       body-only edit to an existing module adds no declaration selector.
     - Existence, for every selector including companions and wiring sites:
       the anchor must exist at `source_revision`; omit working-tree-only and
-      later-commit paths. The one exception is a creation target named by the
-      task's latest `context_creation_authorized` history entry; keep it
-      exactly as recorded. Report any other expected missing path as an
-      evidence gap, and never predict a new filename.
+      later-commit paths. The one exception is a creation target listed for this
+      task in `partition.context_creation_selectors` (which preparation
+      resolves from the task's current grant via
+      `ContextCreationState::resolve`); keep every selector listed there
+      exactly as recorded, and do not resolve `context_creation_authorized`
+      from `history` yourself. When `partition.context_creation_selectors` is
+      absent or omits this task (or omits a path), no current grant covers it:
+      report any other expected missing path as an evidence gap, and never
+      predict a new filename.
     - Review-filed tasks (tagged `code-review`, `delivery-code-review`,
       `qa-full-sweep`, `qa-sweep` or `security-review`): keep the selectors the
       finding names as change targets and add targets it lacks. Drop a current
