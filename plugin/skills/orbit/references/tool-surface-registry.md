@@ -170,15 +170,23 @@ run is refused, so one claim never has two leaves. The owner fences the claim
 against the session's own machine; a claim admitted to another machine, or
 already settled or revoked, is refused as stale.
 
-`orbit.drain.claim.settle` settles an execution claim on the owner. A typed
-handoff is accepted only after the owner reads the pull request from the
-provider and resolves its candidate and base in the owner's own checkout, and
-only with digest-pinned validation evidence; it moves the task to `review`,
-which awaits owner approval — it does not merge. A failure records its evidence
-and blocks the task. A release (a cancelled drain giving back work it will not
-finish) returns the task to the backlog with its reason as a comment. Each
-settlement releases only this claim's reservation, and retries replay the
-recorded outcome.
+`orbit.drain.claim.settle` settles an execution claim on the owner. A
+pull-request handoff is accepted only after the owner reads the pull request
+from the provider and resolves its candidate and base in the owner's own
+checkout, and only with digest-pinned validation evidence. A NoDiff handoff
+reads no pull request and publishes no branch: the owner verifies the
+sha-pinned NoDiff verifier checkpoint (this task/run's report, its base, and a
+`verified_no_diff`, `verified_already_landed`, `verified_already_resolved`, or
+`skipped_no_diff_expected` decision) against the owner's own checkout — the
+candidate must equal its synchronized base with no footprint widening, that
+base must still be contained in the owner's live base, and the clean-tree
+verifier rechecks it at that revision — and only with digest-pinned validation
+evidence, except a `no-diff-expected` skip checkpoint, which carries no
+validation. An accepted handoff moves the task to `review`, which awaits owner
+approval — it does not merge. A failure records its evidence and blocks the
+task. A release (a cancelled drain giving back work it will not finish) returns
+the task to the backlog with its reason as a comment. Each settlement releases
+only this claim's reservation, and retries replay the recorded outcome.
 
 `orbit.drain.claims` lists the workspace's execution claims for inspection and
 deliberate recovery: phase, age, reservation expiry, execution machine, bound
