@@ -985,3 +985,59 @@ fn resident_panel_excludes_resident_tagged_tasks_without_valid_mandate() {
         },
     );
 }
+
+/// Rewrites the fixture checkout so its catalog record and the partition ID
+/// its `.orbit/config.yaml` persists differ, as an ordinary checkout bound
+/// under a different catalog ID does.
+fn split_catalog_and_partition_ids(fixture: &Fixture, catalog_id: &str, partition_id: &str) {
+    fs::write(
+        fixture.work.join("config.yaml"),
+        format!("schema_version: 1\nworkspace_id: {partition_id}\n"),
+    )
+    .unwrap();
+    let path = orbit_registry::workspace_registry::registry_path_for(&fixture.global);
+    let mut registry = orbit_registry::workspace_registry::load_registry_from(&path).unwrap();
+    registry.workspaces[0].id = catalog_id.into();
+    registry.checkouts[0].workspace_id = catalog_id.into();
+    orbit_registry::workspace_registry::save_registry_to(&registry, &path).unwrap();
+}
+
+/// The Residents routine row is selected by the catalog ID the dashboard
+/// addresses, not by the partition ID the checkout persists. A twin checkout
+/// holding the same routine must not supply the row.
+#[test]
+fn resident_routine_resolves_catalog_id_when_partition_id_differs() {
+    isolated(
+        "residents::resident_routine_resolves_catalog_id_when_partition_id_differs",
+        || {
+            let fixture = Fixture::new();
+            resident_fixture(&fixture);
+            split_catalog_and_partition_ids(&fixture, "ws_legacy", "ws_storage");
+            let server = fixture.server(true);
+
+            let twin = add_workspace(&fixture, "ws_twin", "twin");
+            let twin_routines = twin.paths().orbit_dir.join("routines");
+            fs::create_dir_all(&twin_routines).unwrap();
+            fs::copy(
+                fixture.work.join("routines/resident_cycle.yaml"),
+                twin_routines.join("resident_cycle.yaml"),
+            )
+            .unwrap();
+
+            for path in [
+                "/api/residents?workspace=ws_legacy",
+                "/api/residents?all=true&workspace=ws_legacy",
+            ] {
+                let listed = json_ok(server.get(path));
+                let routine = &listed["routine"];
+                assert!(routine.is_object(), "{path}: {listed}");
+                assert_eq!(
+                    routine["name"], "resident-cycle-fixture",
+                    "{path}: {listed}"
+                );
+                assert_eq!(routine["source"], "fixture", "{path}: {listed}");
+                assert!(routine["machine_name"].is_string(), "{path}: {listed}");
+            }
+        },
+    );
+}

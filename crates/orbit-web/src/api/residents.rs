@@ -168,7 +168,14 @@ fn non_blank(value: Option<&str>) -> Option<String> {
 /// every registered workspace's definitions, configuration and store rows,
 /// which this one row never needs.
 fn resident_cycle_routine(state: &DashboardState, runtime: &OrbitRuntime) -> Value {
-    let Ok(workspace_id) = runtime.workspace_id() else {
+    // The selector is the logical catalog ID the dashboard addressed. The
+    // runtime's `workspace_id()` is the persisted partition ID, which an
+    // ordinary checkout may name differently.
+    let Some(workspace_id) = runtime
+        .workspace_runtime_binding()
+        .map(|binding| binding.logical_workspace_id.clone())
+        .or_else(|| runtime.workspace_id().ok())
+    else {
         return Value::Null;
     };
     let Ok(report) = routine_statuses_for_workspace(state.global_root(), &workspace_id) else {
