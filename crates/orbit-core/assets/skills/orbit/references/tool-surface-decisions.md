@@ -67,10 +67,13 @@ expiry and derived effective state (`open`, `answered`, `superseded` or
 Channel administration (`orbit decision channel register|list|revoke|rotate-key`)
 is operator CLI only (refused from agent envelopes and plugin callbacks):
 `register` generates the channel key, mirrors it to the bound plugin's
-`channel_key` secret and starts key epoch 1 (with optional
-`require_dkim_verification`); `revoke` immediately stops verifying outstanding
-tokens (`channel_revoked`); `rotate-key` generates and mirrors a fresh key and
-bumps the key epoch, invalidating tokens minted under prior epochs.
+`channel_key` secret; a new channel name starts at key epoch 1. An active name
+cannot be registered again; revoke it first (or use `rotate-key` to replace its
+key). Re-registering a revoked name uses the previous epoch + 1. Registration
+also accepts optional `require_dkim_verification`. `revoke` immediately stops
+verifying outstanding tokens (`channel_revoked`); `rotate-key` generates and
+mirrors a fresh key and bumps the key epoch, invalidating tokens minted under
+prior epochs.
 
 ## Raising a decision
 
