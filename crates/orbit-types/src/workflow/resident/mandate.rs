@@ -21,7 +21,7 @@ pub enum ResidentRight {
     Promote,
     /// Land a reviewed pull request.
     Merge,
-    /// Install or upgrade a workspace plugin.
+    /// Recognized, but no cycle tool installs or upgrades a workspace plugin.
     PluginUpgrade,
     /// Bring a held or review delivery pull request up to its base branch and re-run checks.
     Refresh,
