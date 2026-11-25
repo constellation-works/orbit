@@ -78,8 +78,8 @@ flag and the leaf's recorded step code, never its reason:
   `review_decision_hold` (the pending decision above), `evidence_hold`,
   `operator_cancel`, `upgrade_paused` (a `transient` settlement whose leaf recorded
   `upgrade_quiesce`: an Orbit upgrade paused it), `delivery_hold` (an `environment`
-  settlement whose leaf recorded `delivery_stale_branch`: `worktree_setup` kept a
-  retained branch untouched for operator inspection), `baseline_red` or `unrecorded`,
+  settlement whose leaf recorded `delivery_stale_branch`: `worktree_setup` left a
+  retained branch or the owner base checkout untouched for operator inspection), `baseline_red` or `unrecorded`,
 - with `counts_as_failure`
   (true for `failure`, `baseline_red` and `unrecorded`) and
 - a `reason` token

@@ -48,7 +48,13 @@ fn assert_owner_base_refusal(error: &OrbitError, checkout: &Path, owner: &str, o
     );
     let checkout = checkout.display().to_string();
     let message = error.to_string();
-    for fragment in [checkout.as_str(), owner, origin] {
+    for fragment in [
+        checkout.as_str(),
+        owner,
+        origin,
+        "refusing stale base",
+        "Reconcile the checkout with origin",
+    ] {
         assert!(
             message.contains(fragment),
             "the refusal must name {fragment}: {message}"

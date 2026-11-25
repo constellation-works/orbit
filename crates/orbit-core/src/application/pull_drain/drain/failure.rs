@@ -747,7 +747,7 @@ fn release_reason(
 ) -> String {
     if is_stale_branch_hold(run, diagnostic) {
         return format!(
-            "leaf {} held on a retained stale branch for operator inspection ({}){}",
+            "leaf {} held on a stale branch or owner base for operator inspection ({}){}",
             run.run_id,
             failure.reason,
             candidate_note(failure)

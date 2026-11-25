@@ -77,7 +77,7 @@ settlements without the flag read as false; absence is not evidence of a pending
 Each settlement's typed `accounting` (`outcome`, `counts_as_failure`, `reason`) says how a
 failure scan counts it: `review_decision_hold`, `evidence_hold`, `operator_cancel`,
 `upgrade_paused` (reason `upgrade_quiesce`: an Orbit upgrade paused the leaf) and
-`delivery_hold` (reason `delivery_stale_branch`: `worktree_setup` kept a retained stale branch untouched for inspection) are held, while `failure`, `baseline_red` and legacy `unrecorded` settlements count. A pending flag on any
+`delivery_hold` (reason `delivery_stale_branch`: `worktree_setup` left a retained stale branch or the owner base checkout untouched for operator inspection) are held, while `failure`, `baseline_red` and legacy `unrecorded` settlements count. A pending flag on any
 settlement other than a failed candidate stays a `failure` with reason
 `review_decision_pending_without_candidate_failure`. Accounting changes no claim or task.
 

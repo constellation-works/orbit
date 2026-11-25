@@ -16,5 +16,6 @@ mod pr_auto_fix_base_red;
 mod pr_auto_fix_ledger;
 mod review_history;
 mod review_report;
+mod stale_branch_guidance;
 mod tool_allowlist;
 mod trusted_host;
