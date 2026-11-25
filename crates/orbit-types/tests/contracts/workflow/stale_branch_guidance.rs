@@ -34,3 +34,19 @@ fn typed_next_step_names_both_remedies() {
         );
     }
 }
+
+#[test]
+fn unattached_base_recovery_needs_no_checkout() {
+    let step = DeliveryRefusal::StaleBranch.operator_next_step("jrun-1");
+    for fragment in [
+        "no checkout holds",
+        "temporary worktree",
+        "merge origin/<base>",
+        "do not delete the branch",
+    ] {
+        assert!(
+            step.contains(fragment),
+            "next step must say `{fragment}`: {step}"
+        );
+    }
+}
