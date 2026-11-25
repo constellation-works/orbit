@@ -85,11 +85,13 @@ td .rel-rate { font-size: var(--text-sm); }
    and a missing message are each also spelled out. */
 /* Reserve the shared segment height for both Incidents and Errors, so
    swapping the header's right slot never moves the panel body. */
-#diagnostics-panel > header { min-height: 65px; flex-wrap: nowrap; }
+#diagnostics-panel > header { min-height: 67px; flex-wrap: nowrap; }
 #diag-title, #diag-window { flex: 0 0 auto; }
 #diag-count { display: flex; align-items: center; gap: var(--space-8); min-width: 0; white-space: nowrap; }
 #diag-count[hidden] { display: none; }
 .diag-count-summary { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.diag-count-compact { display: none; }
+.diagnostics-errors-coverage { margin: var(--space-8) var(--space-16) 0; color: var(--fg-dim); font: var(--text-sm)/1.4 var(--font-sans); }
 #diag-count a { flex: 0 0 auto; }
 .incident-modes .mx-seg-btn { min-width: 44px; min-height: 36px; }
 
@@ -366,11 +368,10 @@ td .rel-rate { font-size: var(--text-sm); }
 @media (max-width: 600px) {
   .diagnostics-errors-page-status { flex: 1 1 100%; order: -1; }
   .diagnostics-errors-pager button { min-height: 36px; }
-  /* The Errors header must read in full at phone widths (no ellipsis):
-     let it wrap and let the count wrap with it. */
-  #diagnostics-panel > header { flex-wrap: wrap; }
-  #diag-count { white-space: normal; flex-wrap: wrap; row-gap: var(--space-2); }
-  .diag-count-summary { overflow: visible; text-overflow: clip; white-space: normal; overflow-wrap: anywhere; }
+  /* The panel header stays one line (STD-07 R39, R5): the count and the
+     load-more link switch to their short forms instead of wrapping. */
+  #diag-count .diag-count-full { display: none; }
+  #diag-count .diag-count-compact { display: inline; }
 }
 
 /* Narrow viewports: the Audit tool-health cards keep their labels readable. */
