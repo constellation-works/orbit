@@ -256,7 +256,7 @@ pub(super) fn run_in_scratch(plan: RunPlan<'_>) -> Result<ScriptStepRan, Refusal
 /// The user-bus locators are admitted here, and only here: without them the
 /// launcher cannot reach the user manager (jrun-20261101-0131-t1, every
 /// contained script step exiting 1 in ~2 ms). They never reach the script,
-/// whose environment is exactly [`script_env`]; the wrapper clears its
+/// whose environment is exactly [`script_env_with_env`]; the wrapper clears its
 /// environment and sets only that inside the sandbox.
 pub(super) fn script_launcher_env(env: &Env) -> Vec<(String, String)> {
     orbit_common::security::child_env::allowlisted_child_env(env, &[], &USER_BUS_LOCATOR_ENV_VARS)
@@ -295,7 +295,7 @@ impl ScriptPassedEnv {
 /// The variables a grant passes into the script (§3 Environment), read from
 /// `parent`. Only names the grant lists are copied, and a name the parent
 /// does not hold (or holds empty) is unset, never an empty string. An
-/// `ORBIT_*` name or one [`script_env`] fixes (`PATH`, `HOME`, …) is never
+/// `ORBIT_*` name or one [`script_env_with_env`] fixes (`PATH`, `HOME`, …) is never
 /// copied, so a grant cannot carry Orbit authority or override the profile's
 /// own values.
 pub(super) fn script_passed_env(
@@ -325,7 +325,7 @@ pub(super) fn script_passed_env(
     passed
 }
 
-/// The names [`script_env`] sets itself; a grant's `env_pass` never
+/// The names [`script_env_with_env`] sets itself; a grant's `env_pass` never
 /// replaces them.
 const SCRIPT_FIXED_ENV: [&str; 5] = [
     env_vars::PATH,
@@ -335,10 +335,7 @@ const SCRIPT_FIXED_ENV: [&str; 5] = [
     env_vars::TZ,
 ];
 
-/// The script's fixed environment (§3): fixed values and the step context.
-/// The granted `env_pass` variables ([`script_passed_env`]) are added to it.
-/// `mount` is where the script sees its scratch directory
-/// ([`orbit_exec::script_scratch_path_in_sandbox`]).
+/// Test wrapper around [`script_env_with_env`] using this process's environment.
 #[cfg(test)]
 pub(crate) fn script_env(
     request: &ScriptStepRequest,
@@ -355,6 +352,11 @@ pub(crate) fn script_env(
     )
 }
 
+/// The script's fixed environment (§3): fixed values and the step context.
+/// The granted `env_pass` variables ([`script_passed_env`]) are added to it.
+/// `env` is this process's environment (only `TZ` is read from it, falling
+/// back to `UTC`); `mount` is where the script sees its scratch directory
+/// ([`orbit_exec::script_scratch_path_in_sandbox`]).
 pub(super) fn script_env_with_env(
     env: &Env,
     request: &ScriptStepRequest,
