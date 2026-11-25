@@ -24,7 +24,10 @@ pub(crate) fn probe_change_since_last_sweep(
     runtime: &OrbitRuntime,
     precondition: &SkipIfUnchanged,
 ) -> Result<ChangeProbe, OrbitError> {
-    let source = Source::new(&runtime.paths().repo_root);
+    let source = Source::new(
+        &runtime.paths().repo_root,
+        runtime.execution_env_policy().process_env(),
+    );
     let tip = match source.verify_branch(&precondition.reference) {
         Ok(revision) => revision.commit,
         Err(error) => {

@@ -85,7 +85,11 @@ fn enable_plugin_checked(
     };
     // Resolve once: a dashboard comparison must be against the paths this
     // very enable will record, not against a second PATH lookup after writes.
-    let (programs, program_warnings) = resolve_consented_programs(&runtime.global_root(), &plugin);
+    let (programs, program_warnings) = resolve_consented_programs(
+        &runtime.global_root(),
+        &plugin,
+        runtime.execution_env_policy().process_env(),
+    );
     if preserve_consent {
         let requested =
             resolve_grant_selection(&["requested".to_string()], &plugin.manifest)?.to_recorded();
@@ -147,11 +151,10 @@ fn enable_plugin_checked(
 pub(in crate::application::plugin) fn resolve_consented_programs(
     global_root: &Path,
     plugin: &LoadedPlugin,
+    env: &orbit_common::Env,
 ) -> (BTreeMap<String, PathBuf>, Vec<String>) {
-    let (resolved, unresolved) = resolve_declared_programs(
-        &plugin.manifest.spec.requires.programs,
-        crate::runtime::process_env().path(),
-    );
+    let (resolved, unresolved) =
+        resolve_declared_programs(&plugin.manifest.spec.requires.programs, env.path());
     let previous = recorded_program_paths(global_root, plugin.namespace());
     let mut warnings: Vec<String> = unresolved
         .into_iter()

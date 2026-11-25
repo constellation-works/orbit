@@ -335,7 +335,7 @@ impl OrbitRuntime {
             timeout_seconds,
             poll_interval_seconds,
             actor,
-            &system_pipeline_wait_clock(&crate::runtime::process_env()),
+            &system_pipeline_wait_clock(self.execution_env_policy().process_env()),
         )
     }
 

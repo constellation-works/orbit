@@ -204,7 +204,7 @@ impl OrbitRuntime {
         let source = self.paths().repo_root.to_string_lossy().into_owned();
         // Every command after `init` names the new repository explicitly, so
         // a failed `init` can never fall through to an enclosing one.
-        let process_env = crate::runtime::process_env();
+        let process_env = self.execution_env_policy().process_env();
         for (args, deadline) in [
             (vec!["init", "--quiet", "--template="], GIT_LOCAL_TIMEOUT),
             (
@@ -233,7 +233,7 @@ impl OrbitRuntime {
                 GIT_CHECKOUT_TIMEOUT,
             ),
         ] {
-            let output = run_git_within(&process_env, &path, &args, deadline)?;
+            let output = run_git_within(process_env, &path, &args, deadline)?;
             if !output.success {
                 return Err(OrbitError::Execution(format!(
                     "prepare evidence checkout {} at {commit}: git {}: {}",
@@ -302,11 +302,11 @@ impl OrbitRuntime {
                 environment_mode: EnvironmentMode::ClearAndSet(env),
                 debug: false,
             };
-            let process_env = crate::runtime::process_env();
+            let process_env = self.execution_env_policy().process_env();
             run_process(
-                &process_env,
+                process_env,
                 &request,
-                &EvidenceCodeqlSandbox::new(checkout, &process_env),
+                &EvidenceCodeqlSandbox::new(checkout, process_env),
             )
         };
         #[cfg(not(target_os = "linux"))]

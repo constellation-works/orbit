@@ -450,7 +450,7 @@ fn write_store_conditional<T, R>(
         ConfigScope::Workspace => workspace_config_path(runtime),
     };
     #[cfg(feature = "test-support")]
-    let env = crate::runtime::process_env();
+    let env = runtime.execution_env_policy().process_env();
     let transaction = || {
         ConfigStore::with_write_lock(&path, || {
             let mut store = match scope {

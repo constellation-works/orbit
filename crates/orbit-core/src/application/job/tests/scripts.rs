@@ -31,7 +31,7 @@ fn script_launcher_env_carries_user_bus_locators_but_script_env_does_not() {
     .map(|(name, value)| (name.to_string(), value.to_string()))
     .collect();
 
-    let launcher_env = script_launcher_env_from(&parent);
+    let launcher_env = script_launcher_env_from(&orbit_common::Env::capture(), &parent);
     assert_eq!(
         env_value(&launcher_env, "XDG_RUNTIME_DIR"),
         Some("/run/user/1000"),
@@ -56,7 +56,7 @@ fn script_launcher_env_carries_user_bus_locators_but_script_env_does_not() {
         .iter()
         .map(|(name, value)| (name.to_string(), value.to_string()))
         .collect();
-    let launcher_env = script_launcher_env_from(&partial);
+    let launcher_env = script_launcher_env_from(&orbit_common::Env::capture(), &partial);
     assert_eq!(
         env_value(&launcher_env, "XDG_RUNTIME_DIR"),
         Some("/run/user/1000")
@@ -91,6 +91,7 @@ fn script_launcher_env_carries_user_bus_locators_but_script_env_does_not() {
         expires_at: None,
     };
     let script_env = script_env(
+        &orbit_common::Env::capture(),
         &request,
         "digest",
         &grant,

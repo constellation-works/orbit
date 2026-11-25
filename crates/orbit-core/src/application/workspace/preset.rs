@@ -188,6 +188,7 @@ impl WorkspacePreset {
     /// enables is one a plugin seeded there whose file still loads.
     pub fn validate_for_workspace(
         &self,
+        env: &orbit_common::Env,
         global_root: &Path,
         workspace_orbit_root: &Path,
     ) -> Result<(), OrbitError> {
@@ -212,6 +213,7 @@ impl WorkspacePreset {
         // Loadability is decided from that staged view, so a missing or
         // unloadable definition refuses the preset with no write.
         self.require_seeded_definitions_load(
+            env,
             global_root,
             workspace_orbit_root,
             staged_plugin_sections.as_ref(),
@@ -374,16 +376,23 @@ impl WorkspacePreset {
     /// when the preset is enabled, through the opened runtime.
     fn require_seeded_definitions_load(
         &self,
+        env: &orbit_common::Env,
         global_root: &Path,
         workspace_orbit_root: &Path,
         staged_plugin_sections: Option<&std::collections::BTreeMap<String, serde_json::Value>>,
     ) -> Result<(), OrbitError> {
-        self.require_routines_load(global_root, workspace_orbit_root, staged_plugin_sections)?;
+        self.require_routines_load(
+            env,
+            global_root,
+            workspace_orbit_root,
+            staged_plugin_sections,
+        )?;
         self.require_auto_tasks_load(workspace_orbit_root)
     }
 
     fn require_routines_load(
         &self,
+        env: &orbit_common::Env,
         global_root: &Path,
         workspace_orbit_root: &Path,
         staged_plugin_sections: Option<&std::collections::BTreeMap<String, serde_json::Value>>,
@@ -395,9 +404,8 @@ impl WorkspacePreset {
             workspace: "workspace".to_string(),
             orbit_dir: workspace_orbit_root.to_path_buf(),
         };
-        let env = crate::runtime::process_env();
         let catalog_lookup = effective_routine_catalog_lookup(
-            &env,
+            env,
             global_root,
             workspace_orbit_root,
             staged_plugin_sections,

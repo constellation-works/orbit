@@ -51,13 +51,14 @@ impl OrbitRuntime {
             self.ensure_tool_agent_facing_with_context(
                 call_name,
                 &super::execute::tool_suggestion_context(
+                    self.execution_env_policy().process_env(),
                     super::execute::ToolEntryPoint::Cli,
                     session_context.clone(),
                 ),
             )?;
 
-            let env = crate::runtime::process_env();
-            let activity_policy = read_activity_tool_policy_from_env(&env);
+            let env = self.execution_env_policy().process_env();
+            let activity_policy = read_activity_tool_policy_from_env(env);
             let mut context = ToolContext {
                 cwd: std::env::current_dir()
                     .ok()

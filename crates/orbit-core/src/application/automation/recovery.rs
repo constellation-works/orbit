@@ -31,7 +31,10 @@ pub(crate) fn recover_auto_task(
 
     // The repository the debt was observed in is a compatibility fact, so it is
     // read from the configured branch rather than the executor's HEAD.
-    let source = Source::new(&runtime.paths().repo_root);
+    let source = Source::new(
+        &runtime.paths().repo_root,
+        runtime.execution_env_policy().process_env(),
+    );
     let (repository, _) = source
         .head(&trigger.branch)
         .map_err(automation_error_to_orbit)?;

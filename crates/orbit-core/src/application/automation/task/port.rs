@@ -32,7 +32,10 @@ impl SourceGit for Source<'_> {
 
 impl TaskAutomationPort for OrbitRuntime {
     fn bounded_source(&self) -> Box<dyn SourceGit + '_> {
-        Box::new(Source::new(&self.paths().repo_root))
+        Box::new(Source::new(
+            &self.paths().repo_root,
+            self.execution_env_policy().process_env(),
+        ))
     }
 
     fn reserve_pilot_tasks(

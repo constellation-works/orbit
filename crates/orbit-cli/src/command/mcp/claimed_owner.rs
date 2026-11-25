@@ -24,6 +24,8 @@ pub(super) struct ClaimedOwnerBridge {
     pub(super) inner: Arc<dyn McpHost>,
     pub(super) global_root: PathBuf,
     pub(super) process_machine_id: String,
+    /// The startup environment the server was composed with.
+    pub(super) env: orbit_common::Env,
 }
 
 impl McpHost for ClaimedOwnerBridge {
@@ -62,6 +64,7 @@ impl McpHost for ClaimedOwnerBridge {
         TaskListResultPolicy::for_call(name, &input, TaskListResultProfile::Default)
             .apply_compact_hint(&mut forwarded_input);
         if let Some(route) = bridge_claimed_owner_call(
+            &self.env,
             &self.global_root,
             session_context.worker_invocation.as_ref(),
             Some(&self.process_machine_id),
@@ -92,6 +95,7 @@ impl McpHost for ClaimedOwnerBridge {
                     // as the CLI's refusal does [ORB-23280].
                     let (operation, input) = tool_family_operation_call(name, input);
                     execute_global_in_process_tool_dispatch(
+                        &self.env,
                         &self.global_root,
                         &operation,
                         input,

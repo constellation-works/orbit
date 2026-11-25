@@ -118,6 +118,7 @@ pub(super) fn set_enabled(
             Some(&plugin),
             projection.status,
             &runtime.global_root(),
+            runtime.execution_env_policy().process_env(),
         );
         summary.diagnostic = projection.diagnostic;
         apply_workspace_toggle(runtime, &mut summary)?;

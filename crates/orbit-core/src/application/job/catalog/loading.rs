@@ -445,7 +445,9 @@ impl OrbitRuntime {
     }
 
     pub(super) fn v2_job_asset_dirs(&self) -> Vec<CatalogDirectory<V2JobCatalogDirKind>> {
-        self.v2_job_asset_dirs_with_env(v2_job_env_dirs(&crate::runtime::process_env()).as_deref())
+        self.v2_job_asset_dirs_with_env(
+            v2_job_env_dirs(self.execution_env_policy().process_env()).as_deref(),
+        )
     }
 
     pub(super) fn v2_job_asset_dirs_with_env(
@@ -472,7 +474,7 @@ impl OrbitRuntime {
         // present so one parse covers both default and custom job names.
         push_v2_job_env_dirs(
             &mut dirs,
-            v2_job_env_dirs(&crate::runtime::process_env()).as_deref(),
+            v2_job_env_dirs(self.execution_env_policy().process_env()).as_deref(),
         );
         dirs.push(
             self.paths().global_dir.join("resources/jobs"),
@@ -553,7 +555,7 @@ impl OrbitRuntime {
     ) -> Vec<CatalogDirectory<V2JobCatalogDirKind>> {
         self.v2_job_asset_dirs_for_execution_with_env(
             job_id,
-            v2_job_env_dirs(&crate::runtime::process_env()).as_deref(),
+            v2_job_env_dirs(self.execution_env_policy().process_env()).as_deref(),
         )
     }
 

@@ -342,7 +342,7 @@ fn store_read_faults_retain_supervision_and_reap_in_a_live_parent() {
             orbit_store::compose::audit_event_store_sqlite(database),
             paths.clone(),
             EventLog::default(),
-            WorkerCommandConfig::for_paths(&paths),
+            WorkerCommandConfig::for_paths(&paths, &orbit_common::Env::capture()),
             Arc::new(StoreHost(runs.clone())),
         );
         let log_path = root.path().join("worker.log");
@@ -548,7 +548,7 @@ fn a_sigterm_stopped_worker_keeps_its_rescue_candidate_before_terminalizing() {
         orbit_store::compose::audit_event_store_sqlite(database),
         paths.clone(),
         EventLog::default(),
-        WorkerCommandConfig::for_paths(&paths),
+        WorkerCommandConfig::for_paths(&paths, &orbit_common::Env::capture()),
         Arc::new(RescueHost {
             inner: runs.clone(),
             preserved: preserved.clone(),
@@ -614,7 +614,7 @@ fn a_sigkilled_worker_keeps_its_rescue_candidate_before_terminalizing() {
         orbit_store::compose::audit_event_store_sqlite(database),
         paths.clone(),
         EventLog::default(),
-        WorkerCommandConfig::for_paths(&paths),
+        WorkerCommandConfig::for_paths(&paths, &orbit_common::Env::capture()),
         Arc::new(RescueHost {
             inner: runs.clone(),
             preserved: preserved.clone(),

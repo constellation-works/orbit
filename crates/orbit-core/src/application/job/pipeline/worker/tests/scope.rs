@@ -279,6 +279,7 @@ fn every_worker_launch_outranks_the_user_manager_as_an_oom_victim() {
             Some(availability),
             true,
             &std::sync::Once::new(),
+            &orbit_common::Env::capture(),
         )
         .expect("non-strict launch never refuses");
         if launch == "scoped" {
@@ -316,6 +317,7 @@ fn script_scope_launcher_scopes_when_the_launch_env_reaches_the_bus() {
     .map(|(name, value)| (name.to_string(), value.to_string()))
     .collect();
     let launcher = script_scope_launcher_with_availability(
+        &orbit_common::Env::capture(),
         "run-1",
         "step-1",
         &settings(MemoryLimit::Infinity, MemoryLimit::Infinity),
@@ -368,6 +370,7 @@ fn script_scope_probe_reports_a_missing_bus_in_the_launch_env() {
     }
 
     let warn = script_scope_launcher_with_availability(
+        &orbit_common::Env::capture(),
         "run-1",
         "step-1",
         &settings(MemoryLimit::Infinity, MemoryLimit::Infinity),
@@ -389,6 +392,7 @@ fn script_scope_probe_reports_a_missing_bus_in_the_launch_env() {
         ..settings(MemoryLimit::Infinity, MemoryLimit::Infinity)
     };
     let refusal = script_scope_launcher_with_availability(
+        &orbit_common::Env::capture(),
         "run-1",
         "step-1",
         &strict_settings,

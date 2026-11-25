@@ -176,9 +176,10 @@ pub(crate) fn contain_worker_command(
     run_id: &str,
     limits: Option<&WorkerLimits>,
     strict: bool,
+    env: &orbit_common::Env,
 ) -> Result<Command, orbit_common::OrbitError> {
     static WARNED: Once = Once::new();
-    let availability = limits.map(|_| user_scope_availability(&crate::runtime::process_env()));
+    let availability = limits.map(|_| user_scope_availability(env));
     contain_worker_command_with_availability(
         base,
         run_id,
@@ -189,9 +190,11 @@ pub(crate) fn contain_worker_command(
         // in-worker watchdog; other platforms are uncontained.
         cfg!(target_os = "linux"),
         &WARNED,
+        env,
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn contain_worker_command_with_availability(
     base: Command,
     run_id: &str,
@@ -200,6 +203,7 @@ pub(crate) fn contain_worker_command_with_availability(
     availability: Option<Result<(), String>>,
     systemd_expected: bool,
     warned: &Once,
+    env: &orbit_common::Env,
 ) -> Result<Command, orbit_common::OrbitError> {
     let Some(limits) = limits else {
         if strict {
@@ -212,9 +216,7 @@ pub(crate) fn contain_worker_command_with_availability(
         }
         return Ok(prefer_as_oom_victim(base));
     };
-    let command = match availability
-        .unwrap_or_else(|| user_scope_availability(&crate::runtime::process_env()))
-    {
+    let command = match availability.unwrap_or_else(|| user_scope_availability(env)) {
         Ok(()) => scoped_worker_command(&base, &scope_unit_name(run_id), limits),
         Err(reason) => {
             if strict {
@@ -386,6 +388,7 @@ pub(crate) fn script_scope_launcher(
 /// itself will use.
 #[cfg(test)]
 pub(crate) fn script_scope_launcher_with_availability(
+    env: &orbit_common::Env,
     run_id: &str,
     step_id: &str,
     settings: &WorkerContainmentSettings,
@@ -394,7 +397,7 @@ pub(crate) fn script_scope_launcher_with_availability(
     availability: Option<Result<(), String>>,
 ) -> Result<ScriptScopeLauncher, String> {
     script_scope_launcher_with_env_and_availability(
-        &crate::runtime::process_env(),
+        env,
         run_id,
         step_id,
         settings,

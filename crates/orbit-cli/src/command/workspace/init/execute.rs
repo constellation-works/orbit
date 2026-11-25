@@ -64,7 +64,11 @@ impl WorkspaceInitArgs {
             .map(WorkspacePreset::load)
             .transpose()?;
         if let Some(preset) = &preset {
-            preset.validate_for_workspace(&global_root, &orbit_dir)?;
+            preset.validate_for_workspace(
+                &orbit_core::composition::composition_env(),
+                &global_root,
+                &orbit_dir,
+            )?;
         }
 
         let init_result = self.execute_at_path(

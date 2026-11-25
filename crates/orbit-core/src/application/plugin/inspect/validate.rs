@@ -80,7 +80,7 @@ pub fn validate_plugin_dir_for_workspace(
         // record them.
         resolve_declared_programs(
             &plugin.manifest.spec.requires.programs,
-            crate::runtime::process_env().path(),
+            runtime.execution_env_policy().process_env().path(),
         )
         .0,
         // Validation never calls the backend, so nothing is read.

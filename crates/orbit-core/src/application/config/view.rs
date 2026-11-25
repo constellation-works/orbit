@@ -106,7 +106,7 @@ pub fn file_view(runtime: &OrbitRuntime, scope: ConfigScope) -> Result<JsonValue
     // the scope, the environment and the registered plugin contracts, so it
     // is cached under exactly those inputs; any edit re-resolves before it
     // can be shown.
-    let environment_hash = environment_hash(&crate::runtime::process_env());
+    let environment_hash = environment_hash(runtime.execution_env_policy().process_env());
     let resolution_key = FileViewResolutionKey {
         scope: scope.label(),
         global_path: global_file.path.clone(),

@@ -377,7 +377,8 @@ impl OrbitRuntime {
     ) -> Result<DeliveryMergeOutcome, OrbitError> {
         let repo_root = self.paths().repo_root.clone();
         let forge = self.task_pr_forge();
-        let blockers = match await_known_merge_blockers(number, forge, &repo_root)? {
+        let env = self.execution_env_policy().process_env();
+        let blockers = match await_known_merge_blockers(number, forge, &repo_root, env)? {
             KnownMergeBlockers::Ready(blockers) => blockers,
             KnownMergeBlockers::Unavailable(reason) => {
                 return Ok(DeliveryMergeOutcome::BlockersUnavailable { reason });
@@ -468,10 +469,10 @@ fn await_known_merge_blockers(
     number: u64,
     forge: &dyn TaskPrForge,
     repo_root: &std::path::Path,
+    env: &orbit_common::Env,
 ) -> Result<KnownMergeBlockers, OrbitError> {
     let started = Instant::now();
-    let env = crate::runtime::process_env();
-    let mut virtual_elapsed = mergeability_wait_is_virtual(&env).then_some(Duration::ZERO);
+    let mut virtual_elapsed = mergeability_wait_is_virtual(env).then_some(Duration::ZERO);
     let mut attempt = 0_u32;
     loop {
         match forge.pull_request_blockers(repo_root, number) {

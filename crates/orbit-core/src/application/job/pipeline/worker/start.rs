@@ -134,7 +134,7 @@ impl OrbitRuntime {
         // service manager; the live containment test opts in on its own
         // supervisor.
         let settings = self.settings().worker_containment();
-        let env = crate::runtime::process_env();
+        let env = self.execution_env_policy().process_env();
         let inherited = env.orbit_worker_containment_strict();
         let strict = effective_strict_containment(settings.strict, strict_override, inherited);
         let limits = if (cfg!(test) || worker_substituted_process_wide()) && !strict {
@@ -147,7 +147,7 @@ impl OrbitRuntime {
             Arc::clone(&self.stores().audit_event),
             self.paths().clone(),
             self.event_log().clone(),
-            WorkerCommandConfig::for_paths(self.paths())
+            WorkerCommandConfig::for_paths(self.paths(), self.execution_env_policy().process_env())
                 .environment(self.execution_env_policy().clone())
                 .contained(limits)
                 .strict_containment(strict),

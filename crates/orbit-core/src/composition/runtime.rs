@@ -94,7 +94,7 @@ impl OrbitRuntime {
         cwd: &Path,
         root_override: Option<&Path>,
     ) -> Result<OrbitRuntimeRoots, OrbitError> {
-        let env = crate::runtime::process_env();
+        let env = super::process_env();
         roots_from_resolved(
             resolve_initialize_roots(cwd, root_override)?,
             has_explicit_root_override(root_override, &env),
@@ -106,7 +106,7 @@ impl OrbitRuntime {
         root_override: Option<&Path>,
         hint: Option<&WorkspaceRootHint>,
     ) -> Result<OrbitRuntimeRoots, OrbitError> {
-        let env = crate::runtime::process_env();
+        let env = super::process_env();
         roots_from_resolved(
             resolve_initialize_roots_with_hint(cwd, root_override, hint)?,
             has_explicit_root_override(root_override, &env),
@@ -117,7 +117,7 @@ impl OrbitRuntime {
         cwd: &Path,
         root_override: Option<&Path>,
     ) -> Result<OrbitRuntimeRoots, OrbitError> {
-        let env = crate::runtime::process_env();
+        let env = super::process_env();
         roots_from_resolved(
             resolve_bootstrap_roots(cwd, root_override)?,
             has_explicit_root_override(root_override, &env),
@@ -129,7 +129,7 @@ impl OrbitRuntime {
         root_override: Option<&Path>,
         hint: Option<&WorkspaceRootHint>,
     ) -> Result<OrbitRuntimeRoots, OrbitError> {
-        let env = crate::runtime::process_env();
+        let env = super::process_env();
         roots_from_resolved(
             resolve_bootstrap_roots_with_hint(cwd, root_override, hint)?,
             has_explicit_root_override(root_override, &env),
@@ -245,7 +245,7 @@ impl OrbitRuntime {
         ])?;
         let _generation = pin_executable_generation(&roots.global_root, true)?;
         let layout_report = observe_or_upgrade_layout(&roots.shared_root, true)?;
-        let env = crate::runtime::process_env();
+        let env = super::process_env();
         let config = ResolvedConfig::load(
             &env,
             &ConfigRoots::new(&roots.global_root, &roots.shared_root),
@@ -270,7 +270,7 @@ impl OrbitRuntime {
             .map_err(|error| OrbitError::Io(error.to_string()))?;
         let data_root = temp_dir.path().to_path_buf();
         let workspace_root = data_root.join(".orbit");
-        let env = crate::runtime::process_env();
+        let env = super::process_env();
         let runtime_config = prepare_resolved_config(&env, &data_root, &workspace_root)?;
         RuntimeKernel::build_in_memory_from_resolved_config(
             &data_root,
@@ -316,7 +316,7 @@ pub fn pin_executable_generation_as(
     } else {
         Access::Write
     };
-    let env = crate::runtime::process_env();
+    let env = super::process_env();
     GenerationGuard::for_process(
         &env,
         root,
@@ -351,7 +351,7 @@ fn build_runtime(
     // The admission recorded the authority before the layout changed and
     // fenced other first adoptions until now.
     drop(authority);
-    let env = crate::runtime::process_env();
+    let env = super::process_env();
     let runtime_config = if write_free {
         ResolvedConfig::load(&env, &ConfigRoots::new(global_root, shared_root))?
     } else {

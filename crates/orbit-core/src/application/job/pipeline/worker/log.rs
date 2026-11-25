@@ -456,6 +456,7 @@ pub(crate) fn configure_pipeline_worker_stdio(
     command: &mut Command,
     logs_dir: &Path,
     run_id: &str,
+    env: &orbit_common::Env,
 ) -> Result<PipelineWorkerLog, OrbitError> {
     #[cfg(unix)]
     let PipelineWorkerLogDirectory {
@@ -519,11 +520,8 @@ pub(crate) fn configure_pipeline_worker_stdio(
     restrict_pipeline_worker_log_file(&log, &log_path)?;
     #[cfg(not(unix))]
     restrict_pipeline_worker_log_file(&log_path)?;
-    if let Some(profile) = pipeline_worker_profile_file(
-        &logs_dir,
-        run_id,
-        crate::runtime::process_env().llvm_profile_file(),
-    )? {
+    if let Some(profile) = pipeline_worker_profile_file(&logs_dir, run_id, env.llvm_profile_file())?
+    {
         command.env(env_vars::LLVM_PROFILE_FILE, profile);
     }
     write_pipeline_worker_spawn_banner(&mut log, command);

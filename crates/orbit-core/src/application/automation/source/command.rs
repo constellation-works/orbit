@@ -32,16 +32,17 @@ const OUTPUT_LIMIT_POLL: Duration = Duration::from_millis(10);
 pub(in crate::application::automation) const LISTING_LIMIT: u64 = 256 * 1_048_576;
 
 impl<'a> Source<'a> {
-    pub(crate) fn new(root: &'a Path) -> Self {
-        Self::at(root, Utc::now())
+    /// `env` is the environment the runtime was composed with; a source never
+    /// reads the ambient process environment itself.
+    pub(crate) fn new(root: &'a Path, env: &Env) -> Self {
+        Self::at(root, Utc::now(), env)
     }
 
-    pub(crate) fn at(root: &'a Path, now: DateTime<Utc>) -> Self {
-        let env = crate::runtime::process_env();
-        let started = BudgetClock::start(&env);
+    pub(crate) fn at(root: &'a Path, now: DateTime<Utc>, env: &Env) -> Self {
+        let started = BudgetClock::start(env);
         Self {
             root,
-            env,
+            env: env.clone(),
             started,
             cache: None,
             now,
@@ -51,28 +52,34 @@ impl<'a> Source<'a> {
 
     /// Inspect evidence against existing refs without fetching origin. Missing
     /// tracking refs stay deferred; the local branch is not a substitute.
-    pub(in crate::application::automation) fn read_only(root: &'a Path) -> Self {
+    pub(in crate::application::automation) fn read_only(root: &'a Path, env: &Env) -> Self {
         Self {
             fetch_origin: false,
-            ..Self::new(root)
+            ..Self::new(root, env)
         }
     }
 
     pub(in crate::application::automation) fn read_only_with_cache(
         root: &'a Path,
         cache: &'a SourceCache,
+        env: &Env,
     ) -> Self {
         Self {
             cache: Some(cache),
-            ..Self::read_only(root)
+            ..Self::read_only(root, env)
         }
     }
 
-    pub(crate) fn with_cache(root: &'a Path, cache: &'a SourceCache, now: DateTime<Utc>) -> Self {
+    pub(crate) fn with_cache(
+        root: &'a Path,
+        cache: &'a SourceCache,
+        now: DateTime<Utc>,
+        env: &Env,
+    ) -> Self {
         Self {
             cache: Some(cache),
             now,
-            ..Self::new(root)
+            ..Self::new(root, env)
         }
     }
 

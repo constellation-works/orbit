@@ -152,9 +152,12 @@ impl GateContext {
             Some(claim_id) => claim_id.clone(),
             None => lineage_root(runtime, &run_id)?,
         };
-        let repository = Source::new(&runtime.paths().repo_root)
-            .repository()
-            .map_err(automation_error)?;
+        let repository = Source::new(
+            &runtime.paths().repo_root,
+            runtime.execution_env_policy().process_env(),
+        )
+        .repository()
+        .map_err(automation_error)?;
         Ok(Self {
             run_id,
             lineage_root,

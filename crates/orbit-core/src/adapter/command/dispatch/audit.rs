@@ -12,7 +12,6 @@ use orbit_types::task::ReservationOwnerMetadata;
 use orbit_types::tool::ToolSessionContext;
 use serde_json::Value;
 
-use crate::runtime::process_env;
 use crate::runtime::run_input::{
     managed_dispatch_context_from_env, managed_run_context_from_env,
     managed_run_context_run_id_from_env,
@@ -92,8 +91,8 @@ pub(super) fn resolve_audit_context(
 /// Resolve MCP audit correlation exclusively from the managed process
 /// envelope. Model-authored tool JSON and session audit metadata are not
 /// correlation inputs.
-pub fn trusted_mcp_audit_context() -> AuditContext {
-    trusted_mcp_audit_context_with_env(&process_env())
+pub fn trusted_mcp_audit_context(env: &orbit_common::Env) -> AuditContext {
+    trusted_mcp_audit_context_with_env(env)
 }
 
 fn trusted_mcp_audit_context_with_env(env: &Env) -> AuditContext {
@@ -186,11 +185,12 @@ pub(super) fn resolve_agent_identity_for_entry_point(
 /// calls without an envelope keep the legacy input/flag precedence (tool JSON
 /// `model`, then flags).
 pub fn audit_role_label(
+    env: &orbit_common::Env,
     input: &Value,
     agent_override: Option<&str>,
     model_override: Option<&str>,
 ) -> String {
-    audit_role_label_with_env(&process_env(), input, agent_override, model_override)
+    audit_role_label_with_env(env, input, agent_override, model_override)
 }
 
 fn audit_role_label_with_env(
@@ -241,13 +241,14 @@ fn audit_role_label_with_env(
 /// calls are always `unverified`; an authenticated managed envelope may use
 /// only its engine-provided identity and never caller JSON/flags.
 pub fn audit_role_label_for_entry_point(
+    env: &orbit_common::Env,
     input: &Value,
     agent_override: Option<&str>,
     model_override: Option<&str>,
     entry_point: ToolEntryPoint,
 ) -> String {
     audit_role_label_for_entry_point_with_env(
-        &process_env(),
+        env,
         input,
         agent_override,
         model_override,

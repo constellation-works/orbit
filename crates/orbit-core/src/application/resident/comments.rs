@@ -297,7 +297,9 @@ impl OrbitRuntime {
                 orbit_types::workflow::ResidentContinuity::Prefer => {
                     let rebuilt_by_fallback =
                         super::due::continuity_rebuilt(&history, &checkpoint.cycle)
-                            || crate::runtime::process_env()
+                            || self
+                                .execution_env_policy()
+                                .process_env()
                                 .orbit_activity_resident_continuity()
                                 .and_then(OsStr::to_str)
                                 == Some("rebuilt");

@@ -215,8 +215,12 @@ impl PipelineWorkerSupervisor {
     /// Launch a detached worker for `run_id` and start watching its startup.
     pub(crate) fn spawn(&self, run_id: &str, actor: Option<&str>) -> Result<(), WorkerLaunchError> {
         let mut command = self.command.build(self.workspace(), run_id)?;
-        let worker_log =
-            configure_pipeline_worker_stdio(&mut command, &self.paths.logs_dir, run_id)?;
+        let worker_log = configure_pipeline_worker_stdio(
+            &mut command,
+            &self.paths.logs_dir,
+            run_id,
+            self.command.env(),
+        )?;
         self.spawn_process(run_id, actor, command, worker_log)
             .map(|_| ())
     }
