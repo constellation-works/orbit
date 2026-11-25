@@ -367,7 +367,7 @@ Friction creation uses the shared `friction_write::project_committed_friction` p
 - [ORB-23935] — Capture final Claude request usage from partial message events without exhausting bounded stdout capture.
 - [ORB-24019] — Drop redundant Claude `content_block_*` stream events from the `agent_output` relay, keeping the relay consistent with the bounded capture.
 - [ORB-25009] — One commit-message standard and identity scheme for every Orbit commit and squash message.
-- [ORB-26732] — Excluded tasks with any uncovered invocation from the `linked_normalized_token_total` per-linked-task denominator on `GET /api/cost`.
+- [ORB-26732] — Excluded tasks with any uncovered invocation from the `covered_linked_task_count` per-linked-task denominator dividing the `linked_normalized_token_total` linked-token numerator on `GET /api/cost`.
 - [ORB-26986] — Persisted redacted `arguments_json` on invalid-input and unknown-workspace tool refusals inside Core's dispatch boundary.
 - [ORB-27043] — Bounded oversized refusal-argument fallback summaries to a 4,096-byte JSON array of top-level key names with a trailing `+N more` marker.
 - [ORB-27044] — Redacted credential-shaped JSON property names alongside values in `redact_all_json_with_keys` for refusal-argument audit rows.
