@@ -15,9 +15,10 @@ use crate::output;
 use crate::output::sink::{OutputMode, OutputSink};
 use crate::root_check;
 
-pub(crate) fn run() {
+pub(crate) fn run(env: orbit_common::Env) {
     // This is the production entry point for CLI, MCP, sweep clock, and the
     // dashboard (`orbit web serve`). Test harnesses never execute this main.
+    orbit_core::composition::install_captured_env(env);
     orbit_core::mark_process_as_pipeline_worker_binary();
     // Provider lines are retained for `run logs --follow`, while diagnostics
     // stay quiet on stderr. An explicit RUST_LOG still overrides both defaults.

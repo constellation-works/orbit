@@ -3,12 +3,12 @@
 
 use orbit_common::env_vars;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
-use orbit_common::OrbitError;
 use orbit_common::fs::generation::{
     Access, GenerationGuard, ParticipantRole, process_handover, process_participation,
 };
+use orbit_common::{Env, OrbitError};
 use orbit_config::{ConfigRoots, ResolvedConfig};
 use orbit_store::Store;
 use orbit_store::compose::compiled_compatibility;
@@ -32,6 +32,25 @@ use crate::runtime::{
     resolve_bootstrap_roots_with_hint, resolve_global_root, resolve_initialize_roots,
     resolve_initialize_roots_with_hint,
 };
+
+/// The environment `main` captured, kept where runtimes are built.
+static CAPTURED_ENV: OnceLock<Env> = OnceLock::new();
+
+/// Keep the environment `main` captured with [`Env::capture`] for
+/// composition. The first value stays: a later call changes nothing.
+pub fn install_captured_env(env: Env) {
+    let installed = CAPTURED_ENV.set(env).is_ok();
+    debug_assert!(
+        installed,
+        "the process environment is captured once, in main"
+    );
+}
+
+/// The environment `main` captured, or `None` in a process that never ran
+/// `main`, such as a test binary.
+pub fn captured_env() -> Option<&'static Env> {
+    CAPTURED_ENV.get()
+}
 
 impl OrbitRuntime {
     pub fn initialize() -> Result<Self, OrbitError> {
