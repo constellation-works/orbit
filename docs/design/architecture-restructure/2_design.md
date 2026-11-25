@@ -314,7 +314,7 @@ Each task lands on its own, leaves every check green and changes no behaviour. T
 | Phase | What | Tasks | Waits for |
 |---|---|---|---|
 | 0 | Ratchets and the app table | ORB-28362, ORB-28364 | nothing |
-| 1 | Environment | ORB-28365 to ORB-28371 | the ratchet check (ORB-28362), directly for ORB-28365 to ORB-28370 and through them for ORB-28371 |
+| 1 | Environment | ORB-28365 to ORB-28371 | the ratchet check (ORB-28362), directly for ORB-28367 to ORB-28370 and through them for ORB-28371; ORB-28365 and ORB-28366 wait on nothing |
 | 2 | Store | ORB-28372 to ORB-28386 | the ratchet check, except ORB-28373 (no dependencies) and ORB-28384 (waits for ORB-28373 only) |
 | 3 | Runtime layers | ORB-28387 to ORB-28395 | the carve waits for nothing; the file layout waits for phases 1 and 2 |
 | 4 | The surface boundary | ORB-28396 to ORB-28407, ORB-28415 to ORB-28417 | the ratchet check, the app table and ORB-28365 (ORB-28416 waits for it) |
