@@ -38,8 +38,8 @@ Daniel approved all eleven as proposed: "let's take it easy and go with your cur
 | 7 | Existing table names | Keep the plural names and record the deviation from STD-12 §R1; new tables are singular. |
 | 8 | Environment | Keep `env_vars.rs` as the one declaration; add one capture at process start and ban every other read with Clippy. |
 | 9 | `orbit-cmd` | It only opens a `Core`. Its command groups become apps in `orbit-core`. |
-| 10 | Unit of work | The subject. One subject's registry spec, app and repositories are converted together, in the order operations-as-data already uses. |
-| 11 | Order | Ratchets first, then environment, store, the surface boundary, the inside of core, and the engine host last. |
+| 10 | Unit of work | Differs by phase: a family of records in the store, a surface family at the boundary, a module inside core. A subject's repositories, entry and functions are converted in separate tasks; moving a noun into the registry stays with operations-as-data [ORB-15932]. |
+| 11 | Order | Ratchets, environment, store, the surface boundary, the inside of core, the engine host: the order the gates close. Once the ratchet check lands, environment, store, the surface boundary and the engine host proceed side by side, with the runtime layers carved before the inside of core moves (2_design.md §11). |
 
 ## 1. Motivation
 
