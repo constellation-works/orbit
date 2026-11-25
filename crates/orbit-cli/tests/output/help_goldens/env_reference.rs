@@ -38,6 +38,13 @@ fn config_environment_reference_matches_registry() {
         .expect("write an environment reference row");
     }
 
+    assert!(
+        table.contains(
+            "| `CARGO_DENY_DB_PATH` | Primary advisory database location for `scripts/cargo-deny.sh`; a non-empty value takes precedence over `ORBIT_CARGO_DENY_DB_PATH`. Orbit sets it for a sandboxed worker that may write. | If unset or empty, the wrapper uses `ORBIT_CARGO_DENY_DB_PATH`; if both are unset or empty, cargo-deny uses its own default location. | — |"
+        ),
+        "the generated environment reference must document cargo-deny's database path precedence and default"
+    );
+
     if std::env::var(UPDATE_HELP_GOLDENS_ENV).as_deref() == Ok("1") && saved != table {
         fs::write(&path, format!("{before}{BEGIN}{table}{END}{after}"))
             .expect("update the generated environment reference in docs/CONFIG.md");

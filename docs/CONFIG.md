@@ -24,7 +24,7 @@ whole.
 <!-- BEGIN GENERATED ENVIRONMENT REFERENCE -->
 | Variable | Meaning | Default when unset | Flag relationship |
 |---|---|---|---|
-| `CARGO_DENY_DB_PATH` | Cargo-deny advisory database location that Orbit sets for a sandboxed worker that may write. | Unset. Cargo-deny uses its own default location. | — |
+| `CARGO_DENY_DB_PATH` | Primary advisory database location for `scripts/cargo-deny.sh`; a non-empty value takes precedence over `ORBIT_CARGO_DENY_DB_PATH`. Orbit sets it for a sandboxed worker that may write. | If unset or empty, the wrapper uses `ORBIT_CARGO_DENY_DB_PATH`; if both are unset or empty, cargo-deny uses its own default location. | — |
 | `CARGO_HOME` | Cargo home for toolchain discovery, build caches and credential paths. | The user's `~/.cargo` where Orbit derives a Cargo home. | — |
 | `CARGO_MANIFEST_DIR` | Workspace location for the engine round-trip example. | The manifest directory recorded at compile time. | — |
 | `CLAUDE_CONFIG_DIR` | Claude Code's configuration and state directory. | `~/.claude` where Orbit derives the directory. | — |
