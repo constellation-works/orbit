@@ -69,6 +69,21 @@ pub fn is_valid_verb(verb: &str) -> bool {
     is_valid_segment(verb)
 }
 
+/// The rule a plugin name segment meets, phrased for a diagnostic.
+pub const SEGMENT_RULE: &str =
+    "start with a lowercase letter, then use lowercase letters, digits or '-'";
+
+/// Why `name` is refused as a plugin namespace, phrased for a config
+/// diagnostic. `orbit` passes the segment rule and is refused only as the
+/// reserved first-party prefix, so it gets that reason instead.
+pub fn namespace_refusal(name: &str) -> &'static str {
+    if name == ORBIT_NAMESPACE_PREFIX {
+        "'orbit' is reserved as the first-party tool prefix"
+    } else {
+        SEGMENT_RULE
+    }
+}
+
 /// Canonical registry name of a plugin tool.
 pub fn plugin_tool_name(namespace: &str, verb: &str, first_party: bool) -> String {
     if first_party {

@@ -1,6 +1,6 @@
 //! Pure manifest validation.
 
-use super::super::namespace::{is_valid_namespace, is_valid_verb};
+use super::super::namespace::{SEGMENT_RULE, is_valid_namespace, is_valid_verb};
 use super::super::template::validate_template;
 use super::super::version::{SemverRange, Version};
 use super::{
@@ -117,10 +117,7 @@ impl PluginManifest {
             if !is_valid_verb(&tool.name) {
                 return Err(PluginManifestError::new(
                     field,
-                    format!(
-                        "'{}' is not a valid tool verb: use lowercase letters, digits or '-'",
-                        tool.name
-                    ),
+                    format!("'{}' is not a valid tool verb: {SEGMENT_RULE}", tool.name),
                 ));
             }
             if !seen.insert(tool.name.as_str()) {
@@ -156,7 +153,7 @@ impl PluginManifest {
                             format!("spec.tools[{index}].cli.verb"),
                             format!(
                                 "tool '{}' overrides its CLI verb to '{verb}', which is not a \
-                                 valid subcommand: use lowercase letters, digits or '-'",
+                                 valid subcommand: {SEGMENT_RULE}",
                                 tool.name
                             ),
                         ));
@@ -248,10 +245,7 @@ impl PluginManifest {
             if !is_valid_verb(&panel.id) {
                 return Err(PluginManifestError::new(
                     format!("{field}.id"),
-                    format!(
-                        "'{}' is not a valid panel id: use lowercase letters, digits or '-'",
-                        panel.id
-                    ),
+                    format!("'{}' is not a valid panel id: {SEGMENT_RULE}", panel.id),
                 ));
             }
             if !seen.insert(panel.id.as_str()) {

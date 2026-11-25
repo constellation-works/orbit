@@ -252,3 +252,14 @@ fn plugin_section_admission_errors_join_continuation_lines_with_one_space() {
         );
     }
 }
+
+/// `orbit` passes the character rule and is refused only as the reserved
+/// first-party prefix, so the section refusal must name that reason [ORB-28536].
+#[test]
+fn reserved_orbit_plugin_section_is_refused_by_reason() {
+    let error = plugin_section_load_error("[plugins.orbit]\nknown = 1\n");
+    assert!(
+        error.contains("reserved"),
+        "[plugins.orbit] must be refused as the reserved namespace [ORB-28536]: {error}"
+    );
+}
