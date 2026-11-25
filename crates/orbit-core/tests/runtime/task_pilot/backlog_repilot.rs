@@ -73,6 +73,17 @@ fn edited_backlog_is_repiloted_once_by_the_bundled_routine() {
         let now = Utc::now();
         let unchanged = evaluate_routine(&workspace.runtime, &routine, false, now).unwrap();
         assert!(unchanged.batch.is_empty(), "{unchanged:?}");
+        update_as(&workspace, &task, "comment", json!("Ready for pickup."));
+        let commented = evaluate_routine(&workspace.runtime, &routine, false, now).unwrap();
+        assert!(
+            !commented
+                .state
+                .unwrap()
+                .members
+                .unwrap()
+                .pending
+                .contains_key(&task.id)
+        );
         edit_requirements(&workspace, &task, field);
         let observed = evaluate_routine(&workspace.runtime, &routine, false, now).unwrap();
         assert!(
@@ -154,6 +165,149 @@ fn edited_backlog_is_repiloted_once_by_the_bundled_routine() {
                     .unwrap()
                     .len(),
                 1
+            );
+        }
+    }
+}
+
+fn manual_backlog_starts_after_edits_without_a_routine_pilot() {
+    use orbit_types::workflow::JobRunTrigger;
+
+    orbit_core::test_support::install_substitute_pipeline_worker(["sh", "-c", "exec sleep 30"]);
+    for field in ["acceptance_criteria", "context_files", "comment"] {
+        let workspace = Workspace::new();
+        workspace.install_pilot_job();
+        let task = assessed_backlog(&workspace);
+        update_as(&workspace, &task, "tags", json!(["no-drain"]));
+        let routine = bundled_routine();
+        let now = Utc::now();
+        evaluate_routine(&workspace.runtime, &routine, false, now).unwrap();
+
+        match field {
+            "acceptance_criteria" => {
+                update_as(
+                    &workspace,
+                    &task,
+                    field,
+                    json!(["Changed acceptance criterion."]),
+                );
+            }
+            "context_files" => {
+                // Record a creation grant independently of any selector or
+                // requirement edit. The assessed file is absent from the
+                // checkout but is still in the pinned source.
+                let before = workspace.runtime.get_task(&task.id).unwrap();
+                assert_eq!(before.context_files, ["file:README.md"]);
+                std::fs::remove_file(workspace.repo.join("README.md")).unwrap();
+                let history = workspace.runtime.get_task_history(&task.id).unwrap();
+                update_as(&workspace, &task, field, json!(before.context_files));
+                let after = workspace.runtime.get_task(&task.id).unwrap();
+                assert_eq!(after.context_files, before.context_files);
+                assert_eq!(after.acceptance_criteria, before.acceptance_criteria);
+                assert!(
+                    workspace.runtime.get_task_history(&task.id).unwrap()[history.len()..]
+                        .iter()
+                        .any(|entry| entry.event == "context_creation_authorized")
+                );
+            }
+            _ => update_as(&workspace, &task, field, json!("Ready for manual pickup.")),
+        }
+        evaluate_routine(&workspace.runtime, &routine, false, now).unwrap();
+        let due = evaluate_routine(
+            &workspace.runtime,
+            &routine,
+            false,
+            now + Duration::minutes(11),
+        )
+        .unwrap();
+        let members = due.state.unwrap().members.unwrap();
+        let run = members.active;
+        let started = workspace.runtime.start_task(&task.id, None, None);
+        // Cancel an unexpected run before asserting, including when reproducing
+        // the original refusal on the unmodified scheduler.
+        if let Some(run_id) = run.as_ref().and_then(|attempt| attempt.action_id.as_ref()) {
+            workspace.runtime.cancel_job_run(run_id).unwrap();
+        }
+        assert_eq!(
+            started
+                .unwrap_or_else(|error| panic!("{field}: {error}"))
+                .status,
+            TaskStatus::InProgress
+        );
+        assert!(run.is_none(), "{field}: the routine started a pilot");
+        assert!(!members.pending.contains_key(&task.id), "{field}");
+        assert!(
+            workspace
+                .jobs
+                .list_job_runs("task_pilot_pipeline")
+                .unwrap()
+                .is_empty()
+        );
+
+        if field == "acceptance_criteria" {
+            workspace
+                .runtime
+                .update_task_as_human(
+                    &task.id,
+                    TaskUpdateParams {
+                        status: Some(TaskStatus::Backlog),
+                        ..Default::default()
+                    },
+                    "human:fixture".into(),
+                )
+                .unwrap();
+            let explicit = workspace
+                .runtime
+                .submit_explicit_task_pilot(&task.id, Some("operator"), JobRunTrigger::cli())
+                .unwrap();
+            workspace.runtime.cancel_job_run(&explicit.run_id).unwrap();
+            let run = workspace
+                .jobs
+                .get_job_run(&explicit.run_id)
+                .unwrap()
+                .unwrap();
+            assert_eq!(run.input.unwrap()["task_ids"], json!([task.id]));
+
+            let delivery = RuntimeHost::insert_job_run(
+                &workspace.runtime,
+                "task_pr_pipeline",
+                1,
+                Utc::now(),
+                Some(json!({"task_ids": [task.id]})),
+                None,
+            )
+            .unwrap();
+            let refused = workspace
+                .runtime
+                .start_task(&task.id, None, None)
+                .unwrap_err();
+            let owner = refused.force_overridable().unwrap();
+            assert_eq!(
+                owner.kind,
+                orbit_common::ForceOverridableKind::RunStillOwnsTask
+            );
+            assert_eq!(owner.run_id.as_deref(), Some(delivery.run_id.as_str()));
+            RuntimeHost::finalize_job_run(
+                &workspace.runtime,
+                &delivery.run_id,
+                JobRunState::Cancelled,
+                Utc::now(),
+                None,
+            )
+            .unwrap();
+
+            let _connection = hold_execution_claim(&workspace, &task);
+            let refused = workspace
+                .runtime
+                .start_task(&task.id, None, None)
+                .unwrap_err();
+            assert!(
+                refused.to_string().contains("fixture-claim-run"),
+                "{refused}"
+            );
+            assert_eq!(
+                workspace.runtime.get_task(&task.id).unwrap().status,
+                TaskStatus::Backlog
             );
         }
     }
@@ -477,6 +631,7 @@ crate::scenario_table!(
     context_files_edit_repilots_a_held_backlog_task,
     only_non_edit_writes_leave_a_held_backlog_task_unselected,
     edited_backlog_is_repiloted_once_by_the_bundled_routine,
+    manual_backlog_starts_after_edits_without_a_routine_pilot,
     live_execution_claim_keeps_edited_backlog_settled,
     failed_backlog_repilot_stops_at_the_routine_retry_bound
 );

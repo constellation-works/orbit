@@ -46,16 +46,9 @@ impl Host<'_> {
                     }) => return Ok(MemberAdmission::Retire("task_deleted".into())),
                     Err(error) => return Err(error.into()),
                 };
-                if !orbit_automation::members::preparation::eligible(&task, self.eligibility()) {
-                    let reason = self
-                        .eligibility()
-                        .exclude_tags
-                        .iter()
-                        .find(|tag| task.tags.contains(tag))
-                        .map_or_else(
-                            || "task_ineligible".to_string(),
-                            |tag| format!("excluded_tag: {tag}"),
-                        );
+                if let Some(reason) =
+                    preparation::routine_pilot_exclusion(&task, self.eligibility())
+                {
                     return Ok(MemberAdmission::Retire(reason));
                 }
                 if let Some(run_ids) = active_preparations.get(id) {

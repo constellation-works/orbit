@@ -867,6 +867,14 @@ fingerprint, so changing it invalidates assessments accepted under the old
 one, while the default adds nothing and keeps the fingerprints accepted before
 the block existed. Explicit task-ID runs do not consult it.
 
+Scheduled task pilots also withhold approved backlog tasks tagged `no-drain`
+(`excluded_tag: no-drain`). The routine checks this at observation and again
+before admitting a pending member. A criteria edit or a context-creation grant
+cannot queue a new routine pilot on this manual-start path. Proposed tasks can
+still receive routine preparation, and an operator can request an explicit
+pilot for a `no-drain` backlog task. Live local run ownership and protecting
+execution claims still guard manual starts.
+
 `freshness` [ORB-13638] selects the material checked for drift during pilot
 preparation and apply. Eligibility selects never-assessed tasks for their first
 automatic pilot. Once a task has an applied assessment, unrelated material or

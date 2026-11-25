@@ -126,17 +126,9 @@ impl Host<'_> {
                         withheld.insert(task.id, "human_crew".into());
                         continue;
                     }
-                    if !orbit_automation::members::preparation::eligible(&task, self.eligibility())
+                    if let Some(reason) =
+                        preparation::routine_pilot_exclusion(&task, self.eligibility())
                     {
-                        let reason = self
-                            .eligibility()
-                            .exclude_tags
-                            .iter()
-                            .find(|tag| task.tags.contains(tag))
-                            .map_or_else(
-                                || "task_ineligible".to_string(),
-                                |tag| format!("excluded_tag: {tag}"),
-                            );
                         withheld.insert(task.id, reason);
                         continue;
                     }
