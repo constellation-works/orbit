@@ -679,12 +679,13 @@ function tileValue(quantiles, fmt, missing) {
   return { text: text ?? missing, known: text != null };
 }
 
-function adjustedTiles(scenario, boundedGap = forecastBoundedGap(scenario.source)) {
+// The bounded-gap qualification lives on its own amber line's hint, so the
+// metric tiles carry only what is specific to their metric (STD-07 P1/R16).
+function adjustedTiles(scenario) {
   const { source } = scenario;
   const inputs = view.payload.inputs || {};
   const parallelism = rangeText(source.effective_parallelism, fmtParallelism);
   const criticalPath = rangeText(source.critical_path_hours, formatForecastHours);
-  const gapLine = boundedGap?.detail ?? null;
   return [
     totalTile("Time to drain", tileValue(source.time_to_drain_hours, formatForecastHours, "Unknown"), [
       drainReason(scenario, source.time_to_drain_hours),
@@ -693,10 +694,9 @@ function adjustedTiles(scenario, boundedGap = forecastBoundedGap(scenario.source
       parallelism ? `Effective parallelism ${parallelism} of ${inputs.concurrency ?? "?"} slots, averaged over the drain.` : null,
       criticalPath ? `Critical path ${criticalPath}: the longest dependency chain.` : null,
       arrivalsApprovedLine(scenario),
-      gapLine,
     ], "fc-kpi"),
-    totalTile("Cost", tileValue(source.usd, formatForecastUsd, "Unknown"), [metricReason(scenario, source.usd, "usd"), costedLine(scenario), gapLine], "fc-kpi"),
-    totalTile("Tokens", tileValue(source.tokens, formatForecastTokens, "Unknown"), [metricReason(scenario, source.tokens, "tokens"), gapLine], "fc-kpi"),
+    totalTile("Cost", tileValue(source.usd, formatForecastUsd, "Unknown"), [metricReason(scenario, source.usd, "usd"), costedLine(scenario)], "fc-kpi"),
+    totalTile("Tokens", tileValue(source.tokens, formatForecastTokens, "Unknown"), [metricReason(scenario, source.tokens, "tokens")], "fc-kpi"),
   ];
 }
 
@@ -818,7 +818,7 @@ function totalsNodes(scenario) {
   if (!info) {
     const boundedGap = forecastBoundedGap(source);
     const figures = el("section", { class: "stat-tiles", "aria-label": "Totals" }, [
-      el("div", { class: "stat-tiles-row" }, adjustedTiles(scenario, boundedGap)),
+      el("div", { class: "stat-tiles-row" }, adjustedTiles(scenario)),
     ]);
     if (boundedGap) figures.dataset.boundedGap = "true";
     return [figures, boundedGapNote(boundedGap), subsetNote(source)];
