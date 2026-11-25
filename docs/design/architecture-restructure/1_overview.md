@@ -87,20 +87,20 @@ Nothing is built, so the Task column is empty. The File column is where each con
 |---|---|---|
 | What a surface may name | `crates/orbit-core/src/lib.rs` (exports `app`, `Core`, `Error` only) | — |
 | One unit per subject | `crates/orbit-core/src/app/<subject>/` | — |
-| The entry point, authorization and audit | `crates/orbit-core/src/app/exec.rs` | — |
+| The entry point, authorization and audit | crates/orbit-core/src/app/exec.rs | — |
 | What every operation has | `crates/orbit-runtime/src/base/` | — |
 | The opened workspace and the store | `crates/orbit-runtime/src/stored/` | — |
 | This machine as a place work runs | `crates/orbit-runtime/src/host/` | — |
 | The run a process carries | `crates/orbit-runtime/src/run/` | — |
-| Port bindings between apps | `crates/orbit-core/src/app/port.rs` | — |
+| Port bindings between apps | crates/orbit-core/src/app/port.rs | — |
 | Engine host, as five traits | `crates/orbit-engine/src/context/hosts/`, implemented in `crates/orbit-core/src/adapter/engine_host/` | — |
 | Opening a `Core` for a registered workspace | `crates/orbit-cmd/src/registry/` | — |
 | Record shapes | `crates/orbit-store/src/contract/` | — |
 | One repository per record | `crates/orbit-store/src/repository/<record>.rs` | — |
 | One driver per storage mechanism, and its schema | `crates/orbit-store/src/driver/sqlite/<database>/schema/` | — |
-| The read and write facade | `crates/orbit-store/src/store.rs` | — |
-| Environment declaration and capture | `crates/orbit-common/src/env_vars.rs`, `crates/orbit-common/src/env.rs` | — |
-| Ratchet baselines | `scripts/architecture-ratchet-baseline.json` | — |
+| The read and write facade | crates/orbit-store/src/store.rs | — |
+| Environment declaration and capture | `crates/orbit-common/src/env_vars.rs`, crates/orbit-common/src/env.rs | — |
+| Ratchet baselines | scripts/architecture-ratchet-baseline.json | — |
 
 ## What does not change
 
