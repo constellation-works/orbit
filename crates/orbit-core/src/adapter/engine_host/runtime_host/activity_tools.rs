@@ -15,7 +15,6 @@ use crate::application::job::{
     DisallowGrant, IMPLEMENTING_ACTIVITY, agent_tool_grant_classification, classify_disallow_grant,
     drops_disallowed_requirements, granted_tool_refusal,
 };
-use crate::application::resident::RESIDENT_CYCLE_ACTIVITY;
 
 /// Activities whose tool baseline carries the fleet-notice write tools, so
 /// a managed run can warn other agents about a problem outside its task
@@ -69,6 +68,7 @@ pub(super) fn resolve_activity_tools(
                 .collect(),
             omitted_requirement_notes,
             granted_tools: Vec::new(),
+            resident_tools: Vec::new(),
             suppressed_tools: Vec::new(),
         });
     }
@@ -85,6 +85,7 @@ pub(super) fn resolve_activity_tools(
         effective_tools,
         omitted_requirement_notes,
         granted_tools: Vec::new(),
+        resident_tools: Vec::new(),
         suppressed_tools: Vec::new(),
     })
 }
@@ -106,6 +107,7 @@ pub(super) fn resolve_activity_tools(
 /// its capability, process, coordination and claimed-mode checks at call time.
 pub(super) fn resolve_activity_tool_denials(
     runtime: &OrbitRuntime,
+    run_id: Option<&str>,
     task_ids: &[String],
     activity: &str,
     disallow_list: &[String],
@@ -151,33 +153,19 @@ pub(super) fn resolve_activity_tool_denials(
     // suppression also denies them to the child.
     let suppressed_tools = crew_memory_suppressions(runtime, &tasks, Some(activity))?;
     effective_tools.retain(|tool| !suppressed_tools.contains(tool));
-    // A resident cycle's live grant puts the guarded families it holds rights
-    // for in the tool list; core's cycle guard still gates every call.
-    let mut granted_tools: Vec<String> = grants
-        .lifted
-        .into_iter()
-        .filter(|tool| !suppressed_tools.contains(tool))
-        .collect();
-    if activity == RESIDENT_CYCLE_ACTIVITY {
-        let right_tools = runtime
-            .resident_cycle_right_tools(task_ids)
-            .map_err(|error| {
-                DispatchError::CliInvocationFailed(format!(
-                    "resolve resident cycle grant tools: {error}"
-                ))
-            })?;
-        for tool in right_tools {
-            if !granted_tools.contains(&tool) {
-                granted_tools.push(tool);
-            }
-        }
-    }
     Ok(ResolvedActivityTools {
         requested_tools,
         effective_tools,
         omitted_requirement_notes,
         // A stored grant of a suppressed tool lifts nothing for this run.
-        granted_tools,
+        granted_tools: grants
+            .lifted
+            .into_iter()
+            .filter(|tool| !suppressed_tools.contains(tool))
+            .collect(),
+        resident_tools: run_id.map_or_else(Vec::new, |run_id| {
+            runtime.resident_cycle_granted_tools(run_id, activity)
+        }),
         suppressed_tools,
     })
 }

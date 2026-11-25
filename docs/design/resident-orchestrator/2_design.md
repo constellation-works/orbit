@@ -446,6 +446,12 @@ to `review` (`resident_handoff_by_checkpoint`): it hands off with a checkpoint
 through native `orbit task lint --restore-pruned`. Context maintenance has no resident right;
 operator restoration outside a cycle is unchanged.
 
+The provider envelope uses the live grant recorded for the dispatched run. A grant with delivery
+rights advertises the corresponding `orbit.workflow` and `orbit.task.recover` families and
+supplies them in the nested MCP toolset stamp. Expired and observe-only cycles contribute no
+delivery families.
+Individual actions still pass through the activity policy and Core's tool guard.
+
 **Action ledger.** Each admitted write (except the checkpoint itself) is keyed
 `resident:<mandate>:<cycle>:<n>`, numbered under the assignment's write lock. A `resident_action`
 history row with phase `started` precedes the call, and a row with `ok`, `failed` or `refused`

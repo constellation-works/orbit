@@ -195,18 +195,15 @@ impl RuntimeKernel {
         // A live resident cycle may read drain readiness (`orbit.workflow.auto`
         // action `status`) in its covered workspaces without operator
         // capability; controls and every other caller stay held to the row.
-        let resident_drain_status = if name == "orbit.workflow.auto"
-            && input
-                .get("action")
-                .and_then(Value::as_str)
-                .is_some_and(|action| action.trim() == "status")
-            && let Some(run_id) = resident_cycle_run_id(tool_context)
-        {
-            self.application
-                .resident_cycle_drain_status_allowed(self, &run_id, input)?
-        } else {
-            false
-        };
+        let resident_drain_status =
+            if crate::authorization::is_resident_drain_status_call(name, input)
+                && let Some(run_id) = resident_cycle_run_id(tool_context)
+            {
+                self.application
+                    .resident_cycle_drain_status_allowed(self, &run_id, input)?
+            } else {
+                false
+            };
         if !resident_drain_status {
             self.authorize_tool_operation(
                 name,

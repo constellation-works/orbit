@@ -899,6 +899,7 @@ pub trait NullRuntimeHost: Send + Sync {
 
     fn resolve_activity_tool_denials(
         &self,
+        _run_id: Option<&str>,
         _task_ids: &[String],
         _activity: &str,
         _disallow_list: &[String],

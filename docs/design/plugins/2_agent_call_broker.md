@@ -169,6 +169,13 @@ For every brokered resident action (ship, decision raise, land, refresh, re-pilo
 broker's authenticated run can exercise the resident exemption. An in-process call still faces
 the operator capability check and cannot use a resident grant or replay its ledger entries.
 
+**A resident cycle's drain status.** The nested client forwards
+`orbit.workflow` with `action: auto` and `mode: status` for the cycle's workspace.
+The broker uses the authenticated run to invoke the regular readiness read with agent
+capability and the activity's policy. Core checks the live cycle and workspace. Other
+covered workspaces use the existing workspace-local status route. Drain controls require
+operator capability.
+
 **A resident cycle's re-pilot, requeue and delivery recovery.** `orbit.task.recover` action `repilot`
 submits a pilot run whose worker, like a ship's leaf, must start beside the cycle's read-only
 sandbox; action `requeue` restores a held task and its preserved candidate; and action

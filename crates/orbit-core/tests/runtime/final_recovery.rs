@@ -873,7 +873,7 @@ fn final_recovery_keeps_run_observers_and_every_declared_tool_write_denied() {
         }
         let resolved = fixture
             .runtime
-            .resolve_activity_tool_denials(&[], activity, &denied)
+            .resolve_activity_tool_denials(None, &[], activity, &denied)
             .unwrap();
         assert!(
             resolved
@@ -969,7 +969,7 @@ fn agent_loop_activities_withhold_run_show_and_keep_its_operator_gate() {
         );
         let resolved = fixture
             .runtime
-            .resolve_activity_tool_denials(&[], activity, &denied)
+            .resolve_activity_tool_denials(None, &[], activity, &denied)
             .unwrap();
         assert!(
             !orbit_types::workflow::tool_allowed(
@@ -1011,7 +1011,7 @@ fn final_recovery_drops_a_required_tool_its_disallow_list_covers() {
     );
     let resolved = fixture
         .runtime
-        .resolve_activity_tool_denials(tasks, "final_recovery", &denied)
+        .resolve_activity_tool_denials(None, tasks, "final_recovery", &denied)
         .expect("final recovery starts when the implementer requires a disallowed tool");
     assert!(
         !resolved
@@ -1047,7 +1047,7 @@ fn final_recovery_drops_a_required_tool_its_disallow_list_covers() {
     let covering = vec!["orbit.task.add".to_string()];
     let step = fixture
         .runtime
-        .resolve_activity_tool_denials(tasks, "step_failure_recovery", &covering)
+        .resolve_activity_tool_denials(None, tasks, "step_failure_recovery", &covering)
         .expect("step recovery drops a covered requirement instead of refusing to start");
     assert!(
         !step
@@ -1080,7 +1080,7 @@ fn assert_admission_refused(
 ) {
     let refused = fixture
         .runtime
-        .resolve_activity_tool_denials(tasks, activity, disallow_list)
+        .resolve_activity_tool_denials(None, tasks, activity, disallow_list)
         .expect_err(
             "an implementing activity stays fail-closed when the list covers a requirement",
         );

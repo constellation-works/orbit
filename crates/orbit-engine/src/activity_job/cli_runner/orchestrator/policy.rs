@@ -166,6 +166,7 @@ pub(super) struct ActivityToolGrant {
 pub(super) fn resolve_activity_tool_grant(
     host: &dyn RuntimeHost,
     spec: &AgentLoopSpec,
+    run_id: &str,
     activity_name: &str,
     input: &Value,
     task_ids: &[String],
@@ -176,7 +177,13 @@ pub(super) fn resolve_activity_tool_grant(
         claimed_tool_disallow_list(spec.tool_disallow_list.as_deref(), claimed);
     let mut activity_tools = match tool_disallow_list.as_deref() {
         Some(disallow_list) => {
-            host.resolve_activity_tool_denials(task_ids, activity_name, disallow_list)?
+            let discovery_run = (!claimed && spec.response_correction.is_none()).then_some(run_id);
+            host.resolve_activity_tool_denials(
+                discovery_run,
+                task_ids,
+                activity_name,
+                disallow_list,
+            )?
         }
         None => host.resolve_activity_tools(task_ids, &spec.tools)?,
     };
@@ -448,7 +455,7 @@ fn restrict_allowlist(
             } else {
                 if registered.is_none() {
                     registered = Some(
-                        host.resolve_activity_tool_denials(task_ids, activity_name, &[])?
+                        host.resolve_activity_tool_denials(None, task_ids, activity_name, &[])?
                             .effective_tools,
                     );
                 }

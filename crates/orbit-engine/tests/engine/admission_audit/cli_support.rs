@@ -86,6 +86,7 @@ impl orbit_engine::test_support::NullRuntimeHost for TestHost {
     /// Deny mode over the fixed [`TEST_REGISTERED_TOOLS`] registry.
     fn resolve_activity_tool_denials(
         &self,
+        _run_id: Option<&str>,
         _task_ids: &[String],
         _activity: &str,
         disallow_list: &[String],

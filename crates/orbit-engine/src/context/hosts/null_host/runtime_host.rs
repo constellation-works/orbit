@@ -745,11 +745,18 @@ impl<T: NullRuntimeHost> RuntimeHost for T {
     }
     fn resolve_activity_tool_denials(
         &self,
+        run_id: Option<&str>,
         task_ids: &[String],
         activity: &str,
         disallow_list: &[String],
     ) -> Result<ResolvedActivityTools, DispatchError> {
-        NullRuntimeHost::resolve_activity_tool_denials(self, task_ids, activity, disallow_list)
+        NullRuntimeHost::resolve_activity_tool_denials(
+            self,
+            run_id,
+            task_ids,
+            activity,
+            disallow_list,
+        )
     }
     fn resolve_activity_tools(
         &self,
