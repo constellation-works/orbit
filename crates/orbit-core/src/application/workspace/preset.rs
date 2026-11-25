@@ -16,6 +16,7 @@
 //! name and the SHA-256 of its bytes are recorded under `.orbit/state/` for
 //! provenance.
 
+use orbit_common::env_vars;
 use std::path::{Path, PathBuf};
 
 use chrono::Utc;
@@ -543,9 +544,9 @@ fn effective_routine_catalog_lookup(
     let global_jobs_dir = global_root.join("resources/jobs");
     let workspace_jobs_dir = workspace_orbit_root.join("resources/jobs");
     let mut dirs: Vec<PathBuf> = Vec::new();
-    if let Some(raw) = std::env::var("ORBIT_JOB_DIR")
+    if let Some(raw) = std::env::var(env_vars::ORBIT_JOB_DIR)
         .ok()
-        .or_else(|| std::env::var("ORBIT_V2_JOB_DIR").ok())
+        .or_else(|| std::env::var(env_vars::ORBIT_V2_JOB_DIR).ok())
     {
         dirs.extend(
             raw.split(':')

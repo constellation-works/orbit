@@ -26,6 +26,7 @@
 //! no legitimate worker flow. A worker reaches the owner without `~/.ssh` by
 //! handing its result back through step output.
 
+use orbit_common::env_vars;
 use std::ffi::OsStr;
 use std::path::PathBuf;
 
@@ -121,8 +122,8 @@ pub(crate) fn credential_read_denies(
 /// plugin backend the host spawns on an agent's behalf — so it carries the
 /// same credential denies on either platform.
 pub fn default_credential_read_denies() -> Vec<PathBuf> {
-    let home = std::env::var_os("HOME");
-    let cargo_home = std::env::var_os("CARGO_HOME");
+    let home = std::env::var_os(env_vars::HOME);
+    let cargo_home = std::env::var_os(env_vars::CARGO_HOME);
     credential_read_denies(home.as_deref(), cargo_home.as_deref())
         .into_iter()
         .map(|deny| deny.path)

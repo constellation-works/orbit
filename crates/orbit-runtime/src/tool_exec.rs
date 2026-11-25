@@ -1,3 +1,4 @@
+use orbit_common::env_vars;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError};
@@ -542,7 +543,11 @@ fn linked_worktree_root_from_gitfile(
     canonical_cwd: &Path,
     canonical_repo_root: &Path,
 ) -> Option<PathBuf> {
-    const GIT_LOCATION_OVERRIDES: [&str; 3] = ["GIT_DIR", "GIT_COMMON_DIR", "GIT_WORK_TREE"];
+    const GIT_LOCATION_OVERRIDES: [&str; 3] = [
+        env_vars::GIT_DIR,
+        env_vars::GIT_COMMON_DIR,
+        env_vars::GIT_WORK_TREE,
+    ];
     if GIT_LOCATION_OVERRIDES
         .iter()
         .any(|name| std::env::var_os(name).is_some())
@@ -602,7 +607,7 @@ fn canonical_git_common_dir(path: &Path) -> Option<PathBuf> {
 }
 
 fn read_activity_fs_profile_from_env() -> Option<String> {
-    let value = std::env::var("ORBIT_ACTIVITY_FS_PROFILE").ok()?;
+    let value = std::env::var(env_vars::ORBIT_ACTIVITY_FS_PROFILE).ok()?;
     let trimmed = value.trim();
     (!trimmed.is_empty()).then_some(trimmed.to_string())
 }

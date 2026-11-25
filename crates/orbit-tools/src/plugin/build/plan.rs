@@ -1,5 +1,6 @@
 //! Consent plan: resolved programs, toolchain roots, and the paths a build may read.
 
+use orbit_common::env_vars;
 use std::collections::BTreeSet;
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
@@ -172,14 +173,20 @@ pub fn plan_plugin_build(
 
     let mut locators = Vec::new();
     if let Some(home) = &rustup_home {
-        locators.push(("RUSTUP_HOME".to_string(), home.display().to_string()));
-        if let Some(toolchain) = env.locator("RUSTUP_TOOLCHAIN")
+        locators.push((
+            env_vars::RUSTUP_HOME.to_string(),
+            home.display().to_string(),
+        ));
+        if let Some(toolchain) = env.locator(env_vars::RUSTUP_TOOLCHAIN)
             && !toolchain.contains('/')
         {
-            locators.push(("RUSTUP_TOOLCHAIN".to_string(), toolchain.to_string()));
+            locators.push((
+                env_vars::RUSTUP_TOOLCHAIN.to_string(),
+                toolchain.to_string(),
+            ));
         }
     }
-    for name in ["GOROOT", "JAVA_HOME"] {
+    for name in [env_vars::GOROOT, env_vars::JAVA_HOME] {
         if let Some(value) = env.locator(name)
             && let Ok(canonical) = Path::new(value).canonicalize()
             && roots.iter().any(|root| canonical.starts_with(root))

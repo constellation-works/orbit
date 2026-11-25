@@ -38,6 +38,7 @@
 //! prepared ([`remove_legacy_github_run_log_cache`]). Any failure to read or
 //! write the cache is a miss, never a read error.
 
+use orbit_common::env_vars;
 use std::fs::{self, File};
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -198,7 +199,7 @@ impl LogCache {
     /// else the machine-global `~/.orbit`. `None` when neither resolves, which
     /// leaves reads uncached.
     pub(crate) fn in_data_root() -> Option<Self> {
-        let root = match std::env::var("ORBIT_ROOT") {
+        let root = match std::env::var(env_vars::ORBIT_ROOT) {
             Ok(root) if !root.trim().is_empty() => PathBuf::from(root),
             _ => orbit_common::fs::path::global_orbit_dir().ok()?,
         };

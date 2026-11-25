@@ -1,3 +1,4 @@
+use orbit_common::env_vars;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -11,7 +12,7 @@ use crate::run_input::managed_dispatch_context_from_env;
 ///
 /// Unlike `ORBIT_ROOT`, this selects only the host-global registry and never
 /// changes workspace root discovery or bootstrap ownership.
-const ORBIT_REGISTRY_ROOT_ENV: &str = "ORBIT_REGISTRY_ROOT";
+use orbit_common::env_vars::ORBIT_REGISTRY_ROOT as ORBIT_REGISTRY_ROOT_ENV;
 
 /// Returns the global Orbit root.
 ///
@@ -53,12 +54,12 @@ pub fn resolve_generation_root(root_override: Option<&Path>) -> Result<PathBuf, 
         let root = resolve_root_path_value(&root.to_string_lossy(), &cwd)?;
         return explicit_generation_root(root, "--root");
     }
-    if let Ok(explicit) = std::env::var("ORBIT_ROOT") {
+    if let Ok(explicit) = std::env::var(env_vars::ORBIT_ROOT) {
         let trimmed = explicit.trim();
         if !trimmed.is_empty() {
             let cwd = std::env::current_dir()?;
             let root = resolve_root_path_value(trimmed, &cwd)?;
-            return explicit_generation_root(root, "ORBIT_ROOT");
+            return explicit_generation_root(root, env_vars::ORBIT_ROOT);
         }
     }
     resolve_global_root()
@@ -250,7 +251,7 @@ fn resolve_orbit_roots(
     }
 
     // 2. ORBIT_ROOT env (escape hatch)
-    if let Ok(explicit) = std::env::var("ORBIT_ROOT")
+    if let Ok(explicit) = std::env::var(env_vars::ORBIT_ROOT)
         && !explicit.trim().is_empty()
     {
         let root = resolve_explicit_root_path_value(&explicit, cwd, explicit_root_mode)?;
@@ -345,7 +346,7 @@ enum ExplicitRootMode {
 }
 
 fn orbit_root_env_is_set() -> bool {
-    std::env::var("ORBIT_ROOT").is_ok_and(|value| !value.trim().is_empty())
+    std::env::var(env_vars::ORBIT_ROOT).is_ok_and(|value| !value.trim().is_empty())
 }
 
 /// An initialized `.orbit/` in `cwd` that is not the linked checkout's own
@@ -651,7 +652,7 @@ pub fn try_resolve_initialized_roots_with_hint(
         )));
     }
 
-    if let Ok(explicit) = std::env::var("ORBIT_ROOT")
+    if let Ok(explicit) = std::env::var(env_vars::ORBIT_ROOT)
         && !explicit.trim().is_empty()
     {
         let root =

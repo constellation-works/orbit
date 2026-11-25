@@ -1,3 +1,4 @@
+use crate::env_vars;
 /// Environment variable that grants [`orbit_types::tool::McpCapability::Operator`] to a caller the
 /// envelope would otherwise leave unprivileged.
 ///
@@ -6,7 +7,7 @@
 /// deliberate. Every use is logged and audited with
 /// [`super::CallerProvenance::OperatorOverride`] so an override is visible in the
 /// trail rather than indistinguishable from an ordinary operator session.
-pub const OPERATOR_OVERRIDE_ENV: &str = "ORBIT_OPERATOR";
+pub use crate::env_vars::ORBIT_OPERATOR as OPERATOR_OVERRIDE_ENV;
 
 /// Whether [`OPERATOR_OVERRIDE_ENV`] is set to a truthy value in this
 /// process's environment.
@@ -20,7 +21,7 @@ pub fn operator_override_active() -> bool {
 }
 
 /// Process-envelope variables that declare the caller to be an agent.
-const AGENT_ENVELOPE_ENV: &[&str] = &["ORBIT_AGENT_NAME", "ORBIT_AGENT_MODEL"];
+const AGENT_ENVELOPE_ENV: &[&str] = &[env_vars::ORBIT_AGENT_NAME, env_vars::ORBIT_AGENT_MODEL];
 
 /// Whether this process's environment declares it to be an agent or a step of
 /// a managed run.
@@ -36,10 +37,10 @@ pub fn agent_context_declared() -> bool {
 }
 
 /// Set to `agent` by the activity runner for agent-backed steps.
-const ACTOR_KIND_ENV: &str = "ORBIT_TASK_ACTOR_KIND";
+use crate::env_vars::ORBIT_TASK_ACTOR_KIND as ACTOR_KIND_ENV;
 
 /// Set by the engine for any process it spawns as part of a managed run.
-const MANAGED_RUN_ENV: &str = "ORBIT_MANAGED_RUN_CONTEXT";
+use crate::env_vars::ORBIT_MANAGED_RUN_CONTEXT as MANAGED_RUN_ENV;
 
 /// Whether an environment variable is set to a truthy value.
 ///

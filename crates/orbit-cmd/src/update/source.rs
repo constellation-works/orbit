@@ -60,17 +60,17 @@ pub(super) fn read_bounded(
 pub const DEFAULT_RELEASE_REPO: &str = "constellation-works/orbit";
 
 /// Environment variable naming a local release mirror directory.
-pub const RELEASE_DIR_ENV: &str = "ORBIT_UPDATE_RELEASE_DIR";
+pub use orbit_common::env_vars::ORBIT_UPDATE_RELEASE_DIR as RELEASE_DIR_ENV;
 
 /// Environment variable naming the GitHub repository to read releases from.
 /// Shares its name with the variable `install.sh` reads.
-pub const RELEASE_REPO_ENV: &str = "ORBIT_INSTALL_REPO";
+pub use orbit_common::env_vars::ORBIT_INSTALL_REPO as RELEASE_REPO_ENV;
 
 /// Test-only override for the release API. Compiled only for debug builds
 /// when the CLI process-test feature is enabled; release builds have no such
 /// environment setting and always use the pinned GitHub API below.
 #[cfg(all(feature = "test-release-api-base", debug_assertions))]
-const TEST_RELEASE_API_BASE_ENV: &str = "ORBIT_TEST_RELEASE_API_BASE";
+use orbit_common::env_vars::ORBIT_TEST_RELEASE_API_BASE as TEST_RELEASE_API_BASE_ENV;
 
 /// File in a mirror directory naming the newest published version.
 pub const MIRROR_LATEST_FILE: &str = "latest-version.txt";

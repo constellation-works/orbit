@@ -1,5 +1,6 @@
 //! Routine and machine clock operations for the dashboard [ORB-10875].
 
+use orbit_common::env_vars;
 use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -567,7 +568,7 @@ pub(super) fn host_cron_zone() -> Value {
 }
 
 fn host_zone_name() -> Option<String> {
-    let tz = std::env::var("TZ").ok();
+    let tz = std::env::var(env_vars::TZ).ok();
     let link = std::fs::read_link("/etc/localtime").ok();
     let file = std::fs::read_to_string("/etc/timezone").ok();
     zone_name_from_sources(
@@ -846,7 +847,7 @@ impl<'a> OperationAudit<'a> {
             error_message: denial
                 .map(ToString::to_string)
                 .or_else(|| failure.map(str::to_string)),
-            host: std::env::var("HOSTNAME").ok(),
+            host: std::env::var(env_vars::HOSTNAME).ok(),
             pid: std::process::id(),
             session_id: None,
             workspace_id: Some(self.workspace.to_string()),

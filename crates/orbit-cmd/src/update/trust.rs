@@ -14,9 +14,9 @@ use chrono::NaiveDate;
 use orbit_common::OrbitError;
 use orbit_common::security::release::{TRUSTED_RELEASE_KEYS, TrustedReleaseKey};
 
-const TRUSTED_KEYS_FILE_ENV: &str = "ORBIT_RELEASE_TRUSTED_KEYS_FILE";
-const TRUSTED_KEYS_ACK_ENV: &str = "ORBIT_RELEASE_TRUSTED_KEYS_FILE_ACKNOWLEDGE_TRUST_CHANGE";
-const PUBLIC_KEY_FILE_ENV: &str = "ORBIT_RELEASE_PUBLIC_KEY_FILE";
+use orbit_common::env_vars::ORBIT_RELEASE_PUBLIC_KEY_FILE as PUBLIC_KEY_FILE_ENV;
+use orbit_common::env_vars::ORBIT_RELEASE_TRUSTED_KEYS_FILE as TRUSTED_KEYS_FILE_ENV;
+use orbit_common::env_vars::ORBIT_RELEASE_TRUSTED_KEYS_FILE_ACKNOWLEDGE_TRUST_CHANGE as TRUSTED_KEYS_ACK_ENV;
 
 /// Same ceiling as other release metadata. A trust file is a handful of records.
 const MAX_TRUST_FILE_BYTES: u64 = 64 * 1024;

@@ -6,13 +6,14 @@
 //! `orbit_config::ConfigSeed`, and config loading itself never probes the
 //! host.
 
+use orbit_common::env_vars;
 use std::env;
 use std::path::PathBuf;
 
 /// Returns true when an executable named `name` is found on `PATH`. Walks the
 /// process `PATH` manually (no extra crate dep).
 fn binary_on_path(name: &str) -> bool {
-    let Some(path_var) = env::var_os("PATH") else {
+    let Some(path_var) = env::var_os(env_vars::PATH) else {
         return false;
     };
     for dir in env::split_paths(&path_var) {

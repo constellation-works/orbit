@@ -1,3 +1,4 @@
+use orbit_common::env_vars;
 mod archive;
 pub(crate) mod artifact;
 mod command;
@@ -31,10 +32,10 @@ pub(crate) fn mutation_identity(model: Option<String>) -> (Option<String>, Optio
     if model.is_some() {
         return (None, model);
     }
-    let agent = std::env::var("ORBIT_AGENT_NAME")
+    let agent = std::env::var(env_vars::ORBIT_AGENT_NAME)
         .ok()
         .filter(|value| !value.trim().is_empty());
-    let model = std::env::var("ORBIT_AGENT_MODEL")
+    let model = std::env::var(env_vars::ORBIT_AGENT_MODEL)
         .ok()
         .filter(|value| !value.trim().is_empty());
     (agent, model)

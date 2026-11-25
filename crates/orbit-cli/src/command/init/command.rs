@@ -1,4 +1,5 @@
 use clap::Args;
+use orbit_common::env_vars;
 use orbit_core::bootstrap::init::{InitOptions, allocated_task_prefix, init_global};
 use orbit_core::{OrbitError, OrbitRuntime};
 use orbit_registry::workspace_registry::global_orbit_dir;
@@ -44,7 +45,7 @@ pub struct InitCommand {
     /// ready
     #[arg(
         long,
-        env = "ORBIT_SKIP_HOST_PREREQUISITES",
+        env = env_vars::ORBIT_SKIP_HOST_PREREQUISITES,
         value_parser = clap::builder::FalseyValueParser::new()
     )]
     pub skip_host_prerequisites: bool,

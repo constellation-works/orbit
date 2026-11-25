@@ -1,6 +1,7 @@
 //! Invocation-local skill discovery. Shared provider state stays at its
 //! original paths; only the selected skill directories are materialized.
 
+use orbit_common::env_vars;
 use std::path::{Path, PathBuf};
 
 use orbit_types::workflow::{ExperimentActivityOverlay, experiment_skill_provider_supported};
@@ -37,8 +38,8 @@ pub(super) fn prepare_experiment_skill_root(
             .find(|(name, value)| name == key && !value.is_empty())
             .map(|(_, value)| PathBuf::from(value))
     };
-    let configured = value("CLAUDE_CONFIG_DIR");
-    let home = value("HOME");
+    let configured = value(env_vars::CLAUDE_CONFIG_DIR);
+    let home = value(env_vars::HOME);
     let source = configured
         .clone()
         .or_else(|| home.as_ref().map(|home| home.join(".claude")))
@@ -102,9 +103,9 @@ pub(super) fn prepare_experiment_skill_root(
             }
         }
     }
-    child_env.retain(|(key, _)| key != "CLAUDE_CONFIG_DIR");
+    child_env.retain(|(key, _)| key != env_vars::CLAUDE_CONFIG_DIR);
     child_env.push((
-        "CLAUDE_CONFIG_DIR".into(),
+        env_vars::CLAUDE_CONFIG_DIR.into(),
         private.path().display().to_string(),
     ));
     Ok(Some(private))

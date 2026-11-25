@@ -36,7 +36,7 @@ use crate::RuntimeKernel;
 
 /// Names the run a handed-over worker image adopts. Only honoured by the
 /// process already recorded as that run's owner.
-pub(crate) const ADOPT_RUN_ENV: &str = "ORBIT_ADOPT_PIPELINE_RUN";
+pub(crate) use orbit_common::env_vars::ORBIT_ADOPT_PIPELINE_RUN as ADOPT_RUN_ENV;
 
 /// Error code of a run its worker interrupted to let an upgrade proceed.
 pub const UPGRADE_QUIESCE_ERROR_CODE: &str = "upgrade_quiesce";

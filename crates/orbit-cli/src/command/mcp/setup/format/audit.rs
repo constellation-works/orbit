@@ -1,5 +1,6 @@
 //! Evidence emitted at the actual file mutation, including runtime-free init.
 
+use orbit_common::env_vars;
 use std::panic::Location;
 use std::path::Path;
 
@@ -20,8 +21,8 @@ pub(super) fn record_config_write(
         caller = %Location::caller(),
         action,
         pid = std::process::id(),
-        run_id = std::env::var("ORBIT_RUN_ID").ok().as_deref(),
-        activity_id = std::env::var("ORBIT_ACTIVITY_ID").ok().as_deref(),
+        run_id = std::env::var(env_vars::ORBIT_RUN_ID).ok().as_deref(),
+        activity_id = std::env::var(env_vars::ORBIT_ACTIVITY_ID).ok().as_deref(),
         cwd = ?std::env::current_dir().ok(),
         args = ?std::env::args_os().collect::<Vec<_>>(),
         server_args = %servers,

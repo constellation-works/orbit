@@ -64,19 +64,19 @@ const HOST_RESOURCES_INTERVAL: StdDuration = StdDuration::from_secs(5);
 /// a window deadline that passes with no run changing.
 const DRAIN_RECHECK_INTERVAL: StdDuration = StdDuration::from_secs(15);
 /// Interval, in milliseconds, an isolated test fixture's server substitutes
-/// for [`SCAN_INTERVAL`]. Only builds with `test-support` recognize it.
+/// for [`DRAIN_RECHECK_INTERVAL`]. Only builds with `test-support`
+/// recognize it.
 #[cfg(feature = "test-support")]
-const SCAN_INTERVAL_ENV: &str = "ORBIT_TEST_EVENTS_SCAN_INTERVAL_MS";
+use orbit_common::env_vars::ORBIT_TEST_EVENTS_DRAIN_RECHECK_INTERVAL_MS as DRAIN_RECHECK_INTERVAL_ENV;
 /// Interval, in milliseconds, an isolated test fixture's server substitutes
 /// for [`HOST_RESOURCES_INTERVAL`]. Only builds with `test-support`
 /// recognize it.
 #[cfg(feature = "test-support")]
-const HOST_RESOURCES_INTERVAL_ENV: &str = "ORBIT_TEST_EVENTS_HOST_RESOURCES_INTERVAL_MS";
+use orbit_common::env_vars::ORBIT_TEST_EVENTS_HOST_RESOURCES_INTERVAL_MS as HOST_RESOURCES_INTERVAL_ENV;
 /// Interval, in milliseconds, an isolated test fixture's server substitutes
-/// for [`DRAIN_RECHECK_INTERVAL`]. Only builds with `test-support`
-/// recognize it.
+/// for [`SCAN_INTERVAL`]. Only builds with `test-support` recognize it.
 #[cfg(feature = "test-support")]
-const DRAIN_RECHECK_INTERVAL_ENV: &str = "ORBIT_TEST_EVENTS_DRAIN_RECHECK_INTERVAL_MS";
+use orbit_common::env_vars::ORBIT_TEST_EVENTS_SCAN_INTERVAL_MS as SCAN_INTERVAL_ENV;
 
 #[cfg(feature = "test-support")]
 fn test_interval(env: &str) -> Option<StdDuration> {

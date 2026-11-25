@@ -1,3 +1,4 @@
+use crate::env_vars;
 use std::path::{Path, PathBuf};
 
 use crate::OrbitError;
@@ -61,11 +62,11 @@ pub fn ssh_socket_dir() -> Result<PathBuf, OrbitError> {
 /// destination's caller authorization is read against, so both resolve it the
 /// same way rather than each spelling out its own fallback.
 pub fn home_dir() -> Result<PathBuf, OrbitError> {
-    let home = std::env::var("HOME")
+    let home = std::env::var(env_vars::HOME)
         .ok()
         .filter(|value| !value.trim().is_empty())
         .or_else(|| {
-            std::env::var("USERPROFILE")
+            std::env::var(env_vars::USERPROFILE)
                 .ok()
                 .filter(|value| !value.trim().is_empty())
         })

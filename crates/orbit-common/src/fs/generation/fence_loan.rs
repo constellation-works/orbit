@@ -30,7 +30,7 @@ use crate::OrbitError;
 
 /// Environment variable naming the generation fences a parent lent to this
 /// process: one line per authority, `<admission fd>:<generation fd>:<root>`.
-pub const LENT_FENCE_ENV: &str = "ORBIT_LENT_GENERATION_FENCE";
+pub use crate::env_vars::ORBIT_LENT_GENERATION_FENCE as LENT_FENCE_ENV;
 
 impl GenerationUpdate {
     /// Take exclusive admission on `root` for a fence, as [`Self::acquire`]

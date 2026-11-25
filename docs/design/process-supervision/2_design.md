@@ -150,7 +150,7 @@ it under one `Supervision` request.
 - **Hooks.** `on_spawn(pid)`; progress sampling of the newest 64 KiB of
   stdout as the periodic hook; a stopped-descendant reporter callback.
 - **Deadline.** Extendable: build-budget wait credits read from
-  `WAIT_DIRECTORY_ENV`. It is kept on the supervision clock that
+  `ORBIT_ACTIVITY_BUILD_BUDGET_DIR`. It is kept on the supervision clock that
   `with_cli_supervision_clock` replaces in tests and handed to the supervisor
   as the matching real instant.
 - **Termination.** `KillNow`, with the group drain wait. The drain budget is

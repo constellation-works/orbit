@@ -4,7 +4,7 @@ use super::INHERITED_AUTHORITY_ENV;
 
 /// Set by the scrub so a test process re-executed by a scrubbed parent keeps
 /// the variables its parent set on purpose.
-pub const SCRUBBED_MARKER_ENV: &str = "ORBIT_TEST_ENV_SCRUBBED";
+pub use crate::env_vars::ORBIT_TEST_ENV_SCRUBBED as SCRUBBED_MARKER_ENV;
 
 /// Remove every [`INHERITED_AUTHORITY_ENV`] variable from this process, once.
 ///

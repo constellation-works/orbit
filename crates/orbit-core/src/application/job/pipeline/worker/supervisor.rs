@@ -15,6 +15,7 @@
 //! must not own — so its failure paths can be exercised against a store alone.
 //! [`OrbitRuntime`] keeps its worker methods as thin delegations.
 
+use orbit_common::env_vars;
 use std::sync::Arc;
 
 use chrono::DateTime;
@@ -278,7 +279,7 @@ impl PipelineWorkerSupervisor {
             })?;
 
         if self.host.worker_bound() {
-            command.env("ORBIT_WORKER_CONTEXT_REQUIRED", "1");
+            command.env(env_vars::ORBIT_WORKER_CONTEXT_REQUIRED, "1");
         }
         let child = command
             .spawn()

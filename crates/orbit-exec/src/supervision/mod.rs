@@ -22,7 +22,7 @@ pub use orbit_common::process::supervisor::{
     INTERRUPTED_SIGNAL_NOTE, OUTPUT_CAPTURE_LIMIT_NOTE, ProcessStopCause, TERMINATION_STATUS_NOTE,
 };
 
-const ORBIT_EXEC_OUTPUT_CAPTURE_LIMIT_ENV: &str = "ORBIT_EXEC_OUTPUT_CAPTURE_LIMIT_BYTES";
+use orbit_common::env_vars::ORBIT_EXEC_OUTPUT_CAPTURE_LIMIT_BYTES as ORBIT_EXEC_OUTPUT_CAPTURE_LIMIT_ENV;
 const DEFAULT_OUTPUT_CAPTURE_LIMIT_BYTES: usize = 1024 * 1024;
 
 /// How long pipe workers may keep running after the supervised child is gone,

@@ -1,3 +1,4 @@
+use orbit_common::env_vars;
 use std::collections::HashMap;
 
 use orbit_common::OrbitError;
@@ -8,7 +9,7 @@ use crate::runtime::{AgentRuntime, AgentRuntimeFactory};
 use crate::types::{AgentInvocationSpec, AgentRequest};
 
 const RUNTIME_KEY: &str = "ollama";
-const REQUIRED_ENV_VARS: &[&str] = &["HOME", "PATH"];
+const REQUIRED_ENV_VARS: &[&str] = &[env_vars::HOME, env_vars::PATH];
 
 pub(crate) struct OllamaRuntime {
     command: String,

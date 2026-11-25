@@ -1,3 +1,4 @@
+use orbit_common::env_vars;
 use std::borrow::Cow;
 use std::cell::{OnceCell, RefCell};
 use std::collections::{BTreeSet, HashMap};
@@ -650,9 +651,9 @@ pub(super) fn ci_branch_field(input: &Value, key: &str) -> Result<Option<String>
 }
 
 pub(super) fn v2_job_env_dirs() -> Option<String> {
-    std::env::var("ORBIT_JOB_DIR")
+    std::env::var(env_vars::ORBIT_JOB_DIR)
         .ok()
-        .or_else(|| std::env::var("ORBIT_V2_JOB_DIR").ok())
+        .or_else(|| std::env::var(env_vars::ORBIT_V2_JOB_DIR).ok())
 }
 
 pub(super) fn push_v2_job_env_dirs(

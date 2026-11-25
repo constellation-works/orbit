@@ -4,6 +4,7 @@
 //! programs, so it lives beside `tool`/`context`/`host` rather than inside
 //! the `proc.spawn` builtin leaf.
 
+use orbit_common::env_vars;
 use std::path::Path;
 
 use orbit_common::OrbitError;
@@ -27,12 +28,12 @@ pub(crate) fn enforce_program_allowlist(
             let child_path = ctx.proc_spawn_environment.as_deref().and_then(|pairs| {
                 pairs
                     .iter()
-                    .find(|(name, _)| name == "PATH")
+                    .find(|(name, _)| name == env_vars::PATH)
                     .map(|(_, value)| value.as_str())
             });
             let path = child_path
                 .map(std::ffi::OsString::from)
-                .or_else(|| std::env::var_os("PATH"));
+                .or_else(|| std::env::var_os(env_vars::PATH));
             path.and_then(|path| {
                 std::env::split_paths(&path)
                     .find_map(|dir| std::fs::canonicalize(dir.join(requested)).ok())

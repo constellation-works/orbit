@@ -36,7 +36,7 @@ use super::worktree::scratch_checkout_path;
 /// Name prefix of a host-evidence checkout under the managed worktree root.
 const WORKTREE_DIR: &str = "orbit-host-evidence";
 /// The switch macOS sandbox tests read to fail rather than skip.
-const REQUIRE_SANDBOX_EXEC: &str = "ORBIT_REQUIRE_SANDBOX_EXEC";
+use orbit_common::env_vars::ORBIT_REQUIRE_SANDBOX_EXEC as REQUIRE_SANDBOX_EXEC;
 
 /// One host run and its judgement.
 #[derive(Debug, Clone)]

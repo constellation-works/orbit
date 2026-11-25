@@ -25,7 +25,7 @@
 use std::time::{Duration, Instant};
 
 /// Overrides [`DEFAULT_STOPPED_DESCENDANT_THRESHOLD`], in milliseconds.
-pub const STOPPED_DESCENDANT_THRESHOLD_ENV: &str = "ORBIT_STOPPED_DESCENDANT_THRESHOLD_MS";
+pub use crate::env_vars::ORBIT_STOPPED_DESCENDANT_THRESHOLD_MS as STOPPED_DESCENDANT_THRESHOLD_ENV;
 
 /// How long a descendant must stay stopped before it is ended.
 ///

@@ -16,7 +16,7 @@ const DEFAULT_WORKFLOW_BASE_BRANCH: &str = "main";
 const CODEX_APPROVAL_POLICIES: &[&str] = &["untrusted", "on-request", "never"];
 const DEFAULT_WORKFLOW_CREW: &str = "opus";
 const LEGACY_DEFAULT_WORKFLOW_CREW: &str = "claude";
-const CONSTELLATION_DEFAULT_PROVIDER_ENV: &str = "CONSTELLATION_DEFAULT_PROVIDER";
+use orbit_common::env_vars::CONSTELLATION_DEFAULT_PROVIDER as CONSTELLATION_DEFAULT_PROVIDER_ENV;
 
 /// Live `[crews.<name>]` fields addressable as `crews.<name>.<field>`.
 ///

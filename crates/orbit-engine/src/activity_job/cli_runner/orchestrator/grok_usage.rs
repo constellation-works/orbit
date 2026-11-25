@@ -1,5 +1,6 @@
 //! Advisory reads of the Grok CLI account's billing window.
 
+use orbit_common::env_vars;
 use std::io::Read;
 use std::path::PathBuf;
 
@@ -45,15 +46,15 @@ impl GrokUsageRequest {
                 return None;
             }
         }
-        let home = value("GROK_HOME")
+        let home = value(env_vars::GROK_HOME)
             .map(PathBuf::from)
-            .or_else(|| value("HOME").map(|home| PathBuf::from(home).join(".grok")))?;
+            .or_else(|| value(env_vars::HOME).map(|home| PathBuf::from(home).join(".grok")))?;
         // A relative root depends on the child's cwd, not the host's cwd.
         if !home.is_absolute() {
             return None;
         }
         let environment = [
-            "PATH",
+            env_vars::PATH,
             "SSL_CERT_FILE",
             "SSL_CERT_DIR",
             "HTTPS_PROXY",

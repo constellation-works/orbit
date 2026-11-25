@@ -1,5 +1,6 @@
 //! Build environment and toolchain policy for an install-time plugin build.
 
+use orbit_common::env_vars;
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 
@@ -14,20 +15,20 @@ pub const PLUGIN_BUILD_DIR_PREFIX: &str = ".build-";
 /// Toolchain locators a build may receive (§3.5), each only under the rules
 /// in [`plugin_build_environment`].
 pub const PLUGIN_BUILD_TOOLCHAIN_LOCATORS: &[&str] = &[
-    "RUSTUP_HOME",
-    "RUSTUP_TOOLCHAIN",
-    "CARGO_HOME",
-    "GOROOT",
-    "JAVA_HOME",
+    env_vars::RUSTUP_HOME,
+    env_vars::RUSTUP_TOOLCHAIN,
+    env_vars::CARGO_HOME,
+    env_vars::GOROOT,
+    env_vars::JAVA_HOME,
 ];
 
 /// Names never passed to a build, whatever the locator list later contains.
 pub const PLUGIN_BUILD_DENIED_ENV: &[&str] = &[
-    "GH_TOKEN",
-    "GITHUB_TOKEN",
+    env_vars::GH_TOKEN,
+    env_vars::GITHUB_TOKEN,
     "ANTHROPIC_API_KEY",
     "OPENAI_API_KEY",
-    "SSH_AUTH_SOCK",
+    env_vars::SSH_AUTH_SOCK,
     "GIT_ASKPASS",
     "NPM_TOKEN",
 ];
@@ -60,8 +61,8 @@ pub struct PluginBuildHostEnv {
 impl PluginBuildHostEnv {
     pub fn from_process() -> Self {
         Self {
-            path: std::env::var_os("PATH"),
-            home: std::env::var_os("HOME")
+            path: std::env::var_os(env_vars::PATH),
+            home: std::env::var_os(env_vars::HOME)
                 .filter(|home| !home.is_empty())
                 .map(PathBuf::from),
             locators: PLUGIN_BUILD_TOOLCHAIN_LOCATORS
@@ -113,12 +114,12 @@ pub(super) fn toolchain_for(
     env: &PluginBuildHostEnv,
 ) -> Toolchain {
     let cargo_bin = env
-        .locator("CARGO_HOME")
+        .locator(env_vars::CARGO_HOME)
         .map(PathBuf::from)
         .or_else(|| env.home.as_ref().map(|home| home.join(".cargo")))
         .map(|cargo_home| cargo_home.join("bin"));
     let rustup_home = env
-        .locator("RUSTUP_HOME")
+        .locator(env_vars::RUSTUP_HOME)
         .map(PathBuf::from)
         .or_else(|| env.home.as_ref().map(|home| home.join(".rustup")))
         .and_then(|home| home.canonicalize().ok());
@@ -173,11 +174,11 @@ pub fn plugin_build_environment(
         .collect();
     path.extend(["/usr/bin".to_string(), "/bin".to_string()]);
     let mut env = vec![
-        ("PATH".to_string(), path.join(":")),
-        ("HOME".to_string(), format!("{build}/home")),
-        ("TMPDIR".to_string(), format!("{build}/tmp")),
-        ("LANG".to_string(), "C.UTF-8".to_string()),
-        ("TZ".to_string(), "UTC".to_string()),
+        (env_vars::PATH.to_string(), path.join(":")),
+        (env_vars::HOME.to_string(), format!("{build}/home")),
+        (env_vars::TMPDIR.to_string(), format!("{build}/tmp")),
+        (env_vars::LANG.to_string(), "C.UTF-8".to_string()),
+        (env_vars::TZ.to_string(), "UTC".to_string()),
         (
             "SOURCE_DATE_EPOCH".to_string(),
             plan.committed_at.to_string(),
@@ -185,7 +186,10 @@ pub fn plugin_build_environment(
         ("ORBIT_BUILD_DIR".to_string(), build.clone()),
         ("ORBIT_BUILD_SRC".to_string(), format!("{build}/src")),
         ("ORBIT_BUILD_PHASE".to_string(), phase.name().to_string()),
-        ("CARGO_HOME".to_string(), format!("{build}/home/.cargo")),
+        (
+            env_vars::CARGO_HOME.to_string(),
+            format!("{build}/home/.cargo"),
+        ),
     ];
     env.extend(plan.locators.iter().cloned());
     env.retain(|(name, _)| !is_denied_build_env(name));

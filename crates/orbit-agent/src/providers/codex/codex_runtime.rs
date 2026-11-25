@@ -1,3 +1,4 @@
+use orbit_common::env_vars;
 use std::collections::HashMap;
 
 use crate::agent::{AgentConfig, ProviderOptions};
@@ -10,7 +11,7 @@ const RUNTIME_KEY: &str = "codex";
 /// `CODEX_HOME` is non-secret state-root context: the sandbox grants exactly
 /// the directory it names, so dropping it would make the CLI resolve
 /// `$HOME/.codex` while the profile granted the override.
-const REQUIRED_ENV_VARS: &[&str] = &["HOME", "PATH", "CODEX_HOME"];
+const REQUIRED_ENV_VARS: &[&str] = &[env_vars::HOME, env_vars::PATH, env_vars::CODEX_HOME];
 
 pub(crate) struct CodexRuntime {
     command: String,

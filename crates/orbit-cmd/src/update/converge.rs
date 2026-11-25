@@ -39,7 +39,7 @@ const STEP_OUTPUT_LIMIT: usize = 1024 * 1024;
 
 /// Environment variable bounding each `--version` and `update --contract`
 /// probe of a candidate or installed executable, in seconds.
-pub const PROBE_TIMEOUT_ENV: &str = "ORBIT_UPDATE_PROBE_TIMEOUT_SECS";
+pub use orbit_common::env_vars::ORBIT_UPDATE_PROBE_TIMEOUT_SECS as PROBE_TIMEOUT_ENV;
 
 /// Default [`PROBE_TIMEOUT_ENV`]. The probes run while every generation
 /// authority is held exclusively, so a candidate that hangs must not hold

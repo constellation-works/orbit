@@ -22,7 +22,7 @@ pub(super) const ARRIVALS_COMPUTE_BUDGET: Duration = Duration::from_secs(20);
 /// [`ARRIVALS_COMPUTE_BUDGET`]. Only dev-dependency builds with `test-support`
 /// recognize this variable.
 #[cfg(feature = "test-support")]
-pub const COMPUTE_BUDGET_ENV: &str = "ORBIT_TEST_FORECAST_COMPUTE_BUDGET_MS";
+pub use orbit_common::env_vars::ORBIT_TEST_FORECAST_COMPUTE_BUDGET_MS as COMPUTE_BUDGET_ENV;
 
 /// The wall-time budget of a scenario with arrivals: [`ARRIVALS_COMPUTE_BUDGET`]
 /// unless a test fixture substituted another through [`COMPUTE_BUDGET_ENV`].

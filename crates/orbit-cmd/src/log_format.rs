@@ -1,6 +1,7 @@
 //! Process-log filters, path resolution and plain-text source/code columns
 //! shared by `orbit log` and the dashboard's log view.
 
+use orbit_common::env_vars;
 use std::path::{Path, PathBuf};
 
 use chrono::{DateTime, Duration, Utc};
@@ -253,7 +254,7 @@ pub fn resolve_log_path(override_path: Option<&Path>) -> Result<PathBuf, OrbitEr
     if let Some(path) = override_path {
         return Ok(path.to_path_buf());
     }
-    if let Ok(env) = std::env::var("ORBIT_LOG_PATH")
+    if let Ok(env) = std::env::var(env_vars::ORBIT_LOG_PATH)
         && !env.is_empty()
     {
         return Ok(PathBuf::from(env));

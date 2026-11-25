@@ -7,6 +7,7 @@
 //! diagnostic and registered inactive; every built-in and every other plugin is
 //! untouched.
 
+use orbit_common::env_vars;
 use std::collections::BTreeMap;
 use std::path::Path;
 use std::sync::Arc;
@@ -516,7 +517,7 @@ fn audit_refused_row(store: &Store, installed: &InstalledPlugin, check: &str, me
         stdout_truncated: None,
         stderr_truncated: None,
         error_message: Some(message.to_string()),
-        host: std::env::var("HOSTNAME").ok(),
+        host: std::env::var(env_vars::HOSTNAME).ok(),
         pid: std::process::id(),
         session_id: None,
         workspace_id: None,

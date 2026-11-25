@@ -17,6 +17,7 @@
 //! promptly carrying the exact pre-dispatch error.
 
 use chrono::Utc;
+use orbit_common::env_vars;
 use orbit_common::observability::audit_id::audit_execution_id;
 use orbit_engine::DispatchError;
 use orbit_store::contracts::AuditEventInsertParams;
@@ -302,7 +303,7 @@ fn record_child_audit(
             stdout_truncated: None,
             stderr_truncated: None,
             error_message: error_message.map(ToOwned::to_owned),
-            host: std::env::var("HOSTNAME").ok(),
+            host: std::env::var(env_vars::HOSTNAME).ok(),
             pid: std::process::id(),
             session_id: None,
             workspace_id: None,

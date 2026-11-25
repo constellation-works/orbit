@@ -5,6 +5,7 @@
 //! `mcp-registration` row reads them, from the CLI and the dashboard alike, so
 //! the path table lives here once. Nothing in this module writes a file.
 
+use orbit_common::env_vars;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -216,7 +217,7 @@ fn grok_reads_shared_location(scope: McpClientScope, home_dir: Option<&Path>) ->
         {
             return false;
         }
-        if std::env::var("GROK_CLAUDE_MCPS_ENABLED")
+        if std::env::var(env_vars::GROK_CLAUDE_MCPS_ENABLED)
             .ok()
             .is_some_and(|value| matches!(value.to_ascii_lowercase().as_str(), "0" | "false"))
         {

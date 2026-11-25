@@ -43,7 +43,7 @@ use crate::task::locks::{workspace_orbit_dir, workspace_task_reservation_id};
 /// Environment fallback for the holder's token, so an operator shell does not
 /// have to repeat `--claim-token` on every dispatch. An explicit argument always
 /// wins; this is a convenience, not a second identity.
-pub const CLAIM_TOKEN_ENV: &str = "ORBIT_WORKSPACE_CLAIM_TOKEN";
+pub use orbit_common::env_vars::ORBIT_WORKSPACE_CLAIM_TOKEN as CLAIM_TOKEN_ENV;
 
 const DEFAULT_CLAIM_TTL_SECONDS: u32 = 3600;
 const MAX_CLAIM_TTL_SECONDS: u32 = 43_200;

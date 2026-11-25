@@ -48,12 +48,12 @@ pub use lifecycle::stdin_supports_handover;
 pub(crate) use lifecycle::{resumed_session, serve};
 
 /// Carries a resumed session's state into the replacement image.
-pub const RESUME_ENV: &str = "ORBIT_MCP_RESUME";
+pub use orbit_common::env_vars::ORBIT_MCP_RESUME as RESUME_ENV;
 
 /// Debug-build fixture only. Milliseconds between stdio lifecycle checks.
 /// Release builds keep the two-second budget whatever this says. Values
 /// outside 20ms..=2s are ignored so a fixture can only shorten the tick.
-pub const LIFECYCLE_INTERVAL_ENV: &str = "ORBIT_TEST_MCP_LIFECYCLE_INTERVAL_MS";
+pub use orbit_common::env_vars::ORBIT_TEST_MCP_LIFECYCLE_INTERVAL_MS as LIFECYCLE_INTERVAL_ENV;
 
 /// A partial line longer than this is not handed over; the session keeps
 /// serving and retries at a later idle point.

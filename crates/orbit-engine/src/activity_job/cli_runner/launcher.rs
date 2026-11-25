@@ -1,13 +1,14 @@
 //! Provider launcher lookup and the agent tool environment pinned to the
 //! dispatching Orbit build.
 
+use orbit_common::env_vars;
 use std::collections::HashSet;
 use std::ffi::OsStr;
 use std::path::{Component, Path, PathBuf};
 
 use super::spawn::SpawnError;
 
-const ORBIT_BIN_ENV: &str = "ORBIT_BIN";
+use orbit_common::env_vars::ORBIT_BIN as ORBIT_BIN_ENV;
 
 /// Conventional `$HOME` bin directories searched when a provider launcher
 /// is not on the inherited `PATH`, and backfilled into a spawned agent's
@@ -33,8 +34,8 @@ pub(crate) fn resolve_provider_launcher(
     program: &str,
     cwd: Option<&Path>,
 ) -> Result<String, SpawnError> {
-    let path = std::env::var_os("PATH");
-    let home = std::env::var_os("HOME").map(PathBuf::from);
+    let path = std::env::var_os(env_vars::PATH);
+    let home = std::env::var_os(env_vars::HOME).map(PathBuf::from);
     resolve_provider_launcher_with(provider, program, path.as_deref(), home.as_deref(), cwd)
 }
 
@@ -74,10 +75,10 @@ pub(crate) fn orbit_tool_env(
     let inherited_path = child_env
         .iter()
         .rev()
-        .find(|(name, _)| name == "PATH")
+        .find(|(name, _)| name == env_vars::PATH)
         .map(|(_, value)| std::ffi::OsString::from(value))
-        .or_else(|| std::env::var_os("PATH"));
-    let home = std::env::var_os("HOME").map(PathBuf::from);
+        .or_else(|| std::env::var_os(env_vars::PATH));
+    let home = std::env::var_os(env_vars::HOME).map(PathBuf::from);
     orbit_tool_env_with(
         configured.as_deref(),
         &current_exe,
@@ -150,7 +151,7 @@ fn orbit_tool_env_with(
 
     Ok(vec![
         (ORBIT_BIN_ENV.to_string(), selected_text),
-        ("PATH".to_string(), pinned_path),
+        (env_vars::PATH.to_string(), pinned_path),
     ])
 }
 
@@ -340,7 +341,7 @@ pub fn missing_launcher_in(text: &str) -> Option<MissingLauncher> {
 
 #[cfg(windows)]
 fn windows_executable_extensions() -> Vec<String> {
-    std::env::var("PATHEXT")
+    std::env::var(env_vars::PATHEXT)
         .unwrap_or_else(|_| ".COM;.EXE;.BAT;.CMD".to_string())
         .split(';')
         .filter(|extension| !extension.is_empty())

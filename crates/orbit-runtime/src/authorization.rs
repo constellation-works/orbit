@@ -17,6 +17,7 @@
 //! [`AuditEventStatus::Denied`]; the two rows answer different questions
 //! ("what was refused" versus "what call failed").
 
+use orbit_common::env_vars;
 use std::collections::BTreeSet;
 
 use orbit_common::OrbitError;
@@ -83,7 +84,7 @@ pub fn is_resident_cycle_right_gated_operation(tool: &str) -> bool {
 /// caller and resolves the target workspace against the live cycle's grant.
 pub fn route_resident_delivery_recovery_to_broker(tool: &str) -> bool {
     tool == TASK_RESUME_DELIVERY_OPERATION_ID
-        && std::env::var_os("ORBIT_PLUGIN_BROKER").is_some()
+        && std::env::var_os(env_vars::ORBIT_PLUGIN_BROKER).is_some()
         && crate::run_input::managed_run_context_run_id_from_env().is_some()
 }
 
@@ -388,7 +389,7 @@ impl RuntimeKernel {
             stdout_truncated: None,
             stderr_truncated: None,
             error_message,
-            host: std::env::var("HOSTNAME").ok(),
+            host: std::env::var(env_vars::HOSTNAME).ok(),
             pid: std::process::id(),
             session_id: None,
             workspace_id: None,

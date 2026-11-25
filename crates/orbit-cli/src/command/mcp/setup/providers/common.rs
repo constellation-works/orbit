@@ -1,3 +1,4 @@
+use orbit_common::env_vars;
 use std::path::Path;
 
 use crate::command::mcp::ORBIT_MCP_SERVER_ID;
@@ -162,7 +163,7 @@ pub(super) fn missing_root_args<'b>(
 pub(super) fn supply_json_root(entry: &mut serde_json::Value, launch: ServerLaunch<'_>) -> bool {
     let env_root = entry
         .get("env")
-        .and_then(|env| env.get("ORBIT_ROOT"))
+        .and_then(|env| env.get(env_vars::ORBIT_ROOT))
         .and_then(serde_json::Value::as_str)
         .map(str::to_string);
     let Some(args) = entry

@@ -26,6 +26,7 @@
 //! dashboard's host forward ([`crate::host_tunnels`]) runs it on the blocking
 //! pool with [`Unattended`] bounds.
 
+use orbit_common::env_vars;
 use std::io::Read;
 use std::net::{Ipv4Addr, TcpListener};
 use std::path::PathBuf;
@@ -301,7 +302,7 @@ fn spawn_ssh_for(
     if let Some(diagnostics) = diagnostics {
         // Stable local OpenSSH diagnostics; this does not change the remote
         // command or request an environment variable be sent to the host.
-        command.env("LC_ALL", "C").stderr(diagnostics);
+        command.env(env_vars::LC_ALL, "C").stderr(diagnostics);
     }
     // A freshly written test stub can still be open for write across a sibling
     // fork; Linux then returns ETXTBSY for a short window (ORB-11340).

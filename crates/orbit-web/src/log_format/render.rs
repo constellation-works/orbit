@@ -1,6 +1,7 @@
 //! HTML rendering and context shortening for web log events.
 
 use orbit_cmd::log_format::{AGENT_OUTPUT_TARGET, format_code, format_source};
+use orbit_common::env_vars;
 use orbit_common::security::redaction::redact_all;
 use serde::Serialize;
 use serde_json::Value;
@@ -272,7 +273,9 @@ fn code_value(value: String) -> String {
 }
 
 fn shorten_context_value(value: &str) -> String {
-    let home = std::env::var("HOME").ok().filter(|home| !home.is_empty());
+    let home = std::env::var(env_vars::HOME)
+        .ok()
+        .filter(|home| !home.is_empty());
     let relative = home
         .as_deref()
         .and_then(|home| Path::new(value).strip_prefix(home).ok());

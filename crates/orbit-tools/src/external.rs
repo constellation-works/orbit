@@ -9,7 +9,7 @@ use serde_json::Value;
 use crate::program_policy::enforce_program_allowlist;
 use crate::{TIMEOUT_DEFAULT_MS, Tool, ToolContext, upsert_env};
 
-const EXTERNAL_TOOL_TIMEOUT_OVERRIDE_ENV: &str = "ORBIT_EXTERNAL_TOOL_TIMEOUT_MS";
+use orbit_common::env_vars::ORBIT_EXTERNAL_TOOL_TIMEOUT_MS as EXTERNAL_TOOL_TIMEOUT_OVERRIDE_ENV;
 const ORBIT_TOOL_NAME_ENV: &str = "ORBIT_TOOL_NAME";
 const ORBIT_TOOL_CWD_ENV: &str = "ORBIT_TOOL_CWD";
 const ORBIT_TOOL_WORKSPACE_ROOT_ENV: &str = "ORBIT_TOOL_WORKSPACE_ROOT";

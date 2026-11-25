@@ -1,5 +1,6 @@
 use super::timeout::{command_timeout, git_timeout_error};
 use orbit_common::OrbitError;
+use orbit_common::env_vars;
 use orbit_common::security::child_env::AGENT_SUBPROCESS_BASELINE_VARS;
 use orbit_exec::{
     EnvironmentMode, ExecRequest, NoSandbox, StdinMode, run_process, run_process_streaming_stdout,
@@ -151,15 +152,15 @@ fn vcs_environment(extras: &[&str]) -> Vec<(String, String)> {
 /// account [ORB-28025]. None names a secret that is not already `gh`'s own
 /// credential route.
 const GH_CREDENTIAL_ENV: &[&str] = &[
-    "GH_TOKEN",
-    "GITHUB_TOKEN",
-    "GH_ENTERPRISE_TOKEN",
-    "GITHUB_ENTERPRISE_TOKEN",
-    "GH_HOST",
-    "GH_CONFIG_DIR",
-    "XDG_CONFIG_HOME",
-    "XDG_RUNTIME_DIR",
-    "DBUS_SESSION_BUS_ADDRESS",
+    env_vars::GH_TOKEN,
+    env_vars::GITHUB_TOKEN,
+    env_vars::GH_ENTERPRISE_TOKEN,
+    env_vars::GITHUB_ENTERPRISE_TOKEN,
+    env_vars::GH_HOST,
+    env_vars::GH_CONFIG_DIR,
+    env_vars::XDG_CONFIG_HOME,
+    env_vars::XDG_RUNTIME_DIR,
+    env_vars::DBUS_SESSION_BUS_ADDRESS,
 ];
 
 /// The one environment every host-side `gh` child runs under: the baseline
@@ -170,11 +171,11 @@ pub(in crate::executor::automation) fn gh_environment() -> Vec<(String, String)>
 }
 
 fn git_environment() -> Vec<(String, String)> {
-    let mut environment = vcs_environment(&["SSH_AUTH_SOCK"]);
+    let mut environment = vcs_environment(&[env_vars::SSH_AUTH_SOCK]);
     // Git stderr drives retry classification. LANGUAGE can override gettext's
     // locale selection, so never admit it and replace the parent's LC_ALL.
-    environment.retain(|(name, _)| name != "LC_ALL" && name != "LANGUAGE");
-    environment.push(("LC_ALL".to_string(), "C".to_string()));
+    environment.retain(|(name, _)| name != env_vars::LC_ALL && name != "LANGUAGE");
+    environment.push((env_vars::LC_ALL.to_string(), "C".to_string()));
     environment.push(("GIT_OPTIONAL_LOCKS".to_string(), "0".to_string()));
     environment
 }

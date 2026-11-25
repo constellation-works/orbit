@@ -26,7 +26,7 @@ pub(super) const MAX_GENERATED: usize = 10_000;
 /// [`MAX_GENERATED`]. Only dev-dependency builds with `test-support`
 /// recognize this variable.
 #[cfg(feature = "test-support")]
-pub const MAX_GENERATED_ENV: &str = "ORBIT_TEST_FORECAST_MAX_GENERATED";
+pub use orbit_common::env_vars::ORBIT_TEST_FORECAST_MAX_GENERATED as MAX_GENERATED_ENV;
 
 /// The generation bound: [`MAX_GENERATED`] unless a test fixture
 /// substituted another through [`MAX_GENERATED_ENV`].

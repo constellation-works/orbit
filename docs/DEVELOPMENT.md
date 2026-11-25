@@ -46,10 +46,10 @@ make ci-guards         # static repository guards; no build or network
 make ci-fast           # MSRV compile check, formatting, script guardrails; no Rust tests
 make ci-test-affected  # complete test targets of changed crates and their workspace dependents
 make ci-lint           # clippy for production and all targets, then rustdoc
-make goldens           # CLI/MCP, CI log, sandbox and SQLite ledger schema goldens; UPDATE=1 regenerates
+make goldens           # CLI/MCP, environment reference, CI log, sandbox and SQLite ledger schema goldens
 ```
 
-Run `make goldens` when the change touches a golden surface (CLI help, MCP text, sandbox profiles, ledger schemas), and the tests of the behavior you changed. A red required check on the PR is repaired through the PR (auto-fix or a follow-up commit). `workflow.required_validation_commands` in the workspace config sets what the pipeline runs.
+Run `make goldens` when the change touches a golden surface (CLI help, the CLI environment reference, MCP text, sandbox profiles, ledger schemas), and the tests of the behavior you changed. To regenerate, run `make goldens UPDATE=1`. For environment documentation alone, run `ORBIT_UPDATE_HELP_GOLDENS=1 cargo test -p orbit-cli --test output help_goldens::env_reference::config_environment_reference_matches_registry -- --exact` and review the generated change in [CONFIG.md](CONFIG.md#environment-variables). A red required check on the PR is repaired through the PR (auto-fix or a follow-up commit). `workflow.required_validation_commands` in the workspace config sets what the pipeline runs.
 
 When an edit changes any generated row in `docs/INDEX.md` (for example, indexed Markdown frontmatter, its first heading, or summary), run `make docs-index`, review the generated index, and run `scripts/generate-doc-indexes.sh --check`. Include any resulting `docs/INDEX.md` change with the source edits, even when `make ci-fast` is pipeline-owned final validation.
 
@@ -186,7 +186,7 @@ cases. Its behavioral fixtures run in [test-codeql-production-paths.py](../scrip
 ### Affected-test selection
 
 Delivery remote-source and provider-attribution fixtures freeze monotonic source-budget time through
-`orbit_core::test_support::SOURCE_ELAPSED_ENV`, inherited by their isolated
+`ORBIT_TEST_SOURCE_ELAPSED_MS`, inherited by their isolated
 children and the built CLI. Zero elapsed milliseconds removes the assumption
 that real Git/provider commands finish within the two-second command budget,
 thirty-second source deadline, or twenty-second lookup window on a busy host.

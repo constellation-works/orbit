@@ -13,7 +13,7 @@ use crate::config_document;
 use crate::registry;
 
 /// The retired invocation-level agent backend override.
-pub(crate) const RETIRED_BACKEND_ENV: &str = "ORBIT_BACKEND";
+pub(crate) use orbit_common::env_vars::ORBIT_BACKEND as RETIRED_BACKEND_ENV;
 
 /// [ORB-10801] `ORBIT_BACKEND` and `[runtime] backend` were tiers 2 and 3 of
 /// the retired agent-loop backend precedence chain. Both are refused rather

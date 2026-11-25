@@ -1,3 +1,4 @@
+use orbit_common::env_vars;
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -70,7 +71,7 @@ fn explicit_orbit_root(
     cwd: &Path,
     root_override: Option<&Path>,
 ) -> Result<Option<PathBuf>, OrbitError> {
-    let env_root = env::var("ORBIT_ROOT").ok();
+    let env_root = env::var(env_vars::ORBIT_ROOT).ok();
     let raw = root_override
         .map(|root| root.to_string_lossy())
         .or_else(|| {
@@ -300,11 +301,11 @@ fn canonical_or_original(path: &Path) -> PathBuf {
 }
 
 pub(super) fn env_home_dir() -> Option<PathBuf> {
-    env::var_os("HOME")
+    env::var_os(env_vars::HOME)
         .filter(|value| !value.is_empty())
         .map(PathBuf::from)
         .or_else(|| {
-            env::var_os("USERPROFILE")
+            env::var_os(env_vars::USERPROFILE)
                 .filter(|value| !value.is_empty())
                 .map(PathBuf::from)
         })

@@ -422,7 +422,7 @@ pub fn sync_parent_dir(parent_dir: &File) -> io::Result<()> {
 /// concurrent suites queue behind each other's flushes. A test process loses
 /// nothing by skipping them: only a power loss or kernel crash can observe a
 /// missing sync. Release builds ignore the variable.
-pub const RELAXED_DURABILITY_ENV: &str = "ORBIT_TEST_RELAXED_DURABILITY";
+pub use crate::env_vars::ORBIT_TEST_RELAXED_DURABILITY as RELAXED_DURABILITY_ENV;
 
 static RELAXED_DURABILITY: OnceLock<bool> = OnceLock::new();
 

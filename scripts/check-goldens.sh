@@ -9,6 +9,7 @@ set -euo pipefail
 #   - sanitized CI signature and GitHub log fixture goldens
 #   - builtin MCP definition and annotation conformance
 #   - CLI long-help text under crates/orbit-cli/tests/help_goldens/
+#   - CLI environment reference in docs/CONFIG.md
 #   - crates/orbit-cli/tests/output_goldens/ (including tool_list.json)
 #   - crates/orbit-cli/tests/snapshots/mcp_tools_list.json
 #   - crates/orbit-exec/tests/sandbox_profile_goldens/ (compiled SBPL on every

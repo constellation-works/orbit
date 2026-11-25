@@ -1,10 +1,11 @@
 use orbit_common::OrbitError;
+use orbit_common::env_vars;
 use orbit_types::identity::require_canonical_agent_family;
 
-const ORBIT_AGENT_NAME: &str = "ORBIT_AGENT_NAME";
-const ORBIT_AGENT_MODEL: &str = "ORBIT_AGENT_MODEL";
-const ORBIT_ACTOR: &str = "ORBIT_ACTOR";
-const OS_USER_ENV: &[&str] = &["USER", "USERNAME", "LOGNAME"];
+use orbit_common::env_vars::ORBIT_ACTOR;
+use orbit_common::env_vars::ORBIT_AGENT_MODEL;
+use orbit_common::env_vars::ORBIT_AGENT_NAME;
+const OS_USER_ENV: &[&str] = &[env_vars::USER, env_vars::USERNAME, env_vars::LOGNAME];
 
 /// Actor label recorded when [`OPERATOR_OVERRIDE_ENV`](orbit_common::governance::authorization::OPERATOR_OVERRIDE_ENV)
 /// is the only signal identifying the caller.

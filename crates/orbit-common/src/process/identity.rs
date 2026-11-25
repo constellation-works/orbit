@@ -194,13 +194,17 @@ const PS_OUTPUT_LIMIT: usize = 4096;
 
 #[cfg(all(unix, not(target_os = "linux")))]
 fn lstart_raw(pid: u32) -> Result<Option<String>, io::Error> {
+    use crate::env_vars;
+
     #[cfg(target_os = "macos")]
     if let Some(lstart) = darwin_lstart_utc(pid) {
         return Ok(Some(lstart));
     }
     let mut cmd = Command::new("ps");
     cmd.args(["-o", "lstart=", "-p", &pid.to_string()]);
-    cmd.env("TZ", "UTC").env("LC_ALL", "C").env("LANG", "C");
+    cmd.env(env_vars::TZ, "UTC")
+        .env(env_vars::LC_ALL, "C")
+        .env(env_vars::LANG, "C");
     let output = run_bounded_capped_typed(&mut cmd, PS_TIMEOUT, PS_OUTPUT_LIMIT).map_err(
         |error| match error {
             BoundedRunError::Spawn(error) => error,

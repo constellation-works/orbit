@@ -1,5 +1,6 @@
 use super::*;
 use crate::application::job::run::definition::pipeline_worker_file_name;
+use orbit_common::env_vars;
 
 const PIPELINE_WORKER_LOG_TAIL_BYTES: u64 = 16 * 1024;
 
@@ -521,9 +522,9 @@ pub(crate) fn configure_pipeline_worker_stdio(
     if let Some(profile) = pipeline_worker_profile_file(
         &logs_dir,
         run_id,
-        std::env::var_os("LLVM_PROFILE_FILE").as_deref(),
+        std::env::var_os(env_vars::LLVM_PROFILE_FILE).as_deref(),
     )? {
-        command.env("LLVM_PROFILE_FILE", profile);
+        command.env(env_vars::LLVM_PROFILE_FILE, profile);
     }
     write_pipeline_worker_spawn_banner(&mut log, command);
     let reader = log.try_clone().map_err(|error| {

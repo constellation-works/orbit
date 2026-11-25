@@ -1,6 +1,7 @@
 //! Providers whose MCP servers live under `[mcp_servers.<id>]` in a TOML
 //! config: Codex and Grok share the exact shape.
 
+use orbit_common::env_vars;
 use orbit_common::security::child_env::MCP_MANAGED_BINDING_ENV_VARS;
 use orbit_core::OrbitError;
 use toml_edit::{Array, Item, Table, value};
@@ -71,7 +72,7 @@ fn supply_toml_root(doc: &mut toml_edit::DocumentMut, launch: ServerLaunch<'_>) 
         .get(SERVERS_KEY)
         .and_then(|servers| servers.get(server_id))
         .and_then(|entry| entry.get("env"))
-        .and_then(|env| env.get("ORBIT_ROOT"))
+        .and_then(|env| env.get(env_vars::ORBIT_ROOT))
         .and_then(Item::as_str)
         .map(str::to_string);
     let Some(args) = doc

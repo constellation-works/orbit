@@ -5,7 +5,7 @@ use std::time::{Duration, Instant};
 /// Frozen elapsed time for isolated fixtures, inherited by their CLI children.
 /// Only dev-dependency builds with `test-support` recognize this variable.
 #[cfg(feature = "test-support")]
-pub const SOURCE_ELAPSED_ENV: &str = "ORBIT_TEST_SOURCE_ELAPSED_MS";
+pub use orbit_common::env_vars::ORBIT_TEST_SOURCE_ELAPSED_MS as SOURCE_ELAPSED_ENV;
 
 pub(in crate::application::automation) struct BudgetClock {
     started: Instant,

@@ -1,3 +1,4 @@
+use orbit_common::env_vars;
 use std::collections::HashMap;
 
 use orbit_common::OrbitError;
@@ -28,7 +29,12 @@ const RUNTIME_KEY: &str = "copilot";
 /// `XDG_CACHE_HOME` is likewise forwarded: the Copilot launcher extracts its
 /// bundled package to `$XDG_CACHE_HOME/copilot`, which the sandbox grants
 /// from the same override.
-const REQUIRED_ENV_VARS: &[&str] = &["HOME", "PATH", "COPILOT_HOME", "XDG_CACHE_HOME"];
+const REQUIRED_ENV_VARS: &[&str] = &[
+    env_vars::HOME,
+    env_vars::PATH,
+    env_vars::COPILOT_HOME,
+    env_vars::XDG_CACHE_HOME,
+];
 
 pub(crate) struct CopilotRuntime {
     command: String,

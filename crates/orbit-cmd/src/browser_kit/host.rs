@@ -1,6 +1,7 @@
 //! What the kit commands need from the host: tools on PATH, the guard that
 //! keeps them out of workers, and the child processes they run.
 
+use orbit_common::env_vars;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::Duration;
@@ -19,7 +20,7 @@ const PROBE_OUTPUT_LIMIT: usize = 8 * 1024 * 1024;
 
 /// The first executable `program` on this process's PATH.
 pub(super) fn find_on_path(program: &str) -> Option<PathBuf> {
-    let path = std::env::var_os("PATH")?;
+    let path = std::env::var_os(env_vars::PATH)?;
     std::env::split_paths(&path)
         .map(|dir| dir.join(program))
         .find(|candidate| is_executable(candidate))
@@ -51,7 +52,7 @@ fn is_executable(path: &Path) -> bool {
 /// a kit built as root lands in root's home, where workers never look.
 pub(super) fn require_host_operator() -> Result<(), OrbitError> {
     let set = |name: &str| std::env::var_os(name).is_some_and(|value| !value.is_empty());
-    if set(MCP_MANAGED_CONTEXT_ENV) || set("ORBIT_WORKER_CONTEXT_REQUIRED") {
+    if set(MCP_MANAGED_CONTEXT_ENV) || set(env_vars::ORBIT_WORKER_CONTEXT_REQUIRED) {
         return Err(OrbitError::InvalidInput(
             "the browser kit is host setup: run `orbit config browser-kit` on the host as the user who \
              runs workers, never inside a worker"

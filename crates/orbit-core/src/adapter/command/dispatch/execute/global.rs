@@ -1,6 +1,7 @@
 //! Server-global and host-global tool dispatch: tools with no workspace
 //! runtime behind them, audited through the global audit store.
 
+use orbit_common::env_vars;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, PoisonError};
 
@@ -190,7 +191,7 @@ pub(in crate::adapter::command) fn execute_global_plugin_dispatch(
         .plugin_binding(name)
         .ok_or_else(|| OrbitError::not_found(NotFoundKind::Tool, name.to_string()))?;
     #[cfg(unix)]
-    let broker_refusal = if let Some(socket) = std::env::var_os("ORBIT_PLUGIN_BROKER")
+    let broker_refusal = if let Some(socket) = std::env::var_os(env_vars::ORBIT_PLUGIN_BROKER)
         && session_context.application.is_none()
         && std::env::var_os(
             orbit_common::security::application_credential::APPLICATION_CREDENTIAL_FD_ENV,

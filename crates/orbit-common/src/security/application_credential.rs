@@ -10,7 +10,7 @@ use crate::OrbitError;
 use crate::security::token;
 
 /// Descriptor number, never a credential value. Only local CLI calls read it.
-pub const APPLICATION_CREDENTIAL_FD_ENV: &str = "ORBIT_APPLICATION_CREDENTIAL_FD";
+pub use crate::env_vars::ORBIT_APPLICATION_CREDENTIAL_FD as APPLICATION_CREDENTIAL_FD_ENV;
 
 /// A one-time mint result. Deliberately neither serializable nor cloneable.
 pub struct ApplicationCredential {

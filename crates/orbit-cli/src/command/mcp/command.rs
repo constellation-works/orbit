@@ -1,3 +1,4 @@
+use orbit_common::env_vars;
 use std::path::Path;
 
 use clap::{Args, Subcommand, ValueEnum};
@@ -154,7 +155,7 @@ impl ServeArgs {
     pub fn execute_without_runtime(self, root_override: Option<&Path>) -> CommandOut {
         if matches!(self.mode, Some(ServeMode::Remote))
             && (root_override.is_some()
-                || std::env::var("ORBIT_ROOT").is_ok_and(|value| !value.trim().is_empty()))
+                || std::env::var(env_vars::ORBIT_ROOT).is_ok_and(|value| !value.trim().is_empty()))
         {
             return Err(OrbitError::InvalidInput(
                 "orbit mcp serve --mode remote cannot apply a local Orbit data root override (--root or ORBIT_ROOT); configure the Orbit root on the SSH destination instead"

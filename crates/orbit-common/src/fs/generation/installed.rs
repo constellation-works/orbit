@@ -6,6 +6,7 @@
 //! installed executable what it supports, so the build cannot advance shared
 //! state past it.
 
+use crate::env_vars;
 use std::path::{Path, PathBuf};
 
 use super::handoff::{PROBE_TIMEOUT, Report, contract_report};
@@ -13,7 +14,7 @@ use super::identity::CompatibilityIdentity;
 
 /// Environment variable naming the managed install directory, as the
 /// installer reads it.
-pub const INSTALL_DIR_ENV: &str = "ORBIT_INSTALL_DIR";
+pub use crate::env_vars::ORBIT_INSTALL_DIR as INSTALL_DIR_ENV;
 
 /// The managed install directory for this process: `$ORBIT_INSTALL_DIR`, else
 /// `$HOME/.orbit/bin`.
@@ -21,7 +22,7 @@ pub fn managed_install_dir() -> Option<PathBuf> {
     if let Some(explicit) = std::env::var_os(INSTALL_DIR_ENV).filter(|value| !value.is_empty()) {
         return Some(PathBuf::from(explicit));
     }
-    std::env::var_os("HOME")
+    std::env::var_os(env_vars::HOME)
         .filter(|value| !value.is_empty())
         .map(|home| PathBuf::from(home).join(".orbit").join("bin"))
 }

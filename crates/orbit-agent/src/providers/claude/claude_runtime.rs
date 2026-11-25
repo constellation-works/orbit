@@ -1,3 +1,4 @@
+use orbit_common::env_vars;
 use std::collections::HashMap;
 
 use orbit_common::OrbitError;
@@ -11,7 +12,7 @@ const RUNTIME_KEY: &str = "claude";
 /// `CLAUDE_CONFIG_DIR` is non-secret state-root context: the sandbox grants
 /// exactly the directory it names, so dropping it would make the CLI resolve
 /// `$HOME/.claude` while the profile granted the override.
-const REQUIRED_ENV_VARS: &[&str] = &["HOME", "PATH", "CLAUDE_CONFIG_DIR"];
+const REQUIRED_ENV_VARS: &[&str] = &[env_vars::HOME, env_vars::PATH, env_vars::CLAUDE_CONFIG_DIR];
 
 pub(crate) struct ClaudeRuntime {
     command: String,

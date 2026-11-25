@@ -1,3 +1,4 @@
+use orbit_common::env_vars;
 use std::path::{Path, PathBuf};
 
 use orbit_common::fs::physical::canonicalize_existing_prefix_checked;
@@ -11,14 +12,14 @@ pub(super) fn append_linux_provider_state_roots(
     provider: &str,
     resolved: &mut ResolvedFsProfile,
 ) -> Result<(), DispatchError> {
-    let home = std::env::var_os("HOME").map(PathBuf::from);
+    let home = std::env::var_os(env_vars::HOME).map(PathBuf::from);
     let mut directories = Vec::new();
-    if let Some(path) = std::env::var_os("CODEX_HOME").map(PathBuf::from) {
+    if let Some(path) = std::env::var_os(env_vars::CODEX_HOME).map(PathBuf::from) {
         directories.push(path);
     } else if let Some(home) = &home {
         directories.push(home.join(".codex"));
     }
-    if let Some(path) = std::env::var_os("CLAUDE_CONFIG_DIR").map(PathBuf::from) {
+    if let Some(path) = std::env::var_os(env_vars::CLAUDE_CONFIG_DIR).map(PathBuf::from) {
         directories.push(path);
     } else if let Some(home) = &home {
         directories.push(home.join(".claude"));
@@ -202,10 +203,15 @@ fn linux_muse_state_roots(provider: &str, home: Option<&Path>) -> Vec<PathBuf> {
             .map(PathBuf::from)
     };
     [
-        xdg_scoped_root(home, env_path("XDG_CONFIG_HOME"), &[".config"], "muse"),
         xdg_scoped_root(
             home,
-            env_path("XDG_DATA_HOME"),
+            env_path(env_vars::XDG_CONFIG_HOME),
+            &[".config"],
+            "muse",
+        ),
+        xdg_scoped_root(
+            home,
+            env_path(env_vars::XDG_DATA_HOME),
             &[".local", "share"],
             "muse",
         ),
@@ -220,10 +226,10 @@ fn linux_copilot_state_roots(provider: &str, home: Option<&Path>) -> Vec<PathBuf
     linux_copilot_state_roots_with(
         provider,
         home,
-        std::env::var_os("COPILOT_HOME")
+        std::env::var_os(env_vars::COPILOT_HOME)
             .map(PathBuf::from)
             .as_deref(),
-        std::env::var_os("XDG_CACHE_HOME")
+        std::env::var_os(env_vars::XDG_CACHE_HOME)
             .map(PathBuf::from)
             .as_deref(),
     )

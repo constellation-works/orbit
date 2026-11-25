@@ -85,7 +85,7 @@ use super::super::build_output::bind_host_output;
 pub(in crate::executor::automation::vcs) use super::capture::capture;
 
 /// The file a required command may write its [`ValidationSummary`] to.
-pub(crate) const VALIDATION_SUMMARY_ENV: &str = "ORBIT_VALIDATION_SUMMARY";
+pub(crate) use orbit_common::env_vars::ORBIT_VALIDATION_SUMMARY as VALIDATION_SUMMARY_ENV;
 /// A selection, as a candidate run's summary reported it, that the command
 /// must test instead of choosing its own.
 pub(crate) const VALIDATION_SELECTION_ENV: &str = "ORBIT_VALIDATION_SELECTION";

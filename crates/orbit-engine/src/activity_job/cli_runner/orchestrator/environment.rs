@@ -2,6 +2,7 @@
 use super::super::super::dispatcher::DispatchError;
 use super::super::spawn::{CODEX_CA_CERTIFICATE_ENV, SSL_CERT_FILE_ENV};
 use crate::context::RuntimeHost;
+use orbit_common::env_vars;
 use orbit_common::security::child_env::{
     ACTIVITY_DEADLINE_ENV, CLAUDE_CREDENTIAL_ENV, crew_env_file_problem,
 };
@@ -49,9 +50,9 @@ pub(super) fn codex_home(env: &[(String, String)]) -> Option<PathBuf> {
             .find(|(key, value)| key == name && !value.is_empty())
             .map(|(_, value)| value.as_str())
     };
-    value("CODEX_HOME")
+    value(env_vars::CODEX_HOME)
         .map(PathBuf::from)
-        .or_else(|| value("HOME").map(|home| Path::new(home).join(".codex")))
+        .or_else(|| value(env_vars::HOME).map(|home| Path::new(home).join(".codex")))
 }
 
 /// Refuse to start `claude` on a host where the Claude Desktop app's shared
@@ -154,7 +155,7 @@ pub(super) fn add_browser_kit_env(child_env: &mut Vec<(String, String)>) {
     let Some(home) = child_env
         .iter()
         .rev()
-        .find(|(key, value)| key == "HOME" && !value.is_empty())
+        .find(|(key, value)| key == env_vars::HOME && !value.is_empty())
         .map(|(_, home)| PathBuf::from(home))
     else {
         return;

@@ -154,7 +154,7 @@ impl HostFileState {
 /// active only when `<point>.armed` exists there. A waiting point records
 /// `<point>.reached` and blocks until `<point>.release` appears; a signal
 /// point only records `<point>.reached`. Inert unless the file test arms it.
-const PUBLISH_GATE_ENV: &str = "ORBIT_TEST_HOSTS_PUBLISH_GATE";
+use orbit_common::env_vars::ORBIT_TEST_HOSTS_PUBLISH_GATE as PUBLISH_GATE_ENV;
 
 fn gate_dir() -> Option<PathBuf> {
     std::env::var_os(PUBLISH_GATE_ENV).map(PathBuf::from)

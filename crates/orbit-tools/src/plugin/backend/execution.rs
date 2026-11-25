@@ -1,5 +1,6 @@
 use super::*;
 use crate::{DeterministicStepPrograms, ToolCaller};
+use orbit_common::env_vars;
 
 /// Whether a child environment also writes the host program-link directory.
 enum ProgramLinks {
@@ -473,7 +474,7 @@ impl PluginBackendSpec {
             let mut path_dirs = vec![program_dir];
             if let Some(existing) = env_pairs
                 .iter()
-                .find(|(key, _)| key == "PATH")
+                .find(|(key, _)| key == env_vars::PATH)
                 .map(|(_, value)| value.clone())
             {
                 for dir in std::env::split_paths(&existing) {
@@ -490,11 +491,11 @@ impl PluginBackendSpec {
         };
         let mut set = |key: &str, value: String| upsert_env(&mut env_pairs, key, value);
         if let Some(path) = path_override {
-            set("PATH", path);
+            set(env_vars::PATH, path);
         }
         set("ORBIT_HOST_API", PLUGIN_HOST_API.to_string());
         set("ORBIT_VERSION", env!("CARGO_PKG_VERSION").to_string());
-        set("ORBIT_PLUGIN", self.provenance.name.clone());
+        set(env_vars::ORBIT_PLUGIN, self.provenance.name.clone());
         set("ORBIT_PLUGIN_VERSION", self.provenance.version.clone());
         set(
             "ORBIT_PLUGIN_ROOT",
@@ -519,7 +520,10 @@ impl PluginBackendSpec {
         // record the child inherits on `PLUGIN_CALLBACK_FD`.
         set("ORBIT_ALLOWED_TOOLS", self.allowed_tools(ctx).join(","));
         // `requires.programs` is what a callback through `proc.spawn` may run.
-        set("ORBIT_PROC_ALLOWED_PROGRAMS", self.programs.join(","));
+        set(
+            env_vars::ORBIT_PROC_ALLOWED_PROGRAMS,
+            self.programs.join(","),
+        );
         Ok(env_pairs)
     }
 

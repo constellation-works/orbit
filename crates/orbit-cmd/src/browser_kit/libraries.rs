@@ -8,6 +8,7 @@
 //! lacks) are downloaded and unpacked into `root/`; anywhere else the
 //! libraries and the command that provides them are reported.
 
+use orbit_common::env_vars;
 use std::path::Path;
 use std::process::Command;
 use std::time::Duration;
@@ -29,7 +30,7 @@ pub(super) fn unresolved(layout: &KitLayout, executable: &Path) -> Result<Vec<St
     let mut command = Command::new("ldd");
     command.arg(executable);
     if let Some(path) = library_path(layout) {
-        command.env("LD_LIBRARY_PATH", path);
+        command.env(env_vars::LD_LIBRARY_PATH, path);
     }
     let output = run_probe(&mut command, PROBE_DEADLINE)?;
     Ok(parse_not_found(&String::from_utf8_lossy(&output.stdout)))
@@ -46,7 +47,7 @@ fn library_path(layout: &KitLayout) -> Option<String> {
     if entries.is_empty() {
         return None;
     }
-    if let Some(existing) = std::env::var("LD_LIBRARY_PATH")
+    if let Some(existing) = std::env::var(env_vars::LD_LIBRARY_PATH)
         .ok()
         .filter(|value| !value.is_empty())
     {

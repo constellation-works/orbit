@@ -6,6 +6,7 @@
 //! error suppression. Adding a [`Commands`] variant therefore requires one
 //! new operation arm and the compiler rejects an incomplete registry.
 
+use orbit_common::env_vars;
 use std::path::Path;
 
 use orbit_common::governance::operation::{Effect, OperationVerb};
@@ -631,10 +632,10 @@ pub(super) fn tool_operation(command: &super::super::tool::ToolCommand) -> Comma
 
 pub(super) fn tool_run_actor_role(args: &super::super::tool::ToolRunArgs) -> String {
     let (input_agent, input_model) = tool_run_input_identity(args);
-    let env_agent = std::env::var("ORBIT_AGENT_NAME")
+    let env_agent = std::env::var(env_vars::ORBIT_AGENT_NAME)
         .ok()
         .filter(|value| !value.trim().is_empty());
-    let env_model = std::env::var("ORBIT_AGENT_MODEL")
+    let env_model = std::env::var(env_vars::ORBIT_AGENT_MODEL)
         .ok()
         .filter(|value| !value.trim().is_empty());
     let has_input_identity = input_agent.is_some() || input_model.is_some();

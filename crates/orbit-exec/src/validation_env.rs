@@ -36,6 +36,7 @@
 //! job-control warnings). The complete outcome, including probe mode and any
 //! fallback reason, is cached per process for [`LOGIN_SHELL_CACHE_TTL`].
 
+use orbit_common::env_vars;
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
@@ -48,13 +49,13 @@ use crate::{EnvironmentMode, ExecRequest, StdinMode};
 /// and the locators toolchains on it need to find their own installation.
 /// Everything else in the login environment stays behind.
 pub const LOGIN_SHELL_TOOLCHAIN_VARS: &[&str] = &[
-    "PATH",
-    "CARGO_HOME",
-    "RUSTUP_HOME",
+    env_vars::PATH,
+    env_vars::CARGO_HOME,
+    env_vars::RUSTUP_HOME,
     "GOPATH",
-    "GOROOT",
+    env_vars::GOROOT,
     "GOBIN",
-    "JAVA_HOME",
+    env_vars::JAVA_HOME,
     "PYENV_ROOT",
     "NVM_DIR",
     "VOLTA_HOME",
@@ -217,11 +218,11 @@ impl ValidationEnvPolicy {
     /// when unset or empty, preserving a supplied nonempty value.
     pub fn agent_environment(&self, mut env: Vec<(String, String)>) -> Vec<(String, String)> {
         ensure_python_no_bytecode_vec(&mut env);
-        let configured = self.expanded_path(lookup(&env, "HOME")).join(":");
+        let configured = self.expanded_path(lookup(&env, env_vars::HOME)).join(":");
         if configured.is_empty() {
             return env;
         }
-        let path = match lookup(&env, "PATH") {
+        let path = match lookup(&env, env_vars::PATH) {
             Some(inherited)
                 if inherited == configured || inherited.starts_with(&format!("{configured}:")) =>
             {
@@ -230,8 +231,8 @@ impl ValidationEnvPolicy {
             Some(inherited) => format!("{configured}:{inherited}"),
             None => configured,
         };
-        env.retain(|(name, _)| name != "PATH");
-        env.push(("PATH".to_string(), path));
+        env.retain(|(name, _)| name != env_vars::PATH);
+        env.push((env_vars::PATH.to_string(), path));
         env
     }
 
@@ -267,7 +268,7 @@ pub struct LoginShellEnv {
 impl LoginShellEnv {
     /// The login shell's PATH, when it exported one.
     pub fn path(&self) -> Option<&str> {
-        self.vars.get("PATH").map(String::as_str)
+        self.vars.get(env_vars::PATH).map(String::as_str)
     }
 }
 
@@ -293,7 +294,7 @@ impl LoginShell {
     pub fn for_current_user(env: &[(String, String)]) -> Self {
         let program = account_shell()
             .or_else(|| {
-                lookup(env, "SHELL")
+                lookup(env, env_vars::SHELL)
                     .map(PathBuf::from)
                     .filter(|shell| shell.is_absolute())
             })
@@ -360,7 +361,7 @@ impl LoginShell {
         let outcome = run_probe_process(&ExecRequest {
             program: shell.clone(),
             args,
-            current_dir: lookup(base, "HOME").map(ToOwned::to_owned),
+            current_dir: lookup(base, env_vars::HOME).map(ToOwned::to_owned),
             timeout_ms: Some(u64::try_from(self.timeout.as_millis()).unwrap_or(u64::MAX)),
             stdin_mode: StdinMode::Null,
             environment_mode: EnvironmentMode::ClearAndSet(probe_environment(base, &self.program)),
@@ -415,8 +416,8 @@ impl LoginShell {
         let key = format!(
             "{}\0{}\0{}\0{}\0{}",
             self.program.display(),
-            lookup(base, "PATH").unwrap_or_default(),
-            lookup(base, "HOME").unwrap_or_default(),
+            lookup(base, env_vars::PATH).unwrap_or_default(),
+            lookup(base, env_vars::HOME).unwrap_or_default(),
             interactive,
             self.timeout.as_nanos()
         );
@@ -546,16 +547,16 @@ impl ValidationEnvironment {
             Some(Err(error)) => login_shell_error = Some(error),
             None => {}
         }
-        let config_path = policy.expanded_path(env.get("HOME").map(String::as_str));
+        let config_path = policy.expanded_path(env.get(env_vars::HOME).map(String::as_str));
         if !config_path.is_empty() {
             let configured = config_path.join(":");
-            let path = match (policy.path_mode, env.get("PATH")) {
+            let path = match (policy.path_mode, env.get(env_vars::PATH)) {
                 (ValidationPathMode::Prepend, Some(resolved)) if !resolved.is_empty() => {
                     format!("{configured}:{resolved}")
                 }
                 _ => configured,
             };
-            env.insert("PATH".to_string(), path);
+            env.insert(env_vars::PATH.to_string(), path);
             source = ValidationEnvSource::Config;
         }
         if env.get(PYTHON_NO_BYTECODE_ENV).is_none_or(String::is_empty) {
@@ -581,7 +582,7 @@ impl ValidationEnvironment {
 
     /// The PATH commands run with, when one is set.
     pub fn path(&self) -> Option<&str> {
-        lookup(&self.env, "PATH")
+        lookup(&self.env, env_vars::PATH)
     }
 
     /// `env`, an agent session's environment from
@@ -597,7 +598,7 @@ impl ValidationEnvironment {
         &self,
         mut env: Vec<(String, String)>,
     ) -> Vec<(String, String)> {
-        let inherited = lookup(&env, "PATH").unwrap_or_default().to_string();
+        let inherited = lookup(&env, env_vars::PATH).unwrap_or_default().to_string();
         let mut seen: Vec<&str> = inherited.split(':').collect();
         let mut appended = Vec::new();
         for entry in self.path().unwrap_or_default().split(':') {
@@ -614,8 +615,8 @@ impl ValidationEnvironment {
         } else {
             format!("{inherited}:{}", appended.join(":"))
         };
-        env.retain(|(name, _)| name != "PATH");
-        env.push(("PATH".to_string(), path));
+        env.retain(|(name, _)| name != env_vars::PATH);
+        env.push((env_vars::PATH.to_string(), path));
         env
     }
 
@@ -765,20 +766,27 @@ fn probe_environment(base: &[(String, String)], program: &Path) -> Vec<(String, 
         .filter(|(name, _)| {
             matches!(
                 name.as_str(),
-                "HOME" | "USER" | "LOGNAME" | "PATH" | "LANG" | "LC_ALL" | "TMPDIR" | "TZ"
+                env_vars::HOME
+                    | env_vars::USER
+                    | env_vars::LOGNAME
+                    | env_vars::PATH
+                    | env_vars::LANG
+                    | env_vars::LC_ALL
+                    | env_vars::TMPDIR
+                    | env_vars::TZ
             )
         })
         .cloned()
         .collect();
-    if !env.contains_key("HOME")
+    if !env.contains_key(env_vars::HOME)
         && let Some(home) = account_home()
     {
-        env.insert("HOME".to_string(), home.display().to_string());
+        env.insert(env_vars::HOME.to_string(), home.display().to_string());
     }
-    env.entry("PATH".to_string())
+    env.entry(env_vars::PATH.to_string())
         .or_insert_with(|| "/usr/bin:/bin:/usr/sbin:/sbin".to_string());
-    env.insert("SHELL".to_string(), program.display().to_string());
-    env.insert("TERM".to_string(), "dumb".to_string());
+    env.insert(env_vars::SHELL.to_string(), program.display().to_string());
+    env.insert(env_vars::TERM.to_string(), "dumb".to_string());
     env.into_iter().collect()
 }
 

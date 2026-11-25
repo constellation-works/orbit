@@ -53,7 +53,7 @@ const VERSION: u32 = 1;
 /// in a cache file per image name that keeps the same identity key and
 /// settle rule as the root's own. The root's cache is still read and written
 /// exactly as if the image had been hashed. Release builds ignore the variable.
-pub const SHARED_TEST_DIGESTS_ENV: &str = "ORBIT_TEST_SHARED_IMAGE_DIGESTS";
+pub use crate::env_vars::ORBIT_TEST_SHARED_IMAGE_DIGESTS as SHARED_TEST_DIGESTS_ENV;
 
 /// The kernel's identity for one version of one file's bytes.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

@@ -76,7 +76,7 @@ pub(crate) struct TunnelConfig {
 /// Debug-build fixture only. Milliseconds to wait for an already-running remote
 /// dashboard. Release builds keep the five-second budget whatever this says.
 /// Unset, zero, unparsable, or larger values keep that budget too.
-const TEST_ATTACH_TIMEOUT_ENV: &str = "ORBIT_TEST_HOST_FORWARD_ATTACH_TIMEOUT_MS";
+use orbit_common::env_vars::ORBIT_TEST_HOST_FORWARD_ATTACH_TIMEOUT_MS as TEST_ATTACH_TIMEOUT_ENV;
 
 fn attach_timeout_from_env(value: Option<&str>, debug_build: bool) -> Duration {
     const PRODUCTION: Duration = Duration::from_secs(5);

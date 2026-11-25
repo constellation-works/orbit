@@ -1,3 +1,4 @@
+use orbit_common::env_vars;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
@@ -446,7 +447,13 @@ pub(super) fn resolve_default_crew(
 
 pub(super) fn default_pass_list() -> Vec<String> {
     #[allow(unused_mut)]
-    let mut vars = vec!["HOME", "PATH", "CODEX_HOME", "TMPDIR", "USER"];
+    let mut vars = vec![
+        env_vars::HOME,
+        env_vars::PATH,
+        env_vars::CODEX_HOME,
+        env_vars::TMPDIR,
+        env_vars::USER,
+    ];
     #[cfg(target_os = "macos")]
     vars.push("__CF_USER_TEXT_ENCODING");
     vars.into_iter().map(ToString::to_string).collect()
@@ -549,12 +556,12 @@ pub(super) fn resolve_build_output_env(
         let reserved = identity.starts_with("ORBIT_")
             || matches!(
                 identity.as_str(),
-                "PATH"
-                    | "HOME"
-                    | "USER"
-                    | "LOGNAME"
-                    | "SHELL"
-                    | "TMPDIR"
+                env_vars::PATH
+                    | env_vars::HOME
+                    | env_vars::USER
+                    | env_vars::LOGNAME
+                    | env_vars::SHELL
+                    | env_vars::TMPDIR
                     | "TMP"
                     | "TEMP"
                     | "PWD"

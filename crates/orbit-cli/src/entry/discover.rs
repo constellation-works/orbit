@@ -1,4 +1,5 @@
 use clap::{Command, CommandFactory, FromArgMatches};
+use orbit_common::env_vars;
 
 use super::host_ssh::host_ssh_command;
 use super::output_args::{install_output_args, plain_header, requested_output};
@@ -46,9 +47,9 @@ pub(super) fn explicit_root_source(
     if root_override.is_some() {
         return Some("--root");
     }
-    std::env::var("ORBIT_ROOT")
+    std::env::var(env_vars::ORBIT_ROOT)
         .is_ok_and(|value| !value.trim().is_empty())
-        .then_some("ORBIT_ROOT")
+        .then_some(env_vars::ORBIT_ROOT)
 }
 
 /// The Orbit root this invocation will use, read from argv before clap runs.
