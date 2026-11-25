@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Regression checks for the Task detail last-item stretch guard."""
 
+import importlib.util
 from pathlib import Path
 import subprocess
 import sys
@@ -10,6 +11,10 @@ import unittest
 
 SCRIPTS = Path(__file__).resolve().parent
 CHECKER = SCRIPTS / "check-dashboard-last-item-stretch.py"
+CHECKER_SPEC = importlib.util.spec_from_file_location("stretch_checker", CHECKER)
+CHECKER_MODULE = importlib.util.module_from_spec(CHECKER_SPEC)
+sys.modules[CHECKER_SPEC.name] = CHECKER_MODULE
+CHECKER_SPEC.loader.exec_module(CHECKER_MODULE)
 
 
 class DashboardLastItemStretchTests(unittest.TestCase):
@@ -52,6 +57,54 @@ class DashboardLastItemStretchTests(unittest.TestCase):
         )
         components = css / "components.css"
         components.write_text(".card { padding: 12px; }\n", encoding="utf-8")
+
+    def test_class_tokens_include_qualified_and_chained_classes_without_decimals(self):
+        cases = (
+            ("div.comment-card", {"comment-card"}),
+            ("div.card", {"card"}),
+            (".foo.task-run", {"foo", "task-run"}),
+            (".extra.history-kv-item", {"extra", "history-kv-item"}),
+            (".history-kv-item.history-kv-note", {"history-kv-item", "history-kv-note"}),
+            ("div.card:nth-child(1.5)", {"card"}),
+        )
+        for selector, expected in cases:
+            with self.subTest(selector=selector):
+                self.assertEqual(CHECKER_MODULE.class_names(selector), expected)
+                self.assertEqual(CHECKER_MODULE.positive_class_names(selector), expected)
+
+    def test_rejects_tag_qualified_and_chained_growth_selectors(self):
+        cases = (
+            (
+                self.task_detail,
+                ".comments-panel .comment-thread > div.comment-card { flex: 1; }\n",
+                "lets a stacked item",
+            ),
+            (
+                self.task_detail,
+                ".task-run-list > .foo.task-run { flex: 1; }\n",
+                "lets a stacked item",
+            ),
+            (
+                self.task_detail,
+                ".history-kv-list > .extra.history-kv-item { flex: 1; }\n",
+                "lets a stacked item",
+            ),
+            (
+                self.root / "crates/orbit-web/assets/dashboard/css/components.css",
+                "div.card { flex: 1; }\n",
+                "lets comment cards grow",
+            ),
+        )
+        for path, rule, expected_error in cases:
+            with self.subTest(rule=rule):
+                original = path.read_text(encoding="utf-8")
+                path.write_text(original + rule, encoding="utf-8")
+                try:
+                    result = self.run_guard()
+                    self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+                    self.assertIn(expected_error, result.stderr)
+                finally:
+                    path.write_text(original, encoding="utf-8")
 
     def run_guard(self):
         return subprocess.run(
@@ -187,6 +240,7 @@ class DashboardLastItemStretchTests(unittest.TestCase):
             ".history-kv-list > em:last-child { flex-grow: 0; }\n",
             ".history-kv-list > .history-kv-note { flex: none; }\n",
             ".history-kv-list > div.history-kv-note { flex: none; }\n",
+            ".history-kv-list > .history-kv-item.history-kv-note { flex: none; }\n",
         )
         for rule in unmatched_rules:
             with self.subTest(rule=rule):

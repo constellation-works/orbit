@@ -48,7 +48,7 @@ GRID_STACKS = (
 )
 
 RULE = re.compile(r"([^{}]+)\{([^{}]*)\}", re.DOTALL)
-CLASS_TOKEN = re.compile(r"(?<![\w-])\.([\w-]+)(?![\w-])")
+CLASS_TOKEN = re.compile(r"\.((?:[^\W\d]|-)[\w-]*)(?![\w-])")
 NUMBER = re.compile(r"^[+-]?(?:\d+(?:\.\d*)?|\.\d+)$")
 
 
@@ -152,11 +152,22 @@ def positive_class_names(selector):
 
 
 def positive_compound_class_names(compound):
-    """Read classes after a compound's type selector as well as at its start."""
-    return {
-        match.group(1)
-        for match in re.finditer(r"\.([\w-]+)(?![\w-])", strip_not_blocks(compound))
-    }
+    """Read positive class selectors from a compound, including class chains."""
+    return positive_class_names(compound)
+
+
+def compound_covers_all_items(compound, stack):
+    """Whether a direct-child selector covers every item in a stack."""
+    if stack.child != "*":
+        return True
+    item_classes = {name.removeprefix(".") for name in stack.child_aliases}
+    names = positive_compound_class_names(compound)
+    if not names <= item_classes:
+        return False
+    if re.fullmatch(r"(?:\*|[A-Za-z][\w-]*)?(?:\.[\w-]+)*", compound) is None:
+        return False
+    element = re.match(r"[A-Za-z][\w-]*", compound)
+    return element is None or element.group().lower() in stack.child_tags
 
 
 def parent_pattern(parent):
@@ -173,8 +184,15 @@ def compound_matches_item(compound, stack):
         # item. `*`, `*:last-child`, `.history-kv-item`, and
         # `div.history-kv-item` qualify; `em` or `.history-kv-note` do not.
         item_classes = {name.removeprefix(".") for name in stack.child_aliases}
-        if not positive_compound_class_names(compound) <= item_classes:
+        names = positive_compound_class_names(compound)
+        if names and not (names & item_classes):
             return False
+        if not names:
+            element = re.match(r"[A-Za-z][\w-]*", compound)
+            if element is None and compound != "*" and not compound.startswith((":", "*:")):
+                return False
+            if element is not None and element.group().lower() not in stack.child_tags:
+                return False
         element = re.match(r"[A-Za-z][\w-]*", compound)
         return element is None or element.group().lower() in stack.child_tags
     if stack.child == "li":
@@ -185,7 +203,7 @@ def compound_matches_item(compound, stack):
     return compound == "*" or bool(names & aliases) or ":last-child" in compound
 
 
-def direct_child(selector, stack):
+def direct_child(selector, stack, *, all_items=False):
     match = parent_pattern(stack.parent).search(selector)
     if match is None:
         return False
@@ -210,7 +228,11 @@ def direct_child(selector, stack):
         return False
     rest = tail[end:]
     if rest.strip() == "":
+        if all_items:
+            return compound_covers_all_items(compound, stack)
         return compound_matches_item(compound, stack)
+    if all_items:
+        return False
     # The selector continues past the direct child. Only a pure sibling
     # chain (+/~) keeps the styled target as a direct child of the stack;
     # a descendant (space) or nested child (>) styles something inside the
@@ -337,7 +359,12 @@ def check_flex_stacks(root):
                     elif grow > 0:
                         errors.append(f"{location} lets a stacked item or list grow with {prop}: {props[prop]}")
                     elif item_match:
-                        item_has_zero_grow = True
+                        if stack.child == "*":
+                            item_has_zero_grow = item_has_zero_grow or direct_child(
+                                selector, stack, all_items=True
+                            )
+                        else:
+                            item_has_zero_grow = True
                 if item_match and "height" in props and props["height"] not in {
                     "auto", "fit-content", "max-content", "min-content", "inherit", "initial", "unset", "revert", "revert-layer"
                 }:
