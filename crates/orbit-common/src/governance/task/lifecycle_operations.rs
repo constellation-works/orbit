@@ -318,12 +318,12 @@ pub(super) const RESUME_DELIVERY: TaskOperation = TaskOperation {
     id_route: McpIdRouteDeclaration::Task,
 };
 
-/// Explicit operator request for one task-pilot assessment.
+/// Explicit operator or resident-cycle request for one task-pilot assessment.
 pub(super) const REPILOT: TaskOperation = TaskOperation {
     verb: TaskVerb::Repilot,
     cli_path: &["repilot"],
     tool_name: "orbit.task.repilot",
-    tool_description: "Request a new pilot assessment for a proposed or backlog task (operator only on the owner). Rules and `full` fallback: the orbit skill's tool-surface-registry.md reference, section `Artifact and recovery tools`.",
+    tool_description: "Request a new pilot assessment for a proposed or backlog task (operator on the owner, or live resident cycle with `dispatch` in its mandate's workspace). Rules and `full` fallback: the orbit skill's tool-surface-registry.md reference, section `Artifact and recovery tools`.",
     cli_about: "Explicitly request one new pilot assessment",
     cli_help: CliHelp {
         long_about: Some(

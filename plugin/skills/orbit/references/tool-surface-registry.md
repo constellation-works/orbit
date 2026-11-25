@@ -279,13 +279,18 @@ require operator capability; agent sessions are refused. `show`, `list` and
   opaque base64 only.
 - `orbit.task.recover` action `repilot` (`orbit.task.repilot`) explicitly
   requests one new pilot assessment for a `proposed` or `backlog` task
-  (operator authority on the owner; refuses pending/running pilots, live
-  delivery, human crews and replica checkouts; never promotes or dispatches).
-  When the latest assessment holds promotion, the pilot re-checks holding
-  findings and keeps fields untouched by the task's changes, falling back to a
-  full assessment if the repository moved at its footprint, scope changed
-  beyond a bounded edit, or the prior assessment is too old or was a re-check;
-  `full` forces a full assessment.
+  (operator authority on the owner, or a trusted live resident cycle holding
+  `dispatch` for its mandate's own workspace via the broker; foreign
+  workspaces are refused with `resident_scope_refused`, cycles without
+  `dispatch` with `resident_right_refused`, stale cycles with
+  `resident_cycle_stale`, and other managed runs or unbrokered callers stay
+  operator-only and are refused; refuses pending/running pilots, live
+  delivery, human crews and replica checkouts; never promotes or
+  dispatches). When the latest assessment holds promotion, the pilot
+  re-checks holding findings and keeps fields untouched by the task's
+  changes, falling back to a full assessment if the repository moved at its
+  footprint, scope changed beyond a bounded edit, or the prior assessment is
+  too old or was a re-check; `full` forces a full assessment.
 - `orbit.task.recover` action `resume_delivery` (`orbit.task.resume_delivery`)
   starts a review-only recovery leaf for a blocked task's preserved delivery
   through an authenticated cycle with the `recover` right, continuing on the
