@@ -62,10 +62,11 @@ pub(crate) const DEPRECATED_CONFIG_KEYS: &[(&str, &str)] = &[
         "ignored: explorer delegation was removed; remove this key",
     ),
     (
-        // compat-until: 2026-12-01 (4716319b4216)
+        // compat-until: 2026-12-07 (1bd67f79b9b9)
         "workflow.purpose_crews.explorer",
         "ignored: explorer delegation was removed; remove this key",
     ),
+    // compat-until: 2026-12-01 (4716319b4216)
     (
         "commit.planned_by_trailer",
         "ignored: Planned-By is no longer written; read the implementer from Co-authored-by or task attribution",
