@@ -1,7 +1,7 @@
 ---
 title: "Scope: operator-granted tools for the implementing activity (`granted_tools`)"
 owner: claude
-last_updated: 2026-11-20
+last_updated: 2026-11-24
 last_validated: 2026-11-20
 status: Implemented
 stage: shipped
@@ -17,8 +17,9 @@ tags: [granted-tools]
 
 Status: Implemented — all six implementation phases are shipped, as scoped by [ORB-18317]. Grants are
 operator-only, owner-host-only and frozen for a dispatched attempt. Every
-currently denied implementer tool is mutating: grants authorize reviewed
-proposals, never live mutations. See the shipped
+currently denied implementer tool is either mutating or conservatively treated
+as mutating by grant classification: grants authorize reviewed proposals,
+never live mutations. See the shipped
 [operator runbook](../../../crates/orbit-core/assets/skills/orbit/references/task-fields-tools.md#operator-runbook-granting-tools).
 Bearing: tasks already carry `required_tools`
 ([`artifacts.rs`](../../../crates/orbit-types/src/task/artifacts.rs));
@@ -40,8 +41,8 @@ so a task can revise an auto-task definition as part of its work.
 Before this feature that was impossible by design.
 `agent_implement`'s `tool_disallow_list`
 names `orbit.auto_task` action `add`, `orbit.auto_task` action `mint`, `orbit.auto_task` action `update`,
-`orbit.command.exec`, `orbit.pipeline.invoke`, `orbit.workflow` action `land`,
-`orbit.run` action `resume`, `orbit.run` action `show` and `orbit.workflow` action `ship`. Listing one in
+`orbit.command.exec`, `orbit.pipeline.invoke`, `orbit.run` actions `resume` and
+`show`, and `orbit.workflow` actions `land`, `refresh` and `ship`. Listing one in
 `required_tools` does not help:
 `admit_required_tools` in
 [`activity_tools.rs`](../../../crates/orbit-core/src/adapter/engine_host/runtime_host/activity_tools.rs)
@@ -74,7 +75,7 @@ denied ones.
 
 | Fact | Source |
 |---|---|
-| `agent_implement` denies the nine tools listed above, `on_denial: terminate` | [`agent_implement.yaml`](../../../crates/orbit-core/assets/activities/agent_implement.yaml) (`tool_disallow_list`) |
+| `agent_implement` denies the ten tools listed above, `on_denial: terminate` | [`agent_implement.yaml`](../../../crates/orbit-core/assets/activities/agent_implement.yaml) (`tool_disallow_list`) |
 | A requirement that the deny list covers fails implementer admission; non-implementers drop it with a note [ORB-15162] | [`activity_tools.rs`](../../../crates/orbit-core/src/adapter/engine_host/runtime_host/activity_tools.rs) (`admit_required_tools`, `resolve_activity_tool_denials`), [`activity_tool_requirements.rs`](../../../crates/orbit-core/src/application/job/activity_tool_requirements.rs) (`drops_disallowed_requirements`) |
 | Requirements must be exact canonical names of registered, agent-facing, enabled tools; wildcards are refused | [`activity_tools.rs`](../../../crates/orbit-core/src/adapter/engine_host/runtime_host/activity_tools.rs) |
 | Field-level operator authorization: `orbit.auto_task` action `update` carrying `expected_enabled`, and `orbit.auto_task` action `mint` carrying `acknowledge_unconditional`, additionally require the governed operation `orbit.routine.control` | [`tool_exec.rs`](../../../crates/orbit-runtime/src/tool_exec.rs) (`authorize_registered_tool`), [`operations.rs`](../../../crates/orbit-common/src/governance/authorization/catalog/operations.rs) (`orbit.routine.control`, Operator-only) |
@@ -185,9 +186,9 @@ its allowed set. `orbit.auto_task` action `update` (ungoverned except for the
 `AGENT_IMPLEMENT_TOOL_GRANT_CLASSIFICATIONS` in
 [`authorization/grants.rs`](../../../crates/orbit-common/src/governance/authorization/grants.rs),
 beside the governed-operation catalog. Authorization reviewers own additions
-and any change to repeat-safety, as they do catalog rows. It classifies eight of the nine
-shipped deny entries: the three auto-task operations are grantable;
-the command, pipeline and workflow operations are always operator-only.
+and any change to repeat-safety, as they do catalog rows. It classifies nine of the ten
+shipped deny entries: the three auto-task operations are grantable; the command,
+pipeline, run-resume and workflow operations are always operator-only.
 `orbit.run` action `show` joined the deny lists under [ORB-22215] without a classification
 row; it defaults to mutating and the governed-row recheck keeps it always operator-only,
 so the omission fails closed.

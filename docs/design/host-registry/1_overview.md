@@ -3,7 +3,7 @@ summary: "Host Registry — Overview"
 type: design
 title: "Host Registry — Overview"
 owner: codex
-last_updated: 2026-11-03
+last_updated: 2026-11-24
 last_validated: 2026-11-09
 status: Implemented
 stage: shipped
@@ -13,14 +13,32 @@ doc_role: overview
 tags: [host-registry, machine-identity, workspace-catalog]
 paths: ["crates/orbit-types/src/identity/machine.rs", "crates/orbit-types/src/workspace/registry.rs", "crates/orbit-config/src/registry/settings/**", "crates/orbit-registry/src/machine_identity.rs", "crates/orbit-registry/src/hosts.rs", "crates/orbit-cmd/src/hosts/**", "crates/orbit-cli/src/command/host.rs", "crates/orbit-registry/src/workspace_registry/**", "crates/orbit-cmd/src/registry/runtime/**", "crates/orbit-cli/src/command/init/**", "crates/orbit-cli/src/command/config/**", "crates/orbit-cli/src/command/workspace/**", "crates/orbit-cli/src/command/mcp/**", "crates/orbit-web/src/lib.rs", "crates/orbit-web/src/state/**", "crates/orbit-mcp/src/remote/identity.rs", "crates/orbit-mcp/src/remote/discovery.rs"]
 related_features: [host-registry, mcp-session-context, remote-access, federated-mcp]
-related_artifacts: [ORB-11009, ORB-14448, ORB-14449, ORB-14451]
+related_artifacts: [ORB-11009, ORB-14448, ORB-14449, ORB-14451, ORB-27669]
 ---
 
 # Host Registry — Overview
 
 The live host-registry feature is a machine-local identity and workspace catalog. It tells an Orbit process who the accepting machine is, which logical workspaces this installation knows, and which local checkout may be opened for each workspace.
 
-It is not a fleet router. The operator registers remote hosts with `orbit host add`; the CLI-owned host file stores the operator's name and SSH target plus each host's stable `machine_id` and `task_prefix`. It can also store a registration-time `host_os` snapshot for crew selection, added by [ORB-16763]; probes do not refresh that snapshot. By default, `orbit host list|show` use live probes for changing details such as reachability, version, protocol and workspaces ([specs/host-commands.md](./specs/host-commands.md), [ORB-14448]). Task ids route to the host their prefix names, and `--host` names a host for `--workspace` and `--pull` ([specs/host-routing.md](./specs/host-routing.md), [ORB-14449]). The dashboard's Observe › Fleet view exposes the same operations and is implemented ([specs/host-commands.md#dashboard](./specs/host-commands.md#dashboard), [ORB-14451]). This catalog has no presence, placement, lease, workspace-link or registry-cache workflow. The implemented federated MCP mux is specified separately in [federated-mcp](../federated-mcp/1_overview.md); [ORB-11009] established its separate contract home. It consumes registered hosts for MCP routing but remains a distinct serving mode, separate from this catalog.
+It is not a general fleet router. The operator registers remote hosts with
+`orbit host add`; the CLI-owned host file stores each host's name and SSH target,
+stable `machine_id` and `task_prefix`. It can also store a registration-time
+`host_os` snapshot for crew selection, added by [ORB-16763]; probes do not refresh
+that snapshot. By default, `orbit host list|show` use live probes for changing
+details such as reachability, version, protocol and workspaces
+([specs/host-commands.md](./specs/host-commands.md), [ORB-14448]). Task ids route
+to the host their prefix names, and `--host` names a host for `--workspace` and
+`--pull` ([specs/host-routing.md](./specs/host-routing.md), [ORB-14449]). The
+dashboard's Observe › Fleet view exposes the same operations and is implemented
+([specs/host-commands.md#dashboard](./specs/host-commands.md#dashboard), [ORB-14451]).
+The catalog has no background presence or heartbeat, placement, lease,
+workspace-link or registry-cache workflow; it does support operator-recorded
+offline marks, with optional expiry, for planned downtime ([ORB-27669],
+[host command spec](./specs/host-commands.md)). The implemented federated MCP
+mux is specified separately in [federated-mcp](../federated-mcp/1_overview.md);
+[ORB-11009] established its separate contract home. It consumes registered
+hosts for MCP routing but remains a distinct serving mode, separate from this
+catalog.
 
 ## Ownership
 
@@ -76,5 +94,6 @@ remote-host scope is shipped; the questions in the vision are future work.
 - [ORB-14449] implemented task-prefix routing and --host selection.
 - [ORB-14451] implemented dashboard Settings › Hosts through shared registry operations.
 - [ORB-16763] added registration-time host OS facts for serving-host crew selection.
+- [ORB-27669] added operator-recorded offline acknowledgements for planned downtime.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.

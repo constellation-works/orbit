@@ -3,7 +3,7 @@ summary: "Host Registry — Vision"
 type: design
 title: "Host Registry — Vision"
 owner: codex
-last_updated: 2026-10-26
+last_updated: 2026-11-24
 last_validated: 2026-11-09
 status: Accepted
 feature: host-registry
@@ -32,8 +32,11 @@ workspace-scoped tool on the accepting machine. Direct SSH stdio reaches one
 chosen remote server; this surface has no cross-host workspace list or
 host-qualified selector. The implemented federated stdio mode is a separate
 exception: it lists and routes to the accepting machine and registered SSH
-hosts through host-qualified selectors. The local host registry remains
-neither a fleet inventory nor a general routing authority. The host file
+hosts through host-qualified selectors. The local host registry can also carry
+an operator-recorded offline mark for planned downtime, with optional expiry
+([ORB-27669], [host command spec](./specs/host-commands.md)). It remains a
+registered-host list and task-prefix routing table, not an automatic presence
+service or general placement authority. The host file
 ([specs/host-commands.md](./specs/host-commands.md)) records each registered host's
 name, SSH target, machine identity and task prefix, plus an optional operating-system
 snapshot captured at registration for creation-time crew-pool selection. Reachability,
