@@ -390,6 +390,66 @@ and [single environment capture](../architecture-restructure/4_decisions.md#one-
 carry the CLI boundary and remaining environment reads; its accepted sequence
 owns the implementation work.
 
+## Policy YAML decoder deviation under STD-02@8 §R47
+
+**Recorded:** 2026-11-25 · [ORB-28227]
+
+### Context
+
+[STD-02@8 §R47](../../standards/STD-02-rust-architecture-and-errors/STD-02.md)
+states a subject stays whole: code for one subject must not be split across
+units only to keep one of them free of I/O. A library unit may own the file
+access its subject needs, confined to one module of that unit, and may import
+the persistence unit — finding, reading and parsing one kind of input live
+together.
+
+The policy subject is currently split across two units. The file location and
+reading live in the persistence crate
+(`crates/orbit-store/src/driver/file/policy_def_store/mod.rs:82`
+`get_policy_def`, delegating to the projection at line 116), while the schema
+and document decoding live in the foundation crate as the single shared entry
+point `orbit_common::protocol::yaml::parse_policy_resource`
+(`crates/orbit-common/src/protocol/yaml.rs:47`). The store already depends on
+Common (`crates/orbit-store/Cargo.toml` `[dependencies]`), so the decoder's
+physical home in Common is reachable from the store without a new edge.
+
+There are two production callers of the decoder: the store projection above
+and bootstrap seeding at `crates/orbit-core/src/bootstrap/policy.rs:79`,
+which repeats the resource-to-`PolicyDef` projection at line 93. The
+pure-types extraction `9f5ac5d36` moved this subject-specific codec from
+Common's former types tree to its protocol module; both callers can use the
+existing Store edge instead, and the policy contract types can stay I/O-free.
+
+### Deviation
+
+The single decoder stays physically in Common for now, with its existing
+signature and behavior preserved, rather than moving into the Store unit with
+the file access it serves. A Common re-export from Store is not available as
+the remedy: the dependency direction runs Store → Common, never the reverse,
+so Common cannot re-export a Store-owned decoder.
+
+This departure is recorded under STD-02@8's
+[Deviations](../../standards/STD-02-rust-architecture-and-errors/STD-02.md#deviations)
+provision pending the approved gradual architecture work. The accepted
+[Architecture Restructure decisions](../architecture-restructure/4_decisions.md)
+own that replacement.
+
+### Decision
+
+Preserve `orbit_common::protocol::yaml::parse_policy_resource` with its
+existing signature and behavior as the stable public Common entry point and
+the single shared decoder. Keep both existing consumers (the store projection
+and bootstrap seeding) on it. This task changes no public signatures, code,
+or vendored standards.
+
+### Reconsideration
+
+Revisit the decoder's physical home during the approved restructure, once a
+compatibly agreed crate layout or migration exists that can relocate it into
+the Store unit (with the Store edge serving both callers) without breaking
+the stable entry point. Until then the deviation stands and unrelated changes
+do not trigger a relocation.
+
 ## Task References
 
 - [ORB-00289] — trimmed six admin and maintenance tools from the agent MCP surface.
@@ -410,5 +470,6 @@ owns the implementation work.
 - [ORB-27881] — synced the vendored constellation standards STD-02@4 → @5.
 - [ORB-27886] — recorded Orbit's standing and deviations against STD-02@5 §R2, §R6, §R18 and §R39–R44 ([Standing against STD-02@5 (R2, R6, R18, R39–R44)](#standing-against-std-025-r2-r6-r18-r39r44)).
 - [ORB-28199] — recorded Orbit's current CLI boundary deviation against STD-02@8 §R7.
+- [ORB-28227] — recorded the policy YAML decoder deviation against STD-02@8 §R47 ([Policy YAML decoder deviation under STD-02@8 §R47](#policy-yaml-decoder-deviation-under-std-028-r47)).
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.
