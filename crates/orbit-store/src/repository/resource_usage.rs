@@ -248,9 +248,10 @@ impl<Access> ResourceUsageRepository<'_, Access> {
         delivery_run_load::load_delivery_runs(self.conn, since)
     }
 
-    /// Every sampled run since the epoch, exactly as [`Self::delivery_runs`]
-    /// would return it now, reusing each run of `previous` whose shape still
-    /// holds.
+    /// Every sampled run since the epoch, as [`Self::delivery_runs`] would
+    /// return it now. Unchanged runs in `previous` are reused when at most
+    /// half of current run shapes changed, including exactly half. When more
+    /// than half changed, every qualifying minute is read in one ordered scan.
     pub fn reload_delivery_runs(
         &self,
         previous: Option<DeliveryRunsLoad>,
