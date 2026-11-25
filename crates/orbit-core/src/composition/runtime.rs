@@ -1,9 +1,9 @@
 //! Runtime composition: root resolution, runtime construction and configuration
 //! initialization for [`OrbitRuntime`].
 
-use orbit_common::env_vars;
+use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
 use orbit_common::fs::generation::{
     Access, GenerationGuard, ParticipantRole, process_handover, process_participation,
@@ -32,31 +32,6 @@ use crate::runtime::{
     resolve_bootstrap_roots_with_hint, resolve_global_root, resolve_initialize_roots,
     resolve_initialize_roots_with_hint,
 };
-
-/// The environment `main` captured, kept where runtimes are built.
-static CAPTURED_ENV: OnceLock<Env> = OnceLock::new();
-
-/// Keep the environment `main` captured with [`Env::capture`] for
-/// composition. The first value stays: a later call changes nothing.
-pub fn install_captured_env(env: Env) {
-    let installed = CAPTURED_ENV.set(env).is_ok();
-    debug_assert!(
-        installed,
-        "the process environment is captured once, in main"
-    );
-}
-
-/// The environment `main` captured, or `None` in a process that never ran
-/// `main`, such as a test binary.
-pub fn captured_env() -> Option<&'static Env> {
-    CAPTURED_ENV.get()
-}
-
-/// Supply the startup environment to a composition entry point. Library
-/// hosts without Orbit's main capture at their own composition boundary.
-pub fn composition_env() -> Env {
-    captured_env().cloned().unwrap_or_else(Env::capture)
-}
 
 impl OrbitRuntime {
     pub fn initialize() -> Result<Self, OrbitError> {
@@ -119,9 +94,10 @@ impl OrbitRuntime {
         cwd: &Path,
         root_override: Option<&Path>,
     ) -> Result<OrbitRuntimeRoots, OrbitError> {
+        let env = crate::runtime::process_env();
         roots_from_resolved(
             resolve_initialize_roots(cwd, root_override)?,
-            has_explicit_root_override(root_override),
+            has_explicit_root_override(root_override, &env),
         )
     }
 
@@ -130,9 +106,10 @@ impl OrbitRuntime {
         root_override: Option<&Path>,
         hint: Option<&WorkspaceRootHint>,
     ) -> Result<OrbitRuntimeRoots, OrbitError> {
+        let env = crate::runtime::process_env();
         roots_from_resolved(
             resolve_initialize_roots_with_hint(cwd, root_override, hint)?,
-            has_explicit_root_override(root_override),
+            has_explicit_root_override(root_override, &env),
         )
     }
 
@@ -140,9 +117,10 @@ impl OrbitRuntime {
         cwd: &Path,
         root_override: Option<&Path>,
     ) -> Result<OrbitRuntimeRoots, OrbitError> {
+        let env = crate::runtime::process_env();
         roots_from_resolved(
             resolve_bootstrap_roots(cwd, root_override)?,
-            has_explicit_root_override(root_override),
+            has_explicit_root_override(root_override, &env),
         )
     }
 
@@ -151,9 +129,10 @@ impl OrbitRuntime {
         root_override: Option<&Path>,
         hint: Option<&WorkspaceRootHint>,
     ) -> Result<OrbitRuntimeRoots, OrbitError> {
+        let env = crate::runtime::process_env();
         roots_from_resolved(
             resolve_bootstrap_roots_with_hint(cwd, root_override, hint)?,
-            has_explicit_root_override(root_override),
+            has_explicit_root_override(root_override, &env),
         )
     }
 
@@ -266,7 +245,7 @@ impl OrbitRuntime {
         ])?;
         let _generation = pin_executable_generation(&roots.global_root, true)?;
         let layout_report = observe_or_upgrade_layout(&roots.shared_root, true)?;
-        let env = composition_env();
+        let env = crate::runtime::process_env();
         let config = ResolvedConfig::load(
             &env,
             &ConfigRoots::new(&roots.global_root, &roots.shared_root),
@@ -291,7 +270,7 @@ impl OrbitRuntime {
             .map_err(|error| OrbitError::Io(error.to_string()))?;
         let data_root = temp_dir.path().to_path_buf();
         let workspace_root = data_root.join(".orbit");
-        let env = composition_env();
+        let env = crate::runtime::process_env();
         let runtime_config = prepare_resolved_config(&env, &data_root, &workspace_root)?;
         RuntimeKernel::build_in_memory_from_resolved_config(
             &data_root,
@@ -337,8 +316,9 @@ pub fn pin_executable_generation_as(
     } else {
         Access::Write
     };
+    let env = crate::runtime::process_env();
     GenerationGuard::for_process(
-        &composition_env(),
+        &env,
         root,
         &compiled_compatibility(),
         role,
@@ -371,7 +351,7 @@ fn build_runtime(
     // The admission recorded the authority before the layout changed and
     // fenced other first adoptions until now.
     drop(authority);
-    let env = composition_env();
+    let env = crate::runtime::process_env();
     let runtime_config = if write_free {
         ResolvedConfig::load(&env, &ConfigRoots::new(global_root, shared_root))?
     } else {
@@ -513,16 +493,21 @@ fn roots_from_resolved(
     })
 }
 
-fn has_explicit_root_override(root_override: Option<&Path>) -> bool {
+fn has_explicit_root_override(root_override: Option<&Path>, env: &Env) -> bool {
     if root_override.is_some() {
         return true;
     }
-    let env_override =
-        std::env::var(env_vars::ORBIT_ROOT).is_ok_and(|value| !value.trim().is_empty());
+    let env_override = env
+        .orbit_root()
+        .and_then(OsStr::to_str)
+        .is_some_and(|value| !value.trim().is_empty());
     #[cfg(target_os = "macos")]
     if env_override
         && managed_dispatch_context_from_env()
-        && std::env::var(env_vars::ORBIT_REGISTRY_ROOT).is_ok_and(|value| !value.trim().is_empty())
+        && env
+            .orbit_registry_root()
+            .and_then(OsStr::to_str)
+            .is_some_and(|value| !value.trim().is_empty())
     {
         // The sandbox may not create a generation record under the selected
         // workspace `.orbit`. Keep global stores and their generation pin on

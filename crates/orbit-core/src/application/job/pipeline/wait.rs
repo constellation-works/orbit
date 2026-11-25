@@ -1,7 +1,10 @@
-#[cfg(debug_assertions)]
+#[cfg(all(debug_assertions, any(test, feature = "test-support")))]
+use std::ffi::OsStr;
+#[cfg(all(debug_assertions, any(test, feature = "test-support")))]
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Condvar, Mutex, PoisonError};
 
+use orbit_common::Env;
 use serde::Deserialize;
 
 use super::*;
@@ -10,15 +13,6 @@ const PIPELINE_WAIT_DEFAULT_TIMEOUT_SECONDS: u64 = 3600;
 const PIPELINE_WAIT_MAX_TIMEOUT_SECONDS: u64 = 86400;
 const PIPELINE_WAIT_DEFAULT_POLL_SECONDS: u64 = 5;
 pub(super) const PIPELINE_WAIT_MIN_POLL_SECONDS: u64 = 1;
-
-/// Set to `1` in a debug build to make a pipeline wait add each poll to its
-/// elapsed time and return, instead of sleeping.
-///
-/// Release builds ignore it. The virtual clock does not wake when a worker is
-/// reaped, so set it only on a deadline that must expire while the run is
-/// still active. A wait that should observe completion keeps the real clock.
-#[cfg(debug_assertions)]
-pub(crate) use orbit_common::env_vars::ORBIT_TEST_PIPELINE_WAIT_VIRTUAL as PIPELINE_WAIT_VIRTUAL_ENV;
 
 pub(crate) trait PipelineWaitClock {
     fn elapsed(&self) -> Duration;
@@ -30,14 +24,14 @@ pub(crate) trait PipelineWaitClock {
 struct SystemPipelineWaitClock {
     started_at: Instant,
     /// Milliseconds the virtual clock has advanced. Absent unless
-    /// [`PIPELINE_WAIT_VIRTUAL_ENV`] is `1` in a debug build.
-    #[cfg(debug_assertions)]
+    /// `ORBIT_TEST_PIPELINE_WAIT_VIRTUAL` is `1` in a debug `test-support` build.
+    #[cfg(all(debug_assertions, any(test, feature = "test-support")))]
     virtual_millis: Option<AtomicU64>,
 }
 
 impl PipelineWaitClock for SystemPipelineWaitClock {
     fn elapsed(&self) -> Duration {
-        #[cfg(debug_assertions)]
+        #[cfg(all(debug_assertions, any(test, feature = "test-support")))]
         if let Some(virtual_millis) = &self.virtual_millis {
             return Duration::from_millis(virtual_millis.load(Ordering::Relaxed));
         }
@@ -50,7 +44,7 @@ impl PipelineWaitClock for SystemPipelineWaitClock {
             wait(duration);
             return;
         }
-        #[cfg(debug_assertions)]
+        #[cfg(all(debug_assertions, any(test, feature = "test-support")))]
         if let Some(virtual_millis) = &self.virtual_millis {
             let added = u64::try_from(duration.as_millis()).unwrap_or(u64::MAX);
             virtual_millis.fetch_add(added, Ordering::Relaxed);
@@ -60,11 +54,16 @@ impl PipelineWaitClock for SystemPipelineWaitClock {
     }
 }
 
-fn system_pipeline_wait_clock() -> SystemPipelineWaitClock {
+fn system_pipeline_wait_clock(env: &Env) -> SystemPipelineWaitClock {
+    #[cfg(not(all(debug_assertions, any(test, feature = "test-support"))))]
+    let _ = env;
     SystemPipelineWaitClock {
         started_at: Instant::now(),
-        #[cfg(debug_assertions)]
-        virtual_millis: match std::env::var(PIPELINE_WAIT_VIRTUAL_ENV).ok().as_deref() {
+        #[cfg(all(debug_assertions, any(test, feature = "test-support")))]
+        virtual_millis: match env
+            .orbit_test_pipeline_wait_virtual()
+            .and_then(OsStr::to_str)
+        {
             Some("1") => Some(AtomicU64::new(0)),
             _ => None,
         },
@@ -335,7 +334,7 @@ impl OrbitRuntime {
             timeout_seconds,
             poll_interval_seconds,
             actor,
-            &system_pipeline_wait_clock(),
+            &system_pipeline_wait_clock(&crate::runtime::process_env()),
         )
     }
 

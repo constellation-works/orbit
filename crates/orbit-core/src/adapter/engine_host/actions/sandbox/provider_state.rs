@@ -1,6 +1,7 @@
-use orbit_common::env_vars;
+use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 
+use orbit_common::Env;
 use orbit_common::fs::physical::canonicalize_existing_prefix_checked;
 use orbit_engine::DispatchError;
 use orbit_types::policy::ResolvedFsProfile;
@@ -9,17 +10,18 @@ use super::resolve::append_unique_modify_root;
 use super::runtime_paths::linux_path_inspection_error;
 
 pub(super) fn append_linux_provider_state_roots(
+    env: &Env,
     provider: &str,
     resolved: &mut ResolvedFsProfile,
 ) -> Result<(), DispatchError> {
-    let home = std::env::var_os(env_vars::HOME).map(PathBuf::from);
+    let home = env.home().map(PathBuf::from);
     let mut directories = Vec::new();
-    if let Some(path) = std::env::var_os(env_vars::CODEX_HOME).map(PathBuf::from) {
+    if let Some(path) = env.codex_home().map(PathBuf::from) {
         directories.push(path);
     } else if let Some(home) = &home {
         directories.push(home.join(".codex"));
     }
-    if let Some(path) = std::env::var_os(env_vars::CLAUDE_CONFIG_DIR).map(PathBuf::from) {
+    if let Some(path) = env.claude_config_dir().map(PathBuf::from) {
         directories.push(path);
     } else if let Some(home) = &home {
         directories.push(home.join(".claude"));
@@ -33,8 +35,8 @@ pub(super) fn append_linux_provider_state_roots(
     // more here than on macOS: every entry in this list is *created* by the
     // validated provider-root path below, so an unconditional entry would
     // mkdir a `~/.copilot` on hosts that have never installed the CLI.
-    directories.extend(linux_copilot_state_roots(provider, home.as_deref()));
-    directories.extend(linux_muse_state_roots(provider, home.as_deref()));
+    directories.extend(linux_copilot_state_roots(env, provider, home.as_deref()));
+    directories.extend(linux_muse_state_roots(env, provider, home.as_deref()));
     for directory in directories {
         let canonical = ensure_linux_provider_directory(&directory, home.as_deref())?;
         append_unique_modify_root(resolved, canonical.display().to_string());
@@ -190,28 +192,20 @@ fn xdg_scoped_root(
 /// entry in the caller's list is *created* by `ensure_linux_provider_directory`,
 /// so an unconditional entry would mkdir a `~/.config/muse` on hosts that
 /// never installed Muse. [ORB-16577]
-fn linux_muse_state_roots(provider: &str, home: Option<&Path>) -> Vec<PathBuf> {
+fn linux_muse_state_roots(env: &Env, provider: &str, home: Option<&Path>) -> Vec<PathBuf> {
     if orbit_types::workflow::Provider::parse(provider).ok()
         != Some(orbit_types::workflow::Provider::Muse)
     {
         return Vec::new();
     }
     // XDG treats an empty variable as unset.
-    let env_path = |name: &str| {
-        std::env::var_os(name)
-            .filter(|value| !value.is_empty())
-            .map(PathBuf::from)
-    };
+    let env_path =
+        |value: Option<&OsStr>| value.filter(|value| !value.is_empty()).map(PathBuf::from);
     [
+        xdg_scoped_root(home, env_path(env.xdg_config_home()), &[".config"], "muse"),
         xdg_scoped_root(
             home,
-            env_path(env_vars::XDG_CONFIG_HOME),
-            &[".config"],
-            "muse",
-        ),
-        xdg_scoped_root(
-            home,
-            env_path(env_vars::XDG_DATA_HOME),
+            env_path(env.xdg_data_home()),
             &[".local", "share"],
             "muse",
         ),
@@ -221,17 +215,13 @@ fn linux_muse_state_roots(provider: &str, home: Option<&Path>) -> Vec<PathBuf> {
     .collect()
 }
 
-/// Process-env wrapper around [`linux_copilot_state_roots_with`].
-fn linux_copilot_state_roots(provider: &str, home: Option<&Path>) -> Vec<PathBuf> {
+/// Captured-env wrapper around [`linux_copilot_state_roots_with`].
+fn linux_copilot_state_roots(env: &Env, provider: &str, home: Option<&Path>) -> Vec<PathBuf> {
     linux_copilot_state_roots_with(
         provider,
         home,
-        std::env::var_os(env_vars::COPILOT_HOME)
-            .map(PathBuf::from)
-            .as_deref(),
-        std::env::var_os(env_vars::XDG_CACHE_HOME)
-            .map(PathBuf::from)
-            .as_deref(),
+        env.copilot_home().map(Path::new),
+        env.xdg_cache_home().map(Path::new),
     )
 }
 

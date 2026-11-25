@@ -1,11 +1,11 @@
 //! The audit-store dispatch core: builds the audit row for one tool call,
 //! persists it, and hands the outcome to success finalization.
 
-use orbit_common::env_vars;
+use std::ffi::OsStr;
 use std::time::Instant;
 
 use orbit_common::security::redaction::redact_all_json_with_keys;
-use orbit_common::{NotFoundKind, OrbitError};
+use orbit_common::{Env, NotFoundKind, OrbitError};
 use orbit_store::contracts::{AuditEventInsertParams, AuditInvocationFields};
 use orbit_tools::ToolExecutionKind;
 use orbit_tools::plugin::{take_delivered_plugin_secret_names, take_plugin_secret_updates};
@@ -17,7 +17,8 @@ use serde_json::Value;
 use crate::redact_sensitive_env_text;
 
 use super::super::audit::{
-    AuditContext, audit_role_label_for_entry_point, mcp_audit_session_model, resolve_audit_context,
+    AuditContext, audit_role_label_for_entry_point_with_env, mcp_audit_session_model,
+    resolve_audit_context,
 };
 use super::super::callback::take_callback_plugin_provenance;
 use super::entry::{ToolEntryPoint, mark_tool_audit_recorded};
@@ -59,7 +60,9 @@ pub(in crate::adapter::command::dispatch) struct BrokeredAudit {
     pub(in crate::adapter::command::dispatch) session_model: Option<String>,
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) fn execute_tool_dispatch_with_audit_store<F, S>(
+    env: &Env,
     name: &str,
     input: Value,
     execution_kind: ToolExecutionKind,
@@ -92,7 +95,8 @@ where
             Some(brokered.peer_pid),
         ),
         None => (
-            audit_role_label_for_entry_point(
+            audit_role_label_for_entry_point_with_env(
+                env,
                 &input,
                 agent_override.as_deref(),
                 model_override.as_deref(),
@@ -101,7 +105,7 @@ where
             std::env::current_dir()
                 .map(|path| path.to_string_lossy().into_owned())
                 .unwrap_or_else(|_| ".".to_string()),
-            resolve_audit_context(&input, entry_point, session_context.as_ref()),
+            resolve_audit_context(env, &input, entry_point, session_context.as_ref()),
             None,
         ),
     };
@@ -201,7 +205,10 @@ where
         stdout_truncated: None,
         stderr_truncated: None,
         error_message,
-        host: std::env::var(env_vars::HOSTNAME).ok(),
+        host: env
+            .hostname()
+            .and_then(OsStr::to_str)
+            .map(ToOwned::to_owned),
         pid: std::process::id(),
         session_id: audit_context.session_id,
         workspace_id: session_context
@@ -246,6 +253,7 @@ where
     // own trust label off `unverified`. `session_model` is the same kind of
     // attribution: it is recorded beside the role, and it never becomes one.
     let session_model = mcp_audit_session_model(
+        env,
         entry_point,
         brokered_session_model.as_deref(),
         orchestrator_model.as_deref(),

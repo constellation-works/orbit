@@ -9,8 +9,11 @@ use super::rework::{self, ForecastArrivalStream, RegressionRework};
 use super::schedule::{self, DrainStop, HORIZON_HOURS, Scenario, ScheduleState};
 use crate::application::admission::forecast::{ForecastAdmission, ForecastWait};
 use crate::application::statistics::SplitMix64;
+use orbit_common::Env;
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
+#[cfg(feature = "test-support")]
+use std::ffi::OsStr;
 use std::time::{Duration, Instant};
 
 /// Wall time, from the start of a forecast, that a scenario with arrivals may
@@ -24,12 +27,23 @@ pub(super) const ARRIVALS_COMPUTE_BUDGET: Duration = Duration::from_secs(20);
 #[cfg(feature = "test-support")]
 pub use orbit_common::env_vars::ORBIT_TEST_FORECAST_COMPUTE_BUDGET_MS as COMPUTE_BUDGET_ENV;
 
+/// Resolved generation and compute bounds for one forecast simulation.
+#[derive(Clone, Copy)]
+pub(super) struct SimulationBounds {
+    pub(super) max_generated: usize,
+    pub(super) compute_budget: Duration,
+    pub(super) deadline: Instant,
+}
+
 /// The wall-time budget of a scenario with arrivals: [`ARRIVALS_COMPUTE_BUDGET`]
 /// unless a test fixture substituted another through [`COMPUTE_BUDGET_ENV`].
-pub(super) fn arrivals_compute_budget() -> Duration {
+pub(super) fn arrivals_compute_budget(env: &Env) -> Duration {
+    #[cfg(not(feature = "test-support"))]
+    let _ = env;
     #[cfg(feature = "test-support")]
-    if let Some(millis) = std::env::var(COMPUTE_BUDGET_ENV)
-        .ok()
+    if let Some(millis) = env
+        .orbit_test_forecast_compute_budget_ms()
+        .and_then(OsStr::to_str)
         .and_then(|value| value.parse().ok())
     {
         return Duration::from_millis(millis);
@@ -215,6 +229,7 @@ impl Outcome {
         rework: &RegressionRework,
         arrivals_supported: bool,
         bases: &[Value],
+        bounds: SimulationBounds,
     ) -> Value {
         // A cut scenario's finished iterations are not a sample of all of
         // them, so nothing below may be computed from them.
@@ -461,8 +476,8 @@ impl Outcome {
                 "reason": cut.key(),
                 "iterations": ITERATIONS,
                 "iterations_completed": completed,
-                "generated_limit": rework::max_generated(),
-                "compute_budget_seconds": arrivals_compute_budget().as_secs(),
+                "generated_limit": bounds.max_generated,
+                "compute_budget_seconds": bounds.compute_budget.as_secs(),
             });
         }
         result
@@ -496,7 +511,7 @@ pub(super) fn simulate_backlog_forecast(
     rework: &RegressionRework,
     arrivals: Option<&BTreeMap<&'static str, f64>>,
     correction: &Correction,
-    deadline: Instant,
+    bounds: SimulationBounds,
 ) -> Forecast {
     let frozen = admission;
     let initial_admission =
@@ -548,8 +563,8 @@ pub(super) fn simulate_backlog_forecast(
     let arrival_pools = rework::forecast_arrival_pools(rework);
     let arrivals_active = arrivals
         .is_some_and(|rates| rates.values().sum::<f64>() > 0.0 && !rework.donors.is_empty());
-    let deadline = arrivals_active.then_some(deadline);
-    let max_generated = rework::max_generated();
+    let deadline = arrivals_active.then_some(bounds.deadline);
+    let max_generated = bounds.max_generated;
     let expired = || deadline.is_some_and(|deadline| Instant::now() >= deadline);
     // Give each task a replayable stream. This makes its correction
     // anchors exact for the sampled scripts without retaining every script.
@@ -620,6 +635,7 @@ pub(super) fn simulate_backlog_forecast(
                     &mut rng,
                     correction,
                     deadline,
+                    max_generated,
                 )
             } else {
                 (Vec::new(), false)
@@ -783,6 +799,7 @@ pub(super) fn simulate_backlog_forecast(
         arrivals
             .is_none_or(|rates| rates.values().sum::<f64>() <= 0.0 || !rework.donors.is_empty()),
         &bases,
+        bounds,
     );
     let if_approved = approved_scenario.as_ref().map(|scenario| {
         approved_outcome.into_json(
@@ -796,6 +813,7 @@ pub(super) fn simulate_backlog_forecast(
                 rates.values().sum::<f64>() <= 0.0 || !rework.donors.is_empty()
             }),
             &bases,
+            bounds,
         )
     });
     Forecast {

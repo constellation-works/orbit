@@ -6,7 +6,7 @@ use crate::OrbitRuntime;
 
 use super::correction::CorrectionInputs;
 use super::options::Options;
-use super::{assembly, cohorts, correction, history, persistence, projection, simulation};
+use super::{assembly, cohorts, correction, history, persistence, projection, rework, simulation};
 
 pub(super) fn calculate_backlog_forecast(
     runtime: &OrbitRuntime,
@@ -28,6 +28,13 @@ pub(super) fn calculate_backlog_forecast(
         items: &prepared.items,
         now,
     });
+    let env = crate::runtime::process_env();
+    let compute_budget = simulation::arrivals_compute_budget(&env);
+    let bounds = simulation::SimulationBounds {
+        max_generated: rework::max_generated(&env),
+        compute_budget,
+        deadline: preparation_started + compute_budget,
+    };
     let simulation_started = std::time::Instant::now();
     let mut forecast = simulation::simulate_backlog_forecast(
         &prepared.items,
@@ -40,7 +47,7 @@ pub(super) fn calculate_backlog_forecast(
         &prepared.rework,
         options.arrivals.then_some(&prepared.arrival_rates),
         &correction,
-        preparation_started + simulation::arrivals_compute_budget(),
+        bounds,
     );
     let simulation_ms = simulation_started.elapsed().as_secs_f64() * 1000.0;
     let items = &prepared.items;

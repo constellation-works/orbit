@@ -9,8 +9,9 @@ use orbit_common::OrbitError;
 pub fn host_resource_monitor(
     global_root: &Path,
 ) -> Result<crate::runtime::host_resource::HostResourceMonitor, OrbitError> {
+    let env = crate::runtime::process_env();
     let snapshot = orbit_config::ConfigStore::open(
-        &super::composition_env(),
+        &env,
         orbit_config::ConfigScope::Global,
         global_root.join("config.toml"),
     )?

@@ -1,7 +1,6 @@
 //! `orbit plugin enable`: record grant consent and apply what the plugin
 //! contributes.
 
-use orbit_common::env_vars;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
@@ -151,7 +150,7 @@ pub(in crate::application::plugin) fn resolve_consented_programs(
 ) -> (BTreeMap<String, PathBuf>, Vec<String>) {
     let (resolved, unresolved) = resolve_declared_programs(
         &plugin.manifest.spec.requires.programs,
-        std::env::var_os(env_vars::PATH).as_deref(),
+        crate::runtime::process_env().path(),
     );
     let previous = recorded_program_paths(global_root, plugin.namespace());
     let mut warnings: Vec<String> = unresolved

@@ -1,3 +1,5 @@
+use std::ffi::OsStr;
+
 use orbit_engine::{DispatchError, ResolvedCliExecutor, ResolvedShellExecutor};
 use orbit_types::workflow::ExecutorType;
 use orbit_types::workflow::activity_job::Provider;
@@ -14,9 +16,11 @@ pub(crate) fn resolve_cli_executor(
     runtime: &OrbitRuntime,
     provider: &str,
 ) -> Result<ResolvedCliExecutor, DispatchError> {
+    let env = crate::runtime::process_env();
     let env_key = format!("ORBIT_V2_CLI_{}", provider.to_ascii_uppercase());
-    let env_command = std::env::var(&env_key)
-        .ok()
+    let env_command = env
+        .var(&env_key)
+        .and_then(OsStr::to_str)
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty());
 

@@ -1,6 +1,10 @@
 //! Monotonic time used by source budgets, separate from delivery timestamps.
 
+#[cfg(feature = "test-support")]
+use std::ffi::OsStr;
 use std::time::{Duration, Instant};
+
+use orbit_common::Env;
 
 /// Frozen elapsed time for isolated fixtures, inherited by their CLI children.
 /// Only dev-dependency builds with `test-support` recognize this variable.
@@ -14,12 +18,15 @@ pub(in crate::application::automation) struct BudgetClock {
 }
 
 impl BudgetClock {
-    pub(in crate::application::automation) fn start() -> Self {
+    pub(in crate::application::automation) fn start(env: &Env) -> Self {
+        #[cfg(not(feature = "test-support"))]
+        let _ = env;
         Self {
             started: super::budget_now(),
             #[cfg(feature = "test-support")]
-            frozen: std::env::var(SOURCE_ELAPSED_ENV)
-                .ok()
+            frozen: env
+                .orbit_test_source_elapsed_ms()
+                .and_then(OsStr::to_str)
                 .and_then(|value| value.parse().ok())
                 .map(Duration::from_millis),
         }

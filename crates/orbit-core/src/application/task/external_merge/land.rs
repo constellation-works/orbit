@@ -9,7 +9,7 @@
 
 use std::time::{Duration, Instant};
 
-use orbit_common::OrbitError;
+use orbit_common::{Env, OrbitError};
 use orbit_types::task::{Task, TaskStatus};
 use serde::Serialize;
 
@@ -31,11 +31,6 @@ const MERGEABILITY_UNKNOWN_BUDGET: Duration = Duration::from_secs(90);
 /// Backoff before each further read, in seconds. The last read uses whatever
 /// of [`MERGEABILITY_UNKNOWN_BUDGET`] remains after these steps.
 const MERGEABILITY_UNKNOWN_BACKOFF_SECS: [u64; 4] = [5, 10, 20, 40];
-
-/// Debug-build tests set this to `virtual` so the budget advances without
-/// sleeping. Release builds ignore it, so a production binary cannot skip
-/// the wait.
-use orbit_common::env_vars::ORBIT_TEST_MERGEABILITY_WAIT as MERGEABILITY_WAIT_TEST_ENV;
 
 use super::candidate::Candidate;
 
@@ -475,7 +470,8 @@ fn await_known_merge_blockers(
     repo_root: &std::path::Path,
 ) -> Result<KnownMergeBlockers, OrbitError> {
     let started = Instant::now();
-    let mut virtual_elapsed = mergeability_wait_is_virtual().then_some(Duration::ZERO);
+    let env = crate::runtime::process_env();
+    let mut virtual_elapsed = mergeability_wait_is_virtual(&env).then_some(Duration::ZERO);
     let mut attempt = 0_u32;
     loop {
         match forge.pull_request_blockers(repo_root, number) {
@@ -527,6 +523,12 @@ fn mergeability_backoff(attempt: u32, remaining: Duration) -> Duration {
     Duration::from_secs(step).min(remaining)
 }
 
-fn mergeability_wait_is_virtual() -> bool {
-    cfg!(debug_assertions) && std::env::var(MERGEABILITY_WAIT_TEST_ENV).as_deref() == Ok("virtual")
+#[cfg(all(debug_assertions, any(test, feature = "test-support")))]
+fn mergeability_wait_is_virtual(env: &Env) -> bool {
+    env.orbit_test_mergeability_wait() == Some(std::ffi::OsStr::new("virtual"))
+}
+
+#[cfg(not(all(debug_assertions, any(test, feature = "test-support"))))]
+fn mergeability_wait_is_virtual(_env: &Env) -> bool {
+    false
 }

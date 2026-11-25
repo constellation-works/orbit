@@ -1,8 +1,10 @@
 //! Sandbox launch, environment and scratch lifecycle for a script attempt.
 
-use orbit_common::env_vars;
+use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
+
+use orbit_common::{Env, env_vars};
 
 use orbit_common::security::redaction::{
     argv_redactor, redact_all_and_home, redact_secret_values_text,
@@ -82,6 +84,7 @@ pub(super) fn path_segment(value: &str) -> String {
 }
 
 pub(super) struct RunPlan<'a> {
+    pub(super) env: &'a Env,
     pub(super) request: &'a ScriptStepRequest,
     pub(super) snapshot: &'a ScriptSnapshot,
     pub(super) grant: &'a ScriptGrant,
@@ -102,6 +105,7 @@ pub(super) struct RunPlan<'a> {
 
 pub(super) fn run_in_scratch(plan: RunPlan<'_>) -> Result<ScriptStepRan, Refusal> {
     let RunPlan {
+        env: process_env,
         request,
         snapshot,
         grant,
@@ -166,7 +170,7 @@ pub(super) fn run_in_scratch(plan: RunPlan<'_>) -> Result<ScriptStepRan, Refusal
         .map(|argument| redact_secret_values_text(&argv_redactor().apply_str(argument), &secrets))
         .collect();
 
-    let mut env = script_env(request, asset.digest.as_str(), grant, &mount);
+    let mut env = script_env_with_env(process_env, request, asset.digest.as_str(), grant, &mount);
     env.extend(passed.vars);
     let mut readable: Vec<PathBuf> = grant
         .interpreter_paths
@@ -175,7 +179,7 @@ pub(super) fn run_in_scratch(plan: RunPlan<'_>) -> Result<ScriptStepRan, Refusal
         .cloned()
         .collect();
     readable.extend(grant.read_roots.iter().cloned());
-    let home = std::env::var_os(env_vars::HOME);
+    let home = process_env.home();
     let timeout_seconds = request
         .timeout_seconds
         .or(asset.spec.requests.timeout_seconds)
@@ -184,7 +188,7 @@ pub(super) fn run_in_scratch(plan: RunPlan<'_>) -> Result<ScriptStepRan, Refusal
         .max(1);
 
     let run = orbit_exec::run_script_sandboxed(
-        &orbit_common::Env::capture(),
+        process_env,
         ScriptSandboxRequest {
             sandbox: ScriptSandboxSpec {
                 cwd,
@@ -254,20 +258,17 @@ pub(super) fn run_in_scratch(plan: RunPlan<'_>) -> Result<ScriptStepRan, Refusal
 /// contained script step exiting 1 in ~2 ms). They never reach the script,
 /// whose environment is exactly [`script_env`]; the wrapper clears its
 /// environment and sets only that inside the sandbox.
-pub(super) fn script_launcher_env() -> Vec<(String, String)> {
-    orbit_common::security::child_env::allowlisted_child_env(
-        &orbit_common::Env::capture(),
-        &[],
-        &USER_BUS_LOCATOR_ENV_VARS,
-    )
+pub(super) fn script_launcher_env(env: &Env) -> Vec<(String, String)> {
+    orbit_common::security::child_env::allowlisted_child_env(env, &[], &USER_BUS_LOCATOR_ENV_VARS)
 }
 
 /// Snapshot-driven form of [`script_launcher_env`], so a test states the
 /// ambient environment it is reasoning about.
 #[cfg(test)]
 pub(crate) fn script_launcher_env_from(parent: &[(String, String)]) -> Vec<(String, String)> {
+    let env = crate::runtime::process_env();
     orbit_common::security::child_env::allowlisted_child_env_from(
-        &orbit_common::Env::capture(),
+        &env,
         parent,
         &[],
         &USER_BUS_LOCATOR_ENV_VARS,
@@ -338,7 +339,24 @@ const SCRIPT_FIXED_ENV: [&str; 5] = [
 /// The granted `env_pass` variables ([`script_passed_env`]) are added to it.
 /// `mount` is where the script sees its scratch directory
 /// ([`orbit_exec::script_scratch_path_in_sandbox`]).
+#[cfg(test)]
 pub(crate) fn script_env(
+    request: &ScriptStepRequest,
+    digest: &str,
+    grant: &ScriptGrant,
+    mount: &Path,
+) -> Vec<(String, String)> {
+    script_env_with_env(
+        &crate::runtime::process_env(),
+        request,
+        digest,
+        grant,
+        mount,
+    )
+}
+
+pub(super) fn script_env_with_env(
+    env: &Env,
     request: &ScriptStepRequest,
     digest: &str,
     grant: &ScriptGrant,
@@ -366,7 +384,10 @@ pub(crate) fn script_env(
         (env_vars::LANG.into(), "C.UTF-8".into()),
         (
             env_vars::TZ.into(),
-            std::env::var(env_vars::TZ).unwrap_or_else(|_| "UTC".to_string()),
+            env.tz()
+                .and_then(OsStr::to_str)
+                .unwrap_or("UTC")
+                .to_string(),
         ),
         ("ORBIT_SCRIPT_NAME".into(), request.script.clone()),
         ("ORBIT_SCRIPT_DIGEST".into(), digest.to_string()),

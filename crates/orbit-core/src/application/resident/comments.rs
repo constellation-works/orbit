@@ -2,7 +2,6 @@
 
 use chrono::Utc;
 use orbit_common::OrbitError;
-use orbit_common::env_vars;
 use orbit_common::security::redaction::{redact_all, redact_home_dir};
 use orbit_types::task::Task;
 use orbit_types::workflow::{
@@ -10,6 +9,7 @@ use orbit_types::workflow::{
     RunStateUpdate,
 };
 use serde_json::{Value, json};
+use std::ffi::OsStr;
 
 use super::{
     cycle::live_cycle_from_history, due::checkpoints, resident_mandate_ended,
@@ -297,9 +297,9 @@ impl OrbitRuntime {
                 orbit_types::workflow::ResidentContinuity::Prefer => {
                     let rebuilt_by_fallback =
                         super::due::continuity_rebuilt(&history, &checkpoint.cycle)
-                            || std::env::var(env_vars::ORBIT_ACTIVITY_RESIDENT_CONTINUITY)
-                                .ok()
-                                .as_deref()
+                            || crate::runtime::process_env()
+                                .orbit_activity_resident_continuity()
+                                .and_then(OsStr::to_str)
                                 == Some("rebuilt");
                     // Heartbeat skips schedule another check but do not
                     // replace the provider's last real checkpoint.

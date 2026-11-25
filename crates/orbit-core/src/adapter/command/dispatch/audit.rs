@@ -1,8 +1,9 @@
 //! Audit correlation and agent identity: the trusted context and role label
 //! a tool call is recorded under.
 
-use orbit_common::OrbitError;
-use orbit_common::env_vars;
+use std::ffi::OsStr;
+
+use orbit_common::{Env, OrbitError};
 use orbit_tools::{ActivityBinding, ReservationOwnerContext};
 use orbit_types::identity::{
     normalize_agent_family_for_model, normalize_optional_attribution_label,
@@ -11,6 +12,7 @@ use orbit_types::task::ReservationOwnerMetadata;
 use orbit_types::tool::ToolSessionContext;
 use serde_json::Value;
 
+use crate::runtime::process_env;
 use crate::runtime::run_input::{
     managed_dispatch_context_from_env, managed_run_context_from_env,
     managed_run_context_run_id_from_env,
@@ -28,7 +30,29 @@ pub struct AuditContext {
     pub step_index: Option<i64>,
 }
 
+fn env_trimmed(value: Option<&OsStr>) -> Option<String> {
+    value
+        .and_then(OsStr::to_str)
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
+fn env_non_empty(value: Option<&OsStr>) -> Option<String> {
+    value
+        .and_then(OsStr::to_str)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+}
+
+fn env_non_blank(value: Option<&OsStr>) -> Option<String> {
+    value
+        .and_then(OsStr::to_str)
+        .filter(|value| !value.trim().is_empty())
+        .map(ToOwned::to_owned)
+}
+
 pub(super) fn resolve_audit_context(
+    env: &Env,
     input: &Value,
     entry_point: ToolEntryPoint,
     session_context: Option<&ToolSessionContext>,
@@ -41,33 +65,27 @@ pub(super) fn resolve_audit_context(
             .filter(|value| !value.is_empty())
             .map(ToOwned::to_owned)
     }
-    fn env_str(name: &str) -> Option<String> {
-        std::env::var(name)
-            .ok()
-            .map(|value| value.trim().to_string())
-            .filter(|value| !value.is_empty())
-    }
 
     if entry_point == ToolEntryPoint::Mcp {
         // The MCP entry point never reads model-authored tool JSON for
         // correlation; `session_context` is retained in the signature because
         // it is the trusted envelope the caller must hand over to reach it.
         let _ = session_context;
-        return trusted_mcp_audit_context();
+        return trusted_mcp_audit_context_with_env(env);
     }
 
     AuditContext {
         session_id: None,
-        task_id: input_str(input, "task_id").or_else(|| env_str(env_vars::ORBIT_TASK_ID)),
+        task_id: input_str(input, "task_id").or_else(|| env_trimmed(env.orbit_task_id())),
         job_run_id: input_str(input, "job_run_id")
             .or_else(|| input_str(input, "run_id"))
-            .or_else(|| env_str(env_vars::ORBIT_RUN_ID)),
+            .or_else(|| env_trimmed(env.orbit_run_id())),
         activity_id: input_str(input, "activity_id")
-            .or_else(|| env_str(env_vars::ORBIT_ACTIVITY_ID)),
+            .or_else(|| env_trimmed(env.orbit_activity_id())),
         step_index: input
             .get("step_index")
             .and_then(Value::as_i64)
-            .or_else(|| env_str(env_vars::ORBIT_STEP_INDEX).and_then(|s| s.parse().ok())),
+            .or_else(|| env_trimmed(env.orbit_step_index()).and_then(|s| s.parse().ok())),
     }
 }
 
@@ -75,20 +93,17 @@ pub(super) fn resolve_audit_context(
 /// envelope. Model-authored tool JSON and session audit metadata are not
 /// correlation inputs.
 pub fn trusted_mcp_audit_context() -> AuditContext {
-    fn env_str(name: &str) -> Option<String> {
-        std::env::var(name)
-            .ok()
-            .map(|value| value.trim().to_string())
-            .filter(|value| !value.is_empty())
-    }
+    trusted_mcp_audit_context_with_env(&process_env())
+}
 
+fn trusted_mcp_audit_context_with_env(env: &Env) -> AuditContext {
     if managed_dispatch_context_from_env() {
         AuditContext {
-            session_id: env_str(env_vars::ORBIT_SESSION_ID),
-            task_id: env_str(env_vars::ORBIT_TASK_ID),
+            session_id: env_trimmed(env.orbit_session_id()),
+            task_id: env_trimmed(env.orbit_task_id()),
             job_run_id: managed_run_context_run_id_from_env(),
-            activity_id: env_str(env_vars::ORBIT_ACTIVITY_ID),
-            step_index: env_str(env_vars::ORBIT_STEP_INDEX).and_then(|value| value.parse().ok()),
+            activity_id: env_trimmed(env.orbit_activity_id()),
+            step_index: env_trimmed(env.orbit_step_index()).and_then(|value| value.parse().ok()),
         }
     } else {
         AuditContext::default()
@@ -108,12 +123,9 @@ pub(super) fn reservation_owner_from_env() -> Option<ReservationOwnerContext> {
 /// The managed activity a nested `orbit tool run` / `orbit mcp serve` call
 /// serves, read from the run envelope the dispatching host stamped into the
 /// agent's environment — never from tool input. `None` outside a managed run.
-pub(super) fn activity_binding_from_env() -> Option<ActivityBinding> {
+pub(super) fn activity_binding_from_env(env: &Env) -> Option<ActivityBinding> {
     let job_run_id = managed_run_context_run_id_from_env()?;
-    let task_id = std::env::var(env_vars::ORBIT_TASK_ID)
-        .ok()
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty());
+    let task_id = env_trimmed(env.orbit_task_id());
     Some(ActivityBinding {
         job_run_id,
         task_id,
@@ -124,21 +136,18 @@ pub(super) fn managed_run_context() -> bool {
     managed_run_context_from_env()
 }
 
-fn read_agent_identity_from_env() -> (Option<String>, Option<String>) {
-    let agent = std::env::var(env_vars::ORBIT_AGENT_NAME)
-        .ok()
-        .filter(|s| !s.is_empty());
-    let model = std::env::var(env_vars::ORBIT_AGENT_MODEL)
-        .ok()
-        .filter(|s| !s.is_empty());
+fn read_agent_identity_from_env(env: &Env) -> (Option<String>, Option<String>) {
+    let agent = env_non_empty(env.orbit_agent_name());
+    let model = env_non_empty(env.orbit_agent_model());
     (agent, model)
 }
 
 fn resolve_agent_identity(
+    env: &Env,
     agent_override: Option<String>,
     model_override: Option<String>,
 ) -> Result<(Option<String>, Option<String>), OrbitError> {
-    let (env_agent_name, env_model_name) = read_agent_identity_from_env();
+    let (env_agent_name, env_model_name) = read_agent_identity_from_env(env);
     let has_override = agent_override
         .as_deref()
         .is_some_and(|value| !value.trim().is_empty())
@@ -157,6 +166,7 @@ fn resolve_agent_identity(
 }
 
 pub(super) fn resolve_agent_identity_for_entry_point(
+    env: &Env,
     entry_point: ToolEntryPoint,
     agent_override: Option<String>,
     model_override: Option<String>,
@@ -164,7 +174,7 @@ pub(super) fn resolve_agent_identity_for_entry_point(
     if entry_point == ToolEntryPoint::Mcp && !managed_run_context() {
         return Ok((None, None));
     }
-    resolve_agent_identity(agent_override, model_override)
+    resolve_agent_identity(env, agent_override, model_override)
 }
 
 /// Resolve the audit `role` label for a tool invocation.
@@ -180,13 +190,18 @@ pub fn audit_role_label(
     agent_override: Option<&str>,
     model_override: Option<&str>,
 ) -> String {
+    audit_role_label_with_env(&process_env(), input, agent_override, model_override)
+}
+
+fn audit_role_label_with_env(
+    env: &Env,
+    input: &Value,
+    agent_override: Option<&str>,
+    model_override: Option<&str>,
+) -> String {
     let (input_agent, input_model) = read_input_identity(input);
-    let env_agent = std::env::var(env_vars::ORBIT_AGENT_NAME)
-        .ok()
-        .filter(|value| !value.trim().is_empty());
-    let env_model = std::env::var(env_vars::ORBIT_AGENT_MODEL)
-        .ok()
-        .filter(|value| !value.trim().is_empty());
+    let env_agent = env_non_blank(env.orbit_agent_name());
+    let env_model = env_non_blank(env.orbit_agent_model());
     let has_input_identity = input_agent.is_some() || input_model.is_some();
     let has_flag_identity = agent_override.is_some_and(|value| !value.trim().is_empty())
         || model_override.is_some_and(|value| !value.trim().is_empty());
@@ -231,19 +246,31 @@ pub fn audit_role_label_for_entry_point(
     model_override: Option<&str>,
     entry_point: ToolEntryPoint,
 ) -> String {
+    audit_role_label_for_entry_point_with_env(
+        &process_env(),
+        input,
+        agent_override,
+        model_override,
+        entry_point,
+    )
+}
+
+pub(super) fn audit_role_label_for_entry_point_with_env(
+    env: &Env,
+    input: &Value,
+    agent_override: Option<&str>,
+    model_override: Option<&str>,
+    entry_point: ToolEntryPoint,
+) -> String {
     if entry_point != ToolEntryPoint::Mcp {
-        return audit_role_label(input, agent_override, model_override);
+        return audit_role_label_with_env(env, input, agent_override, model_override);
     }
     if !managed_run_context() {
         return "unverified".to_string();
     }
 
-    let env_agent = std::env::var(env_vars::ORBIT_AGENT_NAME)
-        .ok()
-        .filter(|value| !value.trim().is_empty());
-    let env_model = std::env::var(env_vars::ORBIT_AGENT_MODEL)
-        .ok()
-        .filter(|value| !value.trim().is_empty());
+    let env_agent = env_non_blank(env.orbit_agent_name());
+    let env_model = env_non_blank(env.orbit_agent_model());
     let agent = normalize_agent_family_for_model(env_agent.as_deref(), env_model.as_deref())
         .ok()
         .flatten()
@@ -262,6 +289,7 @@ pub fn audit_role_label_for_entry_point(
 /// model, else MCP `clientInfo.name`. Tool-input `model` is not read. CLI
 /// calls return `None`. The value is not an authenticated role.
 pub(super) fn mcp_audit_session_model(
+    env: &Env,
     entry_point: ToolEntryPoint,
     brokered_model: Option<&str>,
     orchestrator_model: Option<&str>,
@@ -280,8 +308,8 @@ pub(super) fn mcp_audit_session_model(
         return Some(model);
     }
     if managed_run_context() {
-        let env_model = std::env::var(env_vars::ORBIT_AGENT_MODEL).ok();
-        if let Some(model) = kept(env_model.as_deref()) {
+        let env_model = env.orbit_agent_model().and_then(OsStr::to_str);
+        if let Some(model) = kept(env_model) {
             return Some(model);
         }
     }

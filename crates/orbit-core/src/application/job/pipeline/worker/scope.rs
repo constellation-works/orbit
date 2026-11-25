@@ -178,7 +178,7 @@ pub(crate) fn contain_worker_command(
     strict: bool,
 ) -> Result<Command, orbit_common::OrbitError> {
     static WARNED: Once = Once::new();
-    let availability = limits.map(|_| user_scope_availability());
+    let availability = limits.map(|_| user_scope_availability(&crate::runtime::process_env()));
     contain_worker_command_with_availability(
         base,
         run_id,
@@ -212,7 +212,9 @@ pub(crate) fn contain_worker_command_with_availability(
         }
         return Ok(prefer_as_oom_victim(base));
     };
-    let command = match availability.unwrap_or_else(user_scope_availability) {
+    let command = match availability
+        .unwrap_or_else(|| user_scope_availability(&crate::runtime::process_env()))
+    {
         Ok(()) => scoped_worker_command(&base, &scope_unit_name(run_id), limits),
         Err(reason) => {
             if strict {
@@ -360,19 +362,29 @@ pub(crate) fn scoped_worker_command(base: &Command, unit: &str, limits: &WorkerL
 /// `machine.worker_containment = "strict"` a script without its scope never
 /// starts; `warn` and `off` run it in the worker's cgroup instead.
 pub(crate) fn script_scope_launcher(
+    env: &orbit_common::Env,
     run_id: &str,
     step_id: &str,
     settings: &WorkerContainmentSettings,
     grant: &ScriptGrantLimits,
     launcher_env: &[(String, String)],
 ) -> Result<ScriptScopeLauncher, String> {
-    script_scope_launcher_with_availability(run_id, step_id, settings, grant, launcher_env, None)
+    script_scope_launcher_with_env_and_availability(
+        env,
+        run_id,
+        step_id,
+        settings,
+        grant,
+        launcher_env,
+        None,
+    )
 }
 
 /// [`script_scope_launcher`] with the availability verdict supplied, so a
 /// test states the probe outcome instead of reaching the host's user
 /// manager. `None` probes in `launcher_env`, the environment the launch
 /// itself will use.
+#[cfg(test)]
 pub(crate) fn script_scope_launcher_with_availability(
     run_id: &str,
     step_id: &str,
@@ -381,9 +393,28 @@ pub(crate) fn script_scope_launcher_with_availability(
     launcher_env: &[(String, String)],
     availability: Option<Result<(), String>>,
 ) -> Result<ScriptScopeLauncher, String> {
-    let inherited = std::env::var_os(STRICT_WORKER_CONTAINMENT_ENV);
-    let strict =
-        super::start::effective_strict_containment(settings.strict, false, inherited.as_deref());
+    script_scope_launcher_with_env_and_availability(
+        &crate::runtime::process_env(),
+        run_id,
+        step_id,
+        settings,
+        grant,
+        launcher_env,
+        availability,
+    )
+}
+
+fn script_scope_launcher_with_env_and_availability(
+    env: &orbit_common::Env,
+    run_id: &str,
+    step_id: &str,
+    settings: &WorkerContainmentSettings,
+    grant: &ScriptGrantLimits,
+    launcher_env: &[(String, String)],
+    availability: Option<Result<(), String>>,
+) -> Result<ScriptScopeLauncher, String> {
+    let inherited = env.orbit_worker_containment_strict();
+    let strict = super::start::effective_strict_containment(settings.strict, false, inherited);
     let Some(machine_limits) = WorkerLimits::from_settings(settings) else {
         if strict {
             return Err("machine.worker_containment=off".into());
@@ -447,9 +478,12 @@ fn physical_memory_bytes() -> Option<u64> {
 /// Whether a script step runs under strict containment: configured, or
 /// inherited from a strict parent run, the same rule
 /// [`script_scope_launcher`] applies.
-pub(crate) fn script_containment_is_strict(settings: &WorkerContainmentSettings) -> bool {
-    let inherited = std::env::var_os(STRICT_WORKER_CONTAINMENT_ENV);
-    super::start::effective_strict_containment(settings.strict, false, inherited.as_deref())
+pub(crate) fn script_containment_is_strict(
+    env: &orbit_common::Env,
+    settings: &WorkerContainmentSettings,
+) -> bool {
+    let inherited = env.orbit_worker_containment_strict();
+    super::start::effective_strict_containment(settings.strict, false, inherited)
 }
 
 /// One script step's scope, as [`script_scope_launcher`] found it.
@@ -464,13 +498,16 @@ pub(crate) enum ScriptScopeLauncher {
 /// Whether this process can create transient scopes in a user manager, probed
 /// with the same properties a worker scope uses.
 #[cfg(target_os = "linux")]
-fn user_scope_availability() -> Result<(), String> {
-    let parent: Vec<(OsString, OsString)> = std::env::vars_os().collect();
+fn user_scope_availability(env: &orbit_common::Env) -> Result<(), String> {
+    let parent: Vec<(OsString, OsString)> = env
+        .vars()
+        .map(|(name, value)| (name.to_os_string(), value.to_os_string()))
+        .collect();
     user_scope_availability_in_os_env(&parent)
 }
 
 #[cfg(not(target_os = "linux"))]
-fn user_scope_availability() -> Result<(), String> {
+fn user_scope_availability(_env: &orbit_common::Env) -> Result<(), String> {
     Err("worker scopes need Linux with a systemd user manager".to_string())
 }
 

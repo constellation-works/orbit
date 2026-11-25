@@ -196,7 +196,8 @@ pub(super) fn resolve_executor_sandbox_on(
                     &mut resolved,
                     &mut runtime_write_authority,
                 )?;
-                append_linux_provider_state_roots(provider, &mut resolved)?;
+                let env = crate::runtime::process_env();
+                append_linux_provider_state_roots(&env, provider, &mut resolved)?;
                 // A worktree cwd absolutizes the versioned exceptions under
                 // that worktree. The registered checkout does not: the same
                 // carve-outs would grant its live host-clock stores. No grant

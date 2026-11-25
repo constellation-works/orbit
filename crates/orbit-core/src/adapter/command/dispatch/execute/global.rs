@@ -1,7 +1,6 @@
 //! Server-global and host-global tool dispatch: tools with no workspace
 //! runtime behind them, audited through the global audit store.
 
-use orbit_common::env_vars;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, PoisonError};
 
@@ -79,7 +78,9 @@ where
     F: FnOnce(Value) -> Result<Value, OrbitError>,
     S: FnMut(&AuditEventInsertParams, AuditInvocationFields<'_>) -> Result<(), OrbitError>,
 {
+    let env = crate::runtime::process_env();
     execute_tool_dispatch_with_audit_store(
+        &env,
         name,
         input,
         ToolExecutionKind::Mutating,
@@ -96,9 +97,12 @@ where
         |input| {
             enforce_plugin_callback_allowlist_from_root(global_root, name)?;
             if session_context.application.is_some()
-                || (entry_point == ToolEntryPoint::Cli && std::env::var_os(orbit_common::security::application_credential::APPLICATION_CREDENTIAL_FD_ENV).is_some())
+                || (entry_point == ToolEntryPoint::Cli
+                    && env.orbit_application_credential_fd().is_some())
             {
-                return Err(OrbitError::CapabilityDenied("application calls require an explicitly resolved workspace runtime".into()));
+                return Err(OrbitError::CapabilityDenied(
+                    "application calls require an explicitly resolved workspace runtime".into(),
+                ));
             }
             dispatch(input)
         },
@@ -189,20 +193,18 @@ pub(in crate::adapter::command) fn execute_global_plugin_dispatch(
     session_context: ToolSessionContext,
     registry: orbit_tools::ToolRegistry,
 ) -> Result<Value, OrbitError> {
+    let env = crate::runtime::process_env();
     let binding = registry
         .plugin_binding(name)
         .ok_or_else(|| OrbitError::not_found(NotFoundKind::Tool, name.to_string()))?;
     #[cfg(unix)]
-    let broker_refusal = if let Some(socket) = std::env::var_os(env_vars::ORBIT_PLUGIN_BROKER)
+    let broker_refusal = if let Some(socket) = env.orbit_plugin_broker()
         && session_context.application.is_none()
-        && std::env::var_os(
-            orbit_common::security::application_credential::APPLICATION_CREDENTIAL_FD_ENV,
-        )
-        .is_none()
+        && env.orbit_application_credential_fd().is_none()
     {
         let cwd = std::env::current_dir()?;
         let result = crate::runtime::plugin::broker::forward_call_with_status(
-            Path::new(&socket),
+            Path::new(socket),
             name,
             input.clone(),
             &cwd,
@@ -231,7 +233,7 @@ pub(in crate::adapter::command) fn execute_global_plugin_dispatch(
     let global_root = global_root.to_path_buf();
     let trusted_env = entry_point != ToolEntryPoint::Mcp || managed_run_context();
     let activity_tool_policy = if trusted_env {
-        read_activity_tool_policy_from_env()
+        read_activity_tool_policy_from_env(&env)
     } else {
         Default::default()
     };
@@ -243,19 +245,20 @@ pub(in crate::adapter::command) fn execute_global_plugin_dispatch(
         allowed_tools: activity_tool_policy.allowed_tools,
         tool_deny_policy: activity_tool_policy.deny_policy,
         proc_allowed_programs: if trusted_env {
-            read_proc_allowed_programs_from_env()
+            read_proc_allowed_programs_from_env(&env)
         } else {
             Vec::new()
         },
         proc_disallowed_programs: if trusted_env {
-            read_proc_disallowed_programs_from_env()
+            read_proc_disallowed_programs_from_env(&env)
         } else {
             None
         },
-        activity_binding: activity_binding_from_env(),
+        activity_binding: activity_binding_from_env(&env),
         ..Default::default()
     };
     execute_tool_dispatch_with_audit_store(
+        &env,
         name,
         input,
         execution_kind,

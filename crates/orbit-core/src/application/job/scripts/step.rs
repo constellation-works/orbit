@@ -25,7 +25,6 @@
 //! the recorded argv before any of them leaves this host boundary, so the
 //! audit record, `orbit run show` and `orbit script history` never hold it.
 
-use orbit_common::env_vars;
 use std::path::{Path, PathBuf};
 
 use orbit_engine::activity_job::{ScriptSnapshot, load_script_snapshot, render_script_args};
@@ -68,7 +67,10 @@ impl OrbitRuntime {
             profile: orbit_exec::probe_script_sandbox(),
             gaps: macos.then_some(orbit_exec::SCRIPT_MACOS_PROFILE_GAPS),
             strict_refuses: macos
-                && script_containment_is_strict(self.settings().worker_containment()),
+                && script_containment_is_strict(
+                    &crate::runtime::process_env(),
+                    self.settings().worker_containment(),
+                ),
         }
     }
 }
@@ -228,14 +230,18 @@ fn prepare_and_run(
     record.write_roots = grant.write_roots.clone();
     // Which granted names pass is known before anything can refuse for the
     // host, so every record after the grant check names them.
-    let parent: Vec<(String, String)> = std::env::vars().collect();
+    let env = crate::runtime::process_env();
+    let parent: Vec<(String, String)> = env
+        .vars()
+        .filter_map(|(name, value)| Some((name.to_str()?.to_owned(), value.to_str()?.to_owned())))
+        .collect();
     let passed = script_passed_env(&grant, &parent);
     record.env_pass = passed.names();
     record.env_pass_unset = passed.unset.clone();
 
     let input_text = admitted_input(&snapshot, &request.input)?;
-    let home = std::env::var_os(env_vars::HOME);
-    probe_granted_roots(&grant, home.as_deref())?;
+    let home = env.home();
+    probe_granted_roots(&env, &grant, home)?;
 
     // Declared inputs resolve after the grant checks, so a refusal records
     // the grant, and before the profile probe and anything created or
@@ -248,7 +254,7 @@ fn prepare_and_run(
             cwd: &cwd,
             read_roots: &grant.read_roots,
             masked: &masked,
-            home: home.as_deref(),
+            home,
         },
     )
     .map_err(|message| refuse(script_refusal::FILE_INPUT_UNAVAILABLE, message))?;
@@ -259,7 +265,7 @@ fn prepare_and_run(
     // limits), so strict containment refuses every script step there. It is
     // a host policy, decided before the profile is probed.
     if cfg!(target_os = "macos")
-        && script_containment_is_strict(runtime.settings().worker_containment())
+        && script_containment_is_strict(&env, runtime.settings().worker_containment())
     {
         return Err(refuse(
             script_refusal::SANDBOX_UNAVAILABLE,
@@ -291,8 +297,9 @@ fn prepare_and_run(
     // One environment for both the availability probe and the launch, so
     // the probe answers for the environment `systemd-run` will actually
     // get [ORB-20661].
-    let mut launcher_env = script_launcher_env();
+    let mut launcher_env = script_launcher_env(&env);
     let scope = script_scope_launcher(
+        &env,
         &request.run_id,
         &request.step_id,
         runtime.settings().worker_containment(),
@@ -334,6 +341,7 @@ fn prepare_and_run(
 
     let scratch = ScriptScratch::create(runtime, request)?;
     let mut result = run_in_scratch(RunPlan {
+        env: &env,
         request,
         snapshot: &snapshot,
         grant: &grant,
@@ -424,7 +432,11 @@ fn script_masked_trees(runtime: &OrbitRuntime, cwd: &Path) -> Vec<PathBuf> {
 /// lie outside the credential paths and be readable (and a write root
 /// writable) by this process. On macOS, privacy permissions are granted to
 /// the process that runs the job, which need not be the one that granted.
-fn probe_granted_roots(grant: &ScriptGrant, home: Option<&std::ffi::OsStr>) -> Result<(), Refusal> {
+fn probe_granted_roots(
+    env: &orbit_common::Env,
+    grant: &ScriptGrant,
+    home: Option<&std::ffi::OsStr>,
+) -> Result<(), Refusal> {
     let roots = grant
         .read_roots
         .iter()
@@ -436,14 +448,12 @@ fn probe_granted_roots(grant: &ScriptGrant, home: Option<&std::ffi::OsStr>) -> R
                 .map(|root| (root, ScriptRootAccess::Write)),
         );
     for (root, access) in roots {
-        orbit_exec::probe_script_root(&orbit_common::Env::capture(), root, access, home).map_err(
-            |reason| {
-                refuse(
-                    script_refusal::ROOT_UNAVAILABLE,
-                    format!("{reason}; nothing was run"),
-                )
-            },
-        )?;
+        orbit_exec::probe_script_root(env, root, access, home).map_err(|reason| {
+            refuse(
+                script_refusal::ROOT_UNAVAILABLE,
+                format!("{reason}; nothing was run"),
+            )
+        })?;
     }
     Ok(())
 }

@@ -1,4 +1,6 @@
-use orbit_common::env_vars;
+use std::ffi::OsStr;
+
+use orbit_common::Env;
 use std::borrow::Cow;
 use std::cell::{OnceCell, RefCell};
 use std::collections::{BTreeSet, HashMap};
@@ -443,7 +445,7 @@ impl OrbitRuntime {
     }
 
     pub(super) fn v2_job_asset_dirs(&self) -> Vec<CatalogDirectory<V2JobCatalogDirKind>> {
-        self.v2_job_asset_dirs_with_env(v2_job_env_dirs().as_deref())
+        self.v2_job_asset_dirs_with_env(v2_job_env_dirs(&crate::runtime::process_env()).as_deref())
     }
 
     pub(super) fn v2_job_asset_dirs_with_env(
@@ -468,7 +470,10 @@ impl OrbitRuntime {
         let mut dirs = CatalogDirectoryList::default();
         // Same layering as named execution, with the workspace dir always
         // present so one parse covers both default and custom job names.
-        push_v2_job_env_dirs(&mut dirs, v2_job_env_dirs().as_deref());
+        push_v2_job_env_dirs(
+            &mut dirs,
+            v2_job_env_dirs(&crate::runtime::process_env()).as_deref(),
+        );
         dirs.push(
             self.paths().global_dir.join("resources/jobs"),
             V2JobCatalogDirKind::Global,
@@ -546,7 +551,10 @@ impl OrbitRuntime {
         &self,
         job_id: &str,
     ) -> Vec<CatalogDirectory<V2JobCatalogDirKind>> {
-        self.v2_job_asset_dirs_for_execution_with_env(job_id, v2_job_env_dirs().as_deref())
+        self.v2_job_asset_dirs_for_execution_with_env(
+            job_id,
+            v2_job_env_dirs(&crate::runtime::process_env()).as_deref(),
+        )
     }
 
     pub(super) fn v2_job_asset_dirs_for_execution_with_env(
@@ -650,10 +658,11 @@ pub(super) fn ci_branch_field(input: &Value, key: &str) -> Result<Option<String>
     }
 }
 
-pub(super) fn v2_job_env_dirs() -> Option<String> {
-    std::env::var(env_vars::ORBIT_JOB_DIR)
-        .ok()
-        .or_else(|| std::env::var(env_vars::ORBIT_V2_JOB_DIR).ok())
+pub(super) fn v2_job_env_dirs(env: &Env) -> Option<String> {
+    env.orbit_job_dir()
+        .and_then(OsStr::to_str)
+        .or_else(|| env.orbit_v2_job_dir().and_then(OsStr::to_str))
+        .map(ToOwned::to_owned)
 }
 
 pub(super) fn push_v2_job_env_dirs(
