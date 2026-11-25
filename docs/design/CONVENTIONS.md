@@ -1,7 +1,7 @@
 ---
 title: Design Doc Conventions
 owner: daniel
-last_updated: 2026-11-03
+updated_date: 2026-11-03
 last_validated: 2026-11-03
 status: Accepted
 ---
@@ -192,7 +192,7 @@ A feature that is gone for good (nothing worth keeping as reference) may still b
 
 ### Archiving a design
 
-1. Set `status: Deprecated` in the entry doc's frontmatter (and bump its `last_updated`).
+1. Set `status: Deprecated` in the entry doc's frontmatter (and bump its `updated_date`).
 2. Add a one-line pointer near the top of the entry doc: the replacement design, or the reason it is parked or retired.
 3. Move the folder into `docs/design/_archived/<feature>/` with `git mv` and fix inbound links (the move adds one `../` to every relative link out of the folder).
 
