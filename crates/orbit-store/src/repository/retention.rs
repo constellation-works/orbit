@@ -9,8 +9,9 @@
 //! deletes at most `limit` rows, [`RetentionRepository::archive_run_states`]
 //! archives at most `limit` runs (each run costs one state-row delete and one
 //! run-row update), and [`RetentionRepository::delete_applied_journal_rows`]
-//! takes no limit and deletes every ID in the slice it is given, so the caller
-//! must chunk the IDs. Keeping each call to one batch means a sweep of a large
+//! takes no limit and processes every ID in the slice it is given, deleting
+//! only the rows still `applied`, so the caller must chunk the IDs. Keeping
+//! each call to one batch means a sweep of a large
 //! history never holds the write lock for longer than one batch; when to sweep
 //! and how to batch is the calling operation's. [`visit_blob_reference_text`] is the one read that
 //! spans snapshots, one per chunk, so a scan of the whole history never pins
