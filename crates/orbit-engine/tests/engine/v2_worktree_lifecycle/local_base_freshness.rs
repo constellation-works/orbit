@@ -273,6 +273,48 @@ fn an_unrelated_ignored_owner_file_does_not_block_admission() {
     );
 }
 
+fn landing_preserves_ignored_owner_files() {
+    for scenario in ["origin", "candidate", "unrelated"] {
+        let (fixture, host) = Fixture::hosted();
+        let owner = head(&fixture.repo);
+        ignore_owner_file(&fixture, "local-notes.txt", "unpublished bytes\n");
+        let incoming = if scenario == "origin" {
+            "local-notes.txt"
+        } else {
+            "from-elsewhere.txt"
+        };
+        let origin = push_to_origin_from_elsewhere(&fixture, incoming);
+        host.add_task("T-LANDING-IGNORED", TaskStatus::Backlog);
+        let run_id = "jrun-landing-ignored";
+        let output = action(
+            &host,
+            "worktree_setup",
+            &setup_input(&["T-LANDING-IGNORED"], run_id),
+        )
+        .unwrap();
+        assert_eq!(output["base_sha"], origin);
+        let checkout = Checkout::from_setup(&output);
+        if scenario == "candidate" {
+            commit_tracked_record(&checkout.path, "local-notes.txt", "candidate bytes\n");
+        }
+        let index = git(&fixture.repo, &["ls-files", "--stage"]);
+        let result = merge(&host, run_id, BASE, &checkout.path);
+        if scenario == "unrelated" {
+            result.expect("unrelated ignored file must not block landing");
+            assert_eq!(head(&fixture.repo), head(&checkout.path));
+        } else {
+            let error = result.expect_err("conflicting ignored file must refuse landing");
+            assert!(error.to_string().contains("local-notes.txt"), "{error}");
+            assert_eq!(head(&fixture.repo), owner);
+            assert_eq!(git(&fixture.repo, &["ls-files", "--stage"]), index);
+        }
+        assert_eq!(
+            read(fixture.repo.join("local-notes.txt")),
+            "unpublished bytes\n"
+        );
+    }
+}
+
 /// Without an origin remote, or with one that cannot be fetched, local setup
 /// keeps cutting from the owner's own branch.
 fn local_setup_keeps_the_owner_base_when_origin_is_absent_or_unreachable() {
@@ -414,6 +456,10 @@ fn local_base_freshness_contracts() {
             (
                 "an_unrelated_ignored_owner_file_does_not_block_admission",
                 an_unrelated_ignored_owner_file_does_not_block_admission,
+            ),
+            (
+                "landing_preserves_ignored_owner_files",
+                landing_preserves_ignored_owner_files,
             ),
             (
                 "local_setup_keeps_the_owner_base_when_origin_is_absent_or_unreachable",

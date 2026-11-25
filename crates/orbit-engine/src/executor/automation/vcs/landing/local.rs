@@ -9,7 +9,9 @@ use crate::context::{HandoffLandingStep, RuntimeHost};
 use super::super::super::input::input_string_field;
 use super::super::completion_hold::{ChangedPaths, candidate_commit_changed_paths};
 use super::super::git::{git_command_success, git_output};
-use super::super::worktree::{checkout_holding_branch, ensure_clean_checkout};
+use super::super::worktree::{
+    checkout_holding_branch, ensure_base_checkout_ready, ensure_clean_checkout,
+};
 use super::intent::LandingView;
 use super::observe::{observe_or_stop, resolve_landing_ref};
 use super::record::{
@@ -60,6 +62,7 @@ pub(super) fn land_local_candidate<H: RuntimeHost + ?Sized>(
     let checkout = checkout_holding_branch(&workspace, &candidate.landing_branch)?
         .unwrap_or_else(|| workspace.clone());
     ensure_clean_checkout(&checkout, "owner landing checkout")?;
+    ensure_base_checkout_ready(&checkout, Some(&candidate.candidate.commit))?;
     let checked_out = git_output(&checkout, &["rev-parse", "--abbrev-ref", "HEAD"])?;
     if checked_out.trim() != candidate.landing_branch {
         return Err(stop(
@@ -114,7 +117,12 @@ pub(super) fn land_local_candidate<H: RuntimeHost + ?Sized>(
     )?;
     let fast_forwarded = git_command_success(
         &checkout,
-        &["merge", "--ff-only", &candidate.candidate.commit],
+        &[
+            "merge",
+            "--ff-only",
+            "--no-overwrite-ignore",
+            &candidate.candidate.commit,
+        ],
     )?;
     // The ref itself is the evidence either way: a failed fast-forward left it
     // where it was, which is a resolved intent rather than an uncertain one.
