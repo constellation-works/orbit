@@ -18,10 +18,11 @@ cannot regenerate them.
 | `~/.orbit/workspaces.json` | The workspaces registered on this machine, with owner and replica roles. |
 | `~/.orbit/tasks/workspaces/<ws-id>/<task-id>/` | The task bundles. |
 | `~/.orbit/tasks/index.sqlite` | The task-ID allocator, its highest issued ID, and workspace bindings. |
-| `~/.orbit/orbit.db` | Audit events, job runs and checkpoints, reservations, routine state. |
-| `~/.orbit/frictions/` | The friction tag taxonomy and legacy friction records. |
+| `~/.orbit/orbit.db` | Audit events, job runs and checkpoints, reservations, routine state, and friction records. |
+| `~/.orbit/frictions/workspaces/<ws-id>/` | Published legacy friction record tree kept as import and rollback evidence after SQLite migration. |
 | `~/.orbit/resources/` | The YAML you wrote. `orbit init` reseeds the shipped defaults. |
 | `<repo>/.orbit/config.yaml`, `config.toml` | Workspace identity and settings. |
+| `<repo>/.orbit/frictions/` | Workspace friction tag taxonomy (`tags.yaml` — preserve customized tags) and legacy import/rollback records. |
 | `<repo>/.orbit/resources/` | Workspace overrides for activities, jobs, executors and policies. |
 | `<repo>/.orbit/state/audit/blobs/` | Captured output that rows in `orbit.db` point to. Keep it with `orbit.db`. |
 | `<repo>/.orbit/state/worktrees/` | Run worktrees. They can hold uncommitted work from active or failed runs. |
