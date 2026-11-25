@@ -19,9 +19,9 @@ pub fn scrub_inherited_authority() {
     // SAFETY: runs from a pre-`main` initializer, before any thread exists.
     unsafe {
         for name in INHERITED_AUTHORITY_ENV {
-            std::env::remove_var(name);
+            crate::env::remove_process_var(name);
         }
-        std::env::set_var(SCRUBBED_MARKER_ENV, "1");
+        crate::env::set_process_var(SCRUBBED_MARKER_ENV, "1");
     }
 }
 

@@ -242,8 +242,8 @@ pub fn scoped<'a>(vars: impl IntoIterator<Item = (&'a str, Option<&'a str>)>) ->
     unsafe {
         for (name, value) in &requested {
             match value {
-                Some(value) => std::env::set_var(name, value),
-                None => std::env::remove_var(name),
+                Some(value) => crate::env::set_process_var(name, value),
+                None => crate::env::remove_process_var(name),
             }
         }
     }
@@ -261,8 +261,8 @@ impl Drop for ScopedEnv {
         unsafe {
             for (name, value) in &self.saved {
                 match value {
-                    Some(value) => std::env::set_var(name, value),
-                    None => std::env::remove_var(name),
+                    Some(value) => crate::env::set_process_var(name, value),
+                    None => crate::env::remove_process_var(name),
                 }
             }
         }

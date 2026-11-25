@@ -273,7 +273,7 @@ orbit-store/src/
 
 **At design time.** `crates/orbit-common/src/env_vars.rs` declared 136 names with meaning, default and matching flag. A golden test generated the reference in `docs/CONFIG.md` for STD-01 §R25. Across 12 crates, 232 `env::var` calls and 15 `env::vars` calls read directly from the process. Of the single-variable reads, 144 used a declared constant and the others used a local constant or computed name.
 
-**Implemented for the runtime, engine, tools and store.** Resolved configuration carries the startup snapshot into the runtime's base layer. Root discovery, engine launcher and Git policy, tool dispatch, and the publication Git runner receive the snapshot or values resolved from it. The architecture ratchet tracks the remaining process-environment readers across the workspace.
+**Implemented for the runtime, engine, tools and store.** Resolved configuration carries the startup snapshot into the runtime's base layer. Root discovery, engine launcher and Git policy, tool dispatch, and the publication Git runner receive the snapshot or values resolved from it. The architecture ratchet held the remaining direct process-environment calls while conversion was in flight; the Clippy gate below now enforces the production boundary.
 
 **Proposed.**
 
@@ -307,7 +307,7 @@ Each rule gets the strongest mechanism available (STD-02 §R6).
 | The store is opened once | `Store::open` disallowed outside composition | `clippy.toml` |
 | The environment is read once | `std::env` readers disallowed outside `Env::capture` | `clippy.toml` |
 
-**Ratchets while the work is in flight.** The end-state gates cannot be switched on until their count is zero, and Orbit lands many unrelated changes a day. So the first task adds one CI check with a checked-in baseline, the pattern `scripts/dashboard-css-literals-baseline.json` already uses: a count may fall, and the baseline is lowered in the same change; it may not rise. The counts: files with an `impl OrbitRuntime` block; files in each surface crate that name `OrbitRuntime`; `RuntimeHost` methods; `ApplicationPort` methods; `*Backend` traits; `Store::open` calls outside composition; writer locks outside `Store::write`; `std::env` reads outside the capture; places that read the worker invocation or the coordination owner; top-level modules of `orbit-runtime` outside the four layers.
+**Ratchets while the work is in flight.** The end-state gates cannot be switched on until their count is zero, and Orbit lands many unrelated changes a day. So the first task adds one CI check with a checked-in baseline, the pattern `scripts/dashboard-css-literals-baseline.json` already uses: a count may fall, and the baseline is lowered in the same change; it may not rise. The counts: files with an `impl OrbitRuntime` block; files in each surface crate that name `OrbitRuntime`; `RuntimeHost` methods; `ApplicationPort` methods; `*Backend` traits; `Store::open` calls outside composition; writer locks outside `Store::write`; places that read the worker invocation or the coordination owner; top-level modules of `orbit-runtime` outside the four layers.
 
 ## 11. Order of work
 
