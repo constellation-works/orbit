@@ -200,7 +200,8 @@ impl WorkspacePreset {
         // nothing.
         let staged_plugin_sections = if self.sets_config() {
             let path = workspace_orbit_root.join("config.toml");
-            let store = self.staged_store(global_root, &path, WorkspaceInitMode::SeedFromGlobal)?;
+            let store =
+                self.staged_store(env, global_root, &path, WorkspaceInitMode::SeedFromGlobal)?;
             let sections = store.plugin_sections_with_global(global_root)?;
             drop(store);
             Some(sections)
@@ -208,7 +209,7 @@ impl WorkspacePreset {
             None
         };
         if let Some(sections) = &staged_plugin_sections {
-            self.validate_staged_plugin_sections(global_root, workspace_orbit_root, sections)?;
+            self.validate_staged_plugin_sections(env, global_root, workspace_orbit_root, sections)?;
         }
         // Loadability is decided from that staged view, so a missing or
         // unloadable definition refuses the preset with no write.
@@ -227,6 +228,7 @@ impl WorkspacePreset {
     /// and is admitted, as `orbit config set` admits it.
     fn validate_staged_plugin_sections(
         &self,
+        env: &orbit_common::Env,
         global_root: &Path,
         workspace_orbit_root: &Path,
         sections: &std::collections::BTreeMap<String, serde_json::Value>,
@@ -244,7 +246,7 @@ impl WorkspacePreset {
             return Ok(());
         }
         let config = orbit_config::ResolvedConfig::load(
-            &orbit_common::Env::capture(),
+            env,
             &orbit_config::ConfigRoots::new(global_root, workspace_orbit_root),
         )?;
         if !config.persistence.audit_db.is_file() {
@@ -290,14 +292,19 @@ impl WorkspacePreset {
         }
         let path = workspace_orbit_root.join("config.toml");
         ConfigStore::with_write_lock(&path, || {
-            let mut store =
-                self.staged_store(global_root, &path, WorkspaceInitMode::SeedFromGlobal)?;
+            let mut store = self.staged_store(
+                &orbit_common::Env::capture(),
+                global_root,
+                &path,
+                WorkspaceInitMode::SeedFromGlobal,
+            )?;
             store.save()
         })
     }
 
     fn staged_store(
         &self,
+        env: &orbit_common::Env,
         global_root: &Path,
         path: &Path,
         init: WorkspaceInitMode,
@@ -309,12 +316,8 @@ impl WorkspacePreset {
                 self.name
             )));
         }
-        let mut store = ConfigStore::open_for_workspace_set(
-            &orbit_common::Env::capture(),
-            path,
-            &global_root.join("config.toml"),
-            init,
-        )?;
+        let mut store =
+            ConfigStore::open_for_workspace_set(env, path, &global_root.join("config.toml"), init)?;
         let refuse = |key: &str, error: OrbitError| {
             OrbitError::InvalidInput(format!(
                 "preset '{}' sets `{key}`, which `orbit config set` refuses: {}",
@@ -592,9 +595,12 @@ fn effective_routine_catalog_lookup(
             Err(error) => errors.push(catalog_error_to_orbit(error).to_string()),
         }
     }
-    for (namespace, files) in
-        active_plugin_job_files(global_root, workspace_orbit_root, staged_plugin_sections)?
-    {
+    for (namespace, files) in active_plugin_job_files(
+        env,
+        global_root,
+        workspace_orbit_root,
+        staged_plugin_sections,
+    )? {
         if let Err(error) = catalog.load_files_prefer_existing(&files) {
             errors.push(format!(
                 "plugin '{namespace}' job catalog layer: {}",
@@ -628,12 +634,13 @@ fn effective_routine_catalog_lookup(
 /// before contribution collisions are resolved, as in the runtime. A host
 /// with no plugin store has no active plugin.
 fn active_plugin_job_files(
+    env: &Env,
     global_root: &Path,
     workspace_orbit_root: &Path,
     staged_plugin_sections: Option<&std::collections::BTreeMap<String, serde_json::Value>>,
 ) -> Result<Vec<(String, Vec<PathBuf>)>, OrbitError> {
     let config = orbit_config::ResolvedConfig::load(
-        &orbit_common::Env::capture(),
+        env,
         &orbit_config::ConfigRoots::new(global_root, workspace_orbit_root),
     )?;
     if !config.persistence.audit_db.is_file() {
