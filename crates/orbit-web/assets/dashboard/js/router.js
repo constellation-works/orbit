@@ -459,18 +459,44 @@ function revealActiveRailSelection() {
   syncRailScrollCues();
 }
 
-// Desktop: when the open destination's views do not all fit the room the
-// rail leaves them, size the list to a whole number of rows (never fewer
-// than two) and rest it on a row boundary that keeps the active view in
-// sight, so the list's edges never cut a label. A list that fits, and the
-// phone strips, are left alone.
+// Desktop: the open destination's views show whole, with no inner scrolling,
+// whenever the rail can make room. When the largest destination's views would
+// not all fit the room the rail leaves them, the rail tightens its own spacing
+// (`rail-compact`: shorter rows, no group headings, a one-line host block).
+// The decision follows the largest list, not the open one, so the rail keeps
+// one size as the operator moves between destinations. Only when even the
+// compact rail is too short does the open list shrink to a whole number of
+// rows (never fewer than two), resting on a row boundary that keeps the active
+// view in sight so its edges never cut a label, and the destination column
+// scrolls past that. A list that fits, and the phone strips, are left alone.
 const RAIL_SUBTAB_MIN_ROWS = 2;
+function railSubtabsClipped(strip) {
+  return strip.scrollHeight > strip.clientHeight + 1;
+}
+// Whether `strip`, shown open in place of the current one, would show whole.
+function railSubtabsFitWhenOpen(strip) {
+  const open = document.querySelector(".rail-subtabs:not(.dimmed)");
+  if (open === strip) return !railSubtabsClipped(strip);
+  open?.classList.add("dimmed");
+  strip.classList.remove("dimmed");
+  const fits = !railSubtabsClipped(strip);
+  strip.classList.add("dimmed");
+  open?.classList.remove("dimmed");
+  return fits;
+}
 function fitRailSubtabRegion() {
+  const rail = document.querySelector(".rail");
+  rail?.classList.remove("rail-compact");
   for (const strip of document.querySelectorAll(".rail-subtabs")) strip.style.maxHeight = "";
   if (window.matchMedia("(max-width: 760px)").matches) return;
+  const largest = [...document.querySelectorAll(".rail-subtabs")]
+    .reduce((best, strip) => (!best || strip.children.length > best.children.length ? strip : best), null);
+  if (rail && largest && largest.children.length > RAIL_SUBTAB_MIN_ROWS && !railSubtabsFitWhenOpen(largest)) {
+    rail.classList.add("rail-compact");
+  }
   const strip = document.querySelector(".rail-subtabs:not(.dimmed)");
   const views = strip ? [...strip.querySelectorAll(".subtab")] : [];
-  if (views.length <= RAIL_SUBTAB_MIN_ROWS || strip.scrollHeight <= strip.clientHeight + 1) return;
+  if (views.length <= RAIL_SUBTAB_MIN_ROWS || !railSubtabsClipped(strip)) return;
   const rowHeight = views[0].offsetHeight;
   const gap = parseFloat(getComputedStyle(strip).rowGap) || 0;
   const step = rowHeight + gap;
