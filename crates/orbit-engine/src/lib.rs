@@ -1,12 +1,3 @@
-#![deny(clippy::print_stderr, clippy::print_stdout)]
-// Legacy execution-engine surfaces still need a focused documentation pass.
-#![allow(missing_docs)]
-// Unit tests use unwrap/expect for fixture setup; production call sites remain linted.
-#![cfg_attr(test, allow(clippy::expect_used, clippy::unwrap_used))]
-#![cfg_attr(
-    not(any(test, feature = "test-support")),
-    deny(clippy::disallowed_methods)
-)]
 //! v2 activity/job execution engine with template rendering and retry logic.
 //!
 //! Orchestrates the full lifecycle of running a v2 activity or job:
@@ -31,6 +22,16 @@
 //! # Dependency direction
 //! orbit-common, orbit-agent, orbit-exec, orbit-store, orbit-tools
 //! → `orbit-engine` → orbit-core
+
+#![deny(clippy::print_stderr, clippy::print_stdout)]
+// Legacy execution-engine surfaces still need a focused documentation pass.
+#![allow(missing_docs)]
+// Unit tests use unwrap/expect for fixture setup; production call sites remain linted.
+#![cfg_attr(test, allow(clippy::expect_used, clippy::unwrap_used))]
+#![cfg_attr(
+    not(any(test, feature = "test-support")),
+    deny(clippy::disallowed_methods)
+)]
 
 #[cfg(test)]
 #[path = "../tests/support/git.rs"]

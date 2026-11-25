@@ -1,3 +1,5 @@
+//! Axum HTTP server bootstrap, loopback bind enforcement, middleware, and graceful shutdown; imports `api`, `assets`, `connect`, `health`, `heap`, `lease`, `shutdown`, `state`, and composition/core crates.
+
 use std::future::{Future, IntoFuture};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::path::Path;

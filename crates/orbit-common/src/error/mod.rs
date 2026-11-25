@@ -1,3 +1,5 @@
+//! Workspace surface error type (`OrbitError`), structured refusal payloads, and error classification helpers; imports `fs` and `orbit-types`.
+
 mod classification;
 mod conversions;
 mod kinds;

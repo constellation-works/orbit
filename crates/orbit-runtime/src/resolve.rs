@@ -1,3 +1,5 @@
+//! Global and workspace Orbit root discovery (`resolve_global_root`, workspace root lookup); imports `paths`, `run_input`, `orbit-common`, and `orbit-config`.
+
 use orbit_common::env_vars;
 use std::fs;
 use std::path::{Path, PathBuf};

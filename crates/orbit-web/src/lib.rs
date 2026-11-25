@@ -1,4 +1,3 @@
-#![cfg_attr(not(test), deny(clippy::disallowed_methods))]
 //! `orbit-web` — HTTP API, dashboard UI, and remote web connection.
 //!
 //! This crate isolates the axum-based dashboard (HTML/JS assets + `/api/*`
@@ -18,6 +17,8 @@
 //! Path leases are not configurable [ORB-22808], so Orbit Web serves no
 //! intake socket and no command starts the listener.
 //! All routes, content types, defaults, and graceful shutdown are preserved.
+
+#![cfg_attr(not(test), deny(clippy::disallowed_methods))]
 
 mod api;
 mod assets;

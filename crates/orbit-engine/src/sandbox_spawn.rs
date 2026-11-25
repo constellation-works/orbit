@@ -1,3 +1,5 @@
+//! Sandboxed child-process spawn and permanent/transient spawn failure classification; imports `context`, `orbit-common`, `orbit-exec`, and `orbit-types`.
+
 #[cfg(any(test, feature = "test-support"))]
 use std::cell::Cell;
 use std::path::Path;

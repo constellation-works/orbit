@@ -1,3 +1,5 @@
+//! Path normalization, tilde/token expansion, and Git-root path helpers; imports `orbit-common` only.
+
 use orbit_common::env_vars;
 use std::ffi::OsStr;
 use std::path::{Component, Path, PathBuf};

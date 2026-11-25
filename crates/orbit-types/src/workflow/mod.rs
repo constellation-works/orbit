@@ -1,4 +1,4 @@
-//! Domain contracts for this Orbit types module.
+//! Activity-job, automation, auto-task, routine, experiment, and delivery workflow contracts; imports sibling `orbit-types` modules only (I/O-free).
 
 pub mod activity_job;
 mod auto_concurrency;

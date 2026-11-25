@@ -1,3 +1,5 @@
+//! Top-level CLI subcommand argument definitions and dispatch handlers; imports `output`, `parse`, `plugin_cli`, and workspace domain/composition crates.
+
 pub mod agents;
 pub mod application;
 pub mod attention;

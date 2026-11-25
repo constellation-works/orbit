@@ -1,4 +1,4 @@
-//! Domain contracts for this Orbit types module.
+//! Audit event, actor attribution, invocation trace, pricing, and provider-limit telemetry contracts; imports `identity`, `plugin`, `record`, and `tool` within `orbit-types` only (I/O-free).
 
 mod audit_actor;
 mod audit_event;

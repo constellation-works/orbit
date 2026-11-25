@@ -1,3 +1,5 @@
+//! Managed-run environment marker parsing (`ORBIT_MANAGED_RUN_CONTEXT`, run/task IDs); imports `std`, `serde_json`, and `orbit-common` only.
+
 use orbit_common::env_vars;
 use std::collections::BTreeSet;
 

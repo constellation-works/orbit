@@ -1,3 +1,5 @@
+//! Explicit global and workspace configuration directory roots (`ConfigRoots`); imports `std` only.
+
 use std::path::{Path, PathBuf};
 
 /// The two directories a layered configuration is read from.

@@ -1,3 +1,5 @@
+//! Registered tool execution, capability enforcement, and redaction on `RuntimeKernel`; imports `orbit_runtime`, `paths`, `run_input`, `orbit-common`, `orbit-engine`, `orbit-tools`, and `orbit-types`.
+
 use orbit_common::env_vars;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};

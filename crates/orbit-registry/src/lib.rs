@@ -1,7 +1,3 @@
-#![deny(clippy::print_stderr, clippy::print_stdout)]
-#![allow(missing_docs)]
-#![cfg_attr(test, allow(clippy::expect_used, clippy::unwrap_used))]
-#![cfg_attr(not(test), deny(clippy::disallowed_methods))]
 //! Machine identity and workspace registry domain for Orbit.
 //!
 //! This crate owns machine identity, the logical workspace catalog, local
@@ -9,6 +5,11 @@
 //! operator's registered remote hosts, and their file persistence and
 //! validation. It contains no command orchestration,
 //! MCP transport, Core runtime execution, or shared database access.
+
+#![deny(clippy::print_stderr, clippy::print_stdout)]
+#![allow(missing_docs)]
+#![cfg_attr(test, allow(clippy::expect_used, clippy::unwrap_used))]
+#![cfg_attr(not(test), deny(clippy::disallowed_methods))]
 
 pub mod hosts;
 pub mod machine_identity;

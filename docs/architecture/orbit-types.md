@@ -1,7 +1,7 @@
 ---
 type: context
 summary: Architecture map for orbit-types: what it owns, main modules, dependencies and entry points.
-last_validated: 2026-11-24
+last_validated: 2026-11-25
 tags: [architecture, orbit-types]
 ---
 
@@ -31,3 +31,18 @@ Design intent: [docs/design/orbit-core/](../../docs/design/orbit-core/) — this
 ## Domain modules
 
 The domain modules are `desktop`, `identity`, `plugin`, `policy`, `record`, `resource`, `task`, `telemetry`, `timestamp`, `tool`, `workflow` and `workspace`. `desktop` = guarded desktop task contracts; `plugin` = plugin manifests, pins, and namespace rules; `record` = durable authored artifacts; `telemetry` = measurement of runs. `timestamp` owns the shared legacy UTC wire format for policy and executor records.
+
+## Ownership by module
+
+- `desktop`: Guarded desktop task contracts where caller JSON never supplies actor authority; imports `task` within `orbit-types` only (I/O-free).
+- `identity`: Stable identity contracts (`OrbitId`, `ActorIdentity`, machine/workspace/agent/human crew identifiers); imports `task` and `workflow` within `orbit-types` only (I/O-free).
+- `plugin`: Plugin standard contracts (`plugin.yaml` v2 manifest, `.orbit/plugins.yaml` pin file, install record, and namespace rules); imports no sibling modules (I/O-free).
+- `policy`: Filesystem policy profile, glob matching, role, and policy-definition contracts; imports `resource` and `timestamp` within `orbit-types` only (I/O-free).
+- `record`: Durable record contracts (`OrbitEvent`, `Audit`, friction, notice, evolution, and crew discovery); imports `identity`, `telemetry`, and `workflow` within `orbit-types` only (I/O-free).
+- `resource`: Generic resource envelope, header, and executor/policy resource contracts; imports `policy`, `task`, `timestamp`, and `workflow` within `orbit-types` only (I/O-free).
+- `task`: Task model, lifecycle status, plan, decision, artifact, readiness, and regression contracts; imports `identity` and `workflow` within `orbit-types` only (I/O-free).
+- `telemetry`: Audit event, actor attribution, invocation trace, pricing, and provider-limit telemetry contracts; imports `identity`, `plugin`, `record`, and `tool` within `orbit-types` only (I/O-free).
+- `timestamp`: UTC timestamp contracts for persisted records using the legacy date format; imports no sibling modules (I/O-free).
+- `tool`: Tool schema, family, invocation, MCP toolset/rules, and application-consent contracts; imports `identity` and `task` within `orbit-types` only (I/O-free).
+- `workflow`: Activity-job, automation, auto-task, routine, experiment, and delivery workflow contracts; imports sibling `orbit-types` modules only (I/O-free).
+- `workspace`: Workspace registry, checkout role, path layout, and task-publication binding contracts; imports `identity` and `plugin` within `orbit-types` only (I/O-free).

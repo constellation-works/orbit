@@ -1,3 +1,5 @@
+//! `RuntimeKernel` mutation wrappers that append session `OrbitEvent` entries; imports `orbit_runtime`, `orbit-common`, and `orbit-types`.
+
 use orbit_types::record::OrbitEvent;
 
 use crate::RuntimeKernel;

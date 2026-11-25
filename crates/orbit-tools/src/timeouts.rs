@@ -1,3 +1,5 @@
+//! Shared network and subprocess timeout constants for builtin, external, and plugin tools; imports no internal modules.
+
 /// Default network operation timeout (15 s). Used for most GitHub API calls
 /// and Orbit CLI commands where a quick response is expected.
 pub(crate) const TIMEOUT_DEFAULT_MS: u64 = 15_000;

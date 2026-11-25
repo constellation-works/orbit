@@ -1,3 +1,9 @@
+//! Shared mechanism crate for the Orbit workspace.
+//!
+//! Domain contracts live in `orbit-types`. This crate owns `OrbitError` and
+//! responsibility-based helpers: governance, filesystem, process, storage,
+//! protocol, observability, security, and text.
+
 #![deny(clippy::print_stderr, clippy::print_stdout)]
 #![allow(missing_docs)]
 #![cfg_attr(test, allow(clippy::expect_used, clippy::unwrap_used))]
@@ -5,11 +11,6 @@
     not(any(test, feature = "test-support")),
     deny(clippy::disallowed_methods)
 )]
-//! Shared mechanism crate for the Orbit workspace.
-//!
-//! Domain contracts live in `orbit-types`. This crate owns `OrbitError` and
-//! responsibility-based helpers: governance, filesystem, process, storage,
-//! protocol, observability, security, and text.
 
 pub mod env_vars;
 mod error;

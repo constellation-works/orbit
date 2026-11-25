@@ -1,12 +1,3 @@
-// ORB-10016: command modules moved from orbit-core keep their documentation
-// posture; the legacy surfaces still need a focused documentation pass.
-#![allow(missing_docs)]
-// Unit tests use unwrap/expect for fixture setup; production call sites remain linted.
-#![cfg_attr(test, allow(clippy::expect_used, clippy::unwrap_used))]
-#![cfg_attr(
-    not(any(test, feature = "test-release-api-base")),
-    deny(clippy::disallowed_methods)
-)]
 //! Command-layer surfaces extracted from `orbit-core` [ORB-10016].
 //!
 //! Each module owns one CLI-facing command group whose implementation is a
@@ -22,6 +13,16 @@
 //! `orbit-cli` and `orbit-web`. Command groups that orbit-core's runtime
 //! internals (tool hosts, engine hosts, bootstrap seeding) invoke remain in
 //! `orbit_core::adapter::command`; see `ARCHITECTURE.md` for the boundary.
+
+// ORB-10016: command modules moved from orbit-core keep their documentation
+// posture; the legacy surfaces still need a focused documentation pass.
+#![allow(missing_docs)]
+// Unit tests use unwrap/expect for fixture setup; production call sites remain linted.
+#![cfg_attr(test, allow(clippy::expect_used, clippy::unwrap_used))]
+#![cfg_attr(
+    not(any(test, feature = "test-release-api-base")),
+    deny(clippy::disallowed_methods)
+)]
 
 // A bare `cargo test` from a managed-run shell must match one from a clean shell.
 #[cfg(test)]

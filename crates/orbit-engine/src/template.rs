@@ -1,3 +1,5 @@
+//! Template context and `{{...}}` interpolation renderer for job steps; imports `orbit-common` only.
+
 use std::collections::HashMap;
 use std::sync::Arc;
 

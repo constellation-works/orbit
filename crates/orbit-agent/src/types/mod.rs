@@ -1,3 +1,5 @@
+//! Provider request, response-envelope, usage, and diagnostic contract types; imports `orbit-common` and `orbit-types` only.
+
 mod request;
 mod response;
 

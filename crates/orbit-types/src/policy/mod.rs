@@ -1,4 +1,4 @@
-//! Domain contracts for this Orbit types module.
+//! Filesystem policy profile, glob matching, role, and policy-definition contracts; imports `resource` and `timestamp` within `orbit-types` only (I/O-free).
 
 mod error;
 mod fs_rules;
