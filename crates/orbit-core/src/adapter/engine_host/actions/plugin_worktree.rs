@@ -206,7 +206,8 @@ pub(super) fn resolve_plugin_delivery_worktree(
         runtime,
         action,
         &owner_run,
-        checkpoint.branch_prefix.as_deref(),
+        &job_spec,
+        &checkpoint,
         &requested_workspace_path,
         &checkpoint.workspace_path,
     )?;
@@ -223,7 +224,8 @@ pub(super) fn resolve_plugin_delivery_worktree(
 struct AuthenticatedWorktreeCheckpoint {
     workspace_path: String,
     job_run_id: String,
-    branch_prefix: Option<String>,
+    step_input: Option<Value>,
+    input_schema: Option<Value>,
 }
 
 fn host_attested_run_id<'a>(
@@ -511,18 +513,11 @@ fn authenticated_worktree_checkpoint(
                             ),
                         )
                     })?;
-                let branch_prefix = target
-                    .default_input
-                    .as_ref()
-                    .and_then(|defaults| defaults.get("branch_prefix"))
-                    .and_then(Value::as_str)
-                    .map(str::trim)
-                    .filter(|value| !value.is_empty() && !value.contains("{{"))
-                    .map(ToOwned::to_owned);
                 found.push(AuthenticatedWorktreeCheckpoint {
                     workspace_path,
                     job_run_id,
-                    branch_prefix,
+                    step_input: target.default_input.clone(),
+                    input_schema: target.input_schema_json.clone(),
                 });
             }
             SuccessfulCheckpoint::Inconsistent => {
@@ -642,7 +637,8 @@ fn authenticate_worktree_path(
     runtime: &OrbitRuntime,
     action: &str,
     owner_run: &JobRun,
-    step_branch_prefix: Option<&str>,
+    job_spec: &JobV2,
+    checkpoint: &AuthenticatedWorktreeCheckpoint,
     requested_workspace_path: &str,
     checkpoint_workspace_path: &str,
 ) -> Result<PathBuf, DispatchError> {
@@ -687,18 +683,37 @@ fn authenticate_worktree_path(
         ));
     }
 
+    // Render only the identity field: other setup inputs can reference prior
+    // step outputs which are unnecessary for deriving the owned path.
+    let prefix_input = checkpoint.step_input.as_ref().map(|input| match input {
+        Value::Object(fields) => serde_json::json!({
+            "branch_prefix": fields.get("branch_prefix").cloned().unwrap_or(Value::Null)
+        }),
+        other => other.clone(),
+    });
+    let rendered = orbit_engine::activity_job::render_job_step_input_at_admission(
+        job_spec.default_input.as_ref(),
+        owner_run.input.as_ref().unwrap_or(&Value::Null),
+        prefix_input.as_ref(),
+        checkpoint.input_schema.as_ref(),
+    )
+    .map_err(|error| {
+        DispatchError::action_failed(
+            action,
+            format!(
+                "render worktree setup branch prefix for run '{}': {error}",
+                owner_run.run_id
+            ),
+        )
+    })?;
     let mut run_for_derivation = owner_run.clone();
-    if let Some(prefix) = step_branch_prefix {
-        let input = run_for_derivation
-            .input
-            .get_or_insert_with(|| serde_json::json!({}));
-        if let Some(object) = input.as_object_mut()
-            && !object.contains_key("branch_prefix")
-        {
-            object.insert(
-                "branch_prefix".to_string(),
-                Value::String(prefix.to_string()),
-            );
+    let input = run_for_derivation
+        .input
+        .get_or_insert_with(|| serde_json::json!({}));
+    if let Some(object) = input.as_object_mut() {
+        object.remove("branch_prefix");
+        if let Some(prefix) = rendered.get("branch_prefix") {
+            object.insert("branch_prefix".to_string(), prefix.clone());
         }
     }
     let derived_paths =

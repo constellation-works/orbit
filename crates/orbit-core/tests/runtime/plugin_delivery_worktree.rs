@@ -692,6 +692,18 @@ spec:
     )
     .unwrap();
 
+    for (name, prefix) in [
+        ("syncproof_default_prefix", "{{ input.branch_prefix }}"),
+        ("syncproof_override_prefix", "step-prefix"),
+    ] {
+        let yaml = std::fs::read_to_string(jobs.join("syncproof_batch_delivery.yaml"))
+            .unwrap()
+            .replace("name: syncproof_batch_delivery", &format!("name: {name}"))
+            .replace("    base_branch: main", "    branch_prefix: default-prefix\n    base_branch: main")
+            .replace("        base: \"{{ input.base_branch }}\"", &format!("        branch_prefix: \"{prefix}\"\n        base: \"{{{{ input.base_branch }}}}\""));
+        std::fs::write(jobs.join(format!("{name}.yaml")), yaml).unwrap();
+    }
+
     // Delivery job with no worktree_setup step at all: mutating call must fail
     // closed while a read-only call without workspace_path keeps existing routing.
     std::fs::write(
@@ -1161,9 +1173,47 @@ fn non_delivery_and_unbound_read_only_plugin_calls_keep_existing_routing() {
     );
 }
 
+fn setup_prefix_defaults_and_step_overrides_bind_plugin_worktree() {
+    let fixture = PluginDeliveryFixture::new(&[]);
+    for (job, run_prefix, expected_prefix) in [
+        ("syncproof_default_prefix", None, "default-prefix"),
+        (
+            "syncproof_override_prefix",
+            Some("run-prefix"),
+            "step-prefix",
+        ),
+    ] {
+        let task = fixture.seed_task(job, &[&format!("delivery:{job}")]);
+        let mut input = json!({"task_ids": [&task]});
+        if let Some(prefix) = run_prefix {
+            input["branch_prefix"] = json!(prefix);
+        }
+        let result = fixture
+            .runtime
+            .run_job_v2_from_yaml(&fixture.plugin_job_path(job), input)
+            .expect("configured prefix must bind the setup worktree");
+        assert!(result.success, "{result:?}");
+        let path = result.pipeline["worktree"]["workspace_path"]
+            .as_str()
+            .unwrap();
+        assert!(
+            Path::new(path)
+                .file_name()
+                .unwrap()
+                .to_string_lossy()
+                .starts_with(expected_prefix),
+            "{path}"
+        );
+        assert_eq!(result.pipeline["sync"]["workspace_root"], path);
+        assert_eq!(result.pipeline["sync"]["task_id"], task);
+        assert_eq!(result.pipeline["sync"]["primary_write_denied"], true);
+    }
+}
+
 crate::scenario_table!(
     plugin_delivery_worktree_scenarios,
     pr_mode_plugin_delivery_binds_worktree_and_completes_pr_ci_route_without_agent,
     missing_mismatched_unowned_invalid_and_multi_task_bindings_fail_closed_before_dispatch,
-    non_delivery_and_unbound_read_only_plugin_calls_keep_existing_routing
+    non_delivery_and_unbound_read_only_plugin_calls_keep_existing_routing,
+    setup_prefix_defaults_and_step_overrides_bind_plugin_worktree
 );
