@@ -3,6 +3,8 @@
   "counts": {
     "application_port_methods": 20,
     "driver_writer_outside_transaction_files": 7,
+    "env_global_accessor_calls": 105,
+    "env_process_env_method_calls": 511,
     "from_kernel_ref_uses": 21,
     "impl_orbit_runtime_files": 337,
     "orbit_runtime_naming_files.orbit-cli": 131,
