@@ -13,7 +13,7 @@ use rusqlite::{Connection, MAIN_DB, OpenFlags, Transaction, TransactionBehavior}
 use super::read_pool::{ReadGuard, ReadPool};
 use super::schema;
 use crate::contracts::ForwardCompatibleOpen;
-use crate::contracts::incident::classify_failure;
+use orbit_types::telemetry::incident::classify_failure;
 
 /// SQL name of [`unicode_lower`]. The bundled SQLite `lower()` folds ASCII
 /// only, so a query needle lowered in Rust would never match stored

@@ -9,8 +9,7 @@ use orbit_automation::delivery::{
     self, ActionOutcome, DeliveryHost, Evaluation, evidence::EvidenceFacts,
 };
 use orbit_automation::{AutomationError, DeferredReason};
-use orbit_common::OrbitError;
-use orbit_store::{Store, compose, contracts::AutomationStoreBackend};
+use orbit_store::Store;
 use orbit_types::workflow::automation::*;
 use std::{
     collections::BTreeMap,
@@ -255,7 +254,7 @@ impl DeliveryHost for Host {
 
 /// Evaluate the consumer under epoch `v1` at `now() + minutes`.
 pub(super) fn evaluate_at(
-    store: &dyn AutomationStoreBackend,
+    store: &Store,
     host: &Host,
     trigger: &DeliveryTrigger,
     enabled: bool,
@@ -276,7 +275,7 @@ pub(super) fn evaluate_at(
 }
 
 pub(super) fn evaluate(
-    store: &dyn AutomationStoreBackend,
+    store: &Store,
     host: &Host,
     trigger: &DeliveryTrigger,
     enabled: bool,
@@ -284,27 +283,19 @@ pub(super) fn evaluate(
     evaluate_at(store, host, trigger, enabled, 0).unwrap()
 }
 
-pub(super) fn setup() -> (Arc<dyn AutomationStoreBackend>, Host, DeliveryTrigger) {
+pub(super) fn setup() -> (Store, Host, DeliveryTrigger) {
     let (_, store, host, trigger) = setup_raw();
     (store, host, trigger)
 }
 
 /// [`setup`], also handing back the SQLite store under it so a fixture can
 /// seed retained history no evaluation pass could build cheaply.
-pub(super) fn setup_raw() -> (
-    Store,
-    Arc<dyn AutomationStoreBackend>,
-    Host,
-    DeliveryTrigger,
-) {
+pub(super) fn setup_raw() -> (Store, Store, Host, DeliveryTrigger) {
     let raw = Store::open_in_memory().unwrap();
-    let store = compose::automation_store(raw.clone()).unwrap();
+    let store = raw.clone();
     let host = Host::new();
     let trigger = trigger();
-    assert_eq!(
-        evaluate(store.as_ref(), &host, &trigger, true).reason,
-        "baselined"
-    );
+    assert_eq!(evaluate(&store, &host, &trigger, true).reason, "baselined");
     (raw, store, host, trigger)
 }
 
@@ -319,7 +310,7 @@ fn concurrent_evaluators_admit_one_action() {
                 let store = store.clone();
                 let host = host.clone();
                 let trigger = &trigger;
-                scope.spawn(move || evaluate_at(store.as_ref(), host.as_ref(), trigger, true, 0))
+                scope.spawn(move || evaluate_at(&store, host.as_ref(), trigger, true, 0))
             })
             .collect::<Vec<_>>();
         for handle in handles {
@@ -327,7 +318,11 @@ fn concurrent_evaluators_admit_one_action() {
         }
     });
     assert_eq!(host.actions.lock().unwrap().len(), 1);
-    let state = store.automation_state(CONSUMER).unwrap().unwrap();
+    let state = store
+        .read()
+        .and_then(|snapshot| snapshot.automation().state(CONSUMER))
+        .unwrap()
+        .unwrap();
     assert_eq!(state.pending.len(), 2);
     assert_eq!(state.covered, revision(0));
 }
@@ -336,9 +331,7 @@ fn concurrent_evaluators_admit_one_action() {
 fn adversarial_evidence_cannot_manufacture_coverage() {
     let (store, host, trigger) = setup();
     host.page(0, 2);
-    let state = evaluate(store.as_ref(), &host, &trigger, true)
-        .state
-        .unwrap();
+    let state = evaluate(&store, &host, &trigger, true).state.unwrap();
     let attempt = state.active.unwrap();
     host.evidence(&attempt);
     let valid = host.evidence.lock().unwrap().clone().unwrap();
@@ -410,13 +403,13 @@ fn adversarial_evidence_cannot_manufacture_coverage() {
     host.page(2, 2);
     for e in variants {
         *host.evidence.lock().unwrap() = Some(e);
-        let result = evaluate(store.as_ref(), &host, &trigger, true);
+        let result = evaluate(&store, &host, &trigger, true);
         assert_eq!(result.state.unwrap().covered, revision(0));
         assert!(result.receipts.is_empty());
     }
     for (reason, e) in typed {
         *host.evidence.lock().unwrap() = Some(e);
-        let result = evaluate(store.as_ref(), &host, &trigger, true);
+        let result = evaluate(&store, &host, &trigger, true);
         let state = result.state.unwrap();
         assert_eq!(state.covered, revision(0), "{reason}");
         assert!(result.receipts.is_empty(), "{reason}");
@@ -455,58 +448,46 @@ fn adversarial_evidence_cannot_manufacture_coverage() {
     assert!(delivery::evidence::validate(&attempt, &facts, now()).is_err());
 }
 
-/// A crash at the receipt transaction leaves both old C and the action replayable.
-struct ReceiptFailure {
-    inner: Arc<dyn AutomationStoreBackend>,
-    fail: AtomicBool,
-}
-
-impl AutomationStoreBackend for ReceiptFailure {
-    fn automation_state(&self, c: &str) -> Result<Option<AutomationState>, OrbitError> {
-        self.inner.automation_state(c)
-    }
-
-    fn automation_initialize(&self, s: &AutomationState) -> Result<bool, OrbitError> {
-        self.inner.automation_initialize(s)
-    }
-
-    fn automation_commit(
-        &self,
-        a: &AutomationState,
-        b: &AutomationState,
-        r: Option<&AcceptedCoverage>,
-    ) -> Result<bool, OrbitError> {
-        if r.is_some() && self.fail.swap(false, Ordering::SeqCst) {
-            return Err(OrbitError::Store("injected receipt failure".into()));
-        }
-        self.inner.automation_commit(a, b, r)
-    }
-
-    fn automation_receipts(&self, c: &str, n: usize) -> Result<Vec<AcceptedCoverage>, OrbitError> {
-        self.inner.automation_receipts(c, n)
-    }
-}
-
 #[test]
 fn receipt_failure_recovers_atomically() {
     let (store, host, trigger) = setup();
     host.page(0, 2);
-    let state = evaluate(store.as_ref(), &host, &trigger, true)
-        .state
-        .unwrap();
+    let state = evaluate(&store, &host, &trigger, true).state.unwrap();
     host.evidence(&state.active.unwrap());
     host.page(2, 2);
-    let failed = ReceiptFailure {
-        inner: store.clone(),
-        fail: AtomicBool::new(true),
-    };
-    assert!(evaluate_at(&failed, &host, &trigger, true, 0).is_err());
+    store
+        .connection()
+        .lock()
+        .unwrap()
+        .execute_batch(
+            "CREATE TEMP TRIGGER fail_receipt BEFORE INSERT ON automation_coverage
+         BEGIN SELECT RAISE(ABORT, 'injected receipt failure'); END;",
+        )
+        .unwrap();
+    assert!(evaluate_at(&store, &host, &trigger, true, 0).is_err());
     assert_eq!(
-        store.automation_state(CONSUMER).unwrap().unwrap().covered,
+        store
+            .read()
+            .and_then(|snapshot| snapshot.automation().state(CONSUMER))
+            .unwrap()
+            .unwrap()
+            .covered,
         revision(0)
     );
-    assert!(store.automation_receipts(CONSUMER, 20).unwrap().is_empty());
-    let recovered = evaluate(&failed, &host, &trigger, true);
+    assert!(
+        store
+            .read()
+            .and_then(|snapshot| snapshot.automation().receipts(CONSUMER, 20))
+            .unwrap()
+            .is_empty()
+    );
+    store
+        .connection()
+        .lock()
+        .unwrap()
+        .execute_batch("DROP TRIGGER fail_receipt")
+        .unwrap();
+    let recovered = evaluate(&store, &host, &trigger, true);
     assert_eq!(recovered.state.unwrap().covered, revision(2));
     assert_eq!(recovered.receipts.len(), 1);
 }
@@ -517,7 +498,7 @@ fn receipt_failure_recovers_atomically() {
 fn a_stopped_action_with_malformed_evidence_settles_and_spends_its_retry_budget() {
     let (store, host, trigger) = setup();
     host.page(0, 2);
-    let first = evaluate(store.as_ref(), &host, &trigger, true)
+    let first = evaluate(&store, &host, &trigger, true)
         .state
         .unwrap()
         .active
@@ -527,7 +508,7 @@ fn a_stopped_action_with_malformed_evidence_settles_and_spends_its_retry_budget(
     *host.raw_evidence.lock().unwrap() = Some(br#"{"schema_version":1,"batch_id":{}}"#.to_vec());
 
     // While the task is open its executor can still re-put the file.
-    let open = evaluate(store.as_ref(), &host, &trigger, true)
+    let open = evaluate(&store, &host, &trigger, true)
         .state
         .unwrap()
         .active
@@ -536,7 +517,7 @@ fn a_stopped_action_with_malformed_evidence_settles_and_spends_its_retry_budget(
     assert!(open.reason.unwrap().contains("malformed"));
 
     host.stopped.store(true, Ordering::SeqCst);
-    let settled = evaluate(store.as_ref(), &host, &trigger, true)
+    let settled = evaluate(&store, &host, &trigger, true)
         .state
         .unwrap()
         .active
@@ -555,7 +536,7 @@ fn a_stopped_action_with_malformed_evidence_settles_and_spends_its_retry_budget(
     );
 
     // After the backoff the next fire admits a fresh action over the same debt.
-    let retried = evaluate_at(store.as_ref(), &host, &trigger, true, 6)
+    let retried = evaluate_at(&store, &host, &trigger, true, 6)
         .unwrap()
         .state
         .unwrap();
@@ -566,7 +547,7 @@ fn a_stopped_action_with_malformed_evidence_settles_and_spends_its_retry_budget(
     assert_eq!(retried.covered, revision(0));
 
     // The retry closes the same way: the budget is spent, nothing is covered.
-    let exhausted = evaluate_at(store.as_ref(), &host, &trigger, true, 7).unwrap();
+    let exhausted = evaluate_at(&store, &host, &trigger, true, 7).unwrap();
     assert_eq!(exhausted.reason, "needs_attention");
     let state = exhausted.state.unwrap();
     assert_eq!(state.active.unwrap().state, BatchState::Exhausted);
@@ -574,44 +555,9 @@ fn a_stopped_action_with_malformed_evidence_settles_and_spends_its_retry_budget(
     assert!(exhausted.receipts.is_empty());
 }
 
-/// An evaluator that read no state while a concurrent one won the baseline
-/// at another head [ORB-25602]: the read of `automation_state` installs the
-/// winner before answering `None`, the deterministic form of that race.
-struct LostInitialization {
-    inner: Arc<dyn AutomationStoreBackend>,
-    winner: Mutex<Option<AutomationState>>,
-}
-
-impl AutomationStoreBackend for LostInitialization {
-    fn automation_state(&self, c: &str) -> Result<Option<AutomationState>, OrbitError> {
-        if let Some(winner) = self.winner.lock().unwrap().take() {
-            assert!(self.inner.automation_initialize(&winner)?);
-            return Ok(None);
-        }
-        self.inner.automation_state(c)
-    }
-
-    fn automation_initialize(&self, s: &AutomationState) -> Result<bool, OrbitError> {
-        self.inner.automation_initialize(s)
-    }
-
-    fn automation_commit(
-        &self,
-        a: &AutomationState,
-        b: &AutomationState,
-        r: Option<&AcceptedCoverage>,
-    ) -> Result<bool, OrbitError> {
-        self.inner.automation_commit(a, b, r)
-    }
-
-    fn automation_receipts(&self, c: &str, n: usize) -> Result<Vec<AcceptedCoverage>, OrbitError> {
-        self.inner.automation_receipts(c, n)
-    }
-}
-
 #[test]
 fn a_lost_baseline_race_defers_instead_of_reporting_its_unwritten_state() {
-    let store = compose::automation_store(Store::open_in_memory().unwrap()).unwrap();
+    let store = Store::open_in_memory().unwrap();
     let host = Host::new();
     let trigger = trigger();
     let winner = AutomationState {
@@ -635,12 +581,28 @@ fn a_lost_baseline_race_defers_instead_of_reporting_its_unwritten_state() {
         active: None,
         stall: None,
     };
-    let racing = LostInitialization {
-        inner: store.clone(),
-        winner: Mutex::new(Some(winner.clone())),
-    };
+    // Let the competing baseline win at the write boundary, after the
+    // evaluator has read an empty checkpoint.
+    {
+        let connection = store.connection();
+        let conn = connection.lock().unwrap();
+        conn.execute_batch(
+            "CREATE TEMP TABLE baseline_winner (consumer, state_json);
+             CREATE TEMP TRIGGER win_baseline BEFORE INSERT ON automation_consumers
+             BEGIN
+               INSERT INTO automation_consumers
+               SELECT consumer, 0, state_json FROM baseline_winner;
+             END;",
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO baseline_winner VALUES (?1, ?2)",
+            [&winner.consumer, &serde_json::to_string(&winner).unwrap()],
+        )
+        .unwrap();
+    }
 
-    let lost = evaluate_at(&racing, &host, &trigger, true, 0);
+    let lost = evaluate_at(&store, &host, &trigger, true, 0);
     assert!(
         matches!(
             lost,
@@ -651,5 +613,11 @@ fn a_lost_baseline_race_defers_instead_of_reporting_its_unwritten_state() {
         "the losing evaluator must not report its own baseline at {:?}: {lost:?}",
         revision(0)
     );
-    assert_eq!(store.automation_state(CONSUMER).unwrap(), Some(winner));
+    assert_eq!(
+        store
+            .read()
+            .and_then(|snapshot| snapshot.automation().state(CONSUMER))
+            .unwrap(),
+        Some(winner)
+    );
 }

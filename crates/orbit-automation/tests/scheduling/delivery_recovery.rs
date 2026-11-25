@@ -9,7 +9,6 @@ use orbit_automation::{
     delivery::{self, recovery, reset},
 };
 use orbit_store::Store;
-use orbit_store::contracts::AutomationStoreBackend;
 use orbit_types::workflow::automation::recovery::{
     HistoryMapping, HistoryReplayRecord, RecoveryPreview, RecoveryRecord, RecoveryRequest,
     ResetRequest, refusal,
@@ -50,27 +49,16 @@ fn recovery<'a>(
 
 /// Drive a consumer to a settled failed action over two retained landings,
 /// exactly as an archived unevidenced task leaves it.
-fn stalled() -> (
-    std::sync::Arc<dyn AutomationStoreBackend>,
-    Host,
-    DeliveryTrigger,
-    CoverageBatch,
-) {
+fn stalled() -> (Store, Host, DeliveryTrigger, CoverageBatch) {
     let (_, store, host, trigger, batch) = stalled_raw();
     (store, host, trigger, batch)
 }
 
 /// [`stalled`], also handing back the SQLite store under it.
-fn stalled_raw() -> (
-    Store,
-    std::sync::Arc<dyn AutomationStoreBackend>,
-    Host,
-    DeliveryTrigger,
-    CoverageBatch,
-) {
+fn stalled_raw() -> (Store, Store, Host, DeliveryTrigger, CoverageBatch) {
     let (raw, store, host, trigger) = setup_raw();
     host.page(0, 2);
-    let batch = evaluate(store.as_ref(), &host, &trigger, true)
+    let batch = evaluate(&store, &host, &trigger, true)
         .state
         .unwrap()
         .active
@@ -81,9 +69,9 @@ fn stalled_raw() -> (
     // admitted after its backoff, and that attempt fails too.
     host.page(2, 2);
     host.failed.store(true, Ordering::SeqCst);
-    evaluate(store.as_ref(), &host, &trigger, true);
-    evaluate_at(store.as_ref(), &host, &trigger, true, 6).unwrap();
-    let settled = evaluate(store.as_ref(), &host, &trigger, true)
+    evaluate(&store, &host, &trigger, true);
+    evaluate_at(&store, &host, &trigger, true, 6).unwrap();
+    let settled = evaluate(&store, &host, &trigger, true)
         .state
         .unwrap()
         .active
@@ -165,7 +153,11 @@ fn recovery_and_reset_count_every_retained_receipt_beyond_a_page() {
     ids.extend(seeded_ids("settled", 100));
     seed_receipts(&raw, &ids);
     assert_eq!(
-        store.automation_receipts(CONSUMER, 1000).unwrap().len(),
+        store
+            .read()
+            .and_then(|snapshot| snapshot.automation().receipts(CONSUMER, 1000))
+            .unwrap()
+            .len(),
         100
     );
 
@@ -173,14 +165,18 @@ fn recovery_and_reset_count_every_retained_receipt_beyond_a_page() {
     let mut operation = recovery(&trigger, "v1", &reissue);
     operation.action_terminal = true;
     operation.action_failed_without_evidence = true;
-    let preview = recovery::preview(store.as_ref(), &operation).unwrap();
+    let preview = recovery::preview(&store, &operation).unwrap();
     assert_eq!(preview.debt.receipts, 101);
     assert!(
         !preview.action.as_ref().unwrap().reissuable,
         "an action whose receipt is the 101st newest is evidenced"
     );
 
-    let state = store.automation_state(CONSUMER).unwrap().unwrap();
+    let state = store
+        .read()
+        .and_then(|snapshot| snapshot.automation().state(CONSUMER))
+        .unwrap()
+        .unwrap();
     let reset_request = ResetRequest {
         reason: "count what a reset would forget".into(),
         force: false,
@@ -199,7 +195,7 @@ fn recovery_and_reset_count_every_retained_receipt_beyond_a_page() {
         action_terminal: true,
         action_failed_without_evidence: true,
     };
-    let reset_preview = reset::preview(store.as_ref(), &reset_operation).unwrap();
+    let reset_preview = reset::preview(&store, &reset_operation).unwrap();
     assert_eq!(reset_preview.debt.receipts, 101);
     assert!(!reset_preview.action.unwrap().reissuable);
 }
@@ -211,7 +207,7 @@ fn replaying_a_waiver_displaced_by_newer_waivers_still_succeeds() {
     let (raw, store, _host, _trigger, batch) = stalled_raw();
     let waive = |batch_id: &str| {
         delivery::waive(
-            store.as_ref(),
+            &store,
             CONSUMER,
             &WaiveBatchRequest {
                 batch_id: batch_id.into(),
@@ -225,7 +221,8 @@ fn replaying_a_waiver_displaced_by_newer_waivers_still_succeeds() {
     seed_waivers(&raw, &seeded_ids("newer", 100));
     assert!(
         !store
-            .automation_waivers(CONSUMER, 1000)
+            .read()
+            .and_then(|snapshot| snapshot.automation().waivers(CONSUMER, 1000))
             .unwrap()
             .iter()
             .any(|waiver| waiver.batch_id == batch.id),
@@ -233,14 +230,16 @@ fn replaying_a_waiver_displaced_by_newer_waivers_still_succeeds() {
     );
 
     let generation = store
-        .automation_state(CONSUMER)
+        .read()
+        .and_then(|snapshot| snapshot.automation().state(CONSUMER))
         .unwrap()
         .unwrap()
         .generation;
     waive(&batch.id).expect("replaying a recorded waiver is idempotent");
     assert_eq!(
         store
-            .automation_state(CONSUMER)
+            .read()
+            .and_then(|snapshot| snapshot.automation().state(CONSUMER))
             .unwrap()
             .unwrap()
             .generation,
@@ -263,7 +262,10 @@ fn retuned(trigger: &DeliveryTrigger) -> DeliveryTrigger {
 #[test]
 fn incompatible_and_unauthorized_changes_are_refused_without_touching_state() {
     let (store, _host, trigger, _batch) = stalled();
-    let before = store.automation_state(CONSUMER).unwrap();
+    let before = store
+        .read()
+        .and_then(|snapshot| snapshot.automation().state(CONSUMER))
+        .unwrap();
 
     let mut branch = retuned(&trigger);
     branch.branch = "main".into();
@@ -313,15 +315,22 @@ fn incompatible_and_unauthorized_changes_are_refused_without_touching_state() {
         let mut recovery = recovery(trigger, epoch, request);
         recovery.repository = repository;
 
-        let error = recovery::apply(store.as_ref(), &recovery).expect_err("refused");
+        let error = recovery::apply(&store, &recovery).expect_err("refused");
         let AutomationError::Refused(reasons) = error else {
             panic!("expected a typed refusal, got {error}");
         };
         assert!(reasons.contains(expected), "{reasons} lacks {expected}");
-        assert_eq!(store.automation_state(CONSUMER).unwrap(), before);
+        assert_eq!(
+            store
+                .read()
+                .and_then(|snapshot| snapshot.automation().state(CONSUMER))
+                .unwrap(),
+            before
+        );
         assert!(
             store
-                .automation_recoveries(CONSUMER, 10)
+                .read()
+                .and_then(|snapshot| snapshot.automation().recoveries(CONSUMER, 10))
                 .unwrap()
                 .is_empty()
         );
@@ -330,18 +339,17 @@ fn incompatible_and_unauthorized_changes_are_refused_without_touching_state() {
 
 /// A consumer still holding an admitted action whose task closed with
 /// malformed coverage — the state an evaluation never reached to settle.
-fn wedged() -> (
-    std::sync::Arc<dyn AutomationStoreBackend>,
-    Host,
-    DeliveryTrigger,
-    AutomationState,
-) {
+fn wedged() -> (Store, Host, DeliveryTrigger, AutomationState) {
     let (store, host, trigger) = setup();
     host.page(0, 2);
-    evaluate(store.as_ref(), &host, &trigger, true);
+    evaluate(&store, &host, &trigger, true);
     *host.raw_evidence.lock().unwrap() = Some(br#"{"schema_version":1,"batch_id":{}}"#.to_vec());
     host.stopped.store(true, Ordering::SeqCst);
-    let state = store.automation_state(CONSUMER).unwrap().unwrap();
+    let state = store
+        .read()
+        .and_then(|snapshot| snapshot.automation().state(CONSUMER))
+        .unwrap()
+        .unwrap();
     assert_eq!(state.active.as_ref().unwrap().state, BatchState::Admitted);
 
     (store, host, trigger, state)
@@ -378,7 +386,7 @@ fn recovery_reissues_an_admitted_action_whose_task_closed_without_evidence() {
     let reissue = request(false, true);
 
     let mut executing = recovery(&trigger, "v1", &reissue);
-    let error = recovery::apply(store.as_ref(), &executing).expect_err("live action refused");
+    let error = recovery::apply(&store, &executing).expect_err("live action refused");
     let AutomationError::Refused(reasons) = error else {
         panic!("expected a typed refusal, got {error}");
     };
@@ -386,16 +394,20 @@ fn recovery_reissues_an_admitted_action_whose_task_closed_without_evidence() {
 
     executing.action_terminal = true;
     executing.action_failed_without_evidence = true;
-    let preview = recovery::preview(store.as_ref(), &executing).unwrap();
+    let preview = recovery::preview(&store, &executing).unwrap();
     assert_eq!(preview.reason, "needs_attention");
     assert!(preview.action.as_ref().unwrap().reissuable);
 
-    let applied = recovery::apply(store.as_ref(), &executing).unwrap();
+    let applied = recovery::apply(&store, &executing).unwrap();
     assert_eq!(
         applied.applied,
         vec![RecoveryPreview::REISSUED_ACTION.to_string()]
     );
-    let after = store.automation_state(CONSUMER).unwrap().unwrap();
+    let after = store
+        .read()
+        .and_then(|snapshot| snapshot.automation().state(CONSUMER))
+        .unwrap()
+        .unwrap();
     let attempt = after.active.unwrap();
     assert_eq!(attempt.state, BatchState::Claimed);
     assert_eq!(attempt.attempt, 2);
@@ -420,17 +432,28 @@ fn a_terminal_proof_cannot_reissue_a_concurrently_admitted_replacement() {
     active.attempt += 1;
     active.action_key = format!("automation:{}:{}", active.batch.id, active.attempt);
     active.action_id = Some("replacement-action".into());
-    assert!(store.automation_commit(&state, &admitted, None).unwrap());
+    assert!(
+        store
+            .write(|tx| orbit_automation::checkpoint::commit_state(tx, &state, &admitted, None))
+            .unwrap()
+    );
 
-    let error = recovery::apply(store.as_ref(), &operation).unwrap_err();
+    let error = recovery::apply(&store, &operation).unwrap_err();
     assert!(matches!(
         error,
         AutomationError::Deferred(DeferredReason::ConcurrentEvaluation)
     ));
-    assert_eq!(store.automation_state(CONSUMER).unwrap(), Some(admitted));
+    assert_eq!(
+        store
+            .read()
+            .and_then(|snapshot| snapshot.automation().state(CONSUMER))
+            .unwrap(),
+        Some(admitted)
+    );
     assert!(
         store
-            .automation_recoveries(CONSUMER, 10)
+            .read()
+            .and_then(|snapshot| snapshot.automation().recoveries(CONSUMER, 10))
             .unwrap()
             .is_empty()
     );
@@ -449,8 +472,7 @@ fn recovery_does_not_reissue_a_terminal_action_with_acceptable_evidence() {
     let mut operation = recovery(&trigger, "v1", &reissue);
     operation.action_terminal = liveness.terminal;
     operation.action_failed_without_evidence = liveness.failed_without_evidence;
-    let error =
-        recovery::apply(store.as_ref(), &operation).expect_err("valid evidence is not reissued");
+    let error = recovery::apply(&store, &operation).expect_err("valid evidence is not reissued");
     let AutomationError::Refused(reasons) = error else {
         panic!("expected a typed refusal, got {error}");
     };
@@ -480,21 +502,30 @@ fn reset_forgets_a_consumer_whose_admitted_action_already_stopped() {
         action_failed_without_evidence: false,
     };
 
-    let error = reset::apply(store.as_ref(), &operation).expect_err("live action refused");
+    let error = reset::apply(&store, &operation).expect_err("live action refused");
     let AutomationError::Refused(reasons) = error else {
         panic!("expected a typed refusal, got {error}");
     };
     assert!(reasons.contains(refusal::ACTION_EXECUTING), "{reasons}");
     assert_eq!(
-        store.automation_state(CONSUMER).unwrap(),
+        store
+            .read()
+            .and_then(|snapshot| snapshot.automation().state(CONSUMER))
+            .unwrap(),
         Some(state.clone())
     );
 
     operation.action_terminal = true;
     operation.action_failed_without_evidence = true;
-    let applied = reset::apply(store.as_ref(), &operation).unwrap();
+    let applied = reset::apply(&store, &operation).unwrap();
     assert!(applied.applied);
-    assert!(store.automation_state(CONSUMER).unwrap().is_none());
+    assert!(
+        store
+            .read()
+            .and_then(|snapshot| snapshot.automation().state(CONSUMER))
+            .unwrap()
+            .is_none()
+    );
 }
 
 #[test]
@@ -524,10 +555,16 @@ fn reset_can_forget_a_terminal_action_with_acceptable_evidence() {
         action_terminal: liveness.terminal,
         action_failed_without_evidence: liveness.failed_without_evidence,
     };
-    let applied = reset::apply(store.as_ref(), &operation).unwrap();
+    let applied = reset::apply(&store, &operation).unwrap();
     assert!(applied.applied);
     assert!(!applied.action.unwrap().reissuable);
-    assert!(store.automation_state(CONSUMER).unwrap().is_none());
+    assert!(
+        store
+            .read()
+            .and_then(|snapshot| snapshot.automation().state(CONSUMER))
+            .unwrap()
+            .is_none()
+    );
 }
 
 /// The retry is admitted through the public evaluator, with virtual backoff.
@@ -557,10 +594,10 @@ fn reset_cannot_inherit_terminal_proof_across_retry_admission() {
     };
 
     host.page(2, 2);
-    evaluate(store.as_ref(), &host, &trigger, true);
+    evaluate(&store, &host, &trigger, true);
     host.stopped.store(false, Ordering::SeqCst);
     *host.raw_evidence.lock().unwrap() = None;
-    let replacement = evaluate_at(store.as_ref(), &host, &trigger, true, 6)
+    let replacement = evaluate_at(&store, &host, &trigger, true, 6)
         .unwrap()
         .state
         .unwrap();
@@ -578,8 +615,8 @@ fn reset_cannot_inherit_terminal_proof_across_retry_admission() {
     );
 
     for result in [
-        reset::preview(store.as_ref(), &operation),
-        reset::apply(store.as_ref(), &operation),
+        reset::preview(&store, &operation),
+        reset::apply(&store, &operation),
     ] {
         assert!(matches!(
             result,
@@ -588,12 +625,16 @@ fn reset_cannot_inherit_terminal_proof_across_retry_admission() {
             ))
         ));
         assert_eq!(
-            store.automation_state(CONSUMER).unwrap(),
+            store
+                .read()
+                .and_then(|snapshot| snapshot.automation().state(CONSUMER))
+                .unwrap(),
             Some(replacement.clone())
         );
         assert!(
             store
-                .automation_recoveries(CONSUMER, 10)
+                .read()
+                .and_then(|snapshot| snapshot.automation().recoveries(CONSUMER, 10))
                 .unwrap()
                 .is_empty()
         );
@@ -629,24 +670,15 @@ fn certificate(n: usize) -> DeliveryExclusion {
     }
 }
 
-fn review_setup() -> (
-    std::sync::Arc<dyn AutomationStoreBackend>,
-    Host,
-    DeliveryTrigger,
-) {
-    let store =
-        orbit_store::compose::automation_store(orbit_store::Store::open_in_memory().unwrap())
-            .unwrap();
+fn review_setup() -> (Store, Host, DeliveryTrigger) {
+    let store = orbit_store::Store::open_in_memory().unwrap();
     let host = Host::new();
     let trigger = DeliveryTrigger {
         coverage: CoverageClass::LandedCodeReviewV1,
         retries: 0,
         ..trigger()
     };
-    assert_eq!(
-        evaluate(store.as_ref(), &host, &trigger, true).reason,
-        "baselined"
-    );
+    assert_eq!(evaluate(&store, &host, &trigger, true).reason, "baselined");
     (store, host, trigger)
 }
 
@@ -704,7 +736,7 @@ fn replay_input(
 }
 
 fn replay(
-    store: &dyn AutomationStoreBackend,
+    store: &Store,
     trigger: &DeliveryTrigger,
     input: recovery::HistoryReplayInput,
 ) -> Result<RecoveryPreview, AutomationError> {
@@ -724,12 +756,7 @@ fn replay(
 
 /// Unresolved commit 1 ahead of certificate-excluded landing 2: the exclusion
 /// is retained because the unresolved commit blocks its prefix.
-fn unresolved_then_excluded() -> (
-    std::sync::Arc<dyn AutomationStoreBackend>,
-    Host,
-    DeliveryTrigger,
-    AutomationState,
-) {
+fn unresolved_then_excluded() -> (Store, Host, DeliveryTrigger, AutomationState) {
     let (store, host, trigger) = review_setup();
     host.page(0, 2);
     {
@@ -739,9 +766,7 @@ fn unresolved_then_excluded() -> (
             .insert(revision(1).commit, "provider_identity_missing".into());
         page.exclusions.insert(landing(2).key, certificate(2));
     }
-    let state = evaluate(store.as_ref(), &host, &trigger, true)
-        .state
-        .unwrap();
+    let state = evaluate(&store, &host, &trigger, true).state.unwrap();
     assert_eq!(state.covered, revision(0));
     assert_eq!(state.excluded.len(), 1);
     assert_eq!(state.unresolved.len(), 1);
@@ -753,12 +778,16 @@ fn replayed_exclusions_still_retire_their_canonical_covered_prefix() {
     let (store, host, trigger, before) = unresolved_then_excluded();
 
     replay(
-        store.as_ref(),
+        &store,
         &trigger,
         replay_input(&before, vec![rebased_landing(2)], &[1]),
     )
     .expect("a proven replay applies");
-    let replayed = store.automation_state(CONSUMER).unwrap().unwrap();
+    let replayed = store
+        .read()
+        .and_then(|snapshot| snapshot.automation().state(CONSUMER))
+        .unwrap()
+        .unwrap();
     assert_eq!(replayed.pending_commits, ["r1", "r2"]);
     let excluded = &replayed.excluded[0];
     assert_eq!(excluded.delivery.commits, ["r2"]);
@@ -781,9 +810,7 @@ fn replayed_exclusions_still_retire_their_canonical_covered_prefix() {
         exclusions: [(landing(1).key, certificate(1))].into(),
         complete: true,
     };
-    let state = evaluate(store.as_ref(), &host, &trigger, true)
-        .state
-        .unwrap();
+    let state = evaluate(&store, &host, &trigger, true).state.unwrap();
     assert_eq!(
         state.covered,
         rebased(2),
@@ -791,7 +818,13 @@ fn replayed_exclusions_still_retire_their_canonical_covered_prefix() {
     );
     assert!(state.pending_commits.is_empty());
     assert!(state.excluded.is_empty());
-    assert!(store.automation_receipts(CONSUMER, 10).unwrap().is_empty());
+    assert!(
+        store
+            .read()
+            .and_then(|snapshot| snapshot.automation().receipts(CONSUMER, 10))
+            .unwrap()
+            .is_empty()
+    );
     assert!(host.actions.lock().unwrap().is_empty());
 }
 
@@ -801,10 +834,10 @@ fn replayed_waivers_and_exclusions_retire_with_a_later_accepted_batch() {
 
     // Landings 1 and 2 are waived after their only review attempt failed.
     host.page(0, 2);
-    evaluate(store.as_ref(), &host, &trigger, true);
+    evaluate(&store, &host, &trigger, true);
     host.failed.store(true, Ordering::SeqCst);
     host.page(2, 2);
-    let exhausted = evaluate(store.as_ref(), &host, &trigger, true)
+    let exhausted = evaluate(&store, &host, &trigger, true)
         .state
         .unwrap()
         .active
@@ -812,7 +845,7 @@ fn replayed_waivers_and_exclusions_retire_with_a_later_accepted_batch() {
     assert_eq!(exhausted.state, BatchState::Exhausted);
     host.failed.store(false, Ordering::SeqCst);
     delivery::waive(
-        store.as_ref(),
+        &store,
         CONSUMER,
         &WaiveBatchRequest {
             batch_id: exhausted.batch.id.clone(),
@@ -830,9 +863,7 @@ fn replayed_waivers_and_exclusions_retire_with_a_later_accepted_batch() {
         .unwrap()
         .exclusions
         .insert(landing(3).key, certificate(3));
-    let before = evaluate(store.as_ref(), &host, &trigger, true)
-        .state
-        .unwrap();
+    let before = evaluate(&store, &host, &trigger, true).state.unwrap();
     assert_eq!(
         (
             before.waived.len(),
@@ -843,12 +874,16 @@ fn replayed_waivers_and_exclusions_retire_with_a_later_accepted_batch() {
     );
 
     replay(
-        store.as_ref(),
+        &store,
         &trigger,
         replay_input(&before, (1..=4).map(rebased_landing).collect(), &[]),
     )
     .expect("a proven replay applies");
-    let replayed = store.automation_state(CONSUMER).unwrap().unwrap();
+    let replayed = store
+        .read()
+        .and_then(|snapshot| snapshot.automation().state(CONSUMER))
+        .unwrap()
+        .unwrap();
     assert_eq!(
         replayed
             .waived
@@ -861,7 +896,11 @@ fn replayed_waivers_and_exclusions_retire_with_a_later_accepted_batch() {
     assert_eq!(replayed.excluded[0].delivery.commits, ["r3"]);
     assert_eq!(replayed.pending[0].commits, ["r4"]);
     assert_eq!(
-        store.automation_waivers(CONSUMER, 10).unwrap()[0].batch_id,
+        store
+            .read()
+            .and_then(|snapshot| snapshot.automation().waivers(CONSUMER, 10))
+            .unwrap()[0]
+            .batch_id,
         exhausted.batch.id,
         "the waiver record is untouched"
     );
@@ -878,7 +917,7 @@ fn replayed_waivers_and_exclusions_retire_with_a_later_accepted_batch() {
         exclusions: Default::default(),
         complete: true,
     };
-    let attempt = evaluate(store.as_ref(), &host, &trigger, true)
+    let attempt = evaluate(&store, &host, &trigger, true)
         .state
         .unwrap()
         .active
@@ -898,9 +937,7 @@ fn replayed_waivers_and_exclusions_retire_with_a_later_accepted_batch() {
         exclusions: Default::default(),
         complete: true,
     };
-    let state = evaluate(store.as_ref(), &host, &trigger, true)
-        .state
-        .unwrap();
+    let state = evaluate(&store, &host, &trigger, true).state.unwrap();
     assert_eq!(state.covered, rebased(5));
     assert!(state.pending_commits.is_empty());
     assert!(
@@ -911,7 +948,14 @@ fn replayed_waivers_and_exclusions_retire_with_a_later_accepted_batch() {
         state.excluded.is_empty(),
         "no stale exclusion survives the batch"
     );
-    assert_eq!(store.automation_receipts(CONSUMER, 10).unwrap().len(), 1);
+    assert_eq!(
+        store
+            .read()
+            .and_then(|snapshot| snapshot.automation().receipts(CONSUMER, 10))
+            .unwrap()
+            .len(),
+        1
+    );
 }
 
 #[test]
@@ -932,23 +976,23 @@ fn a_retained_exclusion_the_proof_cannot_restate_refuses_the_replay() {
         (vec![moved], refusal::HISTORY_CONTRACT_DRIFT),
         (vec![regrouped], refusal::PROVIDER_PROOF_UNAVAILABLE),
     ] {
-        let error = replay(
-            store.as_ref(),
-            &trigger,
-            replay_input(&before, deliveries, &[1]),
-        )
-        .expect_err("unproven membership is refused");
+        let error = replay(&store, &trigger, replay_input(&before, deliveries, &[1]))
+            .expect_err("unproven membership is refused");
         assert!(
             matches!(&error, AutomationError::Refused(reason) if reason == expected),
             "{error}"
         );
         assert_eq!(
-            store.automation_state(CONSUMER).unwrap(),
+            store
+                .read()
+                .and_then(|snapshot| snapshot.automation().state(CONSUMER))
+                .unwrap(),
             Some(before.clone())
         );
         assert!(
             store
-                .automation_recoveries(CONSUMER, 10)
+                .read()
+                .and_then(|snapshot| snapshot.automation().recoveries(CONSUMER, 10))
                 .unwrap()
                 .is_empty()
         );
@@ -992,14 +1036,16 @@ fn a_retained_exclusion_the_proof_cannot_restate_refuses_the_replay() {
     dropped.excluded.clear();
     for forged in [misplaced, recertified, orphaned, dropped] {
         assert!(
-            store.automation_recover(&before, &forged, &record).is_err(),
+            store
+                .write(|tx| orbit_automation::checkpoint::recover(tx, &before, &forged, &record))
+                .is_err(),
             "{:?}",
             forged.excluded
         );
     }
     assert!(
         store
-            .automation_recover(&before, &canonical, &record)
+            .write(|tx| orbit_automation::checkpoint::recover(tx, &before, &canonical, &record))
             .unwrap()
     );
 }

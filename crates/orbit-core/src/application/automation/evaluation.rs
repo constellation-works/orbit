@@ -100,7 +100,7 @@ fn evaluate(
     // consumer/baseline.
     request.enabled &= ownership.owned_here;
 
-    let store = runtime.automation_store()?;
+    let store = runtime.sqlite_store()?;
     let host = Host {
         runtime,
         action,
@@ -121,7 +121,7 @@ fn evaluate(
     };
 
     let mut diagnostic =
-        delivery::evaluate(store.as_ref(), &host, request).map_err(automation_error_to_orbit)?;
+        delivery::evaluate(&store, &host, request).map_err(automation_error_to_orbit)?;
 
     // An enabled definition this host cannot admit for reports why, so
     // `disabled` keeps meaning the operator disabled it. Preview reports the
@@ -242,8 +242,9 @@ impl DeliveryHost for Host<'_> {
     ) -> Result<delivery::recovery::HistoryReplayInput, AutomationError> {
         let receipts = self
             .runtime
-            .automation_store()?
-            .automation_receipt_count(&state.consumer)?;
+            .sqlite_store()?
+            .read()
+            .and_then(|snapshot| snapshot.automation().receipt_count(&state.consumer))?;
         let (mut page, record) = self.source.replay_history(branch, state, receipts)?;
         provider::attribute(self.runtime, &mut page.deliveries)?;
 
@@ -299,7 +300,7 @@ impl DeliveryHost for Host<'_> {
         let mut page = self.source.observe(branch, state)?;
         direct::observe(
             &self.source,
-            self.runtime.automation_store()?.as_ref(),
+            &self.runtime.sqlite_store()?,
             state,
             &mut page,
         )?;
@@ -319,8 +320,9 @@ impl DeliveryHost for Host<'_> {
         // The claim this host was handed must still be the one recorded.
         let state = self
             .runtime
-            .automation_store()?
-            .automation_state(&attempt.batch.consumer)?
+            .sqlite_store()?
+            .read()
+            .and_then(|snapshot| snapshot.automation().state(&attempt.batch.consumer))?
             .ok_or_else(|| AutomationError::Deferred(DeferredReason::ClaimMissing))?;
         if state.active.as_ref() != Some(attempt) {
             return Err(AutomationError::Deferred(DeferredReason::ClaimSuperseded));

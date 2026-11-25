@@ -298,8 +298,12 @@ fn auto_task_cli_recovery_and_reset_preview_preserve_then_audit_consumer_changes
     let mut trigger = serde_json::json!({"branch":"fixture-delivery","threshold":1,"max_wait_minutes":60,"coverage":"landed_code_review_v1","max_items":20,"retries":0});
     let (runtime, definition) = baselined_delivery_consumer(&fixture, &trigger);
     let consumer = consumer_key(&runtime, "auto-task", &definition.name).unwrap();
-    let store = runtime.automation_store().unwrap();
-    let original = store.automation_state(&consumer).unwrap().unwrap();
+    let store = runtime.sqlite_store().unwrap();
+    let original = store
+        .read()
+        .and_then(|snapshot| snapshot.automation().state(&consumer))
+        .unwrap()
+        .unwrap();
     assert_eq!(original.pending.len(), 0);
     assert!(original.active.is_none());
     trigger["max_wait_minutes"] = serde_json::json!(120);
@@ -320,7 +324,10 @@ fn auto_task_cli_recovery_and_reset_preview_preserve_then_audit_consumer_changes
     );
     assert!(preview["applied"].as_array().unwrap().is_empty());
     assert_eq!(
-        store.automation_state(&consumer).unwrap(),
+        store
+            .read()
+            .and_then(|snapshot| snapshot.automation().state(&consumer))
+            .unwrap(),
         Some(original.clone())
     );
     fixture
@@ -334,7 +341,10 @@ fn auto_task_cli_recovery_and_reset_preview_preserve_then_audit_consumer_changes
         .assert()
         .failure();
     assert_eq!(
-        store.automation_state(&consumer).unwrap(),
+        store
+            .read()
+            .and_then(|snapshot| snapshot.automation().state(&consumer))
+            .unwrap(),
         Some(original.clone())
     );
     let recovered = fixture.json(&[
@@ -350,7 +360,11 @@ fn auto_task_cli_recovery_and_reset_preview_preserve_then_audit_consumer_changes
         recovered["applied"],
         serde_json::json!(["adopted_settings"])
     );
-    let after = store.automation_state(&consumer).unwrap().unwrap();
+    let after = store
+        .read()
+        .and_then(|snapshot| snapshot.automation().state(&consumer))
+        .unwrap()
+        .unwrap();
     assert_ne!(after.epoch, original.epoch);
     assert_eq!(after.generation, original.generation + 1);
     assert_eq!(after.baseline, original.baseline);
@@ -361,7 +375,13 @@ fn auto_task_cli_recovery_and_reset_preview_preserve_then_audit_consumer_changes
     );
     assert_eq!(reset_preview["applied"], false);
     assert_eq!(reset_preview["generation"], after.generation);
-    assert_eq!(store.automation_state(&consumer).unwrap(), Some(after));
+    assert_eq!(
+        store
+            .read()
+            .and_then(|snapshot| snapshot.automation().state(&consumer))
+            .unwrap(),
+        Some(after)
+    );
     let reset = operator_json(
         &fixture,
         &[
@@ -374,8 +394,17 @@ fn auto_task_cli_recovery_and_reset_preview_preserve_then_audit_consumer_changes
         ],
     );
     assert_eq!(reset["applied"], true);
-    assert!(store.automation_state(&consumer).unwrap().is_none());
-    let records = store.automation_recoveries(&consumer, 10).unwrap();
+    assert!(
+        store
+            .read()
+            .and_then(|snapshot| snapshot.automation().state(&consumer))
+            .unwrap()
+            .is_none()
+    );
+    let records = store
+        .read()
+        .and_then(|snapshot| snapshot.automation().recoveries(&consumer, 10))
+        .unwrap();
     assert_eq!(records.len(), 2);
     assert!(
         records
@@ -406,7 +435,14 @@ fn auto_task_cli_recovery_and_reset_preview_preserve_then_audit_consumer_changes
     )
     .assert()
     .failure();
-    assert_eq!(store.automation_recoveries(&consumer, 10).unwrap().len(), 2);
+    assert_eq!(
+        store
+            .read()
+            .and_then(|snapshot| snapshot.automation().recoveries(&consumer, 10))
+            .unwrap()
+            .len(),
+        2
+    );
 }
 
 fn auto_task_cli_reset_and_forced_delete_work_when_origin_branch_is_missing() {
@@ -426,8 +462,12 @@ fn auto_task_cli_reset_and_forced_delete_work_when_origin_branch_is_missing() {
     let trigger = serde_json::json!({"branch":"fixture-delivery","threshold":1,"max_wait_minutes":60,"coverage":"landed_code_review_v1","max_items":20,"retries":0});
     let (runtime, definition) = baselined_delivery_consumer(&fixture, &trigger);
     let consumer = consumer_key(&runtime, "auto-task", &definition.name).unwrap();
-    let store = runtime.automation_store().unwrap();
-    let original = store.automation_state(&consumer).unwrap().unwrap();
+    let store = runtime.sqlite_store().unwrap();
+    let original = store
+        .read()
+        .and_then(|snapshot| snapshot.automation().state(&consumer))
+        .unwrap()
+        .unwrap();
 
     // The local branch remains available, but origin no longer serves it.
     move_origin_head_off_branch(&fixture);
@@ -445,7 +485,13 @@ fn auto_task_cli_reset_and_forced_delete_work_when_origin_branch_is_missing() {
         &["auto-task", "reset", &definition.name, "--json"],
     );
     assert_eq!(preview["applied"], false);
-    assert_eq!(store.automation_state(&consumer).unwrap(), Some(original));
+    assert_eq!(
+        store
+            .read()
+            .and_then(|snapshot| snapshot.automation().state(&consumer))
+            .unwrap(),
+        Some(original)
+    );
 
     let reset = operator_json(
         &fixture,
@@ -459,10 +505,17 @@ fn auto_task_cli_reset_and_forced_delete_work_when_origin_branch_is_missing() {
         ],
     );
     assert_eq!(reset["applied"], true);
-    assert!(store.automation_state(&consumer).unwrap().is_none());
     assert!(
         store
-            .automation_recoveries(&consumer, 10)
+            .read()
+            .and_then(|snapshot| snapshot.automation().state(&consumer))
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        store
+            .read()
+            .and_then(|snapshot| snapshot.automation().recoveries(&consumer, 10))
             .unwrap()
             .iter()
             .any(|record| record.reason == "Reset after origin branch deletion")
@@ -490,10 +543,17 @@ fn auto_task_cli_reset_and_forced_delete_work_when_origin_branch_is_missing() {
         ],
     );
     assert_eq!(removed["consumer"]["reset"], true);
-    assert!(store.automation_state(&consumer).unwrap().is_none());
     assert!(
         store
-            .automation_recoveries(&consumer, 10)
+            .read()
+            .and_then(|snapshot| snapshot.automation().state(&consumer))
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        store
+            .read()
+            .and_then(|snapshot| snapshot.automation().recoveries(&consumer, 10))
             .unwrap()
             .iter()
             .any(|record| record.reason == "Delete after origin branch deletion")
@@ -515,8 +575,14 @@ fn auto_task_cli_delete_failing_after_consumer_reset_keeps_definition_and_cursor
     let (runtime, definition) = baselined_delivery_consumer(&fixture, &trigger);
     let name = definition.name.as_str();
     let consumer = consumer_key(&runtime, "auto-task", name).unwrap();
-    let store = runtime.automation_store().unwrap();
-    assert!(store.automation_state(&consumer).unwrap().is_some());
+    let store = runtime.sqlite_store().unwrap();
+    assert!(
+        store
+            .read()
+            .and_then(|snapshot| snapshot.automation().state(&consumer))
+            .unwrap()
+            .is_some()
+    );
 
     // A pin whose ref lock is held cannot be deleted, so teardown fails after
     // the consumer reset has already applied.
@@ -574,7 +640,11 @@ fn auto_task_cli_delete_failing_after_consumer_reset_keeps_definition_and_cursor
     .assert()
     .failure();
     assert!(
-        store.automation_state(&consumer).unwrap().is_none(),
+        store
+            .read()
+            .and_then(|snapshot| snapshot.automation().state(&consumer))
+            .unwrap()
+            .is_none(),
         "the failure must come after teardown applied the consumer reset"
     );
     assert_eq!(
@@ -626,7 +696,7 @@ fn auto_task_waive_batch_reports_an_unregistered_required_tool_as_a_warning() {
     let (runtime, definition) = baselined_delivery_consumer(&fixture, &trigger);
     let name = definition.name.as_str();
     let consumer = consumer_key(&runtime, "auto-task", name).unwrap();
-    let store = runtime.automation_store().unwrap();
+    let store = runtime.sqlite_store().unwrap();
 
     // Name a tool the registry does not hold. The definition write is refused
     // by the edit path, so the file is changed directly, as an operator would
@@ -643,7 +713,11 @@ fn auto_task_waive_batch_reports_an_unregistered_required_tool_as_a_warning() {
     // real batch needs observed commits, so the consumer row is written
     // directly, as the tick fixtures do.
     let fail_active_batch = |batch_id: &str| {
-        let mut state = store.automation_state(&consumer).unwrap().unwrap();
+        let mut state = store
+            .read()
+            .and_then(|snapshot| snapshot.automation().state(&consumer))
+            .unwrap()
+            .unwrap();
         state.active = Some(BatchAttempt {
             batch: CoverageBatch {
                 schema_version: 1,
@@ -696,7 +770,10 @@ fn auto_task_waive_batch_reports_an_unregistered_required_tool_as_a_warning() {
                 .is_some_and(|text| text.contains(UNREGISTERED))),
             "{warnings:?}"
         );
-        let waivers = store.automation_waivers(&consumer, 100).unwrap();
+        let waivers = store
+            .read()
+            .and_then(|snapshot| snapshot.automation().waivers(&consumer, 100))
+            .unwrap();
         assert!(
             waivers.iter().any(|waiver| waiver.batch_id == batch_id),
             "the waiver is recorded even though the command reports a warning"
@@ -994,8 +1071,12 @@ fn doctor_scans_all_consumer_pages_and_warns_on_a_later_read_failure() {
     let trigger = serde_json::json!({"branch":"fixture-delivery","threshold":1,"max_wait_minutes":60,"coverage":"landed_code_review_v1","max_items":20,"retries":0});
     let (runtime, definition) = baselined_delivery_consumer(&fixture, &trigger);
     let consumer = consumer_key(&runtime, "auto-task", &definition.name).unwrap();
-    let store = runtime.automation_store().unwrap();
-    let baseline = store.automation_state(&consumer).unwrap().unwrap();
+    let store = runtime.sqlite_store().unwrap();
+    let baseline = store
+        .read()
+        .and_then(|snapshot| snapshot.automation().state(&consumer))
+        .unwrap()
+        .unwrap();
     let doctor_row = || {
         let output = fixture.command(&["doctor", "--json"]).output().unwrap();
         let rows: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
@@ -1011,7 +1092,13 @@ fn doctor_scans_all_consumer_pages_and_warns_on_a_later_read_failure() {
     for index in 0..200 {
         let mut healthy = baseline.clone();
         healthy.consumer = consumer_key(&runtime, "auto-task", &format!("aaa-{index:03}")).unwrap();
-        assert!(store.automation_initialize(&healthy).unwrap());
+        assert!(
+            store
+                .write(
+                    |tx| orbit_core::test_support::automation_checkpoint::initialize(tx, &healthy)
+                )
+                .unwrap()
+        );
     }
     assert!(stalled_consumers(&runtime).unwrap().is_empty());
     assert_eq!(doctor_row()["status"], "ok");
@@ -1026,7 +1113,13 @@ fn doctor_scans_all_consumer_pages_and_warns_on_a_later_read_failure() {
         divergence: None,
         crew_hold: None,
     });
-    assert!(store.automation_stall(&baseline, &stalled).unwrap());
+    assert!(
+        store
+            .write(|tx| orbit_core::test_support::automation_checkpoint::stall(
+                tx, &baseline, &stalled
+            ))
+            .unwrap()
+    );
     let listed = stalled_consumers(&runtime).unwrap();
     assert_eq!(
         listed.len(),
@@ -1069,8 +1162,12 @@ fn auto_task_cli_reset_recover_and_doctor_treat_a_closed_action_as_settled() {
     let trigger = serde_json::json!({"branch":"fixture-delivery","threshold":1,"max_wait_minutes":60,"coverage":"landed_code_review_v1","max_items":20,"retries":1});
     let (runtime, definition) = baselined_delivery_consumer(&fixture, &trigger);
     let consumer = consumer_key(&runtime, "auto-task", &definition.name).unwrap();
-    let store = runtime.automation_store().unwrap();
-    let baselined = store.automation_state(&consumer).unwrap().unwrap();
+    let store = runtime.sqlite_store().unwrap();
+    let baselined = store
+        .read()
+        .and_then(|snapshot| snapshot.automation().state(&consumer))
+        .unwrap()
+        .unwrap();
 
     // One landed commit, frozen into a batch and admitted to a review task.
     fs::write(fixture.repo.join("fixture.txt"), "landed\n").unwrap();
@@ -1126,7 +1223,11 @@ fn auto_task_cli_reset_recover_and_doctor_treat_a_closed_action_as_settled() {
     });
     assert!(
         store
-            .automation_commit(&baselined, &admitted, None)
+            .write(
+                |tx| orbit_core::test_support::automation_checkpoint::commit_state(
+                    tx, &baselined, &admitted, None
+                )
+            )
             .unwrap()
     );
 
@@ -1191,15 +1292,29 @@ fn auto_task_cli_reset_recover_and_doctor_treat_a_closed_action_as_settled() {
         ],
     );
     assert_eq!(reset["applied"], true);
-    assert!(store.automation_state(&consumer).unwrap().is_none());
+    assert!(
+        store
+            .read()
+            .and_then(|snapshot| snapshot.automation().state(&consumer))
+            .unwrap()
+            .is_none()
+    );
 
     // Recreate the closed action's checkpoint, then deterministically admit a
     // live replacement after Core's liveness probe and before reset applies.
     // This exercises the public runtime boundary including real retained refs.
-    assert!(store.automation_initialize(&baselined).unwrap());
     assert!(
         store
-            .automation_commit(&baselined, &admitted, None)
+            .write(|tx| orbit_core::test_support::automation_checkpoint::initialize(tx, &baselined))
+            .unwrap()
+    );
+    assert!(
+        store
+            .write(
+                |tx| orbit_core::test_support::automation_checkpoint::commit_state(
+                    tx, &baselined, &admitted, None
+                )
+            )
             .unwrap()
     );
     let live = fixture.json(&[
@@ -1225,7 +1340,10 @@ fn auto_task_cli_reset_recover_and_doctor_treat_a_closed_action_as_settled() {
     );
     git(&fixture, &["update-ref", &pin, "HEAD"]);
     let pinned = git(&fixture, &["rev-parse", &pin]);
-    let history = store.automation_recoveries(&consumer, 10).unwrap();
+    let history = store
+        .read()
+        .and_then(|snapshot| snapshot.automation().recoveries(&consumer, 10))
+        .unwrap();
     let request = orbit_types::workflow::automation::recovery::ResetRequest {
         reason: "discard the closed review's debt".into(),
         force: false,
@@ -1235,7 +1353,17 @@ fn auto_task_cli_reset_recover_and_doctor_treat_a_closed_action_as_settled() {
             let store = store.clone();
             let previous = admitted.clone();
             let next = replacement.clone();
-            move || assert!(store.automation_commit(&previous, &next, None).unwrap())
+            move || {
+                assert!(
+                    store
+                        .write(
+                            |tx| orbit_core::test_support::automation_checkpoint::commit_state(
+                                tx, &previous, &next, None
+                            )
+                        )
+                        .unwrap()
+                )
+            }
         },
         || {
             orbit_core::application::automation::reset_auto_task(
@@ -1252,10 +1380,19 @@ fn auto_task_cli_reset_recover_and_doctor_treat_a_closed_action_as_settled() {
         "{error}"
     );
     assert_eq!(
-        store.automation_state(&consumer).unwrap(),
+        store
+            .read()
+            .and_then(|snapshot| snapshot.automation().state(&consumer))
+            .unwrap(),
         Some(replacement)
     );
-    assert_eq!(store.automation_recoveries(&consumer, 10).unwrap(), history);
+    assert_eq!(
+        store
+            .read()
+            .and_then(|snapshot| snapshot.automation().recoveries(&consumer, 10))
+            .unwrap(),
+        history
+    );
     assert_eq!(git(&fixture, &["rev-parse", &pin]), pinned);
 
     let preview = operator_json(
@@ -1281,9 +1418,19 @@ fn auto_task_cli_reset_recover_and_doctor_treat_a_closed_action_as_settled() {
         ],
     );
     assert_eq!(forced["applied"], true);
-    assert!(store.automation_state(&consumer).unwrap().is_none());
+    assert!(
+        store
+            .read()
+            .and_then(|snapshot| snapshot.automation().state(&consumer))
+            .unwrap()
+            .is_none()
+    );
     assert_eq!(
-        store.automation_recoveries(&consumer, 10).unwrap().len(),
+        store
+            .read()
+            .and_then(|snapshot| snapshot.automation().recoveries(&consumer, 10))
+            .unwrap()
+            .len(),
         history.len() + 1
     );
     assert!(git(&fixture, &["for-each-ref", "--format=%(refname)", &pin]).is_empty());

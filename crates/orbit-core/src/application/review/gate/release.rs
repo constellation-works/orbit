@@ -27,9 +27,14 @@ pub(crate) fn release_review_attempt(
     runtime: &OrbitRuntime,
     request: &ReviewReleaseRequest,
 ) -> Result<(), OrbitError> {
-    let store = runtime.review_store()?;
+    let store = runtime.sqlite_store()?;
     let workspace_id = runtime.workspace_id()?;
-    let Some(ledger) = store.review_ledger(&workspace_id, &request.lineage_key)? else {
+    let Some(ledger) = store.read().and_then(|snapshot| {
+        snapshot
+            .review()
+            .ledger(&workspace_id, &request.lineage_key)
+    })?
+    else {
         return Ok(());
     };
     let Some(attempt) = ledger
@@ -56,9 +61,16 @@ impl OrbitRuntime {
         run_id: &str,
         finished_at: DateTime<Utc>,
     ) {
-        let released = self.review_store().and_then(|store| {
+        let released = self.sqlite_store().and_then(|store| {
             let workspace_id = self.workspace_id()?;
-            store.review_release_run(&workspace_id, run_id, finished_at)
+            store.write(|tx| {
+                crate::application::review::ledger::release_run(
+                    tx,
+                    &workspace_id,
+                    run_id,
+                    finished_at,
+                )
+            })
         });
         match released {
             Ok(ledgers) => {
@@ -85,8 +97,11 @@ pub(super) fn release_abandoned(
     lineage_key: &str,
     admitting_run_id: &str,
 ) -> Result<(), OrbitError> {
-    let store = runtime.review_store()?;
-    let Some(ledger) = store.review_ledger(workspace_id, lineage_key)? else {
+    let store = runtime.sqlite_store()?;
+    let Some(ledger) = store
+        .read()
+        .and_then(|snapshot| snapshot.review().ledger(workspace_id, lineage_key))?
+    else {
         return Ok(());
     };
     let Some(attempt) = ledger.attempts.iter().find(|attempt| {
@@ -115,16 +130,19 @@ pub(crate) fn record_reviewer_invocation(
     request: &ReviewerInvocationRequest,
 ) -> Result<Option<u64>, OrbitError> {
     let now = Utc::now();
-    let ledger = runtime.review_store()?.review_record_invocation(
-        &runtime.workspace_id()?,
-        &ReviewInvocationRecord {
-            lineage_key: &request.lineage_key,
-            attempt_id: &request.attempt_id,
-            run_id: &request.run_id,
-            event: request.event,
-            now,
-        },
-    )?;
+    let ledger = runtime.sqlite_store()?.write(|tx| {
+        crate::application::review::ledger::record_invocation(
+            tx,
+            &runtime.workspace_id()?,
+            &ReviewInvocationRecord {
+                lineage_key: &request.lineage_key,
+                attempt_id: &request.attempt_id,
+                run_id: &request.run_id,
+                event: request.event,
+                now,
+            },
+        )
+    })?;
     if !matches!(request.event, ReviewerInvocationEvent::Started) {
         return Ok(None);
     }
@@ -145,15 +163,18 @@ fn release(
     bound: DateTime<Utc>,
     now: DateTime<Utc>,
 ) -> Result<(), OrbitError> {
-    let released = runtime.review_store()?.review_release(
-        workspace_id,
-        &ReviewRelease {
-            lineage_key: &ledger.lineage_key,
-            attempt_id: &attempt.attempt_id,
-            bound,
-            now,
-        },
-    )?;
+    let released = runtime.sqlite_store()?.write(|tx| {
+        crate::application::review::ledger::release(
+            tx,
+            workspace_id,
+            &ReviewRelease {
+                lineage_key: &ledger.lineage_key,
+                attempt_id: &attempt.attempt_id,
+                bound,
+                now,
+            },
+        )
+    })?;
     audit_release(runtime, &attempt.run_id, &released, now);
     Ok(())
 }

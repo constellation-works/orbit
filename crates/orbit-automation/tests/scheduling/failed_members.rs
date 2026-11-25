@@ -111,7 +111,7 @@ fn source() -> SourceRevision {
     }
 }
 
-fn failing_tick(store: &dyn AutomationStoreBackend, host: &FailingHost, minute: i64) -> String {
+fn failing_tick(store: &Store, host: &FailingHost, minute: i64) -> String {
     evaluate(
         store,
         host,
@@ -146,7 +146,7 @@ fn consumer_keeps_admitting_after_a_thousand_distinct_failed_members() {
     {
         return;
     }
-    let store = compose::automation_store(Store::open_in_memory().unwrap()).unwrap();
+    let store = Store::open_in_memory().unwrap();
     let host = FailingHost::default();
     let mut failed_keys = BTreeSet::new();
 
@@ -161,7 +161,7 @@ fn consumer_keeps_admitting_after_a_thousand_distinct_failed_members() {
             .map(|task| format!("w{wave:03}-{task:02}"))
             .collect();
         assert_eq!(
-            failing_tick(store.as_ref(), &host, i64::try_from(wave).unwrap()),
+            failing_tick(&store, &host, i64::try_from(wave).unwrap()),
             "fired",
             "wave {wave}: new members are still admitted after {} distinct failures",
             failed_keys.len()
@@ -173,13 +173,11 @@ fn consumer_keeps_admitting_after_a_thousand_distinct_failed_members() {
     // recorded, and none refires at the fingerprint it failed at.
     let minute = i64::try_from(WAVES).unwrap();
     for minute in [minute, minute + 10] {
-        assert_eq!(
-            failing_tick(store.as_ref(), &host, minute),
-            "needs_attention"
-        );
+        assert_eq!(failing_tick(&store, &host, minute), "needs_attention");
     }
     let members = store
-        .automation_state(CONSUMER)
+        .read()
+        .and_then(|snapshot| snapshot.automation().state(CONSUMER))
         .unwrap()
         .unwrap()
         .members
@@ -202,8 +200,12 @@ fn consumer_keeps_admitting_after_a_thousand_distinct_failed_members() {
     );
 }
 
-fn state(store: &dyn AutomationStoreBackend) -> AutomationState {
-    store.automation_state(CONSUMER).unwrap().unwrap()
+fn state(store: &Store) -> AutomationState {
+    store
+        .read()
+        .and_then(|snapshot| snapshot.automation().state(CONSUMER))
+        .unwrap()
+        .unwrap()
 }
 
 /// The wave of `WAVE` members, all observed at one fingerprint.
@@ -225,26 +227,30 @@ fn each_failed_member_keeps_its_own_record_and_forged_retirement_is_refused() {
     // A wholly failed attempt clears without a receipt; a partly applied one
     // certifies its applied members in a receipt and retires the rest.
     for applied in [0, 2] {
-        let store = compose::automation_store(Store::open_in_memory().unwrap()).unwrap();
+        let store = Store::open_in_memory().unwrap();
         let host = FailingHost::default();
         let keys = wave(&host);
         *host.applied.borrow_mut() = keys.iter().take(applied).cloned().collect();
         let (certified, failing) = keys.split_at(applied);
 
-        assert_eq!(failing_tick(store.as_ref(), &host, 0), "fired");
-        let previous = state(store.as_ref());
+        assert_eq!(failing_tick(&store, &host, 0), "fired");
+        let previous = state(&store);
         let active = previous
             .members
             .as_ref()
             .and_then(|members| members.active.clone())
             .unwrap();
         assert_eq!(
-            failing_tick(store.as_ref(), &host, 1),
+            failing_tick(&store, &host, 1),
             "needs_attention",
             "no failed member refires at the fingerprint it failed at"
         );
-        let settled = state(store.as_ref());
-        let receipt = store.automation_receipts(CONSUMER, 1).unwrap().pop();
+        let settled = state(&store);
+        let receipt = store
+            .read()
+            .and_then(|snapshot| snapshot.automation().receipts(CONSUMER, 1))
+            .unwrap()
+            .pop();
         assert_eq!(receipt.is_some(), applied > 0);
 
         let members = settled.members.as_ref().unwrap();
@@ -271,7 +277,12 @@ fn each_failed_member_keeps_its_own_record_and_forged_retirement_is_refused() {
         genuine.generation = previous.generation + 1;
         assert!(
             !store
-                .automation_commit(&previous, &genuine, receipt.as_ref())
+                .write(|tx| orbit_automation::checkpoint::commit_state(
+                    tx,
+                    &previous,
+                    &genuine,
+                    receipt.as_ref()
+                ))
                 .unwrap()
         );
 
@@ -281,7 +292,12 @@ fn each_failed_member_keeps_its_own_record_and_forged_retirement_is_refused() {
             forge(&mut forged.members.as_mut().unwrap().failed);
             assert!(
                 store
-                    .automation_commit(&previous, &forged, receipt.as_ref())
+                    .write(|tx| orbit_automation::checkpoint::commit_state(
+                        tx,
+                        &previous,
+                        &forged,
+                        receipt.as_ref()
+                    ))
                     .is_err(),
                 "applied={applied}: store accepted {name}"
             );
@@ -329,16 +345,16 @@ fn checkpoint_with_whole_batch_failed_records_resumes_and_compacts() {
         return;
     }
     let base = Store::open_in_memory().unwrap();
-    let store = compose::automation_store(base.clone()).unwrap();
+    let store = base.clone();
     let host = FailingHost::default();
     let keys = wave(&host);
-    assert_eq!(failing_tick(store.as_ref(), &host, 0), "fired");
-    let active = state(store.as_ref())
+    assert_eq!(failing_tick(&store, &host, 0), "fired");
+    let active = state(&store)
         .members
         .and_then(|members| members.active)
         .unwrap();
-    assert_eq!(failing_tick(store.as_ref(), &host, 1), "needs_attention");
-    let compact = state(store.as_ref());
+    assert_eq!(failing_tick(&store, &host, 1), "needs_attention");
+    let compact = state(&store);
 
     // Persist the checkpoint a release before compact records wrote: every
     // failed member holding a copy of its whole exhausted batch, without the
@@ -362,7 +378,7 @@ fn checkpoint_with_whole_batch_failed_records_resumes_and_compacts() {
             ],
         )
         .unwrap();
-    assert_eq!(state(store.as_ref()), legacy);
+    assert_eq!(state(&store), legacy);
 
     // Compaction may keep only the record's own member.
     let mut misattributed = legacy.clone();
@@ -372,14 +388,19 @@ fn checkpoint_with_whole_batch_failed_records_resumes_and_compacts() {
     failed.insert(keys[0].clone(), other);
     assert!(
         store
-            .automation_commit(&legacy, &misattributed, None)
+            .write(|tx| orbit_automation::checkpoint::commit_state(
+                tx,
+                &legacy,
+                &misattributed,
+                None
+            ))
             .is_err()
     );
 
     // The next pass reads it, still withholds every failed member and
     // commits each record compacted to its own member.
-    assert_eq!(failing_tick(store.as_ref(), &host, 2), "needs_attention");
-    let resumed = state(store.as_ref());
+    assert_eq!(failing_tick(&store, &host, 2), "needs_attention");
+    let resumed = state(&store);
     assert_eq!(
         resumed.members.as_ref().unwrap().failed,
         compact.members.unwrap().failed

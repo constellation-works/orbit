@@ -41,8 +41,10 @@ pub(crate) fn recover_auto_task(
 
     let consumer = super::consumer_key(runtime, "auto-task", &definition.name)?;
     let by = runtime.actor().resolve_write_label(None, None)?;
-    let store = runtime.automation_store()?;
-    let state = store.automation_state(&consumer)?;
+    let store = runtime.sqlite_store()?;
+    let state = store
+        .read()
+        .and_then(|snapshot| snapshot.automation().state(&consumer))?;
     let action_liveness =
         super::auto_task_action_liveness(runtime, definition, state.as_ref(), now);
     let resolved_action_id = state
@@ -76,9 +78,12 @@ pub(crate) fn recover_auto_task(
 
     let replay = if request.replay_history {
         let state = store
-            .automation_state(&consumer)?
+            .read()
+            .and_then(|snapshot| snapshot.automation().state(&consumer))?
             .ok_or_else(|| OrbitError::InvalidInput("unknown delivery consumer".into()))?;
-        let receipts = store.automation_receipt_count(&consumer)?;
+        let receipts = store
+            .read()
+            .and_then(|snapshot| snapshot.automation().receipt_count(&consumer))?;
         let (mut page, record) = source
             .replay_history(&trigger.branch, &state, receipts)
             .map_err(automation_error_to_orbit)?;
@@ -95,7 +100,7 @@ pub(crate) fn recover_auto_task(
     };
 
     if !request.mutates() {
-        return recovery::preview(store.as_ref(), &operation).map_err(automation_error_to_orbit);
+        return recovery::preview(&store, &operation).map_err(automation_error_to_orbit);
     }
 
     runtime.ensure_coordination_task_write_permitted()?;
@@ -104,7 +109,7 @@ pub(crate) fn recover_auto_task(
         ensure_replay_head(&source, &trigger.branch, &replay.record.captured_head)?;
     }
 
-    recovery::apply(store.as_ref(), &operation).map_err(automation_error_to_orbit)
+    recovery::apply(&store, &operation).map_err(automation_error_to_orbit)
 }
 
 pub(super) fn ensure_replay_head(

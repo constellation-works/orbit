@@ -32,12 +32,16 @@ pub(crate) fn expiring_frozen_batch_tasks(
     let prefix = format!("{machine}/{}/", runtime.workspace_id()?);
     let horizon = now + Duration::hours(FROZEN_BATCH_EXPIRY_WINDOW_HOURS);
 
-    let store = runtime.automation_store()?;
+    let store = runtime.sqlite_store()?;
     let mut expiring = BTreeMap::new();
     let _: ControlFlow<std::convert::Infallible> =
         consumer_states::for_each_workspace_consumer_state(
             &prefix,
-            |after, limit| store.automation_states_page(&prefix, after, limit),
+            |after, limit| {
+                store
+                    .read()
+                    .and_then(|snapshot| snapshot.automation().states_page(&prefix, after, limit))
+            },
             |state| &state.consumer,
             |state| {
                 if let Some(attempt) = state.active

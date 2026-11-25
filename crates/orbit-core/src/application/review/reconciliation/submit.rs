@@ -159,7 +159,7 @@ fn submit(
     }
     let observation = observe(runtime, task_id)?;
     let workspace_id = runtime.workspace_id()?;
-    let store = runtime.review_store()?;
+    let store = runtime.sqlite_store()?;
     let now = Utc::now();
     let reconciliation_id = format!(
         "rrc-{}",
@@ -167,32 +167,39 @@ fn submit(
     );
     // A resubmitted key keeps the contract it was first submitted under; only
     // a new key freezes the owner's current one.
-    let contract = match store.review_reconciliation(&workspace_id, &reconciliation_id)? {
+    let contract = match store.read().and_then(|snapshot| {
+        snapshot
+            .review()
+            .reconciliation(&workspace_id, &reconciliation_id)
+    })? {
         Some(existing) => existing.contract,
         None => contract(runtime, &observation.accepted).map_err(OrbitError::InvalidInput)?,
     };
-    let mut record = store.review_reconciliation_open(
-        &workspace_id,
-        &ReviewReconciliation {
-            schema_version: REVIEW_RECONCILIATION_SCHEMA_VERSION,
-            reconciliation_id: reconciliation_id.clone(),
-            request_key: request_key.to_string(),
-            binding: observation.binding,
-            binding_digest: observation.binding_digest,
-            contract,
-            requested_by: operator.actor.clone(),
-            requested_at: now,
-            attempts: Vec::new(),
-            validation: None,
-            review: None,
-            follow_up_task_id: None,
-            outcome: None,
-            dispositions: Vec::new(),
-            remediation_checks: Vec::new(),
-            revision: 0,
-            updated_at: now,
-        },
-    )?;
+    let mut record = store.write(|tx| {
+        crate::application::review::ledger::open_reconciliation(
+            tx,
+            &workspace_id,
+            &ReviewReconciliation {
+                schema_version: REVIEW_RECONCILIATION_SCHEMA_VERSION,
+                reconciliation_id: reconciliation_id.clone(),
+                request_key: request_key.to_string(),
+                binding: observation.binding,
+                binding_digest: observation.binding_digest,
+                contract,
+                requested_by: operator.actor.clone(),
+                requested_at: now,
+                attempts: Vec::new(),
+                validation: None,
+                review: None,
+                follow_up_task_id: None,
+                outcome: None,
+                dispositions: Vec::new(),
+                remediation_checks: Vec::new(),
+                revision: 0,
+                updated_at: now,
+            },
+        )
+    })?;
     if record.runs_settled() || live_run(runtime, &record)?.is_some() {
         audit(runtime, operator, &record, "replayed", None)?;
         return view(runtime, task_id, &record, true);
@@ -220,7 +227,9 @@ fn submit(
             admitted_by: operator.actor.clone(),
             admitted_at: now,
         });
-        store.review_reconciliation_update(&workspace_id, &record)?;
+        store.write(|tx| {
+            crate::application::review::ledger::update_reconciliation(tx, &workspace_id, &record)
+        })?;
     }
     let admission = ReconciliationAdmission {
         reconciliation_id: reconciliation_id.clone(),
@@ -264,11 +273,16 @@ pub(super) fn bind_attempt_run(
     run_id: &str,
 ) -> Result<ReviewReconciliation, OrbitError> {
     let workspace_id = runtime.workspace_id()?;
-    let store = runtime.review_store()?;
+    let store = runtime.sqlite_store()?;
     let mut last_error = None;
     for _ in 0..5 {
         let mut record = store
-            .review_reconciliation(&workspace_id, reconciliation_id)?
+            .read()
+            .and_then(|snapshot| {
+                snapshot
+                    .review()
+                    .reconciliation(&workspace_id, reconciliation_id)
+            })?
             .ok_or_else(|| {
                 OrbitError::InvalidInput(format!("reconciliation {reconciliation_id} not found"))
             })?;
@@ -289,7 +303,9 @@ pub(super) fn bind_attempt_run(
             }
             None => current.run_id = Some(run_id.to_string()),
         }
-        match store.review_reconciliation_update(&workspace_id, &record) {
+        match store.write(|tx| {
+            crate::application::review::ledger::update_reconciliation(tx, &workspace_id, &record)
+        }) {
             Ok(updated) => return Ok(updated),
             Err(error) => last_error = Some(error),
         }
@@ -327,9 +343,14 @@ fn accept_baseline(
     let reason = super::safe_reconciliation_text(&required_string(input, &["reason"], "reason")?);
     let refused = |message: String| OrbitError::InvalidInput(message);
     let workspace_id = runtime.workspace_id()?;
-    let store = runtime.review_store()?;
+    let store = runtime.sqlite_store()?;
     let mut record = store
-        .review_reconciliation(&workspace_id, &reconciliation_id)?
+        .read()
+        .and_then(|snapshot| {
+            snapshot
+                .review()
+                .reconciliation(&workspace_id, &reconciliation_id)
+        })?
         .filter(|record| record.binding.task_id == task_id)
         .ok_or_else(|| {
             refused(format!(
@@ -504,7 +525,9 @@ fn accept_baseline(
     if disposed {
         record.outcome = Some(ReconciliationOutcome::AcceptedWithDisposition);
     }
-    let record = store.review_reconciliation_update(&workspace_id, &record)?;
+    let record = store.write(|tx| {
+        crate::application::review::ledger::update_reconciliation(tx, &workspace_id, &record)
+    })?;
     runtime.update_task_as_system(
         task_id,
         TaskUpdateParams {
@@ -696,11 +719,16 @@ fn record_remediation_check(
     check: &BaselineRemediationCheck,
 ) -> Result<ReviewReconciliation, OrbitError> {
     let workspace_id = runtime.workspace_id()?;
-    let store = runtime.review_store()?;
+    let store = runtime.sqlite_store()?;
     let mut last_error = None;
     for _ in 0..5 {
         let mut current = store
-            .review_reconciliation(&workspace_id, &record.reconciliation_id)?
+            .read()
+            .and_then(|snapshot| {
+                snapshot
+                    .review()
+                    .reconciliation(&workspace_id, &record.reconciliation_id)
+            })?
             .ok_or_else(|| {
                 OrbitError::InvalidInput(format!(
                     "review reconciliation '{}' does not exist",
@@ -716,7 +744,9 @@ fn record_remediation_check(
             return Ok(current);
         }
         current.remediation_checks.push(check.clone());
-        match store.review_reconciliation_update(&workspace_id, &current) {
+        match store.write(|tx| {
+            crate::application::review::ledger::update_reconciliation(tx, &workspace_id, &current)
+        }) {
             Ok(updated) => return Ok(updated),
             Err(error) => last_error = Some(error),
         }
@@ -726,9 +756,11 @@ fn record_remediation_check(
 
 fn records(runtime: &OrbitRuntime, task_id: &str) -> Result<Vec<ReviewReconciliation>, OrbitError> {
     runtime.get_task(task_id)?;
-    runtime
-        .review_store()?
-        .review_reconciliations_for_task(&runtime.workspace_id()?, task_id)
+    runtime.sqlite_store()?.read().and_then(|snapshot| {
+        snapshot
+            .review()
+            .reconciliations_for_task(&runtime.workspace_id()?, task_id)
+    })
 }
 
 fn summaries(

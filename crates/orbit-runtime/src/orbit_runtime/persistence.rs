@@ -116,19 +116,6 @@ impl RuntimeKernel {
         }
     }
 
-    pub fn automation_store(
-        &self,
-    ) -> Result<Arc<dyn orbit_store::contracts::AutomationStoreBackend>, OrbitError> {
-        Ok(Arc::clone(&self.stored().stores().host.automation))
-    }
-
-    /// Before-PR review ledgers, certificates, and landings [ORB-11333].
-    pub fn review_store(
-        &self,
-    ) -> Result<Arc<dyn orbit_store::contracts::ReviewStoreBackend>, OrbitError> {
-        Ok(Arc::clone(&self.stored().stores().host.review))
-    }
-
     pub fn sqlite_store(&self) -> Result<Store, OrbitError> {
         Ok(self.stored().stores().host.sqlite.clone())
     }

@@ -41,7 +41,7 @@ The domain modules are `desktop`, `identity`, `plugin`, `policy`, `record`, `res
 - `record`: Durable record contracts (`OrbitEvent`, `Audit`, friction, notice, evolution, and crew discovery); imports `identity`, `telemetry`, and `workflow` within `orbit-types` only (I/O-free).
 - `resource`: Generic resource envelope, header, and executor/policy resource contracts; imports `policy`, `task`, `timestamp`, and `workflow` within `orbit-types` only (I/O-free).
 - `task`: Task model, lifecycle status, plan, decision, artifact, readiness, and regression contracts; imports `identity` and `workflow` within `orbit-types` only (I/O-free).
-- `telemetry`: Audit event, actor attribution, invocation trace, pricing, and provider-limit telemetry contracts; imports `identity`, `plugin`, `record`, and `tool` within `orbit-types` only (I/O-free).
+- `telemetry`: Audit event, actor attribution, invocation trace, pricing, provider limit, and incident contracts and grouping; imports `identity`, `plugin`, `record`, `tool`, and `workflow` within `orbit-types` only (I/O-free).
 - `timestamp`: UTC timestamp contracts for persisted records using the legacy date format; imports no sibling modules (I/O-free).
 - `tool`: Tool schema, family, invocation, MCP toolset/rules, and application-consent contracts; imports `identity` and `task` within `orbit-types` only (I/O-free).
 - `workflow`: Activity-job, automation, auto-task, routine, experiment, and delivery workflow contracts; imports sibling `orbit-types` modules only (I/O-free).

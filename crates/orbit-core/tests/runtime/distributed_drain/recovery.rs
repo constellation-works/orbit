@@ -744,9 +744,15 @@ fn an_exhausted_claimed_review_requeues_onto_a_new_claim() {
     );
     ledger.consumed_seconds = 1_800;
     pair.follower
-        .review_store()
+        .sqlite_store()
         .unwrap()
-        .review_import_claimed_ledger(&follower_workspace, &ledger)
+        .write(|tx| {
+            orbit_core::test_support::review_ledger::import_claimed_ledger(
+                tx,
+                &follower_workspace,
+                &ledger,
+            )
+        })
         .unwrap();
     let branch = format!("orbit/{task}-kept");
     let head = "e".repeat(40);

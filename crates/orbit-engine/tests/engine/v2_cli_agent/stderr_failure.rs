@@ -2,8 +2,8 @@
 //! letting untrusted stderr change incident or workflow classification.
 
 use super::*;
-use orbit_store::contracts::group_failure_incidents;
 use orbit_types::telemetry::AuditEvent;
+use orbit_types::telemetry::incident::group_failure_incidents;
 use orbit_types::workflow::{
     ClaimFailureClass, HeldFailure, PR_AUTO_FIX_CHECK_REPAIR_MARKER, is_contract_refusal,
     is_owner_busy, is_pr_auto_fix_check_repair, is_task_blocked_by_agent, is_upgrade_pending,

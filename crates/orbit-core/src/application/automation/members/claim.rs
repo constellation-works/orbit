@@ -35,8 +35,9 @@ pub(crate) fn claim(
         .map_err(|e| OrbitError::InvalidInput(e.to_string()))?;
 
     let active = runtime
-        .automation_store()?
-        .automation_state(&submitted.consumer)?
+        .sqlite_store()?
+        .read()
+        .and_then(|snapshot| snapshot.automation().state(&submitted.consumer))?
         .and_then(|state| state.members)
         .and_then(|members| members.active)
         .ok_or_else(|| OrbitError::InvalidInput("state claim missing".into()))?;

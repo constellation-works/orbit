@@ -33,9 +33,14 @@ fn assert_assessed(workspace: &Workspace, attempt: &MemberAttempt, task: &Task) 
     assert_eq!(members.assessed[&task.id].receipt_id, attempt.id);
     let receipt = workspace
         .runtime
-        .automation_store()
+        .sqlite_store()
         .unwrap()
-        .automation_receipt(&attempt.consumer, &attempt.id)
+        .read()
+        .and_then(|snapshot| {
+            snapshot
+                .automation()
+                .receipt(&attempt.consumer, &attempt.id)
+        })
         .unwrap()
         .expect("settlement records a receipt");
     assert_eq!(
@@ -468,8 +473,12 @@ fn a_delivery_routine_settles_held_and_timed_out_jobs_without_retrying() {
         admitted.pending_commits = vec![after.commit.clone()];
         admitted.pending = vec![delivery];
         admitted.active = Some(attempt.clone());
-        let store = workspace.runtime.automation_store().unwrap();
-        assert!(store.automation_commit(&state, &admitted, None).unwrap());
+        let store = workspace.runtime.sqlite_store().unwrap();
+        assert!(
+            store
+                .write(|tx| orbit_automation::checkpoint::commit_state(tx, &state, &admitted, None))
+                .unwrap()
+        );
         // A completed child supplies a conclusively stopped owner without
         // relying on a guessed PID, timing, or load on this shared host.
         let mut owner = crate::git_test_support::command()
@@ -504,7 +513,11 @@ fn a_delivery_routine_settles_held_and_timed_out_jobs_without_retrying() {
             )
             .unwrap();
             assert_eq!(result.reason, "needs_attention", "{terminal:?}: {result:?}");
-            let persisted = store.automation_state(&state.consumer).unwrap().unwrap();
+            let persisted = store
+                .read()
+                .and_then(|snapshot| snapshot.automation().state(&state.consumer))
+                .unwrap()
+                .unwrap();
             let active = persisted.active.as_ref().unwrap();
             assert_eq!(active.state, BatchState::Failed, "{terminal:?}: {active:?}");
             assert_eq!(

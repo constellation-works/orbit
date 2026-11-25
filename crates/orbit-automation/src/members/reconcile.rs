@@ -7,13 +7,13 @@ use crate::AutomationError;
 use crate::checkpoint::commit;
 use crate::delivery::digest;
 use chrono::{DateTime, Duration, Utc};
-use orbit_store::contracts::AutomationStoreBackend;
+use orbit_store::Store;
 use orbit_types::workflow::automation;
 use orbit_types::workflow::automation::{members::*, *};
 use std::collections::BTreeSet;
 
 pub(super) fn reconcile(
-    store: &dyn AutomationStoreBackend,
+    store: &Store,
     host: &dyn MemberHost,
     state: AutomationState,
     now: DateTime<Utc>,
@@ -285,7 +285,7 @@ fn release_superseded(
 /// checkpoint that won the generation fence proves no retry or run can still
 /// claim that attempt; a lost race keeps it, and what it retained, intact.
 fn commit_retiring(
-    store: &dyn AutomationStoreBackend,
+    store: &Store,
     host: &dyn MemberHost,
     state: &AutomationState,
     next: AutomationState,

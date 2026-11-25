@@ -209,9 +209,10 @@ fn a_verified_refusal_from_another_task_keeps_its_model_out_of_the_next_batch() 
         );
         drawn.insert(crew);
         let minted = runtime
-            .automation_store()
+            .sqlite_store()
             .unwrap()
-            .automation_state(&consumer)
+            .read()
+            .and_then(|snapshot| snapshot.automation().state(&consumer))
             .unwrap()
             .and_then(|state| state.active)
             .and_then(|active| active.action_id)
@@ -255,9 +256,10 @@ fn a_pool_whose_every_model_is_refused_holds_the_batch_until_the_refusal_clears(
     let held_state = |runtime: &OrbitRuntime| {
         let consumer = consumer_key(runtime, "auto-task", CONSUMER).unwrap();
         runtime
-            .automation_store()
+            .sqlite_store()
             .unwrap()
-            .automation_state(&consumer)
+            .read()
+            .and_then(|snapshot| snapshot.automation().state(&consumer))
             .unwrap()
             .unwrap()
     };

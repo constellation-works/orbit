@@ -8,7 +8,7 @@ use orbit_automation::members::{
     MemberAdmission, MemberEvaluation, MemberHost, MemberOutcome, MemberPage, evaluate,
 };
 use orbit_automation::{AutomationError, DeferredReason};
-use orbit_store::{Store, compose, contracts::AutomationStoreBackend};
+use orbit_store::Store;
 use orbit_types::workflow::automation::{
     AutomationDiagnostic, SourceRevision,
     members::{MemberAttempt, StateMember, StateTrigger, StateTriggerKind},
@@ -122,7 +122,7 @@ fn trigger() -> StateTrigger {
 }
 
 fn evaluate_at(
-    store: &dyn AutomationStoreBackend,
+    store: &Store,
     host: &Host,
     enabled: bool,
     dry_run: bool,
@@ -142,27 +142,27 @@ fn evaluate_at(
     )
 }
 
-pub(super) fn tick(
-    store: &dyn AutomationStoreBackend,
-    host: &Host,
-    minute: i64,
-) -> AutomationDiagnostic {
+pub(super) fn tick(store: &Store, host: &Host, minute: i64) -> AutomationDiagnostic {
     evaluate_at(store, host, true, false, minute).unwrap()
 }
 
 #[test]
 fn disabled_consumer_without_state_never_probes_the_branch_in_either_mode() {
-    let store = compose::automation_store(Store::open_in_memory().unwrap()).unwrap();
+    let store = Store::open_in_memory().unwrap();
     let host = Host::new();
     *host.head_probes.borrow_mut() = Some(0);
 
     for dry_run in [false, true] {
-        let diagnostic = evaluate_at(store.as_ref(), &host, false, dry_run, 0).unwrap();
+        let diagnostic = evaluate_at(&store, &host, false, dry_run, 0).unwrap();
         assert_eq!(diagnostic.reason, "disabled", "dry_run={dry_run}");
         assert!(diagnostic.state.is_none(), "dry_run={dry_run}");
         assert_eq!(*host.head_probes.borrow(), Some(0), "dry_run={dry_run}");
         assert!(
-            store.automation_state(CONSUMER).unwrap().is_none(),
+            store
+                .read()
+                .and_then(|snapshot| snapshot.automation().state(CONSUMER))
+                .unwrap()
+                .is_none(),
             "dry_run={dry_run} must not create state"
         );
     }
@@ -170,22 +170,22 @@ fn disabled_consumer_without_state_never_probes_the_branch_in_either_mode() {
 
 #[test]
 fn enabled_consumer_without_state_still_probes_the_branch() {
-    let store = compose::automation_store(Store::open_in_memory().unwrap()).unwrap();
+    let store = Store::open_in_memory().unwrap();
     let host = Host::new();
     *host.head_probes.borrow_mut() = Some(0);
 
     for dry_run in [false, true] {
-        assert!(evaluate_at(store.as_ref(), &host, true, dry_run, 0).is_err());
+        assert!(evaluate_at(&store, &host, true, dry_run, 0).is_err());
     }
     assert_eq!(*host.head_probes.borrow(), Some(2));
 }
 
 #[test]
 fn checkpoint_rejects_budget_reset_ack_replacement_and_lost_failure_tombstone() {
-    let store = compose::automation_store(Store::open_in_memory().unwrap()).unwrap();
+    let store = Store::open_in_memory().unwrap();
     let host = Host::new();
-    tick(store.as_ref(), &host, 0);
-    let state = tick(store.as_ref(), &host, 2).state.unwrap();
+    tick(&store, &host, 0);
+    let state = tick(&store, &host, 2).state.unwrap();
     for mutation in 0..3 {
         let mut next = state.clone();
         next.generation += 1;
@@ -195,14 +195,22 @@ fn checkpoint_rejects_budget_reset_ack_replacement_and_lost_failure_tombstone() 
             1 => active.max_attempts += 1,
             _ => active.action_id = Some("replacement".into()),
         }
-        assert!(store.automation_commit(&state, &next, None).is_err());
+        assert!(
+            store
+                .write(|tx| orbit_automation::checkpoint::commit_state(tx, &state, &next, None))
+                .is_err()
+        );
     }
     *host.failed.borrow_mut() = true;
-    let failed = tick(store.as_ref(), &host, 40).state.unwrap();
+    let failed = tick(&store, &host, 40).state.unwrap();
     let mut erased = failed.clone();
     erased.generation += 1;
     erased.members.as_mut().unwrap().failed.clear();
-    assert!(store.automation_commit(&failed, &erased, None).is_err());
+    assert!(
+        store
+            .write(|tx| orbit_automation::checkpoint::commit_state(tx, &failed, &erased, None))
+            .is_err()
+    );
 }
 
 /// A retry waiting for admission once retired as exhausted when a temporary
@@ -210,10 +218,10 @@ fn checkpoint_rejects_budget_reset_ack_replacement_and_lost_failure_tombstone() 
 /// again without new input [ORB-25602]. The claim now waits out the hold.
 #[test]
 fn a_temporary_hold_on_an_unminted_retry_clears_without_input_churn() {
-    let store = compose::automation_store(Store::open_in_memory().unwrap()).unwrap();
+    let store = Store::open_in_memory().unwrap();
     let host = Host::new();
-    tick(store.as_ref(), &host, 0);
-    tick(store.as_ref(), &host, 2);
+    tick(&store, &host, 0);
+    tick(&store, &host, 2);
     assert_eq!(
         host.actions.borrow().len(),
         1,
@@ -222,7 +230,7 @@ fn a_temporary_hold_on_an_unminted_retry_clears_without_input_churn() {
 
     // The run fails: a second attempt is claimed, unminted, behind its backoff.
     *host.failed.borrow_mut() = true;
-    let retry = tick(store.as_ref(), &host, 3).state.unwrap();
+    let retry = tick(&store, &host, 3).state.unwrap();
     let active = retry.members.unwrap().active.unwrap();
     assert_eq!((active.attempt, active.action_id), (2, None));
     *host.failed.borrow_mut() = false;
@@ -230,9 +238,10 @@ fn a_temporary_hold_on_an_unminted_retry_clears_without_input_churn() {
     // A transient guard withholds the only member before the deadline.
     *host.withhold.borrow_mut() = Some("execution_claim_active".into());
     for minute in [4, 9] {
-        tick(store.as_ref(), &host, minute);
+        tick(&store, &host, minute);
         let members = store
-            .automation_state(CONSUMER)
+            .read()
+            .and_then(|snapshot| snapshot.automation().state(CONSUMER))
             .unwrap()
             .unwrap()
             .members
@@ -247,7 +256,7 @@ fn a_temporary_hold_on_an_unminted_retry_clears_without_input_churn() {
 
     // The same input is admitted as the retry once the hold clears.
     *host.withhold.borrow_mut() = None;
-    tick(store.as_ref(), &host, 10);
+    tick(&store, &host, 10);
     assert!(
         host.actions.borrow().values().any(|run| run == "run-2"),
         "{:?}",

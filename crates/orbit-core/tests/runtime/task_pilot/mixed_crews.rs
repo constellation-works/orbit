@@ -124,7 +124,7 @@ with open({calls:?}, "a", encoding="utf-8") as handle:
 /// claim: `state_automation` plus every member's task id. Prepare accepts
 /// that claim only from this run. Returns the run and its input.
 fn claimed_preparation_run(workspace: &Workspace, tasks: &[&Task]) -> (String, Value) {
-    let store = workspace.runtime.automation_store().unwrap();
+    let store = workspace.runtime.sqlite_store().unwrap();
     let state = workspace.routine_state();
     let members = tasks
         .iter()
@@ -153,7 +153,11 @@ fn claimed_preparation_run(workspace: &Workspace, tasks: &[&Task]) -> (String, V
     let mut claimed = state.clone();
     claimed.generation += 1;
     claimed.members.as_mut().unwrap().active = Some(attempt.clone());
-    assert!(store.automation_commit(&state, &claimed, None).unwrap());
+    assert!(
+        store
+            .write(|tx| orbit_automation::checkpoint::commit_state(tx, &state, &claimed, None))
+            .unwrap()
+    );
 
     let input = json!({
         "state_automation": attempt,
@@ -177,7 +181,12 @@ fn claimed_preparation_run(workspace: &Workspace, tasks: &[&Task]) -> (String, V
     acknowledged.members.as_mut().unwrap().active = Some(attempt.clone());
     assert!(
         store
-            .automation_commit(&claimed, &acknowledged, None)
+            .write(|tx| orbit_automation::checkpoint::commit_state(
+                tx,
+                &claimed,
+                &acknowledged,
+                None
+            ))
             .unwrap()
     );
     pin_attempt_source(&workspace.runtime, &attempt).unwrap();

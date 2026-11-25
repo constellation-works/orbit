@@ -113,9 +113,11 @@ fn judge_open_attempt(
         }),
         None,
     )?;
-    let Some(ledger) = runtime
-        .review_store()?
-        .review_ledger(&context.workspace_id, &request.lineage_key)?
+    let Some(ledger) = runtime.sqlite_store()?.read().and_then(|snapshot| {
+        snapshot
+            .review()
+            .ledger(&context.workspace_id, &request.lineage_key)
+    })?
     else {
         return Ok(None);
     };

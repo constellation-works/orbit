@@ -8,9 +8,6 @@ pub mod task_registry;
 pub(crate) mod task_reservation_store;
 pub(crate) mod v2_audit_store;
 
-pub(crate) mod automation;
-pub(crate) mod review;
-
 // SQLite text ordering requires every writer to use the same timestamp encoding.
 pub(crate) mod codec {
     use chrono::{DateTime, SecondsFormat, Utc};

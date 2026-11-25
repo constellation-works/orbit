@@ -8,7 +8,7 @@
 use std::collections::BTreeMap;
 
 use chrono::{DateTime, Utc};
-use orbit_store::contracts::AutomationStoreBackend;
+use orbit_store::Store;
 use orbit_types::workflow::automation::{
     CONDITION_ADMISSION_ATTEMPTS, ConditionFire, ConditionFireState, ConditionState,
     ConditionTrigger,
@@ -92,7 +92,7 @@ impl ConditionDiagnostic {
 }
 
 fn commit(
-    store: &dyn AutomationStoreBackend,
+    store: &Store,
     previous: &ConditionState,
     mut next: ConditionState,
 ) -> Result<ConditionState, AutomationError> {
@@ -102,7 +102,7 @@ fn commit(
         .ok_or(AutomationError::Deferred(
             DeferredReason::GenerationExhausted,
         ))?;
-    if !store.condition_commit(previous, &next)? {
+    if !store.write(|tx| crate::condition::commit_state(tx, previous, &next))? {
         return Err(AutomationError::Deferred(
             DeferredReason::ConcurrentEvaluation,
         ));
@@ -112,13 +112,15 @@ fn commit(
 
 /// Run one pass for one condition consumer.
 pub fn evaluate_condition(
-    store: &dyn AutomationStoreBackend,
+    store: &Store,
     host: &dyn ConditionHost,
     request: ConditionEvaluation<'_>,
 ) -> Result<ConditionDiagnostic, AutomationError> {
     // Missing state is a first pass; unreadable state fails closed here and
     // never becomes a fresh baseline.
-    let stored = store.condition_state(request.consumer)?;
+    let stored = store
+        .read()
+        .and_then(|snapshot| snapshot.condition().state(request.consumer))?;
 
     // A follower, a replica or an unresolved owner never fires and never
     // admits a pending intent: the owner finishes its own.
@@ -151,7 +153,9 @@ pub fn evaluate_condition(
         Some(state) => (state, Vec::new()),
         None => {
             let fresh = ConditionState::new(request.consumer, request.epoch);
-            if !request.dry_run && !store.condition_initialize(&fresh)? {
+            if !request.dry_run
+                && !store.write(|tx| crate::condition::initialize_state(tx, &fresh))?
+            {
                 return Err(AutomationError::Deferred(
                     DeferredReason::ConcurrentEvaluation,
                 ));
@@ -251,7 +255,7 @@ fn observe_all(
 /// An edge recorded under an older definition is refused, not admitted under
 /// the edited target or template it never saw.
 fn settle(
-    store: &dyn AutomationStoreBackend,
+    store: &Store,
     host: &dyn ConditionHost,
     state: ConditionState,
     now: DateTime<Utc>,

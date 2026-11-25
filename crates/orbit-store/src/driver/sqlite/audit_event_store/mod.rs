@@ -6,11 +6,9 @@
 //! `~/.orbit/orbit.db`. The CLI and runtime always use the global store.
 //!
 //! `row` hydrates full event rows; `insert` writes them; `queries` reads by id
-//! or filter and prunes; `stats` and `aggregates` back the reporting surfaces;
-//! `incident` groups failures.
+//! or filter and prunes; `stats` and `aggregates` back the reporting surfaces.
 
 mod aggregates;
-pub mod incident;
 mod insert;
 mod queries;
 mod row;
@@ -19,7 +17,7 @@ mod stats;
 use chrono::{DateTime, Utc};
 use rusqlite::types::ToSql;
 
-use row::{AUDIT_EVENT_COLUMNS, audit_event_from_row};
+pub(crate) use row::{AUDIT_EVENT_COLUMNS, audit_event_from_row};
 
 type SqlParams = Vec<Box<dyn ToSql>>;
 

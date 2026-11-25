@@ -60,6 +60,7 @@ Where each entry of `crates/orbit-core/src/application/` goes in the [architectu
 | `application_authority.rs` | `app::auto_task` | above task |
 | `attention` | `app::attention` | above task |
 | `audit_event.rs` | `app::audit` | above task |
+| `audit_event` | `app::audit` | above task |
 | `auto_tasks` | `app::auto_task` | above task |
 | `automation` | `app::automation` | 3 |
 | `backlog_forecast` | `unit::backlog_forecast` | 9 |

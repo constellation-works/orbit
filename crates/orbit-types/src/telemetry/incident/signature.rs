@@ -2,8 +2,8 @@
 //! with placeholders, and the stable incident id.
 
 use super::classify::{classify, surface_of};
+use crate::telemetry::AuditEvent;
 use chrono::{DateTime, Utc};
-use orbit_types::telemetry::AuditEvent;
 use std::borrow::Cow;
 
 /// Longest normalized message retained in a signature. Long enough to keep

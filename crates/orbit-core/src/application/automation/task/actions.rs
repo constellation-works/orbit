@@ -246,10 +246,14 @@ pub(crate) fn accepted_action_coverage(
         return Ok(None);
     };
     let prefix = format!("{machine}/{}/", runtime.workspace_id()?);
-    let store = runtime.automation_store()?;
+    let store = runtime.sqlite_store()?;
     let result = consumer_states::for_each_workspace_consumer_state(
         &prefix,
-        |after, limit| store.automation_states_page(&prefix, after, limit),
+        |after, limit| {
+            store
+                .read()
+                .and_then(|snapshot| snapshot.automation().states_page(&prefix, after, limit))
+        },
         |state| &state.consumer,
         |state| {
             let accepted = match state
@@ -259,7 +263,12 @@ pub(crate) fn accepted_action_coverage(
             {
                 Some(attempt) => validated_evidence(runtime, attempt, now)?,
                 None => store
-                    .automation_receipts(&state.consumer, RECEIPT_LIMIT)?
+                    .read()
+                    .and_then(|snapshot| {
+                        snapshot
+                            .automation()
+                            .receipts(&state.consumer, RECEIPT_LIMIT)
+                    })?
                     .into_iter()
                     .find(|receipt| receipt.action_id == task_id)
                     .map(|receipt| receipt.evidence),
@@ -508,10 +517,14 @@ pub(crate) fn has_open_delivery_batch_attempt(
         return Ok(false);
     };
     let prefix = format!("{machine}/{}/", runtime.workspace_id()?);
-    let store = runtime.automation_store()?;
+    let store = runtime.sqlite_store()?;
     let found = consumer_states::for_each_workspace_consumer_state(
         &prefix,
-        |after, limit| store.automation_states_page(&prefix, after, limit),
+        |after, limit| {
+            store
+                .read()
+                .and_then(|snapshot| snapshot.automation().states_page(&prefix, after, limit))
+        },
         |state| &state.consumer,
         |state| {
             let Some(attempt) = state.active.as_ref().filter(|attempt| {

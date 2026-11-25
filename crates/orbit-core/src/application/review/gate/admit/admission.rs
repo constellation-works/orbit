@@ -105,7 +105,7 @@ pub(super) fn admit(
         _ => EvidenceCarry::None,
     };
 
-    let store = runtime.review_store()?;
+    let store = runtime.sqlite_store()?;
     let lineage_key = context.lineage_key();
     release_abandoned(
         runtime,
@@ -114,18 +114,21 @@ pub(super) fn admit(
         &context.run_id,
     )?;
     let now = Utc::now();
-    let (reservation, ledger) = store.review_reserve(
-        &context.workspace_id,
-        &ReviewReserveRequest {
-            lineage_key: &lineage_key,
-            task_ids: &context.task_ids,
-            run_id: &context.run_id,
-            task_meaning_digest,
-            candidate: &candidate.head,
-            budget: admission.budget,
-            now,
-        },
-    )?;
+    let (reservation, ledger) = store.write(|tx| {
+        crate::application::review::ledger::reserve(
+            tx,
+            &context.workspace_id,
+            &ReviewReserveRequest {
+                lineage_key: &lineage_key,
+                task_ids: &context.task_ids,
+                run_id: &context.run_id,
+                task_meaning_digest,
+                candidate: &candidate.head,
+                budget: admission.budget,
+                now,
+            },
+        )
+    })?;
     let (attempt, resumed) = match reservation {
         ReviewReservation::Reserved { attempt } => (attempt, false),
         ReviewReservation::Resumed { attempt } => (attempt, true),

@@ -428,7 +428,7 @@ impl OrbitRuntime {
             let consumer = crate::application::automation::consumer_key(self, "auto-task", name)?;
             let actor = write_actor(self)?;
             orbit_automation::delivery::waive(
-                self.automation_store()?.as_ref(),
+                &self.sqlite_store()?,
                 &consumer,
                 request,
                 &actor,

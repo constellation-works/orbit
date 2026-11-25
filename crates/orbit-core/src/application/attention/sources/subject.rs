@@ -368,9 +368,11 @@ pub(super) fn derive_subject_kind(
                     .map_err(|error| {
                         OrbitError::Execution(format!("decode review certificate: {error}"))
                     })?;
-                let Some(ledger) = runtime
-                    .review_store()?
-                    .review_ledger(&runtime.workspace_id()?, &certificate.lineage_key)?
+                let Some(ledger) = runtime.sqlite_store()?.read().and_then(|snapshot| {
+                    snapshot
+                        .review()
+                        .ledger(&runtime.workspace_id()?, &certificate.lineage_key)
+                })?
                 else {
                     return Err(OrbitError::Execution(
                         "review certificate has no lineage ledger; settlement cannot be verified"

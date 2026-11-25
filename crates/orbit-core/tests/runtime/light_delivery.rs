@@ -157,14 +157,14 @@ fn delivery_state(fixture: &Fixture, consumer: &str) -> Value {
             )
         })
         .collect::<std::collections::BTreeMap<_, _>>();
-    let store = fixture.runtime.automation_store().unwrap();
+    let store = fixture.runtime.sqlite_store().unwrap();
     json!({
         "tasks": tasks,
         "histories": histories,
-        "states": store.automation_states_page("", None, 100).unwrap(),
-        "receipts": store.automation_receipts(consumer, 100).unwrap(),
-        "recoveries": store.automation_recoveries(consumer, 100).unwrap(),
-        "waivers": store.automation_waivers(consumer, 100).unwrap(),
+        "states": store.read().and_then(|snapshot| snapshot.automation().states_page("", None, 100)).unwrap(),
+        "receipts": store.read().and_then(|snapshot| snapshot.automation().receipts(consumer, 100)).unwrap(),
+        "recoveries": store.read().and_then(|snapshot| snapshot.automation().recoveries(consumer, 100)).unwrap(),
+        "waivers": store.read().and_then(|snapshot| snapshot.automation().waivers(consumer, 100)).unwrap(),
         "definition": fixture.runtime.auto_task_show("preview-review").unwrap(),
     })
 }
@@ -316,9 +316,10 @@ fn mapped_delivery_preview(guard_exit: Option<u8>) {
     assert_eq!(
         fixture
             .runtime
-            .automation_store()
+            .sqlite_store()
             .unwrap()
-            .automation_state(&consumer)
+            .read()
+            .and_then(|snapshot| snapshot.automation().state(&consumer))
             .unwrap(),
         Some(applied)
     );

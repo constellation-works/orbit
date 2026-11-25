@@ -49,7 +49,10 @@ pub(crate) fn enable_preview(
     // its enable is still previewed against an empty history.
     let (consumer, state) = match condition_consumer(runtime, definition.carrier, definition.name) {
         Ok(consumer) => {
-            let state = runtime.automation_store()?.condition_state(&consumer)?;
+            let state = runtime
+                .sqlite_store()?
+                .read()
+                .and_then(|snapshot| snapshot.condition().state(&consumer))?;
             (consumer, state)
         }
         Err(_) => (
@@ -143,8 +146,11 @@ pub(crate) fn record_condition_disabled(
 ) {
     let result = (|| -> Result<(), OrbitError> {
         let consumer = condition_consumer(runtime, carrier, name)?;
-        let store = runtime.automation_store()?;
-        let Some(state) = store.condition_state(&consumer)? else {
+        let store = runtime.sqlite_store()?;
+        let Some(state) = store
+            .read()
+            .and_then(|snapshot| snapshot.condition().state(&consumer))?
+        else {
             return Ok(());
         };
         if !state.enabled {
@@ -153,7 +159,7 @@ pub(crate) fn record_condition_disabled(
         let mut next = state.clone();
         next.enabled = false;
         next.generation += 1;
-        store.condition_commit(&state, &next)?;
+        store.write(|tx| orbit_automation::condition::commit_state(tx, &state, &next))?;
         Ok(())
     })();
     if let Err(error) = result {
@@ -167,8 +173,11 @@ pub(crate) fn forget_condition_state(
     carrier: ConditionCarrier,
     name: &str,
 ) {
-    let result = condition_consumer(runtime, carrier, name)
-        .and_then(|consumer| runtime.automation_store()?.condition_delete(&consumer));
+    let result = condition_consumer(runtime, carrier, name).and_then(|consumer| {
+        runtime
+            .sqlite_store()?
+            .write(|tx| tx.condition().delete_state(&consumer))
+    });
     if let Err(error) = result {
         tracing::warn!(%name, %error, "condition state not forgotten");
     }

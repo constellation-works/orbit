@@ -13,6 +13,7 @@ mod guard;
 mod job_wait;
 mod protocol;
 mod schema;
+mod state;
 mod typing;
 
 pub use check::{
@@ -38,3 +39,4 @@ pub use protocol::{
     ConditionAction, ConditionDiagnostic, ConditionEvaluation, ConditionHost, evaluate_condition,
 };
 pub use schema::{AUTO_TASK_STEP_STATUSES, ConditionCarrier};
+pub use state::{commit_audited_state, commit_state, initialize_state};

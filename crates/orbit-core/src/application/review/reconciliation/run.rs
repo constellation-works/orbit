@@ -63,8 +63,13 @@ fn authenticate(
     let reconciliation_id = required_string(input, &["reconciliation_id"], "reconciliation_id")?;
     let task_id = required_string(input, &["task_id"], "task_id")?;
     let record = runtime
-        .review_store()?
-        .review_reconciliation(&runtime.workspace_id()?, &admission.reconciliation_id)?
+        .sqlite_store()?
+        .read()
+        .and_then(|snapshot| {
+            snapshot
+                .review()
+                .reconciliation(&runtime.workspace_id()?, &admission.reconciliation_id)
+        })?
         .filter(|record| {
             record.reconciliation_id == reconciliation_id && record.binding.task_id == task_id
         })
@@ -720,14 +725,21 @@ fn update(
     change: impl Fn(&mut ReviewReconciliation),
 ) -> Result<ReviewReconciliation, OrbitError> {
     let workspace_id = runtime.workspace_id()?;
-    let store = runtime.review_store()?;
+    let store = runtime.sqlite_store()?;
     let mut last_error = None;
     for _ in 0..5 {
         let mut record = store
-            .review_reconciliation(&workspace_id, reconciliation_id)?
+            .read()
+            .and_then(|snapshot| {
+                snapshot
+                    .review()
+                    .reconciliation(&workspace_id, reconciliation_id)
+            })?
             .ok_or_else(|| refused(format!("reconciliation {reconciliation_id} not found")))?;
         change(&mut record);
-        match store.review_reconciliation_update(&workspace_id, &record) {
+        match store.write(|tx| {
+            crate::application::review::ledger::update_reconciliation(tx, &workspace_id, &record)
+        }) {
             Ok(updated) => return Ok(updated),
             Err(error) => last_error = Some(error),
         }

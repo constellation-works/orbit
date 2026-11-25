@@ -198,14 +198,19 @@ fn settle(
     reviewer: ReviewerIdentity,
     admitted: &ReviewGateAdmitted,
 ) -> Result<Settled, OrbitError> {
-    let store = runtime.review_store()?;
+    let store = runtime.sqlite_store()?;
     // The admission names the lineage it reserved in; a resumed run reuses
     // that admission, so settlement never re-derives a different key.
     let lineage_key = Some(admitted.lineage_key.as_str())
         .filter(|key| !key.trim().is_empty())
         .map_or_else(|| context.lineage_key(), ToOwned::to_owned);
     let ledger = store
-        .review_ledger(&context.workspace_id, &lineage_key)?
+        .read()
+        .and_then(|snapshot| {
+            snapshot
+                .review()
+                .ledger(&context.workspace_id, &lineage_key)
+        })?
         .ok_or_else(|| {
             OrbitError::Execution(format!(
                 "review_gate_stale: lineage '{lineage_key}' has no ledger for attempt {attempt_id}"
@@ -247,7 +252,11 @@ fn settle(
         ReviewAttemptState::Settled { .. } | ReviewAttemptState::Open => None,
     };
     if recorded.is_some()
-        && let Some(certificate) = store.review_certificate(&context.workspace_id, attempt_id)?
+        && let Some(certificate) = store.read().and_then(|snapshot| {
+            snapshot
+                .review()
+                .certificate(&context.workspace_id, attempt_id)
+        })?
     {
         return candidate::reconcile_settled(runtime, context, certificate);
     }
@@ -491,15 +500,18 @@ fn settle(
         // The store charges the attempt's recorded reviewer runtime; the
         // minutes budget gates new starts, so an admitted reviewer that
         // overruns it still settles on its evidence.
-        None => store.review_settle(
-            &context.workspace_id,
-            &ReviewSettlement {
-                lineage_key: &lineage_key,
-                attempt_id,
-                verdict: judgement.verdict,
-                now,
-            },
-        )?,
+        None => store.write(|tx| {
+            crate::application::review::ledger::settle(
+                tx,
+                &context.workspace_id,
+                &ReviewSettlement {
+                    lineage_key: &lineage_key,
+                    attempt_id,
+                    verdict: judgement.verdict,
+                    now,
+                },
+            )
+        })?,
     };
 
     let certificate = ReviewCertificate {
@@ -584,7 +596,13 @@ fn settle(
             )?;
         }
     }
-    store.review_certificate_record(&context.workspace_id, &certificate)?;
+    store.write(|tx| {
+        crate::application::review::ledger::record_certificate(
+            tx,
+            &context.workspace_id,
+            &certificate,
+        )
+    })?;
     publication::publish_certificate(runtime, context, &certificate)?;
     if certificate.verdict.passed() {
         baseline::record_known_red(runtime, &context.task_ids, &certificate.known_red)?;

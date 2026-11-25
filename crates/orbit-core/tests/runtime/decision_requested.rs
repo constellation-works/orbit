@@ -188,9 +188,10 @@ impl Fixture {
         )
         .unwrap();
         self.runtime
-            .automation_store()
+            .sqlite_store()
             .unwrap()
-            .automation_state(&consumer)
+            .read()
+            .and_then(|snapshot| snapshot.automation().state(&consumer))
             .unwrap()
             .unwrap()
     }
@@ -235,7 +236,7 @@ fn fire(fx: &Fixture, task: &str, now: chrono::DateTime<Utc>) -> String {
     assert_eq!(due.batch.len(), 1, "{due:?}");
     assert_eq!(due.batch[0].task_ids, vec![task.to_string()]);
 
-    let store = fx.runtime.automation_store().unwrap();
+    let store = fx.runtime.sqlite_store().unwrap();
     let state = fx.routine_state();
     let member = state.members.as_ref().unwrap().pending[task].clone();
     let id = digest(format!("attempt:{task}").as_bytes());
@@ -257,7 +258,11 @@ fn fire(fx: &Fixture, task: &str, now: chrono::DateTime<Utc>) -> String {
     let mut claimed = state.clone();
     claimed.generation += 1;
     claimed.members.as_mut().unwrap().active = Some(attempt.clone());
-    assert!(store.automation_commit(&state, &claimed, None).unwrap());
+    assert!(
+        store
+            .write(|tx| orbit_automation::checkpoint::commit_state(tx, &state, &claimed, None))
+            .unwrap()
+    );
     let KeyedJobRunAdmission::Admitted(run) = fx
         .jobs
         .insert_automation_job_run(
@@ -275,7 +280,12 @@ fn fire(fx: &Fixture, task: &str, now: chrono::DateTime<Utc>) -> String {
     acknowledged.members.as_mut().unwrap().active = Some(attempt);
     assert!(
         store
-            .automation_commit(&claimed, &acknowledged, None)
+            .write(|tx| orbit_automation::checkpoint::commit_state(
+                tx,
+                &claimed,
+                &acknowledged,
+                None
+            ))
             .unwrap()
     );
     run.run_id
@@ -553,8 +563,12 @@ fn member_state_from_before_the_variant_still_loads_and_runs() {
     let mut next = state.clone();
     next.generation += 1;
     next.members = Some(old);
-    let store = fx.runtime.automation_store().unwrap();
-    assert!(store.automation_commit(&state, &next, None).unwrap());
+    let store = fx.runtime.sqlite_store().unwrap();
+    assert!(
+        store
+            .write(|tx| orbit_automation::checkpoint::commit_state(tx, &state, &next, None))
+            .unwrap()
+    );
 
     // The old pending member's task is gone, so evaluation runs and the
     // member retires instead of erroring or firing.

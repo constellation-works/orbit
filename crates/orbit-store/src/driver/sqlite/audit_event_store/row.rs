@@ -11,7 +11,7 @@ use crate::parse_timestamp;
 /// Canonical `SELECT` column list for a full [`AuditEvent`] row, in the order
 /// [`audit_event_from_row`] indexes. Shared by every query that hydrates whole
 /// events so a schema column can only be added in one place.
-pub(super) const AUDIT_EVENT_COLUMNS: &str = "id, execution_id, timestamp, command, subcommand, \
+pub(crate) const AUDIT_EVENT_COLUMNS: &str = "id, execution_id, timestamp, command, subcommand, \
      tool_name, target_type, target_id, role, status, exit_code, duration_ms, \
      working_directory, arguments_json, stdout_truncated, stderr_truncated, \
      error_message, host, pid, session_id, workspace_id, caller_machine_id, \
@@ -22,7 +22,7 @@ pub(super) const AUDIT_EVENT_COLUMNS: &str = "id, execution_id, timestamp, comma
      plugin_grants, plugin_secrets, plugin_secret_updates, brokered, peer_pid, \
      application_json, session_model";
 
-pub(super) fn audit_event_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<AuditEvent> {
+pub(crate) fn audit_event_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<AuditEvent> {
     let ts_raw: String = row.get(2)?;
     let status_raw: String = row.get(9)?;
     let timestamp = parse_timestamp(&ts_raw)?;

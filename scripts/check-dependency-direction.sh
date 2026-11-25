@@ -2003,7 +2003,7 @@ if dependency_matches -n 'automation_commit\(|Sha256|fn evaluate\b|fn exclusion\
   fail=1
 fi
 
-if dependency_matches -n 'ReviewStoreBackend|review_certificate_record|review_reserve' \
+if dependency_matches -n '\.review\(\)|ReviewRepository' \
   "$repo_root/crates/orbit-automation/src" \
   --glob '*.rs' --glob '!**/tests/**'; then
   echo "orbit-automation must not persist review evidence; Store owns ledgers and certificates"

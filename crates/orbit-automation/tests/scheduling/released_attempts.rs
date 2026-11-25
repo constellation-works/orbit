@@ -18,7 +18,7 @@ enum Run {
 /// A source with one member whose host pins every admitted attempt in a
 /// set standing in for the ref namespace, and unpins on release.
 struct PinningHost<'a> {
-    store: &'a dyn AutomationStoreBackend,
+    store: &'a Store,
     run: Cell<Run>,
     /// Admission pins, then fails before acknowledging the run.
     admit_fails: Cell<bool>,
@@ -31,7 +31,7 @@ struct PinningHost<'a> {
 }
 
 impl<'a> PinningHost<'a> {
-    fn new(store: &'a dyn AutomationStoreBackend) -> Self {
+    fn new(store: &'a Store) -> Self {
         Self {
             store,
             run: Cell::new(Run::Pending),
@@ -95,10 +95,19 @@ impl MemberHost for PinningHost<'_> {
     }
     fn outcome(&self, attempt: &MemberAttempt) -> Result<MemberOutcome, AutomationError> {
         if self.race.replace(false) {
-            let old = self.store.automation_state(CONSUMER)?.unwrap();
+            let old = self
+                .store
+                .read()
+                .and_then(|snapshot| snapshot.automation().state(CONSUMER))?
+                .unwrap();
             let mut next = old.clone();
             next.generation += 1;
-            assert!(self.store.automation_commit(&old, &next, None)?);
+            assert!(
+                self.store
+                    .write(|tx| orbit_automation::checkpoint::commit_state(
+                        tx, &old, &next, None
+                    ))?
+            );
         }
         let action_id = attempt.action_id.clone().unwrap_or_default();
         Ok(match self.run.get() {
@@ -124,7 +133,8 @@ impl MemberHost for PinningHost<'_> {
     fn release(&self, attempt: &MemberAttempt) {
         assert!(
             self.store
-                .automation_state(CONSUMER)
+                .read()
+                .and_then(|snapshot| snapshot.automation().state(CONSUMER))
                 .unwrap()
                 .unwrap()
                 .members
@@ -166,9 +176,10 @@ fn tick(host: &PinningHost<'_>, minute: i64) -> Result<String, AutomationError> 
     .map(|diagnostic| diagnostic.reason)
 }
 
-fn active_id(store: &dyn AutomationStoreBackend) -> Option<String> {
+fn active_id(store: &Store) -> Option<String> {
     store
-        .automation_state(CONSUMER)
+        .read()
+        .and_then(|snapshot| snapshot.automation().state(CONSUMER))
         .unwrap()
         .unwrap()
         .members
@@ -195,8 +206,8 @@ fn attempts_are_released_once_settled_exhausted_or_retired() {
         return;
     }
     // Settled: the receipt's checkpoint releases the pin.
-    let store = compose::automation_store(Store::open_in_memory().unwrap()).unwrap();
-    let host = PinningHost::new(store.as_ref());
+    let store = Store::open_in_memory().unwrap();
+    let host = PinningHost::new(&store);
     let id = fire(&host);
     assert_eq!(tick(&host, 3).unwrap(), "batch_pending");
     assert!(host.released.borrow().is_empty(), "a pending run keeps it");
@@ -206,8 +217,8 @@ fn attempts_are_released_once_settled_exhausted_or_retired() {
     assert!(host.pins.borrow().is_empty());
 
     // Failed: a retry reuses the attempt and its pin; exhaustion releases it.
-    let store = compose::automation_store(Store::open_in_memory().unwrap()).unwrap();
-    let host = PinningHost::new(store.as_ref());
+    let store = Store::open_in_memory().unwrap();
+    let host = PinningHost::new(&store);
     let id = fire(&host);
     host.run.set(Run::Stops);
     assert_eq!(tick(&host, 3).unwrap(), "retry_backoff");
@@ -222,8 +233,8 @@ fn attempts_are_released_once_settled_exhausted_or_retired() {
     assert!(host.pins.borrow().is_empty());
 
     // Superseded before acknowledgement: an expired claim is retired...
-    let store = compose::automation_store(Store::open_in_memory().unwrap()).unwrap();
-    let host = PinningHost::new(store.as_ref());
+    let store = Store::open_in_memory().unwrap();
+    let host = PinningHost::new(&store);
     host.admit_fails.set(true);
     let id = fire(&host);
     tick(&host, 40).unwrap();
@@ -231,8 +242,8 @@ fn attempts_are_released_once_settled_exhausted_or_retired() {
     assert!(host.pins.borrow().is_empty());
 
     // ...and so is one whose every member went stale.
-    let store = compose::automation_store(Store::open_in_memory().unwrap()).unwrap();
-    let host = PinningHost::new(store.as_ref());
+    let store = Store::open_in_memory().unwrap();
+    let host = PinningHost::new(&store);
     host.admit_fails.set(true);
     let id = fire(&host);
     host.retired.set(true);
@@ -248,8 +259,8 @@ fn an_attempt_survives_a_settlement_that_loses_the_generation_race() {
     ) {
         return;
     }
-    let store = compose::automation_store(Store::open_in_memory().unwrap()).unwrap();
-    let host = PinningHost::new(store.as_ref());
+    let store = Store::open_in_memory().unwrap();
+    let host = PinningHost::new(&store);
     let id = fire(&host);
     host.run.set(Run::Applies);
     host.race.set(true);

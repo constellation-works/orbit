@@ -20,7 +20,7 @@ use orbit_automation::review::{
     LandingFacts, combined_task_meaning_digest, exclusion, task_meaning_digest,
 };
 use orbit_common::fs::path_filter::PathFilter;
-use orbit_store::contracts::ReviewStoreBackend;
+use orbit_store::Store;
 use orbit_types::task::{LIGHT_DELIVERY_PATHS_KEY, LightDeliveryJudgement, SKIP_REVIEW_TAG};
 use orbit_types::workflow::ReviewCertificate;
 use orbit_types::workflow::automation::{AutomationState, Delivery, DeliveryExclusion, SourcePage};
@@ -41,7 +41,7 @@ pub(crate) fn exclusions(
     page: &mut SourcePage,
     dry_run: bool,
 ) -> Result<(), AutomationError> {
-    let store = runtime.review_store()?;
+    let store = runtime.sqlite_store()?;
     for delivery in &page.deliveries {
         if page.exclusions.contains_key(&delivery.key) {
             continue;
@@ -51,11 +51,13 @@ pub(crate) fn exclusions(
             .get(&delivery.after.commit)
             .and_then(Option::as_ref)
             .and_then(|association| association.head.clone());
-        let mut certificates = store.review_certificates_for_tree(
-            &state.repository,
-            &delivery.after.tree,
-            CERTIFICATES_PER_LANDING,
-        )?;
+        let mut certificates = store.read().and_then(|snapshot| {
+            snapshot.review().certificates_for_tree(
+                &state.repository,
+                &delivery.after.tree,
+                CERTIFICATES_PER_LANDING,
+            )
+        })?;
         // [ORB-15193] A base that moved after review leaves the landed tree
         // unlike any reviewed one; the pull request's head names the
         // candidate the provider merged.
@@ -63,17 +65,19 @@ pub(crate) fn exclusions(
             && let Ok(revision) = source.revision(head)
             && revision.tree != delivery.after.tree
         {
-            certificates.extend(store.review_certificates_for_tree(
-                &state.repository,
-                &revision.tree,
-                CERTIFICATES_PER_LANDING,
-            )?);
+            certificates.extend(store.read().and_then(|snapshot| {
+                snapshot.review().certificates_for_tree(
+                    &state.repository,
+                    &revision.tree,
+                    CERTIFICATES_PER_LANDING,
+                )
+            })?);
         }
         for certificate in certificates {
             let facts = landing_facts(
                 runtime,
                 source,
-                store.as_ref(),
+                &store,
                 delivery,
                 &certificate,
                 landed_head.clone(),
@@ -185,7 +189,7 @@ const LIGHT_DELIVERY_ASSURANCE: &str = "light_delivery";
 fn landing_facts(
     runtime: &OrbitRuntime,
     source: &Source<'_>,
-    store: &dyn ReviewStoreBackend,
+    store: &Store,
     delivery: &Delivery,
     certificate: &ReviewCertificate,
     landed_head: Option<String>,
@@ -203,7 +207,8 @@ fn landing_facts(
     });
     let task_meaning_current = task_meaning_current(runtime, certificate)?;
     let managed_landing = store
-        .review_landings(&certificate.attempt_id)?
+        .read()
+        .and_then(|snapshot| snapshot.review().landings(&certificate.attempt_id))?
         .into_iter()
         .last();
     let rebased_tree = if objects_present

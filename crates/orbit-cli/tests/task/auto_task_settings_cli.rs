@@ -1465,25 +1465,28 @@ fn land_delivery(
     file: &str,
 ) {
     let consumer = consumer_key(runtime, "auto-task", name).unwrap();
-    let store = runtime.automation_store().unwrap();
+    let store = runtime.sqlite_store().unwrap();
     let state = store
-        .automation_state(&consumer)
+        .read()
+        .and_then(|snapshot| snapshot.automation().state(&consumer))
         .unwrap()
         .unwrap_or_else(|| panic!("{name} has no delivery state after baseline"));
     let landed = commit_file(fixture, file, "landed\n");
     store
-        .automation_record_delivery_intent(&Delivery {
-            key: format!("direct:{}:{branch}:{}", state.repository, landed.commit),
-            repository: state.repository.clone(),
-            branch: branch.to_string(),
-            before: state.observed.clone(),
-            after: landed.clone(),
-            commits: vec![landed.commit.clone()],
-            task_ids: Vec::new(),
-            unattributed: Some(UNATTRIBUTED_NO_LANDING_TASK.into()),
-            evidence_reference: format!("run:fixture-run:{}", landed.commit),
-            evidence_digest: "fixture-digest".into(),
-            landed_at: Utc::now(),
+        .write(|tx| {
+            tx.automation().insert_delivery_intent(&Delivery {
+                key: format!("direct:{}:{branch}:{}", state.repository, landed.commit),
+                repository: state.repository.clone(),
+                branch: branch.to_string(),
+                before: state.observed.clone(),
+                after: landed.clone(),
+                commits: vec![landed.commit.clone()],
+                task_ids: Vec::new(),
+                unattributed: Some(UNATTRIBUTED_NO_LANDING_TASK.into()),
+                evidence_reference: format!("run:fixture-run:{}", landed.commit),
+                evidence_digest: "fixture-digest".into(),
+                landed_at: Utc::now(),
+            })
         })
         .unwrap();
 }

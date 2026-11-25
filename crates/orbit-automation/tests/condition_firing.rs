@@ -12,7 +12,6 @@
 use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
-use std::sync::Arc;
 
 use chrono::{DateTime, Duration, Utc};
 use orbit_automation::condition::{
@@ -21,8 +20,7 @@ use orbit_automation::condition::{
 };
 use orbit_automation::{AutomationError, DeferredReason};
 use orbit_common::test_env;
-use orbit_store::contracts::AutomationStoreBackend;
-use orbit_store::{Store, compose};
+use orbit_store::Store;
 use orbit_types::workflow::automation::{
     ConditionArm, ConditionFire, ConditionFireState, ConditionOrigin, ConditionState,
     ConditionTrigger,
@@ -46,8 +44,8 @@ fn trigger(extra: serde_json::Value) -> ConditionTrigger {
     serde_json::from_value(value).unwrap()
 }
 
-fn memory_store() -> Arc<dyn AutomationStoreBackend> {
-    compose::automation_store(Store::open_in_memory().unwrap()).unwrap()
+fn memory_store() -> Store {
+    Store::open_in_memory().unwrap()
 }
 
 fn subject(key: &str, when: Truth, revision: &str) -> SubjectObservation {
@@ -157,7 +155,7 @@ impl<'a> Pass<'a> {
 
     fn run(
         &self,
-        store: &dyn AutomationStoreBackend,
+        store: &Store,
         host: &dyn ConditionHost,
         now: DateTime<Utc>,
     ) -> Result<ConditionDiagnostic, AutomationError> {
@@ -180,7 +178,7 @@ impl<'a> Pass<'a> {
 }
 
 fn pass(
-    store: &dyn AutomationStoreBackend,
+    store: &Store,
     host: &Board,
     trigger: &ConditionTrigger,
     now: DateTime<Utc>,
@@ -195,10 +193,10 @@ fn edges_admit_once_with_the_frozen_subject_and_rearm_under_a_new_identity() {
     let trigger = trigger(serde_json::json!({}));
 
     board.set(vec![subject("ORB-1", Truth::False, "1")]);
-    assert_eq!(pass(&*store, &board, &trigger, at(0)).reason, "baselined");
+    assert_eq!(pass(&store, &board, &trigger, at(0)).reason, "baselined");
 
     board.set(vec![subject("ORB-1", Truth::True, "2")]);
-    let fired = pass(&*store, &board, &trigger, at(1));
+    let fired = pass(&store, &board, &trigger, at(1));
     assert_eq!(fired.reason, "fired");
     assert_eq!(board.admissions(), 1);
     let first = board.admitted.borrow()[0].clone();
@@ -207,21 +205,25 @@ fn edges_admit_once_with_the_frozen_subject_and_rearm_under_a_new_identity() {
     assert_eq!(first.depth, 1);
     assert_eq!(first.captured["revision"], "2");
     assert_eq!(first.action_key, format!("condition:{}:0", first.fire_id));
-    let state = store.condition_state(CONSUMER).unwrap().unwrap();
+    let state = store
+        .read()
+        .and_then(|snapshot| snapshot.condition().state(CONSUMER))
+        .unwrap()
+        .unwrap();
     let recorded = state.fire(&first.fire_id).unwrap();
     assert_eq!(recorded.state, ConditionFireState::Acknowledged);
     assert_eq!(recorded.action_id.as_deref(), Some("task-1"));
 
     // Still true: the subject stays fired and nothing is admitted again.
     board.set(vec![subject("ORB-1", Truth::True, "3")]);
-    pass(&*store, &board, &trigger, at(2));
+    pass(&store, &board, &trigger, at(2));
     assert_eq!(board.admissions(), 1, "a held truth is one edge, not many");
 
     // `rearm` defaults to !(when); the next true edge is a new fire.
     board.set(vec![subject("ORB-1", Truth::False, "4")]);
-    pass(&*store, &board, &trigger, at(3));
+    pass(&store, &board, &trigger, at(3));
     board.set(vec![subject("ORB-1", Truth::True, "4")]);
-    pass(&*store, &board, &trigger, at(4));
+    pass(&store, &board, &trigger, at(4));
     assert_eq!(board.admissions(), 2);
     let second = board.admitted.borrow()[1].clone();
     assert_ne!(
@@ -237,12 +239,16 @@ fn enable_baselines_true_subjects_unless_fire_existing_and_again_on_reenable() {
     let board = Board::default();
     board.set(vec![subject("ORB-1", Truth::True, "1")]);
     assert_eq!(
-        pass(&*store, &board, &trigger_baseline, at(0)).reason,
+        pass(&store, &board, &trigger_baseline, at(0)).reason,
         "baselined"
     );
-    pass(&*store, &board, &trigger_baseline, at(1));
+    pass(&store, &board, &trigger_baseline, at(1));
     assert_eq!(board.admissions(), 0, "a baselined subject never fires");
-    let state = store.condition_state(CONSUMER).unwrap().unwrap();
+    let state = store
+        .read()
+        .and_then(|snapshot| snapshot.condition().state(CONSUMER))
+        .unwrap()
+        .unwrap();
     assert!(state.subjects["ORB-1"].baselined);
 
     // Disable, then re-enable while the subject is still true: baseline again.
@@ -251,14 +257,14 @@ fn enable_baselines_true_subjects_unless_fire_existing_and_again_on_reenable() {
         ..Pass::live(&trigger_baseline)
     };
     assert_eq!(
-        disabled.run(&*store, &board, at(2)).unwrap().reason,
+        disabled.run(&store, &board, at(2)).unwrap().reason,
         "disabled"
     );
     board.set(vec![subject("ORB-1", Truth::False, "2")]);
-    disabled.run(&*store, &board, at(3)).unwrap();
+    disabled.run(&store, &board, at(3)).unwrap();
     board.set(vec![subject("ORB-1", Truth::True, "3")]);
     assert_eq!(
-        pass(&*store, &board, &trigger_baseline, at(4)).reason,
+        pass(&store, &board, &trigger_baseline, at(4)).reason,
         "baselined"
     );
     assert_eq!(board.admissions(), 0, "re-enable baselines too");
@@ -267,7 +273,7 @@ fn enable_baselines_true_subjects_unless_fire_existing_and_again_on_reenable() {
     let store = memory_store();
     let board = Board::default();
     board.set(vec![subject("ORB-1", Truth::True, "1")]);
-    assert_eq!(pass(&*store, &board, &fire_existing, at(0)).reason, "fired");
+    assert_eq!(pass(&store, &board, &fire_existing, at(0)).reason, "fired");
     assert_eq!(board.admissions(), 1);
 }
 
@@ -279,12 +285,12 @@ fn a_lost_reply_or_a_crash_before_admission_finishes_once_after_restart() {
     let board = Board::default();
 
     {
-        let store = compose::automation_store(Store::open(&path).unwrap()).unwrap();
+        let store = Store::open(&path).unwrap();
         board.set(vec![
             subject("ORB-1", Truth::False, "1"),
             subject("ORB-2", Truth::False, "1"),
         ]);
-        pass(&*store, &board, &trigger, at(0));
+        pass(&store, &board, &trigger, at(0));
         board.set(vec![
             subject("ORB-1", Truth::True, "2"),
             subject("ORB-2", Truth::True, "2"),
@@ -293,8 +299,12 @@ fn a_lost_reply_or_a_crash_before_admission_finishes_once_after_restart() {
         // admit); the other records its action and loses the reply.
         board.lose_reply.set(1);
         board.fail_before.set(1);
-        pass(&*store, &board, &trigger, at(1));
-        let state = store.condition_state(CONSUMER).unwrap().unwrap();
+        pass(&store, &board, &trigger, at(1));
+        let state = store
+            .read()
+            .and_then(|snapshot| snapshot.condition().state(CONSUMER))
+            .unwrap()
+            .unwrap();
         assert!(
             state
                 .fires
@@ -306,10 +316,14 @@ fn a_lost_reply_or_a_crash_before_admission_finishes_once_after_restart() {
     }
 
     // Restart: a new store handle over the same file settles both intents.
-    let store = compose::automation_store(Store::open(&path).unwrap()).unwrap();
-    pass(&*store, &board, &trigger, at(2));
+    let store = Store::open(&path).unwrap();
+    pass(&store, &board, &trigger, at(2));
     assert_eq!(board.admissions(), 2, "each edge admits exactly one action");
-    let state = store.condition_state(CONSUMER).unwrap().unwrap();
+    let state = store
+        .read()
+        .and_then(|snapshot| snapshot.condition().state(CONSUMER))
+        .unwrap()
+        .unwrap();
     assert!(
         state
             .fires
@@ -336,13 +350,17 @@ fn an_admission_that_keeps_failing_stops_after_its_attempt_budget() {
     let board = Board::default();
     let trigger = trigger(serde_json::json!({}));
     board.set(vec![subject("ORB-1", Truth::False, "1")]);
-    pass(&*store, &board, &trigger, at(0));
+    pass(&store, &board, &trigger, at(0));
     board.set(vec![subject("ORB-1", Truth::True, "2")]);
     board.fail_before.set(usize::MAX);
     for minute in 1..=8 {
-        pass(&*store, &board, &trigger, at(minute));
+        pass(&store, &board, &trigger, at(minute));
     }
-    let state = store.condition_state(CONSUMER).unwrap().unwrap();
+    let state = store
+        .read()
+        .and_then(|snapshot| snapshot.condition().state(CONSUMER))
+        .unwrap()
+        .unwrap();
     assert_eq!(state.fires.len(), 1);
     assert_eq!(state.fires[0].state, ConditionFireState::Failed);
     assert_eq!(state.fires[0].attempts, 5);
@@ -355,17 +373,23 @@ fn a_waiting_admission_keeps_its_key_and_spends_no_attempt() {
     let board = Board::default();
     let trigger = trigger(serde_json::json!({}));
     board.set(vec![subject("ORB-1", Truth::False, "1")]);
-    pass(&*store, &board, &trigger, at(0));
+    pass(&store, &board, &trigger, at(0));
     board.set(vec![subject("ORB-1", Truth::True, "2")]);
     *board.deferral.borrow_mut() = Some("open instance task-0".into());
     for minute in 1..=7 {
-        pass(&*store, &board, &trigger, at(minute));
+        pass(&store, &board, &trigger, at(minute));
     }
-    let fire = store.condition_state(CONSUMER).unwrap().unwrap().fires[0].clone();
+    let fire = store
+        .read()
+        .and_then(|snapshot| snapshot.condition().state(CONSUMER))
+        .unwrap()
+        .unwrap()
+        .fires[0]
+        .clone();
     assert_eq!(fire.state, ConditionFireState::Intent);
     assert_eq!(fire.attempts, 0);
     *board.deferral.borrow_mut() = None;
-    pass(&*store, &board, &trigger, at(8));
+    pass(&store, &board, &trigger, at(8));
     assert_eq!(board.admissions(), 1);
     assert_eq!(board.admitted.borrow()[0].fire_id, fire.fire_id);
 }
@@ -376,19 +400,19 @@ fn of_two_concurrent_evaluators_only_one_records_and_admits_the_edge() {
     let board = Rc::new(Board::default());
     let trigger = trigger(serde_json::json!({}));
     board.set(vec![subject("ORB-1", Truth::False, "1")]);
-    pass(&*store, &board, &trigger, at(0));
+    pass(&store, &board, &trigger, at(0));
     board.set(vec![subject("ORB-1", Truth::True, "2")]);
 
     // The second evaluator loads the same generation, and the first runs a
     // whole pass while the second is still observing.
-    let inner_store = Arc::clone(&store);
+    let inner_store = store.clone();
     let inner_board = Rc::clone(&board);
     let inner_trigger = trigger.clone();
     *board.on_observe.borrow_mut() = Some(Box::new(move || {
-        let fired = pass(&*inner_store, &inner_board, &inner_trigger, at(1));
+        let fired = pass(&inner_store, &inner_board, &inner_trigger, at(1));
         assert_eq!(fired.reason, "fired");
     }));
-    let loser = Pass::live(&trigger).run(&*store, &*board, at(1));
+    let loser = Pass::live(&trigger).run(&store, &*board, at(1));
     assert!(
         matches!(
             loser,
@@ -399,7 +423,7 @@ fn of_two_concurrent_evaluators_only_one_records_and_admits_the_edge() {
         "{loser:?}"
     );
     assert_eq!(board.admissions(), 1);
-    pass(&*store, &board, &trigger, at(2));
+    pass(&store, &board, &trigger, at(2));
     assert_eq!(
         board.admissions(),
         1,
@@ -407,7 +431,8 @@ fn of_two_concurrent_evaluators_only_one_records_and_admits_the_edge() {
     );
     assert_eq!(
         store
-            .condition_state(CONSUMER)
+            .read()
+            .and_then(|snapshot| snapshot.condition().state(CONSUMER))
             .unwrap()
             .unwrap()
             .fires
@@ -422,24 +447,21 @@ fn holds_need_continuous_truth_and_unknown_neither_fires_nor_rearms() {
     let board = Board::default();
     let trigger = trigger(serde_json::json!({"for_minutes": 10}));
     board.set(vec![subject("ORB-1", Truth::False, "1")]);
-    pass(&*store, &board, &trigger, at(0));
+    pass(&store, &board, &trigger, at(0));
 
     board.set(vec![subject("ORB-1", Truth::True, "2")]);
     for minute in [1, 5, 9] {
-        assert_eq!(
-            pass(&*store, &board, &trigger, at(minute)).reason,
-            "holding"
-        );
+        assert_eq!(pass(&store, &board, &trigger, at(minute)).reason, "holding");
     }
     // A gap longer than the continuity limit (5 minutes at a 1-minute
     // cadence) restarts the hold: 16 is 15 minutes after the first truth.
-    assert_eq!(pass(&*store, &board, &trigger, at(16)).reason, "holding");
+    assert_eq!(pass(&store, &board, &trigger, at(16)).reason, "holding");
     assert_eq!(board.admissions(), 0, "a broken hold never fires");
     for minute in [20, 24] {
-        pass(&*store, &board, &trigger, at(minute));
+        pass(&store, &board, &trigger, at(minute));
     }
     assert_eq!(board.admissions(), 0);
-    pass(&*store, &board, &trigger, at(26));
+    pass(&store, &board, &trigger, at(26));
     assert_eq!(board.admissions(), 1, "ten continuous minutes fire");
 
     // An unknown rearm keeps the subject fired; a later truth is no new edge.
@@ -448,12 +470,16 @@ fn holds_need_continuous_truth_and_unknown_neither_fires_nor_rearms() {
         Truth::Unknown("tasks['ORB-9'] missing".into()),
         "3",
     )]);
-    pass(&*store, &board, &trigger, at(27));
-    let state = store.condition_state(CONSUMER).unwrap().unwrap();
+    pass(&store, &board, &trigger, at(27));
+    let state = store
+        .read()
+        .and_then(|snapshot| snapshot.condition().state(CONSUMER))
+        .unwrap()
+        .unwrap();
     assert_eq!(state.subjects["ORB-1"].arm, ConditionArm::Fired);
     board.set(vec![subject("ORB-1", Truth::True, "3")]);
     for minute in 28..40 {
-        pass(&*store, &board, &trigger, at(minute));
+        pass(&store, &board, &trigger, at(minute));
     }
     assert_eq!(board.admissions(), 1);
 
@@ -462,14 +488,14 @@ fn holds_need_continuous_truth_and_unknown_neither_fires_nor_rearms() {
     let board = Board::default();
     let instant = trigger_with_defaults();
     board.set(vec![subject("ORB-2", Truth::False, "1")]);
-    pass(&*store, &board, &instant, at(0));
+    pass(&store, &board, &instant, at(0));
     board.set(vec![subject(
         "ORB-2",
         Truth::Unknown("unreadable".into()),
         "2",
     )]);
     for minute in 1..10 {
-        pass(&*store, &board, &instant, at(minute));
+        pass(&store, &board, &instant, at(minute));
     }
     assert_eq!(board.admissions(), 0);
 }
@@ -487,14 +513,18 @@ fn cooldown_and_fire_caps_defer_edges_oldest_first_without_dropping_them() {
         subject("ORB-1", Truth::False, "1"),
         subject("ORB-2", Truth::False, "1"),
     ]);
-    pass(&*store, &board, &capped, at(0));
+    pass(&store, &board, &capped, at(0));
     board.set(vec![
         subject("ORB-1", Truth::True, "2"),
         subject("ORB-2", Truth::True, "2"),
     ]);
-    assert_eq!(pass(&*store, &board, &capped, at(1)).reason, "fired");
+    assert_eq!(pass(&store, &board, &capped, at(1)).reason, "fired");
     assert_eq!(board.admissions(), 1);
-    let state = store.condition_state(CONSUMER).unwrap().unwrap();
+    let state = store
+        .read()
+        .and_then(|snapshot| snapshot.condition().state(CONSUMER))
+        .unwrap()
+        .unwrap();
     let waiting = if state.subjects["ORB-1"].arm == ConditionArm::Fired {
         "ORB-2"
     } else {
@@ -507,11 +537,11 @@ fn cooldown_and_fire_caps_defer_edges_oldest_first_without_dropping_them() {
     // Keep observing (inside the continuity limit) until the daily cap opens.
     let mut minute = 2;
     while minute < 24 * 60 {
-        pass(&*store, &board, &capped, at(minute));
+        pass(&store, &board, &capped, at(minute));
         minute += 4;
     }
     assert_eq!(board.admissions(), 1, "the cap defers, it never bursts");
-    pass(&*store, &board, &capped, at(24 * 60 + 2));
+    pass(&store, &board, &capped, at(24 * 60 + 2));
     assert_eq!(
         board.admissions(),
         2,
@@ -523,17 +553,17 @@ fn cooldown_and_fire_caps_defer_edges_oldest_first_without_dropping_them() {
     let board = Board::default();
     let cooled = trigger(serde_json::json!({"cooldown_minutes": 30}));
     board.set(vec![subject("ORB-1", Truth::False, "1")]);
-    pass(&*store, &board, &cooled, at(0));
+    pass(&store, &board, &cooled, at(0));
     board.set(vec![subject("ORB-1", Truth::True, "2")]);
-    pass(&*store, &board, &cooled, at(1));
+    pass(&store, &board, &cooled, at(1));
     board.set(vec![subject("ORB-1", Truth::False, "3")]);
-    pass(&*store, &board, &cooled, at(2));
+    pass(&store, &board, &cooled, at(2));
     board.set(vec![subject("ORB-1", Truth::True, "4")]);
     for minute in [3, 7, 11, 15, 19, 23, 27] {
-        pass(&*store, &board, &cooled, at(minute));
+        pass(&store, &board, &cooled, at(minute));
     }
     assert_eq!(board.admissions(), 1, "inside the cooldown nothing fires");
-    pass(&*store, &board, &cooled, at(31));
+    pass(&store, &board, &cooled, at(31));
     assert_eq!(board.admissions(), 2);
 }
 
@@ -548,13 +578,17 @@ fn excess_matches_at_enable_refuse_the_enable_and_a_storm_stalls_the_pass() {
             .collect::<Vec<_>>()
     };
     board.set(three(Truth::True));
-    let refused = pass(&*store, &board, &trigger, at(0));
+    let refused = pass(&store, &board, &trigger, at(0));
     assert_eq!(refused.reason, "too_many_matches");
-    let state = store.condition_state(CONSUMER).unwrap().unwrap();
+    let state = store
+        .read()
+        .and_then(|snapshot| snapshot.condition().state(CONSUMER))
+        .unwrap()
+        .unwrap();
     assert!(!state.enabled, "the enable did not take");
     assert_eq!(state.stall.as_ref().unwrap().sample.len(), 3);
     assert_eq!(
-        pass(&*store, &board, &trigger, at(1)).reason,
+        pass(&store, &board, &trigger, at(1)).reason,
         "too_many_matches",
         "a stall holds until an operator clears it"
     );
@@ -563,9 +597,9 @@ fn excess_matches_at_enable_refuse_the_enable_and_a_storm_stalls_the_pass() {
     let store = memory_store();
     let board = Board::default();
     board.set(three(Truth::False));
-    pass(&*store, &board, &trigger, at(0));
+    pass(&store, &board, &trigger, at(0));
     board.set(three(Truth::True));
-    assert_eq!(pass(&*store, &board, &trigger, at(1)).reason, "match_storm");
+    assert_eq!(pass(&store, &board, &trigger, at(1)).reason, "match_storm");
     assert_eq!(board.admissions(), 0);
 }
 
@@ -587,14 +621,18 @@ fn a_chain_deeper_than_five_is_refused_and_recorded_and_a_flapping_subject_stall
         with_origin("ORB-4", Truth::False, 4),
         with_origin("ORB-5", Truth::False, 5),
     ]);
-    pass(&*store, &board, &trigger, at(0));
+    pass(&store, &board, &trigger, at(0));
     board.set(vec![
         with_origin("ORB-4", Truth::True, 4),
         with_origin("ORB-5", Truth::True, 5),
     ]);
-    let refused = pass(&*store, &board, &trigger, at(1));
+    let refused = pass(&store, &board, &trigger, at(1));
     assert_eq!(refused.reason, "loop_suspected");
-    let state = store.condition_state(CONSUMER).unwrap().unwrap();
+    let state = store
+        .read()
+        .and_then(|snapshot| snapshot.condition().state(CONSUMER))
+        .unwrap()
+        .unwrap();
     let refusal = state
         .fires
         .iter()
@@ -615,14 +653,14 @@ fn a_chain_deeper_than_five_is_refused_and_recorded_and_a_flapping_subject_stall
     let store = memory_store();
     let board = Board::default();
     board.set(vec![subject("ORB-1", Truth::False, "0")]);
-    pass(&*store, &board, &trigger, at(0));
+    pass(&store, &board, &trigger, at(0));
     let mut minute = 1;
     let mut last = String::new();
     for flap in 0..4 {
         board.set(vec![subject("ORB-1", Truth::True, &format!("t{flap}"))]);
-        last = pass(&*store, &board, &trigger, at(minute)).reason;
+        last = pass(&store, &board, &trigger, at(minute)).reason;
         board.set(vec![subject("ORB-1", Truth::False, &format!("f{flap}"))]);
-        pass(&*store, &board, &trigger, at(minute + 1));
+        pass(&store, &board, &trigger, at(minute + 1));
         minute += 2;
     }
     assert_eq!(last, "oscillating");
@@ -635,11 +673,15 @@ fn followers_dry_runs_and_disabled_passes_admit_nothing_and_keep_pending_intents
     let board = Board::default();
     let trigger = trigger_with_defaults();
     board.set(vec![subject("ORB-1", Truth::False, "1")]);
-    pass(&*store, &board, &trigger, at(0));
+    pass(&store, &board, &trigger, at(0));
     board.set(vec![subject("ORB-1", Truth::True, "2")]);
     board.fail_before.set(1);
-    pass(&*store, &board, &trigger, at(1));
-    let pending = store.condition_state(CONSUMER).unwrap().unwrap();
+    pass(&store, &board, &trigger, at(1));
+    let pending = store
+        .read()
+        .and_then(|snapshot| snapshot.condition().state(CONSUMER))
+        .unwrap()
+        .unwrap();
     assert_eq!(pending.fires[0].state, ConditionFireState::Intent);
 
     for refusal in [
@@ -651,13 +693,17 @@ fn followers_dry_runs_and_disabled_passes_admit_nothing_and_keep_pending_intents
             refusal: Some(refusal),
             ..Pass::live(&trigger)
         };
-        assert_eq!(
-            follower.run(&*store, &board, at(2)).unwrap().reason,
-            refusal
-        );
+        assert_eq!(follower.run(&store, &board, at(2)).unwrap().reason, refusal);
     }
     assert_eq!(board.admissions(), 0, "only the owner finishes its intents");
-    assert_eq!(store.condition_state(CONSUMER).unwrap().unwrap(), pending);
+    assert_eq!(
+        store
+            .read()
+            .and_then(|snapshot| snapshot.condition().state(CONSUMER))
+            .unwrap()
+            .unwrap(),
+        pending
+    );
 
     let preview = Pass {
         dry_run: true,
@@ -667,10 +713,17 @@ fn followers_dry_runs_and_disabled_passes_admit_nothing_and_keep_pending_intents
         subject("ORB-1", Truth::True, "2"),
         subject("ORB-2", Truth::True, "1"),
     ]);
-    let dry = preview.run(&*store, &board, at(3)).unwrap();
+    let dry = preview.run(&store, &board, at(3)).unwrap();
     assert_eq!(dry.would_fire, vec!["ORB-2".to_string()]);
     assert_eq!(board.admissions(), 0, "a dry run admits nothing");
-    assert_eq!(store.condition_state(CONSUMER).unwrap().unwrap(), pending);
+    assert_eq!(
+        store
+            .read()
+            .and_then(|snapshot| snapshot.condition().state(CONSUMER))
+            .unwrap()
+            .unwrap(),
+        pending
+    );
 }
 
 #[test]
@@ -679,21 +732,38 @@ fn a_recorded_fire_cannot_be_rewritten_by_a_later_commit() {
     let board = Board::default();
     let trigger = trigger_with_defaults();
     board.set(vec![subject("ORB-1", Truth::False, "1")]);
-    pass(&*store, &board, &trigger, at(0));
+    pass(&store, &board, &trigger, at(0));
     board.set(vec![subject("ORB-1", Truth::True, "2")]);
-    pass(&*store, &board, &trigger, at(1));
-    let state = store.condition_state(CONSUMER).unwrap().unwrap();
+    pass(&store, &board, &trigger, at(1));
+    let state = store
+        .read()
+        .and_then(|snapshot| snapshot.condition().state(CONSUMER))
+        .unwrap()
+        .unwrap();
     let mut forged = state.clone();
     forged.generation += 1;
     forged.fires[0].captured = serde_json::json!({"key": "ORB-9"});
     assert!(
-        !matches!(store.condition_commit(&state, &forged), Ok(true)),
+        !matches!(
+            store.write(|tx| orbit_automation::condition::commit_state(tx, &state, &forged)),
+            Ok(true)
+        ),
         "a fire's captured subject is immutable"
     );
     let mut stale = state.clone();
     stale.generation += 2;
-    assert!(!matches!(store.condition_commit(&state, &stale), Ok(true)));
-    assert_eq!(store.condition_state(CONSUMER).unwrap().unwrap(), state);
+    assert!(!matches!(
+        store.write(|tx| orbit_automation::condition::commit_state(tx, &state, &stale)),
+        Ok(true)
+    ));
+    assert_eq!(
+        store
+            .read()
+            .and_then(|snapshot| snapshot.condition().state(CONSUMER))
+            .unwrap()
+            .unwrap(),
+        state
+    );
 }
 
 /// Subjects split into laps the way the task prefilter pages them: each lap
@@ -755,13 +825,13 @@ fn a_paged_enable_baselines_true_subjects_on_every_page_not_only_the_first() {
     let trigger = trigger(serde_json::json!({}));
     assert_eq!(
         Pass::live(&trigger)
-            .run(&*store, &host, at(0))
+            .run(&store, &host, at(0))
             .unwrap()
             .reason,
         "baselined",
         "the enable reads every page before it baselines"
     );
-    Pass::live(&trigger).run(&*store, &host, at(1)).unwrap();
+    Pass::live(&trigger).run(&store, &host, at(1)).unwrap();
     assert_eq!(
         host.admitted.get(),
         0,
@@ -784,7 +854,7 @@ fn a_paged_enable_counts_matches_on_every_page_against_max_matches() {
         ..Paged::default()
     };
     let trigger = trigger(serde_json::json!({"max_matches": 2}));
-    let diagnostic = Pass::live(&trigger).run(&*store, &host, at(0)).unwrap();
+    let diagnostic = Pass::live(&trigger).run(&store, &host, at(0)).unwrap();
     assert_eq!(
         diagnostic.reason, "too_many_matches",
         "three matches on page two refuse an enable with max_matches 2"
@@ -798,12 +868,12 @@ fn a_pending_intent_from_the_old_definition_is_refused_not_admitted_under_the_ed
     let board = Board::default();
     let trigger = trigger(serde_json::json!({}));
     board.set(vec![subject("ORB-1", Truth::True, "1")]);
-    pass(&*store, &board, &trigger, at(0));
+    pass(&store, &board, &trigger, at(0));
     board.set(vec![subject("ORB-1", Truth::False, "2")]);
-    pass(&*store, &board, &trigger, at(1));
+    pass(&store, &board, &trigger, at(1));
     board.set(vec![subject("ORB-1", Truth::True, "3")]);
     *board.deferral.borrow_mut() = Some("open_instance task-9".into());
-    pass(&*store, &board, &trigger, at(2));
+    pass(&store, &board, &trigger, at(2));
     assert_eq!(
         board.admissions(),
         0,
@@ -814,7 +884,7 @@ fn a_pending_intent_from_the_old_definition_is_refused_not_admitted_under_the_ed
     *board.deferral.borrow_mut() = None;
     let edited = condition_epoch(&trigger, &("mint", "edited")).unwrap();
     evaluate_condition(
-        &*store,
+        &store,
         &board,
         ConditionEvaluation {
             consumer: CONSUMER,
@@ -833,7 +903,11 @@ fn a_pending_intent_from_the_old_definition_is_refused_not_admitted_under_the_ed
         0,
         "an edge recorded under the old definition is never admitted under the edited one"
     );
-    let state = store.condition_state(CONSUMER).unwrap().unwrap();
+    let state = store
+        .read()
+        .and_then(|snapshot| snapshot.condition().state(CONSUMER))
+        .unwrap()
+        .unwrap();
     assert_eq!(state.fires[0].state, ConditionFireState::Refused);
 }
 
@@ -847,10 +921,11 @@ fn capacity_baseline_omits_false_subjects_and_finds_later_edge() {
             .map(|i| subject(&format!("task-{i}"), Truth::False, "1"))
             .collect(),
     );
-    pass(&*store, &board, &trigger, at(0));
+    pass(&store, &board, &trigger, at(0));
     assert!(
         store
-            .condition_state(CONSUMER)
+            .read()
+            .and_then(|snapshot| snapshot.condition().state(CONSUMER))
             .unwrap()
             .unwrap()
             .subjects
@@ -858,7 +933,7 @@ fn capacity_baseline_omits_false_subjects_and_finds_later_edge() {
             <= 1000
     );
     board.set(vec![subject("task-1000", Truth::True, "2")]);
-    pass(&*store, &board, &trigger, at(1));
+    pass(&store, &board, &trigger, at(1));
     assert_eq!(board.admissions(), 1);
 }
 
@@ -882,13 +957,17 @@ fn capacity_subjects_backpressure_without_losing_edges() {
             },
         );
     }
-    assert!(store.condition_initialize(&state).unwrap());
+    assert!(
+        store
+            .write(|tx| orbit_automation::condition::initialize_state(tx, &state))
+            .unwrap()
+    );
     let mut subjects = (0..995)
         .map(|i| subject(&format!("old-{i}"), Truth::True, "1"))
         .collect::<Vec<_>>();
     subjects.extend((0..20).map(|i| subject(&format!("new-{i}"), Truth::True, "1")));
     board.set(subjects);
-    let result = pass(&*store, &board, &trigger, at(1));
+    let result = pass(&store, &board, &trigger, at(1));
     let saved = result.state.unwrap();
     assert!(saved.subjects.len() <= 1000);
     assert!(
@@ -905,8 +984,8 @@ fn capacity_subjects_backpressure_without_losing_edges() {
             .map(|i| subject(&format!("new-{i}"), Truth::True, "1"))
             .collect(),
     );
-    pass(&*store, &board, &trigger, at(31 * 24 * 60));
-    pass(&*store, &board, &trigger, at(31 * 24 * 60 + 1));
+    pass(&store, &board, &trigger, at(31 * 24 * 60));
+    pass(&store, &board, &trigger, at(31 * 24 * 60 + 1));
     assert_eq!(
         board.admissions(),
         20,
@@ -946,13 +1025,17 @@ fn capacity_fires_preserves_pending_intents_and_makes_progress() {
             detail: None,
         });
     }
-    assert!(store.condition_initialize(&state).unwrap());
+    assert!(
+        store
+            .write(|tx| orbit_automation::condition::initialize_state(tx, &state))
+            .unwrap()
+    );
     *board.deferral.borrow_mut() = Some("waiting".into());
     board.set(vec![
         subject("new-1", Truth::True, "1"),
         subject("new-2", Truth::True, "1"),
     ]);
-    let saved = pass(&*store, &board, &trigger, at(0)).state.unwrap();
+    let saved = pass(&store, &board, &trigger, at(0)).state.unwrap();
     assert!(saved.fires.len() <= 1000);
     assert_eq!(
         saved.fire("old-0").unwrap().state,
@@ -980,9 +1063,13 @@ fn capacity_fires_preserves_pending_intents_and_makes_progress() {
             fire
         })
         .collect();
-    assert!(full_store.condition_initialize(&full).unwrap());
+    assert!(
+        full_store
+            .write(|tx| orbit_automation::condition::initialize_state(tx, &full))
+            .unwrap()
+    );
     board.set(vec![subject("waiting", Truth::True, "1")]);
-    let result = pass(&*full_store, &board, &trigger, at(1));
+    let result = pass(&full_store, &board, &trigger, at(1));
     assert_eq!(result.reason, "backpressure");
     let saved = result.state.unwrap();
     assert_eq!(saved.fires.len(), 1000);

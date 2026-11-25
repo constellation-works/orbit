@@ -4,7 +4,7 @@
 
 use super::delivery::{CONSUMER, Host, evaluate, landing, now, revision, setup};
 use orbit_automation::delivery::{self, DEFINITION_CHANGED, Evaluation};
-use orbit_store::{Store, compose, contracts::AutomationStoreBackend};
+use orbit_store::Store;
 use orbit_types::workflow::automation::members::MemberState;
 use orbit_types::workflow::automation::recovery::{AutomationStall, SYSTEM_ACTOR, refusal};
 use orbit_types::workflow::automation::*;
@@ -12,7 +12,7 @@ use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 
 fn tick(
-    store: &dyn AutomationStoreBackend,
+    store: &Store,
     host: &Host,
     trigger: &DeliveryTrigger,
     epoch: &str,
@@ -34,8 +34,12 @@ fn tick(
 }
 
 /// Record a stall marker through its own fenced write.
-fn stall(store: &dyn AutomationStoreBackend) {
-    let state = store.automation_state(CONSUMER).unwrap().unwrap();
+fn stall(store: &Store) {
+    let state = store
+        .read()
+        .and_then(|snapshot| snapshot.automation().state(CONSUMER))
+        .unwrap()
+        .unwrap();
     let mut next = state.clone();
     next.generation += 1;
     next.stall = Some(AutomationStall {
@@ -46,15 +50,17 @@ fn stall(store: &dyn AutomationStoreBackend) {
         divergence: None,
         crew_hold: None,
     });
-    assert!(store.automation_stall(&state, &next).unwrap());
+    assert!(
+        store
+            .write(|tx| orbit_automation::checkpoint::stall(tx, &state, &next))
+            .unwrap()
+    );
 }
 
 /// A baseline an older binary or another consumer kind persisted, which this
 /// evaluator never writes itself.
-fn foreign_baseline(
-    change: impl FnOnce(&mut AutomationState),
-) -> (Arc<dyn AutomationStoreBackend>, Host, DeliveryTrigger) {
-    let store = compose::automation_store(Store::open_in_memory().unwrap()).unwrap();
+fn foreign_baseline(change: impl FnOnce(&mut AutomationState)) -> (Store, Host, DeliveryTrigger) {
+    let store = Store::open_in_memory().unwrap();
     let trigger = super::delivery::trigger();
     let mut state = AutomationState {
         members: None,
@@ -78,7 +84,11 @@ fn foreign_baseline(
         stall: None,
     };
     change(&mut state);
-    assert!(store.automation_initialize(&state).unwrap());
+    assert!(
+        store
+            .write(|tx| orbit_automation::checkpoint::initialize(tx, &state))
+            .unwrap()
+    );
 
     (store, Host::new(), trigger)
 }
@@ -86,22 +96,19 @@ fn foreign_baseline(
 /// A review consumer holding every kind of debt: a covered batch and its
 /// receipt, a waived batch, a pending landing, an excluded landing and an
 /// unresolved commit.
-fn indebted() -> (Arc<dyn AutomationStoreBackend>, Host, DeliveryTrigger) {
-    let store = compose::automation_store(Store::open_in_memory().unwrap()).unwrap();
+fn indebted() -> (Store, Host, DeliveryTrigger) {
+    let store = Store::open_in_memory().unwrap();
     let host = Host::new();
     let trigger = DeliveryTrigger {
         coverage: CoverageClass::LandedCodeReviewV1,
         retries: 0,
         ..super::delivery::trigger()
     };
-    assert_eq!(
-        evaluate(store.as_ref(), &host, &trigger, true).reason,
-        "baselined"
-    );
+    assert_eq!(evaluate(&store, &host, &trigger, true).reason, "baselined");
 
     // Covered: landings 1 and 2, with their receipt.
     host.page(0, 2);
-    let attempt = evaluate(store.as_ref(), &host, &trigger, true)
+    let attempt = evaluate(&store, &host, &trigger, true)
         .state
         .unwrap()
         .active
@@ -109,7 +116,7 @@ fn indebted() -> (Arc<dyn AutomationStoreBackend>, Host, DeliveryTrigger) {
     host.evidence(&attempt);
     host.page(2, 2);
     assert_eq!(
-        evaluate(store.as_ref(), &host, &trigger, true)
+        evaluate(&store, &host, &trigger, true)
             .state
             .unwrap()
             .covered,
@@ -119,10 +126,10 @@ fn indebted() -> (Arc<dyn AutomationStoreBackend>, Host, DeliveryTrigger) {
     // Waived: landings 3 and 4, whose only attempt failed.
     *host.evidence.lock().unwrap() = None;
     host.page(2, 4);
-    evaluate(store.as_ref(), &host, &trigger, true);
+    evaluate(&store, &host, &trigger, true);
     host.failed.store(true, Ordering::SeqCst);
     host.page(4, 4);
-    let exhausted = evaluate(store.as_ref(), &host, &trigger, true)
+    let exhausted = evaluate(&store, &host, &trigger, true)
         .state
         .unwrap()
         .active
@@ -130,7 +137,7 @@ fn indebted() -> (Arc<dyn AutomationStoreBackend>, Host, DeliveryTrigger) {
     assert_eq!(exhausted.state, BatchState::Exhausted);
     host.failed.store(false, Ordering::SeqCst);
     delivery::waive(
-        store.as_ref(),
+        &store,
         CONSUMER,
         &WaiveBatchRequest {
             batch_id: exhausted.batch.id.clone(),
@@ -158,9 +165,7 @@ fn indebted() -> (Arc<dyn AutomationStoreBackend>, Host, DeliveryTrigger) {
             },
         );
     }
-    let state = evaluate(store.as_ref(), &host, &trigger, true)
-        .state
-        .unwrap();
+    let state = evaluate(&store, &host, &trigger, true).state.unwrap();
     host.page(7, 7);
     assert_eq!(state.covered, revision(2));
     assert_eq!(state.waived.len(), 2);
@@ -234,32 +239,54 @@ fn capture_warnings<T>(f: impl FnOnce() -> T) -> (T, Vec<String>) {
 #[test]
 fn a_settings_only_edit_is_adopted_in_the_same_pass_with_every_obligation_retained() {
     let (store, host, trigger) = indebted();
-    let before = store.automation_state(CONSUMER).unwrap().unwrap();
-    let receipts = store.automation_receipts(CONSUMER, 100).unwrap();
+    let before = store
+        .read()
+        .and_then(|snapshot| snapshot.automation().state(CONSUMER))
+        .unwrap()
+        .unwrap();
+    let receipts = store
+        .read()
+        .and_then(|snapshot| snapshot.automation().receipts(CONSUMER, 100))
+        .unwrap();
     assert_eq!(receipts.len(), 1);
     let retuned = retuned(&trigger);
 
     // Preview projects the adoption without writing or reporting anything.
-    let preview = tick(store.as_ref(), &host, &retuned, "v2", true);
+    let preview = tick(&store, &host, &retuned, "v2", true);
     assert_eq!(preview.reason, "threshold_reached");
-    assert_eq!(store.automation_state(CONSUMER).unwrap().unwrap(), before);
+    assert_eq!(
+        store
+            .read()
+            .and_then(|snapshot| snapshot.automation().state(CONSUMER))
+            .unwrap()
+            .unwrap(),
+        before
+    );
     assert!(host.adoptions.lock().unwrap().is_empty());
 
     // The lowered threshold admits the retained landing in the same tick.
-    let (adopted, warnings) =
-        capture_warnings(|| tick(store.as_ref(), &host, &retuned, "v2", false));
+    let (adopted, warnings) = capture_warnings(|| tick(&store, &host, &retuned, "v2", false));
     assert_eq!(adopted.reason, "threshold_reached");
     assert!(adopted.refusals.is_empty());
     let after = adopted.state.unwrap();
     assert_eq!(after.epoch, "v2");
     assert_eq!(after.trigger.as_ref(), Some(&retuned));
     assert_eq!(debt(&after), debt(&before));
-    assert_eq!(store.automation_receipts(CONSUMER, 100).unwrap(), receipts);
+    assert_eq!(
+        store
+            .read()
+            .and_then(|snapshot| snapshot.automation().receipts(CONSUMER, 100))
+            .unwrap(),
+        receipts
+    );
     let admitted = after.active.unwrap();
     assert_eq!(admitted.batch.epoch, "v2");
     assert_eq!(admitted.state, BatchState::Admitted);
 
-    let recoveries = store.automation_recoveries(CONSUMER, 10).unwrap();
+    let recoveries = store
+        .read()
+        .and_then(|snapshot| snapshot.automation().recoveries(CONSUMER, 10))
+        .unwrap();
     assert_eq!(recoveries.len(), 1);
     let record = &recoveries[0];
     assert_eq!(record.by, SYSTEM_ACTOR);
@@ -290,23 +317,28 @@ fn a_settings_only_edit_is_adopted_in_the_same_pass_with_every_obligation_retain
 
     // Later ticks evaluate the adopted identity: nothing repeats.
     let (_, warnings) = capture_warnings(|| {
-        tick(store.as_ref(), &host, &retuned, "v2", false);
-        tick(store.as_ref(), &host, &retuned, "v2", false);
+        tick(&store, &host, &retuned, "v2", false);
+        tick(&store, &host, &retuned, "v2", false);
     });
     assert!(warnings.is_empty(), "{warnings:?}");
     assert_eq!(host.adoptions.lock().unwrap().len(), 1);
-    assert_eq!(store.automation_recoveries(CONSUMER, 10).unwrap().len(), 1);
+    assert_eq!(
+        store
+            .read()
+            .and_then(|snapshot| snapshot.automation().recoveries(CONSUMER, 10))
+            .unwrap()
+            .len(),
+        1
+    );
 }
 
 /// Evaluate `trigger` under a new epoch and require the consumer to stay
 /// exactly where it was, held at `definition_changed` for `expected`.
-fn assert_held(
-    store: &dyn AutomationStoreBackend,
-    host: &Host,
-    trigger: &DeliveryTrigger,
-    expected: &str,
-) {
-    let before = store.automation_state(CONSUMER).unwrap();
+fn assert_held(store: &Store, host: &Host, trigger: &DeliveryTrigger, expected: &str) {
+    let before = store
+        .read()
+        .and_then(|snapshot| snapshot.automation().state(CONSUMER))
+        .unwrap();
     for dry_run in [true, false] {
         let held = tick(store, host, trigger, "v2", dry_run);
         assert_eq!(held.reason, DEFINITION_CHANGED, "{expected}");
@@ -316,10 +348,17 @@ fn assert_held(
             held.refusals
         );
     }
-    assert_eq!(store.automation_state(CONSUMER).unwrap(), before);
+    assert_eq!(
+        store
+            .read()
+            .and_then(|snapshot| snapshot.automation().state(CONSUMER))
+            .unwrap(),
+        before
+    );
     assert!(
         store
-            .automation_recoveries(CONSUMER, 10)
+            .read()
+            .and_then(|snapshot| snapshot.automation().recoveries(CONSUMER, 10))
             .unwrap()
             .is_empty()
     );
@@ -346,13 +385,13 @@ fn edits_that_change_what_the_debt_means_are_never_adopted() {
         let (store, host, trigger) = indebted();
         let mut edited = retuned(&trigger);
         edit(&mut edited);
-        assert_held(store.as_ref(), &host, &edited, expected);
+        assert_held(&store, &host, &edited, expected);
     }
 
     let (store, host, trigger) = indebted();
     *host.repository.lock().unwrap() = "owner/moved".into();
     assert_held(
-        store.as_ref(),
+        &store,
         &host,
         &retuned(&trigger),
         refusal::REPOSITORY_CHANGED,
@@ -364,25 +403,20 @@ fn an_executing_or_unsettled_action_is_never_interrupted_by_adoption() {
     // An admitted action whose task is still open.
     let (store, host, trigger) = setup();
     host.page(0, 2);
-    let admitted = evaluate(store.as_ref(), &host, &trigger, true);
+    let admitted = evaluate(&store, &host, &trigger, true);
     assert_eq!(
         admitted.state.unwrap().active.unwrap().state,
         BatchState::Admitted
     );
     host.page(2, 2);
-    assert_held(
-        store.as_ref(),
-        &host,
-        &retuned(&trigger),
-        refusal::ACTIVE_EXECUTION,
-    );
+    assert_held(&store, &host, &retuned(&trigger), refusal::ACTIVE_EXECUTION);
 
     // A claim that never reached admission.
     let (store, host, trigger) = setup();
     host.page(0, 2);
     host.fail_admit.store(true, Ordering::SeqCst);
     let _ = delivery::evaluate(
-        store.as_ref(),
+        &store,
         &host,
         Evaluation {
             consumer: CONSUMER,
@@ -393,15 +427,14 @@ fn an_executing_or_unsettled_action_is_never_interrupted_by_adoption() {
             now: now(),
         },
     );
-    let claimed = store.automation_state(CONSUMER).unwrap().unwrap();
+    let claimed = store
+        .read()
+        .and_then(|snapshot| snapshot.automation().state(CONSUMER))
+        .unwrap()
+        .unwrap();
     assert_eq!(claimed.active.unwrap().state, BatchState::Claimed);
     host.page(2, 2);
-    assert_held(
-        store.as_ref(),
-        &host,
-        &retuned(&trigger),
-        refusal::ACTIVE_EXECUTION,
-    );
+    assert_held(&store, &host, &retuned(&trigger), refusal::ACTIVE_EXECUTION);
 }
 
 #[test]
@@ -409,7 +442,7 @@ fn a_consumer_the_evaluator_cannot_judge_alone_is_left_for_an_operator() {
     // Legacy state baselined before its trigger was recorded.
     let (store, host, trigger) = foreign_baseline(|state| state.trigger = None);
     assert_held(
-        store.as_ref(),
+        &store,
         &host,
         &retuned(&trigger),
         refusal::COVERAGE_UNVERIFIABLE,
@@ -417,32 +450,31 @@ fn a_consumer_the_evaluator_cannot_judge_alone_is_left_for_an_operator() {
 
     let (store, host, trigger) =
         foreign_baseline(|state| state.members = Some(MemberState::default()));
-    assert_held(
-        store.as_ref(),
-        &host,
-        &retuned(&trigger),
-        refusal::MEMBER_CONSUMER,
-    );
+    assert_held(&store, &host, &retuned(&trigger), refusal::MEMBER_CONSUMER);
 
     let (store, host, trigger) = indebted();
-    stall(store.as_ref());
-    assert_held(
-        store.as_ref(),
-        &host,
-        &retuned(&trigger),
-        refusal::CONSUMER_STALLED,
-    );
+    stall(&store);
+    assert_held(&store, &host, &retuned(&trigger), refusal::CONSUMER_STALLED);
 }
 
 #[test]
 fn a_host_that_does_not_adopt_keeps_every_edit_for_an_operator() {
     let (store, host, trigger) = indebted();
     host.adopts_settings.store(false, Ordering::SeqCst);
-    let before = store.automation_state(CONSUMER).unwrap();
+    let before = store
+        .read()
+        .and_then(|snapshot| snapshot.automation().state(CONSUMER))
+        .unwrap();
 
-    let held = tick(store.as_ref(), &host, &retuned(&trigger), "v2", false);
+    let held = tick(&store, &host, &retuned(&trigger), "v2", false);
     assert_eq!(held.reason, DEFINITION_CHANGED);
     assert!(held.refusals.is_empty());
-    assert_eq!(store.automation_state(CONSUMER).unwrap(), before);
+    assert_eq!(
+        store
+            .read()
+            .and_then(|snapshot| snapshot.automation().state(CONSUMER))
+            .unwrap(),
+        before
+    );
     assert!(host.adoptions.lock().unwrap().is_empty());
 }

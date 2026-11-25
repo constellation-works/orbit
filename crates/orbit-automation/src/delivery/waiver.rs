@@ -2,12 +2,12 @@
 
 use crate::{AutomationError, DeferredReason, checkpoint};
 use chrono::{DateTime, Utc};
-use orbit_store::contracts::AutomationStoreBackend;
+use orbit_store::Store;
 use orbit_types::workflow::automation::*;
 
 /// Waive only settled failed/exhausted work; retain its code as a coverage gap.
 pub fn waive(
-    store: &dyn AutomationStoreBackend,
+    store: &Store,
     consumer: &str,
     request: &WaiveBatchRequest,
     by: &str,
@@ -22,14 +22,16 @@ pub fn waive(
     // Waiving is idempotent: a batch already recorded as waived needs no second
     // write. Look it up by its durable identity, not among a recent page.
     if store
-        .automation_waiver(consumer, &request.batch_id)?
+        .read()
+        .and_then(|snapshot| snapshot.automation().waiver(consumer, &request.batch_id))?
         .is_some()
     {
         return Ok(());
     }
 
     let previous = store
-        .automation_state(consumer)?
+        .read()
+        .and_then(|snapshot| snapshot.automation().state(consumer))?
         .ok_or_else(|| AutomationError::Evidence("consumer not found".into()))?;
 
     let active = previous
@@ -64,7 +66,7 @@ pub fn waive(
         at: now,
     };
 
-    if !store.automation_waive(&previous, &next, &waiver)? {
+    if !store.write(|tx| crate::checkpoint::waive(tx, &previous, &next, &waiver))? {
         return Err(AutomationError::Deferred(
             DeferredReason::ConcurrentEvaluation,
         ));

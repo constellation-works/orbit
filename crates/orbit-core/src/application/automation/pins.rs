@@ -497,12 +497,16 @@ impl Inventory {
     /// exhaustion, and every pending or running pilot run of its workspace.
     fn read(runtime: &OrbitRuntime, owner: &Owner) -> Result<Self, OrbitError> {
         let mut inventory = Self::default();
-        let store = runtime.automation_store()?;
+        let store = runtime.sqlite_store()?;
         let prefix = owner.consumers();
         let _: ControlFlow<std::convert::Infallible> =
             consumer_states::for_each_workspace_consumer_state(
                 &prefix,
-                |after, limit| store.automation_states_page(&prefix, after, limit),
+                |after, limit| {
+                    store.read().and_then(|snapshot| {
+                        snapshot.automation().states_page(&prefix, after, limit)
+                    })
+                },
                 |state| &state.consumer,
                 |state| {
                     inventory.add(&state);

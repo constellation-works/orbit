@@ -219,8 +219,9 @@ pub(super) fn preflight_budget(
 ) -> Result<ReviewGateAdmissionOutput, OrbitError> {
     let lineage = context.lineage_key();
     if let Some(ledger) = runtime
-        .review_store()?
-        .review_ledger(&context.workspace_id, &lineage)?
+        .sqlite_store()?
+        .read()
+        .and_then(|snapshot| snapshot.review().ledger(&context.workspace_id, &lineage))?
         && let Some(latest) = ledger.latest_attempt()
         && !ledger.reviewed(&latest.candidate, &latest.task_meaning_digest)
         && ledger.remaining_at(Utc::now()).seconds == 0

@@ -213,8 +213,12 @@ fn listing_reports_last_fire_from_a_delivery_admission() {
         .expect("the first delivery mints a review task");
     let definition = runtime.auto_task_show(CONSUMER).unwrap().unwrap();
     let key = consumer_key(&runtime, "auto-task", CONSUMER).unwrap();
-    let store = runtime.automation_store().unwrap();
-    let state = store.automation_state(&key).unwrap().unwrap();
+    let store = runtime.sqlite_store().unwrap();
+    let state = store
+        .read()
+        .and_then(|snapshot| snapshot.automation().state(&key))
+        .unwrap()
+        .unwrap();
     let active = state.active.as_ref().unwrap();
     let mut next = state.clone();
     next.generation += 1;
@@ -253,7 +257,14 @@ fn listing_reports_last_fire_from_a_delivery_admission() {
     };
     assert!(
         store
-            .automation_commit(&state, &next, Some(&receipt))
+            .write(
+                |tx| orbit_core::test_support::automation_checkpoint::commit_state(
+                    tx,
+                    &state,
+                    &next,
+                    Some(&receipt)
+                )
+            )
             .unwrap()
     );
     fixture.json(&[
@@ -284,7 +295,8 @@ fn listing_reports_last_fire_from_a_delivery_admission() {
     let now = Utc::now();
     evaluate_auto_task(&runtime, &definition, false, now).unwrap();
     let active = store
-        .automation_state(&key)
+        .read()
+        .and_then(|snapshot| snapshot.automation().state(&key))
         .unwrap()
         .unwrap()
         .active
@@ -314,7 +326,8 @@ fn listing_reports_last_fire_from_a_delivery_admission() {
     )
     .unwrap();
     let retry_id = store
-        .automation_state(&key)
+        .read()
+        .and_then(|snapshot| snapshot.automation().state(&key))
         .unwrap()
         .unwrap()
         .active

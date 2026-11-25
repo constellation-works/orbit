@@ -638,9 +638,6 @@
     },
     "orbit-store": {
       "test_function_paths": [
-        "contracts/incident/tests/classify.rs::deferral_rows_and_provider_usage_limits_classify_as_deferred",
-        "contracts/incident/tests/classify.rs::doctor_findings_are_expected_but_a_doctor_crash_stays_unexpected",
-        "contracts/incident/tests/grouping.rs::cached_citations_preserve_recorded_folds_and_combinatorial_precedence",
         "driver/file/task_bundle/bundle_io/tests/write.rs::interrupted_bundle_publish_never_exposes_partial_final_directory",
         "driver/sqlite/authority/schema/tests/mod.rs::newer_authority_schemas_keep_safe_writers_or_hold_reads_or_refuse",
         "driver/sqlite/authority/schema/tests/mod.rs::shipped_authority_shapes_adopt_without_reshaping_or_losing_old_writes",
@@ -716,7 +713,11 @@
       ]
     },
     "orbit-types": {
-      "test_function_paths": []
+      "test_function_paths": [
+        "telemetry/incident/tests/classify.rs::deferral_rows_and_provider_usage_limits_classify_as_deferred",
+        "telemetry/incident/tests/classify.rs::doctor_findings_are_expected_but_a_doctor_crash_stays_unexpected",
+        "telemetry/incident/tests/grouping.rs::cached_citations_preserve_recorded_folds_and_combinatorial_precedence"
+      ]
     },
     "orbit-web": {
       "test_function_paths": [

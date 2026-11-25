@@ -265,9 +265,10 @@ fn local_artifact_writers_cannot_forge_or_pin_review_certificates() {
         .unwrap();
     let landings = fixture
         .runtime
-        .review_store()
+        .sqlite_store()
         .unwrap()
-        .review_landings(&certificate.attempt_id)
+        .read()
+        .and_then(|snapshot| snapshot.review().landings(&certificate.attempt_id))
         .unwrap();
     assert_eq!(
         landings.len(),
@@ -705,7 +706,7 @@ fn doc_duties_discovery_fetches_only_listed_ledgers() {
 
 fn unknown_task_tools_preserve_audit_classification_and_suppress_disabled_hints() {
     use orbit_core::adapter::command::ToolEntryPoint;
-    use orbit_store::contracts::{FailureClass, classify};
+    use orbit_types::telemetry::incident::{FailureClass, classify};
     use orbit_types::tool::{McpCapability, ToolSessionContext};
 
     let fixture = Fixture::new();

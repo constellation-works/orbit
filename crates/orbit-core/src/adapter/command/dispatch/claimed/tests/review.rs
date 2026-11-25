@@ -190,23 +190,26 @@ impl Fixture {
             .with_worker_invocation(binding.clone(), owner.clone())
             .unwrap();
         let workspace = runtime.workspace_id().unwrap();
-        let store = runtime.review_store().unwrap();
+        let store = runtime.sqlite_store().unwrap();
         let (reservation, _) = store
-            .review_reserve(
-                &workspace,
-                &ReviewReserveRequest {
-                    lineage_key: LINEAGE,
-                    task_ids: &[TASK.to_string()],
-                    run_id: LEAF,
-                    task_meaning_digest: "digest",
-                    candidate: &SourceRevision {
-                        commit: "a".repeat(40),
-                        tree: "b".repeat(40),
+            .write(|tx| {
+                crate::application::review::ledger::reserve(
+                    tx,
+                    &workspace,
+                    &ReviewReserveRequest {
+                        lineage_key: LINEAGE,
+                        task_ids: &[TASK.to_string()],
+                        run_id: LEAF,
+                        task_meaning_digest: "digest",
+                        candidate: &SourceRevision {
+                            commit: "a".repeat(40),
+                            tree: "b".repeat(40),
+                        },
+                        budget: ReviewBudget::default(),
+                        now: Utc::now(),
                     },
-                    budget: ReviewBudget::default(),
-                    now: Utc::now(),
-                },
-            )
+                )
+            })
             .unwrap();
         let ReviewReservation::Reserved { attempt } = reservation else {
             panic!("a fresh lineage reserves: {reservation:?}");
@@ -231,18 +234,21 @@ impl Fixture {
 
     fn reviewer_at(&self, event: ReviewerInvocationEvent, now: chrono::DateTime<Utc>) {
         self.runtime
-            .review_store()
+            .sqlite_store()
             .unwrap()
-            .review_record_invocation(
-                &self.runtime.workspace_id().unwrap(),
-                &ReviewInvocationRecord {
-                    lineage_key: LINEAGE,
-                    attempt_id: &self.attempt_id,
-                    run_id: LEAF,
-                    event,
-                    now,
-                },
-            )
+            .write(|tx| {
+                crate::application::review::ledger::record_invocation(
+                    tx,
+                    &self.runtime.workspace_id().unwrap(),
+                    &ReviewInvocationRecord {
+                        lineage_key: LINEAGE,
+                        attempt_id: &self.attempt_id,
+                        run_id: LEAF,
+                        event,
+                        now,
+                    },
+                )
+            })
             .unwrap();
     }
 
@@ -823,39 +829,45 @@ fn a_reviewer_past_its_deadline_without_finishing_reaches_nothing() {
 fn a_run_two_open_attempts_name_reaches_nothing() {
     let fixture = Fixture::new();
     let broker = fixture.serve("agent_review_repair");
-    let store = fixture.runtime.review_store().unwrap();
+    let store = fixture.runtime.sqlite_store().unwrap();
     let workspace = fixture.runtime.workspace_id().unwrap();
     let (reservation, _) = store
-        .review_reserve(
-            &workspace,
-            &ReviewReserveRequest {
-                lineage_key: "lineage-2",
-                task_ids: &[TASK.to_string()],
-                run_id: LEAF,
-                task_meaning_digest: "digest",
-                candidate: &SourceRevision {
-                    commit: "a".repeat(40),
-                    tree: "b".repeat(40),
+        .write(|tx| {
+            crate::application::review::ledger::reserve(
+                tx,
+                &workspace,
+                &ReviewReserveRequest {
+                    lineage_key: "lineage-2",
+                    task_ids: &[TASK.to_string()],
+                    run_id: LEAF,
+                    task_meaning_digest: "digest",
+                    candidate: &SourceRevision {
+                        commit: "a".repeat(40),
+                        tree: "b".repeat(40),
+                    },
+                    budget: ReviewBudget::default(),
+                    now: Utc::now(),
                 },
-                budget: ReviewBudget::default(),
-                now: Utc::now(),
-            },
-        )
+            )
+        })
         .unwrap();
     let ReviewReservation::Reserved { attempt } = reservation else {
         panic!("a second lineage reserves: {reservation:?}");
     };
     store
-        .review_record_invocation(
-            &workspace,
-            &ReviewInvocationRecord {
-                lineage_key: "lineage-2",
-                attempt_id: &attempt.attempt_id,
-                run_id: LEAF,
-                event: ReviewerInvocationEvent::Started,
-                now: Utc::now(),
-            },
-        )
+        .write(|tx| {
+            crate::application::review::ledger::record_invocation(
+                tx,
+                &workspace,
+                &ReviewInvocationRecord {
+                    lineage_key: "lineage-2",
+                    attempt_id: &attempt.attempt_id,
+                    run_id: LEAF,
+                    event: ReviewerInvocationEvent::Started,
+                    now: Utc::now(),
+                },
+            )
+        })
         .unwrap();
     let (source, _) = fixture.report("report.json", &fixture.attempt_id);
     for (name, input) in [

@@ -28,7 +28,7 @@ use orbit_automation::routines::sweep::{
     RoutineDispatch, RunOwnerLiveness, SweepOptions, run_sweep_core,
 };
 use orbit_common::{OrbitError, test_env};
-use orbit_store::{Store, compose, contracts::AutomationStoreBackend};
+use orbit_store::Store;
 use orbit_types::workflow::automation::{
     AutomationDiagnostic, AutomationState, SourceRevision,
     members::{
@@ -1007,7 +1007,7 @@ impl MemberHost for CoverageHost {
 }
 
 fn member_tick(
-    store: &dyn AutomationStoreBackend,
+    store: &Store,
     host: &CoverageHost,
     minute: i64,
 ) -> Result<AutomationDiagnostic, AutomationError> {
@@ -1053,7 +1053,7 @@ fn forged_member_outputs_never_advance_coverage() {
         "null result",
         "duplicate member",
     ] {
-        let store = compose::automation_store(Store::open_in_memory().unwrap()).unwrap();
+        let store = Store::open_in_memory().unwrap();
         let host = CoverageHost {
             evidence: RefCell::new(None),
             member: StateMember {
@@ -1070,16 +1070,11 @@ fn forged_member_outputs_never_advance_coverage() {
                 crew: None,
             },
         };
-        assert_eq!(
-            member_tick(store.as_ref(), &host, 0).unwrap().reason,
-            "debouncing"
-        );
-        assert_eq!(
-            member_tick(store.as_ref(), &host, 2).unwrap().reason,
-            "fired"
-        );
+        assert_eq!(member_tick(&store, &host, 0).unwrap().reason, "debouncing");
+        assert_eq!(member_tick(&store, &host, 2).unwrap().reason, "fired");
         let before = store
-            .automation_state("fixture/member-coverage")
+            .read()
+            .and_then(|snapshot| snapshot.automation().state("fixture/member-coverage"))
             .unwrap()
             .unwrap();
         let attempt = before.members.as_ref().unwrap().active.as_ref().unwrap();
@@ -1114,14 +1109,15 @@ fn forged_member_outputs_never_advance_coverage() {
         *host.evidence.borrow_mut() = Some(forged);
         assert!(
             matches!(
-                member_tick(store.as_ref(), &host, 3),
+                member_tick(&store, &host, 3),
                 Err(AutomationError::Evidence(_))
             ),
             "{forgery}: forged output must be rejected"
         );
         assert_eq!(
             store
-                .automation_state("fixture/member-coverage")
+                .read()
+                .and_then(|snapshot| snapshot.automation().state("fixture/member-coverage"))
                 .unwrap()
                 .unwrap(),
             before,
@@ -1129,15 +1125,19 @@ fn forged_member_outputs_never_advance_coverage() {
         );
         assert!(
             store
-                .automation_receipts("fixture/member-coverage", 20)
+                .read()
+                .and_then(|snapshot| snapshot
+                    .automation()
+                    .receipts("fixture/member-coverage", 20))
                 .unwrap()
                 .is_empty(),
             "{forgery}: failed evidence cannot mint a coverage receipt"
         );
         *host.evidence.borrow_mut() = Some(valid);
-        member_tick(store.as_ref(), &host, 4).unwrap();
+        member_tick(&store, &host, 4).unwrap();
         let state = store
-            .automation_state("fixture/member-coverage")
+            .read()
+            .and_then(|snapshot| snapshot.automation().state("fixture/member-coverage"))
             .unwrap()
             .unwrap();
         let members = state.members.unwrap();
@@ -1149,7 +1149,10 @@ fn forged_member_outputs_never_advance_coverage() {
         );
         assert_eq!(
             store
-                .automation_receipts("fixture/member-coverage", 20)
+                .read()
+                .and_then(|snapshot| snapshot
+                    .automation()
+                    .receipts("fixture/member-coverage", 20))
                 .unwrap()
                 .len(),
             1,

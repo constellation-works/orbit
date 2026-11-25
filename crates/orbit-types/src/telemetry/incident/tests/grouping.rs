@@ -5,8 +5,8 @@ use super::super::grouping::{
     probe_push_unique, probe_sort_samples,
 };
 use super::super::types::{CASCADE_WINDOW_SECS, FailureIncident, PropagationLink};
+use crate::telemetry::{AuditEvent, AuditEventStatus};
 use chrono::{DateTime, Duration};
-use orbit_types::telemetry::{AuditEvent, AuditEventStatus};
 use serde::Deserialize;
 use std::collections::BTreeMap;
 use std::path::Path;

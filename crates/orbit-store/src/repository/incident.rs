@@ -4,19 +4,31 @@ use orbit_common::OrbitError;
 use orbit_common::storage::sqlite::sqlite_store_error;
 use orbit_types::telemetry::{AuditEvent, AuditEventStatus};
 
-use crate::Store;
-pub use crate::contracts::incident::*;
+use crate::contracts::{DEFAULT_SCAN_LIMIT, FailureIncidentQuery};
+use crate::store::Snapshot;
+use rusqlite::Connection;
 
-use super::{AUDIT_EVENT_COLUMNS, audit_event_from_row};
+use crate::driver::sqlite::audit_event_store::{AUDIT_EVENT_COLUMNS, audit_event_from_row};
 
-impl Store {
-    pub fn get_failure_incidents(
+/// Read the audit rows from which the application derives incident reports.
+pub struct IncidentRepository<'a> {
+    conn: &'a Connection,
+}
+
+impl<'a> IncidentRepository<'a> {
+    pub(crate) fn for_snapshot(snapshot: &'a Snapshot<'_>) -> Self {
+        Self {
+            conn: snapshot.connection(),
+        }
+    }
+
+    /// Read failed and denied rows, with a flag when the scan reaches its cap.
+    pub fn failures(
         &self,
         query: &FailureIncidentQuery,
-    ) -> Result<FailureIncidentReport, OrbitError> {
-        let conn = self.read_connection()?;
+    ) -> Result<(Vec<AuditEvent>, bool), OrbitError> {
         let (sql, param_values) = failure_incident_scan_sql(query);
-        let mut stmt = conn.prepare(&sql).map_err(sqlite_store_error)?;
+        let mut stmt = self.conn.prepare(&sql).map_err(sqlite_store_error)?;
         let param_refs: Vec<&dyn rusqlite::types::ToSql> =
             param_values.iter().map(|value| value.as_ref()).collect();
         let failures = stmt
@@ -26,7 +38,7 @@ impl Store {
             .map_err(sqlite_store_error)?;
         let max_events = scan_limit(query);
         let truncated = failures.len() >= max_events;
-        Ok(build_report(&failures, truncated))
+        Ok((failures, truncated))
     }
 }
 

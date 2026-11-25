@@ -188,12 +188,16 @@ pub fn stalled_consumers(runtime: &OrbitRuntime) -> Result<Vec<StalledConsumer>,
     };
     let prefix = format!("{machine}/{}/", runtime.workspace_id()?);
 
-    let store = runtime.automation_store()?;
+    let store = runtime.sqlite_store()?;
     let mut stalled = Vec::new();
     let _: ControlFlow<std::convert::Infallible> =
         consumer_states::for_each_workspace_consumer_state(
             &prefix,
-            |after, limit| store.automation_states_page(&prefix, after, limit),
+            |after, limit| {
+                store
+                    .read()
+                    .and_then(|snapshot| snapshot.automation().states_page(&prefix, after, limit))
+            },
             |state| &state.consumer,
             |state| {
                 if let Some(stall) = state.stall {

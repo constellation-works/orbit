@@ -10,7 +10,7 @@ use crate::checkpoint::{commit, diagnostic};
 use crate::delivery::definition_epoch;
 use crate::{AutomationError, DeferredReason};
 use chrono::{DateTime, Duration, Utc};
-use orbit_store::contracts::AutomationStoreBackend;
+use orbit_store::Store;
 use orbit_types::workflow::automation;
 use orbit_types::workflow::automation::{members::*, *};
 use std::collections::{BTreeMap, BTreeSet};
@@ -49,7 +49,7 @@ pub(super) fn active_batch(attempt: &MemberAttempt) -> Vec<BatchMember> {
 }
 
 pub(super) fn diagnostic_with_batch(
-    store: &dyn AutomationStoreBackend,
+    store: &Store,
     consumer: &str,
     reason: &str,
     state: AutomationState,
@@ -61,7 +61,7 @@ pub(super) fn diagnostic_with_batch(
 }
 
 pub fn evaluate(
-    store: &dyn AutomationStoreBackend,
+    store: &Store,
     host: &dyn MemberHost,
     request: MemberEvaluation<'_>,
 ) -> Result<AutomationDiagnostic, AutomationError> {
@@ -76,7 +76,10 @@ pub fn evaluate(
 
     trigger.validate().map_err(orbit_common::OrbitError::from)?;
 
-    let mut state = match store.automation_state(consumer)? {
+    let mut state = match store
+        .read()
+        .and_then(|snapshot| snapshot.automation().state(consumer))?
+    {
         Some(state) => state,
         None => {
             if !enabled {
@@ -107,7 +110,7 @@ pub fn evaluate(
                 stall: None,
             };
 
-            if !dry_run && !store.automation_initialize(&state)? {
+            if !dry_run && !store.write(|tx| crate::checkpoint::initialize(tx, &state))? {
                 return Err(AutomationError::Deferred(
                     DeferredReason::ConcurrentEvaluation,
                 ));

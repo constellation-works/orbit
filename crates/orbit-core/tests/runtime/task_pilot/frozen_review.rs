@@ -42,9 +42,10 @@ fn state(workspace: &Workspace) -> AutomationState {
     let consumer = consumer_key(&workspace.runtime, "auto-task", NAME).unwrap();
     workspace
         .runtime
-        .automation_store()
+        .sqlite_store()
         .unwrap()
-        .automation_state(&consumer)
+        .read()
+        .and_then(|snapshot| snapshot.automation().state(&consumer))
         .unwrap()
         .unwrap()
 }
@@ -204,8 +205,12 @@ fn admit_incomplete_review(
     admitted.pending_commits = vec![after.commit.clone()];
     admitted.pending = vec![delivery];
     admitted.active = Some(attempt.clone());
-    let store = workspace.runtime.automation_store().unwrap();
-    assert!(store.automation_commit(&base, &admitted, None).unwrap());
+    let store = workspace.runtime.sqlite_store().unwrap();
+    assert!(
+        store
+            .write(|tx| orbit_automation::checkpoint::commit_state(tx, &base, &admitted, None))
+            .unwrap()
+    );
 
     let run_id = executor_run_owned_by(workspace, &review.id, pid);
     put_coverage(workspace, &review.id, &run_id, &evidence_template(&attempt));
@@ -274,7 +279,7 @@ fn an_incomplete_frozen_review_is_retried_on_the_same_batch_and_can_settle() {
     let now = incomplete.now;
     let batch = incomplete.batch.clone();
     let after = batch.through_inclusive.clone();
-    let store = workspace.runtime.automation_store().unwrap();
+    let store = workspace.runtime.sqlite_store().unwrap();
     // The executor's run fails: the task blocks through the real
     // run-terminalization path.
     end_run(&workspace, &incomplete, JobRunState::Failed);
@@ -357,7 +362,10 @@ fn an_incomplete_frozen_review_is_retried_on_the_same_batch_and_can_settle() {
     let done = state(&workspace);
     assert!(done.active.is_none(), "{done:?}");
     assert_eq!(done.covered, after, "{done:?}");
-    let receipts = store.automation_receipts(&done.consumer, 10).unwrap();
+    let receipts = store
+        .read()
+        .and_then(|snapshot| snapshot.automation().receipts(&done.consumer, 10))
+        .unwrap();
     assert_eq!(receipts.len(), 1);
     assert_eq!(receipts[0].action_id, second_task);
 }

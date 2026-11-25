@@ -79,9 +79,11 @@ pub(crate) fn merged_head_completion_refusal(
     accepted: &AcceptedHandoff,
     pull_request: &HandoffPullRequest,
 ) -> Result<Option<String>, OrbitError> {
-    let records = runtime
-        .review_store()?
-        .review_reconciliations_for_task(&runtime.workspace_id()?, &task.id)?;
+    let records = runtime.sqlite_store()?.read().and_then(|snapshot| {
+        snapshot
+            .review()
+            .reconciliations_for_task(&runtime.workspace_id()?, &task.id)
+    })?;
     let digest = observe::task_digest(task)?;
     let matching: Vec<&ReviewReconciliation> = records
         .iter()

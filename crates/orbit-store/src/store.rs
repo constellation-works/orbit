@@ -9,12 +9,15 @@ use crate::Store;
 use crate::driver::sqlite::host::read_pool::ReadGuard;
 use crate::repository::admission_load::AdmissionLoadRepository;
 use crate::repository::application_consent::ApplicationConsentRepository;
+use crate::repository::automation::AutomationRepository;
 use crate::repository::backlog_forecast::BacklogForecastRepository;
 use crate::repository::codebase_fact::{AgentFactRepository, CodebaseFactRepository};
+use crate::repository::condition::ConditionRepository;
 use crate::repository::crew_memory::CrewMemoryRepository;
 use crate::repository::evolution::EvolutionRepository;
 use crate::repository::experiment::{ExperimentAssignmentRepository, ExperimentRepository};
 use crate::repository::friction::FrictionRepository;
+use crate::repository::incident::IncidentRepository;
 use crate::repository::landed_diff::LandedDiffRepository;
 use crate::repository::notice::NoticeRepository;
 use crate::repository::plugin::PluginRepository;
@@ -22,6 +25,7 @@ use crate::repository::provider_limit::ProviderLimitRepository;
 use crate::repository::reliability::ReliabilityRepository;
 use crate::repository::resource_usage::{ResourceUsageRepository, WorkerResourceLimitRepository};
 use crate::repository::retention::RetentionRepository;
+use crate::repository::review::ReviewRepository;
 use crate::repository::routine::RoutineRepository;
 use crate::repository::script_grant::ScriptGrantRepository;
 use crate::repository::tool::ToolRepository;
@@ -39,6 +43,26 @@ pub struct Snapshot<'a> {
 impl Snapshot<'_> {
     pub(crate) fn connection(&self) -> &Connection {
         &self.conn
+    }
+
+    /// Read-only access to host automation records.
+    pub fn automation(&self) -> AutomationRepository<'_, Self> {
+        AutomationRepository::for_snapshot(self)
+    }
+
+    /// Read-only access to host condition records.
+    pub fn condition(&self) -> ConditionRepository<'_, Self> {
+        ConditionRepository::for_snapshot(self)
+    }
+
+    /// Read-only access to the audit evidence used in incident reports.
+    pub fn incident(&self) -> IncidentRepository<'_> {
+        IncidentRepository::for_snapshot(self)
+    }
+
+    /// Read-only access to host review records.
+    pub fn review(&self) -> ReviewRepository<'_, Self> {
+        ReviewRepository::for_snapshot(self)
     }
 
     /// Read-only access to host admission-load records in this snapshot.
@@ -175,6 +199,21 @@ impl Tx<'_> {
     /// Read-write access to host admission-load records inside this transaction.
     pub fn admission_load(&self) -> AdmissionLoadRepository<'_, Self> {
         AdmissionLoadRepository::for_tx(self)
+    }
+
+    /// Access host automation records in this write transaction.
+    pub fn automation(&self) -> AutomationRepository<'_, Self> {
+        AutomationRepository::for_tx(self)
+    }
+
+    /// Access host condition records in this write transaction.
+    pub fn condition(&self) -> ConditionRepository<'_, Self> {
+        ConditionRepository::for_tx(self)
+    }
+
+    /// Access host review records in this write transaction.
+    pub fn review(&self) -> ReviewRepository<'_, Self> {
+        ReviewRepository::for_tx(self)
     }
 
     /// Read-write access to stored agent task-fact cache rows inside this

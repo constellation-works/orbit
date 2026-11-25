@@ -861,40 +861,46 @@ fn sandbox_fixture() {
     let workspace = runner.workspace_id().expect("follower workspace");
 
     // The admitted attempt, its reviewer running in the leaf.
-    let store = runner.review_store().expect("review store");
+    let store = runner.sqlite_store().expect("review store");
     let candidate = SourceRevision {
         commit: "a".repeat(40),
         tree: "b".repeat(40),
     };
     let (reservation, _) = store
-        .review_reserve(
-            &workspace,
-            &ReviewReserveRequest {
-                lineage_key: LINEAGE,
-                task_ids: std::slice::from_ref(&task),
-                run_id: LEAF,
-                task_meaning_digest: "digest",
-                candidate: &candidate,
-                budget: ReviewBudget::default(),
-                now: Utc::now(),
-            },
-        )
+        .write(|tx| {
+            orbit_core::test_support::review_ledger::reserve(
+                tx,
+                &workspace,
+                &ReviewReserveRequest {
+                    lineage_key: LINEAGE,
+                    task_ids: std::slice::from_ref(&task),
+                    run_id: LEAF,
+                    task_meaning_digest: "digest",
+                    candidate: &candidate,
+                    budget: ReviewBudget::default(),
+                    now: Utc::now(),
+                },
+            )
+        })
         .expect("reserve");
     let ReviewReservation::Reserved { attempt } = reservation else {
         panic!("a fresh lineage reserves an attempt: {reservation:?}");
     };
     let attempt_id = attempt.attempt_id.clone();
     store
-        .review_record_invocation(
-            &workspace,
-            &ReviewInvocationRecord {
-                lineage_key: LINEAGE,
-                attempt_id: &attempt_id,
-                run_id: LEAF,
-                event: ReviewerInvocationEvent::Started,
-                now: Utc::now(),
-            },
-        )
+        .write(|tx| {
+            orbit_core::test_support::review_ledger::record_invocation(
+                tx,
+                &workspace,
+                &ReviewInvocationRecord {
+                    lineage_key: LINEAGE,
+                    attempt_id: &attempt_id,
+                    run_id: LEAF,
+                    event: ReviewerInvocationEvent::Started,
+                    now: Utc::now(),
+                },
+            )
+        })
         .expect("reviewer started");
 
     // The manifest the gate pins on the owner, through the claim, first for
@@ -1170,7 +1176,8 @@ fn sandbox_fixture() {
     assert!(
         paths.iter().all(|path| path != "review-certificate.json")
             && store
-                .review_certificate(&workspace, &attempt_id)
+                .read()
+                .and_then(|snapshot| snapshot.review().certificate(&workspace, &attempt_id))
                 .expect("certificate read")
                 .is_none(),
         "the bridge never writes a certificate: {paths:?}"
@@ -1234,16 +1241,19 @@ fn sandbox_fixture() {
     // calls; another activity's broker never did; and a broker that has
     // shut down is named as the cause.
     store
-        .review_record_invocation(
-            &workspace,
-            &ReviewInvocationRecord {
-                lineage_key: LINEAGE,
-                attempt_id: &attempt_id,
-                run_id: LEAF,
-                event: ReviewerInvocationEvent::Finished { runtime_seconds: 5 },
-                now: Utc::now(),
-            },
-        )
+        .write(|tx| {
+            orbit_core::test_support::review_ledger::record_invocation(
+                tx,
+                &workspace,
+                &ReviewInvocationRecord {
+                    lineage_key: LINEAGE,
+                    attempt_id: &attempt_id,
+                    run_id: LEAF,
+                    event: ReviewerInvocationEvent::Finished { runtime_seconds: 5 },
+                    now: Utc::now(),
+                },
+            )
+        })
         .expect("reviewer finished");
     let stopped = runner
         .start_plugin_broker(&broker_run(
@@ -1345,16 +1355,19 @@ fn sandbox_fixture() {
     // recovers the claim and a later pull supersedes it, and the owner
     // refuses the bridged read and write as stale with nothing changed.
     store
-        .review_record_invocation(
-            &workspace,
-            &ReviewInvocationRecord {
-                lineage_key: LINEAGE,
-                attempt_id: &attempt_id,
-                run_id: LEAF,
-                event: ReviewerInvocationEvent::Started,
-                now: Utc::now(),
-            },
-        )
+        .write(|tx| {
+            orbit_core::test_support::review_ledger::record_invocation(
+                tx,
+                &workspace,
+                &ReviewInvocationRecord {
+                    lineage_key: LINEAGE,
+                    attempt_id: &attempt_id,
+                    run_id: LEAF,
+                    event: ReviewerInvocationEvent::Started,
+                    now: Utc::now(),
+                },
+            )
+        })
         .expect("reviewer restarted");
     let bridged = |run_id: &str| {
         let broker = runner
@@ -1413,9 +1426,10 @@ fn sandbox_fixture() {
             .map(|artifact| (artifact.path, artifact.content))
             .collect::<Vec<_>>();
         let certificate = owner_runtime
-            .review_store()
+            .sqlite_store()
             .expect("owner review store")
-            .review_certificate(&owner_workspace, &attempt_id)
+            .read()
+            .and_then(|snapshot| snapshot.review().certificate(&owner_workspace, &attempt_id))
             .expect("owner certificate read");
         (artifacts, certificate.is_some())
     };

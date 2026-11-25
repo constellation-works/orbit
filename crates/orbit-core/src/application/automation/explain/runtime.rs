@@ -66,7 +66,10 @@ impl OrbitRuntime {
                 })?;
         let now = Utc::now();
         let consumer = condition_consumer(self, found.carrier, &found.name)?;
-        let state = self.automation_store()?.condition_state(&consumer)?;
+        let state = self
+            .sqlite_store()?
+            .read()
+            .and_then(|snapshot| snapshot.condition().state(&consumer))?;
         // Explain sees what the next pass would: the definition's own minted
         // tasks are neither subjects nor, unless `board_includes_own`, board.
         let own = match condition.target {

@@ -5,7 +5,7 @@ use super::reconcile::{reconcile, retire_covered_prefix};
 use super::{DEFINITION_CHANGED, DeliveryHost, Evaluation, input_digest, observe, stall};
 use crate::checkpoint::{commit, diagnostic};
 use crate::{AutomationError, DeferredReason};
-use orbit_store::contracts::AutomationStoreBackend;
+use orbit_store::Store;
 use orbit_types::workflow::automation;
 use orbit_types::workflow::automation::*;
 
@@ -16,7 +16,7 @@ use orbit_types::workflow::automation::*;
 /// whether the consumer has to stop and say so. Preview never writes, so it
 /// reports the deferral exactly as the evaluator saw it.
 pub fn evaluate(
-    store: &dyn AutomationStoreBackend,
+    store: &Store,
     host: &dyn DeliveryHost,
     request: Evaluation<'_>,
 ) -> Result<AutomationDiagnostic, AutomationError> {
@@ -30,7 +30,7 @@ pub fn evaluate(
 
 /// One ordinary evaluation pass: reconcile, observe, then admit what is due.
 fn evaluate_pass(
-    store: &dyn AutomationStoreBackend,
+    store: &Store,
     host: &dyn DeliveryHost,
     request: Evaluation<'_>,
 ) -> Result<AutomationDiagnostic, AutomationError> {
@@ -46,7 +46,10 @@ fn evaluate_pass(
     trigger.validate().map_err(orbit_common::OrbitError::from)?;
 
     // The first evaluation pins a baseline at the branch head; nothing before it is debt.
-    let mut state = match store.automation_state(consumer)? {
+    let mut state = match store
+        .read()
+        .and_then(|snapshot| snapshot.automation().state(consumer))?
+    {
         Some(state) => state,
         None => {
             // Disabled definitions never pin a baseline. Preview must match the
@@ -82,7 +85,7 @@ fn evaluate_pass(
             // Another evaluator may have pinned its own baseline since the
             // read above. Its state is the persisted one; this pass's
             // candidate was never written, so it must not be reported.
-            if !dry_run && !store.automation_initialize(&state)? {
+            if !dry_run && !store.write(|tx| crate::checkpoint::initialize(tx, &state))? {
                 return Err(AutomationError::Deferred(
                     DeferredReason::ConcurrentEvaluation,
                 ));
@@ -383,7 +386,7 @@ enum Admission {
 /// Hand the claimed attempt to Core and record the durable action id it
 /// resolved, unless the host holds it under the current configuration.
 fn admit_active(
-    store: &dyn AutomationStoreBackend,
+    store: &Store,
     host: &dyn DeliveryHost,
     request: &Evaluation<'_>,
     state: &AutomationState,

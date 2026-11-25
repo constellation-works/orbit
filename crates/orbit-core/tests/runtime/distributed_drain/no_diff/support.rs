@@ -1047,15 +1047,23 @@ pub(crate) fn admit(
         active: None,
         stall: None,
     };
-    let store = owner.automation_store().unwrap();
-    assert!(store.automation_initialize(&baseline).unwrap());
+    let store = owner.sqlite_store().unwrap();
+    assert!(
+        store
+            .write(|tx| orbit_automation::checkpoint::initialize(tx, &baseline))
+            .unwrap()
+    );
     let mut admitted = baseline.clone();
     admitted.generation = 1;
     admitted.observed = attempt.batch.through_inclusive.clone();
     admitted.pending_commits = attempt.batch.commits.clone();
     admitted.pending = attempt.batch.deliveries.clone();
     admitted.active = Some(attempt.clone());
-    assert!(store.automation_commit(&baseline, &admitted, None).unwrap());
+    assert!(
+        store
+            .write(|tx| orbit_automation::checkpoint::commit_state(tx, &baseline, &admitted, None))
+            .unwrap()
+    );
 }
 /// The one file named `name` under `root`.
 pub(crate) fn find_file(root: &Path, name: &str) -> Option<PathBuf> {

@@ -664,7 +664,7 @@ orbit auto-task reset delivery-code-review \
   --reason "agent-main was rewritten past the observed commit"
 ```
 
-An apply writes one immutable record into the same `automation_recoveries`
+An apply writes one immutable record into the recovery history
 table — kind `reset`, carrying `by`/`at`/`reason`, the previous epoch and
 generation, the forgotten-debt inventory, the abandoned action and the new
 baseline — drops the consumer row in the same transaction, and deletes the

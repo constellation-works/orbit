@@ -94,8 +94,13 @@ impl OrbitRuntime {
         else {
             return Ok(());
         };
-        self.review_store()?
-            .review_certificate_record(&self.workspace_id()?, &certificate)
+        self.sqlite_store()?.write(|tx| {
+            crate::application::review::ledger::record_certificate(
+                tx,
+                &self.workspace_id()?,
+                &certificate,
+            )
+        })
     }
 
     /// Explicit review-state approval. Does not reuse the backlog grant validator.

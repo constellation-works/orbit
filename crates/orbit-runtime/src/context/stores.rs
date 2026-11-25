@@ -3,9 +3,9 @@ use orbit_config::{CodexExecutionPolicy, ExecutionEnvPolicy};
 use orbit_policy::PolicyEngine;
 use orbit_search::LexicalIndex;
 use orbit_store::contracts::{
-    AuditEventStoreBackend, AutomationStoreBackend, InvocationStoreBackend, JobRunStoreBackend,
-    ReviewStoreBackend, TaskArtifactStoreBackend, TaskDocumentStoreBackend,
-    TaskHistoryStoreBackend, TaskReservationStoreBackend, TaskStoreBackend, V2AuditStoreBackend,
+    AuditEventStoreBackend, InvocationStoreBackend, JobRunStoreBackend, TaskArtifactStoreBackend,
+    TaskDocumentStoreBackend, TaskHistoryStoreBackend, TaskReservationStoreBackend,
+    TaskStoreBackend, V2AuditStoreBackend,
 };
 use orbit_store::skill_store::SkillDirs;
 use orbit_store::{ExecutorDefDir, FileStore, PolicyDefDirs, Store};
@@ -19,8 +19,6 @@ use std::sync::Arc;
 #[derive(Clone)]
 pub(crate) struct OrbitHostStore {
     pub(crate) sqlite: Store,
-    pub(crate) automation: Arc<dyn AutomationStoreBackend>,
-    pub(crate) review: Arc<dyn ReviewStoreBackend>,
     pub(crate) v2_audit: Arc<dyn V2AuditStoreBackend>,
     pub(crate) invocation: Arc<dyn InvocationStoreBackend>,
 }

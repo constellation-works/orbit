@@ -70,10 +70,11 @@ impl<'a> ClaimedReviewScope<'a> {
             .ok_or_else(|| denied("the run has no job-run authority"))?;
         let now = Utc::now();
         let mut held = Vec::new();
-        for ledger in runtime
-            .review_store()?
-            .review_ledgers_held_by(&runtime.workspace_id()?, job_run_id)?
-        {
+        for ledger in runtime.sqlite_store()?.read().and_then(|snapshot| {
+            snapshot
+                .review()
+                .ledgers_held_by(&runtime.workspace_id()?, job_run_id)
+        })? {
             if !ledger.task_ids.contains(&binding.task_id) {
                 continue;
             }

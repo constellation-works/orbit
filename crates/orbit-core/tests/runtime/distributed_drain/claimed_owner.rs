@@ -693,9 +693,12 @@ fn a_claimed_worker_cannot_plant_review_records_that_its_gate_still_writes() {
         .expect("the owner accepts the reviewed handoff");
     assert!(
         owner
-            .review_store()
+            .sqlite_store()
             .unwrap()
-            .review_certificate(&owner.workspace_id().unwrap(), &attempt_id)
+            .read()
+            .and_then(|snapshot| snapshot
+                .review()
+                .certificate(&owner.workspace_id().unwrap(), &attempt_id))
             .unwrap()
             .is_some(),
         "the owner pins the gate's certificate"

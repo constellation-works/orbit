@@ -802,9 +802,14 @@ impl Delivery {
 
     fn stored(&self, reconciliation: &str) -> ReviewReconciliation {
         self.owner
-            .review_store()
+            .sqlite_store()
             .unwrap()
-            .review_reconciliation(&self.owner.workspace_id().unwrap(), reconciliation)
+            .read()
+            .and_then(|snapshot| {
+                snapshot
+                    .review()
+                    .reconciliation(&self.owner.workspace_id().unwrap(), reconciliation)
+            })
             .unwrap()
             .expect("retained reconciliation")
     }
@@ -826,9 +831,15 @@ impl Delivery {
         record.binding_digest = sha256_hex(&serde_json::to_vec(&record.binding).unwrap());
         let refused = self
             .owner
-            .review_store()
+            .sqlite_store()
             .unwrap()
-            .review_reconciliation_update(&self.owner.workspace_id().unwrap(), &record)
+            .write(|tx| {
+                orbit_core::test_support::review_ledger::update_reconciliation(
+                    tx,
+                    &self.owner.workspace_id().unwrap(),
+                    &record,
+                )
+            })
             .expect_err("the store never rewrites a binding or schema");
         assert!(refused.to_string().contains("immutable"), "{refused}");
         let database = self.owner.global_root().join("orbit.db");
@@ -1448,9 +1459,14 @@ fn a_baseline_failure_completes_only_on_an_operator_disposition() {
 
     let stored = delivery
         .owner
-        .review_store()
+        .sqlite_store()
         .unwrap()
-        .review_reconciliation(&delivery.owner.workspace_id().unwrap(), &reconciliation)
+        .read()
+        .and_then(|snapshot| {
+            snapshot
+                .review()
+                .reconciliation(&delivery.owner.workspace_id().unwrap(), &reconciliation)
+        })
         .unwrap()
         .expect("retained reconciliation");
     assert_eq!(stored.contract.required_commands, vec![command.clone()]);
@@ -1518,21 +1534,25 @@ fn a_baseline_failure_completes_only_on_an_operator_disposition() {
 
     // No ordinary review certificate was invented for the merged head.
     let merged = &retained["record"]["binding"]["pull_request"];
-    let store = delivery.owner.review_store().unwrap();
+    let store = delivery.owner.sqlite_store().unwrap();
     assert!(
         store
-            .review_certificates_for_tree(
+            .read()
+            .and_then(|snapshot| snapshot.review().certificates_for_tree(
                 merged["repository"].as_str().unwrap(),
                 merged["merged_head"]["tree"].as_str().unwrap(),
                 10,
-            )
+            ))
             .unwrap()
             .is_empty(),
         "a disposition must not mint a passed review certificate"
     );
     assert!(
         store
-            .review_certificate(&delivery.owner.workspace_id().unwrap(), &reconciliation)
+            .read()
+            .and_then(|snapshot| snapshot
+                .review()
+                .certificate(&delivery.owner.workspace_id().unwrap(), &reconciliation))
             .unwrap()
             .is_none(),
         "baseline"

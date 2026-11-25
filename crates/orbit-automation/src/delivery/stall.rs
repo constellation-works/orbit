@@ -32,7 +32,7 @@ use super::{DeliveryHost, Evaluation, recovery};
 use crate::checkpoint::{diagnostic, next_generation};
 use crate::{AutomationError, DeferredReason};
 use chrono::{DateTime, Duration, Utc};
-use orbit_store::contracts::AutomationStoreBackend;
+use orbit_store::Store;
 use orbit_types::workflow::automation::recovery::{
     AutomationStall, CrewOsHold, DEFAULT_STALL_WINDOW_MINUTES, HistoryDivergence, RecoveryRequest,
     SYSTEM_ACTOR,
@@ -91,7 +91,7 @@ fn is_stuck(reason: &DeferredReason) -> bool {
 /// place, so the caller continues its pass against the generation the clearing
 /// write left behind.
 pub(super) fn suspended(
-    store: &dyn AutomationStoreBackend,
+    store: &Store,
     host: &dyn DeliveryHost,
     request: &Evaluation<'_>,
     state: &mut AutomationState,
@@ -155,12 +155,15 @@ pub(super) fn suspended(
 /// next tick retries. A stuck reason becomes a durable stall instead, and
 /// `history_diverged` first gets one automatic chance to prove itself safe.
 pub(super) fn deferred(
-    store: &dyn AutomationStoreBackend,
+    store: &Store,
     host: &dyn DeliveryHost,
     request: &Evaluation<'_>,
     reason: DeferredReason,
 ) -> Result<AutomationDiagnostic, AutomationError> {
-    let Some(state) = store.automation_state(request.consumer)? else {
+    let Some(state) = store
+        .read()
+        .and_then(|snapshot| snapshot.automation().state(request.consumer))?
+    else {
         return Err(AutomationError::Deferred(reason));
     };
 
@@ -198,7 +201,7 @@ pub(super) fn deferred(
 /// Stall on an admission hold the host reported for the claimed action,
 /// leaving the claim as it is for the pass that finds the hold gone.
 pub(super) fn held(
-    store: &dyn AutomationStoreBackend,
+    store: &Store,
     host: &dyn DeliveryHost,
     request: &Evaluation<'_>,
     state: &AutomationState,
@@ -229,7 +232,7 @@ pub(super) fn held(
 
 /// Prove the rebase, or stall on what the proof refused.
 fn diverged(
-    store: &dyn AutomationStoreBackend,
+    store: &Store,
     host: &dyn DeliveryHost,
     request: &Evaluation<'_>,
     state: AutomationState,
@@ -269,7 +272,7 @@ fn diverged(
 /// Apply the replay proof under a system-attributed audit record, then record
 /// the rewrite as friction so it does not pass unseen.
 fn replay(
-    store: &dyn AutomationStoreBackend,
+    store: &Store,
     host: &dyn DeliveryHost,
     request: &Evaluation<'_>,
     state: &AutomationState,
@@ -329,7 +332,9 @@ fn replay(
         store,
         request.consumer,
         "history_replayed",
-        store.automation_state(request.consumer)?,
+        store
+            .read()
+            .and_then(|snapshot| snapshot.automation().state(request.consumer))?,
     )
 }
 
@@ -355,7 +360,7 @@ fn obligations(state: &AutomationState) -> Vec<String> {
 /// for the same reason so repeated ticks neither reset the clock nor file a
 /// second friction.
 fn mark(
-    store: &dyn AutomationStoreBackend,
+    store: &Store,
     host: &dyn DeliveryHost,
     request: &Evaluation<'_>,
     state: &AutomationState,
@@ -402,7 +407,7 @@ fn mark(
 
 /// Escalate a stall already recorded once its window has elapsed.
 fn escalate_if_due(
-    store: &dyn AutomationStoreBackend,
+    store: &Store,
     host: &dyn DeliveryHost,
     request: &Evaluation<'_>,
     state: &AutomationState,
@@ -422,7 +427,7 @@ fn due(now: DateTime<Utc>, stall: &AutomationStall) -> bool {
 }
 
 fn write(
-    store: &dyn AutomationStoreBackend,
+    store: &Store,
     state: &AutomationState,
     stall: Option<AutomationStall>,
 ) -> Result<AutomationState, AutomationError> {
@@ -434,7 +439,7 @@ fn write(
     next.stall = stall;
     next.generation = next_generation(state)?;
 
-    if !store.automation_stall(state, &next)? {
+    if !store.write(|tx| crate::checkpoint::stall(tx, state, &next))? {
         return Err(AutomationError::Deferred(
             DeferredReason::ConcurrentEvaluation,
         ));

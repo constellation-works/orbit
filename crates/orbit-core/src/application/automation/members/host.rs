@@ -62,7 +62,7 @@ pub(crate) fn evaluate_with_cache(
     host.inspection_cache = cache;
     host.guard = definition.trigger.when.clone();
     members::evaluate(
-        runtime.automation_store()?.as_ref(),
+        &runtime.sqlite_store()?,
         &host,
         MemberEvaluation {
             consumer: &consumer,

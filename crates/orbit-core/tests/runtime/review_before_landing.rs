@@ -234,12 +234,15 @@ fn failure_handoff_after(
 fn candidate_reviewed(fixture: &Fixture) -> (orbit_types::workflow::ReviewLedger, bool) {
     let ledger = fixture
         .runtime
-        .review_store()
+        .sqlite_store()
         .unwrap()
-        .review_ledger(
-            &fixture.runtime.workspace_id().unwrap(),
-            fixture.input["admission"]["lineage_key"].as_str().unwrap(),
-        )
+        .read()
+        .and_then(|snapshot| {
+            snapshot.review().ledger(
+                &fixture.runtime.workspace_id().unwrap(),
+                fixture.input["admission"]["lineage_key"].as_str().unwrap(),
+            )
+        })
         .unwrap()
         .unwrap();
     let attempt = ledger.attempts.last().unwrap();

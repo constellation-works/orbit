@@ -4,14 +4,13 @@
 use chrono::{DateTime, Duration, Utc};
 use orbit_common::OrbitError;
 use orbit_common::security::release::sha256_hex;
+use orbit_store::Tx;
 use orbit_types::workflow::{
     ReviewAttempt, ReviewAttemptState, ReviewLedger, ReviewReservation, ReviewVerdict,
     ReviewerInvocation, ReviewerInvocationEvent,
 };
-use rusqlite::Connection;
 
-use super::ledger::write_ledger;
-use crate::contracts::ReviewReserveRequest;
+use orbit_store::contracts::ReviewReserveRequest;
 
 fn attempt_id(lineage_key: &str, index: u32) -> String {
     let digest = sha256_hex(lineage_key.as_bytes());
@@ -169,17 +168,17 @@ pub(super) fn review_spent(
 }
 
 pub(super) fn reserve_new(
-    conn: &Connection,
+    tx: &Tx<'_>,
     workspace_id: &str,
     ledger: ReviewLedger,
     request: &ReviewReserveRequest<'_>,
 ) -> Result<(ReviewReservation, ReviewLedger), OrbitError> {
     let revision = ledger.revision;
-    reserve_new_in(conn, workspace_id, Some(revision), ledger, request)
+    reserve_new_in(tx, workspace_id, Some(revision), ledger, request)
 }
 
 pub(super) fn reserve_new_in(
-    conn: &Connection,
+    tx: &Tx<'_>,
     workspace_id: &str,
     previous_revision: Option<u32>,
     mut ledger: ReviewLedger,
@@ -209,12 +208,7 @@ pub(super) fn reserve_new_in(
         reviewer_running: None,
     };
     ledger.attempts.push(attempt.clone());
-    write_ledger(
-        conn,
-        workspace_id,
-        previous_revision,
-        &mut ledger,
-        request.now,
-    )?;
+    tx.review()
+        .put_ledger(workspace_id, previous_revision, &mut ledger, request.now)?;
     Ok((ReviewReservation::Reserved { attempt }, ledger))
 }

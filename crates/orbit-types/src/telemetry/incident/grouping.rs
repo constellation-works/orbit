@@ -1,16 +1,15 @@
 //! Passes 2 to 4: cluster rows by run scope and signature, collapse
-//! in-run cascades, then fold cited-run cascades; and the report built on
-//! top. Root metadata comes from the earliest row by timestamp, then event ID.
+//! in-run cascades, then fold cited-run cascades. Root metadata comes
+//! from the earliest row by timestamp, then event ID.
 
 use super::cause::{CauseInput, cause_for};
 use super::classify::{classify, has_tool_identity, surface_of};
 use super::signature::{incident_id, signature_for};
 use super::types::{
-    CASCADE_WINDOW_SECS, FailureClass, FailureIncident, FailureIncidentReport, IncidentEventRef,
-    PropagationLink,
+    CASCADE_WINDOW_SECS, FailureClass, FailureIncident, IncidentEventRef, PropagationLink,
 };
+use crate::telemetry::AuditEvent;
 use chrono::{DateTime, Duration, Utc};
-use orbit_types::telemetry::AuditEvent;
 use std::cmp::Reverse;
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -18,73 +17,6 @@ use std::collections::{BTreeMap, BTreeSet};
 /// full population is always reachable through the raw Audit view; this bound
 /// keeps one burst of thousands from dominating a response body.
 const MAX_SAMPLE_EVENTS: usize = 20;
-
-/// Groups already-filtered failure rows into a report. Split out from the
-/// store call so the contract is testable without a database.
-pub fn build_report(failures: &[AuditEvent], truncated: bool) -> FailureIncidentReport {
-    let incidents = group_failure_incidents(failures);
-
-    let mut raw_events_by_class: BTreeMap<String, u64> = BTreeMap::new();
-    let mut job_run_lifecycle_events: u64 = 0;
-    for event in failures {
-        *raw_events_by_class
-            .entry(classify(event).as_str().to_string())
-            .or_insert(0) += 1;
-        if !has_tool_identity(event) {
-            job_run_lifecycle_events += 1;
-        }
-    }
-    let mut incidents_by_class: BTreeMap<String, u64> = BTreeMap::new();
-    let mut run_ids: BTreeSet<String> = BTreeSet::new();
-    let mut run_ids_by_class: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
-    let mut job_run_lifecycle_incidents: u64 = 0;
-    for incident in &incidents {
-        *incidents_by_class
-            .entry(incident.class.as_str().to_string())
-            .or_insert(0) += 1;
-        if !incident.has_tool_identity {
-            job_run_lifecycle_incidents += 1;
-        }
-        for run_id in &incident.run_ids {
-            run_ids.insert(run_id.clone());
-            run_ids_by_class
-                .entry(incident.class.as_str().to_string())
-                .or_default()
-                .insert(run_id.clone());
-        }
-    }
-    let affected_runs_by_class: BTreeMap<String, u64> = run_ids_by_class
-        .into_iter()
-        .map(|(class, ids)| (class, ids.len() as u64))
-        .collect();
-    let lifecycle_diagnostic_events = raw_events_by_class
-        .get(FailureClass::Diagnostic.as_str())
-        .copied()
-        .unwrap_or(0);
-    let lifecycle_diagnostic_incidents = incidents_by_class
-        .get(FailureClass::Diagnostic.as_str())
-        .copied()
-        .unwrap_or(0);
-    let lifecycle_diagnostic_affected_run_count = affected_runs_by_class
-        .get(FailureClass::Diagnostic.as_str())
-        .copied()
-        .unwrap_or(0);
-
-    FailureIncidentReport {
-        raw_failed_events: failures.len() as u64,
-        raw_events_by_class,
-        incidents_by_class,
-        affected_runs_by_class,
-        incidents,
-        affected_run_count: run_ids.len() as u64,
-        job_run_lifecycle_events,
-        job_run_lifecycle_incidents,
-        lifecycle_diagnostic_events,
-        lifecycle_diagnostic_incidents,
-        lifecycle_diagnostic_affected_run_count,
-        truncated,
-    }
-}
 
 /// One `(run scope, signature)` bucket before cascade collapsing.
 #[derive(Debug, Clone)]
