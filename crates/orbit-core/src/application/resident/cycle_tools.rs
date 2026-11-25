@@ -18,7 +18,8 @@ const RECOVER_TOOL: &str = "orbit.task.recover";
 
 /// The tool families a right reaches: `dispatch` ships, re-pilots and requeues,
 /// `merge` lands, `refresh` refreshes and `recover` resumes a delivery.
-/// Promotion and `plugin_upgrade` use tools every cycle already has.
+/// Promotion uses tools every cycle already has; `plugin_upgrade` reaches no
+/// tool, so no cycle installs or upgrades a workspace plugin.
 fn tools_of_right(right: ResidentRight) -> &'static [&'static str] {
     match right {
         ResidentRight::Dispatch => &[WORKFLOW_TOOL, RECOVER_TOOL],

@@ -1,7 +1,7 @@
 ---
 title: Resident Orchestrator — Design
 owner: claude
-last_updated: 2026-11-23
+last_updated: 2026-11-24
 last_validated: 2026-11-08
 status: Draft
 feature: resident-orchestrator
@@ -87,7 +87,8 @@ not the prompt.
 
 - **Rights.** `dispatch` (start or requeue leaf runs and drains), `promote` (move an ordinary
   `proposed` task to `backlog`, where the drain can admit it), `merge` (land a reviewed PR),
-  `plugin_upgrade` (install or upgrade a workspace plugin), `refresh` (merge the base tip into
+  `plugin_upgrade` (a recognized right with no cycle tool: no resident cycle installs or upgrades
+  a workspace plugin), `refresh` (merge the base tip into
   a held or review delivery PR and start its required checks, when the merge is conflict-free),
   `recover` (when the workspace requires before-PR or before-landing review, start a recovery
   leaf that may make the needed source changes to a stopped delivery's preserved candidate and

@@ -141,7 +141,7 @@ flag.
 | `dispatch` | Start or requeue leaf runs and drains. |
 | `promote` | Move an ordinary `proposed` task to `backlog` (held `no-auto-approve` proposals need `promote_held`). |
 | `merge` | Land a reviewed pull request. |
-| `plugin_upgrade` | Install or upgrade a workspace plugin. |
+| `plugin_upgrade` | Nothing yet. The right is recognized, but no resident cycle tool installs or upgrades a workspace plugin. |
 | `refresh` | Merge the base branch tip into a held or review delivery pull request head (conflict-free) and re-run its required checks. |
 | `recover` | Start a recovery leaf for a blocked task’s preserved delivery. |
 | `promote_held` | Move eligible `no-auto-approve` proposals to `backlog` after a current pilot with no holds or warnings. |
