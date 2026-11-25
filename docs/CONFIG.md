@@ -29,7 +29,7 @@ whole.
 | `CARGO_MANIFEST_DIR` | Workspace location for the engine round-trip example. | The manifest directory recorded at compile time. | — |
 | `CLAUDE_CONFIG_DIR` | Claude Code's configuration and state directory. | `~/.claude` where Orbit derives the directory. | — |
 | `CLICOLOR_FORCE` | Terminal color preference. It cannot enable color on non-terminals or bypass `NO_COLOR` or `TERM=dumb`. | Unset. | — |
-| `CODEX_CA_CERTIFICATE` | PEM CA bundle for Codex. On macOS Orbit checks it is readable and supplies the system bundle when neither this nor `SSL_CERT_FILE` is set. | Unset. Orbit uses `/etc/ssl/cert.pem` on macOS. | — |
+| `CODEX_CA_CERTIFICATE` | PEM CA bundle for Codex under the macOS Seatbelt sandbox. A nonempty value takes precedence over `SSL_CERT_FILE`; Orbit validates the selected path is a readable file and fails the launch otherwise. When both are unset or empty, Orbit supplies `/etc/ssl/cert.pem` through this variable. Bare macOS launches, other providers, and Linux are unaffected. | Unset. On a macOS Seatbelt Codex launch, Orbit supplies `/etc/ssl/cert.pem` when both this and `SSL_CERT_FILE` are unset or empty. | — |
 | `CODEX_HOME` | Codex configuration and state directory. | `~/.codex` where Orbit derives the directory. | — |
 | `COLUMNS` | Preferred terminal width in columns. | Terminal width query, or no truncation when neither supplies a width. | — |
 | `CONSTELLATION_DEFAULT_PROVIDER` | Provider used to resolve the default workflow crew below explicit config. | The built-in default crew. | — |
@@ -166,7 +166,7 @@ whole.
 | `SHELL` | Login shell location forwarded to host-side Git and GitHub CLI children. | Unset if the OS or launcher does not supply it. | — |
 | `SSH_AUTH_SOCK` | SSH agent socket forwarded to host-side Git children. | Unset. | — |
 | `SSH_CONNECTION` | OpenSSH connection metadata from which Orbit extracts the caller IP. | Unset. | — |
-| `SSL_CERT_FILE` | PEM CA bundle that TLS clients read. Orbit accepts it for Codex on macOS when `CODEX_CA_CERTIFICATE` is unset. | Unset. | — |
+| `SSL_CERT_FILE` | PEM CA bundle that TLS clients read. For Codex under the macOS Seatbelt sandbox, a nonempty value applies when `CODEX_CA_CERTIFICATE` is unset or empty; Orbit validates the selected path is a readable file and fails the launch otherwise. When both are unset or empty, Orbit supplies `/etc/ssl/cert.pem` through `CODEX_CA_CERTIFICATE`. Bare macOS launches, other providers, and Linux are unaffected. | Unset. On a macOS Seatbelt Codex launch, the `/etc/ssl/cert.pem` fallback applies when both this and `CODEX_CA_CERTIFICATE` are unset or empty. | — |
 | `SUDO_GID` | Original group ID used by Linux host setup when running under sudo. | Unset. | — |
 | `SUDO_UID` | Original user ID used by Linux host setup when running under sudo. | Unset. | — |
 | `TERM` | Terminal type. `dumb` disables terminal styling. | Unset if the OS or launcher does not supply it. | — |
