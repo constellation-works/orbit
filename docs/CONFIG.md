@@ -157,8 +157,8 @@ whole.
 | `ORBIT_WORKTREE_ROOT` | Parent directory override for managed worktrees. | The workspace's managed worktree directory. | — |
 | `PATH` | Program search path used for executable discovery and child execution. | Unset if the OS or launcher does not supply it. Individual launchers may supply a fallback. | — |
 | `PATHEXT` | Windows executable extensions tried when searching for programs. | `.COM;.EXE;.BAT;.CMD`. | — |
-| `PLAYWRIGHT_BROWSERS_PATH` | Directory of the headless browser kit's browsers, which Playwright reads. | Unset. Set only for a worker whose host has a verified kit. | — |
-| `PLAYWRIGHT_MODULE` | The headless browser kit's Playwright ES module, which a check imports `chromium` from. | Unset. Set only for a worker whose host has a verified kit. | — |
+| `PLAYWRIGHT_BROWSERS_PATH` | Directory of the headless browser kit's browsers, which Playwright reads. | Unset. Orbit sets it for a worker whose host has a verified kit. Host setup also sets it for the Chromium download, and the kit's `env.sh`, which smoke verification sources, exports it whether or not the kit is verified. | — |
+| `PLAYWRIGHT_MODULE` | The headless browser kit's Playwright ES module, which a check imports `chromium` from. | Unset. Orbit sets it for a worker whose host has a verified kit. The kit's `env.sh`, which host setup writes and smoke verification sources, exports it whether or not the kit is verified. | — |
 | `PYTHONDONTWRITEBYTECODE` | Python bytecode-write switch. Orbit sets `1` for a validation command that does not set it. | Orbit sets `1` for validation commands. | — |
 | `RUSTUP_HOME` | Rustup installation and toolchain cache root forwarded to plugin builds. | Unset. | — |
 | `RUSTUP_TOOLCHAIN` | Rust toolchain selection forwarded to plugin builds. | Unset. | — |
