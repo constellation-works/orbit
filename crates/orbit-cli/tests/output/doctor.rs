@@ -2371,9 +2371,12 @@ fn doctor_reports_the_retired_ux_rules_runner_manifest_with_its_removal() {
     };
     let reported = check(&f);
     assert_eq!(reported["status"], "warning", "{reported}");
-    msg_has(&reported, &manifest.display().to_string());
+    // Doctor names the canonical path (on macOS the temp dir resolves
+    // `/var` to `/private/var`), so the expectation is canonical too.
+    let shown = fs::canonicalize(&manifest).expect("canonical manifest");
+    msg_has(&reported, &shown.display().to_string());
     msg_has(&reported, "jobs that reference it refuse");
-    fix_has(&reported, &format!("Delete {}", manifest.display()));
+    fix_has(&reported, &format!("Delete {}", shown.display()));
     fix_has(&reported, "orbit script revoke ux_rules_runner");
     assert!(manifest.is_file(), "diagnosis leaves the manifest in place");
     fs::remove_file(&manifest).expect("remove manifest");
