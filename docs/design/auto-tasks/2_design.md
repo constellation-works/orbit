@@ -48,11 +48,15 @@ No-diff tasks retain their configured or default status and pilot path.
 The creation history records the effective initial status under `system`,
 and the task's `auto-task:<name>` tag identifies its source definition.
 See [the initial-status decision](4_decisions.md#implementation-auto-tasks-enter-proposed-at-mint-time).
-Context selectors are copied unchanged into minted tasks. Diff-producing
-chores must declare a scope in their YAML template; otherwise admission holds
-them for task-pilot. Older definitions without selectors remain readable.
+Context selectors are copied into minted tasks, dropping a file or directory
+anchor the target checkout lacks, so a minted task never names a missing lock
+anchor the pilot would drop with a promotion-holding warning [ORB-28151].
+Diff-producing chores must declare a scope in their YAML template; otherwise
+admission holds them for task-pilot. Older definitions without selectors
+remain readable.
 `doc-duties` declares a bounded template footprint (`dir:docs` plus the
-tracked top-level `README.md` and `CONTRIBUTING.md`). Its brief assigns
+tracked top-level `README.md` and `CONTRIBUTING.md`). A repository without
+`CONTRIBUTING.md` mints without that selector. Its brief assigns
 batch selection to the executing worker, which drops generated indexes,
 archives and records the repository identifies as historical, including
 paths on the repository's link-check or doc-index exclusion list. The task
