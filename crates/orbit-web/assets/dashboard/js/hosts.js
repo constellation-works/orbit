@@ -135,7 +135,7 @@ async function loadRemoteAccess() {
   try {
     next = { host, payload: await fetchJson("/api/remote-access") };
   } catch (error) {
-    next = { host, error: error.status === 404 ? "This host's Orbit does not report remote access." : `Remote access unavailable: ${error.message}` };
+    next = { host, error: error.routeMissing ? "This host's Orbit does not report remote access." : `Remote access unavailable: ${error.message}` };
   }
   if (token !== remoteEpoch) return;
   remoteAccess = next;
