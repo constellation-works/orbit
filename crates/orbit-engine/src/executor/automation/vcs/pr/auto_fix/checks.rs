@@ -362,9 +362,9 @@ pub(in crate::executor::automation::vcs::pr) fn repair_failed_checks<H: RuntimeH
         ));
     };
     let (failed, required) =
-        match required_failures(host, workspace_path, pr_number, head_sha, failed) {
+        match classified_required_failures(host, workspace_path, pr_number, head_sha, failed) {
             Ok(found) => found,
-            Err(reason) => return CheckRepair::Ended(verdict::stopped(pr_number, &reason)),
+            Err(stop) => return CheckRepair::Ended(stop.into_error(pr_number)),
         };
     let dependency_base = status.base_branch.as_deref().and_then(|base| {
         git_output(
@@ -509,18 +509,66 @@ pub(super) fn required_failures<H: RuntimeHost + ?Sized>(
     head_sha: &str,
     failed: &[(Option<String>, String)],
 ) -> Result<RequiredFailures, String> {
-    let required = read_required_checks(host, Path::new(workspace_path), pr_number)
-        .map_err(|error| format!("its required checks could not be read: {error}"))?;
+    classified_required_failures(host, workspace_path, pr_number, head_sha, failed)
+        .map_err(|stop| stop.reason)
+}
+
+/// A refusal of [`required_failures`], with the hold it deserves when the
+/// evidence is inconclusive rather than a verdict on the pull request.
+pub(super) struct RequiredFailuresStop {
+    reason: String,
+    hold: Option<DeliveryRefusal>,
+}
+
+impl RequiredFailuresStop {
+    fn held(refusal: DeliveryRefusal, reason: String) -> Self {
+        Self {
+            reason,
+            hold: Some(refusal),
+        }
+    }
+
+    /// The stop for `pr_number`: a typed hold when the evidence is
+    /// inconclusive, an ordinary stop otherwise.
+    fn into_error(self, pr_number: &str) -> OrbitError {
+        let error = verdict::stopped(pr_number, &self.reason);
+        match self.hold {
+            Some(refusal) => verdict::hold_auto_fix_stop(error, refusal),
+            None => error,
+        }
+    }
+}
+
+fn classified_required_failures<H: RuntimeHost + ?Sized>(
+    host: &H,
+    workspace_path: &str,
+    pr_number: &str,
+    head_sha: &str,
+    failed: &[(Option<String>, String)],
+) -> Result<RequiredFailures, RequiredFailuresStop> {
+    let required =
+        read_required_checks(host, Path::new(workspace_path), pr_number).map_err(|error| {
+            RequiredFailuresStop::held(
+                DeliveryRefusal::CheckEvidenceInconclusive,
+                format!("its required checks could not be read: {error}"),
+            )
+        })?;
     if required.head_sha != head_sha || required.reported_head_sha.as_deref() != Some(head_sha) {
-        return Err(format!(
-            "its required checks were read on head {} rather than {head_sha}",
-            required.head_sha
+        return Err(RequiredFailuresStop::held(
+            DeliveryRefusal::HeadChanged,
+            format!(
+                "its required checks were read on head {} rather than {head_sha}",
+                required.head_sha
+            ),
         ));
     }
     if required.checks.iter().any(|check| {
         check.state != Some(CheckState::Passed) && check.state != Some(CheckState::Failed)
     }) {
-        return Err("its required checks have not all concluded; no repair is admitted".into());
+        return Err(RequiredFailuresStop::held(
+            DeliveryRefusal::CheckEvidenceInconclusive,
+            "its required checks have not all concluded; no repair is admitted".into(),
+        ));
     }
     let mut failed = failed
         .iter()
@@ -544,7 +592,10 @@ pub(super) fn required_failures<H: RuntimeHost + ?Sized>(
         }
     }
     if failed.is_empty() {
-        return Err("only optional checks failed; the merge is blocked by something else".into());
+        return Err(RequiredFailuresStop {
+            reason: "only optional checks failed; the merge is blocked by something else".into(),
+            hold: None,
+        });
     }
     Ok((failed, required))
 }

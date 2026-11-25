@@ -5590,7 +5590,7 @@ impl Fixture {
             .unwrap_or(0)
     }
     /// Answers to successive required-checks reads; the last repeats
-    /// (`empty`, `truncated`, `fail` or `success`; see [`FAKE_GH`]).
+    /// (`empty`, `truncated`, `fail`, `tls`, `success`, `pending` or `foreign_head`; see [`FAKE_GH`]).
     fn script_required_check_outcomes(&self, outcomes: &[&str]) {
         self.script_lines("required-checks-outcomes", outcomes);
         fs::write(self.forge.join("required-checks-reads"), "0\n").unwrap();
@@ -7395,6 +7395,8 @@ PYVIEW
                         fail) echo 'unexpected end of JSON input' >&2; exit 1 ;;
                         tls) echo 'Post "https://api.github.com/graphql": net/http: TLS handshake timeout' >&2; exit 1 ;;
                         success) ;;
+                        pending) observed=mixed_pending ;;
+                        foreign_head) rc_head=0000000000000000000000000000000000000000 ;;
                         *) echo "fake gh: unknown required-checks outcome '$rc_outcome'" >&2; exit 2 ;;
                     esac
                 fi
@@ -7405,7 +7407,7 @@ PYVIEW
                     mixed_*|paired_failure|paired_failure_reversed|optional_pending) ;;
                     *) rollup=$(printf '%s' "$rollup" | sed 's/}$/,"isRequired":true}/') ;;
                 esac
-                printf '{"data":{"repository":{"pullRequest":{"headRefOid":"%s","commits":{"nodes":[{"commit":{"oid":"%s","statusCheckRollup":{"contexts":{"pageInfo":{"hasNextPage":false},"nodes":[%s]}}}}]}}}}}\n' "$(head_sha)" "$(head_sha)" "$rollup"
+                printf '{"data":{"repository":{"pullRequest":{"headRefOid":"%s","commits":{"nodes":[{"commit":{"oid":"%s","statusCheckRollup":{"contexts":{"pageInfo":{"hasNextPage":false},"nodes":[%s]}}}}]}}}}}\n' "${rc_head:-$(head_sha)}" "${rc_head:-$(head_sha)}" "$rollup"
                 exit ;;
         esac
         # An unreviewed push that lands after the freshness check, while the
