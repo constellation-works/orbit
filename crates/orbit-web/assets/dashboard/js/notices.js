@@ -15,7 +15,7 @@
 // and Close asks for its reason only once chosen. Posting is a modal dialog
 // with title, severity and body up front. `#notices` opens this tab.
 
-import { bindTaskLink, captureWorkspaceVisit, el, enableRovingRows, fetchJson, formatDateTime, getHostRevision, getWorkspaceRevision, isAggregateView, makeRowDisclosure, onWorkspaceChange, pinnedInfoHint, relativeTime, requestJson, requestPanel, setBadgeDescription, syncNodes } from './common.js';
+import { bindTaskLink, captureWorkspaceVisit, el, enableRovingRows, fetchJson, formatDateTime, getHostRevision, getWorkspaceRevision, isAggregateView, makeRowDisclosure, onWorkspaceChange, pinnedInfoHint, requestJson, requestPanel, setBadgeDescription, syncNodes } from './common.js';
 
 const $ = (id) => document.getElementById(id);
 const text = (value) => (typeof value === "string" ? value : "");
@@ -278,19 +278,30 @@ function bySeverity(notices) {
   return [...notices].sort((a, b) => severityRank(a) - severityRank(b));
 }
 
+// Compact age since an ended notice ended, mirroring ageLabel's single-unit
+// buckets so the dock matches the banner ("5m ago", "5h ago", "2d ago").
+function endedAgo(value, now) {
+  const at = Date.parse(text(value));
+  if (!Number.isFinite(at)) return "";
+  const seconds = Math.max(0, Math.floor((now - at) / 1000));
+  if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`;
+  if (seconds < 86400) return `${Math.floor(seconds / 3600)}h ago`;
+  return `${Math.floor(seconds / 86400)}d ago`;
+}
+
 // The row's one time: how soon an open notice lapses when that is within a day,
-// otherwise how old it is; for an ended notice, when it ended.
+// otherwise how old it is; for an ended notice, when it ended. Open rows reuse
+// the banner's compact labels so both read the same.
 function rowTime(notice, now) {
   if (notice?.status !== "open") {
-    const ended = relativeTime(text(notice?.ended_at), now);
-    return `${notice?.status === "expired" ? "expired" : "closed"}${ended ? ` ${ended}` : ""}`;
+    const ago = endedAgo(notice?.ended_at, now);
+    return `${notice?.status === "expired" ? "expired" : "closed"}${ago ? ` ${ago}` : ""}`;
   }
   const expires = Date.parse(text(notice?.expires_at));
   if (Number.isFinite(expires) && expires - now < 86_400_000) {
-    const lapse = relativeTime(text(notice.expires_at), now);
-    if (lapse) return `expires ${lapse}`;
+    return expiryLabel(notice, now) || ageLabel(notice, now) || "";
   }
-  return relativeTime(text(notice?.opened_at), now) || "";
+  return ageLabel(notice, now) || "";
 }
 
 function endedText(notice) {
