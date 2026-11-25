@@ -549,7 +549,9 @@ fn audit_refused_row(store: &Store, installed: &InstalledPlugin, check: &str, me
         plugin: Some(&provenance),
         ..Default::default()
     };
-    if let Err(error) = store.insert_audit_event_record_with_invocation(&params, invocation) {
+    if let Err(error) =
+        store.write(|tx| tx.audit_event().insert_with_invocation(&params, invocation))
+    {
         tracing::error!(
             target: "orbit.core.plugin",
             plugin = %installed.name,

@@ -1,7 +1,6 @@
 //! Roots, persistence readiness, and audit stores.
 
 use std::path::PathBuf;
-use std::sync::Arc;
 
 use chrono::Utc;
 use orbit_common::OrbitError;
@@ -138,7 +137,7 @@ impl RuntimeKernel {
                 .stores()
                 .host
                 .sqlite
-                .insert_audit_event_record_with_invocation(params, invocation)
+                .write(|tx| tx.audit_event().insert_with_invocation(params, invocation))
         }
     }
 
@@ -153,12 +152,6 @@ impl RuntimeKernel {
     /// migrating the database, independently of cached runtime connections.
     pub fn check_sqlite_store_writable(&self) -> Result<(), OrbitError> {
         Store::check_path_writable(&self.base().persistence().audit_db)
-    }
-
-    pub fn v2_audit_store(
-        &self,
-    ) -> Result<Arc<dyn orbit_store::contracts::V2AuditStoreBackend>, OrbitError> {
-        Ok(Arc::clone(&self.stored().stores().host.v2_audit))
     }
 
     pub fn ensure_persistence_ready(&self) -> Result<(), OrbitError> {
@@ -186,14 +179,24 @@ impl RuntimeKernel {
         if filter.workspace_id.trim().is_empty() {
             filter.workspace_id = self.workspace_id()?;
         }
-        self.v2_audit_store()?.list_v2_audit_events(&filter)
+        self.stored()
+            .stores()
+            .host
+            .sqlite
+            .read()?
+            .v2_audit()
+            .list(&filter)
     }
 
     pub fn insert_v2_audit_event(
         &self,
         params: &orbit_store::contracts::V2AuditEventInsertParams,
     ) -> Result<(), OrbitError> {
-        self.v2_audit_store()?.insert_v2_audit_event(params)
+        self.stored()
+            .stores()
+            .host
+            .sqlite
+            .write(|tx| tx.v2_audit().insert(params))
     }
 }
 

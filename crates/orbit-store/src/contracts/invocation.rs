@@ -243,150 +243,15 @@ pub struct AgentExecutionBackfill {
     pub recorded_at: DateTime<Utc>,
 }
 
-/// A completed invocation with no dispatch identity, with the launch events
-/// that may have started it: the `cli.invocation.started` events of its
-/// workspace and run, for its model, launched within the matching tolerance
-/// of its end time minus its duration.
-#[derive(Debug, Clone, PartialEq)]
-pub struct UnidentifiedInvocationLaunch {
-    pub invocation_id: i64,
-    pub run_id: String,
+/// One model-attributed invocation row returned for activity-metrics bucketing.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InvocationSample {
     pub activity_id: String,
-    /// The crew the invocation's job run resolved, when the run records one.
-    pub run_resolved_crew: Option<String>,
-    pub launches: Vec<InvocationLaunchEvent>,
-}
-
-/// One `cli.invocation.started` event that may have launched an invocation.
-#[derive(Debug, Clone, PartialEq)]
-pub struct InvocationLaunchEvent {
-    pub event_id: String,
-    pub started_at: DateTime<Utc>,
-    /// The audited launch argv; `None` when the event predates argv capture
-    /// or carries only the resolved effort below.
-    pub argv_redacted: Option<Vec<String>>,
-    /// The resolved dispatch effort the launch event itself records, when it
-    /// carries one (events since 2026-10-29). Absent means the event did not
-    /// record one, never that the effort was the provider default.
-    pub reasoning_effort: Option<orbit_types::identity::ReasoningEffort>,
-    /// The event carried an effort value this binary cannot read.
-    pub effort_unreadable: bool,
-}
-
-/// Launches of one run, step, provider and model that the dispatch-effort
-/// backfill may still record, one row per launch. The agent launched, but
-/// its invocation never completed (the run failed, was interrupted, held or
-/// cancelled), so there is no invocation to carry an identity. The step is
-/// the one whose `step.started`/`step.finished` interval contains the
-/// launch, proven by the run's own audit trail. Launches no single step
-/// contains, and launches that name no provider, are counted aside and are
-/// not grouped here.
-#[derive(Debug, Clone, PartialEq)]
-pub struct UnrecordedLaunchGroup {
-    pub run_id: String,
-    pub activity_id: String,
-    pub provider: String,
+    pub agent: String,
     pub model: Option<String>,
-    /// The crew the job run resolved, when the run records one.
-    pub run_resolved_crew: Option<String>,
-    pub launches: Vec<InvocationLaunchEvent>,
-}
-
-/// Launch-only events the backfill did not group, by the reason each one
-/// was left out. A launch has one reason: a step that cannot be proven is
-/// counted there, and a launch inside one step that names no provider is
-/// counted as missing a provider.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct UnrecordedLaunchOmissions {
-    /// No step interval contained the launch, or more than one did.
-    pub no_step: usize,
-    /// The launch event named no provider, so no row can be written.
-    pub no_provider: usize,
-}
-
-/// Aggregate completed invocations without consulting mutable crew configuration.
-/// Missing dispatch identity is a separate historical `unknown` population.
-pub fn agent_effort_usage<'a>(
-    facts: impl IntoIterator<Item = &'a InvocationAccountingFact>,
-) -> Vec<orbit_types::telemetry::AgentEffortUsage> {
-    let mut accumulator = AgentEffortUsageAccumulator::default();
-    for fact in facts {
-        record_agent_effort_usage(&mut accumulator, fact);
-    }
-    finish_agent_effort_usage(accumulator)
-}
-
-type AgentEffortKey = (Option<String>, Option<String>, Option<String>);
-type AgentEffortPopulation = (
-    orbit_types::telemetry::AgentEffortUsage,
-    std::collections::BTreeSet<String>,
-);
-
-/// Bounded by distinct crew/model/effort identities and linked task ids, without
-/// retaining another copy of the full invocation population.
-#[derive(Debug, Default)]
-pub struct AgentEffortUsageAccumulator {
-    rows: std::collections::BTreeMap<AgentEffortKey, AgentEffortPopulation>,
-}
-
-/// Add exactly one completed invocation to its recorded population.
-pub fn record_agent_effort_usage(
-    accumulator: &mut AgentEffortUsageAccumulator,
-    fact: &InvocationAccountingFact,
-) {
-    use orbit_types::telemetry::AgentEffortUsage;
-    let crew = fact
-        .execution
-        .as_ref()
-        .and_then(|execution| execution.crew.clone());
-    let effort = fact
-        .execution
-        .as_ref()
-        .map(|execution| execution.reasoning_effort.map(|effort| effort.to_string()))
-        .unwrap_or(Some("unknown".to_string()));
-    let (row, tasks) = accumulator
-        .rows
-        .entry((crew.clone(), fact.model.clone(), effort.clone()))
-        .or_insert_with(|| {
-            (
-                AgentEffortUsage {
-                    crew,
-                    model: fact.model.clone(),
-                    reasoning_effort: effort,
-                    invocations: 0,
-                    tasks: 0,
-                    duration_ms: 0,
-                    input_tokens: 0,
-                    output_tokens: 0,
-                    provider_cost_usd: 0.0,
-                    provider_cost_count: 0,
-                },
-                std::collections::BTreeSet::new(),
-            )
-        });
-    row.invocations += 1;
-    row.duration_ms = row.duration_ms.saturating_add(fact.duration_ms);
-    row.input_tokens = row.input_tokens.saturating_add(fact.input_tokens);
-    row.output_tokens = row.output_tokens.saturating_add(fact.output_tokens);
-    if let Some(cost) = fact
-        .provider_cost_usd
-        .filter(|cost| cost.is_finite() && *cost >= 0.0)
-    {
-        row.provider_cost_usd += cost;
-        row.provider_cost_count += 1;
-    }
-    tasks.extend(fact.task_ids.iter().cloned());
-}
-/// Stable identity order, with distinct task support for each population.
-pub fn finish_agent_effort_usage(
-    accumulator: AgentEffortUsageAccumulator,
-) -> Vec<orbit_types::telemetry::AgentEffortUsage> {
-    accumulator
-        .rows
-        .into_values()
-        .map(|(mut row, tasks)| {
-            row.tasks = tasks.len() as u64;
-            row
-        })
-        .collect()
+    pub input_tokens: u64,
+    pub cache_read_tokens: u64,
+    pub cache_create_tokens: u64,
+    pub output_tokens: u64,
+    pub tool_call_count: u64,
 }

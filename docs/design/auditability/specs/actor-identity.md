@@ -113,9 +113,9 @@ back under the *current* map while aggregates stay pinned to the stamped version
 
 ## Aggregates
 
-`get_audit_event_aggregates_by_actor` groups on `(actor_kind, actor_id, actor_vendor,
+`AuditEventRepository::aggregates_by_actor` groups on `(actor_kind, actor_id, actor_vendor,
 actor_family)` and carries the same MCP-vs-CLI surface split as the older
-`get_audit_event_aggregates_by_role`. `model` is deliberately absent from the group key —
+`AuditEventRepository::aggregates_by_role`. `model` is deliberately absent from the group key —
 that is the grain the raw role aggregate already splits on.
 
 The role-grouped aggregate is retained: it is the raw, un-normalized view, and keeping

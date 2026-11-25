@@ -492,7 +492,10 @@ fn reconciliation_recovers_a_reaped_status_when_the_exit_audit_is_missing() {
             .runtime
             .sqlite_store()
             .unwrap()
-            .prune_audit_events(&(Utc::now() + chrono::Duration::seconds(1)))
+            .write(|tx| {
+                tx.audit_event()
+                    .prune(&(Utc::now() + chrono::Duration::seconds(1)))
+            })
             .unwrap()
             > 0
     );

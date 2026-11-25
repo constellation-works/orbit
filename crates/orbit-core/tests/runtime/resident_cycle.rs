@@ -443,7 +443,7 @@ impl Fixture {
         let audit_dir = tempfile::tempdir().unwrap();
         let audit = V2AuditWriter::with_disk_sinks(
             audit_dir.path(),
-            Arc::new(orbit_store::Store::open_in_memory().unwrap()),
+            orbit_store::Store::open_in_memory().unwrap(),
             "ws_test",
             run,
             "codex:test".to_string(),

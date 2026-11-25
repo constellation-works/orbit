@@ -267,21 +267,25 @@ mod outcomes {
             },
             kind,
         };
+        let workspace_id = runtime.workspace_id().unwrap();
+        let payload_json = serde_json::to_string(&event).unwrap();
         runtime
             .sqlite_store()
             .unwrap()
-            .insert_v2_audit_event(&V2AuditEventInsertParams {
-                workspace_id: runtime.workspace_id().unwrap(),
-                event_id: event.envelope.event_id.clone(),
-                source: "v2_envelope".into(),
-                schema_version: event.envelope.schema_version,
-                event_type: event.envelope.event_type.clone(),
-                ts: event.envelope.ts,
-                run_id: run_id.into(),
-                agent_identity: "fixture".into(),
-                parent_event_id: None,
-                workspace_path: None,
-                payload_json: serde_json::to_string(&event).unwrap(),
+            .write(|tx| {
+                tx.v2_audit().insert(&V2AuditEventInsertParams {
+                    workspace_id: workspace_id.clone(),
+                    event_id: event.envelope.event_id.clone(),
+                    source: "v2_envelope".into(),
+                    schema_version: event.envelope.schema_version,
+                    event_type: event.envelope.event_type.clone(),
+                    ts: event.envelope.ts,
+                    run_id: run_id.into(),
+                    agent_identity: "fixture".into(),
+                    parent_event_id: None,
+                    workspace_path: None,
+                    payload_json: payload_json.clone(),
+                })
             })
             .unwrap();
     }

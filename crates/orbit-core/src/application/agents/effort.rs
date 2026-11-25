@@ -1,6 +1,6 @@
 //! The shared (model, recorded effort) grouping key for the agent
 //! scorecards and the model ranking's effort split. The encoding matches
-//! `orbit_store::contracts::agent_effort_usage` exactly: a present dispatch
+//! `orbit_runtime::engine::agent_effort_usage` exactly: a present dispatch
 //! identity with no rendered effort is `None` (the provider default), a
 //! historical invocation with no dispatch identity is `Some("unknown")`,
 //! and a rendered effort is its wire name (`low`, `medium`, `high`,
@@ -381,8 +381,10 @@ impl crate::OrbitRuntime {
         let workspace_id = self.stores().jobs().workspace_id().to_string();
         let since = Some(run.created_at);
         let until = chrono::Utc::now();
-        let invocations = store
-            .list_invocation_accounting_facts(&orbit_store::contracts::InvocationAccountingQuery {
+        let snapshot = store.read().ok()?;
+        let invocation_repo = snapshot.invocation();
+        let invocations = invocation_repo
+            .list_accounting_facts(&orbit_store::contracts::InvocationAccountingQuery {
                 workspace_id: Some(workspace_id.clone()),
                 since,
                 until,
@@ -391,7 +393,7 @@ impl crate::OrbitRuntime {
                 tracing::warn!(%error, run_id = %run.run_id, "leaf effort: invocations unreadable");
                 Vec::new()
             });
-        let launches = store
+        let launches = invocation_repo
             .list_agent_executions(&orbit_store::contracts::AgentExecutionQuery {
                 workspace_id: Some(workspace_id),
                 since,

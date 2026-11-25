@@ -106,12 +106,15 @@ pub(super) fn begin_agent_execution(
     model: Option<&str>,
     identity: &orbit_types::telemetry::AgentExecutionIdentity,
 ) -> Result<Option<i64>, orbit_common::OrbitError> {
-    Ok(Some(runtime.sqlite_store()?.begin_agent_execution(
-        runtime.stores().jobs().workspace_id(),
-        run_id,
-        activity_id,
-        provider,
-        model,
-        identity,
-    )?))
+    let workspace_id = runtime.stores().jobs().workspace_id();
+    Ok(Some(runtime.stores().host_store().write(|tx| {
+        tx.invocation().insert_agent_execution(
+            workspace_id,
+            run_id,
+            activity_id,
+            provider,
+            model,
+            identity,
+        )
+    })?))
 }

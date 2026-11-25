@@ -4,7 +4,8 @@ use std::path::Path;
 
 use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
-use orbit_store::contracts::{AuditEventFilter, AuditEventStoreBackend};
+use orbit_store::Store;
+use orbit_store::contracts::AuditEventFilter;
 use orbit_types::workflow::{JobRun, JobRunState, WORKER_PROVENANCE_SEPARATOR};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -183,10 +184,7 @@ impl WorkerExit {
 /// False when the run is not running, it has no worker pid, no matching exit
 /// row exists, or the audit cannot be read. Callers that cannot prove the
 /// stop keep the worker-terminated failure.
-pub(crate) fn recorded_host_manager_stop(
-    audit_events: &dyn AuditEventStoreBackend,
-    run: &JobRun,
-) -> bool {
+pub(crate) fn recorded_host_manager_stop(store: &Store, run: &JobRun) -> bool {
     let Some(pid) = run.pid else {
         return false;
     };
@@ -194,18 +192,18 @@ pub(crate) fn recorded_host_manager_stop(
         return false;
     }
     matches!(
-        recorded_worker_exit(audit_events, &run.run_id, pid),
+        recorded_worker_exit(store, &run.run_id, pid),
         Ok(Some(exit)) if exit.stopped_by_host_manager()
     )
 }
 
 /// The newest exit a supervisor recorded for `worker_pid` running `run_id`.
 pub(crate) fn recorded_worker_exit(
-    audit_events: &dyn AuditEventStoreBackend,
+    store: &Store,
     run_id: &str,
     worker_pid: u32,
 ) -> Result<Option<WorkerExit>, OrbitError> {
-    Ok(audit_arguments(audit_events, run_id, WORKER_EXIT_AUDIT)?
+    Ok(audit_arguments(store, run_id, WORKER_EXIT_AUDIT)?
         .into_iter()
         .filter_map(|arguments| serde_json::from_value::<WorkerExit>(arguments).ok())
         .find(|exit| exit.worker_pid == worker_pid))
@@ -213,11 +211,11 @@ pub(crate) fn recorded_worker_exit(
 
 /// The scope recorded when `worker_pid` claimed `run_id`, if it ran in one.
 fn recorded_worker_scope(
-    audit_events: &dyn AuditEventStoreBackend,
+    store: &Store,
     run_id: &str,
     worker_pid: u32,
 ) -> Result<Option<WorkerScopeCgroup>, OrbitError> {
-    Ok(audit_arguments(audit_events, run_id, WORKER_CLAIM_AUDIT)?
+    Ok(audit_arguments(store, run_id, WORKER_CLAIM_AUDIT)?
         .into_iter()
         .find(|arguments| {
             arguments.get("worker_pid").and_then(Value::as_u64) == Some(u64::from(worker_pid))
@@ -230,13 +228,11 @@ fn recorded_worker_scope(
 }
 
 /// Arguments of `run_id`'s `tool_name` audit rows, newest first.
-fn audit_arguments(
-    audit_events: &dyn AuditEventStoreBackend,
-    run_id: &str,
-    tool_name: &str,
-) -> Result<Vec<Value>, OrbitError> {
-    Ok(audit_events
-        .list_audit_events(&AuditEventFilter {
+fn audit_arguments(store: &Store, run_id: &str, tool_name: &str) -> Result<Vec<Value>, OrbitError> {
+    Ok(store
+        .read()?
+        .audit_event()
+        .list(&AuditEventFilter {
             tool_name: Some(tool_name.to_string()),
             job_run_id: Some(run_id.to_string()),
             limit: 20,
@@ -252,13 +248,13 @@ fn audit_arguments(
 /// was observed and what the worker's scope still reports. `None` for a run
 /// that never recorded a worker.
 pub(crate) fn reconciled_worker_exit_clause(
-    audit_events: &dyn AuditEventStoreBackend,
+    store: &Store,
     run: &JobRun,
     logs_dir: &Path,
 ) -> Option<String> {
     let pid = run.pid?;
     let provenance = lifecycle::worker_log_provenance(logs_dir, run);
-    let recorded_exit = recorded_worker_exit(audit_events, &run.run_id, pid);
+    let recorded_exit = recorded_worker_exit(store, &run.run_id, pid);
     let recovered_from_log = !matches!(&recorded_exit, Ok(Some(_)));
     let clause = match recorded_exit {
         Ok(Some(exit)) => exit.describe(),
@@ -270,7 +266,7 @@ pub(crate) fn reconciled_worker_exit_clause(
             "supervisor exit audit unavailable; reaped status retained in worker log".to_string()
         }
         Ok(None) => {
-            let scope = match recorded_worker_scope(audit_events, &run.run_id, pid) {
+            let scope = match recorded_worker_scope(store, &run.run_id, pid) {
                 Ok(Some(scope)) => ScopeEvidence::read(&scope, true).describe(),
                 Ok(None) => "no worker scope evidence is available".to_string(),
                 Err(error) => format!("worker scope evidence unreadable: {error}"),

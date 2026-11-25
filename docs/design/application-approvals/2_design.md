@@ -72,7 +72,7 @@ Other crates are named explicitly.
    row takes the invocation
    (`crates/orbit-core/src/adapter/command/dispatch/execute/audit_store.rs:106-216`) and
    stores it as the redacted `application` JSON column
-   (`crates/orbit-store/src/driver/sqlite/audit_event_store/insert.rs:274`).
+   (`crates/orbit-store/src/repository/audit/event/insert.rs:224`).
 
 Admission runs before the capability chokepoint in `authorize_registered_tool`
 (`crates/orbit-runtime/src/tool_exec.rs:175`), in `run_tool_with_context_and_capability`

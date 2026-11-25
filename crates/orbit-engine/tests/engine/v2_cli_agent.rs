@@ -1796,7 +1796,7 @@ pub(super) fn build_writer(
     let store = Arc::new(Store::open_in_memory()?);
     let writer = V2AuditWriter::with_disk_sinks(
         &audit_root,
-        store.clone(),
+        (*store).clone(),
         "ws_smoke",
         run_id,
         "smoke".to_string(),
@@ -1810,7 +1810,9 @@ pub(super) fn events_snapshot(
     run_id: &str,
 ) -> Result<Vec<V2AuditEvent>, Box<dyn std::error::Error>> {
     store
-        .list_v2_audit_events(&V2AuditEventFilter {
+        .read()?
+        .v2_audit()
+        .list(&V2AuditEventFilter {
             workspace_id: "ws_smoke".to_string(),
             run_id: Some(run_id.to_string()),
             source: Some("v2_envelope".to_string()),

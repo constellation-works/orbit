@@ -288,17 +288,19 @@ fn recorded_invocation(
                     .runtime
                     .sqlite_store()
                     .unwrap()
-                    .begin_agent_execution(
-                        fixture.runtime.stores().jobs().workspace_id(),
-                        run_id,
-                        activity,
-                        "codex",
-                        Some(model),
-                        &orbit_types::telemetry::AgentExecutionIdentity {
-                            crew: Some(crew.into()),
-                            reasoning_effort: Some(effort),
-                        },
-                    )
+                    .write(|tx| {
+                        tx.invocation().insert_agent_execution(
+                            fixture.runtime.stores().jobs().workspace_id(),
+                            run_id,
+                            activity,
+                            "codex",
+                            Some(model),
+                            &orbit_types::telemetry::AgentExecutionIdentity {
+                                crew: Some(crew.into()),
+                                reasoning_effort: Some(effort),
+                            },
+                        )
+                    })
                     .unwrap(),
             ),
             job_run_id: run_id.into(),

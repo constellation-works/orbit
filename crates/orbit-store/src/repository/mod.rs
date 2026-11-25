@@ -2,6 +2,7 @@
 
 pub(crate) mod admission_load;
 pub(crate) mod application_consent;
+pub(crate) mod audit;
 pub(crate) mod auto_task;
 pub(crate) mod automation;
 pub(crate) mod backlog_forecast;
@@ -14,6 +15,7 @@ pub(crate) mod experiment;
 mod file_backends;
 pub(crate) mod friction;
 pub(crate) mod incident;
+pub(crate) mod invocation;
 pub(crate) mod landed_diff;
 pub(crate) mod notice;
 pub(crate) mod plugin;

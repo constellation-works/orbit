@@ -106,7 +106,7 @@ pub(crate) fn build_writer_and_sinks(
     let _ = std::fs::create_dir_all(&blob_dir);
     let inner = Arc::new(InMemorySink::new(blob_dir));
     let envelope = Arc::new(V2SqliteSink::for_audit_root(
-        Arc::new(orbit_store::Store::open_in_memory().expect("open sqlite sink")),
+        orbit_store::Store::open_in_memory().expect("open sqlite sink"),
         "ws_smoke",
         run_id,
         audit_root,

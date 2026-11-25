@@ -3,11 +3,12 @@ use std::path::{Path, PathBuf};
 use orbit_agent::loop_engine::audit::{AuditSink, BlobStore};
 use orbit_common::OrbitError;
 use orbit_common::storage::blob_sweep;
-use orbit_store::contracts::{V2AuditEventFilter, V2AuditEventInsertParams, V2AuditStoreBackend};
+use orbit_store::Store;
+use orbit_store::contracts::{V2AuditEventFilter, V2AuditEventInsertParams};
 use orbit_types::workflow::activity_job::V2AuditEvent;
 
 pub struct V2SqliteSink {
-    store: std::sync::Arc<dyn V2AuditStoreBackend>,
+    store: Store,
     workspace_id: String,
     run_id: String,
     blob_store: BlobStore,
@@ -15,7 +16,7 @@ pub struct V2SqliteSink {
 
 impl V2SqliteSink {
     pub fn new(
-        store: std::sync::Arc<dyn V2AuditStoreBackend>,
+        store: Store,
         workspace_id: impl Into<String>,
         run_id: impl Into<String>,
         blob_root: impl Into<PathBuf>,
@@ -29,7 +30,7 @@ impl V2SqliteSink {
     }
 
     pub fn for_audit_root(
-        store: std::sync::Arc<dyn V2AuditStoreBackend>,
+        store: Store,
         workspace_id: impl Into<String>,
         run_id: impl Into<String>,
         audit_root: &Path,
@@ -46,8 +47,8 @@ impl V2SqliteSink {
     pub fn write_envelope(&self, event: &V2AuditEvent) -> Result<(), OrbitError> {
         let payload_json = serde_json::to_string(event)
             .map_err(|err| OrbitError::Store(format!("serialize v2 audit event: {err}")))?;
-        self.store
-            .insert_v2_audit_event(&V2AuditEventInsertParams {
+        self.store.write(|tx| {
+            tx.v2_audit().insert(&V2AuditEventInsertParams {
                 workspace_id: self.workspace_id.clone(),
                 event_id: event.envelope.event_id.clone(),
                 source: "v2_envelope".to_string(),
@@ -59,7 +60,8 @@ impl V2SqliteSink {
                 parent_event_id: event.envelope.parent_event_id.clone(),
                 workspace_path: event.envelope.workspace_path.clone(),
                 payload_json: payload_json.clone(),
-            })?;
+            })
+        })?;
         self.blob_store.clear_published(&payload_json);
         Ok(())
     }
@@ -69,7 +71,7 @@ impl V2SqliteSink {
     /// the store's default 1000-row newest-first window: long provider runs
     /// emit progress rows that would push early recovery evidence out of it.
     pub(crate) fn snapshot_events(&self) -> Result<Vec<V2AuditEvent>, OrbitError> {
-        let rows = self.store.list_v2_audit_events(&V2AuditEventFilter {
+        let rows = self.store.read()?.v2_audit().list(&V2AuditEventFilter {
             workspace_id: self.workspace_id.clone(),
             run_id: Some(self.run_id.clone()),
             source: Some("v2_envelope".to_string()),

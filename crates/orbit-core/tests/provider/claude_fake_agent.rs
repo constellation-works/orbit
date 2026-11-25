@@ -8,7 +8,6 @@
 // provider process.
 
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 
 use orbit_core::OrbitRuntime;
 use orbit_engine::{
@@ -151,7 +150,7 @@ fn try_dispatch_spec(
     let audit_dir = tempfile::tempdir().expect("audit tempdir");
     let audit = V2AuditWriter::with_disk_sinks(
         audit_dir.path(),
-        Arc::new(orbit_store::Store::open_in_memory().expect("audit store")),
+        orbit_store::Store::open_in_memory().expect("audit store"),
         "ws_test",
         "claude-fake",
         "claude:claude-opus-4-8".to_string(),

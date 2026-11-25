@@ -140,7 +140,7 @@ fn try_dispatch_with_audit(
     let store = Arc::new(orbit_store::Store::open_in_memory().expect("audit store"));
     let audit = V2AuditWriter::with_disk_sinks(
         audit_dir.path(),
-        store.clone(),
+        (*store).clone(),
         "ws_test",
         "agy-fake",
         "antigravity:gemini-3.8-flash-high".to_string(),
@@ -186,7 +186,10 @@ fn command_construction_matches_the_shipped_headless_contract() {
     assert!(outcome.success, "dispatch failed: {:?}", outcome.message);
 
     let events = store
-        .list_v2_audit_events(&orbit_store::V2AuditEventFilter {
+        .read()
+        .expect("open store snapshot")
+        .v2_audit()
+        .list(&orbit_store::V2AuditEventFilter {
             workspace_id: "ws_test".to_string(),
             run_id: Some("agy-fake".to_string()),
             source: Some("v2_envelope".to_string()),

@@ -154,18 +154,15 @@ impl RuntimeKernel {
         run_id: &str,
     ) -> Result<RunTagInstructions, OrbitError> {
         let workspace_id = self.workspace_id()?;
-        let store = self.v2_audit_store()?;
-        let present = store
-            .list_v2_audit_run_ids_with_events(
-                &workspace_id,
-                &[run_id.to_string()],
-                Some("v2_envelope"),
-            )?
+        let snapshot = self.stores().host_store().read()?;
+        let v2 = snapshot.v2_audit();
+        let present = v2
+            .run_ids_with_events(&workspace_id, &[run_id.to_string()], Some("v2_envelope"))?
             .contains(run_id);
         if !present {
             return Ok(RunTagInstructions::unavailable());
         }
-        let mut rows = store.list_v2_audit_events(&V2AuditEventFilter {
+        let mut rows = v2.list(&V2AuditEventFilter {
             workspace_id,
             run_id: Some(run_id.to_string()),
             source: Some("v2_envelope".to_string()),

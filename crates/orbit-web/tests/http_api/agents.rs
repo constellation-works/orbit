@@ -308,19 +308,21 @@ fn implementers_report_cost_duration_tiers_and_first_reviews_without_scoring_cos
                                 .runtime
                                 .sqlite_store()
                                 .unwrap()
-                                .begin_agent_execution(
-                                    fixture.runtime.stores().jobs().workspace_id(),
-                                    &run,
-                                    "implement_one",
-                                    "codex",
-                                    Some(&model),
-                                    &orbit_types::telemetry::AgentExecutionIdentity {
-                                        crew: Some("crew".into()),
-                                        reasoning_effort: (index == 0).then_some(
-                                            orbit_types::identity::ReasoningEffort::High,
-                                        ),
-                                    },
-                                )
+                                .write(|tx| {
+                                    tx.invocation().insert_agent_execution(
+                                        fixture.runtime.stores().jobs().workspace_id(),
+                                        &run,
+                                        "implement_one",
+                                        "codex",
+                                        Some(&model),
+                                        &orbit_types::telemetry::AgentExecutionIdentity {
+                                            crew: Some("crew".into()),
+                                            reasoning_effort: (index == 0).then_some(
+                                                orbit_types::identity::ReasoningEffort::High,
+                                            ),
+                                        },
+                                    )
+                                })
                                 .unwrap(),
                         ),
                         job_run_id: run,
@@ -394,19 +396,21 @@ fn implementers_report_cost_duration_tiers_and_first_reviews_without_scoring_cos
                             .runtime
                             .sqlite_store()
                             .unwrap()
-                            .begin_agent_execution(
-                                fixture.runtime.stores().jobs().workspace_id(),
-                                "jrun-model-0",
-                                "implement_one",
-                                "codex",
-                                Some("model-0"),
-                                &orbit_types::telemetry::AgentExecutionIdentity {
-                                    crew: Some("crew".into()),
-                                    reasoning_effort: Some(
-                                        orbit_types::identity::ReasoningEffort::Xhigh,
-                                    ),
-                                },
-                            )
+                            .write(|tx| {
+                                tx.invocation().insert_agent_execution(
+                                    fixture.runtime.stores().jobs().workspace_id(),
+                                    "jrun-model-0",
+                                    "implement_one",
+                                    "codex",
+                                    Some("model-0"),
+                                    &orbit_types::telemetry::AgentExecutionIdentity {
+                                        crew: Some("crew".into()),
+                                        reasoning_effort: Some(
+                                            orbit_types::identity::ReasoningEffort::Xhigh,
+                                        ),
+                                    },
+                                )
+                            })
                             .unwrap(),
                     ),
                     job_run_id: "jrun-model-0".into(),

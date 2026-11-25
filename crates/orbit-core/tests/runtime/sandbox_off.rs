@@ -6,7 +6,6 @@
 
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 
 use orbit_core::OrbitRuntime;
 use orbit_core::application::workspace_sync::reconcile_workspace_managed_artifacts;
@@ -158,7 +157,7 @@ fn dispatch_codex(
     runtime: &OrbitRuntime,
     dir: &Path,
 ) -> Vec<orbit_types::workflow::activity_job::V2AuditEvent> {
-    let store = Arc::new(orbit_store::Store::open_in_memory().expect("audit store"));
+    let store = orbit_store::Store::open_in_memory().expect("audit store");
     let audit = V2AuditWriter::with_disk_sinks(
         &dir.join("audit"),
         store.clone(),
@@ -189,7 +188,10 @@ fn dispatch_codex(
     assert!(outcome.success, "{:?}", outcome.message);
     assert_eq!(outcome.output["bare"], true);
     store
-        .list_v2_audit_events(&V2AuditEventFilter {
+        .read()
+        .expect("open store snapshot")
+        .v2_audit()
+        .list(&V2AuditEventFilter {
             workspace_id: "ws_test".to_string(),
             run_id: Some("sandbox-off".to_string()),
             source: Some("v2_envelope".to_string()),

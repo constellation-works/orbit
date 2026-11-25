@@ -172,7 +172,7 @@ impl<'a> Pipeline<'a> {
     ) -> Result<JobOutcome, String> {
         let audit = V2AuditWriter::with_disk_sinks(
             &self.fx.workspace.join("audit"),
-            std::sync::Arc::new(orbit_store::Store::open_in_memory().unwrap()),
+            orbit_store::Store::open_in_memory().unwrap(),
             "ws_fixture",
             &self.run,
             "fixture",
