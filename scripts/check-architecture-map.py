@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Enforce STD-02 §R43: unit map in ARCHITECTURE.md + crate pages, path existence, and first-line //! docs."""
+"""Enforce STD-02 §R43: unit map in ARCHITECTURE.md + crate pages, path existence, first-line //! docs, and one destination row per orbit-core application entry."""
 
 import argparse
 from dataclasses import dataclass
@@ -58,6 +58,11 @@ TABLE_MODULE = re.compile(r"^\s*\|\s*`([A-Za-z_][A-Za-z0-9_]*)`\s*\|\s*(.*?)\s*\
 RELATIVE_PATH_TOKEN = re.compile(r"^[a-z0-9_.-]+(?:/[a-z0-9_.-]+)+$")
 TRAILING_SLASH_TOKEN = re.compile(r"^[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)*/$")
 PATH_SUFFIX = re.compile(r"(?:::\S+|:\d+(?::\d+)?|#L\d+(?:-L\d+)?)$")
+APPLICATION_DIR = Path("crates/orbit-core/src/application")
+APPLICATION_PAGE = Path("docs/architecture/orbit-core.md")
+APPLICATION_MAP_HEADING = "Application module destinations"
+APPLICATION_DESTINATION_PREFIXES = ("app::", "unit::", "migrate", "dissolved")
+APPLICATION_ENTRY_CELL = re.compile(r"^`([A-Za-z0-9_.-]+)`$")
 
 
 @dataclass(frozen=True)
@@ -399,6 +404,87 @@ def check_doc_paths_and_links(doc_path, masked_text, root, crate_dir=None):
     return errors
 
 
+def application_entries(root):
+    """Top-level entries of orbit-core's application/: directories and .rs files, minus the module root."""
+    app_dir = root / APPLICATION_DIR
+    if not app_dir.is_dir():
+        return {}
+    entries = {}
+    for child in sorted(app_dir.iterdir(), key=lambda p: p.name):
+        if child.name.startswith(".") or child.name == "mod.rs":
+            continue
+        if child.is_dir() or (child.is_file() and child.suffix == ".rs"):
+            entries[child.name] = child
+    return entries
+
+
+def parse_application_map(masked_text, doc_label):
+    """Parse the `## Application module destinations` table into {entry: lineno}."""
+    section = extract_section(masked_text, APPLICATION_MAP_HEADING, level=2)
+    if section is None:
+        return None, []
+    start_line, lines = section
+    rows = {}
+    errors = []
+    header_seen = False
+    for offset, line in enumerate(lines):
+        stripped = line.strip()
+        if not stripped.startswith("|"):
+            continue
+        cells = [cell.strip() for cell in stripped.strip("|").split("|")]
+        if not header_seen:
+            header_seen = True
+            continue
+        if all(re.fullmatch(r":?-{2,}:?", cell) for cell in cells if cell):
+            continue
+        lineno = start_line + offset + 1
+        entry = APPLICATION_ENTRY_CELL.fullmatch(cells[0]) if cells else None
+        if not entry:
+            errors.append(
+                f"{doc_label}:{lineno}: application map entry must be a backticked name: {cells[0]!r}"
+            )
+            continue
+        name = entry.group(1)
+        if name in rows:
+            errors.append(f"{doc_label}:{lineno}: duplicate application map row '{name}'")
+            continue
+        destination = cells[1].replace("`", "") if len(cells) > 1 else ""
+        if not destination.startswith(APPLICATION_DESTINATION_PREFIXES):
+            errors.append(
+                f"{doc_label}:{lineno}: '{name}' destination must start with app::, unit::, migrate or dissolved"
+            )
+        rows[name] = lineno
+    return rows, errors
+
+
+def check_application_map(root):
+    """Require one destination row per top-level entry of orbit-core's application/ (STD-02 §R43)."""
+    entries = application_entries(root)
+    app_dir_present = (root / APPLICATION_DIR).is_dir()
+    label = APPLICATION_PAGE.as_posix()
+    page = root / APPLICATION_PAGE
+    if not page.is_file():
+        return [f"{label}: missing application destination page"] if app_dir_present else []
+    masked = strip_non_prose(page.read_text(encoding="utf-8"))
+    rows, errors = parse_application_map(masked, label)
+    if rows is None:
+        if app_dir_present:
+            errors.append(
+                f"{label}: missing `## {APPLICATION_MAP_HEADING}` section for {APPLICATION_DIR.as_posix()}"
+            )
+        return errors
+    for name in sorted(entries):
+        if name not in rows:
+            errors.append(f"{label}: no destination row for application/{name}")
+    for name, lineno in sorted(rows.items(), key=lambda item: item[1]):
+        if name in entries:
+            continue
+        errors.append(
+            f"{label}:{lineno}: row '{name}' does not match an entry of {APPLICATION_DIR.as_posix()}/"
+        )
+    return errors
+
+
 def check(root):
     root = root.resolve()
     crates, discovery_errors = discover_workspace_crates(root)
@@ -510,6 +596,7 @@ def check(root):
         readme_masked = strip_non_prose(readme_path.read_text(encoding="utf-8"))
         errors.extend(check_doc_paths_and_links(readme_path, readme_masked, root))
 
+    errors.extend(check_application_map(root))
     return crates, errors
 
 

@@ -12,7 +12,7 @@ This is a map of the code as it is today. Design intent lives in
 there instead of repeating it. Layering rules and the authoritative crate table
 live in `ARCHITECTURE.md`; `scripts/check-dependency-direction.sh` enforces
 every edge below and `scripts/check-architecture-map.py` enforces STD-02 §R43
-unit coverage, path existence, and first-line `//!` doc comments.
+unit coverage, path existence, first-line `//!` doc comments, and one destination row per entry of orbit-core's application module (see [orbit-core](orbit-core.md#application-module-destinations)).
 
 ## End-to-end data flow
 

@@ -45,3 +45,81 @@ Design intent: [docs/design/orbit-core/](../../docs/design/orbit-core/) — this
 - `composition`: Composition root joining resolved configuration, bootstrap, `RuntimeKernel`, `CoreApplicationPort`, and adapters; imports `application`, `bootstrap`, `runtime`, and lower workspace crates.
 - `metrics`: Reliability and run metrics computed from persisted job-run data; imports `application`, `runtime`, `orbit-common`, `orbit-runtime`, `orbit-store`, and `orbit-types`.
 - `runtime`: Re-export of `orbit-runtime` and the public `OrbitRuntime` wrapper over `RuntimeKernel`; imports lower workspace crates only (never `application`, `adapter`, `bootstrap`, or `composition`).
+
+## Application module destinations
+
+Where each entry of `crates/orbit-core/src/application/` goes in the [architecture restructure](../design/architecture-restructure/2_design.md) (§3, §5). These are targets: the sections above still describe the current layout. This table is deleted with `application/` (ORB-28450). `scripts/check-architecture-map.py` fails when an entry has no row.
+
+`app::<subject>` is the module `app/<subject>` and `unit::<name>` is the module `unit/<name>`, both under `crates/orbit-core/src/`. `migrate` is the module of that name under the same root. Order: the declared chain `task < run < automation < review < distributed < pull_drain < admission < workspace_auto < backlog_forecast < sweep_filing` is numbered 1 to 10. `above task` means outside the chain and unordered, above `task` as today. `leaf` means the unit imports no `application/` entry. `between task and run` is `crew_pool`: it imports `task` and `run` calls it.
+
+| Entry | Destination | Order |
+|---|---|---|
+| `admission` | `unit::admission` | 7 |
+| `agent_corpus.rs` | `app::agent` | above task |
+| `agents` | `app::agent` | above task |
+| `application_authority.rs` | `app::auto_task` | above task |
+| `attention` | `app::attention` | above task |
+| `audit_event.rs` | `app::audit` | above task |
+| `auto_tasks` | `app::auto_task` | above task |
+| `automation` | `app::automation` | 3 |
+| `backlog_forecast` | `unit::backlog_forecast` | 9 |
+| `change_watch.rs` | `unit::change_watch` | leaf |
+| `codebase` | `app::codebase` | above task |
+| `config` | `app::config` | above task |
+| `contracts` | dissolved: each shape goes to the app that owns it | — |
+| `crew_memory` | `app::crew_memory` | above task |
+| `distributed` | `unit::distributed` | 5 |
+| `evolution` | `app::evolution` | above task |
+| `executor.rs` | `unit::executor` | leaf |
+| `experiment` | `app::experiment` | above task |
+| `gc` | `app::gc` | above task |
+| `health` | `app::doctor` | above task |
+| `host_labels.rs` | `unit::host_labels` | leaf |
+| `job` | `app::run`; its `crew_pools` module goes to `unit::crew_pool` (between task and run) | 2 |
+| `landing` | `unit::landing` | above task |
+| `managed_assets` | `unit::managed_assets` | leaf |
+| `notice` | `app::notice` | above task |
+| `operator_input.rs` | `app::review` | 4 |
+| `plugin` | `app::plugin` | above task |
+| `pull_drain` | `unit::pull_drain` | 6 |
+| `resident` | `app::resident` | above task |
+| `review` | `app::review` | 4 |
+| `routines` | `app::routine` | above task |
+| `search` | `app::search` | above task |
+| `seeding_policy.rs` | `unit::seeding_policy` | above task |
+| `skill` | `app::skill` | above task |
+| `statistics.rs` | `unit::statistics` | leaf |
+| `sweep_filing` | `unit::sweep_filing` | 10 |
+| `tag_instructions.rs` | `unit::tag_instructions` | above task |
+| `task` | `app::task` | 1 |
+| `task_bundle` | `app::task` (bundle export, import, publication, reindex); its `migration.rs` → `migrate` | 1 |
+| `test_support.rs` | dissolved: test-only fixtures move with their users | — |
+| `tests` | dissolved: test-only; each module moves with what it tests | — |
+| `tool_name_migration` | `migrate` | — |
+| `vision_probe.rs` | `app::agent` | above task |
+| `workflow.rs` | `app::run` | 2 |
+| `workspace` | `app::workspace` | above task |
+| `workspace_auto` | `unit::workspace_auto` | 8 |
+
+New apps with no module today: `friction`, `host`, `update`. They have no row, since there is no entry.
+
+### Decided by callers
+
+Callers were checked at base `2f18287`, by module path and by inherent-method name across `crates/`. Method names are matched by name, so counts can include port calls.
+
+- `task_bundle`: corrected from `migrate`. Only its `migration.rs` is legacy. The rest is the `orbit task` bundle group (export, import, publication, reindex), called from `orbit-cli`.
+- Single files, decided because the starting table left them open:
+  - `application_authority.rs` → `app::auto_task`: its only operations are auto-task add and update under application consent.
+  - `agent_corpus.rs` → `app::agent`: implements `task`'s `TaskCorpusPort`, so the higher app implements it.
+  - `change_watch.rs` → `unit::change_watch`: reads task and run stamps, so it spans two apps; the dashboard is its only caller.
+  - `executor.rs` → `unit::executor`: used by `job`, `vision_probe` (agents) and bootstrap seeding.
+  - `host_labels.rs` → `unit::host_labels`: used by `task` and `job`.
+  - `operator_input.rs` → `app::review`: its only app user is `review`; the dashboard and the `landing` unit also use it.
+  - `seeding_policy.rs` → `unit::seeding_policy`: used by `health`, `auto_tasks`, `workspace` and `routines`.
+  - `statistics.rs` → `unit::statistics`: used by `agents`, `experiment`, `resident` and `backlog_forecast`.
+  - `tag_instructions.rs` → `unit::tag_instructions`: used by `experiment`, `agent_corpus` and `distributed`.
+  - `vision_probe.rs` → `app::agent`: backs `orbit agents vision-probe`.
+  - `workflow.rs` → `app::run`: the ship and auto workflow and drain-window rules; `job` is the only app user, and `distributed` and `workspace_auto` are units above `run` that reach it downward.
+- Kept as units though no app imports them directly: `pull_drain`, `workspace_auto`, `sweep_filing`, `backlog_forecast` and `landing`. Their callers are units, the engine action dispatch, the runtime or the dashboard. `workspace_auto` stays above `admission` and `pull_drain`, which it calls.
+- Kept as an app: `crew_memory`. Its engine adapter and `experiment` callers are internal, but its run-bound crew memory tools are a user-facing surface.
+- Existing edge to resolve with the move: `distributed` calls `auto_tasks::job_step` directly, and `auto_tasks` is unordered.
