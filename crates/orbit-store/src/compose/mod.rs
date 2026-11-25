@@ -5,9 +5,9 @@ use std::sync::Arc;
 
 use crate::Store;
 use crate::contracts::{
-    AuditEventStoreBackend, FrictionStoreBackend, InvocationStoreBackend, JobRunStoreBackend,
-    RoutineStoreBackend, TaskArtifactStoreBackend, TaskDocumentStoreBackend,
-    TaskHistoryStoreBackend, TaskReservationStoreBackend, TaskStoreBackend, V2AuditStoreBackend,
+    AuditEventStoreBackend, InvocationStoreBackend, JobRunStoreBackend, TaskArtifactStoreBackend,
+    TaskDocumentStoreBackend, TaskHistoryStoreBackend, TaskReservationStoreBackend,
+    TaskStoreBackend, V2AuditStoreBackend,
 };
 use crate::driver::file::executor_def_store::ExecutorDefDir;
 use crate::driver::file::policy_def_store::PolicyDefDirs;
@@ -15,7 +15,6 @@ use crate::driver::file::session_log_store::SessionLogDir;
 use crate::driver::sqlite::job_run_store::SqliteJobRunStore;
 use crate::driver::sqlite::task_registry::TaskRegistryStore;
 use crate::file_store::FileStore;
-use crate::repository::friction::FrictionStore;
 use crate::repository::sqlite_backends::{
     SqliteAuditEventStoreBackend, SqliteTaskReservationStoreBackend,
 };
@@ -49,21 +48,18 @@ pub fn workspace_job_run_store(
     Arc::new(SqliteJobRunStore::new(store, workspace_id))
 }
 
-/// Build the live friction repository after the explicit, idempotent legacy
-/// import workflow has committed (or reported an earlier completion). A
-/// read-only store skips the import; the next writable open performs it.
-pub fn workspace_friction_store(
-    store: Store,
-    workspace_id: impl Into<String>,
-    files_root: impl Into<PathBuf>,
-) -> Result<Arc<dyn FrictionStoreBackend>, orbit_common::OrbitError> {
-    let workspace_id = workspace_id.into();
-    let files_root = files_root.into();
+/// Run the explicit, idempotent legacy friction import. A read-only store
+/// skips the import; the next writable open performs it.
+pub fn prepare_workspace_frictions(
+    store: &Store,
+    workspace_id: &str,
+    files_root: &std::path::Path,
+) -> Result<(), orbit_common::OrbitError> {
     // A store that cannot write can never persist the import, so attempting it
     // would only repeat a doomed write transaction (and its warning) on every
     // open. The next writable open imports and persists it.
     if !store.is_read_only()
-        && let Err(error) = import_workspace_frictions(&store, &workspace_id, &files_root)
+        && let Err(error) = import_workspace_frictions(store, workspace_id, files_root)
     {
         if error.is_readonly_or_access_failure() {
             orbit_common::tracing::warn!(
@@ -77,11 +73,7 @@ pub fn workspace_friction_store(
             return Err(error);
         }
     }
-    Ok(Arc::new(FrictionStore::open(
-        store,
-        workspace_id,
-        files_root,
-    )?))
+    Ok(())
 }
 
 /// Prove the store database is open-able *and writable by this binary*.
@@ -122,10 +114,8 @@ pub fn workspace_session_log_store(orbit_dir: PathBuf) -> FileStore<SessionLogDi
     FileStore::new(SessionLogDir::new(orbit_dir))
 }
 
-pub fn routine_store(
-    database: &std::path::Path,
-) -> Result<Arc<dyn RoutineStoreBackend>, orbit_common::OrbitError> {
-    Ok(Arc::new(Store::open(database)?))
+pub fn routine_store(database: &std::path::Path) -> Result<Store, orbit_common::OrbitError> {
+    Store::open(database)
 }
 
 pub fn invocation_store(
@@ -286,11 +276,19 @@ mod compatibility;
 
 pub use compatibility::compiled_compatibility;
 
-/// Legacy cursor file persistence, retained for rollback compatibility.
+/// Composition for workspace-local auto-task cursors.
 pub mod auto_task {
-    pub use crate::driver::file::auto_task::{
-        CursorSession, cursor_state_path, load_cursor_state, upsert_cursor, with_cursor_lock,
-    };
+    use std::path::Path;
+
+    use crate::file_store::AutoTaskStore;
+
+    pub use crate::driver::file::auto_task::cursor_state_path;
+    pub use crate::repository::auto_task::AutoTaskWriteRepository;
+
+    /// Bind a cursor store to its workspace state file.
+    pub fn cursor_store(path: &Path) -> AutoTaskStore {
+        AutoTaskStore::new(path.to_path_buf())
+    }
 }
 
 /// Open automation contracts over the already-configured host store.

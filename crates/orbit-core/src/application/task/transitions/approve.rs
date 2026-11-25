@@ -311,14 +311,14 @@ impl OrbitRuntime {
             return Ok(());
         };
         let workspace_id = self.workspace_id()?;
-        ensure_resolves_targets_are_workspace_local(frictions.as_ref(), &workspace_id, task)
+        ensure_resolves_targets_are_workspace_local(&frictions, &workspace_id, task)
     }
 }
 
 /// Rejects an unqualified `resolves` friction ID that is missing locally
 /// but present in another workspace on this host.
 fn ensure_resolves_targets_are_workspace_local(
-    frictions: &dyn FrictionStoreBackend,
+    frictions: &WorkspaceFrictions,
     workspace_id: &str,
     task: &Task,
 ) -> Result<(), OrbitError> {

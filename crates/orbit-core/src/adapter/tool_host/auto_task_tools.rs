@@ -27,7 +27,7 @@ use crate::application::auto_tasks::delete::{self, AutoTaskDeleteProfile};
 use crate::application::auto_tasks::projection::{self, AutoTaskListingProfile};
 use crate::application::auto_tasks::{
     AutoTaskAddParams, AutoTaskDeleteParams, AutoTaskTemplatePatch, AutoTaskUpdateParams,
-    cursor_state_path, load_cursor_state,
+    cursor_state_path, cursor_store,
 };
 
 /// Run one auto-task verb.
@@ -144,7 +144,11 @@ fn show(runtime: &OrbitRuntime, input: &OperationInput) -> Result<Value, OrbitEr
     }
     // An unreadable cursor file is reported, never rendered as "never
     // observed".
-    match load_cursor_state(&cursor_state_path(&runtime.paths().state_dir)) {
+    match cursor_store(&cursor_state_path(&runtime.paths().state_dir))
+        .read()
+        .auto_task()
+        .get()
+    {
         Ok(state) => {
             value["cursor"] = match state.definitions.get(&name) {
                 Some(cursor) => serde_json::to_value(cursor)

@@ -45,10 +45,11 @@ pub mod skill_store {
     pub use crate::repository::skill::SkillRepository;
 }
 
-/// Friction record access and default tag-taxonomy initialization.
-pub mod friction_store {
-    pub use crate::driver::file::friction_store::ensure_default_tag_taxonomy;
-    pub use crate::repository::friction::{FrictionAddParams, FrictionListFilter, FrictionStore};
+/// Workspace configuration for friction tags.
+pub mod friction_taxonomy {
+    pub use crate::repository::friction::taxonomy::{
+        ensure_default_tag_taxonomy, load_tag_taxonomy, load_tag_taxonomy_with_descriptions,
+    };
 }
 
 /// Host-only recovery authority persistence (`authority.db`).
@@ -97,9 +98,9 @@ pub use driver::file::task_bundle::bundle_io::is_unpublished_stub;
 pub use driver::file::workspace_binding::workspace_id_for_orbit_dir;
 pub use driver::sqlite::host::connection::Store;
 pub(crate) use driver::sqlite::host::connection::StoreTx;
-pub use driver::sqlite::routine_store::try_acquire_routine_sweep_lock;
 pub use file_store::{FileSnapshot, FileStore, FileTx};
 pub use fs::lock::read_lock_holder;
+pub use fs::routine_sweep_lock::try_acquire_routine_sweep_lock;
 pub use repository::admission_load::AdmissionLoadRepository;
 pub use repository::application_consent::ApplicationConsentRepository;
 pub use repository::backlog_forecast::BacklogForecastRepository;

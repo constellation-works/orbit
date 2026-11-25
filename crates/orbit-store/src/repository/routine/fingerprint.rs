@@ -3,7 +3,7 @@
 use orbit_common::OrbitError;
 use orbit_common::storage::sqlite::sqlite_store_error;
 
-use crate::Store;
+use super::RoutineRepository;
 
 /// Newest fire and job-run rows whose in-place changes the token samples. A
 /// fire outcome or run transition rewrites the row of an in-flight or recent
@@ -14,7 +14,7 @@ use crate::Store;
 /// it; the caller's freshness bound remains the fallback.
 const FINGERPRINT_ROW_WINDOW: i64 = 256;
 
-impl Store {
+impl<Access> RoutineRepository<'_, Access> {
     /// Change tokens over the tables a routine status read draws on, as
     /// `(routines, job_runs)`.
     ///
@@ -37,8 +37,8 @@ impl Store {
     /// Unlike the database file's size or modification time both ignore the
     /// rest of the audit store, so unrelated audit traffic leaves them
     /// unchanged.
-    pub fn routine_state_fingerprint(&self) -> Result<(String, String), OrbitError> {
-        let conn = self.read_connection()?;
+    pub fn state_fingerprint(&self) -> Result<(String, String), OrbitError> {
+        let conn = self.conn;
         conn.query_row(
             "SELECT
                 (SELECT COUNT(*) || '/' || COALESCE(MAX(id), 0) FROM routine_fires),

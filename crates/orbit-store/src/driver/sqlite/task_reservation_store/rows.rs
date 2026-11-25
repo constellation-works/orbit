@@ -55,7 +55,7 @@ pub(super) fn unique_row_id(prefix: &str) -> String {
 /// transition it authorizes are one durable decision rather than two
 /// independently committed writes.
 pub(crate) fn reserve_files_in_tx(
-    tx: &mut crate::StoreTx<'_>,
+    tx: &crate::StoreTx<'_>,
     params: &TaskReservationReserveParams,
 ) -> Result<TaskReservationReserveResult, OrbitError> {
     let now = crate::now_string();
@@ -159,7 +159,7 @@ pub(crate) fn reserve_files_in_tx(
 /// this returns. For the same reason a `files` call expires task reservations
 /// only; leases expire through [`expire_leases`].
 pub(super) fn expire_reservations_in_scope(
-    tx: &mut crate::StoreTx<'_>,
+    tx: &crate::StoreTx<'_>,
     workspace_orbit_dir: &str,
     workspace_id: Option<&str>,
     now: &str,
@@ -201,7 +201,7 @@ pub(super) fn expire_leases(
 
 /// `filter` binds ?1 and ?2 as [`reservation_scope_clause`] does.
 fn expire_rows(
-    tx: &mut crate::StoreTx<'_>,
+    tx: &crate::StoreTx<'_>,
     workspace_orbit_dir: &str,
     workspace_id: Option<&str>,
     now: &str,
@@ -256,7 +256,7 @@ fn expire_rows(
 /// The task reservations and hard leases whose paths block `requested_files`.
 /// Advisory leases never conflict.
 pub(super) fn find_reservation_conflicts(
-    tx: &mut crate::StoreTx<'_>,
+    tx: &crate::StoreTx<'_>,
     workspace_orbit_dir: &str,
     workspace_id: Option<&str>,
     now: &str,
@@ -283,7 +283,7 @@ pub(super) fn find_reservation_conflicts(
 /// `visit`, oldest holder first, without collecting them: a lease answer keeps
 /// only the prefix it can show.
 pub(super) fn visit_reservation_conflicts(
-    tx: &mut crate::StoreTx<'_>,
+    tx: &crate::StoreTx<'_>,
     workspace_orbit_dir: &str,
     workspace_id: Option<&str>,
     now: &str,

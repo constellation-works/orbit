@@ -153,6 +153,7 @@ mod boundary;
 mod branch_observation;
 mod commit;
 mod handoff;
+mod journal_commit;
 mod landing;
 mod lease_notices;
 mod lifecycle;

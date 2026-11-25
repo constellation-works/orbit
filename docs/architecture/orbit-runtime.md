@@ -118,7 +118,7 @@ Six of those fields were public. Callers outside the crate now read them through
 - `cwd`: Shared working-directory confinement for operator host tools; imports `orbit_runtime` and `orbit-common`.
 - `engine`: Engine execution helpers, crew projections, environment host, and invocation metrics on `RuntimeKernel`; imports `orbit_runtime`, `cost`, `run_input`, and lower workspace crates.
 - `event_bus`: Bounded in-process session `EventLog` ring buffer; imports `orbit-types` only.
-- `friction`: Runtime-owned access to the workspace-partitioned friction repository; imports `orbit_runtime`, `workspace`, `orbit-common`, `orbit-store`, and `orbit-types`.
+- `friction`: Workspace-scoped friction commands and projections over the host store snapshots and transactions; imports `orbit_runtime`, `workspace`, `orbit-common`, `orbit-store`, and `orbit-types`.
 - `git_sandbox`: Host-owned Git write boundaries for macOS and Linux provider sandboxes; imports `orbit-common` and `orbit-types` only.
 - `host`: `Host`, the runtime layer over `Stored` for this machine as a place work runs: PR forge, host signals, load and resource probes, admission policy and execution assets; imports `base`, `stored`, `context`, `host_resource`, `host_signal`, `orbit_runtime`, `plugin`, `task`, and lower workspace crates.
 - `host_resource`: Host resource probes, shared pressure history, learned profiles, and load forecasts; imports `run_input`, `orbit-common`, `orbit-config`, `orbit-store`, and `orbit-types`.

@@ -17,15 +17,20 @@
 //! writes hold the advisory lock for their whole operation, so reads ignore
 //! a torn tail left by an interrupted append and the next append repairs it.
 
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use orbit_common::OrbitError;
 
+use crate::driver::file::auto_task::with_cursor_lock;
 use crate::driver::file::executor_def_store::ExecutorDefDir;
+use crate::driver::file::friction_store::LegacyFrictionDir;
 use crate::driver::file::policy_def_store::PolicyDefDirs;
 use crate::driver::file::session_log_store::SessionLogDir;
 use crate::driver::file::skill_store::SkillDirs;
+use crate::repository::auto_task::{AutoTaskRepository, AutoTaskWriteRepository};
 use crate::repository::executor_def::ExecutorDefRepository;
+use crate::repository::friction::legacy::LegacyFrictionRepository;
 use crate::repository::policy_def::PolicyDefRepository;
 use crate::repository::session_log::SessionLogRepository;
 use crate::repository::skill::SkillRepository;
@@ -161,5 +166,69 @@ impl FileTx<'_, SkillDirs> {
     /// Access to skills inside a write scope.
     pub fn skill(&self) -> SkillRepository<'_, Self> {
         SkillRepository::for_tx(self)
+    }
+}
+
+impl FileSnapshot<'_, LegacyFrictionDir> {
+    pub(crate) fn friction(&self) -> LegacyFrictionRepository<'_> {
+        LegacyFrictionRepository::new(self.layout())
+    }
+}
+
+/// Store for the workspace-local auto-task cursor file.
+pub struct AutoTaskStore {
+    path: PathBuf,
+}
+
+impl AutoTaskStore {
+    pub(crate) fn new(path: PathBuf) -> Self {
+        Self { path }
+    }
+
+    /// Open a read view over the cursor file.
+    pub fn read(&self) -> AutoTaskSnapshot<'_> {
+        AutoTaskSnapshot { path: &self.path }
+    }
+
+    /// Hold the stable sidecar lock across cursor reads, writes and the
+    /// caller's scheduler or definition operation. Each explicit cursor write
+    /// is an atomic replacement and persists even if a later checkpoint fails.
+    pub fn write<T>(
+        &self,
+        op: impl FnOnce(&AutoTaskTx<'_>) -> Result<T, OrbitError>,
+    ) -> Result<T, OrbitError> {
+        with_cursor_lock(&self.path, || op(&AutoTaskTx { path: &self.path }))
+    }
+}
+
+/// An unlocked read view over the auto-task cursor file.
+pub struct AutoTaskSnapshot<'a> {
+    path: &'a Path,
+}
+
+impl AutoTaskSnapshot<'_> {
+    pub(crate) fn path(&self) -> &Path {
+        self.path
+    }
+
+    /// Read-only access to the auto-task cursor map.
+    pub fn auto_task(&self) -> AutoTaskRepository<'_> {
+        AutoTaskRepository::for_snapshot(self)
+    }
+}
+
+/// Access to the auto-task cursor file while its sidecar lock is held.
+pub struct AutoTaskTx<'a> {
+    path: &'a Path,
+}
+
+impl AutoTaskTx<'_> {
+    pub(crate) fn path(&self) -> &Path {
+        self.path
+    }
+
+    /// Load the working cursor map inside the write scope.
+    pub fn auto_task(&self) -> Result<AutoTaskWriteRepository<'_>, OrbitError> {
+        AutoTaskWriteRepository::for_tx(self)
     }
 }

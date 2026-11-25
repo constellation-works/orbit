@@ -506,9 +506,7 @@ fn auto_task_cli_reset_and_forced_delete_work_when_origin_branch_is_missing() {
 
 fn auto_task_cli_delete_failing_after_consumer_reset_keeps_definition_and_cursor() {
     use orbit_common::security::release::sha256_hex;
-    use orbit_core::application::auto_tasks::{
-        AutoTaskCursor, cursor_state_path, load_cursor_state,
-    };
+    use orbit_core::application::auto_tasks::{AutoTaskCursor, cursor_state_path, cursor_store};
     use orbit_core::application::automation::consumer_key;
     use orbit_types::workflow::AutoTaskPendingClaim;
 
@@ -534,7 +532,7 @@ fn auto_task_cli_delete_failing_after_consumer_reset_keeps_definition_and_cursor
     fs::write(&ref_lock, "").unwrap();
 
     let cursor_path = cursor_state_path(&runtime.paths().state_dir);
-    let mut cursors = load_cursor_state(&cursor_path).unwrap();
+    let mut cursors = cursor_store(&cursor_path).read().auto_task().get().unwrap();
     cursors.definitions.insert(
         name.to_string(),
         AutoTaskCursor {
@@ -580,7 +578,7 @@ fn auto_task_cli_delete_failing_after_consumer_reset_keeps_definition_and_cursor
         "the failure must come after teardown applied the consumer reset"
     );
     assert_eq!(
-        load_cursor_state(&cursor_path).unwrap(),
+        cursor_store(&cursor_path).read().auto_task().get().unwrap(),
         cursors,
         "a failed delete must leave the scheduler cursor, pending claim included"
     );
@@ -604,7 +602,10 @@ fn auto_task_cli_delete_failing_after_consumer_reset_keeps_definition_and_cursor
         serde_json::json!([pin])
     );
     assert!(
-        !load_cursor_state(&cursor_path)
+        !cursor_store(&cursor_path)
+            .read()
+            .auto_task()
+            .get()
             .unwrap()
             .definitions
             .contains_key(name)

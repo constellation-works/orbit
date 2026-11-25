@@ -14,6 +14,7 @@ use crate::repository::codebase_fact::{AgentFactRepository, CodebaseFactReposito
 use crate::repository::crew_memory::CrewMemoryRepository;
 use crate::repository::evolution::EvolutionRepository;
 use crate::repository::experiment::{ExperimentAssignmentRepository, ExperimentRepository};
+use crate::repository::friction::FrictionRepository;
 use crate::repository::landed_diff::LandedDiffRepository;
 use crate::repository::notice::NoticeRepository;
 use crate::repository::plugin::PluginRepository;
@@ -21,6 +22,7 @@ use crate::repository::provider_limit::ProviderLimitRepository;
 use crate::repository::reliability::ReliabilityRepository;
 use crate::repository::resource_usage::{ResourceUsageRepository, WorkerResourceLimitRepository};
 use crate::repository::retention::RetentionRepository;
+use crate::repository::routine::RoutineRepository;
 use crate::repository::script_grant::ScriptGrantRepository;
 use crate::repository::tool::ToolRepository;
 
@@ -72,6 +74,16 @@ impl Snapshot<'_> {
     /// Read-only access to landed-delivery diff stat records in this snapshot.
     pub fn landed_diff(&self) -> LandedDiffRepository<'_, Self> {
         LandedDiffRepository::for_snapshot(self)
+    }
+
+    /// Read-only access to workspace-partitioned friction records.
+    pub fn friction(&self) -> FrictionRepository<'_, Self> {
+        FrictionRepository::for_snapshot(self)
+    }
+
+    /// Read-only access to host-local routine records.
+    pub fn routine(&self) -> RoutineRepository<'_, Self> {
+        RoutineRepository::for_snapshot(self)
     }
 
     /// Read-only access to fleet notice records in this snapshot.
@@ -146,12 +158,18 @@ impl Drop for Snapshot<'_> {
 /// returns `Ok` and rolls back on error or unwind. Writing repository methods
 /// are available only on repositories obtained from `&Tx`.
 pub struct Tx<'a> {
-    conn: &'a Connection,
+    transaction: &'a crate::StoreTx<'a>,
 }
 
 impl Tx<'_> {
     pub(crate) fn connection(&self) -> &Connection {
-        self.conn
+        self.transaction.connection()
+    }
+
+    // The task commit boundary still calls reservation and notice SQL that
+    // use the legacy wrapper for this same transaction.
+    pub(crate) fn legacy(&self) -> &crate::StoreTx<'_> {
+        self.transaction
     }
 
     /// Read-write access to host admission-load records inside this transaction.
@@ -191,6 +209,16 @@ impl Tx<'_> {
     /// transaction.
     pub fn landed_diff(&self) -> LandedDiffRepository<'_, Self> {
         LandedDiffRepository::for_tx(self)
+    }
+
+    /// Access to workspace-partitioned friction records inside this transaction.
+    pub fn friction(&self) -> FrictionRepository<'_, Self> {
+        FrictionRepository::for_tx(self)
+    }
+
+    /// Access to host-local routine records inside this transaction.
+    pub fn routine(&self) -> RoutineRepository<'_, Self> {
+        RoutineRepository::for_tx(self)
     }
 
     /// Read-write access to fleet notice records inside this transaction.
@@ -278,7 +306,7 @@ impl Store {
     {
         self.with_transaction_behavior(TransactionBehavior::Immediate, |store_tx| {
             let tx = Tx {
-                conn: store_tx.connection(),
+                transaction: store_tx,
             };
             op(&tx)
         })

@@ -10,7 +10,7 @@ doc_role: design
 type: design
 summary: Contract for routine definitions, clock-tick dispatch, host-local state, and OS clock integration.
 tags: [routines, scheduler]
-paths: ["crates/orbit-cli/src/command/routine/**", "crates/orbit-core/src/application/routines/**", "crates/orbit-cmd/src/registry/routines.rs", "crates/orbit-cmd/src/registry/runtime/mod.rs", "crates/orbit-registry/src/machine_identity.rs", "crates/orbit-registry/src/workspace_registry/**", "crates/orbit-store/src/driver/sqlite/routine_store/**"]
+paths: ["crates/orbit-cli/src/command/routine/**", "crates/orbit-core/src/application/routines/**", "crates/orbit-cmd/src/registry/routines.rs", "crates/orbit-cmd/src/registry/runtime/mod.rs", "crates/orbit-registry/src/machine_identity.rs", "crates/orbit-registry/src/workspace_registry/**", "crates/orbit-store/src/repository/routine.rs", "crates/orbit-store/src/repository/routine/**"]
 related_features: [routines, auto-tasks, activity-job, host-registry]
 related_artifacts: [ORB-10001, ORB-10021, ORB-10207, ORB-10270, ORB-10319, ORB-10800, ORB-10986, ORB-11082, ORB-11315, ORB-12236, ORB-12237, ORB-12745]
 ---
@@ -1009,7 +1009,7 @@ diagnostics without persisting state or dispatching work.
 
 All scheduler state lives host-locally in the existing host SQLite database
 `~/.orbit/orbit.db`, gitignored and never synced. Cron scheduling and common
-pause controls use `routine_*` tables (`orbit-store/src/driver/sqlite/routine_store/`):
+pause controls use `routine_*` tables (`crates/orbit-store/src/repository/routine.rs`):
 
 - **routine_cursors** — per routine: first-observation baseline + last slot consumed.
 - **routine_fires** — one row per fire attempt: `(name, slot, attempt)` idempotency key,

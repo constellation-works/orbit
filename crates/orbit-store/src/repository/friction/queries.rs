@@ -238,8 +238,6 @@ pub(super) fn foreign_owners_of(
     Ok(owners)
 }
 
-pub(crate) use crate::driver::sqlite::friction_write::{next_month_seq, upsert_record};
-
 fn decode_record(row: &Row<'_>) -> Result<StoredFrictionRecord, OrbitError> {
     let get_text = |index: usize| -> Result<String, OrbitError> {
         row.get::<_, String>(index).map_err(sqlite_store_error)

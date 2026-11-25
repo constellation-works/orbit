@@ -1,7 +1,7 @@
 use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
 use orbit_common::storage::timestamp::parse_stored_timestamp;
-use orbit_store::contracts::{RoutineFireRecord, RoutineFireState, RoutineStoreBackend};
+use orbit_store::contracts::{RoutineFireRecord, RoutineFireState};
 
 use super::super::loader::LoadedRoutine;
 use super::report::duration_from_minutes;
@@ -20,14 +20,18 @@ use super::report::duration_from_minutes;
 /// must not be written while it still exists. A skipped row on this slot
 /// occupies an attempt number but does not spend `retries.max`.
 pub(super) fn retryable_failure(
-    store: &dyn RoutineStoreBackend,
+    store: &orbit_store::Store,
     routine: &LoadedRoutine,
 ) -> Result<Option<RoutineFireRecord>, OrbitError> {
     let retries = routine.definition.policy.retries;
     if retries.max == 0 {
         return Ok(None);
     }
-    let Some(latest) = store.routine_latest_non_skip_fire(&routine.definition.name)? else {
+    let Some(latest) = store
+        .read()?
+        .routine()
+        .latest_non_skip_fire(&routine.definition.name)?
+    else {
         return Ok(None);
     };
     if latest.state != RoutineFireState::Failed {
@@ -36,7 +40,9 @@ pub(super) fn retryable_failure(
     // Real tries on this slot. Without skipped gaps this equals
     // `latest.attempt`: max=2 allows the initial fire plus two re-dispatches.
     let non_skipped = store
-        .routine_slot_attempts(&latest.routine_name, &latest.slot)?
+        .read()?
+        .routine()
+        .slot_attempts(&latest.routine_name, &latest.slot)?
         .map(|attempts| attempts.non_skipped)
         .unwrap_or(latest.attempt);
     if non_skipped > retries.max {
@@ -51,11 +57,13 @@ pub(super) fn retryable_failure(
 /// retry is not claimed again. The skipped row keeps its number; the
 /// re-dispatch uses the next free one.
 pub(super) fn next_retry_attempt(
-    store: &dyn RoutineStoreBackend,
+    store: &orbit_store::Store,
     failed: &RoutineFireRecord,
 ) -> Result<u32, OrbitError> {
     let highest = store
-        .routine_slot_attempts(&failed.routine_name, &failed.slot)?
+        .read()?
+        .routine()
+        .slot_attempts(&failed.routine_name, &failed.slot)?
         .map(|attempts| attempts.highest)
         .unwrap_or(failed.attempt);
     highest.max(failed.attempt).checked_add(1).ok_or_else(|| {
@@ -68,7 +76,7 @@ pub(super) fn next_retry_attempt(
 
 /// The most recent failed fire whose retry backoff has elapsed.
 pub(super) fn retry_candidate(
-    store: &dyn RoutineStoreBackend,
+    store: &orbit_store::Store,
     routine: &LoadedRoutine,
     now_utc: DateTime<Utc>,
 ) -> Result<Option<RoutineFireRecord>, OrbitError> {

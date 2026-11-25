@@ -3,27 +3,28 @@
 use chrono::Utc;
 use orbit_common::{NotFoundKind, OrbitError};
 use orbit_store::RegisteredTaskResolution;
-use orbit_store::compose::workspace_friction_store;
-use orbit_store::contracts::{
-    FrictionRehomeOutcome, FrictionRehomeParams, FrictionStoreBackend, FrictionUpdateParams,
-};
+use orbit_store::compose::prepare_workspace_frictions;
+use orbit_store::contracts::{FrictionRehomeOutcome, FrictionRehomeParams, FrictionUpdateParams};
 use orbit_types::record::FrictionStatus;
 use std::path::PathBuf;
-use std::sync::Arc;
 
 use crate::RuntimeKernel;
 use crate::workspace::catalog::WorkspaceScope;
 
-/// Friction repository scoped by this runtime's workspace identity.
-///
-/// Uses the runtime-owned host store rather than opening the audit database
-/// again on every call.
-pub fn store_for(runtime: &RuntimeKernel) -> Result<Arc<dyn FrictionStoreBackend>, OrbitError> {
-    workspace_friction_store(
-        runtime.sqlite_store()?,
-        runtime.workspace_id()?,
-        files_root(runtime),
-    )
+mod metrics;
+mod mutations;
+mod workspace;
+
+pub use workspace::WorkspaceFrictions;
+use workspace::validate_workspace_id;
+
+/// Friction operations scoped to this runtime's workspace identity.
+pub fn store_for(runtime: &RuntimeKernel) -> Result<WorkspaceFrictions, OrbitError> {
+    let store = runtime.sqlite_store()?;
+    let workspace_id = runtime.workspace_id()?;
+    let files_root = files_root(runtime);
+    prepare_workspace_frictions(&store, &workspace_id, &files_root)?;
+    WorkspaceFrictions::open(store, workspace_id, files_root)
 }
 
 /// Where this runtime's workspace keeps its friction tag taxonomy.

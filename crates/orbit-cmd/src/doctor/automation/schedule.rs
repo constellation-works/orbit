@@ -80,7 +80,7 @@ fn stale_routine_message(global_root: &std::path::Path) -> Result<Option<String>
         let Some(limit) = interval.checked_mul(3) else {
             continue;
         };
-        let success = store.routine_latest_succeeded_fire(name)?;
+        let success = store.read()?.routine().latest_succeeded_fire(name)?;
         let reference = match &success {
             Some(fire) => parse_stored_timestamp(&fire.updated_at)?,
             None => parse_stored_timestamp(baseline)?,

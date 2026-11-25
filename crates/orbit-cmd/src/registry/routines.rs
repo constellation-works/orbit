@@ -335,7 +335,7 @@ pub fn routine_status_store_fingerprint(global_root: &Path) -> Option<RoutineSto
         return None;
     }
     orbit_store::Store::open_read_only(&database)
-        .and_then(|store| store.routine_state_fingerprint())
+        .and_then(|store| store.read()?.routine().state_fingerprint())
         .ok()
         .map(|(routines, job_runs)| RoutineStoreFingerprint { routines, job_runs })
 }

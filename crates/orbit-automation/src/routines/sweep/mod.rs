@@ -15,3 +15,5 @@ pub use core::{duplicate_ownership_skipped, run_sweep_core};
 /// Cooperative budget for a host scheduler tick, owned by the clock whose
 /// health judges an overdue tick against it [ORB-22688].
 pub use orbit_clock::TICK_DEADLINE;
+
+pub use fire::record_fire_intent;

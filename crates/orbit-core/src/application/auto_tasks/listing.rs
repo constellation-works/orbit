@@ -11,7 +11,7 @@ use super::crud::require_loaded;
 use super::loader::{AutoTaskCollection, AutoTaskLoadError};
 use super::schedule::next_scheduled_slot;
 use super::scheduler::ListedAutoTask;
-use super::state::{AutoTaskCursor, cursor_state_path, load_cursor_state};
+use super::state::{AutoTaskCursor, cursor_state_path, cursor_store};
 use crate::OrbitRuntime;
 use crate::application::automation::delivery_ownership_refusal;
 use crate::application::contracts::ScheduleDisplayState;
@@ -111,7 +111,10 @@ impl OrbitRuntime {
         include_inactive_plugins: bool,
         now: DateTime<Utc>,
     ) -> AutoTaskListing {
-        let cursors = load_cursor_state(&cursor_state_path(&self.paths().state_dir));
+        let cursors = cursor_store(&cursor_state_path(&self.paths().state_dir))
+            .read()
+            .auto_task()
+            .get();
         let cursor_state_error = cursors.as_ref().err().map(ToString::to_string);
         let listed = collection
             .definitions

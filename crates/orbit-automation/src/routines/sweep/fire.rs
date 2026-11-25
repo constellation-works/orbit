@@ -1,7 +1,7 @@
 use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
 use orbit_common::storage::timestamp::parse_stored_timestamp;
-use orbit_store::contracts::{RoutineFireIntentParams, RoutineFireState, RoutineStoreBackend};
+use orbit_store::contracts::{RoutineFireIntentParams, RoutineFireState};
 use orbit_types::workflow::JobRunState;
 use orbit_types::workflow::OverlapPolicy;
 use std::collections::BTreeMap;
@@ -27,7 +27,7 @@ pub(super) struct FireRequest<'a> {
 }
 
 pub(super) fn fire(
-    store: &dyn RoutineStoreBackend,
+    store: &orbit_store::Store,
     routine: &LoadedRoutine,
     dispatch: &dyn RoutineDispatch,
     request: FireRequest<'_>,
@@ -44,7 +44,7 @@ pub(super) fn fire(
     let name = &definition.name;
 
     if definition.policy.overlap == OverlapPolicy::Forbid
-        && store.routine_blocking_fire(name)?.is_some()
+        && store.read()?.routine().blocking_fire(name)?.is_some()
     {
         // Stale in-flight entries past the policy timeout were already
         // reclaimed by the outcome sync at the top of the pass, so anything
@@ -61,20 +61,25 @@ pub(super) fn fire(
             && !unscheduled;
         if consume && !options.dry_run {
             // `guard_miss: skip` consumes the slot as a recorded skip.
-            let claimed = store.routine_record_fire_intent(&RoutineFireIntentParams {
-                routine_name: name.clone(),
-                slot: slot.to_string(),
-                attempt,
-                source_workspace: routine.source_workspace.clone(),
-            })?;
-            if claimed {
-                store.routine_mark_fire_outcome(
-                    name,
-                    slot,
+            let claimed = record_fire_intent(
+                store,
+                &RoutineFireIntentParams {
+                    routine_name: name.clone(),
+                    slot: slot.to_string(),
                     attempt,
-                    RoutineFireState::Skipped,
-                    Some(&format!("{reason}: {detail}")),
-                )?;
+                    source_workspace: routine.source_workspace.clone(),
+                },
+                true,
+            )?;
+            if claimed {
+                store.write(|tx| {
+                    tx.routine().update_fire(
+                        (name, slot, attempt),
+                        RoutineFireState::Skipped,
+                        None,
+                        Some(&format!("{reason}: {detail}")),
+                    )
+                })?;
             }
         }
         return Ok(RoutineSweepReport {
@@ -96,11 +101,7 @@ pub(super) fn fire(
         attempt,
         source_workspace: routine.source_workspace.clone(),
     };
-    let claimed = if unscheduled {
-        store.routine_record_unscheduled_fire_intent(&intent)?
-    } else {
-        store.routine_record_fire_intent(&intent)?
-    };
+    let claimed = record_fire_intent(store, &intent, !unscheduled)?;
     if !claimed {
         return Ok(RoutineSweepReport {
             slot: Some(slot.to_string()),
@@ -116,7 +117,14 @@ pub(super) fn fire(
         slot,
     ) {
         Ok(run_id) => {
-            store.routine_mark_fire_dispatched(name, slot, attempt, &run_id)?;
+            store.write(|tx| {
+                tx.routine().update_fire(
+                    (name, slot, attempt),
+                    RoutineFireState::Dispatched,
+                    Some(&run_id),
+                    None,
+                )
+            })?;
             Ok(RoutineSweepReport {
                 routine: name.clone(),
                 source: routine.source_workspace.clone(),
@@ -133,13 +141,14 @@ pub(super) fn fire(
             // record it as `Failed` — retryable under the same slot within
             // `policy.retries` — rather than the terminal `Error`
             // the outcome sync reserves for an ambiguous crash-orphaned intent.
-            store.routine_mark_fire_outcome(
-                name,
-                slot,
-                attempt,
-                RoutineFireState::Failed,
-                Some(&format!("dispatch failed: {error}")),
-            )?;
+            store.write(|tx| {
+                tx.routine().update_fire(
+                    (name, slot, attempt),
+                    RoutineFireState::Failed,
+                    None,
+                    Some(&format!("dispatch failed: {error}")),
+                )
+            })?;
             Ok(RoutineSweepReport {
                 routine: name.clone(),
                 source: routine.source_workspace.clone(),
@@ -159,14 +168,16 @@ pub(super) fn fire(
 /// without it, a sweep that crashed between intent and dispatch would block
 /// `overlap: forbid` forever).
 pub(super) fn sync_unresolved_fires(
-    store: &dyn RoutineStoreBackend,
+    store: &orbit_store::Store,
     routines_by_name: &BTreeMap<String, &LoadedRoutine>,
     dispatch: &dyn RoutineDispatch,
     now_utc: DateTime<Utc>,
     deadline: Instant,
 ) -> Result<BTreeMap<String, String>, OrbitError> {
     let mut errors = BTreeMap::new();
-    for fire in store.routine_unresolved_fires()? {
+    // Release the read snapshot before reconciling outcomes through the writer.
+    let unresolved = store.read()?.routine().unresolved_fires()?;
+    for fire in unresolved {
         if Instant::now() >= deadline {
             break;
         }
@@ -197,13 +208,14 @@ pub(super) fn sync_unresolved_fires(
             // A recorded intent whose sweep died before dispatch: reclaim it
             // once past the timeout horizon, otherwise leave it for a later pass.
             RoutineFireState::Intent if expired => {
-                store.routine_mark_fire_outcome(
-                    &fire.routine_name,
-                    &fire.slot,
-                    fire.attempt,
-                    RoutineFireState::Error,
-                    Some("stale fire intent reclaimed (sweep died before dispatch)"),
-                )?;
+                store.write(|tx| {
+                    tx.routine().update_fire(
+                        (&fire.routine_name, &fire.slot, fire.attempt),
+                        RoutineFireState::Error,
+                        None,
+                        Some("stale fire intent reclaimed (sweep died before dispatch)"),
+                    )
+                })?;
             }
             RoutineFireState::Dispatched => {
                 let run_id = fire.run_id.as_deref();
@@ -292,13 +304,14 @@ pub(super) fn sync_unresolved_fires(
                 };
 
                 if let Some((state, detail)) = outcome {
-                    store.routine_mark_fire_outcome(
-                        &fire.routine_name,
-                        &fire.slot,
-                        fire.attempt,
-                        state,
-                        detail,
-                    )?;
+                    store.write(|tx| {
+                        tx.routine().update_fire(
+                            (&fire.routine_name, &fire.slot, fire.attempt),
+                            state,
+                            None,
+                            detail,
+                        )
+                    })?;
                 }
             }
             _ => {}
@@ -306,4 +319,22 @@ pub(super) fn sync_unresolved_fires(
     }
 
     Ok(errors)
+}
+
+/// Insert a fire intent and, for a scheduled fire, advance the cursor
+/// atomically. A duplicate intent has already consumed its slot.
+pub fn record_fire_intent(
+    store: &orbit_store::Store,
+    intent: &RoutineFireIntentParams,
+    scheduled: bool,
+) -> Result<bool, OrbitError> {
+    store.write(|tx| {
+        let routine = tx.routine();
+        let now = chrono::Utc::now().to_rfc3339();
+        let inserted = routine.insert_fire(intent, &now)?;
+        if inserted && scheduled {
+            routine.update_cursor_slot(&intent.routine_name, &intent.slot, &now)?;
+        }
+        Ok(inserted)
+    })
 }

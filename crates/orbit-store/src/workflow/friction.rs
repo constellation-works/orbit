@@ -18,12 +18,16 @@ use std::path::{Path, PathBuf};
 
 use orbit_common::storage::sqlite::{sqlite_error, sqlite_store_error};
 use orbit_common::{OrbitError, StorageLayer};
-use rusqlite::{Connection, TransactionBehavior};
+use rusqlite::Connection;
 
-use crate::Store;
-use crate::driver::file::friction_store::{friction_record_paths, read_record_at};
+use crate::FileStore;
+use crate::driver::file::friction_store::LegacyFrictionDir;
+use crate::{Store, Tx};
 
-use crate::repository::friction::queries::upsert_record;
+mod submission;
+
+pub use submission::{add, add_or_reuse, next_friction_sequence, submit};
+pub(crate) use submission::{allocate, project_committed_friction};
 
 /// Shape of the import this binary knows how to produce and re-verify. A
 /// marker recorded by a newer binary is refused rather than reinterpreted.
@@ -54,13 +58,11 @@ pub fn import_workspace_frictions(
     source_root: &Path,
 ) -> Result<FrictionImportReport, OrbitError> {
     let source_key = source_key(source_root);
-    if let Some(report) =
-        store.with_read_connection(|conn| completed_marker(conn, workspace_id, &source_key))?
-    {
+    if let Some(report) = completed_marker(store.read()?.connection(), workspace_id, &source_key)? {
         return Ok(report);
     }
 
-    store.with_transaction_behavior(TransactionBehavior::Immediate, |tx| {
+    store.write(|tx| {
         let conn = tx.connection();
         // Re-check inside the writer transaction in case another process
         // completed the import after the observational fast path.
@@ -69,7 +71,7 @@ pub fn import_workspace_frictions(
         }
         let canonical_root = resolve_import_root(source_root)?;
         run_import(
-            conn,
+            tx,
             workspace_id,
             source_root,
             canonical_root.as_deref(),
@@ -160,30 +162,33 @@ fn resolve_import_root(source_root: &Path) -> Result<Option<PathBuf>, OrbitError
 }
 
 fn run_import(
-    conn: &Connection,
+    tx: &Tx<'_>,
     workspace_id: &str,
     source_root: &Path,
     canonical_root: Option<&Path>,
     source_key: &str,
 ) -> Result<FrictionImportReport, OrbitError> {
+    let conn = tx.connection();
+    let records = tx.friction();
     // A resolved root is kept so every record location below is checked
     // against the same canonical path the walk used.
-    let paths = match canonical_root {
-        Some(root) => friction_record_paths(root)?,
-        None => Vec::new(),
-    };
-
     let mut seen: BTreeSet<String> = BTreeSet::new();
     let mut imported = 0u64;
     let mut skipped_existing = 0u64;
 
-    // Streamed one record at a time: the whole corpus is never resident, only
-    // the ID set used to detect a collision inside this source tree. `paths`
-    // is only non-empty when `canonical_root` resolved, so the two stay in
-    // lockstep without an unreachable-error branch.
+    // Streamed one record at a time. Only the IDs used to detect collisions
+    // and the paths discovered in this tree stay resident.
+    let mut discovered = 0;
     if let Some(corpus_root) = canonical_root {
+        let files = FileStore::new(LegacyFrictionDir {
+            root: corpus_root.to_path_buf(),
+        });
+        let snapshot = files.read();
+        let legacy = snapshot.friction();
+        let paths = legacy.paths()?;
+        discovered = paths.len() as u64;
         for path in &paths {
-            let stored = read_record_at(path)?;
+            let stored = legacy.get(path)?;
             let record = stored.record;
             let (month, seq) = split_friction_id(&record.id).ok_or_else(|| {
                 OrbitError::Store(format!(
@@ -201,12 +206,11 @@ fn run_import(
                     path.display()
                 )));
             }
-            if record_exists(conn, workspace_id, &record.id)? {
+            if records.contains(workspace_id, &record.id)? {
                 skipped_existing += 1;
                 continue;
             }
-            upsert_record(
-                conn,
+            records.put(
                 workspace_id,
                 &record,
                 &month,
@@ -217,7 +221,6 @@ fn run_import(
         }
     }
 
-    let discovered = paths.len() as u64;
     if imported + skipped_existing != discovered {
         return Err(OrbitError::Store(format!(
             "friction import for workspace '{workspace_id}' handled {} of {discovered} \
@@ -266,21 +269,6 @@ fn run_import(
         skipped_existing,
         already_complete: false,
     })
-}
-
-fn record_exists(
-    conn: &Connection,
-    workspace_id: &str,
-    friction_id: &str,
-) -> Result<bool, OrbitError> {
-    let count: i64 = conn
-        .query_row(
-            "SELECT COUNT(*) FROM friction_records WHERE workspace_id = ?1 AND friction_id = ?2",
-            rusqlite::params![workspace_id, friction_id],
-            |row| row.get(0),
-        )
-        .map_err(sqlite_store_error)?;
-    Ok(count > 0)
 }
 
 /// The legacy layout addressed a record by its ID, so a record filed under a

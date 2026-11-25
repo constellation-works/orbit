@@ -193,20 +193,20 @@ pub(crate) fn rewrite_enabled_line(raw: &str, enabled: bool) -> Result<String, O
 /// when it was already paused.
 pub fn pause_routine(global_root: &Path, name: &str, actor: &str) -> Result<bool, OrbitError> {
     let store = super::super::open_routine_store(global_root)?;
-    store.routine_pause(name, actor)
+    store.write(|tx| tx.routine().insert_pause(name, actor))
 }
 
 /// Clear a host-local pause. Returns `false` when it was not paused.
 pub fn resume_routine(global_root: &Path, name: &str) -> Result<bool, OrbitError> {
     let store = super::super::open_routine_store(global_root)?;
-    store.routine_resume(name)
+    store.write(|tx| tx.routine().delete_pause(name))
 }
 
 /// Close a routine's open circuit breaker now, recording the reset under
 /// `actor`. Returns `false` when it was not open.
 fn reset_routine_breaker(global_root: &Path, name: &str, actor: &str) -> Result<bool, OrbitError> {
     let store = super::super::open_routine_store(global_root)?;
-    store.routine_breaker_reset(name, actor)
+    orbit_automation::routines::breaker::reset_breaker(&store, name, actor)
 }
 
 /// Let one fire of a routine through its open circuit breaker on the next
@@ -214,7 +214,7 @@ fn reset_routine_breaker(global_root: &Path, name: &str, actor: &str) -> Result<
 /// open.
 fn bypass_routine_breaker(global_root: &Path, name: &str, actor: &str) -> Result<bool, OrbitError> {
     let store = super::super::open_routine_store(global_root)?;
-    store.routine_breaker_bypass(name, actor)
+    orbit_automation::routines::breaker::request_breaker_bypass(&store, name, actor)
 }
 
 /// The two operator actions on a tripped routine's circuit breaker.
@@ -291,5 +291,5 @@ pub fn routine_breaker_events(
     limit: usize,
 ) -> Result<Vec<orbit_store::contracts::RoutineBreakerEvent>, OrbitError> {
     let store = super::super::open_existing_routine_store(global_root)?;
-    store.routine_breaker_events(name, limit)
+    store.read()?.routine().breaker_events(name, limit)
 }

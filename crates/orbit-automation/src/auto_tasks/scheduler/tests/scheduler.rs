@@ -5,9 +5,7 @@ use crate::auto_tasks::scheduler::{
 };
 use chrono::{DateTime, Duration, TimeZone, Utc};
 use orbit_common::OrbitError;
-use orbit_store::compose::auto_task::{
-    cursor_state_path, load_cursor_state, upsert_cursor, with_cursor_lock,
-};
+use orbit_store::compose::auto_task::{cursor_state_path, cursor_store};
 use orbit_types::workflow::automation::AutomationDiagnostic;
 use orbit_types::workflow::{AutoTaskCursor, AutoTaskDefinition};
 use std::fs;
@@ -174,12 +172,16 @@ fn due_fixture(name: &str) -> (tempfile::TempDir, TestDispatch, DateTime<Utc>) {
     write_interval_definition(&definition_root, name, "always");
     let dispatch = TestDispatch::new(definition_root, state_dir);
     let t0 = at(2026, 1, 1, 0, 0);
-    upsert_cursor(
-        &cursor_state_path(&dispatch.state_dir),
-        name,
-        cursor(&t0.to_rfc3339(), None),
-    )
-    .expect("baseline cursor");
+    cursor_store(&cursor_state_path(&dispatch.state_dir))
+        .write(|tx| {
+            let mut records = tx.auto_task()?;
+            records
+                .state
+                .definitions
+                .insert((name).to_string(), cursor(&t0.to_rfc3339(), None));
+            records.put()
+        })
+        .expect("baseline cursor");
     (root, dispatch, t0)
 }
 
@@ -207,7 +209,11 @@ fn overlapping_due_passes_mint_one_task() {
     });
 
     assert_eq!(dispatch.minted.load(Ordering::SeqCst), 1);
-    let state = load_cursor_state(&cursor_state_path(&dispatch.state_dir)).expect("load");
+    let state = cursor_store(&cursor_state_path(&dispatch.state_dir))
+        .read()
+        .auto_task()
+        .get()
+        .expect("load");
     assert_eq!(
         state.definitions["chore"].last_task_id.as_deref(),
         Some("ORB-00001")
@@ -226,7 +232,16 @@ fn loaded_definition_deleted_before_admission_cannot_recreate_cursor() {
     let t0 = at(2026, 1, 1, 0, 0);
     let state_path = cursor_state_path(&dispatch.state_dir);
     for name in ["removed", "survivor"] {
-        upsert_cursor(&state_path, name, cursor(&t0.to_rfc3339(), None)).expect("seed cursor");
+        cursor_store(&state_path)
+            .write(|tx| {
+                let mut records = tx.auto_task()?;
+                records
+                    .state
+                    .definitions
+                    .insert((name).to_string(), cursor(&t0.to_rfc3339(), None));
+                records.put()
+            })
+            .expect("seed cursor");
     }
     let loaded = Arc::new(Barrier::new(2));
     let resume = Arc::new(Barrier::new(2));
@@ -245,13 +260,15 @@ fn loaded_definition_deleted_before_admission_cannot_recreate_cursor() {
             outcome.expect("scheduler pass")
         });
         loaded.wait();
-        with_cursor_lock(&state_path, |session| {
-            fs::remove_file(auto_tasks_dir(&definition_root).join("removed.yaml"))
-                .expect("delete loaded definition");
-            assert!(session.state.definitions.remove("removed").is_some());
-            session.save()
-        })
-        .expect("delete cursor under admission lock");
+        cursor_store(&state_path)
+            .write(|tx| {
+                let mut session = tx.auto_task()?;
+                fs::remove_file(auto_tasks_dir(&definition_root).join("removed.yaml"))
+                    .expect("delete loaded definition");
+                assert!(session.state.definitions.remove("removed").is_some());
+                session.put()
+            })
+            .expect("delete cursor under admission lock");
         resume.wait();
 
         let outcome = pass.join().expect("scheduler thread");
@@ -265,7 +282,11 @@ fn loaded_definition_deleted_before_admission_cannot_recreate_cursor() {
         assert_eq!(outcome.reports[1].name, "survivor");
         assert_eq!(outcome.reports[1].action, "fired");
         assert_eq!(dispatch.minted.load(Ordering::SeqCst), 1);
-        let state = load_cursor_state(&state_path).expect("cursor state");
+        let state = cursor_store(&state_path)
+            .read()
+            .auto_task()
+            .get()
+            .expect("cursor state");
         assert!(!state.definitions.contains_key("removed"));
         assert_eq!(
             state.definitions["survivor"].last_task_id.as_deref(),
@@ -287,7 +308,11 @@ fn interruption_after_claim_reports_unresolved_and_does_not_remint() {
     .expect("interrupted");
     assert_eq!(interrupted.reports[0].action, "error");
     assert_eq!(dispatch.minted.load(Ordering::SeqCst), 0);
-    let state = load_cursor_state(&cursor_state_path(&dispatch.state_dir)).expect("load");
+    let state = cursor_store(&cursor_state_path(&dispatch.state_dir))
+        .read()
+        .auto_task()
+        .get()
+        .expect("load");
     assert_eq!(
         state.definitions["chore"]
             .pending
@@ -312,7 +337,11 @@ fn interruption_after_claim_reports_unresolved_and_does_not_remint() {
         retry.reports[0]
     );
     assert_eq!(dispatch.minted.load(Ordering::SeqCst), 0);
-    let state = load_cursor_state(&cursor_state_path(&dispatch.state_dir)).expect("load");
+    let state = cursor_store(&cursor_state_path(&dispatch.state_dir))
+        .read()
+        .auto_task()
+        .get()
+        .expect("load");
     assert!(state.definitions["chore"].last_slot.is_none());
 }
 
@@ -329,7 +358,11 @@ fn interruption_after_mint_reconciles_on_retry_without_reminting() {
     .expect("interrupted");
     assert_eq!(interrupted.reports[0].action, "error");
     assert_eq!(dispatch.minted.load(Ordering::SeqCst), 1);
-    let state = load_cursor_state(&cursor_state_path(&dispatch.state_dir)).expect("load");
+    let state = cursor_store(&cursor_state_path(&dispatch.state_dir))
+        .read()
+        .auto_task()
+        .get()
+        .expect("load");
     assert_eq!(
         state.definitions["chore"]
             .pending
@@ -356,7 +389,11 @@ fn interruption_after_mint_reconciles_on_retry_without_reminting() {
         retry.reports[0]
     );
     assert_eq!(dispatch.minted.load(Ordering::SeqCst), 1);
-    let state = load_cursor_state(&cursor_state_path(&dispatch.state_dir)).expect("load");
+    let state = cursor_store(&cursor_state_path(&dispatch.state_dir))
+        .read()
+        .auto_task()
+        .get()
+        .expect("load");
     assert!(state.definitions["chore"].pending.is_none());
     assert!(state.definitions["chore"].last_slot.is_some());
 }
@@ -382,7 +419,11 @@ fn checkpoint_write_failure_records_mint_evidence_and_retry_reconciles() {
         "{:?}",
         failed.reports[0]
     );
-    let state = load_cursor_state(&cursor_state_path(&dispatch.state_dir)).expect("load");
+    let state = cursor_store(&cursor_state_path(&dispatch.state_dir))
+        .read()
+        .auto_task()
+        .get()
+        .expect("load");
     assert_eq!(
         state.definitions["chore"]
             .pending

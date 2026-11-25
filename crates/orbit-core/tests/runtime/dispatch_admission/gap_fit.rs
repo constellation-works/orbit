@@ -10,6 +10,7 @@ use std::path::{Path, PathBuf};
 
 use chrono::{DateTime, Duration, Utc};
 use orbit_core::application::task::TaskAddParams;
+use orbit_core::runtime::friction::WorkspaceFrictions as FrictionStore;
 use orbit_core::runtime::host_resource::forecast::{ForecastDecision, HostLoadForecast};
 use orbit_core::{OrbitRuntime, TaskComplexity, TaskPriority, TaskStatus, TaskType};
 use orbit_engine::RuntimeHost;
@@ -17,7 +18,6 @@ use orbit_store::contracts::{
     AdmissionForecastPoint, AdmissionRunContext, ExecutionClaim, ExecutionClaimPhase,
     ExecutionLocation, FrictionListFilter, RunResourceMinute,
 };
-use orbit_store::friction_store::FrictionStore;
 use orbit_tools::ToolContext;
 use orbit_types::record::FrictionRecord;
 use orbit_types::workflow::{

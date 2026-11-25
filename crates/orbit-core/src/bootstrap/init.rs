@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 
 use orbit_common::OrbitError;
 use orbit_store::compose::{global_executor_def_store, global_policy_def_store};
-use orbit_store::friction_store;
+use orbit_store::friction_taxonomy;
 use orbit_types::workflow::ShipMode;
 use orbit_types::workspace::{DEFAULT_BASE_BRANCH, WorkspacePaths};
 
@@ -394,7 +394,7 @@ pub fn init_workspace_at_root(
     };
 
     if !options.global_only {
-        friction_store::ensure_default_tag_taxonomy(&orbit_root.join("frictions"))?;
+        friction_taxonomy::ensure_default_tag_taxonomy(&orbit_root.join("frictions"))?;
     }
     // Every globally scoped default has now landed, so later runtime opens may
     // skip the reconciliation pass until this binary's asset set changes. The

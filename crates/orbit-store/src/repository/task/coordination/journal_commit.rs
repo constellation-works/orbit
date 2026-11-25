@@ -2,15 +2,15 @@
 
 use orbit_common::storage::sqlite::sqlite_store_error;
 use orbit_common::{ClaimRefusalKind, OrbitError};
-use rusqlite::{OptionalExtension, TransactionBehavior, params};
+use rusqlite::{OptionalExtension, params};
 
-use super::JournalCommitOutcome;
 use crate::contracts::{
     TaskCoordinationRow, TaskReservationReserveParams, TaskReservationReserveResult,
 };
-use crate::driver::sqlite::friction_write;
+use crate::driver::sqlite::task_commit_journal::{JournalCommitOutcome, upsert_executor_census_in};
 use crate::driver::sqlite::task_reservation_store::notices::{self, LeaseOverlapNotice};
 use crate::driver::sqlite::task_reservation_store::reserve_files_in_tx;
+use crate::workflow::friction::{allocate, project_committed_friction};
 use crate::{Store, StoreTx};
 
 impl Store {
@@ -32,9 +32,10 @@ impl Store {
         lease_notice: Option<&LeaseOverlapNotice<'_>>,
     ) -> Result<JournalCommitOutcome, OrbitError> {
         let mut reported_friction = None;
-        let outcome = self.with_transaction_behavior(TransactionBehavior::Immediate, |tx| {
-            let workspace_id: String = tx
-                .tx
+        let outcome = self.write(|tx| {
+            let legacy = tx.legacy();
+            let conn = tx.connection();
+            let workspace_id: String = conn
                 .query_row(
                     "SELECT workspace_id FROM task_commit_journal
                      WHERE journal_id = ?1 AND state = 'prepared'",
@@ -49,7 +50,7 @@ impl Store {
                     ))
                 })?;
 
-            if let Some(existing) = first_existing_coordination_row(tx, &workspace_id, identities)?
+            if let Some(existing) = first_existing_coordination_row(legacy, &workspace_id, identities)?
             {
                 return Ok(JournalCommitOutcome::RowExists {
                     kind: existing.0,
@@ -59,7 +60,7 @@ impl Store {
 
             let reserved = match reservation {
                 Some(params) => {
-                    let result = reserve_files_in_tx(tx, params)?;
+                    let result = reserve_files_in_tx(legacy, params)?;
                     if !result.reserved {
                         return Ok(JournalCommitOutcome::Conflicted(result));
                     }
@@ -80,7 +81,7 @@ impl Store {
             }
             let now = crate::now_string();
             for row in &rows {
-                tx.tx
+                conn
                     .execute(
                         "INSERT INTO task_coordination_rows(
                             workspace_id, kind, row_id, payload_json, journal_id, created_at
@@ -101,7 +102,7 @@ impl Store {
                 if old.kind != new.kind || old.row_id != new.row_id {
                     return Err(OrbitError::Store("claim row identity changed".into()));
                 }
-                let count = tx.tx.execute(
+                let count = conn.execute(
                     "UPDATE task_coordination_rows SET payload_json=?5, journal_id=?6 WHERE workspace_id=?1 AND kind=?2 AND row_id=?3 AND payload_json=?4",
                     params![workspace_id, old.kind, old.row_id, old.payload_json, new.payload_json, journal_id],
                 ).map_err(sqlite_store_error)?;
@@ -110,19 +111,17 @@ impl Store {
                 }
             }
             if let Some(reservation_id) = &effects.release_reservation {
-                tx.tx.execute(
+                conn.execute(
                     "UPDATE task_reservations SET released_at=?3, release_reason='explicit' WHERE reservation_id=?1 AND workspace_id=?2 AND released_at IS NULL",
                     params![reservation_id, workspace_id, now],
                 ).map_err(sqlite_store_error)?;
             }
 
             if let Some((friction, receipt_id)) = &effects.friction {
-                let record = friction_write::add_in_transaction(
-                    tx.connection(), &workspace_id, friction,
-                )?;
+                let record = allocate(tx, &workspace_id, friction.clone())?;
                 let payload = serde_json::to_string(&record)
                     .map_err(|error| OrbitError::Store(error.to_string()))?;
-                tx.tx.execute(
+                conn.execute(
                     "INSERT INTO task_coordination_rows(workspace_id, kind, row_id, payload_json, journal_id, created_at) VALUES (?1, 'distributed-claim-friction-v1', ?2, ?3, ?4, ?5)",
                     params![workspace_id, receipt_id, payload, journal_id, now],
                 ).map_err(sqlite_store_error)?;
@@ -130,17 +129,16 @@ impl Store {
             }
 
             if let Some(entry) = &effects.census {
-                super::upsert_executor_census_in(tx.connection(), &workspace_id, entry)?;
+                upsert_executor_census_in(conn, &workspace_id, entry)?;
             }
 
             let reservation_id = reserved
                 .as_ref()
                 .and_then(|result| result.reservation_id.clone());
             if let Some(notice) = lease_notice {
-                notices::append_lease_overlaps(tx, notice)?;
+                notices::append_lease_overlaps(legacy, notice)?;
             }
-            let affected = tx
-                .tx
+            let affected = conn
                 .execute(
                     "UPDATE task_commit_journal
                      SET state = 'committed', committed_at = ?2, reservation_id = ?3
@@ -157,7 +155,7 @@ impl Store {
         })?;
         // A later SQL error or failed COMMIT must not announce a submission.
         if let Some((workspace_id, record)) = reported_friction {
-            friction_write::project_committed_friction(&workspace_id, &record);
+            project_committed_friction(&workspace_id, &record);
         }
         Ok(outcome)
     }
@@ -165,13 +163,13 @@ impl Store {
 
 /// The first requested row identity that is already published, if any.
 fn first_existing_coordination_row(
-    tx: &mut StoreTx<'_>,
+    tx: &StoreTx<'_>,
     workspace_id: &str,
     rows: &[TaskCoordinationRow],
 ) -> Result<Option<(String, String)>, OrbitError> {
     for row in rows {
         let existing: Option<String> = tx
-            .tx
+            .connection()
             .query_row(
                 "SELECT row_id FROM task_coordination_rows
                  WHERE workspace_id = ?1 AND kind = ?2 AND row_id = ?3",

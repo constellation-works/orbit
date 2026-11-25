@@ -116,7 +116,12 @@ impl RoutineDispatch for FakeDispatch {
 }
 
 fn fires(store: &Store, name: &str) -> Vec<RoutineFireRecord> {
-    store.routine_recent_fires(name, 32).expect("recent fires")
+    store
+        .read()
+        .unwrap()
+        .routine()
+        .recent_fires(name, 32)
+        .expect("recent fires")
 }
 
 /// A dispatch that overruns the tick deadline: finish the in-flight fire, then
@@ -156,9 +161,11 @@ fn a_dispatch_that_exhausts_the_deadline_defers_the_following_workspace() {
     next.source_orbit_dir = "/following/.orbit".into();
     let baseline = ts(2026, 1, 1, 0, 0, 0).to_rfc3339();
     for name in ["first", "next"] {
-        store.routine_record_baseline(name, &baseline).unwrap();
+        store
+            .write(|tx| tx.routine().insert_cursor(name, &baseline))
+            .unwrap();
     }
-    let next_cursor = store.routine_cursor("next").unwrap();
+    let next_cursor = store.read().unwrap().routine().cursor("next").unwrap();
     let started = std::time::Instant::now();
     let deadline = started + std::time::Duration::from_millis(100);
     let dispatch = BlockingDispatch {
@@ -183,7 +190,10 @@ fn a_dispatch_that_exhausts_the_deadline_defers_the_following_workspace() {
     assert_eq!(reports[1].source, "following");
     assert_eq!(reports[1].reason.as_deref(), Some("tick_deadline"));
     assert_eq!(dispatch.delegate.submit_count(), 1);
-    assert_eq!(store.routine_cursor("next").unwrap(), next_cursor);
+    assert_eq!(
+        store.read().unwrap().routine().cursor("next").unwrap(),
+        next_cursor
+    );
     assert!(fires(&store, "next").is_empty());
     assert!(started.elapsed() < std::time::Duration::from_secs(2));
 }
@@ -200,19 +210,32 @@ fn interrupted_forbid_fixture(
     let coll = collection(vec![routine("job", "forbid")]);
 
     store
-        .routine_record_baseline("job", &ts(2026, 1, 1, 0, 0, 0).to_rfc3339())
+        .write(|tx| {
+            tx.routine()
+                .insert_cursor("job", &ts(2026, 1, 1, 0, 0, 0).to_rfc3339())
+        })
         .unwrap();
     let slot = ts(2026, 1, 1, 0, 5, 0).to_rfc3339();
-    store
-        .routine_record_fire_intent(&RoutineFireIntentParams {
+    orbit_automation::routines::sweep::record_fire_intent(
+        &store,
+        &RoutineFireIntentParams {
             routine_name: "job".to_string(),
             slot: slot.clone(),
             attempt: 1,
             source_workspace: "polaris".to_string(),
-        })
-        .unwrap();
+        },
+        true,
+    )
+    .unwrap();
     store
-        .routine_mark_fire_dispatched("job", &slot, 1, "condemned")
+        .write(|tx| {
+            tx.routine().update_fire(
+                ("job", &slot, 1),
+                RoutineFireState::Dispatched,
+                Some("condemned"),
+                None,
+            )
+        })
         .unwrap();
 
     // Condemned to `interrupted`. Marking a run interrupted attaches no
@@ -364,22 +387,35 @@ fn claim(
     detail: Option<&str>,
 ) {
     let slot = slot.to_rfc3339();
-    store
-        .routine_record_fire_intent(&RoutineFireIntentParams {
+    orbit_automation::routines::sweep::record_fire_intent(
+        store,
+        &RoutineFireIntentParams {
             routine_name: name.to_string(),
             slot: slot.clone(),
             attempt: 1,
             source_workspace: "polaris".to_string(),
-        })
-        .expect("claim slot");
+        },
+        true,
+    )
+    .expect("claim slot");
     if state == RoutineFireState::Dispatched {
         store
-            .routine_mark_fire_dispatched(name, &slot, 1, "live")
+            .write(|tx| {
+                tx.routine().update_fire(
+                    (name, &slot, 1),
+                    RoutineFireState::Dispatched,
+                    Some("live"),
+                    None,
+                )
+            })
             .expect("dispatch");
         return;
     }
     store
-        .routine_mark_fire_outcome(name, &slot, 1, state, detail)
+        .write(|tx| {
+            tx.routine()
+                .update_fire((name, &slot, 1), state, None, detail)
+        })
         .expect("outcome");
 }
 
@@ -416,7 +452,7 @@ fn catch_up_once_fires_one_makeup_and_skip_records_each_missed_slot() {
     let baseline = ts(2026, 10, 14, 20, 0, 0).to_rfc3339();
     for name in ["worktree-gc", "operator-skip"] {
         store
-            .routine_record_baseline(name, &baseline)
+            .write(|tx| tx.routine().insert_cursor(name, &baseline))
             .expect("baseline");
     }
     let dispatch = FakeDispatch::default();
@@ -508,7 +544,10 @@ fn overlap_forbid_holds_across_newer_skipped_slots() {
     let store = Store::open_in_memory().expect("in-memory store");
     let job = routine_spec("ship", "* * * * *", "skip", "forbid", "noop", (0, 1), 120);
     store
-        .routine_record_baseline("ship", &ts(2026, 1, 1, 0, 0, 0).to_rfc3339())
+        .write(|tx| {
+            tx.routine()
+                .insert_cursor("ship", &ts(2026, 1, 1, 0, 0, 0).to_rfc3339())
+        })
         .unwrap();
     claim(
         &store,
@@ -567,7 +606,10 @@ fn failed_fire_with_retry_budget_survives_skipped_slots() {
     let store = Store::open_in_memory().expect("in-memory store");
     let job = routine_spec("hourly", "0 * * * *", "skip", "forbid", "noop", (2, 1), 30);
     store
-        .routine_record_baseline("hourly", &ts(2026, 1, 1, 0, 0, 0).to_rfc3339())
+        .write(|tx| {
+            tx.routine()
+                .insert_cursor("hourly", &ts(2026, 1, 1, 0, 0, 0).to_rfc3339())
+        })
         .unwrap();
     let failed_slot = ts(2026, 1, 1, 0, 0, 0);
     claim(
@@ -609,7 +651,10 @@ fn failed_fire_with_retry_budget_survives_skipped_slots() {
     assert_eq!(dispatch.submit_count(), 1);
     assert_eq!(
         store
-            .routine_cursor("hourly")
+            .read()
+            .unwrap()
+            .routine()
+            .cursor("hourly")
             .unwrap()
             .unwrap()
             .last_slot
@@ -626,7 +671,10 @@ fn failed_fire_with_retry_budget_survives_skipped_slots() {
     let store = Store::open_in_memory().expect("in-memory store");
     let job = routine_spec("hourly", "0 * * * *", "skip", "forbid", "noop", (2, 30), 30);
     store
-        .routine_record_baseline("hourly", &ts(2026, 1, 1, 0, 0, 0).to_rfc3339())
+        .write(|tx| {
+            tx.routine()
+                .insert_cursor("hourly", &ts(2026, 1, 1, 0, 0, 0).to_rfc3339())
+        })
         .unwrap();
     claim(
         &store,
@@ -674,7 +722,10 @@ fn skip_records_a_bounded_batch_before_the_next_natural_fire() {
     let store = Store::open_in_memory().expect("in-memory store");
     let first = routine_spec("minute", "* * * * *", "skip", "allow", "noop", (0, 1), 30);
     store
-        .routine_record_baseline("minute", &ts(2026, 1, 1, 0, 0, 0).to_rfc3339())
+        .write(|tx| {
+            tx.routine()
+                .insert_cursor("minute", &ts(2026, 1, 1, 0, 0, 0).to_rfc3339())
+        })
         .unwrap();
     let dispatch = FakeDispatch::default();
     let now = ts(2026, 1, 1, 2, 0, 30);
@@ -688,10 +739,22 @@ fn skip_records_a_bounded_batch_before_the_next_natural_fire() {
     .unwrap();
     assert_eq!(dispatch.submit_count(), 0);
     assert_eq!(reports[0].reason.as_deref(), Some("missed_run: skip"));
-    assert_eq!(store.routine_recent_fires("minute", 80).unwrap().len(), 64);
     assert_eq!(
         store
-            .routine_cursor("minute")
+            .read()
+            .unwrap()
+            .routine()
+            .recent_fires("minute", 80)
+            .unwrap()
+            .len(),
+        64
+    );
+    assert_eq!(
+        store
+            .read()
+            .unwrap()
+            .routine()
+            .cursor("minute")
             .unwrap()
             .unwrap()
             .last_slot
@@ -845,7 +908,7 @@ fn repeated_identical_failures_open_the_routine_breaker_until_a_trial_succeeds()
         .and_then(|at| at.with_nanosecond(0))
         .expect("minute boundary");
     store
-        .routine_record_baseline("job", &base.to_rfc3339())
+        .write(|tx| tx.routine().insert_cursor("job", &base.to_rfc3339()))
         .unwrap();
     let at = |minutes: i64| base + Duration::minutes(minutes);
     let sweep = |minutes: i64| {
@@ -859,7 +922,15 @@ fn repeated_identical_failures_open_the_routine_breaker_until_a_trial_succeeds()
         .expect("sweep");
         reports.into_iter().next().expect("one routine row")
     };
-    let breaker = || store.routine_breakers().unwrap().remove("job");
+    let breaker = || {
+        store
+            .read()
+            .unwrap()
+            .routine()
+            .breakers()
+            .unwrap()
+            .remove("job")
+    };
 
     for minute in 1..=3 {
         assert_eq!(
@@ -908,7 +979,10 @@ fn repeated_identical_failures_open_the_routine_breaker_until_a_trial_succeeds()
         RoutineBreakerState::Closed
     );
     let events: Vec<String> = store
-        .routine_breaker_events("job", 10)
+        .read()
+        .unwrap()
+        .routine()
+        .breaker_events("job", 10)
         .unwrap()
         .into_iter()
         .rev()
@@ -930,41 +1004,58 @@ fn in_flight_fire_prevents_trip_until_its_outcome_is_known() {
     let dispatch = FakeDispatch::default();
     let now = Utc::now();
     store
-        .routine_record_baseline("job", &(now - Duration::hours(1)).to_rfc3339())
+        .write(|tx| {
+            tx.routine()
+                .insert_cursor("job", &(now - Duration::hours(1)).to_rfc3339())
+        })
         .expect("baseline");
 
     for minute in 1..=3 {
         let slot = (now - Duration::minutes(10 - minute)).to_rfc3339();
-        store
-            .routine_record_fire_intent(&RoutineFireIntentParams {
+        orbit_automation::routines::sweep::record_fire_intent(
+            &store,
+            &RoutineFireIntentParams {
                 routine_name: "job".into(),
                 slot: slot.clone(),
                 attempt: 1,
                 source_workspace: "polaris".into(),
-            })
-            .expect("failure intent");
+            },
+            true,
+        )
+        .expect("failure intent");
         store
-            .routine_mark_fire_outcome(
-                "job",
-                &slot,
-                1,
-                RoutineFireState::Failed,
-                Some("dispatch failed"),
-            )
+            .write(|tx| {
+                tx.routine().update_fire(
+                    ("job", &slot, 1),
+                    RoutineFireState::Failed,
+                    None,
+                    Some("dispatch failed"),
+                )
+            })
             .expect("failure outcome");
     }
 
     let in_flight_slot = (now - Duration::minutes(1)).to_rfc3339();
-    store
-        .routine_record_fire_intent(&RoutineFireIntentParams {
+    orbit_automation::routines::sweep::record_fire_intent(
+        &store,
+        &RoutineFireIntentParams {
             routine_name: "job".into(),
             slot: in_flight_slot.clone(),
             attempt: 1,
             source_workspace: "polaris".into(),
-        })
-        .expect("in-flight intent");
+        },
+        true,
+    )
+    .expect("in-flight intent");
     store
-        .routine_mark_fire_dispatched("job", &in_flight_slot, 1, "in-flight")
+        .write(|tx| {
+            tx.routine().update_fire(
+                ("job", &in_flight_slot, 1),
+                RoutineFireState::Dispatched,
+                Some("in-flight"),
+                None,
+            )
+        })
         .expect("in-flight dispatch");
     dispatch
         .states
@@ -978,7 +1069,13 @@ fn in_flight_fire_prevents_trip_until_its_outcome_is_known() {
     run_sweep_core(&store, &coll, &dispatch, SweepOptions::default(), now).expect("sweep");
 
     assert!(
-        store.routine_breakers().expect("breaker rows").is_empty(),
+        store
+            .read()
+            .unwrap()
+            .routine()
+            .breakers()
+            .expect("breaker rows")
+            .is_empty(),
         "a newer unresolved fire prevents older failures from counting as consecutive"
     );
 }
@@ -1011,11 +1108,11 @@ fn bypass_fires_an_hourly_routine_between_slots_without_consuming_a_slot() {
         .expect("hour boundary");
     let at = |minutes: i64| base + Duration::minutes(minutes);
     store
-        .routine_record_baseline("hourly", &base.to_rfc3339())
+        .write(|tx| tx.routine().insert_cursor("hourly", &base.to_rfc3339()))
         .expect("baseline");
     store
-        .routine_breaker_transition(
-            &RoutineBreakerRecord {
+        .write(|tx| {
+            tx.routine().put_breaker(&RoutineBreakerRecord {
                 routine_name: "hourly".into(),
                 source_workspace: "polaris".into(),
                 state: RoutineBreakerState::Open,
@@ -1030,16 +1127,16 @@ fn bypass_fires_an_hourly_routine_between_slots_without_consuming_a_slot() {
                 bypass_requested_at: None,
                 floor_at: None,
                 updated_at: base.to_rfc3339(),
-            },
-            &RoutineBreakerEvent {
+            })?;
+            tx.routine().insert_breaker_event(&RoutineBreakerEvent {
                 routine_name: "hourly".into(),
                 event: "tripped".into(),
                 actor: "sweep".into(),
                 detail: Some("dispatch_failed".into()),
                 run_id: None,
                 at: base.to_rfc3339(),
-            },
-        )
+            })
+        })
         .expect("seed open breaker");
     let sweep = |minutes: i64| {
         run_sweep_core(
@@ -1057,8 +1154,7 @@ fn bypass_fires_an_hourly_routine_between_slots_without_consuming_a_slot() {
 
     assert_eq!(sweep(30).reason.as_deref(), Some(BREAKER_OPEN_REASON));
     assert!(
-        store
-            .routine_breaker_bypass("hourly", "human:test")
+        orbit_automation::routines::breaker::request_breaker_bypass(&store, "hourly", "human:test")
             .expect("bypass")
     );
 
@@ -1069,14 +1165,22 @@ fn bypass_fires_an_hourly_routine_between_slots_without_consuming_a_slot() {
     assert_eq!(dispatch.submit_count(), 1);
     assert_eq!(
         store
-            .routine_cursor("hourly")
+            .read()
+            .unwrap()
+            .routine()
+            .cursor("hourly")
             .expect("cursor")
             .expect("cursor row")
             .last_slot,
         None,
         "the bypass fire consumes no scheduled slot"
     );
-    let fires = store.routine_recent_fires("hourly", 10).expect("fires");
+    let fires = store
+        .read()
+        .unwrap()
+        .routine()
+        .recent_fires("hourly", 10)
+        .expect("fires");
     assert_eq!(fires.len(), 1, "no slot is recorded as skipped: {fires:?}");
 
     dispatch
@@ -1085,7 +1189,7 @@ fn bypass_fires_an_hourly_routine_between_slots_without_consuming_a_slot() {
         .insert(run_id, JobRunState::Success);
     assert_eq!(sweep(32).reason.as_deref(), Some("not_due"));
     assert_eq!(
-        store.routine_breakers().unwrap()["hourly"].state,
+        store.read().unwrap().routine().breakers().unwrap()["hourly"].state,
         RoutineBreakerState::Closed,
         "the successful bypass trial closes the breaker"
     );
@@ -1133,14 +1237,22 @@ impl RoutineDispatch for InterleavingDispatch {
         if !self.done.get() {
             self.done.set(true);
             let acted = match self.action {
-                InterleavedOperatorAction::Reset => self
-                    .store
-                    .routine_breaker_reset("hourly", "human:test")
-                    .expect("operator reset"),
-                InterleavedOperatorAction::Bypass => self
-                    .store
-                    .routine_breaker_bypass("hourly", "human:test")
-                    .expect("operator bypass"),
+                InterleavedOperatorAction::Reset => {
+                    orbit_automation::routines::breaker::reset_breaker(
+                        &self.store,
+                        "hourly",
+                        "human:test",
+                    )
+                    .expect("operator reset")
+                }
+                InterleavedOperatorAction::Bypass => {
+                    orbit_automation::routines::breaker::request_breaker_bypass(
+                        &self.store,
+                        "hourly",
+                        "human:test",
+                    )
+                    .expect("operator bypass")
+                }
             };
             assert!(acted, "operator action applies to the open breaker");
         }
@@ -1174,11 +1286,11 @@ fn interleaving_fixture(
         .and_then(|at| at.with_nanosecond(0))
         .expect("hour boundary");
     store
-        .routine_record_baseline("hourly", &base.to_rfc3339())
+        .write(|tx| tx.routine().insert_cursor("hourly", &base.to_rfc3339()))
         .expect("baseline");
     store
-        .routine_breaker_transition(
-            &RoutineBreakerRecord {
+        .write(|tx| {
+            tx.routine().put_breaker(&RoutineBreakerRecord {
                 routine_name: "hourly".into(),
                 source_workspace: "polaris".into(),
                 state: RoutineBreakerState::Open,
@@ -1193,16 +1305,16 @@ fn interleaving_fixture(
                 bypass_requested_at: None,
                 floor_at: None,
                 updated_at: base.to_rfc3339(),
-            },
-            &RoutineBreakerEvent {
+            })?;
+            tx.routine().insert_breaker_event(&RoutineBreakerEvent {
                 routine_name: "hourly".into(),
                 event: "tripped".into(),
                 actor: "sweep".into(),
                 detail: Some("dispatch_failed".into()),
                 run_id: None,
                 at: base.to_rfc3339(),
-            },
-        )
+            })
+        })
         .expect("seed open breaker");
     let dispatch = InterleavingDispatch {
         delegate: FakeDispatch::default(),
@@ -1215,7 +1327,10 @@ fn interleaving_fixture(
 
 fn breaker_events(store: &Store) -> Vec<String> {
     store
-        .routine_breaker_events("hourly", 10)
+        .read()
+        .unwrap()
+        .routine()
+        .breaker_events("hourly", 10)
         .expect("breaker events")
         .into_iter()
         .rev()
@@ -1232,7 +1347,7 @@ fn operator_reset_committed_mid_sweep_is_not_undone_by_the_stale_pass() {
 
     let (store, coll, dispatch, base) = interleaving_fixture(InterleavedOperatorAction::Reset);
     let reports = run_sweep_core(
-        &*store,
+        &store,
         &coll,
         &dispatch,
         SweepOptions::default(),
@@ -1242,7 +1357,12 @@ fn operator_reset_committed_mid_sweep_is_not_undone_by_the_stale_pass() {
     assert!(dispatch.done.get(), "the interleave actually happened");
     assert_eq!(reports[0].reason.as_deref(), Some("not_due"));
     assert_eq!(dispatch.delegate.submit_count(), 0);
-    let breaker = &store.routine_breakers().expect("breakers")["hourly"];
+    let breaker = &store
+        .read()
+        .unwrap()
+        .routine()
+        .breakers()
+        .expect("breakers")["hourly"];
     assert_eq!(
         breaker.state,
         RoutineBreakerState::Closed,
@@ -1264,7 +1384,7 @@ fn operator_reset_committed_mid_sweep_is_not_undone_by_the_stale_pass() {
 fn operator_bypass_committed_mid_sweep_still_fires_once_now() {
     let (store, coll, dispatch, base) = interleaving_fixture(InterleavedOperatorAction::Bypass);
     let reports = run_sweep_core(
-        &*store,
+        &store,
         &coll,
         &dispatch,
         SweepOptions::default(),
@@ -1277,14 +1397,22 @@ fn operator_bypass_committed_mid_sweep_still_fires_once_now() {
     assert_eq!(dispatch.delegate.submit_count(), 1);
     assert_eq!(
         store
-            .routine_cursor("hourly")
+            .read()
+            .unwrap()
+            .routine()
+            .cursor("hourly")
             .expect("cursor")
             .expect("cursor row")
             .last_slot,
         None,
         "the bypass fire consumes no scheduled slot"
     );
-    let breaker = &store.routine_breakers().expect("breakers")["hourly"];
+    let breaker = &store
+        .read()
+        .unwrap()
+        .routine()
+        .breakers()
+        .expect("breakers")["hourly"];
     assert_eq!(breaker.trial_reason.as_deref(), Some("bypass"));
     assert!(breaker.trial_started_at.is_some(), "{breaker:?}");
     assert_eq!(breaker_events(&store), ["tripped", "bypass", "trial"]);

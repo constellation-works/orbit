@@ -10,7 +10,7 @@ use std::path::Path;
 
 use chrono::{Duration, Utc};
 use orbit_core::OrbitRuntime;
-use orbit_core::application::auto_tasks::state::{cursor_state_path, load_cursor_state};
+use orbit_core::application::auto_tasks::state::{cursor_state_path, cursor_store};
 use orbit_core::application::auto_tasks::{SchedulerOptions, run_auto_task_scheduler_at};
 use orbit_core::application::task::{TaskAddParams, TaskUpdateParams};
 use orbit_types::task::{TaskArtifact, TaskStatus, TaskType};
@@ -315,7 +315,11 @@ fn qa_full_sweep_tool_contracts_and_symbolic_cursor_mints_next_sweep() {
     assert!(outcome.errors.is_empty(), "{outcome:?}");
     assert_eq!(outcome.reports.len(), 1);
     assert_eq!(outcome.reports[0].action, "skipped", "{outcome:?}");
-    let state = load_cursor_state(&cursor_state_path(&runtime.paths().state_dir)).unwrap();
+    let state = cursor_store(&cursor_state_path(&runtime.paths().state_dir))
+        .read()
+        .auto_task()
+        .get()
+        .unwrap();
     let skip = state.definitions[&definition.name]
         .last_skip
         .as_ref()

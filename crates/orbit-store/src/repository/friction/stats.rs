@@ -15,26 +15,10 @@ use rusqlite::Connection;
 use super::queries::encode_timestamp;
 use crate::contracts::FrictionReportedCount;
 
-/// Per-status record counts for one workspace.
-#[derive(Debug, Clone, Default)]
-pub(super) struct StatusCounts {
-    pub(super) by_status: BTreeMap<String, u64>,
-}
-
-impl StatusCounts {
-    pub(super) fn get(&self, status: &str) -> u64 {
-        self.by_status.get(status).copied().unwrap_or(0)
-    }
-
-    pub(super) fn total(&self) -> u64 {
-        self.by_status.values().sum()
-    }
-}
-
 pub(super) fn status_counts(
     conn: &Connection,
     workspace_id: &str,
-) -> Result<StatusCounts, OrbitError> {
+) -> Result<BTreeMap<String, u64>, OrbitError> {
     let mut statement = conn
         .prepare(
             "SELECT status, COUNT(*) FROM friction_records
@@ -51,7 +35,7 @@ pub(super) fn status_counts(
         let (status, count) = row.map_err(sqlite_store_error)?;
         by_status.insert(status, count.max(0) as u64);
     }
-    Ok(StatusCounts { by_status })
+    Ok(by_status)
 }
 
 /// Records resolved inside `[start, end)`. A record with no `resolved_at`

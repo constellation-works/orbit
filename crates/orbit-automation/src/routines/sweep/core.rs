@@ -1,7 +1,6 @@
 use chrono::{DateTime, Local, SecondsFormat, Utc};
 use orbit_common::OrbitError;
 use orbit_common::storage::timestamp::parse_stored_timestamp;
-use orbit_store::contracts::RoutineStoreBackend;
 use orbit_types::workflow::automation::ConditionGuardMiss;
 use orbit_types::workflow::{MissedRunPolicy, OverlapPolicy};
 use std::collections::BTreeMap;
@@ -25,7 +24,7 @@ use super::retry::{next_retry_attempt, retry_candidate, retryable_failure};
 /// — so the orchestration can be driven against a temp store, a hand-built
 /// [`RoutineCollection`], a fake [`RoutineDispatch`], and an explicit `now`.
 pub fn run_sweep_core(
-    store: &dyn RoutineStoreBackend,
+    store: &orbit_store::Store,
     collection: &RoutineCollection,
     dispatch: &dyn RoutineDispatch,
     options: SweepOptions,
@@ -46,8 +45,8 @@ pub fn run_sweep_core(
         sync_unresolved_fires(store, &routines_by_name, dispatch, now_utc, deadline)?
     };
 
-    let pauses = store.routine_pauses()?;
-    let breakers = store.routine_breakers()?;
+    let pauses = store.read()?.routine().pauses()?;
+    let breakers = store.read()?.routine().breakers()?;
 
     let mut reports = Vec::new();
     for routine in &collection.routines {
@@ -132,7 +131,7 @@ pub(super) const BREAKER_BYPASS_FIRE_REASON: &str = "breaker_bypass";
 /// the usual rules once the breaker closes. Other trigger kinds wait for no
 /// slot and are evaluated as usual.
 fn bypass_fire(
-    store: &dyn RoutineStoreBackend,
+    store: &orbit_store::Store,
     routine: &LoadedRoutine,
     dispatch: &dyn RoutineDispatch,
     pauses: &BTreeMap<String, orbit_store::contracts::RoutinePauseRecord>,
@@ -170,7 +169,7 @@ fn bypass_fire(
 }
 
 fn sweep_routine(
-    store: &dyn RoutineStoreBackend,
+    store: &orbit_store::Store,
     routine: &LoadedRoutine,
     dispatch: &dyn RoutineDispatch,
     pauses: &BTreeMap<String, orbit_store::contracts::RoutinePauseRecord>,
@@ -245,14 +244,15 @@ fn sweep_routine(
     let cron = parse_cron(&definition.trigger.cron)?;
     let now_local = now_utc.with_timezone(&Local);
 
-    let Some(cursor) = store.routine_cursor(name)? else {
+    let cursor = store.read()?.routine().cursor(name)?;
+    let Some(cursor) = cursor else {
         // First observation on this host: record the baseline and fire
         // nothing — a routine never fires for slots that predate its
         // registration here.
         if options.dry_run {
             return Ok(action(routine, "would_baseline"));
         }
-        store.routine_record_baseline(name, &now_utc.to_rfc3339())?;
+        store.write(|tx| tx.routine().insert_cursor(name, &now_utc.to_rfc3339()))?;
         return Ok(action(routine, "baselined"));
     };
 
@@ -271,8 +271,8 @@ fn sweep_routine(
     // fire. Recording them while either is outstanding hides that fire from a
     // latest-row check, so do not write them until both are clear. A new due
     // fire still takes precedence over a retry and is handled below.
-    let suppress_skips = store.routine_blocking_fire(name)?.is_some()
-        || retryable_failure(store, routine)?.is_some();
+    let has_blocking_fire = store.read()?.routine().blocking_fire(name)?.is_some();
+    let suppress_skips = has_blocking_fire || retryable_failure(store, routine)?.is_some();
     // A waiting `when:` guard keeps a due slot unconsumed past its natural
     // grace: it fires on the first later pass where the guard is true, and
     // the next slot collapses it (§11).
@@ -327,7 +327,7 @@ fn sweep_routine(
         DueDecision::RecordSkip { slot } => {
             if suppress_skips {
                 if definition.policy.overlap == OverlapPolicy::Forbid
-                    && store.routine_blocking_fire(name)?.is_some()
+                    && store.read()?.routine().blocking_fire(name)?.is_some()
                 {
                     return Ok(RoutineSweepReport {
                         slot: Some(slot.with_timezone(&Utc).to_rfc3339()),

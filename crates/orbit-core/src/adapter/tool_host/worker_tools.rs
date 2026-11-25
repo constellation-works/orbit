@@ -219,7 +219,8 @@ fn worker_friction_add(
         .tags()?
         .into_iter()
         .collect();
-    params.tags = orbit_store::contracts::normalize_friction_tags(params.tags, &taxonomy)?;
+    params.tags =
+        orbit_common::governance::friction::normalize_friction_tags(params.tags, &taxonomy)?;
     apply(
         runtime,
         session,

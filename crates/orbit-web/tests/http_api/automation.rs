@@ -5,7 +5,7 @@ use chrono::{DateTime, Duration, Utc};
 use orbit_core::AutoTaskAddParams;
 use orbit_store::contracts::{
     RoutineBreakerEvent, RoutineBreakerRecord, RoutineBreakerState, RoutineFireIntentParams,
-    RoutineFireState, RoutineStoreBackend,
+    RoutineFireState,
 };
 use orbit_types::task::{TaskPriority, TaskStatus, TaskType};
 use orbit_types::workflow::automation::members::{
@@ -288,19 +288,36 @@ fn routine_last_fire_reports_the_newer_state_triggered_run() {
             let store =
                 orbit_store::compose::routine_store(&fixture.global.join("orbit.db")).unwrap();
             let slot = "2026-09-20T23:00:00+00:00";
-            store
-                .routine_record_fire_intent(&RoutineFireIntentParams {
+            orbit_core::application::routines::record_fire_intent(
+                &store,
+                &RoutineFireIntentParams {
                     routine_name: "pilot".into(),
                     slot: slot.into(),
                     attempt: 1,
                     source_workspace: "fixture".into(),
+                },
+                true,
+            )
+            .unwrap();
+            store
+                .write(|tx| {
+                    tx.routine().update_fire(
+                        ("pilot", slot, 1),
+                        RoutineFireState::Dispatched,
+                        Some("jrun-cron-fire"),
+                        None,
+                    )
                 })
                 .unwrap();
             store
-                .routine_mark_fire_dispatched("pilot", slot, 1, "jrun-cron-fire")
-                .unwrap();
-            store
-                .routine_mark_fire_outcome("pilot", slot, 1, RoutineFireState::Succeeded, None)
+                .write(|tx| {
+                    tx.routine().update_fire(
+                        ("pilot", slot, 1),
+                        RoutineFireState::Succeeded,
+                        None,
+                        None,
+                    )
+                })
                 .unwrap();
             let server = fixture.server(false);
             let last_fire = || {
@@ -557,7 +574,7 @@ fn routine_last_fire_reports_condition_triggered_runs() {
 // Public HTTP projection: a fire is a scheduled slot, not each retry attempt.
 // Timestamps are seeded explicitly so chronology never depends on host timing.
 fn record_fire(
-    store: &dyn RoutineStoreBackend,
+    store: &orbit_store::Store,
     fixture: &Fixture,
     name: &str,
     at: DateTime<Utc>,
@@ -565,26 +582,34 @@ fn record_fire(
     state: RoutineFireState,
 ) {
     let slot = at.to_rfc3339();
-    store
-        .routine_record_fire_intent(&RoutineFireIntentParams {
+    orbit_core::application::routines::record_fire_intent(
+        store,
+        &RoutineFireIntentParams {
             routine_name: name.into(),
             slot: slot.clone(),
             attempt,
             source_workspace: "fixture".into(),
-        })
-        .unwrap();
+        },
+        true,
+    )
+    .unwrap();
     if state != RoutineFireState::Error {
         store
-            .routine_mark_fire_dispatched(
-                name,
-                &slot,
-                attempt,
-                &format!("jrun-{name}-{}-{attempt}", at.timestamp()),
-            )
+            .write(|tx| {
+                tx.routine().update_fire(
+                    (name, &slot, attempt),
+                    RoutineFireState::Dispatched,
+                    Some(&format!("jrun-{name}-{}-{attempt}", at.timestamp())),
+                    None,
+                )
+            })
             .unwrap();
     }
     store
-        .routine_mark_fire_outcome(name, &slot, attempt, state, None)
+        .write(|tx| {
+            tx.routine()
+                .update_fire((name, &slot, attempt), state, None, None)
+        })
         .unwrap();
     let global = orbit_store::Store::open(&fixture.global.join("orbit.db")).unwrap();
     global.with_transaction(|tx| {
@@ -623,7 +648,7 @@ fn routine_fire_history_counts_slots_and_stops_at_non_failures() {
                     _ => RoutineFireState::Failed,
                 };
                 record_fire(
-                    store.as_ref(),
+                    &store,
                     &fixture,
                     "watch",
                     start + Duration::minutes(i * 20),
@@ -669,7 +694,7 @@ fn routine_fire_history_counts_slots_and_stops_at_non_failures() {
 
             // An older slot's successful retry breaks the streak without adding a dot.
             record_fire(
-                store.as_ref(),
+                &store,
                 &fixture,
                 "watch",
                 start + Duration::minutes(200),
@@ -694,7 +719,7 @@ fn routine_fire_history_counts_slots_and_stops_at_non_failures() {
             .enumerate()
             {
                 record_fire(
-                    store.as_ref(),
+                    &store,
                     &fixture,
                     "watch",
                     start + Duration::minutes(260 + i as i64 * 20),
@@ -728,7 +753,7 @@ fn routine_streak_merges_automation_history_and_marks_bounded_history() {
                 .unwrap()
                 .with_timezone(&Utc);
             record_fire(
-                store.as_ref(),
+                &store,
                 &fixture,
                 "review",
                 start,
@@ -736,7 +761,7 @@ fn routine_streak_merges_automation_history_and_marks_bounded_history() {
                 RoutineFireState::Failed,
             );
             record_fire(
-                store.as_ref(),
+                &store,
                 &fixture,
                 "review",
                 start,
@@ -827,7 +852,7 @@ fn routine_streak_merges_automation_history_and_marks_bounded_history() {
             // extending it past unseen cron history with older automation runs.
             for i in 4..105 {
                 record_fire(
-                    store.as_ref(),
+                    &store,
                     &fixture,
                     "review",
                     start + Duration::minutes(i * 20),
@@ -889,16 +914,26 @@ fn routine_health_memo_ignores_unrelated_audit_writes_but_sees_new_fires() {
             let store =
                 orbit_store::compose::routine_store(&fixture.global.join("orbit.db")).unwrap();
             let slot = "2026-10-10T06:00:00+00:00";
-            store
-                .routine_record_fire_intent(&RoutineFireIntentParams {
+            orbit_core::application::routines::record_fire_intent(
+                &store,
+                &RoutineFireIntentParams {
                     routine_name: "watch".into(),
                     slot: slot.into(),
                     attempt: 1,
                     source_workspace: "fixture".into(),
-                })
-                .unwrap();
+                },
+                true,
+            )
+            .unwrap();
             store
-                .routine_mark_fire_dispatched("watch", slot, 1, "jrun-new-fire")
+                .write(|tx| {
+                    tx.routine().update_fire(
+                        ("watch", slot, 1),
+                        RoutineFireState::Dispatched,
+                        Some("jrun-new-fire"),
+                        None,
+                    )
+                })
                 .unwrap();
             let after = read();
             assert_eq!(
@@ -906,14 +941,23 @@ fn routine_health_memo_ignores_unrelated_audit_writes_but_sees_new_fires() {
                 "a recorded fire invalidates the memo at once"
             );
             store
-                .routine_mark_fire_outcome("watch", slot, 1, RoutineFireState::Succeeded, None)
+                .write(|tx| {
+                    tx.routine().update_fire(
+                        ("watch", slot, 1),
+                        RoutineFireState::Succeeded,
+                        None,
+                        None,
+                    )
+                })
                 .unwrap();
             assert_eq!(
                 read()["routines"][0]["last_fire"]["state"],
                 "succeeded",
                 "a fire outcome invalidates the memo at once"
             );
-            store.routine_pause("watch", "tester").unwrap();
+            store
+                .write(|tx| tx.routine().insert_pause("watch", "tester"))
+                .unwrap();
             assert!(
                 !read()["routines"][0]["paused_at"].is_null(),
                 "a pause invalidates the memo at once"
@@ -968,23 +1012,23 @@ fn routine_breaker_status_reports_server_computed_trial_phase_and_expected_time(
             let admitted_at = now - Duration::minutes(2);
             let set_breaker = |record: RoutineBreakerRecord, event: &str| {
                 store
-                    .routine_breaker_transition(
-                        &record,
-                        &RoutineBreakerEvent {
+                    .write(|tx| {
+                        tx.routine().put_breaker(&record)?;
+                        tx.routine().insert_breaker_event(&RoutineBreakerEvent {
                             routine_name: record.routine_name.clone(),
                             event: event.into(),
                             actor: "sweep".into(),
                             detail: record.trial_reason.clone(),
                             run_id: None,
                             at: now.to_rfc3339(),
-                        },
-                    )
+                        })
+                    })
                     .unwrap();
             };
 
             // 1. Armed cron trial with no non-ignored fire after admission.
             record_fire(
-                store.as_ref(),
+                &store,
                 &fixture,
                 "cron_trial",
                 admitted_at - Duration::hours(1),
@@ -992,7 +1036,7 @@ fn routine_breaker_status_reports_server_computed_trial_phase_and_expected_time(
                 RoutineFireState::Failed,
             );
             record_fire(
-                store.as_ref(),
+                &store,
                 &fixture,
                 "cron_trial",
                 admitted_at + Duration::seconds(10),
@@ -1049,16 +1093,26 @@ fn routine_breaker_status_reports_server_computed_trial_phase_and_expected_time(
 
             // 2. In-flight cron trial once a non-skipped fire is created after admission.
             let trial_slot = (admitted_at + Duration::seconds(30)).to_rfc3339();
-            store
-                .routine_record_fire_intent(&RoutineFireIntentParams {
+            orbit_core::application::routines::record_fire_intent(
+                &store,
+                &RoutineFireIntentParams {
                     routine_name: "cron_trial".into(),
                     slot: trial_slot.clone(),
                     attempt: 1,
                     source_workspace: "fixture".into(),
-                })
-                .unwrap();
+                },
+                true,
+            )
+            .unwrap();
             store
-                .routine_mark_fire_dispatched("cron_trial", &trial_slot, 1, "jrun-cron-trial")
+                .write(|tx| {
+                    tx.routine().update_fire(
+                        ("cron_trial", &trial_slot, 1),
+                        RoutineFireState::Dispatched,
+                        Some("jrun-cron-trial"),
+                        None,
+                    )
+                })
                 .unwrap();
             let global = orbit_store::Store::open(&fixture.global.join("orbit.db")).unwrap();
             global
@@ -1085,13 +1139,14 @@ fn routine_breaker_status_reports_server_computed_trial_phase_and_expected_time(
 
             // 3. Settled trial awaiting sweep and closed breaker report "none".
             store
-                .routine_mark_fire_outcome(
-                    "cron_trial",
-                    &trial_slot,
-                    1,
-                    RoutineFireState::Succeeded,
-                    None,
-                )
+                .write(|tx| {
+                    tx.routine().update_fire(
+                        ("cron_trial", &trial_slot, 1),
+                        RoutineFireState::Succeeded,
+                        None,
+                        None,
+                    )
+                })
                 .unwrap();
             let settled_cron = row("cron_trial");
             assert_eq!(
@@ -1140,9 +1195,12 @@ fn routine_breaker_status_reports_server_computed_trial_phase_and_expected_time(
             assert_eq!(backoff_cron["breaker"]["trial_expected_at"], future_trial);
 
             assert!(
-                store
-                    .routine_breaker_bypass("cron_trial", "human:test")
-                    .unwrap()
+                orbit_core::application::routines::request_breaker_bypass(
+                    &store,
+                    "cron_trial",
+                    "human:test"
+                )
+                .unwrap()
             );
             let pending_bypass_cron = row("cron_trial");
             assert_eq!(pending_bypass_cron["breaker"]["trial_phase"], "armed");
@@ -1203,7 +1261,14 @@ fn routine_breaker_status_reports_server_computed_trial_phase_and_expected_time(
                     },
                     "tripped",
                 );
-                assert!(store.routine_breaker_bypass(name, "human:test").unwrap());
+                assert!(
+                    orbit_core::application::routines::request_breaker_bypass(
+                        &store,
+                        name,
+                        "human:test"
+                    )
+                    .unwrap()
+                );
                 let pending = row(name);
                 assert_eq!(pending["breaker"]["trial_phase"], "armed", "{pending}");
                 assert!(
