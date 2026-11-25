@@ -163,6 +163,7 @@ mod review_record_ids;
 mod review_report_revisions;
 mod review_run_option;
 mod reviewable_lines;
+mod routine_collision_deadline;
 mod run_cli_invocations;
 mod run_failure_diagnostic;
 mod run_history;
