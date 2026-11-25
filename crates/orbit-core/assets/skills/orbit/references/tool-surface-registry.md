@@ -187,7 +187,11 @@ evidence for each command the owner requires. Two cases need none: a
 `no-diff-expected` skip checkpoint, which carries no validation (the owner's
 copy of the task must still carry the tag), and an empty required command list,
 which accepts a verified checkpoint with no validation logs except that
-`verified_already_resolved` still requires a passing replay log for each selector. An accepted
+`verified_already_resolved` still requires a passing replay log for each selector —
+as does a report-backed `verified_no_diff` or `verified_already_landed`
+checkpoint that carries `already_resolved_evidence.selectors`. A
+`no-diff-expected` skip checkpoint carrying `already_resolved_evidence.selectors`
+is refused. An accepted
 handoff moves the task to `review`, which awaits owner
 approval — it does not merge. A failure records its evidence and blocks the
 task. A release (a cancelled drain giving back work it will not finish) returns
