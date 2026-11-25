@@ -304,7 +304,6 @@ export function forecastUnavailableInfo(forecast, payload = {}) {
   }
   if (unavailable.risk_unestimated) reasons.push({ kind: "risk_unestimated", label: "Risk not estimated", detail: "Regression risk is not estimated for some tasks, so the adjusted forecast is unavailable." });
   if (unavailable.arrival_conflict_unknown) reasons.push({ kind: "arrival_conflict_unknown", label: "Arrival conflicts unknown", detail: "Whether arriving tasks would conflict with this backlog is unknown, so the adjusted forecast is unavailable." });
-  if (unavailable.return_tail_unsupported) reasons.push({ kind: "return_tail_unsupported", label: "Unsupported return tail", detail: "A blocked task has waited past all recorded return history, so the full forecast is unavailable." });
   if (!reasons.length) return null;
   const support = supportText(forecast, payload);
   return { kind: reasons[0].kind, reasons, label: reasons.map((r) => r.label).join(" · "), detail: [reasons.map((r) => r.detail).join(" "), support].filter(Boolean).join(" "), support };
@@ -324,7 +323,6 @@ export function returnTailUnforecastableCount(forecast) {
 /// Whether non-draining or missing totals stem from an unsupported return tail
 /// rather than supported draws exceeding the 90-day horizon.
 export function hasUnsupportedReturnTail(forecast, coverage = {}) {
-  if (forecast?.unavailable?.return_tail_unsupported) return true;
   if (returnTailUnforecastableCount(forecast) > 0) return true;
   if (num(coverage?.return_tail_unsupported) > 0) return true;
   return num(forecast?.outcomes?.no_return) > 0

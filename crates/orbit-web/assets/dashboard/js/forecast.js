@@ -749,8 +749,6 @@ function warningLine(scenario, hasBaseline) {
   let text = `${lead}the regression-adjusted forecast is unavailable: ${info.label}.`;
   if (info.kind === "simulation_cut") {
     text = `${lead}${info.reasons[0].detail} Choose Current backlog for that forecast.`;
-  } else if (info.kind === "return_tail_unsupported") {
-    text = `${lead}a blocked task has waited past all recorded return history.`;
   } else if (info.kind === "regression_history_missing" && recordedPoolsContainGaps(source)) {
     text = `${lead}regression follow-up cannot be estimated because ${regressionGapBecause(source)}.`;
   } else if (info.kind === "regression_history_missing" && missing && regressionHistoryIsAbsent(source)) {
