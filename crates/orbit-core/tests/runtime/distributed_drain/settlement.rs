@@ -149,7 +149,10 @@ fn operator_cancelled_claimed_leaf_returns_to_backlog_with_reason() {
     pair.follower
         .sqlite_store()
         .unwrap()
-        .upsert_job_run_for_workspace(&pair.follower.workspace_id().unwrap(), &run, None)
+        .write(|tx| {
+            tx.job_run()
+                .put(&pair.follower.workspace_id().unwrap(), &run, None)
+        })
         .unwrap();
 
     let cancelled = pair
@@ -1174,7 +1177,7 @@ fn backfill_ignores_a_settlement_older_than_a_newer_run_without_a_crew_selection
         .expect("the settled claim");
     // A newer owner-local delivery run that selected no crew: its input names
     // the task but carries no crew selection, and it keeps no run state.
-    let store = orbit_store::compose::workspace_job_run_store(
+    let store = orbit_core::runtime::JobRuns::shared(
         pair.wire.owner.sqlite_store().expect("owner store"),
         pair.wire.owner.workspace_id().expect("owner workspace"),
     );
@@ -1197,11 +1200,13 @@ fn backfill_ignores_a_settlement_older_than_a_newer_run_without_a_crew_selection
             .owner
             .sqlite_store()
             .expect("owner store")
-            .upsert_job_run_for_workspace(
-                &pair.wire.owner.workspace_id().expect("owner workspace"),
-                &run,
-                None,
-            )
+            .write(|tx| {
+                tx.job_run().put(
+                    &pair.wire.owner.workspace_id().expect("owner workspace"),
+                    &run,
+                    None,
+                )
+            })
             .expect("the newer run stays newer");
     }
     let report = pair
@@ -1300,7 +1305,7 @@ fn a_follower_reports_its_leafs_recorded_effort_on_settlement() {
     let workspace = pair.follower.workspace_id().unwrap();
     let store = pair.follower.sqlite_store().unwrap();
     store
-        .upsert_job_run_for_workspace(&workspace, &run, None)
+        .write(|tx| tx.job_run().put(&workspace, &run, None))
         .unwrap();
     store
         .write(|tx| {

@@ -149,7 +149,7 @@ fn a_live_leaf_carrying_a_released_claim_task_prevents_settlement() {
     let fx = Fixture::new();
     let task = fx.released_pr(104, true, &fx.base);
     fx.merge(104, &task, BOT, &fx.base);
-    let jobs = orbit_store::compose::workspace_job_run_store(
+    let jobs = orbit_core::runtime::JobRuns::shared(
         fx.runtime.sqlite_store().unwrap(),
         fx.runtime.workspace_id().unwrap(),
     );

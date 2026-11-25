@@ -10,9 +10,9 @@ use std::sync::Arc;
 use chrono::{Duration, Utc};
 use orbit_core::application::automation::{consumer_key, evaluate_routine};
 use orbit_core::application::task::{FinalRecoveryCompletion, FinalRecoveryRequest};
+use orbit_core::runtime::JobRuns;
 use orbit_core::{ActorIdentity, OrbitRuntime};
 use orbit_engine::{RuntimeHost, TaskAutomationUpdate};
-use orbit_store::contracts::JobRunStoreBackend;
 use orbit_types::task::TaskStatus;
 use orbit_types::workflow::automation::members::MemberState;
 use orbit_types::workflow::{JobRunState, RoutineDefinition};
@@ -24,7 +24,7 @@ struct Fixture {
     global: PathBuf,
     repo: PathBuf,
     runtime: OrbitRuntime,
-    jobs: Arc<dyn JobRunStoreBackend>,
+    jobs: Arc<JobRuns>,
     runs: std::cell::Cell<u32>,
 }
 
@@ -61,7 +61,7 @@ fn fixture() -> Fixture {
     git(&["add", "."]);
     git(&["commit", "-qm", "seed"]);
     let runtime = OrbitRuntime::from_roots(&global, &repo.join(".orbit")).unwrap();
-    let jobs = orbit_store::compose::workspace_job_run_store(
+    let jobs = orbit_core::runtime::JobRuns::shared(
         runtime.sqlite_store().unwrap(),
         runtime.workspace_id().unwrap(),
     );

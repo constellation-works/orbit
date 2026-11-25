@@ -28,14 +28,13 @@ use std::sync::{Arc, Mutex};
 use chrono::Utc;
 use orbit_common::OrbitError;
 use orbit_core::application::task::TaskAddParams;
+use orbit_core::runtime::JobRuns;
 use orbit_core::runtime::task_pr_forge::{
     ForgePullRequest, GhTaskPrForge, PullRequestBlockers, TaskPrForge,
 };
 use orbit_core::{OrbitRuntime, TaskStatus};
 use orbit_engine::{RuntimeHost, TaskAutomationUpdate};
-use orbit_store::contracts::{
-    ExecutionClaimPhase, JobRunStepParams, JobRunStoreBackend, LocalPullPhase,
-};
+use orbit_store::contracts::{ExecutionClaimPhase, JobRunStepParams, LocalPullPhase};
 use orbit_tools::ToolContext;
 use orbit_types::task::ExternalRef;
 use orbit_types::workflow::{
@@ -134,7 +133,7 @@ struct Fixture {
     _root: TempDir,
     activities: std::path::PathBuf,
     runtime: OrbitRuntime,
-    jobs: Arc<dyn JobRunStoreBackend>,
+    jobs: Arc<JobRuns>,
     forge: FakeForge,
     probe: Arc<super::dispatch_admission::PressureProbe>,
 }
@@ -165,7 +164,7 @@ impl Fixture {
             .unwrap()
             .with_task_pr_forge(Arc::new(forge.clone()))
             .with_host_resource_probe(probe.clone());
-        let jobs = orbit_store::compose::workspace_job_run_store(
+        let jobs = orbit_core::runtime::JobRuns::shared(
             runtime.sqlite_store().unwrap(),
             runtime.workspace_id().unwrap(),
         );

@@ -27,9 +27,9 @@ use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use chrono::Utc;
+use orbit_core::runtime::JobRuns;
 use orbit_core::{FailureClass, OrbitRuntime};
 use orbit_engine::RuntimeHost;
-use orbit_store::contracts::JobRunStoreBackend;
 use orbit_tools::ToolContext;
 use orbit_types::telemetry::incident::classify;
 use orbit_types::telemetry::{AuditEvent, AuditEventStatus};
@@ -63,7 +63,7 @@ struct Fixture {
     global: PathBuf,
     repo: PathBuf,
     runtime: OrbitRuntime,
-    jobs: Arc<dyn JobRunStoreBackend>,
+    jobs: Arc<JobRuns>,
     parent: String,
     #[cfg(unix)]
     listener: std::net::TcpListener,
@@ -145,7 +145,7 @@ impl Fixture {
         let runtime = OrbitRuntime::from_roots(&global, &repo.join(".orbit"))
             .unwrap()
             .with_host_resource_probe(crate::dispatch_admission::PressureProbe::calm());
-        let jobs = orbit_store::compose::workspace_job_run_store(
+        let jobs = orbit_core::runtime::JobRuns::shared(
             runtime.sqlite_store().unwrap(),
             runtime.workspace_id().unwrap(),
         );

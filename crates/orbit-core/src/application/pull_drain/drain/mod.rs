@@ -9,9 +9,10 @@ mod settlement;
 use std::sync::Arc;
 
 use orbit_common::OrbitError;
+use orbit_runtime::JobRuns;
 use orbit_store::contracts::{
-    AdmissionLookup, AdmissionReceipt, AdmissionRequest, ClaimedReviewCarry, JobRunStoreBackend,
-    LocalPullAdmission, PullDestination,
+    AdmissionLookup, AdmissionReceipt, AdmissionRequest, ClaimedReviewCarry, LocalPullAdmission,
+    PullDestination,
 };
 use orbit_tools::DrainOwnerTransport;
 use orbit_types::workflow::BaselineRedHold;
@@ -185,7 +186,7 @@ enum Bind {
 }
 
 pub(crate) struct PullDrain<'a> {
-    pub(crate) jobs: &'a dyn JobRunStoreBackend,
+    pub(crate) jobs: &'a JobRuns,
     pub(crate) peer: &'a dyn PullPeer,
     pub(crate) launcher: &'a dyn PullLauncher,
     pub(crate) refused_delivery: RefusedDelivery,

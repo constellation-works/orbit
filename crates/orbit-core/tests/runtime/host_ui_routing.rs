@@ -153,7 +153,7 @@ fn exclusion(output: &Value, task: &str) -> Option<(String, String)> {
 }
 
 fn running_drain(runtime: &OrbitRuntime) -> String {
-    let jobs = orbit_store::compose::workspace_job_run_store(
+    let jobs = orbit_core::runtime::JobRuns::shared(
         runtime.sqlite_store().unwrap(),
         runtime.workspace_id().unwrap(),
     );

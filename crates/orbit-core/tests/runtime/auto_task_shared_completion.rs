@@ -156,7 +156,7 @@ pub(super) fn admit_run(runtime: &OrbitRuntime, name: &str, revision: &str, step
     let yaml = format!(
         "schemaVersion: 3\nkind: Job\nmetadata: {{ name: {name} }}\nspec:\n  state: enabled\n  expire_when: \"now >= job.started_at + duration('24h')\"\n  steps:\n{steps}"
     );
-    let jobs = orbit_store::compose::workspace_job_run_store(
+    let jobs = orbit_core::runtime::JobRuns::shared(
         runtime.sqlite_store().unwrap(),
         runtime.workspace_id().unwrap(),
     );
@@ -243,7 +243,7 @@ pub(super) fn complete_with_evidence(
     run: &str,
     revision: &str,
 ) -> String {
-    let jobs = orbit_store::compose::workspace_job_run_store(
+    let jobs = orbit_core::runtime::JobRuns::shared(
         runtime.sqlite_store().unwrap(),
         runtime.workspace_id().unwrap(),
     );

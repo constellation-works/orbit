@@ -30,7 +30,7 @@ fn repair_and_backlog_share_the_owner_ceiling_with_other_pulls() {
 /// A live worker holds each unrelated delivery until the scenario ends.
 fn hold_owner_leaf(owner: &OrbitRuntime, task: &str) -> Worker {
     let worker = Worker::spawn();
-    let jobs = orbit_store::compose::workspace_job_run_store(
+    let jobs = orbit_core::runtime::JobRuns::shared(
         owner.sqlite_store().unwrap(),
         owner.workspace_id().unwrap(),
     );
@@ -155,7 +155,7 @@ fn owner_fallback(busy: bool, with_backlog: bool, distinct_logical: bool) {
         jobs.join("workspace_pull_pipeline.yaml"),
     )
     .unwrap();
-    let owner_jobs = orbit_store::compose::workspace_job_run_store(
+    let owner_jobs = orbit_core::runtime::JobRuns::shared(
         owner.sqlite_store().unwrap(),
         owner.workspace_id().unwrap(),
     );

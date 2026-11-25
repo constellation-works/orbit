@@ -11,8 +11,9 @@ use std::sync::Arc;
 use chrono::Utc;
 use orbit_core::OrbitRuntime;
 use orbit_core::application::task::TaskAddParams;
+use orbit_core::runtime::JobRuns;
 use orbit_engine::{DispatchError, RuntimeHost};
-use orbit_store::contracts::{JobRunStoreBackend, V2AuditEventInsertParams};
+use orbit_store::contracts::V2AuditEventInsertParams;
 use orbit_types::workflow::{
     MAX_TAG_INSTRUCTION_FILE_BYTES, PipelineState, TagInstruction, TagInstructionSource,
     V2AuditEnvelope, V2AuditEvent, V2AuditEventKind,
@@ -26,7 +27,7 @@ struct Fixture {
     _root: TempDir,
     repo: PathBuf,
     runtime: OrbitRuntime,
-    jobs: Arc<dyn JobRunStoreBackend>,
+    jobs: Arc<JobRuns>,
 }
 
 impl Fixture {
@@ -45,7 +46,7 @@ impl Fixture {
         git(&repo, &["config", "user.email", "fixture@example.com"]);
         git(&repo, &["config", "user.name", "Fixture"]);
         let runtime = OrbitRuntime::from_roots(&global, &workspace).unwrap();
-        let jobs = orbit_store::compose::workspace_job_run_store(
+        let jobs = orbit_core::runtime::JobRuns::shared(
             runtime.sqlite_store().unwrap(),
             runtime.workspace_id().unwrap(),
         );

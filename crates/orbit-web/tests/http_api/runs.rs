@@ -5,6 +5,7 @@ use std::collections::BTreeSet;
 
 use chrono::{DateTime, Utc};
 use orbit_core::application::task::TaskAddParams;
+use orbit_core::runtime::JobRuns;
 use orbit_core::{JobRun, JobRunState, JobTargetType, V2AuditEventInsertParams};
 use orbit_types::task::is_valid_orb_task_id;
 use orbit_types::workflow::{
@@ -1034,7 +1035,6 @@ scenario_test!(
 );
 
 fn pull_request_holds_body(fixture: &Fixture) {
-    use orbit_store::compose::workspace_job_run_store;
     use orbit_store::contracts::{LocalPullPhase, SettlementRefusal};
     use orbit_types::workflow::PullBreaker;
 
@@ -1054,7 +1054,7 @@ fn pull_request_holds_body(fixture: &Fixture) {
     });
     let workspace = ws_id(fixture);
     let store = store(fixture);
-    let jobs = workspace_job_run_store(store.clone(), workspace.clone());
+    let jobs = JobRuns::shared(store.clone(), workspace.clone());
     let destination = pull_destination();
     let request = pull_request(&drain, "request-hold-fixture");
     let allocated = jobs
@@ -1116,7 +1116,6 @@ scenario_test!(
 );
 
 fn pull_budget_body(fixture: &Fixture) {
-    use orbit_store::compose::workspace_job_run_store;
     use orbit_store::contracts::{LocalPullMutation, LocalPullPhase, SettlementRefusal};
     use orbit_types::workflow::ReviewGateAdmissionOutput;
 
@@ -1129,7 +1128,7 @@ fn pull_budget_body(fixture: &Fixture) {
     state_with(fixture, &drain, |_| {});
     let workspace = ws_id(fixture);
     let store = store(fixture);
-    let jobs = workspace_job_run_store(store.clone(), workspace.clone());
+    let jobs = JobRuns::shared(store.clone(), workspace.clone());
     let destination = pull_destination();
     let request = pull_request(&drain, "budget-claim");
     let server = fixture.server(false);
@@ -1236,14 +1235,14 @@ fn unregistered_workspace_body(fixture: &Fixture) {
     );
     run.duration_ms = Some(1_000);
     store
-        .upsert_job_run_for_workspace(REMOVED, &run, None)
+        .write(|tx| tx.job_run().put(REMOVED, &run, None))
         .unwrap();
     let mut step = run_step(JobTargetType::Activity, "implement", JobRunState::Success);
     step.started_at = Some(now);
     step.finished_at = Some(now);
     step.duration_ms = Some(1_000);
     store
-        .upsert_job_run_step_for_workspace(REMOVED, &run.run_id, &step)
+        .write(|tx| tx.job_run().put_step(REMOVED, &run.run_id, &step))
         .unwrap();
     for index in 0..3 {
         let event_id = format!("leaf-{index}");
@@ -1359,7 +1358,10 @@ fn cancel_and_replay_body(fixture: &Fixture) {
         second
             .sqlite_store()
             .unwrap()
-            .upsert_job_run_for_workspace(&second.workspace_id().unwrap(), &run, None)
+            .write(|tx| {
+                tx.job_run()
+                    .put(&second.workspace_id().unwrap(), &run, None)
+            })
             .unwrap();
     };
     seed("jrun-held-running", JobRunState::Running);
@@ -1429,7 +1431,10 @@ fn run_detail_workspace_id_body(fixture: &Fixture) {
     second
         .sqlite_store()
         .unwrap()
-        .upsert_job_run_for_workspace(&second.workspace_id().unwrap(), &run, None)
+        .write(|tx| {
+            tx.job_run()
+                .put(&second.workspace_id().unwrap(), &run, None)
+        })
         .unwrap();
     let local = fixture.seed_run("jrun-local-c1", "owner_fixture", JobRunState::Success);
     let server = fixture.server(false);

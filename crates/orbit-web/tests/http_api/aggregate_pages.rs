@@ -292,7 +292,10 @@ fn fleet_drains_preserves_hosts_health_for_ten_workspaces() {
                 runtime
                     .sqlite_store()
                     .unwrap()
-                    .get_job_run_for_workspace(&runtime.workspace_id().unwrap(), &drain.run_id)
+                    .read()
+                    .unwrap()
+                    .job_run()
+                    .get(&runtime.workspace_id().unwrap(), &drain.run_id)
                     .unwrap()
                     .unwrap()
                     .state,
@@ -440,7 +443,10 @@ fn fleet_drains_rows_match_workspace_readiness_across_workspaces() {
                 alpha
                     .sqlite_store()
                     .unwrap()
-                    .get_job_run_for_workspace(&alpha.workspace_id().unwrap(), &drain.run_id)
+                    .read()
+                    .unwrap()
+                    .job_run()
+                    .get(&alpha.workspace_id().unwrap(), &drain.run_id)
                     .unwrap()
                     .unwrap()
                     .state,
@@ -646,7 +652,7 @@ fn check_aggregate_job_runs_pages(measure_latency: bool) {
     incomplete.finished_at = None;
     incomplete.duration_ms = None;
     store
-        .upsert_job_run_for_workspace("ws_alpha", &incomplete, None)
+        .write(|tx| tx.job_run().put("ws_alpha", &incomplete, None))
         .expect("store incomplete run");
 
     let started = measure_latency.then(std::time::Instant::now);
@@ -1057,7 +1063,7 @@ fn write_seeded_run(runtime: &OrbitRuntime, run: &JobRun) {
     runtime
         .sqlite_store()
         .expect("sqlite store")
-        .upsert_job_run_for_workspace(&workspace_id, run, None)
+        .write(|tx| tx.job_run().put(&workspace_id, run, None))
         .expect("insert job run");
 }
 

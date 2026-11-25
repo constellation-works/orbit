@@ -87,7 +87,7 @@ fn run_pages_filter_in_sql_and_project_task_ids_without_task_reads() {
         // Use a distinguishable job for assertions without changing allocated IDs.
         run.job_id = id.to_owned();
         store
-            .upsert_job_run_for_workspace(&partition, &run, None)
+            .write(|tx| tx.job_run().put(&partition, &run, None))
             .unwrap();
     }
     let since = now - Duration::hours(24);

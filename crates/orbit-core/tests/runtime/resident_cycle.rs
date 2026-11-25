@@ -30,7 +30,8 @@ use orbit_core::OrbitRuntime;
 use orbit_core::adapter::command::ToolEntryPoint;
 use orbit_core::application::automation::evaluate_routine;
 use orbit_core::application::task::{TaskAddParams, TaskUpdateParams};
-use orbit_store::contracts::{JobRunStoreBackend, KeyedJobRunAdmission};
+use orbit_core::runtime::JobRuns;
+use orbit_store::contracts::KeyedJobRunAdmission;
 use orbit_types::task::{TaskArtifact, TaskHistoryEntry, TaskStatus};
 use orbit_types::tool::{McpCapability, ToolSessionContext};
 use orbit_types::workflow::{
@@ -66,7 +67,7 @@ struct Fixture {
     global: PathBuf,
     repo: PathBuf,
     runtime: OrbitRuntime,
-    jobs: Arc<dyn JobRunStoreBackend>,
+    jobs: Arc<JobRuns>,
 }
 
 fn fixture() -> Fixture {
@@ -105,7 +106,7 @@ fn fixture() -> Fixture {
     git(&["add", "."]);
     git(&["commit", "-qm", "seed"]);
     let runtime = OrbitRuntime::from_roots(&global, &repo.join(".orbit")).unwrap();
-    let jobs = orbit_store::compose::workspace_job_run_store(
+    let jobs = orbit_core::runtime::JobRuns::shared(
         runtime.sqlite_store().unwrap(),
         runtime.workspace_id().unwrap(),
     );

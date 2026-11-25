@@ -13,11 +13,11 @@ use std::sync::Arc;
 
 use chrono::Utc;
 use orbit_core::OrbitRuntime;
+use orbit_core::runtime::JobRuns;
 use orbit_engine::{
     DispatchError, FinalRecoveryAdmission, FinalRecoveryAdmissionRequest, FinalRecoveryApplication,
     FinalRecoveryApplied, RuntimeHost,
 };
-use orbit_store::contracts::JobRunStoreBackend;
 use orbit_types::workflow::{
     FinalRecoveryCheckpointOutcome, FinalRecoveryDecision, JobRunState, PipelineState,
 };
@@ -35,7 +35,7 @@ struct Fixture {
     global: PathBuf,
     runtime: OrbitRuntime,
     repo: PathBuf,
-    jobs: Arc<dyn JobRunStoreBackend>,
+    jobs: Arc<JobRuns>,
 }
 
 fn execute_tool_command_with_current_env(
@@ -73,7 +73,7 @@ fn fixture(pool: &str) -> Fixture {
     )
     .unwrap();
     let runtime = OrbitRuntime::from_roots(&global, &repo.join(".orbit")).unwrap();
-    let jobs = orbit_store::compose::workspace_job_run_store(
+    let jobs = orbit_core::runtime::JobRuns::shared(
         runtime.sqlite_store().unwrap(),
         runtime.workspace_id().unwrap(),
     );
@@ -316,7 +316,10 @@ impl Fixture {
         self.runtime
             .sqlite_store()
             .unwrap()
-            .upsert_job_run_for_workspace(&self.runtime.workspace_id().unwrap(), &run, None)
+            .write(|tx| {
+                tx.job_run()
+                    .put(&self.runtime.workspace_id().unwrap(), &run, None)
+            })
             .unwrap();
         RuntimeHost::apply_task_automation_update(
             &self.runtime,

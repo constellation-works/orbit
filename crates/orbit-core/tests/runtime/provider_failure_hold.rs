@@ -26,6 +26,7 @@ use chrono::{Duration, Utc};
 #[cfg(unix)]
 use orbit_common::OrbitError;
 use orbit_core::application::task::TaskAddParams;
+use orbit_core::runtime::JobRuns;
 use orbit_core::{OrbitRuntime, TaskComplexity, TaskStatus, TaskType};
 use orbit_engine::WORKFLOW_RUN_FAILED_EVENT;
 #[cfg(unix)]
@@ -36,7 +37,7 @@ use orbit_engine::{
     V2AuditWriter, execute_job_with_resume,
 };
 use orbit_engine::{RuntimeHost, TaskAutomationUpdate};
-use orbit_store::contracts::{JobRunStepParams, JobRunStoreBackend};
+use orbit_store::contracts::JobRunStepParams;
 use orbit_tools::ToolContext;
 #[cfg(unix)]
 use orbit_types::telemetry::ProviderLimitObservation;
@@ -99,7 +100,7 @@ pub(super) struct Fixture {
     _root: TempDir,
     pub(super) runtime: OrbitRuntime,
     pub(super) repo: PathBuf,
-    jobs: Arc<dyn JobRunStoreBackend>,
+    jobs: Arc<JobRuns>,
 }
 
 pub(super) fn fixture(config: &str) -> Fixture {
@@ -134,7 +135,7 @@ pub(super) fn fixture_in(
     let runtime = OrbitRuntime::from_roots(&global, &repo.join(".orbit"))
         .unwrap()
         .with_automation_machine_identity(machine.map(ToOwned::to_owned));
-    let jobs = orbit_store::compose::workspace_job_run_store(
+    let jobs = orbit_core::runtime::JobRuns::shared(
         runtime.sqlite_store().unwrap(),
         runtime.workspace_id().unwrap(),
     );

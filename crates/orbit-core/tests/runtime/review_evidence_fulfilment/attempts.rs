@@ -42,7 +42,10 @@ fn seed_run(fixture: &Fixture, input: Value, at: DateTime<Utc>, output: Option<V
         .runtime
         .sqlite_store()
         .unwrap()
-        .upsert_job_run_for_workspace(&fixture.runtime.workspace_id().unwrap(), &run, Some(&state))
+        .write(|tx| {
+            tx.job_run()
+                .put(&fixture.runtime.workspace_id().unwrap(), &run, Some(&state))
+        })
         .unwrap();
 }
 
@@ -51,7 +54,10 @@ fn recent_runs(fixture: &Fixture) -> Vec<JobRun> {
         .runtime
         .sqlite_store()
         .unwrap()
-        .list_job_runs_for_workspace(
+        .read()
+        .unwrap()
+        .job_run()
+        .list(
             &fixture.runtime.workspace_id().unwrap(),
             &JobRunQuery {
                 job_id: Some(REVIEW_EVIDENCE_FULFILMENT_JOB.into()),
@@ -116,7 +122,12 @@ fn age_out(fixture: &Fixture, key: &str) {
         .runtime
         .sqlite_store()
         .unwrap()
-        .upsert_job_runs_for_workspace(&workspace_id, &paired)
+        .write(|tx| {
+            for (run, state) in &paired {
+                tx.job_run().put(&workspace_id, run, *state)?;
+            }
+            Ok(())
+        })
         .unwrap();
     let window = recent_runs(fixture);
     assert_eq!(window.len(), 200);

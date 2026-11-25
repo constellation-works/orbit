@@ -18,9 +18,10 @@ use std::sync::Arc;
 use chrono::Utc;
 use orbit_core::application::job::{fold_run_incidents, job_run_to_json};
 use orbit_core::application::task::TaskAddParams;
+use orbit_core::runtime::JobRuns;
 use orbit_core::{OrbitRuntime, TaskComplexity, TaskStatus, TaskType};
 use orbit_engine::{RuntimeHost, TaskAutomationUpdate};
-use orbit_store::contracts::{JobRunStepParams, JobRunStoreBackend};
+use orbit_store::contracts::JobRunStepParams;
 use orbit_types::tool::{McpCapability, ToolSessionContext};
 use orbit_types::workflow::{
     BASELINE_RED_HOLD_EVENT, BaselineRedHold, JobRun, JobRunState, JobTargetType, PipelineState,
@@ -35,7 +36,7 @@ struct Fixture {
     _root: TempDir,
     runtime: OrbitRuntime,
     repo: PathBuf,
-    jobs: Arc<dyn JobRunStoreBackend>,
+    jobs: Arc<JobRuns>,
 }
 
 impl Fixture {
@@ -74,7 +75,7 @@ impl Fixture {
         )
         .unwrap();
         let runtime = OrbitRuntime::from_roots(&global, &repo.join(".orbit")).unwrap();
-        let jobs = orbit_store::compose::workspace_job_run_store(
+        let jobs = orbit_core::runtime::JobRuns::shared(
             runtime.sqlite_store().unwrap(),
             runtime.workspace_id().unwrap(),
         );

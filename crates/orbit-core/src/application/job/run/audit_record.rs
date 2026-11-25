@@ -15,13 +15,46 @@ use std::path::Path;
 use chrono::{DateTime, Utc};
 use orbit_common::observability::audit_id::audit_execution_id;
 use orbit_common::{NotFoundKind, OrbitError};
+use orbit_runtime::JobRuns;
 use orbit_store::Store;
-use orbit_store::contracts::{AuditEventInsertParams, JobRunStepParams, JobRunStoreBackend};
+use orbit_store::contracts::{AuditEventInsertParams, JobRunStepParams};
 use orbit_types::telemetry::AuditEventStatus;
-use orbit_types::workflow::{JobRun, JobRunState, JobTargetType};
+use orbit_types::workflow::{JobRun, JobRunState, JobTargetType, PipelineState};
 use serde_json::Value;
 
 use crate::OrbitRuntime;
+
+/// The run reads and step writes the diagnostic writers and the pipeline's
+/// worker supervisor make. [`JobRuns`] is the one production implementation;
+/// the seam lets a supervisor unit test fault the startup observer's run
+/// reads against a real store.
+pub(crate) trait SupervisedRuns: Send + Sync {
+    fn get_job_run(&self, run_id: &str) -> Result<Option<JobRun>, OrbitError>;
+    fn read_run_state(&self, run_id: &str) -> Result<Option<PipelineState>, OrbitError>;
+    fn complete_job_run_step(
+        &self,
+        run_id: &str,
+        params: &JobRunStepParams,
+    ) -> Result<bool, OrbitError>;
+}
+
+impl SupervisedRuns for JobRuns {
+    fn get_job_run(&self, run_id: &str) -> Result<Option<JobRun>, OrbitError> {
+        JobRuns::get_job_run(self, run_id)
+    }
+
+    fn read_run_state(&self, run_id: &str) -> Result<Option<PipelineState>, OrbitError> {
+        JobRuns::read_run_state(self, run_id)
+    }
+
+    fn complete_job_run_step(
+        &self,
+        run_id: &str,
+        params: &JobRunStepParams,
+    ) -> Result<bool, OrbitError> {
+        JobRuns::complete_job_run_step(self, run_id, params)
+    }
+}
 
 /// One pipeline audit row, as its callers describe it.
 pub(crate) struct PipelineAuditRow<'a> {
@@ -92,7 +125,7 @@ pub(crate) fn pipeline_audit(
 /// a later supervisor observation cannot overwrite the cause the worker
 /// itself reported.
 pub(crate) fn diagnostic_step(
-    runs: &dyn JobRunStoreBackend,
+    runs: &dyn SupervisedRuns,
     run: &JobRun,
     started_at: DateTime<Utc>,
     finished_at: DateTime<Utc>,
@@ -134,7 +167,7 @@ pub(crate) fn diagnostic_step(
     )
 )]
 pub(crate) fn watchdog_diagnostic_step(
-    runs: &dyn JobRunStoreBackend,
+    runs: &dyn SupervisedRuns,
     run: &JobRun,
     started_at: DateTime<Utc>,
     finished_at: DateTime<Utc>,
@@ -157,7 +190,7 @@ pub(crate) fn watchdog_diagnostic_step(
 }
 
 fn write_diagnostic_step(
-    runs: &dyn JobRunStoreBackend,
+    runs: &dyn SupervisedRuns,
     current: &JobRun,
     started_at: DateTime<Utc>,
     finished_at: DateTime<Utc>,

@@ -2,6 +2,7 @@
 //! across drains [ORB-22362].
 
 use chrono::{Duration, Utc};
+use orbit_runtime::JobRuns;
 use orbit_store::contracts::FrictionListFilter;
 use orbit_types::record::FrictionStatus;
 use orbit_types::workflow::{CrewExclusion, CrewExclusionSource, CrewPoolExclusion, PipelineState};
@@ -35,7 +36,7 @@ fn exclusion(reason: &str) -> Vec<CrewExclusion> {
     }]
 }
 
-fn seed_run(jobs: &dyn orbit_store::contracts::JobRunStoreBackend, run_id: &str, reason: &str) {
+fn seed_run(jobs: &JobRuns, run_id: &str, reason: &str) {
     let mut state = PipelineState::new(
         run_id.to_string(),
         "workspace_auto_pipeline".to_string(),

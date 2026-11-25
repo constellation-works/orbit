@@ -579,7 +579,7 @@ pub(in super::super) fn pilot_run(
         .runtime
         .sqlite_store()
         .unwrap()
-        .upsert_job_run_for_workspace(&workspace_id, &run, None)
+        .write(|tx| tx.job_run().put(&workspace_id, &run, None))
         .unwrap();
     let mut state =
         orbit_types::workflow::PipelineState::new(run_id.into(), run.job_id.clone(), json!({}));

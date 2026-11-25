@@ -26,11 +26,12 @@ use orbit_core::application::routines::{
     RoutineMachineIdentity, SweepOptions, run_sweep_at_with_providers,
 };
 use orbit_core::metrics::reliability::ReliabilityWindow;
+use orbit_core::runtime::JobRuns;
 use orbit_core::{OrbitError, OrbitRuntime};
 use orbit_store::contracts::{
     AdmissionRequest, AdmissionRunContext, AdmissionShipContract, AuditEventFilter,
-    DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA, JobRunStepParams, JobRunStoreBackend, LocalPullAdmission,
-    LocalPullPhase, PullDestination,
+    DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA, JobRunStepParams, LocalPullAdmission, LocalPullPhase,
+    PullDestination,
 };
 use orbit_types::telemetry::AuditEventStatus;
 use orbit_types::workflow::{
@@ -68,7 +69,7 @@ struct TestContext {
     global: PathBuf,
     workspace: PathBuf,
     runtime: OrbitRuntime,
-    jobs: Arc<dyn JobRunStoreBackend>,
+    jobs: Arc<JobRuns>,
 }
 
 fn run_isolated_test(test_name: &str) -> bool {
@@ -101,11 +102,11 @@ fn run_isolated_test(test_name: &str) -> bool {
     true
 }
 
-fn record_upgrade_interruption(jobs: &dyn JobRunStoreBackend, run_id: &str) {
+fn record_upgrade_interruption(jobs: &JobRuns, run_id: &str) {
     record_upgrade_interruption_at(jobs, run_id, Utc::now());
 }
 
-fn record_upgrade_interruption_at(jobs: &dyn JobRunStoreBackend, run_id: &str, now: DateTime<Utc>) {
+fn record_upgrade_interruption_at(jobs: &JobRuns, run_id: &str, now: DateTime<Utc>) {
     jobs.complete_job_run_step(
         run_id,
         &JobRunStepParams {
@@ -149,7 +150,7 @@ spec:
 
     let workspace = repo.join(".orbit");
     let runtime = OrbitRuntime::from_roots(&global, &workspace).unwrap();
-    let jobs = orbit_store::compose::workspace_job_run_store(
+    let jobs = orbit_core::runtime::JobRuns::shared(
         runtime.sqlite_store().unwrap(),
         runtime.workspace_id().unwrap(),
     );

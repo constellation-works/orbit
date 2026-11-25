@@ -21,7 +21,7 @@ fn requeue_ignores_a_colliding_owner_run_for_a_settled_follower() {
     assert_eq!(pair.owner_status(&task_id), "blocked");
     assert_eq!(pair.owner_claim_for_leaf(&leaf)["claim"]["phase"], "failed");
     let owner = &pair.wire.owner;
-    let jobs = orbit_store::compose::workspace_job_run_store(
+    let jobs = orbit_core::runtime::JobRuns::shared(
         owner.sqlite_store().unwrap(),
         owner.workspace_id().unwrap(),
     );
@@ -155,7 +155,7 @@ fn requeue_names_the_live_run_or_pr_pipeline() {
         }),
         None,
     ] {
-        let jobs = orbit_store::compose::workspace_job_run_store(
+        let jobs = orbit_core::runtime::JobRuns::shared(
             owner.sqlite_store().unwrap(),
             owner.workspace_id().unwrap(),
         )

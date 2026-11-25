@@ -32,7 +32,6 @@ fn a_closed_observer_channel_stops_and_reaps_the_spawned_child() {
     );
 }
 
-use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::process::Child;
@@ -43,21 +42,20 @@ use std::time::Duration;
 
 use chrono::{DateTime, Utc};
 use orbit_common::OrbitError;
+use orbit_runtime::JobRuns;
 use orbit_store::Store;
 use orbit_store::contracts::*;
-use orbit_types::identity::Crew;
-use orbit_types::workflow::{
-    JobRun, JobRunStartOutcome, JobRunState, PipelineState, RunStateUpdate,
-};
+use orbit_types::workflow::{JobRun, JobRunState, PipelineState};
 use orbit_types::workspace::WorkspacePaths;
 
 use super::super::super::wait::{sleep_until_worker_exit, worker_exits_seen};
 use super::super::command::WorkerCommandConfig;
 use super::super::supervisor::{PipelineRunHost, PipelineWorkerSupervisor};
+use crate::application::job::run::audit_record::SupervisedRuns;
 use crate::runtime::event_bus::EventLog;
 
 struct ReadFaultStore {
-    inner: Arc<dyn JobRunStoreBackend>,
+    inner: Arc<JobRuns>,
     reads: AtomicUsize,
     fail_at: usize,
     missing: bool,
@@ -65,7 +63,7 @@ struct ReadFaultStore {
     recover: Mutex<mpsc::Receiver<()>>,
 }
 
-impl JobRunStoreBackend for ReadFaultStore {
+impl SupervisedRuns for ReadFaultStore {
     fn get_job_run(&self, run_id: &str) -> Result<Option<JobRun>, OrbitError> {
         let read = self.reads.fetch_add(1, Ordering::SeqCst);
         if read == self.fail_at {
@@ -89,80 +87,8 @@ impl JobRunStoreBackend for ReadFaultStore {
         self.inner.get_job_run(run_id)
     }
 
-    fn workspace_id(&self) -> &str {
-        self.inner.workspace_id()
-    }
-
-    fn with_execution_location(
-        &self,
-        location: Option<orbit_types::task::ExecutionLocation>,
-    ) -> std::sync::Arc<dyn JobRunStoreBackend> {
-        self.inner.with_execution_location(location)
-    }
-
-    fn list_job_runs(&self, job_id: &str) -> Result<Vec<JobRun>, OrbitError> {
-        self.inner.list_job_runs(job_id)
-    }
-
-    fn list_job_runs_filtered(&self, query: &JobRunQuery) -> Result<Vec<JobRun>, OrbitError> {
-        self.inner.list_job_runs_filtered(query)
-    }
-
-    fn count_job_runs_filtered(&self, query: &JobRunQuery) -> Result<u64, OrbitError> {
-        self.inner.count_job_runs_filtered(query)
-    }
-
-    fn list_job_run_durations_filtered(&self, query: &JobRunQuery) -> Result<Vec<u64>, OrbitError> {
-        self.inner.list_job_run_durations_filtered(query)
-    }
-
-    fn list_pending_or_running_job_runs(&self, job_id: &str) -> Result<Vec<JobRun>, OrbitError> {
-        self.inner.list_pending_or_running_job_runs(job_id)
-    }
-
-    fn drain_intent(
-        &self,
-    ) -> Result<Option<orbit_store::contracts::DrainIntentRecord>, OrbitError> {
-        self.inner.drain_intent()
-    }
-
-    fn record_drain_intent(
-        &self,
-        record: &orbit_store::contracts::DrainIntentRecord,
-    ) -> Result<(), OrbitError> {
-        self.inner.record_drain_intent(record)
-    }
-
-    fn insert_job_run(
-        &self,
-        job_id: &str,
-        attempt: u32,
-        scheduled_at: DateTime<Utc>,
-        input: Option<serde_json::Value>,
-        retry_source_run_id: Option<String>,
-    ) -> Result<JobRun, OrbitError> {
-        self.inner
-            .insert_job_run(job_id, attempt, scheduled_at, input, retry_source_run_id)
-    }
-
-    fn admit_child_job_run(
-        &self,
-        params: &ChildJobRunAdmissionParams,
-    ) -> Result<ChildJobRunAdmissionOutcome, OrbitError> {
-        self.inner.admit_child_job_run(params)
-    }
-
-    fn mark_job_run_running(
-        &self,
-        run_id: &str,
-        started_at: DateTime<Utc>,
-        pid: u32,
-    ) -> Result<JobRunStartOutcome, OrbitError> {
-        self.inner.mark_job_run_running(run_id, started_at, pid)
-    }
-
-    fn claim_pending_job_run_owner(&self, run_id: &str, pid: u32) -> Result<bool, OrbitError> {
-        self.inner.claim_pending_job_run_owner(run_id, pid)
+    fn read_run_state(&self, run_id: &str) -> Result<Option<PipelineState>, OrbitError> {
+        self.inner.read_run_state(run_id)
     }
 
     fn complete_job_run_step(
@@ -172,85 +98,9 @@ impl JobRunStoreBackend for ReadFaultStore {
     ) -> Result<bool, OrbitError> {
         self.inner.complete_job_run_step(run_id, params)
     }
-
-    fn record_job_run_crew(&self, run_id: &str, crew: &Crew) -> Result<bool, OrbitError> {
-        self.inner.record_job_run_crew(run_id, crew)
-    }
-
-    fn finalize_job_run_with_outcome(
-        &self,
-        run_id: &str,
-        state: JobRunState,
-        finished_at: DateTime<Utc>,
-        duration_ms: Option<u64>,
-    ) -> Result<JobRunFinalization, OrbitError> {
-        self.inner
-            .finalize_job_run_with_outcome(run_id, state, finished_at, duration_ms)
-    }
-
-    fn cancel_pending_job_run(
-        &self,
-        run_id: &str,
-        finished_at: DateTime<Utc>,
-    ) -> Result<orbit_store::contracts::PendingJobRunCancellation, OrbitError> {
-        self.inner.cancel_pending_job_run(run_id, finished_at)
-    }
-
-    fn repair_terminal_job_run_timing(
-        &self,
-        run_id: &str,
-        finished_at: DateTime<Utc>,
-        duration_ms: Option<u64>,
-    ) -> Result<bool, OrbitError> {
-        self.inner
-            .repair_terminal_job_run_timing(run_id, finished_at, duration_ms)
-    }
-
-    fn list_all_pending_or_running_runs(&self) -> Result<Vec<JobRun>, OrbitError> {
-        self.inner.list_all_pending_or_running_runs()
-    }
-
-    fn archive_job_run(&self, run_id: &str) -> Result<String, OrbitError> {
-        self.inner.archive_job_run(run_id)
-    }
-
-    fn delete_job_run(&self, run_id: &str) -> Result<String, OrbitError> {
-        self.inner.delete_job_run(run_id)
-    }
-
-    fn read_run_state(&self, run_id: &str) -> Result<Option<PipelineState>, OrbitError> {
-        self.inner.read_run_state(run_id)
-    }
-
-    fn read_run_states(
-        &self,
-        run_ids: &[String],
-    ) -> Result<HashMap<String, Option<PipelineState>>, OrbitError> {
-        self.inner.read_run_states(run_ids)
-    }
-
-    fn write_run_state(&self, run_id: &str, state: &PipelineState) -> Result<(), OrbitError> {
-        self.inner.write_run_state(run_id, state)
-    }
-
-    fn initialize_run_state(
-        &self,
-        run_id: &str,
-        state: &PipelineState,
-    ) -> Result<bool, OrbitError> {
-        self.inner.initialize_run_state(run_id, state)
-    }
-
-    fn update_run_state(
-        &self,
-        run_id: &str,
-        update: &mut dyn FnMut(JobRunState, &mut PipelineState) -> Result<(), OrbitError>,
-    ) -> Result<RunStateUpdate, OrbitError> {
-        self.inner.update_run_state(run_id, update)
-    }
 }
 
-struct StoreHost(Arc<dyn JobRunStoreBackend>);
+struct StoreHost(Arc<JobRuns>);
 
 impl PipelineRunHost for StoreHost {
     fn reconciled_run(&self, run_id: &str) -> Result<JobRun, OrbitError> {
@@ -322,8 +172,7 @@ fn store_read_faults_retain_supervision_and_reap_in_a_live_parent() {
             root.path().join("global"),
         );
         let database = Store::open_in_memory().unwrap();
-        let runs =
-            orbit_store::compose::workspace_job_run_store(database.clone(), "observer-fixture");
+        let runs = orbit_runtime::JobRuns::shared(database.clone(), "observer-fixture");
         let run = runs
             .insert_job_run("observer-fixture", 1, Utc::now(), None, None)
             .unwrap();
@@ -488,7 +337,7 @@ sys.exit(7)
 }
 
 struct RescueHost {
-    inner: Arc<dyn JobRunStoreBackend>,
+    inner: Arc<JobRuns>,
     preserved: Arc<Mutex<Vec<String>>>,
     provider_probes: Arc<AtomicUsize>,
     defer_provider_probes: usize,
@@ -538,7 +387,7 @@ fn a_sigterm_stopped_worker_keeps_its_rescue_candidate_before_terminalizing() {
         root.path().join("global"),
     );
     let database = Store::open_in_memory().unwrap();
-    let runs = orbit_store::compose::workspace_job_run_store(database.clone(), "rescue-fixture");
+    let runs = orbit_runtime::JobRuns::shared(database.clone(), "rescue-fixture");
     let run = runs
         .insert_job_run("rescue-fixture", 1, Utc::now(), None, None)
         .unwrap();
@@ -603,7 +452,7 @@ fn a_sigkilled_worker_keeps_its_rescue_candidate_before_terminalizing() {
         root.path().join("global"),
     );
     let database = Store::open_in_memory().unwrap();
-    let runs = orbit_store::compose::workspace_job_run_store(database.clone(), "rescue-fixture");
+    let runs = orbit_runtime::JobRuns::shared(database.clone(), "rescue-fixture");
     let run = runs
         .insert_job_run("rescue-fixture", 1, Utc::now(), None, None)
         .unwrap();

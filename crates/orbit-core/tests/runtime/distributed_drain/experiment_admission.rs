@@ -22,7 +22,10 @@ fn execute_empty_claim_worker(pair: &Pair, bound: &OrbitRuntime, run_id: &str) {
     pair.follower
         .sqlite_store()
         .unwrap()
-        .upsert_job_run_for_workspace(&pair.follower.workspace_id().unwrap(), &run, None)
+        .write(|tx| {
+            tx.job_run()
+                .put(&pair.follower.workspace_id().unwrap(), &run, None)
+        })
         .unwrap();
     bound.execute_pipeline_run_worker(run_id).unwrap();
 }

@@ -36,7 +36,10 @@ fn mark_old(pair: &Pair, leaf: &str, pid: u32, long_identity: bool) {
     pair.follower
         .sqlite_store()
         .unwrap()
-        .upsert_job_run_for_workspace(&pair.follower.workspace_id().unwrap(), &run, None)
+        .write(|tx| {
+            tx.job_run()
+                .put(&pair.follower.workspace_id().unwrap(), &run, None)
+        })
         .unwrap();
 }
 

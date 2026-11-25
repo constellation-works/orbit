@@ -27,13 +27,14 @@
 //!   supervisor reads that line from the log before it records the exit
 //!   [ORB-18166]. With no such line the exit says the sender is unknown.
 
+use crate::application::job::run::audit_record::SupervisedRuns;
 use std::process::ExitStatus;
 use std::thread;
 use std::time::{Duration, Instant};
 
 use chrono::Utc;
 use orbit_common::OrbitError;
-use orbit_store::contracts::{JobRunStepParams, JobRunStoreBackend};
+use orbit_store::contracts::JobRunStepParams;
 use orbit_types::workflow::JobRunState;
 
 use crate::application::job::run::WORKER_TERMINATED_ERROR_CODE;
@@ -118,7 +119,7 @@ impl WorkerExit {
 /// Reconciliation writes its step just after the interrupted state, so a
 /// missing step is waited for briefly.
 pub(crate) fn note_exit_after_reconciliation(
-    runs: &dyn JobRunStoreBackend,
+    runs: &dyn SupervisedRuns,
     run_id: &str,
     exit: &WorkerExit,
 ) -> Result<(), OrbitError> {

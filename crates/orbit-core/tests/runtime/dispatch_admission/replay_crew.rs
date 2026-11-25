@@ -78,7 +78,7 @@ fn detached_replay_recaptures_automatic_crews_and_preserves_explicit_choices() {
                 "eligible_pool": [{"name": "held", "weight": 1}],
             });
         }
-        let jobs = orbit_store::compose::workspace_job_run_store(
+        let jobs = orbit_core::runtime::JobRuns::shared(
             runtime.sqlite_store().unwrap(),
             runtime.workspace_id().unwrap(),
         );

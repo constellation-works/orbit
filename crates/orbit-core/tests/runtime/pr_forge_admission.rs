@@ -358,7 +358,7 @@ fn bundled_pr_submission_refuses_before_any_delivery_effect() {
         ],
     );
     std::fs::write(retained.join("candidate.txt"), "retained candidate").unwrap();
-    let jobs = orbit_store::compose::workspace_job_run_store(
+    let jobs = orbit_core::runtime::JobRuns::shared(
         runtime.sqlite_store().unwrap(),
         runtime.workspace_id().unwrap(),
     );

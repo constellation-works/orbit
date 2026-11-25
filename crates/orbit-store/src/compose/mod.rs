@@ -5,13 +5,12 @@ use std::sync::Arc;
 
 use crate::Store;
 use crate::contracts::{
-    JobRunStoreBackend, TaskArtifactStoreBackend, TaskDocumentStoreBackend,
-    TaskHistoryStoreBackend, TaskReservationStoreBackend, TaskStoreBackend,
+    TaskArtifactStoreBackend, TaskDocumentStoreBackend, TaskHistoryStoreBackend,
+    TaskReservationStoreBackend, TaskStoreBackend,
 };
 use crate::driver::file::executor_def_store::ExecutorDefDir;
 use crate::driver::file::policy_def_store::PolicyDefDirs;
 use crate::driver::file::session_log_store::SessionLogDir;
-use crate::driver::sqlite::job_run_store::SqliteJobRunStore;
 use crate::driver::sqlite::task_registry::TaskRegistryStore;
 use crate::file_store::FileStore;
 use crate::repository::sqlite_backends::SqliteTaskReservationStoreBackend;
@@ -36,13 +35,6 @@ pub fn workspace_task_backends(
         history: store.clone(),
         artifact: store,
     }
-}
-
-pub fn workspace_job_run_store(
-    store: Store,
-    workspace_id: impl Into<String>,
-) -> Arc<dyn JobRunStoreBackend> {
-    Arc::new(SqliteJobRunStore::new(store, workspace_id))
 }
 
 /// Run the explicit, idempotent legacy friction import. A read-only store

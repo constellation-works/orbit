@@ -1028,7 +1028,10 @@ fn holds_opt_outs_missing_grants_and_foreign_pull_requests_are_never_repaired() 
     fx.runtime
         .sqlite_store()
         .unwrap()
-        .upsert_job_run_for_workspace(&fx.runtime.workspace_id().unwrap(), &claimed_run, None)
+        .write(|tx| {
+            tx.job_run()
+                .put(&fx.runtime.workspace_id().unwrap(), &claimed_run, None)
+        })
         .unwrap();
     let clean = fx.stopped_leaf(95, "review", Shelf::Review);
     fx.blocked(&clean, "ccc5", "orbit-bot", false, &[]);

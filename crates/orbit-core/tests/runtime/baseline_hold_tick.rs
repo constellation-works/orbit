@@ -371,7 +371,7 @@ fn tick(fixture: &Fixture, now: DateTime<Utc>) -> SweepOutcome {
 
 /// Every refresh run, read from the store without reconciling any.
 fn refresh_runs(fixture: &Fixture) -> Vec<String> {
-    orbit_store::compose::workspace_job_run_store(
+    orbit_core::runtime::JobRuns::shared(
         fixture.runtime.sqlite_store().unwrap(),
         fixture.runtime.workspace_id().unwrap(),
     )

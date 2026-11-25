@@ -5,6 +5,7 @@ use orbit_core::application::contracts::DrainEntryPoint;
 use orbit_core::application::distributed::{PullCrewWindow, RESOURCE_THROTTLED};
 use orbit_core::application::task::TaskUpdateParams;
 use orbit_core::bootstrap::init::{InitOptions, init_workspace_at_root};
+use orbit_core::runtime::JobRuns;
 use orbit_store::contracts::DISTRIBUTED_DRAIN_PROTOCOL_SCHEMA;
 use orbit_types::task::{HostOs, TaskStatus};
 use orbit_types::workflow::{
@@ -34,8 +35,8 @@ fn recorded_pass(runtime: &OrbitRuntime, drain: &str) -> DrainAdmissionPass {
         .expect("the pass is recorded")
 }
 
-fn job_store(owner: &OrbitRuntime) -> Arc<dyn JobRunStoreBackend> {
-    orbit_store::compose::workspace_job_run_store(
+fn job_store(owner: &OrbitRuntime) -> Arc<JobRuns> {
+    orbit_core::runtime::JobRuns::shared(
         owner.sqlite_store().unwrap(),
         owner.workspace_id().unwrap(),
     )

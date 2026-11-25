@@ -29,7 +29,7 @@ fn workspace_with(config: &str) -> Workspace {
     std::fs::write(workspace.repo.join(".orbit/config.toml"), config).unwrap();
     let global = workspace.runtime.global_root();
     workspace.runtime = runtime_at(&global, &workspace.repo.join(".orbit"));
-    workspace.jobs = orbit_store::compose::workspace_job_run_store(
+    workspace.jobs = orbit_core::runtime::JobRuns::shared(
         workspace.runtime.sqlite_store().unwrap(),
         workspace.runtime.workspace_id().unwrap(),
     );
@@ -55,7 +55,10 @@ fn save_run(workspace: &Workspace, run: &JobRun, state: Option<&PipelineState>) 
         .runtime
         .sqlite_store()
         .unwrap()
-        .upsert_job_run_for_workspace(&workspace.runtime.workspace_id().unwrap(), run, state)
+        .write(|tx| {
+            tx.job_run()
+                .put(&workspace.runtime.workspace_id().unwrap(), run, state)
+        })
         .unwrap();
 }
 
@@ -85,11 +88,10 @@ fn save_step(
         .runtime
         .sqlite_store()
         .unwrap()
-        .upsert_job_run_step_for_workspace(
-            &workspace.runtime.workspace_id().unwrap(),
-            run_id,
-            &step,
-        )
+        .write(|tx| {
+            tx.job_run()
+                .put_step(&workspace.runtime.workspace_id().unwrap(), run_id, &step)
+        })
         .unwrap();
 }
 
@@ -465,11 +467,10 @@ fn an_old_pipeline_repair_failure_holds_until_its_finish_backoff() {
             .runtime
             .sqlite_store()
             .unwrap()
-            .upsert_job_run_step_for_workspace(
-                &workspace.runtime.workspace_id().unwrap(),
-                run_id,
-                &step,
-            )
+            .write(|tx| {
+                tx.job_run()
+                    .put_step(&workspace.runtime.workspace_id().unwrap(), run_id, &step)
+            })
             .unwrap();
 
         let expires_at = finished_at + Duration::minutes(backoff_minutes);

@@ -8,7 +8,8 @@ use std::sync::Arc;
 use chrono::{DateTime, Duration, TimeZone, Utc};
 use orbit_core::OrbitRuntime;
 use orbit_core::application::job::StreakErrorAgreement;
-use orbit_store::contracts::{JobRunStepParams, JobRunStoreBackend};
+use orbit_core::runtime::JobRuns;
+use orbit_store::contracts::JobRunStepParams;
 use orbit_types::workflow::{JobRunState, JobTargetType};
 use serde_json::json;
 use tempfile::TempDir;
@@ -18,7 +19,7 @@ const JOB: &str = "streak_fixture";
 struct Fixture {
     _root: TempDir,
     runtime: OrbitRuntime,
-    jobs: Arc<dyn JobRunStoreBackend>,
+    jobs: Arc<JobRuns>,
     next_minute: i64,
 }
 
@@ -33,7 +34,7 @@ impl Fixture {
         std::fs::write(global.join("config.toml"), config).unwrap();
         write_job(&jobs_dir);
         let runtime = OrbitRuntime::from_roots(&global, &repo.join(".orbit")).unwrap();
-        let jobs = orbit_store::compose::workspace_job_run_store(
+        let jobs = orbit_core::runtime::JobRuns::shared(
             runtime.sqlite_store().unwrap(),
             runtime.workspace_id().unwrap(),
         );

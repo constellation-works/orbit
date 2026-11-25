@@ -277,7 +277,7 @@ fn a_colliding_owner_run_does_not_supply_a_followers_friction_model() {
     owner
         .sqlite_store()
         .unwrap()
-        .upsert_job_run_for_workspace(&workspace, &colliding, None)
+        .write(|tx| tx.job_run().put(&workspace, &colliding, None))
         .unwrap();
     assert_eq!(
         owner
@@ -335,7 +335,7 @@ fn an_owner_local_claim_still_uses_its_bound_runs_model() {
         .follower
         .sqlite_store()
         .unwrap()
-        .upsert_job_run_for_workspace(&workspace, &run, None)
+        .write(|tx| tx.job_run().put(&workspace, &run, None))
         .unwrap();
 
     let bound = local

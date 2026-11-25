@@ -687,7 +687,7 @@ fn a_control_crew_without_admission_evidence_is_unavailable_not_a_mismatch() {
     // Simulate a pre-capture delivery: remove every job run for the task.
     {
         use orbit_store::contracts::JobRunQuery;
-        let jobs = orbit_store::compose::workspace_job_run_store(
+        let jobs = orbit_core::runtime::JobRuns::shared(
             fx.runtime.sqlite_store().unwrap(),
             fx.runtime.workspace_id().unwrap(),
         );
@@ -874,7 +874,7 @@ fn a_rerate_onto_a_superseded_delivery_crew_is_unavailable_not_a_mismatch() {
     // older explicit luna delivery and the newer normal sol delivery.
     {
         use orbit_store::contracts::JobRunQuery;
-        let jobs = orbit_store::compose::workspace_job_run_store(
+        let jobs = orbit_core::runtime::JobRuns::shared(
             fx.runtime.sqlite_store().unwrap(),
             fx.runtime.workspace_id().unwrap(),
         );

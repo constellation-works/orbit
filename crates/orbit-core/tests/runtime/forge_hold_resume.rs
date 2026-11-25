@@ -18,9 +18,10 @@ use orbit_core::application::routines::{
     RoutineMachineIdentity, SweepOptions, run_sweep_at_with_providers,
 };
 use orbit_core::application::task::TaskAddParams;
+use orbit_core::runtime::JobRuns;
 use orbit_core::{OrbitError, OrbitRuntime, TaskComplexity, TaskStatus, TaskType};
 use orbit_engine::{RuntimeHost, TaskAutomationUpdate};
-use orbit_store::contracts::{JobRunStepParams, JobRunStoreBackend};
+use orbit_store::contracts::JobRunStepParams;
 use orbit_types::workflow::activity_job::{V2AuditEvent, V2AuditEventKind};
 use orbit_types::workflow::{
     DeliveryRefusal, FORGE_UNAVAILABLE_ERROR_CODE, FORGE_UNAVAILABLE_EXPIRED_EVENT,
@@ -117,7 +118,7 @@ struct Fixture {
     _root: TempDir,
     global: PathBuf,
     runtime: OrbitRuntime,
-    jobs: Arc<dyn JobRunStoreBackend>,
+    jobs: Arc<JobRuns>,
 }
 
 impl Fixture {
@@ -147,7 +148,7 @@ impl Fixture {
         )
         .unwrap();
         let runtime = OrbitRuntime::from_roots(&global, &repo.join(".orbit")).unwrap();
-        let jobs = orbit_store::compose::workspace_job_run_store(
+        let jobs = orbit_core::runtime::JobRuns::shared(
             runtime.sqlite_store().unwrap(),
             runtime.workspace_id().unwrap(),
         );

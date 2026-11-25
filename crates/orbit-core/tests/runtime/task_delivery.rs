@@ -95,10 +95,10 @@ impl Fixture {
         let workspace = self.runtime.workspace_id().unwrap();
         // The inserted template is not part of the fixture's history.
         store
-            .delete_job_run_for_workspace(&workspace, &original_id)
+            .write(|tx| tx.job_run().delete(&workspace, &original_id))
             .unwrap();
         store
-            .upsert_job_run_for_workspace(&workspace, &run, None)
+            .write(|tx| tx.job_run().put(&workspace, &run, None))
             .unwrap();
         run
     }
@@ -159,12 +159,15 @@ fn newest_delivery_uses_submitted_task_bindings() {
     tie.finished_at = Some(tie.created_at + Duration::days(1));
     let store = fixture.runtime.sqlite_store().unwrap();
     store
-        .upsert_job_run_for_workspace(&fixture.runtime.workspace_id().unwrap(), &tie, None)
+        .write(|tx| {
+            tx.job_run()
+                .put(&fixture.runtime.workspace_id().unwrap(), &tie, None)
+        })
         .unwrap();
     tie.run_id = "foreign".into();
     tie.created_at += Duration::days(2);
     store
-        .upsert_job_run_for_workspace("foreign-workspace", &tie, None)
+        .write(|tx| tx.job_run().put("foreign-workspace", &tie, None))
         .unwrap();
     // None of these shapes is a submitted task_ids array.
     for (index, input) in [
@@ -333,7 +336,7 @@ fn measure_delivery_lookup() {
         .insert_job_run("fixture_delivery", 1, Utc::now(), None, None)
         .unwrap();
     store
-        .delete_job_run_for_workspace(&workspace, &template.run_id)
+        .write(|tx| tx.job_run().delete(&workspace, &template.run_id))
         .unwrap();
     let start = Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap();
     for index in 0..RUNS {
@@ -351,7 +354,7 @@ fn measure_delivery_lookup() {
             "payload": payload,
         }));
         store
-            .upsert_job_run_for_workspace(&workspace, &template, None)
+            .write(|tx| tx.job_run().put(&workspace, &template, None))
             .unwrap();
     }
     // Measure the serialized bytes actually persisted in this fixture.

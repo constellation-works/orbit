@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use chrono::Utc;
 use orbit_core::OrbitRuntime;
-use orbit_store::contracts::JobRunStoreBackend;
+use orbit_core::runtime::JobRuns;
 use orbit_types::workflow::{JobRun, JobRunState, PipelineState};
 use serde_json::{Value, json};
 use tempfile::TempDir;
@@ -15,7 +15,7 @@ use tempfile::TempDir;
 struct Fixture {
     _root: TempDir,
     runtime: OrbitRuntime,
-    jobs: Arc<dyn JobRunStoreBackend>,
+    jobs: Arc<JobRuns>,
     job: PathBuf,
     database: PathBuf,
 }
@@ -53,7 +53,7 @@ impl Fixture {
         )
         .unwrap();
         let runtime = OrbitRuntime::from_roots(&global, &workspace).unwrap();
-        let jobs = orbit_store::compose::workspace_job_run_store(
+        let jobs = orbit_core::runtime::JobRuns::shared(
             runtime.sqlite_store().unwrap(),
             runtime.workspace_id().unwrap(),
         );

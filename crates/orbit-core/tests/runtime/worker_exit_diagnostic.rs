@@ -19,11 +19,11 @@ use std::time::{Duration, Instant};
 
 use chrono::Utc;
 use orbit_core::OrbitRuntime;
+use orbit_core::runtime::JobRuns;
 use orbit_core::test_support::{
     WorkerReapPhase, install_substitute_pipeline_worker, install_worker_reap_hook,
     pipeline_worker_observer_completed,
 };
-use orbit_store::contracts::JobRunStoreBackend;
 use orbit_types::workflow::{JobRun, JobRunState};
 use serde_json::json;
 use tempfile::TempDir;
@@ -36,7 +36,7 @@ const DEADLINE: Duration = Duration::from_secs(30);
 struct Fixture {
     root: TempDir,
     runtime: OrbitRuntime,
-    jobs: Arc<dyn JobRunStoreBackend>,
+    jobs: Arc<JobRuns>,
 }
 
 impl Fixture {
@@ -55,7 +55,7 @@ impl Fixture {
         )
         .unwrap();
         let runtime = runtime_at(root.path());
-        let jobs = orbit_store::compose::workspace_job_run_store(
+        let jobs = orbit_core::runtime::JobRuns::shared(
             runtime.sqlite_store().unwrap(),
             runtime.workspace_id().unwrap(),
         );

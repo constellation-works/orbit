@@ -53,7 +53,7 @@ all through `set_drain_worker_limit`
 only stops new admission; nothing is cancelled.
 
 **Occupancy is per workspace.** `occupancy()`
-(`crates/orbit-store/src/driver/sqlite/job_run_store/pull.rs`) counts the
+(`crates/orbit-runtime/src/stored/job_runs/pull.rs`) counts the
 workspace's live leaves, including explicit `orbit run ship` deliveries.
 Every occupancy query filters on `workspace_id`. No limit spans workspaces:
 two workspaces draining on one host each take their full ceiling.

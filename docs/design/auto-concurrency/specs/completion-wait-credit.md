@@ -65,7 +65,7 @@ them ended held on the PR or its checks (`delivery_completion_budget_expired`,
 higher than 22%, by an unknown amount.
 
 **Precedent.** Pull drains already do a version of this. Since 2026-10
-(`pull_admission_load`, `crates/orbit-store/src/driver/sqlite/job_run_store/pull.rs`), a
+(`pull_admission_load`, `crates/orbit-runtime/src/stored/job_runs/pull.rs`), a
 claimed leaf in its before-landing review earns its drain a replacement admission, capped at
 the drain's own ceiling; [ORB-15194] added it after reviews with 1.5 to 2 hour tails cut a
 follower's effective concurrency. The same code says: "Owner/local drains continue counting

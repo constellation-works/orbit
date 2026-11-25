@@ -2,8 +2,9 @@
 
 use chrono::{Duration, Utc};
 use orbit_core::OrbitRuntime;
+use orbit_core::runtime::JobRuns;
 use orbit_store::V2AuditEventInsertParams;
-use orbit_store::contracts::{JobRunStepParams, JobRunStoreBackend};
+use orbit_store::contracts::JobRunStepParams;
 use orbit_types::workflow::{ChildDispatch, JobRunState, JobTargetType, PipelineState};
 use serde_json::json;
 
@@ -13,8 +14,8 @@ use super::{
 
 const LOAD_ERROR: &str = "invalid input: script manifest .orbit/resources/scripts/fixture.yaml: entry 'scripts/missing.mjs' does not resolve to a regular file inside the workspace";
 
-fn jobs(runtime: &OrbitRuntime) -> std::sync::Arc<dyn JobRunStoreBackend> {
-    orbit_store::compose::workspace_job_run_store(
+fn jobs(runtime: &OrbitRuntime) -> std::sync::Arc<JobRuns> {
+    orbit_core::runtime::JobRuns::shared(
         runtime.sqlite_store().unwrap(),
         runtime.workspace_id().unwrap(),
     )

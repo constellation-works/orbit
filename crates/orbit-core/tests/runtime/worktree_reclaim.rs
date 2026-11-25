@@ -46,7 +46,7 @@ fn admission_reclaims_oldest_kept_worktrees_first_and_leaves_active_runs() {
     git(&repo, &["add", ".gitignore"]);
     git(&repo, &["commit", "-qm", "base"]);
     let runtime = OrbitRuntime::from_roots(&global, &repo.join(".orbit")).unwrap();
-    let jobs = orbit_store::compose::workspace_job_run_store(
+    let jobs = orbit_core::runtime::JobRuns::shared(
         runtime.sqlite_store().unwrap(),
         runtime.workspace_id().unwrap(),
     );
@@ -208,7 +208,7 @@ fn admission_skips_empty_terminal_history_without_git_and_detects_new_output() {
     git(&repo, &["add", ".gitignore"]);
     git(&repo, &["commit", "-qm", "base"]);
     let runtime = OrbitRuntime::from_roots(&global, &repo.join(".orbit")).unwrap();
-    let jobs = orbit_store::compose::workspace_job_run_store(
+    let jobs = orbit_core::runtime::JobRuns::shared(
         runtime.sqlite_store().unwrap(),
         runtime.workspace_id().unwrap(),
     );

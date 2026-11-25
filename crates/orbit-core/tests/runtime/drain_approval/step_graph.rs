@@ -53,7 +53,7 @@ impl Workspace {
         let pilot = self.wait_for(drain, "an approval pilot", || {
             self.children(drain, PILOT_JOB).into_iter().nth(index)
         });
-        let jobs = orbit_store::compose::workspace_job_run_store(
+        let jobs = orbit_core::runtime::JobRuns::shared(
             self.runtime.sqlite_store().unwrap(),
             self.runtime.workspace_id().unwrap(),
         );

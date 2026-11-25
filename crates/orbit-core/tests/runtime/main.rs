@@ -114,6 +114,7 @@ mod implement_blocker;
 mod invocation_metrics;
 mod job_failure_streak;
 mod job_finalization;
+mod job_run_records;
 mod light_delivery;
 mod local_provider_holds;
 mod local_route_before_pr;

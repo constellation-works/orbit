@@ -323,7 +323,10 @@ fn task_show_summarizes_active_run_and_limits_artifacts() {
         runtime
             .sqlite_store()
             .unwrap()
-            .upsert_job_run_for_workspace(&runtime.workspace_id().unwrap(), &run, None)
+            .write(|tx| {
+                tx.job_run()
+                    .put(&runtime.workspace_id().unwrap(), &run, None)
+            })
             .unwrap();
         let task = runtime
             .add_task(TaskAddParams {
@@ -1128,7 +1131,10 @@ fn task_show_offers_resume_for_resumable_escalated_run() {
     runtime
         .sqlite_store()
         .unwrap()
-        .upsert_job_run_for_workspace(&runtime.workspace_id().unwrap(), &run, None)
+        .write(|tx| {
+            tx.job_run()
+                .put(&runtime.workspace_id().unwrap(), &run, None)
+        })
         .unwrap();
     block_with_final_recovery(&runtime, &fixture.repo, &id, run_id);
 
@@ -1201,7 +1207,10 @@ fn task_show_offers_resume_for_resumable_escalated_run() {
     runtime
         .sqlite_store()
         .unwrap()
-        .upsert_job_run_for_workspace(&runtime.workspace_id().unwrap(), &nonlocal_run, None)
+        .write(|tx| {
+            tx.job_run()
+                .put(&runtime.workspace_id().unwrap(), &nonlocal_run, None)
+        })
         .unwrap();
     block_with_final_recovery(&runtime, &fixture.repo, &nonlocal_id, nonlocal_run_id);
     let nonlocal_cli = fixture.json(&["task", "show", &nonlocal_id, "--json"]);
@@ -1270,7 +1279,10 @@ fn task_show_offers_resume_for_resumable_escalated_run() {
     runtime
         .sqlite_store()
         .unwrap()
-        .upsert_job_run_for_workspace(&runtime.workspace_id().unwrap(), &nonresumable_run, None)
+        .write(|tx| {
+            tx.job_run()
+                .put(&runtime.workspace_id().unwrap(), &nonresumable_run, None)
+        })
         .unwrap();
     block_with_final_recovery(
         &runtime,

@@ -17,8 +17,8 @@ use std::sync::Arc;
 use chrono::{DateTime, Utc};
 use orbit_core::OrbitRuntime;
 use orbit_core::application::task::{TaskAddParams, TaskUpdateParams};
+use orbit_core::runtime::JobRuns;
 use orbit_engine::RuntimeHost;
-use orbit_store::contracts::JobRunStoreBackend;
 use orbit_types::workflow::{CommentLogMark, PipelineState, SteeringWatermark};
 use serde_json::{Value, json};
 use tempfile::TempDir;
@@ -34,7 +34,7 @@ struct Fixture {
     global: PathBuf,
     workspace: PathBuf,
     runtime: OrbitRuntime,
-    jobs: Arc<dyn JobRunStoreBackend>,
+    jobs: Arc<JobRuns>,
     task: String,
 }
 
@@ -183,9 +183,9 @@ impl Fixture {
     }
 }
 
-fn open(global: &Path, workspace: &Path) -> (OrbitRuntime, Arc<dyn JobRunStoreBackend>) {
+fn open(global: &Path, workspace: &Path) -> (OrbitRuntime, Arc<JobRuns>) {
     let runtime = OrbitRuntime::from_roots(global, workspace).unwrap();
-    let jobs = orbit_store::compose::workspace_job_run_store(
+    let jobs = orbit_core::runtime::JobRuns::shared(
         runtime.sqlite_store().unwrap(),
         runtime.workspace_id().unwrap(),
     );

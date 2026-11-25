@@ -355,7 +355,10 @@ fn an_expired_gate_wait_cancels_its_delivery_child_and_keeps_its_candidate() {
     runtime
         .sqlite_store()
         .unwrap()
-        .upsert_job_run_for_workspace(&runtime.workspace_id().unwrap(), &child_run, None)
+        .write(|tx| {
+            tx.job_run()
+                .put(&runtime.workspace_id().unwrap(), &child_run, None)
+        })
         .unwrap();
     runtime
         .apply_task_automation_update(

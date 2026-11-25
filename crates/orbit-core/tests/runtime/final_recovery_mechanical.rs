@@ -181,7 +181,7 @@ fn resume_run_resumes_the_failed_run_once_within_the_shared_bound() {
     .unwrap();
 
     let task = fx.task(&[]);
-    let jobs = orbit_store::compose::workspace_job_run_store(
+    let jobs = orbit_core::runtime::JobRuns::shared(
         fx.runtime.sqlite_store().unwrap(),
         fx.runtime.workspace_id().unwrap(),
     );

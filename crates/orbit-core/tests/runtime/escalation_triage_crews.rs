@@ -114,7 +114,7 @@ pub(super) fn held_pilot_warning(fx: &Fixture, author: Option<&str>) -> String {
         "surface_warnings": [{"text": "The change reaches an unnamed surface.", "holds_promotion": true}],
     }});
     if let Some(author) = author {
-        let jobs = orbit_store::compose::workspace_job_run_store(
+        let jobs = orbit_core::runtime::JobRuns::shared(
             fx.runtime.sqlite_store().unwrap(),
             fx.runtime.workspace_id().unwrap(),
         );
@@ -261,7 +261,7 @@ fn a_capped_automatic_pass_reports_its_tail_as_unexamined() {
         .unwrap()
         .to_string();
     let already_triaging = held_pilot_warning(&fx, None);
-    let jobs = orbit_store::compose::workspace_job_run_store(
+    let jobs = orbit_core::runtime::JobRuns::shared(
         fx.runtime.sqlite_store().unwrap(),
         fx.runtime.workspace_id().unwrap(),
     );

@@ -184,7 +184,7 @@ impl Fixture {
         )
         .unwrap();
         let runtime = self.runtime();
-        let jobs = orbit_store::compose::workspace_job_run_store(
+        let jobs = orbit_core::runtime::JobRuns::shared(
             runtime.sqlite_store().unwrap(),
             runtime.workspace_id().unwrap(),
         );

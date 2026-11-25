@@ -818,7 +818,7 @@ pub(super) struct ResumedRun {
 #[cfg(unix)]
 pub(super) fn owner_resumes(leaf: &ReviewedLeaf, timing: ReviewTiming) -> ResumedRun {
     let owner = &leaf.pair.wire.owner;
-    let jobs = orbit_store::compose::workspace_job_run_store(
+    let jobs = orbit_core::runtime::JobRuns::shared(
         owner.sqlite_store().unwrap(),
         owner.workspace_id().unwrap(),
     );

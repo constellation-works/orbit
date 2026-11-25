@@ -67,7 +67,7 @@ fn seed_job_run(runtime: &OrbitRuntime, id: &str, job_id: &str, state: JobRunSta
     runtime
         .sqlite_store()
         .unwrap()
-        .upsert_job_run_for_workspace(&workspace_id, &run, None)
+        .write(|tx| tx.job_run().put(&workspace_id, &run, None))
         .unwrap();
 }
 

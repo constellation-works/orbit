@@ -423,7 +423,7 @@ fn released_workers_exiting_around_the_kill_deadline_are_not_forced_kills() {
         let process = BoundProcess::bind(pid, None).unwrap().unwrap();
         // The in-process executor has already settled this run, as in the
         // drain tests. Only substitute/observer teardown remains.
-        let jobs = orbit_store::compose::workspace_job_run_store(
+        let jobs = orbit_core::runtime::JobRuns::shared(
             runtime.sqlite_store().unwrap(),
             runtime.workspace_id().unwrap(),
         );
@@ -808,7 +808,7 @@ fn ordinary_teardown_releases_a_fixture_owned_root() {
     let pid = owned.workers.lock().unwrap()[0].pid;
     // The in-process executor would settle the run; only substitute and
     // observer teardown remain.
-    let jobs = orbit_store::compose::workspace_job_run_store(
+    let jobs = orbit_core::runtime::JobRuns::shared(
         fixture.runtime.sqlite_store().unwrap(),
         fixture.runtime.workspace_id().unwrap(),
     );

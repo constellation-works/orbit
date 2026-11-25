@@ -144,7 +144,10 @@ pub(super) fn publish_and_stop(
     f.runtime
         .sqlite_store()
         .unwrap()
-        .upsert_job_run_for_workspace(&f.runtime.workspace_id().unwrap(), &run, None)
+        .write(|tx| {
+            tx.job_run()
+                .put(&f.runtime.workspace_id().unwrap(), &run, None)
+        })
         .unwrap();
     let mut state = f.runtime.read_run_state(id).unwrap().unwrap();
     state.compact_for_terminal(run.state);
@@ -250,14 +253,20 @@ fn changed_adoption_and_admission_refuse(f: &Fixture, id: &str, binding: &Value)
         f.runtime
             .sqlite_store()
             .unwrap()
-            .upsert_job_run_for_workspace(&f.runtime.workspace_id().unwrap(), &changed, None)
+            .write(|tx| {
+                tx.job_run()
+                    .put(&f.runtime.workspace_id().unwrap(), &changed, None)
+            })
             .unwrap();
         assert_refused(f, id, binding, case);
     }
     f.runtime
         .sqlite_store()
         .unwrap()
-        .upsert_job_run_for_workspace(&f.runtime.workspace_id().unwrap(), &run, None)
+        .write(|tx| {
+            tx.job_run()
+                .put(&f.runtime.workspace_id().unwrap(), &run, None)
+        })
         .unwrap();
     // Task ownership is still exact after a successful adoption, and the
     // superseded original source cannot authorize a fresh request either.

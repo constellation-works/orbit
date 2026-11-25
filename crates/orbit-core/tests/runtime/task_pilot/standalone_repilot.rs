@@ -154,25 +154,27 @@ fn standalone_partition_failure_holds_only_task_dependent_repilots() {
             .runtime
             .sqlite_store()
             .unwrap()
-            .upsert_job_run_step_for_workspace(
-                &workspace.runtime.workspace_id().unwrap(),
-                &run_id,
-                &orbit_types::workflow::JobRunStep {
-                    step_index: 1,
-                    target_type: orbit_types::workflow::JobTargetType::Activity,
-                    target_id: "task_pilot".into(),
-                    state: JobRunState::Failed,
-                    error_code: Some(code.into()),
-                    failure_code: None,
-                    error_message: Some(message.into()),
-                    lock_wait_ms: None,
-                    started_at: None,
-                    finished_at: None,
-                    duration_ms: None,
-                    exit_code: Some(1),
-                    agent_response_json: None,
-                },
-            )
+            .write(|tx| {
+                tx.job_run().put_step(
+                    &workspace.runtime.workspace_id().unwrap(),
+                    &run_id,
+                    &orbit_types::workflow::JobRunStep {
+                        step_index: 1,
+                        target_type: orbit_types::workflow::JobTargetType::Activity,
+                        target_id: "task_pilot".into(),
+                        state: JobRunState::Failed,
+                        error_code: Some(code.into()),
+                        failure_code: None,
+                        error_message: Some(message.into()),
+                        lock_wait_ms: None,
+                        started_at: None,
+                        finished_at: None,
+                        duration_ms: None,
+                        exit_code: Some(1),
+                        agent_response_json: None,
+                    },
+                )
+            })
             .unwrap();
         let failed = workspace.action(
             "apply_task_pilot_results",

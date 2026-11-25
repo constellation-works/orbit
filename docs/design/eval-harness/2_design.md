@@ -51,7 +51,7 @@ The crew override and the per-run branch name (`orbit/<task>-<hash of run id>`) 
 
 ### 1.2 What a true detached run would cost
 
-Making T itself runnable twice needs all of these in core: a commit pin on worktree setup; an admission bypass; a frozen task context for the implementer; a second run binding beside `job_run_id` (candidate resume and failure handling read that field); and exemptions in the ship in-flight guard, PR superseding and worktree GC. It would also need a capacity lane, because only the delivery leaves occupy drain slots: a run started with `orbit run job` takes none (`crates/orbit-store/src/driver/sqlite/job_run_store/pull.rs:590-596`). That is a second delivery model threaded through the first one.
+Making T itself runnable twice needs all of these in core: a commit pin on worktree setup; an admission bypass; a frozen task context for the implementer; a second run binding beside `job_run_id` (candidate resume and failure handling read that field); and exemptions in the ship in-flight guard, PR superseding and worktree GC. It would also need a capacity lane, because only the delivery leaves occupy drain slots: a run started with `orbit run job` takes none (`occupancy` in `crates/orbit-runtime/src/stored/job_runs/pull.rs`). That is a second delivery model threaded through the first one.
 
 ### 1.3 The primitive this design uses: a candidate task
 

@@ -39,6 +39,8 @@ The kernel's state is four structs, each holding the one below it and its own fi
 | `Host` | `host` | `Stored` and this machine as a place work runs | one that starts, validates or lands work |
 | `Run` | `run` | `Host` and the run this process carries | code inside a drain or a worker |
 
+Job runs, local pull admissions and drain intent are reached through `stores().jobs()`, a `JobRuns` handle (`crates/orbit-runtime/src/stored/job_runs/mod.rs`). It runs each admission, lifecycle, checkpoint-state and pull-occupancy rule inside one `Store::write`, over the store's job-run, local-pull, drain-intent and admission-load repositories.
+
 `RuntimeKernel` holds `Run`, the `application` callback and the three test hooks, and nothing else. Its methods are unchanged, and each reads its state through the layer that holds it. A field goes to the lowest layer in which every operation could use it. A field that is optional today stays optional.
 
 ### Where each former kernel field lives

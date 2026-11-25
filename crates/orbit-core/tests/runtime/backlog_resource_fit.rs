@@ -134,7 +134,7 @@ fn profile_delivery(runtime: &OrbitRuntime, cores: f64) {
         steps: Vec::new(),
     };
     store
-        .upsert_job_run_for_workspace(&workspace, &run, None)
+        .write(|tx| tx.job_run().put(&workspace, &run, None))
         .unwrap();
     for minute in 0..60u32 {
         store

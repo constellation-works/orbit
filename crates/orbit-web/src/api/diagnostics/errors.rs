@@ -135,7 +135,8 @@ fn diagnostics_error_rows(
                 });
             let record = runtime.sqlite_store().ok().and_then(|store| {
                 store
-                    .get_job_run_for_workspace(&workspace_id, &run)
+                    .read()
+                    .and_then(|snapshot| snapshot.job_run().get(&workspace_id, &run))
                     .ok()
                     .flatten()
             });

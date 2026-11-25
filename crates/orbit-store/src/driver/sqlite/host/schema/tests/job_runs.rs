@@ -4,7 +4,6 @@ use rusqlite::Connection;
 use super::super::super::ledger::{self, Migration};
 use super::super::*;
 use crate::Store;
-use crate::compose::workspace_job_run_store;
 use crate::contracts::JobRunQuery;
 
 /// The registry up to, not including, v38.
@@ -118,8 +117,11 @@ fn job_run_states_move_survives_interruption_byte_for_byte() {
     // The run listing still decodes every moved run, trailing columns included.
     drop(conn);
     let store = Store::open_read_only(&path).expect("open migrated database");
-    let runs = workspace_job_run_store(store, "ws_a")
-        .list_job_runs_filtered(&JobRunQuery::default())
+    let runs = store
+        .read()
+        .expect("read migrated database")
+        .job_run()
+        .list("ws_a", &JobRunQuery::default())
         .expect("list moved runs");
     assert_eq!(runs.len(), 153);
     assert!(

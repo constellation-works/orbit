@@ -78,7 +78,7 @@ fn pilot_can_record_a_claimed_prerequisite_without_mutating_it() {
 fn owner_pull_defers_an_active_pilot_and_admits_it_after_the_hold_ends() {
     let pair = Pair::new(2);
     let prepared = prepare(&pair, &pair.tasks[0]);
-    let jobs = orbit_store::compose::workspace_job_run_store(
+    let jobs = orbit_core::runtime::JobRuns::shared(
         pair.wire.owner.sqlite_store().unwrap(),
         pair.wire.owner.workspace_id().unwrap(),
     );

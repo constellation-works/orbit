@@ -346,7 +346,7 @@ exit 99
             .join(format!("{}.job.yaml", run.run_id));
         std::fs::create_dir_all(snapshot_path.parent().unwrap()).unwrap();
         std::fs::write(&snapshot_path, yaml).unwrap();
-        orbit_store::compose::workspace_job_run_store(
+        orbit_core::runtime::JobRuns::shared(
             self.runtime.sqlite_store().unwrap(),
             self.runtime.workspace_id().unwrap(),
         )
@@ -1345,7 +1345,7 @@ fn setup_prefix_from_prior_step_output_binds_and_rejects_mismatches() {
         .join(format!("{}.job.yaml", run_step.run_id));
     std::fs::create_dir_all(snapshot_path.parent().unwrap()).unwrap();
     std::fs::write(&snapshot_path, job_yaml).unwrap();
-    orbit_store::compose::workspace_job_run_store(
+    orbit_core::runtime::JobRuns::shared(
         fixture.runtime.sqlite_store().unwrap(),
         fixture.runtime.workspace_id().unwrap(),
     )

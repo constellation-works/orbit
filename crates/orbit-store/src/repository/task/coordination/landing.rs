@@ -20,7 +20,6 @@ use orbit_types::workflow::handoff::*;
 use super::TaskCommitBoundary;
 use super::lifecycle::{decode, invalid, row};
 use crate::contracts::*;
-use crate::driver::sqlite::job_run_store::SqliteJobRunStore;
 
 const ATTEMPT: &str = "distributed-landing-attempt-v1";
 const HISTORY: &str = "distributed-landing-attempt-history-v1";
@@ -202,23 +201,24 @@ impl TaskCommitBoundary {
         &self,
         attempt: &LandingAttempt,
     ) -> Result<String, OrbitError> {
-        let jobs = SqliteJobRunStore::new(self.store.clone(), &self.workspace_id);
+        let snapshot = self.store.read()?;
+        let jobs = snapshot.job_run();
         let run_id = attempt
             .job_run_id
             .as_deref()
             .ok_or_else(|| invalid("terminal owner landing job evidence required"))?;
         if jobs
-            .automation_job_for_key(&format!(
-                "landing:{}:{}",
-                attempt.handoff_id, attempt.attempt
-            ))?
+            .get_automation_key(
+                &self.workspace_id,
+                &format!("landing:{}:{}", attempt.handoff_id, attempt.attempt),
+            )?
             .as_deref()
             != Some(run_id)
         {
             return Err(invalid("landing job does not match the owner dispatch key"));
         }
         let run = jobs
-            .get_job_run(run_id)?
+            .get(&self.workspace_id, run_id)?
             .ok_or_else(|| invalid("terminal owner landing job evidence missing"))?;
         if run.job_id != "task_landing_pipeline"
             || run

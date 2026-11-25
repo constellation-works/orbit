@@ -534,7 +534,10 @@ impl Fixture {
         self.runtime
             .sqlite_store()
             .unwrap()
-            .upsert_job_run_for_workspace(&self.runtime.workspace_id().unwrap(), run, None)
+            .write(|tx| {
+                tx.job_run()
+                    .put(&self.runtime.workspace_id().unwrap(), run, None)
+            })
             .unwrap();
     }
 }
@@ -1291,7 +1294,10 @@ pub(super) fn seed_other_run(
     runtime
         .sqlite_store()
         .unwrap()
-        .upsert_job_run_for_workspace(&runtime.workspace_id().unwrap(), &run, None)
+        .write(|tx| {
+            tx.job_run()
+                .put(&runtime.workspace_id().unwrap(), &run, None)
+        })
         .unwrap();
 }
 
@@ -1320,7 +1326,7 @@ pub(super) fn run_step(
 
 pub(super) fn save_record_step(fixture: &Fixture, run: &JobRun, step: &JobRunStep) {
     store(fixture)
-        .upsert_job_run_step_for_workspace(&ws_id(fixture), &run.run_id, step)
+        .write(|tx| tx.job_run().put_step(&ws_id(fixture), &run.run_id, step))
         .unwrap();
 }
 

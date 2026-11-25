@@ -156,7 +156,10 @@ fn ended_treatments_do_not_authorize_fresh_admission() {
         f.runtime
             .sqlite_store()
             .unwrap()
-            .upsert_job_run_for_workspace(&f.runtime.workspace_id().unwrap(), &failed, None)
+            .write(|tx| {
+                tx.job_run()
+                    .put(&f.runtime.workspace_id().unwrap(), &failed, None)
+            })
             .unwrap();
         let resumed = f
             .runtime

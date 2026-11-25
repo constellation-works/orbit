@@ -187,7 +187,7 @@ pub fn notices(runtime: &RuntimeKernel, input: Value) -> Result<Value, OrbitErro
     if let Some(id) = &lease_id {
         validate_lease_id_form(id)?;
     }
-    let notices = runtime.stores().task_reservations().list_lease_notices(
+    let notices = runtime.stores().host_store().read()?.lease_notice().list(
         &workspace_orbit_dir(runtime),
         workspace_task_reservation_id(runtime)?.as_deref(),
         lease_id.as_deref(),

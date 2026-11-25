@@ -18,12 +18,16 @@ use crate::repository::backlog_forecast::BacklogForecastRepository;
 use crate::repository::codebase_fact::{AgentFactRepository, CodebaseFactRepository};
 use crate::repository::condition::ConditionRepository;
 use crate::repository::crew_memory::CrewMemoryRepository;
+use crate::repository::drain_intent::DrainIntentRepository;
 use crate::repository::evolution::EvolutionRepository;
 use crate::repository::experiment::{ExperimentAssignmentRepository, ExperimentRepository};
 use crate::repository::friction::FrictionRepository;
 use crate::repository::incident::IncidentRepository;
 use crate::repository::invocation::InvocationRepository;
+use crate::repository::job_run::JobRunRepository;
 use crate::repository::landed_diff::LandedDiffRepository;
+use crate::repository::lease_notice::LeaseNoticeRepository;
+use crate::repository::local_pull::LocalPullRepository;
 use crate::repository::notice::NoticeRepository;
 use crate::repository::plugin::PluginRepository;
 use crate::repository::provider_limit::ProviderLimitRepository;
@@ -133,6 +137,23 @@ impl Snapshot<'_> {
     /// Read-only access to fleet notice records in this snapshot.
     pub fn notice(&self) -> NoticeRepository<'_, Self> {
         NoticeRepository::for_snapshot(self)
+    }
+    /// Read-only access to job runs, their steps, pipeline states, task bindings
+    /// and automation action keys in this snapshot.
+    pub fn job_run(&self) -> JobRunRepository<'_, Self> {
+        JobRunRepository::for_snapshot(self)
+    }
+    /// Read-only access to local pull admissions in this snapshot.
+    pub fn local_pull(&self) -> LocalPullRepository<'_, Self> {
+        LocalPullRepository::for_snapshot(self)
+    }
+    /// Read-only access to workspace drain intents in this snapshot.
+    pub fn drain_intent(&self) -> DrainIntentRepository<'_, Self> {
+        DrainIntentRepository::for_snapshot(self)
+    }
+    /// Read-only access to lease notices in this snapshot.
+    pub fn lease_notice(&self) -> LeaseNoticeRepository<'_, Self> {
+        LeaseNoticeRepository::for_snapshot(self)
     }
     /// Read-only access to crew memory revisions, events and proposals in this snapshot.
     pub fn crew_memory(&self) -> CrewMemoryRepository<'_, Self> {
@@ -298,6 +319,23 @@ impl Tx<'_> {
     /// Read-write access to fleet notice records inside this transaction.
     pub fn notice(&self) -> NoticeRepository<'_, Self> {
         NoticeRepository::for_tx(self)
+    }
+    /// Read-write access to job runs, their steps, pipeline states, task bindings
+    /// and automation action keys inside this transaction.
+    pub fn job_run(&self) -> JobRunRepository<'_, Self> {
+        JobRunRepository::for_tx(self)
+    }
+    /// Read-write access to local pull admissions inside this transaction.
+    pub fn local_pull(&self) -> LocalPullRepository<'_, Self> {
+        LocalPullRepository::for_tx(self)
+    }
+    /// Read-write access to workspace drain intents inside this transaction.
+    pub fn drain_intent(&self) -> DrainIntentRepository<'_, Self> {
+        DrainIntentRepository::for_tx(self)
+    }
+    /// Read-write access to lease notices inside this transaction.
+    pub fn lease_notice(&self) -> LeaseNoticeRepository<'_, Self> {
+        LeaseNoticeRepository::for_tx(self)
     }
     /// Read-write access to crew memory revisions, events and proposals inside this transaction.
     pub fn crew_memory(&self) -> CrewMemoryRepository<'_, Self> {

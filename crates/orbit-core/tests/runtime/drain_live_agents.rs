@@ -236,7 +236,7 @@ fn fixture_exit_command() -> Command {
 }
 
 fn insert_run(runtime: &OrbitRuntime, job_id: &str) -> String {
-    let jobs = orbit_store::compose::workspace_job_run_store(
+    let jobs = orbit_core::runtime::JobRuns::shared(
         runtime.sqlite_store().unwrap(),
         runtime.workspace_id().unwrap(),
     );
@@ -247,7 +247,7 @@ fn insert_run(runtime: &OrbitRuntime, job_id: &str) -> String {
 
 fn start_run(runtime: &OrbitRuntime, job_id: &str) -> String {
     let run_id = insert_run(runtime, job_id);
-    let jobs = orbit_store::compose::workspace_job_run_store(
+    let jobs = orbit_core::runtime::JobRuns::shared(
         runtime.sqlite_store().unwrap(),
         runtime.workspace_id().unwrap(),
     );

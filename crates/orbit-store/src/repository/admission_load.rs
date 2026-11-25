@@ -14,7 +14,7 @@ use std::marker::PhantomData;
 use chrono::{DateTime, Duration, Utc};
 use orbit_common::OrbitError;
 use orbit_common::storage::sqlite::sqlite_store_error;
-use rusqlite::{Connection, params, params_from_iter};
+use rusqlite::{Connection, OptionalExtension, params, params_from_iter};
 
 use crate::contracts::{
     AdmissionReservation, AdmissionRun, AdmissionRunMinute, HostResourceMinute,
@@ -112,6 +112,25 @@ impl<'a, 'tx> AdmissionLoadRepository<'a, Tx<'tx>> {
 }
 
 impl<Access> AdmissionLoadRepository<'_, Access> {
+    /// The newest reservation of `task_id` in `workspace_id`, as its work
+    /// class, complexity and stored `reserved_at` text; `None` when the task
+    /// holds none.
+    pub fn latest_task_reservation(
+        &self,
+        workspace_id: &str,
+        task_id: &str,
+    ) -> Result<Option<(String, Option<String>, String)>, OrbitError> {
+        self.conn
+            .query_row(
+                "SELECT work_class, complexity, reserved_at FROM admission_reservations
+                 WHERE workspace_id = ?1 AND task_id = ?2 ORDER BY reserved_at DESC, rowid DESC LIMIT 1",
+                params![workspace_id, task_id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .optional()
+            .map_err(sqlite_store_error)
+    }
+
     /// Every stored admission reservation, oldest first.
     pub fn reservations(&self) -> Result<Vec<AdmissionReservation>, OrbitError> {
         let mut statement = self

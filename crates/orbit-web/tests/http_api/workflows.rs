@@ -5,6 +5,7 @@ use orbit_core::TaskPriority::{High, Low, Medium};
 use orbit_core::TaskStatus::{Backlog, InProgress, Proposed};
 use orbit_core::application::job::JobRunListParams;
 use orbit_core::application::task::TaskAddParams;
+use orbit_core::runtime::JobRuns;
 use orbit_core::{JobRun, JobRunState, Task, TaskComplexity, TaskPriority, TaskStatus};
 use orbit_types::workflow::{
     BASELINE_RED_HOLD_EVENT, BaselineRedHold, ChildDispatch, PipelineState,
@@ -559,12 +560,11 @@ fn run_state(fixture: &Fixture, run_id: &str) -> JobRunState {
 wf_test!(
     queued_only_cancel_refuses_a_window_that_started_after_the_card_rendered,
     {
-        use orbit_store::compose::workspace_job_run_store;
         use orbit_store::contracts::AuditEventFilter;
         use orbit_types::workflow::JobRunStartOutcome;
         let fixture = Fixture::new();
         let server = fixture.server(true);
-        let jobs = workspace_job_run_store(
+        let jobs = JobRuns::shared(
             fixture.runtime.sqlite_store().unwrap(),
             fixture.runtime.workspace_id().unwrap(),
         );
@@ -775,11 +775,13 @@ wf_test!(failed_pull_protocol_is_visible_after_terminalization, {
         .runtime
         .sqlite_store()
         .unwrap()
-        .upsert_job_run_step_for_workspace(
-            &fixture.runtime.workspace_id().unwrap(),
-            &run.run_id,
-            &run.steps[0],
-        )
+        .write(|tx| {
+            tx.job_run().put_step(
+                &fixture.runtime.workspace_id().unwrap(),
+                &run.run_id,
+                &run.steps[0],
+            )
+        })
         .unwrap();
     let mut state = PipelineState::new(run.run_id.clone(), run.job_id.clone(), json!({}));
     state.pull_drain.drain_last_pass = Some(orbit_types::workflow::DrainAdmissionPass {
