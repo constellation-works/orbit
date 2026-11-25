@@ -498,12 +498,12 @@ env_vars! {
     );
     #[test_support]
     const ORBIT_TEST_HOST_FORWARD_ATTACH_TIMEOUT_MS: orbit_test_host_forward_attach_timeout_ms = (
-        "Debug-build timeout in milliseconds for attaching to a remote dashboard.",
+        "Timeout in milliseconds for attaching to a remote dashboard. Honored only in a debug build with the `test-support` feature or in a unit-test binary.",
         "5 seconds.",
     );
     #[test_support]
     const ORBIT_TEST_MCP_LIFECYCLE_INTERVAL_MS: orbit_test_mcp_lifecycle_interval_ms = (
-        "Debug-build interval in milliseconds for stdio MCP lifecycle checks.",
+        "Interval in milliseconds for stdio MCP lifecycle checks. Honored only in a debug build with the `test-support` feature or in a unit-test binary.",
         "2 seconds.",
     );
     #[test_support]

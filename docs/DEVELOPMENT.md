@@ -220,16 +220,15 @@ only after a real wrapper heartbeat proves the queue interval. This removes
 host-speed assumptions without extending timeout or cleanup budgets.
 
 A debug `orbit` or dashboard child does not see those thread-local hooks.
-Two deadlines in that child read an environment variable only when the
-binary is built with debug assertions, and a release build ignores it:
-`ORBIT_TEST_HOST_FORWARD_ATTACH_TIMEOUT_MS` (host-forward attach budget) and
-`ORBIT_TEST_MCP_LIFECYCLE_INTERVAL_MS` (stdio lifecycle tick). The third,
-`ORBIT_TEST_PIPELINE_WAIT_VIRTUAL=1` (a pipeline wait adds each poll to its
-elapsed time instead of sleeping, and does not wake on a reaped worker), also
-needs the `test-support` feature or a unit-test binary in a debug build; any
-other build sleeps in real time. The quiet-deadline child fixture injects its
-bound through `run_child_test_within`. The real child and the real reap stay
-in place.
+Three environment variables reach that child instead, and each is honoured
+only in a debug build with the `test-support` feature or in a unit-test
+binary; any other build, including a plain `cargo build`, ignores all three
+and uses the production timings: `ORBIT_TEST_HOST_FORWARD_ATTACH_TIMEOUT_MS`
+(host-forward attach budget), `ORBIT_TEST_MCP_LIFECYCLE_INTERVAL_MS` (stdio
+lifecycle tick) and `ORBIT_TEST_PIPELINE_WAIT_VIRTUAL=1` (a pipeline wait adds
+each poll to its elapsed time instead of sleeping, and does not wake on a
+reaped worker). The quiet-deadline child fixture injects its bound through
+`run_child_test_within`. The real child and the real reap stay in place.
 
 `ORBIT_TEST_MERGEABILITY_WAIT=virtual` has the same extra condition for landing's
 mergeability poll, which the external-merge fixtures run in-process rather than
