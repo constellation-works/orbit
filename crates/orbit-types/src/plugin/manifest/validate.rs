@@ -34,7 +34,7 @@ impl PluginManifest {
             return Err(PluginManifestError::new(
                 "metadata.name",
                 format!(
-                    "'{}' is not a valid namespace: use lowercase letters, digits, '_' or '-', \
+                    "'{}' is not a valid namespace: use lowercase letters, digits or '-', \
                      starting with a letter, and not the reserved 'orbit'",
                     self.metadata.name
                 ),
@@ -118,7 +118,7 @@ impl PluginManifest {
                 return Err(PluginManifestError::new(
                     field,
                     format!(
-                        "'{}' is not a valid tool verb: use lowercase letters, digits, '_' or '-'",
+                        "'{}' is not a valid tool verb: use lowercase letters, digits or '-'",
                         tool.name
                     ),
                 ));
@@ -156,7 +156,7 @@ impl PluginManifest {
                             format!("spec.tools[{index}].cli.verb"),
                             format!(
                                 "tool '{}' overrides its CLI verb to '{verb}', which is not a \
-                                 valid subcommand: use lowercase letters, digits, '_' or '-'",
+                                 valid subcommand: use lowercase letters, digits or '-'",
                                 tool.name
                             ),
                         ));
@@ -249,7 +249,7 @@ impl PluginManifest {
                 return Err(PluginManifestError::new(
                     format!("{field}.id"),
                     format!(
-                        "'{}' is not a valid panel id: use lowercase letters, digits, '_' or '-'",
+                        "'{}' is not a valid panel id: use lowercase letters, digits or '-'",
                         panel.id
                     ),
                 ));

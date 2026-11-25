@@ -42,8 +42,8 @@ impl Execute for PluginScaffoldArgs {
         let namespace = self.namespace.trim().to_string();
         if !is_valid_namespace(&namespace) {
             return Err(OrbitError::InvalidInput(format!(
-                "'{namespace}' is not a valid plugin namespace: use lowercase letters, digits, \
-                 '_' or '-', starting with a letter, and not the reserved 'orbit'"
+                "'{namespace}' is not a valid plugin namespace: use lowercase letters, digits \
+                 or '-', starting with a letter, and not the reserved 'orbit'"
             )));
         }
         let source = self.dir.unwrap_or_else(|| default_scaffold_dir(&namespace));

@@ -79,7 +79,7 @@ pub(crate) fn plugin_enablement_from_document(
                 path,
                 format!(
                     "'{PLUGIN_ENABLEMENT_TABLE}.{namespace}' is not a \
-                     plugin namespace: use lowercase letters, digits, '_' or '-', starting with a \
+                     plugin namespace: use lowercase letters, digits or '-', starting with a \
                      letter"
                 ),
             ));

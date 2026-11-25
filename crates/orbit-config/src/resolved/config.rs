@@ -454,7 +454,7 @@ fn plugin_sections_from_raw(
                 config_path,
                 format!(
                     "'[plugins.{namespace}]' is not a plugin namespace: \
-                     use lowercase letters, digits, '_' or '-', starting with a letter"
+                     use lowercase letters, digits or '-', starting with a letter"
                 ),
             ));
         }
