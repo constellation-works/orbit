@@ -35,7 +35,7 @@ version bump that does not refresh the copies fails CI.
 
 ### Marked list patches
 
-The refresh script applies `marked-list-setext-tabs` to the pinned Marked 18.2.0
+The refresh script applies `marked-list-setext-tabs` to the pinned Marked 18.2.1
 bundle before computing its digest. The list continuation guard recognizes
 the same trailing spaces and tabs as the Setext heading rule, so an
 outdented underline stays literal and an indented underline forms a heading.

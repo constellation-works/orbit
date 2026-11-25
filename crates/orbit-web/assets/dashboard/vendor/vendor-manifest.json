@@ -15,13 +15,13 @@
     {
       "name": "marked",
       "npm_package": "marked",
-      "version": "18.2.0",
+      "version": "18.2.1",
       "upstream": "https://github.com/markedjs/marked",
-      "source": "https://registry.npmjs.org/marked/-/marked-18.2.0.tgz",
+      "source": "https://registry.npmjs.org/marked/-/marked-18.2.1.tgz",
       "npm_file": "lib/marked.umd.js",
       "path": "marked.umd.js",
       "patch": "marked-list-setext-tabs",
-      "sha256": "14929dcb7d2390f87d60352f8fd97cd1991b8f2e424adceb39cd81472a81e195"
+      "sha256": "e8a6bc4399bcb99827a558d432edb02e879db992c147035a69c979abecd5fa80"
     }
   ]
 }
