@@ -91,8 +91,8 @@ env_vars! {
         "Unset.",
     );
     const CODEX_CA_CERTIFICATE: codex_ca_certificate = (
-        "PEM CA bundle for Codex. On macOS Orbit checks it is readable and supplies the system bundle when neither this nor `SSL_CERT_FILE` is set.",
-        "Unset. Orbit uses `/etc/ssl/cert.pem` on macOS.",
+        "PEM CA bundle for Codex under the macOS Seatbelt sandbox. A nonempty value takes precedence over `SSL_CERT_FILE`; Orbit validates the selected path is a readable file and fails the launch otherwise. When both are unset or empty, Orbit supplies `/etc/ssl/cert.pem` through this variable. Bare macOS launches, other providers, and Linux are unaffected.",
+        "Unset. On a macOS Seatbelt Codex launch, Orbit supplies `/etc/ssl/cert.pem` when both this and `SSL_CERT_FILE` are unset or empty.",
     );
     const CODEX_HOME: codex_home = (
         "Codex configuration and state directory.",
@@ -667,8 +667,8 @@ env_vars! {
         "Unset.",
     );
     const SSL_CERT_FILE: ssl_cert_file = (
-        "PEM CA bundle that TLS clients read. Orbit accepts it for Codex on macOS when `CODEX_CA_CERTIFICATE` is unset.",
-        "Unset.",
+        "PEM CA bundle that TLS clients read. For Codex under the macOS Seatbelt sandbox, a nonempty value applies when `CODEX_CA_CERTIFICATE` is unset or empty; Orbit validates the selected path is a readable file and fails the launch otherwise. When both are unset or empty, Orbit supplies `/etc/ssl/cert.pem` through `CODEX_CA_CERTIFICATE`. Bare macOS launches, other providers, and Linux are unaffected.",
+        "Unset. On a macOS Seatbelt Codex launch, the `/etc/ssl/cert.pem` fallback applies when both this and `CODEX_CA_CERTIFICATE` are unset or empty.",
     );
     const SUDO_GID: sudo_gid = (
         "Original group ID used by Linux host setup when running under sudo.",
