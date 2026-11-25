@@ -489,8 +489,10 @@ pub(crate) fn after_landing_health(
         health.problems.push(refusal.mismatch());
     }
 
-    health.branch_error =
-        inspect::branch_unavailable(&Source::new(&runtime.paths().repo_root), &declared.branch);
+    health.branch_error = inspect::branch_unavailable(
+        &Source::new(runtime.env(), &runtime.paths().repo_root),
+        &declared.branch,
+    );
     if let Some(error) = &health.branch_error {
         health.problems.push(format!(
             "branch `{}` does not resolve: {error}",
@@ -666,6 +668,7 @@ pub(crate) fn after_landing_health(
         diagnostic.reason
     });
     apply_remote_trail(
+        runtime.env(),
         &mut health,
         &runtime.paths().repo_root,
         &declared.branch,
@@ -684,6 +687,7 @@ pub(crate) fn after_landing_health(
 /// the checkout. This does not fetch: a pass that cannot reach origin defers
 /// on its own, and doctor has to stay read-only.
 fn apply_remote_trail(
+    env: &orbit_common::Env,
     health: &mut AfterLandingHealth,
     root: &std::path::Path,
     branch: &str,
@@ -691,7 +695,7 @@ fn apply_remote_trail(
     observed: Option<&str>,
     now: DateTime<Utc>,
 ) {
-    let observation = match Source::new(root).remote_observation(branch, observed) {
+    let observation = match Source::new(env, root).remote_observation(branch, observed) {
         Ok(observation) => observation,
         Err(error) => {
             health.problems.push(format!(

@@ -24,6 +24,7 @@ const RECORD: char = '\u{1e}';
 /// be read, the trailers come from task state alone. Mentions are
 /// neutralized outside the trailer block.
 pub fn compose_squash_merge_message(
+    process_env: &orbit_common::Env,
     repo: &Path,
     tasks: &[Task],
     pr_config: &PrConfig,
@@ -32,7 +33,7 @@ pub fn compose_squash_merge_message(
     pr_number: u64,
 ) -> MergeMessage {
     let inner = base
-        .and_then(|base| inner_commits(repo, base, head))
+        .and_then(|base| inner_commits(process_env, repo, base, head))
         .unwrap_or_default();
     let message = MergeMessage::from(&squash_merge_message(tasks, pr_config, pr_number, &inner));
     MergeMessage {
@@ -43,7 +44,12 @@ pub fn compose_squash_merge_message(
 
 /// The non-merge commits of `base..head`, oldest first, or `None` when the
 /// range cannot be read.
-fn inner_commits(repo: &Path, base: &str, head: &str) -> Option<Vec<InnerCommit>> {
+fn inner_commits(
+    process_env: &orbit_common::Env,
+    repo: &Path,
+    base: &str,
+    head: &str,
+) -> Option<Vec<InnerCommit>> {
     let base = base.trim();
     let head = head.trim();
     if base.is_empty() || head.is_empty() || base.starts_with('-') || head.starts_with('-') {
@@ -51,6 +57,7 @@ fn inner_commits(repo: &Path, base: &str, head: &str) -> Option<Vec<InnerCommit>
     }
     let resolves = |rev: &str| {
         git_command_success(
+            process_env,
             repo,
             &[
                 "rev-parse",
@@ -71,6 +78,7 @@ fn inner_commits(repo: &Path, base: &str, head: &str) -> Option<Vec<InnerCommit>
     let format = format!("--format=%an{FIELD}%ae{FIELD}%B{RECORD}");
     let range = format!("{base}..{head}");
     let log = match git_output_raw(
+        process_env,
         repo,
         &[
             "log",
@@ -123,7 +131,15 @@ pub(in crate::executor::automation::vcs) fn squash_merge_fields<H: RuntimeHost +
                 "a squash message needs a pull request number, not '{pr_number}'"
             ))
         })?;
-    let message = compose_squash_merge_message(repo, tasks, &host.pr_config(), base, head, number);
+    let message = compose_squash_merge_message(
+        &host.process_env(),
+        repo,
+        tasks,
+        &host.pr_config(),
+        base,
+        head,
+        number,
+    );
     let mut fields = serde_json::Map::new();
     fields.insert("commit_title".into(), message.title.into());
     fields.insert("commit_message".into(), message.body.into());

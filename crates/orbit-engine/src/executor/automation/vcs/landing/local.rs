@@ -31,9 +31,15 @@ pub(super) fn land_local_candidate<H: RuntimeHost + ?Sized>(
     let candidate = &context.candidate;
     let workspace = context.workspace_path.clone();
     let observed = observe_or_stop(host, context, None, view)?;
-    let landing = resolve_landing_ref(&workspace, &candidate.landing_branch, &candidate.delivery)?;
+    let landing = resolve_landing_ref(
+        &host.process_env(),
+        &workspace,
+        &candidate.landing_branch,
+        &candidate.delivery,
+    )?;
 
     if crate::executor::automation::vcs::git::is_ancestor(
+        &host.process_env(),
         &workspace,
         &candidate.candidate.commit,
         &landing,
@@ -51,6 +57,7 @@ pub(super) fn land_local_candidate<H: RuntimeHost + ?Sized>(
     // still unlanded, so a completion hold stops it here, before the
     // fast-forward below moves the branch.
     let changed = candidate_commit_changed_paths(
+        &host.process_env(),
         &workspace,
         &candidate.base.commit,
         &candidate.candidate.commit,
@@ -59,11 +66,20 @@ pub(super) fn land_local_candidate<H: RuntimeHost + ?Sized>(
         return Err(held);
     }
 
-    let checkout = checkout_holding_branch(&workspace, &candidate.landing_branch)?
-        .unwrap_or_else(|| workspace.clone());
-    ensure_clean_checkout(&checkout, "owner landing checkout")?;
-    ensure_base_checkout_ready(&checkout, Some(&candidate.candidate.commit))?;
-    let checked_out = git_output(&checkout, &["rev-parse", "--abbrev-ref", "HEAD"])?;
+    let checkout =
+        checkout_holding_branch(&host.process_env(), &workspace, &candidate.landing_branch)?
+            .unwrap_or_else(|| workspace.clone());
+    ensure_clean_checkout(&host.process_env(), &checkout, "owner landing checkout")?;
+    ensure_base_checkout_ready(
+        &host.process_env(),
+        &checkout,
+        Some(&candidate.candidate.commit),
+    )?;
+    let checked_out = git_output(
+        &host.process_env(),
+        &checkout,
+        &["rev-parse", "--abbrev-ref", "HEAD"],
+    )?;
     if checked_out.trim() != candidate.landing_branch {
         return Err(stop(
             host,
@@ -81,9 +97,10 @@ pub(super) fn land_local_candidate<H: RuntimeHost + ?Sized>(
     // owner's delivery consumers learn which task it delivered only from an
     // intent retained before the branch moves [ORB-13894]. A candidate that
     // cannot fast-forward lands nothing and stops below.
-    let before = git_output(&checkout, &["rev-parse", "HEAD"])?;
+    let before = git_output(&host.process_env(), &checkout, &["rev-parse", "HEAD"])?;
     let run_id = input_string_field(input, "run_id");
     if crate::executor::automation::vcs::git::is_ancestor(
+        &host.process_env(),
         &checkout,
         before.trim(),
         &candidate.candidate.commit,
@@ -116,6 +133,7 @@ pub(super) fn land_local_candidate<H: RuntimeHost + ?Sized>(
         }),
     )?;
     let fast_forwarded = git_command_success(
+        &host.process_env(),
         &checkout,
         &[
             "merge",
@@ -127,6 +145,7 @@ pub(super) fn land_local_candidate<H: RuntimeHost + ?Sized>(
     // The ref itself is the evidence either way: a failed fast-forward left it
     // where it was, which is a resolved intent rather than an uncertain one.
     let merged = crate::executor::automation::vcs::git::is_ancestor(
+        &host.process_env(),
         &workspace,
         &candidate.candidate.commit,
         &landing,
@@ -188,11 +207,17 @@ pub(super) fn land_already_landed<H: RuntimeHost + ?Sized>(
     let workspace = context.workspace_path.clone();
     let observed = observe_or_stop(host, context, None, view)?;
     let landing = resolve_landing_ref(
+        &host.process_env(),
         &workspace,
         &context.candidate.landing_branch,
         &context.candidate.delivery,
     )?;
-    if !crate::executor::automation::vcs::git::is_ancestor(&workspace, covering_commit, &landing)? {
+    if !crate::executor::automation::vcs::git::is_ancestor(
+        &host.process_env(),
+        &workspace,
+        covering_commit,
+        &landing,
+    )? {
         return Err(stop(
             host,
             context,
@@ -232,6 +257,7 @@ pub(super) fn land_no_diff<H: RuntimeHost + ?Sized>(
 ) -> Result<Value, OrbitError> {
     let observed = observe_or_stop(host, context, None, view)?;
     let landing = resolve_landing_ref(
+        &host.process_env(),
         &context.workspace_path,
         &observed.landing_branch,
         &observed.delivery,

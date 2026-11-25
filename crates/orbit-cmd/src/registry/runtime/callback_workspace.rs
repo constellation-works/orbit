@@ -18,7 +18,9 @@ pub fn refuse_cli_callback_workspace(
     tool: &str,
     selector: &str,
 ) -> Result<(), OrbitError> {
-    let Some(identity) = resolve_plugin_callback(global_root)? else {
+    let Some(identity) =
+        resolve_plugin_callback(&orbit_core::composition::process_env(), global_root)?
+    else {
         return Ok(());
     };
     if identity.unconfined {

@@ -445,8 +445,12 @@ fn host_validation_output_is_reclaimed_only_for_terminal_inactive_attributed_che
                         let script = "mkdir -p \"$BUILD_OUTPUT_DIR/debug\" && printf 'host build' > \"$BUILD_OUTPUT_DIR/debug/output\"\n";
                         let commit = commit_file(&author, "host-build.sh", script);
                         detach(&author);
-                        let candidate =
-                            orbit_engine::review_gate::revision(&fixture.repo, &commit).unwrap();
+                        let candidate = orbit_engine::review_gate::revision(
+                            &orbit_common::Env::capture(),
+                            &fixture.repo,
+                            &commit,
+                        )
+                        .unwrap();
                         let command = orbit_types::workflow::HostSandboxCommand::admit(
                             "sh host-build.sh",
                             &["sh host-build.sh".to_string()],
@@ -806,6 +810,7 @@ fn a_reclaimed_candidate_resumes_rebuilds_with_a_fake_agent_and_completes() {
         || {
             let preserved = PreservedCandidate::new("feature.txt", "feature\n");
             let paths = orbit_engine::run_worktree_paths(
+                &orbit_common::Env::capture(),
                 &preserved.fixture.repo,
                 &preserved.host.runs.lock().unwrap()[0],
             )

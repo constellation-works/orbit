@@ -25,7 +25,12 @@ pub fn preflight_indirect_workspace_write(
     }
     let cwd = std::env::current_dir().map_err(|err| OrbitError::Io(err.to_string()))?;
     let roots = RegisteredRuntimeFactory::resolve_roots_for_cwd(&cwd, None)?;
-    orbit_core::runtime::refuse_indirect_uninitialized_caller_orbit(&cwd, &roots.shared_root, false)
+    orbit_core::runtime::refuse_indirect_uninitialized_caller_orbit(
+        &orbit_core::composition::process_env(),
+        &cwd,
+        &roots.shared_root,
+        false,
+    )
 }
 
 #[derive(Args)]

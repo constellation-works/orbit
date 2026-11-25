@@ -125,15 +125,16 @@ pub(in crate::executor::automation) fn claim_validate<H: RuntimeHost + ?Sized>(
         // Observed for its commit and base only; the delivery is pinned by
         // the `prevalidated` step once the pull request exists.
         observe_with(
+            &host.process_env(),
             &workspace_path,
             &context,
             input,
             HandoffDelivery::LocalCandidate,
         )?
     } else {
-        observe(&workspace_path, &context, input)?
+        observe(&host.process_env(), &workspace_path, &context, input)?
     };
-    require_clean_candidate(&workspace_path, &candidate)?;
+    require_clean_candidate(&host.process_env(), &workspace_path, &candidate)?;
 
     let light = light_validation(host, &context, &workspace_path, &candidate)?;
     let (replays, commands) = if light.is_some() {
@@ -155,7 +156,7 @@ pub(in crate::executor::automation) fn claim_validate<H: RuntimeHost + ?Sized>(
 
     // A later required command must not invalidate logs from an earlier one.
     // Publish them only after the whole suite has kept the candidate intact.
-    require_clean_candidate(&workspace_path, &candidate)?;
+    require_clean_candidate(&host.process_env(), &workspace_path, &candidate)?;
     if pending {
         let known_red = known_red_records(&context, &candidate, &results);
         let mut output = json!({
@@ -277,7 +278,7 @@ pub(super) fn run_claimed_commands<H: RuntimeHost + ?Sized>(
         } else {
             claim_failure(host, context, input, candidate, index, &run, replay)?
         };
-        require_clean_candidate(workspace_path, candidate)?;
+        require_clean_candidate(&host.process_env(), workspace_path, candidate)?;
         results.push(ClaimedResult {
             command: run.command,
             output: flaky
@@ -301,8 +302,8 @@ fn pin_prevalidated<H: RuntimeHost + ?Sized>(
     input: &Value,
     prevalidated: &Value,
 ) -> Result<Value, OrbitError> {
-    let candidate = observe(workspace_path, context, input)?;
-    require_clean_candidate(workspace_path, &candidate)?;
+    let candidate = observe(&host.process_env(), workspace_path, context, input)?;
+    require_clean_candidate(&host.process_env(), workspace_path, &candidate)?;
     if input_string_field(prevalidated, "publication").as_deref() != Some("pending") {
         return Err(OrbitError::InvalidInput(
             "prevalidated must be the output of a pre-publication claim_validate step".to_string(),
@@ -620,7 +621,7 @@ fn claim_failure<H: RuntimeHost + ?Sized>(
         return Ok((Some(known_red), None));
     }
     if let Some(record) = rerun.as_ref().and_then(|rerun| rerun.flaky.as_ref()) {
-        require_clean_candidate(&workspace_path, candidate)?;
+        require_clean_candidate(&host.process_env(), &workspace_path, candidate)?;
         return Ok((None, Some(record.clone())));
     }
     let evidence = format!(

@@ -43,8 +43,9 @@ fn pr_status_retries_the_landed_run_graphql_failure_and_stops_on_permanent_error
             );
             let input = json!({"pr": "123", "workspace_path": fixture});
 
-            let recovered = run_private_operation("pr.status", &input)
-                .expect("PR status should recover after the transient GraphQL error");
+            let recovered =
+                run_private_operation(&orbit_common::Env::capture(), "pr.status", &input)
+                    .expect("PR status should recover after the transient GraphQL error");
             assert_eq!(
                 recovered,
                 json!({"pull_request":{"number":123,"state":"MERGED"}})
@@ -65,8 +66,9 @@ fn pr_status_retries_the_landed_run_graphql_failure_and_stops_on_permanent_error
             ] {
                 fs::write(&count_file, "0").expect("reset call count");
                 fs::write(&failure_file, message).expect("write permanent failure");
-                let error = run_private_operation("pr.status", &input)
-                    .expect_err("permanent lookup failures must not be retried");
+                let error =
+                    run_private_operation(&orbit_common::Env::capture(), "pr.status", &input)
+                        .expect_err("permanent lookup failures must not be retried");
                 assert!(error.to_string().contains(message), "{label}: {error}");
                 assert_eq!(
                     read_count(&count_file),
@@ -116,8 +118,11 @@ fn required_checks_retries_unprefixed_graphql_failure_and_keeps_deadline_failure
             );
             let input = json!({"pr": "123", "workspace_path": fixture});
 
-            let recovered = run_private_operation("pr.required_checks", &input)
-                .expect("required-check observation recovers after the unprefixed provider error");
+            let recovered =
+                run_private_operation(&orbit_common::Env::capture(), "pr.required_checks", &input)
+                    .expect(
+                        "required-check observation recovers after the unprefixed provider error",
+                    );
             assert_eq!(recovered, json!({"pull_request":{"headRefOid":"abc123"}}));
             assert_eq!(
                 read_count(&count_file),
@@ -140,6 +145,7 @@ fn required_checks_retries_unprefixed_graphql_failure_and_keeps_deadline_failure
             .expect("current milliseconds fit in u64");
             let deadline_ms = now_ms + 30_000;
             let error = run_private_operation(
+                &orbit_common::Env::capture(),
                 "pr.required_checks",
                 &json!({"pr": "123", "workspace_path": fixture, "deadline_ms": deadline_ms}),
             )
@@ -158,8 +164,9 @@ fn required_checks_retries_unprefixed_graphql_failure_and_keeps_deadline_failure
             );
 
             fs::write(&count_file, "0").expect("reset call count");
-            let exhausted = run_private_operation("pr.required_checks", &input)
-                .expect_err("an exhausted observation cannot provide check evidence");
+            let exhausted =
+                run_private_operation(&orbit_common::Env::capture(), "pr.required_checks", &input)
+                    .expect_err("an exhausted observation cannot provide check evidence");
             assert_eq!(
                 exhausted
                     .private_vcs_failure()
@@ -176,8 +183,9 @@ fn required_checks_retries_unprefixed_graphql_failure_and_keeps_deadline_failure
             fs::write(&count_file, "0").expect("reset call count");
             fs::write(&failure_file, "HTTP 401: Bad credentials\n")
                 .expect("write a permanent authentication failure");
-            let permanent = run_private_operation("pr.required_checks", &input)
-                .expect_err("permanent authentication failures do not provide check evidence");
+            let permanent =
+                run_private_operation(&orbit_common::Env::capture(), "pr.required_checks", &input)
+                    .expect_err("permanent authentication failures do not provide check evidence");
             assert_eq!(
                 permanent
                     .private_vcs_failure()
@@ -189,6 +197,7 @@ fn required_checks_retries_unprefixed_graphql_failure_and_keeps_deadline_failure
 
             fs::write(&count_file, "0").expect("reset call count");
             let invalid = run_private_operation(
+                &orbit_common::Env::capture(),
                 "pr.required_checks",
                 &json!({"pr": "not-a-pr", "workspace_path": fixture}),
             )

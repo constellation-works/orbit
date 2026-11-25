@@ -55,7 +55,9 @@ fn a_profile_denies_the_state_tree_and_re_allows_only_its_own_namespace() {
             "other",
             grants,
         );
-        let profile = spec.sandbox_profile(None).expect("profile");
+        let profile = spec
+            .sandbox_profile(&orbit_common::Env::capture(), None)
+            .expect("profile");
         let own_state = global_root.join("state/plugins/demo");
 
         assert!(

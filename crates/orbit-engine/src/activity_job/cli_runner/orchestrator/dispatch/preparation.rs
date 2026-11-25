@@ -254,6 +254,7 @@ pub(crate) fn dispatch_cli_invocation(
     // child cwd and once inside the agent contract. Validate that pair against
     // the registered primary before sandbox construction or provider spawn.
     let declared_worktree_pair = validate_declared_worktree_pair(
+        &host.process_env(),
         input,
         task_ctx.as_ref(),
         run_id,
@@ -267,6 +268,7 @@ pub(crate) fn dispatch_cli_invocation(
         fs_profile,
     )?;
     super::provider::dispatch_prepared_provider(
+        &host.process_env(),
         CliDispatchContext {
             host,
             spec,

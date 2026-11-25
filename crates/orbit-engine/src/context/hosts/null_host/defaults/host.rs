@@ -53,7 +53,7 @@ use super::super::super::{
 
 /// A [`RuntimeHost`](super::super::super::RuntimeHost) base for test doubles.
 ///
-/// `RuntimeHost` declares no defaults, so the production host must name every
+/// `RuntimeHost` requires the production host to name every
 /// capability. A test double implements this trait instead, overriding only
 /// what its test exercises; the blanket impl makes it a `RuntimeHost`.
 /// Each default is the answer of a host without that capability: a no-op, an
@@ -62,6 +62,10 @@ use super::super::super::{
 /// `gh` operations. Available only to tests, through
 /// `orbit_engine::test_support`.
 pub trait NullRuntimeHost: Send + Sync {
+    fn process_env(&self) -> orbit_common::Env {
+        orbit_common::Env::capture()
+    }
+
     fn validation_build_output_env(&self) -> Vec<String> {
         NullRuntimeHost::validation_subprocess_environment(self).build_output_env
     }
@@ -641,7 +645,7 @@ pub trait NullRuntimeHost: Send + Sync {
         ))
     }
     fn agent_subprocess_environment(&self, required_env_vars: &[&str]) -> Vec<(String, String)> {
-        allowlisted_child_env(&orbit_common::Env::capture(), &[], required_env_vars)
+        allowlisted_child_env(&NullRuntimeHost::process_env(self), &[], required_env_vars)
     }
     /// This host's own agent environment, overlaid with the crew's entries
     /// from the process environment.
@@ -651,7 +655,7 @@ pub trait NullRuntimeHost: Send + Sync {
         required_env_vars: &[&str],
     ) -> Vec<(String, String)> {
         let env = NullRuntimeHost::agent_subprocess_environment(self, required_env_vars);
-        execution::overlay_crew_env(env, crew_env)
+        execution::overlay_crew_env(&NullRuntimeHost::process_env(self), env, crew_env)
     }
     fn requires_claude_worker_credential(&self) -> bool {
         false
@@ -767,7 +771,11 @@ pub trait NullRuntimeHost: Send + Sync {
         operation: &str,
         input: Value,
     ) -> Result<Value, OrbitError> {
-        crate::executor::automation::vcs::run_private_operation(operation, &input)
+        crate::executor::automation::vcs::run_private_operation(
+            &NullRuntimeHost::process_env(self),
+            operation,
+            &input,
+        )
     }
     fn resolved_agent_model_pair(&self, agent_cli: &str) -> Option<AgentModelPair> {
         let _ = agent_cli;

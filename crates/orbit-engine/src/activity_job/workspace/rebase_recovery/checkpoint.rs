@@ -51,6 +51,7 @@ pub(in crate::activity_job::workspace) enum RebaseContinuation {
 impl WorktreeBoundaryGuard {
     pub(super) fn validate_rebase_checkpoint(
         &self,
+        process_env: &orbit_common::Env,
         checkpoint: &RebaseRecoveryCheckpoint,
         invalid: &impl Fn(&str) -> DispatchError,
     ) -> Result<(), DispatchError> {
@@ -58,10 +59,12 @@ impl WorktreeBoundaryGuard {
         // `base_ref` may have advanced past the pin while the provider ran;
         // the stopped rebase's own `onto` below is the pin that matters.
         if git_stdout(
+            process_env,
             &self.assigned_root,
             &["rev-parse", "--verify", &expected_ref],
         )? != checkpoint.original_head
             || git_stdout(
+                process_env,
                 &self.assigned_root,
                 &[
                     "merge-base",
@@ -74,6 +77,7 @@ impl WorktreeBoundaryGuard {
         }
         for backend in ["rebase-merge", "rebase-apply"] {
             let path = git_stdout(
+                process_env,
                 &self.assigned_root,
                 &["rev-parse", "--path-format=absolute", "--git-path", backend],
             )?;

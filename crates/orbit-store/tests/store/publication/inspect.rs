@@ -136,14 +136,18 @@ fn publication_consume_refuses_symlink_before_reading_the_target() {
     }
     for planted in [PlantedLink::Envelope, PlantedLink::Description] {
         let fixture = Fixture::plant(planted);
-        let inspected = inspect_publication(fixture.request())
+        let inspected = inspect_publication(&orbit_common::Env::capture(), fixture.request())
             .expect_err("inspect must refuse a publication symlink");
         fixture.assert_refusal(&inspected);
         fixture.assert_sentinel_stayed_on_the_host();
 
         let registry = open_registry(&fixture.global);
-        let restored = restore_publication(&registry, fixture.restore_request())
-            .expect_err("restore must refuse a publication symlink");
+        let restored = restore_publication(
+            &orbit_common::Env::capture(),
+            &registry,
+            fixture.restore_request(),
+        )
+        .expect_err("restore must refuse a publication symlink");
         fixture.assert_refusal(&restored);
         fixture.assert_sentinel_stayed_on_the_host();
     }

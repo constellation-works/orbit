@@ -106,7 +106,7 @@ fn source_freshness_hold(runtime: &OrbitRuntime, step: &StepContext) -> Option<S
         return Some("the execution pinned no source revision".to_string());
     };
     let branch = runtime.workflow_base_branch().to_string();
-    match Source::new(&runtime.paths().repo_root).verify_branch(&branch) {
+    match Source::new(runtime.env(), &runtime.paths().repo_root).verify_branch(&branch) {
         Ok(tip) if tip.commit == pinned => None,
         Ok(tip) => Some(format!(
             "the pinned source is stale: `{branch}` moved from {pinned} to {}; start a fresh run",

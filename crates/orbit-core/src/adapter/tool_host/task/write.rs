@@ -83,13 +83,14 @@ fn cli_options<'a>(input: &'a Value, allowed: &[&str]) -> Result<Option<&'a Valu
 /// to the managed run that spawned this process, unless the tool host bound
 /// the call to a reservation owner.
 fn write_screen(
+    env: &orbit_common::Env,
     cli: bool,
     allow_missing_context: bool,
     owner: Option<orbit_tools::ReservationOwnerContext>,
 ) -> TaskWriteScreen {
     match owner {
         Some(owner) => TaskWriteScreen::bound(allow_missing_context, Some(owner.owner_run_id)),
-        None if cli => TaskWriteScreen::from_process(allow_missing_context),
+        None if cli => TaskWriteScreen::from_process(env, allow_missing_context),
         None => TaskWriteScreen::unbound(allow_missing_context),
     }
 }
@@ -121,6 +122,7 @@ pub(super) fn add(
     // canonicalize against the repository root regardless of its value.
     let _ = required_string(input, &["workspace"], "workspace")?;
     let screen = write_screen(
+        runtime.env(),
         cli.is_some(),
         allows_missing_context(input)?,
         // Creation was never bound to a reservation owner.
@@ -342,7 +344,12 @@ fn update_without_repilot(
     let requested_status = optional_string(input, "status")?
         .map(|value| parse_task_status("status", &value))
         .transpose()?;
-    let screen = write_screen(false, allows_missing_context(input)?, reservation_owner);
+    let screen = write_screen(
+        runtime.env(),
+        false,
+        allows_missing_context(input)?,
+        reservation_owner,
+    );
     if let Some(target) = requested_status
         && matches!(target, TaskStatus::Backlog | TaskStatus::InProgress)
     {
@@ -450,7 +457,12 @@ fn cli_update(
     let written = runtime.update_task_screened(
         &id,
         params,
-        &write_screen(true, allows_missing_context(input)?, reservation_owner),
+        &write_screen(
+            runtime.env(),
+            true,
+            allows_missing_context(input)?,
+            reservation_owner,
+        ),
         authority,
         agent,
         model,
@@ -506,7 +518,12 @@ pub(super) fn artifact_put(
         && !agent_context_declared(runtime.execution_env_policy().process_env())
         && caller.session_context.transport.is_none()
         && caller.session_context.worker_invocation.is_none();
-    let screen = write_screen(native_operator, false, caller.reservation_owner);
+    let screen = write_screen(
+        runtime.env(),
+        native_operator,
+        false,
+        caller.reservation_owner,
+    );
     let attaches_mandate = params
         .upsert_artifacts
         .iter()

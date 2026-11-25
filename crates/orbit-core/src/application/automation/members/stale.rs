@@ -48,7 +48,7 @@ pub(crate) fn stale_tasks(
         .ok_or_else(|| OrbitError::InvalidInput("state claim missing".into()))?
         .branch;
     let root = &runtime.paths().repo_root;
-    let source = Source::new(root);
+    let source = Source::new(runtime.env(), root);
     let (_, head) = source
         .local_head(&branch)
         .map_err(automation_error_to_orbit)?;

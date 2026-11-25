@@ -34,7 +34,7 @@ pub struct UnresolvableBranch {
 pub fn unresolvable_delivery_branches(
     runtime: &OrbitRuntime,
 ) -> Result<Vec<UnresolvableBranch>, OrbitError> {
-    let source = Source::new(&runtime.paths().repo_root);
+    let source = Source::new(runtime.env(), &runtime.paths().repo_root);
     let mut unresolvable = Vec::new();
     for definition in runtime.listed_auto_task_definitions()? {
         let AutoTaskSchedule::Deliveries {
@@ -437,8 +437,12 @@ fn inspect(
             // evidence.
             None => branch_unavailable(
                 &match cache {
-                    Some(cache) => Source::read_only_with_cache(&runtime.paths().repo_root, cache),
-                    None => Source::new(&runtime.paths().repo_root),
+                    Some(cache) => Source::read_only_with_cache(
+                        runtime.env(),
+                        &runtime.paths().repo_root,
+                        cache,
+                    ),
+                    None => Source::new(runtime.env(), &runtime.paths().repo_root),
                 },
                 &trigger.branch,
             )
@@ -482,7 +486,7 @@ fn adoption_refusals(
     let repository = if state.branch == trigger.branch {
         // Adoption is judged from the checkout, and `auto-task show` must not
         // fetch. A branch that does not resolve keeps the recorded repository.
-        Source::new(&runtime.paths().repo_root)
+        Source::new(runtime.env(), &runtime.paths().repo_root)
             .local_head(&trigger.branch)
             .map(|(repository, _)| repository)
             .unwrap_or_else(|_| state.repository.clone())

@@ -105,11 +105,11 @@ impl<'a> Host<'a> {
         let root = &self.runtime.paths().repo_root;
         if self.dry_run {
             match self.inspection_cache {
-                Some(cache) => Source::read_only_with_cache(root, cache),
-                None => Source::read_only(root),
+                Some(cache) => Source::read_only_with_cache(self.runtime.env(), root, cache),
+                None => Source::read_only(self.runtime.env(), root),
             }
         } else {
-            Source::new(root)
+            Source::new(self.runtime.env(), root)
         }
     }
 

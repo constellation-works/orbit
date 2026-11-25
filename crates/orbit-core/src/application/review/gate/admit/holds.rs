@@ -39,7 +39,7 @@ pub(super) fn light_review_skipped(
         return Ok(false);
     }
     let base = context.base_sha()?;
-    let head = candidate_identity(&context.workspace_path, &base)?
+    let head = candidate_identity(runtime.env(), &context.workspace_path, &base)?
         .head
         .commit;
     let mut skipped = false;
@@ -77,7 +77,8 @@ pub(super) fn awaiting_external_evidence(
     for task in &context.tasks {
         if let Some(hold) = super::super::super::evidence::evidence_hold(runtime, &task.id)?
             && hold.task_meaning_digest == context.task_digests.1
-            && orbit_engine::review_gate::revision(&context.workspace_path, "HEAD")?.tree
+            && orbit_engine::review_gate::revision(runtime.env(), &context.workspace_path, "HEAD")?
+                .tree
                 == hold.candidate.tree
             && !super::super::super::evidence::evidence_ready(runtime, &task.id, &hold)?
         {

@@ -32,13 +32,19 @@ pub(super) enum UntouchedBaseEvidence {
 
 /// A mixed failure's candidate attribution needs its own changed source.
 pub(super) fn cites_changed_candidate(
+    process_env: &orbit_common::Env,
     workspace: &Path,
     head: &str,
     base: &str,
     log: &str,
 ) -> Result<bool, OrbitError> {
-    let cited = repository_citations(workspace, head, log).map_err(OrbitError::Execution)?;
-    let changed = git_output_paths(workspace, &["diff", "--name-only", "-z", base, head])?;
+    let cited =
+        repository_citations(process_env, workspace, head, log).map_err(OrbitError::Execution)?;
+    let changed = git_output_paths(
+        process_env,
+        workspace,
+        &["diff", "--name-only", "-z", base, head],
+    )?;
     Ok(cited.iter().any(|path| changed.contains(path)))
 }
 
@@ -100,13 +106,14 @@ pub(super) fn watcher_suspicion<H: RuntimeHost + ?Sized>(
     signature: &str,
     pr_number: Option<u64>,
 ) -> Result<Option<String>, String> {
-    let paths = repository_citations(workspace, head, log)?;
+    let paths = repository_citations(&host.process_env(), workspace, head, log)?;
     if paths.is_empty() {
         return Ok(None);
     }
     let branch = base_branch.ok_or("the failed check's base branch could not be established")?;
     let branch = branch.strip_prefix("origin/").unwrap_or(branch);
     let tip = git_output(
+        &host.process_env(),
         workspace,
         &[
             "rev-parse",
@@ -116,6 +123,7 @@ pub(super) fn watcher_suspicion<H: RuntimeHost + ?Sized>(
     )
     .or_else(|_| {
         git_output(
+            &host.process_env(),
             workspace,
             &[
                 "rev-parse",
@@ -125,8 +133,12 @@ pub(super) fn watcher_suspicion<H: RuntimeHost + ?Sized>(
         )
     })
     .map_err(|error| format!("the failed check's base could not be read: {error}"))?;
-    let base = git_output(workspace, &["merge-base", head, tip.trim()])
-        .map_err(|error| error.to_string())?;
+    let base = git_output(
+        &host.process_env(),
+        workspace,
+        &["merge-base", head, tip.trim()],
+    )
+    .map_err(|error| error.to_string())?;
     let evidence = untouched_base_evidence(
         host,
         workspace,
@@ -194,6 +206,7 @@ pub(super) fn watcher_suspicion<H: RuntimeHost + ?Sized>(
 /// a citation outside the checkout that happens to match one only delays a
 /// repair until the base's fresh run decides.
 fn repository_citations(
+    process_env: &orbit_common::Env,
     workspace: &Path,
     head: &str,
     log: &str,
@@ -203,6 +216,7 @@ fn repository_citations(
         return Ok(BTreeSet::new());
     }
     let blobs = git_output_paths(
+        process_env,
         workspace,
         &["ls-tree", "-r", "-z", "--name-only", "--full-tree", head],
     )
@@ -240,23 +254,24 @@ pub(super) fn stale_untouched_failure<H: RuntimeHost + ?Sized>(
     job: &CiCommitJobEvidence,
     log: &str,
 ) -> Result<UntouchedBaseEvidence, String> {
-    let paths = repository_citations(workspace, head, log)?;
+    let paths = repository_citations(&host.process_env(), workspace, head, log)?;
     untouched_base_evidence(host, workspace, head, base, tip, base_branch, job, paths)
 }
 
 /// Whether `log` cites only repository files the candidate did not change
 /// from `base` to `head`: the precondition for a base-suspect failure.
 pub(super) fn is_untouched_failure(
+    process_env: &orbit_common::Env,
     workspace: &Path,
     head: &str,
     base: &str,
     log: &str,
 ) -> Result<bool, String> {
-    let paths = repository_citations(workspace, head, log)?;
+    let paths = repository_citations(process_env, workspace, head, log)?;
     if paths.is_empty() {
         return Ok(false);
     }
-    let changed = annotations::candidate_changed_paths(workspace, base, head)?;
+    let changed = annotations::candidate_changed_paths(process_env, workspace, base, head)?;
     Ok(paths.is_disjoint(&changed))
 }
 
@@ -291,7 +306,7 @@ fn untouched_base_evidence<H: RuntimeHost + ?Sized>(
     if paths.is_empty() {
         return Ok(UntouchedBaseEvidence::Unrelated);
     }
-    let changed = annotations::candidate_changed_paths(workspace, base, head)?;
+    let changed = annotations::candidate_changed_paths(&host.process_env(), workspace, base, head)?;
     if !paths.is_disjoint(&changed) {
         return Ok(UntouchedBaseEvidence::Unrelated);
     }

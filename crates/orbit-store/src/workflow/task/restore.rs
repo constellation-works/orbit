@@ -61,6 +61,7 @@ pub struct PublicationRestoreOutcome {
 /// Restore a task publication without renumbering, implicit identity adoption,
 /// or partial canonical mutation.
 pub fn restore_publication(
+    env: &orbit_common::Env,
     registry: &TaskRegistryStore,
     request: PublicationRestoreRequest,
 ) -> Result<PublicationRestoreOutcome, OrbitError> {
@@ -70,7 +71,7 @@ pub fn restore_publication(
     // exact result rather than recreating a second validation path. The
     // snapshot owns the private checkout its `source_dir`s point into, so it
     // stays alive until staging below has copied every artifact from it.
-    let validated = load_validated_publication(request.publication.clone())?;
+    let validated = load_validated_publication(env, request.publication.clone())?;
     let envelope = &validated.inspection.envelope;
     let task_workspace_id = request.task_workspace_id.clone();
     assert_destination_pairing(registry, &request)?;

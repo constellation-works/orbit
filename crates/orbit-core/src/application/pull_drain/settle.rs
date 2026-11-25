@@ -597,7 +597,7 @@ impl OrbitRuntime {
             if !run.state.is_terminal() {
                 continue;
             }
-            if run_worktree_has_reclaim_output(repo_root, &run, &patterns) {
+            if run_worktree_has_reclaim_output(self.env(), repo_root, &run, &patterns) {
                 leaves.push(leaf);
                 continue;
             }

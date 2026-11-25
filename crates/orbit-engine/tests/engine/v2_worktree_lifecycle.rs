@@ -4188,7 +4188,7 @@ impl orbit_engine::test_support::NullRuntimeHost for LifecycleHost {
         {
             return Ok(status);
         }
-        orbit_engine::run_private_vcs_operation(operation, &input)
+        orbit_engine::run_private_vcs_operation(&orbit_common::Env::capture(), operation, &input)
     }
 
     fn get_task_history(&self, task_id: &str) -> Result<Vec<TaskHistoryEntry>, OrbitError> {

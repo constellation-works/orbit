@@ -94,6 +94,7 @@ impl TaskReviewPort for OrbitRuntime {
                 })
                 .find_map(|reference| reference.id.parse::<u64>().ok());
             if orbit_engine::verify_refreshed_head_from_base(
+                self.env(),
                 &self.paths().repo_root,
                 &certificate.final_candidate.commit,
                 head,

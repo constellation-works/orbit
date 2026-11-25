@@ -339,7 +339,9 @@ fn workspace_build_output_is_opt_in_and_toolchain_neutral() {
             host.resolve_validation_env(environment);
             let command = "sh validate.sh";
             host.require_commands(&[command]);
-            let candidate = review_gate::revision(&fx.repo, &fx.candidate).unwrap();
+            let candidate =
+                review_gate::revision(&orbit_common::Env::capture(), &fx.repo, &fx.candidate)
+                    .unwrap();
             let mut sources = Vec::new();
             for route in ["candidate_validate", "claim_validate", "host_evidence"] {
                 let record = if route == "host_evidence" {

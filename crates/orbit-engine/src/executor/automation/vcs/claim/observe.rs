@@ -41,7 +41,9 @@ use super::{delivery, require_clean_checkout};
 /// may use the cached remote ref when its merge-base still resolves. Missing
 /// or unrelated cached refs preserve the transient fetch failure. Refusals
 /// and NoDiff observations always require a successful fetch.
+#[allow(clippy::too_many_arguments)]
 pub fn observe_candidate(
+    process_env: &orbit_common::Env,
     workspace_path: &Path,
     source: Option<&str>,
     base_branch: &str,
@@ -52,7 +54,11 @@ pub fn observe_candidate(
 ) -> Result<HandoffCandidate, OrbitError> {
     let source_branch = match source {
         Some(branch) => branch.to_string(),
-        None => git_output(workspace_path, &["rev-parse", "--abbrev-ref", "HEAD"])?,
+        None => git_output(
+            process_env,
+            workspace_path,
+            &["rev-parse", "--abbrev-ref", "HEAD"],
+        )?,
     };
     if source_branch.trim().is_empty() || source_branch == "HEAD" {
         // A detached HEAD has no name the owner could resolve in its own
@@ -62,8 +68,13 @@ pub fn observe_candidate(
             "a claimed candidate must sit on a named branch; this checkout has a detached HEAD",
         ));
     }
-    let candidate = revision(workspace_path, &source_branch)?;
-    let base_ref = match resolve_worktree_start_point(workspace_path, base_branch, base_sync) {
+    let candidate = revision(process_env, workspace_path, &source_branch)?;
+    let base_ref = match resolve_worktree_start_point(
+        process_env,
+        workspace_path,
+        base_branch,
+        base_sync,
+    ) {
         Ok(base_ref) => base_ref,
         Err(error)
             if base_sync == BaseSyncMode::Remote
@@ -71,8 +82,12 @@ pub fn observe_candidate(
                 && matches!(&error, OrbitError::Execution(message) | OrbitError::ExecutionTimeout { message, .. } if message.starts_with(TRANSIENT_FAILURE_MARKER)) =>
         {
             let cached = format!("origin/{}", normalize_base_branch(base_branch)?);
-            if !git_command_success(workspace_path, &["merge-base", &candidate.commit, &cached])
-                .unwrap_or(false)
+            if !git_command_success(
+                process_env,
+                workspace_path,
+                &["merge-base", &candidate.commit, &cached],
+            )
+            .unwrap_or(false)
             {
                 return Err(error);
             }
@@ -81,10 +96,11 @@ pub fn observe_candidate(
         }
         Err(error) => return Err(error),
     };
-    let tip = revision(workspace_path, &base_ref)?;
+    let tip = revision(process_env, workspace_path, &base_ref)?;
     // Same rule as `synchronized_base`: the candidate is judged against the
     // merge-base it sits on, not against a tip that can move under a fetch.
     if !git_command_success(
+        process_env,
         workspace_path,
         &["merge-base", &candidate.commit, &base_ref],
     )? {
@@ -94,10 +110,11 @@ pub fn observe_candidate(
         )));
     }
     let merge_base = git_output(
+        process_env,
         workspace_path,
         &["merge-base", &candidate.commit, &base_ref],
     )?;
-    let base = revision(workspace_path, &merge_base)?;
+    let base = revision(process_env, workspace_path, &merge_base)?;
     if let HandoffDelivery::NoDiff { .. } = delivery {
         // [ORB-15074] A clean base is the base the run synchronized onto, which
         // the tip may since have passed; a commit beyond it is a change.
@@ -115,6 +132,7 @@ pub fn observe_candidate(
         ));
     }
     let ancestor = crate::executor::automation::vcs::git::is_ancestor(
+        process_env,
         workspace_path,
         &base.commit,
         &candidate.commit,
@@ -131,7 +149,7 @@ pub fn observe_candidate(
         landing_branch
     };
     Ok(HandoffCandidate {
-        repository: repository(workspace_path, fallback_repository),
+        repository: repository(process_env, workspace_path, fallback_repository),
         source_branch,
         base_branch: base_branch.to_string(),
         landing_branch: landing_branch.to_string(),
@@ -147,15 +165,23 @@ pub fn observe_candidate(
 /// live `origin/<base>` tip: a later advance of that tip is not a refusal.
 /// A NoDiff candidate must be that `base_sha` itself.
 pub(super) fn observe(
+    process_env: &orbit_common::Env,
     workspace_path: &Path,
     context: &ClaimExecutionContext,
     input: &Value,
 ) -> Result<HandoffCandidate, OrbitError> {
-    observe_with(workspace_path, context, input, delivery(context, input)?)
+    observe_with(
+        process_env,
+        workspace_path,
+        context,
+        input,
+        delivery(context, input)?,
+    )
 }
 
 /// [`observe`] with an explicit delivery.
 pub(super) fn observe_with(
+    process_env: &orbit_common::Env,
     workspace_path: &Path,
     context: &ClaimExecutionContext,
     input: &Value,
@@ -163,6 +189,7 @@ pub(super) fn observe_with(
 ) -> Result<HandoffCandidate, OrbitError> {
     let _timeout_budget = GitTimeoutBudgetGuard::install(GitTimeoutBudget::from_input(input)?);
     let candidate = observe_candidate(
+        process_env,
         workspace_path,
         None,
         &context.base_branch,
@@ -173,6 +200,7 @@ pub(super) fn observe_with(
     )?;
     if let Some(declared) = input_string_field(input, "base_sha") {
         let contains_declared = crate::executor::automation::vcs::git::is_ancestor(
+            process_env,
             workspace_path,
             &declared,
             &candidate.candidate.commit,
@@ -184,7 +212,8 @@ pub(super) fn observe_with(
             )));
         }
         if matches!(candidate.delivery, HandoffDelivery::NoDiff { .. })
-            && revision(workspace_path, &declared)?.commit != candidate.candidate.commit
+            && revision(process_env, workspace_path, &declared)?.commit
+                != candidate.candidate.commit
         {
             return Err(refused(format!(
                 "a NoDiff handoff must be the base it was synchronized onto; candidate '{}' \
@@ -198,10 +227,12 @@ pub(super) fn observe_with(
 
 /// The claimed candidate must still be the clean checkout it was observed as.
 pub(super) fn require_clean_candidate(
+    process_env: &orbit_common::Env,
     workspace_path: &Path,
     candidate: &HandoffCandidate,
 ) -> Result<(), OrbitError> {
     require_clean_checkout(
+        process_env,
         workspace_path,
         &candidate.source_branch,
         &candidate.candidate.commit,

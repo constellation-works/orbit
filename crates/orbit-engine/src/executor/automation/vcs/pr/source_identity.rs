@@ -93,7 +93,11 @@ pub(super) fn verify_publication<H: RuntimeHost + ?Sized>(
         let started_at = Utc::now();
         let read = read_pr_status(host, &context.workspace_path, &binding.pull_request);
         // Keep the existing ordering: compare with HEAD read after the provider.
-        let published = git_output(&context.workspace_path, &["rev-parse", "HEAD"])?;
+        let published = git_output(
+            &host.process_env(),
+            &context.workspace_path,
+            &["rev-parse", "HEAD"],
+        )?;
         let published_head = published.trim();
         let push = successful_push(host, &context.batch_id, binding, published_head)?;
         let mut differences = match &read {
@@ -148,6 +152,7 @@ pub(super) fn verify_publication<H: RuntimeHost + ?Sized>(
         if (stale && head_only) || budget.rereads > 0 && differences.is_empty() {
             let reference = format!("refs/heads/{}", binding.branch);
             let probe = remote_ref_output(
+                &host.process_env(),
                 Path::new(&context.workspace_path),
                 &["ls-remote", "origin", &reference],
                 "source repair publication",
@@ -164,8 +169,13 @@ pub(super) fn verify_publication<H: RuntimeHost + ?Sized>(
             if remote["sha"].as_str() != Some(published_head) {
                 differences.push(json!({"field":"remote_branch", "expected":identity::redacted_bounded_text(published_head), "observed":remote}));
             }
-            let branch = git_output(&context.workspace_path, &["branch", "--show-current"])?;
+            let branch = git_output(
+                &host.process_env(),
+                &context.workspace_path,
+                &["branch", "--show-current"],
+            )?;
             let origin = git_output(
+                &host.process_env(),
                 &context.workspace_path,
                 &["config", "--get", "remote.origin.url"],
             )?;

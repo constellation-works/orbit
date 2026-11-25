@@ -33,6 +33,7 @@ use super::entry::{broker_entry_point, mark_tool_audit_recorded};
 /// audit store, records the supplied invocation context, and preserves the
 /// same fail-closed success semantics as runtime-backed tool dispatch.
 pub fn execute_global_in_process_tool_dispatch<F>(
+    process_env: &orbit_common::Env,
     global_root: &Path,
     name: &str,
     input: Value,
@@ -44,6 +45,7 @@ where
     F: FnOnce(Value) -> Result<Value, OrbitError>,
 {
     execute_global_in_process_tool_dispatch_with_audit_writer(
+        process_env,
         global_root,
         name,
         input,
@@ -51,7 +53,7 @@ where
         session_context,
         |params, invocation| {
             let audit_db = orbit_config::resolved_audit_db_path(
-                &orbit_common::Env::capture(),
+                process_env,
                 &orbit_config::ConfigRoots::global_only(global_root),
             )?;
             Store::open(&audit_db)?.insert_audit_event_record_with_invocation(params, invocation)
@@ -65,7 +67,9 @@ where
 /// audit store across dispatches instead of opening it per call. The writer
 /// is invoked with the same params and invocation fields, and its result
 /// goes through the same fail-closed finalization as the open-per-call path.
+#[allow(clippy::too_many_arguments)]
 pub fn execute_global_in_process_tool_dispatch_with_audit_writer<F, S>(
+    process_env: &orbit_common::Env,
     global_root: &Path,
     name: &str,
     input: Value,
@@ -78,9 +82,8 @@ where
     F: FnOnce(Value) -> Result<Value, OrbitError>,
     S: FnMut(&AuditEventInsertParams, AuditInvocationFields<'_>) -> Result<(), OrbitError>,
 {
-    let env = crate::runtime::process_env();
     execute_tool_dispatch_with_audit_store(
-        &env,
+        process_env,
         name,
         input,
         ToolExecutionKind::Mutating,
@@ -95,10 +98,10 @@ where
         },
         audit_writer,
         |input| {
-            enforce_plugin_callback_allowlist_from_root(global_root, name)?;
+            enforce_plugin_callback_allowlist_from_root(process_env, global_root, name)?;
             if session_context.application.is_some()
                 || (entry_point == ToolEntryPoint::Cli
-                    && env.orbit_application_credential_fd().is_some())
+                    && process_env.orbit_application_credential_fd().is_some())
             {
                 return Err(OrbitError::CapabilityDenied(
                     "application calls require an explicitly resolved workspace runtime".into(),
@@ -130,15 +133,20 @@ impl GlobalAuditStoreCache {
     /// it only when the stamps above say the cached handle is stale.
     pub fn insert_audit_event_record(
         &self,
+        process_env: &orbit_common::Env,
         global_root: &Path,
         params: &AuditEventInsertParams,
         invocation: AuditInvocationFields<'_>,
     ) -> Result<(), OrbitError> {
-        self.store(global_root)?
+        self.store(process_env, global_root)?
             .insert_audit_event_record_with_invocation(params, invocation)
     }
 
-    fn store(&self, global_root: &Path) -> Result<Store, OrbitError> {
+    fn store(
+        &self,
+        process_env: &orbit_common::Env,
+        global_root: &Path,
+    ) -> Result<Store, OrbitError> {
         let mut cached = self.0.lock().unwrap_or_else(PoisonError::into_inner);
         let config_stamp = FileStamp::read(&global_root.join("config.toml"));
         if cached
@@ -147,7 +155,7 @@ impl GlobalAuditStoreCache {
         {
             *cached = None;
             let audit_db = orbit_config::resolved_audit_db_path(
-                &orbit_common::Env::capture(),
+                process_env,
                 &orbit_config::ConfigRoots::global_only(global_root),
             )?;
             let store = Store::open(&audit_db)?;
@@ -186,6 +194,7 @@ impl GlobalAuditStoreCache {
 /// this process's cwd and the registry the caller composed from the host's
 /// installed plugins.
 pub(in crate::adapter::command) fn execute_global_plugin_dispatch(
+    process_env: &orbit_common::Env,
     global_root: &Path,
     name: &str,
     input: Value,
@@ -193,14 +202,13 @@ pub(in crate::adapter::command) fn execute_global_plugin_dispatch(
     session_context: ToolSessionContext,
     registry: orbit_tools::ToolRegistry,
 ) -> Result<Value, OrbitError> {
-    let env = crate::runtime::process_env();
     let binding = registry
         .plugin_binding(name)
         .ok_or_else(|| OrbitError::not_found(NotFoundKind::Tool, name.to_string()))?;
     #[cfg(unix)]
-    let broker_refusal = if let Some(socket) = env.orbit_plugin_broker()
+    let broker_refusal = if let Some(socket) = process_env.orbit_plugin_broker()
         && session_context.application.is_none()
-        && env.orbit_application_credential_fd().is_none()
+        && process_env.orbit_application_credential_fd().is_none()
     {
         let cwd = std::env::current_dir()?;
         let result = crate::runtime::plugin::broker::forward_call_with_status(
@@ -231,13 +239,14 @@ pub(in crate::adapter::command) fn execute_global_plugin_dispatch(
         .execution_kind(name)
         .unwrap_or(ToolExecutionKind::Mutating);
     let global_root = global_root.to_path_buf();
-    let trusted_env = entry_point != ToolEntryPoint::Mcp || managed_run_context();
+    let trusted_env = entry_point != ToolEntryPoint::Mcp || managed_run_context(process_env);
     let activity_tool_policy = if trusted_env {
-        read_activity_tool_policy_from_env(&env)
+        read_activity_tool_policy_from_env(process_env)
     } else {
         Default::default()
     };
     let tool_context = ToolContext {
+        env: process_env.clone(),
         cwd: std::env::current_dir()
             .ok()
             .map(|path| path.to_string_lossy().into_owned()),
@@ -245,20 +254,20 @@ pub(in crate::adapter::command) fn execute_global_plugin_dispatch(
         allowed_tools: activity_tool_policy.allowed_tools,
         tool_deny_policy: activity_tool_policy.deny_policy,
         proc_allowed_programs: if trusted_env {
-            read_proc_allowed_programs_from_env(&env)
+            read_proc_allowed_programs_from_env(process_env)
         } else {
             Vec::new()
         },
         proc_disallowed_programs: if trusted_env {
-            read_proc_disallowed_programs_from_env(&env)
+            read_proc_disallowed_programs_from_env(process_env)
         } else {
             None
         },
-        activity_binding: activity_binding_from_env(&env),
+        activity_binding: activity_binding_from_env(process_env),
         ..Default::default()
     };
     execute_tool_dispatch_with_audit_store(
-        &env,
+        process_env,
         name,
         input,
         execution_kind,
@@ -273,7 +282,7 @@ pub(in crate::adapter::command) fn execute_global_plugin_dispatch(
         },
         |params, invocation| {
             let audit_db = orbit_config::resolved_audit_db_path(
-                &orbit_common::Env::capture(),
+                process_env,
                 &orbit_config::ConfigRoots::global_only(&global_root),
             )?;
             Store::open(&audit_db)?.insert_audit_event_record_with_invocation(params, invocation)
@@ -289,11 +298,12 @@ pub(in crate::adapter::command) fn execute_global_plugin_dispatch(
             // this one has no runtime, so the same generic plugin row is
             // resolved here — inside the audited closure, so a refusal lands
             // on the row for this call.
-            enforce_plugin_callback_allowlist_from_root(&global_root, name)?;
-            if orbit_common::security::application_credential::ApplicationCredential::from_process_descriptor(&orbit_common::Env::capture())?.is_some() || tool_context.session_context.application.is_some() {
+            enforce_plugin_callback_allowlist_from_root(process_env, &global_root, name)?;
+            if orbit_common::security::application_credential::ApplicationCredential::from_process_descriptor(process_env)?.is_some() || tool_context.session_context.application.is_some() {
                 return Err(OrbitError::CapabilityDenied("application calls require an explicitly resolved workspace runtime".into()));
             }
             authorize_plugin_tool(
+                process_env,
                 binding.execution_kind == orbit_types::plugin::PluginExecutionKind::Mutating,
                 binding.agent_callable,
                 entry_point,
@@ -309,6 +319,7 @@ pub(in crate::adapter::command) fn execute_global_plugin_dispatch(
 
 /// Decide a plugin tool call that has no workspace runtime behind it.
 fn authorize_plugin_tool(
+    process_env: &orbit_common::Env,
     mutating: bool,
     agent_callable: bool,
     entry_point: ToolEntryPoint,
@@ -322,9 +333,7 @@ fn authorize_plugin_tool(
         // An MCP session's authority is whatever its server was started with,
         // never this process's environment.
         ToolEntryPoint::Mcp => CallerEnvelope::mcp_session(session_context),
-        ToolEntryPoint::Cli => {
-            CallerEnvelope::from_process_env(&orbit_common::Env::capture(), session_context)
-        }
+        ToolEntryPoint::Cli => CallerEnvelope::from_process_env(process_env, session_context),
     };
     let operation = governed_plugin_tool(mutating, agent_callable);
     let caller = CallerCapabilities::resolve_for_operation(&envelope, operation);

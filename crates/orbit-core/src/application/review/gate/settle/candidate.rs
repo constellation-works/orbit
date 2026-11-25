@@ -15,7 +15,11 @@ use super::{output, publication};
 /// of fulfilling it unless the durable carry fallback succeeds. Returns the
 /// ref it was published to.
 pub(super) fn publish_held_candidate(context: &GateContext, commit: &str) -> Option<String> {
-    match orbit_engine::review_gate::publish_held_candidate(&context.workspace_path, commit) {
+    match orbit_engine::review_gate::publish_held_candidate(
+        &context.env,
+        &context.workspace_path,
+        commit,
+    ) {
         Ok(target) => {
             tracing::info!(
                 target: "orbit.core.review",
@@ -88,7 +92,7 @@ pub(in crate::application::review::gate) fn validation_scope(
         .collect::<Vec<_>>();
     for commit in implementation.iter().chain(repair) {
         scope.extend(
-            committed_paths(&context.workspace_path, &commit.commit)?
+            committed_paths(&context.env, &context.workspace_path, &commit.commit)?
                 .into_iter()
                 .map(|path| format!("file:{path}")),
         );
@@ -112,7 +116,8 @@ pub(super) fn reconcile_settled(
                  settled certificate {attempt_id}"
             )));
         }
-        let head = orbit_engine::review_gate::revision(&context.workspace_path, "HEAD")?;
+        let head =
+            orbit_engine::review_gate::revision(runtime.env(), &context.workspace_path, "HEAD")?;
         if head != certificate.final_candidate {
             return Err(OrbitError::Execution(format!(
                 "review_gate_stale: candidate_changed: the worktree head is {} but certificate \

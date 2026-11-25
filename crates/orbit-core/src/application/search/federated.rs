@@ -52,17 +52,15 @@ pub(super) const MAX_FEDERATED_CONCURRENCY: usize = 8;
 
 const NO_MATCHING_WORKSPACE_NOTE: &str = "no registered workspace matched the requested scope";
 
-fn in_managed_run() -> bool {
-    crate::runtime::run_input::managed_run_context_from_env()
-}
-
 impl OrbitRuntime {
     pub(super) fn federated_search(
         &self,
         params: GlobalSearchParams,
     ) -> Result<GlobalSearchResponse, OrbitError> {
         ensure_federated_scope_supported(&params)?;
-        ensure_federated_scope_permitted(in_managed_run())?;
+        ensure_federated_scope_permitted(crate::runtime::run_input::managed_run_context_from_env(
+            self.env(),
+        ))?;
 
         let catalog = self
             .workspace_catalog()

@@ -67,6 +67,7 @@ pub(crate) enum StateAccess {
 /// config, global skills, and SQLite. Shared root provides existing workspace
 /// state. Local root is carried for per-worktree artifact phases.
 pub(crate) fn build_context_from_roots(
+    env: &orbit_common::Env,
     roots: &OrbitRuntimeRoots,
     binding: Option<&WorkspaceRuntimeBinding>,
     runtime_config: &ResolvedConfig,
@@ -207,6 +208,7 @@ pub(crate) fn build_context_from_roots(
     // The workspace `[plugin_enablement]` toggles narrow the host state for
     // this runtime only; every surface below reads the narrowed load.
     let plugin_load = crate::plugin::host::load_workspace_plugins(
+        env,
         global_root,
         &paths.orbit_dir,
         &store,
@@ -255,10 +257,10 @@ pub(crate) fn build_context_from_roots(
         );
     }
 
-    let execution_env_policy = runtime_config.execution_env.clone();
+    let execution_env_policy = runtime_config.execution_env.clone().with_parent_env(env);
     let codex_execution_policy = runtime_config.codex_execution.clone();
     let persistence = runtime_config.persistence.clone();
-    let actor = ActorIdentity::from_env();
+    let actor = ActorIdentity::from_env(env);
     // Config owns PR settings as plain data; Core is the composition layer
     // that translates them into the execution engine's shape.
     let pr_config = PrConfig {
@@ -299,6 +301,7 @@ pub(crate) fn build_context_from_roots(
 
     Ok(OrbitContext::new(
         paths,
+        env.clone(),
         OrbitStores::new(
             task_backends.task,
             task_backends.document,

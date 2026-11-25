@@ -124,9 +124,10 @@ pub struct PublicationInspection {
 /// read-only task state. Fail closed before returning any task when pairing,
 /// schema, lineage, or content-integrity checks fail.
 pub fn inspect_publication(
+    env: &orbit_common::Env,
     request: PublicationInspectRequest,
 ) -> Result<PublicationInspection, OrbitError> {
-    Ok(load_validated_publication(request)?.inspection)
+    Ok(load_validated_publication(env, request)?.inspection)
 }
 
 /// Fully validated publication content retained for recovery. The public
@@ -147,10 +148,11 @@ pub(super) struct ValidatedPublicationBundle {
 }
 
 pub(super) fn load_validated_publication(
+    env: &orbit_common::Env,
     request: PublicationInspectRequest,
 ) -> Result<ValidatedPublicationSnapshot, OrbitError> {
     let request = validate_request(request)?;
-    let fetched = fetch_publication(&request)?;
+    let fetched = fetch_publication(env, &request)?;
     let tree_dir = fetched.tree.path();
     let envelope = read_envelope(tree_dir)?;
     assert_pairing(&request, &envelope, &fetched.branch)?;
@@ -261,7 +263,10 @@ fn validate_request(request: PublicationInspectRequest) -> Result<ValidatedReque
     })
 }
 
-fn fetch_publication(request: &ValidatedRequest) -> Result<FetchedSnapshot, OrbitError> {
+fn fetch_publication(
+    env: &orbit_common::Env,
+    request: &ValidatedRequest,
+) -> Result<FetchedSnapshot, OrbitError> {
     let cache = request.cache_dir.join(&request.publication_id);
     let git_dir = cache.join("origin.git");
     let trees_dir = cache.join(SNAPSHOT_TREES_DIR_NAME);
@@ -283,53 +288,65 @@ fn fetch_publication(request: &ValidatedRequest) -> Result<FetchedSnapshot, Orbi
         },
     )?;
     if git_dir.join("HEAD").is_file() {
-        assert_cache_origin(&git_dir, &request.publication_remote)?;
+        assert_cache_origin(env, &git_dir, &request.publication_remote)?;
         let refspec = format!(
             "{}:{}",
             request.publication_branch, request.publication_branch
         );
-        git(&[
-            "--git-dir",
-            git_dir_s,
-            "fetch",
-            "--force",
-            "origin",
-            &refspec,
-        ])?;
+        git(
+            env,
+            &[
+                "--git-dir",
+                git_dir_s,
+                "fetch",
+                "--force",
+                "origin",
+                &refspec,
+            ],
+        )?;
     } else {
         if git_dir.exists() {
             fs::remove_dir_all(&git_dir)
                 .map_err(|error| OrbitError::from_write_io(&git_dir, error))?;
         }
-        git(&[
-            "clone",
-            "--bare",
-            "--single-branch",
-            "--branch",
-            short_branch(&request.publication_branch),
-            "--",
-            &request.publication_remote,
-            git_dir_s,
-        ])?;
+        git(
+            env,
+            &[
+                "clone",
+                "--bare",
+                "--single-branch",
+                "--branch",
+                short_branch(&request.publication_branch),
+                "--",
+                &request.publication_remote,
+                git_dir_s,
+            ],
+        )?;
     }
 
-    let branch_tip = git(&[
-        "--git-dir",
-        git_dir_s,
-        "rev-parse",
-        &request.publication_branch,
-    ])?
+    let branch_tip = git(
+        env,
+        &[
+            "--git-dir",
+            git_dir_s,
+            "rev-parse",
+            &request.publication_branch,
+        ],
+    )?
     .to_ascii_lowercase();
     let commit_id = request.commit.clone().unwrap_or_else(|| branch_tip.clone());
     if commit_id != branch_tip
-        && git(&[
-            "--git-dir",
-            git_dir_s,
-            "merge-base",
-            "--is-ancestor",
-            &commit_id,
-            &request.publication_branch,
-        ])
+        && git(
+            env,
+            &[
+                "--git-dir",
+                git_dir_s,
+                "merge-base",
+                "--is-ancestor",
+                &commit_id,
+                &request.publication_branch,
+            ],
+        )
         .is_err()
     {
         return Err(inspect_error(format!(
@@ -341,24 +358,27 @@ fn fetch_publication(request: &ValidatedRequest) -> Result<FetchedSnapshot, Orbi
     // Classify the commit before checkout writes a worktree. `ls-tree` lists
     // modes and paths; it does not read blob bytes, so a symlink's target path
     // and the host file it names both stay unread.
-    refuse_untrusted_snapshot_entries(git_dir_s, &commit_id)?;
+    refuse_untrusted_snapshot_entries(env, git_dir_s, &commit_id)?;
 
-    git(&[
-        "--git-dir",
-        git_dir_s,
-        "--work-tree",
-        tree_dir_s,
-        "checkout",
-        "--force",
-        "--detach",
-        &commit_id,
-    ])?;
+    git(
+        env,
+        &[
+            "--git-dir",
+            git_dir_s,
+            "--work-tree",
+            tree_dir_s,
+            "checkout",
+            "--force",
+            "--detach",
+            &commit_id,
+        ],
+    )?;
     // `core.symlinks=false` writes a former link as a regular file containing
     // the link text. A real symlink or special file here means that checkout
     // did not honor the flag, so refuse before any content read.
     refuse_checked_out_special_entries(tree.path())?;
 
-    let git_parent = GitRunner::new(INSPECT_LABEL).single_parent(git_dir_s, &commit_id)?;
+    let git_parent = GitRunner::new(env, INSPECT_LABEL).single_parent(git_dir_s, &commit_id)?;
 
     let freshness = if commit_id == branch_tip {
         PublicationFreshness::Current
@@ -472,8 +492,15 @@ fn missing_envelope() -> OrbitError {
 /// `git ls-tree -r -z` prints `mode SP type SP object TAB path NUL`. The blob
 /// of a symlink is the target path, so this listing must not be followed by
 /// `git cat-file` or a worktree read of that path.
-fn refuse_untrusted_snapshot_entries(git_dir: &str, commit_id: &str) -> Result<(), OrbitError> {
-    let listing = git(&["--git-dir", git_dir, "ls-tree", "-r", "-z", commit_id])?;
+fn refuse_untrusted_snapshot_entries(
+    env: &orbit_common::Env,
+    git_dir: &str,
+    commit_id: &str,
+) -> Result<(), OrbitError> {
+    let listing = git(
+        env,
+        &["--git-dir", git_dir, "ls-tree", "-r", "-z", commit_id],
+    )?;
     for entry in listing.split('\0') {
         if entry.is_empty() {
             continue;
@@ -779,14 +806,21 @@ fn published_task_ids(tasks_root: &Path) -> Result<Vec<String>, OrbitError> {
     Ok(ids)
 }
 
-fn assert_cache_origin(git_dir: &Path, expected_remote: &str) -> Result<(), OrbitError> {
-    let observed = git(&[
-        "--git-dir",
-        path_str(git_dir)?,
-        "remote",
-        "get-url",
-        "origin",
-    ])?;
+fn assert_cache_origin(
+    env: &orbit_common::Env,
+    git_dir: &Path,
+    expected_remote: &str,
+) -> Result<(), OrbitError> {
+    let observed = git(
+        env,
+        &[
+            "--git-dir",
+            path_str(git_dir)?,
+            "remote",
+            "get-url",
+            "origin",
+        ],
+    )?;
     if remotes_match(expected_remote, &observed) {
         return Ok(());
     }
@@ -797,8 +831,8 @@ fn assert_cache_origin(git_dir: &Path, expected_remote: &str) -> Result<(), Orbi
     )))
 }
 
-fn git(args: &[&str]) -> Result<String, OrbitError> {
-    GitRunner::new(INSPECT_LABEL).run(args)
+fn git(env: &orbit_common::Env, args: &[&str]) -> Result<String, OrbitError> {
+    GitRunner::new(env, INSPECT_LABEL).run(args)
 }
 
 fn path_str(path: &Path) -> Result<&str, OrbitError> {

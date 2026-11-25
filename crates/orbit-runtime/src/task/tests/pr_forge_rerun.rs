@@ -65,6 +65,7 @@ impl Drop for Fixture {
 
 // Crate visibility lets the sibling source module bind this test-only double.
 pub(crate) fn task_forge_gh_request(
+    _env: &orbit_common::Env,
     request: ExecRequest,
     _repo_root: &Path,
     _label: &str,
@@ -143,7 +144,7 @@ fn rerun_waits_for_running_workflow_before_requesting_failed_jobs() {
         ])),
         Reply::Rerun(12),
     ]);
-    let outcome = GhTaskPrForge
+    let outcome = GhTaskPrForge::new(&orbit_common::Env::capture())
         .rerun_failed_checks(Path::new("."), 42, HEAD)
         .expect("wait for workflow completion, then rerun failed jobs");
     assert_eq!(outcome.requested, [(12, "CI".into())]);
@@ -156,7 +157,7 @@ fn rerun_refuses_after_bounded_wait_and_names_running_workflow() {
     let fixture = Fixture::install(
         (0..24).map(|_| Reply::List(json!([workflow(12, HEAD, "in_progress", "")]))),
     );
-    let error = GhTaskPrForge
+    let error = GhTaskPrForge::new(&orbit_common::Env::capture())
         .rerun_failed_checks(Path::new("."), 42, HEAD)
         .expect_err("running workflow must expire without a rerun");
     let message = error.to_string();
@@ -172,7 +173,7 @@ fn rerun_still_refuses_without_failed_or_running_workflows_on_head() {
         workflow(12, HEAD, "completed", "success"),
         workflow(13, "different-head", "in_progress", ""),
     ]))]);
-    let error = GhTaskPrForge
+    let error = GhTaskPrForge::new(&orbit_common::Env::capture())
         .rerun_failed_checks(Path::new("."), 42, HEAD)
         .expect_err("no failed workflow on this head");
     assert_eq!(

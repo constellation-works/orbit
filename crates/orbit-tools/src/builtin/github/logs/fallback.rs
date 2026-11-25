@@ -54,6 +54,7 @@ enum JobLogFailure {
 /// the bytes differ, and so does the excerpt shape. A cache hit charges no
 /// job-log admission, since no job-log request is made.
 fn fallback_job_log(
+    env: &orbit_common::Env,
     requests: &RunLogRequests,
     bounds: LogReadBounds,
     job: &FallbackJob,
@@ -65,22 +66,30 @@ fn fallback_job_log(
     let selection = requests.selection.clone();
     let admit = || guard(request).map_err(JobLogFailure::Admission);
     let plain = || {
-        stream_bounded_log(&admit()?, bounds, shape, LABEL, selection.clone())
+        stream_bounded_log(env, &admit()?, bounds, shape, LABEL, selection.clone())
             .map_err(JobLogFailure::Read)
     };
     let Some(cache) = &requests.cache else {
         return plain();
     };
     let job_id = job.id.to_string();
-    let Some(source) = completed_job_source(requests, &job_id, guard) else {
+    let Some(source) = completed_job_source(env, requests, &job_id, guard) else {
         return plain();
     };
     let key = LogCacheKey::job_api(&source, &requests.run_id, &job_id);
     if let Some(cached) = cache.get(&key) {
         return Ok(replay_cached_log(bounds, shape, selection, &cached));
     }
-    let read = stream_log_source(&admit()?, bounds, shape, LABEL, selection.clone(), true)
-        .map_err(JobLogFailure::Read)?;
+    let read = stream_log_source(
+        env,
+        &admit()?,
+        bounds,
+        shape,
+        LABEL,
+        selection.clone(),
+        true,
+    )
+    .map_err(JobLogFailure::Read)?;
     Ok(store_completed_log(
         &key, cache, bounds, shape, selection, read,
     ))
@@ -89,6 +98,7 @@ fn fallback_job_log(
 /// Read per-job logs until one yields text, keeping the empty run-scoped read
 /// as the result when none does.
 pub(super) fn recover_from_job_logs(
+    env: &orbit_common::Env,
     requests: &RunLogRequests,
     bounds: LogReadBounds,
     empty: StreamedLog,
@@ -111,7 +121,7 @@ pub(super) fn recover_from_job_logs(
         Some(primary) => format!("{primary}; job log recovery failed: {reason}"),
         None => reason,
     };
-    let jobs = match fallback_jobs(requests, cached_run_view, guard) {
+    let jobs = match fallback_jobs(env, requests, cached_run_view, guard) {
         Ok(jobs) => jobs,
         Err(gap) => {
             return unrecovered(
@@ -127,6 +137,7 @@ pub(super) fn recover_from_job_logs(
     let mut throttle = None;
     for job in jobs.iter().take(bounds.max_fallback_jobs) {
         match fallback_job_log(
+            env,
             requests,
             bounds,
             job,
@@ -192,6 +203,7 @@ pub(super) fn recover_from_job_logs(
 /// already holds an equivalent, freshly projected payload — identity is still
 /// verified against it exactly as it would be against a freshly fetched one.
 fn fallback_jobs(
+    env: &orbit_common::Env,
     requests: &RunLogRequests,
     cached_run_view: Option<&Value>,
     guard: &dyn Fn(&ExecRequest) -> Result<ExecRequest, OrbitError>,
@@ -208,7 +220,7 @@ fn fallback_jobs(
                 crate::github_quota::gh_request_deadline(&request, std::time::Instant::now());
             let result = run_process(&orbit_common::Env::capture(), &request, &NoSandbox)
                 .map_err(|error| format!("gh run view could not run: {error}"))?;
-            crate::github_quota::observe_gh_result_by_deadline(&request, &result, deadline);
+            crate::github_quota::observe_gh_result_by_deadline(env, &request, &result, deadline);
             check_read_result(&result, "gh run view").map_err(|error| FallbackGap {
                 reason: error.to_string(),
                 throttle: throttle_of(&error).map(Box::new),

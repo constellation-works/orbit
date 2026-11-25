@@ -147,7 +147,7 @@ impl OrbitRuntime {
             Arc::clone(&self.stores().audit_event),
             self.paths().clone(),
             self.event_log().clone(),
-            WorkerCommandConfig::for_paths(self.paths())
+            WorkerCommandConfig::for_paths(self.env(), self.paths())
                 .environment(self.execution_env_policy().clone())
                 .contained(limits)
                 .strict_containment(strict),

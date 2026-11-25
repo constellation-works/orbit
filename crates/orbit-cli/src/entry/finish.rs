@@ -16,7 +16,10 @@ pub(super) fn refuse_plugin_child_cli(
     audit_meta: &Option<command::operation::CommandMeta>,
     root_override: Option<&std::path::Path>,
 ) -> Result<(), orbit_core::OrbitError> {
-    let Ok(root) = orbit_core::runtime::resolve_generation_root(root_override) else {
+    let Ok(root) = orbit_core::runtime::resolve_generation_root(
+        &orbit_core::composition::process_env(),
+        root_override,
+    ) else {
         return Ok(());
     };
     let invocation = audit_meta
@@ -25,7 +28,11 @@ pub(super) fn refuse_plugin_child_cli(
             Some(subcommand) => format!("{} {subcommand}", meta.command),
             None => meta.command.clone(),
         });
-    orbit_core::adapter::command::refuse_plugin_child_cli_command(&root, invocation.as_deref())
+    orbit_core::adapter::command::refuse_plugin_child_cli_command(
+        &orbit_core::composition::process_env(),
+        &root,
+        invocation.as_deref(),
+    )
 }
 
 /// Render what the command returned, or report why it failed.

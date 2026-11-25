@@ -126,7 +126,9 @@ pub(in crate::executor::automation) fn ensure_dependencies_delivered_into_base<
             if !completed {
                 continue;
             }
-            if let Some(commits) = undelivered_commits(repo_root, &dependency_id, base_sha)? {
+            if let Some(commits) =
+                undelivered_commits(&host.process_env(), repo_root, &dependency_id, base_sha)?
+            {
                 undelivered.push(UndeliveredDependency {
                     task_id: task_id.clone(),
                     dependency_id,
@@ -169,16 +171,23 @@ pub(in crate::executor::automation) fn ensure_dependencies_delivered_into_base<
 /// work delivered from another workspace) is indistinguishable from one that
 /// never needed a commit, and blocking on that would be a guess.
 fn undelivered_commits(
+    process_env: &orbit_common::Env,
     repo_root: &Path,
     dependency_id: &str,
     base_sha: &str,
 ) -> Result<Option<Vec<String>>, OrbitError> {
     let marker = format!("[{dependency_id}]");
-    if !commits_matching(repo_root, &marker, &[base_sha], Some(1))?.is_empty() {
+    if !commits_matching(process_env, repo_root, &marker, &[base_sha], Some(1))?.is_empty() {
         return Ok(None);
     }
 
-    let elsewhere = commits_matching(repo_root, &marker, &["--all"], Some(MAX_EVIDENCE_COMMITS))?;
+    let elsewhere = commits_matching(
+        process_env,
+        repo_root,
+        &marker,
+        &["--all"],
+        Some(MAX_EVIDENCE_COMMITS),
+    )?;
     Ok((!elsewhere.is_empty()).then_some(elsewhere))
 }
 

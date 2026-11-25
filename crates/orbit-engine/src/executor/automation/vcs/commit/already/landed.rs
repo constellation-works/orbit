@@ -185,6 +185,7 @@ impl AlreadyLanded {
         }
 
         git_success(
+            &host.process_env(),
             workspace,
             &["merge-base", "--is-ancestor", &covering, &head],
         )
@@ -193,13 +194,17 @@ impl AlreadyLanded {
                 "covering commit is not a verified ancestor of tested HEAD: {error}"
             ))
         })?;
-        let message = git_output(workspace, &["show", "-s", "--format=%B", &covering])?;
+        let message = git_output(
+            &host.process_env(),
+            workspace,
+            &["show", "-s", "--format=%B", &covering],
+        )?;
         if !delivery_markers(&message).contains(&format!("[{}]", evidence.covering_task_id)) {
             return Err(Self::refused(
                 "covering commit has no matching task delivery marker",
             ));
         }
-        verify_covering_scope(task, workspace, &covering, &head)?;
+        verify_covering_scope(&host.process_env(), task, workspace, &covering, &head)?;
         let validation_provenance = verify_checks(host, &evidence, task)?;
 
         Ok(json!({
@@ -287,6 +292,7 @@ fn shape_hints(diagnostic: &str, content: &[u8]) -> String {
 }
 
 fn verify_covering_scope(
+    process_env: &orbit_common::Env,
     task: &Task,
     workspace: &Path,
     covering: &str,
@@ -311,6 +317,7 @@ fn verify_covering_scope(
         }
     }
     let changed = git_output_paths(
+        process_env,
         workspace,
         &["diff", "--name-only", "-z", covering, head, "--"],
     )?;
@@ -326,6 +333,7 @@ fn verify_covering_scope(
         ));
     }
     let delivered = git_output_paths(
+        process_env,
         workspace,
         &[
             "diff-tree",

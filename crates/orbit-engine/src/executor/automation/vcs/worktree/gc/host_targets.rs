@@ -194,8 +194,11 @@ fn attributions<'a>(
 }
 
 /// Base runs' scratch checkouts by the target key their path derives.
-fn base_run_owners(repo_root: &Path) -> BTreeMap<String, ScratchOwner> {
-    recorded_base_runs(repo_root)
+fn base_run_owners(
+    process_env: &orbit_common::Env,
+    repo_root: &Path,
+) -> BTreeMap<String, ScratchOwner> {
+    recorded_base_runs(process_env, repo_root)
         .into_iter()
         .filter_map(|run| {
             let source = canonical_source(&run.worktree)?;
@@ -231,11 +234,15 @@ fn scratch_owner(
 
 /// Whether a run's checkout has a host validation target. A prefilter only:
 /// collection still applies every run, worker and containment gate.
-pub(super) fn run_has_host_target(repo_root: &Path, run: &JobRun) -> bool {
+pub(super) fn run_has_host_target(
+    process_env: &orbit_common::Env,
+    repo_root: &Path,
+    run: &JobRun,
+) -> bool {
     let Ok(Some(root)) = targets_root(repo_root) else {
         return false;
     };
-    run_worktree_paths(repo_root, run)
+    run_worktree_paths(process_env, repo_root, run)
         .unwrap_or_default()
         .iter()
         .filter_map(|worktree| canonical_source(worktree))
@@ -261,6 +268,7 @@ enum TargetOwner<'i, 'r> {
 /// removed or would remove. A failure is reported, never returned, so the
 /// rest of the sweep's figures survive it.
 pub(super) fn collect_host_targets(
+    process_env: &orbit_common::Env,
     repo_root: &Path,
     run_paths: &[(&JobRun, Vec<PathBuf>)],
     options: &WorktreeGcOptions,
@@ -288,7 +296,7 @@ pub(super) fn collect_host_targets(
         }
     };
     let index = attributions(run_paths, &names);
-    let mut base_runs = base_run_owners(repo_root);
+    let mut base_runs = base_run_owners(process_env, repo_root);
     let mut targets = Vec::new();
     for name in names {
         let target = Target {

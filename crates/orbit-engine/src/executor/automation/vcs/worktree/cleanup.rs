@@ -18,6 +18,7 @@ pub(super) const TRASH_DELETE_TIMEOUT_MS: u64 = 600_000;
 /// `force = false`, except for a dirty worktree whose candidate it has just
 /// verified recoverable and unchanged.
 pub(super) fn remove_worktree(
+    process_env: &orbit_common::Env,
     repo_root: &Path,
     workspace_path: &Path,
     branch_name: Option<&str>,
@@ -31,6 +32,7 @@ pub(super) fn remove_worktree(
         restore_owner_access(workspace_path);
         if force {
             git_success(
+                process_env,
                 repo_root,
                 &[
                     "worktree",
@@ -40,12 +42,12 @@ pub(super) fn remove_worktree(
                 ],
             )?;
         } else {
-            remove_worktree_without_force(repo_root, workspace_path)?;
+            remove_worktree_without_force(process_env, repo_root, workspace_path)?;
         }
     }
-    git_success(repo_root, &["worktree", "prune"])?;
+    git_success(process_env, repo_root, &["worktree", "prune"])?;
     if let Some(branch_name) = branch_name {
-        git_success(repo_root, &["branch", "-D", branch_name])?;
+        git_success(process_env, repo_root, &["branch", "-D", branch_name])?;
     }
     Ok(())
 }
@@ -126,12 +128,13 @@ pub(super) fn remove_unregistered_directory(path: &Path) -> Result<(), OrbitErro
 /// propagates as-is; a timeout goes to [`recover_timed_out_removal`], which
 /// re-establishes Git's verdict independently before touching anything.
 fn remove_worktree_without_force(
+    process_env: &orbit_common::Env,
     repo_root: &Path,
     workspace_path: &Path,
 ) -> Result<(), OrbitError> {
     let path = workspace_path.to_string_lossy().into_owned();
     let args = ["worktree", "remove", path.as_str()];
-    let outcome = git_run(repo_root, &args)?;
+    let outcome = git_run(process_env, repo_root, &args)?;
     if outcome.success {
         return Ok(());
     }
@@ -143,7 +146,7 @@ fn remove_worktree_without_force(
             &outcome.stderr,
         ));
     }
-    recover_timed_out_removal(workspace_path, outcome.timeout_ms)
+    recover_timed_out_removal(process_env, workspace_path, outcome.timeout_ms)
 }
 
 /// Finish a `git worktree remove` the supervisor killed, but only once the
@@ -152,8 +155,12 @@ fn remove_worktree_without_force(
 /// path. A tree that cannot be verified — dirty, locked, holding submodules,
 /// or whose checks cannot complete inside the Git budget — is left in place
 /// with its registration intact and reported as an error.
-fn recover_timed_out_removal(workspace_path: &Path, timeout_ms: u64) -> Result<(), OrbitError> {
-    if let Err(reason) = verify_interrupted_removal(workspace_path) {
+fn recover_timed_out_removal(
+    process_env: &orbit_common::Env,
+    workspace_path: &Path,
+    timeout_ms: u64,
+) -> Result<(), OrbitError> {
+    if let Err(reason) = verify_interrupted_removal(process_env, workspace_path) {
         return Err(OrbitError::Execution(format!(
             "git worktree remove timed out after {timeout_ms}ms before its safety checks could be confirmed; preserved worktree '{}' in place and registered because {reason}. Rescue or inspect its contents, then remove it manually or retry with a larger git timeout",
             workspace_path.display()
@@ -166,13 +173,17 @@ fn recover_timed_out_removal(workspace_path: &Path, timeout_ms: u64) -> Result<(
 /// interrupted. The only change tolerated is a tracked file missing from the
 /// working tree with the index untouched — the footprint Git's own physical
 /// delete leaves once its checks have passed, and one that loses no bytes.
-fn verify_interrupted_removal(workspace_path: &Path) -> Result<(), String> {
+fn verify_interrupted_removal(
+    process_env: &orbit_common::Env,
+    workspace_path: &Path,
+) -> Result<(), String> {
     // Without its `.git` link, Git would resolve an enclosing repository and
     // every check below would describe the wrong tree.
     if !workspace_path.join(".git").is_file() {
         return Err("its .git link is missing, so its state cannot be verified".to_string());
     }
     let located = git_output_raw(
+        process_env,
         workspace_path,
         &["rev-parse", "--show-toplevel", "--absolute-git-dir"],
     )
@@ -192,10 +203,11 @@ fn verify_interrupted_removal(workspace_path: &Path) -> Result<(), String> {
     if admin_dir.join("locked").exists() {
         return Err("it is locked".to_string());
     }
-    if admin_dir.join("modules").is_dir() || has_populated_gitlink(workspace_path)? {
+    if admin_dir.join("modules").is_dir() || has_populated_gitlink(process_env, workspace_path)? {
         return Err("it contains submodules".to_string());
     }
     let status = git_output_raw(
+        process_env,
         workspace_path,
         &[
             "status",
@@ -228,8 +240,11 @@ fn same_directory(left: &Path, right: &Path) -> bool {
 
 /// Mirrors Git's own submodule refusal: a gitlink whose directory still has
 /// content may hold history that exists nowhere else.
-fn has_populated_gitlink(workspace_path: &Path) -> Result<bool, String> {
-    let staged = git_output_raw(workspace_path, &["ls-files", "--stage", "-z"])
+fn has_populated_gitlink(
+    process_env: &orbit_common::Env,
+    workspace_path: &Path,
+) -> Result<bool, String> {
+    let staged = git_output_raw(process_env, workspace_path, &["ls-files", "--stage", "-z"])
         .map_err(|error| error.to_string())?;
     Ok(staged
         .split('\0')

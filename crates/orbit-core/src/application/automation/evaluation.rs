@@ -106,10 +106,13 @@ fn evaluate(
         action,
         dry_run: request.dry_run,
         source: match cache {
-            Some(cache) => {
-                source::Source::with_cache(&runtime.paths().repo_root, cache, request.now)
-            }
-            None => source::Source::at(&runtime.paths().repo_root, request.now),
+            Some(cache) => source::Source::with_cache(
+                runtime.env(),
+                &runtime.paths().repo_root,
+                cache,
+                request.now,
+            ),
+            None => source::Source::at(runtime.env(), &runtime.paths().repo_root, request.now),
         },
     };
 
@@ -148,7 +151,7 @@ pub(super) fn auto_task_action_liveness(
         runtime,
         action: Action::Task(definition),
         dry_run: true,
-        source: source::Source::read_only(&runtime.paths().repo_root),
+        source: source::Source::read_only(runtime.env(), &runtime.paths().repo_root),
     };
 
     delivery::action_liveness(&host, state, now).unwrap_or_else(|error| {

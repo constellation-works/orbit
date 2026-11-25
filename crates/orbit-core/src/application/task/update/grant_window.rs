@@ -79,7 +79,8 @@ impl OrbitRuntime {
             include_steps: false,
             ..Default::default()
         })? {
-            for path in orbit_engine::run_worktree_paths(&self.paths().repo_root, &run)? {
+            for path in orbit_engine::run_worktree_paths(self.env(), &self.paths().repo_root, &run)?
+            {
                 if path.try_exists()? {
                     return Err(refuse(format!(
                         "worktree '{}' still exists for it",

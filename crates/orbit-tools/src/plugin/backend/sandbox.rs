@@ -3,6 +3,8 @@ use super::*;
 /// The granted boundary one plugin backend runs under.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PluginSandboxProfile {
+    #[cfg(target_os = "macos")]
+    pub(crate) process_env: orbit_common::Env,
     /// Readable (and executable) roots: the plugin root plus granted reads,
     /// each declared program at the path recorded when the operator enabled
     /// the plugin, and — for `orbit_tools` — Orbit's global root and the
@@ -438,7 +440,11 @@ fn spawn_confined(
     );
     let env = match &req.environment_mode {
         EnvironmentMode::ClearAndSet(pairs) => pairs.clone(),
-        EnvironmentMode::Inherit => std::env::vars().collect(),
+        EnvironmentMode::Inherit => profile
+            .process_env
+            .utf8_vars()
+            .map(|(name, value)| (name.to_owned(), value.to_owned()))
+            .collect(),
     };
     let stdin = match req.stdin_mode {
         StdinMode::Inherit => Stdio::inherit(),

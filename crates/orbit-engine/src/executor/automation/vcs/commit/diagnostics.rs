@@ -11,12 +11,17 @@ use super::super::git::{git_output, git_output_raw};
 /// this message shares no wording with [`unrelated_history_error`] so a reader
 /// can tell the two conditions apart (ORB-10380).
 pub(super) fn empty_stage_error(
+    process_env: &orbit_common::Env,
     task_id: &str,
     workspace_path: &Path,
     base_sha: Option<&str>,
 ) -> Result<OrbitError, OrbitError> {
-    let counts = worktree_status_counts(workspace_path)?;
-    let head_sha = git_output(workspace_path, &["rev-parse", "--verify", "HEAD^{commit}"])?;
+    let counts = worktree_status_counts(process_env, workspace_path)?;
+    let head_sha = git_output(
+        process_env,
+        workspace_path,
+        &["rev-parse", "--verify", "HEAD^{commit}"],
+    )?;
     let base = match base_sha {
         Some(base_sha) => format!("pinned base {base_sha}"),
         None => "no pinned base in this step's input".to_string(),
@@ -57,8 +62,12 @@ pub(super) struct WorktreeStatusCounts {
 /// whole output, which would eat the leading status column of a single-line
 /// result (` M path` -> `M path`) and misalign the index/worktree columns by
 /// one byte (see `git_output`'s doc comment).
-fn worktree_status_counts(workspace_path: &Path) -> Result<WorktreeStatusCounts, OrbitError> {
+fn worktree_status_counts(
+    process_env: &orbit_common::Env,
+    workspace_path: &Path,
+) -> Result<WorktreeStatusCounts, OrbitError> {
     let status = git_output_raw(
+        process_env,
         workspace_path,
         &["status", "--porcelain=v1", "--untracked-files=all"],
     )?;

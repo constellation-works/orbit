@@ -28,6 +28,7 @@ pub type RuntimeConfigLoader =
 #[derive(Clone)]
 pub struct Base {
     pub(crate) paths: WorkspacePaths,
+    pub(crate) env: orbit_common::Env,
     pub(crate) policy: OrbitPolicyContext,
     /// The admitted settings, which carry the actor.
     pub(crate) settings: OrbitRuntimeSettings,
@@ -73,6 +74,7 @@ impl Base {
     /// log and nothing yet supplied by composition.
     pub(crate) fn new(
         paths: WorkspacePaths,
+        env: orbit_common::Env,
         policy: OrbitPolicyContext,
         settings: OrbitRuntimeSettings,
         config_loader: RuntimeConfigLoader,
@@ -81,6 +83,7 @@ impl Base {
     ) -> Self {
         Self {
             paths,
+            env,
             policy,
             settings,
             config_loader,
@@ -128,6 +131,7 @@ impl Base {
             .policy
             .execution_env_policy
             .clone()
+            .with_parent_env(&self.env)
             .with_defaults(defaults);
     }
 

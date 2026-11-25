@@ -93,7 +93,7 @@ impl<'a> Assessor<'a> {
     pub(super) fn new(runtime: &'a OrbitRuntime) -> Self {
         Self {
             runtime,
-            source: Source::new(&runtime.paths().repo_root),
+            source: Source::new(runtime.env(), &runtime.paths().repo_root),
             remaining: MAX_ASSESSMENTS,
         }
     }

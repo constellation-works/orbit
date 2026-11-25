@@ -250,7 +250,7 @@ fn diverged_with_back_merges(orphan_sides: &[&str], canonical_sides: &[&str]) ->
 }
 
 fn state_for<'a>(repo: &'a Path, old_tip: &str) -> (Source<'a>, AutomationState) {
-    let source = Source::new(repo);
+    let source = Source::new(&orbit_common::Env::capture(), repo);
     let repository = source.repository().expect("repository");
     // The orphan tip's merge base with main is the shared parent. Covered and
     // baseline stay there, which is what a replay of this divergence requires.
@@ -296,7 +296,7 @@ fn missing_git_executable_defers_ancestor_check_instead_of_reporting_divergence(
     std::fs::create_dir(&empty_bin).expect("empty PATH directory");
     let path = empty_bin.to_str().expect("PATH is utf-8");
     let _path = orbit_common::test_env::scoped([("PATH", Some(path))]);
-    let source = Source::new(root.path());
+    let source = Source::new(&orbit_common::Env::capture(), root.path());
 
     let error = source
         .is_ancestor("older", "newer")
@@ -962,7 +962,7 @@ fn recorded_associations_survive_observation_and_missing_identities_back_off() {
     ] {
         let now = chrono::DateTime::UNIX_EPOCH + chrono::Duration::seconds(seconds);
         let host = LookupHost {
-            source: Source::at(history.root.path(), now),
+            source: Source::at(&orbit_common::Env::capture(), history.root.path(), now),
             calls: &calls,
             missing: &history.new[2],
         };
@@ -1052,7 +1052,7 @@ fn timed_out_source_reaps_its_leader_and_kills_the_grandchild() {
         ("GIT_CEILING_DIRECTORIES", Some(ceilings.as_str())),
         (GIT_CEILING_FOR_ISOLATED_CHILD, Some(git_ceiling)),
     ]);
-    let source = Source::new(root.path());
+    let source = Source::new(&orbit_common::Env::capture(), root.path());
     let started = Instant::now();
     let result = source.git(&[
         "-c",
@@ -1126,7 +1126,7 @@ fn held_fetch_lock_consumes_only_the_remaining_source_deadline() {
     with_delivery_source_clock(
         move || origin + clock_spent.get(),
         || {
-            let source = Source::new(repo);
+            let source = Source::new(&orbit_common::Env::capture(), repo);
             spent.set(super::super::source::SOURCE_DEADLINE - Duration::from_millis(250));
             let started = Instant::now();
             let result = source.head("main");
@@ -1159,7 +1159,7 @@ fn held_graphql_quota_defers_a_provider_read_without_running_gh() {
     let records = tempfile::tempdir().expect("tempdir");
     let store = GithubQuotaStore::new(records.path().to_path_buf());
     let policy = GithubQuotaPolicy::default();
-    let account = github_quota::inherited_account_key();
+    let account = github_quota::inherited_account_key(&orbit_common::Env::capture());
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .expect("clock")
@@ -1181,7 +1181,7 @@ fn held_graphql_quota_defers_a_provider_read_without_running_gh() {
     );
 
     let error = github_quota::with_scoped_guard(store.clone(), policy, || {
-        Source::new(root.path()).ci_cover_pull_request("#1")
+        Source::new(&orbit_common::Env::capture(), root.path()).ci_cover_pull_request("#1")
     })
     .expect_err("a held provider read defers");
     assert!(
@@ -1210,7 +1210,7 @@ fn held_quota_refusal_meeting_a_spent_command_budget_defers_as_source_budget_unc
     use orbit_tools::github_quota::{self, GithubQuotaPolicy, GithubQuotaStore, RateLimitAnswer};
 
     let policy = GithubQuotaPolicy::default();
-    let account = github_quota::inherited_account_key();
+    let account = github_quota::inherited_account_key(&orbit_common::Env::capture());
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .expect("clock")
@@ -1248,7 +1248,7 @@ fn held_quota_refusal_meeting_a_spent_command_budget_defers_as_source_budget_unc
 
     let (_within_records, within) = held_store();
     let error = github_quota::with_scoped_guard(within.clone(), policy, || {
-        Source::new(root.path()).ci_cover_pull_request("#1")
+        Source::new(&orbit_common::Env::capture(), root.path()).ci_cover_pull_request("#1")
     })
     .expect_err("a held provider read defers");
     assert!(
@@ -1266,7 +1266,7 @@ fn held_quota_refusal_meeting_a_spent_command_budget_defers_as_source_budget_unc
         std::time::Duration::from_secs(120),
     );
     let error = github_quota::with_scoped_guard(spent.clone(), policy, || {
-        Source::new(root.path()).ci_cover_pull_request("#1")
+        Source::new(&orbit_common::Env::capture(), root.path()).ci_cover_pull_request("#1")
     })
     .expect_err("a refusal met by a spent budget defers");
     assert!(
@@ -1336,7 +1336,7 @@ fn slow_quota_probe_consuming_source_deadline_prevents_spawning_gh() {
             .duration_since(std::time::UNIX_EPOCH)
             .map_or(0, |elapsed| elapsed.as_secs())
     };
-    let account = github_quota::inherited_account_key();
+    let account = github_quota::inherited_account_key(&orbit_common::Env::capture());
     let seeded_at = epoch_now() - 10_000;
     store.refresh_if_due(&policy, &account, seeded_at, &|| {
         let quota = |remaining| github_quota::ObservedQuota {
@@ -1361,7 +1361,7 @@ fn slow_quota_probe_consuming_source_deadline_prevents_spawning_gh() {
     let error = super::super::source::test_support::with_delivery_source_clock(
         move || origin + clock_spent.get(),
         || {
-            let source = Source::new(root.path());
+            let source = Source::new(&orbit_common::Env::capture(), root.path());
             spent.set(super::super::source::SOURCE_DEADLINE - Duration::from_millis(80));
             github_quota::with_simulated_clipped_probe(
                 move |probe| {

@@ -29,6 +29,7 @@ fn workflow_path(run: &Value) -> Result<&str, OrbitError> {
 /// A failed workflow can have no PR linkage or check runs at all. Authenticate
 /// its repository, branch, head, workflow and latest attempt directly instead.
 fn verified_run(
+    process_env: &orbit_common::Env,
     deadline: Deadline,
     workspace: &Path,
     snapshot: &Snapshot,
@@ -36,6 +37,7 @@ fn verified_run(
 ) -> Result<Value, OrbitError> {
     let id = number(listed, "id", unreadable)?;
     let run = api(
+        process_env,
         deadline,
         workspace,
         &format!("repos/{{owner}}/{{repo}}/actions/runs/{id}"),
@@ -84,9 +86,15 @@ fn verified_run(
     Ok(run)
 }
 
-fn git_read(deadline: Deadline, workspace: &Path, args: &[&str]) -> Result<String, OrbitError> {
+fn git_read(
+    process_env: &orbit_common::Env,
+    deadline: Deadline,
+    workspace: &Path,
+    args: &[&str],
+) -> Result<String, OrbitError> {
     Ok(deadline
         .execute(
+            process_env,
             "git",
             args.iter().map(|s| (*s).into()).collect(),
             workspace,
@@ -98,6 +106,7 @@ fn git_read(deadline: Deadline, workspace: &Path, args: &[&str]) -> Result<Strin
 /// Only the newest execution of each workflow can diagnose an absent context.
 /// A successful or unfinished run with zero jobs is never failure evidence.
 pub(super) fn failed_workflow_evidence(
+    process_env: &orbit_common::Env,
     deadline: Deadline,
     workspace: &Path,
     snapshot: &Snapshot,
@@ -129,6 +138,7 @@ pub(super) fn failed_workflow_evidence(
         let run_id = number(listed, "id", unreadable)?;
         let attempt = number(listed, "run_attempt", unreadable)?;
         let jobs = api(
+            process_env,
             deadline,
             workspace,
             &format!(
@@ -138,10 +148,11 @@ pub(super) fn failed_workflow_evidence(
         if !complete_list(&jobs, "jobs")?.is_empty() {
             continue;
         }
-        let run = verified_run(deadline, workspace, snapshot, listed)?;
+        let run = verified_run(process_env, deadline, workspace, snapshot, listed)?;
         let path = workflow_path(&run)?;
         let workflow_id = number(&run, "workflow_id", unreadable)?;
         let workflow = api(
+            process_env,
             deadline,
             workspace,
             &format!("repos/{{owner}}/{{repo}}/actions/workflows/{workflow_id}"),
@@ -160,8 +171,14 @@ pub(super) fn failed_workflow_evidence(
         )?;
         let head = text(&snapshot.pr["head"], "sha", unreadable)?;
         let base = text(&snapshot.pr["base"], "sha", unreadable)?;
-        let fork = git_read(deadline, workspace, &["merge-base", base, head])?;
+        let fork = git_read(
+            process_env,
+            deadline,
+            workspace,
+            &["merge-base", base, head],
+        )?;
         let changed = git_read(
+            process_env,
             deadline,
             workspace,
             &["diff", "--name-only", "-z", fork.trim(), head, "--", path],
@@ -171,13 +188,14 @@ pub(super) fn failed_workflow_evidence(
         // still identify the required contexts the workflow would have emitted.
         let base_revision = format!("{base}:{path}");
         let head_revision = format!("{head}:{path}");
-        let (revision, source) = match git_read(deadline, workspace, &["show", &base_revision]) {
-            Ok(source) => (base_revision, source),
-            Err(_) => (
-                head_revision.clone(),
-                git_read(deadline, workspace, &["show", &head_revision])?,
-            ),
-        };
+        let (revision, source) =
+            match git_read(process_env, deadline, workspace, &["show", &base_revision]) {
+                Ok(source) => (base_revision, source),
+                Err(_) => (
+                    head_revision.clone(),
+                    git_read(process_env, deadline, workspace, &["show", &head_revision])?,
+                ),
+            };
         if source.len() > super::MAX_WORKFLOW_SOURCE_BYTES {
             return Err(unreadable("failed workflow source bound"));
         }
@@ -193,6 +211,7 @@ pub(super) fn failed_workflow_evidence(
             .collect();
         let suite_id = number(&run, "check_suite_id", unreadable)?;
         let suite = api(
+            process_env,
             deadline,
             workspace,
             &format!("repos/{{owner}}/{{repo}}/check-suites/{suite_id}"),
@@ -233,9 +252,10 @@ pub(super) fn failed_workflow_evidence(
         }) else {
             continue;
         };
-        let blob = git_read(deadline, workspace, &["rev-parse", &revision])?;
+        let blob = git_read(process_env, deadline, workspace, &["rev-parse", &revision])?;
         let provider_message = deadline
             .execute(
+                process_env,
                 "gh",
                 vec!["run".into(), "view".into(), run_id.to_string()],
                 workspace,
@@ -274,6 +294,7 @@ pub(super) fn failed_workflow_evidence(
 
 /// Observe the same reserved run after its single full-workflow rerun.
 pub(super) fn observe_failed_workflow(
+    process_env: &orbit_common::Env,
     deadline: Deadline,
     workspace: &Path,
     evidence: &PrInfrastructureEvidence,
@@ -281,6 +302,7 @@ pub(super) fn observe_failed_workflow(
     pass: &super::read_reset::SnapshotWaits,
 ) -> Result<Value, OrbitError> {
     let snapshot = prerequisite::snapshot(
+        process_env,
         deadline,
         workspace,
         prerequisite::PullRequestSelector {
@@ -313,7 +335,7 @@ pub(super) fn observe_failed_workflow(
         .iter()
         .find(|run| run["id"].as_u64() == Some(evidence.run_id))
         .ok_or_else(|| unreadable("failed workflow reservation disappeared"))?;
-    let run = verified_run(deadline, workspace, &snapshot, listed)?;
+    let run = verified_run(process_env, deadline, workspace, &snapshot, listed)?;
     if run["workflow_id"].as_u64() != Some(evidence.workflow_id)
         || workflow_path(&run)? != evidence.workflow_path
         || run["event"] != evidence.event

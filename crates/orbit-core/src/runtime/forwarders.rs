@@ -68,9 +68,10 @@ impl OrbitRuntime {
 // which does not reach through `Deref`.
 impl OrbitRuntime {
     pub fn current_worker_invocation(
+        env: &orbit_common::Env,
         global_root: &Path,
     ) -> Result<Option<WorkerInvocation>, OrbitError> {
-        RuntimeKernel::current_worker_invocation(global_root)
+        RuntimeKernel::current_worker_invocation(env, global_root)
     }
 
     pub fn list_v2_audit_events(

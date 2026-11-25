@@ -92,6 +92,7 @@ impl McpHost for ClaimedOwnerBridge {
                     // as the CLI's refusal does [ORB-23280].
                     let (operation, input) = tool_family_operation_call(name, input);
                     execute_global_in_process_tool_dispatch(
+                        &orbit_core::composition::process_env(),
                         &self.global_root,
                         &operation,
                         input,

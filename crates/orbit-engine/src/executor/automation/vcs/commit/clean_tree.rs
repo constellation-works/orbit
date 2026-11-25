@@ -34,7 +34,7 @@ pub(super) trait Verifier {
         run_id: &str,
         tested_head: &str,
     ) -> Result<Value, OrbitError> {
-        Self::verify_clean_checkout(workspace, tested_head)?;
+        Self::verify_clean_checkout(&host.process_env(), workspace, tested_head)?;
         Self::check_artifacts(host, task)?;
         Self::verify_at_revision(host, task, workspace, run_id, tested_head)
     }
@@ -77,7 +77,7 @@ pub(super) trait Verifier {
         tested_head: &str,
         supplied_regression_from: &[String],
     ) -> Result<Value, OrbitError> {
-        Self::verify_clean_checkout(workspace, tested_head)?;
+        Self::verify_clean_checkout(&host.process_env(), workspace, tested_head)?;
         Self::check_artifacts(host, task)?;
         Self::verify_at_revision_with_supplied_regression_from(
             host,
@@ -89,11 +89,16 @@ pub(super) trait Verifier {
         )
     }
 
-    fn verify_clean_checkout(workspace: &Path, tested_head: &str) -> Result<(), OrbitError> {
-        if git_output(workspace, &["rev-parse", "HEAD"])? != tested_head {
+    fn verify_clean_checkout(
+        process_env: &orbit_common::Env,
+        workspace: &Path,
+        tested_head: &str,
+    ) -> Result<(), OrbitError> {
+        if git_output(process_env, workspace, &["rev-parse", "HEAD"])? != tested_head {
             return Err(Self::refused(Self::SPEC.head_changed));
         }
         if !git_output(
+            process_env,
             workspace,
             &["status", "--porcelain", "--untracked-files=all"],
         )?

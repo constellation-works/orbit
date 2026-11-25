@@ -62,15 +62,25 @@ pub(in crate::executor::automation::vcs::pr) fn publish_local_repair<H: RuntimeH
     if !holds_repair {
         return Ok(LocalRepair::None);
     }
-    let local = commit_sha(workspace, "HEAD")?;
-    let branch = git_output(workspace, &["symbolic-ref", "--quiet", "--short", "HEAD"]).ok();
+    let local = commit_sha(&host.process_env(), workspace, "HEAD")?;
+    let branch = git_output(
+        &host.process_env(),
+        workspace,
+        &["symbolic-ref", "--quiet", "--short", "HEAD"],
+    )
+    .ok();
     if local == authorized
         || branch.as_deref() != Some(head.as_str())
-        || !crate::executor::automation::vcs::git::is_ancestor(workspace, authorized, &local)?
+        || !crate::executor::automation::vcs::git::is_ancestor(
+            &host.process_env(),
+            workspace,
+            authorized,
+            &local,
+        )?
     {
         return Ok(LocalRepair::None);
     }
-    let remote = remote_branch_sha(workspace, &head)?;
+    let remote = remote_branch_sha(&host.process_env(), workspace, &head)?;
     if remote.as_deref() != Some(authorized) {
         return Err(verdict::stopped(
             pr_number,
@@ -86,9 +96,17 @@ pub(in crate::executor::automation::vcs::pr) fn publish_local_repair<H: RuntimeH
             "the completion step carries no base to validate against",
         )
     })?;
-    let base_ref =
-        resolve_worktree_start_point(workspace, &base, base_sync_mode_from_input(input)?)?;
-    let base_sha = git_output(workspace, &["merge-base", authorized, &base_ref])?;
+    let base_ref = resolve_worktree_start_point(
+        &host.process_env(),
+        workspace,
+        &base,
+        base_sync_mode_from_input(input)?,
+    )?;
+    let base_sha = git_output(
+        &host.process_env(),
+        workspace,
+        &["merge-base", authorized, &base_ref],
+    )?;
     candidate_validate(
         host,
         &json!({

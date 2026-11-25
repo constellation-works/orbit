@@ -173,7 +173,9 @@ fn job_run(id: &str, state: JobRunState, input: Value) -> JobRun {
 /// The directory `setup_worktree` creates for a run with no `branch_prefix`
 /// override.
 pub(super) fn resolved_task_worktree(repo: &Path, run: &JobRun) -> PathBuf {
-    run_worktree_paths(repo, run).unwrap().remove(0)
+    run_worktree_paths(&orbit_common::Env::capture(), repo, run)
+        .unwrap()
+        .remove(0)
 }
 
 pub(super) fn init_repo(path: &Path) {

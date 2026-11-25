@@ -124,6 +124,7 @@ impl ServerMcpHost {
                         })
                         .map(|definition| definition.schema.name.as_str()),
                     &orbit_core::adapter::command::tool_suggestion_context(
+                        &orbit_core::composition::process_env(),
                         ToolEntryPoint::Mcp,
                         context.clone(),
                     ),
@@ -363,15 +364,21 @@ impl ServerMcpHost {
         input: Value,
         context: ToolSessionContext,
     ) -> Result<Value, OrbitError> {
+        let process_env = orbit_core::composition::process_env();
         execute_global_in_process_tool_dispatch_with_audit_writer(
+            &process_env,
             &self.global_root,
             name,
             input,
             ToolEntryPoint::Mcp,
             context,
             |params, invocation| {
-                self.audit_store
-                    .insert_audit_event_record(&self.global_root, params, invocation)
+                self.audit_store.insert_audit_event_record(
+                    &process_env,
+                    &self.global_root,
+                    params,
+                    invocation,
+                )
             },
             |input| match name {
                 "orbit.workspace.list" => self.list_workspaces(&input),
@@ -392,7 +399,14 @@ impl ServerMcpHost {
         input: Value,
         context: ToolSessionContext,
     ) -> Result<Value, OrbitError> {
-        execute_global_plugin_tool(&self.global_root, name, input, ToolEntryPoint::Mcp, context)
+        execute_global_plugin_tool(
+            &orbit_core::composition::process_env(),
+            &self.global_root,
+            name,
+            input,
+            ToolEntryPoint::Mcp,
+            context,
+        )
     }
 
     pub(super) fn resolve_workspace_runtime(
@@ -606,15 +620,21 @@ impl ServerMcpHost {
         context: ToolSessionContext,
         error: OrbitError,
     ) -> Result<Value, OrbitError> {
+        let process_env = orbit_core::composition::process_env();
         execute_global_in_process_tool_dispatch_with_audit_writer(
+            &process_env,
             &self.global_root,
             name,
             input,
             ToolEntryPoint::Mcp,
             context,
             |params, invocation| {
-                self.audit_store
-                    .insert_audit_event_record(&self.global_root, params, invocation)
+                self.audit_store.insert_audit_event_record(
+                    &process_env,
+                    &self.global_root,
+                    params,
+                    invocation,
+                )
             },
             move |_| Err(error),
         )
@@ -708,7 +728,10 @@ impl ServerMcpHost {
             .filter(|_| {
                 context.application.is_none()
                     && context.worker_invocation.is_none()
-                    && route_resident_delivery_recovery_to_broker(&operation)
+                    && route_resident_delivery_recovery_to_broker(
+                        &orbit_core::composition::process_env(),
+                        &operation,
+                    )
             })
             .map(|home| serde_json::json!({"workspace": home}));
         let (runtime, selected) = match self.resolve_workspace_runtime(

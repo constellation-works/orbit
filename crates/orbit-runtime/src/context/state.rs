@@ -7,6 +7,7 @@ use orbit_types::workspace::WorkspacePaths;
 /// `Host`.
 pub(crate) struct OrbitContext {
     pub(crate) paths: WorkspacePaths,
+    pub(crate) env: orbit_common::Env,
     pub(crate) stores: OrbitStores,
     pub(crate) execution: OrbitExecutionAssets,
     pub(crate) policy: OrbitPolicyContext,
@@ -16,6 +17,7 @@ pub(crate) struct OrbitContext {
 impl OrbitContext {
     pub(crate) fn new(
         paths: WorkspacePaths,
+        env: orbit_common::Env,
         stores: OrbitStores,
         execution: OrbitExecutionAssets,
         policy: OrbitPolicyContext,
@@ -23,6 +25,7 @@ impl OrbitContext {
     ) -> Self {
         Self {
             paths,
+            env,
             stores,
             execution,
             policy,

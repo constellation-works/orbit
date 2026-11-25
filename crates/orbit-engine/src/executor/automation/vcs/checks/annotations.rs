@@ -171,8 +171,12 @@ pub(super) fn source_annotations<H: RuntimeHost + ?Sized>(
                  network failed, not the source"
             ));
         }
-        if !git_output(workspace, &["cat-file", "-t", &format!("{head}:{path}")])
-            .is_ok_and(|kind| kind.trim() == "blob")
+        if !git_output(
+            &host.process_env(),
+            workspace,
+            &["cat-file", "-t", &format!("{head}:{path}")],
+        )
+        .is_ok_and(|kind| kind.trim() == "blob")
         {
             return Err(format!(
                 "annotated path '{path}' is not a file at head {head} in this checkout"
@@ -289,6 +293,7 @@ pub(super) fn unanswered_required<H: RuntimeHost + ?Sized>(
         };
         let changed = changed.get_or_insert_with(|| {
             candidate_changed_paths(
+                &host.process_env(),
                 workspace,
                 &context.candidate.base.commit,
                 &context.candidate.candidate.commit,
@@ -338,11 +343,13 @@ pub(super) fn source_path(path: &str) -> bool {
 
 /// Exact paths changed by the candidate, including both sides of renames.
 pub(super) fn candidate_changed_paths(
+    process_env: &orbit_common::Env,
     workspace: &Path,
     base: &str,
     head: &str,
 ) -> Result<BTreeSet<String>, String> {
     git_output_paths(
+        process_env,
         workspace,
         &["diff", "--name-only", "-z", "--no-renames", base, head],
     )

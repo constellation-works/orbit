@@ -62,6 +62,7 @@ fn record<H: RuntimeHost + ?Sized>(
     )
 }
 fn exact_remote(
+    process_env: &orbit_common::Env,
     workspace: &str,
     status: &PullRequestStatus,
     evidence: &PrInfrastructureEvidence,
@@ -84,6 +85,7 @@ fn exact_remote(
     }
     let reference = format!("refs/heads/{}", evidence.head_branch);
     let remote = deadline.execute(
+        process_env,
         "git",
         vec![
             "ls-remote".into(),
@@ -161,7 +163,7 @@ pub(super) fn recover<H: RuntimeHost + ?Sized>(
                 DeliveryRefusal::CompletionBudgetExpired,
             ));
         }
-        exact_remote(workspace, status, evidence, deadline)?;
+        exact_remote(&host.process_env(), workspace, status, evidence, deadline)?;
         let observed = host
             .run_private_vcs_operation(
                 operations::CI_PREREQUISITE_OBSERVE,
@@ -241,7 +243,7 @@ pub(super) fn recover<H: RuntimeHost + ?Sized>(
     let evidence: PrInfrastructureEvidence =
         serde_json::from_value(response["evidence"].clone())
             .map_err(|error| stopped(pr, &format!("unreadable prerequisite evidence: {error}")))?;
-    exact_remote(workspace, status, &evidence, deadline)?;
+    exact_remote(&host.process_env(), workspace, status, &evidence, deadline)?;
     if deadline.remaining().is_err() {
         return Err(hold_auto_fix_stop(
             stopped(
@@ -255,7 +257,13 @@ pub(super) fn recover<H: RuntimeHost + ?Sized>(
     match admission {
         PrInfrastructureAdmission::Refused(reason) => Err(stopped(pr, &reason)),
         PrInfrastructureAdmission::Observe(reservation) => {
-            exact_remote(workspace, status, &reservation.evidence, deadline)?;
+            exact_remote(
+                &host.process_env(),
+                workspace,
+                status,
+                &reservation.evidence,
+                deadline,
+            )?;
             host.run_private_vcs_operation(
                 operations::CI_PREREQUISITE_OBSERVE,
                 json!({"workspace_path":workspace,"evidence":reservation.evidence,"deadline_ms":deadline_ms}),
@@ -271,7 +279,7 @@ pub(super) fn recover<H: RuntimeHost + ?Sized>(
                 "original",
                 &json!(reservation),
             )?;
-            exact_remote(workspace, status, &evidence, deadline)?;
+            exact_remote(&host.process_env(), workspace, status, &evidence, deadline)?;
             // The adapter rechecks policy, latest attempt and source evidence
             // immediately before this single-shot mutation. Never retry it.
             let reply = host.run_private_vcs_operation(operations::CI_RERUN_FAILED, json!({"workspace_path":workspace,"run_id":evidence.run_id.to_string(),"prerequisite":evidence,"deadline_ms":deadline_ms}));

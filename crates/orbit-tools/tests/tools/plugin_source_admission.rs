@@ -93,7 +93,7 @@ fn unsafe_git_sources_are_refused_before_git_is_spawned() {
         "git+-uplugin",
         "git+https://example.com/demo.git#-upload-pack=payload",
     ] {
-        let error = resolve_plugin_source(&unpinned(source))
+        let error = resolve_plugin_source(&orbit_common::Env::capture(), &unpinned(source))
             .expect_err("unsafe Git source must be refused")
             .to_string();
         assert!(

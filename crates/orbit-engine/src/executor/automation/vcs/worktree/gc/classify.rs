@@ -23,7 +23,7 @@ use std::path::{Path, PathBuf};
 /// local and unroutable prefixes still get their own verdict. A missing route
 /// is not an outage and is not carried over: another run's claim may name a route.
 pub(super) struct SweepTaskLookups<'a, H: RuntimeHost + ?Sized> {
-    host: &'a H,
+    pub(super) host: &'a H,
     answers: RefCell<BTreeMap<(String, String), WorktreeGcTaskLookup>>,
     owner_unreachable: RefCell<BTreeMap<String, String>>,
 }
@@ -72,6 +72,7 @@ impl<'a, H: RuntimeHost + ?Sized> SweepTaskLookups<'a, H> {
 }
 
 pub(super) fn classify_known<H: RuntimeHost + ?Sized>(
+    process_env: &orbit_common::Env,
     repo_root: &Path,
     path: &Path,
     run: &JobRun,
@@ -147,7 +148,7 @@ pub(super) fn classify_known<H: RuntimeHost + ?Sized>(
         return Ok(report);
     }
     if options.target_only {
-        return collect_build_output(path, run, options, report);
+        return collect_build_output(process_env, path, run, options, report);
     }
 
     // Primary gate: only a task settled to rejected, archived, or done
@@ -261,7 +262,7 @@ pub(super) fn classify_known<H: RuntimeHost + ?Sized>(
         return reclaim_failed_removal_leftover(path, run, options, report);
     }
 
-    if let Some(reason) = worktree_lock(path)? {
+    if let Some(reason) = worktree_lock(process_env, path)? {
         report.action = "skipped:worktree_locked".to_string();
         report.detail = Some(reason);
         return Ok(report);
@@ -270,15 +271,19 @@ pub(super) fn classify_known<H: RuntimeHost + ?Sized>(
     // The safety net: a task can be settled with uncommitted content still
     // sitting in the worktree. Only a sweep that rescues dirty candidates
     // removes one, and only once that content is recoverable elsewhere.
-    let dirty = !git_output(path, &["status", "--porcelain", "--untracked-files=all"])?
-        .trim()
-        .is_empty();
+    let dirty = !git_output(
+        process_env,
+        path,
+        &["status", "--porcelain", "--untracked-files=all"],
+    )?
+    .trim()
+    .is_empty();
     if dirty && !options.rescue_dirty {
         report.action = "skipped:dirty_rescue_candidate".to_string();
         return Ok(report);
     }
 
-    let branch = match branch_name(path) {
+    let branch = match branch_name(process_env, path) {
         Ok(branch) => branch,
         Err(_) => {
             report.action = "skipped:branch_unknown".to_string();
@@ -288,14 +293,14 @@ pub(super) fn classify_known<H: RuntimeHost + ?Sized>(
     if dirty {
         // A rescue patch pins its base commit, and a published ref holds
         // the whole candidate, so the branch's commits survive either way.
-        return rescue_dirty_worktree(repo_root, path, run, &branch, options, report);
+        return rescue_dirty_worktree(process_env, repo_root, path, run, &branch, options, report);
     }
     // A clean parked worktree is often a failed run's only copy of the
     // commits it made before publication failed. Its branch goes only when
     // those commits survive elsewhere.
     let mut checked_tip = None;
     if parked.is_some() {
-        match parked_commits_survive(path, run, &branch) {
+        match parked_commits_survive(process_env, path, run, &branch) {
             Ok((tip, recovery)) => {
                 checked_tip = Some(tip);
                 report.recovery = recovery;
@@ -323,8 +328,8 @@ pub(super) fn classify_known<H: RuntimeHost + ?Sized>(
 
     // Deliberately no `--force`: a last-moment dirtying of the worktree makes
     // Git fail closed. Never replace this with raw recursive deletion.
-    remove_worktree(repo_root, path, None, false)?;
+    remove_worktree(process_env, repo_root, path, None, false)?;
     report.bytes_reclaimed = estimated_bytes;
-    report.action = delete_run_branch(repo_root, &branch, checked_tip.as_deref());
+    report.action = delete_run_branch(process_env, repo_root, &branch, checked_tip.as_deref());
     Ok(report)
 }

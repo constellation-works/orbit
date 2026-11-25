@@ -32,16 +32,15 @@ const OUTPUT_LIMIT_POLL: Duration = Duration::from_millis(10);
 pub(in crate::application::automation) const LISTING_LIMIT: u64 = 256 * 1_048_576;
 
 impl<'a> Source<'a> {
-    pub(crate) fn new(root: &'a Path) -> Self {
-        Self::at(root, Utc::now())
+    pub(crate) fn new(env: &orbit_common::Env, root: &'a Path) -> Self {
+        Self::at(env, root, Utc::now())
     }
 
-    pub(crate) fn at(root: &'a Path, now: DateTime<Utc>) -> Self {
-        let env = crate::runtime::process_env();
-        let started = BudgetClock::start(&env);
+    pub(crate) fn at(env: &orbit_common::Env, root: &'a Path, now: DateTime<Utc>) -> Self {
+        let started = BudgetClock::start(env);
         Self {
+            env: env.clone(),
             root,
-            env,
             started,
             cache: None,
             now,
@@ -51,28 +50,37 @@ impl<'a> Source<'a> {
 
     /// Inspect evidence against existing refs without fetching origin. Missing
     /// tracking refs stay deferred; the local branch is not a substitute.
-    pub(in crate::application::automation) fn read_only(root: &'a Path) -> Self {
+    pub(in crate::application::automation) fn read_only(
+        env: &orbit_common::Env,
+        root: &'a Path,
+    ) -> Self {
         Self {
             fetch_origin: false,
-            ..Self::new(root)
+            ..Self::new(env, root)
         }
     }
 
     pub(in crate::application::automation) fn read_only_with_cache(
+        env: &orbit_common::Env,
         root: &'a Path,
         cache: &'a SourceCache,
     ) -> Self {
         Self {
             cache: Some(cache),
-            ..Self::read_only(root)
+            ..Self::read_only(env, root)
         }
     }
 
-    pub(crate) fn with_cache(root: &'a Path, cache: &'a SourceCache, now: DateTime<Utc>) -> Self {
+    pub(crate) fn with_cache(
+        env: &orbit_common::Env,
+        root: &'a Path,
+        cache: &'a SourceCache,
+        now: DateTime<Utc>,
+    ) -> Self {
         Self {
             cache: Some(cache),
             now,
-            ..Self::new(root)
+            ..Self::new(env, root)
         }
     }
 
@@ -185,6 +193,7 @@ impl<'a> Source<'a> {
             let wall_started = std::time::Instant::now();
             quota_deadline = orbit_tools::github_quota::gh_request_deadline(request, wall_started);
             let admitted = orbit_tools::github_quota::admit_gh_request(
+                &self.env,
                 orbit_tools::github_quota::GithubCaller::Background,
                 request,
             );
@@ -334,6 +343,7 @@ impl<'a> Source<'a> {
             let failure = failure_text(&mut diagnostics, &failure_fallback(&outcome));
             if let Some(request) = &quota_request {
                 orbit_tools::github_quota::observe_gh_failure_by_deadline(
+                    &self.env,
                     request,
                     &failure,
                     quota_deadline,

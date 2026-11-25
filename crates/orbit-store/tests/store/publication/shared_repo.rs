@@ -120,7 +120,12 @@ impl Fixture {
     }
 
     fn publish(&self, lineage: &Lineage) -> Result<PublicationPublishOutcome, OrbitError> {
-        publish_task_snapshot(&self.registry, self.request(lineage), &policy())
+        publish_task_snapshot(
+            &orbit_common::Env::capture(),
+            &self.registry,
+            self.request(lineage),
+            &policy(),
+        )
     }
 
     fn tip(&self, branch: &str) -> String {
@@ -246,8 +251,13 @@ fn shared_repo_refuses_a_bound_branch_that_is_not_this_lineages_envelope() {
         ..LINEAGE_A
     };
     let request = fixture.request(&mismatched);
-    let error = publish_task_snapshot(&fixture.registry, request, &policy())
-        .expect_err("another publication id on the bound branch must be refused");
+    let error = publish_task_snapshot(
+        &orbit_common::Env::capture(),
+        &fixture.registry,
+        request,
+        &policy(),
+    )
+    .expect_err("another publication id on the bound branch must be refused");
     assert!(
         error.to_string().contains("publication id mismatch"),
         "expected an authority-conflict refusal, got {error}"

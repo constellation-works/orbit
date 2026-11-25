@@ -45,9 +45,13 @@ pub(super) fn remaining_millis(deadline: Instant) -> u64 {
 /// budget is spent is not counted and comes back as the typed
 /// [`OrbitError::ProcessTimeout`], the same budget error a caller returns for
 /// a request admitted too late; a caller maps it to its own timeout outcome.
-pub fn admit_gh_request(caller: GithubCaller, request: &ExecRequest) -> Result<(), OrbitError> {
+pub fn admit_gh_request(
+    env: &orbit_common::Env,
+    caller: GithubCaller,
+    request: &ExecRequest,
+) -> Result<(), OrbitError> {
     let deadline = gh_request_deadline(request, store::monotonic_now());
-    admit_by_deadline(caller, request, deadline).map_err(|decided| {
+    admit_by_deadline(env, caller, request, deadline).map_err(|decided| {
         if deadline.is_some_and(store::budget_spent) {
             return OrbitError::ProcessTimeout {
                 timeout_ms: request.timeout_ms.unwrap_or_default(),
@@ -66,6 +70,7 @@ pub fn admit_gh_request(caller: GithubCaller, request: &ExecRequest) -> Result<(
 /// [`OrbitError::ProcessTimeout`], and the caller must not spawn. A request
 /// without a finite budget comes back unchanged.
 pub fn admit_gh_request_within_budget(
+    env: &orbit_common::Env,
     caller: GithubCaller,
     request: &ExecRequest,
 ) -> Result<ExecRequest, OrbitError> {
@@ -77,7 +82,7 @@ pub fn admit_gh_request_within_budget(
         return Err(exhausted());
     }
     let deadline = gh_request_deadline(request, store::monotonic_now());
-    let admitted = admit_by_deadline(caller, request, deadline);
+    let admitted = admit_by_deadline(env, caller, request, deadline);
     // As in `run_gh_request`, a spent budget wins over the refusal it caused,
     // and a refusal is counted only once it is certain to be delivered.
     let bounded = remaining_request_budget(request, deadline).ok_or_else(exhausted)?;
@@ -116,6 +121,7 @@ impl DecidedRefusal {
 /// and returns instead of spawning `gh`, so no protected call follows it. A
 /// refusal comes back uncounted for the caller to [`DecidedRefusal::deliver`].
 fn admit_by_deadline(
+    env: &orbit_common::Env,
     caller: GithubCaller,
     request: &ExecRequest,
     deadline: Option<Instant>,
@@ -126,7 +132,7 @@ fn admit_by_deadline(
     let Some(resource) = request::request_resource(request) else {
         return Ok(());
     };
-    let account = request::request_account(request);
+    let account = request::request_account(env, request);
     let store = store.bounded_by(deadline);
     let probe = || request::read_rate_limit(request, deadline);
     let now = now_epoch_seconds();
@@ -149,18 +155,20 @@ fn admit_by_deadline(
 /// inside the caller's remaining budget. `None` leaves each record-lock wait
 /// at the shared file-lock default of 30 seconds.
 pub fn observe_gh_result_by_deadline(
+    env: &orbit_common::Env,
     request: &ExecRequest,
     result: &ExecutionResult,
     deadline: Option<Instant>,
 ) {
     if !result.success {
-        observe_gh_failure_by_deadline(request, &result.stderr, deadline);
+        observe_gh_failure_by_deadline(env, request, &result.stderr, deadline);
     }
 }
 
 /// [`observe_gh_result_by_deadline`] for a failed `request` whose diagnostic is
 /// `stderr`.
 pub fn observe_gh_failure_by_deadline(
+    env: &orbit_common::Env,
     request: &ExecRequest,
     stderr: &str,
     deadline: Option<Instant>,
@@ -186,7 +194,7 @@ pub fn observe_gh_failure_by_deadline(
         .unwrap_or(resource);
     store.bounded_by(deadline).record_throttle(
         &policy,
-        &request::request_account(request),
+        &request::request_account(env, request),
         resource,
         &throttle,
         now_epoch_seconds(),
@@ -228,6 +236,7 @@ fn timed_out_before_start(duration_ms: u64) -> ExecutionResult {
 /// taken when this starts, bounds the admission's lock waits and probe, the
 /// child and the post-call accounting.
 pub fn run_gh_request(
+    env: &orbit_common::Env,
     caller: GithubCaller,
     request: &ExecRequest,
 ) -> Result<ExecutionResult, OrbitError> {
@@ -236,7 +245,7 @@ pub fn run_gh_request(
     }
     let started = store::monotonic_now();
     let deadline = gh_request_deadline(request, started);
-    let admitted = admit_by_deadline(caller, request, deadline);
+    let admitted = admit_by_deadline(env, caller, request, deadline);
     // The budget is checked before a refusal propagates: a refusal decided
     // once the budget is spent is the timeout, not a throttle to wait out, and
     // only a refusal that survives this check is counted.
@@ -253,7 +262,7 @@ pub fn run_gh_request(
     admitted.map_err(|decided| decided.deliver(request, true))?;
     let result = run_process(&orbit_common::Env::capture(), &bounded_request, &NoSandbox)?;
     if !result.success {
-        observe_gh_failure_by_deadline(&bounded_request, &result.stderr, deadline);
+        observe_gh_failure_by_deadline(env, &bounded_request, &result.stderr, deadline);
     }
     Ok(result)
 }

@@ -359,6 +359,7 @@ allocation_test!(
                 "{publication_id}: initialize publication"
             );
             publish_task_snapshot(
+                &orbit_common::Env::capture(),
                 &publisher.registry,
                 PublicationPublishRequest {
                     workspace_id: workspace.into(),
@@ -393,6 +394,7 @@ allocation_test!(
                 let cache = target_root.path().join("restore_cache");
                 std::fs::create_dir_all(&cache).unwrap();
                 let outcome = restore_publication(
+                    &orbit_common::Env::capture(),
                     &target,
                     PublicationRestoreRequest {
                         task_workspace_id: "ws_target".into(),

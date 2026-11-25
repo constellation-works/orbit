@@ -66,7 +66,8 @@ impl RuntimeKernel {
         if agent_context_declared(&orbit_common::Env::capture())
             || session.application.is_some()
             || !caller.grants().contains(&McpCapability::Operator)
-            || orbit_tools::plugin::resolve_plugin_callback(&self.global_root())?.is_some()
+            || orbit_tools::plugin::resolve_plugin_callback(self.env(), &self.global_root())?
+                .is_some()
         {
             return Err(OrbitError::CapabilityDenied(
                 "application consent requires a host operator".into(),
@@ -195,7 +196,8 @@ impl RuntimeKernel {
         if agent_context_declared(&orbit_common::Env::capture())
             || session.application.is_some()
             || !caller.grants().contains(&McpCapability::Operator)
-            || orbit_tools::plugin::resolve_plugin_callback(&self.global_root())?.is_some()
+            || orbit_tools::plugin::resolve_plugin_callback(self.env(), &self.global_root())?
+                .is_some()
         {
             return Err(OrbitError::CapabilityDenied(
                 "application revocation requires a host operator".into(),

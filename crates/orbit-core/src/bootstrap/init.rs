@@ -185,7 +185,7 @@ pub fn init_global(
 ) -> Result<InitResult, OrbitError> {
     let global_root = match root_override {
         Some(root) => root.to_path_buf(),
-        None => resolve_global_root()?,
+        None => resolve_global_root(&crate::runtime::process_env())?,
     };
     init_workspace_at_root(
         &global_root,
@@ -209,12 +209,10 @@ pub fn init_workspace_at_root(
     let workspace_global_root = if options.global_only {
         None
     } else {
-        Some(
-            options
-                .global_root_override
-                .clone()
-                .map_or_else(resolve_global_root, Ok::<PathBuf, OrbitError>)?,
-        )
+        Some(options.global_root_override.clone().map_or_else(
+            || resolve_global_root(&crate::runtime::process_env()),
+            Ok::<PathBuf, OrbitError>,
+        )?)
     };
     ProductProfile::Orbit.validate_roots(&[&orbit_root])?;
     if let Some(global_root) = workspace_global_root.as_deref() {

@@ -75,8 +75,9 @@ pub fn run_auth_probe(
         ));
     }
     let executor = host.resolve_cli_executor(provider)?;
-    let program = resolve_provider_launcher(provider, &executor.command, Some(cwd))
-        .map_err(|error| DispatchError::CliInvocationPermanent(error.message))?;
+    let program =
+        resolve_provider_launcher(&host.process_env(), provider, &executor.command, Some(cwd))
+            .map_err(|error| DispatchError::CliInvocationPermanent(error.message))?;
     let resolved = host.resolve_executor_sandbox(provider, None, Some(cwd))?;
     let prepared = prepare_sandbox_for_dispatch(resolved.as_ref())
         .map_err(|error| DispatchError::CliInvocationPermanent(error.message))?;
@@ -121,7 +122,7 @@ pub fn run_auth_probe(
             .iter()
             .map(|(key, value)| ((*key).into(), (*value).into())),
     );
-    let tool_env = orbit_tool_env(&env)
+    let tool_env = orbit_tool_env(&host.process_env(), &env)
         .map_err(|error| DispatchError::CliInvocationPermanent(error.message))?;
     env.extend(tool_env);
     let mut spawned = spawn_for_supervision(

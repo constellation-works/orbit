@@ -159,7 +159,7 @@ impl OrbitRuntime {
             });
         };
         let repo_root = &self.paths().repo_root;
-        let paths = match run_worktree_paths(repo_root, run) {
+        let paths = match run_worktree_paths(self.env(), repo_root, run) {
             Ok(paths) => paths,
             Err(error) => return absent(format!("run {run_id} names no worktree: {error}")),
         };

@@ -380,6 +380,7 @@ pub(super) fn tool_context_for_activity(
     let run_id = run_id.map(str::trim).filter(|value| !value.is_empty());
 
     ToolContext {
+        env: runtime.env().clone(),
         cwd: std::env::current_dir()
             .ok()
             .map(|cwd| cwd.to_string_lossy().into_owned()),

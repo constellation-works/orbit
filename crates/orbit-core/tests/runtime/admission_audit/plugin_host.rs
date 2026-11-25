@@ -100,6 +100,7 @@ fn a_tampered_manifest_claiming_another_plugins_namespace_cannot_displace_its_ac
     let mut registry = ToolRegistry::new();
     registry.register_builtins();
     let load = load_host_plugins(
+        &orbit_common::Env::capture(),
         &global_root,
         &orbit_dir,
         &store,
@@ -173,6 +174,7 @@ fn fs_write_covering_the_plugin_root_is_refused_at_registration() {
     let mut registry = ToolRegistry::new();
     registry.register_builtins();
     let load = load_host_plugins(
+        &orbit_common::Env::capture(),
         &global_root,
         &orbit_dir,
         &store,
@@ -220,6 +222,7 @@ fn fs_write_traversal_to_a_protected_global_path_is_refused_at_registration() {
     let mut registry = ToolRegistry::new();
     registry.register_builtins();
     let load = load_host_plugins(
+        &orbit_common::Env::capture(),
         &global_root,
         &orbit_dir,
         &store,

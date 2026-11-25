@@ -1334,7 +1334,11 @@ fn code_scanning_without_installed_bundle_waits_on_a_prerequisite() {
 
     let mut alert = code_alert(484, "rust/cleartext-logging", "crates/a/src/lib.rs", 12);
     alert["tool_version"] = json!("2.27.5");
-    let first = file(&runtime, code_alerts_snapshot(vec![alert.clone()]), None);
+    let first = file(
+        &orbit_core::test_support::with_runtime_env(runtime.clone(), orbit_common::Env::capture()),
+        code_alerts_snapshot(vec![alert.clone()]),
+        None,
+    );
     assert_eq!(first["filed_count"], 1, "{first}");
     let prerequisites = first["codeql_bundle_prerequisites"].as_array().unwrap();
     assert_eq!(prerequisites.len(), 1, "{first}");
@@ -1351,7 +1355,11 @@ fn code_scanning_without_installed_bundle_waits_on_a_prerequisite() {
         "{drift:?}"
     );
 
-    let second = file(&runtime, code_alerts_snapshot(vec![alert]), None);
+    let second = file(
+        &orbit_core::test_support::with_runtime_env(runtime.clone(), orbit_common::Env::capture()),
+        code_alerts_snapshot(vec![alert]),
+        None,
+    );
     assert_eq!(second["filed_count"], 0, "{second}");
     assert_eq!(drift_frictions(&runtime).len(), 1);
 }

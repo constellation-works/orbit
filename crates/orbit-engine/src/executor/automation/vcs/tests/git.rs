@@ -53,17 +53,19 @@ fn quiet_git_failures_keep_exit_status_and_signal_diagnostics() {
         assert_eq!(raw.status.signal(), signal);
         assert!(raw.stderr.is_empty(), "the Git fixture must fail silently");
 
-        let outcome = git_run(repo.path(), &args).unwrap();
+        let outcome = git_run(&orbit_common::Env::capture(), repo.path(), &args).unwrap();
         assert!(!outcome.success && !outcome.timed_out);
         assert_eq!(outcome.exit_code, exit_code);
         let message =
             git_failure_error(repo.path(), &args, outcome.exit_code, &outcome.stderr).to_string();
         assert!(message.contains(diagnostic), "lost child status: {message}");
 
-        let error = git_output_raw(repo.path(), &args).unwrap_err().to_string();
+        let error = git_output_raw(&orbit_common::Env::capture(), repo.path(), &args)
+            .unwrap_err()
+            .to_string();
         assert!(error.contains(diagnostic), "lost child status: {error}");
 
-        let bytes = git_run_bytes(repo.path(), &args, None).unwrap();
+        let bytes = git_run_bytes(&orbit_common::Env::capture(), repo.path(), &args, None).unwrap();
         assert!(!bytes.success && !bytes.timed_out);
         assert_eq!(bytes.exit_code, exit_code);
         let message =
@@ -139,7 +141,12 @@ fn stalled_delivery_fetch_releases_the_lock_before_a_waiter_times_out() {
                 fetch_ms: GitTimeoutBudget::MAX_MS,
                 ..GitTimeoutBudget::DEFAULT
             });
-            let result = fetch_remote_base_within(&holder_repo, "main", hold_limit);
+            let result = fetch_remote_base_within(
+                &orbit_common::Env::capture(),
+                &holder_repo,
+                "main",
+                hold_limit,
+            );
             done.send((holder_started.elapsed(), format!("{result:?}")))
                 .unwrap();
             result
@@ -291,7 +298,12 @@ fn real_ssh_fetch_starts_under_lock_and_reaps_before_release() {
         let (done, holder_done) = mpsc::sync_channel(1);
         let holder_repo = repo.clone();
         let holder = scope.spawn(move || {
-            let result = fetch_remote_base_within(&holder_repo, "main", startup_limit);
+            let result = fetch_remote_base_within(
+                &orbit_common::Env::capture(),
+                &holder_repo,
+                "main",
+                startup_limit,
+            );
             done.send(format!("{result:?}")).unwrap();
             result
         });
@@ -394,10 +406,10 @@ fn host_git_classifies_failures_in_the_c_locale() {
             "alias.child-locale=!printf '%s\\n' \"$LC_ALL\" \"${LANGUAGE-unset}\"",
             "child-locale",
         ];
-        let outcome = git_run(repo.path(), &args).unwrap();
+        let outcome = git_run(&orbit_common::Env::capture(), repo.path(), &args).unwrap();
         assert!(outcome.success, "{}", outcome.stderr);
         assert_eq!(outcome.stdout, "C\nunset\n");
-        let bytes = git_run_bytes(repo.path(), &args, None).unwrap();
+        let bytes = git_run_bytes(&orbit_common::Env::capture(), repo.path(), &args, None).unwrap();
         assert!(bytes.success, "{}", bytes.stderr);
         assert_eq!(bytes.stdout, b"C\nunset\n");
         git_ok(
@@ -419,7 +431,12 @@ fn host_git_classifies_failures_in_the_c_locale() {
         );
         // Force contention directly rather than relying on host timing.
         fs::write(repo.path().join(".git/refs/heads/fixture.lock"), "held").unwrap();
-        let failed = git_run(repo.path(), &["update-ref", "refs/heads/fixture", "HEAD"]).unwrap();
+        let failed = git_run(
+            &orbit_common::Env::capture(),
+            repo.path(),
+            &["update-ref", "refs/heads/fixture", "HEAD"],
+        )
+        .unwrap();
         assert!(!failed.success && !failed.timed_out);
         assert!(
             is_git_ref_update_contention(&failed.stderr),

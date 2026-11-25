@@ -162,8 +162,14 @@ impl ServeArgs {
                     .to_string(),
             ));
         }
-        let global_root = orbit_core::runtime::resolve_generation_root(root_override)?;
-        let worker = orbit_core::OrbitRuntime::current_worker_invocation(&global_root)?;
+        let global_root = orbit_core::runtime::resolve_generation_root(
+            &orbit_core::composition::process_env(),
+            root_override,
+        )?;
+        let worker = orbit_core::OrbitRuntime::current_worker_invocation(
+            &orbit_core::composition::process_env(),
+            &global_root,
+        )?;
         if worker.is_some()
             && (self.operator
                 || self.internal_drain
@@ -236,8 +242,11 @@ impl ServeArgs {
                     global_root,
                     self.remote_caller_machine_id,
                     requested_authority(self.operator),
-                    self.workspace
-                        .or_else(orbit_core::runtime::managed_workspace_selector_from_env),
+                    self.workspace.or_else(|| {
+                        orbit_core::runtime::managed_workspace_selector_from_env(
+                            &orbit_core::composition::process_env(),
+                        )
+                    }),
                     self.orchestrator,
                     super::server::StdioLaunch {
                         internal_drain: self.internal_drain,

@@ -106,7 +106,10 @@ impl WorkspaceSyncRecord {
 pub(super) fn execute_sync_all(check: bool, root_override: Option<&Path>) -> CommandOut {
     // The host root, never derived from cwd: the command works from any
     // directory, including a home directory that holds the global root.
-    let global_root = orbit_core::runtime::resolve_generation_root(root_override)?;
+    let global_root = orbit_core::runtime::resolve_generation_root(
+        &orbit_core::composition::process_env(),
+        root_override,
+    )?;
     let registry = workspace_registry::load_registry_from(&workspace_registry::registry_path_for(
         &global_root,
     ))?;

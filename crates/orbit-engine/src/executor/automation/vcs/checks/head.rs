@@ -626,9 +626,14 @@ pub(in crate::executor::automation::vcs) fn unmoved_red_base<H: RuntimeHost + ?S
             // the hold. A diagnostic-only aggregate must not cancel its
             // leaf's suspicion while dependency evidence is unproven.
             CheckFailureClass::Candidate => {
-                candidate_owned |=
-                    super::suspect::cites_changed_candidate(workspace, head, base, &log)
-                        .map_err(|error| error.to_string())?;
+                candidate_owned |= super::suspect::cites_changed_candidate(
+                    &host.process_env(),
+                    workspace,
+                    head,
+                    base,
+                    &log,
+                )
+                .map_err(|error| error.to_string())?;
             }
             CheckFailureClass::Inconclusive => {
                 inconclusive.get_or_insert(format!("'{label}' is inconclusive: {why}"));
@@ -649,7 +654,8 @@ pub(in crate::executor::automation::vcs) fn unmoved_red_base<H: RuntimeHost + ?S
     // cannot prove whether the base fixed every failed check: repairing now
     // would spend an attempt on a failure the new base may already clear.
     // The landing's own branch update does not use this hold.
-    if let Some(tip) = moved_tip.filter(|tip| !contains(workspace, tip, head)) {
+    if let Some(tip) = moved_tip.filter(|tip| !contains(&host.process_env(), workspace, tip, head))
+    {
         tip_jobs.get_or_insert_with(|| {
             commit_jobs(host, workspace, tip).map_err(|error| error.to_string())
         });
@@ -781,7 +787,8 @@ fn inherited<H: RuntimeHost + ?Sized>(
     // authorize one unchanged-head rerun. A moved-tip pass must not become an
     // inherited branch update for an untouched failure; a same-signature tip
     // failure remains inherited below.
-    let untouched = super::suspect::is_untouched_failure(workspace, head, base, log)?;
+    let untouched =
+        super::suspect::is_untouched_failure(&host.process_env(), workspace, head, base, log)?;
     if tip_jobs.iter().any(|candidate| {
         same_job(candidate, job) && candidate.conclusion.value() == Some(&CiJobConclusion::Success)
     }) {
@@ -799,7 +806,7 @@ fn inherited<H: RuntimeHost + ?Sized>(
             .filter(|candidate| same_job(candidate, job) && unsuccessful(candidate))
         {
             let fresh = super::suspect::started_after_completion(job, candidate)
-                || contains(workspace, tip, head);
+                || contains(&host.process_env(), workspace, tip, head);
             if !fresh {
                 continue;
             }

@@ -32,7 +32,7 @@ const PUSH_FORGE_MAX_WINDOW_MS: u64 = 2 * 60 * 60 * 1000;
 /// Largest forge refusal a hold carries.
 const FORGE_HOLD_DIAGNOSTIC_BYTES: usize = 2048;
 
-pub(super) fn push(input: &Value) -> Result<Value, OrbitError> {
+pub(super) fn push(process_env: &orbit_common::Env, input: &Value) -> Result<Value, OrbitError> {
     let repo_root = required_string(input, "repo_root")?;
     let branch = required_string(input, "branch")?;
     let force_with_lease = input
@@ -58,6 +58,7 @@ pub(super) fn push(input: &Value) -> Result<Value, OrbitError> {
     args.extend(["--".to_string(), "origin".to_string(), branch.to_string()]);
     let target_ref = format!("refs/heads/{branch}");
     let local_head = execute(
+        process_env,
         "git",
         vec!["rev-parse".into(), "--verify".into(), target_ref.clone()],
         Some(Path::new(repo_root)),
@@ -65,6 +66,7 @@ pub(super) fn push(input: &Value) -> Result<Value, OrbitError> {
         "push local head",
     )?;
     let pushed = execute_push_with_transient_retry(
+        process_env,
         &args,
         Path::new(repo_root),
         &target_ref,
@@ -78,7 +80,10 @@ pub(super) fn push(input: &Value) -> Result<Value, OrbitError> {
 
 /// Push `head_sha` to `target_ref` on `origin`, replacing whatever the ref
 /// held: the ref is owned by the one run named in it.
-pub(super) fn push_candidate_ref(input: &Value) -> Result<Value, OrbitError> {
+pub(super) fn push_candidate_ref(
+    process_env: &orbit_common::Env,
+    input: &Value,
+) -> Result<Value, OrbitError> {
     let repo_root = required_string(input, "repo_root")?;
     let head_sha = required_string(input, "head_sha")?;
     let target_ref = required_string(input, "target_ref")?;
@@ -97,6 +102,7 @@ pub(super) fn push_candidate_ref(input: &Value) -> Result<Value, OrbitError> {
     // A carried candidate ref is pushed by a failure activity, which has no
     // later step to hold at: exhausting its budget is an ordinary failure.
     let pushed = execute_push_with_transient_retry(
+        process_env,
         &[
             "push".to_string(),
             "--".to_string(),
@@ -313,11 +319,13 @@ enum RefTip {
 /// an exact match reports why, so a timed-out push can name the miss without
 /// a second probe.
 fn confirmed_at_publication_destination(
+    process_env: &orbit_common::Env,
     repo_root: &Path,
     target_ref: &str,
     head_sha: &str,
 ) -> Result<PublicationObservation, OrbitError> {
     let listed = execute(
+        process_env,
         "git",
         vec![
             "remote".into(),
@@ -357,6 +365,7 @@ fn confirmed_at_publication_destination(
             target.probe_url.clone(),
         ]);
         let expanded = execute(
+            process_env,
             "git",
             verify_args,
             Some(repo_root),
@@ -380,6 +389,7 @@ fn confirmed_at_publication_destination(
             target_ref.into(),
         ]);
         let remote = execute(
+            process_env,
             "git",
             args,
             Some(repo_root),
@@ -468,6 +478,7 @@ fn timed_out_confirmation_error(
 /// landed; an exact ref is success, and any other outcome fails without
 /// sending the push again.
 fn confirm_timed_out_push(
+    process_env: &orbit_common::Env,
     repo_root: &Path,
     target_ref: &str,
     head_sha: &str,
@@ -475,7 +486,8 @@ fn confirm_timed_out_push(
     attempt: u32,
     waited_ms: u64,
 ) -> Result<Pushed, PushFailure> {
-    let observation = confirmed_at_publication_destination(repo_root, target_ref, head_sha);
+    let observation =
+        confirmed_at_publication_destination(process_env, repo_root, target_ref, head_sha);
     match observation {
         Ok(PublicationObservation::Landed(confirmation)) => {
             tracing::info!(target: "orbit_engine::executor::automation::vcs::operations",
@@ -514,6 +526,7 @@ fn confirm_timed_out_push(
 /// and is not retried: an exact ref is a landed push, and any other outcome
 /// fails. A failed remote read stops further mutations.
 pub(super) fn execute_push_with_transient_retry(
+    process_env: &orbit_common::Env,
     args: &[String],
     repo_root: &Path,
     target_ref: &str,
@@ -535,6 +548,7 @@ pub(super) fn execute_push_with_transient_retry(
     let mut no_thin = false;
     loop {
         let result = run_vcs_process(
+            process_env,
             "git",
             push_attempt_args(args, no_thin),
             Some(repo_root),
@@ -544,7 +558,13 @@ pub(super) fn execute_push_with_transient_retry(
         let diagnostic = format!("{}\n{}", result.stdout, result.stderr);
         if result.timed_out {
             return confirm_timed_out_push(
-                repo_root, target_ref, head_sha, operation, attempt, waited_ms,
+                process_env,
+                repo_root,
+                target_ref,
+                head_sha,
+                operation,
+                attempt,
+                waited_ms,
             );
         }
         if result.success || !is_transient_push_failure(&diagnostic) {
@@ -565,7 +585,7 @@ pub(super) fn execute_push_with_transient_retry(
         // the fetch URL, and probing the resolved push URL by URL would
         // apply `insteadOf` to it a second time [ORB-17671, ORB-17686].
         if let PublicationObservation::Landed(confirmation) =
-            confirmed_at_publication_destination(repo_root, target_ref, head_sha)
+            confirmed_at_publication_destination(process_env, repo_root, target_ref, head_sha)
                 .map_err(PushFailure::Error)?
         {
             tracing::info!(target: "orbit_engine::executor::automation::vcs::operations",

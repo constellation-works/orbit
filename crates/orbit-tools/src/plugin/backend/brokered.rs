@@ -69,13 +69,14 @@ impl PluginBackendSpec {
     /// widens it.
     pub fn brokered_sandbox_profile(
         &self,
+        process_env: &orbit_common::Env,
         caller: &BrokeredCaller,
     ) -> Result<PluginSandboxProfile, OrbitError> {
         let mut ctx = ToolContext::default();
         caller.restrict(&mut ctx);
         self.enforce_programs(&ctx, &self.provenance.name)?;
 
-        let mut profile = self.sandbox_profile(Some(&caller.worktree))?;
+        let mut profile = self.sandbox_profile(process_env, Some(&caller.worktree))?;
         if profile.unsandboxed {
             return Err(OrbitError::PolicyDenied(format!(
                 "plugin '{}' runs unsandboxed (`backend.sandbox: none`), so the host cannot hold \

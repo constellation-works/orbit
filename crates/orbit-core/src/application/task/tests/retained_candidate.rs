@@ -50,11 +50,15 @@ fn truncated_candidate_status_marks_the_omitted_count_as_a_lower_bound() {
     let worktrees = root.path().join("worktrees");
     // The isolated child can inherit a host worktree root. Pin it for this process.
     unsafe { std::env::set_var("ORBIT_WORKTREE_ROOT", &worktrees) };
-    let path = run_worktree_paths(&runtime.paths().repo_root, &run)
-        .expect("worktree path")
-        .into_iter()
-        .next()
-        .expect("one path");
+    let path = run_worktree_paths(
+        &orbit_common::Env::capture(),
+        &runtime.paths().repo_root,
+        &run,
+    )
+    .expect("worktree path")
+    .into_iter()
+    .next()
+    .expect("one path");
     std::fs::create_dir_all(&path).expect("worktree dir");
     git(&path, &["init", "-b", "main"]);
     std::fs::write(path.join("README"), "kept\n").expect("readme");

@@ -54,6 +54,7 @@ pub fn host_plugin_rows(global_root: &Path) -> Result<Vec<InstalledPlugin>, Orbi
 /// inside Core's ordinary audited dispatch boundary and with the plugin's
 /// provenance on the row.
 pub fn execute_global_plugin_tool(
+    process_env: &orbit_common::Env,
     global_root: &Path,
     name: &str,
     input: Value,
@@ -67,6 +68,7 @@ pub fn execute_global_plugin_tool(
         &config.plugins,
     )?;
     crate::adapter::command::dispatch::execute_global_plugin_dispatch(
+        process_env,
         global_root,
         name,
         input,

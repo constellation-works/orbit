@@ -19,3 +19,8 @@ pub use crate::runtime::{captured_env, install_captured_env};
 pub fn composition_env() -> orbit_common::Env {
     crate::runtime::process_env()
 }
+
+/// Supply the captured process snapshot to composition callers.
+pub fn process_env() -> orbit_common::Env {
+    crate::runtime::process_env()
+}

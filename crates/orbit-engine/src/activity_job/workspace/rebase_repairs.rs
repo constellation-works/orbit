@@ -32,13 +32,14 @@ const BINARY_SNIFF_BYTES: usize = 8000;
 /// The authorized conflict paths that hold no repair: neither changed by
 /// this invocation (`changed`) nor repaired before it.
 pub(super) fn unrepaired_conflict_paths(
+    process_env: &orbit_common::Env,
     root: &Path,
     conflicting_paths: &[String],
     changed: &[String],
 ) -> Result<Vec<String>, DispatchError> {
     let mut unrepaired = Vec::new();
     for path in conflicting_paths {
-        if !changed.contains(path) && !repaired_before_invocation(root, path)? {
+        if !changed.contains(path) && !repaired_before_invocation(process_env, root, path)? {
             unrepaired.push(path.clone());
         }
     }
@@ -53,6 +54,7 @@ pub(super) fn unrepaired_conflict_paths(
 /// hold that exact blob and mode as a regular, marker-free file; a deletion
 /// must leave nothing at the path. Any mismatch refuses the whole intent.
 pub(super) fn adopt_resolution_intents(
+    process_env: &orbit_common::Env,
     root: &Path,
     intents: &[ResolutionIntent],
     authorized: &[String],
@@ -64,7 +66,7 @@ pub(super) fn adopt_resolution_intents(
         if !authorized.iter().any(|authorized| authorized == path) || is_host_owned_path(path) {
             return Err(refused("names a path outside the authorized conflict set"));
         }
-        let stages = conflict_stages(root, path).map_err(|error| error.to_string())?;
+        let stages = conflict_stages(process_env, root, path).map_err(|error| error.to_string())?;
         if stages.contains_key(&2) == stages.contains_key(&3) {
             return Err(refused("does not name a modify/delete conflict"));
         }
@@ -96,11 +98,14 @@ pub(super) fn adopt_resolution_intents(
         if has_conflict_markers(&content) {
             return Err(refused("keeps a side, but the file holds conflict markers"));
         }
-        let blob = git_stdout(root, &["hash-object", "--", path]).map_err(|e| e.to_string())?;
+        let blob = git_stdout(process_env, root, &["hash-object", "--", path])
+            .map_err(|e| e.to_string())?;
         if blob != side.oid {
             return Err(refused("keeps a side the worktree content differs from"));
         }
-        if !mode_matches(root, &metadata, &side.mode).map_err(|error| error.to_string())? {
+        if !mode_matches(process_env, root, &metadata, &side.mode)
+            .map_err(|error| error.to_string())?
+        {
             return Err(refused(
                 "keeps a side whose file mode the worktree differs from",
             ));
@@ -112,12 +117,18 @@ pub(super) fn adopt_resolution_intents(
 
 /// Whether the worktree file's executable bit matches the stage mode, where
 /// Git tracks file modes at all.
-fn mode_matches(root: &Path, metadata: &fs::Metadata, mode: &str) -> Result<bool, DispatchError> {
+fn mode_matches(
+    process_env: &orbit_common::Env,
+    root: &Path,
+    metadata: &fs::Metadata,
+    mode: &str,
+) -> Result<bool, DispatchError> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
 
         let tracked = git_stdout(
+            process_env,
             root,
             &[
                 "config",
@@ -171,8 +182,12 @@ pub(super) fn earlier_companion_paths(
 /// repair. A path Git would have written but that is now absent was deleted
 /// as its resolution. Anything else (a symlink or
 /// directory in the way) is not adopted; the invocation must repair it.
-fn repaired_before_invocation(root: &Path, path: &str) -> Result<bool, DispatchError> {
-    let stages = conflict_stages(root, path)?;
+fn repaired_before_invocation(
+    process_env: &orbit_common::Env,
+    root: &Path,
+    path: &str,
+) -> Result<bool, DispatchError> {
+    let stages = conflict_stages(process_env, root, path)?;
     let sides = [stages.get(&2), stages.get(&3)];
     let file = root.join(path);
     let Ok(metadata) = fs::symlink_metadata(&file) else {
@@ -189,13 +204,17 @@ fn repaired_before_invocation(root: &Path, path: &str) -> Result<bool, DispatchE
     if has_conflict_markers(&content) {
         return Ok(false);
     }
-    let blob = git_stdout(root, &["hash-object", "--", path])?;
-    if let Some(tree) = auto_merge_tree(root)? {
-        let stopped = git_output_raw(root, &["rev-parse", "--verify", &format!("{tree}:{path}")])?;
+    let blob = git_stdout(process_env, root, &["hash-object", "--", path])?;
+    if let Some(tree) = auto_merge_tree(process_env, root)? {
+        let stopped = git_output_raw(
+            process_env,
+            root,
+            &["rev-parse", "--verify", &format!("{tree}:{path}")],
+        )?;
         return Ok(stopped.success && String::from_utf8_lossy(&stopped.stdout).trim() != blob);
     }
-    let driver = merge_driver(root, path)?;
-    if driver == "text" && textual_merge(root, &stages)? {
+    let driver = merge_driver(process_env, root, path)?;
+    if driver == "text" && textual_merge(process_env, root, &stages)? {
         return Ok(true);
     }
     // Without the original output, custom drivers' arbitrary writes cannot
@@ -207,20 +226,32 @@ fn repaired_before_invocation(root: &Path, path: &str) -> Result<bool, DispatchE
 }
 
 /// The stopped merge's original worktree tree, when the Git strategy records it.
-pub(super) fn auto_merge_tree(root: &Path) -> Result<Option<String>, DispatchError> {
-    let output = git_output_raw(root, &["rev-parse", "--verify", "AUTO_MERGE^{tree}"])?;
+pub(super) fn auto_merge_tree(
+    process_env: &orbit_common::Env,
+    root: &Path,
+) -> Result<Option<String>, DispatchError> {
+    let output = git_output_raw(
+        process_env,
+        root,
+        &["rev-parse", "--verify", "AUTO_MERGE^{tree}"],
+    )?;
     Ok(output
         .success
         .then(|| String::from_utf8_lossy(&output.stdout).trim().to_string()))
 }
 
 /// Respect both the path attribute and the driver selected for unspecified paths.
-fn merge_driver(root: &Path, path: &str) -> Result<String, DispatchError> {
-    let merge = git_stdout(root, &["check-attr", "merge", "--", path])?;
+fn merge_driver(
+    process_env: &orbit_common::Env,
+    root: &Path,
+    path: &str,
+) -> Result<String, DispatchError> {
+    let merge = git_stdout(process_env, root, &["check-attr", "merge", "--", path])?;
     match merge.rsplit(": ").next() {
         Some("set") => Ok("text".to_string()),
         Some("unset") => Ok("binary".to_string()),
         Some("unspecified") => git_stdout(
+            process_env,
             root,
             &["config", "--default", "text", "--get", "merge.default"],
         ),
@@ -234,8 +265,16 @@ struct StageEntry {
     oid: String,
 }
 
-fn conflict_stages(root: &Path, path: &str) -> Result<BTreeMap<u8, StageEntry>, DispatchError> {
-    let listing = git_stdout_bytes(root, &["ls-files", "--unmerged", "-z", "--", path])?;
+fn conflict_stages(
+    process_env: &orbit_common::Env,
+    root: &Path,
+    path: &str,
+) -> Result<BTreeMap<u8, StageEntry>, DispatchError> {
+    let listing = git_stdout_bytes(
+        process_env,
+        root,
+        &["ls-files", "--unmerged", "-z", "--", path],
+    )?;
     let mut stages = BTreeMap::new();
     for record in listing.split(|byte| *byte == 0) {
         let record = String::from_utf8_lossy(record);
@@ -265,12 +304,17 @@ fn conflict_stages(root: &Path, path: &str) -> Result<BTreeMap<u8, StageEntry>, 
 
 /// Whether a built-in text merge writes markers: both sides must exist and
 /// every present stage, including the ancestor, must be a regular text file.
-fn textual_merge(root: &Path, stages: &BTreeMap<u8, StageEntry>) -> Result<bool, DispatchError> {
+fn textual_merge(
+    process_env: &orbit_common::Env,
+    root: &Path,
+    stages: &BTreeMap<u8, StageEntry>,
+) -> Result<bool, DispatchError> {
     if !stages.contains_key(&2) || !stages.contains_key(&3) {
         return Ok(false);
     }
     for stage in stages.values() {
-        if !matches!(stage.mode.as_str(), "100644" | "100755") || blob_is_binary(root, &stage.oid)?
+        if !matches!(stage.mode.as_str(), "100644" | "100755")
+            || blob_is_binary(process_env, root, &stage.oid)?
         {
             return Ok(false);
         }
@@ -278,8 +322,12 @@ fn textual_merge(root: &Path, stages: &BTreeMap<u8, StageEntry>) -> Result<bool,
     Ok(true)
 }
 
-fn blob_is_binary(root: &Path, oid: &str) -> Result<bool, DispatchError> {
-    let output = git_output_raw(root, &["cat-file", "blob", oid])?;
+fn blob_is_binary(
+    process_env: &orbit_common::Env,
+    root: &Path,
+    oid: &str,
+) -> Result<bool, DispatchError> {
+    let output = git_output_raw(process_env, root, &["cat-file", "blob", oid])?;
     if !output.success {
         return Err(DispatchError::CliInvocationPermanent(format!(
             "read the conflict side blob {oid}"

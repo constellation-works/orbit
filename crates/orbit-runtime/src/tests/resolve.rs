@@ -130,13 +130,15 @@ mod git_spawns {
         let expected_shared = main.join(".orbit");
         let expected_local = worktree.join(".orbit");
 
-        let roots = crate::resolve_bootstrap_roots(&deep, None).expect("bootstrap roots");
+        let roots = crate::resolve_bootstrap_roots(&orbit_common::Env::capture(), &deep, None)
+            .expect("bootstrap roots");
         assert_eq!(roots.shared_root, expected_shared);
         assert_eq!(roots.local_root, expected_local);
         assert_eq!(spawn_count(&count), 0, "bootstrap roots must not spawn git");
         reset_count(&count);
 
-        let roots = crate::resolve_initialize_roots(&deep, None).expect("initialize roots");
+        let roots = crate::resolve_initialize_roots(&orbit_common::Env::capture(), &deep, None)
+            .expect("initialize roots");
         assert_eq!(roots.shared_root, expected_shared);
         assert_eq!(roots.local_root, expected_local);
         assert_eq!(
@@ -166,7 +168,8 @@ mod git_spawns {
         // git for an ordinary checkout's top level (pre-existing, out of
         // scope for this change).
         let expected = main.join(".orbit");
-        let roots = crate::resolve_initialize_roots(&deep, None).expect("initialize roots");
+        let roots = crate::resolve_initialize_roots(&orbit_common::Env::capture(), &deep, None)
+            .expect("initialize roots");
         assert_eq!(roots.shared_root, expected);
         assert_eq!(roots.local_root, expected);
         assert_eq!(
@@ -211,8 +214,12 @@ mod git_spawns {
 
         // A submodule gitfile points into `modules/` and must not resolve to
         // the main checkout; git stays the authority, so git must run.
-        assert_eq!(crate::paths::find_git_main_worktree_root(&sub), None);
-        let worktree = crate::paths::find_git_worktree_root(&sub).expect("submodule root");
+        assert_eq!(
+            crate::paths::find_git_main_worktree_root(&orbit_common::Env::capture(), &sub),
+            None
+        );
+        let worktree = crate::paths::find_git_worktree_root(&orbit_common::Env::capture(), &sub)
+            .expect("submodule root");
         assert_eq!(worktree, sub.canonicalize().expect("canonical sub"));
         assert!(
             spawn_count(&count) > 0,
@@ -253,7 +260,8 @@ mod git_spawns {
         unsafe {
             std::env::set_var("GIT_DIR", "/nonexistent-git-dir-for-test");
         }
-        let roots = crate::resolve_bootstrap_roots(&deep, None).expect("bootstrap roots");
+        let roots = crate::resolve_bootstrap_roots(&orbit_common::Env::capture(), &deep, None)
+            .expect("bootstrap roots");
         assert_eq!(roots.shared_root, main.join(".orbit"));
         assert_eq!(roots.local_root, worktree.join(".orbit"));
         assert!(
@@ -289,11 +297,12 @@ mod invalid_config_path {
         std::fs::write(orbit_dir.join("config.toml"), "root = = invalid\n")
             .expect("invalid config");
 
-        let message = match crate::resolve_bootstrap_roots(&workspace, None) {
-            Err(OrbitError::InvalidInput(message)) => message,
-            Err(other) => panic!("expected InvalidInput, got {other:?}"),
-            Ok(_) => panic!("an unparseable config.toml must be refused"),
-        };
+        let message =
+            match crate::resolve_bootstrap_roots(&orbit_common::Env::capture(), &workspace, None) {
+                Err(OrbitError::InvalidInput(message)) => message,
+                Err(other) => panic!("expected InvalidInput, got {other:?}"),
+                Ok(_) => panic!("an unparseable config.toml must be refused"),
+            };
         assert!(
             message.starts_with("invalid runtime config '~/project/.orbit/config.toml': "),
             "the config path must be home-redacted: {message}"
@@ -323,11 +332,12 @@ mod invalid_config_path {
         // A directory at the config path deterministically makes read_to_string fail.
         std::fs::create_dir(orbit_dir.join("config.toml")).expect("config directory");
 
-        let message = match crate::resolve_bootstrap_roots(&workspace, None) {
-            Err(OrbitError::Io(message)) => message,
-            Err(other) => panic!("expected Io, got {other:?}"),
-            Ok(_) => panic!("an unreadable config.toml must be refused"),
-        };
+        let message =
+            match crate::resolve_bootstrap_roots(&orbit_common::Env::capture(), &workspace, None) {
+                Err(OrbitError::Io(message)) => message,
+                Err(other) => panic!("expected Io, got {other:?}"),
+                Ok(_) => panic!("an unreadable config.toml must be refused"),
+            };
         assert!(
             message.starts_with("failed to read runtime config '~/project/.orbit/config.toml': "),
             "the config path must be home-redacted: {message}"

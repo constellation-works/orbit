@@ -37,7 +37,8 @@ pub(super) fn host_ssh_command(args: &[std::ffi::OsString]) -> Option<String> {
             rest.push(quoted);
         }
     }
-    let global_root = orbit_core::runtime::resolve_global_root().ok()?;
+    let global_root =
+        orbit_core::runtime::resolve_global_root(&orbit_core::composition::process_env()).ok()?;
     let target = orbit_cmd::hosts::host_ssh_target(&global_root, host?.trim()).ok()??;
     let command = if rest.is_empty() {
         "orbit".to_string()

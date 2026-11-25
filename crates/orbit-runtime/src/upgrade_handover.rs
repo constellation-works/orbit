@@ -51,8 +51,8 @@ pub fn bind_worker_run(run_id: &str) {
 }
 
 /// Whether this process was handed `run_id` by its previous image.
-pub fn adopts_run(run_id: &str) -> bool {
-    std::env::var_os(ADOPT_RUN_ENV).as_deref() == Some(OsStr::new(run_id))
+pub fn adopts_run(env: &orbit_common::Env, run_id: &str) -> bool {
+    env.orbit_adopt_pipeline_run() == Some(OsStr::new(run_id))
 }
 
 /// This worker's run and the switch it must yield to, when both exist.
@@ -80,7 +80,7 @@ impl RuntimeKernel {
     /// switch, or hand over to a replaced installation that can adopt the
     /// run. Neither returns; a failed handover is logged and the drain keeps
     /// running the replaced image.
-    pub fn drain_upgrade_boundary(&self) {
+    pub fn drain_upgrade_boundary(&self, args: impl FnOnce() -> Vec<std::ffi::OsString>) {
         let Some(run_id) = WORKER_RUN.get() else {
             return;
         };
@@ -101,8 +101,7 @@ impl RuntimeKernel {
             installed = %installed.display(),
             "the installed Orbit executable was replaced; handing this drain over to it",
         );
-        let args: Vec<_> = std::env::args_os().skip(1).collect();
-        let error = reexec(&installed, &args, &[(ADOPT_RUN_ENV, OsStr::new(run_id))]);
+        let error = reexec(&installed, &args(), &[(ADOPT_RUN_ENV, OsStr::new(run_id))]);
         tracing::warn!(
             target: "orbit.generation",
             run_id,

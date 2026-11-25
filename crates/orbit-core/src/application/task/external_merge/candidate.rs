@@ -658,6 +658,7 @@ impl OrbitRuntime {
             // head off the published one. It settles only when every commit
             // it adds is a clean merge of target-branch commits.
             return match orbit_engine::verify_merged_base_refresh(
+                self.env(),
                 &self.paths().repo_root,
                 &orbit_engine::MergedBaseRefresh {
                     published_head: &proof.head,
@@ -742,6 +743,7 @@ impl OrbitRuntime {
         }
         if proof.head != head_sha
             && orbit_engine::verify_refreshed_head_from_base(
+                self.env(),
                 &self.paths().repo_root,
                 &proof.head,
                 head_sha,

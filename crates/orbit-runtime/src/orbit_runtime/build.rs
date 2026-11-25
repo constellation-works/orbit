@@ -19,6 +19,19 @@ use crate::workspace::binding::WorkspaceRuntimeBinding;
 use crate::{builder, worker_coordination};
 
 impl RuntimeKernel {
+    /// Inject a caller's environment snapshot into a test fixture.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn with_test_env(mut self, env: orbit_common::Env) -> Self {
+        let base = self.base_mut();
+        base.policy.execution_env_policy = base
+            .policy
+            .execution_env_policy
+            .clone()
+            .with_parent_env(&env);
+        base.env = env;
+        self
+    }
+
     /// Set the observation clock for deterministic CI-failure filing.
     /// Without an override, filing uses the current UTC time.
     pub fn with_ci_failure_time(mut self, now: chrono::DateTime<chrono::Utc>) -> Self {
@@ -54,6 +67,7 @@ impl RuntimeKernel {
 
     #[allow(clippy::too_many_arguments)]
     pub fn build_from_resolved_config(
+        env: &orbit_common::Env,
         roots: &OrbitRuntimeRoots,
         binding: Option<WorkspaceRuntimeBinding>,
         runtime_config: &orbit_config::ResolvedConfig,
@@ -71,6 +85,7 @@ impl RuntimeKernel {
         };
         Self::finish_from_context(
             builder::build_context_from_roots(
+                env,
                 roots,
                 binding.as_ref(),
                 runtime_config,
@@ -86,7 +101,9 @@ impl RuntimeKernel {
         )
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn build_from_resolved_config_write_free(
+        env: &orbit_common::Env,
         roots: &OrbitRuntimeRoots,
         binding: Option<WorkspaceRuntimeBinding>,
         runtime_config: &orbit_config::ResolvedConfig,
@@ -97,6 +114,7 @@ impl RuntimeKernel {
     ) -> Result<Self, OrbitError> {
         let mut runtime = Self::finish_from_context(
             builder::build_context_from_roots(
+                env,
                 roots,
                 binding.as_ref(),
                 runtime_config,
@@ -139,7 +157,9 @@ impl RuntimeKernel {
             .with_shared_history(global_root)
             .sampled_in_background(),
         );
-        let worker_invocation = worker_coordination::restore_process_binding(global_root)?;
+        let worker_invocation =
+            worker_coordination::restore_process_binding(&context.env, global_root)?;
+        let task_pr_forge = default_task_pr_forge(&context.env);
         Ok(Self::from_layers(
             application,
             context,
@@ -149,7 +169,7 @@ impl RuntimeKernel {
             layout_report,
             host_resources,
             default_host_signal_probe(),
-            default_task_pr_forge(),
+            task_pr_forge,
             None,
             worker_invocation,
         ))
@@ -172,6 +192,7 @@ impl RuntimeKernel {
     ) -> Self {
         let base = Base::new(
             context.paths,
+            context.env,
             context.policy,
             context.settings,
             config_loader,
@@ -199,6 +220,7 @@ impl RuntimeKernel {
     }
 
     pub fn build_in_memory_from_resolved_config(
+        env: &orbit_common::Env,
         data_root: &Path,
         workspace_root: &Path,
         runtime_config: &orbit_config::ResolvedConfig,
@@ -224,6 +246,7 @@ impl RuntimeKernel {
             local_root: workspace_root.to_path_buf(),
         };
         let context = builder::build_context_from_roots(
+            env,
             &roots,
             Some(&binding),
             runtime_config,

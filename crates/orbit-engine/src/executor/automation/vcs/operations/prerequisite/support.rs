@@ -9,11 +9,13 @@ pub(in super::super) fn unreadable(reason: &str) -> OrbitError {
     OrbitError::workflow_evidence_unavailable(reason)
 }
 pub(in super::super) fn api(
+    process_env: &orbit_common::Env,
     deadline: Deadline,
     workspace: &Path,
     endpoint: &str,
 ) -> Result<Value, OrbitError> {
     let response = deadline.execute(
+        process_env,
         "gh",
         vec!["api".into(), endpoint.into()],
         workspace,

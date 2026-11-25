@@ -36,6 +36,7 @@ pub(super) fn certify_empty_rebase<H: RuntimeHost + ?Sized>(
     }
     let workspace = context.workspace_path.as_path();
     if !git_output_raw(
+        &host.process_env(),
         workspace,
         &["status", "--porcelain", "--untracked-files=all"],
     )?
@@ -47,16 +48,21 @@ pub(super) fn certify_empty_rebase<H: RuntimeHost + ?Sized>(
         ));
     }
     let head_sha_before = required_input_string(input, "head_sha")?;
-    let original_base = original_base_sha(workspace, head_sha_before, base_sha)?;
-    let (covering, candidate_paths) =
-        covering_commit(workspace, &original_base, head_sha_before, base_sha)?.ok_or_else(
-            || {
-                refused(
-                    AbsorbedReason::NoCoveringCommit,
-                    "the synced base does not hold the candidate's exact content",
-                )
-            },
-        )?;
+    let original_base =
+        original_base_sha(&host.process_env(), workspace, head_sha_before, base_sha)?;
+    let (covering, candidate_paths) = covering_commit(
+        &host.process_env(),
+        workspace,
+        &original_base,
+        head_sha_before,
+        base_sha,
+    )?
+    .ok_or_else(|| {
+        refused(
+            AbsorbedReason::NoCoveringCommit,
+            "the synced base does not hold the candidate's exact content",
+        )
+    })?;
     let run_id = recovery_run_id(input, context);
     let workspace_path = workspace.to_string_lossy().into_owned();
     let dispatch = |error: crate::context::dispatch_contract::DispatchError| {
@@ -101,11 +107,12 @@ pub(super) fn certify_empty_rebase<H: RuntimeHost + ?Sized>(
 }
 
 pub(in crate::executor::automation::vcs) fn ensure_clean_for_rewrite(
+    process_env: &orbit_common::Env,
     workspace_path: &Path,
     head_sha_before: &str,
     what: &str,
 ) -> Result<(), OrbitError> {
-    let dirty_paths = dirty_worktree_paths(workspace_path)?;
+    let dirty_paths = dirty_worktree_paths(process_env, workspace_path)?;
     if !dirty_paths.is_empty() {
         return Err(OrbitError::Execution(format!(
             "git_rebase: refusing to rewrite {what} on top of checkpoint '{head_sha_before}': \
@@ -123,32 +130,44 @@ pub(in crate::executor::automation::vcs) fn ensure_clean_for_rewrite(
 /// Uses [`git_output_raw`] rather than [`git_output`]: the latter trims the
 /// whole output, which would eat the leading status column of a single-line
 /// result (` M path` -> `M path`) and misalign every path by one byte.
-fn dirty_worktree_paths(workspace_path: &Path) -> Result<Vec<String>, OrbitError> {
-    Ok(git_output_raw(workspace_path, &["status", "--porcelain"])?
-        .lines()
-        .filter_map(|line| line.get(3..))
-        .map(str::trim)
-        .filter(|path| !path.is_empty())
-        .map(ToOwned::to_owned)
-        .collect())
+fn dirty_worktree_paths(
+    process_env: &orbit_common::Env,
+    workspace_path: &Path,
+) -> Result<Vec<String>, OrbitError> {
+    Ok(
+        git_output_raw(process_env, workspace_path, &["status", "--porcelain"])?
+            .lines()
+            .filter_map(|line| line.get(3..))
+            .map(str::trim)
+            .filter(|path| !path.is_empty())
+            .map(ToOwned::to_owned)
+            .collect(),
+    )
 }
 
 pub(super) fn refuse_or_recover_existing_rebase(
+    process_env: &orbit_common::Env,
     workspace_path: &Path,
     head: &str,
     head_sha_before: &str,
     base_sha: &str,
 ) -> Result<Value, OrbitError> {
-    let conflicting_paths = unmerged_paths(workspace_path)?;
+    let conflicting_paths = unmerged_paths(process_env, workspace_path)?;
     if !conflicting_paths.is_empty() {
         // A conflict recovery round can leave this candidate's rebase stopped
         // on a later pick. It stays pinned to its own `onto`, which a
         // completion retry's fresh base fetch may already have passed; the
         // next round must describe that pin to be admitted.
-        let onto = read_rebase_state(workspace_path, "onto")?;
+        let onto = read_rebase_state(process_env, workspace_path, "onto")?;
         let target_base_sha = match onto.as_deref() {
             Some(onto)
-                if rebase_belongs_to_attempt(workspace_path, head, head_sha_before, onto)? =>
+                if rebase_belongs_to_attempt(
+                    process_env,
+                    workspace_path,
+                    head,
+                    head_sha_before,
+                    onto,
+                )? =>
             {
                 onto
             }
@@ -157,8 +176,8 @@ pub(super) fn refuse_or_recover_existing_rebase(
         // Naming the stopped pick tells a later stop of the same rebase
         // apart from the one a recovery round just resolved.
         let diagnostic = match (
-            read_rebase_state(workspace_path, "msgnum")?,
-            read_rebase_state(workspace_path, "end")?,
+            read_rebase_state(process_env, workspace_path, "msgnum")?,
+            read_rebase_state(process_env, workspace_path, "end")?,
         ) {
             (Some(pick), Some(end)) => {
                 format!(
@@ -168,6 +187,7 @@ pub(super) fn refuse_or_recover_existing_rebase(
             _ => "rebase remains stopped with unresolved conflicts".to_string(),
         };
         return Err(rebase_conflict_error(
+            process_env,
             workspace_path,
             head_sha_before,
             target_base_sha,
@@ -175,19 +195,20 @@ pub(super) fn refuse_or_recover_existing_rebase(
             &diagnostic,
         )?);
     }
-    if rebase_belongs_to_attempt(workspace_path, head, head_sha_before, base_sha)? {
-        abort_owned_rebase(workspace_path)?;
+    if rebase_belongs_to_attempt(process_env, workspace_path, head, head_sha_before, base_sha)? {
+        abort_owned_rebase(process_env, workspace_path)?;
         return Err(OrbitError::Execution(
             "git_rebase: interrupted rebase started by this attempt was aborted after a Git timeout. Retry can start clean. This is timeout recovery, not a merge conflict and not failure-handoff recovery.".to_string(),
         ));
     }
-    let provenance = rebase_provenance_summary(workspace_path);
+    let provenance = rebase_provenance_summary(process_env, workspace_path);
     Err(OrbitError::Execution(format!(
         "git_rebase: a pre-existing rebase is in progress without unresolved conflict entries ({provenance}). Not aborting; foreign or retained candidate state was left intact. Inspect the worktree before retrying. This is not conflict recovery."
     )))
 }
 
 pub(super) fn recover_started_rebase_timeout<T>(
+    process_env: &orbit_common::Env,
     workspace_path: &Path,
     head: &str,
     head_sha_before: &str,
@@ -200,7 +221,7 @@ pub(super) fn recover_started_rebase_timeout<T>(
         outcome.timeout_ms,
         &outcome.stderr,
     );
-    if !rebase_in_progress(workspace_path).unwrap_or(false) {
+    if !rebase_in_progress(process_env, workspace_path).unwrap_or(false) {
         return Err(timeout_recovery_error(
             outcome.timeout_ms,
             format!(
@@ -208,9 +229,10 @@ pub(super) fn recover_started_rebase_timeout<T>(
             ),
         ));
     }
-    let conflicting_paths = unmerged_paths(workspace_path).unwrap_or_default();
+    let conflicting_paths = unmerged_paths(process_env, workspace_path).unwrap_or_default();
     if !conflicting_paths.is_empty() {
         return Err(rebase_conflict_error(
+            process_env,
             workspace_path,
             head_sha_before,
             base_sha,
@@ -220,7 +242,7 @@ pub(super) fn recover_started_rebase_timeout<T>(
             ),
         )?);
     }
-    abort_owned_rebase(workspace_path)?;
+    abort_owned_rebase(process_env, workspace_path)?;
     Err(timeout_recovery_error(
         outcome.timeout_ms,
         format!(
@@ -230,9 +252,10 @@ pub(super) fn recover_started_rebase_timeout<T>(
 }
 
 pub(in crate::executor::automation::vcs) fn abort_owned_rebase(
+    process_env: &orbit_common::Env,
     workspace_path: &Path,
 ) -> Result<(), OrbitError> {
-    git_success(workspace_path, &["rebase", "--abort"]).map_err(|error| {
+    git_success(process_env, workspace_path, &["rebase", "--abort"]).map_err(|error| {
         OrbitError::Execution(format!(
             "git_rebase: failed to abort an interrupted rebase started by this attempt: {error}"
         ))
@@ -240,14 +263,15 @@ pub(in crate::executor::automation::vcs) fn abort_owned_rebase(
 }
 
 pub(in crate::executor::automation::vcs) fn rebase_belongs_to_attempt(
+    process_env: &orbit_common::Env,
     workspace_path: &Path,
     head: &str,
     head_sha_before: &str,
     base_sha: &str,
 ) -> Result<bool, OrbitError> {
-    let orig_head = read_rebase_state(workspace_path, "orig-head")?;
-    let onto = read_rebase_state(workspace_path, "onto")?;
-    let head_name = read_rebase_state(workspace_path, "head-name")?;
+    let orig_head = read_rebase_state(process_env, workspace_path, "orig-head")?;
+    let onto = read_rebase_state(process_env, workspace_path, "onto")?;
+    let head_name = read_rebase_state(process_env, workspace_path, "head-name")?;
     let orig_ok = orig_head.as_deref() == Some(head_sha_before);
     let onto_ok = onto.as_deref() == Some(base_sha);
     let head_ok = head_name.as_deref().is_some_and(|name| {
@@ -257,26 +281,32 @@ pub(in crate::executor::automation::vcs) fn rebase_belongs_to_attempt(
 }
 
 pub(in crate::executor::automation::vcs) fn rebase_provenance_summary(
+    process_env: &orbit_common::Env,
     workspace_path: &Path,
 ) -> String {
-    let orig_head = read_rebase_state(workspace_path, "orig-head")
+    let orig_head = read_rebase_state(process_env, workspace_path, "orig-head")
         .ok()
         .flatten()
         .unwrap_or_else(|| "unknown".to_string());
-    let onto = read_rebase_state(workspace_path, "onto")
+    let onto = read_rebase_state(process_env, workspace_path, "onto")
         .ok()
         .flatten()
         .unwrap_or_else(|| "unknown".to_string());
-    let head_name = read_rebase_state(workspace_path, "head-name")
+    let head_name = read_rebase_state(process_env, workspace_path, "head-name")
         .ok()
         .flatten()
         .unwrap_or_else(|| "unknown".to_string());
     format!("orig-head={orig_head}, onto={onto}, head-name={head_name}")
 }
 
-fn read_rebase_state(workspace_path: &Path, name: &str) -> Result<Option<String>, OrbitError> {
+fn read_rebase_state(
+    process_env: &orbit_common::Env,
+    workspace_path: &Path,
+    name: &str,
+) -> Result<Option<String>, OrbitError> {
     for dir in ["rebase-merge", "rebase-apply"] {
         let rel = match git_output(
+            process_env,
             workspace_path,
             &["rev-parse", "--git-path", &format!("{dir}/{name}")],
         ) {
@@ -354,7 +384,12 @@ pub(super) fn recovered_rewrite<H: RuntimeHost + ?Sized>(
     if recovery_pinned_base(&checkpoint, &input["base_sha"]) {
         return Ok(RecoveredRewrite::Current(checkpoint));
     }
-    if base_overtook_recovery(input, &context.workspace_path, &checkpoint)? {
+    if base_overtook_recovery(
+        &host.process_env(),
+        input,
+        &context.workspace_path,
+        &checkpoint,
+    )? {
         return Ok(RecoveredRewrite::Overtaken(checkpoint));
     }
     Err(mismatch())
@@ -363,6 +398,7 @@ pub(super) fn recovered_rewrite<H: RuntimeHost + ?Sized>(
 /// Whether the prepared base strictly descends from the base `checkpoint`
 /// landed on, for the step that certified it.
 fn base_overtook_recovery(
+    process_env: &orbit_common::Env,
     input: &Value,
     workspace: &Path,
     checkpoint: &Value,
@@ -382,7 +418,12 @@ fn base_overtook_recovery(
         return Ok(false);
     }
     Ok(prepared != landed
-        && crate::executor::automation::vcs::git::is_ancestor(workspace, &landed, &prepared)?)
+        && crate::executor::automation::vcs::git::is_ancestor(
+            process_env,
+            workspace,
+            &landed,
+            &prepared,
+        )?)
 }
 
 /// How the current HEAD relates to the certified recovery of the prepared
@@ -412,18 +453,22 @@ pub(in crate::executor::automation::vcs) fn recovery_pinned_base(
 }
 
 pub(in crate::executor::automation::vcs) fn unmerged_paths(
+    process_env: &orbit_common::Env,
     repo_root: &Path,
 ) -> Result<Vec<String>, OrbitError> {
-    Ok(
-        git_output_raw(repo_root, &["diff", "--name-only", "--diff-filter=U", "-z"])?
-            .split('\0')
-            .filter(|path| !path.is_empty())
-            .map(ToOwned::to_owned)
-            .collect(),
-    )
+    Ok(git_output_raw(
+        process_env,
+        repo_root,
+        &["diff", "--name-only", "--diff-filter=U", "-z"],
+    )?
+    .split('\0')
+    .filter(|path| !path.is_empty())
+    .map(ToOwned::to_owned)
+    .collect())
 }
 
 pub(super) fn rebase_conflict_error(
+    process_env: &orbit_common::Env,
     repo_root: &Path,
     head_sha_before: &str,
     target_base_sha: &str,
@@ -433,9 +478,14 @@ pub(super) fn rebase_conflict_error(
     Ok(OrbitError::RecoverableVcsConflict(Box::new(
         RecoverableVcsConflict {
             operation: "git_rebase".to_string(),
-            original_base_sha: original_base_sha(repo_root, head_sha_before, target_base_sha)?,
+            original_base_sha: original_base_sha(
+                process_env,
+                repo_root,
+                head_sha_before,
+                target_base_sha,
+            )?,
             target_base_sha: target_base_sha.to_string(),
-            conflicting_files: conflicted_files(repo_root, &conflicting_paths)?,
+            conflicting_files: conflicted_files(process_env, repo_root, &conflicting_paths)?,
             conflicting_paths,
             diagnostic: diagnostic.to_string(),
         },
@@ -446,11 +496,12 @@ pub(super) fn rebase_conflict_error(
 /// renames, missing sides, and malformed index evidence remain for recovery to
 /// judge. An absent base can only prove identical add/add sides.
 fn conflicted_files(
+    process_env: &orbit_common::Env,
     repo_root: &Path,
     paths: &[String],
 ) -> Result<Vec<orbit_common::ConflictedFile>, OrbitError> {
     // One index read for the whole stop, rather than one Git process per file.
-    let raw = git_output_raw(repo_root, &["ls-files", "--unmerged", "-z"])?;
+    let raw = git_output_raw(process_env, repo_root, &["ls-files", "--unmerged", "-z"])?;
     let mut entries = std::collections::BTreeMap::new();
     let mut valid = true;
     for record in raw.split('\0').filter(|record| !record.is_empty()) {

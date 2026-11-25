@@ -703,7 +703,7 @@ fn missing_required_prerequisite_refuses_incomplete_or_foreign_evidence() {
                             value["workflow_runs"].as_array_mut().unwrap().push(second);
                         }),
                         "spent" => {
-                            let response = orbit_engine::run_private_vcs_operation("ci.prerequisite_evidence",&json!({"workspace_path":fx.repo,"pr":PR_NUMBER,"head_sha":fx.candidate,"head_branch":BRANCH,"base_branch":BASE,"deadline_ms":std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as u64 + 60000})).unwrap();
+                            let response = orbit_engine::run_private_vcs_operation(&orbit_common::Env::capture(), "ci.prerequisite_evidence",&json!({"workspace_path":fx.repo,"pr":PR_NUMBER,"head_sha":fx.candidate,"head_branch":BRANCH,"base_branch":BASE,"deadline_ms":std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as u64 + 60000})).unwrap();
                             let evidence: orbit_types::workflow::PrInfrastructureEvidence =
                                 serde_json::from_value(response["evidence"].clone()).unwrap();
                             let mut reservation =

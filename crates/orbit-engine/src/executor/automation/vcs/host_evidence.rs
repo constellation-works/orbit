@@ -78,7 +78,7 @@ pub fn run_host_sandbox_test<H: RuntimeHost + ?Sized>(
     command: &HostSandboxCommand,
     run_id: &str,
 ) -> Result<HostEvidenceRun, OrbitError> {
-    match super::review_gate::revision(workspace_path, &candidate.commit) {
+    match super::review_gate::revision(&host.process_env(), workspace_path, &candidate.commit) {
         Ok(found) if found == *candidate => {}
         Ok(found) => {
             return Ok(HostEvidenceRun::refused(
@@ -98,11 +98,18 @@ pub fn run_host_sandbox_test<H: RuntimeHost + ?Sized>(
     }
     let host_command = command.host_command();
     let key = sha256_hex(format!("{run_id}\0{}\0{host_command}", candidate.commit).as_bytes());
-    let worktree =
-        scratch_checkout_path(workspace_path, &format!("{WORKTREE_DIR}-{}", &key[..16]))?;
-    let ran = in_detached_worktree(workspace_path, &worktree, &candidate.commit, |checkout| {
-        execute(host, checkout, command, &host_command)
-    });
+    let worktree = scratch_checkout_path(
+        &host.process_env(),
+        workspace_path,
+        &format!("{WORKTREE_DIR}-{}", &key[..16]),
+    )?;
+    let ran = in_detached_worktree(
+        &host.process_env(),
+        workspace_path,
+        &worktree,
+        &candidate.commit,
+        |checkout| execute(host, checkout, command, &host_command),
+    );
     Ok(match ran {
         Ok(run) => run,
         Err(error) => HostEvidenceRun::refused(

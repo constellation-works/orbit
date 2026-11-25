@@ -40,6 +40,7 @@ fn provider_fields_keep_prerequisite_refusals_across_read_operations() {
                     ] {
                         let error = super::super::with_completion_clock(|| {
                             orbit_engine::run_private_vcs_operation(
+                                &orbit_common::Env::capture(),
                                 operation,
                                 &json!({
                                     "workspace_path": fx.repo, "pr": PR_NUMBER,

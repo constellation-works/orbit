@@ -30,6 +30,7 @@ pub fn landing_wait_gate_cleared<H: RuntimeHost + ?Sized>(
     let status = read_pr_status(host, workspace, &pr)?;
     if status.head_sha.as_deref() != Some(&context.candidate.candidate.commit)
         && super::super::checks::verify_published_base_update(
+            &host.process_env(),
             workspace,
             &context.candidate,
             &status,
@@ -56,8 +57,13 @@ pub fn landing_wait_gate_cleared<H: RuntimeHost + ?Sized>(
         // A base can turn green while the old candidate checks remain red.
         // Wake landing so its existing base-refresh machinery can act. Require
         // fresh exact-tip push evidence for every currently required check.
-        fetch_remote_base(workspace, &context.candidate.base_branch)?;
+        fetch_remote_base(
+            &host.process_env(),
+            workspace,
+            &context.candidate.base_branch,
+        )?;
         let tip = git_output(
+            &host.process_env(),
             workspace,
             &[
                 "rev-parse",

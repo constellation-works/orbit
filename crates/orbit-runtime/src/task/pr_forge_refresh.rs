@@ -132,6 +132,7 @@ fn parse_merge_tree_conflicting_paths(stdout: &str) -> Vec<String> {
 }
 
 pub(super) fn update_pull_request_branch_with_gh(
+    env: &orbit_common::Env,
     repo_root: &Path,
     number: u64,
     head_branch: &str,
@@ -240,7 +241,7 @@ pub(super) fn update_pull_request_branch_with_gh(
     let mut request =
         orbit_tools::github_cli::update_pull_request_branch_request(number, expected_head_sha);
     request.current_dir = Some(repo_root.to_string_lossy().into_owned());
-    let result = orbit_tools::github_quota::run_gh_request(FORGE_QUOTA_CALLER, &request)?;
+    let result = orbit_tools::github_quota::run_gh_request(env, FORGE_QUOTA_CALLER, &request)?;
     if !result.success {
         let stderr = orbit_common::security::redaction::redact_all_and_home(result.stderr.trim());
         if !result.timed_out && forge_refused_request(&stderr) {
@@ -254,7 +255,7 @@ pub(super) fn update_pull_request_branch_with_gh(
     // GitHub's update-branch endpoint returns HTTP 202 and creates the merge
     // commit asynchronously; observe the new head SHA before returning.
     for delay_secs in REFRESH_HEAD_POLL_BACKOFF_SECS {
-        if let Ok(entry) = view_pull_request(repo_root, number)
+        if let Ok(entry) = view_pull_request(env, repo_root, number)
             && let Some(new_head) = entry
                 .get("headRefOid")
                 .and_then(Value::as_str)
@@ -266,7 +267,7 @@ pub(super) fn update_pull_request_branch_with_gh(
         }
         std::thread::sleep(Duration::from_secs(delay_secs));
     }
-    if let Ok(entry) = view_pull_request(repo_root, number)
+    if let Ok(entry) = view_pull_request(env, repo_root, number)
         && let Some(new_head) = entry
             .get("headRefOid")
             .and_then(Value::as_str)

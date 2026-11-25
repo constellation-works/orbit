@@ -95,6 +95,7 @@ impl OrbitRuntime {
                 ));
             }
             HandoffDelivery::LocalCandidate => orbit_engine::observe_candidate(
+                self.env(),
                 &self.paths().repo_root,
                 Some(&handoff.candidate.source_branch),
                 &handoff.candidate.base_branch,
@@ -132,6 +133,7 @@ impl OrbitRuntime {
             .as_ref()
             .ok_or_else(|| refusal::refused("original claim footprint unavailable"))?;
         let (new_paths, footprint_widening) = orbit_engine::validate_claim_new_paths(
+            self.env(),
             &self.paths().repo_root,
             &original.footprint,
             &candidate.base.commit,
@@ -178,12 +180,13 @@ impl OrbitRuntime {
             return Ok(None);
         };
         let repo_root = &self.paths().repo_root;
-        let repository = Source::new(repo_root)
+        let repository = Source::new(self.env(), repo_root)
             .repository()
             .map_err(orbit_automation::automation_error_to_orbit)?;
         Ok(Some(HandoffReviewObservation {
             reviewed_base_sha: evidence.reviewed_base_sha.clone(),
             reviewed_base_is_ancestor: orbit_engine::review_gate::contains_commit(
+                self.env(),
                 repo_root,
                 &evidence.reviewed_base_sha,
                 &candidate.base.commit,

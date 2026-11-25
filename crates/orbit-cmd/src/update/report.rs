@@ -292,18 +292,20 @@ fn migrate_step(
     pins: &mut CandidatePins,
     report: &mut UpdateReport,
 ) -> ConvergenceStep {
-    let lent =
-        match orbit_core::runtime::resolve_generation_root(workspace.root_argument.as_deref()) {
-            Ok(child_root) => pins.fence_for_layout_migration(&child_root, &workspace.root),
-            Err(error) => {
-                tracing::warn!(
-                    target: "orbit.update",
-                    error = %error,
-                    "kept every generation pin: the migration's authority is unknown"
-                );
-                Ok(MigrationFences::none())
-            }
-        };
+    let lent = match orbit_core::runtime::resolve_generation_root(
+        &orbit_core::composition::process_env(),
+        workspace.root_argument.as_deref(),
+    ) {
+        Ok(child_root) => pins.fence_for_layout_migration(&child_root, &workspace.root),
+        Err(error) => {
+            tracing::warn!(
+                target: "orbit.update",
+                error = %error,
+                "kept every generation pin: the migration's authority is unknown"
+            );
+            Ok(MigrationFences::none())
+        }
+    };
     let lent = match lent {
         Ok(lent) => lent,
         Err(detail) => return ConvergenceStep::refused(&MIGRATE_STEP.join(" "), &detail),

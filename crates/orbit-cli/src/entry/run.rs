@@ -53,7 +53,7 @@ pub(crate) fn run(env: orbit_common::Env) {
     // pin so a read-only unpinned `~/.orbit` cannot block scratch init. A
     // managed macOS child joins its parent's host registry pin even when
     // ORBIT_ROOT selects workspace data; update still checks both roots.
-    let actor = ActorIdentity::from_env();
+    let actor = ActorIdentity::from_env(&env);
     // ORB-12876: a recognized plugin backend reaches Orbit only through a tool
     // call, which the callback allowlist gates against the plugin's
     // `permissions.orbit_tools`. Refuse it the rest of the CLI here — before
@@ -129,8 +129,11 @@ pub(crate) fn run(env: orbit_common::Env) {
     // Successful rebinds still take normal executable-generation admission.
     if matches!(&cli.command, command::Commands::Workspace(workspace)
         if matches!(&workspace.command, command::workspace::WorkspaceSubcommand::Rebind(_)))
-        && let Err(error) = orbit_core::runtime::resolve_generation_root(root_override.as_deref())
-            .and_then(|root| orbit_cmd::workspace_rebind::require_checkout_rebind_host_store(&root))
+        && let Err(error) = orbit_core::runtime::resolve_generation_root(
+            &orbit_core::composition::process_env(),
+            root_override.as_deref(),
+        )
+        .and_then(|root| orbit_cmd::workspace_rebind::require_checkout_rebind_host_store(&root))
     {
         print_error(&error, &sink, json_error_preference);
         orbit_common::observability::logging::exit(1);
@@ -141,14 +144,16 @@ pub(crate) fn run(env: orbit_common::Env) {
     {
         None
     } else {
-        let root =
-            match orbit_core::runtime::resolve_process_generation_root(root_override.as_deref()) {
-                Ok(root) => root,
-                Err(error) => {
-                    print_error(&error, &sink, None);
-                    orbit_common::observability::logging::exit(1);
-                }
-            };
+        let root = match orbit_core::runtime::resolve_process_generation_root(
+            &orbit_core::composition::process_env(),
+            root_override.as_deref(),
+        ) {
+            Ok(root) => root,
+            Err(error) => {
+                print_error(&error, &sink, None);
+                orbit_common::observability::logging::exit(1);
+            }
+        };
         let root_source = explicit_root_source(root_override.as_deref());
         let root_existed = root.exists();
         if let Some(source) = root_source
@@ -221,14 +226,19 @@ pub(crate) fn run(env: orbit_common::Env) {
     let claimed_owner_worker = if unusable_tool_input {
         false
     } else if claimed_owner_call {
-        let global_root = match orbit_core::runtime::resolve_global_root() {
-            Ok(root) => root,
-            Err(error) => {
-                print_error(&error, &sink, json_error_preference);
-                orbit_common::observability::logging::exit(1);
-            }
-        };
-        match orbit_core::OrbitRuntime::current_worker_invocation(&global_root) {
+        let global_root =
+            match orbit_core::runtime::resolve_global_root(&orbit_core::composition::process_env())
+            {
+                Ok(root) => root,
+                Err(error) => {
+                    print_error(&error, &sink, json_error_preference);
+                    orbit_common::observability::logging::exit(1);
+                }
+            };
+        match orbit_core::OrbitRuntime::current_worker_invocation(
+            &orbit_core::composition::process_env(),
+            &global_root,
+        ) {
             Ok(binding) => binding
                 .is_some_and(|binding| binding.execution.machine_id != binding.owner_machine_id),
             Err(error) => {

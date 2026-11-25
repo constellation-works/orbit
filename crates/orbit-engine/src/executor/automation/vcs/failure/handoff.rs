@@ -284,12 +284,12 @@ pub(in crate::executor::automation) fn pr_failure_handoff<H: RuntimeHost + Sync 
         );
     }
 
-    let mut conflicting_paths = unmerged_paths(&workspace_path)?;
+    let mut conflicting_paths = unmerged_paths(&host.process_env(), &workspace_path)?;
     // [ORB-13455] Task and run ownership do not prove this run started the
     // Git rebase. Only the rebase `sync_base` started from the prepared
     // checkpoint may be aborted; any other rebase is left exactly as found.
-    let rebase_aborted = if rebase_in_progress(&workspace_path)? {
-        if !prepared_attempt_owns_rebase(input, &workspace_path)? {
+    let rebase_aborted = if rebase_in_progress(&host.process_env(), &workspace_path)? {
+        if !prepared_attempt_owns_rebase(&host.process_env(), input, &workspace_path)? {
             return refuse_foreign_rebase(
                 host,
                 &task,
@@ -300,7 +300,7 @@ pub(in crate::executor::automation) fn pr_failure_handoff<H: RuntimeHost + Sync 
                 &workspace_path,
             );
         }
-        git_command_success(&workspace_path, &["rebase", "--abort"])?
+        git_command_success(&host.process_env(), &workspace_path, &["rebase", "--abort"])?
     } else {
         false
     };
@@ -403,9 +403,13 @@ pub(in crate::executor::automation) fn pr_failure_handoff<H: RuntimeHost + Sync 
 
     let (head_sha, committed_files) =
         commit_failure_candidate(host, run_id, &workspace_path, &task)?;
-    let head = git_output(&workspace_path, &["rev-parse", "--abbrev-ref", "HEAD"])?
-        .trim()
-        .to_string();
+    let head = git_output(
+        &host.process_env(),
+        &workspace_path,
+        &["rev-parse", "--abbrev-ref", "HEAD"],
+    )?
+    .trim()
+    .to_string();
     if head == "HEAD" {
         return Err(OrbitError::Execution(
             "pr_failure_handoff: recovery candidate is detached".to_string(),
@@ -417,11 +421,21 @@ pub(in crate::executor::automation) fn pr_failure_handoff<H: RuntimeHost + Sync 
         Some(base_sha) => base_sha,
         None => {
             let sync_mode = base_sync_mode_from_input(job_input)?;
-            let target_base_ref = resolve_worktree_start_point(&workspace_path, &base, sync_mode)?;
-            commit_sha(&workspace_path, &target_base_ref)?
+            let target_base_ref = resolve_worktree_start_point(
+                &host.process_env(),
+                &workspace_path,
+                &base,
+                sync_mode,
+            )?;
+            commit_sha(&host.process_env(), &workspace_path, &target_base_ref)?
         }
     };
-    let original_base_sha = original_base_sha(&workspace_path, &head_sha, &target_base_sha)?;
+    let original_base_sha = original_base_sha(
+        &host.process_env(),
+        &workspace_path,
+        &head_sha,
+        &target_base_sha,
+    )?;
 
     if committed_files.is_empty() && head_sha == original_base_sha {
         return Ok(json!({

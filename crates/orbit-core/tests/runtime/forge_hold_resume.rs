@@ -760,7 +760,11 @@ fn completion_with_inconclusive_check_evidence_can_be_resumed() {
             .runtime
             .submit_resume_run(&run, Some("operator"), None)
             .expect("completion can re-observe the existing pull request");
-        let outcome = fx.runtime.execute_pipeline_run_worker(&resumed.run_id);
+        let outcome = orbit_core::test_support::with_runtime_env(
+            fx.runtime.clone(),
+            orbit_common::Env::capture(),
+        )
+        .execute_pipeline_run_worker(&resumed.run_id);
         let finished = fx.jobs.get_job_run(&resumed.run_id).unwrap().unwrap();
         assert_eq!(finished.state, expected, "{outcome:?} {:?}", finished.steps);
         if expected == JobRunState::Held {

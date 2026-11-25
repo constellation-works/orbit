@@ -40,6 +40,7 @@ impl OrbitRuntime {
         let name = operation;
         let admission = (|| {
             let callback = enforce_plugin_callback_allowlist(
+                self.env(),
                 &self.global_root(),
                 self.stores().plugins(),
                 name,
@@ -51,6 +52,7 @@ impl OrbitRuntime {
             self.ensure_tool_agent_facing_with_context(
                 call_name,
                 &super::execute::tool_suggestion_context(
+                    self.env(),
                     super::execute::ToolEntryPoint::Cli,
                     session_context.clone(),
                 ),

@@ -81,6 +81,7 @@ pub(in crate::executor::automation) fn pr_complete<H: RuntimeHost + ?Sized>(
         // before anything merges, so a held change waits for a person.
         if !hold_rules.is_empty() {
             let changed = pull_request_changed_paths(
+                &host.process_env(),
                 &context.workspace_path,
                 input_string_field(input, "base").as_deref(),
                 input_string_field(input, "base_sync").as_deref() == Some("local"),

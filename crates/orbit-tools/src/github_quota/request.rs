@@ -53,10 +53,13 @@ fn is_endpoint(arg: &str, endpoint: &str) -> bool {
 /// the host name and a truncated SHA-256 of the token from the request's
 /// environment, or of the config location `gh` reads its stored login from.
 /// The credential itself never reaches the record.
-pub(crate) fn request_account(request: &ExecRequest) -> String {
+pub(crate) fn request_account(env: &orbit_common::Env, request: &ExecRequest) -> String {
     let lookup = |name: &str| -> Option<String> {
         let value = match &request.environment_mode {
-            EnvironmentMode::Inherit => std::env::var(name).ok(),
+            EnvironmentMode::Inherit => env
+                .var(name)
+                .and_then(std::ffi::OsStr::to_str)
+                .map(ToOwned::to_owned),
             EnvironmentMode::ClearAndSet(pairs) => pairs
                 .iter()
                 .find(|(key, _)| key == name)

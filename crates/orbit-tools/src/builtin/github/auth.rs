@@ -20,21 +20,21 @@ pub fn build_exec_request(_input: &Value) -> Result<ExecRequest, OrbitError> {
 /// (does it hold usable credentials here) are separate fields, and neither
 /// failure mode is an error return. An error would be indistinguishable from
 /// the tool itself being broken.
-fn unavailable(detail: String) -> Value {
+fn unavailable(ctx: &crate::ToolContext, detail: String) -> Value {
     json!({
         "available": false,
         "authenticated": false,
         "stdout": "",
         "stderr": "",
         "detail": detail,
-        "quota": quota_status(),
+        "quota": quota_status(ctx),
     })
 }
 
 /// The host's GitHub quota record for this lane's account, or `null` when this
 /// process does not guard its `gh` reads.
-fn quota_status() -> Value {
-    crate::github_quota::host_quota_status()
+fn quota_status(ctx: &crate::ToolContext) -> Value {
+    crate::github_quota::host_quota_status(&ctx.env)
         .and_then(|status| serde_json::to_value(status).ok())
         .unwrap_or(Value::Null)
 }
@@ -44,14 +44,14 @@ super::gh_tool! {
     name: "github.auth.status";
     description: "Preflight the GitHub CLI surface (`available` and `authenticated`); neither absence nor missing credentials is an error. Quota details: the orbit skill's tool-surface-registry.md reference, section `GitHub auth status`.";
     parameters: [];
-    execute: |_ctx, input| {
+    execute: |ctx, input| {
         let req = build_exec_request(&input)?;
         // A missing `gh`, or a sandbox that denies executing it, surfaces here
         // as a spawn error. That is a capability answer, not a tool fault.
         let result = match orbit_exec::run_process(&orbit_common::Env::capture(), &req, &orbit_exec::NoSandbox) {
             Ok(result) => result,
             Err(error) => {
-                return Ok(unavailable(redact_all(&error.to_string())));
+                return Ok(unavailable(ctx, redact_all(&error.to_string())));
             }
         };
 
@@ -65,7 +65,7 @@ super::gh_tool! {
             } else {
                 "GitHub CLI is present but holds no usable credentials on this execution lane"
             },
-            "quota": quota_status(),
+            "quota": quota_status(ctx),
         }))
     }
 }

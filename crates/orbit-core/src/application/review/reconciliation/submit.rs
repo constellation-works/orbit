@@ -353,8 +353,8 @@ fn accept_baseline(
         )));
     };
     let repo = &runtime.paths().repo_root;
-    let remediation_commit = review_gate::fetch_landed_commit(repo, &remediation)
-        .and_then(|()| review_gate::revision(repo, &remediation))
+    let remediation_commit = review_gate::fetch_landed_commit(runtime.env(), repo, &remediation)
+        .and_then(|()| review_gate::revision(runtime.env(), repo, &remediation))
         .map_err(|error| {
             refused(format!(
                 "remediation {remediation} is not readable in the owner checkout ({error})"
@@ -409,6 +409,7 @@ fn accept_baseline(
     let binding_digest = record.binding_digest.clone();
     let head = record.binding.pull_request.merged_head.commit.clone();
     let delivery = Delivery {
+        env: runtime.env(),
         repo,
         landing: record.binding.pull_request.landing_branch.clone(),
         number: record.binding.pull_request.number,
@@ -531,6 +532,7 @@ fn accept_baseline(
 
 /// The bound delivery a proposed remediation is judged against.
 struct Delivery<'a> {
+    env: &'a orbit_common::Env,
     repo: &'a std::path::Path,
     landing: String,
     number: u64,
@@ -547,6 +549,7 @@ impl Delivery<'_> {
     /// request's head, which a squash landing does not keep.
     fn admit(&self, remediation: &str) -> Result<(), OrbitError> {
         let Self {
+            env,
             repo,
             landing,
             number,
@@ -555,20 +558,20 @@ impl Delivery<'_> {
         } = self;
         let on_landing = [format!("origin/{landing}"), landing.clone()]
             .iter()
-            .any(|tip| review_gate::contains_commit(repo, remediation, tip).unwrap_or(false));
+            .any(|tip| review_gate::contains_commit(env, repo, remediation, tip).unwrap_or(false));
         if !on_landing {
             return Err(OrbitError::InvalidInput(format!(
                 "remediation {remediation} is not on {landing}; land the fix there (fetch the \
                  landing branch if it already landed) and retry"
             )));
         }
-        if review_gate::contains_commit(repo, remediation, head)? {
+        if review_gate::contains_commit(env, repo, remediation, head)? {
             return Err(OrbitError::InvalidInput(format!(
                 "remediation {remediation} is already part of the merged head {head}, so it \
                  cannot explain a failure of that head"
             )));
         }
-        if !review_gate::contains_commit(repo, landed, remediation)? {
+        if !review_gate::contains_commit(env, repo, landed, remediation)? {
             return Err(OrbitError::InvalidInput(format!(
                 "remediation {remediation} does not contain commit {landed} that pull request \
                  #{number} landed as, so a check there cannot show the delivered code passes; \

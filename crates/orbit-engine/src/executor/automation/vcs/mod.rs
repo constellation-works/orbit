@@ -103,10 +103,11 @@ pub use worktree::{
 /// outside the public tool registry. A host answers
 /// [`crate::RuntimeHost::run_private_vcs_operation`] with it.
 pub fn run_private_operation(
+    process_env: &orbit_common::Env,
     operation: &str,
     input: &serde_json::Value,
 ) -> Result<serde_json::Value, orbit_common::OrbitError> {
-    operations::run(operation, input)
+    operations::run(process_env, operation, input)
 }
 
 /// [ORB-26389] The engine-private operation that merges a pull request. A

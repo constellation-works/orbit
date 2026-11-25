@@ -1,6 +1,5 @@
 //! Registered tool execution, capability enforcement, and redaction on `RuntimeKernel`; imports `orbit_runtime`, `paths`, `run_input`, `orbit-common`, `orbit-engine`, `orbit-tools`, and `orbit-types`.
 
-use orbit_common::env_vars;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError};
@@ -304,7 +303,7 @@ fn resident_cycle_run_id(tool_context: &ToolContext) -> Option<String> {
                 .as_ref()
                 .map(|binding| binding.job_run_id.clone())
         })
-        .or_else(crate::run_input::managed_run_context_run_id_from_env)
+        .or_else(|| crate::run_input::managed_run_context_run_id_from_env(&tool_context.env))
         .map(|id| id.trim().to_string())
         .filter(|id| !id.is_empty())
 }
@@ -409,6 +408,7 @@ pub fn populate_filesystem_policy_context(
     runtime: &RuntimeKernel,
     tool_context: &mut ToolContext,
 ) -> Result<(), OrbitError> {
+    tool_context.env = runtime.env().clone();
     if tool_context.workspace_root.is_none() {
         tool_context.workspace_root = resolve_workspace_root_from_context(runtime, tool_context)?;
     }
@@ -416,7 +416,7 @@ pub fn populate_filesystem_policy_context(
         tool_context.policy_engine = Some(Arc::new(runtime.policy_engine().clone()));
     }
     if tool_context.fs_profile.is_none() {
-        tool_context.fs_profile = read_activity_fs_profile_from_env();
+        tool_context.fs_profile = read_activity_fs_profile_from_env(runtime.env());
     }
     Ok(())
 }
@@ -482,7 +482,12 @@ pub(crate) fn active_git_checkout_root(
     if let Some(cached) = active_checkout_root_cache().get(&key) {
         return Some(cached.clone());
     }
-    let resolved = active_git_checkout_root_uncached(canonical_repo_root, cwd, &canonical_cwd);
+    let resolved = active_git_checkout_root_uncached(
+        &tool_context.env,
+        canonical_repo_root,
+        cwd,
+        &canonical_cwd,
+    );
     if let Some(root) = &resolved {
         active_checkout_root_cache().insert(key, root.clone());
     }
@@ -490,6 +495,7 @@ pub(crate) fn active_git_checkout_root(
 }
 
 fn active_git_checkout_root_uncached(
+    env: &orbit_common::Env,
     canonical_repo_root: &Path,
     cwd: &Path,
     canonical_cwd: &Path,
@@ -507,7 +513,7 @@ fn active_git_checkout_root_uncached(
     }
 
     if let Some(checkout_root) =
-        linked_worktree_root_from_gitfile(canonical_cwd, canonical_repo_root)
+        linked_worktree_root_from_gitfile(env, canonical_cwd, canonical_repo_root)
     {
         return Some(checkout_root);
     }
@@ -542,18 +548,11 @@ fn active_git_checkout_root_uncached(
 /// Git location overrides can relocate git's own answer, so with one set
 /// only git can say.
 fn linked_worktree_root_from_gitfile(
+    env: &orbit_common::Env,
     canonical_cwd: &Path,
     canonical_repo_root: &Path,
 ) -> Option<PathBuf> {
-    const GIT_LOCATION_OVERRIDES: [&str; 3] = [
-        env_vars::GIT_DIR,
-        env_vars::GIT_COMMON_DIR,
-        env_vars::GIT_WORK_TREE,
-    ];
-    if GIT_LOCATION_OVERRIDES
-        .iter()
-        .any(|name| std::env::var_os(name).is_some())
-    {
+    if crate::paths::git_location_override_set(env) {
         return None;
     }
     for ancestor in canonical_cwd.ancestors() {
@@ -612,8 +611,10 @@ fn canonical_git_common_dir(path: &Path) -> Option<PathBuf> {
     Some(common.canonicalize().unwrap_or(common))
 }
 
-fn read_activity_fs_profile_from_env() -> Option<String> {
-    let value = std::env::var(env_vars::ORBIT_ACTIVITY_FS_PROFILE).ok()?;
+fn read_activity_fs_profile_from_env(env: &orbit_common::Env) -> Option<String> {
+    let value = env
+        .orbit_activity_fs_profile()
+        .and_then(std::ffi::OsStr::to_str)?;
     let trimmed = value.trim();
     (!trimmed.is_empty()).then_some(trimmed.to_string())
 }

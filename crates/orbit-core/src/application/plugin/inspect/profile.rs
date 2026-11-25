@@ -46,8 +46,11 @@ pub(super) fn render_backend_profile(
         .canonicalize()
         .unwrap_or_else(|_| workspace.to_path_buf());
     let workspace_text = workspace.to_string_lossy().into_owned();
-    let profile = backend.spec().sandbox_profile(Some(&workspace))?;
+    let profile = backend
+        .spec()
+        .sandbox_profile(runtime.env(), Some(&workspace))?;
     let context = ToolContext {
+        env: runtime.env().clone(),
         cwd: Some(workspace_text.clone()),
         workspace_root: Some(workspace.clone()),
         proc_allowed_programs: plugin.manifest.spec.requires.programs.clone(),

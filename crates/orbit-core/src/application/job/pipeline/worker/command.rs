@@ -317,6 +317,7 @@ pub(crate) fn orbit_worker_command_with_permission(
 /// carries both.
 #[derive(Clone, Debug)]
 pub(crate) struct WorkerCommandConfig {
+    env: orbit_common::Env,
     /// `--root` to forward to the worker, so the child opens the same global
     /// store the parent used to persist the run [ORB-10821]. `None` for the
     /// default split-root layout; see [`pipeline_worker_root_override`].
@@ -330,8 +331,9 @@ pub(crate) struct WorkerCommandConfig {
 
 impl WorkerCommandConfig {
     /// Launch policy without resource containment.
-    pub(crate) fn for_paths(paths: &WorkspacePaths) -> Self {
+    pub(crate) fn for_paths(env: &orbit_common::Env, paths: &WorkspacePaths) -> Self {
         Self {
+            env: env.clone(),
             root_override: pipeline_worker_root_override(paths).map(Path::to_path_buf),
             containment: None,
             strict_containment: false,
@@ -366,6 +368,7 @@ impl WorkerCommandConfig {
         policy: orbit_config::ExecutionEnvPolicy,
     ) -> Self {
         Self {
+            env: orbit_common::Env::capture(),
             root_override: None,
             containment: limits,
             strict_containment: false,
@@ -416,7 +419,7 @@ impl WorkerCommandConfig {
         // cycle outside a sandbox, say), it must not inherit that run's binding
         // and activity policy, or its own tool calls would be judged as the
         // submitter's. The workspace and registry locators stay.
-        if crate::runtime::run_input::managed_run_context_from_env() {
+        if crate::runtime::run_input::managed_run_context_from_env(&self.env) {
             for name in MCP_MANAGED_BINDING_ENV_VARS
                 .iter()
                 .copied()

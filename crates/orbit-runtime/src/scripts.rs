@@ -17,7 +17,6 @@
 //! (`orbit.script.grant` / `orbit.script.revoke`); the chokepoint refuses
 //! agent sessions and plugin callbacks before this code is reached.
 
-use orbit_common::env_vars;
 use std::path::{Path, PathBuf};
 
 use orbit_common::OrbitError;
@@ -590,7 +589,7 @@ impl RuntimeKernel {
             )));
         }
         let limits = grant_output_limits(name, options)?;
-        let interpreter_paths = resolve_grant_interpreter_paths(asset)?;
+        let interpreter_paths = resolve_grant_interpreter_paths(asset, self.env().path())?;
         let mut read_roots = asset.spec.requests.read_roots.clone();
         read_roots.extend(options.read_roots.iter().cloned());
         let mut write_roots = asset.spec.requests.write_roots.clone();
@@ -606,7 +605,7 @@ impl RuntimeKernel {
         // Each root must exist, resolve, sit outside the credential paths and
         // pass a read (and, for a write root, write) probe by this process.
         // The job's process repeats the probe before every spawn.
-        let home = std::env::var_os(env_vars::HOME);
+        let home = self.env().home();
         let roots = read_roots
             .iter()
             .map(|root| (root, orbit_exec::ScriptRootAccess::Read))
@@ -616,13 +615,7 @@ impl RuntimeKernel {
                     .map(|root| (root, orbit_exec::ScriptRootAccess::Write)),
             );
         for (root, access) in roots {
-            orbit_exec::probe_script_root(
-                &orbit_common::Env::capture(),
-                root,
-                access,
-                home.as_deref(),
-            )
-            .map_err(|reason| {
+            orbit_exec::probe_script_root(self.env(), root, access, home).map_err(|reason| {
                 OrbitError::InvalidInput(format!(
                     "script `{name}` cannot be granted: {reason}; nothing was granted"
                 ))
@@ -713,14 +706,15 @@ fn decode_hex(hex: &str) -> Result<Vec<u8>, OrbitError> {
 /// its canonical path on the granting operator's `PATH`, the rest
 /// literal. An interpreter that does not resolve refuses the grant —
 /// recording nothing would let a later caller's `PATH` decide what runs.
-fn resolve_grant_interpreter_paths(asset: &ScriptAsset) -> Result<Vec<PathBuf>, OrbitError> {
+fn resolve_grant_interpreter_paths(
+    asset: &ScriptAsset,
+    path: Option<&std::ffi::OsStr>,
+) -> Result<Vec<PathBuf>, OrbitError> {
     let Some((program, rest)) = asset.interpreter.split_first() else {
         return Ok(Vec::new());
     };
-    let (resolved, unresolved) = orbit_tools::plugin::resolve_declared_programs(
-        std::slice::from_ref(program),
-        std::env::var_os(env_vars::PATH).as_deref(),
-    );
+    let (resolved, unresolved) =
+        orbit_tools::plugin::resolve_declared_programs(std::slice::from_ref(program), path);
     if let Some((_, reason)) = unresolved.into_iter().next() {
         return Err(OrbitError::InvalidInput(format!(
             "script `{}` interpreter `{program}` did not resolve at {}: {reason}; make it \

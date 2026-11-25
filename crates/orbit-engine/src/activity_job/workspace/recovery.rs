@@ -91,7 +91,9 @@ impl WorktreeBoundaryGuard {
             ));
             orbit_common::fs::io::create_private_dir(&pending)
                 .map_err(|error| recovery_io_error("create pending recovery", &pending, error))?;
-            if let Err(error) = self.write_recovery_payload(&pending, assigned_after, attempt) {
+            if let Err(error) =
+                self.write_recovery_payload(&self.process_env, &pending, assigned_after, attempt)
+            {
                 // Best effort: never leave a half-written payload behind.
                 let _ = fs::remove_dir_all(&pending);
                 return Err(error);
@@ -129,6 +131,7 @@ impl WorktreeBoundaryGuard {
     /// untracked path, and the manifest naming them.
     fn write_recovery_payload(
         &self,
+        process_env: &orbit_common::Env,
         pending: &Path,
         assigned_after: &GitWorktreeFingerprint,
         attempt: u32,
@@ -141,7 +144,7 @@ impl WorktreeBoundaryGuard {
         let mut diff_args = vec!["diff"];
         diff_args.extend(DIFF_IDENTITY_FLAGS);
         diff_args.extend(["HEAD", "--"]);
-        let patch = git_stdout_bytes(&self.assigned_root, &diff_args)?;
+        let patch = git_stdout_bytes(process_env, &self.assigned_root, &diff_args)?;
         let patch_path = pending.join("tracked.patch");
         atomic_write_bytes(&patch_path, &patch)
             .map_err(|error| recovery_io_error("write tracked patch", &patch_path, error))?;

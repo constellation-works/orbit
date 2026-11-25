@@ -648,7 +648,7 @@ fn operator_retry_reservations_recover_before_submission_and_after_lost_attachme
         let context = ClaimInvocation::trusted_operator(
             stopped.task_id.clone(),
             stopped.claim_id.clone(),
-            orbit_core::ActorIdentity::from_env().label,
+            orbit_core::ActorIdentity::from_env(&orbit_common::Env::capture()).label,
         )
         .with_handoff_observation(HandoffObservation {
             candidate: accepted.handoff.candidate.clone(),

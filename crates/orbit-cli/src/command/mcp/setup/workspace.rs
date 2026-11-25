@@ -80,8 +80,14 @@ fn explicit_orbit_root(
                 .filter(|value| !value.trim().is_empty())
                 .map(std::borrow::Cow::Borrowed)
         });
-    raw.map(|raw| orbit_core::runtime::resolve_root_path_value(&raw, cwd))
-        .transpose()
+    raw.map(|raw| {
+        orbit_core::runtime::resolve_root_path_value(
+            &orbit_core::composition::process_env(),
+            &raw,
+            cwd,
+        )
+    })
+    .transpose()
 }
 
 /// The Orbit data root whose workspace catalog describes this checkout.

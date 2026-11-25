@@ -81,7 +81,7 @@ impl Verifier for FindingInvalid {
                     citation.location
                 )));
             }
-            verify_citation(workspace, &head, &citation.location)?;
+            verify_citation(&host.process_env(), workspace, &head, &citation.location)?;
         }
         Ok(json!({
             "phase": "commit",
@@ -218,7 +218,12 @@ fn read_report<H: RuntimeHost + ?Sized>(
 
 /// `location` is a repository-relative `path:line` naming a line of a file
 /// at `head`.
-fn verify_citation(workspace: &Path, head: &str, location: &str) -> Result<(), OrbitError> {
+fn verify_citation(
+    process_env: &orbit_common::Env,
+    workspace: &Path,
+    head: &str,
+    location: &str,
+) -> Result<(), OrbitError> {
     let malformed = || {
         FindingInvalid::refused(format!(
             "evidence location {location:?} is not a repository-relative `path:line`"
@@ -228,15 +233,15 @@ fn verify_citation(workspace: &Path, head: &str, location: &str) -> Result<(), O
         task::parse_source_location::<usize>(location, SourceLocationEmptyComponents::Reject)
             .map_err(|_| malformed())?;
     let object = format!("{head}:{path}");
-    if !git_command_success(workspace, &["cat-file", "-e", &object])? {
+    if !git_command_success(process_env, workspace, &["cat-file", "-e", &object])? {
         return Err(FindingInvalid::refused(format!(
             "evidence location {location:?} names a path absent at the tested HEAD"
         )));
     }
-    if git_output_raw(workspace, &["cat-file", "-t", &object])?.trim() != "blob" {
+    if git_output_raw(process_env, workspace, &["cat-file", "-t", &object])?.trim() != "blob" {
         return Err(malformed());
     }
-    if git_output_raw(workspace, &["show", &object])?
+    if git_output_raw(process_env, workspace, &["show", &object])?
         .lines()
         .count()
         < line

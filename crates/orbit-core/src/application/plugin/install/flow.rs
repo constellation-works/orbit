@@ -156,11 +156,14 @@ fn install_plugin_inner(
                 .to_string(),
         ));
     }
-    let resolved = resolve_plugin_source(&PluginSourceRequest {
-        source,
-        expected_digest: options.digest.as_deref(),
-        digest_origin,
-    })?;
+    let resolved = resolve_plugin_source(
+        runtime.env(),
+        &PluginSourceRequest {
+            source,
+            expected_digest: options.digest.as_deref(),
+            digest_origin,
+        },
+    )?;
     let source_root = resolved.root.clone();
     refuse_in_repository_source(runtime, &source_root)?;
 

@@ -97,11 +97,11 @@ pub fn trusted_mcp_audit_context() -> AuditContext {
 }
 
 fn trusted_mcp_audit_context_with_env(env: &Env) -> AuditContext {
-    if managed_dispatch_context_from_env() {
+    if managed_dispatch_context_from_env(env) {
         AuditContext {
             session_id: env_trimmed(env.orbit_session_id()),
             task_id: env_trimmed(env.orbit_task_id()),
-            job_run_id: managed_run_context_run_id_from_env(),
+            job_run_id: managed_run_context_run_id_from_env(env),
             activity_id: env_trimmed(env.orbit_activity_id()),
             step_index: env_trimmed(env.orbit_step_index()).and_then(|value| value.parse().ok()),
         }
@@ -110,8 +110,10 @@ fn trusted_mcp_audit_context_with_env(env: &Env) -> AuditContext {
     }
 }
 
-pub(super) fn reservation_owner_from_env() -> Option<ReservationOwnerContext> {
-    managed_run_context_run_id_from_env().map(|owner_run_id| ReservationOwnerContext {
+pub(super) fn reservation_owner_from_env(
+    process_env: &orbit_common::Env,
+) -> Option<ReservationOwnerContext> {
+    managed_run_context_run_id_from_env(process_env).map(|owner_run_id| ReservationOwnerContext {
         owner_metadata: Some(ReservationOwnerMetadata {
             source: Some("orbit_cli".to_string()),
             ..Default::default()
@@ -124,7 +126,7 @@ pub(super) fn reservation_owner_from_env() -> Option<ReservationOwnerContext> {
 /// serves, read from the run envelope the dispatching host stamped into the
 /// agent's environment — never from tool input. `None` outside a managed run.
 pub(super) fn activity_binding_from_env(env: &Env) -> Option<ActivityBinding> {
-    let job_run_id = managed_run_context_run_id_from_env()?;
+    let job_run_id = managed_run_context_run_id_from_env(env)?;
     let task_id = env_trimmed(env.orbit_task_id());
     Some(ActivityBinding {
         job_run_id,
@@ -132,8 +134,8 @@ pub(super) fn activity_binding_from_env(env: &Env) -> Option<ActivityBinding> {
     })
 }
 
-pub(super) fn managed_run_context() -> bool {
-    managed_run_context_from_env()
+pub(super) fn managed_run_context(process_env: &orbit_common::Env) -> bool {
+    managed_run_context_from_env(process_env)
 }
 
 fn read_agent_identity_from_env(env: &Env) -> (Option<String>, Option<String>) {
@@ -171,7 +173,7 @@ pub(super) fn resolve_agent_identity_for_entry_point(
     agent_override: Option<String>,
     model_override: Option<String>,
 ) -> Result<(Option<String>, Option<String>), OrbitError> {
-    if entry_point == ToolEntryPoint::Mcp && !managed_run_context() {
+    if entry_point == ToolEntryPoint::Mcp && !managed_run_context(env) {
         return Ok((None, None));
     }
     resolve_agent_identity(env, agent_override, model_override)
@@ -241,13 +243,14 @@ fn audit_role_label_with_env(
 /// calls are always `unverified`; an authenticated managed envelope may use
 /// only its engine-provided identity and never caller JSON/flags.
 pub fn audit_role_label_for_entry_point(
+    process_env: &orbit_common::Env,
     input: &Value,
     agent_override: Option<&str>,
     model_override: Option<&str>,
     entry_point: ToolEntryPoint,
 ) -> String {
     audit_role_label_for_entry_point_with_env(
-        &process_env(),
+        process_env,
         input,
         agent_override,
         model_override,
@@ -265,7 +268,7 @@ pub(super) fn audit_role_label_for_entry_point_with_env(
     if entry_point != ToolEntryPoint::Mcp {
         return audit_role_label_with_env(env, input, agent_override, model_override);
     }
-    if !managed_run_context() {
+    if !managed_run_context(env) {
         return "unverified".to_string();
     }
 
@@ -307,7 +310,7 @@ pub(super) fn mcp_audit_session_model(
     if let Some(model) = kept(brokered_model) {
         return Some(model);
     }
-    if managed_run_context() {
+    if managed_run_context(env) {
         let env_model = env.orbit_agent_model().and_then(OsStr::to_str);
         if let Some(model) = kept(env_model) {
             return Some(model);

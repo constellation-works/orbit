@@ -12,15 +12,17 @@ use super::super::callback::read_activity_tool_policy_from_env;
 /// Resolve the activity grants relevant to recovery hints using the same
 /// trusted-envelope rule as dispatch. Unmanaged MCP sessions ignore process policy.
 pub fn tool_suggestion_context(
+    process_env: &orbit_common::Env,
     entry_point: ToolEntryPoint,
     session_context: ToolSessionContext,
 ) -> ToolContext {
-    let policy = if entry_point != ToolEntryPoint::Mcp || managed_run_context() {
-        read_activity_tool_policy_from_env(&crate::runtime::process_env())
+    let policy = if entry_point != ToolEntryPoint::Mcp || managed_run_context(process_env) {
+        read_activity_tool_policy_from_env(process_env)
     } else {
         Default::default()
     };
     ToolContext {
+        env: process_env.clone(),
         session_context,
         allowed_tools: policy.allowed_tools,
         tool_deny_policy: policy.deny_policy,

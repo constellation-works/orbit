@@ -40,6 +40,7 @@ pub(in super::super) struct CachePaths {
 }
 
 pub(in super::super) fn cache_paths(
+    process_env: &orbit_common::Env,
     repo: &Path,
     base_sha: &str,
     command: &str,
@@ -62,13 +63,13 @@ pub(in super::super) fn cache_paths(
     identity.push('\0');
     identity.push_str(&serde_json::json!(build_output_env).to_string());
     let key = sha256_hex(identity.as_bytes());
-    let dir = git_common_dir(&orbit_common::Env::capture(), repo)?.join(CACHE_DIR);
+    let dir = git_common_dir(process_env, repo)?.join(CACHE_DIR);
     Ok(CachePaths {
         result: dir.join(format!("{key}.json")),
         lock: dir.join(format!("{key}.lock")),
         inconclusive_hold: dir.join(format!("{key}.hold-inconclusive.json")),
         claim_inconclusive: dir.join(format!("{key}.claim-inconclusive.json")),
-        worktree: scratch_checkout_path(repo, &format!("{CACHE_DIR}-{key}"))?,
+        worktree: scratch_checkout_path(process_env, repo, &format!("{CACHE_DIR}-{key}"))?,
     })
 }
 
@@ -85,10 +86,11 @@ pub(in super::super) struct RecordedBaseRun {
 /// run's checkout (and so its host validation target) existed; holding the
 /// lock proves no base run is using either.
 #[cfg(any(target_os = "linux", target_os = "macos"))]
-pub(in super::super) fn recorded_base_runs(repo: &Path) -> Vec<RecordedBaseRun> {
-    let Ok(dir) =
-        git_common_dir(&orbit_common::Env::capture(), repo).map(|common| common.join(CACHE_DIR))
-    else {
+pub(in super::super) fn recorded_base_runs(
+    process_env: &orbit_common::Env,
+    repo: &Path,
+) -> Vec<RecordedBaseRun> {
+    let Ok(dir) = git_common_dir(process_env, repo).map(|common| common.join(CACHE_DIR)) else {
         return Vec::new();
     };
     let Ok(entries) = std::fs::read_dir(&dir) else {
@@ -107,7 +109,8 @@ pub(in super::super) fn recorded_base_runs(repo: &Path) -> Vec<RecordedBaseRun> 
                 return None;
             }
             Some(RecordedBaseRun {
-                worktree: scratch_checkout_path(repo, &format!("{CACHE_DIR}-{key}")).ok()?,
+                worktree: scratch_checkout_path(process_env, repo, &format!("{CACHE_DIR}-{key}"))
+                    .ok()?,
                 lock: entry.path(),
             })
         })
@@ -124,6 +127,7 @@ pub(in super::super) fn cached_base_check<H: RuntimeHost + ?Sized>(
     selection: Option<&Value>,
 ) -> Option<BaselineCheck> {
     let cache = cache_paths(
+        &host.process_env(),
         workspace_path,
         base_sha,
         command,
@@ -167,25 +171,32 @@ pub(super) fn run_on_base<H: RuntimeHost + ?Sized>(
     selection: Option<&Value>,
     deadline: Option<Instant>,
 ) -> Result<RequiredCommandRun, OrbitError> {
-    in_detached_worktree(workspace_path, worktree, base_sha, |checkout| {
-        if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
-            return Err(OrbitError::Execution(
-                "the base comparison deadline expired during checkout".into(),
-            ));
-        }
-        run_validation_command_until(host, checkout, command, selection, deadline)
-    })?
+    in_detached_worktree(
+        &host.process_env(),
+        workspace_path,
+        worktree,
+        base_sha,
+        |checkout| {
+            if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
+                return Err(OrbitError::Execution(
+                    "the base comparison deadline expired during checkout".into(),
+                ));
+            }
+            run_validation_command_until(host, checkout, command, selection, deadline)
+        },
+    )?
 }
 
 /// Check `commit` out into a fresh detached worktree at `worktree`, run `f`
 /// there, then remove the worktree whatever `f` returned.
 pub(in super::super) fn in_detached_worktree<T>(
+    process_env: &orbit_common::Env,
     workspace_path: &Path,
     worktree: &Path,
     commit: &str,
     f: impl FnOnce(&Path) -> T,
 ) -> Result<T, OrbitError> {
-    remove_worktree(workspace_path, worktree);
+    remove_worktree(process_env, workspace_path, worktree);
     if let Some(parent) = worktree.parent() {
         orbit_common::fs::io::create_private_dir_all(parent).map_err(|error| {
             OrbitError::Execution(format!("create '{}': {error}", parent.display()))
@@ -193,6 +204,7 @@ pub(in super::super) fn in_detached_worktree<T>(
     }
     let path = worktree.to_string_lossy();
     let added = git_run(
+        process_env,
         workspace_path,
         &[
             "worktree",
@@ -205,22 +217,23 @@ pub(in super::super) fn in_detached_worktree<T>(
         ],
     )?;
     if !added.success {
-        remove_worktree(workspace_path, worktree);
+        remove_worktree(process_env, workspace_path, worktree);
         return Err(OrbitError::Execution(format!(
             "git worktree add {commit}: {}",
             added.stderr.trim()
         )));
     }
     let result = f(worktree);
-    remove_worktree(workspace_path, worktree);
+    remove_worktree(process_env, workspace_path, worktree);
     Ok(result)
 }
 
 /// Best-effort removal of a base worktree and its registration.
-fn remove_worktree(workspace_path: &Path, worktree: &Path) {
+fn remove_worktree(process_env: &orbit_common::Env, workspace_path: &Path, worktree: &Path) {
     if worktree.exists() {
         let path = worktree.to_string_lossy();
         let _ = git_run(
+            process_env,
             workspace_path,
             &["worktree", "remove", "--force", "--end-of-options", &path],
         );
@@ -233,5 +246,5 @@ fn remove_worktree(workspace_path: &Path, worktree: &Path) {
             );
         }
     }
-    let _ = git_run(workspace_path, &["worktree", "prune"]);
+    let _ = git_run(process_env, workspace_path, &["worktree", "prune"]);
 }

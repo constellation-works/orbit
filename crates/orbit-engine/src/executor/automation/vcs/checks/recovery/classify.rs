@@ -306,8 +306,14 @@ pub(super) fn classify_failed_checks<'a, H: RuntimeHost + ?Sized>(
             if matches!(
                 class,
                 CheckFailureClass::Candidate | CheckFailureClass::Inconclusive
-            ) && super::super::suspect::cites_changed_candidate(workspace, head, base, &log)
-                .unwrap_or(false)
+            ) && super::super::suspect::cites_changed_candidate(
+                &host.process_env(),
+                workspace,
+                head,
+                base,
+                &log,
+            )
+            .unwrap_or(false)
             {
                 code.insert(
                     job_id,

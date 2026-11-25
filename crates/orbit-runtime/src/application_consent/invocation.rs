@@ -80,7 +80,8 @@ impl RuntimeKernel {
         session: &mut ToolSessionContext,
         enforcement: CapabilityEnforcement,
     ) -> Result<bool, OrbitError> {
-        let callback = orbit_tools::plugin::resolve_plugin_callback(&self.global_root())?;
+        let callback =
+            orbit_tools::plugin::resolve_plugin_callback(self.env(), &self.global_root())?;
         let inherited = callback
             .as_ref()
             .and_then(|identity| identity.application.as_deref().cloned());

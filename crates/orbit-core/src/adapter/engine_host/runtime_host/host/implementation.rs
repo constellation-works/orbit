@@ -50,6 +50,10 @@ use super::super::{
 use super::private_vcs;
 
 impl RuntimeHost for OrbitRuntime {
+    fn process_env(&self) -> orbit_common::Env {
+        self.env().clone()
+    }
+
     fn start_plugin_broker(
         &self,
         run: &PluginBrokerRun,

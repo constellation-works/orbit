@@ -114,7 +114,9 @@ pub fn test_plugin_dir(
     // The profile a call from the conformance workspace compiles, so consent
     // reads the same rendered, resolved write set the sandbox will open. It
     // also repeats the protected-path refusal against the real workspace.
-    let profile = backend.spec().sandbox_profile(Some(&workspace_root))?;
+    let profile = backend
+        .spec()
+        .sandbox_profile(runtime.env(), Some(&workspace_root))?;
     let external_writes = writes_outside(&profile.write, &profile.write_files, &sandbox_path);
     authorize_conformance_run(
         &plugin,
@@ -131,6 +133,7 @@ pub fn test_plugin_dir(
     for (file_index, case_index) in case_locations {
         fixture_secrets.supply(&plugin.tests[file_index].file.tests[case_index].secrets);
         let execution = run_case(
+            runtime.env(),
             &plugin,
             &backend,
             &workspace_root,
@@ -432,6 +435,7 @@ struct CaseExecution {
 
 /// Run one golden and compare the output to what the manifest promises.
 fn run_case(
+    env: &orbit_common::Env,
     plugin: &LoadedPlugin,
     backend: &PluginBackend,
     workspace_root: &Path,
@@ -472,6 +476,7 @@ fn run_case(
         backend: backend.clone(),
     };
     let context = ToolContext {
+        env: env.clone(),
         cwd: Some(workspace_root.to_string_lossy().into_owned()),
         workspace_root: Some(workspace_root.to_path_buf()),
         // `requires.programs` is checked against this list the same way a

@@ -50,26 +50,26 @@ fn resolve_one<H: RuntimeHost + ?Sized>(
         .get_task_history(target)
         .ok()
         .and_then(|history| landed_commit_from_history(&history))
-        && let Some(subject) = commit_subject(workspace, &sha)
+        && let Some(subject) = commit_subject(&host.process_env(), workspace, &sha)
     {
         return Some(RegressionLandedCommit { sha, subject });
     }
     let marker = format!("[{target}]");
     // This fallback requires the marker in the commit's own subject, beyond
     // the subject/body/trailer ownership used for dependency delivery.
-    commits_matching(workspace, &marker, &["HEAD"], None)
+    commits_matching(&host.process_env(), workspace, &marker, &["HEAD"], None)
         .ok()?
         .into_iter()
         .find_map(|sha| {
-            let subject = commit_subject(workspace, &sha)?;
+            let subject = commit_subject(&host.process_env(), workspace, &sha)?;
             subject
                 .contains(&marker)
                 .then_some(RegressionLandedCommit { sha, subject })
         })
 }
 
-fn commit_subject(workspace: &Path, sha: &str) -> Option<String> {
-    let subject = git_output(workspace, &["show", "-s", "--format=%s", sha]).ok()?;
+fn commit_subject(process_env: &orbit_common::Env, workspace: &Path, sha: &str) -> Option<String> {
+    let subject = git_output(process_env, workspace, &["show", "-s", "--format=%s", sha]).ok()?;
     let subject = subject.trim().to_string();
     (!subject.is_empty()).then_some(subject)
 }

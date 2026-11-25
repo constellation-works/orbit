@@ -212,9 +212,10 @@ fn refused_unpublished_repair_releases_after_worktree_restoration() {
             .with_task_pr_forge(Arc::new(OpenPublication));
         // The agent-exit widening precedes scope-record validation. A refused
         // commit has no repair checkpoint or repair publication to clean up.
-        let candidate = orbit_engine::run_worktree_paths(&f.repo, &f.source)
-            .unwrap()
-            .remove(0);
+        let candidate =
+            orbit_engine::run_worktree_paths(&orbit_common::Env::capture(), &f.repo, &f.source)
+                .unwrap()
+                .remove(0);
         std::fs::create_dir_all(candidate.parent().unwrap()).unwrap();
         git(
             &f.repo,

@@ -22,6 +22,7 @@ const MAX_STALE_HEAD_REREADS: u32 = 3;
 const MAX_STALE_HEAD_WAIT_SECONDS: u64 = 60;
 
 pub(super) struct HeadLag {
+    process_env: orbit_common::Env,
     pub(super) observations: u32,
     /// The candidate the PR head ref was last seen at; once settled there it
     /// cannot lag again, so a later regression is not treated as lag.
@@ -32,8 +33,13 @@ pub(super) struct HeadLag {
 }
 
 impl HeadLag {
-    pub(super) fn new(max_wait_seconds: u64, poll_interval_seconds: u64) -> Self {
+    pub(super) fn new(
+        process_env: orbit_common::Env,
+        max_wait_seconds: u64,
+        poll_interval_seconds: u64,
+    ) -> Self {
         Self {
+            process_env,
             observations: 0,
             pull_ref_settled_at: None,
             waited_seconds: 0,
@@ -80,7 +86,13 @@ impl HeadLag {
         } else {
             "review_gate_stale"
         };
-        let remote_sha = remote_ref_sha(workspace_path, &reference, pr_number, error_code)?;
+        let remote_sha = remote_ref_sha(
+            &self.process_env,
+            workspace_path,
+            &reference,
+            pr_number,
+            error_code,
+        )?;
         let ref_lags = remote_sha.as_deref() != Some(candidate);
         let lag_description = if remote_sha.is_none() {
             format!("pull ref '{reference}' is absent")
@@ -124,7 +136,13 @@ impl HeadLag {
                     )
                 })?;
             let branch_ref = format!("refs/heads/{branch}");
-            let branch_sha = remote_ref_sha(workspace_path, &branch_ref, pr_number, error_code)?;
+            let branch_sha = remote_ref_sha(
+                &self.process_env,
+                workspace_path,
+                &branch_ref,
+                pr_number,
+                error_code,
+            )?;
             if branch_sha.as_deref() != Some(candidate) {
                 return Err(head_lag_error(
                     error_code,
@@ -170,12 +188,14 @@ impl HeadLag {
 /// The SHA `origin` reports for exactly `reference`; `None` when it is absent.
 /// A failed `ls-remote` is an error, never lag.
 fn remote_ref_sha(
+    process_env: &orbit_common::Env,
     workspace_path: &str,
     reference: &str,
     pr_number: &str,
     error_code: &str,
 ) -> Result<Option<String>, OrbitError> {
     let probe = remote_ref_output(
+        process_env,
         Path::new(workspace_path),
         &["ls-remote", "origin", reference],
         "PR head settling",

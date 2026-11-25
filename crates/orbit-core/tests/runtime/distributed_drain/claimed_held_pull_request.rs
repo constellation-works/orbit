@@ -353,6 +353,7 @@ fn a_before_landing_evidence_hold_preserves_reviewer_fixes_for_next_claim() {
         );
         let reviewer = &admitted["reviewer"];
         let fixed = orbit_engine::review_gate::commit_reviewer_repairs(
+            &orbit_common::Env::capture(),
             &repo,
             &format!(
                 "{} / {}",

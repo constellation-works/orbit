@@ -60,15 +60,17 @@ pub(crate) fn freeze_auto_task_run(
     };
     let source_revision = if checked.pinned_revision {
         let branch = runtime.workflow_base_branch().to_string();
-        let revision =
-            crate::application::automation::source::Source::new(&runtime.paths().repo_root)
-                .verify_branch(&branch)
-                .map_err(|error| {
-                    OrbitError::InvalidInput(format!(
-                        "a release-readiness/v1 step pins the integration branch `{branch}` at \
+        let revision = crate::application::automation::source::Source::new(
+            runtime.env(),
+            &runtime.paths().repo_root,
+        )
+        .verify_branch(&branch)
+        .map_err(|error| {
+            OrbitError::InvalidInput(format!(
+                "a release-readiness/v1 step pins the integration branch `{branch}` at \
                  admission, which did not resolve: {error}; nothing was submitted"
-                    ))
-                })?;
+            ))
+        })?;
         Some(revision.commit)
     } else {
         None

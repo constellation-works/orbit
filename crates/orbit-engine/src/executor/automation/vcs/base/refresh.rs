@@ -77,8 +77,14 @@ pub(in crate::executor::automation::vcs) fn recover<H: RuntimeHost + ?Sized>(
             }
             return Ok(RefreshStep::Changed);
         }
-        super::super::checks::verify_published_base_update(workspace, candidate, status)?;
+        super::super::checks::verify_published_base_update(
+            &host.process_env(),
+            workspace,
+            candidate,
+            status,
+        )?;
         let parents = super::super::git::git_output(
+            &host.process_env(),
             workspace,
             &[
                 "rev-list",
@@ -102,6 +108,7 @@ pub(in crate::executor::automation::vcs) fn recover<H: RuntimeHost + ?Sized>(
             ));
         }
         let tree = super::super::git::git_output(
+            &host.process_env(),
             workspace,
             &[
                 "rev-parse",
@@ -218,7 +225,10 @@ pub(in crate::executor::automation::vcs) fn recover<H: RuntimeHost + ?Sized>(
             let observed = read_pr_status_before(host, workspace, &number, deadline_ms)?;
             if observed.head_sha.as_deref() != Some(&request.head_sha) {
                 super::super::checks::verify_published_base_update(
-                    workspace, candidate, &observed,
+                    &host.process_env(),
+                    workspace,
+                    candidate,
+                    &observed,
                 )?;
                 return Ok(RefreshStep::Changed);
             }
@@ -236,6 +246,7 @@ fn refused(reason: &str) -> OrbitError {
 /// published/review pins still supply the candidate; Git supplies its base.
 /// Missing checkpoints leave recovery unavailable, never weaken those pins.
 pub(in crate::executor::automation::vcs) fn owner_candidate(
+    process_env: &orbit_common::Env,
     workspace: &Path,
     input: &Value,
     pin: &DeliveryPin,
@@ -250,16 +261,19 @@ pub(in crate::executor::automation::vcs) fn owner_candidate(
         return Ok(None);
     };
     let base = base.strip_prefix("origin/").unwrap_or(base);
-    let origin = super::super::git::git_output(workspace, &["remote", "get-url", "origin"])?;
+    let origin =
+        super::super::git::git_output(process_env, workspace, &["remote", "get-url", "origin"])?;
     let Some(repository) = super::super::claim::slug(&origin) else {
         return Ok(None);
     };
     let base_ref = super::super::git::resolve_worktree_start_point(
+        process_env,
         workspace,
         base,
         super::super::git::base_sync_mode_from_input(input)?,
     )?;
-    let base = super::super::git::git_output(workspace, &["merge-base", head, &base_ref])?;
+    let base =
+        super::super::git::git_output(process_env, workspace, &["merge-base", head, &base_ref])?;
     Ok(Some(HandoffCandidate {
         repository,
         source_branch: branch.into(),
@@ -271,8 +285,8 @@ pub(in crate::executor::automation::vcs) fn owner_candidate(
             .base_branch
             .clone()
             .ok_or_else(|| refused("landing branch unavailable"))?,
-        candidate: super::super::review_gate::revision(workspace, head)?,
-        base: super::super::review_gate::revision(workspace, base.trim())?,
+        candidate: super::super::review_gate::revision(process_env, workspace, head)?,
+        base: super::super::review_gate::revision(process_env, workspace, base.trim())?,
         delivery: orbit_types::workflow::handoff::HandoffDelivery::PullRequest { number },
     }))
 }

@@ -53,11 +53,12 @@ impl RunLogRead {
 /// `fallback_jobs` would project its own) hand it in so the fallback never
 /// re-queries GitHub for metadata the caller already has.
 pub fn read_run_log(
+    env: &orbit_common::Env,
     requests: &RunLogRequests,
     bounds: LogReadBounds,
     cached_run_view: Option<&Value>,
 ) -> Result<RunLogRead, OrbitError> {
-    read_run_log_guarded(requests, bounds, cached_run_view, &|request| {
+    read_run_log_guarded(env, requests, bounds, cached_run_view, &|request| {
         Ok(request.clone())
     })
 }
@@ -66,12 +67,13 @@ pub fn read_run_log(
 /// including metadata and per-job fallback reads. The guard may clamp the
 /// request timeout or refuse an exhausted absolute budget.
 pub fn read_run_log_guarded(
+    env: &orbit_common::Env,
     requests: &RunLogRequests,
     bounds: LogReadBounds,
     cached_run_view: Option<&Value>,
     guard: &dyn Fn(&ExecRequest) -> Result<ExecRequest, OrbitError>,
 ) -> Result<RunLogRead, OrbitError> {
-    let log = match run_scoped_log(requests, bounds, guard) {
+    let log = match run_scoped_log(env, requests, bounds, guard) {
         Ok(log) => log,
         Err(error) if is_recoverable_run_log_error(&error, &requests.run_id) => {
             let empty = match &requests.selection {
@@ -86,6 +88,7 @@ pub fn read_run_log_guarded(
                 }
             };
             let read = recover_from_job_logs(
+                env,
                 requests,
                 bounds,
                 empty,
@@ -118,7 +121,7 @@ pub fn read_run_log_guarded(
         }
         // An empty run-scoped read is the known blind spot: the scoped
         // selection may still be present in a verified job log.
-        let read = recover_from_job_logs(requests, bounds, log, None, cached_run_view, guard);
+        let read = recover_from_job_logs(env, requests, bounds, log, None, cached_run_view, guard);
         return ensure_selection_found(requests, read);
     }
     if !log.text.trim().is_empty() {
@@ -132,6 +135,7 @@ pub fn read_run_log_guarded(
         });
     }
     Ok(recover_from_job_logs(
+        env,
         requests,
         bounds,
         log,

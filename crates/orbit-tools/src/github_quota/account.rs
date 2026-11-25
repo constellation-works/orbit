@@ -4,13 +4,16 @@ use super::{request, *};
 use orbit_exec::ExecRequest;
 use std::time::Instant;
 /// The opaque record key for the GitHub host and credential `request` uses.
-pub fn request_account_key(request: &ExecRequest) -> String {
-    request::request_account(request)
+pub fn request_account_key(env: &orbit_common::Env, request: &ExecRequest) -> String {
+    request::request_account(env, request)
 }
 
 /// The record key a `gh` call inheriting this process's environment uses.
-pub fn inherited_account_key() -> String {
-    request::request_account(&crate::gh_request::gh_exec_request(Vec::new(), None, 0))
+pub fn inherited_account_key(env: &orbit_common::Env) -> String {
+    request::request_account(
+        env,
+        &crate::gh_request::gh_exec_request(Vec::new(), None, 0),
+    )
 }
 
 /// The reset a completion-style caller waits for, from the shared record.
@@ -28,11 +31,15 @@ pub enum SharedReset {
 /// right after an admission probe does not call it again. `request` supplies
 /// the program, environment, directory and timeout budget of that read; that
 /// budget also bounds every wait for the record's lock.
-pub fn shared_exhausted_reset(request: &ExecRequest, resources: &[&str]) -> SharedReset {
+pub fn shared_exhausted_reset(
+    env: &orbit_common::Env,
+    request: &ExecRequest,
+    resources: &[&str],
+) -> SharedReset {
     let Some((store, policy)) = active_guard() else {
         return SharedReset::Unguarded;
     };
-    let account = request::request_account(request);
+    let account = request::request_account(env, request);
     let deadline = gh_request_deadline(request, Instant::now());
     SharedReset::Guarded(store.bounded_by(deadline).exhausted_reset(
         &policy,

@@ -26,9 +26,10 @@ pub(crate) fn build_orbit_tool_host(
     session_context: ToolSessionContext,
 ) -> Arc<dyn OrbitToolHost> {
     let (run_id, brokered_resident) = match run {
-        ToolHostRun::InProcess(run_id) => {
-            (run_id.or_else(managed_run_context_run_id_from_env), false)
-        }
+        ToolHostRun::InProcess(run_id) => (
+            run_id.or_else(|| managed_run_context_run_id_from_env(runtime.env())),
+            false,
+        ),
         #[cfg(unix)]
         ToolHostRun::BrokeredResident(run_id) => (Some(run_id), true),
     };

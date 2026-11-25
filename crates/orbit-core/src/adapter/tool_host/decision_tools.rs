@@ -142,7 +142,7 @@ fn submit_caller(
         return Ok(DecisionSubmitCaller::Agent);
     }
     if let CallbackResolution::Identified(identity) =
-        resolve_plugin_callback_session(&runtime.global_root())?
+        resolve_plugin_callback_session(runtime.env(), &runtime.global_root())?
     {
         return Ok(DecisionSubmitCaller::PluginCallback {
             plugin: identity.provenance.name,

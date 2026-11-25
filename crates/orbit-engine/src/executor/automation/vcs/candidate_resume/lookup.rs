@@ -56,9 +56,15 @@ pub(in crate::executor::automation) fn candidate_resume<H: RuntimeHost + ?Sized>
             .get("claim_repair")
             .filter(|repair| repair.is_object())
         {
-            return claim_repair_resume(repair, &workspace_path, &base_sha);
+            return claim_repair_resume(&host.process_env(), repair, &workspace_path, &base_sha);
         }
-        return claimed_resume(input, task_id, &workspace_path, &base_sha);
+        return claimed_resume(
+            &host.process_env(),
+            input,
+            task_id,
+            &workspace_path,
+            &base_sha,
+        );
     }
     let task = host.get_task(task_id)?;
     if host.source_repair_admission(&run_id)?.is_some() {
@@ -134,7 +140,14 @@ pub(in crate::executor::automation) fn candidate_resume<H: RuntimeHost + ?Sized>
         Preserved::Refused(candidate, reason) => (candidate, Outcome::Fresh(reason)),
         Preserved::Usable(candidate) => {
             let from_claim = candidate.claim.is_some();
-            let outcome = resume(&task.id, &candidate, &workspace_path, &base_sha, from_claim)?;
+            let outcome = resume(
+                &host.process_env(),
+                &task.id,
+                &candidate,
+                &workspace_path,
+                &base_sha,
+                from_claim,
+            )?;
             (candidate, outcome)
         }
     };
@@ -153,6 +166,7 @@ pub(in crate::executor::automation) fn candidate_resume<H: RuntimeHost + ?Sized>
 /// [ORB-14257] Resume the candidate the owner kept from the task's last
 /// claim. Nothing is written to the task: its history lives on the owner.
 fn claimed_resume(
+    process_env: &orbit_common::Env,
     input: &Value,
     task_id: &str,
     workspace_path: &Path,
@@ -171,7 +185,14 @@ fn claimed_resume(
             base_sha,
         ));
     };
-    let outcome = resume(task_id, &candidate, workspace_path, base_sha, true)?;
+    let outcome = resume(
+        process_env,
+        task_id,
+        &candidate,
+        workspace_path,
+        base_sha,
+        true,
+    )?;
     tracing::info!(target: "orbit_engine::executor::automation::vcs::candidate_resume",
         task_id,
         outcome = outcome_name(&outcome),
@@ -207,7 +228,13 @@ fn claimed_resume(
             candidate.prior_pull_request_head(),
             candidate.branch
         )),
-        _ => adopt_published_branch(workspace_path, task_id, &candidate, &candidate.head_sha)?,
+        _ => adopt_published_branch(
+            process_env,
+            workspace_path,
+            task_id,
+            &candidate,
+            &candidate.head_sha,
+        )?,
     };
     match adoption {
         Adoption::Adopted => {
@@ -604,6 +631,7 @@ fn refuse_stale<H: RuntimeHost + ?Sized>(
 /// owner landing stopped on its base. Unlike a kept candidate it must not be
 /// dropped, so a candidate that cannot be restored fails the leaf.
 fn claim_repair_resume(
+    process_env: &orbit_common::Env,
     repair: &Value,
     workspace_path: &Path,
     base_sha: &str,
@@ -635,7 +663,13 @@ fn claim_repair_resume(
         landing_stop: None,
         evidence_findings: None,
     };
-    let outcome = match apply(&candidate, &candidate.head_sha, workspace_path, base_sha)? {
+    let outcome = match apply(
+        process_env,
+        &candidate,
+        &candidate.head_sha,
+        workspace_path,
+        base_sha,
+    )? {
         Applied::Refused(reason) => {
             return Err(OrbitError::Execution(format!(
                 "candidate_resume: repair candidate {} could not be restored: {reason}",

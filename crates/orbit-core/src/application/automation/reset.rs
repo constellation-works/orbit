@@ -36,7 +36,7 @@ pub fn reset_auto_task(
     // Capture the fallback first: fetch can spend the source's whole deadline.
     // Keep its error until needed so a missing local branch cannot prevent a
     // successful remote-first reset.
-    let source = Source::new(&runtime.paths().repo_root);
+    let source = Source::new(runtime.env(), &runtime.paths().repo_root);
     let local = source.local_head(&trigger.branch);
     let baseline = match source.head(&trigger.branch) {
         Ok((_, baseline)) => baseline,
@@ -87,7 +87,7 @@ pub fn reset_auto_task(
     // released after it: a refused reset must leave the frozen inputs of the
     // debt it did not forget reachable. This local pass gets its own budget:
     // even a successful fetch may have spent the baseline source's deadline.
-    let source = Source::new(&runtime.paths().repo_root);
+    let source = Source::new(runtime.env(), &runtime.paths().repo_root);
     let retained = source
         .retained_refs(&consumer)
         .map_err(automation_error_to_orbit)?;
@@ -161,7 +161,7 @@ pub(crate) fn tear_down_auto_task_consumer(
     let Some(consumer) = delivery_consumer(runtime, definition)? else {
         return Ok(None);
     };
-    let source = Source::new(&runtime.paths().repo_root);
+    let source = Source::new(runtime.env(), &runtime.paths().repo_root);
     let pinned = source
         .retained_refs(&consumer)
         .map_err(automation_error_to_orbit)?;
@@ -180,7 +180,7 @@ pub(crate) fn tear_down_auto_task_consumer(
     // Reset releases the pins it knows about; this catches the ones a consumer
     // without state, or a reset that could not delete them, left behind.
     // Reset may have exhausted a fetch deadline since the initial pin read.
-    let source = Source::new(&runtime.paths().repo_root);
+    let source = Source::new(runtime.env(), &runtime.paths().repo_root);
     let retained = source
         .retained_refs(&consumer)
         .map_err(automation_error_to_orbit)?;

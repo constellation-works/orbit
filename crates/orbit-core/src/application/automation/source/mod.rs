@@ -38,8 +38,8 @@ struct ObservationLimits {
 }
 
 pub(crate) struct Source<'a> {
-    root: &'a Path,
     env: Env,
+    root: &'a Path,
     started: BudgetClock,
     cache: Option<&'a SourceCache>,
     now: DateTime<Utc>,

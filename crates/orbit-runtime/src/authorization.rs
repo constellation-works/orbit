@@ -17,7 +17,6 @@
 //! [`AuditEventStatus::Denied`]; the two rows answer different questions
 //! ("what was refused" versus "what call failed").
 
-use orbit_common::env_vars;
 use std::collections::BTreeSet;
 
 use orbit_common::OrbitError;
@@ -82,10 +81,10 @@ pub fn is_resident_cycle_right_gated_operation(tool: &str) -> bool {
 
 /// Routing hint for a nested client. The resident broker authenticates the
 /// caller and resolves the target workspace against the live cycle's grant.
-pub fn route_resident_delivery_recovery_to_broker(tool: &str) -> bool {
+pub fn route_resident_delivery_recovery_to_broker(env: &orbit_common::Env, tool: &str) -> bool {
     tool == TASK_RESUME_DELIVERY_OPERATION_ID
-        && std::env::var_os(env_vars::ORBIT_PLUGIN_BROKER).is_some()
-        && crate::run_input::managed_run_context_run_id_from_env().is_some()
+        && env.orbit_plugin_broker().is_some()
+        && crate::run_input::managed_run_context_run_id_from_env(env).is_some()
 }
 
 /// Identity facts retained after operator admission.
@@ -142,7 +141,10 @@ impl RuntimeKernel {
         if (tool_name == DECISION_SUBMIT_OPERATION_ID || tool_name == DECISION_DIGEST_OPERATION_ID)
             && session_context.worker_invocation.is_none()
             && matches!(
-                orbit_tools::plugin::resolve_plugin_callback_session(&self.global_root())?,
+                orbit_tools::plugin::resolve_plugin_callback_session(
+                    self.env(),
+                    &self.global_root()
+                )?,
                 orbit_tools::plugin::CallbackResolution::Identified(_)
             )
         {
@@ -164,7 +166,7 @@ impl RuntimeKernel {
 
     /// Routing hint for the nested client. Only the broker authenticates the run.
     pub fn env_names_resident_cycle(&self) -> bool {
-        crate::run_input::managed_run_context_run_id_from_env()
+        crate::run_input::managed_run_context_run_id_from_env(self.env())
             .is_some_and(|run_id| self.is_resident_cycle_run(&run_id))
     }
 
@@ -396,7 +398,11 @@ impl RuntimeKernel {
             stdout_truncated: None,
             stderr_truncated: None,
             error_message,
-            host: std::env::var(env_vars::HOSTNAME).ok(),
+            host: self
+                .env()
+                .hostname()
+                .and_then(std::ffi::OsStr::to_str)
+                .map(ToOwned::to_owned),
             pid: std::process::id(),
             session_id: None,
             workspace_id: None,

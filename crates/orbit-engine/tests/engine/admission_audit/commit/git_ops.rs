@@ -420,9 +420,14 @@ fn reviewer_repair_commit_keeps_trailer_values_byte_identical() {
         "attempt-1",
         "haiku@xhigh",
     );
-    orbit_engine::review_gate::commit_reviewer_repairs(repo, "anthropic / haiku", &message)
-        .unwrap()
-        .expect("a repair commit");
+    orbit_engine::review_gate::commit_reviewer_repairs(
+        &orbit_common::Env::capture(),
+        repo,
+        "anthropic / haiku",
+        &message,
+    )
+    .unwrap()
+    .expect("a repair commit");
     let committed = git_output(repo, &["log", "-1", "--format=%B"]).unwrap();
     assert!(
         committed.contains("\nOrbit-Review-Crew: haiku@xhigh"),

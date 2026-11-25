@@ -47,8 +47,10 @@ impl WorktreeBoundaryGuard {
 
         // Authenticate metadata before snapshotting or staging repaired files.
         // Matching commits/index alone cannot authenticate a copy.
-        checkpoint.metadata.verify(&self.assigned_root)?;
-        let after_agent = git_fingerprint(&self.assigned_root)?;
+        checkpoint
+            .metadata
+            .verify(&self.process_env, &self.assigned_root)?;
+        let after_agent = git_fingerprint(&host.process_env(), &self.assigned_root)?;
         if after_agent.head != self.assigned_before.head
             || after_agent.branch != self.assigned_before.branch
             || !index_unchanged(&self.assigned_before, &after_agent)
@@ -67,7 +69,7 @@ impl WorktreeBoundaryGuard {
         } else {
             // The command runs in the checkout: only while this recovery
             // still owns it, as staging is.
-            self.validate_rebase_checkpoint(checkpoint, &invalid)?;
+            self.validate_rebase_checkpoint(&self.process_env, checkpoint, &invalid)?;
             recheck_recovery_owner(
                 host,
                 &self.run_id,
@@ -81,8 +83,10 @@ impl WorktreeBoundaryGuard {
                     "regenerating a generated conflict path failed: {reason}"
                 ))
             })?;
-            checkpoint.metadata.verify(&self.assigned_root)?;
-            let regenerated_state = git_fingerprint(&self.assigned_root)?;
+            checkpoint
+                .metadata
+                .verify(&self.process_env, &self.assigned_root)?;
+            let regenerated_state = git_fingerprint(&host.process_env(), &self.assigned_root)?;
             if regenerated_state.head != self.assigned_before.head
                 || regenerated_state.branch != self.assigned_before.branch
                 || !index_unchanged(&self.assigned_before, &regenerated_state)
@@ -97,7 +101,12 @@ impl WorktreeBoundaryGuard {
             .iter()
             .map(|generated| generated.path.clone())
             .collect::<Vec<_>>();
-        let changed = changed_paths(&self.assigned_root, &self.assigned_before, &after_agent);
+        let changed = changed_paths(
+            &host.process_env(),
+            &self.assigned_root,
+            &self.assigned_before,
+            &after_agent,
+        );
         // A conflict file counts as repaired when this invocation changed it,
         // or when an earlier actor (final recovery) already did [F2026-10-237].
         // A regenerated file is repaired by its command.
@@ -117,14 +126,26 @@ impl WorktreeBoundaryGuard {
                 .map_err(|reason| invalid(&format!("resolution intent refused: {reason}")))?,
             None => Vec::new(),
         };
-        let intended = adopt_resolution_intents(&self.assigned_root, &intents, &hand_repaired)
-            .map_err(|reason| invalid(&format!("resolution intent refused: {reason}")))?;
+        let intended = adopt_resolution_intents(
+            &host.process_env(),
+            &self.assigned_root,
+            &intents,
+            &hand_repaired,
+        )
+        .map_err(|reason| invalid(&format!("resolution intent refused: {reason}")))?;
         let unintended = hand_repaired
             .iter()
             .filter(|path| !intended.contains(path))
             .cloned()
             .collect::<Vec<_>>();
-        if !unrepaired_conflict_paths(&self.assigned_root, &unintended, &changed)?.is_empty() {
+        if !unrepaired_conflict_paths(
+            &host.process_env(),
+            &self.assigned_root,
+            &unintended,
+            &changed,
+        )?
+        .is_empty()
+        {
             return Err(invalid(
                 "one or more authorized conflict files were not repaired",
             ));
@@ -150,8 +171,9 @@ impl WorktreeBoundaryGuard {
                 .cloned(),
         );
         let companion_paths = companion_paths.into_iter().collect::<Vec<_>>();
-        self.validate_rebase_checkpoint(checkpoint, &invalid)?;
-        if unmerged_paths(&self.assigned_root)? != checkpoint.conflicting_paths {
+        self.validate_rebase_checkpoint(&self.process_env, checkpoint, &invalid)?;
+        if unmerged_paths(&host.process_env(), &self.assigned_root)? != checkpoint.conflicting_paths
+        {
             return Err(invalid(
                 "the live unmerged paths changed after provider execution",
             ));
@@ -162,7 +184,7 @@ impl WorktreeBoundaryGuard {
         let mut diff_check_args = vec!["diff", "--check", "--"];
         diff_check_args.extend(hand_repaired.iter().map(String::as_str));
         if !hand_repaired.is_empty()
-            && !git_output_raw(&self.assigned_root, &diff_check_args)?.success
+            && !git_output_raw(&host.process_env(), &self.assigned_root, &diff_check_args)?.success
         {
             return Err(invalid(
                 "a repaired file still contains conflict markers or whitespace errors",
@@ -181,8 +203,8 @@ impl WorktreeBoundaryGuard {
         let mut add_args = vec!["add", "--all", "--"];
         add_args.extend(checkpoint.conflicting_paths.iter().map(String::as_str));
         add_args.extend(companion_paths.iter().map(String::as_str));
-        git_mutation(&self.assigned_root, &add_args)?;
-        if !unmerged_paths(&self.assigned_root)?.is_empty() {
+        git_mutation(&host.process_env(), &self.assigned_root, &add_args)?;
+        if !unmerged_paths(&host.process_env(), &self.assigned_root)?.is_empty() {
             return Err(invalid(
                 "staging the resolved conflict set left unresolved entries",
             ));
@@ -192,15 +214,16 @@ impl WorktreeBoundaryGuard {
         let mut expected_untracked = self.assigned_before.untracked_content.clone();
         expected_untracked.retain(|path, _| !companion_paths.contains(path));
         let continued = git_mutation_output(
+            &host.process_env(),
             &self.assigned_root,
             &["-c", "core.editor=true", "rebase", "--continue"],
         )?;
         if !continued.success {
-            let additional = unmerged_paths(&self.assigned_root)?;
+            let additional = unmerged_paths(&host.process_env(), &self.assigned_root)?;
             // A candidate with several commits can conflict again on a later
             // pick. The repaired pick is committed; keep that progress for
             // the next bounded recovery round instead of refusing it.
-            if !additional.is_empty() && self.stopped_authorized_rebase()? {
+            if !additional.is_empty() && self.stopped_authorized_rebase(&self.process_env)? {
                 self.widen_task(
                     host,
                     task_ids,
@@ -223,9 +246,14 @@ impl WorktreeBoundaryGuard {
             )));
         }
 
-        let completed = git_fingerprint(&self.assigned_root)?;
+        let completed = git_fingerprint(&host.process_env(), &self.assigned_root)?;
         if self.absorbed_authorized_rebase(&completed)? {
-            self.require_clean_continuation(&completed, &expected_untracked, &invalid)?;
+            self.require_clean_continuation(
+                &self.process_env,
+                &completed,
+                &expected_untracked,
+                &invalid,
+            )?;
             return self
                 .absorbed_continuation(
                     checkpoint,
@@ -237,17 +265,27 @@ impl WorktreeBoundaryGuard {
                 )
                 .map(RebaseContinuation::Absorbed);
         }
-        if !self.completed_authorized_rebase(&completed)? {
+        if !self.completed_authorized_rebase(&self.process_env, &completed)? {
             return Err(invalid(
                 "continued rebase did not leave the checkpointed branch on the pinned base with a candidate commit",
             ));
         }
-        self.require_clean_continuation(&completed, &expected_untracked, &invalid)?;
+        self.require_clean_continuation(
+            &self.process_env,
+            &completed,
+            &expected_untracked,
+            &invalid,
+        )?;
         // The pin only records where the rebase stopped. Land the continued
         // candidate on the base tip that is live now, so the deterministic
         // retry and the PR see current integration rather than a stale one.
-        let landed = self.follow_advanced_base(checkpoint, &expected_untracked, &invalid)?;
-        let completed = git_fingerprint(&self.assigned_root)?;
+        let landed = self.follow_advanced_base(
+            &self.process_env,
+            checkpoint,
+            &expected_untracked,
+            &invalid,
+        )?;
+        let completed = git_fingerprint(&host.process_env(), &self.assigned_root)?;
         let base_sha = match landed {
             LandedOn::Candidate(base_sha) => base_sha,
             LandedOn::Absorbed(base_sha) => {
@@ -315,6 +353,7 @@ impl WorktreeBoundaryGuard {
             .clone()
             .ok_or_else(|| refused(AbsorbedReason::TaskScopeChanged))?;
         let (covering, candidate_paths) = covering_commit(
+            &self.process_env,
             &self.assigned_root,
             &checkpoint.original_base_sha,
             &checkpoint.original_head,
@@ -363,11 +402,17 @@ impl WorktreeBoundaryGuard {
     /// the continuation did not commit (`expected_untracked`).
     fn require_clean_continuation(
         &self,
+        process_env: &orbit_common::Env,
         completed: &GitWorktreeFingerprint,
         expected_untracked: &BTreeMap<String, String>,
         invalid: &impl Fn(&str) -> DispatchError,
     ) -> Result<(), DispatchError> {
-        if !git_output_raw(&self.assigned_root, &["diff", "--quiet", "HEAD", "--"])?.success
+        if !git_output_raw(
+            process_env,
+            &self.assigned_root,
+            &["diff", "--quiet", "HEAD", "--"],
+        )?
+        .success
             || &completed.untracked_content != expected_untracked
         {
             return Err(invalid(
@@ -389,29 +434,31 @@ impl WorktreeBoundaryGuard {
     /// remaining advance instead of a lost resolution.
     fn follow_advanced_base(
         &self,
+        process_env: &orbit_common::Env,
         checkpoint: &RebaseRecoveryCheckpoint,
         expected_untracked: &BTreeMap<String, String>,
         invalid: &impl Fn(&str) -> DispatchError,
     ) -> Result<LandedOn, DispatchError> {
         let pinned = checkpoint.target_base_sha.as_str();
         let live = git_stdout(
+            process_env,
             &self.assigned_root,
             &["rev-parse", "--verify", &checkpoint.base_ref],
         )?;
-        if live == pinned || !git_is_ancestor(&self.assigned_root, pinned, &live)? {
+        if live == pinned || !git_is_ancestor(process_env, &self.assigned_root, pinned, &live)? {
             return Ok(LandedOn::Candidate(pinned.to_string()));
         }
-        let followed = git_mutation_output(&self.assigned_root, &["rebase", &live])?;
+        let followed = git_mutation_output(process_env, &self.assigned_root, &["rebase", &live])?;
         if !followed.success {
-            let additional = unmerged_paths(&self.assigned_root)?;
-            git_mutation(&self.assigned_root, &["rebase", "--abort"])?;
-            let restored = git_fingerprint(&self.assigned_root)?;
-            if !self.completed_authorized_rebase(&restored)? {
+            let additional = unmerged_paths(process_env, &self.assigned_root)?;
+            git_mutation(process_env, &self.assigned_root, &["rebase", "--abort"])?;
+            let restored = git_fingerprint(process_env, &self.assigned_root)?;
+            if !self.completed_authorized_rebase(process_env, &restored)? {
                 return Err(invalid(
                     "aborting the follow-up rebase onto the advanced base did not restore the pinned result",
                 ));
             }
-            self.require_clean_continuation(&restored, expected_untracked, invalid)?;
+            self.require_clean_continuation(process_env, &restored, expected_untracked, invalid)?;
             tracing::warn!(
                 target: "orbit.engine.cli_runner",
                 run_id = %self.run_id,
@@ -422,20 +469,24 @@ impl WorktreeBoundaryGuard {
             );
             return Ok(LandedOn::Candidate(pinned.to_string()));
         }
-        let followed = git_fingerprint(&self.assigned_root)?;
-        if followed.head == live && self.finished_authorized_rebase(&followed)?.is_some() {
-            self.require_clean_continuation(&followed, expected_untracked, invalid)?;
+        let followed = git_fingerprint(process_env, &self.assigned_root)?;
+        if followed.head == live
+            && self
+                .finished_authorized_rebase(process_env, &followed)?
+                .is_some()
+        {
+            self.require_clean_continuation(process_env, &followed, expected_untracked, invalid)?;
             return Ok(LandedOn::Absorbed(live));
         }
-        if !self.completed_authorized_rebase(&followed)?
+        if !self.completed_authorized_rebase(process_env, &followed)?
             || followed.head == live
-            || !git_is_ancestor(&self.assigned_root, &live, "HEAD")?
+            || !git_is_ancestor(process_env, &self.assigned_root, &live, "HEAD")?
         {
             return Err(invalid(
                 "rebasing onto the advanced base did not leave the checkpointed branch on that base with a candidate commit",
             ));
         }
-        self.require_clean_continuation(&followed, expected_untracked, invalid)?;
+        self.require_clean_continuation(process_env, &followed, expected_untracked, invalid)?;
         Ok(LandedOn::Candidate(live))
     }
 }

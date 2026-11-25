@@ -271,7 +271,9 @@ orbit-store/src/
 
 ## 8. Environment
 
-**Today.** `crates/orbit-common/src/env_vars.rs` declares 136 names with meaning, default and matching flag, and a golden test generates the reference in `docs/CONFIG.md`. That part of STD-01 §R25 is met. But there are 232 `env::var` calls and 15 `env::vars` calls across 12 crates; 144 of the 232 use a declared constant, and the rest use a local constant or a computed name. There is no capture at startup, and nothing stops a new read.
+**At design time.** `crates/orbit-common/src/env_vars.rs` declares 136 names with meaning, default and matching flag, and a golden test generates the reference in `docs/CONFIG.md`. That part of STD-01 §R25 is met. But there are 232 `env::var` calls and 15 `env::vars` calls across 12 crates; 144 of the 232 use a declared constant, and the rest use a local constant or a computed name. There is no capture at startup, and nothing stops a new read.
+
+**Implemented for the runtime, engine, tools and store.** Composition forwards the startup snapshot into the runtime's base layer. Root discovery, engine launcher and Git policy, tool dispatch, and the publication Git runner receive the snapshot or values resolved from it. The architecture ratchet tracks the remaining process-environment readers across the workspace.
 
 **Proposed.**
 

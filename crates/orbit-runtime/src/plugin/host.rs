@@ -7,7 +7,6 @@
 //! diagnostic and registered inactive; every built-in and every other plugin is
 //! untouched.
 
-use orbit_common::env_vars;
 use std::collections::BTreeMap;
 use std::path::Path;
 use std::sync::Arc;
@@ -271,6 +270,7 @@ pub(crate) fn validate_plugin_contributions(
 /// Register every enabled installed plugin, plus one diagnostic per plugin
 /// the workspace pins that this host cannot serve.
 pub fn load_host_plugins(
+    env: &orbit_common::Env,
     global_root: &Path,
     orbit_dir: &Path,
     store: &Store,
@@ -278,6 +278,7 @@ pub fn load_host_plugins(
     plugin_config: &BTreeMap<String, Value>,
 ) -> PluginHostLoad {
     load_workspace_plugins(
+        env,
         global_root,
         orbit_dir,
         store,
@@ -292,6 +293,7 @@ pub fn load_host_plugins(
 /// contributes nothing, and reports [`PluginDisabledLayer::Workspace`]. A
 /// toggle never enables a plugin the host has not.
 pub fn load_workspace_plugins(
+    env: &orbit_common::Env,
     global_root: &Path,
     orbit_dir: &Path,
     store: &Store,
@@ -306,7 +308,7 @@ pub fn load_workspace_plugins(
         registry,
         plugin_config,
         workspace_toggles,
-        true,
+        Some(env),
     )
 }
 
@@ -331,7 +333,7 @@ pub(super) fn load_workspace_plugins_without_refusal_audit(
         registry,
         plugin_config,
         workspace_toggles,
-        false,
+        None,
     )
 }
 
@@ -342,7 +344,7 @@ fn load_host_plugins_with_audit(
     registry: &mut ToolRegistry,
     plugin_config: &BTreeMap<String, Value>,
     workspace_toggles: &BTreeMap<String, bool>,
-    audit_refusals: bool,
+    audit_env: Option<&orbit_common::Env>,
 ) -> PluginHostLoad {
     let installed = match store.list_plugins() {
         Ok(installed) => installed,
@@ -379,8 +381,8 @@ fn load_host_plugins_with_audit(
         if plugin.enabled
             && let Err((check, message)) = verify_enabled_row(global_root, plugin)
         {
-            if audit_refusals {
-                audit_refused_row(store, plugin, check, &message);
+            if let Some(env) = audit_env {
+                audit_refused_row(env, store, plugin, check, &message);
             }
             load.diagnostics.push(PluginDiagnostic {
                 plugin: plugin.name.clone(),
@@ -488,7 +490,13 @@ fn verify_enabled_row(
 /// path that is already refusing (`record_authorization_event`): the plugin is
 /// not registered either way. Read-only host discovery skips this function;
 /// its following writable runtime load records the durable refusal event.
-fn audit_refused_row(store: &Store, installed: &InstalledPlugin, check: &str, message: &str) {
+fn audit_refused_row(
+    env: &orbit_common::Env,
+    store: &Store,
+    installed: &InstalledPlugin,
+    check: &str,
+    message: &str,
+) {
     let params = AuditEventInsertParams {
         execution_id: audit_execution_id("plugin-load"),
         command: "plugin.load".to_string(),
@@ -517,7 +525,10 @@ fn audit_refused_row(store: &Store, installed: &InstalledPlugin, check: &str, me
         stdout_truncated: None,
         stderr_truncated: None,
         error_message: Some(message.to_string()),
-        host: std::env::var(env_vars::HOSTNAME).ok(),
+        host: env
+            .hostname()
+            .and_then(std::ffi::OsStr::to_str)
+            .map(ToOwned::to_owned),
         pid: std::process::id(),
         session_id: None,
         workspace_id: None,

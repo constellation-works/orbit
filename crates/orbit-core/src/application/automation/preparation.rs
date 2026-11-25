@@ -206,7 +206,7 @@ pub(crate) fn instructions(
     // demand, or reftable refs) keeps the bounded Git commands.
     let instructions = match git2::Repository::open(root) {
         Ok(repo) => instructions_in_process(&repo, revision)?,
-        Err(_) => instructions_with_git(&Source::new(root), revision)?,
+        Err(_) => instructions_with_git(&Source::new(runtime.env(), root), revision)?,
     };
 
     let snapshot = InstructionSnapshot(
@@ -461,7 +461,7 @@ fn selector_objects(
         }
         let tree = match &repo {
             Some(repo) => revision_tree(repo, revision)?.id().to_string(),
-            None => Source::new(root).git(&[
+            None => Source::new(runtime.env(), root).git(&[
                 "rev-parse",
                 "--verify",
                 "--end-of-options",
@@ -514,7 +514,7 @@ fn selector_objects(
                 "--",
             ];
             args.extend(uncached.iter().map(String::as_str));
-            let listing = Source::new(root).git(&args)?;
+            let listing = Source::new(runtime.env(), root).git(&args)?;
             let mut found = std::collections::BTreeSet::new();
             for entry in listing.split('\0') {
                 let Some((meta, path)) = entry.split_once('\t') else {

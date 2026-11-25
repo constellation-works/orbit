@@ -42,6 +42,7 @@ impl<'a, H: RuntimeHost + ?Sized> LandingPoll<'a, H> {
     /// Settles a merged pull request as this handoff's delivery.
     pub(super) fn settle_merged(
         &mut self,
+        process_env: &orbit_common::Env,
         status: &PullRequestStatus,
         updated_head: Option<String>,
     ) -> Result<Value, OrbitError> {
@@ -63,8 +64,8 @@ impl<'a, H: RuntimeHost + ?Sized> LandingPoll<'a, H> {
         if let Some(actions) = self.recovery.evidence() {
             evidence["check_recovery"] = actions;
         }
-        let observed =
-            observe_candidate(context, Some(status), self.view).map_err(|e| self.stop_on(e))?;
+        let observed = observe_candidate(process_env, context, Some(status), self.view)
+            .map_err(|e| self.stop_on(e))?;
         // A merge with no intent of ours is the operator's; the completion
         // record carries that in its history note.
         evidence["external_merge"] = json!(self.intent.is_none());
@@ -214,6 +215,7 @@ impl<'a, H: RuntimeHost + ?Sized> LandingPoll<'a, H> {
     /// refusal caused by a concurrent base change.
     pub(super) fn request_merge(
         &mut self,
+        process_env: &orbit_common::Env,
         status: &PullRequestStatus,
         updated_head: bool,
     ) -> Result<Step, OrbitError> {
@@ -240,8 +242,8 @@ impl<'a, H: RuntimeHost + ?Sized> LandingPoll<'a, H> {
         if self.deadline_passed()? {
             return Err(self.timeout(&context.owed_hosted_checks)?);
         }
-        let observed =
-            observe_candidate(context, Some(status), self.view).map_err(|e| self.stop_on(e))?;
+        let observed = observe_candidate(process_env, context, Some(status), self.view)
+            .map_err(|e| self.stop_on(e))?;
         if observed.repository != capabilities.repository {
             return Err(self.stop(
                 false,

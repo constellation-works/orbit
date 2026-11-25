@@ -12,11 +12,13 @@ const PR_LIST_OPEN_LIMIT: &str = "500";
 
 /// The pull requests on one head branch in `state`.
 pub(in crate::executor::automation::vcs::operations) fn pr_list(
+    process_env: &orbit_common::Env,
     input: &Value,
 ) -> Result<Value, OrbitError> {
     let head = required_string(input, "head")?;
     let state = optional_string(input, "state").unwrap_or("open");
     list_pull_requests(
+        process_env,
         input,
         &[
             "--state",
@@ -32,9 +34,11 @@ pub(in crate::executor::automation::vcs::operations) fn pr_list(
 /// Every open pull request with its body, which is how a run finds its
 /// tasks' earlier delivery pull requests. Bounded by [`PR_LIST_OPEN_LIMIT`].
 pub(in crate::executor::automation::vcs::operations) fn pr_list_open(
+    process_env: &orbit_common::Env,
     input: &Value,
 ) -> Result<Value, OrbitError> {
     list_pull_requests(
+        process_env,
         input,
         &[
             "--state",
@@ -47,7 +51,11 @@ pub(in crate::executor::automation::vcs::operations) fn pr_list_open(
     )
 }
 
-fn list_pull_requests(input: &Value, filters: &[&str]) -> Result<Value, OrbitError> {
+fn list_pull_requests(
+    process_env: &orbit_common::Env,
+    input: &Value,
+    filters: &[&str],
+) -> Result<Value, OrbitError> {
     let workspace_path = required_string(input, "workspace_path")?;
     let args = ["pr", "list"]
         .iter()
@@ -55,6 +63,7 @@ fn list_pull_requests(input: &Value, filters: &[&str]) -> Result<Value, OrbitErr
         .map(|arg| (*arg).to_string())
         .collect::<Vec<_>>();
     let result = execute_with_transient_retry(
+        process_env,
         "gh",
         &args,
         Some(Path::new(workspace_path)),
@@ -75,6 +84,7 @@ fn list_pull_requests(input: &Value, filters: &[&str]) -> Result<Value, OrbitErr
 }
 
 pub(in crate::executor::automation::vcs::operations) fn pr_view(
+    process_env: &orbit_common::Env,
     input: &Value,
 ) -> Result<Value, OrbitError> {
     let selector = required_string(input, "pr")?;
@@ -92,6 +102,7 @@ pub(in crate::executor::automation::vcs::operations) fn pr_view(
         "number,title,body,isDraft,headRefName,baseRefName,files,commits,url".to_string(),
     ];
     let result = execute_with_transient_retry(
+        process_env,
         "gh",
         &args,
         Some(Path::new(workspace_path)),
@@ -110,6 +121,7 @@ pub(in crate::executor::automation::vcs::operations) fn pr_view(
 /// rule in one GraphQL snapshot. Completion resolves a method from this live
 /// state before asking GitHub to merge; it never mutates repository settings.
 pub(in crate::executor::automation::vcs::operations) fn pr_merge_capabilities(
+    process_env: &orbit_common::Env,
     input: &Value,
 ) -> Result<Value, OrbitError> {
     let selector = required_string(input, "pr")?;
@@ -121,6 +133,7 @@ pub(in crate::executor::automation::vcs::operations) fn pr_merge_capabilities(
     })?;
 
     let repository = execute_with_transient_retry(
+        process_env,
         "gh",
         &[
             "repo".to_string(),
@@ -154,6 +167,7 @@ pub(in crate::executor::automation::vcs::operations) fn pr_merge_capabilities(
 
     let query = "query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){autoMergeAllowed mergeCommitAllowed rebaseMergeAllowed squashMergeAllowed pullRequest(number:$number){baseRefName baseRef{branchProtectionRule{requiresLinearHistory}}}}}";
     let response = execute_with_transient_retry(
+        process_env,
         "gh",
         &[
             "api".to_string(),
@@ -267,6 +281,7 @@ fn normalize_merge_capabilities(
 /// actually merged, and if not, what is holding it — so it selects the merge
 /// state fields instead of widening a shared projection.
 pub(in crate::executor::automation::vcs::operations) fn pr_status(
+    process_env: &orbit_common::Env,
     input: &Value,
 ) -> Result<Value, OrbitError> {
     let selector = required_string(input, "pr")?;
@@ -285,6 +300,7 @@ pub(in crate::executor::automation::vcs::operations) fn pr_status(
     ];
     let result = if input.get("deadline_ms").is_some() {
         super::super::super::completion_deadline::Deadline::from_input(input)?.execute(
+            process_env,
             "gh",
             args,
             Path::new(workspace_path),
@@ -292,6 +308,7 @@ pub(in crate::executor::automation::vcs::operations) fn pr_status(
         )?
     } else {
         execute_with_transient_retry(
+            process_env,
             "gh",
             &args,
             Some(Path::new(workspace_path)),
@@ -317,6 +334,7 @@ pub(in crate::executor::automation::vcs::operations) fn pr_status(
 /// never failed. The answer carries the head commit it describes; the reader
 /// in `pr/answers.rs` refuses one that is truncated or names another head.
 pub(in crate::executor::automation::vcs::operations) fn pr_required_checks(
+    process_env: &orbit_common::Env,
     input: &Value,
 ) -> Result<Value, OrbitError> {
     let selector = required_string(input, "pr")?;
@@ -362,12 +380,14 @@ pub(in crate::executor::automation::vcs::operations) fn pr_required_checks(
     loop {
         let executed = match deadline {
             Some(deadline) => deadline.execute(
+                process_env,
                 "gh",
                 args.clone(),
                 Path::new(workspace_path),
                 "PR required checks",
             ),
             None => execute_with_transient_retry(
+                process_env,
                 "gh",
                 &args,
                 Some(Path::new(workspace_path)),

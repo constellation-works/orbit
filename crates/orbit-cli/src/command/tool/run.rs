@@ -132,7 +132,10 @@ impl ToolRunArgs {
     /// with the bootstrap error before `execute` can report the input error.
     pub(crate) fn bootstrap_route(&self) -> Result<ToolRunBootstrap, OrbitError> {
         let value = self.parsed_input()?;
-        if route_resident_delivery_recovery_to_broker(tool_operation_name(&self.name, &value)) {
+        if route_resident_delivery_recovery_to_broker(
+            &orbit_core::composition::process_env(),
+            tool_operation_name(&self.name, &value),
+        ) {
             return Ok(ToolRunBootstrap::CwdWorkspace);
         }
         if let Some(selector) = trimmed_string_field(&value, "workspace") {
@@ -249,8 +252,10 @@ impl Execute for ToolRunArgs {
         // another workspace. Keep the named selector in the call's input.
         let bound = if claimed_owner_call
             || self.name == "orbit.attention"
-            || route_resident_delivery_recovery_to_broker(tool_operation_name(&self.name, &input))
-        {
+            || route_resident_delivery_recovery_to_broker(
+                &orbit_core::composition::process_env(),
+                tool_operation_name(&self.name, &input),
+            ) {
             None
         } else {
             RegisteredRuntimeFactory::bind_cli_tool_workspace(runtime, &mut input, &self.name)?

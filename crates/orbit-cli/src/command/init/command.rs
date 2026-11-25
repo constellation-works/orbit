@@ -656,7 +656,9 @@ struct ReportedInitPaths {
 }
 
 fn reported_init_paths(root_override: Option<&Path>) -> ReportedInitPaths {
-    if root_override.is_some_and(|path| !orbit_core::runtime::is_global_orbit_root(path)) {
+    if root_override.is_some_and(|path| {
+        !orbit_core::runtime::is_global_orbit_root(&orbit_core::composition::process_env(), path)
+    }) {
         ReportedInitPaths {
             skills_root: "<custom orbit root>/skills",
             config_path: "<custom orbit root>/config.toml",

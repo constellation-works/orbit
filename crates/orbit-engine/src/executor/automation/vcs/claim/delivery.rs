@@ -67,11 +67,19 @@ fn pull_request_number(value: &Value) -> Option<u64> {
 /// Repository identity for the handoff. A checkout with a remote names it; an
 /// owner-local checkout has none to observe, so the owner workspace it was
 /// claimed from is the identity of record.
-pub(super) fn repository(workspace_path: &Path, fallback: &str) -> String {
-    git_output(workspace_path, &["remote", "get-url", "origin"])
-        .ok()
-        .and_then(|url| slug(&url))
-        .unwrap_or_else(|| fallback.to_string())
+pub(super) fn repository(
+    process_env: &orbit_common::Env,
+    workspace_path: &Path,
+    fallback: &str,
+) -> String {
+    git_output(
+        process_env,
+        workspace_path,
+        &["remote", "get-url", "origin"],
+    )
+    .ok()
+    .and_then(|url| slug(&url))
+    .unwrap_or_else(|| fallback.to_string())
 }
 
 pub(in crate::executor::automation::vcs) fn slug(remote_url: &str) -> Option<String> {

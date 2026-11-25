@@ -52,7 +52,9 @@ pub(crate) fn record_review_landing(
             },
             ReviewInvalidation::ExternalLandingRace,
         ),
-        Some(landed_commit) => classify(request, &certificate, landed_commit, &branch),
+        Some(landed_commit) => {
+            classify(runtime.env(), request, &certificate, landed_commit, &branch)
+        }
         None => uncovered(
             &certificate,
             request,
@@ -108,6 +110,7 @@ fn certificate_for_head(
 }
 
 fn classify(
+    env: &orbit_common::Env,
     request: &ReviewLandingRequest,
     certificate: &ReviewCertificate,
     landed_commit: &str,
@@ -117,8 +120,8 @@ fn classify(
     // The merge commit lives on the remote; fetch it into the worktree's
     // shared object store before reading it. A fetch failure leaves the
     // landing uncovered with the reason recorded.
-    let fetched = orbit_engine::review_gate::fetch_landed_commit(workspace, landed_commit);
-    let landed = match fetched.and_then(|_| revision(workspace, landed_commit)) {
+    let fetched = orbit_engine::review_gate::fetch_landed_commit(env, workspace, landed_commit);
+    let landed = match fetched.and_then(|_| revision(env, workspace, landed_commit)) {
         Ok(landed) => landed,
         Err(error) => {
             tracing::warn!(
@@ -140,6 +143,7 @@ fn classify(
         }
     };
     let facts = match orbit_engine::review_gate::landed_candidate_facts(
+        env,
         workspace,
         &landed,
         &certificate.final_candidate.commit,

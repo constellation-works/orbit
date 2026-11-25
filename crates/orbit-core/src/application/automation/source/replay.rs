@@ -30,7 +30,7 @@ impl<'a> Source<'a> {
         // `head` may already have spent the shared deadline on a fetch. The
         // proof is a separate pass: a range the traversal check admits gets a
         // full deadline, and its git reads are batched under that budget.
-        let source = Self::new(self.root);
+        let source = Self::new(&self.env, self.root);
 
         let old_observed = source
             .revision(&state.observed.commit)
@@ -214,7 +214,7 @@ impl<'a> Source<'a> {
             .ok_or_else(|| AutomationError::Refused(refusal::HISTORY_MAPPING_AMBIGUOUS.into()))?;
         // Provider observation can fetch `origin` again. Give that pass its
         // own deadline so it cannot consume the signature proof's budget.
-        let page_source = Self::new(self.root);
+        let page_source = Self::new(&self.env, self.root);
         let mut page = page_source
             .observe_with_limits(
                 branch,

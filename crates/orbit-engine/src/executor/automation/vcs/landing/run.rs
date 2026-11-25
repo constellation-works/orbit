@@ -226,6 +226,7 @@ fn land<H: RuntimeHost + ?Sized>(
     // Every containment judgement below reads the landing ref, so the owner's
     // view of it is refreshed once before any of them run.
     let view = LandingView::refresh(
+        &host.process_env(),
         &context.workspace_path,
         &context.candidate.landing_branch,
         &context.candidate.delivery,

@@ -17,6 +17,7 @@ use crate::application::automation::source::Source;
 
 /// Shared inputs of both gate steps.
 pub(super) struct GateContext {
+    pub(super) env: orbit_common::Env,
     pub(super) run_id: String,
     /// First run of the delivery run lineage `run_id` resumes.
     lineage_root: String,
@@ -152,10 +153,11 @@ impl GateContext {
             Some(claim_id) => claim_id.clone(),
             None => lineage_root(runtime, &run_id)?,
         };
-        let repository = Source::new(&runtime.paths().repo_root)
+        let repository = Source::new(runtime.env(), &runtime.paths().repo_root)
             .repository()
             .map_err(automation_error)?;
         Ok(Self {
+            env: runtime.env().clone(),
             run_id,
             lineage_root,
             task_ids,
@@ -179,6 +181,7 @@ impl GateContext {
         match &self.base_sha {
             Some(base_sha) => Ok(base_sha.clone()),
             None => Ok(orbit_engine::review_gate::synchronized_base(
+                &self.env,
                 &self.workspace_path,
                 &self.base_branch,
                 self.base_sync,

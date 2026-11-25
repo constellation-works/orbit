@@ -67,12 +67,13 @@ impl RecoveryObservation {
 
 impl ObservedState {
     fn take(ctx: &ExecCtx<'_>, workspace_root: &Path, base_ref: Option<&str>) -> Self {
-        let worktree = git_fingerprint(workspace_root)
+        let worktree = git_fingerprint(&ctx.host.process_env(), workspace_root)
             .ok()
             .and_then(|fingerprint| serde_json::to_vec(&fingerprint).ok())
             .map(|bytes| hex_sha256(&bytes));
         let base = base_ref.and_then(|base_ref| {
             git_output(
+                &ctx.host.process_env(),
                 workspace_root,
                 &["rev-parse", "--verify", &format!("{base_ref}^{{commit}}")],
             )

@@ -100,7 +100,7 @@ pub(super) fn prepare_build(
         spec,
         source,
         commit,
-        &PluginBuildHostEnv::from_process(),
+        &PluginBuildHostEnv::from_env(runtime.env()),
         &forbidden,
     )?;
     if !allow_build {

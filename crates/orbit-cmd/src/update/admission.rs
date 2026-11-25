@@ -29,8 +29,12 @@ pub fn admission_authorities(
     root_override: Option<&Path>,
     workspace_root: Option<&Path>,
 ) -> Result<Vec<PathBuf>, OrbitError> {
-    let resolved = orbit_core::runtime::resolve_generation_root(root_override)?;
-    let host_global = orbit_core::runtime::resolve_global_root()?;
+    let resolved = orbit_core::runtime::resolve_generation_root(
+        &orbit_core::composition::process_env(),
+        root_override,
+    )?;
+    let host_global =
+        orbit_core::runtime::resolve_global_root(&orbit_core::composition::process_env())?;
     let mut roots = Vec::with_capacity(3);
     push_unique_authority(&mut roots, resolved)?;
     push_unique_authority(&mut roots, host_global)?;
