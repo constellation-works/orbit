@@ -175,7 +175,7 @@ impl RuntimeKernel {
             .as_deref()
             .map(str::trim)
             .filter(|value| !value.is_empty())
-            && let Ok(crew) = resolve_crew(crew_name, self.context.settings().crews())
+            && let Ok(crew) = resolve_crew(crew_name, self.base().settings().crews())
             && let Some(family) = family_from_assignment(&crew.assignment)
         {
             return Ok((Some(family.clone()), Some(family)));

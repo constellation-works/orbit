@@ -53,7 +53,7 @@ fn session_events_retain_newest_at_capacity_and_limit_reads() {
     }
 
     // Direct EventLog callers retain the chronological snapshot contract.
-    let snapshot = reader.event_log.snapshot();
+    let snapshot = reader.event_log().snapshot();
     assert_eq!(snapshot.len(), SESSION_EVENT_CAPACITY);
     assert_eq!(
         snapshot.first(),

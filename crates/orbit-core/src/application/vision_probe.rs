@@ -130,7 +130,7 @@ impl OrbitRuntime {
         timeout_seconds: u64,
     ) -> Result<VisionProbeReport, OrbitError> {
         let started_at = Utc::now();
-        let registry = self.context.settings().crews();
+        let registry = self.settings().crews();
         let explicit = !crews.is_empty();
         let selected: Vec<&Crew> = if explicit {
             crews

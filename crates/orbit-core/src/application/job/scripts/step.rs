@@ -68,7 +68,7 @@ impl OrbitRuntime {
             profile: orbit_exec::probe_script_sandbox(),
             gaps: macos.then_some(orbit_exec::SCRIPT_MACOS_PROFILE_GAPS),
             strict_refuses: macos
-                && script_containment_is_strict(self.context.settings().worker_containment()),
+                && script_containment_is_strict(self.settings().worker_containment()),
         }
     }
 }
@@ -259,7 +259,7 @@ fn prepare_and_run(
     // limits), so strict containment refuses every script step there. It is
     // a host policy, decided before the profile is probed.
     if cfg!(target_os = "macos")
-        && script_containment_is_strict(runtime.context.settings().worker_containment())
+        && script_containment_is_strict(runtime.settings().worker_containment())
     {
         return Err(refuse(
             script_refusal::SANDBOX_UNAVAILABLE,
@@ -295,7 +295,7 @@ fn prepare_and_run(
     let scope = script_scope_launcher(
         &request.run_id,
         &request.step_id,
-        runtime.context.settings().worker_containment(),
+        runtime.settings().worker_containment(),
         &grant.limits,
         &launcher_env,
     )

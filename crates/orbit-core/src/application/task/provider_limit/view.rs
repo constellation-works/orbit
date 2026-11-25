@@ -272,7 +272,7 @@ impl ProviderLimitsView {
         observations: &[ProviderLimitObservation],
         now: DateTime<Utc>,
     ) -> Self {
-        let settings = runtime.context.settings();
+        let settings = runtime.settings();
         let policy = runtime.provider_limit_policy();
         let crews = settings.crews().values().collect::<Vec<_>>();
         let mut readings = observations

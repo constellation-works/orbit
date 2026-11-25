@@ -217,7 +217,7 @@ impl OrbitRuntime {
                 request,
                 many,
                 &classes,
-                self.context.settings().machine_task_prefix(),
+                self.settings().machine_task_prefix(),
             )?,
         };
         for (task_id, attributed) in per_task {
@@ -337,7 +337,7 @@ impl OrbitRuntime {
             landing.task_id,
             &classes,
             counts.reviewable_lines(),
-            self.context.settings().machine_task_prefix(),
+            self.settings().machine_task_prefix(),
         );
         self.write_row(task, landing, &base, counts, reviewable)?;
         Ok(true)

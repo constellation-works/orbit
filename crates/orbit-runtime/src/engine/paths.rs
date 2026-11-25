@@ -5,7 +5,7 @@ use crate::RuntimeKernel;
 
 pub fn current_repo_root(runtime: &RuntimeKernel) -> Result<String, OrbitError> {
     Ok(runtime
-        .context
+        .base()
         .paths()
         .repo_root
         .to_string_lossy()

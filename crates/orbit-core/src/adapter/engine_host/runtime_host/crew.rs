@@ -30,7 +30,7 @@ pub(super) fn agent_crew_config_for_input(
         .map(str::trim)
         .filter(|value| !value.is_empty());
     let names_retired = named.is_some_and(|crew| {
-        orbit_config::names_retired_system_crew(crew, runtime.context.settings().crews())
+        orbit_config::names_retired_system_crew(crew, runtime.settings().crews())
     });
     // An explicit crew is used as it is: no purpose or pool draw overrides it
     // [ORB-16511]. A retired `system` name this host does not define is not

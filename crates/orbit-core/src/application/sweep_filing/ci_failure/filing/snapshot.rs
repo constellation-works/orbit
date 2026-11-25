@@ -264,7 +264,6 @@ where
     let (complete, infrastructure) = split_declared_infrastructure(
         complete,
         &runtime
-            .context
             .settings()
             .pr_settings()
             .ci_infrastructure_signatures,

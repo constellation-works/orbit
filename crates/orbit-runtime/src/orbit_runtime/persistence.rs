@@ -26,6 +26,7 @@ impl RuntimeKernel {
     /// see `OrbitRuntime::list_audit_events`.
     pub fn list_session_events(&self, limit: usize) -> Result<Vec<Audit>, OrbitError> {
         let audits = self
+            .base()
             .event_log
             .recent(limit)
             .into_iter()
@@ -35,11 +36,11 @@ impl RuntimeKernel {
     }
 
     pub fn shared_root(&self) -> PathBuf {
-        self.context.shared_root().to_path_buf()
+        self.base().shared_root().to_path_buf()
     }
 
     pub fn local_root(&self) -> PathBuf {
-        self.context.local_root().to_path_buf()
+        self.base().local_root().to_path_buf()
     }
 
     pub fn data_root(&self) -> PathBuf {
@@ -47,13 +48,13 @@ impl RuntimeKernel {
     }
 
     pub fn global_root(&self) -> PathBuf {
-        self.context.global_root().to_path_buf()
+        self.base().global_root().to_path_buf()
     }
 
     /// Higher-level workspace metadata used to construct this runtime, when
     /// the caller supplied an authoritative binding.
     pub fn workspace_runtime_binding(&self) -> Option<&WorkspaceRuntimeBinding> {
-        self.workspace_binding.as_deref()
+        self.base().workspace_binding.as_deref()
     }
 
     /// Ship mode an unattended drain delivers in.
@@ -71,6 +72,7 @@ impl RuntimeKernel {
     /// checkout directory's name, never an internal id.
     pub fn workspace_label(&self) -> String {
         let repo_root = self
+            .base()
             .workspace_binding
             .as_deref()
             .map_or(self.paths().repo_root.as_path(), |binding| {
@@ -94,7 +96,7 @@ impl RuntimeKernel {
     }
 
     pub fn persistence_config_json(&self) -> Value {
-        self.context.persistence().as_json_value()
+        self.base().persistence().as_json_value()
     }
 
     /// Whether an entry exists at the configured lexical search index path.
@@ -103,7 +105,7 @@ impl RuntimeKernel {
     /// looping index symlink is not mistaken for an absent index. Inspection
     /// errors for parent components remain visible to the caller.
     pub fn search_index_file_exists(&self) -> Result<bool, OrbitError> {
-        let path = &self.context.persistence().semantic_db;
+        let path = &self.base().persistence().semantic_db;
         match std::fs::symlink_metadata(path) {
             Ok(_) => Ok(true),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
@@ -117,18 +119,18 @@ impl RuntimeKernel {
     pub fn automation_store(
         &self,
     ) -> Result<Arc<dyn orbit_store::contracts::AutomationStoreBackend>, OrbitError> {
-        Ok(Arc::clone(&self.context.stores().host.automation))
+        Ok(Arc::clone(&self.stored().stores().host.automation))
     }
 
     /// Before-PR review ledgers, certificates, and landings [ORB-11333].
     pub fn review_store(
         &self,
     ) -> Result<Arc<dyn orbit_store::contracts::ReviewStoreBackend>, OrbitError> {
-        Ok(Arc::clone(&self.context.stores().host.review))
+        Ok(Arc::clone(&self.stored().stores().host.review))
     }
 
     pub fn sqlite_store(&self) -> Result<Store, OrbitError> {
-        Ok(self.context.stores().host.sqlite.clone())
+        Ok(self.stored().stores().host.sqlite.clone())
     }
 
     /// Persist native CLI and tool-dispatch telemetry without widening a
@@ -140,12 +142,12 @@ impl RuntimeKernel {
     ) -> Result<(), OrbitError> {
         if self.is_write_free() {
             Store::append_audit_event_at_path(
-                &self.context.persistence().audit_db,
+                &self.base().persistence().audit_db,
                 params,
                 invocation,
             )
         } else {
-            self.context
+            self.stored()
                 .stores()
                 .host
                 .sqlite
@@ -157,23 +159,23 @@ impl RuntimeKernel {
     /// handles. Diagnostics must observe missing or replaced files and must
     /// not repair or migrate them as a side effect.
     pub fn sqlite_store_for_diagnostics(&self) -> Result<Store, OrbitError> {
-        Store::open_read_only(&self.context.persistence().audit_db)
+        Store::open_read_only(&self.base().persistence().audit_db)
     }
 
     /// Check write readiness at the configured path without recreating or
     /// migrating the database, independently of cached runtime connections.
     pub fn check_sqlite_store_writable(&self) -> Result<(), OrbitError> {
-        Store::check_path_writable(&self.context.persistence().audit_db)
+        Store::check_path_writable(&self.base().persistence().audit_db)
     }
 
     pub fn v2_audit_store(
         &self,
     ) -> Result<Arc<dyn orbit_store::contracts::V2AuditStoreBackend>, OrbitError> {
-        Ok(Arc::clone(&self.context.stores().host.v2_audit))
+        Ok(Arc::clone(&self.stored().stores().host.v2_audit))
     }
 
     pub fn ensure_persistence_ready(&self) -> Result<(), OrbitError> {
-        orbit_store::compose::ensure_sqlite_store_ready(&self.context.persistence().audit_db)
+        orbit_store::compose::ensure_sqlite_store_ready(&self.base().persistence().audit_db)
     }
 
     /// Identity used by this runtime's workspace-partitioned stores. A
@@ -181,13 +183,13 @@ impl RuntimeKernel {
     /// uses its persisted partition ID, which may differ from the logical ID.
     pub fn workspace_id(&self) -> Result<String, OrbitError> {
         if let Some(id) = builder::selected_explicit_root_workspace_id(
-            self.context.global_root(),
-            &self.context.paths().orbit_dir,
+            self.base().global_root(),
+            &self.base().paths().orbit_dir,
             self.workspace_runtime_binding(),
         ) {
             return Ok(id.to_owned());
         }
-        workspace_id_for_orbit_dir(&self.context.paths().orbit_dir)
+        workspace_id_for_orbit_dir(&self.base().paths().orbit_dir)
     }
 
     pub fn list_v2_audit_events(

@@ -37,7 +37,7 @@ impl RuntimeKernel {
     /// `os:` namespace, which runs only untagged tasks). A fixture composes
     /// two runtimes in one process and gives each the OS it stands in for.
     pub fn with_host_os(mut self, os: Option<orbit_types::task::HostOs>) -> Self {
-        self.host_os = os;
+        self.base_mut().host_os = os;
         self
     }
 
@@ -45,20 +45,20 @@ impl RuntimeKernel {
     /// admission checks a task's `os:` tags against, and what a pull drain
     /// declares to its owner.
     pub fn host_os(&self) -> Option<orbit_types::task::HostOs> {
-        self.host_os
+        self.base().host_os
     }
 
     /// Carry `labels` as this host's `machine.labels`, already normalized. A
     /// fixture composes a labelled host the way it composes
     /// [`Self::with_host_os`]; production runtimes take the admitted setting.
     pub fn with_machine_labels(mut self, labels: Vec<String>) -> Self {
-        self.context.set_machine_labels(labels);
+        self.base_mut().settings.set_machine_labels(labels);
         self
     }
 
     /// This host's admitted `machine.labels`, without the implicit OS label.
     pub fn machine_labels(&self) -> &[String] {
-        self.context.settings().machine_labels()
+        self.base().settings().machine_labels()
     }
 
     /// The capability labels this host carries for a task's
@@ -66,7 +66,7 @@ impl RuntimeKernel {
     /// label. Local admission checks a task against this set, and a pull
     /// drain declares the configured part to its owner beside its OS.
     pub fn host_labels(&self) -> std::collections::BTreeSet<String> {
-        orbit_types::task::effective_host_labels(self.machine_labels(), self.host_os)
+        orbit_types::task::effective_host_labels(self.machine_labels(), self.base().host_os)
     }
 
     /// Declare the registered remote hosts, by machine id, with the
@@ -80,7 +80,7 @@ impl RuntimeKernel {
         mut self,
         hosts: impl IntoIterator<Item = (String, orbit_types::task::HostOs)>,
     ) -> Self {
-        self.registered_host_oses = hosts.into_iter().collect();
+        self.base_mut().registered_host_oses = hosts.into_iter().collect();
         self
     }
 
@@ -96,14 +96,14 @@ impl RuntimeKernel {
     /// host's OS, which is exactly the single-host draw behaviour.
     pub fn serving_host_oses(&self) -> std::collections::BTreeSet<orbit_types::task::HostOs> {
         let mut oses = std::collections::BTreeSet::new();
-        oses.extend(self.host_os);
-        if self.registered_host_oses.is_empty() {
+        oses.extend(self.base().host_os);
+        if self.base().registered_host_oses.is_empty() {
             return oses;
         }
         let Ok(recent) = self.recently_claiming_machines() else {
             return oses;
         };
-        for (machine_id, os) in &self.registered_host_oses {
+        for (machine_id, os) in &self.base().registered_host_oses {
             if recent.contains_key(machine_id) {
                 oses.insert(*os);
             }
@@ -131,6 +131,7 @@ impl RuntimeKernel {
             .collect::<Vec<_>>()
             .join(" or ");
         let matching = self
+            .base()
             .registered_host_oses
             .iter()
             .filter(|(_, os)| wanted.contains(os))
@@ -188,7 +189,7 @@ impl RuntimeKernel {
     /// rather than the current user's. A fixture composes a host with a kit,
     /// or without one, in a home it controls.
     pub fn with_browser_kit_home(mut self, home: &std::path::Path) -> Self {
-        self.browser_kit_home = Some(home.to_path_buf());
+        self.host_mut().browser_kit_home = Some(home.to_path_buf());
         self
     }
 
@@ -200,7 +201,7 @@ impl RuntimeKernel {
     /// installed mid-window counts at the next admission pass.
     pub fn browser_kit_verified(&self) -> bool {
         use orbit_exec::browser_kit::{KitInspection, KitLayout};
-        let layout = match &self.browser_kit_home {
+        let layout = match &self.host().browser_kit_home {
             Some(home) => KitLayout::for_home(home),
             None => match KitLayout::current_user() {
                 Ok(layout) => layout,
@@ -213,33 +214,37 @@ impl RuntimeKernel {
     /// Replace the host-signal probe, so a fixture can present a scheduled
     /// shutdown without touching the real `/run` filesystem [ORB-12968].
     pub fn with_host_signal_probe(mut self, probe: Arc<dyn HostSignalProbe>) -> Self {
-        self.host_signals = probe;
+        self.host_mut().host_signals = probe;
         self
     }
 
     /// Override [`crate::host_signal::HOST_SHUTDOWN_HOLD_MINUTES`] for a
     /// fixture. Production runtimes keep the fixed horizon.
     pub fn with_host_shutdown_hold_minutes(mut self, minutes: u32) -> Self {
-        self.context.set_host_shutdown_hold_minutes(minutes);
+        self.base_mut()
+            .settings
+            .set_host_shutdown_hold_minutes(minutes);
         self
     }
 
     /// The shutdown-hold horizon, in minutes.
     pub fn host_shutdown_hold_minutes(&self) -> u32 {
-        self.context.settings().host_shutdown_hold_minutes()
+        self.base().settings().host_shutdown_hold_minutes()
     }
 
     /// Replace the forge a terminal task decision closes PRs through, so a
     /// fixture can observe closures without a real repository.
     pub fn with_task_pr_forge(mut self, forge: Arc<dyn TaskPrForge>) -> Self {
-        self.task_pr_forge = forge;
+        self.host_mut().task_pr_forge = forge;
         self
     }
 
     /// Override [`orbit_engine::WORKTREE_PARKED_RECLAIM_AFTER_HOURS`] for a
     /// fixture. Production runtimes keep the fixed window.
     pub fn with_worktree_parked_reclaim_after_hours(mut self, hours: u64) -> Self {
-        self.context.set_worktree_parked_reclaim_after_hours(hours);
+        self.base_mut()
+            .settings
+            .set_worktree_parked_reclaim_after_hours(hours);
         self
     }
 
@@ -252,18 +257,19 @@ impl RuntimeKernel {
         max_wait_minutes: u32,
         stuck_passes: u32,
     ) -> Self {
-        self.context
+        self.base_mut()
+            .settings
             .set_auto_concurrency_head_guard((max_wait_minutes, stuck_passes));
         self
     }
 
     /// The starvation guard's `(max wait minutes, stuck passes)`.
     pub fn auto_concurrency_head_guard(&self) -> (u32, u32) {
-        self.context.settings().auto_concurrency_head_guard()
+        self.base().settings().auto_concurrency_head_guard()
     }
 
     pub fn task_pr_forge(&self) -> &dyn TaskPrForge {
-        self.task_pr_forge.as_ref()
+        self.host().task_pr_forge.as_ref()
     }
 
     /// The host shutdown or reboot currently pending, if any. This is the raw
@@ -271,7 +277,7 @@ impl RuntimeKernel {
     /// admission holds only inside [`Self::host_shutdown_hold_minutes`];
     /// in-flight runs are left alone either way.
     pub fn scheduled_host_shutdown(&self) -> Option<ScheduledShutdown> {
-        self.host_signals.scheduled_shutdown()
+        self.host().host_signals.scheduled_shutdown()
     }
 
     /// The pending shutdown when it is close enough to hold new admissions.
@@ -288,8 +294,8 @@ impl RuntimeKernel {
 
     /// Replace the resource probe for deterministic pressure/unknown fixtures.
     pub fn with_host_resource_probe(mut self, probe: Arc<dyn HostResourceProbe>) -> Self {
-        self.host_resources = Arc::new(
-            HostResourceMonitor::new(probe, self.context.settings().resource_throttle().clone())
+        self.host_mut().host_resources = Arc::new(
+            HostResourceMonitor::new(probe, self.base().settings().resource_throttle().clone())
                 .with_shared_history(&self.global_root()),
         );
         self
@@ -297,20 +303,24 @@ impl RuntimeKernel {
 
     /// Shared sampler/evaluator; fresh runtimes recover recent host history too.
     pub fn host_resource_monitor(&self) -> Arc<HostResourceMonitor> {
-        Arc::clone(&self.host_resources)
+        Arc::clone(&self.host().host_resources)
     }
 
     /// Resource verdict for the host and filesystems used by this workspace.
     /// Admission consumers may consult it; this method changes no run state.
     pub fn host_resource_status(&self) -> HostResourceStatus {
-        self.host_resources.snapshot(&self.host_resource_paths())
+        self.host()
+            .host_resources
+            .snapshot(&self.host_resource_paths())
     }
 
     /// Whether host pressure holds new admissions now [ORB-13901]. Drains,
     /// pull drains and ship discovery start no new task while it throttles;
     /// running work is never touched. Unknown telemetry fails open.
     pub fn resource_admission(&self) -> ResourceAdmission {
-        self.host_resources.admission(&self.host_resource_paths())
+        self.host()
+            .host_resources
+            .admission(&self.host_resource_paths())
     }
 
     /// Every resource profile on this host, across its workspaces. Built from
@@ -320,7 +330,7 @@ impl RuntimeKernel {
     pub fn resource_profiles(&self) -> Result<Arc<ProfileSet>, OrbitError> {
         let store = self.sqlite_store()?;
         let tasks = self.stores().tasks();
-        self.resource_profiles.profiles(
+        self.host().resource_profiles.profiles(
             &store,
             &|task_ids| tasks.task_ids_with_tag(NO_DIFF_EXPECTED_TAG, task_ids),
             self.crew_models(),
@@ -332,7 +342,7 @@ impl RuntimeKernel {
     /// Each configured crew's model by crew name: what a task's assigned
     /// crew looks its crew profile up by.
     fn crew_models(&self) -> std::collections::BTreeMap<String, String> {
-        self.context
+        self.base()
             .settings()
             .crews()
             .iter()
@@ -361,7 +371,7 @@ impl RuntimeKernel {
     /// what `admit_cpu_percent` and the 75% memory ceiling are shares of.
     /// `None` when the host cannot be read.
     pub fn host_capacity(&self) -> Option<HostCapacity> {
-        self.host_load.capacity()
+        self.host().host_load.capacity()
     }
 
     /// The profile describing one delivery, and the fallback step that found
@@ -474,7 +484,7 @@ impl RuntimeKernel {
     /// Read the host's load from `<proc_root>/{stat,meminfo}` instead of
     /// `/proc`, so a fixture can present a measured host.
     pub fn with_host_load_proc_root(mut self, proc_root: PathBuf) -> Self {
-        self.host_load = Arc::new(HostLoadProbe::new(proc_root));
+        self.host_mut().host_load = Arc::new(HostLoadProbe::new(proc_root));
         self
     }
 
@@ -517,7 +527,7 @@ impl RuntimeKernel {
         let horizon = orbit_config::AUTO_CONCURRENCY_HORIZON_CAP_MINUTES;
         let store = self.sqlite_store()?;
         // Any wait for a CPU window happens here, outside the lock.
-        self.host_load.prepare();
+        self.host().host_load.prepare();
         let jobs = delivery_jobs();
         let query = AdmissionLoadQuery {
             now,
@@ -534,7 +544,7 @@ impl RuntimeKernel {
             let forecast = build_forecast(
                 load,
                 Arc::clone(&profiles),
-                self.host_load.measure(now),
+                self.host().host_load.measure(now),
                 horizon,
                 now,
             );

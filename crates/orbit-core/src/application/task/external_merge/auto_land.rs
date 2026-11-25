@@ -210,7 +210,7 @@ impl OrbitRuntime {
                 return Ok(None);
             }
         };
-        let repo_root = self.context.paths().repo_root.clone();
+        let repo_root = self.paths().repo_root.clone();
         let forge = self.task_pr_forge();
         let blockers = match forge.pull_request_blockers(&repo_root, number) {
             Ok(Some(blockers)) => blockers,

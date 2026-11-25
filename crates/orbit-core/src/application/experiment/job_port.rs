@@ -34,7 +34,7 @@ impl JobExperimentPort for OrbitRuntime {
             .map(str::trim)
             .filter(|crew| !crew.is_empty())
             .and_then(|crew| {
-                orbit_types::identity::resolve_crew(crew, self.context.settings().crews()).ok()
+                orbit_types::identity::resolve_crew(crew, self.settings().crews()).ok()
             })
             .map(|crew| crew.assignment.model);
         self.install_experiment_memory_capture(input, model.as_deref())

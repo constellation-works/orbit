@@ -501,9 +501,7 @@ impl OrbitRuntime {
                 .session_context
                 .as_ref()
                 .and_then(|session| session.orchestrator.as_deref())
-                .and_then(|name| {
-                    orbit_types::identity::find_crew(name, self.context.settings().crews())
-                })
+                .and_then(|name| orbit_types::identity::find_crew(name, self.settings().crews()))
                 .map(|crew| crew.assignment.model)
                 .filter(|model| !model.trim().is_empty());
         }

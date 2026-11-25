@@ -132,12 +132,12 @@ impl OrbitStores {
 
 #[derive(Clone)]
 pub(crate) struct OrbitExecutionAssets {
-    pub(super) registry: Arc<ToolRegistry>,
-    pub(super) skill_catalog: SkillCatalog,
+    pub(crate) registry: Arc<ToolRegistry>,
+    pub(crate) skill_catalog: SkillCatalog,
     /// What the host plugin load pass registered and refused, kept so
     /// `orbit plugin list`/`show`/`doctor` report the same facts the tool
     /// surface was built from rather than re-deriving them.
-    pub(super) plugins: Arc<PluginHostLoad>,
+    pub(crate) plugins: Arc<PluginHostLoad>,
 }
 
 impl OrbitExecutionAssets {
@@ -156,9 +156,9 @@ impl OrbitExecutionAssets {
 
 #[derive(Clone)]
 pub(crate) struct OrbitPolicyContext {
-    pub(super) policy: PolicyEngine,
-    pub(super) execution_env_policy: ExecutionEnvPolicy,
-    pub(super) codex_execution_policy: CodexExecutionPolicy,
+    pub(crate) policy: PolicyEngine,
+    pub(crate) execution_env_policy: ExecutionEnvPolicy,
+    pub(crate) codex_execution_policy: CodexExecutionPolicy,
 }
 
 impl OrbitPolicyContext {

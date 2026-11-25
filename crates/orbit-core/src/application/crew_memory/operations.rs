@@ -42,7 +42,7 @@ impl OrbitRuntime {
         if key.is_global() {
             return Ok(key);
         }
-        let crews = self.context.settings().crews();
+        let crews = self.settings().crews();
         if let Some(crew) = crews
             .values()
             .find(|crew| crew.name == key.as_str() || crew.base_name() == key.as_str())
@@ -67,7 +67,7 @@ impl OrbitRuntime {
     /// scorecard term, and every configured crew name and model except the
     /// ones of `own`.
     pub(super) fn crew_memory_vocabulary(&self, own: &[&MemoryKey]) -> MemoryLintVocabulary {
-        let crews = self.context.settings().crews();
+        let crews = self.settings().crews();
         let mut own_names = BTreeSet::new();
         let mut other_names = BTreeSet::new();
         for crew in crews.values() {
@@ -250,7 +250,7 @@ impl OrbitRuntime {
         for row in &current {
             keys.insert(parse_memory_key(&row.memory_key)?);
         }
-        for crew in self.context.settings().crews().values() {
+        for crew in self.settings().crews().values() {
             if let Some(key) = super::memory_key(Some(crew.assignment.model.as_str())) {
                 keys.insert(key);
             }

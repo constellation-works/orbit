@@ -103,7 +103,7 @@ pub(super) fn record_validated_tree(
         return Ok(());
     }
     let mut trees = runtime
-        .validated_trees
+        .validated_trees()
         .lock()
         .map_err(|_| OrbitError::Execution("validated tree record is poisoned".into()))?;
     trees.insert(tree.run_id.clone(), tree.clone());
@@ -122,7 +122,7 @@ pub(super) fn validated_tree(
         return Ok(None);
     }
     Ok(runtime
-        .validated_trees
+        .validated_trees()
         .lock()
         .map_err(|_| OrbitError::Execution("validated tree record is poisoned".into()))?
         .get(run_id)
@@ -132,7 +132,7 @@ pub(super) fn validated_tree(
 pub(super) fn unlocked_path_validation(
     runtime: &OrbitRuntime,
 ) -> orbit_engine::UnlockedPathValidation {
-    let settings = runtime.context.settings();
+    let settings = runtime.settings();
     orbit_engine::UnlockedPathValidation {
         paths: settings.unlocked_context_paths().patterns().to_vec(),
         commands: settings.unlocked_path_validation_commands().to_vec(),
@@ -141,7 +141,6 @@ pub(super) fn unlocked_path_validation(
 
 pub(super) fn generated_paths(runtime: &OrbitRuntime) -> Vec<orbit_engine::GeneratedPath> {
     runtime
-        .context
         .settings()
         .generated_paths()
         .iter()

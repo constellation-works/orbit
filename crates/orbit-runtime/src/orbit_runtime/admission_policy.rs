@@ -32,7 +32,7 @@ pub struct AdmissionCrewSettings {
 }
 
 #[derive(Clone)]
-pub(super) struct AdmissionPolicy {
+pub(crate) struct AdmissionPolicy {
     auto_concurrency: AutoConcurrencySettings,
     provider_limit: ProviderLimitPolicy,
     mid_run_steering: MidRunSteeringSettings,
@@ -75,7 +75,7 @@ impl AdmissionPolicy {
     }
 }
 
-pub(super) struct CachedPolicy {
+pub(crate) struct CachedPolicy {
     stamps: [Option<(SystemTime, u64)>; 2],
     policy: Arc<AdmissionPolicy>,
 }
@@ -97,7 +97,7 @@ fn stamp(root: &Path) -> std::io::Result<Option<(SystemTime, u64)>> {
 
 impl RuntimeKernel {
     fn current_admission_policy(&self) -> Arc<AdmissionPolicy> {
-        if let Some(policy) = &self.admission_policy_snapshot {
+        if let Some(policy) = &self.host().admission_policy_snapshot {
             return policy.clone();
         }
         self.refresh_workflow_policy()
@@ -105,7 +105,7 @@ impl RuntimeKernel {
 
     fn refresh_workflow_policy(&self) -> Arc<AdmissionPolicy> {
         let initial = || {
-            let settings = self.context.settings();
+            let settings = self.base().settings();
             Arc::new(AdmissionPolicy {
                 auto_concurrency: settings.auto_concurrency().clone(),
                 provider_limit: settings.provider_limit().clone(),
@@ -128,6 +128,7 @@ impl RuntimeKernel {
             })
         };
         let mut cache = self
+            .host()
             .admission_policy
             .lock()
             .unwrap_or_else(|error| error.into_inner());
@@ -146,7 +147,7 @@ impl RuntimeKernel {
         if cache.as_ref().is_some_and(|cached| cached.stamps == stamps) {
             return previous;
         }
-        let policy = match (self.config_loader)() {
+        let policy = match (self.base().config_loader)() {
             Ok(config) => Arc::new(AdmissionPolicy::from_resolved(config)),
             Err(error) => {
                 tracing::warn!(%error, "could not reload admission configuration; keeping previous policy");
@@ -185,7 +186,7 @@ impl RuntimeKernel {
     /// Pin both policies for this pass so all decisions use one config version.
     pub fn admission_policy_snapshot(&self) -> Self {
         let mut runtime = self.clone();
-        runtime.admission_policy_snapshot = Some(self.current_admission_policy());
+        runtime.host_mut().admission_policy_snapshot = Some(self.current_admission_policy());
         runtime
     }
 

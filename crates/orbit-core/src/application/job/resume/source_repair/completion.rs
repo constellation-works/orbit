@@ -68,8 +68,8 @@ impl OrbitRuntime {
             "definition": self.source_repair_definition(&run)?,
             "gates": self.host_validation_gates().gates,
             "review": self.operation_policy(),
-            "crews": self.context.settings().crews(),
-            "validation_policy": format!("{:?}", self.context.settings().validation_env()),
+            "crews": self.settings().crews(),
+            "validation_policy": format!("{:?}", self.settings().validation_env()),
             "environment": format!("{environment:?}"),
         });
         let strict = digest(&material)?;

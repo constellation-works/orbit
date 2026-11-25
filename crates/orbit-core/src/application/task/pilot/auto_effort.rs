@@ -69,7 +69,7 @@ impl OrbitRuntime {
     /// an effort whichever crew the run draws. `None` when the pool has no
     /// `@auto` member, which keeps the historical partitioning.
     pub(crate) fn pilot_effort_key(&self, complexity: Option<TaskComplexity>) -> Option<String> {
-        let settings = self.context.settings();
+        let settings = self.settings();
         let policy = settings.auto_effort();
         let signal = pilot_signal(complexity);
         let references = settings
@@ -99,7 +99,7 @@ impl OrbitRuntime {
     ) -> Option<(String, ActivityCrewDraw)> {
         let (round, index) = input_partition(input)?;
         let base = auto_effort_base(&choice.requested)?;
-        let crew = self.context.settings().crews().get(base)?;
+        let crew = self.settings().crews().get(base)?;
         let partition = input.get("partition").unwrap_or(&Value::Null);
         let signal = partition
             .get(AUTO_EFFORT_SIGNAL)

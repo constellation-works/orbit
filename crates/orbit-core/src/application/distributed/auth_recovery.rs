@@ -65,9 +65,11 @@ impl OrbitRuntime {
         if let Some(recovery) = stored.get(&record.request.request_id) {
             return Ok(Some(recovery.clone()));
         }
-        let Some(crew) = unavailable.crew.as_deref().and_then(|name| {
-            orbit_types::identity::find_crew(name, self.context.settings().crews())
-        }) else {
+        let Some(crew) = unavailable
+            .crew
+            .as_deref()
+            .and_then(|name| orbit_types::identity::find_crew(name, self.settings().crews()))
+        else {
             return Ok(None);
         };
         let provider = Provider::parse(&crew.assignment.provider)
@@ -269,7 +271,7 @@ impl OrbitRuntime {
     /// with none.
     fn auth_probe_crew_env(&self, account: Option<&str>) -> Vec<orbit_types::identity::CrewEnvVar> {
         account
-            .and_then(|account| self.context.settings().crews().get(account))
+            .and_then(|account| self.settings().crews().get(account))
             .map(|crew| crew.env.clone())
             .unwrap_or_default()
     }
@@ -278,7 +280,6 @@ impl OrbitRuntime {
     /// `[crews.<name>] env` passes, by name only.
     pub(crate) fn account_relogin_hint(&self, account: &str) -> String {
         let entries = self
-            .context
             .settings()
             .crews()
             .get(account)

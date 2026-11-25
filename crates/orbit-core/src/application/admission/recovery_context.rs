@@ -209,12 +209,7 @@ fn reconcile_task(runtime: &OrbitRuntime, metadata: &Task) -> Result<Option<Task
         .open_pull_requests(&runtime.paths().repo_root)?
     {
         if names_task_delivery_pull_request(
-            &runtime
-                .context
-                .settings()
-                .pr_settings()
-                .conventions
-                .branch_name,
+            &runtime.settings().pr_settings().conventions.branch_name,
             &pr.head_branch,
             &pr.body,
             &task.id,

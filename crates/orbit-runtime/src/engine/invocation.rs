@@ -320,7 +320,7 @@ impl RuntimeKernel {
         &self,
         observation: &ProviderLimitObservation,
     ) -> Result<bool, OrbitError> {
-        self.context
+        self.stored()
             .stores()
             .host
             .provider_limit
@@ -334,7 +334,7 @@ impl RuntimeKernel {
         &self,
         observations: &[ProviderLimitObservation],
     ) -> Result<(), OrbitError> {
-        self.context
+        self.stored()
             .stores()
             .host
             .provider_limit
@@ -344,7 +344,7 @@ impl RuntimeKernel {
     /// [ORB-14695] The latest provider usage limit per provider account,
     /// scope and window this host observed, newest first.
     pub fn provider_limits(&self) -> Result<Vec<ProviderLimitObservation>, OrbitError> {
-        self.context.stores().host.provider_limit.provider_limits()
+        self.stored().stores().host.provider_limit.provider_limits()
     }
 
     /// [ORB-16379] Records a crew this host's provider was unavailable for,
@@ -354,7 +354,7 @@ impl RuntimeKernel {
         &self,
         outage: &ProviderCrewOutage,
     ) -> Result<bool, OrbitError> {
-        self.context
+        self.stored()
             .stores()
             .host
             .provider_limit
@@ -366,7 +366,7 @@ impl RuntimeKernel {
         &self,
         now: DateTime<Utc>,
     ) -> Result<Vec<ProviderCrewOutage>, OrbitError> {
-        self.context
+        self.stored()
             .stores()
             .host
             .provider_limit
@@ -602,5 +602,5 @@ impl TaskTokenSpend {
 fn open_invocation_store(
     runtime: &RuntimeKernel,
 ) -> Result<Arc<dyn InvocationStoreBackend>, OrbitError> {
-    Ok(Arc::clone(&runtime.context.stores().host.invocation))
+    Ok(Arc::clone(&runtime.stored().stores().host.invocation))
 }

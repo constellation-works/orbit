@@ -123,9 +123,7 @@ env = ["OPENAI_API_KEY={SOURCE}"]
     );
     // The launching environment is refreshed deterministically through the
     // same defaults seam clock ticks use; no process-global env mutation.
-    runtime
-        .context
-        .apply_child_env_defaults(&[(SOURCE.into(), "fixture-secret-never-print".into())]);
+    runtime.apply_child_env_defaults(&[(SOURCE.into(), "fixture-secret-never-print".into())]);
     classify(&runtime, &drain);
     let state = runtime.read_run_state(&drain).unwrap().unwrap();
     assert!(
@@ -350,9 +348,7 @@ env = ["OPENAI_API_KEY={SOURCE}"]
     let readiness = default_readiness(&runtime);
     let entry = readiness_task(&readiness, &task.id.to_string());
     assert_eq!(entry["reason"], "crew_not_allowed", "{entry}");
-    runtime
-        .context
-        .apply_child_env_defaults(&[(SOURCE.into(), "observer-secret-never-print".into())]);
+    runtime.apply_child_env_defaults(&[(SOURCE.into(), "observer-secret-never-print".into())]);
     let mut state = runtime.read_run_state(&drain).unwrap().unwrap();
     state
         .crew_env_unset
@@ -509,7 +505,7 @@ env = ["OPENAI_API_KEY={SOURCE}"]
         for available in [false, true] {
             if available {
                 for runtime in [&mut owner, &mut follower] {
-                    runtime.context.apply_child_env_defaults(&[(
+                    runtime.apply_child_env_defaults(&[(
                         SOURCE.into(),
                         "submission-secret-never-print".into(),
                     )]);

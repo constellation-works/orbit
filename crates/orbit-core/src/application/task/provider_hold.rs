@@ -132,7 +132,7 @@ fn widen_with_outages(
     }
     // A crew of the same name configured on another provider is not the
     // one whose login failed.
-    let registry = runtime.context.settings().crews();
+    let registry = runtime.settings().crews();
     let mut matching = outages.iter().filter(|outage| {
         outage.provider.is_none()
             || orbit_types::identity::find_crew(&outage.crew, registry).is_none_or(|crew| {
