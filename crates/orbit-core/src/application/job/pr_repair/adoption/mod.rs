@@ -76,6 +76,11 @@
 //! hold is handed back without backoff only when the published head matches
 //! and has positive, complete green required-check evidence; the ceiling
 //! still applies and completion performs the normal landing checks. A leaf
+//! held on a stale required-checks answer (`delivery_check_evidence_inconclusive`
+//! with the `auto_fix_stopped:` diagnostic) keeps that hand-back but only on
+//! its published head or an Orbit-audited clean base refresh of it; any other
+//! head is reported as `publication_identity_changed` without spending the
+//! ledger [ORB-28519]. A leaf
 //! held as `delivery_repair_dispatched` with `pr_auto_fix_check_repair:` when
 //! `step_failure_recovery` ran without repairing or publishing is handed back
 //! through the ledger while a blocker and budget remain (without held-leaf
