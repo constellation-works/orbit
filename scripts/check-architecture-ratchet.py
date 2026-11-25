@@ -3,7 +3,7 @@
 
 The restructure (docs/design/architecture-restructure/2_design.md §10) moves
 about a thousand operations over many weeks while unrelated work lands daily,
-so the old shape can regrow. This check holds thirteen counts of that shape at
+so the old shape can regrow. This check holds fifteen counts of that shape at
 or below scripts/architecture-ratchet-baseline.json, the pattern of
 scripts/check-dashboard-css-literals.py:
 
@@ -70,6 +70,12 @@ DEFINITIONS = {
         "`Store::open` calls outside orbit-store",
     "driver_writer_outside_transaction_files":
         "driver files that lock the writer connection outside `with_transaction`",
+    "env_global_accessor_calls":
+        "calls of `composition_env()`, `captured_env()` and the free `process_env()` "
+        "that return the captured `Env` from the static `CAPTURED_ENV` "
+        "(their definitions are not counted)",
+    "env_process_env_method_calls":
+        "calls of a `process_env()` method on a runtime or host value (`.process_env()`)",
     "worker_or_owner_reads":
         "calls that read the worker invocation or the coordination owner",
     "runtime_top_level_modules_outside_layers":
@@ -114,6 +120,14 @@ TRANSACTION_CALL = re.compile(r"\bwith_transaction(?:_behavior)?\s*\(")
 OWNER_READ = re.compile(
     r"\b(worker_invocation|coordination_write_owner|coordination_task_reads_visible"
     r"|coordination_task_write_refusal)\s*\(")
+# The two replacements for direct `std::env` reads (§8): a call that fetches
+# the whole captured `Env` at the point of use. The global shape is a free
+# call of `composition_env()`, `captured_env()` or `process_env()`; a method
+# call through `.` is the other shape and is not counted here. Definitions
+# (`fn composition_env`, `fn captured_env`, `fn process_env`) are excluded by
+# `preceded_by_fn`, as with `from_kernel_ref`.
+ENV_GLOBAL_ACCESSOR = re.compile(r"\b(composition_env|captured_env|process_env)\s*\(")
+ENV_METHOD = re.compile(r"\.\s*process_env\s*\(")
 
 
 def blank(text):
@@ -272,6 +286,14 @@ def preceded_by_fn(masked, start):
     return FN_BEFORE.search(masked, max(0, start - 16), start) is not None
 
 
+def preceded_by_dot(masked, start):
+    """Whether the call at start is a method call through `.` (spaces allowed)."""
+    index = start - 1
+    while index >= 0 and masked[index] in " \t\n\r":
+        index -= 1
+    return index >= 0 and masked[index] == "."
+
+
 class Source:
     def __init__(self, path, crate, masked):
         self.path = path
@@ -386,6 +408,14 @@ def measure(root):
         for source in sources if source.crate != STORE_CRATE
         for match in STORE_OPEN.finditer(source.masked)]
     counts["driver_writer_outside_transaction_files"] = writer_files(sources)
+    counts["env_global_accessor_calls"] = [
+        source.location(match.start(), match.group(1))
+        for source in sources for match in ENV_GLOBAL_ACCESSOR.finditer(source.masked)
+        if not preceded_by_fn(source.masked, match.start())
+        and not preceded_by_dot(source.masked, match.start())]
+    counts["env_process_env_method_calls"] = [
+        source.location(match.start())
+        for source in sources for match in ENV_METHOD.finditer(source.masked)]
     counts["worker_or_owner_reads"] = [
         source.location(match.start(), match.group(1))
         for source in sources for match in OWNER_READ.finditer(source.masked)
