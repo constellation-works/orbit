@@ -11,7 +11,7 @@ use orbit_common::fs::selector::Selector;
 use orbit_common::protocol::yaml::parse_routine_yaml;
 use orbit_store::RegisteredTaskResolution;
 use orbit_store::contracts::JobRunQuery;
-use orbit_types::task::Task;
+use orbit_types::task::{NO_DRAIN_TAG, Task, TaskStatus};
 use orbit_types::workflow::JobRunState;
 use orbit_types::workflow::automation::members::{
     MaterialField, MemberAttempt, PreparationEligibility, PreparationPolicy, SourceSensitivity,
@@ -20,6 +20,28 @@ use orbit_types::workflow::automation::members::{
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
+
+/// Scheduled preparation must leave approved manual-only work free to start.
+/// This filter sits outside freshness so it does not invalidate pilot evidence.
+pub(super) fn routine_pilot_exclusion(
+    task: &Task,
+    eligibility: &PreparationEligibility,
+) -> Option<String> {
+    if !preparation::eligible(task, eligibility) {
+        return Some(
+            eligibility
+                .exclude_tags
+                .iter()
+                .find(|tag| task.tags.contains(tag))
+                .map_or_else(
+                    || "task_ineligible".to_string(),
+                    |tag| format!("excluded_tag: {tag}"),
+                ),
+        );
+    }
+    (task.status == TaskStatus::Backlog && task.tags.iter().any(|tag| tag == NO_DRAIN_TAG))
+        .then(|| format!("excluded_tag: {NO_DRAIN_TAG}"))
+}
 
 /// Repository instructions captured from one immutable source revision.
 ///
@@ -776,7 +798,7 @@ impl FootprintPilots {
     pub(crate) fn prepares_until(&self, task: &Task) -> Option<chrono::DateTime<chrono::Utc>> {
         self.0
             .iter()
-            .filter(|(eligibility, _)| preparation::eligible(task, eligibility))
+            .filter(|(eligibility, _)| routine_pilot_exclusion(task, eligibility).is_none())
             .map(|(_, wait)| task.updated_at + *wait)
             .max()
     }
