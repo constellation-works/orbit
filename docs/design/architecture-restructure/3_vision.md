@@ -30,8 +30,10 @@ This doc holds what is not settled. §1 lists the decisions [2_design.md](2_desi
    - A (recommended): functions in `orbit-core/src/app/<subject>/`. Private modules then enforce the boundary between subjects, which inherent methods on one type cannot, and the `OrbitRuntime` wrapper with its `unsafe` cast has nothing left to carry.
    - B: keep inherent methods and tighten the guard script. Nothing moves, and the guard keeps deriving method names, which edges have already regrown past once ([orbit core](../orbit-core/1_overview.md) §5 records it).
 3. **What does a flow run against?**
-   - A (recommended): the kernel as one context holding mechanisms only. It matches the template and STD-02 §R45's single context unit, and it makes the conversion a move.
-   - B: a narrow handle per app, listing the stores and effects that app may use. It is the strongest boundary, and it adds a struct and its wiring for each of about forty units before any of them has shown the need. It can be added later for one app without changing the others.
+   - A (recommended, his direction of 2026-11-25): a runtime in four layers, `Base`, `Stored`, `Host` and `Run`, each a struct that holds the one below, with the process's role resolved once in `Base`. A flow takes the lowest layer it needs. The kernel already has these groups flattened into one struct: 14 of its 34 fields are optional because only some processes have them. `orbit-runtime/src` is laid out as the four layers ([2_design.md §4](2_design.md#4-the-runtime-layers-that-each-add-a-capability)).
+   - B: the kernel as one wide context holding mechanisms only. It makes the conversion a pure move, and every operation can still reach what only a drain has. This was the first draft's recommendation.
+   - C: a narrow handle per app, listing the stores and effects that app may use. It is the strongest boundary, and it adds a struct and its wiring for each of about forty units before any of them has shown the need. It can be added later for one app on top of A.
+   - Within A, two things are his to confirm: four layers and not more (search, the recovery authority and plugins are side capabilities handed out by a layer, not layers), and one crate with a checked module order, not a crate for each layer.
 4. **How is `RuntimeHost` reduced?**
    - A (recommended): five traits along its five existing groups, configuration getters turned into one `RunSettings` value, then narrower bounds per engine module.
    - B: one trait per engine module from the start. Finer, but it means deciding every boundary before measuring which methods each module uses.
@@ -66,12 +68,15 @@ This doc holds what is not settled. §1 lists the decisions [2_design.md](2_desi
 14. Which `ApplicationPort` callers can take a value instead of calling back?
 15. Does any `*Backend` trait have a second implementation that a test depends on?
 16. How many `RuntimeHost` environment methods are plain getters?
+17. Does any operation need the store without a workspace, or a workspace without the store? That decides whether the workspace binding sits in `Base` or `Stored`.
+18. Which of the runtime modules named for a subject (`task/`, `application_consent/`, `friction.rs`, `cost.rs`) are mechanisms, and which are use cases that move up to an app?
+19. Do a worker's writes fit the same task access as its reads, or do routed tool calls need their own path in `Run`?
 
 ## 2. Prior Work
 
 ### Inside Orbit
 
-- **[Orbit core](../orbit-core/1_overview.md)** set the direction `runtime ← application ← adapter`, moved the kernel to its own crate, and introduced ports between application modules. This proposal keeps all three and changes what carries an operation: a function in an app, not a method on the runtime.
+- **[Orbit core](../orbit-core/1_overview.md)** set the direction `runtime ← application ← adapter`, moved the kernel to its own crate, and introduced ports between application modules. This proposal keeps all three and changes what carries an operation: a function in an app, not a method on the runtime. It also divides the kernel into layers.
 - **[Operations as data](../operations-as-data/1_overview.md)** gave each migrated operation one spec and one handler entry. This proposal says what the handler calls and what it may reach.
 - **The STD-02 standing entry** ([decisions](../orbit-core/4_decisions.md#standing-against-std-025-r2-r6-r18-r39r44)) measured Orbit against §R2, §R6, §R18 and §R39 to §R44 and deferred the fixes to a restructure. Sections 3 to 9 of the design answer those deviations one by one.
 
