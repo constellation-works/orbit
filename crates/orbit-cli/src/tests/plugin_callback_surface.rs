@@ -15,7 +15,7 @@ fn is_callback_entry_point(argv: &[&str]) -> bool {
     Cli::try_parse_from(argv)
         .unwrap_or_else(|err| panic!("{argv:?} should parse: {err}"))
         .command
-        .operation()
+        .operation(&orbit_common::Env::default())
         .plugin_callback_entry_point
 }
 

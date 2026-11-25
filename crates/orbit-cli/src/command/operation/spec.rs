@@ -6,9 +6,10 @@
 //! error suppression. Adding a [`Commands`] variant therefore requires one
 //! new operation arm and the compiler rejects an incomplete registry.
 
-use orbit_common::env_vars;
+use std::ffi::OsStr;
 use std::path::Path;
 
+use orbit_common::Env;
 use orbit_common::governance::operation::{Effect, OperationVerb};
 use orbit_common::governance::task::TaskVerb;
 use orbit_core::{ActorIdentity, OrbitError, OrbitRuntime};
@@ -80,6 +81,7 @@ pub struct DispatchContext<'a> {
     /// The global `--workspace` selector, for the runtime-forbidden commands
     /// that resolve their own workspaces instead of being handed one runtime.
     workspace_selector: Option<&'a str>,
+    pub(super) env: &'a Env,
 }
 
 impl<'a> DispatchContext<'a> {
@@ -87,22 +89,26 @@ impl<'a> DispatchContext<'a> {
         runtime: &'a OrbitRuntime,
         root_override: Option<&'a Path>,
         workspace_selector: Option<&'a str>,
+        env: &'a Env,
     ) -> Self {
         Self {
             runtime: Some(runtime),
             root_override,
             workspace_selector,
+            env,
         }
     }
 
     pub fn without_runtime(
         root_override: Option<&'a Path>,
         workspace_selector: Option<&'a str>,
+        env: &'a Env,
     ) -> Self {
         Self {
             runtime: None,
             root_override,
             workspace_selector,
+            env,
         }
     }
 
@@ -228,17 +234,30 @@ macro_rules! runtime_dispatch {
     }};
 }
 
-macro_rules! boxed_runtime_dispatch {
+macro_rules! runtime_env_dispatch {
     ($variant:ident) => {{
         |command, context| match command {
-            Commands::$variant(command) => (*command).execute(context.runtime()?),
+            Commands::$variant(command) => {
+                command.execute_with_env(context.runtime()?, context.env)
+            }
+            _ => dispatch_mismatch(stringify!($variant)),
+        }
+    }};
+}
+
+macro_rules! boxed_runtime_env_dispatch {
+    ($variant:ident) => {{
+        |command, context| match command {
+            Commands::$variant(command) => {
+                (*command).execute_with_env(context.runtime()?, context.env)
+            }
             _ => dispatch_mismatch(stringify!($variant)),
         }
     }};
 }
 
 // Shared only with the sibling registry; dispatch helpers stay inside operation.
-pub(super) use {boxed_runtime_dispatch, runtime_dispatch};
+pub(super) use {boxed_runtime_env_dispatch, runtime_dispatch, runtime_env_dispatch};
 
 pub(super) fn dispatch_mismatch(variant: &str) -> CommandOut {
     Err(OrbitError::Execution(format!(
@@ -365,7 +384,9 @@ pub(super) fn task_operation(
 
 pub(super) fn dispatch_init(command: Commands, context: DispatchContext<'_>) -> CommandOut {
     match command {
-        Commands::Init(command) => command.execute_without_runtime(context.root_override),
+        Commands::Init(command) => {
+            command.execute_without_runtime(context.root_override, context.env)
+        }
         _ => dispatch_mismatch("Init"),
     }
 }
@@ -375,7 +396,7 @@ pub(super) fn dispatch_workspace(command: Commands, context: DispatchContext<'_>
     match command {
         Commands::Workspace(WorkspaceCommand {
             command: WorkspaceSubcommand::Init(args),
-        }) => args.execute_without_runtime(context.root_override),
+        }) => args.execute_without_runtime(context.root_override, context.env),
         Commands::Workspace(WorkspaceCommand {
             command: WorkspaceSubcommand::Sync(args),
         }) => args.execute_without_runtime(context.root_override, context.workspace_selector),
@@ -395,16 +416,20 @@ pub(super) fn dispatch_mcp(command: Commands, context: DispatchContext<'_>) -> C
     match command {
         Commands::Mcp(McpCommand {
             command: McpSubcommand::Init(args),
-        }) => args.execute_without_runtime(context.root_override),
+        }) => args.execute_without_runtime(context.root_override, context.env),
         Commands::Mcp(McpCommand {
             command: McpSubcommand::Remove(args),
-        }) => args.execute_without_runtime(context.root_override),
+        }) => args.execute_without_runtime(context.root_override, context.env),
         Commands::Mcp(McpCommand {
             command: McpSubcommand::Serve(args),
-        }) => args.execute_without_runtime(context.root_override),
+        }) => args.execute_without_runtime(context.root_override, context.env),
         Commands::Mcp(McpCommand {
             command: McpSubcommand::Listen(args),
-        }) => args.execute_without_runtime(context.root_override, context.workspace_selector),
+        }) => args.execute_without_runtime(
+            context.root_override,
+            context.workspace_selector,
+            context.env,
+        ),
         _ => dispatch_mismatch("Mcp"),
     }
 }
@@ -416,15 +441,15 @@ pub(super) fn dispatch_host(command: Commands, context: DispatchContext<'_>) -> 
     }
 }
 
-pub(super) fn dispatch_browser_kit(command: Commands, _context: DispatchContext<'_>) -> CommandOut {
+pub(super) fn dispatch_browser_kit(command: Commands, context: DispatchContext<'_>) -> CommandOut {
     use super::super::config::{ConfigCommand, ConfigSubcommand};
     match command {
         Commands::Config(ConfigCommand {
             command: ConfigSubcommand::BrowserKit(command),
-        }) => command.execute_without_runtime(),
+        }) => command.execute_without_runtime(context.env),
         Commands::BrowserKit(command) => {
             eprintln!("warning: `orbit browser-kit` is deprecated; use `orbit config browser-kit`");
-            command.execute_without_runtime()
+            command.execute_without_runtime(context.env)
         }
         _ => dispatch_mismatch("BrowserKit"),
     }
@@ -442,7 +467,9 @@ pub(super) fn dispatch_migrate(command: Commands, context: DispatchContext<'_>) 
 
 pub(super) fn dispatch_update(command: Commands, context: DispatchContext<'_>) -> CommandOut {
     match command {
-        Commands::Update(command) => command.execute_without_runtime(context.root_override),
+        Commands::Update(command) => {
+            command.execute_without_runtime(context.root_override, context.env)
+        }
         _ => dispatch_mismatch("Update"),
     }
 }
@@ -456,18 +483,22 @@ pub(super) fn dispatch_run(command: Commands, context: DispatchContext<'_>) -> C
 
 pub(super) fn dispatch_sweep(command: Commands, context: DispatchContext<'_>) -> CommandOut {
     match command {
-        Commands::Sweep(command) => {
-            command.execute_without_runtime(context.root_override, context.workspace_selector)
-        }
+        Commands::Sweep(command) => command.execute_without_runtime(
+            context.root_override,
+            context.workspace_selector,
+            context.env,
+        ),
         _ => dispatch_mismatch("Sweep"),
     }
 }
 
 pub(super) fn dispatch_clock(command: Commands, context: DispatchContext<'_>) -> CommandOut {
     match command {
-        Commands::Clock(command) => {
-            command.execute_without_runtime(context.root_override, context.workspace_selector)
-        }
+        Commands::Clock(command) => command.execute_without_runtime(
+            context.root_override,
+            context.workspace_selector,
+            context.env,
+        ),
         _ => dispatch_mismatch("Clock"),
     }
 }
@@ -478,6 +509,7 @@ pub(super) fn dispatch_routine(command: Commands, context: DispatchContext<'_>) 
             context.root_override,
             context.workspace_selector,
             context.runtime,
+            context.env,
         ),
         _ => dispatch_mismatch("Routine"),
     }
@@ -489,7 +521,7 @@ pub(super) fn dispatch_web(command: Commands, context: DispatchContext<'_>) -> C
         Commands::Web(WebCommand {
             command: WebSubcommand::Serve(args),
         }) => {
-            orbit_web::serve_from_env(args, context.root_override)?;
+            orbit_web::serve_from_env(args, context.root_override, context.env)?;
             Ok(CommandOutput::Silent)
         }
         Commands::Web(WebCommand {
@@ -529,7 +561,10 @@ pub(super) fn browser_kit_operation(
     )
 }
 
-pub(super) fn tool_operation(command: &super::super::tool::ToolCommand) -> CommandOperation {
+pub(super) fn tool_operation(
+    command: &super::super::tool::ToolCommand,
+    env: &Env,
+) -> CommandOperation {
     use super::super::tool::ToolSubcommand;
     let (subcommand, tool_name, target_type, target_id, role, json_output) = match &command.command
     {
@@ -538,7 +573,7 @@ pub(super) fn tool_operation(command: &super::super::tool::ToolCommand) -> Comma
             Some(args.name.clone()),
             Some("tool".to_string()),
             Some(args.name.clone()),
-            tool_run_actor_role(args),
+            tool_run_actor_role(args, env),
             Some(false),
         ),
         ToolSubcommand::List(_) => ("list", None, None, None, "admin".to_string(), None),
@@ -630,14 +665,18 @@ pub(super) fn tool_operation(command: &super::super::tool::ToolCommand) -> Comma
     .plugin_callback_entry_point(matches!(&command.command, ToolSubcommand::Run(_)))
 }
 
-pub(super) fn tool_run_actor_role(args: &super::super::tool::ToolRunArgs) -> String {
+pub(super) fn tool_run_actor_role(args: &super::super::tool::ToolRunArgs, env: &Env) -> String {
     let (input_agent, input_model) = tool_run_input_identity(args);
-    let env_agent = std::env::var(env_vars::ORBIT_AGENT_NAME)
-        .ok()
-        .filter(|value| !value.trim().is_empty());
-    let env_model = std::env::var(env_vars::ORBIT_AGENT_MODEL)
-        .ok()
-        .filter(|value| !value.trim().is_empty());
+    let env_agent = env
+        .orbit_agent_name()
+        .and_then(OsStr::to_str)
+        .filter(|value| !value.trim().is_empty())
+        .map(ToOwned::to_owned);
+    let env_model = env
+        .orbit_agent_model()
+        .and_then(OsStr::to_str)
+        .filter(|value| !value.trim().is_empty())
+        .map(ToOwned::to_owned);
     let has_input_identity = input_agent.is_some() || input_model.is_some();
     let has_flag_identity = args.agent.is_some() || args.model.is_some();
     let (agent, model) = if has_input_identity {

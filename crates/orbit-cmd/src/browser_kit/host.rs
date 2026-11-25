@@ -1,14 +1,12 @@
 //! What the kit commands need from the host: tools on PATH, the guard that
 //! keeps them out of workers, and the child processes they run.
 
-use orbit_common::env_vars;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::Duration;
 
-use orbit_common::OrbitError;
 use orbit_common::process::{CapturedOutput, run_bounded_capped};
-use orbit_common::security::child_env::MCP_MANAGED_CONTEXT_ENV;
+use orbit_common::{Env, OrbitError};
 
 /// The fix for a host without Node; Orbit never installs it.
 pub(crate) const NODE_FIX: &str = "Install Node.js 18 or newer (https://nodejs.org or the system \
@@ -19,9 +17,9 @@ pub(crate) const NODE_FIX: &str = "Install Node.js 18 or newer (https://nodejs.o
 const PROBE_OUTPUT_LIMIT: usize = 8 * 1024 * 1024;
 
 /// The first executable `program` on this process's PATH.
-pub(super) fn find_on_path(program: &str) -> Option<PathBuf> {
-    let path = std::env::var_os(env_vars::PATH)?;
-    std::env::split_paths(&path)
+pub(super) fn find_on_path(env: &Env, program: &str) -> Option<PathBuf> {
+    let path = env.path()?;
+    std::env::split_paths(path)
         .map(|dir| dir.join(program))
         .find(|candidate| is_executable(candidate))
 }
@@ -50,9 +48,10 @@ fn is_executable(path: &Path) -> bool {
 ///
 /// A worker cannot build the kit reliably (no `sudo`, a private `/tmp`), and
 /// a kit built as root lands in root's home, where workers never look.
-pub(super) fn require_host_operator() -> Result<(), OrbitError> {
-    let set = |name: &str| std::env::var_os(name).is_some_and(|value| !value.is_empty());
-    if set(MCP_MANAGED_CONTEXT_ENV) || set(env_vars::ORBIT_WORKER_CONTEXT_REQUIRED) {
+pub(super) fn require_host_operator(env: &Env) -> Result<(), OrbitError> {
+    let non_empty = |value: Option<&std::ffi::OsStr>| value.is_some_and(|v| !v.is_empty());
+    if non_empty(env.orbit_managed_run_context()) || non_empty(env.orbit_worker_context_required())
+    {
         return Err(OrbitError::InvalidInput(
             "the browser kit is host setup: run `orbit config browser-kit` on the host as the user who \
              runs workers, never inside a worker"
@@ -70,8 +69,8 @@ pub(super) fn require_host_operator() -> Result<(), OrbitError> {
     Ok(())
 }
 
-pub(super) fn require_tool(program: &str) -> Result<PathBuf, OrbitError> {
-    find_on_path(program)
+pub(super) fn require_tool(env: &Env, program: &str) -> Result<PathBuf, OrbitError> {
+    find_on_path(env, program)
         .ok_or_else(|| OrbitError::InvalidInput(format!("`{program}` is not on PATH. {NODE_FIX}")))
 }
 

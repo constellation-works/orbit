@@ -44,9 +44,14 @@ fn over_limit_unterminated_record_is_bounded_then_skipped_through_its_newline() 
     for _ in 0..4 {
         append(&path, &filler);
         loop {
-            let batch =
-                read_appended_log_events(&path, &LogFilters::default(), &mut offset, &mut buffer)
-                    .expect("read");
+            let batch = read_appended_log_events(
+                &path,
+                &LogFilters::default(),
+                &mut offset,
+                &mut buffer,
+                None,
+            )
+            .expect("read");
             delivered.extend(batch.events);
             assert!(
                 buffer.partial.capacity() <= LOG_STREAM_MAX_RECORD_BYTES,
@@ -67,8 +72,14 @@ fn over_limit_unterminated_record_is_bounded_then_skipped_through_its_newline() 
 
     append(&path, "\"}\n");
     append(&path, &format!("{}\n", log_line("after-oversized")));
-    let batch = read_appended_log_events(&path, &LogFilters::default(), &mut offset, &mut buffer)
-        .expect("read after newline");
+    let batch = read_appended_log_events(
+        &path,
+        &LogFilters::default(),
+        &mut offset,
+        &mut buffer,
+        None,
+    )
+    .expect("read after newline");
     delivered.extend(batch.events);
 
     let steps: Vec<&str> = delivered

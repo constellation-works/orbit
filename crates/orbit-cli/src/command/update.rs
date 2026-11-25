@@ -6,6 +6,7 @@ use orbit_cmd::update::{
     CandidateManifestRequest, LocalCandidateRequest, UpdateEnvironment, UpdateOutcome,
     UpdateReport, UpdateRequest, run_local_candidate_update, run_update, write_candidate_manifest,
 };
+use orbit_common::Env;
 use orbit_common::fs::generation;
 use orbit_core::OrbitError;
 
@@ -104,7 +105,7 @@ pub struct UpdateCommand {
 
 impl UpdateCommand {
     /// Run the update and render its report.
-    pub fn execute_without_runtime(self, root_override: Option<&Path>) -> CommandOut {
+    pub fn execute_without_runtime(self, root_override: Option<&Path>, env: &Env) -> CommandOut {
         if self.contract {
             let identity = orbit_core::composition::compiled_compatibility();
             return Ok(Payload::detail(
@@ -140,7 +141,7 @@ impl UpdateCommand {
             // directory). `orbit update` itself keeps strict initialization
             // through `workspace_for_process`. This observation does not
             // reserve admission.
-            let workspace = UpdateEnvironment::workspace_for_preflight(root_override)?;
+            let workspace = UpdateEnvironment::workspace_for_preflight(root_override, env)?;
             let roots = orbit_cmd::update::admission_authorities(
                 root_override,
                 workspace.as_ref().map(|workspace| workspace.root.as_path()),
@@ -189,9 +190,10 @@ impl UpdateCommand {
                 self.write_candidate_manifest,
                 self.candidate_manifest.zip(self.install_target),
                 self.allow_downgrade,
+                env,
             );
         }
-        let environment = UpdateEnvironment::from_process(root_override)?;
+        let environment = UpdateEnvironment::from_process(root_override, env)?;
         let report = run_update(
             &environment,
             &UpdateRequest {
@@ -217,6 +219,7 @@ fn local_candidate(
     write_manifest: Option<PathBuf>,
     install: Option<(PathBuf, PathBuf)>,
     allow_downgrade: bool,
+    env: &Env,
 ) -> CommandOut {
     if let Some(output) = write_manifest {
         let manifest = write_candidate_manifest(&CandidateManifestRequest {
@@ -247,7 +250,7 @@ fn local_candidate(
                 .to_string(),
         ));
     };
-    let environment = UpdateEnvironment::for_install_target(root_override, &install_target)?;
+    let environment = UpdateEnvironment::for_install_target(root_override, &install_target, env)?;
     let report = run_local_candidate_update(
         &environment,
         &LocalCandidateRequest {

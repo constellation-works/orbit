@@ -32,7 +32,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError, TryLockError, Weak};
 use std::time::{Duration, Instant};
 
-use orbit_common::{HostRegistryCode, OrbitError};
+use orbit_common::{Env, HostRegistryCode, OrbitError};
 use serde::Serialize;
 use serde_json::Value;
 use tokio::sync::watch;
@@ -73,11 +73,6 @@ pub(crate) struct TunnelConfig {
     pub(crate) identity_timeout: Duration,
 }
 
-/// Debug-build fixture only. Milliseconds to wait for an already-running remote
-/// dashboard. Release builds keep the five-second budget whatever this says.
-/// Unset, zero, unparsable, or larger values keep that budget too.
-use orbit_common::env_vars::ORBIT_TEST_HOST_FORWARD_ATTACH_TIMEOUT_MS as TEST_ATTACH_TIMEOUT_ENV;
-
 fn attach_timeout_from_env(value: Option<&str>, debug_build: bool) -> Duration {
     const PRODUCTION: Duration = Duration::from_secs(5);
     if !debug_build {
@@ -90,16 +85,31 @@ fn attach_timeout_from_env(value: Option<&str>, debug_build: bool) -> Duration {
         .unwrap_or(PRODUCTION)
 }
 
+impl TunnelConfig {
+    pub(crate) fn from_env(env: &Env) -> Self {
+        #[cfg(any(test, feature = "test-support"))]
+        let raw = env
+            .orbit_test_host_forward_attach_timeout_ms()
+            .and_then(std::ffi::OsStr::to_str);
+        #[cfg(not(any(test, feature = "test-support")))]
+        let raw = {
+            let _ = env;
+            None
+        };
+        Self {
+            attach_timeout: attach_timeout_from_env(raw, cfg!(debug_assertions)),
+            ..Self::default()
+        }
+    }
+}
+
 impl Default for TunnelConfig {
     fn default() -> Self {
         Self {
             ssh_program: "ssh".to_string(),
             remote_port: DEFAULT_DASHBOARD_PORT,
             idle_timeout: Duration::from_secs(5 * 60),
-            attach_timeout: attach_timeout_from_env(
-                std::env::var(TEST_ATTACH_TIMEOUT_ENV).ok().as_deref(),
-                cfg!(debug_assertions),
-            ),
+            attach_timeout: attach_timeout_from_env(None, cfg!(debug_assertions)),
             ready_timeout: Duration::from_secs(30),
             bind_timeout: Duration::from_secs(CONNECT_TIMEOUT_SECS + 10),
             identity_timeout: Duration::from_secs(10),

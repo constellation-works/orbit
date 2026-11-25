@@ -16,7 +16,7 @@ doctest = false
 
 # Only dev-dependencies enable fixture hooks; shipped probes keep fixed caps.
 [features]
-test-support = []
+test-support = ["orbit-common/test-support"]
 
 [dependencies]
 base64.workspace = true

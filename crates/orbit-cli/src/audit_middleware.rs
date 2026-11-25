@@ -1,8 +1,9 @@
 //! RAII SQLite CLI-invocation audit guard (`AuditGuard`); imports `command`, `orbit-common`, and `orbit-core`.
 
-use orbit_common::env_vars;
+use std::ffi::OsStr;
 use std::time::Instant;
 
+use orbit_common::Env;
 use orbit_common::observability::audit_id::audit_execution_id;
 use orbit_core::adapter::command::take_tool_audit_recorded;
 use orbit_core::{
@@ -29,6 +30,7 @@ pub use crate::command::operation::CommandMeta;
 /// Status defaults to `Failure` with exit code -1 if never explicitly marked.
 pub struct AuditGuard<'a> {
     runtime: &'a OrbitRuntime,
+    env: &'a Env,
     execution_id: String,
     meta: CommandMeta,
     start: Instant,
@@ -38,9 +40,10 @@ pub struct AuditGuard<'a> {
 }
 
 impl<'a> AuditGuard<'a> {
-    pub fn new(runtime: &'a OrbitRuntime, meta: CommandMeta) -> Self {
+    pub fn new(runtime: &'a OrbitRuntime, meta: CommandMeta, env: &'a Env) -> Self {
         Self {
             runtime,
+            env,
             execution_id: audit_execution_id("exec"),
             meta,
             start: Instant::now(),
@@ -132,7 +135,11 @@ impl Drop for AuditGuard<'_> {
             stdout_truncated: None,
             stderr_truncated: None,
             error_message: self.error_message.clone(),
-            host: std::env::var(env_vars::HOSTNAME).ok(),
+            host: self
+                .env
+                .hostname()
+                .and_then(OsStr::to_str)
+                .map(ToOwned::to_owned),
             pid: std::process::id(),
             session_id: None,
             workspace_id: self
@@ -148,19 +155,29 @@ impl Drop for AuditGuard<'_> {
             origin_session_id: None,
             mcp_call_id: None,
             lease_id: None,
-            task_id: std::env::var(env_vars::ORBIT_TASK_ID)
-                .ok()
-                .filter(|s| !s.is_empty()),
+            task_id: self
+                .env
+                .orbit_task_id()
+                .and_then(OsStr::to_str)
+                .filter(|s| !s.is_empty())
+                .map(ToOwned::to_owned),
             job_run_id: self.meta.job_run_id.clone().or_else(|| {
-                std::env::var(env_vars::ORBIT_RUN_ID)
-                    .ok()
+                self.env
+                    .orbit_run_id()
+                    .and_then(OsStr::to_str)
                     .filter(|s| !s.is_empty())
+                    .map(ToOwned::to_owned)
             }),
-            activity_id: std::env::var(env_vars::ORBIT_ACTIVITY_ID)
-                .ok()
-                .filter(|s| !s.is_empty()),
-            step_index: std::env::var(env_vars::ORBIT_STEP_INDEX)
-                .ok()
+            activity_id: self
+                .env
+                .orbit_activity_id()
+                .and_then(OsStr::to_str)
+                .filter(|s| !s.is_empty())
+                .map(ToOwned::to_owned),
+            step_index: self
+                .env
+                .orbit_step_index()
+                .and_then(OsStr::to_str)
                 .and_then(|s| s.parse().ok()),
         };
 

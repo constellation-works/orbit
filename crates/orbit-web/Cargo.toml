@@ -11,7 +11,7 @@ stability = "internal"
 [features]
 # Test-only hooks for HTTP fixture servers. Enable it only from
 # `[dev-dependencies]`, never in a shipped build.
-test-support = []
+test-support = ["orbit-common/test-support"]
 
 [lints]
 workspace = true

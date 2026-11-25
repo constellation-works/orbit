@@ -3,7 +3,7 @@
 
 use std::path::PathBuf;
 
-use orbit_common::OrbitError;
+use orbit_common::{Env, OrbitError};
 use orbit_core::bootstrap::browser_kit::{
     KitInspection, KitLayout, PIXEL_HELPER_PACKAGE, PIXEL_HELPER_VERSION, PLAYWRIGHT_VERSION,
     WORKER_ENV_NAMES,
@@ -37,7 +37,7 @@ pub struct KitProblem {
     pub fix: String,
 }
 
-pub fn kit_status(layout: &KitLayout) -> KitStatus {
+pub fn kit_status(layout: &KitLayout, env: &Env) -> KitStatus {
     let inspection = KitInspection::inspect(layout);
     let verified = inspection.is_verified();
     let state = if !inspection.present {
@@ -53,12 +53,12 @@ pub fn kit_status(layout: &KitLayout) -> KitStatus {
     } else {
         "unverified"
     };
-    let unresolved_libraries = unresolved_libraries(layout, &inspection);
+    let unresolved_libraries = unresolved_libraries(layout, &inspection, env);
     KitStatus {
         matches_pin: inspection.matches_pin(),
         verified,
         state,
-        node: find_on_path("node"),
+        node: find_on_path(env, "node"),
         unresolved_libraries,
         worker_env: if verified {
             WORKER_ENV_NAMES.to_vec()
@@ -70,13 +70,21 @@ pub fn kit_status(layout: &KitLayout) -> KitStatus {
 }
 
 #[cfg(target_os = "linux")]
-fn unresolved_libraries(layout: &KitLayout, inspection: &KitInspection) -> Option<Vec<String>> {
+fn unresolved_libraries(
+    layout: &KitLayout,
+    inspection: &KitInspection,
+    env: &Env,
+) -> Option<Vec<String>> {
     let executable = inspection.executable.as_deref()?;
-    super::libraries::unresolved(layout, executable).ok()
+    super::libraries::unresolved(layout, executable, env).ok()
 }
 
 #[cfg(not(target_os = "linux"))]
-fn unresolved_libraries(_layout: &KitLayout, _inspection: &KitInspection) -> Option<Vec<String>> {
+fn unresolved_libraries(
+    _layout: &KitLayout,
+    _inspection: &KitInspection,
+    _env: &Env,
+) -> Option<Vec<String>> {
     None
 }
 
@@ -182,8 +190,8 @@ pub(super) fn library_fix(_unresolved: &[String]) -> String {
 
 /// Delete the kit. Nothing else on the host refers to it, and workers stop
 /// receiving its variables. `false` when there was no kit.
-pub fn remove(layout: &KitLayout) -> Result<bool, OrbitError> {
-    require_host_operator()?;
+pub fn remove(layout: &KitLayout, env: &Env) -> Result<bool, OrbitError> {
+    require_host_operator(env)?;
     let root = layout.root();
     if !root.exists() {
         return Ok(false);

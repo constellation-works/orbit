@@ -1489,6 +1489,7 @@ fn emitted_external_root_launch_lists_tasks_without_inherited_orbit_root() {
             client,
             &fixture.checkout,
             Some(&fixture.home),
+            &orbit_common::Env::capture(),
         )
         .expect("client config paths");
         let args = read_registered_args(&paths.mcp_path, "orbit");

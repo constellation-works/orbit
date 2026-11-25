@@ -1,10 +1,11 @@
 //! Process-log filters, path resolution and plain-text source/code columns
 //! shared by `orbit log` and the dashboard's log view.
 
-use orbit_common::env_vars;
+use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 
 use chrono::{DateTime, Duration, Utc};
+use orbit_common::Env;
 use orbit_common::protocol::tool_input;
 use orbit_core::OrbitError;
 use serde_json::Value;
@@ -250,14 +251,14 @@ pub fn build_filters(
 }
 
 /// Resolve an explicit log path, then ORBIT_LOG_PATH, then the global JSONL log.
-pub fn resolve_log_path(override_path: Option<&Path>) -> Result<PathBuf, OrbitError> {
+pub fn resolve_log_path(override_path: Option<&Path>, env: &Env) -> Result<PathBuf, OrbitError> {
     if let Some(path) = override_path {
         return Ok(path.to_path_buf());
     }
-    if let Ok(env) = std::env::var(env_vars::ORBIT_LOG_PATH)
-        && !env.is_empty()
+    if let Some(path) = env.orbit_log_path().and_then(OsStr::to_str)
+        && !path.is_empty()
     {
-        return Ok(PathBuf::from(env));
+        return Ok(PathBuf::from(path));
     }
     orbit_common::observability::logging::global_jsonl_log_path(
         &orbit_core::composition::composition_env(),

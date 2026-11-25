@@ -1,14 +1,14 @@
 //! The root attention CLI derives its inputs from the shared tool operation.
 use super::{
-    CommandOut, Execute, Payload,
+    CommandOut, Payload,
     operation_args::{Invocation, augment_operation_args, input_from_matches},
 };
+use std::ffi::OsStr;
+
 use crate::output::payload::{AttentionRow, Block};
 use clap::{Arg, ArgMatches, Args, Command, FromArgMatches};
-use orbit_common::governance::{
-    attention::{ATTENTION_WAIT_TOKEN_ENV, AttentionVerb},
-    operation::OperationVerb,
-};
+use orbit_common::Env;
+use orbit_common::governance::{attention::AttentionVerb, operation::OperationVerb};
 use orbit_core::{
     OrbitRuntime,
     application::attention::{AttentionWaitOutcome, AttentionWaitStatus},
@@ -94,10 +94,10 @@ impl FromArgMatches for AttentionCommand {
         Ok(())
     }
 }
-impl Execute for AttentionCommand {
-    fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
+impl AttentionCommand {
+    pub(crate) fn execute_with_env(self, runtime: &OrbitRuntime, env: &Env) -> CommandOut {
         if let Some(wait) = &self.wait {
-            return execute_wait(runtime, &self.query.input, wait);
+            return execute_wait(runtime, &self.query.input, wait, env);
         }
         let value = runtime.run_tool(self.query.spec.tool_name, Value::Object(self.query.input))?;
         render_attention_envelope(value)
@@ -108,10 +108,14 @@ fn execute_wait(
     runtime: &OrbitRuntime,
     input: &serde_json::Map<String, Value>,
     wait: &AttentionWait,
+    env: &Env,
 ) -> CommandOut {
-    let token = std::env::var(ATTENTION_WAIT_TOKEN_ENV).unwrap_or_default();
+    let token = env
+        .orbit_attention_wait_token()
+        .and_then(OsStr::to_str)
+        .unwrap_or_default();
     let outcome = runtime.attention_wait(
-        &token,
+        token,
         Value::Object(input.clone()),
         &wait.timeout,
         wait.interval.as_deref(),

@@ -5,6 +5,7 @@
 use std::fs;
 use std::path::Path;
 
+use orbit_common::Env;
 use orbit_common::fs::io::atomic_write_text;
 use orbit_core::OrbitError;
 use toml_edit::{DocumentMut, Item, Table, TableLike};
@@ -32,6 +33,7 @@ pub(in crate::command::mcp::setup) fn load_toml_document(
 pub(in crate::command::mcp::setup) fn write_toml_document(
     path: &Path,
     doc: &DocumentMut,
+    env: &Env,
 ) -> Result<(), OrbitError> {
     let target = resolve_config_target(path)?;
     let rendered = doc.to_string();
@@ -50,7 +52,7 @@ pub(in crate::command::mcp::setup) fn write_toml_document(
             path.display()
         ))
     })?;
-    record_config_write(path, &target, "write", orbit_server_args(&root));
+    record_config_write(path, &target, "write", orbit_server_args(&root), env);
     Ok(())
 }
 
@@ -61,21 +63,22 @@ pub(in crate::command::mcp::setup) fn write_toml_document(
 pub(in crate::command::mcp::setup) fn write_or_remove_toml_document(
     path: &Path,
     doc: &DocumentMut,
+    env: &Env,
 ) -> Result<(), OrbitError> {
     if doc.to_string().trim().is_empty() {
         if !path.exists() {
             return Ok(());
         }
         if is_config_symlink(path) {
-            return write_toml_document(path, doc);
+            return write_toml_document(path, doc, env);
         }
         fs::remove_file(path).map_err(|err| {
             OrbitError::Io(format!("failed to remove '{}': {err}", path.display()))
         })?;
-        record_config_write(path, path, "remove", serde_json::json!({}));
+        record_config_write(path, path, "remove", serde_json::json!({}), env);
         return Ok(());
     }
-    write_toml_document(path, doc)
+    write_toml_document(path, doc, env)
 }
 
 /// The table at top-level `key`, created (as an implicit `[key.*]` parent)

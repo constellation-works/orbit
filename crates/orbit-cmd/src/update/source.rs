@@ -7,16 +7,17 @@
 //! lets the update tests exercise download, signature, and checksum handling
 //! against fixtures instead of the network.
 
+use std::ffi::OsStr;
 use std::fmt::Debug;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use orbit_common::OrbitError;
 use orbit_common::observability::logging::format_error_chain;
 use orbit_common::security::release::{
     RELEASE_CHECKSUMS_FILENAME, RELEASE_CHECKSUMS_SIGNATURE_FILENAME,
 };
+use orbit_common::{Env, OrbitError};
 
 /// Input ceilings apply before authentication and before any complete artifact is buffered.
 pub(super) const MAX_METADATA_BYTES: u64 = 64 * 1024;
@@ -65,12 +66,6 @@ pub use orbit_common::env_vars::ORBIT_UPDATE_RELEASE_DIR as RELEASE_DIR_ENV;
 /// Environment variable naming the GitHub repository to read releases from.
 /// Shares its name with the variable `install.sh` reads.
 pub use orbit_common::env_vars::ORBIT_INSTALL_REPO as RELEASE_REPO_ENV;
-
-/// Test-only override for the release API. Compiled only for debug builds
-/// when the CLI process-test feature is enabled; release builds have no such
-/// environment setting and always use the pinned GitHub API below.
-#[cfg(all(feature = "test-release-api-base", debug_assertions))]
-use orbit_common::env_vars::ORBIT_TEST_RELEASE_API_BASE as TEST_RELEASE_API_BASE_ENV;
 
 /// File in a mirror directory naming the newest published version.
 pub const MIRROR_LATEST_FILE: &str = "latest-version.txt";
@@ -135,15 +130,27 @@ pub trait ReleaseSource: Debug + Send + Sync {
 ///
 /// A configured mirror wins over the network so an air-gapped host never
 /// silently reaches out.
-pub fn release_source_from_env() -> Box<dyn ReleaseSource> {
-    if let Some(dir) = std::env::var_os(RELEASE_DIR_ENV).filter(|value| !value.is_empty()) {
+pub fn release_source_from_env(env: &Env) -> Box<dyn ReleaseSource> {
+    if let Some(dir) = env
+        .orbit_update_release_dir()
+        .filter(|value| !value.is_empty())
+    {
         return Box::new(DirectoryReleaseSource::new(PathBuf::from(dir)));
     }
-    let repo = std::env::var(RELEASE_REPO_ENV)
-        .ok()
+    let repo = env
+        .orbit_install_repo()
+        .and_then(OsStr::to_str)
         .filter(|value| !value.is_empty())
-        .unwrap_or_else(|| DEFAULT_RELEASE_REPO.to_string());
-    Box::new(HttpReleaseSource::new(repo))
+        .map_or_else(|| DEFAULT_RELEASE_REPO.to_string(), str::to_string);
+    #[cfg(all(feature = "test-release-api-base", debug_assertions))]
+    let test_api_base = env
+        .orbit_test_release_api_base()
+        .filter(|value| !value.is_empty())
+        .map(|value| value.to_string_lossy().into_owned());
+    let source = HttpReleaseSource::new(repo);
+    #[cfg(all(feature = "test-release-api-base", debug_assertions))]
+    let source = source.with_test_api_base(test_api_base);
+    Box::new(source)
 }
 
 /// GitHub Releases over HTTPS.
@@ -151,6 +158,8 @@ pub fn release_source_from_env() -> Box<dyn ReleaseSource> {
 pub struct HttpReleaseSource {
     repo: String,
     timeout: Duration,
+    #[cfg(all(feature = "test-release-api-base", debug_assertions))]
+    test_api_base: Option<String>,
 }
 
 impl HttpReleaseSource {
@@ -159,7 +168,15 @@ impl HttpReleaseSource {
         Self {
             repo,
             timeout: Duration::from_secs(120),
+            #[cfg(all(feature = "test-release-api-base", debug_assertions))]
+            test_api_base: None,
         }
+    }
+
+    #[cfg(all(feature = "test-release-api-base", debug_assertions))]
+    fn with_test_api_base(mut self, test_api_base: Option<String>) -> Self {
+        self.test_api_base = test_api_base;
+        self
     }
 
     fn client(&self) -> Result<reqwest::blocking::Client, OrbitError> {
@@ -203,10 +220,8 @@ impl HttpReleaseSource {
         // debug_assertions means neither release builds nor user configuration
         // can redirect release metadata requests.
         #[cfg(all(feature = "test-release-api-base", debug_assertions))]
-        if let Some(base) =
-            std::env::var_os(TEST_RELEASE_API_BASE_ENV).filter(|value| !value.is_empty())
-        {
-            return test_release_api_url(&base.to_string_lossy(), &path);
+        if let Some(base) = &self.test_api_base {
+            return test_release_api_url(base, &path);
         }
 
         validated_release_url(&format!("https://api.github.com/{path}"))

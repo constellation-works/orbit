@@ -8,10 +8,11 @@
 //! routine of that runtime's workspace so the audit row names the workspace
 //! whose definition changed.
 
-use orbit_common::env_vars;
+use std::ffi::OsStr;
 use std::path::Path;
 
 use clap::{Args, Subcommand};
+use orbit_common::Env;
 use orbit_core::{OrbitError, OrbitRuntime};
 use orbit_registry::workspace_registry;
 
@@ -60,16 +61,22 @@ impl RoutineCommand {
         root_override: Option<&Path>,
         workspace_selector: Option<&str>,
         runtime: Option<&OrbitRuntime>,
+        env: &Env,
     ) -> CommandOut {
-        let global_root = selected_global_root(root_override)?;
+        let global_root = selected_global_root(root_override, env)?;
         self.command
             .execute_without_runtime(&global_root, workspace_selector, runtime)
     }
 }
 
-fn selected_global_root(root_override: Option<&Path>) -> Result<std::path::PathBuf, OrbitError> {
-    let has_env_override =
-        std::env::var(env_vars::ORBIT_ROOT).is_ok_and(|root| !root.trim().is_empty());
+fn selected_global_root(
+    root_override: Option<&Path>,
+    env: &Env,
+) -> Result<std::path::PathBuf, OrbitError> {
+    let has_env_override = env
+        .orbit_root()
+        .and_then(OsStr::to_str)
+        .is_some_and(|root| !root.trim().is_empty());
     if root_override.is_some() || has_env_override {
         let cwd = std::env::current_dir().map_err(|error| OrbitError::Io(error.to_string()))?;
         return OrbitRuntime::resolve_roots_for_cwd(&cwd, root_override)

@@ -1,5 +1,5 @@
 use clap::Args;
-use orbit_common::env_vars;
+use orbit_common::{Env, env_vars};
 use orbit_core::bootstrap::init::{InitOptions, allocated_task_prefix, init_global};
 use orbit_core::{OrbitError, OrbitRuntime};
 use orbit_registry::workspace_registry::global_orbit_dir;
@@ -78,31 +78,33 @@ pub struct InitCommand {
 
 impl Execute for InitCommand {
     fn execute(self, _runtime: &OrbitRuntime) -> CommandOut {
-        self.run(None)
+        self.run(None, &Env::default())
     }
 }
 
 impl InitCommand {
     /// Prepare the Linux sandbox prerequisites unless the operator opted out.
     #[cfg(target_os = "linux")]
-    fn prepare_linux_host(&self) -> Result<LinuxSandboxReadiness, OrbitError> {
+    fn prepare_linux_host(&self, env: &Env) -> Result<LinuxSandboxReadiness, OrbitError> {
         if self.skip_host_prerequisites {
             Ok(LinuxSandboxReadiness::skipped(
                 "host preparation skipped; `orbit doctor providers` reports readiness",
             ))
         } else {
-            super::linux_host::prepare(self.non_interactive).map(|reason| LinuxSandboxReadiness {
-                status: LinuxSandboxStatus::Ready,
-                reason,
+            super::linux_host::prepare(self.non_interactive, env).map(|reason| {
+                LinuxSandboxReadiness {
+                    status: LinuxSandboxStatus::Ready,
+                    reason,
+                }
             })
         }
     }
 
-    pub fn execute_without_runtime(self, root_override: Option<&Path>) -> CommandOut {
-        self.run(root_override)
+    pub fn execute_without_runtime(self, root_override: Option<&Path>, env: &Env) -> CommandOut {
+        self.run(root_override, env)
     }
 
-    fn run(self, root_override: Option<&Path>) -> CommandOut {
+    fn run(self, root_override: Option<&Path>, env: &Env) -> CommandOut {
         if self.host_prerequisites_only {
             if root_override.is_some()
                 || self.force
@@ -116,7 +118,7 @@ impl InitCommand {
                 ));
             }
             #[cfg(target_os = "linux")]
-            eprintln!("Linux sandbox: {}", self.prepare_linux_host()?.reason);
+            eprintln!("Linux sandbox: {}", self.prepare_linux_host(env)?.reason);
             return Ok(CommandOutput::Silent);
         }
         // Reject a malformed or (non-interactively) missing --machine-name/
@@ -144,7 +146,7 @@ impl InitCommand {
         let linux_sandbox = if root_override.is_some() {
             LinuxSandboxReadiness::skipped("host preparation skipped for a custom Orbit root")
         } else {
-            self.prepare_linux_host()
+            self.prepare_linux_host(env)
                 .unwrap_or_else(|error| LinuxSandboxReadiness {
                     status: LinuxSandboxStatus::NotReady,
                     reason: error.to_string(),
@@ -153,7 +155,7 @@ impl InitCommand {
         #[cfg(target_os = "linux")]
         linux_sandbox.report();
         let config_seed =
-            collect_config_seed_for_init(root_override, self.force, self.non_interactive)?;
+            collect_config_seed_for_init(root_override, self.force, self.non_interactive, env)?;
         let result = init_global(
             root_override,
             InitOptions {

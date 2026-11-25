@@ -1,9 +1,9 @@
 //! Names-only checks of the managed launcher's actual environment. A login
 //! shell is not evidence about a service that was started earlier.
 
-use orbit_common::env_vars;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 use std::collections::BTreeSet;
+use std::ffi::OsStr;
 #[cfg(target_os = "linux")]
 use std::path::Path;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
@@ -13,6 +13,7 @@ use std::process::Command;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 use std::time::Duration;
 
+use orbit_common::Env;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 use orbit_common::process::run_bounded_capped;
 use orbit_common::security::child_env::crew_env_file_problem;
@@ -25,6 +26,7 @@ pub fn crew_env_config_write_warnings(
     runtime: &OrbitRuntime,
     key: &str,
     value: &serde_json::Value,
+    env: &Env,
 ) -> Vec<String> {
     let Some(name) = key
         .strip_prefix("crews.")
@@ -39,7 +41,7 @@ pub fn crew_env_config_write_warnings(
         .filter_map(serde_json::Value::as_str)
         .filter_map(|entry| CrewEnvVar::parse(entry).ok())
         .collect();
-    crew_source_environment_warnings(runtime, &[(name.to_string(), entries)])
+    crew_source_environment_warnings(runtime, &[(name.to_string(), entries)], env)
 }
 
 /// Warnings for declared crew sources missing from the current shell or a
@@ -49,6 +51,7 @@ pub fn crew_env_config_write_warnings(
 pub fn crew_source_environment_warnings(
     runtime: &OrbitRuntime,
     crews: &[(String, Vec<CrewEnvVar>)],
+    env: &Env,
 ) -> Vec<String> {
     if crews.iter().all(|(_, entries)| entries.is_empty()) {
         return Vec::new();
@@ -60,7 +63,7 @@ pub fn crew_source_environment_warnings(
         for entry in entries {
             match &entry.source {
                 CrewEnvSource::Variable(source) => {
-                    if std::env::var_os(source).is_none_or(|value| value.is_empty()) {
+                    if env.var(source).is_none_or(OsStr::is_empty) {
                         warnings.push(format!(
                             "crew `{crew}` env source {source} is unset or empty in the current \
                              shell"
@@ -85,7 +88,7 @@ pub fn crew_source_environment_warnings(
         return warnings;
     }
     #[cfg(any(target_os = "linux", target_os = "macos"))]
-    let Some(home) = std::env::var_os(env_vars::HOME).map(PathBuf::from) else {
+    let Some(home) = env.home().map(PathBuf::from) else {
         return warnings;
     };
     #[cfg(target_os = "linux")]

@@ -12,6 +12,7 @@ fn format_message_html_escapes_dynamic_field_values() {
             "model": TEST_CODEX_MODEL,
             "summary": "bad <b>markup</b>"
         }),
+        None,
     );
 
     assert!(html.contains("&lt;script&gt;alert(1)&lt;/script&gt;"));
@@ -24,18 +25,24 @@ fn format_message_html_escapes_dynamic_field_values() {
 #[test]
 fn rendered_log_redacts_secret_tokens_in_lines_and_fields() {
     let secret = "sk-abcdefghijklmnopqrstuvwxyz0123456789";
-    let runner = render_log_event_for_web(&json!({
-        "timestamp": "2026-04-27T01:00:03Z",
-        "level": "INFO",
-        "target": "orbit_engine::activity_job::cli_runner::supervisor",
-        "fields": {"stream": "stderr", "line": format!("using key {secret} now")}
-    }));
-    let generic = render_log_event_for_web(&json!({
-        "timestamp": "2026-04-27T01:00:03Z",
-        "level": "INFO",
-        "target": "orbit.other",
-        "fields": {"message": format!("token {secret}"), "detail": {"header": "Authorization: Bearer abc123def456"}}
-    }));
+    let runner = render_log_event_for_web(
+        &json!({
+            "timestamp": "2026-04-27T01:00:03Z",
+            "level": "INFO",
+            "target": "orbit_engine::activity_job::cli_runner::supervisor",
+            "fields": {"stream": "stderr", "line": format!("using key {secret} now")}
+        }),
+        None,
+    );
+    let generic = render_log_event_for_web(
+        &json!({
+            "timestamp": "2026-04-27T01:00:03Z",
+            "level": "INFO",
+            "target": "orbit.other",
+            "fields": {"message": format!("token {secret}"), "detail": {"header": "Authorization: Bearer abc123def456"}}
+        }),
+        None,
+    );
 
     for (label, rendered) in [("cli_runner line", runner), ("generic fields", generic)] {
         assert!(

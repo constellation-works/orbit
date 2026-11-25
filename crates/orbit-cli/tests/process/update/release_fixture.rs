@@ -250,6 +250,7 @@ impl Fixture {
                 cwd,
             }),
             bundled_bwrap_installed: false,
+            probe_timeout: std::time::Duration::from_secs(30),
         }
     }
 
@@ -257,8 +258,11 @@ impl Fixture {
     pub(super) fn installed_reports(&self) -> String {
         format!(
             "orbit {}",
-            orbit_cmd::update::converge::probe_version(&self.executable)
-                .expect("run installed binary")
+            orbit_cmd::update::converge::probe_version(
+                &self.executable,
+                std::time::Duration::from_secs(30),
+            )
+            .expect("run installed binary")
         )
     }
 

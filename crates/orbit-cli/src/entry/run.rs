@@ -29,13 +29,14 @@ pub(crate) fn run(env: orbit_common::Env) {
     );
     output::pipe::install_handler();
 
-    let (mut cli, requested_format, legacy_json, header) = parse_cli();
+    let (mut cli, requested_format, legacy_json, header) = parse_cli(&env);
     if command_rotates_jsonl_on_start(&cli.command) {
         orbit_common::observability::logging::rotate_global_jsonl_best_effort(&env);
     }
     // Resolved once per invocation, before dispatch, and passed to the one
     // renderer that consumes it. Nothing downstream re-derives these answers.
-    let sink = OutputSink::from_process(requested_format, legacy_json).with_plain_header(header);
+    let sink =
+        OutputSink::from_process(&env, requested_format, legacy_json).with_plain_header(header);
     sink.apply_color_policy();
     tracing::debug!(
         mode = ?sink.mode(),
@@ -60,11 +61,8 @@ pub(crate) fn run(env: orbit_common::Env) {
     // host routing, generation pinning, runtime bootstrap and dispatch — so no
     // plain command reads governed data around that allowlist.
     {
-        let operation = cli.command.operation().attribute_to(&actor);
-        if std::env::var_os(
-            orbit_common::security::application_credential::APPLICATION_CREDENTIAL_FD_ENV,
-        )
-        .is_some()
+        let operation = cli.command.operation(&env).attribute_to(&actor);
+        if env.orbit_application_credential_fd().is_some()
             && operation.audit_meta.as_ref().is_none_or(|meta| {
                 meta.command != "tool" || meta.subcommand.as_deref() != Some("run")
             })
@@ -88,15 +86,19 @@ pub(crate) fn run(env: orbit_common::Env) {
     // A task id another host's prefix names, a selector another host lists,
     // or `--host` naming one: deliver there and open nothing here. `--host`
     // naming this machine rewrites the selector and runs on [ORB-14449].
-    match command::host_route::preflight(&mut cli) {
+    match command::host_route::preflight(&mut cli, &env) {
         Ok(command::host_route::Preflight::Local) => {}
         Ok(command::host_route::Preflight::Remote(result)) => {
-            let json_error_preference = cli.command.operation().json_error_preference;
+            let json_error_preference = cli.command.operation(&env).json_error_preference;
             finish_command(result, &sink, json_error_preference, None);
             return;
         }
         Err(error) => {
-            print_error(&error, &sink, cli.command.operation().json_error_preference);
+            print_error(
+                &error,
+                &sink,
+                cli.command.operation(&env).json_error_preference,
+            );
             orbit_common::observability::logging::exit(1);
         }
     }
@@ -118,7 +120,7 @@ pub(crate) fn run(env: orbit_common::Env) {
         dispatch,
         governed,
         plugin_callback_entry_point: _,
-    } = cli.command.operation().attribute_to(&actor);
+    } = cli.command.operation(&env).attribute_to(&actor);
     let clock_tick = is_clock_tick(&cli.command);
     let quiet_clock_tick =
         clock_tick && !matches!(sink.mode(), OutputMode::Json | OutputMode::Ndjson);
@@ -149,7 +151,7 @@ pub(crate) fn run(env: orbit_common::Env) {
                     orbit_common::observability::logging::exit(1);
                 }
             };
-        let root_source = explicit_root_source(root_override.as_deref());
+        let root_source = explicit_root_source(root_override.as_deref(), &env);
         let root_existed = root.exists();
         if let Some(source) = root_source
             && let Err(error) = root_check::validate_explicit_root(&root, source)
@@ -272,6 +274,7 @@ pub(crate) fn run(env: orbit_common::Env) {
                     DispatchContext::without_runtime(
                         root_override.as_deref(),
                         workspace_selector.as_deref(),
+                        &env,
                     ),
                 );
                 finish_command(result, &sink, json_error_preference, None);
@@ -354,6 +357,7 @@ pub(crate) fn run(env: orbit_common::Env) {
         &runtime,
         root_override.as_deref(),
         workspace_selector.as_deref(),
+        &env,
     );
     // ORB-10453: the CLI's single authorization chokepoint. Every command
     // traverses it before dispatch, so a governed operation cannot be reached
@@ -367,7 +371,7 @@ pub(crate) fn run(env: orbit_common::Env) {
     // The runtime appends telemetry separately from write-free state handles.
     // Foreign-generation reads still need their native command outcome; the
     // guard itself suppresses emission when tool dispatch already owns it.
-    let guard = audit_meta.map(|meta| audit_middleware::AuditGuard::new(&runtime, meta));
+    let guard = audit_meta.map(|meta| audit_middleware::AuditGuard::new(&runtime, meta, &env));
     let result = authorize(&runtime).and_then(|()| dispatch(cli.command, context));
 
     finish_command(result, &sink, json_error_preference, guard);

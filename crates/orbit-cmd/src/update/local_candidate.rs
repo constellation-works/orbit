@@ -449,7 +449,7 @@ pub fn run_local_candidate_update(
     })?;
     let _lock = UpdateLock::acquire(install_dir)?;
     let identity = inspect_install_target(environment)?;
-    let current = locked_installed_version(target)?;
+    let current = locked_installed_version(target, environment.probe_timeout)?;
     let installed_before = executable_generation(target)?;
 
     // Read the candidate once, into the staging file beside the target: what
@@ -488,7 +488,7 @@ pub fn run_local_candidate_update(
         // live process already running these bytes is asked to hand over to
         // them in place, which proves the generation free before the re-pin.
         drop(staged);
-        let contract = require_admission_contract(target)?;
+        let contract = require_admission_contract(target, environment.probe_timeout)?;
         let admissions = acquire_current_admissions(
             &environment.admission_roots,
             &candidate.sha256,
@@ -511,8 +511,8 @@ pub fn run_local_candidate_update(
         ));
     }
 
-    let contract = require_admission_contract(staged.path())?;
-    let reported = probe_version(staged.path())
+    let contract = require_admission_contract(staged.path(), environment.probe_timeout)?;
+    let reported = probe_version(staged.path(), environment.probe_timeout)
         .and_then(|reported| ReleaseVersion::parse(&reported))
         .map_err(|error| {
             OrbitError::Execution(format!(
@@ -559,7 +559,8 @@ pub fn run_local_candidate_update(
     // Before any workspace state: the installed path must hold the accepted
     // bytes and report the version the staged copy did.
     let installed = executable_generation(target).and_then(|digest| {
-        let version = probe_version(target).and_then(|v| ReleaseVersion::parse(&v))?;
+        let version = probe_version(target, environment.probe_timeout)
+            .and_then(|v| ReleaseVersion::parse(&v))?;
         Ok((digest, version))
     });
     match installed {

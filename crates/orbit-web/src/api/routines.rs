@@ -1,8 +1,8 @@
 //! Routine and machine clock operations for the dashboard [ORB-10875].
 
-use orbit_common::env_vars;
 use std::borrow::Cow;
 use std::collections::BTreeMap;
+use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime};
@@ -15,6 +15,7 @@ use orbit_cmd::registry_routines::{
     RoutineStoreFingerprint, routine_status_input_paths, routine_status_store_fingerprint,
     routine_status_task_store_paths, routine_statuses,
 };
+use orbit_common::Env;
 use orbit_common::governance::authorization::{
     AuthorizationDenial, CallerCapabilities, CallerEnvelope, DASHBOARD_CLOCK_CADENCE,
     DASHBOARD_CLOCK_SERVICE, DASHBOARD_JOB_RUN, DASHBOARD_ROUTINE_BREAKER,
@@ -219,6 +220,7 @@ fn compute_routine_health(
         generated_at,
         operator_session,
         include_inactive_plugins,
+        state.env(),
     );
     tracing::debug!(
         report_ms,
@@ -243,6 +245,7 @@ pub(super) async fn toggle_routine(
     };
     let audit = OperationAudit::new(
         &runtime,
+        state.env(),
         workspace,
         "routine.toggle",
         body.name.as_str(),
@@ -356,6 +359,7 @@ pub(super) async fn control_clock(
     let operation = governed.id;
     let audit = OperationAudit::new(
         &runtime,
+        state.env(),
         workspace,
         operation,
         "clock",
@@ -470,6 +474,7 @@ pub(super) fn report_json(
     generated_at: DateTime<Utc>,
     operator_session: bool,
     include_inactive_plugins: bool,
+    env: &Env,
 ) -> Value {
     let mut inactive_plugin_counts = BTreeMap::<&str, usize>::new();
     for routine in report.inactive_plugin_routines() {
@@ -496,7 +501,7 @@ pub(super) fn report_json(
             "Session access comes from the dashboard server. For operator access, start it with `orbit web serve --operator` (or `orbit web connect`, which does that by default) and reload this page. Neither the server's terminal nor `ORBIT_OPERATOR` grants operator access. Bounded-window submission has separate permissions."
         },
         "clock": clock,
-        "cron_zone": host_cron_zone(),
+        "cron_zone": host_cron_zone(env),
         "routines": report.statuses.iter().map(status_json).collect::<Vec<_>>(),
         "retired": report.retired_rows(include_inactive_plugins),
         "owner_only": report.owner_only_rows(),
@@ -560,19 +565,19 @@ const ROUTINE_COLUMNS: &[(&str, RoutineField)] = &[
 /// host exposes one (`TZ`, the `/etc/localtime` link, `/etc/timezone`), else
 /// null; `offset_seconds` is the current offset from UTC, so a client can
 /// still label the zone when the name is unknown.
-pub(super) fn host_cron_zone() -> Value {
+pub(super) fn host_cron_zone(env: &Env) -> Value {
     json!({
-        "name": host_zone_name(),
+        "name": host_zone_name(env),
         "offset_seconds": Local::now().offset().local_minus_utc(),
     })
 }
 
-fn host_zone_name() -> Option<String> {
-    let tz = std::env::var(env_vars::TZ).ok();
+fn host_zone_name(env: &Env) -> Option<String> {
+    let tz = env.tz().and_then(OsStr::to_str);
     let link = std::fs::read_link("/etc/localtime").ok();
     let file = std::fs::read_to_string("/etc/timezone").ok();
     zone_name_from_sources(
-        tz.as_deref(),
+        tz,
         link.as_deref().and_then(std::path::Path::to_str),
         file.as_deref(),
     )
@@ -736,6 +741,7 @@ pub(super) fn selection_conflict(code: &'static str, message: String) -> Respons
 /// `machine_name` defaults to empty.
 pub(super) struct OperationAudit<'a> {
     runtime: &'a Arc<OrbitRuntime>,
+    host: Option<String>,
     workspace: &'a str,
     operation: &'a str,
     target: Cow<'a, str>,
@@ -746,6 +752,7 @@ pub(super) struct OperationAudit<'a> {
 impl<'a> OperationAudit<'a> {
     pub(super) fn new(
         runtime: &'a Arc<OrbitRuntime>,
+        env: &Env,
         workspace: &'a str,
         operation: &'a str,
         target: impl Into<Cow<'a, str>>,
@@ -753,6 +760,7 @@ impl<'a> OperationAudit<'a> {
     ) -> Self {
         Self {
             runtime,
+            host: env.hostname().and_then(OsStr::to_str).map(str::to_string),
             workspace,
             operation,
             target: target.into(),
@@ -847,7 +855,7 @@ impl<'a> OperationAudit<'a> {
             error_message: denial
                 .map(ToString::to_string)
                 .or_else(|| failure.map(str::to_string)),
-            host: std::env::var(env_vars::HOSTNAME).ok(),
+            host: self.host.clone(),
             pid: std::process::id(),
             session_id: None,
             workspace_id: Some(self.workspace.to_string()),

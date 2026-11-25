@@ -16,10 +16,11 @@ use std::time::Duration;
 
 use clap::Args;
 use orbit_cmd::log_format::{self, Filters};
+use orbit_common::Env;
 use orbit_core::{OrbitError, OrbitRuntime};
 use serde_json::{Value, json};
 
-use crate::command::{CommandOut, Execute, Payload};
+use crate::command::{CommandOut, Payload};
 use crate::output::sink::OutputMode;
 
 use super::format::{self, LevelFilter};
@@ -58,9 +59,9 @@ pub struct TailArgs {
     pub path: Option<PathBuf>,
 }
 
-impl Execute for TailArgs {
-    fn execute(self, _runtime: &OrbitRuntime) -> CommandOut {
-        let path = log_format::resolve_log_path(self.path.as_deref())?;
+impl TailArgs {
+    pub(super) fn execute_with_env(self, _runtime: &OrbitRuntime, env: &Env) -> CommandOut {
+        let path = log_format::resolve_log_path(self.path.as_deref(), env)?;
         let filters = build_filters(&self)?;
         // A follow tail is unbounded, so its records cannot be collected into a
         // document before the first one is written. It is handed back as a

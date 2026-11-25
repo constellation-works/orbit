@@ -1,11 +1,12 @@
 //! The installation, platform, and workspace an update runs against.
 
-use orbit_common::env_vars;
+use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use chrono::NaiveDate;
-use orbit_common::OrbitError;
 use orbit_common::security::release::TrustedReleaseKey;
+use orbit_common::{Env, OrbitError};
 
 use super::admission::admission_authorities;
 use super::channel::{self, InstallChannel};
@@ -45,6 +46,8 @@ pub struct UpdateEnvironment {
     /// Whether this Linux host runs the Bubblewrap bundled with Orbit, which
     /// the update then refreshes along with the executable.
     pub bundled_bwrap_installed: bool,
+    /// Timeout applied to each `--version` and `update --contract` probe.
+    pub probe_timeout: Duration,
 }
 
 /// The process location and resolved root that update subprocesses must retain.
@@ -65,10 +68,14 @@ impl UpdateEnvironment {
     /// can probe an uninitialized generation root without this requirement.
     pub fn workspace_for_process(
         root_override: Option<&Path>,
+        env: &Env,
     ) -> Result<Option<UpdateWorkspace>, OrbitError> {
         let cwd = std::env::current_dir().map_err(|error| OrbitError::Io(error.to_string()))?;
         let root_was_explicit = root_override.is_some()
-            || std::env::var(env_vars::ORBIT_ROOT).is_ok_and(|root| !root.trim().is_empty());
+            || env
+                .orbit_root()
+                .and_then(OsStr::to_str)
+                .is_some_and(|root| !root.trim().is_empty());
         let roots = RegisteredRuntimeFactory::try_resolve_initialized_roots(&cwd, root_override)?;
         Ok(roots.map(|roots| UpdateWorkspace {
             cwd,
@@ -87,33 +94,35 @@ impl UpdateEnvironment {
     /// Malformed roots and broken workspace configs still fail.
     pub fn workspace_for_preflight(
         root_override: Option<&Path>,
+        env: &Env,
     ) -> Result<Option<UpdateWorkspace>, OrbitError> {
         let cwd = std::env::current_dir().map_err(|error| OrbitError::Io(error.to_string()))?;
-        let Some(explicit) = explicit_root_specification(root_override) else {
-            return Self::workspace_for_process(None);
+        let Some(explicit) = explicit_root_specification(root_override, env) else {
+            return Self::workspace_for_process(None, env);
         };
         match RegisteredRuntimeFactory::try_initialized_explicit_root(&cwd, &explicit)? {
-            Some(_) => Self::workspace_for_process(root_override),
+            Some(_) => Self::workspace_for_process(root_override, env),
             None => cwd_convergence_workspace(&cwd),
         }
     }
 
     /// Read this process's own installation, platform, and workspace.
-    pub fn from_process(root_override: Option<&Path>) -> Result<Self, OrbitError> {
+    pub fn from_process(root_override: Option<&Path>, env: &Env) -> Result<Self, OrbitError> {
         let executable =
             converge::resolve_installed_executable(&std::env::current_exe().map_err(|error| {
                 OrbitError::Io(format!("cannot locate the running orbit: {error}"))
             })?);
         let install_channel = InstallChannel::detect_with_homebrew_ownership(
             &executable,
-            channel::managed_install_dir(&orbit_core::composition::composition_env()).as_deref(),
+            channel::managed_install_dir(env).as_deref(),
             &channel::SystemHomebrewInventory::system(),
         );
         Self::assemble(
             root_override,
             executable,
             install_channel,
-            super::trust::trusted_keys_from_env()?,
+            super::trust::trusted_keys_from_env(env)?,
+            env,
         )
     }
 
@@ -125,6 +134,7 @@ impl UpdateEnvironment {
     pub fn for_install_target(
         root_override: Option<&Path>,
         install_target: &Path,
+        env: &Env,
     ) -> Result<Self, OrbitError> {
         let executable = if install_target.is_absolute() {
             install_target.to_path_buf()
@@ -133,11 +143,9 @@ impl UpdateEnvironment {
                 .map_err(|error| OrbitError::Io(error.to_string()))?
                 .join(install_target)
         };
-        let install_channel = InstallChannel::detect(
-            &executable,
-            channel::managed_install_dir(&orbit_core::composition::composition_env()).as_deref(),
-        );
-        Self::assemble(root_override, executable, install_channel, &[])
+        let install_channel =
+            InstallChannel::detect(&executable, channel::managed_install_dir(env).as_deref());
+        Self::assemble(root_override, executable, install_channel, &[], env)
     }
 
     fn assemble(
@@ -145,8 +153,9 @@ impl UpdateEnvironment {
         executable: PathBuf,
         install_channel: InstallChannel,
         trusted_keys: &'static [TrustedReleaseKey],
+        env: &Env,
     ) -> Result<Self, OrbitError> {
-        let workspace = Self::workspace_for_process(root_override)?;
+        let workspace = Self::workspace_for_process(root_override, env)?;
         Ok(Self {
             admission_roots: admission_authorities(
                 root_override,
@@ -156,7 +165,7 @@ impl UpdateEnvironment {
             executable,
             current_version: env!("CARGO_PKG_VERSION").to_string(),
             target_triple: channel::release_target_triple()?.to_string(),
-            source: release_source_from_env(),
+            source: release_source_from_env(env),
             trusted_keys,
             today: chrono::Utc::now().date_naive(),
             workspace,
@@ -165,6 +174,7 @@ impl UpdateEnvironment {
                     orbit_core::bootstrap::linux_sandbox_host::BUNDLED_BWRAP_PATH,
                 )
                 .is_ok(),
+            probe_timeout: converge::probe_timeout_from_env(env),
         })
     }
 }
@@ -174,14 +184,14 @@ impl UpdateEnvironment {
 /// Matches the explicit-root precedence in `try_resolve_initialized_roots`:
 /// the flag wins, and the environment value is returned untrimmed so path
 /// resolution sees the same string the strict resolver does.
-fn explicit_root_specification(root_override: Option<&Path>) -> Option<String> {
+fn explicit_root_specification(root_override: Option<&Path>, env: &Env) -> Option<String> {
     if let Some(root) = root_override {
         return Some(root.to_string_lossy().into_owned());
     }
-    match std::env::var(env_vars::ORBIT_ROOT) {
-        Ok(explicit) if !explicit.trim().is_empty() => Some(explicit),
-        _ => None,
-    }
+    env.orbit_root()
+        .and_then(OsStr::to_str)
+        .filter(|explicit| !explicit.trim().is_empty())
+        .map(str::to_string)
 }
 
 /// Initialized workspace selected from `cwd`, ignoring an explicit generation root.

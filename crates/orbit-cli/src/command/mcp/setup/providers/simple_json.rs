@@ -1,3 +1,4 @@
+use orbit_common::Env;
 use orbit_core::OrbitError;
 use serde_json::{Map as JsonMap, Value as JsonValue};
 
@@ -11,6 +12,7 @@ pub(in crate::command::mcp::setup) fn apply_simple_json_init(
     target: &ConfigTarget,
     top_level_key: &str,
     launch: ServerLaunch<'_>,
+    env: &Env,
 ) -> Result<(), OrbitError> {
     let mut root = load_json_object(&target.mcp_path)?;
     let servers = ensure_json_object(&mut root, top_level_key)?;
@@ -22,7 +24,7 @@ pub(in crate::command::mcp::setup) fn apply_simple_json_init(
             .get_mut(server_id(launch))
             .is_some_and(|entry| supply_json_root(entry, launch));
         if changed {
-            return write_json_object(&target.mcp_path, &root);
+            return write_json_object(&target.mcp_path, &root, env);
         }
         return Ok(());
     }
@@ -30,13 +32,14 @@ pub(in crate::command::mcp::setup) fn apply_simple_json_init(
         server_id(launch).to_string(),
         simple_mcp_server_value(launch),
     );
-    write_json_object(&target.mcp_path, &root)
+    write_json_object(&target.mcp_path, &root, env)
 }
 
 pub(in crate::command::mcp::setup) fn apply_simple_json_remove(
     target: &ConfigTarget,
     top_level_key: &str,
     server_id: &str,
+    env: &Env,
 ) -> Result<(), OrbitError> {
     let mut root = load_json_object(&target.mcp_path)?;
     if let Some(servers) = root
@@ -48,7 +51,7 @@ pub(in crate::command::mcp::setup) fn apply_simple_json_remove(
             root.remove(top_level_key);
         }
     }
-    write_or_remove_json_object(&target.mcp_path, &root)
+    write_or_remove_json_object(&target.mcp_path, &root, env)
 }
 
 fn simple_mcp_server_value(launch: ServerLaunch<'_>) -> JsonValue {

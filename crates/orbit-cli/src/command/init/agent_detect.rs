@@ -6,17 +6,18 @@
 //! `orbit_config::ConfigSeed`, and config loading itself never probes the
 //! host.
 
-use orbit_common::env_vars;
 use std::env;
 use std::path::PathBuf;
 
+use orbit_common::Env;
+
 /// Returns true when an executable named `name` is found on `PATH`. Walks the
 /// process `PATH` manually (no extra crate dep).
-fn binary_on_path(name: &str) -> bool {
-    let Some(path_var) = env::var_os(env_vars::PATH) else {
+fn binary_on_path(name: &str, env: &Env) -> bool {
+    let Some(path_var) = env.path() else {
         return false;
     };
-    for dir in env::split_paths(&path_var) {
+    for dir in env::split_paths(path_var) {
         if dir.as_os_str().is_empty() {
             continue;
         }
@@ -80,16 +81,16 @@ pub struct DetectedAgents {
 }
 
 /// Probe the host `PATH` and return a [`DetectedAgents`] snapshot.
-pub fn detect() -> DetectedAgents {
+pub fn detect(env: &Env) -> DetectedAgents {
     DetectedAgents {
-        claude_cli: binary_on_path("claude"),
-        codex_cli: binary_on_path("codex"),
-        gemini_cli: binary_on_path("gemini"),
-        antigravity_cli: binary_on_path("agy"),
-        grok_cli: binary_on_path("grok"),
-        copilot_cli: binary_on_path("copilot"),
-        muse_cli: binary_on_path("muse"),
-        ollama_cli: binary_on_path("ollama"),
+        claude_cli: binary_on_path("claude", env),
+        codex_cli: binary_on_path("codex", env),
+        gemini_cli: binary_on_path("gemini", env),
+        antigravity_cli: binary_on_path("agy", env),
+        grok_cli: binary_on_path("grok", env),
+        copilot_cli: binary_on_path("copilot", env),
+        muse_cli: binary_on_path("muse", env),
+        ollama_cli: binary_on_path("ollama", env),
     }
 }
 

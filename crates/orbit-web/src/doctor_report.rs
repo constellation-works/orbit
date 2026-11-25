@@ -15,6 +15,7 @@ use std::time::{Duration, Instant};
 
 use chrono::{DateTime, Utc};
 use orbit_cmd::{DoctorProbe, WorkspaceDoctorResult, WorkspaceDoctorStatus};
+use orbit_common::Env;
 use orbit_core::OrbitRuntime;
 use serde_json::{Value, json};
 
@@ -80,6 +81,7 @@ impl DoctorReports {
     pub(crate) async fn read(
         &self,
         runtime: &Arc<OrbitRuntime>,
+        env: &Env,
         read: DoctorRead,
     ) -> Option<(Arc<Report>, Instant)> {
         let requested = Instant::now();
@@ -101,7 +103,7 @@ impl DoctorReports {
             return Some(hit);
         }
         let started = Instant::now();
-        let report = Arc::new(run_bounded(Arc::clone(runtime)).await);
+        let report = Arc::new(run_bounded(Arc::clone(runtime), env.clone()).await);
         let finished = Instant::now();
         *slot.report.lock().unwrap_or_else(PoisonError::into_inner) = Some(Cached {
             runtime: Arc::downgrade(runtime),
@@ -169,7 +171,7 @@ impl Report {
 
 /// Run every report probe in order, each under [`CHECK_TIMEOUT`] and all
 /// under [`RUN_BUDGET`]. Always `deep = false`.
-async fn run_bounded(runtime: Arc<OrbitRuntime>) -> Report {
+async fn run_bounded(runtime: Arc<OrbitRuntime>, env: Env) -> Report {
     let ran_at = Utc::now();
     let started = Instant::now();
     let mut rows = Vec::new();
@@ -181,8 +183,10 @@ async fn run_bounded(runtime: Arc<OrbitRuntime>) -> Report {
         }
         let bound = CHECK_TIMEOUT.min(remaining);
         let probe_runtime = Arc::clone(&runtime);
+        let probe_env = env.clone();
         let probe_copy = *probe;
-        let run = tokio::task::spawn_blocking(move || probe_copy.run(&probe_runtime, false));
+        let run =
+            tokio::task::spawn_blocking(move || probe_copy.run(&probe_runtime, &probe_env, false));
         match tokio::time::timeout(bound, run).await {
             Ok(Ok(probe_rows)) => rows.extend(probe_rows),
             Ok(Err(join_error)) => rows.push(unfinished_row(

@@ -31,7 +31,7 @@ mod toolset;
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
-use orbit_common::OrbitError;
+use orbit_common::{Env, OrbitError};
 use orbit_types::tool::{McpToolDefinition, ToolSessionContext};
 use serde_json::Value;
 
@@ -159,9 +159,15 @@ pub trait McpHost: Send + Sync + 'static {
 pub async fn serve_stdio_with_context(
     host: Arc<dyn McpHost>,
     trusted_context: ToolSessionContext,
+    env: &Env,
 ) -> Result<StdioExit, OrbitError> {
     let server = OrbitToolServer::new_with_context(host, trusted_context);
-    stdio_session::serve(server, stdio_session::resumed_session()).await
+    stdio_session::serve(
+        server,
+        stdio_session::resumed_session(env),
+        stdio_session::lifecycle_interval(env),
+    )
+    .await
 }
 
 /// Serve the deterministic drain RPC on a server explicitly launched for it.
@@ -169,8 +175,14 @@ pub async fn serve_stdio_with_context(
 pub async fn serve_internal_drain_stdio(
     host: Arc<dyn McpHost>,
     trusted_context: ToolSessionContext,
+    env: &Env,
 ) -> Result<StdioExit, OrbitError> {
     let mut server = OrbitToolServer::new_with_context(host, trusted_context);
     server.internal_drain = true;
-    stdio_session::serve(server, stdio_session::resumed_session()).await
+    stdio_session::serve(
+        server,
+        stdio_session::resumed_session(env),
+        stdio_session::lifecycle_interval(env),
+    )
+    .await
 }

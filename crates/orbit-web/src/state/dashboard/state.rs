@@ -4,6 +4,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 
 use orbit_cmd::registry_runtime::ConfigLayerStamp;
+use orbit_common::Env;
 use orbit_core::application::routines::ClockStatus;
 use orbit_core::runtime::WorkspaceRuntimeBinding;
 use orbit_core::{OrbitError, OrbitRuntime, ShipMode};
@@ -29,6 +30,8 @@ pub(crate) type ClockStatusHook = Arc<dyn Fn() -> Result<ClockStatus, OrbitError
 pub(crate) type ClockMutationHook = Arc<dyn Fn() -> Result<(), OrbitError> + Send + Sync>;
 
 pub(in crate::state) struct StateInner {
+    /// Captured process environment handed in at server startup.
+    env: Env,
     /// The served Orbit root: an explicit `--root`, else `~/.orbit`. Passed as
     /// `global_root` when building per-workspace runtimes and observing host resources.
     pub(super) global_root: PathBuf,
@@ -123,7 +126,12 @@ impl DashboardState {
     /// selected. No longer reachable from `orbit web serve` (ORB-10029);
     /// used by [`crate::serve`] and by every handler test (which builds an
     /// in-memory runtime and wants a trivial single-workspace harness).
+    #[cfg(test)]
     pub(crate) fn single(runtime: Arc<OrbitRuntime>) -> Self {
+        Self::single_with_env(runtime, Env::default())
+    }
+
+    pub(crate) fn single_with_env(runtime: Arc<OrbitRuntime>, env: Env) -> Self {
         let entry = WsEntry {
             id: SINGLE_WORKSPACE_ID.to_string(),
             name: SINGLE_WORKSPACE_ID.to_string(),
@@ -164,6 +172,7 @@ impl DashboardState {
             },
         );
         let state = Self::from_parts(
+            env,
             global_root,
             SnapshotData {
                 entries: vec![entry],
@@ -194,9 +203,11 @@ impl DashboardState {
     pub(crate) fn from_registry(
         global_root: PathBuf,
         source: RegistrySource,
+        env: Env,
     ) -> Result<Self, OrbitError> {
         let loaded = source.load()?;
         Ok(Self::from_parts(
+            env,
             global_root,
             loaded.data,
             HashMap::new(),
@@ -206,6 +217,7 @@ impl DashboardState {
     }
 
     fn from_parts(
+        env: Env,
         global_root: PathBuf,
         snapshot: SnapshotData,
         runtimes: HashMap<String, CachedRuntime>,
@@ -227,10 +239,13 @@ impl DashboardState {
             entries: snapshot.entries,
             default_workspace: snapshot.default_workspace,
         };
+        let hosts = HostFileState::new(global_root.clone(), &env);
+        let host_tunnels = Arc::new(HostTunnels::new(TunnelConfig::from_env(&env)));
         Self {
             inner: Arc::new(StateInner {
-                hosts: HostFileState::new(global_root.clone()),
-                host_tunnels: Arc::new(HostTunnels::new(TunnelConfig::default())),
+                env,
+                hosts,
+                host_tunnels,
                 global_root,
                 host_resources: Mutex::new(None),
                 host_disk_paths,
@@ -265,6 +280,11 @@ impl DashboardState {
                 clock_mutation_hook: Mutex::new(None),
             }),
         }
+    }
+
+    /// Captured process environment handed in at server startup.
+    pub(crate) fn env(&self) -> &Env {
+        &self.inner.env
     }
 
     /// Global orbit root (`~/.orbit`) this server was launched against.

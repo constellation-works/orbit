@@ -280,6 +280,7 @@ where
     let workspace = workspace_label(&runtime).await;
     let audit = OperationAudit::new(
         &runtime,
+        state.env(),
         &workspace,
         CONFIG_AUDIT_OPERATION,
         target.as_str(),
@@ -344,6 +345,7 @@ where
     let workspace = workspace_label(&runtime).await;
     let audit = OperationAudit::new(
         &runtime,
+        state.env(),
         &workspace,
         CONFIG_AUDIT_OPERATION,
         target.as_str(),

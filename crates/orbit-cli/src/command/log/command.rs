@@ -1,7 +1,8 @@
 use clap::{Args, Subcommand};
+use orbit_common::Env;
 use orbit_core::OrbitRuntime;
 
-use crate::command::{CommandOut, Execute};
+use crate::command::CommandOut;
 
 use super::tail;
 
@@ -12,9 +13,9 @@ pub struct LogCommand {
     pub command: LogSubcommand,
 }
 
-impl Execute for LogCommand {
-    fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
-        self.command.execute(runtime)
+impl LogCommand {
+    pub(crate) fn execute_with_env(self, runtime: &OrbitRuntime, env: &Env) -> CommandOut {
+        self.command.execute_with_env(runtime, env)
     }
 }
 
@@ -24,10 +25,10 @@ pub enum LogSubcommand {
     Tail(tail::TailArgs),
 }
 
-impl Execute for LogSubcommand {
-    fn execute(self, runtime: &OrbitRuntime) -> CommandOut {
+impl LogSubcommand {
+    fn execute_with_env(self, runtime: &OrbitRuntime, env: &Env) -> CommandOut {
         match self {
-            LogSubcommand::Tail(args) => args.execute(runtime),
+            LogSubcommand::Tail(args) => args.execute_with_env(runtime, env),
         }
     }
 }

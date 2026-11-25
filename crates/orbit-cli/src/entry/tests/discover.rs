@@ -10,7 +10,7 @@ fn decision_submit_cli_preserves_signed_raw_message() {
     ))
     .expect("signed message fixture");
     let signed = fixture["raw_message"].as_str().expect("raw message");
-    let matches = cli_command(&[])
+    let matches = cli_command(&[], &orbit_common::Env::default())
         .try_get_matches_from([
             "orbit",
             "decision",
