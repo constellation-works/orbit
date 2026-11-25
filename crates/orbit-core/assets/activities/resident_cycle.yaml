@@ -127,9 +127,11 @@ spec:
     Delivery recovery. With `recover`, use `orbit.task.recover` action
     `resume_delivery` for a blocked task's exact stopped failed or held run.
     Give the observed failure and remaining task work in `diagnosis`. One
-    attempt per cycle. The host starts a review-only leaf on the preserved
-    candidate. Record the returned action key and watch the leaf. Use `land`
-    with `merge` only when the repaired head has review and required checks.
+    attempt per cycle. The recovery leaf resumes the preserved candidate on
+    the current base and may make the source changes needed to finish it; it
+    runs fresh validation and review, then stops at review. Record the returned
+    action key and watch the leaf through that handoff. Use `land` with
+    `merge` only when the repaired head has review and required checks.
 
     Answerable decisions. A security choice on a machine-owned repair, and
     every other escalation, is raised only on a related human-crew task.
