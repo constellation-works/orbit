@@ -1,6 +1,6 @@
 use super::super::held::{
     HELD_HANDBACK_CEILING, auto_fix_stopped, handed_back_hold, held_backoff, held_backoff_until,
-    held_handbacks, held_refusal, unrepaired_check_repair,
+    held_handbacks, held_refusal, stale_check_answer_hold, unrepaired_check_repair,
 };
 use super::super::ledger::{budget_note, ledger_admits};
 use super::pass_types::{BlockerRead, CLEAN_RECHECK, Repair};
@@ -82,11 +82,13 @@ impl OrbitRuntime {
         let mut operator_stopped = false;
         let mut auto_fix_hold = false;
         let mut unrepaired_repair_hold = false;
+        let mut stale_check_hold = false;
         let held = if run.state == JobRunState::Held {
             let refusal = match self.stores().jobs().get_job_run(&run.run_id) {
                 Ok(Some(full)) => {
                     auto_fix_hold = auto_fix_stopped(&full);
                     unrepaired_repair_hold = unrepaired_check_repair(&full);
+                    stale_check_hold = stale_check_answer_hold(&full);
                     operator_stopped = orbit_types::workflow::is_operator_stopped(
                         full.state,
                         full.steps
@@ -425,14 +427,18 @@ impl OrbitRuntime {
         // A blocker is repaired through the ledger, whether the leaf stopped
         // or held. A held leaf with none is handed back for completion to
         // read the forge again, within its own ceiling.
-        // An auto-fix stop, unrepaired check-repair hold or absent-check hold
-        // is reconsidered only on the held run's own published head: the
-        // newest publication its completion rounds recorded, advanced through
-        // its lineage's auto-fix pushes. An audited refresh can be handed
-        // back to completion, which verifies its Git history before
-        // adopting it.
+        // An auto-fix stop, unrepaired check-repair hold, absent-check hold
+        // or stale required-checks answer hold is reconsidered only on the
+        // held run's own published head: the newest publication its completion
+        // rounds recorded, advanced through its lineage's auto-fix pushes. An
+        // audited refresh can be handed back to completion, which verifies its
+        // Git history before adopting it. The stale-answer guard does not
+        // impose the auto-fix stop's green-check gate below: a matching-head
+        // blocker still reaches the repair ledger.
         let check_runs_absent_hold = held == Some(DeliveryRefusal::CheckRunsAbsent.error_code());
-        let published_sha = if auto_fix_hold || unrepaired_repair_hold || check_runs_absent_hold {
+        let identity_guarded =
+            auto_fix_hold || unrepaired_repair_hold || check_runs_absent_hold || stale_check_hold;
+        let published_sha = if identity_guarded {
             match self.resolve_held_published_sha(run, &history, &number, published_sha) {
                 Ok(sha) => sha,
                 Err(error) => {
@@ -445,9 +451,7 @@ impl OrbitRuntime {
         } else {
             published_sha
         };
-        if (auto_fix_hold || unrepaired_repair_hold || check_runs_absent_hold)
-            && published_sha.as_deref() != Some(blockers.head_sha.as_str())
-        {
+        if identity_guarded && published_sha.as_deref() != Some(blockers.head_sha.as_str()) {
             let audit = match (base.as_deref(), published_sha.as_deref()) {
                 (Some(base), Some(published)) => self.audited_delivery_refreshes(
                     task_id,

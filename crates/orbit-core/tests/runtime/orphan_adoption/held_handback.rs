@@ -442,16 +442,114 @@ fn a_stale_check_answer_hold_is_repaired_once_the_published_head_is_red() {
     );
     assert!(fx.retries(&moved.run).is_empty(), "{pass}");
 
-    // A replacement head the hold does not own is never repaired.
+    // A replacement head the hold does not own is never repaired. Each leaf
+    // below is fresh with no live retry, so the verdict must read the forge
+    // and reach the published-head identity guard instead of stopping at
+    // `live_run` [ORB-28519].
+    let red = fx.delivered_leaf(414, "done", Shelf::Review, LeafEnd::HeldStaleCheckAnswer);
     fx.blocked(
-        &stale,
+        &red,
         "replacement-head",
         "orbit-bot",
         false,
         &["Test shard 13"],
     );
+    let conflicting = fx.delivered_leaf(415, "done", Shelf::Review, LeafEnd::HeldStaleCheckAnswer);
+    fx.blocked(
+        &conflicting,
+        "replacement-head",
+        "orbit-bot",
+        true,
+        &["Test shard 13"],
+    );
     let other = fx.pass(&drain, "done", true);
-    assert!(started(&other, &stale.task).is_none(), "{other}");
+    for leaf in [&red, &conflicting] {
+        assert_eq!(
+            repair_skip(&other, &leaf.task).as_deref(),
+            Some("publication_identity_changed"),
+            "{other}"
+        );
+        assert!(started(&other, &leaf.task).is_none(), "{other}");
+        assert!(fx.retries(&leaf.run).is_empty(), "{other}");
+        assert!(out_of_run_records(&fx, &leaf.task).is_empty(), "{other}");
+        let readiness = fx
+            .runtime
+            .task_pr_auto_fix_readiness(&leaf.task, true)
+            .unwrap();
+        assert_eq!(readiness["available"], false, "{readiness}");
+        assert_eq!(
+            readiness["reason"], "publication_identity_changed",
+            "{readiness}"
+        );
+        match fx
+            .runtime
+            .start_task_pr_auto_fix(&leaf.task, true, Some("dashboard"))
+        {
+            Err(orbit_core::application::job::TaskAutoFixError::Refused(refusal)) => {
+                assert_eq!(refusal.reason(), "publication_identity_changed");
+            }
+            other => panic!("expected publication_identity_changed refusal, got {other:?}"),
+        }
+        assert!(fx.retries(&leaf.run).is_empty());
+        assert!(out_of_run_records(&fx, &leaf.task).is_empty());
+    }
+
+    // An Orbit-audited clean base refresh of the published head remains
+    // eligible: the same identity guard passes when the audit links the head.
+    let audited_head = "audited-head";
+    fx.runtime
+        .record_audit_event(&orbit_store::contracts::AuditEventInsertParams {
+            execution_id: format!("audit-pr-refresh-{}", red.number),
+            command: "pr_refresh".to_string(),
+            subcommand: Some("updated".to_string()),
+            tool_name: None,
+            target_type: Some("pull_request".to_string()),
+            target_id: Some(red.number.to_string()),
+            role: "system".to_string(),
+            status: orbit_types::telemetry::AuditEventStatus::Success,
+            exit_code: 0,
+            duration_ms: 0,
+            working_directory: fx.runtime.paths().repo_root.to_string_lossy().into_owned(),
+            arguments_json: Some(
+                serde_json::json!({
+                    "step": "pr_refresh",
+                    "task_id": red.task,
+                    "actor": "resident",
+                    "pull_request": red.number,
+                    "head_branch": red.head,
+                    "base_branch": "main",
+                    "head_sha": "published-head",
+                    "new_head_sha": audited_head,
+                })
+                .to_string(),
+            ),
+            stdout_truncated: None,
+            stderr_truncated: None,
+            error_message: None,
+            host: None,
+            pid: std::process::id(),
+            session_id: None,
+            workspace_id: Some(fx.runtime.workspace_id().unwrap()),
+            caller_machine_id: None,
+            caller_machine_name: None,
+            process_machine_id: None,
+            process_machine_name: None,
+            transport: None,
+            effective_capabilities: Default::default(),
+            origin_session_id: None,
+            mcp_call_id: None,
+            lease_id: None,
+            task_id: Some(red.task.clone()),
+            job_run_id: None,
+            activity_id: None,
+            step_index: None,
+        })
+        .unwrap();
+    fx.blocked(&red, audited_head, "orbit-bot", false, &["Test shard 13"]);
+    let audited = fx.pass(&drain, "done", true);
+    let entry = started(&audited, &red.task).unwrap_or_else(|| panic!("{audited}"));
+    assert_eq!(entry["blocker"], "failed_checks", "{audited}");
+    assert_eq!(fx.retries(&red.run).len(), 1, "{audited}");
 }
 
 crate::scenario_table!(

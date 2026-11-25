@@ -151,6 +151,23 @@ pub(crate) fn auto_fix_stopped(run: &JobRun) -> bool {
             .is_some_and(|message| message.contains(AUTO_FIX_STOP_DIAGNOSTIC))
 }
 
+/// A leaf held on a stale required-checks answer: the typed refusal is
+/// [`DeliveryRefusal::CheckEvidenceInconclusive`] with the `auto_fix_stopped:`
+/// diagnostic from the stale-rollup stop [ORB-28510]. Unlike a generic
+/// inconclusive-evidence hold, it owns a published head: an unowned
+/// replacement head on the same pull-request branch is never repaired, while
+/// a matching-head blocker still reaches the repair ledger and an
+/// Orbit-audited clean base refresh of that head remains eligible [ORB-28519].
+pub(crate) fn stale_check_answer_hold(run: &JobRun) -> bool {
+    if held_refusal(run) != Some(DeliveryRefusal::CheckEvidenceInconclusive) {
+        return false;
+    }
+    run.steps
+        .last()
+        .and_then(|step| step.error_message.as_deref())
+        .is_some_and(|message| message.contains(AUTO_FIX_STOP_DIAGNOSTIC))
+}
+
 /// A run held because an admitted check repair's `step_failure_recovery` ran
 /// and did not repair or publish a new head (`hold_unrepaired_check_repair`).
 ///
