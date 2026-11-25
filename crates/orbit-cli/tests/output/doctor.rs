@@ -2401,6 +2401,9 @@ fn broken_script_only_refuses_jobs_that_reference_it() {
         &manifest,
         "schemaVersion: 1\nkind: Script\nmetadata:\n  name: broken\nspec:\n  description: Broken fixture\n  entry: missing.sh\n",
     );
+    // Both diagnostics name the physical manifest path (on macOS the temp dir
+    // resolves `/var` to `/private/var`), so the expectation is canonical too.
+    let shown = fs::canonicalize(&manifest).expect("canonical manifest");
     let jobs = f.work.join(".orbit/resources/jobs");
     mkdir(&jobs);
     put(
@@ -2414,7 +2417,7 @@ fn broken_script_only_refuses_jobs_that_reference_it() {
     let report = rows(&doctor(&f, &[]));
     let script_row = row(&report, "script-grants");
     assert_eq!(script_row["status"], "warning", "{script_row}");
-    msg_has(script_row, &manifest.display().to_string());
+    msg_has(script_row, &shown.display().to_string());
     let independent = run(&f, &["job", "run", "independent", "--wait", "--json"]);
     assert!(
         independent.status.success(),
@@ -2423,7 +2426,7 @@ fn broken_script_only_refuses_jobs_that_reference_it() {
     let dependent = run(&f, &["job", "run", "dependent", "--wait", "--json"]);
     assert!(!dependent.status.success(), "dependent job must refuse");
     let error = format!("{}{}", utf8(dependent.stdout), utf8(dependent.stderr));
-    has(&error, &manifest.display().to_string());
+    has(&error, &shown.display().to_string());
     has(&error, "repair that manifest");
     has(&error, "orbit script revoke broken");
 }
