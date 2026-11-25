@@ -12,7 +12,7 @@ tags: [orbit-core, orbit-cmd, architecture, north-star]
 paths: ["crates/orbit-core/**", "crates/orbit-cmd/**"]
 related_features: [orbit-core]
 related_artifacts: [ORB-10026, ORB-10545, ORB-12772]
-last_validated: 2026-10-17
+last_validated: 2026-11-24
 ---
 
 # Orbit Core — Decisions
@@ -339,6 +339,57 @@ sync [ORB-27881]).
 - Cost: registry-shaped and inherent-method slices coexist indefinitely, and
   readers must recognize both idioms until the migration reaches each noun.
 
+## CLI boundary deviation under STD-02@8 §R7
+
+**Recorded:** 2026-11-24 · [ORB-28199]
+
+### Context
+
+[STD-02@8 §R7](../../standards/STD-02-rust-architecture-and-errors/STD-02.md)
+defines the v6 CLI boundary: the CLI crate holds argument declarations, the
+mapping from arguments to one operation, rendering and `main`, and depends on
+exactly one internal crate. Composition, adapters for external systems,
+process spawning and every environment read MUST NOT live in the CLI crate.
+Under [Adopting v6](../../standards/STD-02-rust-architecture-and-errors/STD-02.md#adopting-v6),
+the v6 form of R7 binds a new project and any restructuring of an existing
+one.
+
+### Deviation
+
+The current [crates/orbit-cli/Cargo.toml](../../../crates/orbit-cli/Cargo.toml)
+`[dependencies]` section (lines 24–31) has eight internal dependencies:
+`orbit-cmd`, `orbit-common`,
+`orbit-config`, `orbit-types`, `orbit-core`, `orbit-mcp`, `orbit-registry` and
+`orbit-web`. MCP setup and workspace discovery also remain under
+`crates/orbit-cli/src/command/mcp/setup/`.
+
+Centralizing environment-variable names in `orbit_common::env_vars` did not
+move their reads out of the CLI. `crates/orbit-cli/src/audit_middleware.rs`
+still reads `HOSTNAME`, `ORBIT_TASK_ID`, `ORBIT_RUN_ID`, `ORBIT_ACTIVITY_ID`
+and `ORBIT_STEP_INDEX`; `crates/orbit-cli/src/command/host_route.rs` still
+reads `ORBIT_ROOT`, `ORBIT_AGENT_MODEL` and `ORBIT_AGENT_NAME`. Those callers
+remain on the CLI side of the R7 boundary after ORB-28198 centralized their
+names.
+
+The earlier [Standing against STD-02@5](#standing-against-std-025-r2-r6-r18-r39r44)
+entry is a versioned measurement of the v5 rules, based on the crate graph
+and `ARCHITECTURE.md`. Its statement that R7 was met at crate level does not
+measure the v6 form's explicit CLI boundary, composition, adapter, process or
+environment-read requirements. It remains historical evidence for the v5
+rules; it is not Orbit's current standing against STD-02@8 §R7.
+
+### Decision
+
+Record this departure under STD-02@8's [Deviations](../../standards/STD-02-rust-architecture-and-errors/STD-02.md#deviations)
+provision while the accepted gradual replacement proceeds. The accepted
+[Architecture Restructure decisions](../architecture-restructure/4_decisions.md)
+([PR #11153](https://github.com/constellation-works/orbit/pull/11153), commit
+`f4bcad572d15b0e9c44d2aec267e7eadf5edcad9`) own that replacement. Its
+[opaque Core surface](../architecture-restructure/4_decisions.md#surfaces-hold-an-opaque-core-and-call-one-exec)
+and [single environment capture](../architecture-restructure/4_decisions.md#one-environment-declaration-and-one-capture)
+carry the CLI boundary and remaining environment reads; its accepted sequence
+owns the implementation work.
+
 ## Task References
 
 - [ORB-00289] — trimmed six admin and maintenance tools from the agent MCP surface.
@@ -358,5 +409,6 @@ sync [ORB-27881]).
 - [ORB-12772] — removed the config keys, the `operation_grants` table, and the design folder ([Remove operation mode rather than keep an unused authorization layer](#remove-operation-mode-rather-than-keep-an-unused-authorization-layer)).
 - [ORB-27881] — synced the vendored constellation standards STD-02@4 → @5.
 - [ORB-27886] — recorded Orbit's standing and deviations against STD-02@5 §R2, §R6, §R18 and §R39–R44 ([Standing against STD-02@5 (R2, R6, R18, R39–R44)](#standing-against-std-025-r2-r6-r18-r39r44)).
+- [ORB-28199] — recorded Orbit's current CLI boundary deviation against STD-02@8 §R7.
 
 > Resolve any task above with `orbit task show <ID>` or `git log --grep=<ID>`.
