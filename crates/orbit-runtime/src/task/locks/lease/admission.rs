@@ -8,7 +8,7 @@ use orbit_types::telemetry::AuditEventStatus;
 use serde_json::Value;
 
 use super::super::audit::record_lease_audit_event;
-use super::operations::show;
+use super::operation::show;
 use super::policy::{lower_priority, parse_priority, priority_rank};
 use crate::RuntimeKernel;
 

@@ -11,7 +11,7 @@ use orbit_types::telemetry::AuditEventStatus;
 use serde_json::json;
 
 use super::super::audit::{emit_expired_lease_events, record_lease_audit_event};
-use super::super::commands::{workspace_orbit_dir, workspace_task_reservation_id};
+use super::super::command::{workspace_orbit_dir, workspace_task_reservation_id};
 use crate::RuntimeKernel;
 
 /// Expire leases and warn at 80% of the current TTL, release bound work

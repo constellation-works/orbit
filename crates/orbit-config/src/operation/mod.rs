@@ -33,7 +33,7 @@
 //! states the list replaces every rule an earlier layer stated.
 //!
 //! Deprecated spellings are translated when a document is read
-//! ([`crate::aliases`]) and warned as deprecated
+//! ([`crate::alias`]) and warned as deprecated
 //! (`registry::DEPRECATED_CONFIG_KEYS`): the `review.before_pr` and
 //! `review.before_landing` booleans and the retired `operation.review_policy`
 //! enum become `review.timing`, `operation.review_minutes` becomes

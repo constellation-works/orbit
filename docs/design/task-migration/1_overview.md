@@ -85,7 +85,7 @@ machine a disjoint id range).
 | Request-time runtime facades | [crates/orbit-core/src/application/task_bundle/migration.rs](../../../crates/orbit-core/src/application/task_bundle/migration.rs) | [ORB-24534] moved export/import/reindex into application |
 | Open-time allocator seeding | [crates/orbit-core/src/bootstrap/task_migration.rs](../../../crates/orbit-core/src/bootstrap/task_migration.rs) | [ORB-00034] introduced seeding; [ORB-24534] kept only open-time code here |
 | CLI surfaces | [crates/orbit-cli/src/command/task/export.rs](../../../crates/orbit-cli/src/command/task/export.rs), [import.rs](../../../crates/orbit-cli/src/command/task/import.rs) | [ORB-00034] |
-| `[tasks] id_start` config | [crates/orbit-config/src/registry/settings/table/keys_head.rs](../../../crates/orbit-config/src/registry/settings/table/keys_head.rs) | [ORB-00034] |
+| `[tasks] id_start` config | [crates/orbit-config/src/registry/settings/table/key_head.rs](../../../crates/orbit-config/src/registry/settings/table/key_head.rs) | [ORB-00034] |
 | Owner-wins mirror sync | [crates/orbit-store/src/workflow/task/import.rs](../../../crates/orbit-store/src/workflow/task/import.rs) | [ORB-12126] |
 
 The export/import/reindex surfaces and owner-wins policy are shipped. Later

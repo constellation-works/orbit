@@ -181,17 +181,17 @@ pub struct ConfigKeyDescriptor {
 }
 
 mod allowed;
-mod keys;
+mod key;
 mod settings;
 
 pub use allowed::ConfigAllowedValues;
 
-pub(crate) use keys::GLOBAL_ONLY_KEY_PREFIX;
-pub(crate) use keys::{
+pub(crate) use key::GLOBAL_ONLY_KEY_PREFIX;
+pub(crate) use key::{
     DEPRECATED_CONFIG_KEYS, DEPRECATED_VALUE_FORMS, REMOVED_CONFIG_KEYS,
     is_compatibility_config_key, is_machine_identity_key, parse_crew_field_key,
 };
-pub use keys::{
+pub use key::{
     admit_config_key, admit_settable_config_key, config_key_options, describe, immutable_key_note,
     is_global_only_key,
 };

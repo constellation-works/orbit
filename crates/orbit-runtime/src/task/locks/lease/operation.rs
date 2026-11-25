@@ -8,12 +8,12 @@ use orbit_types::telemetry::AuditEventStatus;
 use serde_json::{Value, json};
 
 use super::super::audit::{emit_expired_lease_events, record_lease_audit_event};
-use super::super::commands::{
+use super::super::command::{
     parse_ttl_seconds, reservation_actor_label, workspace_orbit_dir, workspace_task_reservation_id,
 };
 use super::super::index::TaskLockIndex;
 use super::admission::{LeaseTokenGrant, ensure_token_covers_lease};
-use super::holders::{PathHolders, selector_covers};
+use super::holder::{PathHolders, selector_covers};
 use super::input::{parse_selectors, required_lease_id, validate_lease_id_form};
 use super::queue;
 use super::response::{ResponseBudget, lease_active, lease_json};

@@ -152,7 +152,7 @@ fn deprecated_value_forms_present(document: &toml::Value) -> Vec<(&'static str, 
     registry::DEPRECATED_VALUE_FORMS
         .iter()
         .copied()
-        .filter(|_| crate::aliases::has_legacy_worker_containment(document))
+        .filter(|_| crate::alias::has_legacy_worker_containment(document))
         .collect()
 }
 
@@ -250,7 +250,7 @@ fn warn_removed_key(config_path: &Path, key: &str, note: &str) {
 }
 
 /// [ORB-13992] A deprecated key still loads — translated into its
-/// replacement when the document is read ([`crate::aliases`]), or ignored
+/// replacement when the document is read ([`crate::alias`]), or ignored
 /// where its note says so (`workflow.system_crew`, [ORB-15663]) — and is
 /// warned on every load.
 /// The note names the replacement. A later release makes it an error; delete

@@ -39,7 +39,8 @@ SCHEMA_REGISTRY = "crates/orbit-store/src/driver/sqlite/migration/ledger/registr
 LAYOUT_REGISTRY = "crates/orbit-store/src/workflow/layout/registry.rs"
 HELP_GOLDENS = "crates/orbit-cli/tests/help_goldens"
 MCP_SNAPSHOT = "crates/orbit-cli/tests/snapshots/mcp_tools_list.json"
-CONFIG_KEYS = "crates/orbit-config/src/registry/keys.rs"
+CONFIG_KEYS = "crates/orbit-config/src/registry/key.rs"
+LEGACY_CONFIG_KEYS = "crates/orbit-config/src/registry/keys.rs"
 SEEDED_ASSET_DIRS = tuple(f"crates/orbit-core/assets/{kind}/"
                           for kind in ("routines", "activities", "jobs"))
 # Crates whose deny_unknown_fields types are records Orbit stores or exchanges
@@ -1903,10 +1904,20 @@ def deprecated_keys(text):
 
 
 def detect_deprecated_keys(git, parent, commit, changed):
-    if CONFIG_KEYS not in changed:
+    if changed.isdisjoint((CONFIG_KEYS, LEGACY_CONFIG_KEYS)):
         return []
-    added = deprecated_keys(git.show(commit, CONFIG_KEYS)) - deprecated_keys(git.show(parent, CONFIG_KEYS))
-    return [signal("deprecated-key", CONFIG_KEYS, f"`{key}` added to DEPRECATED_CONFIG_KEYS")
+    # The release range can span the registry file move. Find the owner at
+    # each revision so the move itself does not signal new deprecations.
+    source = CONFIG_KEYS
+    current = git.show(commit, source)
+    if current is None:
+        source = LEGACY_CONFIG_KEYS
+        current = git.show(commit, source)
+    previous = git.show(parent, CONFIG_KEYS)
+    if previous is None:
+        previous = git.show(parent, LEGACY_CONFIG_KEYS)
+    added = deprecated_keys(current) - deprecated_keys(previous)
+    return [signal("deprecated-key", source, f"`{key}` added to DEPRECATED_CONFIG_KEYS")
             for key in sorted(added)]
 
 

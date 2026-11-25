@@ -1293,12 +1293,12 @@ if dependency_matches -n "crate::application::(${contracts_higher})\\b" \
   fail=1
 fi
 
-# Config path primitives are below aliases and operation, which must not
+# Config path primitives are below alias and operation, which must not
 # depend on layered admission. The leaf may only use TOML and std.
 config_src="$repo_root/crates/orbit-config/src"
 # These are policy owners, not optional files. A rename must update the rule,
 # rather than silently dropping that boundary from the scan.
-for module in aliases.rs seeding.rs document/paths.rs crew operation provider_limit \
+for module in alias.rs seeding.rs document/paths.rs crew operation provider_limit \
   layering plugin_enablement.rs unknown.rs resolved/compatibility.rs document/io.rs \
   registry crew_defaults.rs; do
   if [[ ! -e "$config_src/$module" ]]; then
@@ -1306,7 +1306,7 @@ for module in aliases.rs seeding.rs document/paths.rs crew operation provider_li
     exit 1
   fi
 done
-for module in aliases.rs operation; do
+for module in alias.rs operation; do
   if ! super_chains_into "$config_src" "$module" layering crate-root; then
     echo "orbit-config ${module} must not name layering"
     fail=1
@@ -1329,7 +1329,7 @@ fi
 # document::paths and leave snapshot projections to registry/settings, so none
 # names the registry; its crate-root re-exports count as the same edge.
 config_registry_names='registry|AutoConcurrencySettings|CONFIG_KEY_REGISTRY|ConfigKeyDescriptor|ConfigKeyTier|ConfigSection|ConfigSnapshot|ExperimentSettings|ExploreBriefSettings|ExploreSettings|LeaseListenerSettings|LeaseListenerTlsSettings|MachineSettings|MidRunSteeringSettings|NoticeKindHours|NoticeSettings|RegressionRiskSettings|ResourceThrottleSettings|WorkerContainmentSettings|admit_config_key|admit_settable_config_key|config_key_options|describe_config_key|immutable_key_note|is_global_only_key'
-for module in aliases.rs seeding.rs crew operation provider_limit; do
+for module in alias.rs seeding.rs crew operation provider_limit; do
   if ! super_chains_into "$config_src" "$module" "$config_registry_names" crate-root; then
     echo "orbit-config ${module} must not name the registry; read TOML through document::paths"
     fail=1

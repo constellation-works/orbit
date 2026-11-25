@@ -342,7 +342,7 @@ unchanged; a confined child itself still cannot read the store.
 ### 3.3 The submission tool and the apply step
 
 One new governed operation, `orbit.decision.submit`, joins `GOVERNED_OPERATIONS`
-(`crates/orbit-common/src/governance/authorization/catalog/operations.rs`) with a narrow
+(`crates/orbit-common/src/governance/authorization/catalog/operation.rs`) with a narrow
 row: callable by the registered plugin's callback session and by the operator CLI
 (for testing a channel), never by an agent session. Authorization alone grants
 nothing decision-shaped; the tool then checks, in order:
@@ -896,7 +896,7 @@ plugin's object and knows nothing about what the answer does.
 ### 12.3 The raise contract
 
 `orbit.decision.plugin_raise` is a new governed write with the same row shape as
-`orbit.decision.submit` and `orbit.decision.digest` (`catalog/operations.rs`). For every
+`orbit.decision.submit` and `orbit.decision.digest` (`catalog/operation.rs`). For every
 capability-resolved caller it is operator only. An *identified* plugin callback
 session is admitted past the row, and the handler binds it. An agent session is
 refused `caller_not_allowed`. The plugin is the raiser of record. For scribe that is

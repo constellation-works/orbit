@@ -1401,9 +1401,9 @@ def source_contracts(repo: Path):
     }
     mcp_snapshot = json.loads((repo / "crates/orbit-cli/tests/snapshots/mcp_tools_list.json").read_text())
     mcp = {entry["name"] for entry in mcp_snapshot}
-    # `routes.rs` merges `lease_router`, which declares the lease routes in
+    # `route.rs` merges `lease_router`, which declares the lease routes in
     # `leases.rs` so the lease listener serves the same ones.
-    api_source = (repo / "crates/orbit-web/src/api/routes.rs").read_text()
+    api_source = (repo / "crates/orbit-web/src/api/route.rs").read_text()
     api_source += (repo / "crates/orbit-web/src/api/leases.rs").read_text()
     api = set(re.findall(r'\.route\(\s*"([^"]+)"', api_source))
     web_source = (repo / "crates/orbit-web/src/serve.rs").read_text()

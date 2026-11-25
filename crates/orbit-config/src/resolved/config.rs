@@ -241,7 +241,7 @@ impl ResolvedConfig {
     ) -> Result<Self, OrbitError> {
         let mut document = toml::from_str::<toml::Value>(raw)
             .map_err(|err| config_document::invalid_runtime_config(config_path, err))?;
-        crate::aliases::translate_deprecated_keys(&mut document, None, config_path)?;
+        crate::alias::translate_deprecated_keys(&mut document, None, config_path)?;
         let resolved = Self::from_document_with_warnings(
             document,
             config_path,

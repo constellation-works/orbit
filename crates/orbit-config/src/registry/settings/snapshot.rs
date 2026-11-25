@@ -305,11 +305,11 @@ impl ConfigSnapshot {
 
     /// The admitted `machine.worker_*` limits.
     pub fn worker_containment(&self) -> WorkerContainmentSettings {
-        let mode = crate::aliases::WorkerContainmentMode::parse(&self.machine_worker_containment)
-            .unwrap_or(crate::aliases::WorkerContainmentMode::Warn);
+        let mode = crate::alias::WorkerContainmentMode::parse(&self.machine_worker_containment)
+            .unwrap_or(crate::alias::WorkerContainmentMode::Warn);
         WorkerContainmentSettings {
-            enabled: mode != crate::aliases::WorkerContainmentMode::Off,
-            strict: mode == crate::aliases::WorkerContainmentMode::Strict,
+            enabled: mode != crate::alias::WorkerContainmentMode::Off,
+            strict: mode == crate::alias::WorkerContainmentMode::Strict,
             memory_high: self.machine_worker_memory_high,
             memory_max: self.machine_worker_memory_max,
             tasks_max: self.machine_worker_tasks_max,

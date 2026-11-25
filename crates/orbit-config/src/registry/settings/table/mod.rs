@@ -32,7 +32,7 @@ use super::resolve::{
 };
 use super::snapshot::AdmissionScope;
 use crate::crew_auto_effort::AutoEffortBand;
-use crate::crew_task_types::TaskTypeDefinition;
+use crate::crew_task_type::TaskTypeDefinition;
 use crate::lock_modes::RawLockModeEntry;
 use crate::memory_limit::MemoryLimit;
 use crate::operation;
@@ -285,17 +285,17 @@ macro_rules! define_config_settings {
 // The key list is split at setting-family boundaries across `.rs` modules:
 // The CodeQL Rust extractor expands `macro_rules` only from `.rs`
 // sources, and `include!` of a non-`.rs` file is outside its source set.
-// `keys_tail` retains `with_tail_keys!`; housekeeping and workflow fragments
-// preserve token order, and `keys_head` defines the assembler.
+// `key_tail` retains `with_tail_keys!`; housekeeping and workflow fragments
+// preserve token order, and `key_head` defines the assembler.
 // The parent calls the assembler so edition 2024 resolves the key tokens here,
 // beside `define_config_settings!`, and the generated items stay on `table::`.
 #[macro_use]
-mod keys_workflow;
+mod workflow_key;
 #[macro_use]
-mod keys_housekeeping;
+mod housekeeping_key;
 #[macro_use]
-mod keys_tail;
+mod key_tail;
 #[macro_use]
-mod keys_head;
+mod key_head;
 
 assemble_config_settings!();

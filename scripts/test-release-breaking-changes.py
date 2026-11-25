@@ -36,7 +36,8 @@ LAYOUT = "crates/orbit-store/src/workflow/layout/registry.rs"
 GOLDENS = "crates/orbit-cli/tests/help_goldens"
 MCP = "crates/orbit-cli/tests/snapshots/mcp_tools_list.json"
 TYPES = "crates/orbit-types/src/task/artifacts.rs"
-KEYS = "crates/orbit-config/src/registry/keys.rs"
+KEYS = "crates/orbit-config/src/registry/key.rs"
+LEGACY_KEYS = "crates/orbit-config/src/registry/keys.rs"
 ACTIVITY = "crates/orbit-core/assets/activities/sweep.yaml"
 
 ROOT_HELP = """\
@@ -736,6 +737,22 @@ class ReleaseBreakingChangesTest(unittest.TestCase):
         report = self.report()
         self.assertEqual(self.signals(report), {("ORB-54", "mcp-schema", detail)})
         self.assertEqual(report["bump"], "minor")
+
+    def test_deprecated_key_detection_spans_registry_file_move(self):
+        self.repo.git("mv", KEYS, LEGACY_KEYS)
+        self.repo.commit("fixture: use the pre-rename registry path")
+        self.repo.git("tag", "v0.36.0")
+        self.repo.replace(LEGACY_KEYS, "];", '    ("workflow.before_move", "translated"),\n];')
+        self.repo.commit("feat: deprecate a key before the move [ORB-49]")
+        self.repo.git("mv", LEGACY_KEYS, KEYS)
+        self.repo.commit("refactor: move the registry file [ORB-50]")
+        self.repo.replace(KEYS, "];", '    ("workflow.after_move", "translated"),\n];')
+        self.repo.commit("feat: deprecate a key after the move [ORB-51]")
+
+        self.assertEqual(self.signals(self.report()), {
+            ("ORB-49", "deprecated-key", "`workflow.before_move` added to DEPRECATED_CONFIG_KEYS"),
+            ("ORB-51", "deprecated-key", "`workflow.after_move` added to DEPRECATED_CONFIG_KEYS"),
+        })
 
     def test_conditional_then_required_decides_minor(self):
         self._assert_conditional_change_is_breaking(

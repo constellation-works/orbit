@@ -1,7 +1,7 @@
 //! `workflow.task_types`: the ordered task-type list that classifies a task
 //! for `workflow.type_complexity_crews` routing and the implementer by-type
 //! scorecard. `workflow.crew_performance_types` is its deprecated spelling,
-//! translated on load ([`crate::aliases`]).
+//! translated on load ([`crate::alias`]).
 
 use std::collections::BTreeSet;
 

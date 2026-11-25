@@ -92,7 +92,7 @@
 #![cfg_attr(test, allow(clippy::expect_used, clippy::unwrap_used))]
 #![cfg_attr(not(test), deny(clippy::disallowed_methods))]
 
-mod aliases;
+mod alias;
 mod completion_hold;
 mod crew;
 mod crew_defaults;
@@ -121,21 +121,21 @@ mod unknown;
 
 pub use unknown::{UnknownConfigKey, unknown_config_keys_at, unknown_config_keys_present};
 
-use crew::{auto_effort as crew_auto_effort, pools as crew_pools, task_types as crew_task_types};
+use crew::{auto_effort as crew_auto_effort, pools as crew_pools, task_type as crew_task_type};
 use document::{io as config_io, parse as config_toml, paths as config_document};
 
 use std::path::{Path, PathBuf};
 
 use orbit_common::OrbitError;
 
-pub use aliases::deprecated_key_rewrites;
+pub use alias::deprecated_key_rewrites;
 pub use crew_auto_effort::{AUTO_EFFORT_BANDS_KEY, AutoEffortBand, AutoEffortPolicy};
 pub use crew_pools::{
     ComplexityCrewPools, CrewPoolEntry, PurposeCrewPools, TYPE_COMPLEXITY_CREWS_KEY,
     TypeComplexityCrewPools, canonical_crew_pool, canonical_crew_pool_entries,
     type_complexity_crews_key,
 };
-pub use crew_task_types::{OTHER_TYPE, TASK_TYPES_KEY, TaskTypeDefinition, classify_task_type};
+pub use crew_task_type::{OTHER_TYPE, TASK_TYPES_KEY, TaskTypeDefinition, classify_task_type};
 pub use document::invalid_runtime_config;
 pub use experiment_keys::ExperimentConfigKey;
 pub use human_crew_seed::{

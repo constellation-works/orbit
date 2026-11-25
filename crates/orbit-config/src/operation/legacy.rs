@@ -44,7 +44,7 @@ impl LegacyReviewPolicy {
 }
 
 /// What a retired `operation.review_policy` says about before-PR review, or
-/// `None` when the document does not state it. [`crate::aliases`] folds it
+/// `None` when the document does not state it. [`crate::alias`] folds it
 /// into `review.timing` with the document's other before-landing statements.
 pub(crate) fn legacy_policy_before_pr(
     document: &toml::Value,
