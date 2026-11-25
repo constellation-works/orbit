@@ -101,6 +101,7 @@ fn resident_backlog_update_honors_the_proposals_approval_opt_out() {
     let design = proposal("Design-tagged proposal", &["no-auto-approve", "design"]);
     let breaking = proposal("Breaking proposal", &["no-auto-approve", "breaking-change"]);
     let no_drain = proposal("No-drain proposal", &["no-auto-approve", "no-drain"]);
+    let no_drain_only = proposal("No-drain-only proposal", &["no-drain"]);
     let ordinary = proposal("Ordinary proposal", &[]);
     let promote =
         |id: &str| fx.agent_call("orbit.task.update", json!({"id": id, "status": "backlog"}));
@@ -111,15 +112,38 @@ fn resident_backlog_update_honors_the_proposals_approval_opt_out() {
     let ordinary_run = fx.cycle_run(&ordinary_mandate, "ordinary-promotion");
     fx.begin_cycle(&ordinary_run, Utc::now());
     fx.as_cycle_agent(&ordinary_run, || {
-        let error = promote(&clean).unwrap_err();
-        assert!(error.contains("needs the `promote_held` right"), "{error}");
-        fx.agent_call(
-            "orbit.task.update",
-            json!({"id": clean, "status": "in-progress"}),
-        )
-        .unwrap_err();
-        fx.agent_call("orbit.task.update", json!({"id": clean, "tags": []}))
-            .unwrap_err();
+        for held_id in [&clean, &no_drain_only] {
+            let error = promote(held_id).unwrap_err();
+            assert!(
+                error.contains("needs the `promote_held` right"),
+                "{held_id}: {error}"
+            );
+            let error = fx
+                .agent_call(
+                    "orbit.task.update",
+                    json!({"id": held_id, "status": "in-progress"}),
+                )
+                .unwrap_err();
+            assert!(
+                error.contains("resident_held_promotion_refused"),
+                "{held_id}: {error}"
+            );
+            let error = fx
+                .agent_call("orbit.task.update", json!({"id": held_id, "tags": []}))
+                .unwrap_err();
+            assert!(
+                error.contains("resident_held_promotion_refused"),
+                "{held_id}: {error}"
+            );
+            assert_eq!(
+                fx.runtime.get_task(held_id).unwrap().status,
+                TaskStatus::Proposed
+            );
+        }
+        assert_eq!(
+            fx.runtime.get_task(&no_drain_only).unwrap().tags,
+            vec!["no-drain"]
+        );
         assert_eq!(promote(&ordinary).unwrap()["status"], "backlog");
     });
 
@@ -152,9 +176,13 @@ fn resident_backlog_update_honors_the_proposals_approval_opt_out() {
             (&design, "design"),
             (&breaking, "breaking-change"),
             (&no_drain, "no-drain"),
+            (&no_drain_only, "no-drain"),
         ] {
             let error = promote(id).unwrap_err();
-            assert!(error.contains(reason), "{id}: {error}");
+            assert!(
+                error.contains("resident_held_promotion_refused") && error.contains(reason),
+                "{id}: {error}"
+            );
             assert_eq!(
                 fx.runtime.get_task(id).unwrap().status,
                 TaskStatus::Proposed
