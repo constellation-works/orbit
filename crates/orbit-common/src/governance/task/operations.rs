@@ -220,7 +220,7 @@ const LIST: TaskOperation = TaskOperation {
     verb: TaskVerb::List,
     cli_path: &["list"],
     tool_name: "orbit.task.list",
-    tool_description: "List tasks as {tasks, total, truncated}; rules are in the installed Orbit skill `references/task-fields-projections.md`.",
+    tool_description: "List tasks as {tasks, total, truncated}; rules: installed Orbit skill `references/task-fields-projections.md`.",
     cli_about: "List tasks with optional filters",
     cli_help: CliHelp {
         constraints: &[],
@@ -395,7 +395,7 @@ const LIST: TaskOperation = TaskOperation {
         mcp_only(
             "view",
             ParamType::String,
-            "Bounded view; requires `workspace`, rejects `fields` and non-bounded filters (`status`, `priority`, `search`, `offset`, `limit` only). Only value: `bounded`.",
+            "Bounded view; requires `workspace`; rejects `fields` and filters beyond status, priority, search, offset, limit. Only value: `bounded`.",
         ),
         mcp_only("offset", ParamType::Integer, "Bounded offset."),
         mcp_only("search", ParamType::String, "Bounded key/title filter."),
