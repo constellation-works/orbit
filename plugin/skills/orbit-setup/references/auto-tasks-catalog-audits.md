@@ -43,8 +43,10 @@
 
   Remedies choose the highest-reliability
   expressive rung: mechanical guard in an existing gate, in-line hazard
-  comment, nested `AGENTS.md`/`CLAUDE.md` pair, tag instruction, then global
-  instruction, explaining why each higher rung cannot work. Review-instruction
+  comment, nested regular `AGENTS.md` and `CLAUDE.md` files (`CLAUDE.md`
+  importing `@AGENTS.md` where the repository accepts it; never a symlink),
+  tag instruction, then global instruction, explaining why each higher rung
+  cannot work. Review-instruction
   remedies remain available for `review_missed`. Rungs 3–5 and review
   instructions remove or merge an existing rule with no word-count growth
   per edited file, or leave the choice to the operator; comments are exempt.

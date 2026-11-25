@@ -184,11 +184,17 @@ template:
     2. In-line comment (`remedy:comment`): at the hazard site in code an
        agent must touch to repeat the mistake; name the hazard and safe
        pattern. Existing comment-hygiene keeps it honest.
-    3. Nested directory guide (`remedy:nested-guide`): an
-       `AGENTS.md`/`CLAUDE.md` pair in the directory owning the hazard,
-       following the repository's existing pair convention. These are
-       loaded by Codex and Claude when working there; no Orbit delivery
-       machinery is needed.
+    3. Nested directory guide (`remedy:nested-guide`): a regular
+       `AGENTS.md` and a regular `CLAUDE.md` in the directory owning the
+       hazard. Where the repository's guide convention accepts it,
+       `CLAUDE.md` imports the sibling with the line `@AGENTS.md`. Never
+       propose a symlink: normal delivery refuses it. The remedy's
+       acceptance criteria name both regular files and, when used, the
+       import line. If the repository requires a file form that normal
+       delivery cannot commit, record that constraint as a rung 3 entry in
+       `higher_rung_rejections` and select the next admissible rung in the
+       order above. These are loaded by Codex and Claude when working
+       there; no Orbit delivery machinery is needed.
     4. Tag instruction (`remedy:tag-instruction`): a `docs/agents/<name>.md`
        delivered through `workflow.tag_instructions`. The task must say
        how affected tasks receive the tag (for example an authoring or
@@ -341,6 +347,7 @@ template:
   - Each `unclassified` or `absent` link from the last 7 days was classified from its regression task and the culprit landed diff shown by `git show`, and the classification was recorded by an `orbit.task.update` relations write read back on the regression task, or held in `escape-to-guard.json` with evidence and 1 deduplicated gap task when the supported surface cannot change an existing link; link-specific failures are recorded as unsettled.
   - Regressions were clustered by nature x escape x layer plus a 1-line mechanism; new remedies require 3 or more distinct regressions in 30 days, and every task names at least 3 regression IDs and their culprit IDs, its durable rung tag, structured remedy_metadata cluster key and 30d count at filing.
   - Each remedy chooses the highest-reliability expressive rung in order (mechanical guard, in-line hazard comment, nested AGENTS.md/CLAUDE.md pair, tag instruction, global instruction), names why every higher rung cannot express the mechanism, and obeys the ban on new required status checks, merge gates, merge-blocking CI jobs and human-only steps. Mechanical guards name the check, existing gate and rejected violation; regression-test guards are only for no_test; skill or review-instruction remedies remain available only for review_missed.
+  - A nested-guide (rung 3) remedy names a regular `AGENTS.md` and a regular `CLAUDE.md` in its directory, with `CLAUDE.md` importing the sibling by `@AGENTS.md` where the repository convention accepts it, and never a symlink; a file form normal delivery cannot commit is recorded as a rung 3 entry in `higher_rung_rejections`, with the next admissible rung selected.
   - Rungs 3–5 and review-instruction remedies name a removed or merged existing rule in each edited file and measured before/after word counts with no growth, or explicitly leave an unremovable file to the operator without authorizing growth; in-line comments are exempt. No guidance was edited by this run.
   - Tag-instruction remedies explain how affected tasks receive the tag and identify host-config mapping as an operator step excluded from the remedy task acceptance criteria; global remedies demonstrate a mechanism spanning directories and task kinds that rungs 2–4 cannot cover.
   - At most 3 normal remedy tasks and separately at most 3 instruction-retirement tasks were filed, left proposed with spawned_from this run and verified non-empty context_files; open, completed and rejected work was checked for duplicates and overflow recorded.
