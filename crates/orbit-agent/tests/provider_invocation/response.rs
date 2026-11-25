@@ -1687,6 +1687,107 @@ fn provider_schema_stays_in_claude_subset_and_parser_correlates_status() {
     );
 }
 
+/// Success examples emitted by Orbit's prompt contract and its pilot
+/// correction instructions must satisfy the schema sent to structured-output
+/// providers. The parser remains more permissive for schema-less transports.
+#[test]
+fn success_examples_in_provider_prompts_match_the_response_schema() {
+    let spec = Agent::new(&AgentConfig::cli("claude").expect("claude provider config"))
+        .expect("claude provider adapter")
+        .invoke(AgentRequest::activity(br#"{"prompt":"fixture"}"#.to_vec()))
+        .expect("claude invocation spec");
+    let prompt = String::from_utf8(spec.stdin).expect("provider prompt is UTF-8");
+    assert!(prompt.contains("When status=\"success\", omit the \"error\" field."));
+
+    let contract_success = if let Some(example) =
+        prompt
+            .split_once("Success example:\n")
+            .map(|(_, remainder)| {
+                remainder
+                    .lines()
+                    .next()
+                    .expect("success example is present")
+            }) {
+        serde_json::from_str::<Value>(example)
+            .expect("shared response contract success example is JSON")
+    } else {
+        // Interpret the original generic envelope example as a success frame
+        // to keep the regression red on the base contract's `error: null`.
+        let contract_template = prompt
+            .split_once("Required response schema:\n")
+            .expect("shared response contract is embedded in provider prompt")
+            .1
+            .lines()
+            .next()
+            .expect("response contract has an envelope shape");
+        let normalized = contract_template
+            .replace(
+                "\"status\":\"success|failed|timeout\"",
+                "\"status\":\"success\"",
+            )
+            .replace("\"result\":{...}", "\"result\":{}");
+        serde_json::from_str::<Value>(&normalized)
+            .expect("base response contract success example is JSON")
+    };
+
+    let task_pilot = include_str!("../../../orbit-core/assets/activities/task_pilot.yaml");
+    let correction = task_pilot
+        .split_once("`rejection` is `contradictory_reply`")
+        .expect("task_pilot describes contradictory_reply correction")
+        .1
+        .split_once("`rejection` is `missing_envelope`")
+        .expect("contradictory_reply correction is bounded by the next case")
+        .0;
+    assert!(correction.contains("omit the `error` field"));
+    let correction_success = if let Some(example) = correction
+        .split_once("Success envelope example: `")
+        .map(|(_, remainder)| {
+            remainder
+                .split_once('`')
+                .expect("inline JSON example closes")
+                .0
+        }) {
+        serde_json::from_str::<Value>(example).expect("correction success example is JSON")
+    } else {
+        // Model the exact success frame prescribed by the base instruction so
+        // this regression test demonstrates that its `error: null` conflicts
+        // with the provider schema.
+        assert!(correction.contains("\"status\":\"success\""));
+        assert!(correction.contains("\"error\":null"));
+        json!({
+            "schemaVersion": 1,
+            "status": "success",
+            "result": {},
+            "error": null,
+        })
+    };
+
+    let image_probe = include_str!("../../../orbit-core/assets/activities/image_input_probe.yaml");
+    assert!(image_probe.contains("Omit `error` when `status` is"));
+    let image_probe_success = image_probe
+        .lines()
+        .find(|line| {
+            line.trim_start()
+                .starts_with("{\"schemaVersion\":1,\"status\":\"success\"")
+        })
+        .expect("image input probe has a success envelope example");
+    let image_probe_success = serde_json::from_str::<Value>(image_probe_success.trim())
+        .expect("image probe example is JSON");
+
+    let schema = response_envelope_json_schema();
+    let validator = jsonschema::JSONSchema::compile(&schema).expect("schema compiles");
+    for (source, example) in [
+        ("ORBIT_RESPONSE_CONTRACT", contract_success),
+        ("task_pilot contradictory_reply", correction_success),
+        ("image_input_probe", image_probe_success),
+    ] {
+        assert!(
+            validator.is_valid(&example),
+            "{source} success example must satisfy the provider schema; example={example}"
+        );
+    }
+}
+
 fn execution(stdout: String) -> ExecutionResult {
     ExecutionResult {
         success: true,

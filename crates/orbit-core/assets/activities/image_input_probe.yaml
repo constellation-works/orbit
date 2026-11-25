@@ -53,8 +53,9 @@ spec:
     Do not read, search or change any other file, run no other command, and
     call no Orbit tool.
 
-    Return exactly one Orbit response envelope:
-    {"schemaVersion":1,"status":"success","result":{"canary":"<the code>"},"error":null}
+    Return exactly one Orbit response envelope. Omit `error` when `status` is
+    `success`:
+    {"schemaVersion":1,"status":"success","result":{"canary":"<the code>"}}
   tool_disallow_list:
     - orbit.auto_task:add
     - orbit.auto_task:mint
