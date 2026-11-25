@@ -56,7 +56,7 @@ const EXPLAIN: OperationSpec<AutomationVerb> = OperationSpec {
     verb: AutomationVerb::Explain,
     cli_path: &["explain"],
     tool_name: "orbit.automation.explain",
-    tool_description: "Explain a routine's `trigger.condition`, an auto-task's `schedule.condition`, or `job:<name>` steps against live workspace state. Reports the scope, matches and closest misses, one subject's clause tree with operand values (unreadable values are unknown, never false), and durable tracking; job mode shows the steps checked at load. Read-only: it writes nothing, evaluates no waits and mints nothing; enabled jobs run detached and park while a step waits. Details: installed Orbit skill `references/tool-surface-capability-map.md`, row `Condition explain`.",
+    tool_description: "Explain a routine or auto-task condition, or `job:<name>` steps, against live workspace state (read-only). Details: installed Orbit skill `references/tool-surface-capability-map.md`, row `Condition explain`.",
     cli_about: "Show a condition's matches, closest misses and clause tree over live state, or a job's auto-task steps",
     cli_help: CliHelp {
         long_about: None,

@@ -224,7 +224,7 @@ const CLOSE: OperationSpec<NoticeVerb> = OperationSpec {
     verb: NoticeVerb::Close,
     cli_path: &["close"],
     tool_name: "orbit.notice.close",
-    tool_description: "Close a fleet notice by id or dedupe_key with a reason. The operator may close any notice; an orchestrator may close its own crew's notices and any orchestrator- or agent-authored notice; a managed agent, a resident cycle included, may close only its own task's notices. Closing a notice that is already closed or expired returns it unchanged with already_inactive: true.",
+    tool_description: "Close a fleet notice by id or dedupe_key with a reason. Permissions and inactive-notice behavior: the orbit skill's tool-surface-notices.md reference, section `Fleet notices`.",
     cli_about: "Close a fleet notice",
     cli_help: CliHelp {
         long_about: None,

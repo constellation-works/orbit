@@ -122,6 +122,13 @@ pair includes its Jaccard rate, rank, reservation counts for both paths, and
 requesters. The same four regression filters narrow regression counts and
 drill-downs; they do not change the other rankings.
 
+`orbit.codebase` action `related` (`orbit codebase related <path>`) ranks files
+by landed co-change Jaccard with a repository-relative file path, reporting
+conditional rate, shared and individual task support, reservation coupling when
+present, undeclared landed partners and the tasks behind the counts. It excludes
+bulk tasks, reports missing local landed objects as unavailable, and is
+read-only (never fetches Git objects).
+
 `orbit_run` action `show` and each `orbit_run` action `list` item are
 operator-only (denied for agent sessions) and carry the same run projection
 as `.run` in `orbit run show --json` and the dashboard; a session with a

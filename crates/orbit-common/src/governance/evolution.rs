@@ -97,7 +97,7 @@ const LIST: OperationSpec<EvolutionVerb> = OperationSpec {
     verb: EvolutionVerb::List,
     cli_path: &["list"],
     tool_name: "orbit.evolution.list",
-    tool_description: "List evolution signatures in the bound workspace, sorted by summed minutes plus slot_minutes. Returns {count, records}; each includes occurrence_count, distinct_cycles, distinct_mandates, cycle_count, mandate_count, minutes, retries and slot_minutes derived over the requested window. Friction is excluded. Declined signatures become eligible when suppression expires or window cost doubles.",
+    tool_description: "List evolution signatures in the bound workspace, ranked by summed minutes plus slot_minutes. Fields and eligibility: the orbit skill's tool-surface-evolution.md reference, section `Evolution records`.",
     cli_about: "List evolution signatures and summed costs",
     cli_help: CliHelp::NONE,
     effect: Effect::Read,

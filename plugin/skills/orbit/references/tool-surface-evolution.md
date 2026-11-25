@@ -13,10 +13,15 @@ Include `wished` for a workaround or manual step. An optional kebab-case
 without a signature is kept as a cost but does not create a gap record. Optional `mandate` and
 `cycle` attributes associate the event with an assignment and cycle; `cycle` requires `mandate`.
 
-`orbit.evolution.list` lists signatures ranked by summed minutes plus slot minutes. Filter with
+`orbit.evolution.list` lists signatures ranked by summed `minutes` plus
+`slot_minutes` as `{count, records}`; each record includes `occurrence_count`,
+`distinct_cycles`, `distinct_mandates`, `cycle_count`, `mandate_count`,
+`minutes`, `retries` and `slot_minutes` derived over the requested window.
+Friction is excluded. Declined signatures become eligible again when
+suppression expires or window cost doubles. Filter with
 `state` (`open`, `proposed`, `declined` or `resolved`) or `since` (an RFC 3339 time).
 `orbit.evolution.show` displays one record, its occurrences, proposal state, suppression window
-and all-time aggregates.
+and all-time aggregates (friction identifiers are not accepted).
 
 The matching CLI commands are `orbit evolution add --event <JSON>`
 (with optional `--mandate` and `--cycle`), `orbit evolution list [--state <state>] [--since <time>]`

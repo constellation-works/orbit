@@ -58,6 +58,20 @@ reuse requests for unchanged task bindings, while newly eligible tasks can add
 requests. With the decision channel disabled in this workspace, the call raises
 nothing, writes nothing and returns no requests.
 
+`orbit.decision` action `list` (`orbit.decision.list`) lists open human decision
+requests on held work (or all with `include_closed`), filtered by `gate`,
+`task_id` or exact `topic`; each request names its task, gate, allowed answers,
+expiry and derived effective state (`open`, `answered`, `superseded` or
+`expired`). Seeing a request never answers it.
+
+Channel administration (`orbit decision channel register|list|revoke|rotate-key`)
+is operator CLI only (refused from agent envelopes and plugin callbacks):
+`register` generates the channel key, mirrors it to the bound plugin's
+`channel_key` secret and starts key epoch 1 (with optional
+`require_dkim_verification`); `revoke` immediately stops verifying outstanding
+tokens (`channel_revoked`); `rotate-key` generates and mirrors a fresh key and
+bumps the key epoch, invalidating tokens minted under prior epochs.
+
 ## Raising a decision
 
 `orbit_decision` action `raise` (`orbit.decision` action `raise`) is the one decision tool an agent

@@ -90,8 +90,11 @@ run posts only for a problem outside its task that affects other agents,
 with a linked task (prefer the fix) or evidence, after checking the brief's
 open notices; re-posting the same subject corroborates it.
 
-`orbit.notice.close` takes `id` or `dedupe_key` and a `reason`; a notice that is
-already closed or expired comes back with `already_inactive: true`. A notice
+`orbit.notice.close` takes `id` or `dedupe_key` and a `reason`; the operator
+may close any notice, an orchestrator may close its own crew's notices and any
+orchestrator- or agent-authored notice, and a managed agent (a resident cycle
+included) may close only its own task's notices. A notice that is
+already closed or expired comes back unchanged with `already_inactive: true`. A notice
 whose linked task reaches `done` closes itself. `orbit.notice.list` filters by
 `status` (`open` by default, `closed`, `expired` or `all`), `include_global`,
 `scope`, `kind`, `linked_task`, `author_class`, `host` and `limit` (1–200, default 50), and orders

@@ -908,3 +908,46 @@ fn tool_show_reflects_registry_enums_and_handlers_refuse_unknown_values() {
         );
     }
 }
+
+#[test]
+fn tool_list_json_bounds_builtin_description_length() {
+    const MAX_BUILTIN_TOOL_DESCRIPTION_CHARS: usize = 300;
+    let temp = tempdir().expect("tempdir");
+    let home = temp.path().join("home");
+    let work = temp.path().join("work");
+    std::fs::create_dir_all(&home).expect("create home");
+    git_repo::init(&work);
+
+    for args in [
+        &["tool", "list", "--json"][..],
+        &["tool", "list", "--all", "--json"][..],
+    ] {
+        let output = orbit_at_home(&work, &home)
+            .args(args)
+            .assert()
+            .success()
+            .get_output()
+            .stdout
+            .clone();
+        let tools: Vec<Value> = serde_json::from_slice(&output).expect("tool list JSON");
+        assert!(!tools.is_empty());
+        let mut over = Vec::new();
+        for tool in &tools {
+            if tool["builtin"] == false {
+                continue;
+            }
+            let name = tool["name"].as_str().expect("tool name");
+            let description = tool["description"].as_str().expect("tool description");
+            let len = description.chars().count();
+            if len > MAX_BUILTIN_TOOL_DESCRIPTION_CHARS {
+                over.push(format!("{len:>4} chars: {name}"));
+            }
+        }
+        assert!(
+            over.is_empty(),
+            "`orbit {}` builtin descriptions exceed {MAX_BUILTIN_TOOL_DESCRIPTION_CHARS} chars:\n{}",
+            args.join(" "),
+            over.join("\n")
+        );
+    }
+}

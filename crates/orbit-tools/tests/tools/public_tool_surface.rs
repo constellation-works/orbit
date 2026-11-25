@@ -670,3 +670,27 @@ fn unknown_task_tools_only_suggest_active_visible_and_granted_replacements() {
         "tool not found: orbit.task.get; see `orbit tool list` or MCP `tools/list` for valid tool names"
     );
 }
+
+#[test]
+fn every_builtin_registry_description_is_within_length_bound() {
+    const MAX_BUILTIN_TOOL_DESCRIPTION_CHARS: usize = 300;
+    let mut registry = ToolRegistry::new();
+    registry.register_builtins();
+
+    let mut over = Vec::new();
+    for schema in registry.all_schemas() {
+        if !schema.builtin {
+            continue;
+        }
+        let len = schema.description.chars().count();
+        if len > MAX_BUILTIN_TOOL_DESCRIPTION_CHARS {
+            over.push(format!("{len:>4} chars: {}", schema.name));
+        }
+    }
+    assert!(
+        over.is_empty(),
+        "builtin registry tool descriptions must stay <= {MAX_BUILTIN_TOOL_DESCRIPTION_CHARS} \
+         characters (move detailed policy/rules into the installed Orbit skill references):\n{}",
+        over.join("\n")
+    );
+}

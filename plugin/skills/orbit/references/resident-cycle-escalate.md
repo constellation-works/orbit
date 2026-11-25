@@ -240,8 +240,10 @@ Put operator asks in
 `requests[]` and a warn notice, never a "FOR DANIEL" paragraph in notes. Notes are the cycle's delta, not a recurring status report.
 The brief has no older-notes tail; read task state when you need older detail.
 
-A checkpoint for a stale cycle, or a second checkpoint for the same cycle,
-is refused without writes. If you cannot checkpoint, the finalize step
+A checkpoint requires the mandate's live, unexpired cycle and matching `run_id`,
+and returns `{task_id, checkpoint}`. Observed authority in the record grants no
+rights. A malformed record, stale cycle, or a second checkpoint for the same
+cycle is refused without writes. If you cannot checkpoint, the finalize step
 synthesizes an `incomplete` checkpoint from the ledger, so the next cycle
 recovers rather than repeats — but a synthesized checkpoint carries no
 decisions, costs or notes, so write your own whenever you can.

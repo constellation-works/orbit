@@ -253,7 +253,7 @@ const CI_FAILURES: OperationSpec<AgentsVerb> = OperationSpec {
     verb: AgentsVerb::CiFailures,
     cli_path: &["ci-failures"],
     tool_name: "orbit.agents.ci_failures",
-    tool_description: "Required-check failures on candidate heads, one record per head and check with the task, the run that produced the head, the check, its error signature and its cause class (code, flaky, infrastructure or unknown), newest first, with per-class counts. Each record lists the audited class changes later evidence made. Filter by window, task and class.",
+    tool_description: "List required-check failures on candidate heads newest first, with cause classes and counts. Fields and filters: the orbit skill's tool-surface-scorecards.md reference, section `CI failures by cause`.",
     cli_about: "List required-check failures on candidate heads by cause",
     cli_help: CliHelp {
         long_about: None,

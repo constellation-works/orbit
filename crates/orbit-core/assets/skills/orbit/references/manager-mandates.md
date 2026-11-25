@@ -149,8 +149,13 @@ who said it, through which channel, and when). Add `request_id` when the
 words answer a resident request, and `reverses` when they undo a resident
 decision recorded in a checkpoint.
 
-- A relay writes one `resident.answer` comment and wakes the resident. It is
-  steering within authority, weighed like task text; the latest relay wins.
+- A relay writes one `resident.answer` comment carrying `quote` verbatim with
+  `source` provenance, records your session as `relayed_by`, and wakes the
+  resident. It is steering within authority, weighed like task text; the latest
+  relay wins. Refused for an empty or over-long quote (>4000 characters) or an
+  ended mandate. Output is `{task_id, comment, answer}`, where `comment` is
+  `{index, at, by}` (comments carry no ids) and `answer` is the record as
+  written.
 - A relay never changes authority. Input naming rights, workspaces or status
   is refused; route an authorisation through `orbit.resident.grant` instead.
 - A relayed answer to an escalation is a direction, not the decision answer:

@@ -450,7 +450,7 @@ const ELIGIBLE: TaskOperation = TaskOperation {
     verb: TaskVerb::Eligible,
     cli_path: &["eligible"],
     tool_name: "orbit.task.eligible",
-    tool_description: "List backlog and proposed tasks that can be picked up now without colliding with work in flight, as {tasks, total, truncated[, conflicting]}. A task is eligible when its context-file lock surface overlaps no in-progress or review task's surface, decided by the same lock code automatic dispatch uses. No other gate applies: dependencies, complexity, groups, crew and overlap between candidates are not checked. Read-only.",
+    tool_description: "List backlog and proposed tasks with no lock conflict against work in flight (read-only). Rules and fields: the orbit skill's task-fields-projections.md reference, section `Task lifecycle and listing`.",
     cli_about: "List backlog/proposed tasks you can pick up without colliding with work in flight",
     cli_help: CliHelp {
         constraints: &[],
@@ -514,7 +514,7 @@ const SHOW: TaskOperation = TaskOperation {
     verb: TaskVerb::Show,
     cli_path: &["show"],
     tool_name: "orbit.task.show",
-    tool_description: "Fetch a task as JSON by globally unique `id`; optional `workspace` is a fail-closed filter. Use `fields` (alias `field`) for projections, or `field: \"delivery\"` for bounded commit/landing evidence. Projection, routing and delivery details: installed Orbit skill `references/task-fields-projections.md`.",
+    tool_description: "Fetch a task as JSON by globally unique `id`; optional `workspace` filters fail-closed. Use `fields` (`field`) for projections or `field: \"delivery\"` for commit/landing evidence. Projection, routing and delivery details: installed Orbit skill `references/task-fields-projections.md`.",
     cli_about: "Show detailed information about a task, found by ID with an optional workspace filter",
     cli_help: CliHelp {
         long_about: Some(
@@ -620,7 +620,7 @@ const LINT: TaskOperation = TaskOperation {
     verb: TaskVerb::Lint,
     cli_path: &["lint"],
     tool_name: "orbit.task.lint",
-    tool_description: "Lint an Orbit task for stale paths, vague acceptance criteria, and stale repository names. Without `id`, sweep the active tasks (or those in `status`) for `context_files` that need repair. `restore_pruned` re-declares the selectors an earlier prune recorded in task history; without it nothing is written.",
+    tool_description: "Lint tasks for stale paths, vague acceptance criteria and stale repository names (`restore_pruned` re-declares pruned selectors). Details: the orbit skill's task-fields-projections.md reference, section `Task lifecycle and listing`.",
     cli_about: "Lint tasks for context-file and acceptance-criteria problems; `--restore-pruned` re-declares recorded selectors",
     cli_help: CliHelp {
         constraints: &[],

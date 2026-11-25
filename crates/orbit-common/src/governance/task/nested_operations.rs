@@ -12,7 +12,7 @@ pub(super) const ARTIFACT_PUT: TaskOperation = TaskOperation {
     verb: TaskVerb::ArtifactPut,
     cli_path: &["artifact", "put"],
     tool_name: "orbit.task.artifact.put",
-    tool_description: "Store a file (any content, up to 1 MiB) as a task artifact. Sources must stay inside the workspace after symlink resolution; write evidence under `.orbit/tmp/`. Artifact paths beginning with `review-` in any ASCII case are reserved for the review gate's system writer; the only agent-writable exception is the schema-checked `review-report.json`. Name ordinary supporting evidence with a nonreserved name (for example `examination-checks.json`). See the assigned task's evidence template for automation coverage and review report contracts.",
+    tool_description: "Store a workspace-confined file (up to 1 MiB) as a task artifact. Reserved paths and rules: the orbit skill's tool-surface-registry.md reference, section `Artifact and recovery tools`.",
     cli_about: "Store a source file under a task's artifacts directory",
     cli_help: CliHelp {
         long_about: None,
@@ -74,16 +74,7 @@ pub(super) const ARTIFACT_GET: TaskOperation = TaskOperation {
     verb: TaskVerb::ArtifactGet,
     cli_path: &["artifact", "get"],
     tool_name: "orbit.task.artifact.get",
-    tool_description: "Read one stored task artifact by owning task ID and artifact path. Returns \
-                 `media_type`, `size`, and the bytes: UTF-8 text as `content`, and everything \
-                 else as base64 in `content_base64`. Supported raster images (PNG, JPEG, GIF, \
-                 WebP) whose bytes match their declared type are additionally returned as a \
-                 viewable image on transports that carry image content, so a multimodal client \
-                 can inspect a stored visual reference directly. SVG, HTML, and any payload \
-                 whose bytes contradict its media type are returned as opaque base64 and are \
-                 never rendered. List available artifacts first with `orbit.task.show` and \
-                 `field: \"artifacts\"`; payloads are fetched only through this call. Reads are \
-                 bounded to 1048576 bytes.",
+    tool_description: "Read one stored task artifact by owning task ID and path (list first via `orbit.task.show`). Output, image and size rules: the orbit skill's tool-surface-registry.md reference, section `Artifact and recovery tools`.",
     cli_about: "Read one stored artifact back out of a task",
     cli_help: CliHelp {
         long_about: None,
