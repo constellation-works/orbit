@@ -880,7 +880,10 @@ fn decide_post(
                 limits::MAX_OPEN_GLOBAL_PER_OWNER,
             ));
         }
-        if poster.class == AuthorClass::Agent {
+        // A resident's status line is exempt from the per-mandate open cap
+        // both while live and when created or recreated after expiry, while
+        // still subject to the workspace, global and hourly limits above.
+        if poster.class == AuthorClass::Agent && !post.status_line {
             let status_key = poster.resident_status_key();
             let task_open = open
                 .iter()

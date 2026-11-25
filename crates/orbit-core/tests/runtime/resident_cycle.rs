@@ -739,6 +739,144 @@ fn resident_status_line_does_not_consume_the_open_warning_cap() {
     fx.finish_cycle(&run);
 }
 
+#[test]
+fn expired_resident_status_line_is_recreated_at_full_warning_cap() {
+    let fx = isolated_fixture!(expired_resident_status_line_is_recreated_at_full_warning_cap);
+    let (watched, mandate) = fx.watched_mandate("Resident expired status cap");
+    fx.grant(&mandate, &["dispatch"]);
+    let warning_prefix = orbit_types::record::resident_notice_key_prefix(&mandate);
+    let status_key = orbit_types::record::resident_status_notice_key(&mandate);
+
+    let t0 = Utc::now();
+    let run1 = fx.cycle_run(&mandate, "resident-notice-expired-status-1");
+    let brief1 = fx.begin_cycle(&run1, t0);
+    assert_eq!(brief1["cycle_count"], 1, "{brief1}");
+
+    let (first_status, warnings) = orbit_core::test_support::with_notice_post_time(t0, || {
+        fx.as_cycle_agent(&run1, || {
+            let first_status = fx
+                .agent_call(
+                    "orbit.notice.post",
+                    json!({
+                        "kind": "info",
+                        "title": "Watching work",
+                        "dedupe_key": status_key,
+                    }),
+                )
+                .unwrap();
+            let warnings = (0..10)
+                .map(|index| {
+                    fx.agent_call(
+                        "orbit.notice.post",
+                        json!({
+                            "kind": "warn",
+                            "title": format!("Blocker {index}"),
+                            "dedupe_key": format!("{warning_prefix}blocker-{index}"),
+                            "linked_task": watched,
+                        }),
+                    )
+                    .unwrap()
+                })
+                .collect::<Vec<_>>();
+            (first_status, warnings)
+        })
+    });
+    assert_eq!(first_status["outcome"], "created");
+    assert_eq!(warnings.len(), 10);
+    assert!(warnings.iter().all(|post| post["outcome"] == "created"));
+    fx.write_checkpoint(
+        &brief1,
+        &run1,
+        json!({"next_wake": {"reason": "heartbeat", "not_before": t0 + Duration::hours(2)}}),
+    );
+    fx.finish_cycle(&run1);
+
+    // After 5 hours, the 4-hour status line has expired while all ten 72-hour
+    // blocker warnings remain open.
+    let t1 = t0 + Duration::hours(5);
+    let first_expires: DateTime<Utc> =
+        serde_json::from_value(first_status["notice"]["expires_at"].clone()).unwrap();
+    assert!(
+        first_expires < t1,
+        "initial status line should be expired at t1: {first_status}"
+    );
+    let run2 = fx.cycle_run(&mandate, "resident-notice-expired-status-2");
+    let brief2 = fx.begin_cycle(&run2, t1);
+    assert_eq!(brief2["cycle_count"], 1, "{brief2}");
+
+    let (recreated_status, over_cap_warn, over_cap_info) =
+        orbit_core::test_support::with_notice_post_time(t1, || {
+            fx.as_cycle_agent(&run2, || {
+                let recreated_status = fx
+                    .agent_call(
+                        "orbit.notice.post",
+                        json!({
+                            "kind": "info",
+                            "title": "Still watching blockers",
+                            "dedupe_key": status_key,
+                        }),
+                    )
+                    .unwrap();
+                let over_cap_warn = fx.agent_call(
+                    "orbit.notice.post",
+                    json!({
+                        "kind": "warn",
+                        "title": "Blocker 10",
+                        "dedupe_key": format!("{warning_prefix}blocker-10"),
+                        "linked_task": watched,
+                    }),
+                );
+                let over_cap_info = fx.agent_call(
+                    "orbit.notice.post",
+                    json!({
+                        "kind": "info",
+                        "title": "Extra info",
+                        "dedupe_key": format!("{warning_prefix}extra-info"),
+                    }),
+                );
+                (recreated_status, over_cap_warn, over_cap_info)
+            })
+        });
+
+    assert_eq!(recreated_status["outcome"], "created");
+    assert_ne!(
+        recreated_status["notice"]["id"], first_status["notice"]["id"],
+        "recreating after expiry creates a new notice row"
+    );
+    assert_eq!(recreated_status["notice"]["kind"], "info");
+    assert_eq!(recreated_status["notice"]["dedupe_key"], status_key);
+    assert_eq!(recreated_status["notice"]["reports"]["count"], 1);
+
+    for (name, refused) in [("warn", over_cap_warn), ("info", over_cap_info)] {
+        let error = refused.expect_err(&format!(
+            "eleventh non-status {name} notice must still be refused"
+        ));
+        assert!(
+            error.starts_with("notice_limit_exceeded") && error.contains("max_open_per_resident"),
+            "expected max_open_per_resident refusal for {name}, got: {error}"
+        );
+    }
+
+    for post in warnings.iter().chain([&recreated_status]) {
+        let id = post["notice"]["id"].as_str().unwrap();
+        let shown = call(
+            &fx.runtime,
+            "orbit.notice.show",
+            json!({"id": id}),
+            McpCapability::Operator,
+        )
+        .unwrap();
+        assert_eq!(shown["notice"]["status"], "open", "{shown}");
+    }
+
+    fx.write_checkpoint(
+        &brief2,
+        &run2,
+        json!({"next_wake": {"reason": "heartbeat", "not_before": t1 + Duration::hours(2)}}),
+    );
+    fx.finish_cycle(&run2);
+}
+
 /// [ORB-24301] A cycle launches in a managed worktree of the workspace
 /// HEAD under `.orbit/state/worktrees/`, so linux-bwrap can enforce the
 /// `**/.env` deny with its post-run guard instead of refusing the launch;
