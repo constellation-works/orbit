@@ -16,10 +16,13 @@ use super::backlog_forecast::{
 use super::backlog_rework::edit_task;
 use super::support::{Fixture, isolated, json_ok};
 
-/// A medium task now in `status`, whose recorded history is `steps`: each
-/// the status it entered and when, after its creation in backlog.
-fn dated_task(
+/// A task with `complexity` and optional `crew` now in `status`, whose
+/// recorded history is `steps`: each the status it entered and when, after
+/// its creation in backlog.
+fn dated_task_with(
     fixture: &Fixture,
+    complexity: TaskComplexity,
+    crew: Option<&str>,
     status: TaskStatus,
     steps: &[(DateTime<Utc>, TaskStatus)],
 ) -> String {
@@ -27,7 +30,8 @@ fn dated_task(
         .runtime
         .add_task(TaskAddParams {
             title: "Observed attempts".into(),
-            complexity: TaskComplexity::Medium,
+            complexity,
+            crew: crew.map(str::to_string),
             status: Some(status),
             ..Default::default()
         })
@@ -78,6 +82,16 @@ fn dated_task(
         .collect();
     std::fs::write(events_path, events).unwrap();
     id
+}
+
+/// A medium task now in `status`, whose recorded history is `steps`: each
+/// the status it entered and when, after its creation in backlog.
+fn dated_task(
+    fixture: &Fixture,
+    status: TaskStatus,
+    steps: &[(DateTime<Utc>, TaskStatus)],
+) -> String {
+    dated_task_with(fixture, TaskComplexity::Medium, None, status, steps)
 }
 
 /// Ten clean one-hour deliveries ten days ago and, with `blocking`, ten
@@ -143,10 +157,21 @@ fn unresolved_paths_make_critical_path_unknown() {
         || {
             let fixture = Fixture::new();
             one_hour_history(&fixture);
+            let now = Utc::now();
+            // A supported wait that survived past the 90-day return horizon so
+            // the blocked task is scheduled with supported non-return mass.
+            dated_task(
+                &fixture,
+                TaskStatus::Rejected,
+                &[
+                    (now - Duration::days(100), TaskStatus::Blocked),
+                    (now - Duration::days(1), TaskStatus::Rejected),
+                ],
+            );
             let blocked = dated_task(
                 &fixture,
                 TaskStatus::Blocked,
-                &[(Utc::now() - Duration::hours(1), TaskStatus::Blocked)],
+                &[(now - Duration::hours(1), TaskStatus::Blocked)],
             );
             let unknown = json!({"p50": null, "p90": null});
             let all_unfinished = forecast(&fixture);
@@ -579,7 +604,7 @@ fn subsecond_and_immediate_returns_stay_drawable() {
                 block_that_returned(&fixture, delay);
                 let id = backlog_task(&fixture, "Waiting", &["file:wait.rs"], &[], &[]);
                 let forecast = forecast(&fixture);
-                assert_eq!(forecast["model_version"], 23);
+                assert_eq!(forecast["model_version"], 24);
                 assert_eq!(
                     forecast["inputs"]["outcomes"]["episodes"],
                     json!({"blocked": 1, "delivered": 1})
@@ -667,7 +692,7 @@ fn forecast_queued_against(
     dated_task(&fixture, status, steps);
     let id = backlog_task(&fixture, label, &["file:queued.rs"], &[], &[]);
     let forecast = forecast(&fixture);
-    assert_eq!(forecast["model_version"], 23, "{label}");
+    assert_eq!(forecast["model_version"], 24, "{label}");
     assert_eq!(forecast["inputs"]["history_deliveries"], 5, "{label}");
     assert_eq!(forecast["forecast"]["tasks"], 1, "{label}");
     assert_eq!(
@@ -1001,7 +1026,7 @@ fn stored_task_forecasts_count_failed_attempts_and_score_like_measures() {
             assert_eq!(cohort["tasks"], 1, "{response}");
             let simulated = prediction(&response, &queued);
             let stored = fixture.runtime.backlog_forecasts(1).unwrap().remove(0);
-            assert_eq!(stored.model_version, 23);
+            assert_eq!(stored.model_version, 24);
             let tasks: Value = serde_json::from_str(&stored.tasks_json).unwrap();
             let task = &tasks[0]["forecast"];
             assert_eq!(tasks[0]["id"], queued.as_str());
@@ -1416,6 +1441,196 @@ fn an_in_origin_review_repair_keeps_the_measured_origin_spend_scorable() {
                 calibration["forecast_level"]["adjusted"]["usd"]["n"], 0,
                 "{calibration}"
             );
+        },
+    );
+}
+
+#[test]
+fn blocked_task_past_thin_return_cell_falls_back_to_wider_supported_basis() {
+    isolated(
+        "backlog_outcomes::blocked_task_past_thin_return_cell_falls_back_to_wider_supported_basis",
+        || {
+            let fixture = Fixture::new();
+            one_hour_history(&fixture);
+            let now = Utc::now();
+            let base = now - Duration::days(10);
+            // Thin 5-wait cell for medium × opus: three short returns (1h,
+            // 2h, 5h), one ongoing censored wait in someday (4h), and the
+            // currently blocked task itself (12h) — past every completed
+            // observation in the cell.
+            for wait_hours in [1, 2, 5] {
+                dated_task_with(
+                    &fixture,
+                    TaskComplexity::Medium,
+                    Some("opus"),
+                    TaskStatus::Done,
+                    &[
+                        (base, TaskStatus::Blocked),
+                        (base + Duration::hours(wait_hours), TaskStatus::Backlog),
+                        (
+                            base + Duration::hours(wait_hours) + Duration::minutes(1),
+                            TaskStatus::InProgress,
+                        ),
+                        (base + Duration::hours(wait_hours + 1), TaskStatus::Done),
+                    ],
+                );
+            }
+            dated_task_with(
+                &fixture,
+                TaskComplexity::Medium,
+                Some("opus"),
+                TaskStatus::Someday,
+                &[
+                    (now - Duration::hours(4), TaskStatus::Blocked),
+                    (now - Duration::hours(3), TaskStatus::Someday),
+                ],
+            );
+            // Wider medium history (sonnet) with supported 24h returns past
+            // the blocked task's 12h wait age.
+            for _ in 0..5 {
+                dated_task_with(
+                    &fixture,
+                    TaskComplexity::Medium,
+                    Some("sonnet"),
+                    TaskStatus::Done,
+                    &[
+                        (base, TaskStatus::Blocked),
+                        (base + Duration::hours(24), TaskStatus::Backlog),
+                        (
+                            base + Duration::hours(24) + Duration::minutes(1),
+                            TaskStatus::InProgress,
+                        ),
+                        (base + Duration::hours(25), TaskStatus::Done),
+                    ],
+                );
+            }
+            let blocked = dated_task_with(
+                &fixture,
+                TaskComplexity::Medium,
+                Some("opus"),
+                TaskStatus::Blocked,
+                &[(now - Duration::hours(12), TaskStatus::Blocked)],
+            );
+            backlog_task(&fixture, "Ready work", &["file:ready.rs"], &[], &[]);
+
+            let body = forecast(&fixture);
+            assert_eq!(body["model_version"], 24);
+            assert_eq!(body["coverage"]["return_tail_unsupported"], 0, "{body}");
+            let row = prediction(&body, &blocked);
+            assert!(row["unforecastable"].is_null(), "{row}");
+            assert_eq!(row["return_basis"], "complexity", "{row}");
+            assert_eq!(row["return_support"]["tail_unsupported"], false, "{row}");
+            assert!(
+                row["completion_probability"].as_f64().unwrap() > 0.9,
+                "wider basis must yield a supported return draw: {row}"
+            );
+            let totals = &body["forecast"];
+            assert!(totals["schedulable_subset"].is_null(), "{totals}");
+            for metric_key in ["time_to_drain_hours", "tokens", "usd"] {
+                assert!(
+                    totals[metric_key]["p50"].as_f64().is_some(),
+                    "{metric_key} p50 must be non-null: {totals}"
+                );
+                assert!(
+                    totals[metric_key]["p90"].as_f64().is_some(),
+                    "{metric_key} p90 must be non-null: {totals}"
+                );
+            }
+        },
+    );
+}
+
+#[test]
+fn blocked_task_past_every_return_observation_is_unforecastable_with_subset() {
+    isolated(
+        "backlog_outcomes::blocked_task_past_every_return_observation_is_unforecastable_with_subset",
+        || {
+            let fixture = Fixture::new();
+            one_hour_history(&fixture);
+            let now = Utc::now();
+            let base = now - Duration::days(10);
+            // Every return observation in the entire workspace is <= 5h, plus
+            // two open censored waits, so even the widest basis cannot support
+            // the 12h blocked task.
+            for wait_hours in [1, 2, 5] {
+                dated_task_with(
+                    &fixture,
+                    TaskComplexity::Medium,
+                    Some("opus"),
+                    TaskStatus::Done,
+                    &[
+                        (base, TaskStatus::Blocked),
+                        (base + Duration::hours(wait_hours), TaskStatus::Backlog),
+                        (
+                            base + Duration::hours(wait_hours) + Duration::minutes(1),
+                            TaskStatus::InProgress,
+                        ),
+                        (base + Duration::hours(wait_hours + 1), TaskStatus::Done),
+                    ],
+                );
+            }
+            dated_task_with(
+                &fixture,
+                TaskComplexity::Medium,
+                Some("opus"),
+                TaskStatus::Someday,
+                &[
+                    (now - Duration::hours(4), TaskStatus::Blocked),
+                    (now - Duration::hours(3), TaskStatus::Someday),
+                ],
+            );
+            let blocked = dated_task_with(
+                &fixture,
+                TaskComplexity::Medium,
+                Some("opus"),
+                TaskStatus::Blocked,
+                &[(now - Duration::hours(12), TaskStatus::Blocked)],
+            );
+            let downstream = backlog_task(
+                &fixture,
+                "Waits on blocked",
+                &["file:downstream.rs"],
+                &[],
+                &[&blocked],
+            );
+            let free = backlog_task(&fixture, "Free work", &["file:free.rs"], &[], &[]);
+
+            let body = forecast(&fixture);
+            assert_eq!(body["model_version"], 24);
+            let coverage = &body["coverage"];
+            assert_eq!(coverage["return_tail_unsupported"], 1, "{coverage}");
+            assert_eq!(coverage["dependency_unforecastable"], 1, "{coverage}");
+            assert_eq!(
+                coverage["dependency_unforecastable_reasons"],
+                json!({"upstream": 1}),
+                "{coverage}"
+            );
+            let blocked_row = prediction(&body, &blocked);
+            assert_eq!(
+                blocked_row["unforecastable"], "return_tail_unsupported",
+                "{blocked_row}"
+            );
+            assert!(
+                blocked_row["completion_probability"].is_null(),
+                "{blocked_row}"
+            );
+            assert_eq!(prediction(&body, &downstream)["unforecastable"], "upstream");
+            assert_eq!(prediction(&body, &free)["completion_probability"], 1.0);
+
+            let totals = &body["forecast"];
+            let unknown = json!({"p50": null, "p90": null});
+            for metric_key in ["time_to_drain_hours", "tokens", "usd"] {
+                assert_eq!(totals[metric_key], unknown, "{metric_key}: {totals}");
+            }
+            assert!(totals["drain_probability"].is_null(), "{totals}");
+            assert!(totals["completion_probability"].is_null(), "{totals}");
+            assert!(totals["not_expected_to_drain"].is_null(), "{totals}");
+            let subset = &totals["schedulable_subset"];
+            assert_eq!(subset["tasks"], 1, "{subset}");
+            assert_eq!(subset["of"], 3, "{subset}");
+            assert_eq!(subset["time_to_drain_hours"]["p50"], 1.0, "{subset}");
+            assert!(subset["tokens"]["p50"].as_f64().is_some(), "{subset}");
+            assert!(subset["usd"]["p50"].as_f64().is_some(), "{subset}");
         },
     );
 }

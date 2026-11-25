@@ -32,10 +32,10 @@ import {
   COMPLEXITY_LABELS, scheduleShowsReview,
 } from './forecast-shared.js';
 import {
-  UNREPORTED_FORECAST_REASON, SUBSET_REASON, forecastMetricReason, forecastBoundedGap, forecastUnavailableInfo, forecastBaselineFigures, formatForecastHours,
+  UNREPORTED_FORECAST_REASON, SUBSET_REASON, UNSUPPORTED_RETURN_TAIL_SUBSET_REASON, forecastMetricReason, forecastBoundedGap, forecastUnavailableInfo, forecastBaselineFigures, formatForecastHours,
   formatForecastQuantileRange, formatForecastTokens, formatForecastUsd, fmtParallelism, fmtRank, fmtRate,
-  fmtShare, forecastCount, hasHorizonCensoringEvidence, num, quantilePair, recordedPoolsContainGaps,
-  regressionGapBecause, regressionHistoryIsAbsent, forecastDrainScope,
+  fmtShare, forecastCount, hasHorizonCensoringEvidence, hasUnsupportedReturnTail, num, quantilePair, recordedPoolsContainGaps,
+  regressionGapBecause, regressionHistoryIsAbsent, returnTailUnforecastableCount, forecastDrainScope,
 } from './forecast-summary.js';
 import { dataGapsPanelNodes, openCoverageCount, otherChecksClearText } from './forecast-gaps.js';
 import { accuracyPanelNodes } from './forecast-accuracy.js';
@@ -76,6 +76,7 @@ const UNFORECASTABLE_LABELS = {
   proposed: "waits on unapproved work", rejected: "waits on rejected work", archived: "waits on archived work",
   external_work: "waits on another workspace", missing: "waits on a missing task", cycle: "dependency cycle",
   upstream: "behind unforecastable work", return_unsupported: "blocked, with no return history",
+  return_tail_unsupported: "blocked, return tail unsupported",
 };
 const WAITS = [
   ["scheduled", "Scheduled time", "Waiting until the task’s earliest scheduled start; admission can start it later."],
@@ -597,11 +598,16 @@ function metricReason(scenario, quantiles, metric) {
 
 function drainReason(scenario, quantiles) {
   if (quantiles?.p90 != null) return null;
-  const { source } = scenario;
-  if (source?.schedulable_subset) return SUBSET_REASON;
-  if (quantiles?.p50 != null) return hasHorizonCensoringEvidence(source) ? "p90 beyond the 90-day horizon." : `${UNREPORTED_FORECAST_REASON}.`;
-  if (scenario.coverage.no_history) return "Some tasks have no history.";
-  return hasHorizonCensoringEvidence(source) ? "Beyond the 90-day horizon." : `${UNREPORTED_FORECAST_REASON}.`;
+  const { source, coverage } = scenario;
+  const unsupportedTail = hasUnsupportedReturnTail(source, coverage);
+  if (source?.schedulable_subset) return unsupportedTail ? UNSUPPORTED_RETURN_TAIL_SUBSET_REASON : SUBSET_REASON;
+  if (quantiles?.p50 != null) {
+    if (unsupportedTail) return "p90 unknown: a blocked task has an unsupported return tail.";
+    return hasHorizonCensoringEvidence(source, coverage) ? "p90 beyond the 90-day horizon." : `${UNREPORTED_FORECAST_REASON}.`;
+  }
+  if (coverage.no_history) return "Some tasks have no history.";
+  if (unsupportedTail) return "Unsupported return tail: recorded return waits run out before 90 days.";
+  return hasHorizonCensoringEvidence(source, coverage) ? "Beyond the 90-day horizon." : `${UNREPORTED_FORECAST_REASON}.`;
 }
 
 function costedLine(scenario) {
@@ -743,6 +749,8 @@ function warningLine(scenario, hasBaseline) {
   let text = `${lead}the regression-adjusted forecast is unavailable: ${info.label}.`;
   if (info.kind === "simulation_cut") {
     text = `${lead}${info.reasons[0].detail} Choose Current backlog for that forecast.`;
+  } else if (info.kind === "return_tail_unsupported") {
+    text = `${lead}a blocked task has waited past all recorded return history.`;
   } else if (info.kind === "regression_history_missing" && recordedPoolsContainGaps(source)) {
     text = `${lead}regression follow-up cannot be estimated because ${regressionGapBecause(source)}.`;
   } else if (info.kind === "regression_history_missing" && missing && regressionHistoryIsAbsent(source)) {
@@ -782,8 +790,20 @@ function subsetNote(forecast) {
   const detail = fromBaseline
     ? `Pre-regression baseline, which excludes regression follow-up work: the other ${subset.tasks} of ${subset.of}: ${figures}`
     : `The other ${subset.tasks} of ${subset.of}: ${figures}`;
+  const tailCount = returnTailUnforecastableCount(forecast);
+  const noReturnCount = (forecast.task_predictions || []).filter((row) => row?.unforecastable === "return_unsupported").length;
+  const otherCount = Math.max(0, left - tailCount - noReturnCount);
+  let lead = `No full total: ${left} task${left === 1 ? "" : "s"} depend${left === 1 ? "s" : ""} on work the drain cannot start. `;
+  if (tailCount > 0 && otherCount === 0 && noReturnCount === 0) {
+    lead = `No full total: ${tailCount} blocked task${tailCount === 1 ? " has" : "s have"} an unsupported return tail. `;
+  } else if (tailCount > 0) {
+    const rest = left - tailCount;
+    lead = `No full total: ${tailCount} blocked task${tailCount === 1 ? " has" : "s have"} an unsupported return tail and ${rest} other task${rest === 1 ? "" : "s"} cannot be scheduled. `;
+  } else if (noReturnCount > 0 && otherCount === 0) {
+    lead = `No full total: ${noReturnCount} blocked task${noReturnCount === 1 ? " has" : "s have"} no return history. `;
+  }
   const note = el("p", { class: "fc-line fc-subset", role: "note" }, [
-    el("strong", { text: `No full total: ${left} task${left === 1 ? "" : "s"} depend${left === 1 ? "s" : ""} on work the drain cannot start. ` }),
+    el("strong", { text: lead }),
     detail,
   ]);
   if (fromBaseline) note.dataset.forecastBaseline = "pre-regression";
